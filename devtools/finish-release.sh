@@ -3,9 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Finish a release: tag, create adopt branch, open adopt PR, create GitHub Release.
+# Works for both minor releases (PATCH == 0) and hotfix releases (PATCH > 0).
 #
 # Usage: ./devtools/finish-release.sh <version> [options]
 # Example: ./devtools/finish-release.sh 0.4.0 --remote upstream
+#          ./devtools/finish-release.sh 0.4.1  (hotfix release)
 
 set -euo pipefail
 
@@ -24,10 +26,12 @@ usage() {
 Usage: $(basename "$0") <version> [options]
 
 Finish a release by tagging the release branch, creating an adopt branch to
-reconcile versions, and creating a GitHub Release.
+reconcile versions, and creating a GitHub Release. Works for both minor
+releases (PATCH == 0) and hotfix releases (PATCH > 0).
 
 Arguments:
   <version>       Release version in MAJOR.MINOR.PATCH format (e.g. 0.4.0)
+                  Use PATCH > 0 for hotfix releases (e.g. 0.4.1)
 
 Options:
   --remote NAME   Git remote to push to (default: upstream)
@@ -104,8 +108,17 @@ done
 # --- derived values -----------------------------------------------------------
 BRANCH_SUFFIX="$(release_branch_suffix "$VERSION")"
 RELEASE_BRANCH="release/v${BRANCH_SUFFIX}"
-ADOPT_BRANCH="adopt/v${BRANCH_SUFFIX}"
 TAG="v${VERSION}"
+
+_PATCH="${VERSION##*.}"
+IS_HOTFIX=false
+[[ "$_PATCH" -gt 0 ]] && IS_HOTFIX=true
+
+if $IS_HOTFIX; then
+    ADOPT_BRANCH="adopt/v${VERSION}"
+else
+    ADOPT_BRANCH="adopt/v${BRANCH_SUFFIX}"
+fi
 
 # --- pre-flight checks -------------------------------------------------------
 cd "$REPO_ROOT"
@@ -230,7 +243,24 @@ else
 
     log "Creating PR from $ADOPT_BRANCH to main..."
 
-    ADOPT_PR_BODY="$(cat <<EOF
+    if $IS_HOTFIX; then
+        ADOPT_PR_BODY="$(cat <<EOF
+## Adopt hotfix v${VERSION}
+
+Merge hotfix changes from \`${RELEASE_BRANCH}\` into \`main\` via the
+\`${ADOPT_BRANCH}\` branch. The version in \`pyproject.toml\` has been set to
+the current \`main\` development version to avoid conflicts.
+
+**Tag:** \`${TAG}\`
+
+### To merge
+
+Merge this PR once CI passes. Use a **merge commit** (not squash) to preserve
+the release branch history on \`main\`.
+EOF
+)"
+    else
+        ADOPT_PR_BODY="$(cat <<EOF
 ## Adopt release v${VERSION}
 
 Merge release changes from \`${RELEASE_BRANCH}\` into \`main\` via the
@@ -249,12 +279,16 @@ Merge this PR once CI passes. Use a **merge commit** (not squash) to preserve
 the release branch history on \`main\`.
 EOF
 )"
+    fi
+
+    ADOPT_KIND="release"
+    $IS_HOTFIX && ADOPT_KIND="hotfix"
 
     gh pr create \
         --repo "$REPO_SLUG" \
         --base main \
         --head "$ADOPT_BRANCH" \
-        --title "Adopt release v${VERSION}" \
+        --title "Adopt $ADOPT_KIND v${VERSION}" \
         --body "$ADOPT_PR_BODY"
 
     log "Creating GitHub Release $TAG..."

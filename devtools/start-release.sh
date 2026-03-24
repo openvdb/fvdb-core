@@ -3,9 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Start a release: create release branch, bump versions, open merge PR.
+# For hotfix releases (PATCH > 0): prepare the release branch for cherry-picks.
 #
 # Usage: ./devtools/start-release.sh <version> [options]
 # Example: ./devtools/start-release.sh 0.4.0 --remote upstream
+#          ./devtools/start-release.sh 0.4.1  (hotfix release)
 
 set -euo pipefail
 
@@ -24,10 +26,12 @@ usage() {
 Usage: $(basename "$0") <version> [options]
 
 Start a release burndown by creating a release branch, setting versions, and
-opening a merge PR.
+opening a merge PR. When PATCH > 0, prepares the existing release branch for
+a hotfix release instead.
 
 Arguments:
   <version>       Release version in MAJOR.MINOR.PATCH format (e.g. 0.4.0)
+                  Use PATCH > 0 for hotfix releases (e.g. 0.4.1)
 
 Options:
   --remote NAME   Git remote to push to (default: upstream)
@@ -92,6 +96,22 @@ get_version() {
     grep '^version = ' "$REPO_ROOT/pyproject.toml" | sed 's/^version = "\(.*\)"/\1/'
 }
 
+# Extract the PATCH number from a MAJOR.MINOR.PATCH version string.
+extract_patch() {
+    local ver="$1"
+    local _major _minor patch
+    IFS='.' read -r _major _minor patch <<< "$ver"
+    echo "$patch"
+}
+
+# Return the tag name for the release immediately before this version.
+previous_patch_tag() {
+    local ver="$1"
+    local major minor patch
+    IFS='.' read -r major minor patch <<< "$ver"
+    echo "v${major}.${minor}.$((patch - 1))"
+}
+
 # --- argument parsing ---------------------------------------------------------
 VERSION=""
 while [[ $# -gt 0 ]]; do
@@ -118,6 +138,78 @@ done
 BRANCH_SUFFIX="$(release_branch_suffix "$VERSION")"
 RELEASE_BRANCH="release/v${BRANCH_SUFFIX}"
 NEXT_DEV="$(next_dev_version "$VERSION")"
+PATCH="$(extract_patch "$VERSION")"
+IS_HOTFIX=false
+[[ "$PATCH" -gt 0 ]] && IS_HOTFIX=true
+
+# --- hotfix release -----------------------------------------------------------
+if $IS_HOTFIX; then
+    PREV_TAG="$(previous_patch_tag "$VERSION")"
+
+    cd "$REPO_ROOT"
+
+    log "Hotfix version:      $VERSION"
+    log "Previous tag:        $PREV_TAG"
+    log "Release branch:      $RELEASE_BRANCH"
+    log "Remote:              $REMOTE"
+    echo ""
+
+    if ! $DRY_RUN; then
+        if ! git diff --quiet || ! git diff --cached --quiet; then
+            die "working tree is not clean; commit or stash changes first"
+        fi
+
+        if ! $NO_PUSH; then
+            log "Fetching $REMOTE..."
+            git fetch "$REMOTE"
+        fi
+
+        git rev-parse "${PREV_TAG}^{commit}" >/dev/null 2>&1 \
+            || die "previous release tag $PREV_TAG not found"
+
+        git show-ref --verify --quiet "refs/heads/$RELEASE_BRANCH" \
+            || die "branch $RELEASE_BRANCH does not exist locally"
+
+        BRANCH_COMMIT="$(git rev-parse "$RELEASE_BRANCH")"
+        TAG_COMMIT="$(git rev-parse "${PREV_TAG}^{commit}")"
+        if [[ "$BRANCH_COMMIT" != "$TAG_COMMIT" ]]; then
+            die "$RELEASE_BRANCH ($(git rev-parse --short "$RELEASE_BRANCH")) is not at $PREV_TAG ($(git rev-parse --short "${PREV_TAG}^{commit}")); the branch must match the previous release tag"
+        fi
+    fi
+
+    log "Checking out $RELEASE_BRANCH..."
+    run git checkout "$RELEASE_BRANCH"
+
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+    if ! $DRY_RUN; then
+        CURRENT_VER="$(get_version)"
+        if [[ "$CURRENT_VER" != "$VERSION" ]]; then
+            log "Setting version to $VERSION on $RELEASE_BRANCH..."
+            set_version "$VERSION"
+        else
+            log "Version already set to $VERSION on $RELEASE_BRANCH"
+        fi
+
+        "$SCRIPT_DIR/update-doc-versions.sh" "$VERSION"
+
+        if ! git diff --quiet || ! git diff --cached --quiet; then
+            git add pyproject.toml
+            [[ -f docs/conf.py ]] && git add docs/conf.py
+            git commit -s -S -m "Set version to $VERSION for hotfix release"
+        fi
+    fi
+
+    echo ""
+    log "Done. Hotfix v${VERSION} prepared on $RELEASE_BRANCH."
+    echo ""
+    log "Next steps:"
+    log "  1. Cherry-pick or apply fixes to $RELEASE_BRANCH"
+    log "  2. Push $RELEASE_BRANCH to $REMOTE"
+    log "  3. Wait for publish workflow to pass"
+    log "  4. Run: ./devtools/finish-release.sh $VERSION"
+    exit 0
+fi
 
 # --- pre-flight checks -------------------------------------------------------
 cd "$REPO_ROOT"
