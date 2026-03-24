@@ -2,10 +2,16 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 
-"""One-off script to label existing open issues.
+"""One-off bootstrap script to label existing open issues.
 
 Adds ``external`` to issues not filed by fvdb-dev team members, and
 ``triage`` to external issues that have no team-member comment.
+
+The ongoing ``issue-triage.yml`` workflow applies ``triage`` to *all*
+newly opened/reopened issues regardless of author.  This script uses
+narrower criteria because it targets the backlog: internal issues are
+assumed to already be tracked, and external issues with a team reply
+have already received attention.
 
 Requires the GitHub CLI (``gh``) authenticated with a token that has
 ``read:org`` scope (classic PAT) or ``Organization > Members > Read``
