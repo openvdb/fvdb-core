@@ -307,20 +307,6 @@ bind_grid_batch(py::module &m) {
         // length
         .def("__len__", &fvdb::GridBatch::grid_count)
 
-        // Setting transformation
-        .def(
-            "set_global_origin",
-            [](fvdb::GridBatch &self, const torch::Tensor &origin) {
-                self.set_global_origin(pyToVec3d(origin));
-            },
-            py::arg("origin"))
-        .def(
-            "set_global_voxel_size",
-            [](fvdb::GridBatch &self, const torch::Tensor &voxel_size) {
-                self.set_global_voxel_size(pyToVec3d(voxel_size));
-            },
-            py::arg("voxel_size"))
-
         // Grid construction -- accept tensors from Python's to_Vec3* converters
         .def(
             "set_from_mesh",

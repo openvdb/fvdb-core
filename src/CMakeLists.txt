@@ -75,6 +75,7 @@ set(FVDB_CPP_FILES
 
 set(FVDB_CU_FILES
     fvdb/detail/GridBatchData.cu
+    fvdb/detail/GridBatchDataFactory.cu
     fvdb/detail/ops/ActiveGridCoords.cu
     fvdb/detail/ops/ActiveVoxelsInBoundsMask.cu
     fvdb/detail/ops/BuildCoarseGridFromFine.cu
@@ -90,6 +91,12 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/BuildMergedGrids.cu
     fvdb/detail/ops/BuildPaddedGrid.cu
     fvdb/detail/ops/BuildPrunedGrid.cu
+    fvdb/detail/ops/ClipGrid.cu
+    fvdb/detail/ops/CloneGrid.cu
+    fvdb/detail/ops/ConcatenateGrids.cu
+    fvdb/detail/ops/IndexGrid.cu
+    fvdb/detail/ops/MakeContiguous.cu
+    fvdb/detail/ops/SerializeGrid.cu
     fvdb/detail/ops/CoarseIjkForFineGrid.cu
     fvdb/detail/ops/convolution/GatherScatterDefault.cu
     fvdb/detail/ops/convolution/PredGatherIGemm.cu

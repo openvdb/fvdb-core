@@ -1,6 +1,7 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/TorchDeviceBuffer.h>
 #include <fvdb/detail/ops/BuildMergedGrids.h>
 #include <fvdb/detail/utils/Utils.h>
@@ -40,10 +41,10 @@ dispatchMergeGrids<torch::kCUDA>(const GridBatchData &gridBatch1, const GridBatc
     std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> handles;
     for (int i = 0; i < gridBatch1.batchSize(); i += 1) {
         nanovdb::OnIndexGrid *grid1 =
-            gridBatch1.nanoGridHandleMut().deviceGrid<nanovdb::ValueOnIndex>(i);
+            gridBatch1.mGridHdl->deviceGrid<nanovdb::ValueOnIndex>(i);
         TORCH_CHECK(grid1, "First Grid is null");
         nanovdb::OnIndexGrid *grid2 =
-            gridBatch2.nanoGridHandleMut().deviceGrid<nanovdb::ValueOnIndex>(i);
+            gridBatch2.mGridHdl->deviceGrid<nanovdb::ValueOnIndex>(i);
         TORCH_CHECK(grid2, "Second Grid is null");
 
         nanovdb::tools::cuda::MergeGrids<nanovdb::ValueOnIndex> mergeOp(grid1, grid2, stream);
@@ -127,7 +128,7 @@ mergeGrids(const GridBatchData &gridBatch1, const GridBatchData &gridBatch2) {
     auto hdl = FVDB_DISPATCH_KERNEL_DEVICE(gridBatch1.device(), [&]() {
         return dispatchMergeGrids<DeviceTag>(gridBatch1, gridBatch2);
     });
-    return c10::make_intrusive<GridBatchData>(std::move(hdl), voxS, voxO);
+    return makeGridBatchData(std::move(hdl), voxS, voxO);
 }
 
 } // namespace fvdb::detail::ops

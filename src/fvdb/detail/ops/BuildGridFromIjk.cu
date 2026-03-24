@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/detail/GridBatchData.h>
+#include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/BuildGridFromIjk.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Utils.h>
@@ -244,7 +245,7 @@ createNanoGridFromIJK(const JaggedTensor &ijk,
                       const std::vector<nanovdb::Vec3d> &voxelSizes,
                       const std::vector<nanovdb::Vec3d> &origins) {
     auto handle = _createNanoGridFromIJK(ijk);
-    return c10::make_intrusive<GridBatchData>(std::move(handle), voxelSizes, origins);
+    return makeGridBatchData(std::move(handle), voxelSizes, origins);
 }
 
 } // namespace ops

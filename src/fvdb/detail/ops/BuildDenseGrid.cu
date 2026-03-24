@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/detail/GridBatchData.h>
+#include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/BuildDenseGrid.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Utils.h>
@@ -329,7 +330,7 @@ createNanoGridFromDense(int64_t batchSize,
         return dispatchCreateNanoGridFromDense<DeviceTag>(
             batchSize, ijkMin, size, device, maybeMask);
     });
-    return c10::make_intrusive<GridBatchData>(std::move(handle), voxelSizes, origins);
+    return makeGridBatchData(std::move(handle), voxelSizes, origins);
 }
 
 } // namespace ops

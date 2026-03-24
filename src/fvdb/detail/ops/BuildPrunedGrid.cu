@@ -3,6 +3,7 @@
 //
 #include <fvdb/JaggedTensor.h>
 #include <fvdb/detail/GridBatchData.h>
+#include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/TorchDeviceBuffer.h>
 #include <fvdb/detail/ops/BuildPrunedGrid.h>
 #include <fvdb/detail/utils/Utils.h>
@@ -46,7 +47,7 @@ dispatchPruneGrid<torch::kCUDA>(const GridBatchData &gridBatch, const JaggedTens
     for (int i = 0; i < gridBatch.batchSize(); i += 1) {
         nanovdb::GridHandle<TorchDeviceBuffer> handle;
         nanovdb::OnIndexGrid *grid =
-            gridBatch.nanoGridHandleMut().deviceGrid<nanovdb::ValueOnIndex>(i);
+            gridBatch.mGridHdl->deviceGrid<nanovdb::ValueOnIndex>(i);
         TORCH_CHECK(grid, "Grid is null");
 
         const torch::Tensor maskI = mask.index(i).jdata();
@@ -153,7 +154,7 @@ pruneGrid(const GridBatchData &gridBatch, const JaggedTensor &mask) {
     gridBatch.gridVoxelSizesAndOrigins(voxS, voxO);
     auto hdl = FVDB_DISPATCH_KERNEL_DEVICE(
         gridBatch.device(), [&]() { return dispatchPruneGrid<DeviceTag>(gridBatch, mask); });
-    return c10::make_intrusive<GridBatchData>(std::move(hdl), voxS, voxO);
+    return makeGridBatchData(std::move(hdl), voxS, voxO);
 }
 
 } // namespace fvdb::detail::ops

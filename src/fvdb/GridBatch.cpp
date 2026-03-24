@@ -32,6 +32,26 @@
 #include <fvdb/detail/ops/SerializeEncode.h>
 #include <fvdb/detail/ops/NeighborIndexes.h>
 #include <fvdb/detail/ops/VoxelsAlongRays.h>
+#include <fvdb/detail/GridBatchDataFactory.h>
+#include <fvdb/detail/ops/BuildCoarseGridFromFine.h>
+#include <fvdb/detail/ops/BuildDenseGrid.h>
+#include <fvdb/detail/ops/BuildDilatedGrid.h>
+#include <fvdb/detail/ops/BuildFineGridFromCoarse.h>
+#include <fvdb/detail/ops/BuildGridForConv.h>
+#include <fvdb/detail/ops/BuildGridForConvTranspose.h>
+#include <fvdb/detail/ops/BuildGridFromIjk.h>
+#include <fvdb/detail/ops/BuildGridFromMesh.h>
+#include <fvdb/detail/ops/BuildGridFromNearestVoxelsToPoints.h>
+#include <fvdb/detail/ops/BuildGridFromPoints.h>
+#include <fvdb/detail/ops/BuildMergedGrids.h>
+#include <fvdb/detail/ops/BuildPaddedGrid.h>
+#include <fvdb/detail/ops/BuildPrunedGrid.h>
+#include <fvdb/detail/ops/ClipGrid.h>
+#include <fvdb/detail/ops/CloneGrid.h>
+#include <fvdb/detail/ops/ConcatenateGrids.h>
+#include <fvdb/detail/ops/IndexGrid.h>
+#include <fvdb/detail/ops/MakeContiguous.h>
+#include <fvdb/detail/ops/SerializeGrid.h>
 #include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/nanovdb/TorchNanoConversions.h>
 
@@ -45,22 +65,18 @@ namespace fvdb {
 GridBatch::GridBatch() : mImpl() {}
 
 GridBatch::GridBatch(const torch::Device &device)
-    : mImpl(c10::make_intrusive<detail::GridBatchData>(device)) {}
+    : mImpl(detail::makeEmptyGridBatchData(device)) {}
 
 GridBatch::GridBatch(const torch::Device &device,
                      const std::vector<nanovdb::Vec3d> &voxelSizes,
                      const std::vector<nanovdb::Vec3d> &voxelOrigins) {
-    c10::intrusive_ptr<detail::GridBatchData> result =
-        c10::make_intrusive<detail::GridBatchData>(device, voxelSizes, voxelOrigins);
-    mImpl = result;
+    mImpl = detail::makeEmptyGridBatchData(device, voxelSizes, voxelOrigins);
 }
 
 GridBatch::GridBatch(nanovdb::GridHandle<detail::TorchDeviceBuffer> &&gridHdl,
                      const std::vector<nanovdb::Vec3d> &voxelSizes,
                      const std::vector<nanovdb::Vec3d> &voxelOrigins) {
-    c10::intrusive_ptr<detail::GridBatchData> result =
-        c10::make_intrusive<detail::GridBatchData>(std::move(gridHdl), voxelSizes, voxelOrigins);
-    mImpl = result;
+    mImpl = detail::makeGridBatchData(std::move(gridHdl), voxelSizes, voxelOrigins);
 };
 
 bool
@@ -71,7 +87,7 @@ GridBatch::is_contiguous() const {
 GridBatch
 GridBatch::contiguous() const {
     GridBatch result;
-    result.mImpl = detail::GridBatchData::contiguous(mImpl);
+    result.mImpl = detail::ops::makeContiguous(mImpl);
     return result;
 }
 
@@ -175,16 +191,6 @@ GridBatch::jidx() const {
     } else {
         return ret;
     }
-}
-
-void
-GridBatch::set_global_voxel_size(const nanovdb::Vec3d &voxel_size) {
-    mImpl->setGlobalVoxelSize(voxel_size);
-}
-
-void
-GridBatch::set_global_origin(const nanovdb::Vec3d &origin) {
-    mImpl->setGlobalVoxelOrigin(origin);
 }
 
 c10::Device
@@ -602,8 +608,7 @@ GridBatch::set_from_mesh(const JaggedTensor &mesh_vertices,
                          const std::vector<nanovdb::Vec3d> &origins) {
     mImpl->checkDevice(mesh_vertices);
     mImpl->checkDevice(mesh_faces);
-    mImpl = detail::GridBatchData::createFromMesh(
-        mesh_vertices, mesh_faces, voxel_sizes, origins);
+    mImpl = detail::ops::buildGridFromMesh(mesh_vertices, mesh_faces, voxel_sizes, origins);
 }
 
 void
@@ -611,7 +616,7 @@ GridBatch::set_from_points(const JaggedTensor &points,
                            const std::vector<nanovdb::Vec3d> &voxel_sizes,
                            const std::vector<nanovdb::Vec3d> &origins) {
     mImpl->checkDevice(points);
-    mImpl = detail::GridBatchData::createFromPoints(points, voxel_sizes, origins);
+    mImpl = detail::ops::buildGridFromPoints(points, voxel_sizes, origins);
 }
 
 void
@@ -619,8 +624,7 @@ GridBatch::set_from_nearest_voxels_to_points(const JaggedTensor &points,
                                              const std::vector<nanovdb::Vec3d> &voxel_sizes,
                                              const std::vector<nanovdb::Vec3d> &origins) {
     mImpl->checkDevice(points);
-    mImpl =
-        detail::GridBatchData::createFromNeighborVoxelsToPoints(points, voxel_sizes, origins);
+    mImpl = detail::ops::buildGridFromNearestVoxelsToPoints(points, voxel_sizes, origins);
 }
 
 void
@@ -628,7 +632,7 @@ GridBatch::set_from_ijk(const JaggedTensor &coords,
                         const std::vector<nanovdb::Vec3d> &voxel_sizes,
                         const std::vector<nanovdb::Vec3d> &origins) {
     mImpl->checkDevice(coords);
-    mImpl = detail::GridBatchData::createFromIjk(coords, voxel_sizes, origins);
+    mImpl = detail::ops::createNanoGridFromIJK(coords, voxel_sizes, origins);
 }
 
 void
@@ -639,28 +643,27 @@ GridBatch::set_from_dense_grid(const int64_t num_grids,
                                const std::vector<nanovdb::Vec3d> &origins,
                                std::optional<torch::Tensor> mask) {
     mImpl->checkDevice(mask);
-    mImpl = detail::GridBatchData::dense(
-        num_grids, device(), dense_dims, ijk_min, voxel_sizes, origins, mask);
+    mImpl = detail::ops::createNanoGridFromDense(num_grids, ijk_min, dense_dims, device(), mask, voxel_sizes, origins);
 }
 
 GridBatch
 GridBatch::dual_grid(bool exclude_border) const {
     GridBatch result;
-    result.mImpl = mImpl->dual(exclude_border);
+    result.mImpl = detail::ops::buildPaddedGrid(*mImpl, 0, 1, exclude_border);
     return result;
 }
 
 GridBatch
 GridBatch::coarsened_grid(nanovdb::Coord branch_factor) const {
     GridBatch result;
-    result.mImpl = mImpl->coarsen(branch_factor);
+    result.mImpl = detail::ops::buildCoarseGridFromFine(*mImpl, branch_factor);
     return result;
 }
 
 GridBatch
 GridBatch::refined_grid(nanovdb::Coord subdiv_factor, const std::optional<JaggedTensor> mask) const {
     GridBatch result;
-    result.mImpl = mImpl->upsample(subdiv_factor, mask);
+    result.mImpl = detail::ops::buildFineGridFromCoarse(*mImpl, subdiv_factor, mask);
     return result;
 }
 
@@ -668,7 +671,7 @@ GridBatch
 GridBatch::clipped_grid(const std::vector<nanovdb::Coord> &ijk_min,
                         const std::vector<nanovdb::Coord> &ijk_max) const {
     GridBatch result;
-    result.mImpl = mImpl->clip(ijk_min, ijk_max);
+    result.mImpl = detail::ops::clipGrid(*mImpl, ijk_min, ijk_max);
     return result;
 }
 
@@ -686,7 +689,7 @@ GridBatch::clip(const JaggedTensor &features,
         " list dimensions");
 
     auto [clippedFeatures, clippedGridPtr] =
-        mImpl->clipFeaturesWithMask(features, ijk_min, ijk_max);
+        detail::ops::clipGridFeaturesWithMask(*mImpl, features, ijk_min, ijk_max);
 
     GridBatch clippedGrid;
     clippedGrid.mImpl = clippedGridPtr;
@@ -757,35 +760,35 @@ GridBatch::integrate_tsdf(const double truncationMargin,
 GridBatch
 GridBatch::conv_grid(nanovdb::Coord kernel_size, nanovdb::Coord stride) const {
     GridBatch result;
-    result.mImpl = mImpl->convolutionOutput(kernel_size, stride);
+    result.mImpl = detail::ops::buildGridForConv(*mImpl, kernel_size, stride);
     return result;
 }
 
 GridBatch
 GridBatch::conv_transpose_grid(nanovdb::Coord kernel_size, nanovdb::Coord stride) const {
     GridBatch result;
-    result.mImpl = mImpl->convolutionTransposeOutput(kernel_size, stride);
+    result.mImpl = detail::ops::buildGridForConvTranspose(*mImpl, kernel_size, stride);
     return result;
 }
 
 GridBatch
 GridBatch::dilated_grid(const int dilation) const {
     GridBatch result;
-    result.mImpl = mImpl->dilate(dilation);
+    result.mImpl = detail::ops::dilateGrid(*mImpl, std::vector<int64_t>(mImpl->batchSize(), dilation));
     return result;
 }
 
 GridBatch
 GridBatch::merged_grid(const GridBatch &other) const {
     GridBatch result;
-    result.mImpl = mImpl->merge(other.mImpl);
+    result.mImpl = detail::ops::mergeGrids(*mImpl, *other.mImpl);
     return result;
 }
 
 GridBatch
 GridBatch::pruned_grid(const JaggedTensor &mask) const {
     GridBatch result;
-    result.mImpl = mImpl->prune(mask);
+    result.mImpl = detail::ops::pruneGrid(*mImpl, mask);
     return result;
 }
 
@@ -1080,7 +1083,7 @@ GridBatch::to(const torch::Device &to_device) const {
     if (to_device == device()) {
         result.mImpl = mImpl;
     } else {
-        result.mImpl = mImpl->clone(to_device);
+        result.mImpl = detail::ops::cloneGrid(*mImpl, to_device);
     }
     return result;
 }
@@ -1088,35 +1091,35 @@ GridBatch::to(const torch::Device &to_device) const {
 GridBatch
 GridBatch::index(int64_t bi) const {
     GridBatch result;
-    result.mImpl = mImpl->index(bi);
+    result.mImpl = detail::ops::indexGrid(*mImpl, bi);
     return result;
 }
 
 GridBatch
 GridBatch::index(size_t start, size_t stop, size_t step) const {
     GridBatch result;
-    result.mImpl = mImpl->index(start, stop, step);
+    result.mImpl = detail::ops::indexGrid(*mImpl, start, stop, step);
     return result;
 }
 
 GridBatch
 GridBatch::index(const std::vector<int64_t> &bi) const {
     GridBatch result;
-    result.mImpl = mImpl->index(bi);
+    result.mImpl = detail::ops::indexGrid(*mImpl, bi);
     return result;
 }
 
 GridBatch
 GridBatch::index(const std::vector<bool> &bi) const {
     GridBatch result;
-    result.mImpl = mImpl->index(bi);
+    result.mImpl = detail::ops::indexGrid(*mImpl, bi);
     return result;
 }
 
 GridBatch
 GridBatch::index(const torch::Tensor &bi) const {
     GridBatch result;
-    result.mImpl = mImpl->index(bi);
+    result.mImpl = detail::ops::indexGrid(*mImpl, bi);
     return result;
 }
 
@@ -1127,13 +1130,13 @@ GridBatch::jagged_like(const torch::Tensor &data) const {
 
 torch::Tensor
 GridBatch::serialize() const {
-    return mImpl->serialize();
+    return detail::ops::serializeGrid(*mImpl);
 }
 
 GridBatch
 GridBatch::deserialize(const torch::Tensor &data) {
     GridBatch result;
-    result.mImpl = detail::GridBatchData::deserialize(data);
+    result.mImpl = detail::ops::deserializeGrid(data);
     return result;
 }
 
@@ -1154,7 +1157,7 @@ GridBatch::concatenate(const std::vector<GridBatch> &vec) {
     std::transform(vec.begin(), vec.end(), std::back_inserter(vecHdls), [](const GridBatch &grid) {
         return grid.mImpl;
     });
-    result.mImpl = detail::GridBatchData::concatenate(vecHdls);
+    result.mImpl = detail::ops::concatenateGrids(vecHdls);
     return result;
 }
 

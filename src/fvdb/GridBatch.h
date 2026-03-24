@@ -132,12 +132,6 @@ struct GridBatch : torch::CustomClassHolder {
     torch::Tensor jidx() const;
 
     /// @brief Set the voxel size of all grids indexed by this batch to the specified value
-    /// @param voxel_size A 3D (shape [3,]) tensor specifying the voxel size to set for each grid
-    void set_global_voxel_size(const nanovdb::Vec3d &voxel_size);
-
-    /// @brief Set the voxel origin of all grids indexed by this batch to the specified value
-    /// @param origin A 3D (shape [3,]) tensor specifying the voxel origin to set for each grid
-    void set_global_origin(const nanovdb::Vec3d &origin);
 
     /// @brief Get the device on which this grid is stored
     /// @return The device on which this grid is stored

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/detail/GridBatchData.h>
+#include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/BuildGridFromIjk.h>
 #include <fvdb/detail/ops/BuildGridFromPoints.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
@@ -221,7 +222,7 @@ buildGridFromPoints(const JaggedTensor &points,
     auto handle = FVDB_DISPATCH_KERNEL(points.device(), [&]() {
         return dispatchBuildGridFromPoints<DeviceTag>(points, transforms);
     });
-    return c10::make_intrusive<GridBatchData>(std::move(handle), voxelSizes, origins);
+    return makeGridBatchData(std::move(handle), voxelSizes, origins);
 }
 
 } // namespace ops

@@ -6,6 +6,7 @@
 
 #include <fvdb/JaggedTensor.h>
 #include <fvdb/detail/GridBatchData.h>
+#include <fvdb/detail/ops/BuildGridFromIjk.h>
 #include <fvdb/detail/ops/convolution/GatherScatterDefault.h>
 #include <fvdb/detail/ops/convolution/PredGatherIGemm.h>
 
@@ -131,7 +132,7 @@ makeFvdbGrid(const std::vector<nanovdb::Coord> &coords, torch::Device device) {
     JaggedTensor jt(ijk_dev);
     std::vector<nanovdb::Vec3d> vs      = {{1.0, 1.0, 1.0}};
     std::vector<nanovdb::Vec3d> origins = {{0.0, 0.0, 0.0}};
-    return GridBatchData::createFromIjk(jt, vs, origins);
+    return ops::createNanoGridFromIJK(jt, vs, origins);
 }
 
 struct CudaTimer {

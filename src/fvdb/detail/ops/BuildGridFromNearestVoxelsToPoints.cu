@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/detail/GridBatchData.h>
+#include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/BuildGridFromIjk.h>
 #include <fvdb/detail/ops/BuildGridFromNearestVoxelsToPoints.h>
 #include <fvdb/detail/ops/NearestIjkForPoints.h>
@@ -145,7 +146,7 @@ buildGridFromNearestVoxelsToPoints(const JaggedTensor &points,
     auto handle = FVDB_DISPATCH_KERNEL_DEVICE(points.device(), [&]() {
         return dispatchBuildGridFromNearestVoxelsToPoints<DeviceTag>(points, transforms);
     });
-    return c10::make_intrusive<GridBatchData>(std::move(handle), voxelSizes, origins);
+    return makeGridBatchData(std::move(handle), voxelSizes, origins);
 }
 
 } // namespace ops

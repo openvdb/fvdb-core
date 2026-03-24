@@ -3,6 +3,9 @@
 //
 #include <fvdb/JaggedTensor.h>
 #include <fvdb/detail/GridBatchData.h>
+#include <fvdb/detail/ops/BuildDilatedGrid.h>
+#include <fvdb/detail/ops/BuildGridFromPoints.h>
+#include <fvdb/detail/ops/BuildMergedGrids.h>
 #include <fvdb/detail/ops/IntegrateTSDF.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Utils.h>
@@ -404,7 +407,8 @@ buildPointGrid(const double truncationMargin,
     std::vector<nanovdb::Vec3d> voxelSizes;
     std::vector<nanovdb::Vec3d> origins;
     grid.gridVoxelSizesAndOrigins(voxelSizes, origins);
-    return GridBatchData::createFromPoints(jaggedPoints, voxelSizes, origins)->dilate(numPadVoxels);
+    auto pointGrid = ops::buildGridFromPoints(jaggedPoints, voxelSizes, origins);
+    return ops::dilateGrid(*pointGrid, numPadVoxels);
 }
 
 #define DISPATCH_FEATURE_TYPE(...)                                \
@@ -843,7 +847,8 @@ integrateTSDFImpl(const c10::intrusive_ptr<GridBatchData> grid,
         squeezedDepthImages, projectionMats, invProjectionMats, camToWorldMats);
 
     // Step 2: Build union grid grid from unprojected points and merge into with the old grid
-    const auto unionGrid = buildPointGrid(truncationMargin, unprojectedPoints, *grid)->merge(grid);
+    const auto pointGrid = buildPointGrid(truncationMargin, unprojectedPoints, *grid);
+    const auto unionGrid = ops::mergeGrids(*pointGrid, *grid);
 
     // Features are optional. If you don't pass them in, we will use placeholder values which are
     // just empty tensors.

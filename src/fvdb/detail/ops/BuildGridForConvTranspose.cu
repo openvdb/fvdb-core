@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/detail/GridBatchData.h>
+#include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/BuildFineGridFromCoarse.h>
 #include <fvdb/detail/ops/BuildGridForConvTranspose.h>
 #include <fvdb/detail/ops/BuildGridFromIjk.h>
@@ -265,7 +266,7 @@ buildGridForConvTranspose(const GridBatchData &baseBatchHdl,
     auto hdl = FVDB_DISPATCH_KERNEL_DEVICE(baseBatchHdl.device(), [&]() {
         return dispatchBuildGridForConvTranspose<DeviceTag>(baseBatchHdl, kernelSize, stride);
     });
-    return c10::make_intrusive<GridBatchData>(std::move(hdl), voxS, voxO);
+    return makeGridBatchData(std::move(hdl), voxS, voxO);
 }
 
 } // namespace ops

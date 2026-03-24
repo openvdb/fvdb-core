@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/detail/GridBatchData.h>
+#include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/BuildFineGridFromCoarse.h>
+#include <fvdb/detail/utils/VoxelSizeUtils.h>
 #include <fvdb/detail/ops/BuildGridFromIjk.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Utils.h>
@@ -461,15 +463,19 @@ buildFineGridFromCoarse(const GridBatchData &coarseBatchHdl,
                               std::to_string(subdivisionFactor[1]) + ", " +
                               std::to_string(subdivisionFactor[2]) + "]");
     }
-    std::vector<nanovdb::Vec3d> voxS, voxO;
-    coarseBatchHdl.gridVoxelSizesAndOrigins(voxS, voxO);
+    std::vector<nanovdb::Vec3d> fineVoxS, fineVoxO;
+    fineVoxS.reserve(coarseBatchHdl.batchSize());
+    fineVoxO.reserve(coarseBatchHdl.batchSize());
+    for (int64_t i = 0; i < coarseBatchHdl.batchSize(); ++i) {
+        fineVoxS.push_back(fineVoxelSize(coarseBatchHdl.voxelSizeAt(i), subdivisionFactor));
+        fineVoxO.push_back(fineVoxelOrigin(
+            coarseBatchHdl.voxelSizeAt(i), coarseBatchHdl.voxelOriginAt(i), subdivisionFactor));
+    }
     auto hdl = FVDB_DISPATCH_KERNEL(coarseBatchHdl.device(), [&]() {
         return dispatchBuildFineGridFromCoarse<DeviceTag>(
             coarseBatchHdl, subdivisionFactor, subdivMask);
     });
-    auto ret = c10::make_intrusive<GridBatchData>(std::move(hdl), voxS, voxO);
-    ret->setFineTransformFromCoarseGrid(coarseBatchHdl, subdivisionFactor);
-    return ret;
+    return makeGridBatchData(std::move(hdl), fineVoxS, fineVoxO);
 }
 
 JaggedTensor

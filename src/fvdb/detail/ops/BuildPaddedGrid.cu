@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/detail/GridBatchData.h>
+#include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/BuildGridFromIjk.h>
 #include <fvdb/detail/ops/BuildPaddedGrid.h>
+#include <fvdb/detail/ops/PopulateGridMetadata.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
@@ -437,9 +439,52 @@ buildPaddedGrid(const GridBatchData &baseBatchHdl, int bmin, int bmax, bool excl
     auto hdl = FVDB_DISPATCH_KERNEL(baseBatchHdl.device(), [&]() {
         return dispatchBuildPaddedGrid<DeviceTag>(baseBatchHdl, bmin, bmax, excludeBorder);
     });
-    auto ret = c10::make_intrusive<GridBatchData>(std::move(hdl), voxS, voxO);
-    ret->setPrimalTransformFromDualGrid(baseBatchHdl);
-    return ret;
+
+    const int64_t bs            = hdl.gridCount();
+    const torch::Device device  = hdl.buffer().device();
+
+    GridBatchData::GridMetadata *hostMeta   = nullptr;
+    GridBatchData::GridMetadata *deviceMeta = nullptr;
+    if (device.is_cpu() || device.is_cuda()) {
+        hostMeta = allocateHostGridMetadata(bs);
+        if (device.is_cuda()) {
+            deviceMeta = allocateDeviceGridMetadata(device, bs);
+        }
+    } else if (device.is_privateuseone()) {
+        deviceMeta = allocateUnifiedMemoryGridMetadata(bs);
+        hostMeta   = deviceMeta;
+    }
+
+    torch::Tensor batchOffsets;
+    GridBatchData::GridBatchMetadata batchMeta;
+    ops::populateGridMetadata(hdl, voxS, voxO, batchOffsets, hostMeta, deviceMeta, &batchMeta);
+    batchMeta.mIsContiguous = true;
+
+    for (int64_t i = 0; i < bs; i++) {
+        hostMeta[i].mDualTransform   = baseBatchHdl.mHostGridMetadata[i].mPrimalTransform;
+        hostMeta[i].mPrimalTransform = baseBatchHdl.mHostGridMetadata[i].mDualTransform;
+        hostMeta[i].mVoxelSize       = baseBatchHdl.mHostGridMetadata[i].mVoxelSize;
+    }
+    syncMetadataToDevice(hostMeta, deviceMeta, bs, device, true);
+
+    const torch::Tensor listIndices = torch::empty(
+        {0, 1}, torch::TensorOptions().dtype(fvdb::JLIdxScalarType).device(device));
+    std::vector<torch::Tensor> leafBatchIdxs;
+    leafBatchIdxs.reserve(bs);
+    for (int64_t i = 0; i < bs; i += 1) {
+        leafBatchIdxs.push_back(
+            torch::full({hostMeta[i].mNumLeaves},
+                        static_cast<fvdb::JIdxType>(i),
+                        torch::TensorOptions().dtype(fvdb::JIdxScalarType).device(device)));
+    }
+    torch::Tensor leafBatchIndices = torch::cat(leafBatchIdxs, 0);
+
+    auto gridHdlPtr =
+        std::make_shared<nanovdb::GridHandle<TorchDeviceBuffer>>(std::move(hdl));
+
+    return c10::make_intrusive<GridBatchData>(
+        std::move(gridHdlPtr), hostMeta, deviceMeta, bs, std::move(batchMeta),
+        std::move(leafBatchIndices), std::move(batchOffsets), std::move(listIndices));
 }
 
 } // namespace ops

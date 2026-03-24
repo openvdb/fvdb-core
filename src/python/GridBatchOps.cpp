@@ -55,6 +55,28 @@
 #include <fvdb/detail/ops/GridEdgeNetwork.h>
 #include <fvdb/detail/ops/SerializeEncode.h>
 
+// Grid construction / topology / batch ops
+#include <fvdb/detail/GridBatchDataFactory.h>
+#include <fvdb/detail/ops/BuildCoarseGridFromFine.h>
+#include <fvdb/detail/ops/BuildDenseGrid.h>
+#include <fvdb/detail/ops/BuildDilatedGrid.h>
+#include <fvdb/detail/ops/BuildFineGridFromCoarse.h>
+#include <fvdb/detail/ops/BuildGridForConv.h>
+#include <fvdb/detail/ops/BuildGridForConvTranspose.h>
+#include <fvdb/detail/ops/BuildGridFromIjk.h>
+#include <fvdb/detail/ops/BuildGridFromMesh.h>
+#include <fvdb/detail/ops/BuildGridFromNearestVoxelsToPoints.h>
+#include <fvdb/detail/ops/BuildGridFromPoints.h>
+#include <fvdb/detail/ops/BuildMergedGrids.h>
+#include <fvdb/detail/ops/BuildPaddedGrid.h>
+#include <fvdb/detail/ops/BuildPrunedGrid.h>
+#include <fvdb/detail/ops/ClipGrid.h>
+#include <fvdb/detail/ops/CloneGrid.h>
+#include <fvdb/detail/ops/ConcatenateGrids.h>
+#include <fvdb/detail/ops/IndexGrid.h>
+#include <fvdb/detail/ops/MakeContiguous.h>
+#include <fvdb/detail/ops/SerializeGrid.h>
+
 namespace {
 
 nanovdb::Coord
@@ -67,6 +89,26 @@ nanovdb::Vec3d
 vecToVec3d(const std::vector<double> &v) {
     TORCH_CHECK_VALUE(v.size() == 3, "Expected a list of 3 doubles, got ", v.size());
     return nanovdb::Vec3d(v[0], v[1], v[2]);
+}
+
+std::vector<nanovdb::Vec3d>
+vecsToVec3ds(const std::vector<std::vector<double>> &vecs) {
+    std::vector<nanovdb::Vec3d> result;
+    result.reserve(vecs.size());
+    for (const auto &v : vecs) {
+        result.push_back(vecToVec3d(v));
+    }
+    return result;
+}
+
+std::vector<nanovdb::Coord>
+vecsToCoords(const std::vector<std::vector<int32_t>> &vecs) {
+    std::vector<nanovdb::Coord> result;
+    result.reserve(vecs.size());
+    for (const auto &v : vecs) {
+        result.push_back(vecToCoord(v));
+    }
+    return result;
 }
 
 } // namespace
@@ -456,4 +498,286 @@ bind_grid_batch_ops(py::module &m) {
         py::arg("grid"),
         py::arg("order"),
         py::arg("offset"));
+
+    // -----------------------------------------------------------------------
+    // Grid construction factories
+    // -----------------------------------------------------------------------
+
+    m.def(
+        "create_from_ijk",
+        [](const JT &ijk,
+           const std::vector<std::vector<double>> &voxelSizes,
+           const std::vector<std::vector<double>> &origins) {
+            return ops::createNanoGridFromIJK(ijk, vecsToVec3ds(voxelSizes), vecsToVec3ds(origins));
+        },
+        py::arg("ijk"),
+        py::arg("voxel_sizes"),
+        py::arg("origins"));
+
+    m.def(
+        "create_from_points",
+        [](const JT &points,
+           const std::vector<std::vector<double>> &voxelSizes,
+           const std::vector<std::vector<double>> &origins) {
+            return ops::buildGridFromPoints(points, vecsToVec3ds(voxelSizes), vecsToVec3ds(origins));
+        },
+        py::arg("points"),
+        py::arg("voxel_sizes"),
+        py::arg("origins"));
+
+    m.def(
+        "create_from_mesh",
+        [](const JT &vertices,
+           const JT &faces,
+           const std::vector<std::vector<double>> &voxelSizes,
+           const std::vector<std::vector<double>> &origins) {
+            return ops::buildGridFromMesh(
+                vertices, faces, vecsToVec3ds(voxelSizes), vecsToVec3ds(origins));
+        },
+        py::arg("vertices"),
+        py::arg("faces"),
+        py::arg("voxel_sizes"),
+        py::arg("origins"));
+
+    m.def(
+        "create_from_nearest_voxels_to_points",
+        [](const JT &points,
+           const std::vector<std::vector<double>> &voxelSizes,
+           const std::vector<std::vector<double>> &origins) {
+            return ops::buildGridFromNearestVoxelsToPoints(
+                points, vecsToVec3ds(voxelSizes), vecsToVec3ds(origins));
+        },
+        py::arg("points"),
+        py::arg("voxel_sizes"),
+        py::arg("origins"));
+
+    m.def(
+        "create_from_empty",
+        [](const torch::Device &device,
+           const std::vector<double> &voxelSize,
+           const std::vector<double> &origin) {
+            return fvdb::detail::makeEmptyGridBatchData(device, vecToVec3d(voxelSize), vecToVec3d(origin));
+        },
+        py::arg("device"),
+        py::arg("voxel_size"),
+        py::arg("origin"));
+
+    m.def(
+        "create_dense",
+        [](int64_t numGrids,
+           const torch::Device &device,
+           const std::vector<int32_t> &denseDims,
+           const std::vector<int32_t> &ijkMin,
+           const std::vector<std::vector<double>> &voxelSizes,
+           const std::vector<std::vector<double>> &origins,
+           std::optional<torch::Tensor> mask) {
+            return ops::createNanoGridFromDense(numGrids,
+                                               vecToCoord(ijkMin),
+                                               vecToCoord(denseDims),
+                                               device,
+                                               mask,
+                                               vecsToVec3ds(voxelSizes),
+                                               vecsToVec3ds(origins));
+        },
+        py::arg("num_grids"),
+        py::arg("device"),
+        py::arg("dense_dims"),
+        py::arg("ijk_min"),
+        py::arg("voxel_sizes"),
+        py::arg("origins"),
+        py::arg("mask") = std::nullopt);
+
+    m.def("deserialize_grid", &ops::deserializeGrid, py::arg("serialized"));
+    m.def("make_contiguous", &ops::makeContiguous, py::arg("input"));
+    m.def("concatenate_grids", &ops::concatenateGrids, py::arg("elements"));
+
+    // -----------------------------------------------------------------------
+    // Topology ops
+    // -----------------------------------------------------------------------
+
+    m.def(
+        "coarsen_grid",
+        [](const GBI &grid, const std::vector<int32_t> &factor) {
+            if (grid.batchSize() == 0) {
+                return fvdb::detail::makeEmptyGridBatchData(grid.device());
+            }
+            return ops::buildCoarseGridFromFine(grid, vecToCoord(factor));
+        },
+        py::arg("grid"),
+        py::arg("coarsening_factor"));
+
+    m.def(
+        "upsample_grid",
+        [](const GBI &grid,
+           const std::vector<int32_t> &factor,
+           std::optional<fvdb::JaggedTensor> mask) {
+            if (grid.batchSize() == 0) {
+                return fvdb::detail::makeEmptyGridBatchData(grid.device());
+            }
+            return ops::buildFineGridFromCoarse(grid, vecToCoord(factor), mask);
+        },
+        py::arg("grid"),
+        py::arg("upsample_factor"),
+        py::arg("mask") = std::nullopt);
+
+    m.def(
+        "dual_grid",
+        [](const GBI &grid, bool excludeBorder) {
+            if (grid.batchSize() == 0) {
+                return fvdb::detail::makeEmptyGridBatchData(grid.device());
+            }
+            return ops::buildPaddedGrid(grid, 0, 1, excludeBorder);
+        },
+        py::arg("grid"),
+        py::arg("exclude_border") = false);
+
+    m.def(
+        "clip_grid",
+        [](const GBI &grid,
+           const std::vector<std::vector<int32_t>> &ijkMin,
+           const std::vector<std::vector<int32_t>> &ijkMax) {
+            return ops::clipGrid(grid, vecsToCoords(ijkMin), vecsToCoords(ijkMax));
+        },
+        py::arg("grid"),
+        py::arg("ijk_min"),
+        py::arg("ijk_max"));
+
+    m.def(
+        "clip_grid_with_mask",
+        [](const GBI &grid,
+           const std::vector<std::vector<int32_t>> &ijkMin,
+           const std::vector<std::vector<int32_t>> &ijkMax) {
+            return ops::clipGridWithMask(grid, vecsToCoords(ijkMin), vecsToCoords(ijkMax));
+        },
+        py::arg("grid"),
+        py::arg("ijk_min"),
+        py::arg("ijk_max"));
+
+    m.def(
+        "clip_grid_features_with_mask",
+        [](const GBI &grid,
+           const JT &features,
+           const std::vector<std::vector<int32_t>> &ijkMin,
+           const std::vector<std::vector<int32_t>> &ijkMax) {
+            return ops::clipGridFeaturesWithMask(grid, features, vecsToCoords(ijkMin), vecsToCoords(ijkMax));
+        },
+        py::arg("grid"),
+        py::arg("features"),
+        py::arg("ijk_min"),
+        py::arg("ijk_max"));
+
+    m.def(
+        "dilate_grid",
+        [](const GBI &grid, const std::vector<int64_t> &dilation) {
+            if (grid.batchSize() == 0) {
+                return fvdb::detail::makeEmptyGridBatchData(grid.device());
+            }
+            return ops::dilateGrid(grid, dilation);
+        },
+        py::arg("grid"),
+        py::arg("dilation"));
+
+    m.def(
+        "merge_grids",
+        [](const GBI &grid1, const GBI &grid2) {
+            if (grid1.batchSize() == 0) {
+                return fvdb::detail::makeEmptyGridBatchData(grid1.device());
+            }
+            return ops::mergeGrids(grid1, grid2);
+        },
+        py::arg("grid1"),
+        py::arg("grid2"));
+
+    m.def(
+        "prune_grid",
+        [](const GBI &grid, const JT &mask) {
+            if (grid.batchSize() == 0) {
+                return fvdb::detail::makeEmptyGridBatchData(grid.device());
+            }
+            return ops::pruneGrid(grid, mask);
+        },
+        py::arg("grid"),
+        py::arg("mask"));
+
+    m.def(
+        "conv_grid",
+        [](const GBI &grid,
+           const std::vector<int32_t> &kernelSize,
+           const std::vector<int32_t> &stride) {
+            if (grid.batchSize() == 0) {
+                return fvdb::detail::makeEmptyGridBatchData(grid.device());
+            }
+            return ops::buildGridForConv(grid, vecToCoord(kernelSize), vecToCoord(stride));
+        },
+        py::arg("grid"),
+        py::arg("kernel_size"),
+        py::arg("stride"));
+
+    m.def(
+        "conv_transpose_grid",
+        [](const GBI &grid,
+           const std::vector<int32_t> &kernelSize,
+           const std::vector<int32_t> &stride) {
+            if (grid.batchSize() == 0) {
+                return fvdb::detail::makeEmptyGridBatchData(grid.device());
+            }
+            return ops::buildGridForConvTranspose(grid, vecToCoord(kernelSize), vecToCoord(stride));
+        },
+        py::arg("grid"),
+        py::arg("kernel_size"),
+        py::arg("stride"));
+
+    // -----------------------------------------------------------------------
+    // Batch ops
+    // -----------------------------------------------------------------------
+
+    m.def(
+        "clone_grid",
+        [](const GBI &grid, const torch::Device &device) {
+            return ops::cloneGrid(grid, device);
+        },
+        py::arg("grid"),
+        py::arg("device"));
+
+    m.def("serialize_grid", &ops::serializeGrid, py::arg("grid"));
+
+    m.def(
+        "index_grid_int",
+        [](const GBI &grid, int64_t bi) { return ops::indexGrid(grid, bi); },
+        py::arg("grid"),
+        py::arg("index"));
+
+    m.def(
+        "index_grid_slice",
+        [](const GBI &grid, ssize_t start, ssize_t stop, ssize_t step) {
+            return ops::indexGrid(grid, start, stop, step);
+        },
+        py::arg("grid"),
+        py::arg("start"),
+        py::arg("stop"),
+        py::arg("step"));
+
+    m.def(
+        "index_grid_tensor",
+        [](const GBI &grid, const torch::Tensor &indices) {
+            return ops::indexGrid(grid, indices);
+        },
+        py::arg("grid"),
+        py::arg("indices"));
+
+    m.def(
+        "index_grid_int64_list",
+        [](const GBI &grid, const std::vector<int64_t> &indices) {
+            return ops::indexGrid(grid, indices);
+        },
+        py::arg("grid"),
+        py::arg("indices"));
+
+    m.def(
+        "index_grid_bool_list",
+        [](const GBI &grid, const std::vector<bool> &indices) {
+            return ops::indexGrid(grid, indices);
+        },
+        py::arg("grid"),
+        py::arg("indices"));
 }

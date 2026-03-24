@@ -23,6 +23,7 @@
 
 #include <fvdb/JaggedTensor.h>
 #include <fvdb/detail/GridBatchData.h>
+#include <fvdb/detail/ops/BuildGridFromIjk.h>
 #include <fvdb/detail/ops/convolution/GatherScatterDefault.h>
 
 #include <torch/torch.h>
@@ -50,7 +51,7 @@ makeGrid(torch::Tensor ijk_2d, torch::Device device) {
     JaggedTensor jt(ijk_dev);
     std::vector<nanovdb::Vec3d> voxel_sizes = {{1.0, 1.0, 1.0}};
     std::vector<nanovdb::Vec3d> origins     = {{0.0, 0.0, 0.0}};
-    return GridBatchData::createFromIjk(jt, voxel_sizes, origins);
+    return ops::createNanoGridFromIJK(jt, voxel_sizes, origins);
 }
 
 static c10::intrusive_ptr<GridBatchData>
