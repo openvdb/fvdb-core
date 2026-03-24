@@ -7,13 +7,15 @@ supported software and hardware configurations.
 Software Requirements
 ------------------------
 
-fVDB is currently supported on the matrix of dependencies in the following table.
+The following is a compability matrix of the versions of software compatible with each minor release of fVDB.  These are the versions of software fVDB was built and tested against that are officially supported:
 
-+------------------+-----------------+-----------------+----------------+------------------------------------------+
-| Operating System | PyTorch Version | Python Version  | CUDA Version   | Vulkan Version (only for visualization)  |
-+------------------+-----------------+-----------------+----------------+------------------------------------------+
-| Linux Only       | 2.10.0          | 3.10 - 3.13     | 12.8, 13.0     | 1.3.275.0                                |
-+------------------+-----------------+-----------------+----------------+------------------------------------------+
++--------------+------------------+-----------------+-----------------+----------------+------------------------------------------+
+| fVDB Version | Operating System | PyTorch Version | Python Version  | CUDA Version   | Vulkan Version (only for visualization)  |
++--------------+------------------+-----------------+-----------------+----------------+------------------------------------------+
+| 0.3          | Linux Only       | 2.8.0           | 3.10 - 3.13     | 12.8           | 1.3.275.0                                |
++--------------+------------------+-----------------+-----------------+----------------+------------------------------------------+
+| 0.4          | Linux Only       | 2.10.0          | 3.10 - 3.13     | 12.8, 13.0     | 1.3.275.0                                |
++--------------+------------------+-----------------+-----------------+----------------+------------------------------------------+
 
 Driver and Hardware Requirements
 -----------------------------------
