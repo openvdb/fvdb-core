@@ -33,7 +33,7 @@ TEAM_SLUG = "fvdb-dev"
 def gh_api(endpoint: str) -> list[dict] | dict:
     result = subprocess.run(
         ["gh", "api", endpoint],
-        capture_output=True,
+        stdout=subprocess.PIPE,
         text=True,
         check=True,
     )
@@ -77,8 +77,6 @@ def add_label(repo: str, issue_number: int, label: str) -> None:
     subprocess.run(
         ["gh", "issue", "edit", str(issue_number), "--repo", repo, "--add-label", label],
         check=True,
-        capture_output=True,
-        text=True,
     )
 
 
