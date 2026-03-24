@@ -36,8 +36,8 @@ jobs:
             exit 1
           fi
           AUTHOR="${{ github.event.issue.user.login }}"
-          HTTP_CODE=$(gh api "orgs/openvdb/teams/fvdb-dev/memberships/$AUTHOR" \
-            -i --silent 2>&1 | head -1 | awk '{print $2}')
+          HTTP_CODE=$( (gh api "orgs/openvdb/teams/fvdb-dev/memberships/$AUTHOR" \
+            -i --silent 2>&1 || true) | head -1 | awk '{print $2}')
           case "$HTTP_CODE" in
             200) echo "member=true"  >> "$GITHUB_OUTPUT" ;;
             404) echo "member=false" >> "$GITHUB_OUTPUT" ;;
