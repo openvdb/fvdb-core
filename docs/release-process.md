@@ -9,14 +9,18 @@ branching model with short-lived release branches.
 development code. Release branches (`release/vX.Y`) are created for
 stabilization. At release time, an adopt branch (`adopt/vX.Y`) reconciles
 the version in `pyproject.toml` and merges the release work back into `main`,
-keeping the release branch pristine for future patch releases.
+keeping the release branch available for future hotfix releases. Hotfix
+releases (PATCH > 0) reuse the same release branch with a version-specific
+adopt branch (`adopt/vX.Y.Z`).
 
 ```
-main:           ──A──B──C──D──────────────────────G──H──I── ...
-                       \                          /
-release/v0.4:           E──F────────T (tag v0.4.0)
-                                     \          /
-adopt/v0.4:                           V────────  (version fixup)
+main:           ──A──B──C──D──────────G──H──────────────K── ...
+                       \             /       \          /
+release/v0.4:           E──F──T     /     P──Q──U      /
+                               \   /              \   /
+adopt/v0.4:                     V─┘                \ /
+adopt/v0.4.1:                                       W
+                        (v0.4.0)             (v0.4.1)
 ```
 
 - **A, B**: normal development on `main`
@@ -24,10 +28,15 @@ adopt/v0.4:                           V────────  (version fixup)
 - **C**: `main` version bumped to next `.dev0`
 - **D**: new feature merged to `main` (not included in the release)
 - **E, F**: bug fixes or pre-burndown PRs merged to the release branch
-- **T**: release tag created on the release branch
+- **T**: release tag `v0.4.0` created on the release branch
 - **V**: adopt branch created from `T`; version set to match `main`
 - **G**: merge commit bringing release fixes back into `main` via `adopt/v0.4`
-- **H, I**: development continues
+- **H**: development continues
+- **P**: version bumped to `0.4.1` on the release branch (`start-release.sh 0.4.1`)
+- **Q**: cherry-picked fix
+- **U**: release tag `v0.4.1` created on the release branch
+- **W**: adopt branch `adopt/v0.4.1` created from `U`; version set to match `main`
+- **K**: merge commit bringing hotfix into `main` via `adopt/v0.4.1`
 
 ## Branch Naming
 
@@ -35,7 +44,7 @@ adopt/v0.4:                           V────────  (version fixup)
 |---------|---------|---------|
 | Release | `release/vMAJOR.MINOR` | `release/v0.4` |
 | Adopt | `adopt/vMAJOR.MINOR` | `adopt/v0.4` |
-| Hotfix | `hotfix/vMAJOR.MINOR.PATCH` | `hotfix/v0.4.1` |
+| Adopt (hotfix) | `adopt/vMAJOR.MINOR.PATCH` | `adopt/v0.4.1` |
 
 ## Version Management
 
@@ -44,8 +53,10 @@ The version in `pyproject.toml` is the single source of truth.
 | Branch | Version | Example |
 |--------|---------|---------|
 | `release/vX.Y` | `X.Y.0` | `0.4.0` |
+| `release/vX.Y` (hotfix) | `X.Y.Z` | `0.4.1` |
 | `main` (after branching) | `X.Z.0.dev0` | `0.5.0.dev0` |
 | `adopt/vX.Y` | `X.Z.0.dev0` (matches `main`) | `0.5.0.dev0` |
+| `adopt/vX.Y.Z` | `X.Z.0.dev0` (matches `main`) | `0.5.0.dev0` |
 
 The `.dev0` suffix on `main` is a [PEP 440](https://peps.python.org/pep-0440/)
 pre-release marker that signals unreleased development code. It does not affect
@@ -138,18 +149,38 @@ as the base for future hotfix branches.
 Use `--remote origin` to target a different remote.
 Use `--dry-run` to preview without making changes.
 
-### Hotfixes
+### Hotfix Releases
 
-For critical fixes after a release:
+The same scripts handle hotfix releases. Pass a version with PATCH > 0
+(e.g. `0.4.1`) to enter hotfix mode.
 
-1. Create a hotfix branch from the release tag:
+1. **Start the hotfix:**
    ```bash
-   git checkout -b hotfix/v0.4.1 v0.4.0
+   ./devtools/start-release.sh 0.4.1
    ```
-2. Apply the fix and commit.
-3. Open a PR from `hotfix/v0.4.1` to `main`.
-4. If `release/v0.4` still exists, also open a PR to it.
-5. Tag `v0.4.1` and create a GitHub Release.
+   This verifies that `release/v0.4` is at the `v0.4.0` tag, bumps the
+   version to `0.4.1`, and leaves you on the release branch ready to apply
+   fixes. For successive hotfixes (e.g. `0.4.2`), the script verifies the
+   branch is at the previous hotfix tag (`v0.4.1`).
+
+2. **Cherry-pick or apply fixes:**
+   ```bash
+   git cherry-pick <commit-sha>
+   ```
+
+3. **Push the release branch** to trigger the publish workflow:
+   ```bash
+   git push upstream release/v0.4
+   ```
+
+4. **Wait for CI**, then finish the hotfix:
+   ```bash
+   ./devtools/finish-release.sh 0.4.1
+   ```
+   This tags `v0.4.1`, creates `adopt/v0.4.1` with a version fixup, opens
+   a PR into `main`, and creates a GitHub Release.
+
+5. **Merge the adopt PR** once CI passes (use a merge commit, not squash).
 
 ## GitHub Branch Protection
 
@@ -168,9 +199,9 @@ During code freeze, additionally:
 
 | Script | Purpose |
 |--------|---------|
-| `devtools/start-release.sh` | Create release branch, bump versions, open PR |
+| `devtools/start-release.sh` | Create release branch (or prepare hotfix), bump versions, open PR |
 | `devtools/finish-release.sh` | Tag release, create adopt branch + PR, create GitHub Release |
-| `devtools/test-release-scripts.sh` | End-to-end tests for the release scripts |
+| `devtools/test-release-scripts.sh` | End-to-end tests for the release scripts (including hotfix) |
 
 All scripts support `--help`, `--dry-run`, and `--remote <name>` flags.
 
