@@ -4,7 +4,7 @@
 #ifndef FVDB_DETAIL_AUTOGRAD_TRANSFORMPOINTS_H
 #define FVDB_DETAIL_AUTOGRAD_TRANSFORMPOINTS_H
 
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 
 #include <torch/autograd.h>
 
@@ -19,7 +19,7 @@ struct TransformPoints : public torch::autograd::Function<TransformPoints> {
     using JaggedVariable  = JaggedTensor;
 
     static variable_list forward(AutogradContext *ctx,
-                                 c10::intrusive_ptr<GridBatchImpl> grid,
+                                 c10::intrusive_ptr<GridBatchData> grid,
                                  JaggedVariable points,
                                  Variable pointsData,
                                  bool isInverse,

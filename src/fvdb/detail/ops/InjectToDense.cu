@@ -22,7 +22,7 @@ injectToDenseCminorVoxelCallback(
     int32_t leafIdx,
     int32_t voxelIdx,
     int32_t channelIdx,
-    GridBatchImpl::Accessor batchHandle,
+    GridBatchData::Accessor batchHandle,
     // [B, 3]
     torch::PackedTensorAccessor64<int32_t, 2, torch::RestrictPtrTraits> denseOrigins, // [B, 3]
     // [B*N, C]
@@ -60,7 +60,7 @@ injectToDenseCmajorVoxelCallback(
     int32_t leafIdx,
     int32_t voxelIdx,
     int32_t channelIdx,
-    GridBatchImpl::Accessor batchHandle,
+    GridBatchData::Accessor batchHandle,
     // [B, 3]
     torch::PackedTensorAccessor64<int32_t, 2, torch::RestrictPtrTraits> denseOrigins,
     // [B*N, C]
@@ -93,7 +93,7 @@ injectToDenseCmajorVoxelCallback(
 
 template <typename ScalarType>
 void
-injectToDenseCminorCPU(const GridBatchImpl::Accessor &gridHandle,
+injectToDenseCminorCPU(const GridBatchData::Accessor &gridHandle,
                        const torch::TensorAccessor<ScalarType, 2> inGridData,
                        const torch::TensorAccessor<int32_t, 2> denseOrigins,
                        torch::TensorAccessor<ScalarType, 5> outDenseTensor,
@@ -130,7 +130,7 @@ injectToDenseCminorCPU(const GridBatchImpl::Accessor &gridHandle,
 
 template <typename ScalarType>
 void
-injectToDenseCmajorCPU(const GridBatchImpl::Accessor &gridHandle,
+injectToDenseCmajorCPU(const GridBatchData::Accessor &gridHandle,
                        const torch::TensorAccessor<ScalarType, 2> inGridData,
                        const torch::TensorAccessor<int32_t, 2> denseOrigins,
                        torch::TensorAccessor<ScalarType, 5> outDenseTensor) {
@@ -159,7 +159,7 @@ injectToDenseCmajorCPU(const GridBatchImpl::Accessor &gridHandle,
 }
 
 void
-injectToDenseCminorCUDA(const GridBatchImpl &batchHdl,
+injectToDenseCminorCUDA(const GridBatchData &batchHdl,
                         const torch::Tensor &inGridData,
                         const torch::Tensor &denseOrigins,
                         torch::Tensor &outDenseTensor) {
@@ -177,7 +177,7 @@ injectToDenseCminorCUDA(const GridBatchImpl &batchHdl,
                                            int32_t lidx,
                                            int32_t vidx,
                                            int32_t cidx,
-                                           GridBatchImpl::Accessor batchAcc) {
+                                           GridBatchData::Accessor batchAcc) {
                 injectToDenseCminorVoxelCallback<scalar_t>(
                     bidx, lidx, vidx, cidx, batchAcc, denseOriginsAcc, inGridDataAcc, outDenseAcc);
             };
@@ -189,7 +189,7 @@ injectToDenseCminorCUDA(const GridBatchImpl &batchHdl,
 }
 
 void
-injectToDenseCminorPrivateUse1(const GridBatchImpl &batchHdl,
+injectToDenseCminorPrivateUse1(const GridBatchData &batchHdl,
                                const torch::Tensor &inGridData,
                                const torch::Tensor &denseOrigins,
                                torch::Tensor &outDenseTensor) {
@@ -207,7 +207,7 @@ injectToDenseCminorPrivateUse1(const GridBatchImpl &batchHdl,
                                            int32_t lidx,
                                            int32_t vidx,
                                            int32_t cidx,
-                                           GridBatchImpl::Accessor batchAcc) {
+                                           GridBatchData::Accessor batchAcc) {
                 injectToDenseCminorVoxelCallback<scalar_t>(
                     bidx, lidx, vidx, cidx, batchAcc, denseOriginsAcc, inGridDataAcc, outDenseAcc);
             };
@@ -219,7 +219,7 @@ injectToDenseCminorPrivateUse1(const GridBatchImpl &batchHdl,
 }
 
 void
-injectToDenseCminorCPUDispatch(const GridBatchImpl &gridHdl,
+injectToDenseCminorCPUDispatch(const GridBatchData &gridHdl,
                                const torch::Tensor &inGridData,
                                const torch::Tensor &denseOrigins,
                                torch::Tensor &outDenseTensor) {
@@ -240,7 +240,7 @@ injectToDenseCminorCPUDispatch(const GridBatchImpl &gridHdl,
 }
 
 void
-injectToDenseCmajorCUDA(const GridBatchImpl &batchHdl,
+injectToDenseCmajorCUDA(const GridBatchData &batchHdl,
                         const torch::Tensor &inGridData,
                         const torch::Tensor &denseOrigins,
                         torch::Tensor &outDenseTensor) {
@@ -258,7 +258,7 @@ injectToDenseCmajorCUDA(const GridBatchImpl &batchHdl,
                                            int32_t lidx,
                                            int32_t vidx,
                                            int32_t cidx,
-                                           GridBatchImpl::Accessor batchAcc) {
+                                           GridBatchData::Accessor batchAcc) {
                 injectToDenseCmajorVoxelCallback<scalar_t>(
                     bidx, lidx, vidx, cidx, batchAcc, denseOriginsAcc, inGridDataAcc, outDenseAcc);
             };
@@ -270,7 +270,7 @@ injectToDenseCmajorCUDA(const GridBatchImpl &batchHdl,
 }
 
 void
-injectToDenseCmajorPrivateUse1(const GridBatchImpl &batchHdl,
+injectToDenseCmajorPrivateUse1(const GridBatchData &batchHdl,
                                const torch::Tensor &inGridData,
                                const torch::Tensor &denseOrigins,
                                torch::Tensor &outDenseTensor) {
@@ -288,7 +288,7 @@ injectToDenseCmajorPrivateUse1(const GridBatchImpl &batchHdl,
                                            int32_t lidx,
                                            int32_t vidx,
                                            int32_t cidx,
-                                           GridBatchImpl::Accessor batchAcc) {
+                                           GridBatchData::Accessor batchAcc) {
                 injectToDenseCmajorVoxelCallback<scalar_t>(
                     bidx, lidx, vidx, cidx, batchAcc, denseOriginsAcc, inGridDataAcc, outDenseAcc);
             };
@@ -300,7 +300,7 @@ injectToDenseCmajorPrivateUse1(const GridBatchImpl &batchHdl,
 }
 
 void
-injectToDenseCmajorCPUDispatch(const GridBatchImpl &gridHdl,
+injectToDenseCmajorCPUDispatch(const GridBatchData &gridHdl,
                                const torch::Tensor &inGridData,
                                const torch::Tensor &denseOrigins,
                                torch::Tensor &outDenseTensor) {
@@ -318,7 +318,7 @@ injectToDenseCmajorCPUDispatch(const GridBatchImpl &gridHdl,
 }
 
 torch::Tensor
-injectToDenseCminor(const GridBatchImpl &batchHdl,
+injectToDenseCminor(const GridBatchData &batchHdl,
                     const torch::Tensor &sparseData,
                     const torch::Tensor &denseOrigins,
                     const nanovdb::Coord &gridSize) {
@@ -354,7 +354,7 @@ injectToDenseCminor(const GridBatchImpl &batchHdl,
 }
 
 torch::Tensor
-injectToDenseCmajor(const GridBatchImpl &batchHdl,
+injectToDenseCmajor(const GridBatchData &batchHdl,
                     const torch::Tensor &sparseData,
                     const torch::Tensor &denseOrigins,
                     const nanovdb::Coord &gridSize) {

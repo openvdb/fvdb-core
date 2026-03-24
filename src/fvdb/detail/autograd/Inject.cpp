@@ -3,7 +3,7 @@
 //
 
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 #include <fvdb/detail/autograd/Inject.h>
 #include <fvdb/detail/ops/Inject.h>
 
@@ -15,12 +15,12 @@ namespace fvdb::detail::autograd {
 
 Inject::variable_list
 Inject::forward(AutogradContext *ctx,
-                const c10::intrusive_ptr<GridBatchImpl> srcGrid,
+                const c10::intrusive_ptr<GridBatchData> srcGrid,
                 Inject::Variable const &srcFeaturesJData,
                 Inject::Variable const &srcFeaturesJOffsets,
                 Inject::Variable const &srcFeaturesJIdx,
                 Inject::Variable const &srcFeaturesJLIdx,
-                const c10::intrusive_ptr<GridBatchImpl> dstGrid,
+                const c10::intrusive_ptr<GridBatchData> dstGrid,
                 Inject::Variable const &dstFeaturesJData,
                 Inject::Variable const &dstFeaturesJOffsets,
                 Inject::Variable const &dstFeaturesJIdx,
@@ -59,12 +59,12 @@ Inject::backward(AutogradContext *ctx, Inject::variable_list grad_output) {
     auto dLossDSrcFeaturesJData = grad_output[0].clone().contiguous();
     auto dLossDDstFeaturesJData = grad_output[1].clone().contiguous();
 
-    const auto srcGrid     = ctx->saved_data["src_grid"].toCustomClass<GridBatchImpl>();
+    const auto srcGrid     = ctx->saved_data["src_grid"].toCustomClass<GridBatchData>();
     const auto srcJOffsets = ctx->saved_data["src_joffsets"].toTensor();
     const auto srcJIdx     = ctx->saved_data["src_jidx"].toTensor();
     const auto srcJLIdx    = ctx->saved_data["src_jlidx"].toTensor();
 
-    const auto dstGrid     = ctx->saved_data["dst_grid"].toCustomClass<GridBatchImpl>();
+    const auto dstGrid     = ctx->saved_data["dst_grid"].toCustomClass<GridBatchData>();
     const auto dstJOffsets = ctx->saved_data["dst_joffsets"].toTensor();
     const auto dstJIdx     = ctx->saved_data["dst_jidx"].toTensor();
     const auto dstJLIdx    = ctx->saved_data["dst_jlidx"].toTensor();

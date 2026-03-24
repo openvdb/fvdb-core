@@ -42,7 +42,7 @@ def grid_edge_network(grid: Grid) -> tuple[torch.Tensor, torch.Tensor]:
             vertices that form each edge. *i.e.*  ``edge_indices[j] = [v0, v1]`` means that the j-th edge
             connects vertices at positions ``edge_vertices[v0]`` and ``edge_vertices[v1]``.
     """
-    gv, ge = grid._impl.viz_edge_network
+    gv, ge = grid.data.viz_edge_network
     return gv.jdata, ge.jdata
 
 
@@ -86,5 +86,5 @@ def gridbatch_edge_network(grid: GridBatch) -> tuple[JaggedTensor, JaggedTensor]
             vertices that form each edge. *i.e.*  ``edge_indices[b][j] = [v0, v1]`` means that the j-th edge in the b-th grid
             connects vertices at positions ``edge_vertices[b][v0]`` and ``edge_vertices[b][v1]``.
     """
-    gv, ge = grid._impl.viz_edge_network
+    gv, ge = grid.data.viz_edge_network
     return gv, ge

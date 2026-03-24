@@ -144,11 +144,11 @@ class GridBatch:
     #: :meta private: # NOTE: This is here for sphinx to not complain that the attribute is double defined in the class and in the class documentation.
     max_grids_per_batch: int = GridBatchCpp.max_grids_per_batch
 
-    def __init__(self, *, impl: GridBatchCpp):
+    def __init__(self, *, data: GridBatchCpp):
         """
         Constructor for internal use only. - use the GridBatch.from_* classmethods instead.
         """
-        self._impl = impl
+        self.data = data
 
     # ============================================================
     #                  GridBatch from_* constructors
@@ -227,7 +227,7 @@ class GridBatch:
 
         grid_batch_impl = GridBatchCpp(resolved_device)
         grid_batch_impl.set_from_dense_grid(num_grids, dense_dims, ijk_min, voxel_sizes, origins, mask)
-        return cls(impl=grid_batch_impl)
+        return cls(data=grid_batch_impl)
 
     @classmethod
     def from_dense_axis_aligned_bounds(
@@ -318,7 +318,7 @@ class GridBatch:
                 grid_batch.ijk.jdata == tensor([[0, 0, 0], [0, 0, 1], [0, 1, 0], [1, 0, 0], [1, 1, 0], [1, 0, 1], [0, 1, 1], [1, 1, 1]])
 
         """
-        return cls(impl=grid._impl)
+        return cls(data=grid.data)
 
     @classmethod
     def from_ijk(
@@ -364,7 +364,7 @@ class GridBatch:
 
         grid_batch_impl = GridBatchCpp(resolved_device)
         grid_batch_impl.set_from_ijk(ijk._impl, voxel_sizes, origins)
-        return cls(impl=grid_batch_impl)
+        return cls(data=grid_batch_impl)
 
     @classmethod
     def from_mesh(
@@ -417,7 +417,7 @@ class GridBatch:
 
         grid_batch_impl = GridBatchCpp(resolved_device)
         grid_batch_impl.set_from_mesh(mesh_vertices._impl, mesh_faces._impl, voxel_sizes, origins)
-        return cls(impl=grid_batch_impl)
+        return cls(data=grid_batch_impl)
 
     # Load and save functions
     @overload
@@ -525,7 +525,7 @@ class GridBatch:
             grid_impl, data_impl, names_out = _load(path, device, verbose)
 
         # Wrap the GridBatch implementation with the Python wrapper
-        return cls(impl=grid_impl), JaggedTensor(impl=data_impl), names_out
+        return cls(data=grid_impl), JaggedTensor(impl=data_impl), names_out
 
     @classmethod
     def from_nearest_voxels_to_points(
@@ -579,7 +579,7 @@ class GridBatch:
 
         grid_batch_impl = GridBatchCpp(resolved_device)
         grid_batch_impl.set_from_nearest_voxels_to_points(points._impl, voxel_sizes, origins)
-        return cls(impl=grid_batch_impl)
+        return cls(data=grid_batch_impl)
 
     @classmethod
     def from_points(
@@ -625,7 +625,7 @@ class GridBatch:
 
         grid_batch_impl = GridBatchCpp(resolved_device)
         grid_batch_impl.set_from_points(points._impl, voxel_sizes, origins)
-        return cls(impl=grid_batch_impl)
+        return cls(data=grid_batch_impl)
 
     @classmethod
     def from_zero_grids(cls, device: DeviceIdentifier = "cpu") -> "GridBatch":
@@ -649,7 +649,7 @@ class GridBatch:
                 grid_batch.grid_count # 0
 
         """
-        return cls(impl=GridBatchCpp(device=resolve_device(device)))
+        return cls(data=GridBatchCpp(device=resolve_device(device)))
 
     @classmethod
     def from_zero_voxels(
@@ -688,7 +688,7 @@ class GridBatch:
         voxel_sizes = to_Vec3fBatch(voxel_sizes, value_constraint=ValueConstraint.POSITIVE)
         origins = to_Vec3fBatch(origins)
         grid_batch_impl = GridBatchCpp(voxel_sizes=voxel_sizes, grid_origins=origins, device=resolved_device)
-        return cls(impl=grid_batch_impl)
+        return cls(data=grid_batch_impl)
 
     @classmethod
     def from_cat(cls, grids: "Sequence[GridBatch | Grid]") -> "GridBatch":
@@ -707,8 +707,8 @@ class GridBatch:
         for grid in grids:
             if not isinstance(grid, (GridBatch, Grid)):
                 raise TypeError(f"Expected GridBatch or Grid, got {type(grid)}")
-            grid_impls.append(grid._impl)
-        return cls(impl=jcat_cpp(grid_impls))
+            grid_impls.append(grid.data)
+        return cls(data=jcat_cpp(grid_impls))
 
     # ============================================================
     #                Regular Instance Methods Begin
@@ -751,11 +751,11 @@ class GridBatch:
         """
         pool_factor = to_Vec3iBroadcastable(pool_factor, value_constraint=ValueConstraint.POSITIVE)
         stride = to_Vec3iBroadcastable(stride, value_constraint=ValueConstraint.NON_NEGATIVE)
-        coarse_grid_impl = coarse_grid._impl if coarse_grid else None
+        coarse_grid_impl = coarse_grid.data if coarse_grid else None
 
-        result_data_impl, result_grid_impl = self._impl.avg_pool(pool_factor, data._impl, stride, coarse_grid_impl)
+        result_data_impl, result_grid_impl = self.data.avg_pool(pool_factor, data._impl, stride, coarse_grid_impl)
 
-        return JaggedTensor(impl=result_data_impl), GridBatch(impl=cast(GridBatchCpp, result_grid_impl))
+        return JaggedTensor(impl=result_data_impl), GridBatch(data=cast(GridBatchCpp, result_grid_impl))
 
     def bbox_at(self, bi: int) -> torch.Tensor:
         """
@@ -774,7 +774,7 @@ class GridBatch:
         if self.has_zero_voxels_at(bi):
             return torch.zeros((2, 3), dtype=torch.int32, device=self.device)
         else:
-            return self._impl.bbox_at(bi)
+            return self.data.bbox_at(bi)
 
     def clip(
         self, features: JaggedTensor, ijk_min: NumericMaxRank2, ijk_max: NumericMaxRank2
@@ -799,8 +799,8 @@ class GridBatch:
         ijk_min = to_Vec3iBatchBroadcastable(ijk_min)
         ijk_max = to_Vec3iBatchBroadcastable(ijk_max)
 
-        result_features_impl, result_grid_impl = self._impl.clip(features._impl, ijk_min, ijk_max)
-        return JaggedTensor(impl=result_features_impl), GridBatch(impl=result_grid_impl)
+        result_features_impl, result_grid_impl = self.data.clip(features._impl, ijk_min, ijk_max)
+        return JaggedTensor(impl=result_features_impl), GridBatch(data=result_grid_impl)
 
     def clipped_grid(
         self,
@@ -821,7 +821,7 @@ class GridBatch:
         ijk_min = to_Vec3iBatchBroadcastable(ijk_min)
         ijk_max = to_Vec3iBatchBroadcastable(ijk_max)
 
-        return GridBatch(impl=self._impl.clipped_grid(ijk_min, ijk_max))
+        return GridBatch(data=self.data.clipped_grid(ijk_min, ijk_max))
 
     def coarsened_grid(self, coarsening_factor: NumericMaxRank1) -> "GridBatch":
         """
@@ -837,7 +837,7 @@ class GridBatch:
         """
         coarsening_factor = to_Vec3iBroadcastable(coarsening_factor, value_constraint=ValueConstraint.POSITIVE)
 
-        return GridBatch(impl=self._impl.coarsened_grid(coarsening_factor))
+        return GridBatch(data=self.data.coarsened_grid(coarsening_factor))
 
     def contiguous(self) -> "GridBatch":
         """
@@ -849,7 +849,7 @@ class GridBatch:
         Returns:
             grid_batch (GridBatch): A new GridBatch with contiguous memory layout.
         """
-        return GridBatch(impl=self._impl.contiguous())
+        return GridBatch(data=self.data.contiguous())
 
     def conv_grid(self, kernel_size: NumericMaxRank1, stride: NumericMaxRank1 = 1) -> "GridBatch":
         """
@@ -866,7 +866,7 @@ class GridBatch:
         kernel_size = to_Vec3iBroadcastable(kernel_size, value_constraint=ValueConstraint.POSITIVE)
         stride = to_Vec3iBroadcastable(stride, value_constraint=ValueConstraint.POSITIVE)
 
-        return GridBatch(impl=self._impl.conv_grid(kernel_size, stride))
+        return GridBatch(data=self.data.conv_grid(kernel_size, stride))
 
     def conv_transpose_grid(self, kernel_size: NumericMaxRank1, stride: NumericMaxRank1 = 1) -> "GridBatch":
         """
@@ -883,7 +883,7 @@ class GridBatch:
         kernel_size = to_Vec3iBroadcastable(kernel_size, value_constraint=ValueConstraint.POSITIVE)
         stride = to_Vec3iBroadcastable(stride, value_constraint=ValueConstraint.POSITIVE)
 
-        return GridBatch(impl=self._impl.conv_transpose_grid(kernel_size, stride))
+        return GridBatch(data=self.data.conv_transpose_grid(kernel_size, stride))
 
     def coords_in_grid(self, ijk: JaggedTensor) -> JaggedTensor:
         """
@@ -895,7 +895,7 @@ class GridBatch:
         Returns:
             mask (JaggedTensor): Boolean mask per-grid indicating which coordinates map to active voxels. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_queries_for_grid_b)``.
         """
-        return JaggedTensor(impl=self._impl.coords_in_grid(ijk._impl))
+        return JaggedTensor(impl=self.data.coords_in_grid(ijk._impl))
 
     def cpu(self) -> "GridBatch":
         """
@@ -904,7 +904,7 @@ class GridBatch:
         Returns:
             grid_batch (GridBatch): A new :class:`fvdb.GridBatch` on CPU device.
         """
-        return GridBatch(impl=self._impl.cpu())
+        return GridBatch(data=self.data.cpu())
 
     def cubes_in_grid(
         self, cube_centers: JaggedTensor, cube_min: NumericMaxRank1 = 0, cube_max: NumericMaxRank1 = 0
@@ -930,7 +930,7 @@ class GridBatch:
         cube_min = to_Vec3fBroadcastable(cube_min)
         cube_max = to_Vec3fBroadcastable(cube_max)
 
-        return JaggedTensor(impl=self._impl.cubes_in_grid(cube_centers._impl, cube_min, cube_max))
+        return JaggedTensor(impl=self.data.cubes_in_grid(cube_centers._impl, cube_min, cube_max))
 
     def cubes_intersect_grid(
         self, cube_centers: JaggedTensor, cube_min: NumericMaxRank1 = 0, cube_max: NumericMaxRank1 = 0
@@ -956,7 +956,7 @@ class GridBatch:
         cube_min = to_Vec3fBroadcastable(cube_min)
         cube_max = to_Vec3fBroadcastable(cube_max)
 
-        return JaggedTensor(impl=self._impl.cubes_intersect_grid(cube_centers._impl, cube_min, cube_max))
+        return JaggedTensor(impl=self.data.cubes_intersect_grid(cube_centers._impl, cube_min, cube_max))
 
     def cuda(self) -> "GridBatch":
         """
@@ -965,7 +965,7 @@ class GridBatch:
         Returns:
             grid_batch (GridBatch): A new :class:`fvdb.GridBatch` on CUDA device.
         """
-        return GridBatch(impl=self._impl.cuda())
+        return GridBatch(data=self.data.cuda())
 
     def cum_voxels_at(self, bi: int) -> int:
         """
@@ -977,7 +977,7 @@ class GridBatch:
         Returns:
             cum_voxels (int): The cumulative number of voxels up to and including grid ``bi``.
         """
-        return self._impl.cum_voxels_at(bi)
+        return self.data.cum_voxels_at(bi)
 
     def dilated_grid(self, dilation: int) -> "GridBatch":
         """
@@ -989,7 +989,7 @@ class GridBatch:
         Returns:
             dilated_grid (GridBatch): A new :class:`fvdb.GridBatch` with dilated active regions.
         """
-        return GridBatch(impl=self._impl.dilated_grid(dilation))
+        return GridBatch(data=self.data.dilated_grid(dilation))
 
     def dual_bbox_at(self, bi: int) -> torch.Tensor:
         """
@@ -1011,7 +1011,7 @@ class GridBatch:
         if self.has_zero_voxels_at(bi):
             return torch.zeros((2, 3), dtype=torch.int32, device=self.device)
         else:
-            return self._impl.dual_bbox_at(bi)
+            return self.data.dual_bbox_at(bi)
 
     def dual_grid(self, exclude_border: bool = False) -> "GridBatch":
         """
@@ -1026,9 +1026,7 @@ class GridBatch:
         Returns:
             dual_grid (GridBatch): A new :class:`fvdb.GridBatch` representing the dual grid.
         """
-        return GridBatch(
-            impl=self._impl.dual_grid(exclude_border),
-        )
+        return GridBatch(data=self.data.dual_grid(exclude_border))
 
     def voxel_to_world(self, ijk: JaggedTensor) -> JaggedTensor:
         """
@@ -1046,7 +1044,7 @@ class GridBatch:
         Returns:
             world_coords (JaggedTensor): World coordinates. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_points_for_grid_b, 3)``.
         """
-        return JaggedTensor(impl=self._impl.voxel_to_world(ijk._impl))
+        return JaggedTensor(impl=self.data.voxel_to_world(ijk._impl))
 
     def has_same_address_and_grid_count(self, other: Any) -> bool:
         """
@@ -1085,7 +1083,7 @@ class GridBatch:
                 A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_queries_for_grid_b)``.
         """
         assert isinstance(ijk, JaggedTensor), "ijk must be a JaggedTensor"
-        return JaggedTensor(impl=self._impl.ijk_to_index(ijk._impl, cumulative))
+        return JaggedTensor(impl=self.data.ijk_to_index(ijk._impl, cumulative))
 
     def ijk_to_inv_index(self, ijk: JaggedTensor, cumulative: bool = False) -> JaggedTensor:
         """
@@ -1102,7 +1100,7 @@ class GridBatch:
             inv_map (JaggedTensor): Inverse permutation for :meth:`ijk_to_index`.
                 A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_queries_for_grid_b)``.
         """
-        return JaggedTensor(impl=self._impl.ijk_to_inv_index(ijk._impl, cumulative))
+        return JaggedTensor(impl=self.data.ijk_to_inv_index(ijk._impl, cumulative))
 
     def inject_from(
         self,
@@ -1153,7 +1151,7 @@ class GridBatch:
                 f"src and dst must have the same element shape, but got src: {src.eshape}, dst: {dst.eshape}"
             )
 
-        src_grid._impl.inject_to(self._impl, src._impl, dst._impl)
+        src_grid.data.inject_to(self.data, src._impl, dst._impl)
 
         return dst
 
@@ -1252,7 +1250,7 @@ class GridBatch:
             raise ValueError(
                 f"src and dst must have the same element shape, but got src: {src.eshape}, dst: {dst.eshape}"
             )
-        self._impl.inject_to(dst_grid._impl, src._impl, dst._impl)
+        self.data.inject_to(dst_grid.data, src._impl, dst._impl)
         return dst
 
     def integrate_tsdf(
@@ -1293,7 +1291,7 @@ class GridBatch:
             updated_weights (JaggedTensor): Updated weights as JaggedTensor.
         """
 
-        result_grid_impl, result_jagged_1_impl, result_jagged_2_impl = self._impl.integrate_tsdf(
+        result_grid_impl, result_jagged_1_impl, result_jagged_2_impl = self.data.integrate_tsdf(
             truncation_distance,
             projection_matrices,
             cam_to_world_matrices,
@@ -1304,7 +1302,7 @@ class GridBatch:
         )
 
         return (
-            GridBatch(impl=result_grid_impl),
+            GridBatch(data=result_grid_impl),
             JaggedTensor(impl=result_jagged_1_impl),
             JaggedTensor(impl=result_jagged_2_impl),
         )
@@ -1353,7 +1351,7 @@ class GridBatch:
             updated_features (JaggedTensor): Updated features as JaggedTensor.
         """
         result_grid_impl, result_jagged_1_impl, result_jagged_2_impl, result_jagged_3_impl = (
-            self._impl.integrate_tsdf_with_features(
+            self.data.integrate_tsdf_with_features(
                 truncation_distance,
                 projection_matrices,
                 cam_to_world_matrices,
@@ -1367,7 +1365,7 @@ class GridBatch:
         )
 
         return (
-            GridBatch(impl=result_grid_impl),
+            GridBatch(data=result_grid_impl),
             JaggedTensor(impl=result_jagged_1_impl),
             JaggedTensor(impl=result_jagged_2_impl),
             JaggedTensor(impl=result_jagged_3_impl),
@@ -1380,7 +1378,7 @@ class GridBatch:
         Returns:
             is_contiguous (bool): True if the data is contiguous, False otherwise.
         """
-        return self._impl.is_contiguous()
+        return self.data.is_contiguous()
 
     def is_same(self, other: "GridBatch") -> bool:
         """
@@ -1392,7 +1390,7 @@ class GridBatch:
         Returns:
             is_same (bool): True if the grid batches have the same underlying data in memory, False otherwise.
         """
-        return self._impl.is_same(other._impl)
+        return self.data.is_same(other.data)
 
     def jagged_like(self, data: torch.Tensor) -> JaggedTensor:
         """
@@ -1407,7 +1405,7 @@ class GridBatch:
         Returns:
             jagged_data (JaggedTensor): Data in jagged format matching the grid structure.
         """
-        return JaggedTensor(impl=self._impl.jagged_like(data))
+        return JaggedTensor(impl=self.data.jagged_like(data))
 
     def marching_cubes(
         self, field: JaggedTensor, level: float = 0.0
@@ -1426,7 +1424,7 @@ class GridBatch:
             face_indices (JaggedTensor): Triangle face indices. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_faces_for_grid_b, 3)``.
             vertex_normals (JaggedTensor): Vertex normals (computed from gradients). A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_vertices_for_grid_b, 3)``.
         """
-        result_vertices_impl, result_indices_impl, result_normals_impl = self._impl.marching_cubes(field._impl, level)
+        result_vertices_impl, result_indices_impl, result_normals_impl = self.data.marching_cubes(field._impl, level)
         return (
             JaggedTensor(impl=result_vertices_impl),
             JaggedTensor(impl=result_indices_impl),
@@ -1471,11 +1469,11 @@ class GridBatch:
         pool_factor = to_Vec3iBroadcastable(pool_factor, value_constraint=ValueConstraint.POSITIVE)
         stride = to_Vec3iBroadcastable(stride, value_constraint=ValueConstraint.NON_NEGATIVE)
 
-        coarse_grid_impl = coarse_grid._impl if coarse_grid else None
+        coarse_grid_impl = coarse_grid.data if coarse_grid else None
 
-        result_data_impl, result_grid_impl = self._impl.max_pool(pool_factor, data._impl, stride, coarse_grid_impl)
+        result_data_impl, result_grid_impl = self.data.max_pool(pool_factor, data._impl, stride, coarse_grid_impl)
 
-        return JaggedTensor(impl=result_data_impl), GridBatch(impl=result_grid_impl)
+        return JaggedTensor(impl=result_data_impl), GridBatch(data=result_grid_impl)
 
     def merged_grid(self, other: "GridBatch") -> "GridBatch":
         """
@@ -1490,7 +1488,7 @@ class GridBatch:
         Returns:
             merged_grid (GridBatch): A new GridBatch containing the union of active voxels from both grids.
         """
-        return GridBatch(impl=self._impl.merged_grid(other._impl))
+        return GridBatch(data=self.data.merged_grid(other.data))
 
     def neighbor_indexes(self, ijk: JaggedTensor, extent: int, bitshift: int = 0) -> JaggedTensor:
         """
@@ -1508,7 +1506,7 @@ class GridBatch:
                 containing the linear indexes of neighboring voxels for each voxel coordinate in ``ijk``
                 in the input. If some neighbors are not active in the grid, their indexes will be ``-1``.
         """
-        return JaggedTensor(impl=self._impl.neighbor_indexes(ijk._impl, extent, bitshift))
+        return JaggedTensor(impl=self.data.neighbor_indexes(ijk._impl, extent, bitshift))
 
     def num_voxels_at(self, bi: int) -> int:
         """
@@ -1520,7 +1518,7 @@ class GridBatch:
         Returns:
             num_voxels (int): Number of active voxels in the specified grid.
         """
-        return self._impl.num_voxels_at(bi)
+        return self.data.num_voxels_at(bi)
 
     def pruned_grid(self, mask: JaggedTensor) -> "GridBatch":
         """
@@ -1535,7 +1533,7 @@ class GridBatch:
         Returns:
             pruned_grid (GridBatch): A new GridBatch containing only voxels where mask is True.
         """
-        return GridBatch(impl=self._impl.pruned_grid(mask._impl))
+        return GridBatch(data=self.data.pruned_grid(mask._impl))
 
     def origin_at(self, bi: int) -> torch.Tensor:
         """
@@ -1547,7 +1545,7 @@ class GridBatch:
         Returns:
             origin (torch.Tensor): The origin coordinates in world space. Shape: ``(3,)``.
         """
-        return self._impl.origin_at(bi)
+        return self.data.origin_at(bi)
 
     def points_in_grid(self, points: JaggedTensor) -> JaggedTensor:
         """
@@ -1563,7 +1561,7 @@ class GridBatch:
             mask (JaggedTensor): Boolean mask indicating which points are in active voxels.
                 Shape: ``(batch_size, num_points_for_grid_b,)``.
         """
-        return JaggedTensor(impl=self._impl.points_in_grid(points._impl))
+        return JaggedTensor(impl=self.data.points_in_grid(points._impl))
 
     def ray_implicit_intersection(
         self,
@@ -1591,7 +1589,7 @@ class GridBatch:
             intersections (JaggedTensor): Intersection information for each ray.
         """
         return JaggedTensor(
-            impl=self._impl.ray_implicit_intersection(ray_origins._impl, ray_directions._impl, grid_scalars._impl, eps)
+            impl=self.data.ray_implicit_intersection(ray_origins._impl, ray_directions._impl, grid_scalars._impl, eps)
         )
 
     def inject_from_dense_cminor(self, dense_data: torch.Tensor, dense_origins: NumericMaxRank1 = 0) -> JaggedTensor:
@@ -1624,7 +1622,7 @@ class GridBatch:
         """
         dense_origins = to_Vec3i(dense_origins)
 
-        return JaggedTensor(impl=self._impl.inject_from_dense_cminor(dense_data, dense_origins))
+        return JaggedTensor(impl=self.data.inject_from_dense_cminor(dense_data, dense_origins))
 
     def inject_from_dense_cmajor(self, dense_data: torch.Tensor, dense_origins: NumericMaxRank1 = 0) -> JaggedTensor:
         """
@@ -1656,7 +1654,7 @@ class GridBatch:
         """
         dense_origins = to_Vec3i(dense_origins)
 
-        return JaggedTensor(impl=self._impl.inject_from_dense_cmajor(dense_data, dense_origins))
+        return JaggedTensor(impl=self.data.inject_from_dense_cmajor(dense_data, dense_origins))
 
     def sample_bezier(self, points: JaggedTensor, voxel_data: JaggedTensor) -> JaggedTensor:
         """
@@ -1691,7 +1689,7 @@ class GridBatch:
         Returns:
             interpolated_data (JaggedTensor): Interpolated data at each point. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_points_for_grid_b, channels*)``.
         """
-        return JaggedTensor(impl=self._impl.sample_bezier(points._impl, voxel_data._impl))
+        return JaggedTensor(impl=self.data.sample_bezier(points._impl, voxel_data._impl))
 
     def sample_bezier_with_grad(
         self, points: JaggedTensor, voxel_data: JaggedTensor
@@ -1732,7 +1730,7 @@ class GridBatch:
                 This is the spatial gradient of the Bézier interpolation at each point.
                 A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_points_for_grid_b, 3, channels*)``.
         """
-        result_data_impl, result_grad_impl = self._impl.sample_bezier_with_grad(points._impl, voxel_data._impl)
+        result_data_impl, result_grad_impl = self.data.sample_bezier_with_grad(points._impl, voxel_data._impl)
         return JaggedTensor(impl=result_data_impl), JaggedTensor(impl=result_grad_impl)
 
     def sample_trilinear(self, points: JaggedTensor, voxel_data: JaggedTensor) -> JaggedTensor:
@@ -1768,7 +1766,7 @@ class GridBatch:
         Returns:
             interpolated_data (JaggedTensor): Interpolated data at each point. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_points_for_grid_b, channels*)``.
         """
-        return JaggedTensor(impl=self._impl.sample_trilinear(points._impl, voxel_data._impl))
+        return JaggedTensor(impl=self.data.sample_trilinear(points._impl, voxel_data._impl))
 
     def sample_trilinear_with_grad(
         self, points: JaggedTensor, voxel_data: JaggedTensor
@@ -1809,7 +1807,7 @@ class GridBatch:
                 This is the spatial gradient of the trilinear interpolation at each point.
                 A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_points_for_grid_b, 3, channels*)``.
         """
-        result_data_impl, result_grad_impl = self._impl.sample_trilinear_with_grad(points._impl, voxel_data._impl)
+        result_data_impl, result_grad_impl = self.data.sample_trilinear_with_grad(points._impl, voxel_data._impl)
         return JaggedTensor(impl=result_data_impl), JaggedTensor(impl=result_grad_impl)
 
     def segments_along_rays(
@@ -1836,7 +1834,7 @@ class GridBatch:
                 ``(2,)`` representing the start and end distance of each segment.
         """
         return JaggedTensor(
-            impl=self._impl.segments_along_rays(ray_origins._impl, ray_directions._impl, max_segments, eps)
+            impl=self.data.segments_along_rays(ray_origins._impl, ray_directions._impl, max_segments, eps)
         )
 
     def splat_bezier(self, points: JaggedTensor, points_data: JaggedTensor) -> JaggedTensor:
@@ -1862,7 +1860,7 @@ class GridBatch:
             splatted_features (JaggedTensor): Accumulated features at each voxel after splatting.
                 A :class:`fvdb.JaggedTensor` with shape ``(batch_size, total_voxels, channels*)``.
         """
-        return JaggedTensor(impl=self._impl.splat_bezier(points._impl, points_data._impl))
+        return JaggedTensor(impl=self.data.splat_bezier(points._impl, points_data._impl))
 
     def splat_trilinear(self, points: JaggedTensor, points_data: JaggedTensor) -> JaggedTensor:
         """
@@ -1887,7 +1885,7 @@ class GridBatch:
             splatted_features (JaggedTensor): Accumulated features at each voxel after splatting.
                 A :class:`fvdb.JaggedTensor` with shape ``(batch_size, total_voxels, channels*)``.
         """
-        return JaggedTensor(impl=self._impl.splat_trilinear(points._impl, points_data._impl))
+        return JaggedTensor(impl=self.data.splat_trilinear(points._impl, points_data._impl))
 
     def refine(
         self,
@@ -1932,10 +1930,10 @@ class GridBatch:
             fine_grid (GridBatch): The fine :class:`GridBatch` containing the refined structure
         """
         subdiv_factor = to_Vec3iBroadcastable(subdiv_factor, value_constraint=ValueConstraint.POSITIVE)
-        fine_grid_impl = fine_grid._impl if fine_grid else None
+        fine_grid_impl = fine_grid.data if fine_grid else None
         mask_impl = mask._impl if mask else None
-        result_data_impl, result_grid_impl = self._impl.refine(subdiv_factor, data._impl, mask_impl, fine_grid_impl)
-        return JaggedTensor(impl=result_data_impl), GridBatch(impl=result_grid_impl)
+        result_data_impl, result_grid_impl = self.data.refine(subdiv_factor, data._impl, mask_impl, fine_grid_impl)
+        return JaggedTensor(impl=result_data_impl), GridBatch(data=result_grid_impl)
 
     def refined_grid(
         self,
@@ -1963,7 +1961,7 @@ class GridBatch:
             refined_grid (GridBatch): A new :class:`GridBatch` with refined structure.
         """
         subdiv_factor = to_Vec3iBroadcastable(subdiv_factor, value_constraint=ValueConstraint.POSITIVE)
-        return GridBatch(impl=self._impl.refined_grid(subdiv_factor, None if mask is None else mask._impl))
+        return GridBatch(data=self.data.refined_grid(subdiv_factor, None if mask is None else mask._impl))
 
     def to(self, target: "str | torch.device | torch.Tensor | JaggedTensor | GridBatch") -> "GridBatch":
         """
@@ -1982,15 +1980,15 @@ class GridBatch:
         """
         if isinstance(target, str):
             device = _parse_device_string(target)
-            return GridBatch(impl=self._impl.to(device))
+            return GridBatch(data=self.data.to(device))
         elif isinstance(target, torch.device):
-            return GridBatch(impl=self._impl.to(target))
+            return GridBatch(data=self.data.to(target))
         elif isinstance(target, torch.Tensor):
-            return GridBatch(impl=self._impl.to(target))
+            return GridBatch(data=self.data.to(target))
         elif isinstance(target, JaggedTensor):
-            return GridBatch(impl=self._impl.to(target._impl))
+            return GridBatch(data=self.data.to(target._impl))
         elif isinstance(target, GridBatch):
-            return GridBatch(impl=self._impl.to(target._impl))
+            return GridBatch(data=self.data.to(target.data))
         else:
             raise TypeError(f"Unsupported type for to(): {type(target)}")
 
@@ -2032,17 +2030,17 @@ class GridBatch:
         # Handle the overloaded signature - if name is provided, use it
         data_impl = data._impl if data else None
         if name is not None:
-            _save(path, self._impl, data_impl, name, compressed, verbose)
+            _save(path, self.data, data_impl, name, compressed, verbose)
         elif names is not None:
             if isinstance(names, str):
                 # Handle case where names is actually a single name
-                _save(path, self._impl, data_impl, names, compressed, verbose)
+                _save(path, self.data, data_impl, names, compressed, verbose)
             else:
                 # Handle case where names is a list
-                _save(path, self._impl, data_impl, names, compressed, verbose)
+                _save(path, self.data, data_impl, names, compressed, verbose)
         else:
             # Default case with empty names list
-            _save(path, self._impl, data_impl, [], compressed, verbose)
+            _save(path, self.data, data_impl, [], compressed, verbose)
 
     def uniform_ray_samples(
         self,
@@ -2086,7 +2084,7 @@ class GridBatch:
                 of each sample if ``return_midpoints`` is ``True``.
         """
         return JaggedTensor(
-            impl=self._impl.uniform_ray_samples(
+            impl=self.data.uniform_ray_samples(
                 ray_origins._impl,
                 ray_directions._impl,
                 t_min._impl,
@@ -2110,7 +2108,7 @@ class GridBatch:
             voxel_size (torch.Tensor): Voxel size at the specified grid index.
                 Shape: ``(3,)``.
         """
-        return self._impl.voxel_size_at(bi)
+        return self.data.voxel_size_at(bi)
 
     def rays_intersect_voxels(
         self, ray_origins: JaggedTensor, ray_directions: JaggedTensor, eps: float = 0.0
@@ -2174,7 +2172,7 @@ class GridBatch:
             times (JaggedTensor): A JaggedTensor with lshape ``[[T_{0,0}, ..., T_{0,N_0}], ..., [T_{B,0}, ..., T_{B,N_B}]]``
                 and eshape ``(2,)`` containing the entry and exit distance along the ray of each voxel.
         """
-        result_voxels_impl, result_times_impl = self._impl.voxels_along_rays(
+        result_voxels_impl, result_times_impl = self.data.voxels_along_rays(
             ray_origins._impl, ray_directions._impl, max_voxels, eps, return_ijk, cumulative
         )
         return JaggedTensor(impl=result_voxels_impl), JaggedTensor(impl=result_times_impl)
@@ -2199,7 +2197,7 @@ class GridBatch:
             voxel_points (JaggedTensor): Grid coordinates. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_points_for_grid_b, 3)``.
                 Can contain fractional values.
         """
-        return JaggedTensor(impl=self._impl.world_to_voxel(points._impl))
+        return JaggedTensor(impl=self.data.world_to_voxel(points._impl))
 
     def inject_to_dense_cminor(
         self,
@@ -2248,7 +2246,7 @@ class GridBatch:
         min_coord = to_Vec3iBatchBroadcastable(min_coord) if min_coord is not None else None
         grid_size = to_Vec3iBroadcastable(grid_size) if grid_size is not None else None
 
-        return self._impl.inject_to_dense_cminor(sparse_data._impl, min_coord, grid_size)
+        return self.data.inject_to_dense_cminor(sparse_data._impl, min_coord, grid_size)
 
     def inject_to_dense_cmajor(
         self,
@@ -2297,7 +2295,7 @@ class GridBatch:
         min_coord = to_Vec3iBatchBroadcastable(min_coord) if min_coord is not None else None
         grid_size = to_Vec3iBroadcastable(grid_size) if grid_size is not None else None
 
-        return self._impl.inject_to_dense_cmajor(sparse_data._impl, min_coord, grid_size)
+        return self.data.inject_to_dense_cmajor(sparse_data._impl, min_coord, grid_size)
 
     # ============================================================
     #                Indexing and Special Functions
@@ -2314,7 +2312,7 @@ class GridBatch:
         Returns:
             grid_batch (GridBatch): A new GridBatch containing the selected grid.
         """
-        return GridBatch(impl=self._impl.index_int(int(bi)))
+        return GridBatch(data=self.data.index_int(int(bi)))
 
     def index_list(self, indices: list[bool] | list[int]) -> "GridBatch":
         """
@@ -2326,7 +2324,7 @@ class GridBatch:
         Returns:
             grid_batch (GridBatch): A new GridBatch containing the selected grids.
         """
-        return GridBatch(impl=self._impl.index_list(indices))
+        return GridBatch(data=self.data.index_list(indices))
 
     def index_slice(self, s: slice) -> "GridBatch":
         """
@@ -2338,7 +2336,7 @@ class GridBatch:
         Returns:
             grid_batch (GridBatch): A new GridBatch containing the selected grids.
         """
-        return GridBatch(impl=self._impl.index_slice(s))
+        return GridBatch(data=self.data.index_slice(s))
 
     def index_tensor(self, indices: torch.Tensor) -> "GridBatch":
         """
@@ -2350,7 +2348,7 @@ class GridBatch:
         Returns:
             grid_batch (GridBatch): A new GridBatch containing the selected grids.
         """
-        return GridBatch(impl=self._impl.index_tensor(indices))
+        return GridBatch(data=self.data.index_tensor(indices))
 
     # Special methods
     def __getitem__(self, index: GridBatchIndex) -> "GridBatch":
@@ -2397,7 +2395,7 @@ class GridBatch:
         Returns:
             length (int): Number of grids in this batch.
         """
-        return self._impl.grid_count
+        return self.data.grid_count
 
     # ============================================================
     #                        Properties
@@ -2412,7 +2410,7 @@ class GridBatch:
         Returns:
             address (int): The memory address of the underlying C++ object.
         """
-        return self._impl.address
+        return self.data.address
 
     @property
     def all_have_zero_voxels(self) -> bool:
@@ -2471,7 +2469,7 @@ class GridBatch:
             if self.all_have_zero_voxels:
                 return torch.zeros((self.grid_count, 2, 3), dtype=torch.int32, device=self.device)
             elif self.any_have_zero_voxels:
-                bboxes = self._impl.bbox
+                bboxes = self.data.bbox
 
                 fixed_bboxes = []
                 for i in range(self.grid_count):
@@ -2482,7 +2480,7 @@ class GridBatch:
 
                 return torch.stack(fixed_bboxes, dim=0)
             else:
-                return self._impl.bbox
+                return self.data.bbox
 
     @property
     def cum_voxels(self) -> torch.Tensor:
@@ -2501,7 +2499,7 @@ class GridBatch:
         if self.has_zero_grids:
             return torch.empty((0,), dtype=torch.int64, device=self.device)
         else:
-            return self._impl.cum_voxels
+            return self.data.cum_voxels
 
     @property
     def device(self) -> torch.device:
@@ -2511,7 +2509,7 @@ class GridBatch:
         Returns:
             device (torch.device): The device of the batch.
         """
-        return self._impl.device
+        return self.data.device
 
     @property
     def dual_bboxes(self) -> torch.Tensor:
@@ -2544,7 +2542,7 @@ class GridBatch:
             if self.all_have_zero_voxels:
                 return torch.zeros((self.grid_count, 2, 3), dtype=torch.int32, device=self.device)
             elif self.any_have_zero_voxels:
-                bboxes = self._impl.dual_bbox
+                bboxes = self.data.dual_bbox
 
                 fixed_bboxes = []
                 for i in range(self.grid_count):
@@ -2555,7 +2553,7 @@ class GridBatch:
 
                 return torch.stack(fixed_bboxes, dim=0)
             else:
-                return self._impl.dual_bbox
+                return self.data.dual_bbox
 
     @property
     def grid_count(self) -> int:
@@ -2565,7 +2563,7 @@ class GridBatch:
         Returns:
             count (int): Number of grids.
         """
-        return self._impl.grid_count
+        return self.data.grid_count
 
     @property
     def voxel_to_world_matrices(self) -> torch.Tensor:
@@ -2580,7 +2578,7 @@ class GridBatch:
         if self.has_zero_grids:
             return torch.empty((0, 4, 4), dtype=torch.float32, device=self.device)
         else:
-            return self._impl.voxel_to_world_matrices
+            return self.data.voxel_to_world_matrices
 
     @property
     def has_zero_grids(self) -> bool:
@@ -2601,7 +2599,7 @@ class GridBatch:
             ijk (JaggedTensor): A :class:`fvdb.JaggedTensor` with shape ``(batch_size, total_voxels, 3)`` containing the
                 voxel coordinates of each active voxel in index order for each grid.
         """
-        return JaggedTensor(impl=self._impl.ijk)
+        return JaggedTensor(impl=self.data.ijk)
 
     def morton(self, offset: NumericMaxRank1 | None = None) -> JaggedTensor:
         """
@@ -2624,7 +2622,7 @@ class GridBatch:
         else:
             offset = to_Vec3i(offset)
 
-        return JaggedTensor(impl=self._impl.morton(offset))
+        return JaggedTensor(impl=self.data.morton(offset))
 
     def morton_zyx(self, offset: NumericMaxRank1 | None = None) -> JaggedTensor:
         """
@@ -2646,7 +2644,7 @@ class GridBatch:
         else:
             offset = to_Vec3i(offset)
 
-        return JaggedTensor(impl=self._impl.morton_zyx(offset))
+        return JaggedTensor(impl=self.data.morton_zyx(offset))
 
     def hilbert(self, offset: NumericMaxRank1 | None = None) -> JaggedTensor:
         """
@@ -2668,7 +2666,7 @@ class GridBatch:
         else:
             offset = to_Vec3i(offset)
 
-        return JaggedTensor(impl=self._impl.hilbert(offset))
+        return JaggedTensor(impl=self.data.hilbert(offset))
 
     def hilbert_zyx(self, offset: NumericMaxRank1 | None = None) -> JaggedTensor:
         """
@@ -2690,7 +2688,7 @@ class GridBatch:
         else:
             offset = to_Vec3i(offset)
 
-        return JaggedTensor(impl=self._impl.hilbert_zyx(offset))
+        return JaggedTensor(impl=self.data.hilbert_zyx(offset))
 
     @property
     def jidx(self) -> torch.Tensor:
@@ -2709,7 +2707,7 @@ class GridBatch:
         if self.has_zero_grids:
             return torch.empty((0,), dtype=torch.int32, device=self.device)
         else:
-            return self._impl.jidx
+            return self.data.jidx
 
     @property
     def joffsets(self) -> torch.Tensor:
@@ -2729,7 +2727,7 @@ class GridBatch:
         if self.has_zero_grids:
             return torch.empty((0,), dtype=torch.int64, device=self.device)
         else:
-            return self._impl.joffsets
+            return self.data.joffsets
 
     @property
     def num_bytes(self) -> torch.Tensor:
@@ -2743,7 +2741,7 @@ class GridBatch:
         if self.has_zero_grids:
             return torch.empty((0,), dtype=torch.int64, device=self.device)
         else:
-            return self._impl.num_bytes
+            return self.data.num_bytes
 
     @property
     def num_leaf_nodes(self) -> torch.Tensor:
@@ -2757,7 +2755,7 @@ class GridBatch:
         if self.has_zero_grids:
             return torch.empty((0,), dtype=torch.int64, device=self.device)
         else:
-            return self._impl.num_leaf_nodes
+            return self.data.num_leaf_nodes
 
     @property
     def num_voxels(self) -> torch.Tensor:
@@ -2771,7 +2769,7 @@ class GridBatch:
         if self.has_zero_grids:
             return torch.empty((0,), dtype=torch.int64, device=self.device)
         else:
-            return self._impl.num_voxels
+            return self.data.num_voxels
 
     @property
     def origins(self) -> torch.Tensor:
@@ -2784,7 +2782,7 @@ class GridBatch:
         if self.has_zero_grids:
             return torch.empty((0, 3), dtype=torch.float32, device=self.device)
         else:
-            return self._impl.origins
+            return self.data.origins
 
     @property
     def total_bbox(self) -> torch.Tensor:
@@ -2803,7 +2801,7 @@ class GridBatch:
         if self.has_zero_grids or self.all_have_zero_voxels:
             return torch.zeros((2, 3), dtype=torch.int32, device=self.device)
         else:
-            return self._impl.total_bbox
+            return self.data.total_bbox
 
     @property
     def total_bytes(self) -> int:
@@ -2816,7 +2814,7 @@ class GridBatch:
         if self.has_zero_grids:
             return 0
         else:
-            return self._impl.total_bytes
+            return self.data.total_bytes
 
     @property
     def total_leaf_nodes(self) -> int:
@@ -2829,7 +2827,7 @@ class GridBatch:
         if self.has_zero_grids:
             return 0
         else:
-            return self._impl.total_leaf_nodes
+            return self.data.total_leaf_nodes
 
     @property
     def total_voxels(self) -> int:
@@ -2842,7 +2840,7 @@ class GridBatch:
         if self.has_zero_grids:
             return 0
         else:
-            return self._impl.total_voxels
+            return self.data.total_voxels
 
     @property
     def voxel_sizes(self) -> torch.Tensor:
@@ -2855,7 +2853,7 @@ class GridBatch:
         if self.has_zero_grids:
             return torch.empty((0, 3), dtype=torch.float32, device=self.device)
         else:
-            return self._impl.voxel_sizes
+            return self.data.voxel_sizes
 
     @property
     def world_to_voxel_matrices(self) -> torch.Tensor:
@@ -2870,13 +2868,13 @@ class GridBatch:
         if self.has_zero_grids:
             return torch.empty((0, 4, 4), dtype=torch.float32, device=self.device)
         else:
-            return self._impl.world_to_voxel_matrices
+            return self.data.world_to_voxel_matrices
 
     # Expose underlying implementation for compatibility
     @property
     def _gridbatch(self):
         # Access underlying GridBatchCpp - use sparingly during migration
-        return self._impl
+        return self.data
 
 
 def gcat(grids: "Sequence[GridBatch|Grid]") -> GridBatch:

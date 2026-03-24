@@ -69,7 +69,7 @@ sampleBezierWithGradBackwardCallback(int32_t bidx,
 
 template <torch::DeviceType DeviceTag>
 torch::Tensor
-SampleGridBezierWithGradBackward(const GridBatchImpl &batchHdl,
+SampleGridBezierWithGradBackward(const GridBatchData &batchHdl,
                                  const JaggedTensor &points,
                                  const torch::Tensor &gradOutFeatures,
                                  const torch::Tensor &gradOutGradFeatures,
@@ -132,7 +132,7 @@ SampleGridBezierWithGradBackward(const GridBatchImpl &batchHdl,
 }
 
 torch::Tensor
-sampleBezierWithGradBackward(const GridBatchImpl &batchHdl,
+sampleBezierWithGradBackward(const GridBatchData &batchHdl,
                                  const JaggedTensor &points,
                                  const torch::Tensor &gradOutFeatures,
                                  const torch::Tensor &gradOutGradFeatures,

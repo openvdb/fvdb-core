@@ -1,7 +1,7 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 #include <fvdb/detail/ops/BuildGridFromIjk.h>
 #include <fvdb/detail/ops/BuildGridFromPoints.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
@@ -51,8 +51,8 @@ ijkForPointsCallback(int32_t bidx,
 
 JaggedTensor
 ijkForPoints(const JaggedTensor &jaggedPoints, const std::vector<VoxelCoordTransform> &transforms) {
-    TORCH_CHECK(jaggedPoints.device().is_cuda(), "GridBatchImpl must be on CUDA device");
-    TORCH_CHECK(jaggedPoints.device().has_index(), "GridBatchImpl must have a valid index");
+    TORCH_CHECK(jaggedPoints.device().is_cuda(), "GridBatchData must be on CUDA device");
+    TORCH_CHECK(jaggedPoints.device().has_index(), "GridBatchData must have a valid index");
 
     const torch::TensorOptions optsData =
         torch::TensorOptions().dtype(torch::kInt32).device(jaggedPoints.device());
@@ -94,7 +94,7 @@ template <>
 nanovdb::GridHandle<TorchDeviceBuffer>
 dispatchBuildGridFromPoints<torch::kPrivateUse1>(const JaggedTensor &points,
                                                  const std::vector<VoxelCoordTransform> &txs) {
-    TORCH_CHECK(points.device().is_privateuseone(), "GridBatchImpl must be on PrivateUse1 device");
+    TORCH_CHECK(points.device().is_privateuseone(), "GridBatchData must be on PrivateUse1 device");
 
     const torch::TensorOptions deviceOptions = torch::TensorOptions().device(points.device());
     const torch::TensorOptions ijkOptions    = deviceOptions.dtype(torch::kInt32);
@@ -183,7 +183,7 @@ dispatchBuildGridFromPoints<torch::kCPU>(const JaggedTensor &pointsJagged,
         c10::kHalf);
 }
 
-c10::intrusive_ptr<GridBatchImpl>
+c10::intrusive_ptr<GridBatchData>
 buildGridFromPoints(const JaggedTensor &points,
                     const std::vector<nanovdb::Vec3d> &voxelSizes,
                     const std::vector<nanovdb::Vec3d> &origins) {
@@ -202,9 +202,9 @@ buildGridFromPoints(const JaggedTensor &points,
     TORCH_CHECK(
         points.num_tensors() == points.num_outer_lists(),
         "If this happens, Francis' paranoia about tensors and points was justified. File a bug");
-    TORCH_CHECK_VALUE(points.num_outer_lists() <= GridBatchImpl::MAX_GRIDS_PER_BATCH,
+    TORCH_CHECK_VALUE(points.num_outer_lists() <= GridBatchData::MAX_GRIDS_PER_BATCH,
                       "Cannot create a grid with more than ",
-                      GridBatchImpl::MAX_GRIDS_PER_BATCH,
+                      GridBatchData::MAX_GRIDS_PER_BATCH,
                       " grids in a batch. ",
                       "You passed in ",
                       points.num_outer_lists(),
@@ -221,7 +221,7 @@ buildGridFromPoints(const JaggedTensor &points,
     auto handle = FVDB_DISPATCH_KERNEL(points.device(), [&]() {
         return dispatchBuildGridFromPoints<DeviceTag>(points, transforms);
     });
-    return c10::make_intrusive<GridBatchImpl>(std::move(handle), voxelSizes, origins);
+    return c10::make_intrusive<GridBatchData>(std::move(handle), voxelSizes, origins);
 }
 
 } // namespace ops

@@ -14,7 +14,7 @@ namespace autograd {
 
 ReadFromDenseCminor::variable_list
 ReadFromDenseCminor::forward(AutogradContext *ctx,
-                             c10::intrusive_ptr<GridBatchImpl> grid,
+                             c10::intrusive_ptr<GridBatchData> grid,
                              Variable denseData,
                              const torch::Tensor &denseOrigins) {
     torch::Tensor denseOriginsI32 = denseOrigins.to(torch::kInt32).to(denseData.device());
@@ -45,7 +45,7 @@ ReadFromDenseCminor::variable_list
 ReadFromDenseCminor::backward(AutogradContext *ctx, variable_list grad_output) {
     torch::Tensor denseOrigins = ctx->saved_data["dense_origin"].toTensor(); // [B, 3]
     nanovdb::Coord gridSize    = tensorToCoord(ctx->saved_data["grid_size"].toTensor());
-    auto grid                  = ctx->saved_data["grid"].toCustomClass<GridBatchImpl>();
+    auto grid                  = ctx->saved_data["grid"].toCustomClass<GridBatchData>();
     std::vector<int64_t> finalShapeTensor =
         intTensor1DToStdVector(ctx->saved_data["final_shape"].toTensor());
 
@@ -61,7 +61,7 @@ ReadFromDenseCminor::backward(AutogradContext *ctx, variable_list grad_output) {
 
 ReadFromDenseCmajor::variable_list
 ReadFromDenseCmajor::forward(AutogradContext *ctx,
-                             c10::intrusive_ptr<GridBatchImpl> grid,
+                             c10::intrusive_ptr<GridBatchData> grid,
                              Variable denseData,
                              const torch::Tensor &denseOrigins) {
     torch::Tensor denseOriginsI32 = denseOrigins.to(torch::kInt32).to(denseData.device());
@@ -100,7 +100,7 @@ ReadFromDenseCmajor::variable_list
 ReadFromDenseCmajor::backward(AutogradContext *ctx, variable_list grad_output) {
     torch::Tensor denseOrigins = ctx->saved_data["dense_origin"].toTensor(); // [B, 3]
     nanovdb::Coord gridSize    = tensorToCoord(ctx->saved_data["grid_size"].toTensor());
-    auto grid                  = ctx->saved_data["grid"].toCustomClass<GridBatchImpl>();
+    auto grid                  = ctx->saved_data["grid"].toCustomClass<GridBatchData>();
     std::vector<int64_t> finalShapeTensor =
         intTensor1DToStdVector(ctx->saved_data["final_shape"].toTensor());
 

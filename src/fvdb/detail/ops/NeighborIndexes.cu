@@ -46,7 +46,7 @@ neighborIndexesCallback(int32_t bidx,
 
 template <torch::DeviceType DeviceTag>
 JaggedTensor
-VoxelNeighborhood(const GridBatchImpl &batchHdl,
+VoxelNeighborhood(const GridBatchData &batchHdl,
                   const JaggedTensor &ijk,
                   nanovdb::Coord extentMin,
                   nanovdb::Coord extentMax,
@@ -104,7 +104,7 @@ VoxelNeighborhood(const GridBatchImpl &batchHdl,
 }
 
 JaggedTensor
-neighborIndexes(const GridBatchImpl &batchHdl,
+neighborIndexes(const GridBatchData &batchHdl,
                   const JaggedTensor &coords,
                   int32_t extent,
                   int32_t shift) {

@@ -1,7 +1,7 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 #include <fvdb/detail/ops/BuildGridFromIjk.h>
 #include <fvdb/detail/ops/BuildGridFromNearestVoxelsToPoints.h>
 #include <fvdb/detail/ops/NearestIjkForPoints.h>
@@ -109,7 +109,7 @@ dispatchBuildGridFromNearestVoxelsToPoints<torch::kCPU>(
         c10::kHalf);
 }
 
-c10::intrusive_ptr<GridBatchImpl>
+c10::intrusive_ptr<GridBatchData>
 buildGridFromNearestVoxelsToPoints(const JaggedTensor &points,
                                    const std::vector<nanovdb::Vec3d> &voxelSizes,
                                    const std::vector<nanovdb::Vec3d> &origins) {
@@ -127,9 +127,9 @@ buildGridFromNearestVoxelsToPoints(const JaggedTensor &points,
                           std::to_string(points.rsize(1)));
     TORCH_CHECK(points.num_tensors() == points.num_outer_lists(),
                 "If this happens, Francis' paranoia was justified. File a bug");
-    TORCH_CHECK_VALUE(points.num_outer_lists() <= GridBatchImpl::MAX_GRIDS_PER_BATCH,
+    TORCH_CHECK_VALUE(points.num_outer_lists() <= GridBatchData::MAX_GRIDS_PER_BATCH,
                       "Cannot create a grid with more than ",
-                      GridBatchImpl::MAX_GRIDS_PER_BATCH,
+                      GridBatchData::MAX_GRIDS_PER_BATCH,
                       " grids in a batch. ",
                       "You passed in ",
                       points.num_outer_lists(),
@@ -145,7 +145,7 @@ buildGridFromNearestVoxelsToPoints(const JaggedTensor &points,
     auto handle = FVDB_DISPATCH_KERNEL_DEVICE(points.device(), [&]() {
         return dispatchBuildGridFromNearestVoxelsToPoints<DeviceTag>(points, transforms);
     });
-    return c10::make_intrusive<GridBatchImpl>(std::move(handle), voxelSizes, origins);
+    return c10::make_intrusive<GridBatchData>(std::move(handle), voxelSizes, origins);
 }
 
 } // namespace ops

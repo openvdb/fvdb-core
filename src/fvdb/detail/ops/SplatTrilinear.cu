@@ -133,7 +133,7 @@ splatTrilinearStencilCallbackVec4(int32_t bidx,
 
 template <torch::DeviceType DeviceTag, typename scalar_t>
 torch::Tensor
-SplatIntoGridTrilinear(const GridBatchImpl &batchHdl,
+SplatIntoGridTrilinear(const GridBatchData &batchHdl,
                        const JaggedTensor &points,
                        const torch::Tensor &pointsData) {
     int64_t numOutputValues = batchHdl.totalVoxels();
@@ -233,7 +233,7 @@ SplatIntoGridTrilinear(const GridBatchImpl &batchHdl,
 
 template <torch::DeviceType DeviceTag>
 torch::Tensor
-dispatchSplatIntoGridTrilinear(const GridBatchImpl &batchHdl,
+dispatchSplatIntoGridTrilinear(const GridBatchData &batchHdl,
                                const JaggedTensor &points,
                                const torch::Tensor &pointsData) {
     return AT_DISPATCH_V2(points.scalar_type(),
@@ -246,20 +246,20 @@ dispatchSplatIntoGridTrilinear(const GridBatchImpl &batchHdl,
                           c10::kHalf);
 }
 
-template torch::Tensor dispatchSplatIntoGridTrilinear<torch::kCPU>(const GridBatchImpl &,
+template torch::Tensor dispatchSplatIntoGridTrilinear<torch::kCPU>(const GridBatchData &,
                                                                    const JaggedTensor &,
                                                                    const torch::Tensor &);
 
-template torch::Tensor dispatchSplatIntoGridTrilinear<torch::kCUDA>(const GridBatchImpl &,
+template torch::Tensor dispatchSplatIntoGridTrilinear<torch::kCUDA>(const GridBatchData &,
                                                                     const JaggedTensor &,
                                                                     const torch::Tensor &);
 
-template torch::Tensor dispatchSplatIntoGridTrilinear<torch::kPrivateUse1>(const GridBatchImpl &,
+template torch::Tensor dispatchSplatIntoGridTrilinear<torch::kPrivateUse1>(const GridBatchData &,
                                                                            const JaggedTensor &,
                                                                            const torch::Tensor &);
 
 torch::Tensor
-splatTrilinear(const GridBatchImpl &batchHdl,
+splatTrilinear(const GridBatchData &batchHdl,
                        const JaggedTensor &points,
                        const torch::Tensor &pointsData) {
     batchHdl.checkNonEmptyGrid();

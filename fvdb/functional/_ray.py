@@ -68,9 +68,9 @@ def voxels_along_rays(
     if isinstance(grid, Grid):
         jt_o = JaggedTensor(ray_origins)
         jt_d = JaggedTensor(ray_directions)
-        voxels_list, times_list = grid._impl.voxels_along_rays(jt_o._impl, jt_d._impl, max_voxels, eps, return_ijk, True)
+        voxels_list, times_list = grid.data.voxels_along_rays(jt_o._impl, jt_d._impl, max_voxels, eps, return_ijk, True)
         return JaggedTensor(impl=voxels_list[0]), JaggedTensor(impl=times_list[0])
-    rv, rt = grid._impl.voxels_along_rays(ray_origins._impl, ray_directions._impl, max_voxels, eps, return_ijk, cumulative)
+    rv, rt = grid.data.voxels_along_rays(ray_origins._impl, ray_directions._impl, max_voxels, eps, return_ijk, cumulative)
     return JaggedTensor(impl=rv), JaggedTensor(impl=rt)
 
 
@@ -120,8 +120,8 @@ def segments_along_rays(
     if isinstance(grid, Grid):
         jt_o = JaggedTensor(ray_origins)
         jt_d = JaggedTensor(ray_directions)
-        return JaggedTensor(impl=grid._impl.segments_along_rays(jt_o._impl, jt_d._impl, max_segments, eps)[0])
-    return JaggedTensor(impl=grid._impl.segments_along_rays(ray_origins._impl, ray_directions._impl, max_segments, eps))
+        return JaggedTensor(impl=grid.data.segments_along_rays(jt_o._impl, jt_d._impl, max_segments, eps)[0])
+    return JaggedTensor(impl=grid.data.segments_along_rays(ray_origins._impl, ray_directions._impl, max_segments, eps))
 
 
 @overload
@@ -192,13 +192,13 @@ def uniform_ray_samples(
         jt_mn = JaggedTensor(t_min)
         jt_mx = JaggedTensor(t_max)
         return JaggedTensor(
-            impl=grid._impl.uniform_ray_samples(
+            impl=grid.data.uniform_ray_samples(
                 jt_o._impl, jt_d._impl, jt_mn._impl, jt_mx._impl,
                 step_size, cone_angle, include_end_segments, return_midpoints, eps,
             )[0]
         )
     return JaggedTensor(
-        impl=grid._impl.uniform_ray_samples(
+        impl=grid.data.uniform_ray_samples(
             ray_origins._impl, ray_directions._impl, t_min._impl, t_max._impl,
             step_size, cone_angle, include_end_segments, return_midpoints, eps,
         )
@@ -252,7 +252,7 @@ def ray_implicit_intersection(
         jt_o = JaggedTensor(ray_origins)
         jt_d = JaggedTensor(ray_directions)
         jt_s = JaggedTensor(grid_scalars)
-        return grid._impl.ray_implicit_intersection(jt_o._impl, jt_d._impl, jt_s._impl, eps).jdata
+        return grid.data.ray_implicit_intersection(jt_o._impl, jt_d._impl, jt_s._impl, eps).jdata
     return JaggedTensor(
-        impl=grid._impl.ray_implicit_intersection(ray_origins._impl, ray_directions._impl, grid_scalars._impl, eps)
+        impl=grid.data.ray_implicit_intersection(ray_origins._impl, ray_directions._impl, grid_scalars._impl, eps)
     )

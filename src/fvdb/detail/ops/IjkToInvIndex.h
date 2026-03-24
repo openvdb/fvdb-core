@@ -5,13 +5,13 @@
 #define FVDB_DETAIL_OPS_IJKTOINVINDEX_H
 
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 
 namespace fvdb {
 namespace detail {
 namespace ops {
 
-JaggedTensor ijkToInvIndex(const GridBatchImpl &batchHdl, const JaggedTensor &ijk, bool cumulative);
+JaggedTensor ijkToInvIndex(const GridBatchData &batchHdl, const JaggedTensor &ijk, bool cumulative);
 
 } // namespace ops
 } // namespace detail

@@ -5,13 +5,13 @@
 #define FVDB_DETAIL_OPS_ACTIVEGRIDCOORDS_H
 
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 
 namespace fvdb {
 namespace detail {
 namespace ops {
 
-JaggedTensor activeGridCoords(GridBatchImpl const &gridBatch);
+JaggedTensor activeGridCoords(GridBatchData const &gridBatch);
 
 } // namespace ops
 } // namespace detail

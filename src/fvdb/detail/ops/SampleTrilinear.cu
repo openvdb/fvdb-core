@@ -113,7 +113,7 @@ sampleTrilinearStencilCallbackVec4(int32_t bidx,
 
 template <torch::DeviceType DeviceTag, typename scalar_t>
 std::vector<torch::Tensor>
-SampleGridTrilinear(const GridBatchImpl &batchHdl,
+SampleGridTrilinear(const GridBatchData &batchHdl,
                     const JaggedTensor &points,
                     const torch::Tensor &gridData) {
     auto opts = torch::TensorOptions()
@@ -185,7 +185,7 @@ SampleGridTrilinear(const GridBatchImpl &batchHdl,
 
 template <torch::DeviceType DeviceTag>
 std::vector<torch::Tensor>
-dispatchSampleGridTrilinear(const GridBatchImpl &batchHdl,
+dispatchSampleGridTrilinear(const GridBatchData &batchHdl,
                             const JaggedTensor &points,
                             const torch::Tensor &gridData) {
     return AT_DISPATCH_V2(
@@ -197,16 +197,16 @@ dispatchSampleGridTrilinear(const GridBatchImpl &batchHdl,
         c10::kHalf);
 }
 
-template std::vector<torch::Tensor> dispatchSampleGridTrilinear<torch::kCPU>(const GridBatchImpl &,
+template std::vector<torch::Tensor> dispatchSampleGridTrilinear<torch::kCPU>(const GridBatchData &,
                                                                              const JaggedTensor &,
                                                                              const torch::Tensor &);
 template std::vector<torch::Tensor> dispatchSampleGridTrilinear<torch::kCUDA>(
-    const GridBatchImpl &, const JaggedTensor &, const torch::Tensor &);
+    const GridBatchData &, const JaggedTensor &, const torch::Tensor &);
 template std::vector<torch::Tensor> dispatchSampleGridTrilinear<torch::kPrivateUse1>(
-    const GridBatchImpl &, const JaggedTensor &, const torch::Tensor &);
+    const GridBatchData &, const JaggedTensor &, const torch::Tensor &);
 
 std::vector<torch::Tensor>
-sampleTrilinear(const GridBatchImpl &batchHdl,
+sampleTrilinear(const GridBatchData &batchHdl,
                     const JaggedTensor &points,
                     const torch::Tensor &gridData) {
     batchHdl.checkNonEmptyGrid();

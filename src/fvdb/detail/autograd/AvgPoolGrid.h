@@ -4,7 +4,7 @@
 #ifndef FVDB_DETAIL_AUTOGRAD_AVGPOOLGRID_H
 #define FVDB_DETAIL_AUTOGRAD_AVGPOOLGRID_H
 
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 
 #include <torch/autograd.h>
 
@@ -18,8 +18,8 @@ struct AvgPoolGrid : public torch::autograd::Function<AvgPoolGrid> {
     using Variable        = torch::autograd::Variable;
 
     static variable_list forward(AutogradContext *ctx,
-                                 c10::intrusive_ptr<GridBatchImpl> fineGrid,
-                                 c10::intrusive_ptr<GridBatchImpl> coarseGrid,
+                                 c10::intrusive_ptr<GridBatchData> fineGrid,
+                                 c10::intrusive_ptr<GridBatchData> coarseGrid,
                                  nanovdb::Coord poolingFactor,
                                  nanovdb::Coord stride,
                                  Variable fineData);

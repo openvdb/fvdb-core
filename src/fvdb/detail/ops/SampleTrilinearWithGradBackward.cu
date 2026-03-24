@@ -162,7 +162,7 @@ sampleTrilinearWithGradBackwardStencilCallbackVec4(int32_t bidx,
 
 template <torch::DeviceType DeviceTag, typename scalar_t>
 torch::Tensor
-SampleGridTrilinearWithGradBackward(const GridBatchImpl &batchHdl,
+SampleGridTrilinearWithGradBackward(const GridBatchData &batchHdl,
                                     const JaggedTensor &points,
                                     const torch::Tensor &data,
                                     const torch::Tensor &gradOutFeatures,
@@ -277,7 +277,7 @@ SampleGridTrilinearWithGradBackward(const GridBatchImpl &batchHdl,
 
 template <torch::DeviceType DeviceTag>
 torch::Tensor
-dispatchSampleGridTrilinearWithGradBackward(const GridBatchImpl &batchHdl,
+dispatchSampleGridTrilinearWithGradBackward(const GridBatchData &batchHdl,
                                             const JaggedTensor &points,
                                             const torch::Tensor &data,
                                             const torch::Tensor &gradOutFeatures,
@@ -293,28 +293,28 @@ dispatchSampleGridTrilinearWithGradBackward(const GridBatchImpl &batchHdl,
 }
 
 template torch::Tensor
-dispatchSampleGridTrilinearWithGradBackward<torch::kCPU>(const GridBatchImpl &,
+dispatchSampleGridTrilinearWithGradBackward<torch::kCPU>(const GridBatchData &,
                                                          const JaggedTensor &,
                                                          const torch::Tensor &,
                                                          const torch::Tensor &,
                                                          const torch::Tensor &);
 
 template torch::Tensor
-dispatchSampleGridTrilinearWithGradBackward<torch::kCUDA>(const GridBatchImpl &,
+dispatchSampleGridTrilinearWithGradBackward<torch::kCUDA>(const GridBatchData &,
                                                           const JaggedTensor &,
                                                           const torch::Tensor &,
                                                           const torch::Tensor &,
                                                           const torch::Tensor &);
 
 template torch::Tensor
-dispatchSampleGridTrilinearWithGradBackward<torch::kPrivateUse1>(const GridBatchImpl &,
+dispatchSampleGridTrilinearWithGradBackward<torch::kPrivateUse1>(const GridBatchData &,
                                                                  const JaggedTensor &,
                                                                  const torch::Tensor &,
                                                                  const torch::Tensor &,
                                                                  const torch::Tensor &);
 
 torch::Tensor
-sampleTrilinearWithGradBackward(const GridBatchImpl &batchHdl,
+sampleTrilinearWithGradBackward(const GridBatchData &batchHdl,
                                     const JaggedTensor &points,
                                     const torch::Tensor &data,
                                     const torch::Tensor &gradOutFeatures,

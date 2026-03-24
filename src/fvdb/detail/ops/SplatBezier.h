@@ -5,7 +5,7 @@
 #define FVDB_DETAIL_OPS_SPLATBEZIER_H
 
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 
 #include <torch/types.h>
 
@@ -13,7 +13,7 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-torch::Tensor splatBezier(const GridBatchImpl &batchHdl,
+torch::Tensor splatBezier(const GridBatchData &batchHdl,
                                   const JaggedTensor &points,
                                   const torch::Tensor &pointsData);
 

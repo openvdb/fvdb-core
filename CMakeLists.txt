@@ -36,7 +36,7 @@ set(FVDB_BINDINGS_CPP_FILES
     src/python/FusedSSIMBinding.cpp
     src/python/GaussianSplatBinding.cpp
     src/python/GridBatchBinding.cpp
-    src/python/GridBatchImplBinding.cpp
+    src/python/GridBatchDataBinding.cpp
     src/python/GridBatchOps.cpp
     src/python/JaggedTensorBinding.cpp
     src/python/ViewerBinding.cpp)

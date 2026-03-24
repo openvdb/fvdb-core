@@ -21,8 +21,8 @@ maxPoolVoxelCallback(int32_t batchIdx,
                      int32_t leafIdx,
                      int32_t voxelIdx,
                      int32_t channelIdx,
-                     GridBatchImpl::Accessor coarseBatchAccessor,
-                     GridBatchImpl::Accessor fineBatchAccessor,
+                     GridBatchData::Accessor coarseBatchAccessor,
+                     GridBatchData::Accessor fineBatchAccessor,
                      const TensorAccessor<Dtype, 2> fineData,
                      TensorAccessor<Dtype, 2> outCoarseData,
                      nanovdb::Coord poolingFactor,
@@ -73,8 +73,8 @@ maxPoolBackwardVoxelCallback(int32_t batchIdx,
                              int32_t leafIdx,
                              int32_t voxelIdx,
                              int32_t channelIdx,
-                             GridBatchImpl::Accessor coarseBatchAccessor,
-                             GridBatchImpl::Accessor fineBatchAccessor,
+                             GridBatchData::Accessor coarseBatchAccessor,
+                             GridBatchData::Accessor fineBatchAccessor,
                              const TensorAccessor<Dtype, 2> fineData,
                              const TensorAccessor<Dtype, 2> coarseGradOut,
                              TensorAccessor<Dtype, 2> outFineGradIn,
@@ -126,8 +126,8 @@ maxPoolBackwardVoxelCallback(int32_t batchIdx,
 
 template <torch::DeviceType DeviceTag>
 torch::Tensor
-DownsampleGridMaxPool(const GridBatchImpl &fineBatchHdl,
-                      const GridBatchImpl &coarseBatchHdl,
+DownsampleGridMaxPool(const GridBatchData &fineBatchHdl,
+                      const GridBatchData &coarseBatchHdl,
                       const torch::Tensor &fineData,
                       nanovdb::Coord poolingFactor,
                       nanovdb::Coord stride) {
@@ -170,7 +170,7 @@ DownsampleGridMaxPool(const GridBatchImpl &fineBatchHdl,
                                                       int32_t leafIdx,
                                                       int32_t voxelIdx,
                                                       int32_t channelIdx,
-                                                      GridBatchImpl::Accessor coarseBatchAccessor) {
+                                                      GridBatchData::Accessor coarseBatchAccessor) {
                     maxPoolVoxelCallback<scalar_t, TorchRAcc64>(batchIdx,
                                                                 leafIdx,
                                                                 voxelIdx,
@@ -188,7 +188,7 @@ DownsampleGridMaxPool(const GridBatchImpl &fineBatchHdl,
                                                       int32_t leafIdx,
                                                       int32_t voxelIdx,
                                                       int32_t channelIdx,
-                                                      GridBatchImpl::Accessor coarseBatchAccessor) {
+                                                      GridBatchData::Accessor coarseBatchAccessor) {
                     maxPoolVoxelCallback<scalar_t, TorchRAcc64>(batchIdx,
                                                                 leafIdx,
                                                                 voxelIdx,
@@ -206,7 +206,7 @@ DownsampleGridMaxPool(const GridBatchImpl &fineBatchHdl,
                                            int32_t leafIdx,
                                            int32_t voxelIdx,
                                            int32_t channelIdx,
-                                           GridBatchImpl::Accessor coarseBatchAccessor) {
+                                           GridBatchData::Accessor coarseBatchAccessor) {
                     maxPoolVoxelCallback<scalar_t, TorchAcc>(batchIdx,
                                                              leafIdx,
                                                              voxelIdx,
@@ -230,8 +230,8 @@ DownsampleGridMaxPool(const GridBatchImpl &fineBatchHdl,
 
 template <torch::DeviceType DeviceTag>
 torch::Tensor
-DownsampleGridMaxPoolBackward(const GridBatchImpl &coarseBatchHdl,
-                              const GridBatchImpl &fineBatchHdl,
+DownsampleGridMaxPoolBackward(const GridBatchData &coarseBatchHdl,
+                              const GridBatchData &fineBatchHdl,
                               const torch::Tensor &fineData,
                               const torch::Tensor &coarseGradOut,
                               nanovdb::Coord poolingFactor,
@@ -263,7 +263,7 @@ DownsampleGridMaxPoolBackward(const GridBatchImpl &coarseBatchHdl,
                                          int32_t leafIdx,
                                          int32_t voxelIdx,
                                          int32_t channelIdx,
-                                         GridBatchImpl::Accessor coarseBatchAccessor) {
+                                         GridBatchData::Accessor coarseBatchAccessor) {
                     maxPoolBackwardVoxelCallback<scalar_t, TorchRAcc64>(batchIdx,
                                                                         leafIdx,
                                                                         voxelIdx,
@@ -282,7 +282,7 @@ DownsampleGridMaxPoolBackward(const GridBatchImpl &coarseBatchHdl,
                                          int32_t leafIdx,
                                          int32_t voxelIdx,
                                          int32_t channelIdx,
-                                         GridBatchImpl::Accessor coarseBatchAccessor) {
+                                         GridBatchData::Accessor coarseBatchAccessor) {
                     maxPoolBackwardVoxelCallback<scalar_t, TorchRAcc64>(batchIdx,
                                                                         leafIdx,
                                                                         voxelIdx,
@@ -301,7 +301,7 @@ DownsampleGridMaxPoolBackward(const GridBatchImpl &coarseBatchHdl,
                               int32_t leafIdx,
                               int32_t voxelIdx,
                               int32_t channelIdx,
-                              GridBatchImpl::Accessor coarseBatchAccessor) {
+                              GridBatchData::Accessor coarseBatchAccessor) {
                     maxPoolBackwardVoxelCallback<scalar_t, TorchAcc>(batchIdx,
                                                                      leafIdx,
                                                                      voxelIdx,
@@ -325,8 +325,8 @@ DownsampleGridMaxPoolBackward(const GridBatchImpl &coarseBatchHdl,
 }
 
 torch::Tensor
-maxPool(const GridBatchImpl &fineBatchHdl,
-                      const GridBatchImpl &coarseBatchHdl,
+maxPool(const GridBatchData &fineBatchHdl,
+                      const GridBatchData &coarseBatchHdl,
                       const torch::Tensor &fineData,
                       nanovdb::Coord poolingFactor,
                       nanovdb::Coord stride) {
@@ -337,8 +337,8 @@ maxPool(const GridBatchImpl &fineBatchHdl,
 }
 
 torch::Tensor
-maxPoolBackward(const GridBatchImpl &coarseBatchHdl,
-                              const GridBatchImpl &fineBatchHdl,
+maxPoolBackward(const GridBatchData &coarseBatchHdl,
+                              const GridBatchData &fineBatchHdl,
                               const torch::Tensor &fineData,
                               const torch::Tensor &coarseGradOut,
                               nanovdb::Coord poolingFactor,

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 #include <fvdb/detail/TorchDeviceBuffer.h>
 #include <fvdb/detail/ops/BuildPrunedGrid.h>
 #include <fvdb/detail/utils/Utils.h>
@@ -23,12 +23,12 @@
 namespace fvdb::detail::ops {
 
 template <torch::DeviceType>
-nanovdb::GridHandle<TorchDeviceBuffer> dispatchPruneGrid(const GridBatchImpl &gridBatch,
+nanovdb::GridHandle<TorchDeviceBuffer> dispatchPruneGrid(const GridBatchData &gridBatch,
                                                          const JaggedTensor &mask);
 
 template <>
 nanovdb::GridHandle<TorchDeviceBuffer>
-dispatchPruneGrid<torch::kCUDA>(const GridBatchImpl &gridBatch, const JaggedTensor &mask) {
+dispatchPruneGrid<torch::kCUDA>(const GridBatchData &gridBatch, const JaggedTensor &mask) {
     c10::cuda::CUDAGuard deviceGuard(gridBatch.device());
 
     TORCH_CHECK_VALUE(mask.rdim() == 1, "Mask must be a one-dimensional boolean tensor");
@@ -94,7 +94,7 @@ dispatchPruneGrid<torch::kCUDA>(const GridBatchImpl &gridBatch, const JaggedTens
 
 template <>
 nanovdb::GridHandle<TorchDeviceBuffer>
-dispatchPruneGrid<torch::kCPU>(const GridBatchImpl &gridBatch, const JaggedTensor &mask) {
+dispatchPruneGrid<torch::kCPU>(const GridBatchData &gridBatch, const JaggedTensor &mask) {
     using GridT     = nanovdb::ValueOnIndex;
     using IndexTree = nanovdb::NanoTree<GridT>;
 
@@ -142,8 +142,8 @@ dispatchPruneGrid<torch::kCPU>(const GridBatchImpl &gridBatch, const JaggedTenso
     }
 }
 
-c10::intrusive_ptr<GridBatchImpl>
-pruneGrid(const GridBatchImpl &gridBatch, const JaggedTensor &mask) {
+c10::intrusive_ptr<GridBatchData>
+pruneGrid(const GridBatchData &gridBatch, const JaggedTensor &mask) {
     TORCH_CHECK_VALUE(mask.ldim() == 1, "Mask should be a list of tensors");
     TORCH_CHECK_VALUE(gridBatch.batchSize() == mask.num_tensors(),
                       "Cardinality of masks should match gridbatch size");
@@ -153,7 +153,7 @@ pruneGrid(const GridBatchImpl &gridBatch, const JaggedTensor &mask) {
     gridBatch.gridVoxelSizesAndOrigins(voxS, voxO);
     auto hdl = FVDB_DISPATCH_KERNEL_DEVICE(
         gridBatch.device(), [&]() { return dispatchPruneGrid<DeviceTag>(gridBatch, mask); });
-    return c10::make_intrusive<GridBatchImpl>(std::move(hdl), voxS, voxO);
+    return c10::make_intrusive<GridBatchData>(std::move(hdl), voxS, voxO);
 }
 
 } // namespace fvdb::detail::ops

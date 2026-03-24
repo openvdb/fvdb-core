@@ -50,9 +50,9 @@ def marching_cubes(
 
     if isinstance(grid, Grid):
         jt_f = JaggedTensor(field)
-        v, f, n = grid._impl.marching_cubes(jt_f._impl, level)
+        v, f, n = grid.data.marching_cubes(jt_f._impl, level)
         return v.jdata, f.jdata, n.jdata
-    v, f, n = grid._impl.marching_cubes(field._impl, level)
+    v, f, n = grid.data.marching_cubes(field._impl, level)
     return JaggedTensor(impl=v), JaggedTensor(impl=f), JaggedTensor(impl=n)
 
 
@@ -117,7 +117,7 @@ def integrate_tsdf(
     if isinstance(grid, Grid):
         jt_tsdf = JaggedTensor(tsdf)
         jt_w = JaggedTensor(weights)
-        rg, rt, rw = grid._impl.integrate_tsdf(
+        rg, rt, rw = grid.data.integrate_tsdf(
             truncation_distance,
             projection_matrix_or_matrices.unsqueeze(0),
             cam_to_world_matrix_or_matrices.unsqueeze(0),
@@ -126,11 +126,11 @@ def integrate_tsdf(
             depth_image_or_images.unsqueeze(0),
             weight_image_or_images.unsqueeze(0) if weight_image_or_images is not None else None,
         )
-        return Grid(impl=rg), rt.jdata, rw.jdata
+        return Grid(data=rg), rt.jdata, rw.jdata
 
     from ..grid_batch import GridBatch as GB
 
-    rg, rt, rw = grid._impl.integrate_tsdf(
+    rg, rt, rw = grid.data.integrate_tsdf(
         truncation_distance,
         projection_matrix_or_matrices,
         cam_to_world_matrix_or_matrices,
@@ -139,4 +139,4 @@ def integrate_tsdf(
         depth_image_or_images,
         weight_image_or_images,
     )
-    return GB(impl=rg), JaggedTensor(impl=rt), JaggedTensor(impl=rw)
+    return GB(data=rg), JaggedTensor(impl=rt), JaggedTensor(impl=rw)

@@ -55,8 +55,8 @@ def sample_trilinear(
     if isinstance(grid, Grid):
         jt_pts = JaggedTensor(points)
         jt_dat = JaggedTensor(voxel_data)
-        return grid._impl.sample_trilinear(jt_pts._impl, jt_dat._impl).jdata
-    return JaggedTensor(impl=grid._impl.sample_trilinear(points._impl, voxel_data._impl))
+        return grid.data.sample_trilinear(jt_pts._impl, jt_dat._impl).jdata
+    return JaggedTensor(impl=grid.data.sample_trilinear(points._impl, voxel_data._impl))
 
 
 @overload
@@ -100,9 +100,9 @@ def sample_trilinear_with_grad(
     if isinstance(grid, Grid):
         jt_pts = JaggedTensor(points)
         jt_dat = JaggedTensor(voxel_data)
-        rd, rg = grid._impl.sample_trilinear_with_grad(jt_pts._impl, jt_dat._impl)
+        rd, rg = grid.data.sample_trilinear_with_grad(jt_pts._impl, jt_dat._impl)
         return rd.jdata, rg.jdata
-    rd, rg = grid._impl.sample_trilinear_with_grad(points._impl, voxel_data._impl)
+    rd, rg = grid.data.sample_trilinear_with_grad(points._impl, voxel_data._impl)
     return JaggedTensor(impl=rd), JaggedTensor(impl=rg)
 
 
@@ -142,8 +142,8 @@ def sample_bezier(
     if isinstance(grid, Grid):
         jt_pts = JaggedTensor(points)
         jt_dat = JaggedTensor(voxel_data)
-        return grid._impl.sample_bezier(jt_pts._impl, jt_dat._impl).jdata
-    return JaggedTensor(impl=grid._impl.sample_bezier(points._impl, voxel_data._impl))
+        return grid.data.sample_bezier(jt_pts._impl, jt_dat._impl).jdata
+    return JaggedTensor(impl=grid.data.sample_bezier(points._impl, voxel_data._impl))
 
 
 @overload
@@ -183,9 +183,9 @@ def sample_bezier_with_grad(
     if isinstance(grid, Grid):
         jt_pts = JaggedTensor(points)
         jt_dat = JaggedTensor(voxel_data)
-        rd, rg = grid._impl.sample_bezier_with_grad(jt_pts._impl, jt_dat._impl)
+        rd, rg = grid.data.sample_bezier_with_grad(jt_pts._impl, jt_dat._impl)
         return rd.jdata, rg.jdata
-    rd, rg = grid._impl.sample_bezier_with_grad(points._impl, voxel_data._impl)
+    rd, rg = grid.data.sample_bezier_with_grad(points._impl, voxel_data._impl)
     return JaggedTensor(impl=rd), JaggedTensor(impl=rg)
 
 
@@ -225,8 +225,8 @@ def splat_trilinear(
     if isinstance(grid, Grid):
         jt_pts = JaggedTensor(points)
         jt_dat = JaggedTensor(points_data)
-        return grid._impl.splat_trilinear(jt_pts._impl, jt_dat._impl).jdata
-    return JaggedTensor(impl=grid._impl.splat_trilinear(points._impl, points_data._impl))
+        return grid.data.splat_trilinear(jt_pts._impl, jt_dat._impl).jdata
+    return JaggedTensor(impl=grid.data.splat_trilinear(points._impl, points_data._impl))
 
 
 @overload
@@ -264,5 +264,5 @@ def splat_bezier(
     if isinstance(grid, Grid):
         jt_pts = JaggedTensor(points)
         jt_dat = JaggedTensor(points_data)
-        return grid._impl.splat_bezier(jt_pts._impl, jt_dat._impl).jdata
-    return JaggedTensor(impl=grid._impl.splat_bezier(points._impl, points_data._impl))
+        return grid.data.splat_bezier(jt_pts._impl, jt_dat._impl).jdata
+    return JaggedTensor(impl=grid.data.splat_bezier(points._impl, points_data._impl))

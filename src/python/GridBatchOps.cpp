@@ -6,7 +6,7 @@
 
 #include <fvdb/JaggedTensor.h>
 #include <fvdb/Types.h>
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 
 #include <torch/extension.h>
 
@@ -73,7 +73,7 @@ vecToVec3d(const std::vector<double> &v) {
 
 void
 bind_grid_batch_ops(py::module &m) {
-    using GBI = fvdb::detail::GridBatchImpl;
+    using GBI = fvdb::detail::GridBatchData;
     using JT  = fvdb::JaggedTensor;
     namespace ops = fvdb::detail::ops;
 

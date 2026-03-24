@@ -150,7 +150,7 @@ sampleTrilinearWithGradStencilCallbackVec4(int32_t bidx,
 
 template <torch::DeviceType DeviceTag, typename scalar_t>
 std::vector<torch::Tensor>
-SampleGridTrilinearWithGrad(const GridBatchImpl &batchHdl,
+SampleGridTrilinearWithGrad(const GridBatchData &batchHdl,
                             const JaggedTensor &points,
                             const torch::Tensor &gridData) {
     auto opts = torch::TensorOptions()
@@ -259,7 +259,7 @@ SampleGridTrilinearWithGrad(const GridBatchImpl &batchHdl,
 
 template <torch::DeviceType DeviceTag>
 std::vector<torch::Tensor>
-dispatchSampleGridTrilinearWithGrad(const GridBatchImpl &batchHdl,
+dispatchSampleGridTrilinearWithGrad(const GridBatchData &batchHdl,
                                     const JaggedTensor &points,
                                     const torch::Tensor &gridData) {
     return AT_DISPATCH_V2(points.scalar_type(),
@@ -273,14 +273,14 @@ dispatchSampleGridTrilinearWithGrad(const GridBatchImpl &batchHdl,
 }
 
 template std::vector<torch::Tensor> dispatchSampleGridTrilinearWithGrad<torch::kCPU>(
-    const GridBatchImpl &, const JaggedTensor &, const torch::Tensor &);
+    const GridBatchData &, const JaggedTensor &, const torch::Tensor &);
 template std::vector<torch::Tensor> dispatchSampleGridTrilinearWithGrad<torch::kCUDA>(
-    const GridBatchImpl &, const JaggedTensor &, const torch::Tensor &);
+    const GridBatchData &, const JaggedTensor &, const torch::Tensor &);
 template std::vector<torch::Tensor> dispatchSampleGridTrilinearWithGrad<torch::kPrivateUse1>(
-    const GridBatchImpl &, const JaggedTensor &, const torch::Tensor &);
+    const GridBatchData &, const JaggedTensor &, const torch::Tensor &);
 
 std::vector<torch::Tensor>
-sampleTrilinearWithGrad(const GridBatchImpl &batchHdl,
+sampleTrilinearWithGrad(const GridBatchData &batchHdl,
                             const JaggedTensor &points,
                             const torch::Tensor &gridData) {
     batchHdl.checkNonEmptyGrid();

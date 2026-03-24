@@ -4,7 +4,7 @@
 #ifndef FVDB_DETAIL_OPS_REFINE_H
 #define FVDB_DETAIL_OPS_REFINE_H
 
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 #include <fvdb/detail/utils/Utils.h>
 
 #include <torch/types.h>
@@ -13,13 +13,13 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-torch::Tensor refine(const GridBatchImpl &coarseBatchHdl,
-                                  const GridBatchImpl &fineBatchHdl,
+torch::Tensor refine(const GridBatchData &coarseBatchHdl,
+                                  const GridBatchData &fineBatchHdl,
                                   const torch::Tensor &coarseData,
                                   nanovdb::Coord upsamplingFactor);
 
-torch::Tensor refineBackward(const GridBatchImpl &fineBatchHdl,
-                                          const GridBatchImpl &coarseBatchHdl,
+torch::Tensor refineBackward(const GridBatchData &fineBatchHdl,
+                                          const GridBatchData &coarseBatchHdl,
                                           const torch::Tensor &gradOut,
                                           const torch::Tensor &coarseData,
                                           nanovdb::Coord upsamplingFactor);

@@ -17,7 +17,7 @@ namespace autograd {
 
 SampleGridTrilinear::variable_list
 SampleGridTrilinear::forward(SampleGridTrilinear::AutogradContext *ctx,
-                             c10::intrusive_ptr<GridBatchImpl> grid,
+                             c10::intrusive_ptr<GridBatchData> grid,
                              SampleGridTrilinear::JaggedVariable points,
                              SampleGridTrilinear::Variable data,
                              bool returnGrad) {
@@ -46,7 +46,7 @@ SampleGridTrilinear::backward(SampleGridTrilinear::AutogradContext *ctx,
     Variable pointJOffsets = saved.at(2);
     Variable pointsJLidx   = saved.at(3);
 
-    auto grid        = ctx->saved_data["grid"].toCustomClass<GridBatchImpl>();
+    auto grid        = ctx->saved_data["grid"].toCustomClass<GridBatchData>();
     bool returnGrad  = ctx->saved_data["return_grad"].toBool();
     Variable gradOut = grad_output.at(0); // [B*M, *]
 
@@ -71,7 +71,7 @@ SampleGridTrilinear::backward(SampleGridTrilinear::AutogradContext *ctx,
 
 SampleGridBezier::variable_list
 SampleGridBezier::forward(SampleGridBezier::AutogradContext *ctx,
-                          c10::intrusive_ptr<GridBatchImpl> grid,
+                          c10::intrusive_ptr<GridBatchData> grid,
                           SampleGridBezier::JaggedVariable points,
                           SampleGridBezier::Variable data,
                           bool returnGrad) {
@@ -101,7 +101,7 @@ SampleGridBezier::backward(SampleGridBezier::AutogradContext *ctx,
     Variable pointJOffsets = saved.at(2);
     Variable pointsJLidx   = saved.at(3);
 
-    auto grid        = ctx->saved_data["grid"].toCustomClass<GridBatchImpl>();
+    auto grid        = ctx->saved_data["grid"].toCustomClass<GridBatchData>();
     bool returnGrad  = ctx->saved_data["return_grad"].toBool();
     Variable gradOut = grad_output.at(0); // [B*M, *]
 

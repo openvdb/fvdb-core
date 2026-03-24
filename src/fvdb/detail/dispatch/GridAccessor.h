@@ -8,7 +8,7 @@
 // coordinate.  Aligned with dispatch::make_device_guard in
 // dispatch/torch/dispatch.h.
 //
-// GridBatchImpl::Accessor is already a trivially-copyable POD
+// GridBatchData::Accessor is already a trivially-copyable POD
 // (pointers + scalars), safe for CUDA kernel capture.
 //
 #ifndef FVDB_DETAIL_DISPATCH_GRIDACCESSOR_H
@@ -16,21 +16,21 @@
 
 #include "dispatch/torch/dispatch.h"
 
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 
 namespace fvdb {
 namespace detail {
 namespace dispatch {
 
 /// @brief Construct a host grid accessor (CPU path).
-inline GridBatchImpl::Accessor
-make_grid_accessor(::dispatch::cpu_tag auto, GridBatchImpl const &grid) {
+inline GridBatchData::Accessor
+make_grid_accessor(::dispatch::cpu_tag auto, GridBatchData const &grid) {
     return grid.hostAccessor();
 }
 
 /// @brief Construct a device grid accessor (CUDA / PrivateUse1 path).
-inline GridBatchImpl::Accessor
-make_grid_accessor(::dispatch::gpu_tag auto, GridBatchImpl const &grid) {
+inline GridBatchData::Accessor
+make_grid_accessor(::dispatch::gpu_tag auto, GridBatchData const &grid) {
     return grid.deviceAccessor();
 }
 

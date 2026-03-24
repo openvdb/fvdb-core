@@ -4,7 +4,7 @@
 #ifndef FVDB_DETAIL_AUTOGRAD_SAMPLEGRID_H
 #define FVDB_DETAIL_AUTOGRAD_SAMPLEGRID_H
 
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 
 #include <torch/autograd.h>
 
@@ -19,7 +19,7 @@ struct SampleGridTrilinear : public torch::autograd::Function<SampleGridTrilinea
     using JaggedVariable  = JaggedTensor;
 
     static variable_list forward(AutogradContext *ctx,
-                                 c10::intrusive_ptr<GridBatchImpl> grid,
+                                 c10::intrusive_ptr<GridBatchData> grid,
                                  JaggedTensor points,
                                  Variable data,
                                  bool returnGrad = false);
@@ -34,7 +34,7 @@ struct SampleGridBezier : public torch::autograd::Function<SampleGridBezier> {
     using JaggedVariable  = JaggedTensor;
 
     static variable_list forward(AutogradContext *ctx,
-                                 c10::intrusive_ptr<GridBatchImpl> grid,
+                                 c10::intrusive_ptr<GridBatchData> grid,
                                  JaggedTensor points,
                                  Variable data,
                                  bool returnGrad = false);

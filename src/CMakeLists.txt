@@ -74,7 +74,7 @@ set(FVDB_CPP_FILES
 )
 
 set(FVDB_CU_FILES
-    fvdb/detail/GridBatchImpl.cu
+    fvdb/detail/GridBatchData.cu
     fvdb/detail/ops/ActiveGridCoords.cu
     fvdb/detail/ops/ActiveVoxelsInBoundsMask.cu
     fvdb/detail/ops/BuildCoarseGridFromFine.cu

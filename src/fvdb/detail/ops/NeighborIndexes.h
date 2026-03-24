@@ -5,7 +5,7 @@
 #define FVDB_DETAIL_OPS_NEIGHBORINDEXES_H
 
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 
 #include <cstdint>
 
@@ -13,7 +13,7 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-JaggedTensor neighborIndexes(const GridBatchImpl &batchHdl,
+JaggedTensor neighborIndexes(const GridBatchData &batchHdl,
                                const JaggedTensor &coords,
                                int32_t extent,
                                int32_t shift);

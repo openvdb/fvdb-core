@@ -394,7 +394,7 @@ class ConvolutionPlan:
 
         backend_name = expert_config.get("backend", "default")
 
-        source_grid_batch = GridBatch(impl=source_grid._impl)
+        source_grid_batch = GridBatch(data=source_grid.data)
         if backend_name == "dense":
             if target_grid is not None:
                 raise ValueError("Target grid must be None for dense backend.")
@@ -402,7 +402,7 @@ class ConvolutionPlan:
         elif target_grid is None:
             target_grid_batch = source_grid_batch.conv_grid(kernel_size, stride)
         else:
-            target_grid_batch = GridBatch(impl=target_grid._impl)
+            target_grid_batch = GridBatch(data=target_grid.data)
 
         backend = cls._build_backend(
             source_grid_batch, target_grid_batch, kernel_size, stride, channel_pairs, expert_config
@@ -444,7 +444,7 @@ class ConvolutionPlan:
 
         backend_name = expert_config.get("backend", "default")
 
-        source_grid_batch = GridBatch(impl=source_grid._impl)
+        source_grid_batch = GridBatch(data=source_grid.data)
         if backend_name == "dense":
             if target_grid is not None:
                 raise ValueError("Target grid must be None for dense backend, transposed.")
@@ -452,7 +452,7 @@ class ConvolutionPlan:
         elif target_grid is None:
             raise ValueError("Target grid must be provided for transposed convolution, except for dense backend.")
         else:
-            target_grid_batch = GridBatch(impl=target_grid._impl)
+            target_grid_batch = GridBatch(data=target_grid.data)
 
         backend = cls._build_backend(
             source_grid_batch, target_grid_batch, kernel_size, stride, channel_pairs, expert_config, transposed=True
@@ -650,8 +650,8 @@ class ConvolutionPlan:
             out_tensor = _PredGatherIGemmConvFn.apply(
                 data.jdata,
                 weights,
-                self._source_grid._impl,
-                self._target_grid._impl,
+                self._source_grid.data,
+                self._target_grid.data,
                 backend.gs_topology,
                 backend.kernel_size,
                 backend.stride,
@@ -688,7 +688,7 @@ class ConvolutionPlan:
         """
         if self._source_grid.grid_count != 1:
             raise ValueError("Source grid must have batch size of 1 for Grid")
-        return Grid(impl=self._source_grid._impl)
+        return Grid(data=self._source_grid.data)
 
     @property
     def source_grid_batch(self) -> GridBatch:
@@ -715,7 +715,7 @@ class ConvolutionPlan:
         """
         if self._target_grid.grid_count != 1:
             raise ValueError("Target grid must have batch size of 1 for Grid")
-        return Grid(impl=self._target_grid._impl)
+        return Grid(data=self._target_grid.data)
 
     @property
     def target_grid_batch(self) -> GridBatch:
@@ -737,7 +737,7 @@ class ConvolutionPlan:
         Returns:
             has_fixed_topology (bool): ``True`` if source and target grids are the same topology, ``False`` otherwise.
         """
-        return self._source_grid._impl.is_same(self._target_grid._impl)
+        return self._source_grid.data.is_same(self._target_grid.data)
 
     # ============================================================
     #                 Private methods
@@ -770,16 +770,16 @@ class ConvolutionPlan:
         if backend_name == "dense":
             if not _vec_is_all(stride, 1):
                 raise ValueError("Dense backend requires stride 1.")
-            if not source_grid._impl.is_same(target_grid._impl):
+            if not source_grid.data.is_same(target_grid.data):
                 raise ValueError("Dense backend requires source_grid and target_grid to be the same.")
             return _DenseBackend()
 
         # Gather-scatter default — precomputed compacted topology with Python autograd
         if backend_name in ("gather_scatter", "default"):
             if transposed:
-                topo = _fvdb_cpp.gs_build_transpose_topology(source_grid._impl, target_grid._impl, kernel_size, stride)
+                topo = _fvdb_cpp.gs_build_transpose_topology(source_grid.data, target_grid.data, kernel_size, stride)
             else:
-                topo = _fvdb_cpp.gs_build_topology(source_grid._impl, target_grid._impl, kernel_size, stride)
+                topo = _fvdb_cpp.gs_build_topology(source_grid.data, target_grid.data, kernel_size, stride)
             return _GatherScatterBackend(topology=topo)
 
         # PredGatherIGemm — CUTLASS IGEMM on SM80+, forward only
@@ -795,14 +795,14 @@ class ConvolutionPlan:
             for cin, cout in channel_pairs:
                 if cin % 32 != 0 or cout % 32 != 0:
                     raise ValueError(f"PredGatherIGemm requires channel counts divisible by 32, got ({cin}, {cout}).")
-            gs_topo = _fvdb_cpp.gs_build_topology(source_grid._impl, target_grid._impl, kernel_size, stride)
+            gs_topo = _fvdb_cpp.gs_build_topology(source_grid.data, target_grid.data, kernel_size, stride)
             return _PredGatherIGemmBackend(gs_topology=gs_topo, kernel_size=int(ks_vals[0]), stride=int(st_vals[0]))
 
         raise ValueError(f"Unknown backend: {backend_name!r}")
 
     def _execute_dense(self, data: JaggedTensor, weights: torch.Tensor) -> JaggedTensor:
         source_grid = self._source_grid
-        assert source_grid._impl.is_same(self._target_grid._impl)
+        assert source_grid.data.is_same(self._target_grid.data)
 
         min_coord = source_grid.ijk.jdata.min(dim=0).values
         # BXYZC -> BCXYZ

@@ -14,7 +14,7 @@ namespace autograd {
 
 ReadIntoDenseCminor::variable_list
 ReadIntoDenseCminor::forward(AutogradContext *ctx,
-                             c10::intrusive_ptr<GridBatchImpl> grid,
+                             c10::intrusive_ptr<GridBatchData> grid,
                              Variable sparseData,
                              const std::optional<torch::Tensor> &maybeMinCoord,
                              const std::optional<nanovdb::Coord> &maybeGridSize) {
@@ -61,7 +61,7 @@ ReadIntoDenseCminor::backward(AutogradContext *ctx, variable_list grad_output) {
     torch::Tensor denseOrigins = ctx->saved_data["dense_origins"].toTensor(); // [B, 3]
     std::vector<int64_t> finalShapeTensor =
         intTensor1DToStdVector(ctx->saved_data["final_shape"].toTensor());
-    auto grid = ctx->saved_data["grid"].toCustomClass<GridBatchImpl>();
+    auto grid = ctx->saved_data["grid"].toCustomClass<GridBatchData>();
 
     Variable gradOut = grad_output.at(0); // [B, X, Y, Z, *]
 
@@ -75,7 +75,7 @@ ReadIntoDenseCminor::backward(AutogradContext *ctx, variable_list grad_output) {
 
 ReadIntoDenseCmajor::variable_list
 ReadIntoDenseCmajor::forward(AutogradContext *ctx,
-                             c10::intrusive_ptr<GridBatchImpl> grid,
+                             c10::intrusive_ptr<GridBatchData> grid,
                              Variable sparseData,
                              const std::optional<torch::Tensor> &maybeMinCoord,
                              const std::optional<nanovdb::Coord> &maybeGridSize) {
@@ -131,7 +131,7 @@ ReadIntoDenseCmajor::backward(AutogradContext *ctx, variable_list grad_output) {
     torch::Tensor denseOrigins = ctx->saved_data["dense_origins"].toTensor(); // [B, 3]
     std::vector<int64_t> finalShapeTensor =
         intTensor1DToStdVector(ctx->saved_data["final_shape"].toTensor());
-    auto grid = ctx->saved_data["grid"].toCustomClass<GridBatchImpl>();
+    auto grid = ctx->saved_data["grid"].toCustomClass<GridBatchData>();
 
     Variable gradOut = grad_output.at(0); // [B, *, X, Y, Z]
 

@@ -4,7 +4,7 @@
 #ifndef FVDB_DETAIL_AUTOGRAD_INJECT_H
 #define FVDB_DETAIL_AUTOGRAD_INJECT_H
 
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 
 #include <torch/autograd.h>
 
@@ -18,12 +18,12 @@ struct Inject : public torch::autograd::Function<Inject> {
     using Variable        = torch::autograd::Variable;
 
     static variable_list forward(AutogradContext *ctx,
-                                 const c10::intrusive_ptr<GridBatchImpl> fromGrid,
+                                 const c10::intrusive_ptr<GridBatchData> fromGrid,
                                  Variable const &fromFeaturesJData,
                                  Variable const &fromFeaturesJOffsets,
                                  Variable const &fromFeaturesJIdx,
                                  Variable const &fromFeaturesJLIdx,
-                                 const c10::intrusive_ptr<GridBatchImpl> toGrid,
+                                 const c10::intrusive_ptr<GridBatchData> toGrid,
                                  Variable const &toFeaturesJData,
                                  Variable const &toFeaturesJOffsets,
                                  Variable const &toFeaturesJIdx,

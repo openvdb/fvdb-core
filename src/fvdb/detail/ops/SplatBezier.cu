@@ -59,7 +59,7 @@ splatBezierCallback(int32_t bidx,
 
 template <torch::DeviceType DeviceTag>
 torch::Tensor
-SplatIntoGridBezier(const GridBatchImpl &batchHdl,
+SplatIntoGridBezier(const GridBatchData &batchHdl,
                     const JaggedTensor &points,
                     const torch::Tensor &pointsData) {
     int64_t numOutputValues = batchHdl.totalVoxels();
@@ -116,7 +116,7 @@ SplatIntoGridBezier(const GridBatchImpl &batchHdl,
 }
 
 torch::Tensor
-splatBezier(const GridBatchImpl &batchHdl,
+splatBezier(const GridBatchData &batchHdl,
                     const JaggedTensor &points,
                     const torch::Tensor &pointsData) {
     batchHdl.checkNonEmptyGrid();

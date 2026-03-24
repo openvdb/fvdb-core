@@ -1,7 +1,7 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 #include <fvdb/detail/ops/BuildDenseGrid.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Utils.h>
@@ -296,7 +296,7 @@ dispatchCreateNanoGridFromDense<torch::kCPU>(int64_t batchSize,
     }
 }
 
-c10::intrusive_ptr<GridBatchImpl>
+c10::intrusive_ptr<GridBatchData>
 createNanoGridFromDense(int64_t batchSize,
                         nanovdb::Coord ijkMin,
                         nanovdb::Coord size,
@@ -318,9 +318,9 @@ createNanoGridFromDense(int64_t batchSize,
     }
     TORCH_CHECK_VALUE(size[0] >= 0 && size[1] >= 0 && size[2] >= 0,
                       "denseDims must be non-negative");
-    TORCH_CHECK_VALUE(batchSize <= GridBatchImpl::MAX_GRIDS_PER_BATCH,
+    TORCH_CHECK_VALUE(batchSize <= GridBatchData::MAX_GRIDS_PER_BATCH,
                       "Cannot create a grid with more than ",
-                      GridBatchImpl::MAX_GRIDS_PER_BATCH,
+                      GridBatchData::MAX_GRIDS_PER_BATCH,
                       " grids in a batch. ",
                       "You requested ",
                       batchSize,
@@ -329,7 +329,7 @@ createNanoGridFromDense(int64_t batchSize,
         return dispatchCreateNanoGridFromDense<DeviceTag>(
             batchSize, ijkMin, size, device, maybeMask);
     });
-    return c10::make_intrusive<GridBatchImpl>(std::move(handle), voxelSizes, origins);
+    return c10::make_intrusive<GridBatchData>(std::move(handle), voxelSizes, origins);
 }
 
 } // namespace ops

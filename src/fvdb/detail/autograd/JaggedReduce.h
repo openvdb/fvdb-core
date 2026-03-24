@@ -4,7 +4,7 @@
 #ifndef FVDB_DETAIL_AUTOGRAD_JAGGEDREDUCE_H
 #define FVDB_DETAIL_AUTOGRAD_JAGGEDREDUCE_H
 
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 
 #include <torch/autograd.h>
 

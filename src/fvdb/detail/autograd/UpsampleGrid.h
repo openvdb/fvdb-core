@@ -4,7 +4,7 @@
 #ifndef FVDB_DETAIL_AUTOGRAD_UPSAMPLEGRID_H
 #define FVDB_DETAIL_AUTOGRAD_UPSAMPLEGRID_H
 
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 
 #include <torch/autograd.h>
 
@@ -18,8 +18,8 @@ struct UpsampleGrid : public torch::autograd::Function<UpsampleGrid> {
     using Variable        = torch::autograd::Variable;
 
     static variable_list forward(AutogradContext *ctx,
-                                 c10::intrusive_ptr<GridBatchImpl> coarseGrid,
-                                 c10::intrusive_ptr<GridBatchImpl> fineGrid,
+                                 c10::intrusive_ptr<GridBatchData> coarseGrid,
+                                 c10::intrusive_ptr<GridBatchData> fineGrid,
                                  nanovdb::Coord upsamplingFactor,
                                  Variable coarseData);
 

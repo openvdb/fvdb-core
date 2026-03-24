@@ -1,7 +1,7 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 #include <fvdb/detail/ops/ActiveGridCoords.h>
 #include <fvdb/detail/utils/SimpleOpHelper.h>
 #include <fvdb/detail/utils/Utils.h>
@@ -33,7 +33,7 @@ struct Processor : public BasePerActiveVoxelProcessor<DeviceTag,
 } // End anonymous namespace
 
 JaggedTensor
-activeGridCoords(GridBatchImpl const &gridBatch) {
+activeGridCoords(GridBatchData const &gridBatch) {
     return FVDB_DISPATCH_KERNEL(gridBatch.device(),
                                 [&]() { return Processor<DeviceTag>{}.execute(gridBatch); });
 }

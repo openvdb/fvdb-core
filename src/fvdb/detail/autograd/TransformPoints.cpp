@@ -15,7 +15,7 @@ namespace autograd {
 
 TransformPoints::variable_list
 TransformPoints::forward(TransformPoints::AutogradContext *ctx,
-                         c10::intrusive_ptr<GridBatchImpl> grid,
+                         c10::intrusive_ptr<GridBatchData> grid,
                          TransformPoints::JaggedVariable points,
                          Variable pointsData,
                          bool isInverse,
@@ -49,7 +49,7 @@ TransformPoints::backward(TransformPoints::AutogradContext *ctx,
     Variable gradOut        = grad_output.at(0); // [B*N, 3]
 
     // Use data saved in forward
-    auto grid            = ctx->saved_data["grid"].toCustomClass<GridBatchImpl>();
+    auto grid            = ctx->saved_data["grid"].toCustomClass<GridBatchData>();
     const bool isDual    = ctx->saved_data["isDual"].toBool();
     const bool isInverse = ctx->saved_data["isInverse"].toBool();
 

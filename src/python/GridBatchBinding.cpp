@@ -736,7 +736,7 @@ bind_grid_batch(py::module &m) {
             [](torch::Tensor t) { return fvdb::GridBatch::deserialize(t.cpu()).to(t.device()); }))
 
         .def_property_readonly(
-            "_grid_batch_impl",
+            "_grid_batch_data",
             [](const fvdb::GridBatch &self) { return self.impl(); },
-            "Access the underlying GridBatchImpl (bridge accessor for incremental migration).");
+            "Access the underlying GridBatchData (bridge accessor for incremental migration).");
 }

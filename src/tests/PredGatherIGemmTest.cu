@@ -5,7 +5,7 @@
 // validating against GatherScatterDefault as ground truth.
 
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 #include <fvdb/detail/ops/convolution/GatherScatterDefault.h>
 #include <fvdb/detail/ops/convolution/PredGatherIGemm.h>
 
@@ -117,7 +117,7 @@ generateCoordinates(
     return {inputPoints, outputPoints};
 }
 
-static c10::intrusive_ptr<GridBatchImpl>
+static c10::intrusive_ptr<GridBatchData>
 makeFvdbGrid(const std::vector<nanovdb::Coord> &coords, torch::Device device) {
     const int64_t N = static_cast<int64_t>(coords.size());
     auto ijk_cpu    = torch::empty({N, 3}, torch::dtype(torch::kInt32));
@@ -131,7 +131,7 @@ makeFvdbGrid(const std::vector<nanovdb::Coord> &coords, torch::Device device) {
     JaggedTensor jt(ijk_dev);
     std::vector<nanovdb::Vec3d> vs      = {{1.0, 1.0, 1.0}};
     std::vector<nanovdb::Vec3d> origins = {{0.0, 0.0, 0.0}};
-    return GridBatchImpl::createFromIjk(jt, vs, origins);
+    return GridBatchData::createFromIjk(jt, vs, origins);
 }
 
 struct CudaTimer {

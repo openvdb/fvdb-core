@@ -4,7 +4,7 @@
 #ifndef FVDB_DETAIL_OPS_INJECTTODENSE_H
 #define FVDB_DETAIL_OPS_INJECTTODENSE_H
 
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 
 #include <torch/types.h>
 
@@ -12,12 +12,12 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-torch::Tensor injectToDenseCminor(const GridBatchImpl &batchHdl,
+torch::Tensor injectToDenseCminor(const GridBatchData &batchHdl,
                                   const torch::Tensor &sparseData,
                                   const torch::Tensor &denseOrigins,
                                   const nanovdb::Coord &gridSize);
 
-torch::Tensor injectToDenseCmajor(const GridBatchImpl &batchHdl,
+torch::Tensor injectToDenseCmajor(const GridBatchData &batchHdl,
                                   const torch::Tensor &sparseData,
                                   const torch::Tensor &denseOrigins,
                                   const nanovdb::Coord &gridSize);

@@ -4,7 +4,7 @@
 
 #include <pybind11/stl.h>
 
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 
 #include <torch/extension.h>
 
@@ -45,10 +45,10 @@ vecsToCoords(const std::vector<std::vector<int32_t>> &vecs) {
 } // namespace
 
 void
-bind_grid_batch_impl(py::module &m) {
-    using GBI = fvdb::detail::GridBatchImpl;
+bind_grid_batch_data(py::module &m) {
+    using GBI = fvdb::detail::GridBatchData;
 
-    py::class_<GBI, c10::intrusive_ptr<GBI>>(m, "GridBatchImpl")
+    py::class_<GBI, c10::intrusive_ptr<GBI>>(m, "GridBatchData")
 
         // -- Scalar properties --
         .def_property_readonly("grid_count", &GBI::batchSize)

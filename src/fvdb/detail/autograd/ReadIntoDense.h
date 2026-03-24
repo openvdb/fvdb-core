@@ -4,7 +4,7 @@
 #ifndef FVDB_DETAIL_AUTOGRAD_READINTODENSE_H
 #define FVDB_DETAIL_AUTOGRAD_READINTODENSE_H
 
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 
 #include <nanovdb/NanoVDB.h>
 #include <torch/autograd.h>
@@ -19,7 +19,7 @@ struct ReadIntoDenseCminor : public torch::autograd::Function<ReadIntoDenseCmino
     using Variable        = torch::autograd::Variable;
 
     static variable_list forward(AutogradContext *ctx,
-                                 c10::intrusive_ptr<GridBatchImpl> grid,
+                                 c10::intrusive_ptr<GridBatchData> grid,
                                  Variable sparseData,
                                  const std::optional<torch::Tensor> &maybeMinCoord,
                                  const std::optional<nanovdb::Coord> &maybeGridSize);
@@ -33,7 +33,7 @@ struct ReadIntoDenseCmajor : public torch::autograd::Function<ReadIntoDenseCmajo
     using Variable        = torch::autograd::Variable;
 
     static variable_list forward(AutogradContext *ctx,
-                                 c10::intrusive_ptr<GridBatchImpl> grid,
+                                 c10::intrusive_ptr<GridBatchData> grid,
                                  Variable sparseData,
                                  const std::optional<torch::Tensor> &maybeMinCoord,
                                  const std::optional<nanovdb::Coord> &maybeGridSize);

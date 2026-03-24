@@ -14,8 +14,8 @@ namespace autograd {
 
 UpsampleGrid::variable_list
 UpsampleGrid::forward(UpsampleGrid::AutogradContext *ctx,
-                      c10::intrusive_ptr<GridBatchImpl> coarseGrid,
-                      c10::intrusive_ptr<GridBatchImpl> fineGrid,
+                      c10::intrusive_ptr<GridBatchData> coarseGrid,
+                      c10::intrusive_ptr<GridBatchData> fineGrid,
                       nanovdb::Coord upsamplingFactor,
                       UpsampleGrid::Variable coarseData) {
     // Save data for backward in context
@@ -43,8 +43,8 @@ UpsampleGrid::backward(UpsampleGrid::AutogradContext *ctx,
     variable_list saved = ctx->get_saved_variables();
     Variable coarseData = saved.at(0);
 
-    auto fineGrid                   = ctx->saved_data["fine_grid"].toCustomClass<GridBatchImpl>();
-    auto coarseGrid                 = ctx->saved_data["coarse_grid"].toCustomClass<GridBatchImpl>();
+    auto fineGrid                   = ctx->saved_data["fine_grid"].toCustomClass<GridBatchData>();
+    auto coarseGrid                 = ctx->saved_data["coarse_grid"].toCustomClass<GridBatchData>();
     const int64_t upsamplingFactorX = ctx->saved_data["upsampling_factor_x"].toInt();
     const int64_t upsamplingFactorY = ctx->saved_data["upsampling_factor_y"].toInt();
     const int64_t upsamplingFactorZ = ctx->saved_data["upsampling_factor_z"].toInt();

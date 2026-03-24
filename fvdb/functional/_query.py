@@ -44,8 +44,8 @@ def points_in_grid(
 
     if isinstance(grid, Grid):
         jt = JaggedTensor(points)
-        return grid._impl.points_in_grid(jt._impl).jdata
-    return JaggedTensor(impl=grid._impl.points_in_grid(points._impl))
+        return grid.data.points_in_grid(jt._impl).jdata
+    return JaggedTensor(impl=grid.data.points_in_grid(points._impl))
 
 
 @overload
@@ -74,8 +74,8 @@ def coords_in_grid(
 
     if isinstance(grid, Grid):
         jt = JaggedTensor(ijk)
-        return grid._impl.coords_in_grid(jt._impl).jdata
-    return JaggedTensor(impl=grid._impl.coords_in_grid(ijk._impl))
+        return grid.data.coords_in_grid(jt._impl).jdata
+    return JaggedTensor(impl=grid.data.coords_in_grid(ijk._impl))
 
 
 @overload
@@ -120,8 +120,8 @@ def cubes_in_grid(
     cmax = to_Vec3fBroadcastable(cube_max)
     if isinstance(grid, Grid):
         jt = JaggedTensor(cube_centers)
-        return grid._impl.cubes_in_grid(jt._impl, cmin, cmax).jdata
-    return JaggedTensor(impl=grid._impl.cubes_in_grid(cube_centers._impl, cmin, cmax))
+        return grid.data.cubes_in_grid(jt._impl, cmin, cmax).jdata
+    return JaggedTensor(impl=grid.data.cubes_in_grid(cube_centers._impl, cmin, cmax))
 
 
 @overload
@@ -166,8 +166,8 @@ def cubes_intersect_grid(
     cmax = to_Vec3fBroadcastable(cube_max)
     if isinstance(grid, Grid):
         jt = JaggedTensor(cube_centers)
-        return grid._impl.cubes_intersect_grid(jt._impl, cmin, cmax).jdata
-    return JaggedTensor(impl=grid._impl.cubes_intersect_grid(cube_centers._impl, cmin, cmax))
+        return grid.data.cubes_intersect_grid(jt._impl, cmin, cmax).jdata
+    return JaggedTensor(impl=grid.data.cubes_intersect_grid(cube_centers._impl, cmin, cmax))
 
 
 @overload
@@ -199,9 +199,9 @@ def ijk_to_index(
 
     if isinstance(grid, Grid):
         jt = JaggedTensor(ijk)
-        return grid._impl.ijk_to_index(jt._impl, cumulative).jdata
+        return grid.data.ijk_to_index(jt._impl, cumulative).jdata
     assert isinstance(ijk, JaggedTensor), "ijk must be a JaggedTensor"
-    return JaggedTensor(impl=grid._impl.ijk_to_index(ijk._impl, cumulative))
+    return JaggedTensor(impl=grid.data.ijk_to_index(ijk._impl, cumulative))
 
 
 @overload
@@ -234,8 +234,8 @@ def neighbor_indexes(
 
     if isinstance(grid, Grid):
         jt = JaggedTensor(ijk)
-        return grid._impl.neighbor_indexes(jt._impl, extent, bitshift).jdata
-    return JaggedTensor(impl=grid._impl.neighbor_indexes(ijk._impl, extent, bitshift))
+        return grid.data.neighbor_indexes(jt._impl, extent, bitshift).jdata
+    return JaggedTensor(impl=grid.data.neighbor_indexes(ijk._impl, extent, bitshift))
 
 
 @overload
@@ -260,5 +260,5 @@ def active_grid_coords(grid: Grid | GridBatch) -> torch.Tensor | JaggedTensor:
     from ..grid import Grid
 
     if isinstance(grid, Grid):
-        return grid._impl.ijk.jdata
-    return JaggedTensor(impl=grid._impl.ijk)
+        return grid.data.ijk.jdata
+    return JaggedTensor(impl=grid.data.ijk)

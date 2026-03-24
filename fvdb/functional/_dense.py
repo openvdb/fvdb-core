@@ -58,8 +58,8 @@ def inject_from_dense_cminor(
 
     origin = to_Vec3i(dense_origin)
     if isinstance(grid, Grid):
-        return grid._impl.inject_from_dense_cminor(dense_data.unsqueeze(0), origin).jdata
-    return JaggedTensor(impl=grid._impl.inject_from_dense_cminor(dense_data, origin))
+        return grid.data.inject_from_dense_cminor(dense_data.unsqueeze(0), origin).jdata
+    return JaggedTensor(impl=grid.data.inject_from_dense_cminor(dense_data, origin))
 
 
 @overload
@@ -99,8 +99,8 @@ def inject_from_dense_cmajor(
 
     origin = to_Vec3i(dense_origin)
     if isinstance(grid, Grid):
-        return grid._impl.inject_from_dense_cmajor(dense_data.unsqueeze(0), origin).jdata
-    return JaggedTensor(impl=grid._impl.inject_from_dense_cmajor(dense_data, origin))
+        return grid.data.inject_from_dense_cmajor(dense_data.unsqueeze(0), origin).jdata
+    return JaggedTensor(impl=grid.data.inject_from_dense_cmajor(dense_data, origin))
 
 
 # ---------------------------------------------------------------------------
@@ -159,9 +159,9 @@ def inject_to_dense_cminor(
     if isinstance(grid, Grid):
         jt_sd = JaggedTensor(sparse_data)
         mc = to_Vec3iBroadcastable(min_coord) if min_coord is not None else None
-        return grid._impl.inject_to_dense_cminor(jt_sd._impl, mc, gs).squeeze(0)
+        return grid.data.inject_to_dense_cminor(jt_sd._impl, mc, gs).squeeze(0)
     mc = to_Vec3iBatchBroadcastable(min_coord) if min_coord is not None else None
-    return grid._impl.inject_to_dense_cminor(sparse_data._impl, mc, gs)
+    return grid.data.inject_to_dense_cminor(sparse_data._impl, mc, gs)
 
 
 @overload
@@ -214,9 +214,9 @@ def inject_to_dense_cmajor(
     if isinstance(grid, Grid):
         jt_sd = JaggedTensor(sparse_data)
         mc = to_Vec3iBroadcastable(min_coord) if min_coord is not None else None
-        return grid._impl.inject_to_dense_cmajor(jt_sd._impl, mc, gs).squeeze(0)
+        return grid.data.inject_to_dense_cmajor(jt_sd._impl, mc, gs).squeeze(0)
     mc = to_Vec3iBatchBroadcastable(min_coord) if min_coord is not None else None
-    return grid._impl.inject_to_dense_cmajor(sparse_data._impl, mc, gs)
+    return grid.data.inject_to_dense_cmajor(sparse_data._impl, mc, gs)
 
 
 # ---------------------------------------------------------------------------
@@ -281,7 +281,7 @@ def inject(
         else:
             raw_dst = dst
         jt_dst = JaggedTensor(raw_dst)
-        src_grid._impl.inject_to(dst_grid._impl, jt_src._impl, jt_dst._impl)
+        src_grid.data.inject_to(dst_grid.data, jt_src._impl, jt_dst._impl)
         return jt_dst.jdata
 
     jt_src = src
@@ -294,5 +294,5 @@ def inject(
         jt_dst_b = dst
     if jt_dst_b.eshape != jt_src.eshape:
         raise ValueError(f"src and dst must have the same element shape, got src: {jt_src.eshape}, dst: {jt_dst_b.eshape}")
-    src_grid._impl.inject_to(dst_grid._impl, jt_src._impl, jt_dst_b._impl)
+    src_grid.data.inject_to(dst_grid.data, jt_src._impl, jt_dst_b._impl)
     return jt_dst_b

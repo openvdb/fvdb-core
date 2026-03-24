@@ -4,7 +4,7 @@
 #ifndef FVDB_DETAIL_OPS_MAXPOOL_H
 #define FVDB_DETAIL_OPS_MAXPOOL_H
 
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 
 #include <torch/types.h>
 
@@ -12,14 +12,14 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-torch::Tensor maxPool(const GridBatchImpl &fineBatchHdl,
-                                    const GridBatchImpl &coarseBatchHdl,
+torch::Tensor maxPool(const GridBatchData &fineBatchHdl,
+                                    const GridBatchData &coarseBatchHdl,
                                     const torch::Tensor &fineData,
                                     nanovdb::Coord poolingFactor,
                                     nanovdb::Coord stride);
 
-torch::Tensor maxPoolBackward(const GridBatchImpl &coarseBatchHdl,
-                                            const GridBatchImpl &fineBatchHdl,
+torch::Tensor maxPoolBackward(const GridBatchData &coarseBatchHdl,
+                                            const GridBatchData &fineBatchHdl,
                                             const torch::Tensor &fineData,
                                             const torch::Tensor &coarseGradOut,
                                             nanovdb::Coord poolingFactor,

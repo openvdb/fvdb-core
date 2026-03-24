@@ -5,7 +5,7 @@
 #define FVDB_GRIDBATCH_H
 
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 #include <fvdb/detail/ops/convolution/GatherScatterDefault.h>
 #include <fvdb/detail/ops/convolution/PredGatherIGemm.h>
 #include <fvdb/detail/utils/Utils.h>
@@ -19,7 +19,7 @@ namespace fvdb {
 
 struct GridBatch : torch::CustomClassHolder {
     // Set some speed limits so you don't shoot yourself in the foot
-    constexpr static int64_t MAX_GRIDS_PER_BATCH = detail::GridBatchImpl::MAX_GRIDS_PER_BATCH;
+    constexpr static int64_t MAX_GRIDS_PER_BATCH = detail::GridBatchData::MAX_GRIDS_PER_BATCH;
 
     explicit GridBatch();
     explicit GridBatch(const torch::Device &device);
@@ -933,13 +933,13 @@ struct GridBatch : torch::CustomClassHolder {
                    const torch::Tensor &depthImages,
                    const std::optional<torch::Tensor> &weightImages) const;
 
-    c10::intrusive_ptr<detail::GridBatchImpl>
+    c10::intrusive_ptr<detail::GridBatchData>
     impl() const {
         return mImpl;
     }
 
   private:
-    c10::intrusive_ptr<detail::GridBatchImpl> mImpl;
+    c10::intrusive_ptr<detail::GridBatchData> mImpl;
 };
 
 // using GridBatchPtr = c10::intrusive_ptr<GridBatch>;

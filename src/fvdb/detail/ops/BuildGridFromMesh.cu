@@ -1,7 +1,7 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 #include <fvdb/detail/ops/BuildGridFromIjk.h>
 #include <fvdb/detail/ops/BuildGridFromMesh.h>
 #include <fvdb/detail/ops/IjkForMesh.h>
@@ -123,7 +123,7 @@ dispatchBuildGridFromMesh<torch::kCPU>(const JaggedTensor &meshVertices,
         AT_EXPAND(AT_FLOATING_TYPES));
 }
 
-c10::intrusive_ptr<GridBatchImpl>
+c10::intrusive_ptr<GridBatchData>
 buildGridFromMesh(const JaggedTensor &meshVertices,
                   const JaggedTensor &meshFaces,
                   const std::vector<nanovdb::Vec3d> &voxelSizes,
@@ -169,9 +169,9 @@ buildGridFromMesh(const JaggedTensor &meshVertices,
     const int64_t numGrids = meshVertices.joffsets().size(0) - 1;
     TORCH_CHECK(numGrids == meshVertices.num_outer_lists(),
                 "If this happens, Francis' paranoia was justified. File a bug");
-    TORCH_CHECK_VALUE(numGrids <= GridBatchImpl::MAX_GRIDS_PER_BATCH,
+    TORCH_CHECK_VALUE(numGrids <= GridBatchData::MAX_GRIDS_PER_BATCH,
                       "Cannot create a grid with more than ",
-                      GridBatchImpl::MAX_GRIDS_PER_BATCH,
+                      GridBatchData::MAX_GRIDS_PER_BATCH,
                       " grids in a batch. ",
                       "You passed in ",
                       numGrids,
@@ -184,7 +184,7 @@ buildGridFromMesh(const JaggedTensor &meshVertices,
     auto handle = FVDB_DISPATCH_KERNEL_DEVICE(meshVertices.device(), [&]() {
         return dispatchBuildGridFromMesh<DeviceTag>(meshVertices, meshFaces, transforms);
     });
-    return c10::make_intrusive<GridBatchImpl>(std::move(handle), voxelSizes, origins);
+    return c10::make_intrusive<GridBatchData>(std::move(handle), voxelSizes, origins);
 }
 
 } // namespace ops

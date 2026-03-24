@@ -5,7 +5,7 @@
 #define FVDB_DETAIL_OPS_VOXELTOWORLD_H
 
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 
 #include <torch/types.h>
 
@@ -14,16 +14,16 @@ namespace detail {
 namespace ops {
 
 torch::Tensor
-voxelToWorld(const GridBatchImpl &batchHdl, const JaggedTensor &points, bool isPrimal);
+voxelToWorld(const GridBatchData &batchHdl, const JaggedTensor &points, bool isPrimal);
 
 torch::Tensor
-worldToVoxel(const GridBatchImpl &batchHdl, const JaggedTensor &points, bool isPrimal);
+worldToVoxel(const GridBatchData &batchHdl, const JaggedTensor &points, bool isPrimal);
 
-torch::Tensor voxelToWorldBackward(const GridBatchImpl &batchHdl,
+torch::Tensor voxelToWorldBackward(const GridBatchData &batchHdl,
                                             const JaggedTensor &gradOut,
                                             bool isPrimal);
 
-torch::Tensor worldToVoxelBackward(const GridBatchImpl &batchHdl,
+torch::Tensor worldToVoxelBackward(const GridBatchData &batchHdl,
                                                const JaggedTensor &gradOut,
                                                bool isPrimal);
 

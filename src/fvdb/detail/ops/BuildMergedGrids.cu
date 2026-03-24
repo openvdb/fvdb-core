@@ -16,12 +16,12 @@
 namespace fvdb::detail::ops {
 
 template <torch::DeviceType>
-nanovdb::GridHandle<TorchDeviceBuffer> dispatchMergeGrids(const GridBatchImpl &gridBatch1,
-                                                          const GridBatchImpl &gridBatch2);
+nanovdb::GridHandle<TorchDeviceBuffer> dispatchMergeGrids(const GridBatchData &gridBatch1,
+                                                          const GridBatchData &gridBatch2);
 
 template <>
 nanovdb::GridHandle<TorchDeviceBuffer>
-dispatchMergeGrids<torch::kCUDA>(const GridBatchImpl &gridBatch1, const GridBatchImpl &gridBatch2) {
+dispatchMergeGrids<torch::kCUDA>(const GridBatchData &gridBatch1, const GridBatchData &gridBatch2) {
     c10::cuda::CUDAGuard deviceGuard(gridBatch1.device());
     TORCH_CHECK_VALUE(gridBatch1.device() == gridBatch2.device(),
                       "All arguments to MergeGrids must be on the same device");
@@ -68,7 +68,7 @@ dispatchMergeGrids<torch::kCUDA>(const GridBatchImpl &gridBatch1, const GridBatc
 
 template <>
 nanovdb::GridHandle<TorchDeviceBuffer>
-dispatchMergeGrids<torch::kCPU>(const GridBatchImpl &gridBatch1, const GridBatchImpl &gridBatch2) {
+dispatchMergeGrids<torch::kCPU>(const GridBatchData &gridBatch1, const GridBatchData &gridBatch2) {
     using GridT     = nanovdb::ValueOnIndex;
     using IndexTree = nanovdb::NanoTree<GridT>;
     TORCH_CHECK(gridBatch1.device().is_cpu(), "All arguments to MergeGrids must be on the CPU");
@@ -116,8 +116,8 @@ dispatchMergeGrids<torch::kCPU>(const GridBatchImpl &gridBatch1, const GridBatch
     }
 }
 
-c10::intrusive_ptr<GridBatchImpl>
-mergeGrids(const GridBatchImpl &gridBatch1, const GridBatchImpl &gridBatch2) {
+c10::intrusive_ptr<GridBatchData>
+mergeGrids(const GridBatchData &gridBatch1, const GridBatchData &gridBatch2) {
     TORCH_CHECK_VALUE(gridBatch1.batchSize() == gridBatch2.batchSize(),
                       "GridBatches to merge should have same batch size");
     TORCH_CHECK_VALUE(gridBatch1.device() == gridBatch2.device(),
@@ -127,7 +127,7 @@ mergeGrids(const GridBatchImpl &gridBatch1, const GridBatchImpl &gridBatch2) {
     auto hdl = FVDB_DISPATCH_KERNEL_DEVICE(gridBatch1.device(), [&]() {
         return dispatchMergeGrids<DeviceTag>(gridBatch1, gridBatch2);
     });
-    return c10::make_intrusive<GridBatchImpl>(std::move(hdl), voxS, voxO);
+    return c10::make_intrusive<GridBatchData>(std::move(hdl), voxS, voxO);
 }
 
 } // namespace fvdb::detail::ops

@@ -13,7 +13,7 @@ namespace autograd {
 
 SplatIntoGridTrilinear::variable_list
 SplatIntoGridTrilinear::forward(SplatIntoGridTrilinear::AutogradContext *ctx,
-                                c10::intrusive_ptr<GridBatchImpl> grid,
+                                c10::intrusive_ptr<GridBatchData> grid,
                                 SplatIntoGridTrilinear::JaggedVariable points,
                                 SplatIntoGridTrilinear::Variable pointData) {
     torch::Tensor outGridData = ops::splatTrilinear(*grid, points, pointData);
@@ -35,7 +35,7 @@ SplatIntoGridTrilinear::backward(SplatIntoGridTrilinear::AutogradContext *ctx,
     Variable pointCoords   = saved.at(1);       // [B*M, 3]
     Variable pointJOffsets = saved.at(2);       // [B,]
     Variable pointsJLidx   = saved.at(3);       // [B,]
-    auto grid              = ctx->saved_data["grid"].toCustomClass<GridBatchImpl>();
+    auto grid              = ctx->saved_data["grid"].toCustomClass<GridBatchData>();
     Variable gradOut       = grad_output.at(0); // [N, *]
 
     auto ret = ops::sampleTrilinear(
@@ -48,7 +48,7 @@ SplatIntoGridTrilinear::backward(SplatIntoGridTrilinear::AutogradContext *ctx,
 
 SplatIntoGridBezier::variable_list
 SplatIntoGridBezier::forward(SplatIntoGridBezier::AutogradContext *ctx,
-                             c10::intrusive_ptr<GridBatchImpl> grid,
+                             c10::intrusive_ptr<GridBatchData> grid,
                              SplatIntoGridBezier::JaggedVariable points,
                              SplatIntoGridBezier::Variable pointData) {
     torch::Tensor outGridData = ops::splatBezier(*grid, points, pointData);
@@ -71,7 +71,7 @@ SplatIntoGridBezier::backward(SplatIntoGridBezier::AutogradContext *ctx,
     Variable pointJOffsets = saved.at(2); // [B,]
     Variable pointsJLidx   = saved.at(3); // [B,]
 
-    auto grid        = ctx->saved_data["grid"].toCustomClass<GridBatchImpl>();
+    auto grid        = ctx->saved_data["grid"].toCustomClass<GridBatchData>();
     Variable gradOut = grad_output.at(0); // [N, *]
 
     torch::Tensor outGradIn = ops::sampleBezier(

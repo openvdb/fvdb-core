@@ -19,7 +19,7 @@
 #include <cuda_runtime_api.h>
 
 void bind_grid_batch(py::module &m);
-void bind_grid_batch_impl(py::module &m);
+void bind_grid_batch_data(py::module &m);
 void bind_grid_batch_ops(py::module &m);
 void bind_jagged_tensor(py::module &m);
 void bind_gaussian_splat3d(py::module &m);
@@ -131,7 +131,7 @@ pyToCoord(const torch::Tensor &t) {
 } // namespace
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-    bind_grid_batch_impl(m);
+    bind_grid_batch_data(m);
     bind_grid_batch(m);
     bind_grid_batch_ops(m);
     bind_jagged_tensor(m);
@@ -572,7 +572,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 TORCH_LIBRARY(fvdb, m) {
     m.class_<fvdb::GridBatch>("GridBatch");
     m.class_<fvdb::JaggedTensor>("JaggedTensor");
-    m.class_<fvdb::detail::GridBatchImpl>("GridBatchImpl");
+    m.class_<fvdb::detail::GridBatchData>("GridBatchData");
 
     m.def(
         "_fused_ssim(float C1, float C2, Tensor img1, Tensor img2, bool train) -> (Tensor, Tensor, Tensor, Tensor)");

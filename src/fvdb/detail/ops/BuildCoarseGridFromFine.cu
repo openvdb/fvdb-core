@@ -1,7 +1,7 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 #include <fvdb/detail/ops/BuildCoarseGridFromFine.h>
 #include <fvdb/detail/ops/BuildGridFromIjk.h>
 #include <fvdb/detail/ops/CoarseIjkForFineGrid.h>
@@ -21,12 +21,12 @@ namespace fvdb::detail::ops {
 
 template <torch::DeviceType>
 nanovdb::GridHandle<TorchDeviceBuffer>
-dispatchBuildCoarseGridFromFine(const GridBatchImpl &fineGridBatch,
+dispatchBuildCoarseGridFromFine(const GridBatchData &fineGridBatch,
                                 const nanovdb::Coord branchingFactor);
 
 template <>
 nanovdb::GridHandle<TorchDeviceBuffer>
-dispatchBuildCoarseGridFromFine<torch::kCUDA>(const GridBatchImpl &fineGridBatch,
+dispatchBuildCoarseGridFromFine<torch::kCUDA>(const GridBatchData &fineGridBatch,
                                               const nanovdb::Coord branchingFactor) {
     JaggedTensor coords = ops::coarseIJKForFineGrid(fineGridBatch, branchingFactor);
     return ops::_createNanoGridFromIJK(coords);
@@ -34,7 +34,7 @@ dispatchBuildCoarseGridFromFine<torch::kCUDA>(const GridBatchImpl &fineGridBatch
 
 template <>
 nanovdb::GridHandle<TorchDeviceBuffer>
-dispatchBuildCoarseGridFromFine<torch::kPrivateUse1>(const GridBatchImpl &fineGridBatch,
+dispatchBuildCoarseGridFromFine<torch::kPrivateUse1>(const GridBatchData &fineGridBatch,
                                                      const nanovdb::Coord branchingFactor) {
     JaggedTensor coords = ops::coarseIJKForFineGrid(fineGridBatch, branchingFactor);
     return ops::_createNanoGridFromIJK(coords);
@@ -42,7 +42,7 @@ dispatchBuildCoarseGridFromFine<torch::kPrivateUse1>(const GridBatchImpl &fineGr
 
 template <>
 nanovdb::GridHandle<TorchDeviceBuffer>
-dispatchBuildCoarseGridFromFine<torch::kCPU>(const GridBatchImpl &fineBatchHdl,
+dispatchBuildCoarseGridFromFine<torch::kCPU>(const GridBatchData &fineBatchHdl,
                                              const nanovdb::Coord branchingFactor) {
     using GridT     = nanovdb::ValueOnIndex;
     using IndexTree = nanovdb::NanoTree<GridT>;
@@ -82,8 +82,8 @@ dispatchBuildCoarseGridFromFine<torch::kCPU>(const GridBatchImpl &fineBatchHdl,
     }
 }
 
-c10::intrusive_ptr<GridBatchImpl>
-buildCoarseGridFromFine(const GridBatchImpl &fineGridBatch, const nanovdb::Coord branchingFactor) {
+c10::intrusive_ptr<GridBatchData>
+buildCoarseGridFromFine(const GridBatchData &fineGridBatch, const nanovdb::Coord branchingFactor) {
     for (int i = 0; i < 3; i += 1) {
         TORCH_CHECK_VALUE(branchingFactor[i] > 0,
                           "coarseningFactor must be strictly positive. Got [" +
@@ -96,7 +96,7 @@ buildCoarseGridFromFine(const GridBatchImpl &fineGridBatch, const nanovdb::Coord
     auto hdl = FVDB_DISPATCH_KERNEL(fineGridBatch.device(), [&]() {
         return dispatchBuildCoarseGridFromFine<DeviceTag>(fineGridBatch, branchingFactor);
     });
-    auto ret = c10::make_intrusive<GridBatchImpl>(std::move(hdl), voxS, voxO);
+    auto ret = c10::make_intrusive<GridBatchData>(std::move(hdl), voxS, voxO);
     ret->setCoarseTransformFromFineGrid(fineGridBatch, branchingFactor);
     return ret;
 }

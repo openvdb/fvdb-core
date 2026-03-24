@@ -5,7 +5,7 @@
 #define FVDB_DETAIL_OPS_SAMPLETRILINEARWITHGRAD_H
 
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 
 #include <torch/types.h>
 
@@ -15,7 +15,7 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-std::vector<torch::Tensor> sampleTrilinearWithGrad(const GridBatchImpl &batchHdl,
+std::vector<torch::Tensor> sampleTrilinearWithGrad(const GridBatchData &batchHdl,
                                                        const JaggedTensor &points,
                                                        const torch::Tensor &gridData);
 

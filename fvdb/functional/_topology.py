@@ -47,12 +47,12 @@ def coarsened_grid(
     from ..grid import Grid
 
     cf = to_Vec3iBroadcastable(coarsening_factor, value_constraint=ValueConstraint.POSITIVE)
-    impl = grid._impl.coarsened_grid(cf)
+    impl = grid.data.coarsened_grid(cf)
     if isinstance(grid, Grid):
-        return Grid(impl=impl)
+        return Grid(data=impl)
     from ..grid_batch import GridBatch as GB
 
-    return GB(impl=impl)
+    return GB(data=impl)
 
 
 @overload
@@ -88,11 +88,11 @@ def refined_grid(
     sf = to_Vec3iBroadcastable(subdiv_factor, value_constraint=ValueConstraint.POSITIVE)
     if isinstance(grid, Grid):
         m = JaggedTensor(mask)._impl if mask is not None else None
-        return Grid(impl=grid._impl.refined_grid(sf, mask=m))
+        return Grid(data=grid.data.refined_grid(sf, mask=m))
     m = mask._impl if mask is not None else None
     from ..grid_batch import GridBatch as GB
 
-    return GB(impl=grid._impl.refined_grid(sf, m))
+    return GB(data=grid.data.refined_grid(sf, m))
 
 
 @overload
@@ -117,12 +117,12 @@ def dual_grid(grid: Grid | GridBatch, exclude_border: bool = False) -> Grid | Gr
     """
     from ..grid import Grid
 
-    impl = grid._impl.dual_grid(exclude_border)
+    impl = grid.data.dual_grid(exclude_border)
     if isinstance(grid, Grid):
-        return Grid(impl=impl)
+        return Grid(data=impl)
     from ..grid_batch import GridBatch as GB
 
-    return GB(impl=impl)
+    return GB(data=impl)
 
 
 @overload
@@ -146,12 +146,12 @@ def dilated_grid(grid: Grid | GridBatch, dilation: int) -> Grid | GridBatch:
     """
     from ..grid import Grid
 
-    impl = grid._impl.dilated_grid(dilation)
+    impl = grid.data.dilated_grid(dilation)
     if isinstance(grid, Grid):
-        return Grid(impl=impl)
+        return Grid(data=impl)
     from ..grid_batch import GridBatch as GB
 
-    return GB(impl=impl)
+    return GB(data=impl)
 
 
 @overload
@@ -175,12 +175,12 @@ def merged_grid(grid: Grid | GridBatch, other: Grid | GridBatch) -> Grid | GridB
     """
     from ..grid import Grid
 
-    impl = grid._impl.merged_grid(other._impl)
+    impl = grid.data.merged_grid(other.data)
     if isinstance(grid, Grid):
-        return Grid(impl=impl)
+        return Grid(data=impl)
     from ..grid_batch import GridBatch as GB
 
-    return GB(impl=impl)
+    return GB(data=impl)
 
 
 @overload
@@ -209,10 +209,10 @@ def pruned_grid(
 
     if isinstance(grid, Grid):
         jt_m = JaggedTensor(mask)
-        return Grid(impl=grid._impl.pruned_grid(jt_m._impl))
+        return Grid(data=grid.data.pruned_grid(jt_m._impl))
     from ..grid_batch import GridBatch as GB
 
-    return GB(impl=grid._impl.pruned_grid(mask._impl))
+    return GB(data=grid.data.pruned_grid(mask._impl))
 
 
 # ---------------------------------------------------------------------------
@@ -249,12 +249,12 @@ def conv_grid(
 
     ks = to_Vec3iBroadcastable(kernel_size, value_constraint=ValueConstraint.POSITIVE)
     st = to_Vec3iBroadcastable(stride, value_constraint=ValueConstraint.POSITIVE)
-    impl = grid._impl.conv_grid(ks, st)
+    impl = grid.data.conv_grid(ks, st)
     if isinstance(grid, Grid):
-        return Grid(impl=impl)
+        return Grid(data=impl)
     from ..grid_batch import GridBatch as GB
 
-    return GB(impl=impl)
+    return GB(data=impl)
 
 
 @overload
@@ -286,12 +286,12 @@ def conv_transpose_grid(
 
     ks = to_Vec3iBroadcastable(kernel_size, value_constraint=ValueConstraint.POSITIVE)
     st = to_Vec3iBroadcastable(stride, value_constraint=ValueConstraint.POSITIVE)
-    impl = grid._impl.conv_transpose_grid(ks, st)
+    impl = grid.data.conv_transpose_grid(ks, st)
     if isinstance(grid, Grid):
-        return Grid(impl=impl)
+        return Grid(data=impl)
     from ..grid_batch import GridBatch as GB
 
-    return GB(impl=impl)
+    return GB(data=impl)
 
 
 # ---------------------------------------------------------------------------
@@ -323,13 +323,13 @@ def morton(grid: Grid | GridBatch, offset: torch.Tensor | NumericMaxRank1 | None
 
     if isinstance(grid, Grid):
         if offset is None:
-            offset = -torch.min(grid._impl.ijk.jdata, dim=0).values
-        return grid._impl.morton(offset).jdata
+            offset = -torch.min(grid.data.ijk.jdata, dim=0).values
+        return grid.data.morton(offset).jdata
     if offset is None:
-        offset = -torch.min(grid._impl.ijk.jdata, dim=0).values
+        offset = -torch.min(grid.data.ijk.jdata, dim=0).values
     else:
         offset = to_Vec3i(offset)
-    return JaggedTensor(impl=grid._impl.morton(offset))
+    return JaggedTensor(impl=grid.data.morton(offset))
 
 
 @overload
@@ -357,13 +357,13 @@ def morton_zyx(
 
     if isinstance(grid, Grid):
         if offset is None:
-            offset = -torch.min(grid._impl.ijk.jdata, dim=0).values
-        return grid._impl.morton_zyx(offset).jdata
+            offset = -torch.min(grid.data.ijk.jdata, dim=0).values
+        return grid.data.morton_zyx(offset).jdata
     if offset is None:
-        offset = -torch.min(grid._impl.ijk.jdata, dim=0).values
+        offset = -torch.min(grid.data.ijk.jdata, dim=0).values
     else:
         offset = to_Vec3i(offset)
-    return JaggedTensor(impl=grid._impl.morton_zyx(offset))
+    return JaggedTensor(impl=grid.data.morton_zyx(offset))
 
 
 @overload
@@ -392,13 +392,13 @@ def hilbert(
 
     if isinstance(grid, Grid):
         if offset is None:
-            offset = -torch.min(grid._impl.ijk.jdata, dim=0).values
-        return grid._impl.hilbert(offset).jdata
+            offset = -torch.min(grid.data.ijk.jdata, dim=0).values
+        return grid.data.hilbert(offset).jdata
     if offset is None:
-        offset = -torch.min(grid._impl.ijk.jdata, dim=0).values
+        offset = -torch.min(grid.data.ijk.jdata, dim=0).values
     else:
         offset = to_Vec3i(offset)
-    return JaggedTensor(impl=grid._impl.hilbert(offset))
+    return JaggedTensor(impl=grid.data.hilbert(offset))
 
 
 @overload
@@ -426,13 +426,13 @@ def hilbert_zyx(
 
     if isinstance(grid, Grid):
         if offset is None:
-            offset = -torch.min(grid._impl.ijk.jdata, dim=0).values
-        return grid._impl.hilbert_zyx(offset).jdata
+            offset = -torch.min(grid.data.ijk.jdata, dim=0).values
+        return grid.data.hilbert_zyx(offset).jdata
     if offset is None:
-        offset = -torch.min(grid._impl.ijk.jdata, dim=0).values
+        offset = -torch.min(grid.data.ijk.jdata, dim=0).values
     else:
         offset = to_Vec3i(offset)
-    return JaggedTensor(impl=grid._impl.hilbert_zyx(offset))
+    return JaggedTensor(impl=grid.data.hilbert_zyx(offset))
 
 
 # ---------------------------------------------------------------------------
@@ -453,5 +453,5 @@ def edge_network(grid: Grid | GridBatch, return_voxel_coordinates: bool = False)
         A tuple of two :class:`~fvdb.JaggedTensor` objects representing the
         edge network.
     """
-    a, b = grid._impl.viz_edge_network(return_voxel_coordinates)
+    a, b = grid.data.viz_edge_network(return_voxel_coordinates)
     return JaggedTensor(impl=a), JaggedTensor(impl=b)

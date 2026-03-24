@@ -20,11 +20,11 @@ namespace fvdb::detail::ops {
 
 template <torch::DeviceType>
 nanovdb::GridHandle<TorchDeviceBuffer>
-dispatchDilateGrid(const GridBatchImpl &gridBatch, const std::vector<int64_t> &dilationAmount);
+dispatchDilateGrid(const GridBatchData &gridBatch, const std::vector<int64_t> &dilationAmount);
 
 template <>
 nanovdb::GridHandle<TorchDeviceBuffer>
-dispatchDilateGrid<torch::kCUDA>(const GridBatchImpl &gridBatch,
+dispatchDilateGrid<torch::kCUDA>(const GridBatchData &gridBatch,
                                  const std::vector<int64_t> &dilationAmount) {
     c10::cuda::CUDAGuard deviceGuard(gridBatch.device());
 
@@ -85,7 +85,7 @@ dispatchDilateGrid<torch::kCUDA>(const GridBatchImpl &gridBatch,
 
 template <>
 nanovdb::GridHandle<TorchDeviceBuffer>
-dispatchDilateGrid<torch::kCPU>(const GridBatchImpl &gridBatch,
+dispatchDilateGrid<torch::kCPU>(const GridBatchData &gridBatch,
                                 const std::vector<int64_t> &dilationAmount) {
     using GridT     = nanovdb::ValueOnIndex;
     using IndexTree = nanovdb::NanoTree<GridT>;
@@ -133,8 +133,8 @@ dispatchDilateGrid<torch::kCPU>(const GridBatchImpl &gridBatch,
     }
 }
 
-c10::intrusive_ptr<GridBatchImpl>
-dilateGrid(const GridBatchImpl &gridBatch, const std::vector<int64_t> &dilationAmount) {
+c10::intrusive_ptr<GridBatchData>
+dilateGrid(const GridBatchData &gridBatch, const std::vector<int64_t> &dilationAmount) {
     TORCH_CHECK_VALUE(static_cast<int64_t>(dilationAmount.size()) == gridBatch.batchSize(),
                       "dilationAmount should have same size as batch size, got ",
                       dilationAmount.size(),
@@ -156,7 +156,7 @@ dilateGrid(const GridBatchImpl &gridBatch, const std::vector<int64_t> &dilationA
     auto hdl = FVDB_DISPATCH_KERNEL_DEVICE(gridBatch.device(), [&]() {
         return dispatchDilateGrid<DeviceTag>(gridBatch, dilationAmount);
     });
-    return c10::make_intrusive<GridBatchImpl>(std::move(hdl), voxS, voxO);
+    return c10::make_intrusive<GridBatchData>(std::move(hdl), voxS, voxO);
 }
 
 } // namespace fvdb::detail::ops

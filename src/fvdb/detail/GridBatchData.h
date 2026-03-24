@@ -23,7 +23,7 @@
 namespace fvdb {
 namespace detail {
 
-class GridBatchImpl : public torch::CustomClassHolder {
+class GridBatchData : public torch::CustomClassHolder {
   public:
     static constexpr int64_t MAX_GRIDS_PER_BATCH = 1024; // Maximum number of grids in a batch
 
@@ -112,11 +112,11 @@ class GridBatchImpl : public torch::CustomClassHolder {
     void recomputeBatchOffsets();
 
     template <typename Indexable>
-    c10::intrusive_ptr<GridBatchImpl> indexInternal(const Indexable &idx, int64_t size) const;
+    c10::intrusive_ptr<GridBatchData> indexInternal(const Indexable &idx, int64_t size) const;
 
   public:
     class Accessor {
-        const GridBatchImpl::GridMetadata *__restrict__ mMetadata = nullptr; // 8 bytes
+        const GridBatchData::GridMetadata *__restrict__ mMetadata = nullptr; // 8 bytes
         const nanovdb::OnIndexGrid *__restrict__ mGridPtr         = nullptr; // 8 bytes
         fvdb::JIdxType *__restrict__ mLeafBatchIndices            = nullptr; // 8 bytes
         int64_t mTotalVoxels                                      = 0;       // 8 bytes
@@ -136,7 +136,7 @@ class GridBatchImpl : public torch::CustomClassHolder {
         }
 
       public:
-        Accessor(const GridBatchImpl::GridMetadata *metadata,
+        Accessor(const GridBatchData::GridMetadata *metadata,
                  const nanovdb::OnIndexGrid *gridPtr,
                  fvdb::JIdxType *leafBatchIndices,
                  int64_t totalVoxels,
@@ -258,34 +258,34 @@ class GridBatchImpl : public torch::CustomClassHolder {
         return ret;
     }
 
-    GridBatchImpl() = default;
+    GridBatchData() = default;
 
-    GridBatchImpl(const torch::Device &device);
+    GridBatchData(const torch::Device &device);
 
-    GridBatchImpl(const torch::Device &device,
+    GridBatchData(const torch::Device &device,
                   const nanovdb::Vec3d &voxelSize,
                   const nanovdb::Vec3d &origin);
 
-    GridBatchImpl(const torch::Device &device,
+    GridBatchData(const torch::Device &device,
                   const std::vector<nanovdb::Vec3d> &voxelSizes,
                   const std::vector<nanovdb::Vec3d> &origins);
 
-    GridBatchImpl(nanovdb::GridHandle<TorchDeviceBuffer> &&gridHdl,
+    GridBatchData(nanovdb::GridHandle<TorchDeviceBuffer> &&gridHdl,
                   const std::vector<nanovdb::Vec3d> &voxelSizes,
                   const std::vector<nanovdb::Vec3d> &voxelOrigins);
 
-    GridBatchImpl(nanovdb::GridHandle<TorchDeviceBuffer> &&gridHdl,
+    GridBatchData(nanovdb::GridHandle<TorchDeviceBuffer> &&gridHdl,
                   const nanovdb::Vec3d &globalVoxelSize,
                   const nanovdb::Vec3d &globalVoxelOrigin);
 
-    ~GridBatchImpl();
+    ~GridBatchData();
 
     // Cannot move make copies of this handle. There is only one owner of the underlying buffer.
     // This class should only be created and copied through c10::intrusive_ptr
-    GridBatchImpl &operator=(GridBatchImpl &&other) = delete;
-    GridBatchImpl(GridBatchImpl &&other)            = delete;
-    GridBatchImpl(GridBatchImpl &other)             = delete;
-    GridBatchImpl &operator=(GridBatchImpl &other)  = delete;
+    GridBatchData &operator=(GridBatchData &&other) = delete;
+    GridBatchData(GridBatchData &&other)            = delete;
+    GridBatchData(GridBatchData &other)             = delete;
+    GridBatchData &operator=(GridBatchData &other)  = delete;
 
     torch::Tensor voxelOffsets() const;
 
@@ -474,7 +474,7 @@ class GridBatchImpl : public torch::CustomClassHolder {
 
     torch::Tensor worldToGridMatrixPerGrid() const;
 
-    c10::intrusive_ptr<GridBatchImpl> clone(const torch::Device &device,
+    c10::intrusive_ptr<GridBatchData> clone(const torch::Device &device,
                                             bool blocking = false) const;
 
     void
@@ -521,11 +521,11 @@ class GridBatchImpl : public torch::CustomClassHolder {
     void setGlobalVoxelSizeAndOrigin(const nanovdb::Vec3d &voxelSize,
                                      const nanovdb::Vec3d &voxelOrigin);
 
-    void setFineTransformFromCoarseGrid(const GridBatchImpl &coarseBatch,
+    void setFineTransformFromCoarseGrid(const GridBatchData &coarseBatch,
                                         nanovdb::Coord subdivisionFactor);
-    void setCoarseTransformFromFineGrid(const GridBatchImpl &fineBatch,
+    void setCoarseTransformFromFineGrid(const GridBatchData &fineBatch,
                                         nanovdb::Coord coarseningFactor);
-    void setPrimalTransformFromDualGrid(const GridBatchImpl &dualBatch);
+    void setPrimalTransformFromDualGrid(const GridBatchData &dualBatch);
 
     void setGrid(nanovdb::GridHandle<TorchDeviceBuffer> &&gridHdl,
                  const torch::Tensor listIndices,
@@ -533,16 +533,16 @@ class GridBatchImpl : public torch::CustomClassHolder {
                  const std::vector<nanovdb::Vec3d> &voxelOrigins,
                  bool blocking = false);
 
-    c10::intrusive_ptr<GridBatchImpl> index(int64_t bi) const;
-    c10::intrusive_ptr<GridBatchImpl> index(ssize_t start, ssize_t stop, ssize_t step) const;
-    c10::intrusive_ptr<GridBatchImpl> index(const torch::Tensor &indices) const;
-    c10::intrusive_ptr<GridBatchImpl> index(const std::vector<int64_t> &indices) const;
-    c10::intrusive_ptr<GridBatchImpl> index(const std::vector<bool> &indices) const;
+    c10::intrusive_ptr<GridBatchData> index(int64_t bi) const;
+    c10::intrusive_ptr<GridBatchData> index(ssize_t start, ssize_t stop, ssize_t step) const;
+    c10::intrusive_ptr<GridBatchData> index(const torch::Tensor &indices) const;
+    c10::intrusive_ptr<GridBatchData> index(const std::vector<int64_t> &indices) const;
+    c10::intrusive_ptr<GridBatchData> index(const std::vector<bool> &indices) const;
 
-    static c10::intrusive_ptr<GridBatchImpl>
-    concatenate(const std::vector<c10::intrusive_ptr<GridBatchImpl>> &elements);
+    static c10::intrusive_ptr<GridBatchData>
+    concatenate(const std::vector<c10::intrusive_ptr<GridBatchData>> &elements);
 
-    static c10::intrusive_ptr<GridBatchImpl> contiguous(c10::intrusive_ptr<GridBatchImpl> input);
+    static c10::intrusive_ptr<GridBatchData> contiguous(c10::intrusive_ptr<GridBatchData> input);
 
     bool
     isContiguous() const {
@@ -553,64 +553,64 @@ class GridBatchImpl : public torch::CustomClassHolder {
     torch::Tensor serialize() const;
 
     // Load a CPU int8 tensor into a grid batch handle
-    static c10::intrusive_ptr<GridBatchImpl> deserialize(const torch::Tensor &serialized);
+    static c10::intrusive_ptr<GridBatchData> deserialize(const torch::Tensor &serialized);
 
-    c10::intrusive_ptr<GridBatchImpl> coarsen(const nanovdb::Coord coarseningFactor);
+    c10::intrusive_ptr<GridBatchData> coarsen(const nanovdb::Coord coarseningFactor);
 
-    c10::intrusive_ptr<GridBatchImpl> upsample(const nanovdb::Coord upsampleFactor,
+    c10::intrusive_ptr<GridBatchData> upsample(const nanovdb::Coord upsampleFactor,
                                                const std::optional<JaggedTensor> mask);
 
-    c10::intrusive_ptr<GridBatchImpl> dual(const bool excludeBorder);
+    c10::intrusive_ptr<GridBatchData> dual(const bool excludeBorder);
 
-    c10::intrusive_ptr<GridBatchImpl> clip(const std::vector<nanovdb::Coord> &ijkMin,
+    c10::intrusive_ptr<GridBatchData> clip(const std::vector<nanovdb::Coord> &ijkMin,
                                            const std::vector<nanovdb::Coord> &ijkMax);
 
-    std::tuple<c10::intrusive_ptr<GridBatchImpl>, JaggedTensor>
+    std::tuple<c10::intrusive_ptr<GridBatchData>, JaggedTensor>
     clipWithMask(const std::vector<nanovdb::Coord> &ijkMin,
                  const std::vector<nanovdb::Coord> &ijkMax);
 
-    std::pair<JaggedTensor, c10::intrusive_ptr<GridBatchImpl>>
+    std::pair<JaggedTensor, c10::intrusive_ptr<GridBatchData>>
     clipFeaturesWithMask(const JaggedTensor &features,
                          const std::vector<nanovdb::Coord> &ijkMin,
                          const std::vector<nanovdb::Coord> &ijkMax);
 
-    c10::intrusive_ptr<GridBatchImpl> dilate(const int64_t dilationAmount);
+    c10::intrusive_ptr<GridBatchData> dilate(const int64_t dilationAmount);
 
-    c10::intrusive_ptr<GridBatchImpl> dilate(const std::vector<int64_t> dilationAmount);
+    c10::intrusive_ptr<GridBatchData> dilate(const std::vector<int64_t> dilationAmount);
 
-    c10::intrusive_ptr<GridBatchImpl> merge(c10::intrusive_ptr<GridBatchImpl> other);
+    c10::intrusive_ptr<GridBatchData> merge(c10::intrusive_ptr<GridBatchData> other);
 
-    c10::intrusive_ptr<GridBatchImpl> prune(const JaggedTensor &mask);
+    c10::intrusive_ptr<GridBatchData> prune(const JaggedTensor &mask);
 
-    c10::intrusive_ptr<GridBatchImpl> convolutionOutput(const nanovdb::Coord kernelSize,
+    c10::intrusive_ptr<GridBatchData> convolutionOutput(const nanovdb::Coord kernelSize,
                                                         const nanovdb::Coord stride);
 
-    c10::intrusive_ptr<GridBatchImpl> convolutionTransposeOutput(const nanovdb::Coord kernelSize,
+    c10::intrusive_ptr<GridBatchData> convolutionTransposeOutput(const nanovdb::Coord kernelSize,
                                                                  const nanovdb::Coord stride);
 
-    static c10::intrusive_ptr<GridBatchImpl> createFromEmpty(const torch::Device &device,
+    static c10::intrusive_ptr<GridBatchData> createFromEmpty(const torch::Device &device,
                                                              const nanovdb::Vec3d &voxelSize,
                                                              const nanovdb::Vec3d &origin);
-    static c10::intrusive_ptr<GridBatchImpl>
+    static c10::intrusive_ptr<GridBatchData>
     createFromIjk(const JaggedTensor &ijk,
                   const std::vector<nanovdb::Vec3d> &voxelSizes,
                   const std::vector<nanovdb::Vec3d> &origins);
-    static c10::intrusive_ptr<GridBatchImpl>
+    static c10::intrusive_ptr<GridBatchData>
     createFromPoints(const JaggedTensor &points,
                      const std::vector<nanovdb::Vec3d> &voxelSizes,
                      const std::vector<nanovdb::Vec3d> &origins);
 
-    static c10::intrusive_ptr<GridBatchImpl>
+    static c10::intrusive_ptr<GridBatchData>
     createFromMesh(const JaggedTensor &meshVertices,
                    const JaggedTensor &meshFaces,
                    const std::vector<nanovdb::Vec3d> &voxelSizes,
                    const std::vector<nanovdb::Vec3d> &origins);
-    static c10::intrusive_ptr<GridBatchImpl>
+    static c10::intrusive_ptr<GridBatchData>
     createFromNeighborVoxelsToPoints(const JaggedTensor &points,
                                      const std::vector<nanovdb::Vec3d> &voxelSizes,
                                      const std::vector<nanovdb::Vec3d> &origins);
 
-    static c10::intrusive_ptr<GridBatchImpl> dense(const int64_t numGrids,
+    static c10::intrusive_ptr<GridBatchData> dense(const int64_t numGrids,
                                                    const torch::Device &device,
                                                    const nanovdb::Coord &denseDims,
                                                    const nanovdb::Coord &ijkMin,
@@ -621,10 +621,10 @@ class GridBatchImpl : public torch::CustomClassHolder {
   private:
     // We're going to version serialization. These are v0
     torch::Tensor serializeV0() const;
-    static c10::intrusive_ptr<GridBatchImpl> deserializeV0(const torch::Tensor &serialized);
+    static c10::intrusive_ptr<GridBatchData> deserializeV0(const torch::Tensor &serialized);
 };
 
-using BatchGridAccessor = typename GridBatchImpl::Accessor;
+using BatchGridAccessor = typename GridBatchData::Accessor;
 
 } // namespace detail
 } // namespace fvdb

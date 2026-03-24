@@ -104,7 +104,7 @@ worldToVoxelBackwardCallback(int32_t bidx,
 
 template <torch::DeviceType DeviceTag, typename scalar_t>
 torch::Tensor
-TransformPointsToGrid(const GridBatchImpl &batchHdl, const JaggedTensor &points, bool isPrimal) {
+TransformPointsToGrid(const GridBatchData &batchHdl, const JaggedTensor &points, bool isPrimal) {
     batchHdl.checkDevice(points);
     TORCH_CHECK_VALUE(points.rdim() == 2, "points must have shape [B*N, 3]");
     TORCH_CHECK_VALUE(points.rsize(-1) == 3, "points must have shape [B*N, 3]");
@@ -143,7 +143,7 @@ TransformPointsToGrid(const GridBatchImpl &batchHdl, const JaggedTensor &points,
 
 template <torch::DeviceType DeviceTag, typename scalar_t>
 torch::Tensor
-InvTransformPointsToGrid(const GridBatchImpl &batchHdl, const JaggedTensor &points, bool isPrimal) {
+InvTransformPointsToGrid(const GridBatchData &batchHdl, const JaggedTensor &points, bool isPrimal) {
     batchHdl.checkDevice(points);
     TORCH_CHECK_VALUE(points.rdim() == 2, "points must have shape [B*N, 3]");
     TORCH_CHECK_VALUE(points.rsize(-1) == 3, "points must have shape [B*N, 3]");
@@ -182,7 +182,7 @@ InvTransformPointsToGrid(const GridBatchImpl &batchHdl, const JaggedTensor &poin
 
 template <torch::DeviceType DeviceTag, typename scalar_t>
 torch::Tensor
-TransformPointsToGridBackward(const GridBatchImpl &batchHdl,
+TransformPointsToGridBackward(const GridBatchData &batchHdl,
                               const JaggedTensor &gradOut,
                               bool isPrimal) {
     torch::Tensor outGradIn = torch::empty_like(gradOut.jdata());
@@ -216,7 +216,7 @@ TransformPointsToGridBackward(const GridBatchImpl &batchHdl,
 
 template <torch::DeviceType DeviceTag, typename scalar_t>
 torch::Tensor
-InvTransformPointsToGridBackward(const GridBatchImpl &batchHdl,
+InvTransformPointsToGridBackward(const GridBatchData &batchHdl,
                                  const JaggedTensor &gradOut,
                                  bool isPrimal) {
     torch::Tensor outGradIn = torch::empty_like(gradOut.jdata());
@@ -250,7 +250,7 @@ InvTransformPointsToGridBackward(const GridBatchImpl &batchHdl,
 
 template <torch::DeviceType DeviceTag>
 torch::Tensor
-dispatchTransformPointsToGrid(const GridBatchImpl &batchHdl,
+dispatchTransformPointsToGrid(const GridBatchData &batchHdl,
                               const JaggedTensor &points,
                               bool isPrimal) {
     return AT_DISPATCH_V2(points.scalar_type(),
@@ -265,7 +265,7 @@ dispatchTransformPointsToGrid(const GridBatchImpl &batchHdl,
 
 template <torch::DeviceType DeviceTag>
 torch::Tensor
-dispatchInvTransformPointsToGrid(const GridBatchImpl &batchHdl,
+dispatchInvTransformPointsToGrid(const GridBatchData &batchHdl,
                                  const JaggedTensor &points,
                                  bool isPrimal) {
     return AT_DISPATCH_V2(points.scalar_type(),
@@ -280,7 +280,7 @@ dispatchInvTransformPointsToGrid(const GridBatchImpl &batchHdl,
 
 template <torch::DeviceType DeviceTag>
 torch::Tensor
-dispatchTransformPointsToGridBackward(const GridBatchImpl &batchHdl,
+dispatchTransformPointsToGridBackward(const GridBatchData &batchHdl,
                                       const JaggedTensor &gradOut,
                                       bool isPrimal) {
     return AT_DISPATCH_V2(gradOut.scalar_type(),
@@ -295,7 +295,7 @@ dispatchTransformPointsToGridBackward(const GridBatchImpl &batchHdl,
 
 template <torch::DeviceType DeviceTag>
 torch::Tensor
-dispatchInvTransformPointsToGridBackward(const GridBatchImpl &batchHdl,
+dispatchInvTransformPointsToGridBackward(const GridBatchData &batchHdl,
                                          const JaggedTensor &gradOut,
                                          bool isPrimal) {
     return AT_DISPATCH_V2(gradOut.scalar_type(),
@@ -311,7 +311,7 @@ dispatchInvTransformPointsToGridBackward(const GridBatchImpl &batchHdl,
 } // anonymous namespace
 
 torch::Tensor
-voxelToWorld(const GridBatchImpl &batchHdl, const JaggedTensor &points, bool isPrimal) {
+voxelToWorld(const GridBatchData &batchHdl, const JaggedTensor &points, bool isPrimal) {
     batchHdl.checkDevice(points);
     TORCH_CHECK_VALUE(points.rdim() == 2, "points must have shape [B*N, 3]");
     TORCH_CHECK_VALUE(points.rsize(-1) == 3, "points must have shape [B*N, 3]");
@@ -323,7 +323,7 @@ voxelToWorld(const GridBatchImpl &batchHdl, const JaggedTensor &points, bool isP
 }
 
 torch::Tensor
-worldToVoxel(const GridBatchImpl &batchHdl, const JaggedTensor &points, bool isPrimal) {
+worldToVoxel(const GridBatchData &batchHdl, const JaggedTensor &points, bool isPrimal) {
     batchHdl.checkDevice(points);
     TORCH_CHECK_VALUE(points.rdim() == 2, "points must have shape [B*N, 3]");
     TORCH_CHECK_VALUE(points.rsize(-1) == 3, "points must have shape [B*N, 3]");
@@ -335,7 +335,7 @@ worldToVoxel(const GridBatchImpl &batchHdl, const JaggedTensor &points, bool isP
 }
 
 torch::Tensor
-voxelToWorldBackward(const GridBatchImpl &batchHdl,
+voxelToWorldBackward(const GridBatchData &batchHdl,
                               const JaggedTensor &gradOut,
                               bool isPrimal) {
     return FVDB_DISPATCH_KERNEL(gradOut.device(), [&]() {
@@ -344,7 +344,7 @@ voxelToWorldBackward(const GridBatchImpl &batchHdl,
 }
 
 torch::Tensor
-worldToVoxelBackward(const GridBatchImpl &batchHdl,
+worldToVoxelBackward(const GridBatchData &batchHdl,
                                  const JaggedTensor &gradOut,
                                  bool isPrimal) {
     return FVDB_DISPATCH_KERNEL(gradOut.device(), [&]() {

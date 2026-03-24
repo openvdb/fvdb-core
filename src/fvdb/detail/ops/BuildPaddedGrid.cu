@@ -1,7 +1,7 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 #include <fvdb/detail/ops/BuildGridFromIjk.h>
 #include <fvdb/detail/ops/BuildPaddedGrid.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
@@ -24,7 +24,7 @@ namespace ops {
 
 template <torch::DeviceType>
 nanovdb::GridHandle<TorchDeviceBuffer>
-dispatchBuildPaddedGrid(const GridBatchImpl &baseBatchHdl, int bmin, int bmax, bool excludeBorder);
+dispatchBuildPaddedGrid(const GridBatchData &baseBatchHdl, int bmin, int bmax, bool excludeBorder);
 
 __device__ inline void
 copyCoords(const fvdb::JIdxType bidx,
@@ -123,7 +123,7 @@ ijkForGridVoxelCallback(int32_t bidx,
                         int32_t lidx,
                         int32_t vidx,
                         int32_t cidx,
-                        const GridBatchImpl::Accessor batchAcc,
+                        const GridBatchData::Accessor batchAcc,
                         const nanovdb::CoordBBox bbox,
                         TorchRAcc64<int32_t, 2> outIJKData,
                         TorchRAcc64<fvdb::JIdxType, 1> outIJKBIdx) {
@@ -148,7 +148,7 @@ ijkForGridVoxelCallbackWithoutBorder(int32_t bidx,
                                      int32_t lidx,
                                      int32_t vidx,
                                      int32_t cidx,
-                                     const GridBatchImpl::Accessor batchAcc,
+                                     const GridBatchData::Accessor batchAcc,
                                      const nanovdb::CoordBBox bbox,
                                      const TorchRAcc64<int64_t, 1> packInfoBase,
                                      TorchRAcc64<int32_t, 2> outIJKData,
@@ -173,7 +173,7 @@ ijkForGridVoxelCallbackWithoutBorderCount(int32_t bidx,
                                           int32_t lidx,
                                           int32_t vidx,
                                           int32_t cidx,
-                                          const GridBatchImpl::Accessor batchAcc,
+                                          const GridBatchData::Accessor batchAcc,
                                           const nanovdb::CoordBBox bbox,
                                           TorchRAcc64<int64_t, 1> outCounter) {
     const nanovdb::OnIndexGrid *gridPtr = batchAcc.grid(bidx);
@@ -192,10 +192,10 @@ ijkForGridVoxelCallbackWithoutBorderCount(int32_t bidx,
 
 template <torch::DeviceType DeviceTag>
 JaggedTensor
-paddedIJKForGrid(const GridBatchImpl &batchHdl, const nanovdb::CoordBBox &bbox) {
+paddedIJKForGrid(const GridBatchData &batchHdl, const nanovdb::CoordBBox &bbox) {
     TORCH_CHECK(batchHdl.device().is_cuda() || batchHdl.device().is_privateuseone(),
-                "GridBatchImpl must be on CUDA or PrivateUse1 device");
-    TORCH_CHECK(batchHdl.device().has_index(), "GridBatchImpl must have a valid index");
+                "GridBatchData must be on CUDA or PrivateUse1 device");
+    TORCH_CHECK(batchHdl.device().has_index(), "GridBatchData must have a valid index");
 
     const int32_t totalPadAmount = static_cast<int32_t>(bbox.volume());
 
@@ -215,7 +215,7 @@ paddedIJKForGrid(const GridBatchImpl &batchHdl, const nanovdb::CoordBBox &bbox) 
                              int32_t lidx,
                              int32_t vidx,
                              int32_t cidx,
-                             GridBatchImpl::Accessor bacc) {
+                             GridBatchData::Accessor bacc) {
         ijkForGridVoxelCallback(bidx, lidx, vidx, cidx, bacc, bbox, outIJKAcc, outIJKBIdxAcc);
     };
 
@@ -230,9 +230,9 @@ paddedIJKForGrid(const GridBatchImpl &batchHdl, const nanovdb::CoordBBox &bbox) 
 }
 
 JaggedTensor
-paddedIJKForGridWithoutBorder(const GridBatchImpl &batchHdl, const nanovdb::CoordBBox &bbox) {
-    TORCH_CHECK(batchHdl.device().is_cuda(), "GridBatchImpl must be on CUDA device");
-    TORCH_CHECK(batchHdl.device().has_index(), "GridBatchImpl must have a valid index");
+paddedIJKForGridWithoutBorder(const GridBatchData &batchHdl, const nanovdb::CoordBBox &bbox) {
+    TORCH_CHECK(batchHdl.device().is_cuda(), "GridBatchData must be on CUDA device");
+    TORCH_CHECK(batchHdl.device().has_index(), "GridBatchData must have a valid index");
 
     const torch::TensorOptions optsData =
         torch::TensorOptions().dtype(torch::kInt32).device(batchHdl.device());
@@ -247,7 +247,7 @@ paddedIJKForGridWithoutBorder(const GridBatchImpl &batchHdl, const nanovdb::Coor
                              int32_t lidx,
                              int32_t vidx,
                              int32_t cidx,
-                             GridBatchImpl::Accessor bacc) {
+                             GridBatchData::Accessor bacc) {
         ijkForGridVoxelCallbackWithoutBorderCount(
             bidx, lidx, vidx, cidx, bacc, bbox, outCounterAcc);
     };
@@ -275,7 +275,7 @@ paddedIJKForGridWithoutBorder(const GridBatchImpl &batchHdl, const nanovdb::Coor
                               int32_t lidx,
                               int32_t vidx,
                               int32_t cidx,
-                              GridBatchImpl::Accessor bacc) {
+                              GridBatchData::Accessor bacc) {
         ijkForGridVoxelCallbackWithoutBorder(
             bidx, lidx, vidx, cidx, bacc, bbox, packInfoBaseAcc, outIJKAcc, outIJKBIdxAcc);
     };
@@ -286,7 +286,7 @@ paddedIJKForGridWithoutBorder(const GridBatchImpl &batchHdl, const nanovdb::Coor
 }
 
 nanovdb::GridHandle<TorchDeviceBuffer>
-buildPaddedGridFromGridWithoutBorderCPU(const GridBatchImpl &baseBatchHdl, int BMIN, int BMAX) {
+buildPaddedGridFromGridWithoutBorderCPU(const GridBatchData &baseBatchHdl, int BMIN, int BMAX) {
     using GridT = nanovdb::ValueOnIndex;
 
     TORCH_CHECK(BMIN <= BMAX, "BMIN must be less than BMAX");
@@ -340,7 +340,7 @@ buildPaddedGridFromGridWithoutBorderCPU(const GridBatchImpl &baseBatchHdl, int B
 }
 
 nanovdb::GridHandle<TorchDeviceBuffer>
-buildPaddedGridFromGridCPU(const GridBatchImpl &baseBatchHdl, int BMIN, int BMAX) {
+buildPaddedGridFromGridCPU(const GridBatchData &baseBatchHdl, int BMIN, int BMAX) {
     using GridT = nanovdb::ValueOnIndex;
 
     TORCH_CHECK(BMIN <= BMAX, "BMIN must be less than BMAX");
@@ -387,7 +387,7 @@ buildPaddedGridFromGridCPU(const GridBatchImpl &baseBatchHdl, int BMIN, int BMAX
 
 template <>
 nanovdb::GridHandle<TorchDeviceBuffer>
-dispatchBuildPaddedGrid<torch::kCUDA>(const GridBatchImpl &baseBatchHdl,
+dispatchBuildPaddedGrid<torch::kCUDA>(const GridBatchData &baseBatchHdl,
                                       int bmin,
                                       int bmax,
                                       bool excludeBorder) {
@@ -403,7 +403,7 @@ dispatchBuildPaddedGrid<torch::kCUDA>(const GridBatchImpl &baseBatchHdl,
 
 template <>
 nanovdb::GridHandle<TorchDeviceBuffer>
-dispatchBuildPaddedGrid<torch::kPrivateUse1>(const GridBatchImpl &baseBatchHdl,
+dispatchBuildPaddedGrid<torch::kPrivateUse1>(const GridBatchData &baseBatchHdl,
                                              int bmin,
                                              int bmax,
                                              bool excludeBorder) {
@@ -419,7 +419,7 @@ dispatchBuildPaddedGrid<torch::kPrivateUse1>(const GridBatchImpl &baseBatchHdl,
 
 template <>
 nanovdb::GridHandle<TorchDeviceBuffer>
-dispatchBuildPaddedGrid<torch::kCPU>(const GridBatchImpl &baseBatchHdl,
+dispatchBuildPaddedGrid<torch::kCPU>(const GridBatchData &baseBatchHdl,
                                      int bmin,
                                      int bmax,
                                      bool excludeBorder) {
@@ -430,14 +430,14 @@ dispatchBuildPaddedGrid<torch::kCPU>(const GridBatchImpl &baseBatchHdl,
     }
 }
 
-c10::intrusive_ptr<GridBatchImpl>
-buildPaddedGrid(const GridBatchImpl &baseBatchHdl, int bmin, int bmax, bool excludeBorder) {
+c10::intrusive_ptr<GridBatchData>
+buildPaddedGrid(const GridBatchData &baseBatchHdl, int bmin, int bmax, bool excludeBorder) {
     std::vector<nanovdb::Vec3d> voxS, voxO;
     baseBatchHdl.gridVoxelSizesAndOrigins(voxS, voxO);
     auto hdl = FVDB_DISPATCH_KERNEL(baseBatchHdl.device(), [&]() {
         return dispatchBuildPaddedGrid<DeviceTag>(baseBatchHdl, bmin, bmax, excludeBorder);
     });
-    auto ret = c10::make_intrusive<GridBatchImpl>(std::move(hdl), voxS, voxO);
+    auto ret = c10::make_intrusive<GridBatchData>(std::move(hdl), voxS, voxO);
     ret->setPrimalTransformFromDualGrid(baseBatchHdl);
     return ret;
 }

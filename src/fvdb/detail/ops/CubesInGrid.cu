@@ -65,7 +65,7 @@ cubesInGridCallback(int32_t bidx,
 
 template <torch::DeviceType DeviceTag, bool IsTouch>
 JaggedTensor
-CubesInGrid(const GridBatchImpl &batchHdl,
+CubesInGrid(const GridBatchData &batchHdl,
             const JaggedTensor &cubeCenters,
             const nanovdb::Vec3d &padMin,
             const nanovdb::Vec3d &padMax) {
@@ -121,7 +121,7 @@ CubesInGrid(const GridBatchImpl &batchHdl,
 }
 
 JaggedTensor
-cubesInGrid(const GridBatchImpl &batchHdl,
+cubesInGrid(const GridBatchData &batchHdl,
             const JaggedTensor &cubeCenters,
             const nanovdb::Vec3d &padMin,
             const nanovdb::Vec3d &padMax) {
@@ -136,7 +136,7 @@ cubesInGrid(const GridBatchImpl &batchHdl,
 }
 
 JaggedTensor
-cubesIntersectGrid(const GridBatchImpl &batchHdl,
+cubesIntersectGrid(const GridBatchData &batchHdl,
                    const JaggedTensor &cubeCenters,
                    const nanovdb::Vec3d &padMin,
                    const nanovdb::Vec3d &padMax) {

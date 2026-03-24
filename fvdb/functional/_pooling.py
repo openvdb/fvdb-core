@@ -69,16 +69,16 @@ def max_pool(
 
     pool_factor_t = to_Vec3iBroadcastable(pool_factor, value_constraint=ValueConstraint.POSITIVE)
     stride_t = to_Vec3iBroadcastable(stride, value_constraint=ValueConstraint.NON_NEGATIVE)
-    coarse_impl: GridBatchCpp | None = coarse_grid._impl if coarse_grid else None
+    coarse_impl: GridBatchCpp | None = coarse_grid.data if coarse_grid else None
 
     if isinstance(grid, Grid):
         jt_data = JaggedTensor(data)
-        rd, rg = grid._impl.max_pool(pool_factor_t, jt_data._impl, stride_t, coarse_impl)
-        return rd.jdata, Grid(impl=rg)
-    rd, rg = grid._impl.max_pool(pool_factor_t, data._impl, stride_t, coarse_impl)
+        rd, rg = grid.data.max_pool(pool_factor_t, jt_data._impl, stride_t, coarse_impl)
+        return rd.jdata, Grid(data=rg)
+    rd, rg = grid.data.max_pool(pool_factor_t, data._impl, stride_t, coarse_impl)
     from ..grid_batch import GridBatch as GB
 
-    return JaggedTensor(impl=rd), GB(impl=rg)
+    return JaggedTensor(impl=rd), GB(data=rg)
 
 
 @overload
@@ -132,16 +132,16 @@ def avg_pool(
 
     pool_factor_t = to_Vec3iBroadcastable(pool_factor, value_constraint=ValueConstraint.POSITIVE)
     stride_t = to_Vec3iBroadcastable(stride, value_constraint=ValueConstraint.NON_NEGATIVE)
-    coarse_impl: GridBatchCpp | None = coarse_grid._impl if coarse_grid else None
+    coarse_impl: GridBatchCpp | None = coarse_grid.data if coarse_grid else None
 
     if isinstance(grid, Grid):
         jt_data = JaggedTensor(data)
-        rd, rg = grid._impl.avg_pool(pool_factor_t, jt_data._impl, stride_t, coarse_impl)
-        return rd.jdata, Grid(impl=cast("GridBatchCpp", rg))
-    rd, rg = grid._impl.avg_pool(pool_factor_t, data._impl, stride_t, coarse_impl)
+        rd, rg = grid.data.avg_pool(pool_factor_t, jt_data._impl, stride_t, coarse_impl)
+        return rd.jdata, Grid(data=cast("GridBatchCpp", rg))
+    rd, rg = grid.data.avg_pool(pool_factor_t, data._impl, stride_t, coarse_impl)
     from ..grid_batch import GridBatch as GB
 
-    return JaggedTensor(impl=rd), GB(impl=cast("GridBatchCpp", rg))
+    return JaggedTensor(impl=rd), GB(data=cast("GridBatchCpp", rg))
 
 
 @overload
@@ -193,15 +193,15 @@ def refine(
     from ..grid import Grid
 
     subdiv_t = to_Vec3iBroadcastable(subdiv_factor, value_constraint=ValueConstraint.POSITIVE)
-    fine_impl: GridBatchCpp | None = fine_grid._impl if fine_grid else None
+    fine_impl: GridBatchCpp | None = fine_grid.data if fine_grid else None
 
     if isinstance(grid, Grid):
         jt_data = JaggedTensor(data)
         mask_impl = JaggedTensor(mask)._impl if mask is not None else None
-        rd, rg = grid._impl.refine(subdiv_t, jt_data._impl, mask_impl, fine_impl)
-        return rd.jdata, Grid(impl=rg)
+        rd, rg = grid.data.refine(subdiv_t, jt_data._impl, mask_impl, fine_impl)
+        return rd.jdata, Grid(data=rg)
     mask_impl = mask._impl if mask is not None else None
-    rd, rg = grid._impl.refine(subdiv_t, data._impl, mask_impl, fine_impl)
+    rd, rg = grid.data.refine(subdiv_t, data._impl, mask_impl, fine_impl)
     from ..grid_batch import GridBatch as GB
 
-    return JaggedTensor(impl=rd), GB(impl=rg)
+    return JaggedTensor(impl=rd), GB(data=rg)

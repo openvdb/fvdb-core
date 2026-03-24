@@ -64,7 +64,7 @@ sampleBezierWithGradCallback(int32_t bidx,
 
 template <torch::DeviceType DeviceTag>
 std::vector<torch::Tensor>
-SampleGridBezierWithGrad(const GridBatchImpl &batchHdl,
+SampleGridBezierWithGrad(const GridBatchData &batchHdl,
                          const JaggedTensor &points,
                          const torch::Tensor &gridData) {
     auto opts = torch::TensorOptions()
@@ -131,7 +131,7 @@ SampleGridBezierWithGrad(const GridBatchImpl &batchHdl,
 }
 
 std::vector<torch::Tensor>
-sampleBezierWithGrad(const GridBatchImpl &batchHdl,
+sampleBezierWithGrad(const GridBatchData &batchHdl,
                          const JaggedTensor &points,
                          const torch::Tensor &gridData) {
     batchHdl.checkNonEmptyGrid();
