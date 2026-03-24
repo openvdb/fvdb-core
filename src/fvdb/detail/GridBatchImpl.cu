@@ -5,7 +5,7 @@
 #include <fvdb/detail/utils/nanovdb/CreateEmptyGridHandle.h>
 
 // Ops headers for dispatch functions
-#include <fvdb/detail/ops/ActiveGridGoords.h>
+#include <fvdb/detail/ops/ActiveGridCoords.h>
 #include <fvdb/detail/ops/ActiveVoxelsInBoundsMask.h>
 #include <fvdb/detail/ops/BuildCoarseGridFromFine.h>
 #include <fvdb/detail/ops/BuildDenseGrid.h>

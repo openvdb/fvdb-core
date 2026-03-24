@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/detail/autograd/TransformPoints.h>
-#include <fvdb/detail/ops/TransformPointToGrid.h>
+#include <fvdb/detail/ops/VoxelToWorld.h>
 #include <fvdb/detail/utils/Utils.h>
 
 #include <nanovdb/NanoVDB.h>
@@ -25,9 +25,9 @@ TransformPoints::forward(TransformPoints::AutogradContext *ctx,
 
     torch::Tensor outTxPoints;
     if (isInverse) {
-        outTxPoints = ops::invTransformPointsToGrid(*grid, pointsWrap, !isDual);
+        outTxPoints = ops::worldToVoxel(*grid, pointsWrap, !isDual);
     } else {
-        outTxPoints = ops::transformPointsToGrid(*grid, pointsWrap, !isDual);
+        outTxPoints = ops::voxelToWorld(*grid, pointsWrap, !isDual);
     }
 
     ctx->save_for_backward({points.joffsets(), points.jlidx()});
@@ -55,12 +55,12 @@ TransformPoints::backward(TransformPoints::AutogradContext *ctx,
 
     Variable outGradIn;
     if (isInverse) {
-        outGradIn = ops::invTransformPointsToGridBackward(
+        outGradIn = ops::worldToVoxelBackward(
             *grid,
             JaggedTensor::from_data_offsets_and_list_ids(gradOut, pointsJOffsets, pointsJLidx),
             !isDual);
     } else {
-        outGradIn = ops::transformPointsToGridBackward(
+        outGradIn = ops::voxelToWorldBackward(
             *grid,
             JaggedTensor::from_data_offsets_and_list_ids(gradOut, pointsJOffsets, pointsJLidx),
             !isDual);

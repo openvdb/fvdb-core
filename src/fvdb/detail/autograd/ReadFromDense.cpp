@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/detail/autograd/ReadFromDense.h>
-#include <fvdb/detail/ops/ReadFromDense.h>
-#include <fvdb/detail/ops/ReadIntoDense.h>
+#include <fvdb/detail/ops/InjectFromDense.h>
+#include <fvdb/detail/ops/InjectToDense.h>
 #include <fvdb/detail/utils/Utils.h>
 
 #include <nanovdb/NanoVDB.h>
@@ -20,7 +20,7 @@ ReadFromDenseCminor::forward(AutogradContext *ctx,
     torch::Tensor denseOriginsI32 = denseOrigins.to(torch::kInt32).to(denseData.device());
 
     // [N, -1]
-    torch::Tensor ret = ops::readFromDenseCminor(*grid, denseData, denseOriginsI32);
+    torch::Tensor ret = ops::injectFromDenseCminor(*grid, denseData, denseOriginsI32);
 
     // Reshape [N, -1] to [N, *] given [B, X, Y, Z, *]
     torch::Tensor retReshape = ret.view(spliceShape({grid->totalVoxels()}, denseData, 4));
@@ -52,7 +52,7 @@ ReadFromDenseCminor::backward(AutogradContext *ctx, variable_list grad_output) {
     Variable gradOut = grad_output.at(0); // [N, *]
 
     // [B, X, Y, Z, -1]
-    torch::Tensor ret = ops::readIntoDenseCminor(*grid, gradOut, denseOrigins, gridSize);
+    torch::Tensor ret = ops::injectToDenseCminor(*grid, gradOut, denseOrigins, gridSize);
 
     torch::Tensor retReshape = ret.view(finalShapeTensor); // [B, W, H, D, *]
 
@@ -67,7 +67,7 @@ ReadFromDenseCmajor::forward(AutogradContext *ctx,
     torch::Tensor denseOriginsI32 = denseOrigins.to(torch::kInt32).to(denseData.device());
 
     // [N, -1]
-    torch::Tensor ret = ops::readFromDenseCmajor(*grid, denseData, denseOriginsI32);
+    torch::Tensor ret = ops::injectFromDenseCmajor(*grid, denseData, denseOriginsI32);
 
     // Reshape [N, -1] to [N, *] given [B, *, X, Y, Z]
     auto const feature_rank = denseData.dim() - 4;
@@ -107,7 +107,7 @@ ReadFromDenseCmajor::backward(AutogradContext *ctx, variable_list grad_output) {
     Variable gradOut = grad_output.at(0); // [N, *]
 
     // [B, -1, X, Y, Z]
-    torch::Tensor ret = ops::readIntoDenseCmajor(*grid, gradOut, denseOrigins, gridSize);
+    torch::Tensor ret = ops::injectToDenseCmajor(*grid, gradOut, denseOrigins, gridSize);
 
     torch::Tensor retReshape = ret.view(finalShapeTensor); // [B, *, X, Y, Z]
 

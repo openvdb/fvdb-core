@@ -769,7 +769,7 @@ class Grid:
             torch.Tensor: World coordinates. Shape: ``(num_points, 3)``.
         """
         jagged_ijk = JaggedTensor(ijk)
-        return self._impl.grid_to_world(jagged_ijk._impl).jdata
+        return self._impl.voxel_to_world(jagged_ijk._impl).jdata
 
     def has_same_address_and_grid_count(self, other: Any) -> bool:
         """
@@ -1483,7 +1483,7 @@ class Grid:
                 Shape: ``(self.num_voxels, channels*)``.
         """
         dense_origin = to_Vec3i(dense_origin)
-        return self._impl.read_from_dense_cminor(dense_data.unsqueeze(0), dense_origin).jdata
+        return self._impl.inject_from_dense_cminor(dense_data.unsqueeze(0), dense_origin).jdata
 
     def inject_from_dense_cmajor(self, dense_data: torch.Tensor, dense_origin: NumericMaxRank1 = 0) -> torch.Tensor:
         """
@@ -1514,7 +1514,7 @@ class Grid:
                 Shape: ``(self.num_voxels, channels*)``.
         """
         dense_origin = to_Vec3i(dense_origin)
-        return self._impl.read_from_dense_cmajor(dense_data.unsqueeze(0), dense_origin).jdata
+        return self._impl.inject_from_dense_cmajor(dense_data.unsqueeze(0), dense_origin).jdata
 
     def sample_bezier(self, points: torch.Tensor, voxel_data: torch.Tensor) -> torch.Tensor:
         """
@@ -2054,7 +2054,7 @@ class Grid:
                 Can contain fractional values.
         """
         jagged_points = JaggedTensor(points)
-        return self._impl.world_to_grid(jagged_points._impl).jdata
+        return self._impl.world_to_voxel(jagged_points._impl).jdata
 
     def inject_to_dense_cminor(
         self,
@@ -2113,7 +2113,7 @@ class Grid:
             else None
         )
 
-        return self._impl.write_to_dense_cminor(jagged_sparse_data._impl, min_coord, grid_size).squeeze(0)
+        return self._impl.inject_to_dense_cminor(jagged_sparse_data._impl, min_coord, grid_size).squeeze(0)
 
     def inject_to_dense_cmajor(
         self,
@@ -2172,7 +2172,7 @@ class Grid:
             else None
         )
 
-        return self._impl.write_to_dense_cmajor(jagged_sparse_data._impl, min_coord, grid_size).squeeze(0)
+        return self._impl.inject_to_dense_cmajor(jagged_sparse_data._impl, min_coord, grid_size).squeeze(0)
 
     # ============================================================
     #                        Properties
@@ -2264,7 +2264,7 @@ class Grid:
             voxel_to_world_matrix (torch.Tensor): A ``(4, 4)``-shaped tensor representing the
                 voxel-to-world transformation matrix.
         """
-        return self._impl.grid_to_world_matrices[0]
+        return self._impl.voxel_to_world_matrices[0]
 
     @property
     def has_zero_voxels(self) -> bool:
@@ -2425,7 +2425,7 @@ class Grid:
             world_to_voxel_matrix (torch.Tensor): A ``(4, 4)``-shaped tensor representing the
                 world-to-voxel transformation matrix.
         """
-        return self._impl.world_to_grid_matrices[0]
+        return self._impl.world_to_voxel_matrices[0]
 
     # Expose underlying implementation for compatibility
     @property

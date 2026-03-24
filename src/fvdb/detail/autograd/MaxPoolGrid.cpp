@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/detail/autograd/MaxPoolGrid.h>
-#include <fvdb/detail/ops/DownsampleGridMaxPool.h>
+#include <fvdb/detail/ops/MaxPool.h>
 
 #include <nanovdb/NanoVDB.h>
 
@@ -18,7 +18,7 @@ MaxPoolGrid::forward(MaxPoolGrid::AutogradContext *ctx,
                      nanovdb::Coord stride,
                      MaxPoolGrid::Variable fineData) {
     torch::Tensor outCoarseData =
-        ops::downsampleGridMaxPool(*fineGrid, *coarseGrid, fineData, poolingFactor, stride);
+        ops::maxPool(*fineGrid, *coarseGrid, fineData, poolingFactor, stride);
 
     ctx->save_for_backward({fineData});
     ctx->saved_data["fine_grid"]        = fineGrid;
@@ -51,7 +51,7 @@ MaxPoolGrid::backward(MaxPoolGrid::AutogradContext *ctx, MaxPoolGrid::variable_l
 
     Variable gradOut = grad_output.at(0); // [#coarse_voxels | #coarse_corners, *]
 
-    Variable outGradIn = ops::downsampleGridMaxPoolBackward(
+    Variable outGradIn = ops::maxPoolBackward(
         *coarseGrid, *fineGrid, fineData, gradOut, poolingFactor, stride);
 
     return {torch::Tensor(), torch::Tensor(), torch::Tensor(), torch::Tensor(), outGradIn};

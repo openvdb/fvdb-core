@@ -2,14 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/detail/autograd/SampleGrid.h>
-#include <fvdb/detail/ops/SampleGridBezier.h>
-#include <fvdb/detail/ops/SampleGridBezierWithGrad.h>
-#include <fvdb/detail/ops/SampleGridBezierWithGradBackward.h>
-#include <fvdb/detail/ops/SampleGridTrilinear.h>
-#include <fvdb/detail/ops/SampleGridTrilinearWithGrad.h>
-#include <fvdb/detail/ops/SampleGridTrilinearWithGradBackward.h>
-#include <fvdb/detail/ops/SplatIntoGridBezier.h>
-#include <fvdb/detail/ops/SplatIntoGridTrilinear.h>
+#include <fvdb/detail/ops/SampleBezier.h>
+#include <fvdb/detail/ops/SampleBezierWithGrad.h>
+#include <fvdb/detail/ops/SampleBezierWithGradBackward.h>
+#include <fvdb/detail/ops/SampleTrilinear.h>
+#include <fvdb/detail/ops/SampleTrilinearWithGrad.h>
+#include <fvdb/detail/ops/SampleTrilinearWithGradBackward.h>
+#include <fvdb/detail/ops/SplatBezier.h>
+#include <fvdb/detail/ops/SplatTrilinear.h>
 
 namespace fvdb {
 namespace detail {
@@ -23,9 +23,9 @@ SampleGridTrilinear::forward(SampleGridTrilinear::AutogradContext *ctx,
                              bool returnGrad) {
     std::vector<torch::Tensor> ret;
     if (returnGrad) {
-        ret = ops::sampleGridTrilinearWithGrad(*grid, points, data);
+        ret = ops::sampleTrilinearWithGrad(*grid, points, data);
     } else {
-        ret = ops::sampleGridTrilinear(*grid, points, data);
+        ret = ops::sampleTrilinear(*grid, points, data);
     }
 
     // Save data for backward in context
@@ -53,14 +53,14 @@ SampleGridTrilinear::backward(SampleGridTrilinear::AutogradContext *ctx,
     torch::Tensor outGrad;
     if (returnGrad) {
         Variable gradPtsGrad = grad_output.at(1); // [B*M, -1, 3]
-        outGrad              = ops::sampleGridTrilinearWithGradBackward(
+        outGrad              = ops::sampleTrilinearWithGradBackward(
             *grid,
             JaggedTensor::from_data_offsets_and_list_ids(pointCoords, pointJOffsets, pointsJLidx),
             data,
             gradOut,
             gradPtsGrad);
     } else {
-        outGrad = ops::splatIntoGridTrilinear(
+        outGrad = ops::splatTrilinear(
             *grid,
             JaggedTensor::from_data_offsets_and_list_ids(pointCoords, pointJOffsets, pointsJLidx),
             gradOut);
@@ -77,9 +77,9 @@ SampleGridBezier::forward(SampleGridBezier::AutogradContext *ctx,
                           bool returnGrad) {
     std::vector<torch::Tensor> ret;
     if (returnGrad) {
-        ret = ops::sampleGridBezierWithGrad(*grid, points, data);
+        ret = ops::sampleBezierWithGrad(*grid, points, data);
     } else {
-        ret = ops::sampleGridBezier(*grid, points, data);
+        ret = ops::sampleBezier(*grid, points, data);
     }
 
     // Save data for backward in context
@@ -108,14 +108,14 @@ SampleGridBezier::backward(SampleGridBezier::AutogradContext *ctx,
     Variable outGrad;
     if (returnGrad) {
         Variable gradPtsGrad = grad_output.at(1); // [B*M, -1, 3]
-        outGrad              = ops::sampleGridBezierWithGradBackward(
+        outGrad              = ops::sampleBezierWithGradBackward(
             *grid,
             JaggedTensor::from_data_offsets_and_list_ids(pointCoords, pointJOffsets, pointsJLidx),
             gradOut,
             gradPtsGrad,
             data);
     } else {
-        outGrad = ops::splatIntoGridBezier(
+        outGrad = ops::splatBezier(
             *grid,
             JaggedTensor::from_data_offsets_and_list_ids(pointCoords, pointJOffsets, pointsJLidx),
             gradOut);

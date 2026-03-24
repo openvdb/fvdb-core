@@ -1046,7 +1046,7 @@ class GridBatch:
         Returns:
             world_coords (JaggedTensor): World coordinates. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_points_for_grid_b, 3)``.
         """
-        return JaggedTensor(impl=self._impl.grid_to_world(ijk._impl))
+        return JaggedTensor(impl=self._impl.voxel_to_world(ijk._impl))
 
     def has_same_address_and_grid_count(self, other: Any) -> bool:
         """
@@ -1624,7 +1624,7 @@ class GridBatch:
         """
         dense_origins = to_Vec3i(dense_origins)
 
-        return JaggedTensor(impl=self._impl.read_from_dense_cminor(dense_data, dense_origins))
+        return JaggedTensor(impl=self._impl.inject_from_dense_cminor(dense_data, dense_origins))
 
     def inject_from_dense_cmajor(self, dense_data: torch.Tensor, dense_origins: NumericMaxRank1 = 0) -> JaggedTensor:
         """
@@ -1656,7 +1656,7 @@ class GridBatch:
         """
         dense_origins = to_Vec3i(dense_origins)
 
-        return JaggedTensor(impl=self._impl.read_from_dense_cmajor(dense_data, dense_origins))
+        return JaggedTensor(impl=self._impl.inject_from_dense_cmajor(dense_data, dense_origins))
 
     def sample_bezier(self, points: JaggedTensor, voxel_data: JaggedTensor) -> JaggedTensor:
         """
@@ -2199,7 +2199,7 @@ class GridBatch:
             voxel_points (JaggedTensor): Grid coordinates. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_points_for_grid_b, 3)``.
                 Can contain fractional values.
         """
-        return JaggedTensor(impl=self._impl.world_to_grid(points._impl))
+        return JaggedTensor(impl=self._impl.world_to_voxel(points._impl))
 
     def inject_to_dense_cminor(
         self,
@@ -2248,7 +2248,7 @@ class GridBatch:
         min_coord = to_Vec3iBatchBroadcastable(min_coord) if min_coord is not None else None
         grid_size = to_Vec3iBroadcastable(grid_size) if grid_size is not None else None
 
-        return self._impl.write_to_dense_cminor(sparse_data._impl, min_coord, grid_size)
+        return self._impl.inject_to_dense_cminor(sparse_data._impl, min_coord, grid_size)
 
     def inject_to_dense_cmajor(
         self,
@@ -2297,7 +2297,7 @@ class GridBatch:
         min_coord = to_Vec3iBatchBroadcastable(min_coord) if min_coord is not None else None
         grid_size = to_Vec3iBroadcastable(grid_size) if grid_size is not None else None
 
-        return self._impl.write_to_dense_cmajor(sparse_data._impl, min_coord, grid_size)
+        return self._impl.inject_to_dense_cmajor(sparse_data._impl, min_coord, grid_size)
 
     # ============================================================
     #                Indexing and Special Functions
@@ -2580,7 +2580,7 @@ class GridBatch:
         if self.has_zero_grids:
             return torch.empty((0, 4, 4), dtype=torch.float32, device=self.device)
         else:
-            return self._impl.grid_to_world_matrices
+            return self._impl.voxel_to_world_matrices
 
     @property
     def has_zero_grids(self) -> bool:
@@ -2870,7 +2870,7 @@ class GridBatch:
         if self.has_zero_grids:
             return torch.empty((0, 4, 4), dtype=torch.float32, device=self.device)
         else:
-            return self._impl.world_to_grid_matrices
+            return self._impl.world_to_voxel_matrices
 
     # Expose underlying implementation for compatibility
     @property

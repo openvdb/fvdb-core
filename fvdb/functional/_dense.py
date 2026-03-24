@@ -58,8 +58,8 @@ def inject_from_dense_cminor(
 
     origin = to_Vec3i(dense_origin)
     if isinstance(grid, Grid):
-        return grid._impl.read_from_dense_cminor(dense_data.unsqueeze(0), origin).jdata
-    return JaggedTensor(impl=grid._impl.read_from_dense_cminor(dense_data, origin))
+        return grid._impl.inject_from_dense_cminor(dense_data.unsqueeze(0), origin).jdata
+    return JaggedTensor(impl=grid._impl.inject_from_dense_cminor(dense_data, origin))
 
 
 @overload
@@ -99,8 +99,8 @@ def inject_from_dense_cmajor(
 
     origin = to_Vec3i(dense_origin)
     if isinstance(grid, Grid):
-        return grid._impl.read_from_dense_cmajor(dense_data.unsqueeze(0), origin).jdata
-    return JaggedTensor(impl=grid._impl.read_from_dense_cmajor(dense_data, origin))
+        return grid._impl.inject_from_dense_cmajor(dense_data.unsqueeze(0), origin).jdata
+    return JaggedTensor(impl=grid._impl.inject_from_dense_cmajor(dense_data, origin))
 
 
 # ---------------------------------------------------------------------------
@@ -159,9 +159,9 @@ def inject_to_dense_cminor(
     if isinstance(grid, Grid):
         jt_sd = JaggedTensor(sparse_data)
         mc = to_Vec3iBroadcastable(min_coord) if min_coord is not None else None
-        return grid._impl.write_to_dense_cminor(jt_sd._impl, mc, gs).squeeze(0)
+        return grid._impl.inject_to_dense_cminor(jt_sd._impl, mc, gs).squeeze(0)
     mc = to_Vec3iBatchBroadcastable(min_coord) if min_coord is not None else None
-    return grid._impl.write_to_dense_cminor(sparse_data._impl, mc, gs)
+    return grid._impl.inject_to_dense_cminor(sparse_data._impl, mc, gs)
 
 
 @overload
@@ -214,9 +214,9 @@ def inject_to_dense_cmajor(
     if isinstance(grid, Grid):
         jt_sd = JaggedTensor(sparse_data)
         mc = to_Vec3iBroadcastable(min_coord) if min_coord is not None else None
-        return grid._impl.write_to_dense_cmajor(jt_sd._impl, mc, gs).squeeze(0)
+        return grid._impl.inject_to_dense_cmajor(jt_sd._impl, mc, gs).squeeze(0)
     mc = to_Vec3iBatchBroadcastable(min_coord) if min_coord is not None else None
-    return grid._impl.write_to_dense_cmajor(sparse_data._impl, mc, gs)
+    return grid._impl.inject_to_dense_cmajor(sparse_data._impl, mc, gs)
 
 
 # ---------------------------------------------------------------------------

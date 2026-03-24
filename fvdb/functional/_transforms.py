@@ -48,8 +48,8 @@ def voxel_to_world(
 
     if isinstance(grid, Grid):
         jt_ijk = JaggedTensor(ijk)
-        return grid._impl.grid_to_world(jt_ijk._impl).jdata
-    return JaggedTensor(impl=grid._impl.grid_to_world(ijk._impl))
+        return grid._impl.voxel_to_world(jt_ijk._impl).jdata
+    return JaggedTensor(impl=grid._impl.voxel_to_world(ijk._impl))
 
 
 @overload
@@ -85,5 +85,5 @@ def world_to_voxel(
 
     if isinstance(grid, Grid):
         jt_pts = JaggedTensor(points)
-        return grid._impl.world_to_grid(jt_pts._impl).jdata
-    return JaggedTensor(impl=grid._impl.world_to_grid(points._impl))
+        return grid._impl.world_to_voxel(jt_pts._impl).jdata
+    return JaggedTensor(impl=grid._impl.world_to_voxel(points._impl))

@@ -263,7 +263,7 @@ struct GridBatch : torch::CustomClassHolder {
     /// @return A JaggedTensor with shape [B, -1, *] containing the values at the specified
     /// coordinates
     JaggedTensor
-    read_from_dense_cminor(const torch::Tensor &dense_data,
+    inject_from_dense_cminor(const torch::Tensor &dense_data,
                            const torch::Tensor &dense_origins = torch::zeros(3, torch::kInt32)) const;
 
     /// @brief Read the values from a dense tensor of the voxels at the specified coordinates
@@ -273,7 +273,7 @@ struct GridBatch : torch::CustomClassHolder {
     /// @return A JaggedTensor with shape [B, -1, *] containing the values at the specified
     /// coordinates
     JaggedTensor
-    read_from_dense_cmajor(const torch::Tensor &dense_data,
+    inject_from_dense_cmajor(const torch::Tensor &dense_data,
                            const torch::Tensor &dense_origins = torch::zeros(3, torch::kInt32)) const;
 
     /// @brief Read the values from a JaggedTensor indexed by this batch into a dense tensor
@@ -286,7 +286,7 @@ struct GridBatch : torch::CustomClassHolder {
     ///                  Defaults to the total size of a grid containing the whole batch.
     /// @return A dense tensor of shape [B, X, Y, Z, C] containing the values at the specified
     /// coordinates (and zero elsewhere)
-    torch::Tensor write_to_dense_cminor(const JaggedTensor &sparse_data,
+    torch::Tensor inject_to_dense_cminor(const JaggedTensor &sparse_data,
                                         const std::optional<torch::Tensor> &min_coord = std::nullopt,
                                         const std::optional<nanovdb::Coord> &grid_size = std::nullopt) const;
 
@@ -300,7 +300,7 @@ struct GridBatch : torch::CustomClassHolder {
     ///                  Defaults to the total size of a grid containing the whole batch.
     /// @return A dense tensor of shape [B, C, X, Y, Z] containing the values at the specified
     /// coordinates (and zero elsewhere)
-    torch::Tensor write_to_dense_cmajor(const JaggedTensor &sparse_data,
+    torch::Tensor inject_to_dense_cmajor(const JaggedTensor &sparse_data,
                                         const std::optional<torch::Tensor> &min_coord = std::nullopt,
                                         const std::optional<nanovdb::Coord> &grid_size = std::nullopt) const;
 
@@ -309,22 +309,22 @@ struct GridBatch : torch::CustomClassHolder {
     /// in the batch)
     /// @return A JaggedTensor of world coordinates with shape [B, -1, 3] (one point set per grid in
     /// the batch)
-    JaggedTensor grid_to_world(const JaggedTensor &ijk) const;
+    JaggedTensor voxel_to_world(const JaggedTensor &ijk) const;
 
     /// @brief Convert world coordinates to grid coordinates
     /// @param points A JaggedTensor of world coordinates with shape [B, -1, 3] (one point set per
     /// grid in the batch)
     /// @return A JaggedTensor of grid coordinates with shape [B, -1, 3] (one point set per grid in
     /// the batch)
-    JaggedTensor world_to_grid(const JaggedTensor &points) const;
+    JaggedTensor world_to_voxel(const JaggedTensor &points) const;
 
     /// @brief Get grid-to-world matrices
     /// @return A JaggedTensor of grid-to-world matrices with shape [B, 4, 4]
-    torch::Tensor grid_to_world_matrices(const torch::Dtype &dtype = torch::kFloat32) const;
+    torch::Tensor voxel_to_world_matrices(const torch::Dtype &dtype = torch::kFloat32) const;
 
     /// @brief Get world-to-grid matrices
     /// @return A JaggedTensor of world-to-grid matrices with shape [B, 4, 4]
-    torch::Tensor world_to_grid_matrices(const torch::Dtype &dtype = torch::kFloat32) const;
+    torch::Tensor world_to_voxel_matrices(const torch::Dtype &dtype = torch::kFloat32) const;
 
     /// @brief Sample features on the grid batch using trilinear interpolation
     /// @param points a JaggedTensor of points with shape [B, -1, 3] (one point set per grid in the

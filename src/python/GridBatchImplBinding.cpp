@@ -77,8 +77,8 @@ bind_grid_batch_impl(py::module &m) {
         .def_property_readonly("bbox", &GBI::bboxPerGridTensor)
         .def_property_readonly("dual_bbox", &GBI::dualBBoxPerGridTensor)
         .def_property_readonly("total_bbox", &GBI::totalBBoxTensor)
-        .def_property_readonly("grid_to_world_matrices", &GBI::gridToWorldMatrixPerGrid)
-        .def_property_readonly("world_to_grid_matrices", &GBI::worldToGridMatrixPerGrid)
+        .def_property_readonly("voxel_to_world_matrices", &GBI::gridToWorldMatrixPerGrid)
+        .def_property_readonly("world_to_voxel_matrices", &GBI::worldToGridMatrixPerGrid)
 
         // -- Per-grid queries --
         .def("num_voxels_at", &GBI::numVoxelsAt, py::arg("bi"))
@@ -89,8 +89,8 @@ bind_grid_batch_impl(py::module &m) {
         .def("origin_at", &GBI::voxelOriginAtTensor, py::arg("bi"))
         .def("bbox_at", &GBI::bboxAtTensor, py::arg("bi"))
         .def("dual_bbox_at", &GBI::dualBBoxAtTensor, py::arg("bi"))
-        .def("grid_to_world_matrix_at", &GBI::gridToWorldMatrixAt, py::arg("bi"))
-        .def("world_to_grid_matrix_at", &GBI::worldToGridMatrixAt, py::arg("bi"))
+        .def("voxel_to_world_matrix_at", &GBI::gridToWorldMatrixAt, py::arg("bi"))
+        .def("world_to_voxel_matrix_at", &GBI::worldToGridMatrixAt, py::arg("bi"))
 
         // -- Utility --
         .def("jagged_like", &GBI::jaggedTensor, py::arg("data"))

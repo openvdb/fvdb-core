@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/detail/autograd/SplatIntoGrid.h>
-#include <fvdb/detail/ops/SampleGridBezier.h>
-#include <fvdb/detail/ops/SampleGridTrilinear.h>
-#include <fvdb/detail/ops/SplatIntoGridBezier.h>
-#include <fvdb/detail/ops/SplatIntoGridTrilinear.h>
+#include <fvdb/detail/ops/SampleBezier.h>
+#include <fvdb/detail/ops/SampleTrilinear.h>
+#include <fvdb/detail/ops/SplatBezier.h>
+#include <fvdb/detail/ops/SplatTrilinear.h>
 
 namespace fvdb {
 namespace detail {
@@ -16,7 +16,7 @@ SplatIntoGridTrilinear::forward(SplatIntoGridTrilinear::AutogradContext *ctx,
                                 c10::intrusive_ptr<GridBatchImpl> grid,
                                 SplatIntoGridTrilinear::JaggedVariable points,
                                 SplatIntoGridTrilinear::Variable pointData) {
-    torch::Tensor outGridData = ops::splatIntoGridTrilinear(*grid, points, pointData);
+    torch::Tensor outGridData = ops::splatTrilinear(*grid, points, pointData);
 
     // Save data for backward in context
     ctx->save_for_backward({pointData, points.jdata(), points.joffsets(), points.jlidx()});
@@ -38,7 +38,7 @@ SplatIntoGridTrilinear::backward(SplatIntoGridTrilinear::AutogradContext *ctx,
     auto grid              = ctx->saved_data["grid"].toCustomClass<GridBatchImpl>();
     Variable gradOut       = grad_output.at(0); // [N, *]
 
-    auto ret = ops::sampleGridTrilinear(
+    auto ret = ops::sampleTrilinear(
         *grid,
         JaggedTensor::from_data_offsets_and_list_ids(pointCoords, pointJOffsets, pointsJLidx),
         gradOut);
@@ -51,7 +51,7 @@ SplatIntoGridBezier::forward(SplatIntoGridBezier::AutogradContext *ctx,
                              c10::intrusive_ptr<GridBatchImpl> grid,
                              SplatIntoGridBezier::JaggedVariable points,
                              SplatIntoGridBezier::Variable pointData) {
-    torch::Tensor outGridData = ops::splatIntoGridBezier(*grid, points, pointData);
+    torch::Tensor outGridData = ops::splatBezier(*grid, points, pointData);
 
     // Save data for backward in context
     ctx->save_for_backward({pointData, points.jdata(), points.joffsets(), points.jlidx()});
@@ -74,7 +74,7 @@ SplatIntoGridBezier::backward(SplatIntoGridBezier::AutogradContext *ctx,
     auto grid        = ctx->saved_data["grid"].toCustomClass<GridBatchImpl>();
     Variable gradOut = grad_output.at(0); // [N, *]
 
-    torch::Tensor outGradIn = ops::sampleGridBezier(
+    torch::Tensor outGradIn = ops::sampleBezier(
         *grid,
         JaggedTensor::from_data_offsets_and_list_ids(pointCoords, pointJOffsets, pointsJLidx),
         gradOut)[0];

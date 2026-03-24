@@ -17,7 +17,7 @@
 #include <fvdb/detail/autograd/UpsampleGrid.h>
 
 // Ops headers
-#include <fvdb/detail/ops/ActiveGridGoords.h>
+#include <fvdb/detail/ops/ActiveGridCoords.h>
 #include <fvdb/detail/ops/CoordsInGrid.h>
 #include <fvdb/detail/ops/CubesInGrid.h>
 #include <fvdb/detail/ops/GridEdgeNetwork.h>
@@ -30,7 +30,7 @@
 #include <fvdb/detail/ops/SampleRaysUniform.h>
 #include <fvdb/detail/ops/SegmentsAlongRays.h>
 #include <fvdb/detail/ops/SerializeEncode.h>
-#include <fvdb/detail/ops/VoxelNeighborhood.h>
+#include <fvdb/detail/ops/NeighborIndexes.h>
 #include <fvdb/detail/ops/VoxelsAlongRays.h>
 #include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/nanovdb/TorchNanoConversions.h>
@@ -344,7 +344,7 @@ GridBatch::refine(nanovdb::Coord subdiv_factor,
 }
 
 JaggedTensor
-GridBatch::read_from_dense_cminor(const torch::Tensor &dense_data,
+GridBatch::inject_from_dense_cminor(const torch::Tensor &dense_data,
                                   const torch::Tensor &dense_origins) const {
     torch::Tensor origins = dense_origins.to(torch::kInt32);
     if (origins.dim() == 1 && origins.size(0) == 3) {
@@ -356,7 +356,7 @@ GridBatch::read_from_dense_cminor(const torch::Tensor &dense_data,
 }
 
 JaggedTensor
-GridBatch::read_from_dense_cmajor(const torch::Tensor &dense_data,
+GridBatch::inject_from_dense_cmajor(const torch::Tensor &dense_data,
                                   const torch::Tensor &dense_origins) const {
     torch::Tensor origins = dense_origins.to(torch::kInt32);
     if (origins.dim() == 1 && origins.size(0) == 3) {
@@ -368,7 +368,7 @@ GridBatch::read_from_dense_cmajor(const torch::Tensor &dense_data,
 }
 
 torch::Tensor
-GridBatch::write_to_dense_cminor(const JaggedTensor &sparse_data,
+GridBatch::inject_to_dense_cminor(const JaggedTensor &sparse_data,
                                  const std::optional<torch::Tensor> &min_coord,
                                  const std::optional<nanovdb::Coord> &grid_size) const {
     // TODO: ldim checks live here because the underlying ops accept plain torch::Tensor (via
@@ -393,7 +393,7 @@ GridBatch::write_to_dense_cminor(const JaggedTensor &sparse_data,
 }
 
 torch::Tensor
-GridBatch::write_to_dense_cmajor(const JaggedTensor &sparse_data,
+GridBatch::inject_to_dense_cmajor(const JaggedTensor &sparse_data,
                                  const std::optional<torch::Tensor> &min_coord,
                                  const std::optional<nanovdb::Coord> &grid_size) const {
     TORCH_CHECK_VALUE(
@@ -415,7 +415,7 @@ GridBatch::write_to_dense_cmajor(const JaggedTensor &sparse_data,
 }
 
 JaggedTensor
-GridBatch::grid_to_world(const JaggedTensor &ijk) const {
+GridBatch::voxel_to_world(const JaggedTensor &ijk) const {
     // TODO: ldim checks live here because the underlying ops accept plain torch::Tensor (via
     // .jdata()). When these member functions are removed in favor of free-function ops, move checks
     // to Python.
@@ -432,7 +432,7 @@ GridBatch::grid_to_world(const JaggedTensor &ijk) const {
 }
 
 JaggedTensor
-GridBatch::world_to_grid(const JaggedTensor &points) const {
+GridBatch::world_to_voxel(const JaggedTensor &points) const {
     // TODO: ldim checks live here because the underlying ops accept plain torch::Tensor (via
     // .jdata()). When these member functions are removed in favor of free-function ops, move checks
     // to Python.
@@ -449,12 +449,12 @@ GridBatch::world_to_grid(const JaggedTensor &points) const {
 }
 
 torch::Tensor
-GridBatch::grid_to_world_matrices(const torch::Dtype &dtype) const {
+GridBatch::voxel_to_world_matrices(const torch::Dtype &dtype) const {
     return mImpl->gridToWorldMatrixPerGrid().to(dtype).to(device());
 }
 
 torch::Tensor
-GridBatch::world_to_grid_matrices(const torch::Dtype &dtype) const {
+GridBatch::world_to_voxel_matrices(const torch::Dtype &dtype) const {
     return mImpl->worldToGridMatrixPerGrid().to(dtype).to(device());
 }
 
@@ -949,7 +949,7 @@ GridBatch::neighbor_indexes(const JaggedTensor &ijk, int32_t extent, int32_t bit
         ijk.ldim(),
         " list dimensions");
 
-    return fvdb::detail::ops::voxelNeighborhood(*mImpl, ijk, extent, bitshift);
+    return fvdb::detail::ops::neighborIndexes(*mImpl, ijk, extent, bitshift);
 }
 
 JaggedTensor

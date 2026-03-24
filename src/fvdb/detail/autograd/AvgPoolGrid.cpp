@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/detail/autograd/AvgPoolGrid.h>
-#include <fvdb/detail/ops/DownsampleGridAvgPool.h>
+#include <fvdb/detail/ops/AvgPool.h>
 
 #include <nanovdb/NanoVDB.h>
 
@@ -18,7 +18,7 @@ AvgPoolGrid::forward(AvgPoolGrid::AutogradContext *ctx,
                      nanovdb::Coord stride,
                      AvgPoolGrid::Variable fineData) {
     torch::Tensor outCoarseData =
-        ops::downsampleGridAvgPool(*fineGrid, *coarseGrid, fineData, poolingFactor, stride);
+        ops::avgPool(*fineGrid, *coarseGrid, fineData, poolingFactor, stride);
 
     ctx->save_for_backward({fineData});
     ctx->saved_data["fine_grid"]        = fineGrid;
@@ -50,7 +50,7 @@ AvgPoolGrid::backward(AvgPoolGrid::AutogradContext *ctx, AvgPoolGrid::variable_l
     const nanovdb::Coord stride(strideX, strideY, strideZ);
     Variable gradOut = grad_output.at(0); // [#coarse_voxels | #coarse_corners, *]
 
-    Variable outGradIn = ops::downsampleGridAvgPoolBackward(
+    Variable outGradIn = ops::avgPoolBackward(
         *coarseGrid, *fineGrid, fineData, gradOut, poolingFactor, stride);
 
     return {torch::Tensor(), torch::Tensor(), torch::Tensor(), torch::Tensor(), outGradIn};

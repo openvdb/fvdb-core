@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/detail/autograd/UpsampleGrid.h>
-#include <fvdb/detail/ops/UpsampleGridNearest.h>
+#include <fvdb/detail/ops/Refine.h>
 
 #include <nanovdb/NanoVDB.h>
 
@@ -32,7 +32,7 @@ UpsampleGrid::forward(UpsampleGrid::AutogradContext *ctx,
     }
 
     torch::Tensor ret =
-        ops::upsampleGridNearest(*coarseGrid, *fineGrid, coarseData, upsamplingFactor);
+        ops::refine(*coarseGrid, *fineGrid, coarseData, upsamplingFactor);
     return variable_list({ret});
 }
 
@@ -56,7 +56,7 @@ UpsampleGrid::backward(UpsampleGrid::AutogradContext *ctx,
         return {torch::Tensor(), torch::Tensor(), torch::Tensor(), ret};
     }
 
-    torch::Tensor outGradIn = ops::upsampleGridNearestBackward(
+    torch::Tensor outGradIn = ops::refineBackward(
         *fineGrid, *coarseGrid, gradOut, coarseData, upsamplingFactor);
 
     return {torch::Tensor(), torch::Tensor(), torch::Tensor(), outGradIn};

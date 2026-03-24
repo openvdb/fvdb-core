@@ -75,7 +75,7 @@ set(FVDB_CPP_FILES
 
 set(FVDB_CU_FILES
     fvdb/detail/GridBatchImpl.cu
-    fvdb/detail/ops/ActiveGridGoords.cu
+    fvdb/detail/ops/ActiveGridCoords.cu
     fvdb/detail/ops/ActiveVoxelsInBoundsMask.cu
     fvdb/detail/ops/BuildCoarseGridFromFine.cu
     fvdb/detail/ops/BuildDenseGrid.cu
@@ -95,8 +95,8 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/convolution/PredGatherIGemm.cu
     fvdb/detail/ops/CoordsInGrid.cu
     fvdb/detail/ops/CubesInGrid.cu
-    fvdb/detail/ops/DownsampleGridAvgPool.cu
-    fvdb/detail/ops/DownsampleGridMaxPool.cu
+    fvdb/detail/ops/AvgPool.cu
+    fvdb/detail/ops/MaxPool.cu
     fvdb/detail/ops/GridEdgeNetwork.cu
     fvdb/detail/ops/gsplat/FusedSSIM.cu
     fvdb/detail/ops/gsplat/GaussianComputeNanInfMask.cu
@@ -136,23 +136,23 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/PointsInGrid.cu
     fvdb/detail/ops/PopulateGridMetadata.cu
     fvdb/detail/ops/RayImplicitIntersection.cu
-    fvdb/detail/ops/ReadFromDense.cu
-    fvdb/detail/ops/ReadIntoDense.cu
-    fvdb/detail/ops/SampleGridBezier.cu
-    fvdb/detail/ops/SampleGridBezierWithGrad.cu
-    fvdb/detail/ops/SampleGridBezierWithGradBackward.cu
-    fvdb/detail/ops/SampleGridTrilinear.cu
-    fvdb/detail/ops/SampleGridTrilinearWithGrad.cu
-    fvdb/detail/ops/SampleGridTrilinearWithGradBackward.cu
+    fvdb/detail/ops/InjectFromDense.cu
+    fvdb/detail/ops/InjectToDense.cu
+    fvdb/detail/ops/SampleBezier.cu
+    fvdb/detail/ops/SampleBezierWithGrad.cu
+    fvdb/detail/ops/SampleBezierWithGradBackward.cu
+    fvdb/detail/ops/SampleTrilinear.cu
+    fvdb/detail/ops/SampleTrilinearWithGrad.cu
+    fvdb/detail/ops/SampleTrilinearWithGradBackward.cu
     fvdb/detail/ops/SampleRaysUniform.cu
     fvdb/detail/ops/SegmentsAlongRays.cu
     fvdb/detail/ops/SerializeEncode.cu
-    fvdb/detail/ops/SplatIntoGridBezier.cu
-    fvdb/detail/ops/SplatIntoGridTrilinear.cu
-    fvdb/detail/ops/TransformPointToGrid.cu
-    fvdb/detail/ops/UpsampleGridNearest.cu
+    fvdb/detail/ops/SplatBezier.cu
+    fvdb/detail/ops/SplatTrilinear.cu
+    fvdb/detail/ops/VoxelToWorld.cu
+    fvdb/detail/ops/Refine.cu
     fvdb/detail/ops/VolumeRender.cu
-    fvdb/detail/ops/VoxelNeighborhood.cu
+    fvdb/detail/ops/NeighborIndexes.cu
     fvdb/detail/ops/VoxelsAlongRays.cu
     fvdb/detail/utils/cuda/ForEachCUDA.cu
 )

@@ -225,13 +225,13 @@ bind_grid_batch(py::module &m) {
             "viz_edge_network",
             [](const fvdb::GridBatch &self) { return self.viz_edge_network(false); },
             "A pair of JaggedTensors `(gv, ge)` of shape [num_grids, -1, 3] and [num_grids, -1, 2] where `gv` are the corner positions of each voxel and `ge` are edge indices indexing into `gv`. This property is useful for visualizing the grid.")
-        .def_property_readonly("grid_to_world_matrices",
+        .def_property_readonly("voxel_to_world_matrices",
                                [](const fvdb::GridBatch &self) {
-                                   return self.grid_to_world_matrices(torch::kFloat32);
+                                   return self.voxel_to_world_matrices(torch::kFloat32);
                                })
-        .def_property_readonly("world_to_grid_matrices",
+        .def_property_readonly("world_to_voxel_matrices",
                                [](const fvdb::GridBatch &self) {
-                                   return self.world_to_grid_matrices(torch::kFloat32);
+                                   return self.world_to_voxel_matrices(torch::kFloat32);
                                })
         .def_property_readonly("bbox", &fvdb::GridBatch::bbox)
         .def_property_readonly("dual_bbox", &fvdb::GridBatch::dual_bbox)
@@ -405,7 +405,7 @@ bind_grid_batch(py::module &m) {
 
         // Interface with dense grids
         .def(
-            "write_to_dense_cminor",
+            "inject_to_dense_cminor",
             [](const fvdb::GridBatch &self,
                const fvdb::JaggedTensor &sparse_data,
                const std::optional<torch::Tensor> &min_coord,
@@ -413,14 +413,14 @@ bind_grid_batch(py::module &m) {
                 std::optional<nanovdb::Coord> gs;
                 if (grid_size)
                     gs = pyToCoord(*grid_size);
-                return self.write_to_dense_cminor(sparse_data, min_coord, gs);
+                return self.inject_to_dense_cminor(sparse_data, min_coord, gs);
             },
             py::arg("sparse_data"),
             py::arg("min_coord") = py::none(),
             py::arg("grid_size") = py::none())
 
         .def(
-            "write_to_dense_cmajor",
+            "inject_to_dense_cmajor",
             [](const fvdb::GridBatch &self,
                const fvdb::JaggedTensor &sparse_data,
                const std::optional<torch::Tensor> &min_coord,
@@ -428,19 +428,19 @@ bind_grid_batch(py::module &m) {
                 std::optional<nanovdb::Coord> gs;
                 if (grid_size)
                     gs = pyToCoord(*grid_size);
-                return self.write_to_dense_cmajor(sparse_data, min_coord, gs);
+                return self.inject_to_dense_cmajor(sparse_data, min_coord, gs);
             },
             py::arg("sparse_data"),
             py::arg("min_coord") = py::none(),
             py::arg("grid_size") = py::none())
 
-        .def("read_from_dense_cminor",
-             &fvdb::GridBatch::read_from_dense_cminor,
+        .def("inject_from_dense_cminor",
+             &fvdb::GridBatch::inject_from_dense_cminor,
              py::arg("dense_data"),
              py::arg("dense_origins") = torch::zeros(3, torch::kInt32))
 
-        .def("read_from_dense_cmajor",
-             &fvdb::GridBatch::read_from_dense_cmajor,
+        .def("inject_from_dense_cmajor",
+             &fvdb::GridBatch::inject_from_dense_cmajor,
              py::arg("dense_data"),
              py::arg("dense_origins") = torch::zeros(3, torch::kInt32))
 
@@ -673,8 +673,8 @@ bind_grid_batch(py::module &m) {
              py::arg("level") = 0.0)
 
         // Coordinate transform
-        .def("grid_to_world", &fvdb::GridBatch::grid_to_world, py::arg("ijk"))
-        .def("world_to_grid", &fvdb::GridBatch::world_to_grid, py::arg("points"))
+        .def("voxel_to_world", &fvdb::GridBatch::voxel_to_world, py::arg("ijk"))
+        .def("world_to_voxel", &fvdb::GridBatch::world_to_voxel, py::arg("points"))
 
         // To device
         .def("to", &fvdb::GridBatch::to, py::arg("to_device"))

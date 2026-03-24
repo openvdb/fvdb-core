@@ -11,35 +11,35 @@
 #include <torch/extension.h>
 
 // Interpolation
-#include <fvdb/detail/ops/SampleGridBezier.h>
-#include <fvdb/detail/ops/SampleGridBezierWithGrad.h>
-#include <fvdb/detail/ops/SampleGridBezierWithGradBackward.h>
-#include <fvdb/detail/ops/SampleGridTrilinear.h>
-#include <fvdb/detail/ops/SampleGridTrilinearWithGrad.h>
-#include <fvdb/detail/ops/SampleGridTrilinearWithGradBackward.h>
-#include <fvdb/detail/ops/SplatIntoGridBezier.h>
-#include <fvdb/detail/ops/SplatIntoGridTrilinear.h>
+#include <fvdb/detail/ops/SampleBezier.h>
+#include <fvdb/detail/ops/SampleBezierWithGrad.h>
+#include <fvdb/detail/ops/SampleBezierWithGradBackward.h>
+#include <fvdb/detail/ops/SampleTrilinear.h>
+#include <fvdb/detail/ops/SampleTrilinearWithGrad.h>
+#include <fvdb/detail/ops/SampleTrilinearWithGradBackward.h>
+#include <fvdb/detail/ops/SplatBezier.h>
+#include <fvdb/detail/ops/SplatTrilinear.h>
 
 // Transforms
-#include <fvdb/detail/ops/TransformPointToGrid.h>
+#include <fvdb/detail/ops/VoxelToWorld.h>
 
 // Pooling
-#include <fvdb/detail/ops/DownsampleGridAvgPool.h>
-#include <fvdb/detail/ops/DownsampleGridMaxPool.h>
-#include <fvdb/detail/ops/UpsampleGridNearest.h>
+#include <fvdb/detail/ops/AvgPool.h>
+#include <fvdb/detail/ops/MaxPool.h>
+#include <fvdb/detail/ops/Refine.h>
 
 // Dense I/O
 #include <fvdb/detail/ops/Inject.h>
-#include <fvdb/detail/ops/ReadFromDense.h>
-#include <fvdb/detail/ops/ReadIntoDense.h>
+#include <fvdb/detail/ops/InjectFromDense.h>
+#include <fvdb/detail/ops/InjectToDense.h>
 
 // Spatial queries
-#include <fvdb/detail/ops/ActiveGridGoords.h>
+#include <fvdb/detail/ops/ActiveGridCoords.h>
 #include <fvdb/detail/ops/CoordsInGrid.h>
 #include <fvdb/detail/ops/CubesInGrid.h>
 #include <fvdb/detail/ops/IjkToIndex.h>
 #include <fvdb/detail/ops/PointsInGrid.h>
-#include <fvdb/detail/ops/VoxelNeighborhood.h>
+#include <fvdb/detail/ops/NeighborIndexes.h>
 
 // Rays
 #include <fvdb/detail/ops/RayImplicitIntersection.h>
@@ -81,46 +81,46 @@ bind_grid_batch_ops(py::module &m) {
     // Interpolation: forward
     // -----------------------------------------------------------------------
 
-    m.def("sample_trilinear_fwd",
-          &ops::sampleGridTrilinear,
+    m.def("sample_trilinear",
+          &ops::sampleTrilinear,
           py::arg("grid"),
           py::arg("points"),
           py::arg("data"));
 
-    m.def("sample_bezier_fwd",
-          &ops::sampleGridBezier,
+    m.def("sample_bezier",
+          &ops::sampleBezier,
           py::arg("grid"),
           py::arg("points"),
           py::arg("data"));
 
-    m.def("splat_trilinear_fwd",
-          &ops::splatIntoGridTrilinear,
+    m.def("splat_trilinear",
+          &ops::splatTrilinear,
           py::arg("grid"),
           py::arg("points"),
           py::arg("data"));
 
-    m.def("splat_bezier_fwd",
-          &ops::splatIntoGridBezier,
+    m.def("splat_bezier",
+          &ops::splatBezier,
           py::arg("grid"),
           py::arg("points"),
           py::arg("data"));
 
     // Interpolation: with-gradient forward
-    m.def("sample_trilinear_with_grad_fwd",
-          &ops::sampleGridTrilinearWithGrad,
+    m.def("sample_trilinear_with_grad",
+          &ops::sampleTrilinearWithGrad,
           py::arg("grid"),
           py::arg("points"),
           py::arg("data"));
 
-    m.def("sample_bezier_with_grad_fwd",
-          &ops::sampleGridBezierWithGrad,
+    m.def("sample_bezier_with_grad",
+          &ops::sampleBezierWithGrad,
           py::arg("grid"),
           py::arg("points"),
           py::arg("data"));
 
     // Interpolation: with-gradient backward
     m.def("sample_trilinear_with_grad_bwd",
-          &ops::sampleGridTrilinearWithGradBackward,
+          &ops::sampleTrilinearWithGradBackward,
           py::arg("grid"),
           py::arg("points"),
           py::arg("data"),
@@ -128,7 +128,7 @@ bind_grid_batch_ops(py::module &m) {
           py::arg("grad_out_grad_features"));
 
     m.def("sample_bezier_with_grad_bwd",
-          &ops::sampleGridBezierWithGradBackward,
+          &ops::sampleBezierWithGradBackward,
           py::arg("grid"),
           py::arg("points"),
           py::arg("grad_out_features"),
@@ -139,26 +139,26 @@ bind_grid_batch_ops(py::module &m) {
     // Transforms
     // -----------------------------------------------------------------------
 
-    m.def("transform_points_fwd",
-          &ops::transformPointsToGrid,
+    m.def("voxel_to_world",
+          &ops::voxelToWorld,
           py::arg("grid"),
           py::arg("points"),
           py::arg("is_primal"));
 
-    m.def("inv_transform_points_fwd",
-          &ops::invTransformPointsToGrid,
+    m.def("world_to_voxel",
+          &ops::worldToVoxel,
           py::arg("grid"),
           py::arg("points"),
           py::arg("is_primal"));
 
-    m.def("transform_points_bwd",
-          &ops::transformPointsToGridBackward,
+    m.def("voxel_to_world_bwd",
+          &ops::voxelToWorldBackward,
           py::arg("grid"),
           py::arg("grad_out"),
           py::arg("is_primal"));
 
-    m.def("inv_transform_points_bwd",
-          &ops::invTransformPointsToGridBackward,
+    m.def("world_to_voxel_bwd",
+          &ops::worldToVoxelBackward,
           py::arg("grid"),
           py::arg("grad_out"),
           py::arg("is_primal"));
@@ -168,13 +168,13 @@ bind_grid_batch_ops(py::module &m) {
     // -----------------------------------------------------------------------
 
     m.def(
-        "max_pool_fwd",
+        "max_pool",
         [](const GBI &fine,
            const GBI &coarse,
            const torch::Tensor &data,
            const std::vector<int32_t> &factor,
            const std::vector<int32_t> &stride) {
-            return ops::downsampleGridMaxPool(fine, coarse, data, vecToCoord(factor), vecToCoord(stride));
+            return ops::maxPool(fine, coarse, data, vecToCoord(factor), vecToCoord(stride));
         },
         py::arg("fine_grid"),
         py::arg("coarse_grid"),
@@ -190,7 +190,7 @@ bind_grid_batch_ops(py::module &m) {
            const torch::Tensor &coarseGradOut,
            const std::vector<int32_t> &factor,
            const std::vector<int32_t> &stride) {
-            return ops::downsampleGridMaxPoolBackward(
+            return ops::maxPoolBackward(
                 coarse, fine, fineData, coarseGradOut, vecToCoord(factor), vecToCoord(stride));
         },
         py::arg("coarse_grid"),
@@ -201,13 +201,13 @@ bind_grid_batch_ops(py::module &m) {
         py::arg("stride"));
 
     m.def(
-        "avg_pool_fwd",
+        "avg_pool",
         [](const GBI &fine,
            const GBI &coarse,
            const torch::Tensor &data,
            const std::vector<int32_t> &factor,
            const std::vector<int32_t> &stride) {
-            return ops::downsampleGridAvgPool(fine, coarse, data, vecToCoord(factor), vecToCoord(stride));
+            return ops::avgPool(fine, coarse, data, vecToCoord(factor), vecToCoord(stride));
         },
         py::arg("fine_grid"),
         py::arg("coarse_grid"),
@@ -223,7 +223,7 @@ bind_grid_batch_ops(py::module &m) {
            const torch::Tensor &coarseGradOut,
            const std::vector<int32_t> &factor,
            const std::vector<int32_t> &stride) {
-            return ops::downsampleGridAvgPoolBackward(
+            return ops::avgPoolBackward(
                 coarse, fine, fineData, coarseGradOut, vecToCoord(factor), vecToCoord(stride));
         },
         py::arg("coarse_grid"),
@@ -234,12 +234,12 @@ bind_grid_batch_ops(py::module &m) {
         py::arg("stride"));
 
     m.def(
-        "upsample_nearest_fwd",
+        "refine",
         [](const GBI &coarse,
            const GBI &fine,
            const torch::Tensor &data,
            const std::vector<int32_t> &factor) {
-            return ops::upsampleGridNearest(coarse, fine, data, vecToCoord(factor));
+            return ops::refine(coarse, fine, data, vecToCoord(factor));
         },
         py::arg("coarse_grid"),
         py::arg("fine_grid"),
@@ -247,13 +247,13 @@ bind_grid_batch_ops(py::module &m) {
         py::arg("factor"));
 
     m.def(
-        "upsample_nearest_bwd",
+        "refine_bwd",
         [](const GBI &fine,
            const GBI &coarse,
            const torch::Tensor &gradOut,
            const torch::Tensor &coarseData,
            const std::vector<int32_t> &factor) {
-            return ops::upsampleGridNearestBackward(fine, coarse, gradOut, coarseData, vecToCoord(factor));
+            return ops::refineBackward(fine, coarse, gradOut, coarseData, vecToCoord(factor));
         },
         py::arg("fine_grid"),
         py::arg("coarse_grid"),
@@ -267,25 +267,25 @@ bind_grid_batch_ops(py::module &m) {
 
     m.def("inject_op", &ops::inject, py::arg("dst_grid"), py::arg("src_grid"), py::arg("dst"), py::arg("src"));
 
-    m.def("read_from_dense_cminor",
-          &ops::readFromDenseCminor,
+    m.def("inject_from_dense_cminor",
+          &ops::injectFromDenseCminor,
           py::arg("grid"),
           py::arg("dense_data"),
           py::arg("origins"));
 
-    m.def("read_from_dense_cmajor",
-          &ops::readFromDenseCmajor,
+    m.def("inject_from_dense_cmajor",
+          &ops::injectFromDenseCmajor,
           py::arg("grid"),
           py::arg("dense_data"),
           py::arg("origins"));
 
     m.def(
-        "write_to_dense_cminor",
+        "inject_to_dense_cminor",
         [](const GBI &grid,
            const torch::Tensor &sparseData,
            const torch::Tensor &origins,
            const std::vector<int32_t> &gridSize) {
-            return ops::readIntoDenseCminor(grid, sparseData, origins, vecToCoord(gridSize));
+            return ops::injectToDenseCminor(grid, sparseData, origins, vecToCoord(gridSize));
         },
         py::arg("grid"),
         py::arg("sparse_data"),
@@ -293,12 +293,12 @@ bind_grid_batch_ops(py::module &m) {
         py::arg("grid_size"));
 
     m.def(
-        "write_to_dense_cmajor",
+        "inject_to_dense_cmajor",
         [](const GBI &grid,
            const torch::Tensor &sparseData,
            const torch::Tensor &origins,
            const std::vector<int32_t> &gridSize) {
-            return ops::readIntoDenseCmajor(grid, sparseData, origins, vecToCoord(gridSize));
+            return ops::injectToDenseCmajor(grid, sparseData, origins, vecToCoord(gridSize));
         },
         py::arg("grid"),
         py::arg("sparse_data"),
@@ -341,8 +341,8 @@ bind_grid_batch_ops(py::module &m) {
 
     m.def("ijk_to_index", &ops::ijkToIndex, py::arg("grid"), py::arg("ijk"), py::arg("cumulative"));
 
-    m.def("voxel_neighborhood",
-          &ops::voxelNeighborhood,
+    m.def("neighbor_indexes",
+          &ops::neighborIndexes,
           py::arg("grid"),
           py::arg("coords"),
           py::arg("extent"),

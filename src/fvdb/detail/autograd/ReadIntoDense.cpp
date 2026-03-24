@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/detail/autograd/ReadIntoDense.h>
-#include <fvdb/detail/ops/ReadFromDense.h>
-#include <fvdb/detail/ops/ReadIntoDense.h>
+#include <fvdb/detail/ops/InjectFromDense.h>
+#include <fvdb/detail/ops/InjectToDense.h>
 #include <fvdb/detail/utils/Utils.h>
 
 #include <nanovdb/NanoVDB.h>
@@ -37,7 +37,7 @@ ReadIntoDenseCminor::forward(AutogradContext *ctx,
     }
 
     // [B, X, Y, Z, -1]
-    torch::Tensor ret = ops::readIntoDenseCminor(*grid, sparseData, denseOrigins, gridSize);
+    torch::Tensor ret = ops::injectToDenseCminor(*grid, sparseData, denseOrigins, gridSize);
 
     torch::Tensor retReshape = ret.view(
         spliceShape({grid->batchSize(), gridSize[0], gridSize[1], gridSize[2]}, sparseData));
@@ -66,7 +66,7 @@ ReadIntoDenseCminor::backward(AutogradContext *ctx, variable_list grad_output) {
     Variable gradOut = grad_output.at(0); // [B, X, Y, Z, *]
 
     // [N, -1]
-    torch::Tensor ret = ops::readFromDenseCminor(*grid, gradOut, denseOrigins);
+    torch::Tensor ret = ops::injectFromDenseCminor(*grid, gradOut, denseOrigins);
 
     torch::Tensor retReshape = ret.view(finalShapeTensor); // [N, *]
 
@@ -98,7 +98,7 @@ ReadIntoDenseCmajor::forward(AutogradContext *ctx,
     }
 
     // [B, -1, X, Y, Z]
-    torch::Tensor ret = ops::readIntoDenseCmajor(*grid, sparseData, denseOrigins, gridSize);
+    torch::Tensor ret = ops::injectToDenseCmajor(*grid, sparseData, denseOrigins, gridSize);
 
     // Reshape [B, -1, X, Y, Z] to [B, *, X, Y, Z]
     std::vector<int64_t> retShapeVec;
@@ -136,7 +136,7 @@ ReadIntoDenseCmajor::backward(AutogradContext *ctx, variable_list grad_output) {
     Variable gradOut = grad_output.at(0); // [B, *, X, Y, Z]
 
     // [N, -1]
-    torch::Tensor ret = ops::readFromDenseCmajor(*grid, gradOut, denseOrigins);
+    torch::Tensor ret = ops::injectFromDenseCmajor(*grid, gradOut, denseOrigins);
 
     torch::Tensor retReshape = ret.view(finalShapeTensor); // [N, *]
 
