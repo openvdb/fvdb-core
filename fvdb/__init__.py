@@ -180,7 +180,7 @@ from .torch_jagged import (
 # The following import needs to come after all classes and functions are defined
 # in order to avoid a circular dependency error.
 # Make these available without an explicit submodule import
-from . import nn, utils, version, viz
+from . import functional, nn, utils, version, viz
 from .version import __version__
 
 __version_info__ = tuple(map(int, __version__.split(".")))
@@ -251,6 +251,7 @@ __all__ = [
     # Config
     "config",
     # Submodules
+    "functional",
     "version",
     "viz",
     "nn",
