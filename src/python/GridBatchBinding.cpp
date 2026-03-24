@@ -6,12 +6,95 @@
 #include <pybind11/numpy.h>
 #include <pybind11/stl.h>
 
-#include "TypeCasters.h"
 #include "fvdb/GridBatch.h"
 
 #include <fvdb/FVDB.h>
+#include <fvdb/detail/utils/nanovdb/TorchNanoConversions.h>
 
 #include <torch/extension.h>
+
+namespace {
+
+nanovdb::Vec3d
+pyToVec3d(const torch::Tensor &t) {
+    torch::Tensor s = t.squeeze().cpu();
+    if (s.dim() == 0) {
+        double v = s.item().toDouble();
+        return nanovdb::Vec3d(v, v, v);
+    }
+    TORCH_CHECK(s.numel() == 3 && s.size(0) == 3, "tensor must be a vec3 or scalar");
+    return nanovdb::Vec3d(s[0].item().toDouble(), s[1].item().toDouble(), s[2].item().toDouble());
+}
+
+nanovdb::Coord
+pyToCoord(const torch::Tensor &t) {
+    torch::Tensor s = t.squeeze().cpu();
+    if (s.dim() == 0) {
+        auto v = s.item().toLong();
+        return nanovdb::Coord(v, v, v);
+    }
+    TORCH_CHECK(s.numel() == 3 && s.size(0) == 3, "tensor must be a vec3 or scalar");
+    TORCH_CHECK(at::isIntegralType(s.scalar_type(), false), "tensor must have an integer type");
+    return nanovdb::Coord(s[0].item().toLong(), s[1].item().toLong(), s[2].item().toLong());
+}
+
+std::vector<nanovdb::Vec3d>
+pyToVec3dBatch(int64_t batchSize, const torch::Tensor &t, bool allowNegative = true) {
+    torch::Tensor s = t.squeeze().cpu();
+    std::vector<nanovdb::Vec3d> result;
+    result.reserve(batchSize);
+    if (s.dim() == 0) {
+        double v = s.item().toDouble();
+        if (!allowNegative) {
+            TORCH_CHECK_VALUE(v > 0, "value must be > 0");
+        }
+        for (int64_t i = 0; i < batchSize; ++i) {
+            result.emplace_back(v, v, v);
+        }
+    } else if (s.dim() == 1) {
+        nanovdb::Vec3d vec = pyToVec3d(s);
+        if (!allowNegative) {
+            TORCH_CHECK_VALUE(vec[0] > 0 && vec[1] > 0 && vec[2] > 0, "all values must be > 0");
+        }
+        for (int64_t i = 0; i < batchSize; ++i) {
+            result.push_back(vec);
+        }
+    } else {
+        TORCH_CHECK(s.dim() == 2 && s.size(0) == batchSize && s.size(1) == 3,
+                    "Expected shape [], [3], or [B, 3]");
+        for (int64_t i = 0; i < batchSize; ++i) {
+            nanovdb::Vec3d vec = pyToVec3d(s[i]);
+            if (!allowNegative) {
+                TORCH_CHECK_VALUE(vec[0] > 0 && vec[1] > 0 && vec[2] > 0,
+                                  "all values must be > 0");
+            }
+            result.push_back(vec);
+        }
+    }
+    return result;
+}
+
+std::vector<nanovdb::Coord>
+pyToCoordBatch(int64_t batchSize, const torch::Tensor &t) {
+    torch::Tensor s = t.squeeze().cpu();
+    std::vector<nanovdb::Coord> result;
+    result.reserve(batchSize);
+    if (s.dim() == 1) {
+        nanovdb::Coord c = pyToCoord(s);
+        for (int64_t i = 0; i < batchSize; ++i) {
+            result.push_back(c);
+        }
+    } else {
+        TORCH_CHECK(s.dim() == 2 && s.size(0) == batchSize && s.size(1) == 3,
+                    "Expected shape [3] or [B, 3]");
+        for (int64_t i = 0; i < batchSize; ++i) {
+            result.push_back(pyToCoord(s[i]));
+        }
+    }
+    return result;
+}
+
+} // namespace
 
 void
 bind_grid_batch(py::module &m) {
@@ -225,53 +308,131 @@ bind_grid_batch(py::module &m) {
         .def("__len__", &fvdb::GridBatch::grid_count)
 
         // Setting transformation
-        .def("set_global_origin", &fvdb::GridBatch::set_global_origin, py::arg("origin"))
         .def(
-            "set_global_voxel_size", &fvdb::GridBatch::set_global_voxel_size, py::arg("voxel_size"))
+            "set_global_origin",
+            [](fvdb::GridBatch &self, const torch::Tensor &origin) {
+                self.set_global_origin(pyToVec3d(origin));
+            },
+            py::arg("origin"))
+        .def(
+            "set_global_voxel_size",
+            [](fvdb::GridBatch &self, const torch::Tensor &voxel_size) {
+                self.set_global_voxel_size(pyToVec3d(voxel_size));
+            },
+            py::arg("voxel_size"))
 
-        // Grid construction
-        .def("set_from_mesh",
-             &fvdb::GridBatch::set_from_mesh,
-             py::arg("mesh_vertices"),
-             py::arg("mesh_faces"),
-             py::arg("voxel_sizes") = 1.0,
-             py::arg("origins")     = torch::zeros(3, torch::kInt32))
-        .def("set_from_points",
-             &fvdb::GridBatch::set_from_points,
-             py::arg("points"),
-             py::arg("voxel_sizes") = 1.0,
-             py::arg("origins")     = torch::zeros(3, torch::kInt32))
-        .def("set_from_dense_grid",
-             &fvdb::GridBatch::set_from_dense_grid,
-             py::arg("num_grids"),
-             py::arg("dense_dims"),
-             py::arg("ijk_min")     = torch::zeros(3, torch::kInt32),
-             py::arg("voxel_sizes") = 1.0,
-             py::arg("origins")     = torch::zeros(3),
-             py::arg("mask")        = nullptr)
-        .def("set_from_ijk",
-             &fvdb::GridBatch::set_from_ijk,
-             py::arg("ijk"),
-             py::arg("voxel_sizes") = 1.0,
-             py::arg("origins")     = torch::zeros(3))
-        .def("set_from_nearest_voxels_to_points",
-             &fvdb::GridBatch::set_from_nearest_voxels_to_points,
-             py::arg("points"),
-             py::arg("voxel_sizes") = 1.0,
-             py::arg("origins")     = torch::zeros(3))
+        // Grid construction -- accept tensors from Python's to_Vec3* converters
+        .def(
+            "set_from_mesh",
+            [](fvdb::GridBatch &self,
+               const fvdb::JaggedTensor &vertices,
+               const fvdb::JaggedTensor &faces,
+               const torch::Tensor &voxel_sizes,
+               const torch::Tensor &origins) {
+                int64_t n = vertices.joffsets().size(0) - 1;
+                self.set_from_mesh(vertices, faces,
+                                   pyToVec3dBatch(n, voxel_sizes, false),
+                                   pyToVec3dBatch(n, origins));
+            },
+            py::arg("mesh_vertices"),
+            py::arg("mesh_faces"),
+            py::arg("voxel_sizes"),
+            py::arg("origins"))
+        .def(
+            "set_from_points",
+            [](fvdb::GridBatch &self,
+               const fvdb::JaggedTensor &points,
+               const torch::Tensor &voxel_sizes,
+               const torch::Tensor &origins) {
+                int64_t n = points.joffsets().size(0) - 1;
+                self.set_from_points(points,
+                                     pyToVec3dBatch(n, voxel_sizes, false),
+                                     pyToVec3dBatch(n, origins));
+            },
+            py::arg("points"),
+            py::arg("voxel_sizes"),
+            py::arg("origins"))
+        .def(
+            "set_from_dense_grid",
+            [](fvdb::GridBatch &self,
+               int64_t num_grids,
+               const torch::Tensor &dense_dims,
+               const torch::Tensor &ijk_min,
+               const torch::Tensor &voxel_sizes,
+               const torch::Tensor &origins,
+               std::optional<torch::Tensor> mask) {
+                self.set_from_dense_grid(num_grids,
+                                         pyToCoord(dense_dims),
+                                         pyToCoord(ijk_min),
+                                         pyToVec3dBatch(num_grids, voxel_sizes, false),
+                                         pyToVec3dBatch(num_grids, origins),
+                                         mask);
+            },
+            py::arg("num_grids"),
+            py::arg("dense_dims"),
+            py::arg("ijk_min"),
+            py::arg("voxel_sizes"),
+            py::arg("origins"),
+            py::arg("mask") = py::none())
+        .def(
+            "set_from_ijk",
+            [](fvdb::GridBatch &self,
+               const fvdb::JaggedTensor &ijk,
+               const torch::Tensor &voxel_sizes,
+               const torch::Tensor &origins) {
+                int64_t n = ijk.joffsets().size(0) - 1;
+                self.set_from_ijk(ijk,
+                                  pyToVec3dBatch(n, voxel_sizes, false),
+                                  pyToVec3dBatch(n, origins));
+            },
+            py::arg("ijk"),
+            py::arg("voxel_sizes"),
+            py::arg("origins"))
+        .def(
+            "set_from_nearest_voxels_to_points",
+            [](fvdb::GridBatch &self,
+               const fvdb::JaggedTensor &points,
+               const torch::Tensor &voxel_sizes,
+               const torch::Tensor &origins) {
+                int64_t n = points.joffsets().size(0) - 1;
+                self.set_from_nearest_voxels_to_points(points,
+                                                       pyToVec3dBatch(n, voxel_sizes, false),
+                                                       pyToVec3dBatch(n, origins));
+            },
+            py::arg("points"),
+            py::arg("voxel_sizes"),
+            py::arg("origins"))
 
         // Interface with dense grids
-        .def("write_to_dense_cminor",
-             &fvdb::GridBatch::write_to_dense_cminor,
-             py::arg("sparse_data"),
-             py::arg("min_coord") = nullptr,
-             py::arg("grid_size") = nullptr)
+        .def(
+            "write_to_dense_cminor",
+            [](const fvdb::GridBatch &self,
+               const fvdb::JaggedTensor &sparse_data,
+               const std::optional<torch::Tensor> &min_coord,
+               const std::optional<torch::Tensor> &grid_size) {
+                std::optional<nanovdb::Coord> gs;
+                if (grid_size)
+                    gs = pyToCoord(*grid_size);
+                return self.write_to_dense_cminor(sparse_data, min_coord, gs);
+            },
+            py::arg("sparse_data"),
+            py::arg("min_coord") = py::none(),
+            py::arg("grid_size") = py::none())
 
-        .def("write_to_dense_cmajor",
-             &fvdb::GridBatch::write_to_dense_cmajor,
-             py::arg("sparse_data"),
-             py::arg("min_coord") = nullptr,
-             py::arg("grid_size") = nullptr)
+        .def(
+            "write_to_dense_cmajor",
+            [](const fvdb::GridBatch &self,
+               const fvdb::JaggedTensor &sparse_data,
+               const std::optional<torch::Tensor> &min_coord,
+               const std::optional<torch::Tensor> &grid_size) {
+                std::optional<nanovdb::Coord> gs;
+                if (grid_size)
+                    gs = pyToCoord(*grid_size);
+                return self.write_to_dense_cmajor(sparse_data, min_coord, gs);
+            },
+            py::arg("sparse_data"),
+            py::arg("min_coord") = py::none(),
+            py::arg("grid_size") = py::none())
 
         .def("read_from_dense_cminor",
              &fvdb::GridBatch::read_from_dense_cminor,
@@ -285,17 +446,52 @@ bind_grid_batch(py::module &m) {
 
         // Derived grids
         .def("dual_grid", &fvdb::GridBatch::dual_grid, py::arg("exclude_border") = false)
-        .def("coarsened_grid", &fvdb::GridBatch::coarsened_grid, py::arg("coarsening_factor"))
-        .def("refined_grid",
-             &fvdb::GridBatch::refined_grid,
-             py::arg("subdiv_factor"),
-             py::arg("mask") = nullptr)
-        .def("clipped_grid", &fvdb::GridBatch::clipped_grid, py::arg("ijk_min"), py::arg("ijk_max"))
-        .def("conv_grid", &fvdb::GridBatch::conv_grid, py::arg("kernel_size"), py::arg("stride"))
-        .def("conv_transpose_grid",
-             &fvdb::GridBatch::conv_transpose_grid,
-             py::arg("kernel_size"),
-             py::arg("stride"))
+        .def(
+            "coarsened_grid",
+            [](const fvdb::GridBatch &self, const torch::Tensor &coarsening_factor) {
+                return self.coarsened_grid(pyToCoord(coarsening_factor));
+            },
+            py::arg("coarsening_factor"))
+        .def(
+            "refined_grid",
+            [](const fvdb::GridBatch &self,
+               const torch::Tensor &subdiv_factor,
+               const std::optional<fvdb::JaggedTensor> &mask) {
+                return self.refined_grid(pyToCoord(subdiv_factor), mask);
+            },
+            py::arg("subdiv_factor"),
+            py::arg("mask") = py::none())
+        .def(
+            "clipped_grid",
+            [](const fvdb::GridBatch &self,
+               const torch::Tensor &ijk_min,
+               const torch::Tensor &ijk_max) {
+                auto bs = self.grid_count();
+                return self.clipped_grid(pyToCoordBatch(bs, ijk_min),
+                                         pyToCoordBatch(bs, ijk_max));
+            },
+            py::arg("ijk_min"),
+            py::arg("ijk_max"))
+        .def(
+            "conv_grid",
+            [](const fvdb::GridBatch &self,
+               const torch::Tensor &kernel_size,
+               const torch::Tensor &stride) {
+                return self.conv_grid(pyToCoord(kernel_size),
+                                      pyToCoord(stride));
+            },
+            py::arg("kernel_size"),
+            py::arg("stride"))
+        .def(
+            "conv_transpose_grid",
+            [](const fvdb::GridBatch &self,
+               const torch::Tensor &kernel_size,
+               const torch::Tensor &stride) {
+                return self.conv_transpose_grid(pyToCoord(kernel_size),
+                                                pyToCoord(stride));
+            },
+            py::arg("kernel_size"),
+            py::arg("stride"))
         .def("dilated_grid", &fvdb::GridBatch::dilated_grid, py::arg("dilation"))
         .def("merged_grid", &fvdb::GridBatch::merged_grid, py::arg("other"))
         .def("pruned_grid", &fvdb::GridBatch::pruned_grid, py::arg("mask"))
@@ -306,47 +502,95 @@ bind_grid_batch(py::module &m) {
              py::arg("dst"))
 
         // Clipping to a bounding box
-        .def("clip",
-             &fvdb::GridBatch::clip,
-             py::arg("features"),
-             py::arg("ijk_min"),
-             py::arg("ijk_max"))
+        .def(
+            "clip",
+            [](const fvdb::GridBatch &self,
+               const fvdb::JaggedTensor &features,
+               const torch::Tensor &ijk_min,
+               const torch::Tensor &ijk_max) {
+                auto bs = self.grid_count();
+                return self.clip(features,
+                                 pyToCoordBatch(bs, ijk_min),
+                                 pyToCoordBatch(bs, ijk_max));
+            },
+            py::arg("features"),
+            py::arg("ijk_min"),
+            py::arg("ijk_max"))
 
         // Upsampling and pooling
-        .def("max_pool",
-             &fvdb::GridBatch::max_pool,
-             py::arg("pool_factor"),
-             py::arg("data"),
-             py::arg("stride")      = 0,
-             py::arg("coarse_grid") = nullptr)
+        .def(
+            "max_pool",
+            [](const fvdb::GridBatch &self,
+               const torch::Tensor &pool_factor,
+               const fvdb::JaggedTensor &data,
+               const torch::Tensor &stride,
+               std::optional<fvdb::GridBatch> coarse_grid) {
+                return self.max_pool(pyToCoord(pool_factor), data,
+                                     pyToCoord(stride), coarse_grid);
+            },
+            py::arg("pool_factor"),
+            py::arg("data"),
+            py::arg("stride"),
+            py::arg("coarse_grid") = py::none())
 
-        .def("avg_pool",
-             &fvdb::GridBatch::avg_pool,
-             py::arg("pool_factor"),
-             py::arg("data"),
-             py::arg("stride")      = 0,
-             py::arg("coarse_grid") = nullptr)
+        .def(
+            "avg_pool",
+            [](const fvdb::GridBatch &self,
+               const torch::Tensor &pool_factor,
+               const fvdb::JaggedTensor &data,
+               const torch::Tensor &stride,
+               std::optional<fvdb::GridBatch> coarse_grid) {
+                return self.avg_pool(pyToCoord(pool_factor), data,
+                                     pyToCoord(stride), coarse_grid);
+            },
+            py::arg("pool_factor"),
+            py::arg("data"),
+            py::arg("stride"),
+            py::arg("coarse_grid") = py::none())
 
-        .def("refine",
-             &fvdb::GridBatch::refine,
-             py::arg("subdiv_factor"),
-             py::arg("data"),
-             py::arg("mask")      = nullptr,
-             py::arg("fine_grid") = nullptr)
+        .def(
+            "refine",
+            [](const fvdb::GridBatch &self,
+               const torch::Tensor &subdiv_factor,
+               const fvdb::JaggedTensor &data,
+               const std::optional<fvdb::JaggedTensor> &mask,
+               std::optional<fvdb::GridBatch> fine_grid) {
+                return self.refine(pyToCoord(subdiv_factor), data, mask, fine_grid);
+            },
+            py::arg("subdiv_factor"),
+            py::arg("data"),
+            py::arg("mask")      = py::none(),
+            py::arg("fine_grid") = py::none())
 
         // Grid intersects/contains objects
         .def("points_in_grid", &fvdb::GridBatch::points_in_grid, py::arg("points"))
         .def("coords_in_grid", &fvdb::GridBatch::coords_in_grid, py::arg("ijk"))
-        .def("cubes_intersect_grid",
-             &fvdb::GridBatch::cubes_intersect_grid,
-             py::arg("cube_centers"),
-             py::arg("cube_min") = 0.0,
-             py::arg("cube_max") = 0.0)
-        .def("cubes_in_grid",
-             &fvdb::GridBatch::cubes_in_grid,
-             py::arg("cube_centers"),
-             py::arg("cube_min") = 0.0,
-             py::arg("cube_max") = 0.0)
+        .def(
+            "cubes_intersect_grid",
+            [](const fvdb::GridBatch &self,
+               const fvdb::JaggedTensor &cube_centers,
+               const torch::Tensor &cube_min,
+               const torch::Tensor &cube_max) {
+                return self.cubes_intersect_grid(cube_centers,
+                                                 pyToVec3d(cube_min),
+                                                 pyToVec3d(cube_max));
+            },
+            py::arg("cube_centers"),
+            py::arg("cube_min"),
+            py::arg("cube_max"))
+        .def(
+            "cubes_in_grid",
+            [](const fvdb::GridBatch &self,
+               const fvdb::JaggedTensor &cube_centers,
+               const torch::Tensor &cube_min,
+               const torch::Tensor &cube_max) {
+                return self.cubes_in_grid(cube_centers,
+                                          pyToVec3d(cube_min),
+                                          pyToVec3d(cube_max));
+            },
+            py::arg("cube_centers"),
+            py::arg("cube_min"),
+            py::arg("cube_max"))
 
         // Indexing functions
         .def("ijk_to_index",

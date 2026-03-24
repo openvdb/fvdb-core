@@ -184,8 +184,8 @@ load(const std::string &path, const torch::Device &device, bool verbose) {
 
 GridBatch
 gridbatch_from_points(const JaggedTensor &points,
-                      const Vec3dBatchOrScalar &voxel_sizes,
-                      const Vec3dBatch &origins) {
+                      const std::vector<nanovdb::Vec3d> &voxel_sizes,
+                      const std::vector<nanovdb::Vec3d> &origins) {
     auto ret = GridBatch(points.device());
     ret.set_from_points(points, voxel_sizes, origins);
     return ret;
@@ -193,8 +193,8 @@ gridbatch_from_points(const JaggedTensor &points,
 
 GridBatch
 gridbatch_from_ijk(const JaggedTensor &ijk,
-                   const Vec3dBatchOrScalar &voxel_sizes,
-                   const Vec3dBatch &origins) {
+                   const std::vector<nanovdb::Vec3d> &voxel_sizes,
+                   const std::vector<nanovdb::Vec3d> &origins) {
     auto ret = GridBatch(ijk.device());
     ret.set_from_ijk(ijk, voxel_sizes, origins);
     return ret;
@@ -202,8 +202,8 @@ gridbatch_from_ijk(const JaggedTensor &ijk,
 
 GridBatch
 gridbatch_from_nearest_voxels_to_points(const JaggedTensor &points,
-                                        const Vec3dBatchOrScalar &voxel_sizes,
-                                        const Vec3dBatch &origins) {
+                                        const std::vector<nanovdb::Vec3d> &voxel_sizes,
+                                        const std::vector<nanovdb::Vec3d> &origins) {
     auto ret = GridBatch(points.device());
     ret.set_from_nearest_voxels_to_points(points, voxel_sizes, origins);
     return ret;
@@ -211,10 +211,10 @@ gridbatch_from_nearest_voxels_to_points(const JaggedTensor &points,
 
 GridBatch
 gridbatch_from_dense(const int64_t numGrids,
-                     const Vec3i &denseDims,
-                     const Vec3i &ijkMin,
-                     const Vec3dBatchOrScalar &voxel_sizes,
-                     const Vec3dBatch &origins,
+                     const nanovdb::Coord &denseDims,
+                     const nanovdb::Coord &ijkMin,
+                     const std::vector<nanovdb::Vec3d> &voxel_sizes,
+                     const std::vector<nanovdb::Vec3d> &origins,
                      std::optional<torch::Tensor> mask,
                      const torch::Device &device) {
     auto ret = GridBatch(device);
@@ -225,8 +225,8 @@ gridbatch_from_dense(const int64_t numGrids,
 GridBatch
 gridbatch_from_mesh(const JaggedTensor &vertices,
                     const JaggedTensor &faces,
-                    const Vec3dBatchOrScalar &voxel_sizes,
-                    const Vec3dBatch &origins) {
+                    const std::vector<nanovdb::Vec3d> &voxel_sizes,
+                    const std::vector<nanovdb::Vec3d> &origins) {
     auto ret = GridBatch(vertices.device());
     ret.set_from_mesh(vertices, faces, voxel_sizes, origins);
     return ret;

@@ -8,19 +8,21 @@
 #include <fvdb/detail/GridBatchImpl.h>
 #include <fvdb/detail/utils/Utils.h>
 
+#include <nanovdb/NanoVDB.h>
+
 namespace fvdb {
 namespace detail {
 namespace ops {
 
 JaggedTensor cubesInGrid(const GridBatchImpl &batchHdl,
                          const JaggedTensor &cubeCenters,
-                         const Vec3dOrScalar &padMin,
-                         const Vec3dOrScalar &padMax);
+                         const nanovdb::Vec3d &padMin,
+                         const nanovdb::Vec3d &padMax);
 
 JaggedTensor cubesIntersectGrid(const GridBatchImpl &batchHdl,
                                 const JaggedTensor &cubeCenters,
-                                const Vec3dOrScalar &padMin,
-                                const Vec3dOrScalar &padMax);
+                                const nanovdb::Vec3d &padMin,
+                                const nanovdb::Vec3d &padMax);
 
 } // namespace ops
 } // namespace detail

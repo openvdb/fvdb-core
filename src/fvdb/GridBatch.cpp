@@ -178,13 +178,13 @@ GridBatch::jidx() const {
 }
 
 void
-GridBatch::set_global_voxel_size(const Vec3dOrScalar &voxel_size) {
-    mImpl->setGlobalVoxelSize(voxel_size.value());
+GridBatch::set_global_voxel_size(const nanovdb::Vec3d &voxel_size) {
+    mImpl->setGlobalVoxelSize(voxel_size);
 }
 
 void
-GridBatch::set_global_origin(const Vec3d &origin) {
-    mImpl->setGlobalVoxelOrigin(origin.value());
+GridBatch::set_global_origin(const nanovdb::Vec3d &origin) {
+    mImpl->setGlobalVoxelOrigin(origin);
 }
 
 c10::Device
@@ -238,9 +238,9 @@ GridBatch::total_bbox() const {
 }
 
 std::pair<JaggedTensor, GridBatch>
-GridBatch::max_pool(Vec3iOrScalar pool_factor,
+GridBatch::max_pool(nanovdb::Coord pool_factor,
                     const JaggedTensor &data,
-                    Vec3iOrScalar stride,
+                    nanovdb::Coord stride,
                     std::optional<GridBatch> coarse_grid) const {
     // TODO: ldim checks live here because the underlying ops accept plain torch::Tensor (via
     // .jdata()). When these member functions are removed in favor of free-function ops, move checks
@@ -251,12 +251,9 @@ GridBatch::max_pool(Vec3iOrScalar pool_factor,
         data.ldim(),
         " list dimensions");
 
-    nanovdb::Coord pool_factor_coord = pool_factor.value();
-    nanovdb::Coord stride_coord      = stride.value();
-
     for (int i = 0; i < 3; i += 1) {
-        if (stride_coord[i] == 0) {
-            stride_coord[i] = pool_factor_coord[i];
+        if (stride[i] == 0) {
+            stride[i] = pool_factor[i];
         }
     }
 
@@ -264,11 +261,11 @@ GridBatch::max_pool(Vec3iOrScalar pool_factor,
     if (coarse_grid.has_value()) {
         coarse_grid_impl = coarse_grid.value().mImpl;
     } else {
-        coarse_grid_impl = coarsened_grid(stride_coord).mImpl;
+        coarse_grid_impl = coarsened_grid(stride).mImpl;
     }
 
     torch::Tensor pool_data = detail::autograd::MaxPoolGrid::apply(
-        mImpl, coarse_grid_impl, pool_factor_coord, stride_coord, data.jdata())[0];
+        mImpl, coarse_grid_impl, pool_factor, stride, data.jdata())[0];
 
     GridBatch result;
     result.mImpl = coarse_grid_impl;
@@ -276,9 +273,9 @@ GridBatch::max_pool(Vec3iOrScalar pool_factor,
 }
 
 std::pair<JaggedTensor, GridBatch>
-GridBatch::avg_pool(Vec3iOrScalar pool_factor,
+GridBatch::avg_pool(nanovdb::Coord pool_factor,
                     const JaggedTensor &data,
-                    Vec3iOrScalar stride,
+                    nanovdb::Coord stride,
                     std::optional<GridBatch> coarse_grid) const {
     // TODO: ldim checks live here because the underlying ops accept plain torch::Tensor (via
     // .jdata()). When these member functions are removed in favor of free-function ops, move checks
@@ -289,12 +286,9 @@ GridBatch::avg_pool(Vec3iOrScalar pool_factor,
         data.ldim(),
         " list dimensions");
 
-    nanovdb::Coord pool_factor_coord = pool_factor.value();
-    nanovdb::Coord stride_coord      = stride.value();
-
     for (int i = 0; i < 3; i += 1) {
-        if (stride_coord[i] == 0) {
-            stride_coord[i] = pool_factor_coord[i];
+        if (stride[i] == 0) {
+            stride[i] = pool_factor[i];
         }
     }
 
@@ -302,11 +296,11 @@ GridBatch::avg_pool(Vec3iOrScalar pool_factor,
     if (coarse_grid.has_value()) {
         coarse_grid_impl = coarse_grid.value().mImpl;
     } else {
-        coarse_grid_impl = coarsened_grid(stride_coord).mImpl;
+        coarse_grid_impl = coarsened_grid(stride).mImpl;
     }
 
     torch::Tensor pool_data = detail::autograd::AvgPoolGrid::apply(
-        mImpl, coarse_grid_impl, pool_factor_coord, stride_coord, data.jdata())[0];
+        mImpl, coarse_grid_impl, pool_factor, stride, data.jdata())[0];
 
     GridBatch result;
     result.mImpl = coarse_grid_impl;
@@ -314,7 +308,7 @@ GridBatch::avg_pool(Vec3iOrScalar pool_factor,
 }
 
 std::pair<JaggedTensor, GridBatch>
-GridBatch::refine(Vec3iOrScalar subdiv_factor,
+GridBatch::refine(nanovdb::Coord subdiv_factor,
                   const JaggedTensor &data,
                   const std::optional<JaggedTensor> mask,
                   std::optional<GridBatch> fine_grid) const {
@@ -334,8 +328,6 @@ GridBatch::refine(Vec3iOrScalar subdiv_factor,
             " list dimensions");
     }
 
-    const nanovdb::Coord upsampleFactorCoord = subdiv_factor.value();
-
     c10::intrusive_ptr<detail::GridBatchImpl> fineGrid;
     if (fine_grid.has_value()) {
         fineGrid = fine_grid.value().mImpl;
@@ -344,7 +336,7 @@ GridBatch::refine(Vec3iOrScalar subdiv_factor,
     }
 
     torch::Tensor subdivData = detail::autograd::UpsampleGrid::apply(
-        mImpl, fineGrid, upsampleFactorCoord, data.jdata())[0];
+        mImpl, fineGrid, subdiv_factor, data.jdata())[0];
 
     GridBatch result;
     result.mImpl = fineGrid;
@@ -353,24 +345,32 @@ GridBatch::refine(Vec3iOrScalar subdiv_factor,
 
 JaggedTensor
 GridBatch::read_from_dense_cminor(const torch::Tensor &dense_data,
-                                  const Vec3iBatch &dense_origins) const {
+                                  const torch::Tensor &dense_origins) const {
+    torch::Tensor origins = dense_origins.to(torch::kInt32);
+    if (origins.dim() == 1 && origins.size(0) == 3) {
+        origins = origins.unsqueeze(0).expand({mImpl->batchSize(), 3});
+    }
     torch::Tensor retData =
-        detail::autograd::ReadFromDenseCminor::apply(mImpl, dense_data, dense_origins)[0];
+        detail::autograd::ReadFromDenseCminor::apply(mImpl, dense_data, origins)[0];
     return mImpl->jaggedTensor(retData);
 }
 
 JaggedTensor
 GridBatch::read_from_dense_cmajor(const torch::Tensor &dense_data,
-                                  const Vec3iBatch &dense_origins) const {
+                                  const torch::Tensor &dense_origins) const {
+    torch::Tensor origins = dense_origins.to(torch::kInt32);
+    if (origins.dim() == 1 && origins.size(0) == 3) {
+        origins = origins.unsqueeze(0).expand({mImpl->batchSize(), 3});
+    }
     torch::Tensor retData =
-        detail::autograd::ReadFromDenseCmajor::apply(mImpl, dense_data, dense_origins)[0];
+        detail::autograd::ReadFromDenseCmajor::apply(mImpl, dense_data, origins)[0];
     return mImpl->jaggedTensor(retData);
 }
 
 torch::Tensor
 GridBatch::write_to_dense_cminor(const JaggedTensor &sparse_data,
-                                 const std::optional<Vec3iBatch> &min_coord,
-                                 const std::optional<Vec3i> &grid_size) const {
+                                 const std::optional<torch::Tensor> &min_coord,
+                                 const std::optional<nanovdb::Coord> &grid_size) const {
     // TODO: ldim checks live here because the underlying ops accept plain torch::Tensor (via
     // .jdata()). When these member functions are removed in favor of free-function ops, move checks
     // to Python.
@@ -380,25 +380,38 @@ GridBatch::write_to_dense_cminor(const JaggedTensor &sparse_data,
         sparse_data.ldim(),
         " list dimensions");
 
+    std::optional<torch::Tensor> broadcastedMinCoord;
+    if (min_coord.has_value()) {
+        torch::Tensor mc = min_coord.value().to(torch::kInt32);
+        if (mc.dim() == 1 && mc.size(0) == 3) {
+            mc = mc.unsqueeze(0).expand({mImpl->batchSize(), 3});
+        }
+        broadcastedMinCoord = mc;
+    }
     return detail::autograd::ReadIntoDenseCminor::apply(
-        mImpl, sparse_data.jdata(), min_coord, grid_size)[0];
+        mImpl, sparse_data.jdata(), broadcastedMinCoord, grid_size)[0];
 }
 
 torch::Tensor
 GridBatch::write_to_dense_cmajor(const JaggedTensor &sparse_data,
-                                 const std::optional<Vec3iBatch> &min_coord,
-                                 const std::optional<Vec3i> &grid_size) const {
-    // TODO: ldim checks live here because the underlying ops accept plain torch::Tensor (via
-    // .jdata()). When these member functions are removed in favor of free-function ops, move checks
-    // to Python.
+                                 const std::optional<torch::Tensor> &min_coord,
+                                 const std::optional<nanovdb::Coord> &grid_size) const {
     TORCH_CHECK_VALUE(
         sparse_data.ldim() == 1,
         "Expected sparse_data to have 1 list dimension, i.e. be a single list of coordinate values, but got ",
         sparse_data.ldim(),
         " list dimensions");
 
+    std::optional<torch::Tensor> broadcastedMinCoord;
+    if (min_coord.has_value()) {
+        torch::Tensor mc = min_coord.value().to(torch::kInt32);
+        if (mc.dim() == 1 && mc.size(0) == 3) {
+            mc = mc.unsqueeze(0).expand({mImpl->batchSize(), 3});
+        }
+        broadcastedMinCoord = mc;
+    }
     return detail::autograd::ReadIntoDenseCmajor::apply(
-        mImpl, sparse_data.jdata(), min_coord, grid_size)[0];
+        mImpl, sparse_data.jdata(), broadcastedMinCoord, grid_size)[0];
 }
 
 JaggedTensor
@@ -585,75 +598,49 @@ GridBatch::splat_bezier(const JaggedTensor &points, const JaggedTensor &points_d
 void
 GridBatch::set_from_mesh(const JaggedTensor &mesh_vertices,
                          const JaggedTensor &mesh_faces,
-                         const Vec3dBatchOrScalar &voxel_sizes,
-                         const Vec3dBatch &origins) {
+                         const std::vector<nanovdb::Vec3d> &voxel_sizes,
+                         const std::vector<nanovdb::Vec3d> &origins) {
     mImpl->checkDevice(mesh_vertices);
     mImpl->checkDevice(mesh_faces);
-    const int64_t numGrids = mesh_vertices.joffsets().size(0) - 1;
-    const std::vector<nanovdb::Vec3d> voxSizesVec =
-        voxel_sizes.value(numGrids, true /* onlyPositive */, "voxel_sizes");
-    const std::vector<nanovdb::Vec3d> voxOriginsVec =
-        origins.value(numGrids, false /* onlyPositive */, "voxel_origins");
     mImpl = detail::GridBatchImpl::createFromMesh(
-        mesh_vertices, mesh_faces, voxSizesVec, voxOriginsVec);
+        mesh_vertices, mesh_faces, voxel_sizes, origins);
 }
 
 void
 GridBatch::set_from_points(const JaggedTensor &points,
-                           const Vec3dBatchOrScalar &voxel_sizes,
-                           const Vec3dBatch &origins) {
+                           const std::vector<nanovdb::Vec3d> &voxel_sizes,
+                           const std::vector<nanovdb::Vec3d> &origins) {
     mImpl->checkDevice(points);
-    const int64_t numGrids = points.joffsets().size(0) - 1;
-    const std::vector<nanovdb::Vec3d> voxSizesVec =
-        voxel_sizes.value(numGrids, true /* onlyPositive */, "voxel_sizes");
-    const std::vector<nanovdb::Vec3d> voxOriginsVec =
-        origins.value(numGrids, false /* onlyPositive */, "voxel_origins");
-    mImpl = detail::GridBatchImpl::createFromPoints(points, voxSizesVec, voxOriginsVec);
+    mImpl = detail::GridBatchImpl::createFromPoints(points, voxel_sizes, origins);
 }
 
 void
 GridBatch::set_from_nearest_voxels_to_points(const JaggedTensor &points,
-                                             const Vec3dBatchOrScalar &voxel_sizes,
-                                             const Vec3dBatch &origins) {
+                                             const std::vector<nanovdb::Vec3d> &voxel_sizes,
+                                             const std::vector<nanovdb::Vec3d> &origins) {
     mImpl->checkDevice(points);
-    const int64_t numGrids = points.joffsets().size(0) - 1;
-    const std::vector<nanovdb::Vec3d> voxSizesVec =
-        voxel_sizes.value(numGrids, true /* onlyPositive */, "voxel_sizes");
-    const std::vector<nanovdb::Vec3d> voxOriginsVec =
-        origins.value(numGrids, false /* onlyPositive */, "voxel_origins");
     mImpl =
-        detail::GridBatchImpl::createFromNeighborVoxelsToPoints(points, voxSizesVec, voxOriginsVec);
+        detail::GridBatchImpl::createFromNeighborVoxelsToPoints(points, voxel_sizes, origins);
 }
 
 void
 GridBatch::set_from_ijk(const JaggedTensor &coords,
-                        const Vec3dBatchOrScalar &voxel_sizes,
-                        const Vec3dBatch &origins) {
+                        const std::vector<nanovdb::Vec3d> &voxel_sizes,
+                        const std::vector<nanovdb::Vec3d> &origins) {
     mImpl->checkDevice(coords);
-    const int64_t numGrids = coords.joffsets().size(0) - 1;
-    const std::vector<nanovdb::Vec3d> voxSizesVec =
-        voxel_sizes.value(numGrids, true /* onlyPositive */, "voxel_sizes");
-    const std::vector<nanovdb::Vec3d> voxOriginsVec =
-        origins.value(numGrids, false /* onlyPositive */, "voxel_origins");
-    mImpl = detail::GridBatchImpl::createFromIjk(coords, voxSizesVec, voxOriginsVec);
+    mImpl = detail::GridBatchImpl::createFromIjk(coords, voxel_sizes, origins);
 }
 
 void
 GridBatch::set_from_dense_grid(const int64_t num_grids,
-                               const Vec3i &dense_dims,
-                               const Vec3i &ijk_min,
-                               const Vec3dBatchOrScalar &voxel_sizes,
-                               const Vec3dBatch &origins,
+                               const nanovdb::Coord &dense_dims,
+                               const nanovdb::Coord &ijk_min,
+                               const std::vector<nanovdb::Vec3d> &voxel_sizes,
+                               const std::vector<nanovdb::Vec3d> &origins,
                                std::optional<torch::Tensor> mask) {
-    const nanovdb::Coord &denseDims = dense_dims.value();
-    const nanovdb::Coord &ijkMin    = ijk_min.value();
     mImpl->checkDevice(mask);
-    std::vector<nanovdb::Vec3d> voxSizesVec =
-        voxel_sizes.value(num_grids, true /* onlyPositive */, "voxel_sizes");
-    std::vector<nanovdb::Vec3d> voxOriginsVec =
-        origins.value(num_grids, false /* onlyPositive */, "voxel_origins");
     mImpl = detail::GridBatchImpl::dense(
-        num_grids, device(), denseDims, ijkMin, voxSizesVec, voxOriginsVec, mask);
+        num_grids, device(), dense_dims, ijk_min, voxel_sizes, origins, mask);
 }
 
 GridBatch
@@ -664,36 +651,31 @@ GridBatch::dual_grid(bool exclude_border) const {
 }
 
 GridBatch
-GridBatch::coarsened_grid(Vec3iOrScalar branch_factor) const {
+GridBatch::coarsened_grid(nanovdb::Coord branch_factor) const {
     GridBatch result;
-    const nanovdb::Coord branchFactorCoord = branch_factor.value();
-    result.mImpl                           = mImpl->coarsen(branchFactorCoord);
+    result.mImpl = mImpl->coarsen(branch_factor);
     return result;
 }
 
 GridBatch
-GridBatch::refined_grid(Vec3iOrScalar subdiv_factor, const std::optional<JaggedTensor> mask) const {
+GridBatch::refined_grid(nanovdb::Coord subdiv_factor, const std::optional<JaggedTensor> mask) const {
     GridBatch result;
-    const nanovdb::Coord subdivFactorCoord = subdiv_factor.value();
-    result.mImpl                           = mImpl->upsample(subdivFactorCoord, mask);
+    result.mImpl = mImpl->upsample(subdiv_factor, mask);
     return result;
 }
 
 GridBatch
-GridBatch::clipped_grid(const Vec3iBatch &ijk_min, const Vec3iBatch &ijk_max) const {
+GridBatch::clipped_grid(const std::vector<nanovdb::Coord> &ijk_min,
+                        const std::vector<nanovdb::Coord> &ijk_max) const {
     GridBatch result;
-    const std::vector<nanovdb::Coord> &bboxMins =
-        ijk_min.value(mImpl->batchSize(), false, "ijk_min");
-    const std::vector<nanovdb::Coord> &bboxMaxs =
-        ijk_max.value(mImpl->batchSize(), false, "ijk_max");
-    result.mImpl = mImpl->clip(bboxMins, bboxMaxs);
+    result.mImpl = mImpl->clip(ijk_min, ijk_max);
     return result;
 }
 
 std::pair<JaggedTensor, GridBatch>
 GridBatch::clip(const JaggedTensor &features,
-                const Vec3iBatch &ijk_min,
-                const Vec3iBatch &ijk_max) const {
+                const std::vector<nanovdb::Coord> &ijk_min,
+                const std::vector<nanovdb::Coord> &ijk_max) const {
     // TODO: ldim checks live here because the underlying ops accept plain torch::Tensor (via
     // .jdata()). When these member functions are removed in favor of free-function ops, move checks
     // to Python.
@@ -703,13 +685,8 @@ GridBatch::clip(const JaggedTensor &features,
         features.ldim(),
         " list dimensions");
 
-    const std::vector<nanovdb::Coord> &bboxMins =
-        ijk_min.value(mImpl->batchSize(), false, "ijk_min");
-    const std::vector<nanovdb::Coord> &bboxMaxs =
-        ijk_max.value(mImpl->batchSize(), false, "ijk_max");
-
     auto [clippedFeatures, clippedGridPtr] =
-        mImpl->clipFeaturesWithMask(features, bboxMins, bboxMaxs);
+        mImpl->clipFeaturesWithMask(features, ijk_min, ijk_max);
 
     GridBatch clippedGrid;
     clippedGrid.mImpl = clippedGridPtr;
@@ -778,16 +755,16 @@ GridBatch::integrate_tsdf(const double truncationMargin,
 }
 
 GridBatch
-GridBatch::conv_grid(Vec3iOrScalar kernel_size, Vec3iOrScalar stride) const {
+GridBatch::conv_grid(nanovdb::Coord kernel_size, nanovdb::Coord stride) const {
     GridBatch result;
-    result.mImpl = mImpl->convolutionOutput(kernel_size.value(), stride.value());
+    result.mImpl = mImpl->convolutionOutput(kernel_size, stride);
     return result;
 }
 
 GridBatch
-GridBatch::conv_transpose_grid(Vec3iOrScalar kernel_size, Vec3iOrScalar stride) const {
+GridBatch::conv_transpose_grid(nanovdb::Coord kernel_size, nanovdb::Coord stride) const {
     GridBatch result;
-    result.mImpl = mImpl->convolutionTransposeOutput(kernel_size.value(), stride.value());
+    result.mImpl = mImpl->convolutionTransposeOutput(kernel_size, stride);
     return result;
 }
 
@@ -991,8 +968,8 @@ GridBatch::points_in_grid(const JaggedTensor &points) const {
 
 JaggedTensor
 GridBatch::cubes_intersect_grid(const JaggedTensor &cube_centers,
-                                const Vec3dOrScalar &cube_min,
-                                const Vec3dOrScalar &cube_max) const {
+                                const nanovdb::Vec3d &cube_min,
+                                const nanovdb::Vec3d &cube_max) const {
     // TODO: ldim checks live here because the underlying ops accept plain torch::Tensor (via
     // .jdata()). When these member functions are removed in favor of free-function ops, move checks
     // to Python.
@@ -1007,8 +984,8 @@ GridBatch::cubes_intersect_grid(const JaggedTensor &cube_centers,
 
 JaggedTensor
 GridBatch::cubes_in_grid(const JaggedTensor &cube_centers,
-                         const Vec3dOrScalar &cube_min,
-                         const Vec3dOrScalar &cube_max) const {
+                         const nanovdb::Vec3d &cube_min,
+                         const nanovdb::Vec3d &cube_max) const {
     // TODO: ldim checks live here because the underlying ops accept plain torch::Tensor (via
     // .jdata()). When these member functions are removed in favor of free-function ops, move checks
     // to Python.
@@ -1184,19 +1161,19 @@ GridBatch::concatenate(const std::vector<GridBatch> &vec) {
 detail::ops::GatherScatterDefaultTopology
 GridBatch::buildGatherScatterDefaultTopology(const GridBatch &feature_grid,
                                              const GridBatch &output_grid,
-                                             const Vec3iOrScalar &kernelSize,
-                                             const Vec3iOrScalar &stride) {
+                                             const nanovdb::Coord &kernelSize,
+                                             const nanovdb::Coord &stride) {
     return detail::ops::gatherScatterDefaultSparseConvTopology(
-        *feature_grid.mImpl, *output_grid.mImpl, kernelSize.value(), stride.value());
+        *feature_grid.mImpl, *output_grid.mImpl, kernelSize, stride);
 }
 
 detail::ops::GatherScatterDefaultTopology
 GridBatch::buildGatherScatterDefaultTransposeTopology(const GridBatch &feature_grid,
                                                       const GridBatch &output_grid,
-                                                      const Vec3iOrScalar &kernelSize,
-                                                      const Vec3iOrScalar &stride) {
+                                                      const nanovdb::Coord &kernelSize,
+                                                      const nanovdb::Coord &stride) {
     return detail::ops::gatherScatterDefaultSparseConvTransposeTopology(
-        *feature_grid.mImpl, *output_grid.mImpl, kernelSize.value(), stride.value());
+        *feature_grid.mImpl, *output_grid.mImpl, kernelSize, stride);
 }
 
 torch::Tensor

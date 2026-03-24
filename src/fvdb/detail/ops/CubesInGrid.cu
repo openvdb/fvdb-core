@@ -1,7 +1,6 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#include <fvdb/Types.h>
 #include <fvdb/detail/ops/CubesInGrid.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
@@ -68,8 +67,8 @@ template <torch::DeviceType DeviceTag, bool IsTouch>
 JaggedTensor
 CubesInGrid(const GridBatchImpl &batchHdl,
             const JaggedTensor &cubeCenters,
-            const Vec3dOrScalar &padMinTensor,
-            const Vec3dOrScalar &padMaxTensor) {
+            const nanovdb::Vec3d &padMin,
+            const nanovdb::Vec3d &padMax) {
     batchHdl.checkNonEmptyGrid();
     batchHdl.checkDevice(cubeCenters);
     TORCH_CHECK_TYPE(cubeCenters.is_floating_point(),
@@ -81,9 +80,6 @@ CubesInGrid(const GridBatchImpl &batchHdl,
     TORCH_CHECK(cubeCenters.rsize(1) == 3,
                 "Expected 3 dimensional cubeCenters but got cubeCenters.shape[1] = " +
                     std::to_string(cubeCenters.rsize(1)));
-
-    const nanovdb::Vec3d padMin = padMinTensor.value();
-    const nanovdb::Vec3d padMax = padMaxTensor.value();
 
     auto opts             = torch::TensorOptions().dtype(torch::kBool).device(cubeCenters.device());
     torch::Tensor outMask = torch::empty({cubeCenters.rsize(0)}, opts);
@@ -127,8 +123,8 @@ CubesInGrid(const GridBatchImpl &batchHdl,
 JaggedTensor
 cubesInGrid(const GridBatchImpl &batchHdl,
             const JaggedTensor &cubeCenters,
-            const Vec3dOrScalar &padMin,
-            const Vec3dOrScalar &padMax) {
+            const nanovdb::Vec3d &padMin,
+            const nanovdb::Vec3d &padMax) {
     TORCH_CHECK_VALUE(
         cubeCenters.ldim() == 1,
         "Expected cube_centers to have 1 list dimension, i.e. be a single list of coordinate values, but got",
@@ -142,8 +138,8 @@ cubesInGrid(const GridBatchImpl &batchHdl,
 JaggedTensor
 cubesIntersectGrid(const GridBatchImpl &batchHdl,
                    const JaggedTensor &cubeCenters,
-                   const Vec3dOrScalar &padMin,
-                   const Vec3dOrScalar &padMax) {
+                   const nanovdb::Vec3d &padMin,
+                   const nanovdb::Vec3d &padMax) {
     TORCH_CHECK_VALUE(
         cubeCenters.ldim() == 1,
         "Expected cube_centers to have 1 list dimension, i.e. be a single list of coordinate values, but got",

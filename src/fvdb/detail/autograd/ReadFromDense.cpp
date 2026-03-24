@@ -16,10 +16,8 @@ ReadFromDenseCminor::variable_list
 ReadFromDenseCminor::forward(AutogradContext *ctx,
                              c10::intrusive_ptr<GridBatchImpl> grid,
                              Variable denseData,
-                             const Vec3iBatch &denseOrigins) {
-    torch::Tensor denseOriginsI32 =
-        denseOrigins.tensorValue(grid->batchSize(), false /*onlyPositive*/, "dense_origins")
-            .to(denseData.device());
+                             const torch::Tensor &denseOrigins) {
+    torch::Tensor denseOriginsI32 = denseOrigins.to(torch::kInt32).to(denseData.device());
 
     // [N, -1]
     torch::Tensor ret = ops::readFromDenseCminor(*grid, denseData, denseOriginsI32);
@@ -65,10 +63,8 @@ ReadFromDenseCmajor::variable_list
 ReadFromDenseCmajor::forward(AutogradContext *ctx,
                              c10::intrusive_ptr<GridBatchImpl> grid,
                              Variable denseData,
-                             const Vec3iBatch &denseOrigins) {
-    torch::Tensor denseOriginsI32 =
-        denseOrigins.tensorValue(grid->batchSize(), false /*onlyPositive*/, "dense_origins")
-            .to(denseData.device());
+                             const torch::Tensor &denseOrigins) {
+    torch::Tensor denseOriginsI32 = denseOrigins.to(torch::kInt32).to(denseData.device());
 
     // [N, -1]
     torch::Tensor ret = ops::readFromDenseCmajor(*grid, denseData, denseOriginsI32);

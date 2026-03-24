@@ -5,7 +5,6 @@
 #define FVDB_DETAIL_IO_SAVENANOVDB_H
 
 #include <fvdb/GridBatch.h>
-#include <fvdb/Types.h>
 
 #include <tuple>
 

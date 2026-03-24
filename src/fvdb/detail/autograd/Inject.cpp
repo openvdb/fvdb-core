@@ -3,7 +3,6 @@
 //
 
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/Types.h>
 #include <fvdb/detail/GridBatchImpl.h>
 #include <fvdb/detail/autograd/Inject.h>
 #include <fvdb/detail/ops/Inject.h>

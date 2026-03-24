@@ -4,7 +4,6 @@
 #ifndef FVDB_DETAIL_AUTOGRAD_READFROMDENSE_H
 #define FVDB_DETAIL_AUTOGRAD_READFROMDENSE_H
 
-#include <fvdb/Types.h>
 #include <fvdb/detail/GridBatchImpl.h>
 
 #include <torch/autograd.h>
@@ -21,7 +20,7 @@ struct ReadFromDenseCminor : public torch::autograd::Function<ReadFromDenseCmino
     static variable_list forward(AutogradContext *ctx,
                                  c10::intrusive_ptr<GridBatchImpl> grid,
                                  Variable denseData,
-                                 const Vec3iBatch &denseOrigins);
+                                 const torch::Tensor &denseOrigins);
 
     static variable_list backward(AutogradContext *ctx, variable_list grad_output);
 };
@@ -34,7 +33,7 @@ struct ReadFromDenseCmajor : public torch::autograd::Function<ReadFromDenseCmajo
     static variable_list forward(AutogradContext *ctx,
                                  c10::intrusive_ptr<GridBatchImpl> grid,
                                  Variable denseData,
-                                 const Vec3iBatch &denseOrigins);
+                                 const torch::Tensor &denseOrigins);
 
     static variable_list backward(AutogradContext *ctx, variable_list grad_output);
 };

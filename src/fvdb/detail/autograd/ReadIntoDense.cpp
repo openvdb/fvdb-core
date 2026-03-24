@@ -16,15 +16,13 @@ ReadIntoDenseCminor::variable_list
 ReadIntoDenseCminor::forward(AutogradContext *ctx,
                              c10::intrusive_ptr<GridBatchImpl> grid,
                              Variable sparseData,
-                             const std::optional<Vec3iBatch> &maybeMinCoord,
-                             const std::optional<Vec3i> &maybeGridSize) {
+                             const std::optional<torch::Tensor> &maybeMinCoord,
+                             const std::optional<nanovdb::Coord> &maybeGridSize) {
     nanovdb::CoordBBox gridbb = grid->totalBBox();
 
     torch::Tensor denseOrigins;
     if (maybeMinCoord.has_value()) {
-        denseOrigins = maybeMinCoord.value()
-                           .tensorValue(grid->batchSize(), false /*onlyPositive*/, "min_coord")
-                           .to(sparseData.device());
+        denseOrigins = maybeMinCoord.value().to(torch::kInt32).to(sparseData.device());
     } else {
         denseOrigins = coordToTensor(gridbb.min())
                            .to(torch::kInt32)
@@ -35,7 +33,7 @@ ReadIntoDenseCminor::forward(AutogradContext *ctx,
 
     nanovdb::Coord gridSize = gridbb.dim();
     if (maybeGridSize.has_value()) {
-        gridSize = maybeGridSize.value().value();
+        gridSize = maybeGridSize.value();
     }
 
     // [B, X, Y, Z, -1]
@@ -79,15 +77,13 @@ ReadIntoDenseCmajor::variable_list
 ReadIntoDenseCmajor::forward(AutogradContext *ctx,
                              c10::intrusive_ptr<GridBatchImpl> grid,
                              Variable sparseData,
-                             const std::optional<Vec3iBatch> &maybeMinCoord,
-                             const std::optional<Vec3i> &maybeGridSize) {
+                             const std::optional<torch::Tensor> &maybeMinCoord,
+                             const std::optional<nanovdb::Coord> &maybeGridSize) {
     nanovdb::CoordBBox gridbb = grid->totalBBox();
 
     torch::Tensor denseOrigins;
     if (maybeMinCoord.has_value()) {
-        denseOrigins = maybeMinCoord.value()
-                           .tensorValue(grid->batchSize(), false /*onlyPositive*/, "min_coord")
-                           .to(sparseData.device());
+        denseOrigins = maybeMinCoord.value().to(torch::kInt32).to(sparseData.device());
     } else {
         denseOrigins = coordToTensor(gridbb.min())
                            .to(torch::kInt32)
@@ -98,7 +94,7 @@ ReadIntoDenseCmajor::forward(AutogradContext *ctx,
 
     nanovdb::Coord gridSize = gridbb.dim();
     if (maybeGridSize.has_value()) {
-        gridSize = maybeGridSize.value().value();
+        gridSize = maybeGridSize.value();
     }
 
     // [B, -1, X, Y, Z]

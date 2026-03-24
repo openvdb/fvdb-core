@@ -6,7 +6,8 @@
 
 #include <fvdb/GridBatch.h>
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/Types.h>
+
+#include <vector>
 
 namespace fvdb {
 
@@ -107,8 +108,8 @@ JaggedTensor jempty(const std::vector<std::vector<int64_t>> &lsizes,
 ///                for each grid in the batch, or one origin for all grids
 /// @return A GridBatch containing the created grid batch
 GridBatch gridbatch_from_points(const JaggedTensor &points,
-                                const Vec3dBatchOrScalar &voxel_sizes = 1.0,
-                                const Vec3dBatch &origins             = torch::zeros({3}));
+                                const std::vector<nanovdb::Vec3d> &voxel_sizes,
+                                const std::vector<nanovdb::Vec3d> &origins);
 
 /// @brief Return a grid batch with the eight nearest voxels to each point in an input set of point
 /// clouds
@@ -119,8 +120,8 @@ GridBatch gridbatch_from_points(const JaggedTensor &points,
 /// 0, 0] voxel for each grid in the batch, or one origin for all grids
 /// @return A GridBatch containing the created grid batch
 GridBatch gridbatch_from_nearest_voxels_to_points(const JaggedTensor &points,
-                                                  const Vec3dBatchOrScalar &voxel_sizes = 1.0,
-                                                  const Vec3dBatch &origins = torch::zeros({3}));
+                                                  const std::vector<nanovdb::Vec3d> &voxel_sizes,
+                                                  const std::vector<nanovdb::Vec3d> &origins);
 
 /// @brief Return a grid batch with the specified voxel coordinates
 /// @param coords A JaggedTensor of shape [B, -1, 3] specifying the coordinates of each voxel to
@@ -132,8 +133,8 @@ GridBatch gridbatch_from_nearest_voxels_to_points(const JaggedTensor &points,
 ///                for each grid in the batch, or one origin for all grids
 /// @return A GridBatch containing the created grid batch
 GridBatch gridbatch_from_ijk(const JaggedTensor &ijk,
-                             const Vec3dBatchOrScalar &voxel_sizes = 1.0,
-                             const Vec3dBatch &origins             = torch::zeros({3}));
+                             const std::vector<nanovdb::Vec3d> &voxel_sizes,
+                             const std::vector<nanovdb::Vec3d> &origins);
 
 /// @brief Return a grid batch densely from ijkMin to ijkMin + size
 /// @param numGrids The number of grids to create in the batch
@@ -150,10 +151,10 @@ GridBatch gridbatch_from_ijk(const JaggedTensor &ijk,
 /// @param device Which device to build the grid batch on
 /// @return A GridBatch containing a batch of dense grids
 GridBatch gridbatch_from_dense(const int64_t numGrids,
-                               const Vec3i &denseDims,
-                               const Vec3i &ijkMin,
-                               const Vec3dBatchOrScalar &voxel_sizes = 1.0,
-                               const Vec3dBatch &origins             = torch::zeros({3}),
+                               const nanovdb::Coord &denseDims,
+                               const nanovdb::Coord &ijkMin,
+                               const std::vector<nanovdb::Vec3d> &voxel_sizes,
+                               const std::vector<nanovdb::Vec3d> &origins,
                                std::optional<torch::Tensor> mask     = std::nullopt,
                                const torch::Device &device           = torch::kCPU);
 
@@ -169,8 +170,8 @@ GridBatch gridbatch_from_dense(const int64_t numGrids,
 /// @return A GridBatch containing the created grid batch
 GridBatch gridbatch_from_mesh(const JaggedTensor &vertices,
                               const JaggedTensor &faces,
-                              const Vec3dBatchOrScalar &voxel_sizes,
-                              const Vec3dBatch &origins);
+                              const std::vector<nanovdb::Vec3d> &voxel_sizes,
+                              const std::vector<nanovdb::Vec3d> &origins);
 
 /// @brief Return a grid batch, tensors of data, and names from a nanovdb grid handle
 /// @param handle nanovdb grid handle

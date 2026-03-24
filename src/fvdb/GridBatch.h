@@ -5,7 +5,6 @@
 #define FVDB_GRIDBATCH_H
 
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/Types.h>
 #include <fvdb/detail/GridBatchImpl.h>
 #include <fvdb/detail/ops/convolution/GatherScatterDefault.h>
 #include <fvdb/detail/ops/convolution/PredGatherIGemm.h>
@@ -134,11 +133,11 @@ struct GridBatch : torch::CustomClassHolder {
 
     /// @brief Set the voxel size of all grids indexed by this batch to the specified value
     /// @param voxel_size A 3D (shape [3,]) tensor specifying the voxel size to set for each grid
-    void set_global_voxel_size(const Vec3dOrScalar &voxel_size);
+    void set_global_voxel_size(const nanovdb::Vec3d &voxel_size);
 
     /// @brief Set the voxel origin of all grids indexed by this batch to the specified value
     /// @param origin A 3D (shape [3,]) tensor specifying the voxel origin to set for each grid
-    void set_global_origin(const Vec3d &origin);
+    void set_global_origin(const nanovdb::Vec3d &origin);
 
     /// @brief Get the device on which this grid is stored
     /// @return The device on which this grid is stored
@@ -215,9 +214,9 @@ struct GridBatch : torch::CustomClassHolder {
     /// *] of downsampled data
     ///         and coarseGrid is a GridBatch representing the downsampled grid batch
     std::pair<JaggedTensor, GridBatch>
-    max_pool(Vec3iOrScalar pool_factor,
+    max_pool(nanovdb::Coord pool_factor,
              const JaggedTensor &data,
-             Vec3iOrScalar stride                 = 0,
+             nanovdb::Coord stride                = 0,
              std::optional<GridBatch> coarse_grid = std::nullopt) const;
 
     /// @brief Downsample this batch of grids using average pooling
@@ -234,9 +233,9 @@ struct GridBatch : torch::CustomClassHolder {
     /// *] of downsampled data
     ///         and coarseGrid is a GridBatch representing the downsampled grid batch
     std::pair<JaggedTensor, GridBatch>
-    avg_pool(Vec3iOrScalar pool_factor,
+    avg_pool(nanovdb::Coord pool_factor,
              const JaggedTensor &data,
-             Vec3iOrScalar stride                 = 0,
+             nanovdb::Coord stride                = 0,
              std::optional<GridBatch> coarse_grid = std::nullopt) const;
 
     /// @brief Refine this batch of grids using nearest neighbor interpolation
@@ -252,7 +251,7 @@ struct GridBatch : torch::CustomClassHolder {
     /// upsampled data and
     ///         fineGrid is a GridBatch representing the upsampled grid batch
     std::pair<JaggedTensor, GridBatch>
-    refine(Vec3iOrScalar subdiv_factor,
+    refine(nanovdb::Coord subdiv_factor,
            const JaggedTensor &data,
            const std::optional<JaggedTensor> mask = std::nullopt,
            std::optional<GridBatch> fine_grid     = std::nullopt) const;
@@ -265,7 +264,7 @@ struct GridBatch : torch::CustomClassHolder {
     /// coordinates
     JaggedTensor
     read_from_dense_cminor(const torch::Tensor &dense_data,
-                           const Vec3iBatch &dense_origins = torch::zeros(3, torch::kInt32)) const;
+                           const torch::Tensor &dense_origins = torch::zeros(3, torch::kInt32)) const;
 
     /// @brief Read the values from a dense tensor of the voxels at the specified coordinates
     /// @param dense_data A dense tensor of shape [B, C, X, Y, Z]
@@ -275,7 +274,7 @@ struct GridBatch : torch::CustomClassHolder {
     /// coordinates
     JaggedTensor
     read_from_dense_cmajor(const torch::Tensor &dense_data,
-                           const Vec3iBatch &dense_origins = torch::zeros(3, torch::kInt32)) const;
+                           const torch::Tensor &dense_origins = torch::zeros(3, torch::kInt32)) const;
 
     /// @brief Read the values from a JaggedTensor indexed by this batch into a dense tensor
     /// @param sparse_data A JaggedTensor of shape [B, -1, *] containing one value per voxel in the
@@ -288,8 +287,8 @@ struct GridBatch : torch::CustomClassHolder {
     /// @return A dense tensor of shape [B, X, Y, Z, C] containing the values at the specified
     /// coordinates (and zero elsewhere)
     torch::Tensor write_to_dense_cminor(const JaggedTensor &sparse_data,
-                                        const std::optional<Vec3iBatch> &min_coord = std::nullopt,
-                                        const std::optional<Vec3i> &grid_size = std::nullopt) const;
+                                        const std::optional<torch::Tensor> &min_coord = std::nullopt,
+                                        const std::optional<nanovdb::Coord> &grid_size = std::nullopt) const;
 
     /// @brief Read the values from a JaggedTensor indexed by this batch into a dense tensor
     /// @param sparse_data A JaggedTensor of shape [B, -1, *] containing one value per voxel in the
@@ -302,8 +301,8 @@ struct GridBatch : torch::CustomClassHolder {
     /// @return A dense tensor of shape [B, C, X, Y, Z] containing the values at the specified
     /// coordinates (and zero elsewhere)
     torch::Tensor write_to_dense_cmajor(const JaggedTensor &sparse_data,
-                                        const std::optional<Vec3iBatch> &min_coord = std::nullopt,
-                                        const std::optional<Vec3i> &grid_size = std::nullopt) const;
+                                        const std::optional<torch::Tensor> &min_coord = std::nullopt,
+                                        const std::optional<nanovdb::Coord> &grid_size = std::nullopt) const;
 
     /// @brief Convert grid coordinates to world coordinates
     /// @param ijk A JaggedTensor of grid coordinates with shape [B, -1, 3] (one point set per grid
@@ -424,8 +423,8 @@ struct GridBatch : torch::CustomClassHolder {
     ///         where the [bi, i]^th entry is true if the cube with extent (min, max) + points[bi,
     ///         i] intersects the bi^th grid in the batch
     JaggedTensor cubes_intersect_grid(const JaggedTensor &cube_centers,
-                                      const Vec3dOrScalar &cube_min = 0.0,
-                                      const Vec3dOrScalar &cube_max = 0.0) const;
+                                      const nanovdb::Vec3d &cube_min,
+                                      const nanovdb::Vec3d &cube_max) const;
 
     /// @brief Return whether the cube with corners at cube_min and cube_max centered at each point
     /// in world space is fully contained in the grid batch's stencil
@@ -437,8 +436,8 @@ struct GridBatch : torch::CustomClassHolder {
     ///         where the [bi, i]^th entry is true if the cube with extent (min, max) + points[bi,
     ///         i] lies inside the bi^th grid in the batch
     JaggedTensor cubes_in_grid(const JaggedTensor &cube_centers,
-                               const Vec3dOrScalar &cube_min = 0.0,
-                               const Vec3dOrScalar &cube_max = 0.0) const;
+                               const nanovdb::Vec3d &cube_min,
+                               const nanovdb::Vec3d &cube_max) const;
 
     /// @brief Return whether each coordinate is in the grid batch or not
     /// @param ijk A JaggedTensor of ijk coordinates with lshape [N_0, ..., N_B] and eshape (3,)
@@ -611,7 +610,7 @@ struct GridBatch : torch::CustomClassHolder {
     /// @param coarsening_factor The factor by which to coarsen the grid batch (i.e (2, 2, 2)
     /// coarses by a factor of 2x2x2)
     /// @return A GridBatch representing the coarsened version of this batch.
-    GridBatch coarsened_grid(Vec3iOrScalar coarsening_factor) const;
+    GridBatch coarsened_grid(nanovdb::Coord coarsening_factor) const;
 
     /// @brief Refine the grid batch into a finer grid batch.
     ///        Each voxel [i, j, k] in this grid batch maps to voxels [i * subdivFactor, j *
@@ -620,26 +619,26 @@ struct GridBatch : torch::CustomClassHolder {
     /// @param mask An optional JaggedTensor of shape [B, -1] of boolean values indicating which
     /// voxels to refine
     /// @return A GridBatch representing the refined version of this batch.
-    GridBatch refined_grid(Vec3iOrScalar subdiv_factor,
+    GridBatch refined_grid(nanovdb::Coord subdiv_factor,
                            const std::optional<JaggedTensor> mask = std::nullopt) const;
 
     /// @brief Return a batch of grids representing the clipped version of this batch of grids.
     /// @param ijk_min Index space minimum bound of the clip region.
     /// @param ijk_max Index space maximum bound of the clip region.
     /// @return A GridBatch representing the clipped version of this batch of grids.
-    GridBatch clipped_grid(const Vec3iBatch &ijk_min, const Vec3iBatch &ijk_max) const;
+    GridBatch clipped_grid(const std::vector<nanovdb::Coord> &ijk_min, const std::vector<nanovdb::Coord> &ijk_max) const;
 
     /// @brief Generate the grid that is affected by the convolution operator.
     /// @param kernel_size The kernel size of convolution
     /// @param stride The stride of the convolution
     /// @return A GridBatch representing the convolved grid.
-    GridBatch conv_grid(Vec3iOrScalar kernel_size, Vec3iOrScalar stride) const;
+    GridBatch conv_grid(nanovdb::Coord kernel_size, nanovdb::Coord stride) const;
 
     /// @brief Return a batch of grids representing the output of a transposed convolution.
     /// @param kernel_size The kernel size of convolution
     /// @param stride The stride of the convolution
     /// @return A GridBatch representing the transposed convolved grid.
-    GridBatch conv_transpose_grid(Vec3iOrScalar kernel_size, Vec3iOrScalar stride) const;
+    GridBatch conv_transpose_grid(nanovdb::Coord kernel_size, nanovdb::Coord stride) const;
 
     /// @brief Return a batch of grids representing the dilated version of this batch of grids.
     /// @param dilation The dilation factor of the grid batch
@@ -674,7 +673,7 @@ struct GridBatch : torch::CustomClassHolder {
     /// shape [B, -1, *] and
     ///         clipped_grid is a GridBatch representing the clipped version of this batch of grids.
     std::pair<JaggedTensor, GridBatch>
-    clip(const JaggedTensor &features, const Vec3iBatch &ijk_min, const Vec3iBatch &ijk_max) const;
+    clip(const JaggedTensor &features, const std::vector<nanovdb::Coord> &ijk_min, const std::vector<nanovdb::Coord> &ijk_max) const;
 
     /// @brief Extract 0-isosurface from an implicit field.
     /// @param field implicit value stored on each voxel center (or voxel corner on a dual grid)
@@ -738,8 +737,8 @@ struct GridBatch : torch::CustomClassHolder {
     ///                for each grid in the batch, or one origin for all grids
     void set_from_mesh(const JaggedTensor &vertices,
                        const JaggedTensor &faces,
-                       const Vec3dBatchOrScalar &voxel_sizes = 1.0,
-                       const Vec3dBatch &origins             = torch::zeros(3, torch::kInt32));
+                       const std::vector<nanovdb::Vec3d> &voxel_sizes,
+                       const std::vector<nanovdb::Vec3d> &origins);
 
     /// @brief Populate the grid batch with voxels which contain a point in an input set of point
     /// clouds
@@ -751,8 +750,8 @@ struct GridBatch : torch::CustomClassHolder {
     /// [0, 0, 0] voxel
     ///                for each grid in the batch, or one origin for all grids
     void set_from_points(const JaggedTensor &points,
-                         const Vec3dBatchOrScalar &voxel_sizes = 1.0,
-                         const Vec3dBatch &origins             = torch::zeros(3, torch::kInt32));
+                         const std::vector<nanovdb::Vec3d> &voxel_sizes,
+                         const std::vector<nanovdb::Vec3d> &origins);
 
     /// @brief Populate the grid batch with the eight nearest voxels to each point in an input set
     /// of point clouds
@@ -764,9 +763,8 @@ struct GridBatch : torch::CustomClassHolder {
     /// [0, 0, 0] voxel
     ///                for each grid in the batch, or one origin for all grids
     void set_from_nearest_voxels_to_points(const JaggedTensor &points,
-                                           const Vec3dBatchOrScalar &voxel_sizes = 1.0,
-                                           const Vec3dBatch &origins             = torch::zeros(3,
-                                                                                    torch::kInt32));
+                                           const std::vector<nanovdb::Vec3d> &voxel_sizes,
+                                           const std::vector<nanovdb::Vec3d> &origins);
 
     /// @brief Populate the grid batch with the specified voxel coordinates
     /// @param ijk A JaggedTensor of shape [B, -1, 3] specifying the coordinates of each voxel to
@@ -777,8 +775,8 @@ struct GridBatch : torch::CustomClassHolder {
     /// [0, 0, 0] voxel
     ///                for each grid in the batch, or one origin for all grids
     void set_from_ijk(const JaggedTensor &ijk,
-                      const Vec3dBatchOrScalar &voxel_sizes = 1.0,
-                      const Vec3dBatch &origins             = torch::zeros(3, torch::kInt32));
+                      const std::vector<nanovdb::Vec3d> &voxel_sizes,
+                      const std::vector<nanovdb::Vec3d> &origins);
 
     /// @brief Populate the grid batch densely from ijk_min to ijk_min + size
     /// @param num_grids The number of grids to create in the batch
@@ -793,11 +791,11 @@ struct GridBatch : torch::CustomClassHolder {
     /// dense grid.
     ///             Note that the same mask will be re-used for all the grids in the batch.
     void set_from_dense_grid(const int64_t num_grids,
-                             const Vec3i &dense_dims,
-                             const Vec3i &ijk_min                  = torch::zeros(3, torch::kInt32),
-                             const Vec3dBatchOrScalar &voxel_sizes = 1.0,
-                             const Vec3dBatch &origins             = torch::zeros(3),
-                             std::optional<torch::Tensor> mask     = std::nullopt);
+                             const nanovdb::Coord &dense_dims,
+                             const nanovdb::Coord &ijk_min,
+                             const std::vector<nanovdb::Vec3d> &voxel_sizes,
+                             const std::vector<nanovdb::Vec3d> &origins,
+                             std::optional<torch::Tensor> mask = std::nullopt);
 
     /// @brief Serialize this grid batch to a torch tensor of bytes (dtype = int8)
     /// @return A serialized grid batch encoded as a torch::Tensor of type int8
@@ -827,8 +825,8 @@ struct GridBatch : torch::CustomClassHolder {
     static detail::ops::GatherScatterDefaultTopology
     buildGatherScatterDefaultTopology(const GridBatch &feature_grid,
                                       const GridBatch &output_grid,
-                                      const Vec3iOrScalar &kernelSize,
-                                      const Vec3iOrScalar &stride);
+                                      const nanovdb::Coord &kernelSize,
+                                      const nanovdb::Coord &stride);
 
     /// @brief Build the transposed compacted CSR topology for gather-scatter convolution.
     /// @param feature_grid Grid batch containing the input feature voxels.
@@ -839,8 +837,8 @@ struct GridBatch : torch::CustomClassHolder {
     static detail::ops::GatherScatterDefaultTopology
     buildGatherScatterDefaultTransposeTopology(const GridBatch &feature_grid,
                                                const GridBatch &output_grid,
-                                               const Vec3iOrScalar &kernelSize,
-                                               const Vec3iOrScalar &stride);
+                                               const nanovdb::Coord &kernelSize,
+                                               const nanovdb::Coord &stride);
 
     // ---- PredGatherIGemm convolution (CUTLASS IGEMM, SM80+) ----
 
