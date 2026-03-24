@@ -40,19 +40,25 @@ def gh_api(endpoint: str) -> list[dict] | dict:
     return json.loads(result.stdout)
 
 
-def gh_api_paginated(endpoint: str) -> list[dict]:
-    all_items: list[dict] = []
+def gh_api_pages(endpoint: str):
+    """Yield successive pages (lists) from a paginated GitHub API endpoint."""
     sep = "&" if "?" in endpoint else "?"
     page = 1
     while True:
         batch = gh_api(f"{endpoint}{sep}per_page=100&page={page}")
         if not isinstance(batch, list) or not batch:
             break
-        all_items.extend(batch)
+        yield batch
         if len(batch) < 100:
             break
         page += 1
-    return all_items
+
+
+def gh_api_paginated(endpoint: str) -> list[dict]:
+    items: list[dict] = []
+    for batch in gh_api_pages(endpoint):
+        items.extend(batch)
+    return items
 
 
 def fetch_team_members(org: str, team_slug: str) -> set[str]:
@@ -108,8 +114,11 @@ def main() -> None:
             if raw["comments"] == 0:
                 needs_triage = "triage" not in labels
             elif "triage" not in labels:
-                comments = gh_api_paginated(f"repos/{repo}/issues/{number}/comments")
-                has_team_reply = any(c["user"]["login"] in team_members for c in comments)
+                has_team_reply = any(
+                    c["user"]["login"] in team_members
+                    for page in gh_api_pages(f"repos/{repo}/issues/{number}/comments")
+                    for c in page
+                )
                 needs_triage = not has_team_reply
 
             actions = []
