@@ -712,13 +712,23 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
             return std::make_tuple(dLossDSh0Coeffs, dLossDShNCoeffs, dLossDViewDirs);
         }
 
+        std::vector<cudaEvent_t> events(c10::cuda::device_count());
         for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
             C10_CUDA_CHECK(cudaSetDevice(deviceId));
             auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+            C10_CUDA_CHECK(cudaEventCreate(&events[deviceId], cudaEventDisableTiming));
+            C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
+        }
+
+        for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+            C10_CUDA_CHECK(cudaSetDevice(deviceId));
+            auto stream = c10::cuda::getStreamFromPool(false, deviceId);
+            C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
 
             int64_t elementOffset, elementCount;
             std::tie(elementOffset, elementCount) = deviceChunk(N, deviceId);
 
+#if (CUDART_VERSION < 13000)
             nanovdb::util::cuda::memPrefetchAsync(
                 dLossDSh0Coeffs.data_ptr<scalar_t>() + elementOffset * dLossDSh0Coeffs.stride(0),
                 elementCount * dLossDSh0Coeffs.stride(0) * sizeof(scalar_t),
@@ -733,11 +743,49 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
                     deviceId,
                     stream);
             }
+#else
+            std::vector<void *> prefetchPtrs;
+            std::vector<size_t> prefetchSizes;
+            const cudaMemLocation location                 = {cudaMemLocationTypeDevice, deviceId};
+            std::vector<cudaMemLocation> prefetchLocations = {location};
+            std::vector<size_t> prefetchLocationIndices    = {0};
+
+            prefetchPtrs.emplace_back(dLossDSh0Coeffs.data_ptr<scalar_t>() +
+                                      elementOffset * dLossDSh0Coeffs.stride(0));
+            prefetchSizes.emplace_back(elementCount * dLossDSh0Coeffs.stride(0) * sizeof(scalar_t));
+            for (int cameraIndex = 0; cameraIndex < C; ++cameraIndex) {
+                prefetchPtrs.emplace_back(dLossDRenderQuantities.data_ptr<scalar_t>() +
+                                          cameraIndex * dLossDRenderQuantities.stride(0) +
+                                          elementOffset * dLossDRenderQuantities.stride(1));
+                prefetchSizes.emplace_back(elementCount * dLossDRenderQuantities.stride(1) *
+                                           sizeof(scalar_t));
+            }
+
+            C10_CUDA_CHECK(cudaMemPrefetchBatchAsync(prefetchPtrs.data(),
+                                                     prefetchSizes.data(),
+                                                     prefetchPtrs.size(),
+                                                     prefetchLocations.data(),
+                                                     prefetchLocationIndices.data(),
+                                                     prefetchLocations.size(),
+                                                     0,
+                                                     stream));
+#endif
             C10_CUDA_CHECK(cudaMemsetAsync(
                 dLossDSh0Coeffs.data_ptr<scalar_t>() + elementOffset * dLossDSh0Coeffs.stride(0),
                 0,
                 elementCount * dLossDSh0Coeffs.stride(0) * sizeof(scalar_t),
                 stream));
+            C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
+        }
+
+        for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+            C10_CUDA_CHECK(cudaSetDevice(deviceId));
+            auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+            C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
+            C10_CUDA_CHECK(cudaEventDestroy(events[deviceId]));
+
+            int64_t elementOffset, elementCount;
+            std::tie(elementOffset, elementCount) = deviceChunk(N, deviceId);
 
             const auto NUM_BLOCKS = GET_BLOCKS(C * elementCount * D, DEFAULT_BLOCK_DIM);
 
