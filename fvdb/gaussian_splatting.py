@@ -3373,20 +3373,10 @@ class GaussianSplat3d:
 
     @staticmethod
     def _camera_model_from_cpp(camera_model: _C.CameraModel) -> CameraModel:
-        if camera_model == _C.CameraModel.PINHOLE:
-            return CameraModel.PINHOLE
-        elif camera_model == _C.CameraModel.ORTHOGRAPHIC:
-            return CameraModel.ORTHOGRAPHIC
-        elif camera_model == _C.CameraModel.OPENCV_RADTAN_5:
-            return CameraModel.OPENCV_RADTAN_5
-        elif camera_model == _C.CameraModel.OPENCV_RATIONAL_8:
-            return CameraModel.OPENCV_RATIONAL_8
-        elif camera_model == _C.CameraModel.OPENCV_RADTAN_THIN_PRISM_9:
-            return CameraModel.OPENCV_RADTAN_THIN_PRISM_9
-        elif camera_model == _C.CameraModel.OPENCV_THIN_PRISM_12:
-            return CameraModel.OPENCV_THIN_PRISM_12
-        else:
-            raise ValueError(f"Invalid camera model: {camera_model}")
+        try:
+            return CameraModel[camera_model.name]
+        except KeyError as exc:
+            raise ValueError(f"Invalid camera model: {camera_model}") from exc
 
     @staticmethod
     def _camera_model_to_cpp(camera_model: CameraModel) -> _C.CameraModel:
@@ -3396,14 +3386,10 @@ class GaussianSplat3d:
 
     @staticmethod
     def _projection_method_from_cpp(projection_method: _C.ProjectionMethod) -> ProjectionMethod:
-        if projection_method == _C.ProjectionMethod.AUTO:
-            return ProjectionMethod.AUTO
-        elif projection_method == _C.ProjectionMethod.ANALYTIC:
-            return ProjectionMethod.ANALYTIC
-        elif projection_method == _C.ProjectionMethod.UNSCENTED:
-            return ProjectionMethod.UNSCENTED
-        else:
-            raise ValueError(f"Invalid projection method: {projection_method}")
+        try:
+            return ProjectionMethod[projection_method.name]
+        except KeyError as exc:
+            raise ValueError(f"Invalid projection method: {projection_method}") from exc
 
     @staticmethod
     def _projection_method_to_cpp(projection_method: ProjectionMethod) -> _C.ProjectionMethod:
