@@ -189,15 +189,16 @@ projectionBackwardKernel(const int32_t offset,
         }
     }
     // Fused gradient state computation (replaces separate computeGradientState kernel)
-    if (outDLossDMeans2dNormAccum != nullptr) {
+    if (outDLossDMeans2dNormAccum != nullptr && outGradientStepCounts != nullptr) {
         const T dldm2x = dLossDMeans2d[0] * (T(imageWidth) / T(2) * T(C));
         const T dldm2y = dLossDMeans2d[1] * (T(imageHeight) / T(2) * T(C));
         const T norm   = nanovdb::math::Sqrt(dldm2x * dldm2x + dldm2y * dldm2y);
         gpuAtomicAdd(outDLossDMeans2dNormAccum + gId, norm);
         gpuAtomicAdd(outGradientStepCounts + gId, 1);
-        if (outMaxRadiiAccum != nullptr) {
-            atomicMax(outMaxRadiiAccum + gId, radii[idx]);
-        }
+    }
+
+    if (outMaxRadiiAccum != nullptr) {
+        atomicMax(outMaxRadiiAccum + gId, radii[idx]);
     }
 }
 
