@@ -1468,6 +1468,15 @@ class GaussianSplat3d {
                                const fvdb::detail::ops::RenderSettings &settings,
                                const CameraModel cameraModel);
 
+    /// @brief Sparse-project Gaussians with explicit camera-model configuration.
+    /// @param pixelsToRender JaggedTensor of pixel coordinates to render [P1 + P2 + ..., 2]
+    /// @param worldToCameraMatrices [C, 4, 4] Camera-to-world matrices
+    /// @param projectionMatrices [C, 3, 3] Projection matrices
+    /// @param settings Render settings
+    /// @param cameraModel Semantic camera model for projection
+    /// @param projectionMethod Projection implementation selector
+    /// @param distortionCoeffs Optional OpenCV distortion coefficients for distorted cameras
+    /// @return SparseProjectedGaussianSplats containing projected Gaussians and sparse tile data
     SparseProjectedGaussianSplats
     sparseProjectGaussiansForCameraImpl(const JaggedTensor &pixelsToRender,
                                         const torch::Tensor &worldToCameraMatrices,
@@ -1508,6 +1517,9 @@ class GaussianSplat3d {
     /// @param worldToCameraMatrices [C, 4, 4]
     /// @param projectionMatrices [C, 3, 3]
     /// @param settings
+    /// @param cameraModel Semantic camera model for projection
+    /// @param projectionMethod Projection implementation selector
+    /// @param distortionCoeffs Optional OpenCV distortion coefficients for distorted cameras
     /// @return Tuple of (render quantity, alpha value)
     std::tuple<JaggedTensor, JaggedTensor>
     sparseRenderImpl(const JaggedTensor &pixelsToRender,
@@ -1524,6 +1536,9 @@ class GaussianSplat3d {
     /// @param worldToCameraMatrices [C, 4, 4]
     /// @param projectionMatrices [C, 3, 3]
     /// @param settings
+    /// @param cameraModel Semantic camera model for projection
+    /// @param projectionMethod Projection implementation selector
+    /// @param distortionCoeffs Optional OpenCV distortion coefficients for distorted cameras
     /// @return Tuple of two tensors:
     ///     num_contributing_gaussians: A [B, H, W] tensor containing the number of contributing
     ///                                 Gaussians for each pixel for each camera
@@ -1540,6 +1555,9 @@ class GaussianSplat3d {
     /// @param worldToCameraMatrices [C, 4, 4]
     /// @param projectionMatrices [C, 3, 3]
     /// @param settings
+    /// @param cameraModel Semantic camera model for projection
+    /// @param projectionMethod Projection implementation selector
+    /// @param distortionCoeffs Optional OpenCV distortion coefficients for distorted cameras
     /// @return Tuple of two tensors:
     ///     num_contributing_gaussians: A [P1 + P2 + ..., 1] jagged tensor containing the number of
     ///     contributing
@@ -1562,6 +1580,9 @@ class GaussianSplat3d {
     /// @param worldToCameraMatrices [C, 4, 4]
     /// @param projectionMatrices [C, 3, 3]
     /// @param settings
+    /// @param cameraModel Semantic camera model for projection
+    /// @param projectionMethod Projection implementation selector
+    /// @param distortionCoeffs Optional OpenCV distortion coefficients for distorted cameras
     /// @param maybeNumContributingGaussians [C, H, W] tensor containing the number of contributing
     ///                                      Gaussians for each pixel for each camera. If not
     ///                                      provided, ``settings`` must have ``numDepthSamples``
@@ -1596,6 +1617,9 @@ class GaussianSplat3d {
     /// @param worldToCameraMatrices [C, 4, 4]
     /// @param projectionMatrices [C, 3, 3]
     /// @param settings
+    /// @param cameraModel Semantic camera model for projection
+    /// @param projectionMethod Projection implementation selector
+    /// @param distortionCoeffs Optional OpenCV distortion coefficients for distorted cameras
     /// @param maybeNumContributingGaussians [C, H, W] tensor containing the number of contributing
     ///                                      Gaussians for each pixel for each camera. If provided,
     ///                                      the kernel will use the top-k path and ignore this
