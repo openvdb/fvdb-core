@@ -9,6 +9,7 @@
 #include <fvdb/FVDB.h>
 #include <fvdb/detail/utils/nanovdb/TorchNanoConversions.h>
 #include <fvdb/detail/ops/convolution/GatherScatterDefault.h>
+#include <fvdb/detail/ops/convolution/PredGatherIGemm.h>
 
 #include <nanovdb/NanoVDB.h>
 
@@ -464,11 +465,11 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     m.def(
         "gs_build_topology",
-        [](const fvdb::GridBatch &feature_grid,
-           const fvdb::GridBatch &output_grid,
+        [](const fvdb::detail::GridBatchData &feature_grid,
+           const fvdb::detail::GridBatchData &output_grid,
            const torch::Tensor &kernelSize,
            const torch::Tensor &stride) -> GSDTopo {
-            return fvdb::GridBatch::buildGatherScatterDefaultTopology(
+            return fvdb::detail::ops::gatherScatterDefaultSparseConvTopology(
                 feature_grid, output_grid, pyToCoord(kernelSize), pyToCoord(stride));
         },
         "Build the forward gather-scatter default topology.",
@@ -506,11 +507,11 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     m.def(
         "gs_build_transpose_topology",
-        [](const fvdb::GridBatch &feature_grid,
-           const fvdb::GridBatch &output_grid,
+        [](const fvdb::detail::GridBatchData &feature_grid,
+           const fvdb::detail::GridBatchData &output_grid,
            const torch::Tensor &kernelSize,
            const torch::Tensor &stride) -> GSDTopo {
-            return fvdb::GridBatch::buildGatherScatterDefaultTransposeTopology(
+            return fvdb::detail::ops::gatherScatterDefaultSparseConvTransposeTopology(
                 feature_grid, output_grid, pyToCoord(kernelSize), pyToCoord(stride));
         },
         "Build the transposed gather-scatter default topology.",
@@ -553,11 +554,11 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         "pred_gather_igemm_conv",
         [](torch::Tensor features,
            torch::Tensor weights,
-           const fvdb::GridBatch &feature_grid,
-           const fvdb::GridBatch &output_grid,
+           const fvdb::detail::GridBatchData &feature_grid,
+           const fvdb::detail::GridBatchData &output_grid,
            int kernel_size,
            int stride) -> torch::Tensor {
-            return fvdb::GridBatch::predGatherIGemmConv(
+            return fvdb::detail::ops::predGatherIGemmSparseConv(
                 features, weights, feature_grid, output_grid, kernel_size, stride);
         },
         "PredGatherIGemm forward sparse convolution (SM80 CUTLASS IGEMM).",
