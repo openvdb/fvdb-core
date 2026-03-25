@@ -15,6 +15,7 @@ dependencies = [
     "torch>=2.8,<2.11",
     "numpy",
 ]
+optional-dependencies = {viewer = ["nanovdb-editor>=0.0.23,<0.2.0"]}
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
