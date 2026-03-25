@@ -36,7 +36,9 @@ fvdb_core_stable_version = "0.4.2"
 _subs = []
 for _cv in _cuda_versions:
     _tag = f"cu{_cv.replace('.', '')}"
-    _subs.append(f".. |fvdb_core_version_pt{_torch_short}_{_tag}| replace:: {fvdb_core_stable_version}+pt{_torch_short}.{_tag}")
+    _subs.append(
+        f".. |fvdb_core_version_pt{_torch_short}_{_tag}| replace:: {fvdb_core_stable_version}+pt{_torch_short}.{_tag}"
+    )
 _subs.append(f".. |torch_full_version| replace:: {_torch_full}")
 _subs.append(f".. |torch_short| replace:: {_torch_short}")
 _subs.append(f".. |python_range| replace:: {_python_matrix[0]} - {_python_matrix[-1]}")
