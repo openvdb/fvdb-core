@@ -139,7 +139,7 @@ This will:
 5. Push `adopt/v0.4`
 6. Close the draft release PR
 7. Open a new PR from `adopt/v0.4` into `main`
-8. Create a GitHub Release and dispatch the publish workflow from `main`
+8. Create a GitHub Release (triggers the publish workflow)
 
 After the script finishes, **merge the adopt PR** once CI passes. Use a
 merge commit (not squash) to preserve the release branch history on `main`.
@@ -178,8 +178,7 @@ The same scripts handle hotfix releases. Pass a version with PATCH > 0
    ./devtools/finish-release.sh 0.4.1
    ```
    This tags `v0.4.1`, creates `adopt/v0.4.1` with a version fixup, opens
-   a PR into `main`, creates a GitHub Release, and dispatches the publish
-   workflow.
+   a PR into `main`, and creates a GitHub Release.
 
 5. **Merge the adopt PR** once CI passes (use a merge commit, not squash).
 
@@ -201,7 +200,7 @@ During code freeze, additionally:
 | Script | Purpose |
 |--------|---------|
 | `devtools/start-release.sh` | Create release branch (or prepare hotfix), bump versions, open PR |
-| `devtools/finish-release.sh` | Tag release, create adopt branch + PR, create GitHub Release, dispatch publish |
+| `devtools/finish-release.sh` | Tag release, create adopt branch + PR, create GitHub Release |
 | `devtools/test-release-scripts.sh` | End-to-end tests for the release scripts (including hotfix) |
 
 All scripts support `--help`, `--dry-run`, and `--remote <name>` flags.

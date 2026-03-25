@@ -296,13 +296,6 @@ EOF
         --repo "$REPO_SLUG" \
         --title "Release $TAG" \
         --generate-notes
-
-    log "Dispatching publish workflow from main for $TAG..."
-    gh workflow run publish.yml \
-        --repo "$REPO_SLUG" \
-        --ref main \
-        -f branch="$TAG" \
-        -f publish_target=release
 fi
 
 # --- switch back to main ------------------------------------------------------
@@ -312,6 +305,6 @@ run git checkout main
 echo ""
 log "Done. Release $TAG tagged."
 if ! $NO_PR && ! $DRY_RUN; then
-    log "Publish workflow dispatched from main (builds + S3 upload + PyPI sdist)."
+    log "The GitHub Release will trigger the publish workflow."
     log "Merge the adopt PR from $ADOPT_BRANCH once CI passes."
 fi
