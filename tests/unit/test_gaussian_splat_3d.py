@@ -4684,7 +4684,7 @@ class TestGaussianCameraApi(unittest.TestCase):
             ),
         ]
 
-        for camera_model in (CameraModel.ORTHOGRAPHIC, CameraModel.OPENCV_RADTAN_5):
+        for camera_model in (CameraModel.PINHOLE, CameraModel.ORTHOGRAPHIC, CameraModel.OPENCV_RADTAN_5):
             render_args = self._render_args(camera_model, C=2)
             for name, dense_fn, sparse_fn, extra_kwargs in sparse_cases:
                 with self.subTest(camera_model=camera_model, render_mode=name):
