@@ -2,9 +2,12 @@
 
 ## Status
 
-Milestones 1-8.75 are complete. The branch has these commits:
+Milestones 1-8.75 are complete, plus the GridBatchData struct refactor. The branch
+has these commits:
 
 ```
+61cce44 Refactor GridBatchData into frozen struct with single constructor
+b67c353 Add detailed TODO for Milestones 9-12
 31699a5 Milestone 8.75: Rename GridBatchImpl -> GridBatchData, _impl -> data
 cd328a1 Milestone 8.5:  Align C++ op names with Python API
 986c664 Milestones 3-8: Expose raw C++ ops and create fvdb.functional API
@@ -14,14 +17,52 @@ e4f862c Milestone 2:    Remove Vec3*OrScalar type system from C++
 
 ### What exists now
 
-- `GridBatchData` (C++) is the core grid data type, bound to Python with properties,
-  factories, topology methods, and pickle support (`GridBatchDataBinding.cpp`).
-- 39 raw C++ ops are bound as `_fvdb_cpp.<op>` in `GridBatchOps.cpp`.
+- `GridBatchData` (C++) is a frozen struct: all public fields, single constructor
+  that bundles pre-computed fields, no methods beyond const getters. Bound to Python
+  with read-only properties, per-grid queries, and pickle support
+  (`GridBatchDataBinding.cpp`).
+- Construction goes through `makeGridBatchData()` / `makeEmptyGridBatchData()` factory
+  functions in `GridBatchDataFactory.{h,cu}`. These are used by all ops that produce
+  grids.
+- All factory/topology/mutation methods have been removed from GridBatchData and exist
+  only as free-function ops:
+  - Grid construction: `createNanoGridFromIJK`, `buildGridFromPoints`,
+    `buildGridFromMesh`, `buildGridFromNearestVoxelsToPoints`, `createNanoGridFromDense`
+  - Topology: `buildCoarseGridFromFine`, `buildFineGridFromCoarse`, `buildPaddedGrid`,
+    `dilateGrid`, `mergeGrids`, `pruneGrid`, `buildGridForConv`,
+    `buildGridForConvTranspose`
+  - Batch ops: `concatenateGrids`, `makeContiguous`, `cloneGrid`, `indexGrid` (5
+    overloads), `clipGrid`, `clipGridWithMask`, `clipGridFeaturesWithMask`
+  - Serialization: `serializeGrid`, `deserializeGrid`
+- ~65 raw C++ ops are bound as `_fvdb_cpp.<op>` in `GridBatchOps.cpp` (the original
+  39 plus the newly-exposed factory/topology/batch/serialization ops).
 - `fvdb.functional` has 42 public functions with `@overload` for Grid/GridBatch dispatch.
   Currently these delegate to `grid.data.<method>()` (the C++ `GridBatch` wrapper).
 - `Grid.data` and `GridBatch.data` both store a `_fvdb_cpp.GridBatch` (C++ wrapper).
-- C++ op names match the Python API (Milestone 8.5 alignment).
-- Naming is clean: `GridBatchData` in C++, `.data` attribute in Python (Milestone 8.75).
+- All public setters are removed (`setGlobalVoxelSize`, `setGlobalVoxelOrigin`, etc.).
+  `set_global_voxel_size` / `set_global_origin` removed from `GridBatch` API.
+- `nanoGridHandleMut()` is removed. Ops that need non-const device grid pointers
+  access `mGridHdl` directly (public field).
+- No post-construction mutation: `BuildCoarseGridFromFine` and `BuildFineGridFromCoarse`
+  precompute correct voxel sizes/origins; `BuildPaddedGrid` uses low-level metadata API
+  to set transforms before construction.
+- Voxel size computation helpers in `VoxelSizeUtils.h` (`coarseVoxelSize`,
+  `fineVoxelSize`, etc.).
+
+### What changed vs. the original milestone plan
+
+Milestone 12 (enforce immutability) is **already done** -- it was folded into the
+struct refactor. The remaining milestones (9-11) need updating to reflect the new
+reality:
+
+- `_fvdb_cpp.GridBatchData` no longer has factory or topology methods. Those are now
+  free-function ops: e.g. `_fvdb_cpp.create_from_ijk(...)` not
+  `_fvdb_cpp.GridBatchData.create_from_ijk(...)`.
+- Construction uses `_fvdb_cpp.create_from_empty(device, voxel_size, origin)` etc.
+  There is no `GridBatchData(device)` constructor exposed to Python.
+- Topology ops are `_fvdb_cpp.coarsen_grid(grid, factor)` not `grid.coarsen(factor)`.
+- The struct is already fully public and immutable, so no further C++ immutability
+  work is needed.
 
 ---
 
@@ -38,7 +79,7 @@ A Python-only `batched` boolean on `GridBatchData` resolves an ambiguity: when
 
 - Create a Python wrapper class (e.g. `fvdb/grid_data.py`) that holds the C++ `_fvdb_cpp.GridBatchData`
   plus an immutable `batched: bool`.
-- `__getattr__` delegates all C++ properties/methods transparently.
+- `__getattr__` delegates all C++ properties transparently.
 - Batched and unbatched factory methods set the flag at construction time.
 - `Grid` always creates `GridBatchData(cpp, batched=False)`.
 - `GridBatch` always creates `GridBatchData(cpp, batched=True)`.
@@ -102,15 +143,15 @@ def sample_trilinear(grid_data, points, voxel_data):
         return points.jagged_like(result)
 ```
 
-For topology ops, call GridBatchData methods directly:
-- `coarsened_grid` -> `grid_data.coarsen(factor)`, wrap in new `GridBatchData`
-- `refined_grid` -> `grid_data.upsample(factor, mask)`
-- `dual_grid` -> `grid_data.dual(exclude_border)`
-- `dilated_grid` -> `grid_data.dilate(dilation)`
-- `merged_grid` -> `grid_data.merge(other._cpp)`
-- `pruned_grid` -> `grid_data.prune(mask._impl)`
-- `conv_grid` -> `grid_data.convolution_output(ks, st)`
-- `conv_transpose_grid` -> `grid_data.convolution_transpose_output(ks, st)`
+For topology ops, call the free-function ops directly:
+- `coarsened_grid` -> `_fvdb_cpp.coarsen_grid(grid_data._cpp, factor)`, wrap in new `GridBatchData`
+- `refined_grid` -> `_fvdb_cpp.upsample_grid(grid_data._cpp, factor, mask)`
+- `dual_grid` -> `_fvdb_cpp.dual_grid(grid_data._cpp, exclude_border)`
+- `dilated_grid` -> `_fvdb_cpp.dilate_grid(grid_data._cpp, dilation)`
+- `merged_grid` -> `_fvdb_cpp.merge_grids(grid_data._cpp, other._cpp)`
+- `pruned_grid` -> `_fvdb_cpp.prune_grid(grid_data._cpp, mask._impl)`
+- `conv_grid` -> `_fvdb_cpp.conv_grid(grid_data._cpp, ks, st)`
+- `conv_transpose_grid` -> `_fvdb_cpp.conv_transpose_grid(grid_data._cpp, ks, st)`
 
 For non-differentiable ops (queries, rays, meshing), call `_fvdb_cpp.<op>` directly.
 
@@ -138,15 +179,17 @@ Property accessors that read grid metadata stay as direct `self.data.<property>`
 
 1. Change import: `from .grid_data import GridBatchData`
 2. Change `__init__`: stores `GridBatchData` (Python wrapper with `batched` flag)
-3. Update ALL factory classmethods:
-   - `from_ijk` -> use `_fvdb_cpp.GridBatchData.create_from_ijk(...)`, wrap in Python `GridBatchData`
-   - `from_points` -> `_fvdb_cpp.GridBatchData.create_from_points(...)`
-   - `from_mesh` -> `_fvdb_cpp.GridBatchData.create_from_mesh(...)`
-   - `from_nearest_voxels_to_points` -> `_fvdb_cpp.GridBatchData.create_from_nearest_voxels_to_points(...)`
-   - `from_dense` -> `_fvdb_cpp.GridBatchData.create_dense(...)`
-   - `from_zero_voxels` -> `_fvdb_cpp.GridBatchData.create_from_empty(device, voxel_size, origin)`
-   - `from_zero_grids` -> `_fvdb_cpp.GridBatchData(device)` (default constructor)
-   - `from_cat` -> `_fvdb_cpp.GridBatchData.concatenate(impls)`
+3. Update ALL factory classmethods to use the free-function ops:
+   - `from_ijk` -> `_fvdb_cpp.create_from_ijk(ijk, voxel_sizes, origins)`
+   - `from_points` -> `_fvdb_cpp.create_from_points(points, voxel_sizes, origins)`
+   - `from_mesh` -> `_fvdb_cpp.create_from_mesh(vertices, faces, voxel_sizes, origins)`
+   - `from_nearest_voxels_to_points` -> `_fvdb_cpp.create_from_nearest_voxels_to_points(...)`
+   - `from_dense` -> `_fvdb_cpp.create_dense(...)`
+   - `from_zero_voxels` -> `_fvdb_cpp.create_from_empty(device, voxel_size, origin)`
+   - `from_zero_grids` -> NOT directly possible (no default constructor exposed);
+     use `_fvdb_cpp.create_from_empty(device, [1,1,1], [0,0,0])` with zero voxels,
+     or add a dedicated `_fvdb_cpp.create_empty_grid(device)` binding
+   - `from_cat` -> `_fvdb_cpp.concatenate_grids(impls)`
    - `from_nanovdb` -> bridge through `_load()` (may need Milestone 10 for full switch)
 4. Remove `_grid_batch_data` bridge accessor (now redundant)
 5. Remove `_gridbatch` property
@@ -224,28 +267,12 @@ Remove all code that is no longer called. Net deletion: ~3,000+ lines of C++.
 
 ---
 
-## Milestone 12: Enforce Immutability on GridBatchData
+## ~~Milestone 12: Enforce Immutability on GridBatchData~~ (DONE)
 
-Make `GridBatchData` (C++) a truly immutable value type after construction.
-
-### Tasks
-
-- [ ] Delete public mutators from `src/fvdb/detail/GridBatchData.h`:
-  - `setGlobalVoxelSize`
-  - `setGlobalVoxelOrigin`
-  - `setGlobalPrimalTransform`
-  - `setGlobalDualTransform`
-  - `setGlobalVoxelSizeAndOrigin`
-- [ ] Make private (used internally by topology-deriving methods):
-  - `setFineTransformFromCoarseGrid`
-  - `setCoarseTransformFromFineGrid`
-  - `setPrimalTransformFromDualGrid`
-  - `setGrid`
-- [ ] Remove `set_global_origin` and `set_global_voxel_size` from pybind bindings
-      (if still exposed after Milestone 11)
-- [ ] Remove or make private `nanoGridHandleMut()`
-- [ ] Update `fvdb/_fvdb_cpp.pyi`
-- [ ] Build and verify all tests pass
+Completed in commit `61cce44` as part of the frozen-struct refactor. All public
+setters removed, `nanoGridHandleMut()` removed, no post-construction mutation.
+`GridBatchData` is now a frozen struct with a single constructor that bundles
+pre-computed fields.
 
 ---
 
@@ -254,6 +281,6 @@ Make `GridBatchData` (C++) a truly immutable value type after construction.
 - **Milestone 9** is the riskiest: Python autograd must exactly reproduce C++ autograd
   behavior. Test each autograd Function incrementally if possible.
 - **Milestone 10** is moderate risk: IO type changes cascade through several files.
-- **Milestones 11-12** are low risk: deleting dead code, restricting access.
+- **Milestone 11** is low risk: deleting dead code.
 - Milestone 9 is mostly Python-only (except convolution bindings in `Bindings.cpp`).
-  Milestones 10-12 require C++ rebuilds.
+  Milestones 10-11 require C++ rebuilds.
