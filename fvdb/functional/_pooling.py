@@ -131,6 +131,7 @@ def max_pool(
     """
     from ..grid_batch import GridBatch as GB
 
+    is_flat = isinstance(data, torch.Tensor)
     factor_list = to_Vec3i(pool_factor, value_constraint=ValueConstraint.POSITIVE).tolist()
     stride_list = to_Vec3i(stride, value_constraint=ValueConstraint.NON_NEGATIVE).tolist()
 
@@ -140,7 +141,10 @@ def max_pool(
     else:
         coarse_grid_data = _fvdb_cpp.coarsen_grid(grid_data, factor_list)
     result = _MaxPoolFn.apply(data.jdata, grid_data, coarse_grid_data, factor_list, stride_list)
-    return unwrap(result), GB(data=coarse_grid_data)
+    coarse_gb = GB(data=coarse_grid_data)
+    if is_flat:
+        return result, coarse_gb
+    return coarse_gb.jagged_like(result), coarse_gb
 
 
 @overload
@@ -192,6 +196,7 @@ def avg_pool(
     """
     from ..grid_batch import GridBatch as GB
 
+    is_flat = isinstance(data, torch.Tensor)
     factor_list = to_Vec3i(pool_factor, value_constraint=ValueConstraint.POSITIVE).tolist()
     stride_list = to_Vec3i(stride, value_constraint=ValueConstraint.NON_NEGATIVE).tolist()
 
@@ -201,7 +206,10 @@ def avg_pool(
     else:
         coarse_grid_data = _fvdb_cpp.coarsen_grid(grid_data, factor_list)
     result = _AvgPoolFn.apply(data.jdata, grid_data, coarse_grid_data, factor_list, stride_list)
-    return unwrap(result), GB(data=coarse_grid_data)
+    coarse_gb = GB(data=coarse_grid_data)
+    if is_flat:
+        return result, coarse_gb
+    return coarse_gb.jagged_like(result), coarse_gb
 
 
 @overload
@@ -252,6 +260,7 @@ def refine(
     """
     from ..grid_batch import GridBatch as GB
 
+    is_flat = isinstance(data, torch.Tensor)
     factor_list = to_Vec3i(subdiv_factor, value_constraint=ValueConstraint.POSITIVE).tolist()
 
     grid_data, (data,), unwrap = _prepare_args(grid, data)
@@ -265,4 +274,7 @@ def refine(
         else:
             fine_grid_data = _fvdb_cpp.upsample_grid(grid_data, factor_list)
     result = _RefineFn.apply(data.jdata, grid_data, fine_grid_data, factor_list)
-    return unwrap(result), GB(data=fine_grid_data)
+    fine_gb = GB(data=fine_grid_data)
+    if is_flat:
+        return result, fine_gb
+    return fine_gb.jagged_like(result), fine_gb

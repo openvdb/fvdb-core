@@ -107,7 +107,7 @@ def dilated_grid(grid: GridBatch, dilation: int) -> GridBatch:
         A new dilated grid.
     """
     grid_data = _get_grid_data(grid)
-    return _wrap_grid(_fvdb_cpp.dilate_grid(grid_data, [dilation] * 3))
+    return _wrap_grid(_fvdb_cpp.dilate_grid(grid_data, [dilation] * grid_data.grid_count))
 
 
 def merged_grid(grid: GridBatch, other: GridBatch) -> GridBatch:

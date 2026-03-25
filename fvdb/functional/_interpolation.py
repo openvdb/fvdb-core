@@ -301,9 +301,12 @@ def splat_trilinear(
 
     .. seealso:: :func:`splat_bezier`, :func:`sample_trilinear`
     """
+    is_flat = isinstance(points, torch.Tensor)
     grid_data, (points, points_data), unwrap = _prepare_args(grid, points, points_data)
     result = _SplatTrilinearFn.apply(points_data.jdata, grid_data, points._impl)
-    return unwrap(result)
+    if is_flat:
+        return result
+    return grid.jagged_like(result)
 
 
 @overload
@@ -336,6 +339,9 @@ def splat_bezier(
 
     .. seealso:: :func:`splat_trilinear`, :func:`sample_bezier`
     """
+    is_flat = isinstance(points, torch.Tensor)
     grid_data, (points, points_data), unwrap = _prepare_args(grid, points, points_data)
     result = _SplatBezierFn.apply(points_data.jdata, grid_data, points._impl)
-    return unwrap(result)
+    if is_flat:
+        return result
+    return grid.jagged_like(result)

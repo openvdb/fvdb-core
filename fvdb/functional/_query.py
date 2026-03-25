@@ -11,6 +11,13 @@ import torch
 from ..jagged_tensor import JaggedTensor
 from .. import _fvdb_cpp
 from ..types import NumericMaxRank1, to_Vec3fBroadcastable
+
+
+def _to_vec3f_list(v: NumericMaxRank1) -> list[float]:
+    t = to_Vec3fBroadcastable(v)
+    if t.dim() == 0:
+        t = t.expand(3)
+    return t.tolist()
 from ._dispatch import _get_grid_data
 
 if TYPE_CHECKING:
@@ -113,8 +120,8 @@ def cubes_in_grid(
     Returns:
         Boolean mask indicating which cubes are fully contained.
     """
-    cmin = to_Vec3fBroadcastable(cube_min).tolist()
-    cmax = to_Vec3fBroadcastable(cube_max).tolist()
+    cmin = _to_vec3f_list(cube_min)
+    cmax = _to_vec3f_list(cube_max)
     grid_data = _get_grid_data(grid)
     if isinstance(cube_centers, torch.Tensor):
         jt = JaggedTensor(cube_centers)
@@ -158,8 +165,8 @@ def cubes_intersect_grid(
     Returns:
         Boolean mask indicating which cubes intersect the grid.
     """
-    cmin = to_Vec3fBroadcastable(cube_min).tolist()
-    cmax = to_Vec3fBroadcastable(cube_max).tolist()
+    cmin = _to_vec3f_list(cube_min)
+    cmax = _to_vec3f_list(cube_max)
     grid_data = _get_grid_data(grid)
     if isinstance(cube_centers, torch.Tensor):
         jt = JaggedTensor(cube_centers)
