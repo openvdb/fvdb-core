@@ -1,8 +1,6 @@
 name: Publish fVDB Pip Package
 
 on:
-  release:
-    types: [published]
   push:
     branches:
       - 'release/v[0-9]*'
@@ -56,7 +54,7 @@ jobs:
           script: |
             const isPR = context.eventName === 'pull_request';
             const isPush = context.eventName === 'push';
-            const isRelease = context.eventName === 'release';
+            const isRelease = context.eventName === 'release'; // retained for manual retrigger via gh api
             const isDispatch = context.eventName === 'workflow_dispatch';
             let s3 = '${{ inputs.publish_target }}' == 's3';
             let pypi = isDispatch && '${{ inputs.publish_target }}' == 'testpypi';
