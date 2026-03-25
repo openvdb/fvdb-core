@@ -8,11 +8,112 @@ from typing import TYPE_CHECKING, overload
 
 import torch
 
+from .. import _fvdb_cpp
 from ..jagged_tensor import JaggedTensor
 from ._dispatch import _prepare_args
 
 if TYPE_CHECKING:
     from ..grid_batch import GridBatch
+
+
+# ---------------------------------------------------------------------------
+#  Autograd functions
+# ---------------------------------------------------------------------------
+
+
+class _SampleTrilinearFn(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, voxel_data, grid_data, pts_impl):
+        ctx.grid_data = grid_data
+        ctx.pts_impl = pts_impl
+        result_list = _fvdb_cpp.sample_trilinear(grid_data, pts_impl, voxel_data)
+        return result_list[0]
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        grad_data = _fvdb_cpp.splat_trilinear(ctx.grid_data, ctx.pts_impl, grad_output)
+        return grad_data, None, None
+
+
+class _SplatTrilinearFn(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, points_data, grid_data, pts_impl):
+        ctx.grid_data = grid_data
+        ctx.pts_impl = pts_impl
+        return _fvdb_cpp.splat_trilinear(grid_data, pts_impl, points_data)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        result_list = _fvdb_cpp.sample_trilinear(ctx.grid_data, ctx.pts_impl, grad_output)
+        return result_list[0], None, None
+
+
+class _SampleBezierFn(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, voxel_data, grid_data, pts_impl):
+        ctx.grid_data = grid_data
+        ctx.pts_impl = pts_impl
+        result_list = _fvdb_cpp.sample_bezier(grid_data, pts_impl, voxel_data)
+        return result_list[0]
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        grad_data = _fvdb_cpp.splat_bezier(ctx.grid_data, ctx.pts_impl, grad_output)
+        return grad_data, None, None
+
+
+class _SplatBezierFn(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, points_data, grid_data, pts_impl):
+        ctx.grid_data = grid_data
+        ctx.pts_impl = pts_impl
+        return _fvdb_cpp.splat_bezier(grid_data, pts_impl, points_data)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        result_list = _fvdb_cpp.sample_bezier(ctx.grid_data, ctx.pts_impl, grad_output)
+        return result_list[0], None, None
+
+
+class _SampleTrilinearWithGradFn(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, voxel_data, grid_data, pts_impl):
+        ctx.grid_data = grid_data
+        ctx.pts_impl = pts_impl
+        ctx.save_for_backward(voxel_data)
+        result_list = _fvdb_cpp.sample_trilinear_with_grad(grid_data, pts_impl, voxel_data)
+        return result_list[0], result_list[1]
+
+    @staticmethod
+    def backward(ctx, grad_features, grad_grad_features):
+        (voxel_data,) = ctx.saved_tensors
+        grad_data = _fvdb_cpp.sample_trilinear_with_grad_bwd(
+            ctx.grid_data, ctx.pts_impl, voxel_data, grad_features, grad_grad_features
+        )
+        return grad_data, None, None
+
+
+class _SampleBezierWithGradFn(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, voxel_data, grid_data, pts_impl):
+        ctx.grid_data = grid_data
+        ctx.pts_impl = pts_impl
+        ctx.save_for_backward(voxel_data)
+        result_list = _fvdb_cpp.sample_bezier_with_grad(grid_data, pts_impl, voxel_data)
+        return result_list[0], result_list[1]
+
+    @staticmethod
+    def backward(ctx, grad_features, grad_grad_features):
+        (voxel_data,) = ctx.saved_tensors
+        grad_data = _fvdb_cpp.sample_bezier_with_grad_bwd(
+            ctx.grid_data, ctx.pts_impl, grad_features, grad_grad_features, voxel_data
+        )
+        return grad_data, None, None
+
+
+# ---------------------------------------------------------------------------
+#  Public API
+# ---------------------------------------------------------------------------
 
 
 @overload
@@ -51,7 +152,8 @@ def sample_trilinear(
     .. seealso:: :func:`sample_bezier`, :func:`sample_trilinear_with_grad`
     """
     grid_data, (points, voxel_data), unwrap = _prepare_args(grid, points, voxel_data)
-    return unwrap(grid_data.sample_trilinear(points._impl, voxel_data._impl))
+    result = _SampleTrilinearFn.apply(voxel_data.jdata, grid_data, points._impl)
+    return unwrap(result)
 
 
 @overload
@@ -91,7 +193,7 @@ def sample_trilinear_with_grad(
     .. seealso:: :func:`sample_trilinear`, :func:`sample_bezier_with_grad`
     """
     grid_data, (points, voxel_data), unwrap = _prepare_args(grid, points, voxel_data)
-    rd, rg = grid_data.sample_trilinear_with_grad(points._impl, voxel_data._impl)
+    rd, rg = _SampleTrilinearWithGradFn.apply(voxel_data.jdata, grid_data, points._impl)
     return unwrap(rd), unwrap(rg)
 
 
@@ -127,7 +229,8 @@ def sample_bezier(
     .. seealso:: :func:`sample_trilinear`, :func:`sample_bezier_with_grad`
     """
     grid_data, (points, voxel_data), unwrap = _prepare_args(grid, points, voxel_data)
-    return unwrap(grid_data.sample_bezier(points._impl, voxel_data._impl))
+    result = _SampleBezierFn.apply(voxel_data.jdata, grid_data, points._impl)
+    return unwrap(result)
 
 
 @overload
@@ -163,7 +266,7 @@ def sample_bezier_with_grad(
     .. seealso:: :func:`sample_bezier`, :func:`sample_trilinear_with_grad`
     """
     grid_data, (points, voxel_data), unwrap = _prepare_args(grid, points, voxel_data)
-    rd, rg = grid_data.sample_bezier_with_grad(points._impl, voxel_data._impl)
+    rd, rg = _SampleBezierWithGradFn.apply(voxel_data.jdata, grid_data, points._impl)
     return unwrap(rd), unwrap(rg)
 
 
@@ -199,7 +302,8 @@ def splat_trilinear(
     .. seealso:: :func:`splat_bezier`, :func:`sample_trilinear`
     """
     grid_data, (points, points_data), unwrap = _prepare_args(grid, points, points_data)
-    return unwrap(grid_data.splat_trilinear(points._impl, points_data._impl))
+    result = _SplatTrilinearFn.apply(points_data.jdata, grid_data, points._impl)
+    return unwrap(result)
 
 
 @overload
@@ -233,4 +337,5 @@ def splat_bezier(
     .. seealso:: :func:`splat_trilinear`, :func:`sample_bezier`
     """
     grid_data, (points, points_data), unwrap = _prepare_args(grid, points, points_data)
-    return unwrap(grid_data.splat_bezier(points._impl, points_data._impl))
+    result = _SplatBezierFn.apply(points_data.jdata, grid_data, points._impl)
+    return unwrap(result)

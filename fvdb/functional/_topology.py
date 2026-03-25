@@ -9,11 +9,18 @@ from typing import TYPE_CHECKING, overload
 import torch
 
 from ..jagged_tensor import JaggedTensor
-from ..types import NumericMaxRank1, ValueConstraint, to_Vec3i, to_Vec3iBroadcastable
-from ._dispatch import _prepare_args, _prepare_grid
+from .. import _fvdb_cpp
+from ..types import NumericMaxRank1, ValueConstraint, to_Vec3i, to_Vec3i
+from ._dispatch import _get_grid_data
 
 if TYPE_CHECKING:
     from ..grid_batch import GridBatch
+
+
+def _wrap_grid(cpp_impl):
+    from ..grid_batch import GridBatch
+
+    return GridBatch(data=cpp_impl)
 
 
 # ---------------------------------------------------------------------------
@@ -36,9 +43,9 @@ def coarsened_grid(
     Returns:
         A new grid with coarsened structure.
     """
-    grid_data, unwrap_grid = _prepare_grid(grid)
-    cf = to_Vec3iBroadcastable(coarsening_factor, value_constraint=ValueConstraint.POSITIVE)
-    return unwrap_grid(grid_data.coarsened_grid(cf))
+    grid_data = _get_grid_data(grid)
+    cf = to_Vec3i(coarsening_factor, value_constraint=ValueConstraint.POSITIVE).tolist()
+    return _wrap_grid(_fvdb_cpp.coarsen_grid(grid_data, cf))
 
 
 def refined_grid(
@@ -61,15 +68,15 @@ def refined_grid(
 
     .. seealso:: :func:`~fvdb.functional.refine` in ``_pooling`` for refining *data*.
     """
-    grid_data, unwrap_grid = _prepare_grid(grid)
-    sf = to_Vec3iBroadcastable(subdiv_factor, value_constraint=ValueConstraint.POSITIVE)
+    grid_data = _get_grid_data(grid)
+    sf = to_Vec3i(subdiv_factor, value_constraint=ValueConstraint.POSITIVE).tolist()
     if mask is not None:
         if isinstance(mask, torch.Tensor):
             mask = JaggedTensor(mask)
         m = mask._impl
     else:
         m = None
-    return unwrap_grid(grid_data.refined_grid(sf, m))
+    return _wrap_grid(_fvdb_cpp.upsample_grid(grid_data, sf, m))
 
 
 def dual_grid(grid: GridBatch, exclude_border: bool = False) -> GridBatch:
@@ -84,8 +91,8 @@ def dual_grid(grid: GridBatch, exclude_border: bool = False) -> GridBatch:
     Returns:
         A new dual grid.
     """
-    grid_data, unwrap_grid = _prepare_grid(grid)
-    return unwrap_grid(grid_data.dual_grid(exclude_border))
+    grid_data = _get_grid_data(grid)
+    return _wrap_grid(_fvdb_cpp.dual_grid(grid_data, exclude_border))
 
 
 def dilated_grid(grid: GridBatch, dilation: int) -> GridBatch:
@@ -99,8 +106,8 @@ def dilated_grid(grid: GridBatch, dilation: int) -> GridBatch:
     Returns:
         A new dilated grid.
     """
-    grid_data, unwrap_grid = _prepare_grid(grid)
-    return unwrap_grid(grid_data.dilated_grid(dilation))
+    grid_data = _get_grid_data(grid)
+    return _wrap_grid(_fvdb_cpp.dilate_grid(grid_data, [dilation] * 3))
 
 
 def merged_grid(grid: GridBatch, other: GridBatch) -> GridBatch:
@@ -114,8 +121,9 @@ def merged_grid(grid: GridBatch, other: GridBatch) -> GridBatch:
     Returns:
         A new grid containing the union of active voxels.
     """
-    grid_data, unwrap_grid = _prepare_grid(grid)
-    return unwrap_grid(grid_data.merged_grid(other.data))
+    grid_data = _get_grid_data(grid)
+    other_data = _get_grid_data(other)
+    return _wrap_grid(_fvdb_cpp.merge_grids(grid_data, other_data))
 
 
 @overload
@@ -140,10 +148,10 @@ def pruned_grid(
     Returns:
         A new pruned grid.
     """
-    grid_data, unwrap_grid = _prepare_grid(grid)
+    grid_data = _get_grid_data(grid)
     if isinstance(mask, torch.Tensor):
         mask = JaggedTensor(mask)
-    return unwrap_grid(grid_data.pruned_grid(mask._impl))
+    return _wrap_grid(_fvdb_cpp.prune_grid(grid_data, mask._impl))
 
 
 # ---------------------------------------------------------------------------
@@ -168,10 +176,10 @@ def conv_grid(
     Returns:
         Output grid for the convolution.
     """
-    grid_data, unwrap_grid = _prepare_grid(grid)
-    ks = to_Vec3iBroadcastable(kernel_size, value_constraint=ValueConstraint.POSITIVE)
-    st = to_Vec3iBroadcastable(stride, value_constraint=ValueConstraint.POSITIVE)
-    return unwrap_grid(grid_data.conv_grid(ks, st))
+    grid_data = _get_grid_data(grid)
+    ks = to_Vec3i(kernel_size, value_constraint=ValueConstraint.POSITIVE).tolist()
+    st = to_Vec3i(stride, value_constraint=ValueConstraint.POSITIVE).tolist()
+    return _wrap_grid(_fvdb_cpp.conv_grid(grid_data, ks, st))
 
 
 def conv_transpose_grid(
@@ -191,10 +199,10 @@ def conv_transpose_grid(
     Returns:
         Output grid for the transposed convolution.
     """
-    grid_data, unwrap_grid = _prepare_grid(grid)
-    ks = to_Vec3iBroadcastable(kernel_size, value_constraint=ValueConstraint.POSITIVE)
-    st = to_Vec3iBroadcastable(stride, value_constraint=ValueConstraint.POSITIVE)
-    return unwrap_grid(grid_data.conv_transpose_grid(ks, st))
+    grid_data = _get_grid_data(grid)
+    ks = to_Vec3i(kernel_size, value_constraint=ValueConstraint.POSITIVE).tolist()
+    st = to_Vec3i(stride, value_constraint=ValueConstraint.POSITIVE).tolist()
+    return _wrap_grid(_fvdb_cpp.conv_transpose_grid(grid_data, ks, st))
 
 
 # ---------------------------------------------------------------------------
@@ -214,11 +222,12 @@ def morton(grid: GridBatch, offset: torch.Tensor | NumericMaxRank1 | None = None
     Returns:
         Morton codes for each active voxel.
     """
+    grid_data = _get_grid_data(grid)
     if offset is None:
-        offset = -torch.min(grid.data.ijk.jdata, dim=0).values
+        offset = -torch.min(_fvdb_cpp.active_grid_coords(grid_data).jdata, dim=0).values
     elif not isinstance(offset, torch.Tensor):
         offset = to_Vec3i(offset)
-    return JaggedTensor(impl=grid.data.morton(offset))
+    return JaggedTensor(impl=_fvdb_cpp.serialize_encode(grid_data, "morton", offset.tolist()))
 
 
 def morton_zyx(grid: GridBatch, offset: torch.Tensor | NumericMaxRank1 | None = None) -> JaggedTensor:
@@ -232,11 +241,12 @@ def morton_zyx(grid: GridBatch, offset: torch.Tensor | NumericMaxRank1 | None = 
     Returns:
         Transposed Morton codes for each active voxel.
     """
+    grid_data = _get_grid_data(grid)
     if offset is None:
-        offset = -torch.min(grid.data.ijk.jdata, dim=0).values
+        offset = -torch.min(_fvdb_cpp.active_grid_coords(grid_data).jdata, dim=0).values
     elif not isinstance(offset, torch.Tensor):
         offset = to_Vec3i(offset)
-    return JaggedTensor(impl=grid.data.morton_zyx(offset))
+    return JaggedTensor(impl=_fvdb_cpp.serialize_encode(grid_data, "morton_zyx", offset.tolist()))
 
 
 def hilbert(grid: GridBatch, offset: torch.Tensor | NumericMaxRank1 | None = None) -> JaggedTensor:
@@ -251,11 +261,12 @@ def hilbert(grid: GridBatch, offset: torch.Tensor | NumericMaxRank1 | None = Non
     Returns:
         Hilbert codes for each active voxel.
     """
+    grid_data = _get_grid_data(grid)
     if offset is None:
-        offset = -torch.min(grid.data.ijk.jdata, dim=0).values
+        offset = -torch.min(_fvdb_cpp.active_grid_coords(grid_data).jdata, dim=0).values
     elif not isinstance(offset, torch.Tensor):
         offset = to_Vec3i(offset)
-    return JaggedTensor(impl=grid.data.hilbert(offset))
+    return JaggedTensor(impl=_fvdb_cpp.serialize_encode(grid_data, "hilbert", offset.tolist()))
 
 
 def hilbert_zyx(grid: GridBatch, offset: torch.Tensor | NumericMaxRank1 | None = None) -> JaggedTensor:
@@ -269,11 +280,12 @@ def hilbert_zyx(grid: GridBatch, offset: torch.Tensor | NumericMaxRank1 | None =
     Returns:
         Transposed Hilbert codes for each active voxel.
     """
+    grid_data = _get_grid_data(grid)
     if offset is None:
-        offset = -torch.min(grid.data.ijk.jdata, dim=0).values
+        offset = -torch.min(_fvdb_cpp.active_grid_coords(grid_data).jdata, dim=0).values
     elif not isinstance(offset, torch.Tensor):
         offset = to_Vec3i(offset)
-    return JaggedTensor(impl=grid.data.hilbert_zyx(offset))
+    return JaggedTensor(impl=_fvdb_cpp.serialize_encode(grid_data, "hilbert_zyx", offset.tolist()))
 
 
 # ---------------------------------------------------------------------------
@@ -294,5 +306,6 @@ def edge_network(grid: GridBatch, return_voxel_coordinates: bool = False) -> tup
         A tuple of two :class:`~fvdb.JaggedTensor` objects representing the
         edge network.
     """
-    a, b = grid.data.viz_edge_network(return_voxel_coordinates)
+    grid_data = _get_grid_data(grid)
+    a, b = _fvdb_cpp.grid_edge_network(grid_data, return_voxel_coordinates)
     return JaggedTensor(impl=a), JaggedTensor(impl=b)

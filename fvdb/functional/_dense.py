@@ -8,12 +8,106 @@ from typing import TYPE_CHECKING, overload
 
 import torch
 
+from .. import _fvdb_cpp
 from ..jagged_tensor import JaggedTensor
 from ..types import NumericMaxRank1, NumericMaxRank2, ValueConstraint, to_Vec3i, to_Vec3iBatchBroadcastable, to_Vec3iBroadcastable
-from ._dispatch import _prepare_args
+from ._dispatch import _get_grid_data, _prepare_args
 
 if TYPE_CHECKING:
     from ..grid_batch import GridBatch
+
+
+# ---------------------------------------------------------------------------
+#  Autograd functions
+# ---------------------------------------------------------------------------
+
+
+class _InjectFromDenseCminorFn(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, dense_data, grid_data, origins):
+        ctx.grid_data = grid_data
+        ctx.origins = origins
+        ctx.dense_shape = dense_data.shape
+        return _fvdb_cpp.inject_from_dense_cminor(grid_data, dense_data, origins)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        grid_size = list(ctx.dense_shape[1:4])
+        grad = _fvdb_cpp.inject_to_dense_cminor(ctx.grid_data, grad_output, ctx.origins, grid_size)
+        return grad.view(ctx.dense_shape), None, None
+
+
+class _InjectFromDenseCmajorFn(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, dense_data, grid_data, origins):
+        ctx.grid_data = grid_data
+        ctx.origins = origins
+        ctx.dense_shape = dense_data.shape
+        return _fvdb_cpp.inject_from_dense_cmajor(grid_data, dense_data, origins)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        grid_size = list(ctx.dense_shape[-3:])
+        grad = _fvdb_cpp.inject_to_dense_cmajor(ctx.grid_data, grad_output, ctx.origins, grid_size)
+        return grad.view(ctx.dense_shape), None, None
+
+
+class _InjectToDenseCminorFn(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, sparse_data, grid_data, origins, grid_size_list):
+        ctx.grid_data = grid_data
+        ctx.origins = origins
+        ctx.sparse_shape = sparse_data.shape
+        return _fvdb_cpp.inject_to_dense_cminor(grid_data, sparse_data, origins, grid_size_list)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        grad = _fvdb_cpp.inject_from_dense_cminor(ctx.grid_data, grad_output, ctx.origins)
+        return grad.view(ctx.sparse_shape), None, None, None
+
+
+class _InjectToDenseCmajorFn(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, sparse_data, grid_data, origins, grid_size_list):
+        ctx.grid_data = grid_data
+        ctx.origins = origins
+        ctx.sparse_shape = sparse_data.shape
+        return _fvdb_cpp.inject_to_dense_cmajor(grid_data, sparse_data, origins, grid_size_list)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        grad = _fvdb_cpp.inject_from_dense_cmajor(ctx.grid_data, grad_output, ctx.origins)
+        return grad.view(ctx.sparse_shape), None, None, None
+
+
+# ---------------------------------------------------------------------------
+#  Helpers
+# ---------------------------------------------------------------------------
+
+
+def _resolve_dense_params(grid_data, sparse_data, min_coord, grid_size):
+    """Compute origins tensor and grid_size list for inject_to_dense ops.
+
+    When ``min_coord`` or ``grid_size`` is ``None``, defaults are derived from
+    the grid's total bounding box (mirroring the C++ autograd logic).
+    """
+    bbox = grid_data.total_bbox
+    if min_coord is not None:
+        mc = to_Vec3iBatchBroadcastable(min_coord).to(device=sparse_data.jdata.device)
+        if mc.dim() == 1 and mc.size(0) == 3:
+            mc = mc.unsqueeze(0).expand(grid_data.grid_count, 3)
+        origins = mc.to(torch.int32)
+    else:
+        origins = bbox[0].to(torch.int32).unsqueeze(0).expand(grid_data.grid_count, 3).to(sparse_data.jdata.device)
+
+    if grid_size is not None:
+        gs_list = to_Vec3iBroadcastable(grid_size, value_constraint=ValueConstraint.POSITIVE).tolist()
+    else:
+        bbox_min = bbox[0]
+        bbox_max = bbox[1]
+        gs_list = (bbox_max - bbox_min + 1).tolist()
+
+    return origins, gs_list
 
 
 # ---------------------------------------------------------------------------
@@ -43,8 +137,10 @@ def inject_from_dense_cminor(
 
     .. seealso:: :func:`inject_from_dense_cmajor`, :func:`inject_to_dense_cminor`
     """
+    grid_data = _get_grid_data(grid)
     origin = to_Vec3i(dense_origin)
-    return JaggedTensor(impl=grid.data.inject_from_dense_cminor(dense_data, origin))
+    result = _InjectFromDenseCminorFn.apply(dense_data, grid_data, origin)
+    return grid.jagged_like(result)
 
 
 def inject_from_dense_cmajor(
@@ -69,8 +165,10 @@ def inject_from_dense_cmajor(
 
     .. seealso:: :func:`inject_from_dense_cminor`, :func:`inject_to_dense_cmajor`
     """
+    grid_data = _get_grid_data(grid)
     origin = to_Vec3i(dense_origin)
-    return JaggedTensor(impl=grid.data.inject_from_dense_cmajor(dense_data, origin))
+    result = _InjectFromDenseCmajorFn.apply(dense_data, grid_data, origin)
+    return grid.jagged_like(result)
 
 
 # ---------------------------------------------------------------------------
@@ -121,11 +219,11 @@ def inject_to_dense_cminor(
 
     .. seealso:: :func:`inject_to_dense_cmajor`, :func:`inject_from_dense_cminor`
     """
-    gs = to_Vec3iBroadcastable(grid_size, value_constraint=ValueConstraint.POSITIVE) if grid_size is not None else None
-    mc = to_Vec3iBatchBroadcastable(min_coord) if min_coord is not None else None
-
     grid_data, (sparse_data,), _ = _prepare_args(grid, sparse_data)
-    return grid_data.inject_to_dense_cminor(sparse_data._impl, mc, gs)
+    origins, gs_list = _resolve_dense_params(grid_data, sparse_data, min_coord, grid_size)
+    result = _InjectToDenseCminorFn.apply(sparse_data.jdata, grid_data, origins, gs_list)
+    feature_shape = list(sparse_data.jdata.shape[1:])
+    return result.view([grid.grid_count] + gs_list + feature_shape)
 
 
 @overload
@@ -170,11 +268,11 @@ def inject_to_dense_cmajor(
 
     .. seealso:: :func:`inject_to_dense_cminor`, :func:`inject_from_dense_cmajor`
     """
-    gs = to_Vec3iBroadcastable(grid_size, value_constraint=ValueConstraint.POSITIVE) if grid_size is not None else None
-    mc = to_Vec3iBatchBroadcastable(min_coord) if min_coord is not None else None
-
     grid_data, (sparse_data,), _ = _prepare_args(grid, sparse_data)
-    return grid_data.inject_to_dense_cmajor(sparse_data._impl, mc, gs)
+    origins, gs_list = _resolve_dense_params(grid_data, sparse_data, min_coord, grid_size)
+    result = _InjectToDenseCmajorFn.apply(sparse_data.jdata, grid_data, origins, gs_list)
+    feature_shape = list(sparse_data.jdata.shape[1:])
+    return result.view([grid.grid_count] + feature_shape + gs_list)
 
 
 # ---------------------------------------------------------------------------
@@ -229,6 +327,8 @@ def inject(
         The destination data after injection.
     """
     is_flat = isinstance(src, torch.Tensor)
+    dst_grid_data = _get_grid_data(dst_grid)
+    src_grid_data = _get_grid_data(src_grid)
 
     if is_flat:
         jt_src = JaggedTensor(src)
@@ -239,7 +339,7 @@ def inject(
         else:
             raw_dst = dst
         jt_dst = JaggedTensor(raw_dst)
-        src_grid.data.inject_to(dst_grid.data, jt_src._impl, jt_dst._impl)
+        _fvdb_cpp.inject_op(dst_grid_data, src_grid_data, jt_dst._impl, jt_src._impl)
         return jt_dst.jdata
 
     jt_src = src
@@ -252,5 +352,5 @@ def inject(
         jt_dst_b = dst
     if jt_dst_b.eshape != jt_src.eshape:
         raise ValueError(f"src and dst must have the same element shape, got src: {jt_src.eshape}, dst: {jt_dst_b.eshape}")
-    src_grid.data.inject_to(dst_grid.data, jt_src._impl, jt_dst_b._impl)
+    _fvdb_cpp.inject_op(dst_grid_data, src_grid_data, jt_dst_b._impl, jt_src._impl)
     return jt_dst_b

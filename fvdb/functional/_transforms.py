@@ -8,11 +8,38 @@ from typing import TYPE_CHECKING, overload
 
 import torch
 
+from .. import _fvdb_cpp
 from ..jagged_tensor import JaggedTensor
 from ._dispatch import _prepare_args
 
 if TYPE_CHECKING:
     from ..grid_batch import GridBatch
+
+
+class _VoxelToWorldFn(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, points_jdata, grid_data, pts_impl):
+        ctx.grid_data = grid_data
+        ctx.pts_impl = pts_impl
+        return _fvdb_cpp.voxel_to_world(grid_data, pts_impl, True)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        grad_jt = ctx.pts_impl.jagged_like(grad_output)
+        return _fvdb_cpp.voxel_to_world_bwd(ctx.grid_data, grad_jt, True), None, None
+
+
+class _WorldToVoxelFn(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, points_jdata, grid_data, pts_impl):
+        ctx.grid_data = grid_data
+        ctx.pts_impl = pts_impl
+        return _fvdb_cpp.world_to_voxel(grid_data, pts_impl, True)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        grad_jt = ctx.pts_impl.jagged_like(grad_output)
+        return _fvdb_cpp.world_to_voxel_bwd(ctx.grid_data, grad_jt, True), None, None
 
 
 @overload
@@ -45,7 +72,8 @@ def voxel_to_world(
     .. seealso:: :func:`world_to_voxel`
     """
     grid_data, (ijk,), unwrap = _prepare_args(grid, ijk)
-    return unwrap(grid_data.voxel_to_world(ijk._impl))
+    result = _VoxelToWorldFn.apply(ijk.jdata, grid_data, ijk._impl)
+    return unwrap(result)
 
 
 @overload
@@ -78,4 +106,5 @@ def world_to_voxel(
     .. seealso:: :func:`voxel_to_world`
     """
     grid_data, (points,), unwrap = _prepare_args(grid, points)
-    return unwrap(grid_data.world_to_voxel(points._impl))
+    result = _WorldToVoxelFn.apply(points.jdata, grid_data, points._impl)
+    return unwrap(result)

@@ -16,25 +16,34 @@ caller gets back the same type they passed in.
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Callable
+from typing import Any, Callable
 
 import torch
 
 from ..jagged_tensor import JaggedTensor
 
-if TYPE_CHECKING:
-    from .._fvdb_cpp import GridBatch as GridBatchCpp
+
+def _get_grid_data(grid: Any) -> Any:
+    """Extract the GridBatchData C++ object from a GridBatch.
+
+    During migration this handles both old (.data is _fvdb_cpp.GridBatch with
+    a _grid_batch_data bridge) and new (.data is _fvdb_cpp.GridBatchData directly).
+    """
+    data = grid.data
+    if hasattr(data, "_grid_batch_data"):
+        return data._grid_batch_data
+    return data
 
 
 def _prepare_args(
     grid: Any,
     *data_args: torch.Tensor | JaggedTensor | None,
-) -> tuple[GridBatchCpp, tuple[JaggedTensor | None, ...], Callable]:
+) -> tuple[Any, tuple[JaggedTensor | None, ...], Callable]:
     """
     Normalize ``Tensor | JaggedTensor`` data arguments for the batched C++ path.
 
     Args:
-        grid: A :class:`~fvdb.GridBatch` (only type after Grid retirement).
+        grid: A :class:`~fvdb.GridBatch`.
         *data_args: Variable-length data arguments that are either
             ``torch.Tensor`` (single-grid path) or ``JaggedTensor`` (batched
             path).  ``None`` values are passed through unchanged.
@@ -42,33 +51,36 @@ def _prepare_args(
     Returns:
         A 3-tuple ``(grid_data, normed_args, unwrap)`` where:
 
-        - **grid_data** is the C++ grid handle (``grid.data``).
+        - **grid_data** is the C++ ``GridBatchData`` handle.
         - **normed_args** is a tuple of ``JaggedTensor | None`` with every
           ``Tensor`` wrapped as a single-element ``JaggedTensor``.
-        - **unwrap(cpp_jt)** converts a C++ ``JaggedTensor`` result back to the
-          type matching the original input: ``Tensor`` via ``.jdata`` when the
-          inputs were flat, ``JaggedTensor(impl=...)`` otherwise.
+        - **unwrap(raw_tensor)** converts a raw ``torch.Tensor`` result back to
+          the type matching the original input: returned as-is when the inputs
+          were flat, wrapped in a ``JaggedTensor`` (using the first data arg's
+          jagged structure) otherwise.
     """
+    grid_data = _get_grid_data(grid)
+
     first = next((a for a in data_args if a is not None), None)
     is_flat = first is not None and isinstance(first, torch.Tensor)
 
     if is_flat:
         normed = tuple(JaggedTensor(a) if isinstance(a, torch.Tensor) else a for a in data_args)
 
-        def _unwrap_flat(cpp_jt: Any) -> torch.Tensor:
-            return cpp_jt.jdata
+        def _unwrap_flat(result: torch.Tensor) -> torch.Tensor:
+            return result
 
-        return grid.data, normed, _unwrap_flat
+        return grid_data, normed, _unwrap_flat
 
-    normed = data_args
+    proto = first
 
-    def _unwrap_jagged(cpp_jt: Any) -> JaggedTensor:
-        return JaggedTensor(impl=cpp_jt)
+    def _unwrap_jagged(result: torch.Tensor) -> JaggedTensor:
+        return proto.jagged_like(result)
 
-    return grid.data, normed, _unwrap_jagged
+    return grid_data, data_args, _unwrap_jagged
 
 
-def _prepare_grid(grid: Any) -> tuple[GridBatchCpp, Callable]:
+def _prepare_grid(grid: Any) -> tuple[Any, Callable]:
     """
     Prepare a grid argument for topology ops that return a new grid.
 
@@ -78,7 +90,9 @@ def _prepare_grid(grid: Any) -> tuple[GridBatchCpp, Callable]:
     """
     from ..grid_batch import GridBatch
 
+    grid_data = _get_grid_data(grid)
+
     def _unwrap_grid(cpp_impl: Any) -> GridBatch:
         return GridBatch(data=cpp_impl)
 
-    return grid.data, _unwrap_grid
+    return grid_data, _unwrap_grid

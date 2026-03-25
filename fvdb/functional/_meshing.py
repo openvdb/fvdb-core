@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, overload
 
 import torch
 
+from .. import _fvdb_cpp
 from ..jagged_tensor import JaggedTensor
 from ._dispatch import _prepare_args
 
@@ -47,8 +48,8 @@ def marching_cubes(
         A tuple ``(vertices, face_indices, vertex_normals)``.
     """
     grid_data, (field,), unwrap = _prepare_args(grid, field)
-    v, f, n = grid_data.marching_cubes(field._impl, level)
-    return unwrap(v), unwrap(f), unwrap(n)
+    result = _fvdb_cpp.marching_cubes(grid_data, field._impl, level)
+    return unwrap(result[0].jdata), unwrap(result[1].jdata), unwrap(result[2].jdata)
 
 
 @overload
@@ -109,7 +110,8 @@ def integrate_tsdf(
     from ..grid_batch import GridBatch as GB
 
     grid_data, (tsdf, weights), unwrap = _prepare_args(grid, tsdf, weights)
-    rg, rt, rw = grid_data.integrate_tsdf(
+    rg, rt, rw = _fvdb_cpp.integrate_tsdf(
+        grid_data,
         truncation_distance,
         projection_matrices,
         cam_to_world_matrices,
@@ -118,4 +120,4 @@ def integrate_tsdf(
         depth_images,
         weight_images,
     )
-    return GB(data=rg), unwrap(rt), unwrap(rw)
+    return GB(data=rg), unwrap(rt.jdata), unwrap(rw.jdata)

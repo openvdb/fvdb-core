@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, overload
 
 import torch
 
+from .. import _fvdb_cpp
 from ..jagged_tensor import JaggedTensor
 from ._dispatch import _prepare_args
 
@@ -65,8 +66,10 @@ def voxels_along_rays(
         or linear indices, and ``distances`` contains ``(t_entry, t_exit)`` pairs.
     """
     grid_data, (ray_origins, ray_directions), _ = _prepare_args(grid, ray_origins, ray_directions)
-    rv, rt = grid_data.voxels_along_rays(ray_origins._impl, ray_directions._impl, max_voxels, eps, return_ijk, cumulative)
-    return JaggedTensor(impl=rv), JaggedTensor(impl=rt)
+    result = _fvdb_cpp.voxels_along_rays(
+        grid_data, ray_origins._impl, ray_directions._impl, max_voxels, eps, return_ijk, cumulative
+    )
+    return JaggedTensor(impl=result[0]), JaggedTensor(impl=result[1])
 
 
 @overload
@@ -111,7 +114,9 @@ def segments_along_rays(
         A :class:`~fvdb.JaggedTensor` of segments with eshape ``(2,)``.
     """
     grid_data, (ray_origins, ray_directions), _ = _prepare_args(grid, ray_origins, ray_directions)
-    return JaggedTensor(impl=grid_data.segments_along_rays(ray_origins._impl, ray_directions._impl, max_segments, eps))
+    return JaggedTensor(
+        impl=_fvdb_cpp.segments_along_rays(grid_data, ray_origins._impl, ray_directions._impl, max_segments, eps)
+    )
 
 
 @overload
@@ -178,7 +183,8 @@ def uniform_ray_samples(
         grid, ray_origins, ray_directions, t_min, t_max
     )
     return JaggedTensor(
-        impl=grid_data.uniform_ray_samples(
+        impl=_fvdb_cpp.uniform_ray_samples(
+            grid_data,
             ray_origins._impl,
             ray_directions._impl,
             t_min._impl,
@@ -236,4 +242,7 @@ def ray_implicit_intersection(
     grid_data, (ray_origins, ray_directions, grid_scalars), unwrap = _prepare_args(
         grid, ray_origins, ray_directions, grid_scalars
     )
-    return unwrap(grid_data.ray_implicit_intersection(ray_origins._impl, ray_directions._impl, grid_scalars._impl, eps))
+    result_impl = _fvdb_cpp.ray_implicit_intersection(
+        grid_data, ray_origins._impl, ray_directions._impl, grid_scalars._impl, eps
+    )
+    return unwrap(result_impl.jdata)

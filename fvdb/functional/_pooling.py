@@ -4,17 +4,81 @@
 """Functional API for pooling and refinement operations on sparse grids."""
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, cast, overload
+from typing import TYPE_CHECKING, overload
 
 import torch
 
+from .. import _fvdb_cpp
 from ..jagged_tensor import JaggedTensor
-from ..types import NumericMaxRank1, ValueConstraint, to_Vec3iBroadcastable
-from ._dispatch import _prepare_args
+from ..types import NumericMaxRank1, ValueConstraint, to_Vec3i
+from ._dispatch import _get_grid_data, _prepare_args
 
 if TYPE_CHECKING:
-    from .._fvdb_cpp import GridBatch as GridBatchCpp
     from ..grid_batch import GridBatch
+
+
+# ---------------------------------------------------------------------------
+#  Autograd functions
+# ---------------------------------------------------------------------------
+
+
+class _MaxPoolFn(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, data, fine_grid_data, coarse_grid_data, factor_list, stride_list):
+        ctx.save_for_backward(data)
+        ctx.fine_grid_data = fine_grid_data
+        ctx.coarse_grid_data = coarse_grid_data
+        ctx.factor_list = factor_list
+        ctx.stride_list = stride_list
+        return _fvdb_cpp.max_pool(fine_grid_data, coarse_grid_data, data, factor_list, stride_list)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        (data,) = ctx.saved_tensors
+        grad = _fvdb_cpp.max_pool_bwd(
+            ctx.coarse_grid_data, ctx.fine_grid_data, data, grad_output, ctx.factor_list, ctx.stride_list
+        )
+        return grad, None, None, None, None
+
+
+class _AvgPoolFn(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, data, fine_grid_data, coarse_grid_data, factor_list, stride_list):
+        ctx.save_for_backward(data)
+        ctx.fine_grid_data = fine_grid_data
+        ctx.coarse_grid_data = coarse_grid_data
+        ctx.factor_list = factor_list
+        ctx.stride_list = stride_list
+        return _fvdb_cpp.avg_pool(fine_grid_data, coarse_grid_data, data, factor_list, stride_list)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        (data,) = ctx.saved_tensors
+        grad = _fvdb_cpp.avg_pool_bwd(
+            ctx.coarse_grid_data, ctx.fine_grid_data, data, grad_output, ctx.factor_list, ctx.stride_list
+        )
+        return grad, None, None, None, None
+
+
+class _RefineFn(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, data, coarse_grid_data, fine_grid_data, factor_list):
+        ctx.save_for_backward(data)
+        ctx.coarse_grid_data = coarse_grid_data
+        ctx.fine_grid_data = fine_grid_data
+        ctx.factor_list = factor_list
+        return _fvdb_cpp.refine(coarse_grid_data, fine_grid_data, data, factor_list)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        (data,) = ctx.saved_tensors
+        grad = _fvdb_cpp.refine_bwd(ctx.fine_grid_data, ctx.coarse_grid_data, grad_output, data, ctx.factor_list)
+        return grad, None, None, None
+
+
+# ---------------------------------------------------------------------------
+#  Public API
+# ---------------------------------------------------------------------------
 
 
 @overload
@@ -67,13 +131,16 @@ def max_pool(
     """
     from ..grid_batch import GridBatch as GB
 
-    pool_factor_t = to_Vec3iBroadcastable(pool_factor, value_constraint=ValueConstraint.POSITIVE)
-    stride_t = to_Vec3iBroadcastable(stride, value_constraint=ValueConstraint.NON_NEGATIVE)
-    coarse_impl: GridBatchCpp | None = coarse_grid.data if coarse_grid else None
+    factor_list = to_Vec3i(pool_factor, value_constraint=ValueConstraint.POSITIVE).tolist()
+    stride_list = to_Vec3i(stride, value_constraint=ValueConstraint.NON_NEGATIVE).tolist()
 
     grid_data, (data,), unwrap = _prepare_args(grid, data)
-    rd, rg = grid_data.max_pool(pool_factor_t, data._impl, stride_t, coarse_impl)
-    return unwrap(rd), GB(data=rg)
+    if coarse_grid is not None:
+        coarse_grid_data = _get_grid_data(coarse_grid)
+    else:
+        coarse_grid_data = _fvdb_cpp.coarsen_grid(grid_data, factor_list)
+    result = _MaxPoolFn.apply(data.jdata, grid_data, coarse_grid_data, factor_list, stride_list)
+    return unwrap(result), GB(data=coarse_grid_data)
 
 
 @overload
@@ -125,13 +192,16 @@ def avg_pool(
     """
     from ..grid_batch import GridBatch as GB
 
-    pool_factor_t = to_Vec3iBroadcastable(pool_factor, value_constraint=ValueConstraint.POSITIVE)
-    stride_t = to_Vec3iBroadcastable(stride, value_constraint=ValueConstraint.NON_NEGATIVE)
-    coarse_impl: GridBatchCpp | None = coarse_grid.data if coarse_grid else None
+    factor_list = to_Vec3i(pool_factor, value_constraint=ValueConstraint.POSITIVE).tolist()
+    stride_list = to_Vec3i(stride, value_constraint=ValueConstraint.NON_NEGATIVE).tolist()
 
     grid_data, (data,), unwrap = _prepare_args(grid, data)
-    rd, rg = grid_data.avg_pool(pool_factor_t, data._impl, stride_t, coarse_impl)
-    return unwrap(rd), GB(data=cast("GridBatchCpp", rg))
+    if coarse_grid is not None:
+        coarse_grid_data = _get_grid_data(coarse_grid)
+    else:
+        coarse_grid_data = _fvdb_cpp.coarsen_grid(grid_data, factor_list)
+    result = _AvgPoolFn.apply(data.jdata, grid_data, coarse_grid_data, factor_list, stride_list)
+    return unwrap(result), GB(data=coarse_grid_data)
 
 
 @overload
@@ -182,15 +252,17 @@ def refine(
     """
     from ..grid_batch import GridBatch as GB
 
-    subdiv_t = to_Vec3iBroadcastable(subdiv_factor, value_constraint=ValueConstraint.POSITIVE)
-    fine_impl: GridBatchCpp | None = fine_grid.data if fine_grid else None
+    factor_list = to_Vec3i(subdiv_factor, value_constraint=ValueConstraint.POSITIVE).tolist()
 
     grid_data, (data,), unwrap = _prepare_args(grid, data)
-    if mask is not None:
-        if isinstance(mask, torch.Tensor):
-            mask = JaggedTensor(mask)
-        mask_impl = mask._impl
+    if fine_grid is not None:
+        fine_grid_data = _get_grid_data(fine_grid)
     else:
-        mask_impl = None
-    rd, rg = grid_data.refine(subdiv_t, data._impl, mask_impl, fine_impl)
-    return unwrap(rd), GB(data=rg)
+        if mask is not None:
+            if isinstance(mask, torch.Tensor):
+                mask = JaggedTensor(mask)
+            fine_grid_data = _fvdb_cpp.upsample_grid(grid_data, factor_list, mask._impl)
+        else:
+            fine_grid_data = _fvdb_cpp.upsample_grid(grid_data, factor_list)
+    result = _RefineFn.apply(data.jdata, grid_data, fine_grid_data, factor_list)
+    return unwrap(result), GB(data=fine_grid_data)

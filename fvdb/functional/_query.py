@@ -9,8 +9,9 @@ from typing import TYPE_CHECKING, overload
 import torch
 
 from ..jagged_tensor import JaggedTensor
+from .. import _fvdb_cpp
 from ..types import NumericMaxRank1, to_Vec3fBroadcastable
-from ._dispatch import _prepare_args
+from ._dispatch import _get_grid_data
 
 if TYPE_CHECKING:
     from ..grid_batch import GridBatch
@@ -40,8 +41,11 @@ def points_in_grid(
     Returns:
         Boolean mask indicating which points are in active voxels.
     """
-    grid_data, (points,), unwrap = _prepare_args(grid, points)
-    return unwrap(grid_data.points_in_grid(points._impl))
+    grid_data = _get_grid_data(grid)
+    if isinstance(points, torch.Tensor):
+        jt = JaggedTensor(points)
+        return _fvdb_cpp.points_in_grid(grid_data, jt._impl).jdata
+    return JaggedTensor(impl=_fvdb_cpp.points_in_grid(grid_data, points._impl))
 
 
 @overload
@@ -66,8 +70,11 @@ def coords_in_grid(
     Returns:
         Boolean mask indicating which coordinates correspond to active voxels.
     """
-    grid_data, (ijk,), unwrap = _prepare_args(grid, ijk)
-    return unwrap(grid_data.coords_in_grid(ijk._impl))
+    grid_data = _get_grid_data(grid)
+    if isinstance(ijk, torch.Tensor):
+        jt = JaggedTensor(ijk)
+        return _fvdb_cpp.coords_in_grid(grid_data, jt._impl).jdata
+    return JaggedTensor(impl=_fvdb_cpp.coords_in_grid(grid_data, ijk._impl))
 
 
 @overload
@@ -106,10 +113,13 @@ def cubes_in_grid(
     Returns:
         Boolean mask indicating which cubes are fully contained.
     """
-    cmin = to_Vec3fBroadcastable(cube_min)
-    cmax = to_Vec3fBroadcastable(cube_max)
-    grid_data, (cube_centers,), unwrap = _prepare_args(grid, cube_centers)
-    return unwrap(grid_data.cubes_in_grid(cube_centers._impl, cmin, cmax))
+    cmin = to_Vec3fBroadcastable(cube_min).tolist()
+    cmax = to_Vec3fBroadcastable(cube_max).tolist()
+    grid_data = _get_grid_data(grid)
+    if isinstance(cube_centers, torch.Tensor):
+        jt = JaggedTensor(cube_centers)
+        return _fvdb_cpp.cubes_in_grid(grid_data, jt._impl, cmin, cmax).jdata
+    return JaggedTensor(impl=_fvdb_cpp.cubes_in_grid(grid_data, cube_centers._impl, cmin, cmax))
 
 
 @overload
@@ -148,10 +158,13 @@ def cubes_intersect_grid(
     Returns:
         Boolean mask indicating which cubes intersect the grid.
     """
-    cmin = to_Vec3fBroadcastable(cube_min)
-    cmax = to_Vec3fBroadcastable(cube_max)
-    grid_data, (cube_centers,), unwrap = _prepare_args(grid, cube_centers)
-    return unwrap(grid_data.cubes_intersect_grid(cube_centers._impl, cmin, cmax))
+    cmin = to_Vec3fBroadcastable(cube_min).tolist()
+    cmax = to_Vec3fBroadcastable(cube_max).tolist()
+    grid_data = _get_grid_data(grid)
+    if isinstance(cube_centers, torch.Tensor):
+        jt = JaggedTensor(cube_centers)
+        return _fvdb_cpp.cubes_intersect_grid(grid_data, jt._impl, cmin, cmax).jdata
+    return JaggedTensor(impl=_fvdb_cpp.cubes_intersect_grid(grid_data, cube_centers._impl, cmin, cmax))
 
 
 @overload
@@ -179,8 +192,11 @@ def ijk_to_index(
     Returns:
         Linear indices (or ``-1`` for inactive coordinates).
     """
-    grid_data, (ijk,), unwrap = _prepare_args(grid, ijk)
-    return unwrap(grid_data.ijk_to_index(ijk._impl, cumulative))
+    grid_data = _get_grid_data(grid)
+    if isinstance(ijk, torch.Tensor):
+        jt = JaggedTensor(ijk)
+        return _fvdb_cpp.ijk_to_index(grid_data, jt._impl, cumulative).jdata
+    return JaggedTensor(impl=_fvdb_cpp.ijk_to_index(grid_data, ijk._impl, cumulative))
 
 
 @overload
@@ -209,8 +225,11 @@ def neighbor_indexes(
     Returns:
         Neighbor indices; ``-1`` for inactive neighbors.
     """
-    grid_data, (ijk,), unwrap = _prepare_args(grid, ijk)
-    return unwrap(grid_data.neighbor_indexes(ijk._impl, extent, bitshift))
+    grid_data = _get_grid_data(grid)
+    if isinstance(ijk, torch.Tensor):
+        jt = JaggedTensor(ijk)
+        return _fvdb_cpp.neighbor_indexes(grid_data, jt._impl, extent, bitshift).jdata
+    return JaggedTensor(impl=_fvdb_cpp.neighbor_indexes(grid_data, ijk._impl, extent, bitshift))
 
 
 def active_grid_coords(grid: GridBatch) -> JaggedTensor:
@@ -224,4 +243,5 @@ def active_grid_coords(grid: GridBatch) -> JaggedTensor:
         A :class:`~fvdb.JaggedTensor` of shape ``(B, -1, 3)`` with the voxel
         coordinates.
     """
-    return JaggedTensor(impl=grid.data.ijk)
+    grid_data = _get_grid_data(grid)
+    return JaggedTensor(impl=_fvdb_cpp.active_grid_coords(grid_data))
