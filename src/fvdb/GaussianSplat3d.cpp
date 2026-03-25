@@ -462,11 +462,8 @@ GaussianSplat3d::projectGaussiansForCameraImpl(
     RenderSettings settingsForProjection = settings;
 
     if (resolvedProjectionMethod == ProjectionMethod::ANALYTIC) {
-        auto ret = projectGaussiansImpl(
+        return projectGaussiansImpl(
             worldToCameraMatrices, projectionMatrices, settingsForProjection, cameraModel);
-        ret.mCameraModel      = cameraModel;
-        ret.mProjectionMethod = resolvedProjectionMethod;
-        return ret;
     }
 
     const int C = worldToCameraMatrices.size(0);
@@ -795,14 +792,11 @@ GaussianSplat3d::sparseProjectGaussiansForCameraImpl(
     RenderSettings settingsForProjection = settings;
 
     if (resolvedProjectionMethod == ProjectionMethod::ANALYTIC) {
-        auto ret              = sparseProjectGaussiansImpl(pixelsToRender,
-                                              worldToCameraMatrices,
-                                              projectionMatrices,
-                                              settingsForProjection,
-                                              cameraModel);
-        ret.mCameraModel      = cameraModel;
-        ret.mProjectionMethod = resolvedProjectionMethod;
-        return ret;
+        return sparseProjectGaussiansImpl(pixelsToRender,
+                                          worldToCameraMatrices,
+                                          projectionMatrices,
+                                          settingsForProjection,
+                                          cameraModel);
     }
 
     const int C = worldToCameraMatrices.size(0);
