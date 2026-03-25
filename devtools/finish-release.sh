@@ -307,4 +307,5 @@ log "Done. Release $TAG tagged."
 if ! $NO_PR && ! $DRY_RUN; then
     log "The GitHub Release will trigger the publish workflow."
     log "Merge the adopt PR from $ADOPT_BRANCH once CI passes."
+    log "After merging, re-deploy docs: gh workflow run docs.yml --ref main"
 fi

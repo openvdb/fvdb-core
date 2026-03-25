@@ -146,6 +146,16 @@ merge commit (not squash) to preserve the release branch history on `main`.
 The `release/v0.4` branch is left untouched at version `0.4.0`, available
 as the base for future hotfix branches.
 
+After merging, **re-deploy the documentation** to GitHub Pages so it reflects
+the new release version:
+
+```bash
+gh workflow run docs.yml --ref main
+```
+
+Or use the GitHub Actions UI: **Actions > fvdb-core Documentation > Run
+workflow** (select `main`).
+
 Use `--remote origin` to target a different remote.
 Use `--dry-run` to preview without making changes.
 
@@ -181,6 +191,11 @@ The same scripts handle hotfix releases. Pass a version with PATCH > 0
    a PR into `main`, and creates a GitHub Release.
 
 5. **Merge the adopt PR** once CI passes (use a merge commit, not squash).
+
+6. **Re-deploy documentation** after the adopt PR is merged:
+   ```bash
+   gh workflow run docs.yml --ref main
+   ```
 
 ## GitHub Branch Protection
 
@@ -280,6 +295,11 @@ is:
    After each `finish-release.sh` run, merge the resulting `adopt/v*` PR
    on GitHub, deleting the `adopt/v*` branch, once CI passes.  We will keep
    the `release/v*` branch around for any future hotfix branches.
+
+4. **Re-deploy documentation** after both adopt PRs are merged:
+   ```bash
+   gh workflow run docs.yml --ref main
+   ```
 
 `finish-release.sh` checks that the latest `publish.yml` run on the release
 branch succeeded before proceeding. If the workflow failed or hasn't run, it
