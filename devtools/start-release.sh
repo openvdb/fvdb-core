@@ -177,10 +177,17 @@ if $IS_HOTFIX; then
         fi
     fi
 
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+    # The release branch may predate devtools/ scripts, so save a copy of
+    # companion scripts before the checkout replaces the working tree.
+    _HOTFIX_TMPDIR="$(mktemp -d)"
+    trap 'rm -rf "$_HOTFIX_TMPDIR"' EXIT
+    cp "$SCRIPT_DIR/update-doc-versions.sh" "$_HOTFIX_TMPDIR/" 2>/dev/null || true
+    chmod +x "$_HOTFIX_TMPDIR/update-doc-versions.sh" 2>/dev/null || true
+
     log "Checking out $RELEASE_BRANCH..."
     run git checkout "$RELEASE_BRANCH"
-
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
     if ! $DRY_RUN; then
         CURRENT_VER="$(get_version)"
@@ -191,7 +198,9 @@ if $IS_HOTFIX; then
             log "Version already set to $VERSION on $RELEASE_BRANCH"
         fi
 
-        "$SCRIPT_DIR/update-doc-versions.sh" "$VERSION"
+        if [[ -x "$_HOTFIX_TMPDIR/update-doc-versions.sh" ]]; then
+            "$_HOTFIX_TMPDIR/update-doc-versions.sh" "$VERSION"
+        fi
 
         if ! git diff --quiet || ! git diff --cached --quiet; then
             git add pyproject.toml
@@ -199,6 +208,8 @@ if $IS_HOTFIX; then
             git commit -s -S -m "Set version to $VERSION for hotfix release"
         fi
     fi
+
+    rm -rf "$_HOTFIX_TMPDIR"
 
     echo ""
     log "Done. Hotfix v${VERSION} prepared on $RELEASE_BRANCH."
