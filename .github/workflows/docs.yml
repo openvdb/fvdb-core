@@ -64,6 +64,9 @@ jobs:
       run:
         shell: bash -el {0}
     steps:
+      - name: Install system dependencies
+        run: dnf install -y git procps-ng findutils
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # Fetch all history for all branches
