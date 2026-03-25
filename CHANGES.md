@@ -3,6 +3,11 @@ fVDB Version History
 
 Version 0.5.0 - In Development
 
+Version 0.4.1 - March 25, 2026
+
+**Bug Fixes:**
+- Updated `nanovdb-editor` dependency to use version 0.0.23.
+
 Version 0.4.0 - March 12, 2026
 
 *140 commits, 300+ files changed, 10 contributors.*
