@@ -9,14 +9,14 @@ from typing import TYPE_CHECKING, overload
 import torch
 
 from ..jagged_tensor import JaggedTensor
+from ._dispatch import _prepare_args
 
 if TYPE_CHECKING:
-    from ..grid import Grid
     from ..grid_batch import GridBatch
 
 
 @overload
-def sample_trilinear(grid: Grid, points: torch.Tensor, voxel_data: torch.Tensor) -> torch.Tensor: ...
+def sample_trilinear(grid: GridBatch, points: torch.Tensor, voxel_data: torch.Tensor) -> torch.Tensor: ...
 
 
 @overload
@@ -24,7 +24,7 @@ def sample_trilinear(grid: GridBatch, points: JaggedTensor, voxel_data: JaggedTe
 
 
 def sample_trilinear(
-    grid: Grid | GridBatch,
+    grid: GridBatch,
     points: torch.Tensor | JaggedTensor,
     voxel_data: torch.Tensor | JaggedTensor,
 ) -> torch.Tensor | JaggedTensor:
@@ -39,29 +39,24 @@ def sample_trilinear(
     Args:
         grid: The grid structure to sample from.
         points: World-space points to sample at.
-            For :class:`~fvdb.Grid`: shape ``(num_points, 3)``.
-            For :class:`~fvdb.GridBatch`: a :class:`~fvdb.JaggedTensor` with shape ``(B, -1, 3)``.
+            For a single grid: shape ``(num_points, 3)``.
+            For a batch: a :class:`~fvdb.JaggedTensor` with shape ``(B, -1, 3)``.
         voxel_data: Data associated with each voxel.
-            For :class:`~fvdb.Grid`: shape ``(total_voxels, channels*)``.
-            For :class:`~fvdb.GridBatch`: a :class:`~fvdb.JaggedTensor` with shape ``(B, -1, channels*)``.
+            For a single grid: shape ``(total_voxels, channels*)``.
+            For a batch: a :class:`~fvdb.JaggedTensor` with shape ``(B, -1, channels*)``.
 
     Returns:
         Interpolated data at each point, same type and batch structure as ``points``.
 
     .. seealso:: :func:`sample_bezier`, :func:`sample_trilinear_with_grad`
     """
-    from ..grid import Grid
-
-    if isinstance(grid, Grid):
-        jt_pts = JaggedTensor(points)
-        jt_dat = JaggedTensor(voxel_data)
-        return grid.data.sample_trilinear(jt_pts._impl, jt_dat._impl).jdata
-    return JaggedTensor(impl=grid.data.sample_trilinear(points._impl, voxel_data._impl))
+    grid_data, (points, voxel_data), unwrap = _prepare_args(grid, points, voxel_data)
+    return unwrap(grid_data.sample_trilinear(points._impl, voxel_data._impl))
 
 
 @overload
 def sample_trilinear_with_grad(
-    grid: Grid, points: torch.Tensor, voxel_data: torch.Tensor
+    grid: GridBatch, points: torch.Tensor, voxel_data: torch.Tensor
 ) -> tuple[torch.Tensor, torch.Tensor]: ...
 
 
@@ -72,7 +67,7 @@ def sample_trilinear_with_grad(
 
 
 def sample_trilinear_with_grad(
-    grid: Grid | GridBatch,
+    grid: GridBatch,
     points: torch.Tensor | JaggedTensor,
     voxel_data: torch.Tensor | JaggedTensor,
 ) -> tuple[torch.Tensor, torch.Tensor] | tuple[JaggedTensor, JaggedTensor]:
@@ -95,19 +90,13 @@ def sample_trilinear_with_grad(
 
     .. seealso:: :func:`sample_trilinear`, :func:`sample_bezier_with_grad`
     """
-    from ..grid import Grid
-
-    if isinstance(grid, Grid):
-        jt_pts = JaggedTensor(points)
-        jt_dat = JaggedTensor(voxel_data)
-        rd, rg = grid.data.sample_trilinear_with_grad(jt_pts._impl, jt_dat._impl)
-        return rd.jdata, rg.jdata
-    rd, rg = grid.data.sample_trilinear_with_grad(points._impl, voxel_data._impl)
-    return JaggedTensor(impl=rd), JaggedTensor(impl=rg)
+    grid_data, (points, voxel_data), unwrap = _prepare_args(grid, points, voxel_data)
+    rd, rg = grid_data.sample_trilinear_with_grad(points._impl, voxel_data._impl)
+    return unwrap(rd), unwrap(rg)
 
 
 @overload
-def sample_bezier(grid: Grid, points: torch.Tensor, voxel_data: torch.Tensor) -> torch.Tensor: ...
+def sample_bezier(grid: GridBatch, points: torch.Tensor, voxel_data: torch.Tensor) -> torch.Tensor: ...
 
 
 @overload
@@ -115,7 +104,7 @@ def sample_bezier(grid: GridBatch, points: JaggedTensor, voxel_data: JaggedTenso
 
 
 def sample_bezier(
-    grid: Grid | GridBatch,
+    grid: GridBatch,
     points: torch.Tensor | JaggedTensor,
     voxel_data: torch.Tensor | JaggedTensor,
 ) -> torch.Tensor | JaggedTensor:
@@ -137,18 +126,13 @@ def sample_bezier(
 
     .. seealso:: :func:`sample_trilinear`, :func:`sample_bezier_with_grad`
     """
-    from ..grid import Grid
-
-    if isinstance(grid, Grid):
-        jt_pts = JaggedTensor(points)
-        jt_dat = JaggedTensor(voxel_data)
-        return grid.data.sample_bezier(jt_pts._impl, jt_dat._impl).jdata
-    return JaggedTensor(impl=grid.data.sample_bezier(points._impl, voxel_data._impl))
+    grid_data, (points, voxel_data), unwrap = _prepare_args(grid, points, voxel_data)
+    return unwrap(grid_data.sample_bezier(points._impl, voxel_data._impl))
 
 
 @overload
 def sample_bezier_with_grad(
-    grid: Grid, points: torch.Tensor, voxel_data: torch.Tensor
+    grid: GridBatch, points: torch.Tensor, voxel_data: torch.Tensor
 ) -> tuple[torch.Tensor, torch.Tensor]: ...
 
 
@@ -159,7 +143,7 @@ def sample_bezier_with_grad(
 
 
 def sample_bezier_with_grad(
-    grid: Grid | GridBatch,
+    grid: GridBatch,
     points: torch.Tensor | JaggedTensor,
     voxel_data: torch.Tensor | JaggedTensor,
 ) -> tuple[torch.Tensor, torch.Tensor] | tuple[JaggedTensor, JaggedTensor]:
@@ -178,19 +162,13 @@ def sample_bezier_with_grad(
 
     .. seealso:: :func:`sample_bezier`, :func:`sample_trilinear_with_grad`
     """
-    from ..grid import Grid
-
-    if isinstance(grid, Grid):
-        jt_pts = JaggedTensor(points)
-        jt_dat = JaggedTensor(voxel_data)
-        rd, rg = grid.data.sample_bezier_with_grad(jt_pts._impl, jt_dat._impl)
-        return rd.jdata, rg.jdata
-    rd, rg = grid.data.sample_bezier_with_grad(points._impl, voxel_data._impl)
-    return JaggedTensor(impl=rd), JaggedTensor(impl=rg)
+    grid_data, (points, voxel_data), unwrap = _prepare_args(grid, points, voxel_data)
+    rd, rg = grid_data.sample_bezier_with_grad(points._impl, voxel_data._impl)
+    return unwrap(rd), unwrap(rg)
 
 
 @overload
-def splat_trilinear(grid: Grid, points: torch.Tensor, points_data: torch.Tensor) -> torch.Tensor: ...
+def splat_trilinear(grid: GridBatch, points: torch.Tensor, points_data: torch.Tensor) -> torch.Tensor: ...
 
 
 @overload
@@ -198,7 +176,7 @@ def splat_trilinear(grid: GridBatch, points: JaggedTensor, points_data: JaggedTe
 
 
 def splat_trilinear(
-    grid: Grid | GridBatch,
+    grid: GridBatch,
     points: torch.Tensor | JaggedTensor,
     points_data: torch.Tensor | JaggedTensor,
 ) -> torch.Tensor | JaggedTensor:
@@ -220,17 +198,12 @@ def splat_trilinear(
 
     .. seealso:: :func:`splat_bezier`, :func:`sample_trilinear`
     """
-    from ..grid import Grid
-
-    if isinstance(grid, Grid):
-        jt_pts = JaggedTensor(points)
-        jt_dat = JaggedTensor(points_data)
-        return grid.data.splat_trilinear(jt_pts._impl, jt_dat._impl).jdata
-    return JaggedTensor(impl=grid.data.splat_trilinear(points._impl, points_data._impl))
+    grid_data, (points, points_data), unwrap = _prepare_args(grid, points, points_data)
+    return unwrap(grid_data.splat_trilinear(points._impl, points_data._impl))
 
 
 @overload
-def splat_bezier(grid: Grid, points: torch.Tensor, points_data: torch.Tensor) -> torch.Tensor: ...
+def splat_bezier(grid: GridBatch, points: torch.Tensor, points_data: torch.Tensor) -> torch.Tensor: ...
 
 
 @overload
@@ -238,7 +211,7 @@ def splat_bezier(grid: GridBatch, points: JaggedTensor, points_data: JaggedTenso
 
 
 def splat_bezier(
-    grid: Grid | GridBatch,
+    grid: GridBatch,
     points: torch.Tensor | JaggedTensor,
     points_data: torch.Tensor | JaggedTensor,
 ) -> torch.Tensor | JaggedTensor:
@@ -259,10 +232,5 @@ def splat_bezier(
 
     .. seealso:: :func:`splat_trilinear`, :func:`sample_bezier`
     """
-    from ..grid import Grid
-
-    if isinstance(grid, Grid):
-        jt_pts = JaggedTensor(points)
-        jt_dat = JaggedTensor(points_data)
-        return grid.data.splat_bezier(jt_pts._impl, jt_dat._impl).jdata
-    return JaggedTensor(impl=grid.data.splat_bezier(points._impl, points_data._impl))
+    grid_data, (points, points_data), unwrap = _prepare_args(grid, points, points_data)
+    return unwrap(grid_data.splat_bezier(points._impl, points_data._impl))

@@ -9,20 +9,21 @@ from typing import TYPE_CHECKING, overload
 import torch
 
 from ..jagged_tensor import JaggedTensor
+from ._dispatch import _prepare_args
 
 if TYPE_CHECKING:
-    from ..grid import Grid
     from ..grid_batch import GridBatch
 
 
 @overload
 def voxels_along_rays(
-    grid: Grid,
+    grid: GridBatch,
     ray_origins: torch.Tensor,
     ray_directions: torch.Tensor,
     max_voxels: int,
     eps: float = 0.0,
     return_ijk: bool = False,
+    cumulative: bool = False,
 ) -> tuple[JaggedTensor, JaggedTensor]: ...
 
 
@@ -33,13 +34,13 @@ def voxels_along_rays(
     ray_directions: JaggedTensor,
     max_voxels: int,
     eps: float = 0.0,
-    return_ijk: bool = True,
+    return_ijk: bool = False,
     cumulative: bool = False,
 ) -> tuple[JaggedTensor, JaggedTensor]: ...
 
 
 def voxels_along_rays(
-    grid: Grid | GridBatch,
+    grid: GridBatch,
     ray_origins: torch.Tensor | JaggedTensor,
     ray_directions: torch.Tensor | JaggedTensor,
     max_voxels: int,
@@ -57,26 +58,20 @@ def voxels_along_rays(
         max_voxels: Maximum number of voxels to return per ray.
         eps: Epsilon for numerical stability.
         return_ijk: If ``True``, return voxel coordinates; otherwise linear indices.
-        cumulative: If ``True``, return batch-cumulative indices (GridBatch only).
+        cumulative: If ``True``, return batch-cumulative indices.
 
     Returns:
         A tuple ``(voxels, distances)`` where ``voxels`` contains ijk coordinates
         or linear indices, and ``distances`` contains ``(t_entry, t_exit)`` pairs.
     """
-    from ..grid import Grid
-
-    if isinstance(grid, Grid):
-        jt_o = JaggedTensor(ray_origins)
-        jt_d = JaggedTensor(ray_directions)
-        voxels_list, times_list = grid.data.voxels_along_rays(jt_o._impl, jt_d._impl, max_voxels, eps, return_ijk, True)
-        return JaggedTensor(impl=voxels_list[0]), JaggedTensor(impl=times_list[0])
-    rv, rt = grid.data.voxels_along_rays(ray_origins._impl, ray_directions._impl, max_voxels, eps, return_ijk, cumulative)
+    grid_data, (ray_origins, ray_directions), _ = _prepare_args(grid, ray_origins, ray_directions)
+    rv, rt = grid_data.voxels_along_rays(ray_origins._impl, ray_directions._impl, max_voxels, eps, return_ijk, cumulative)
     return JaggedTensor(impl=rv), JaggedTensor(impl=rt)
 
 
 @overload
 def segments_along_rays(
-    grid: Grid,
+    grid: GridBatch,
     ray_origins: torch.Tensor,
     ray_directions: torch.Tensor,
     max_segments: int,
@@ -95,7 +90,7 @@ def segments_along_rays(
 
 
 def segments_along_rays(
-    grid: Grid | GridBatch,
+    grid: GridBatch,
     ray_origins: torch.Tensor | JaggedTensor,
     ray_directions: torch.Tensor | JaggedTensor,
     max_segments: int,
@@ -115,18 +110,13 @@ def segments_along_rays(
     Returns:
         A :class:`~fvdb.JaggedTensor` of segments with eshape ``(2,)``.
     """
-    from ..grid import Grid
-
-    if isinstance(grid, Grid):
-        jt_o = JaggedTensor(ray_origins)
-        jt_d = JaggedTensor(ray_directions)
-        return JaggedTensor(impl=grid.data.segments_along_rays(jt_o._impl, jt_d._impl, max_segments, eps)[0])
-    return JaggedTensor(impl=grid.data.segments_along_rays(ray_origins._impl, ray_directions._impl, max_segments, eps))
+    grid_data, (ray_origins, ray_directions), _ = _prepare_args(grid, ray_origins, ray_directions)
+    return JaggedTensor(impl=grid_data.segments_along_rays(ray_origins._impl, ray_directions._impl, max_segments, eps))
 
 
 @overload
 def uniform_ray_samples(
-    grid: Grid,
+    grid: GridBatch,
     ray_origins: torch.Tensor,
     ray_directions: torch.Tensor,
     t_min: torch.Tensor,
@@ -155,7 +145,7 @@ def uniform_ray_samples(
 
 
 def uniform_ray_samples(
-    grid: Grid | GridBatch,
+    grid: GridBatch,
     ray_origins: torch.Tensor | JaggedTensor,
     ray_directions: torch.Tensor | JaggedTensor,
     t_min: torch.Tensor | JaggedTensor,
@@ -184,30 +174,27 @@ def uniform_ray_samples(
     Returns:
         A :class:`~fvdb.JaggedTensor` of sample distances.
     """
-    from ..grid import Grid
-
-    if isinstance(grid, Grid):
-        jt_o = JaggedTensor(ray_origins)
-        jt_d = JaggedTensor(ray_directions)
-        jt_mn = JaggedTensor(t_min)
-        jt_mx = JaggedTensor(t_max)
-        return JaggedTensor(
-            impl=grid.data.uniform_ray_samples(
-                jt_o._impl, jt_d._impl, jt_mn._impl, jt_mx._impl,
-                step_size, cone_angle, include_end_segments, return_midpoints, eps,
-            )[0]
-        )
+    grid_data, (ray_origins, ray_directions, t_min, t_max), _ = _prepare_args(
+        grid, ray_origins, ray_directions, t_min, t_max
+    )
     return JaggedTensor(
-        impl=grid.data.uniform_ray_samples(
-            ray_origins._impl, ray_directions._impl, t_min._impl, t_max._impl,
-            step_size, cone_angle, include_end_segments, return_midpoints, eps,
+        impl=grid_data.uniform_ray_samples(
+            ray_origins._impl,
+            ray_directions._impl,
+            t_min._impl,
+            t_max._impl,
+            step_size,
+            cone_angle,
+            include_end_segments,
+            return_midpoints,
+            eps,
         )
     )
 
 
 @overload
 def ray_implicit_intersection(
-    grid: Grid,
+    grid: GridBatch,
     ray_origins: torch.Tensor,
     ray_directions: torch.Tensor,
     grid_scalars: torch.Tensor,
@@ -226,7 +213,7 @@ def ray_implicit_intersection(
 
 
 def ray_implicit_intersection(
-    grid: Grid | GridBatch,
+    grid: GridBatch,
     ray_origins: torch.Tensor | JaggedTensor,
     ray_directions: torch.Tensor | JaggedTensor,
     grid_scalars: torch.Tensor | JaggedTensor,
@@ -246,13 +233,7 @@ def ray_implicit_intersection(
     Returns:
         Intersection distance along each ray, or ``-1`` if no intersection.
     """
-    from ..grid import Grid
-
-    if isinstance(grid, Grid):
-        jt_o = JaggedTensor(ray_origins)
-        jt_d = JaggedTensor(ray_directions)
-        jt_s = JaggedTensor(grid_scalars)
-        return grid.data.ray_implicit_intersection(jt_o._impl, jt_d._impl, jt_s._impl, eps).jdata
-    return JaggedTensor(
-        impl=grid.data.ray_implicit_intersection(ray_origins._impl, ray_directions._impl, grid_scalars._impl, eps)
+    grid_data, (ray_origins, ray_directions, grid_scalars), unwrap = _prepare_args(
+        grid, ray_origins, ray_directions, grid_scalars
     )
+    return unwrap(grid_data.ray_implicit_intersection(ray_origins._impl, ray_directions._impl, grid_scalars._impl, eps))

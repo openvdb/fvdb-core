@@ -9,14 +9,14 @@ from typing import TYPE_CHECKING, overload
 import torch
 
 from ..jagged_tensor import JaggedTensor
+from ._dispatch import _prepare_args
 
 if TYPE_CHECKING:
-    from ..grid import Grid
     from ..grid_batch import GridBatch
 
 
 @overload
-def voxel_to_world(grid: Grid, ijk: torch.Tensor) -> torch.Tensor: ...
+def voxel_to_world(grid: GridBatch, ijk: torch.Tensor) -> torch.Tensor: ...
 
 
 @overload
@@ -24,7 +24,7 @@ def voxel_to_world(grid: GridBatch, ijk: JaggedTensor) -> JaggedTensor: ...
 
 
 def voxel_to_world(
-    grid: Grid | GridBatch,
+    grid: GridBatch,
     ijk: torch.Tensor | JaggedTensor,
 ) -> torch.Tensor | JaggedTensor:
     """
@@ -36,24 +36,20 @@ def voxel_to_world(
     Args:
         grid: The grid whose transform to use.
         ijk: Voxel-space coordinates (can be fractional).
-            For :class:`~fvdb.Grid`: shape ``(N, 3)``.
-            For :class:`~fvdb.GridBatch`: a :class:`~fvdb.JaggedTensor` with shape ``(B, -1, 3)``.
+            For a single grid: shape ``(N, 3)``.
+            For a batch: a :class:`~fvdb.JaggedTensor` with shape ``(B, -1, 3)``.
 
     Returns:
         World-space coordinates, same type as ``ijk``.
 
     .. seealso:: :func:`world_to_voxel`
     """
-    from ..grid import Grid
-
-    if isinstance(grid, Grid):
-        jt_ijk = JaggedTensor(ijk)
-        return grid.data.voxel_to_world(jt_ijk._impl).jdata
-    return JaggedTensor(impl=grid.data.voxel_to_world(ijk._impl))
+    grid_data, (ijk,), unwrap = _prepare_args(grid, ijk)
+    return unwrap(grid_data.voxel_to_world(ijk._impl))
 
 
 @overload
-def world_to_voxel(grid: Grid, points: torch.Tensor) -> torch.Tensor: ...
+def world_to_voxel(grid: GridBatch, points: torch.Tensor) -> torch.Tensor: ...
 
 
 @overload
@@ -61,7 +57,7 @@ def world_to_voxel(grid: GridBatch, points: JaggedTensor) -> JaggedTensor: ...
 
 
 def world_to_voxel(
-    grid: Grid | GridBatch,
+    grid: GridBatch,
     points: torch.Tensor | JaggedTensor,
 ) -> torch.Tensor | JaggedTensor:
     """
@@ -73,17 +69,13 @@ def world_to_voxel(
     Args:
         grid: The grid whose transform to use.
         points: World-space positions.
-            For :class:`~fvdb.Grid`: shape ``(N, 3)``.
-            For :class:`~fvdb.GridBatch`: a :class:`~fvdb.JaggedTensor` with shape ``(B, -1, 3)``.
+            For a single grid: shape ``(N, 3)``.
+            For a batch: a :class:`~fvdb.JaggedTensor` with shape ``(B, -1, 3)``.
 
     Returns:
         Voxel-space coordinates, same type as ``points``.
 
     .. seealso:: :func:`voxel_to_world`
     """
-    from ..grid import Grid
-
-    if isinstance(grid, Grid):
-        jt_pts = JaggedTensor(points)
-        return grid.data.world_to_voxel(jt_pts._impl).jdata
-    return JaggedTensor(impl=grid.data.world_to_voxel(points._impl))
+    grid_data, (points,), unwrap = _prepare_args(grid, points)
+    return unwrap(grid_data.world_to_voxel(points._impl))

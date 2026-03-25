@@ -10,9 +10,9 @@ import torch
 
 from ..jagged_tensor import JaggedTensor
 from ..types import NumericMaxRank1, NumericMaxRank2, ValueConstraint, to_Vec3i, to_Vec3iBatchBroadcastable, to_Vec3iBroadcastable
+from ._dispatch import _prepare_args
 
 if TYPE_CHECKING:
-    from ..grid import Grid
     from ..grid_batch import GridBatch
 
 
@@ -21,26 +21,15 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 
-@overload
-def inject_from_dense_cminor(grid: Grid, dense_data: torch.Tensor, dense_origin: NumericMaxRank1 = 0) -> torch.Tensor: ...
-
-
-@overload
 def inject_from_dense_cminor(
-    grid: GridBatch, dense_data: torch.Tensor, dense_origin: NumericMaxRank1 = 0
-) -> JaggedTensor: ...
-
-
-def inject_from_dense_cminor(
-    grid: Grid | GridBatch,
+    grid: GridBatch,
     dense_data: torch.Tensor,
     dense_origin: NumericMaxRank1 = 0,
-) -> torch.Tensor | JaggedTensor:
+) -> JaggedTensor:
     """
     Inject values from a dense tensor (XYZC order) into sparse voxel data.
 
-    For :class:`~fvdb.Grid`, ``dense_data`` has shape ``(X, Y, Z, C*)``.
-    For :class:`~fvdb.GridBatch`, ``dense_data`` has shape ``(B, X, Y, Z, C*)``.
+    ``dense_data`` has shape ``(B, X, Y, Z, C*)``.
 
     This function supports backpropagation.
 
@@ -50,38 +39,23 @@ def inject_from_dense_cminor(
         dense_origin: Origin of the dense tensor in voxel space, broadcastable to ``(3,)``.
 
     Returns:
-        Sparse data at active voxel locations.
+        Sparse data at active voxel locations as a :class:`~fvdb.JaggedTensor`.
 
     .. seealso:: :func:`inject_from_dense_cmajor`, :func:`inject_to_dense_cminor`
     """
-    from ..grid import Grid
-
     origin = to_Vec3i(dense_origin)
-    if isinstance(grid, Grid):
-        return grid.data.inject_from_dense_cminor(dense_data.unsqueeze(0), origin).jdata
     return JaggedTensor(impl=grid.data.inject_from_dense_cminor(dense_data, origin))
 
 
-@overload
-def inject_from_dense_cmajor(grid: Grid, dense_data: torch.Tensor, dense_origin: NumericMaxRank1 = 0) -> torch.Tensor: ...
-
-
-@overload
 def inject_from_dense_cmajor(
-    grid: GridBatch, dense_data: torch.Tensor, dense_origin: NumericMaxRank1 = 0
-) -> JaggedTensor: ...
-
-
-def inject_from_dense_cmajor(
-    grid: Grid | GridBatch,
+    grid: GridBatch,
     dense_data: torch.Tensor,
     dense_origin: NumericMaxRank1 = 0,
-) -> torch.Tensor | JaggedTensor:
+) -> JaggedTensor:
     """
     Inject values from a dense tensor (CXYZ order) into sparse voxel data.
 
-    For :class:`~fvdb.Grid`, ``dense_data`` has shape ``(C*, X, Y, Z)``.
-    For :class:`~fvdb.GridBatch`, ``dense_data`` has shape ``(B, C*, X, Y, Z)``.
+    ``dense_data`` has shape ``(B, C*, X, Y, Z)``.
 
     This function supports backpropagation.
 
@@ -91,15 +65,11 @@ def inject_from_dense_cmajor(
         dense_origin: Origin of the dense tensor in voxel space, broadcastable to ``(3,)``.
 
     Returns:
-        Sparse data at active voxel locations.
+        Sparse data at active voxel locations as a :class:`~fvdb.JaggedTensor`.
 
     .. seealso:: :func:`inject_from_dense_cminor`, :func:`inject_to_dense_cmajor`
     """
-    from ..grid import Grid
-
     origin = to_Vec3i(dense_origin)
-    if isinstance(grid, Grid):
-        return grid.data.inject_from_dense_cmajor(dense_data.unsqueeze(0), origin).jdata
     return JaggedTensor(impl=grid.data.inject_from_dense_cmajor(dense_data, origin))
 
 
@@ -110,9 +80,9 @@ def inject_from_dense_cmajor(
 
 @overload
 def inject_to_dense_cminor(
-    grid: Grid,
+    grid: GridBatch,
     sparse_data: torch.Tensor,
-    min_coord: NumericMaxRank1 | None = None,
+    min_coord: NumericMaxRank1 | NumericMaxRank2 | None = None,
     grid_size: NumericMaxRank1 | None = None,
 ) -> torch.Tensor: ...
 
@@ -121,13 +91,13 @@ def inject_to_dense_cminor(
 def inject_to_dense_cminor(
     grid: GridBatch,
     sparse_data: JaggedTensor,
-    min_coord: NumericMaxRank2 | None = None,
+    min_coord: NumericMaxRank1 | NumericMaxRank2 | None = None,
     grid_size: NumericMaxRank1 | None = None,
 ) -> torch.Tensor: ...
 
 
 def inject_to_dense_cminor(
-    grid: Grid | GridBatch,
+    grid: GridBatch,
     sparse_data: torch.Tensor | JaggedTensor,
     min_coord: NumericMaxRank1 | NumericMaxRank2 | None = None,
     grid_size: NumericMaxRank1 | None = None,
@@ -147,28 +117,22 @@ def inject_to_dense_cminor(
         grid_size: Size of the output dense tensor. ``None`` computes it to fit all active voxels.
 
     Returns:
-        Dense tensor. For :class:`~fvdb.Grid`: shape ``(X, Y, Z, C*)``.
-        For :class:`~fvdb.GridBatch`: shape ``(B, X, Y, Z, C*)``.
+        Dense tensor with shape ``(B, X, Y, Z, C*)``.
 
     .. seealso:: :func:`inject_to_dense_cmajor`, :func:`inject_from_dense_cminor`
     """
-    from ..grid import Grid
-
     gs = to_Vec3iBroadcastable(grid_size, value_constraint=ValueConstraint.POSITIVE) if grid_size is not None else None
-
-    if isinstance(grid, Grid):
-        jt_sd = JaggedTensor(sparse_data)
-        mc = to_Vec3iBroadcastable(min_coord) if min_coord is not None else None
-        return grid.data.inject_to_dense_cminor(jt_sd._impl, mc, gs).squeeze(0)
     mc = to_Vec3iBatchBroadcastable(min_coord) if min_coord is not None else None
-    return grid.data.inject_to_dense_cminor(sparse_data._impl, mc, gs)
+
+    grid_data, (sparse_data,), _ = _prepare_args(grid, sparse_data)
+    return grid_data.inject_to_dense_cminor(sparse_data._impl, mc, gs)
 
 
 @overload
 def inject_to_dense_cmajor(
-    grid: Grid,
+    grid: GridBatch,
     sparse_data: torch.Tensor,
-    min_coord: NumericMaxRank1 | None = None,
+    min_coord: NumericMaxRank1 | NumericMaxRank2 | None = None,
     grid_size: NumericMaxRank1 | None = None,
 ) -> torch.Tensor: ...
 
@@ -177,13 +141,13 @@ def inject_to_dense_cmajor(
 def inject_to_dense_cmajor(
     grid: GridBatch,
     sparse_data: JaggedTensor,
-    min_coord: NumericMaxRank2 | None = None,
+    min_coord: NumericMaxRank1 | NumericMaxRank2 | None = None,
     grid_size: NumericMaxRank1 | None = None,
 ) -> torch.Tensor: ...
 
 
 def inject_to_dense_cmajor(
-    grid: Grid | GridBatch,
+    grid: GridBatch,
     sparse_data: torch.Tensor | JaggedTensor,
     min_coord: NumericMaxRank1 | NumericMaxRank2 | None = None,
     grid_size: NumericMaxRank1 | None = None,
@@ -202,21 +166,15 @@ def inject_to_dense_cmajor(
         grid_size: Size of the output dense tensor.
 
     Returns:
-        Dense tensor. For :class:`~fvdb.Grid`: shape ``(C*, X, Y, Z)``.
-        For :class:`~fvdb.GridBatch`: shape ``(B, C*, X, Y, Z)``.
+        Dense tensor with shape ``(B, C*, X, Y, Z)``.
 
     .. seealso:: :func:`inject_to_dense_cminor`, :func:`inject_from_dense_cmajor`
     """
-    from ..grid import Grid
-
     gs = to_Vec3iBroadcastable(grid_size, value_constraint=ValueConstraint.POSITIVE) if grid_size is not None else None
-
-    if isinstance(grid, Grid):
-        jt_sd = JaggedTensor(sparse_data)
-        mc = to_Vec3iBroadcastable(min_coord) if min_coord is not None else None
-        return grid.data.inject_to_dense_cmajor(jt_sd._impl, mc, gs).squeeze(0)
     mc = to_Vec3iBatchBroadcastable(min_coord) if min_coord is not None else None
-    return grid.data.inject_to_dense_cmajor(sparse_data._impl, mc, gs)
+
+    grid_data, (sparse_data,), _ = _prepare_args(grid, sparse_data)
+    return grid_data.inject_to_dense_cmajor(sparse_data._impl, mc, gs)
 
 
 # ---------------------------------------------------------------------------
@@ -226,8 +184,8 @@ def inject_to_dense_cmajor(
 
 @overload
 def inject(
-    dst_grid: Grid,
-    src_grid: Grid,
+    dst_grid: GridBatch,
+    src_grid: GridBatch,
     src: torch.Tensor,
     dst: torch.Tensor | None = None,
     default_value: float | int | bool = 0,
@@ -245,8 +203,8 @@ def inject(
 
 
 def inject(
-    dst_grid: Grid | GridBatch,
-    src_grid: Grid | GridBatch,
+    dst_grid: GridBatch,
+    src_grid: GridBatch,
     src: torch.Tensor | JaggedTensor,
     dst: torch.Tensor | JaggedTensor | None = None,
     default_value: float | int | bool = 0,
@@ -270,13 +228,13 @@ def inject(
     Returns:
         The destination data after injection.
     """
-    from ..grid import Grid
+    is_flat = isinstance(src, torch.Tensor)
 
-    if isinstance(dst_grid, Grid):
+    if is_flat:
         jt_src = JaggedTensor(src)
         if dst is None:
             eshape = list(src.shape[1:]) if src.dim() > 1 else []
-            dst_shape = [dst_grid.num_voxels] + eshape
+            dst_shape = [dst_grid.total_voxels] + eshape
             raw_dst = torch.full(dst_shape, fill_value=default_value, dtype=src.dtype, device=src.device)
         else:
             raw_dst = dst

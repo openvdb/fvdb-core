@@ -69,7 +69,6 @@ from ._fvdb_cpp import (
 # Import JaggedTensor from jagged_tensor.py
 from .jagged_tensor import JaggedTensor, jcat
 from .grid_batch import GridBatch, gcat
-from .grid import Grid
 
 
 def scaled_dot_product_attention(
@@ -188,7 +187,6 @@ __version_info__ = tuple(map(int, __version__.split(".")))
 __all__ = [
     # Core classes
     "GridBatch",
-    "Grid",
     "JaggedTensor",
     "GaussianSplat3d",
     "ProjectedGaussianSplats",

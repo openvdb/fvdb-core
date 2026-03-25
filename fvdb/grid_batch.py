@@ -15,7 +15,6 @@ Class-methods for creating GridBatch objects from various sources:
 - :meth:`GridBatch.from_zero_voxels()`: for a grid batch where each grid has zero voxels.
 - :meth:`GridBatch.from_dense()`: for a grid batch where each grid is dense data
 - :meth:`GridBatch.from_dense_axis_aligned_bounds()`: for a grid batch where each grid is dense data defined by axis-aligned bounds
-- :meth:`GridBatch.from_grid()`: for a grid batch from a single :class:`Grid` instance
 - :meth:`GridBatch.from_ijk()`: for a grid batch from explicit voxel coordinates
 - :meth:`GridBatch.from_mesh()`: for a grid batch from triangle meshes
 - :meth:`GridBatch.from_points()`: for a grid batch from point clouds
@@ -54,7 +53,7 @@ from .types import (
 )
 
 if TYPE_CHECKING:
-    from .grid import Grid
+    pass
 
 
 class GridBatch:
@@ -67,8 +66,8 @@ class GridBatch:
     sampling, convolution, pooling, dilation, union, etc. It also provides more advanced features
     such as marching cubes, TSDF fusion, and fast ray marching.
 
-    A :class:`GridBatch` can be thought of as a mini-batch of :class:`Grid` instances and,
-    like the :class:`Grid`, does not collect the sparse voxel grids' data but only collects
+    A :class:`GridBatch` can be thought of as a mini-batch of sparse grids and
+    does not collect the sparse voxel grids' data but only collects
     their structure (or topology). Voxel data (e.g., features, colors, densities) for the
     collection of grids is stored separately as an :class:`JaggedTensor` associated with
     the :class:`GridBatch`. This separation allows for flexibility in the type and number of
@@ -128,7 +127,6 @@ class GridBatch:
             - :meth:`from_zero_voxels()`: for a grid batch where each grid has zero voxels.
             - :meth:`from_dense()`: for a grid batch where each grid is dense data
             - :meth:`from_dense_axis_aligned_bounds()`: for a grid batch where each grid is dense data defined by axis-aligned bounds
-            - :meth:`from_grid()`: for a grid batch from a single :class:`Grid` instance
             - :meth:`from_ijk()`: for a grid batch from explicit voxel coordinates
             - :meth:`from_mesh()`: for a grid batch from triangle meshes
             - :meth:`from_points()`: for a grid batch from point clouds
@@ -291,34 +289,6 @@ class GridBatch:
             origin = bounds_min + 0.5 * voxel_size
 
         return cls.from_dense(num_grids, dense_dims=dense_dims, voxel_sizes=voxel_size, origins=origin, device=device)
-
-    @classmethod
-    def from_grid(cls, grid: "Grid") -> "GridBatch":
-        """
-        Create a :class:`fvdb.GridBatch` of batch size 1 from a single :class:`fvdb.Grid`.
-
-        Args:
-            grid (Grid): The :class:`fvdb.Grid` to create the grid batch from.
-
-        Returns:
-            grid_batch (GridBatch): A new :class:`fvdb.GridBatch` object.
-
-        Examples:
-
-            .. code-block:: python
-
-                grid = fvdb.Grid.from_ijk(
-                    ijk=torch.tensor([[0, 0, 0], [0, 0, 1], [0, 1, 0], [1, 0, 0], [1, 1, 0], [1, 0, 1], [0, 1, 1], [1, 1, 1]]),
-                    voxel_size=[1.0, 1.0, 1.0],
-                    origin=[0.0, 0.0, 0.0],
-                    device="cuda",
-                )
-                grid_batch = fvdb.GridBatch.from_grid(grid)
-                grid_batch.grid_count # 1
-                grid_batch.ijk.jdata == tensor([[0, 0, 0], [0, 0, 1], [0, 1, 0], [1, 0, 0], [1, 1, 0], [1, 0, 1], [0, 1, 1], [1, 1, 1]])
-
-        """
-        return cls(data=grid.data)
 
     @classmethod
     def from_ijk(
@@ -691,22 +661,20 @@ class GridBatch:
         return cls(data=grid_batch_impl)
 
     @classmethod
-    def from_cat(cls, grids: "Sequence[GridBatch | Grid]") -> "GridBatch":
+    def from_cat(cls, grids: "Sequence[GridBatch]") -> "GridBatch":
         """
-        Create a grid batch from concatenating a sequence of grids and grid batches.
+        Create a grid batch from concatenating a sequence of grid batches.
 
         Args:
-            grids: The sequence of grids and grid batches to concatenate.
+            grids: The sequence of grid batches to concatenate.
 
         Returns:
             grid_batch (GridBatch): A new :class:`fvdb.GridBatch` object.
         """
         grid_impls: list[GridBatchCpp] = []
-        from .grid import Grid
-
         for grid in grids:
-            if not isinstance(grid, (GridBatch, Grid)):
-                raise TypeError(f"Expected GridBatch or Grid, got {type(grid)}")
+            if not isinstance(grid, GridBatch):
+                raise TypeError(f"Expected GridBatch, got {type(grid)}")
             grid_impls.append(grid.data)
         return cls(data=jcat_cpp(grid_impls))
 
@@ -2877,14 +2845,14 @@ class GridBatch:
         return self.data
 
 
-def gcat(grids: "Sequence[GridBatch|Grid]") -> GridBatch:
+def gcat(grids: "Sequence[GridBatch]") -> GridBatch:
     """
-    Concatenate a sequence of GridBatches or Grids into a single GridBatch.
+    Concatenate a sequence of GridBatches into a single GridBatch.
 
     Concatenation is concatenation along the batch dimension, and increases the batch count.
 
     Args:
-        grids: The sequence of GridBatches or Grids to concatenate.
+        grids: The sequence of GridBatches to concatenate.
 
     Returns:
         grid_batch (GridBatch): A new :class:`fvdb.GridBatch` object.

@@ -10,9 +10,9 @@ import torch
 
 from ..jagged_tensor import JaggedTensor
 from ..types import NumericMaxRank1, ValueConstraint, to_Vec3i, to_Vec3iBroadcastable
+from ._dispatch import _prepare_args, _prepare_grid
 
 if TYPE_CHECKING:
-    from ..grid import Grid
     from ..grid_batch import GridBatch
 
 
@@ -21,18 +21,10 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 
-@overload
-def coarsened_grid(grid: Grid, coarsening_factor: NumericMaxRank1) -> Grid: ...
-
-
-@overload
-def coarsened_grid(grid: GridBatch, coarsening_factor: NumericMaxRank1) -> GridBatch: ...
-
-
 def coarsened_grid(
-    grid: Grid | GridBatch,
+    grid: GridBatch,
     coarsening_factor: NumericMaxRank1,
-) -> Grid | GridBatch:
+) -> GridBatch:
     """
     Return a coarsened version of the grid, keeping only voxels whose
     coordinates are divisible by ``coarsening_factor``.
@@ -42,32 +34,18 @@ def coarsened_grid(
         coarsening_factor: Factor per axis, broadcastable to ``(3,)``, integer dtype.
 
     Returns:
-        A new grid with coarsened structure, same type as ``grid``.
+        A new grid with coarsened structure.
     """
-    from ..grid import Grid
-
+    grid_data, unwrap_grid = _prepare_grid(grid)
     cf = to_Vec3iBroadcastable(coarsening_factor, value_constraint=ValueConstraint.POSITIVE)
-    impl = grid.data.coarsened_grid(cf)
-    if isinstance(grid, Grid):
-        return Grid(data=impl)
-    from ..grid_batch import GridBatch as GB
-
-    return GB(data=impl)
-
-
-@overload
-def refined_grid(grid: Grid, subdiv_factor: NumericMaxRank1, mask: torch.Tensor | None = None) -> Grid: ...
-
-
-@overload
-def refined_grid(grid: GridBatch, subdiv_factor: NumericMaxRank1, mask: JaggedTensor | None = None) -> GridBatch: ...
+    return unwrap_grid(grid_data.coarsened_grid(cf))
 
 
 def refined_grid(
-    grid: Grid | GridBatch,
+    grid: GridBatch,
     subdiv_factor: NumericMaxRank1,
     mask: torch.Tensor | JaggedTensor | None = None,
-) -> Grid | GridBatch:
+) -> GridBatch:
     """
     Return a refined (subdivided) version of the grid. Each voxel is
     subdivided by ``subdiv_factor``. An optional boolean ``mask`` selects which
@@ -79,31 +57,22 @@ def refined_grid(
         mask: Optional boolean mask selecting voxels to refine.
 
     Returns:
-        A new grid with refined structure, same type as ``grid``.
+        A new grid with refined structure.
 
     .. seealso:: :func:`~fvdb.functional.refine` in ``_pooling`` for refining *data*.
     """
-    from ..grid import Grid
-
+    grid_data, unwrap_grid = _prepare_grid(grid)
     sf = to_Vec3iBroadcastable(subdiv_factor, value_constraint=ValueConstraint.POSITIVE)
-    if isinstance(grid, Grid):
-        m = JaggedTensor(mask)._impl if mask is not None else None
-        return Grid(data=grid.data.refined_grid(sf, mask=m))
-    m = mask._impl if mask is not None else None
-    from ..grid_batch import GridBatch as GB
-
-    return GB(data=grid.data.refined_grid(sf, m))
-
-
-@overload
-def dual_grid(grid: Grid, exclude_border: bool = False) -> Grid: ...
+    if mask is not None:
+        if isinstance(mask, torch.Tensor):
+            mask = JaggedTensor(mask)
+        m = mask._impl
+    else:
+        m = None
+    return unwrap_grid(grid_data.refined_grid(sf, m))
 
 
-@overload
-def dual_grid(grid: GridBatch, exclude_border: bool = False) -> GridBatch: ...
-
-
-def dual_grid(grid: Grid | GridBatch, exclude_border: bool = False) -> Grid | GridBatch:
+def dual_grid(grid: GridBatch, exclude_border: bool = False) -> GridBatch:
     """
     Return the dual grid whose voxel centers correspond to corners of the
     primal grid.
@@ -113,27 +82,13 @@ def dual_grid(grid: Grid | GridBatch, exclude_border: bool = False) -> Grid | Gr
         exclude_border: Exclude border voxels that extend beyond primal bounds.
 
     Returns:
-        A new dual grid, same type as ``grid``.
+        A new dual grid.
     """
-    from ..grid import Grid
-
-    impl = grid.data.dual_grid(exclude_border)
-    if isinstance(grid, Grid):
-        return Grid(data=impl)
-    from ..grid_batch import GridBatch as GB
-
-    return GB(data=impl)
+    grid_data, unwrap_grid = _prepare_grid(grid)
+    return unwrap_grid(grid_data.dual_grid(exclude_border))
 
 
-@overload
-def dilated_grid(grid: Grid, dilation: int) -> Grid: ...
-
-
-@overload
-def dilated_grid(grid: GridBatch, dilation: int) -> GridBatch: ...
-
-
-def dilated_grid(grid: Grid | GridBatch, dilation: int) -> Grid | GridBatch:
+def dilated_grid(grid: GridBatch, dilation: int) -> GridBatch:
     """
     Return a grid dilated by ``dilation`` voxels.
 
@@ -142,27 +97,13 @@ def dilated_grid(grid: Grid | GridBatch, dilation: int) -> Grid | GridBatch:
         dilation: Dilation radius in voxels.
 
     Returns:
-        A new dilated grid, same type as ``grid``.
+        A new dilated grid.
     """
-    from ..grid import Grid
-
-    impl = grid.data.dilated_grid(dilation)
-    if isinstance(grid, Grid):
-        return Grid(data=impl)
-    from ..grid_batch import GridBatch as GB
-
-    return GB(data=impl)
+    grid_data, unwrap_grid = _prepare_grid(grid)
+    return unwrap_grid(grid_data.dilated_grid(dilation))
 
 
-@overload
-def merged_grid(grid: Grid, other: Grid) -> Grid: ...
-
-
-@overload
-def merged_grid(grid: GridBatch, other: GridBatch) -> GridBatch: ...
-
-
-def merged_grid(grid: Grid | GridBatch, other: Grid | GridBatch) -> Grid | GridBatch:
+def merged_grid(grid: GridBatch, other: GridBatch) -> GridBatch:
     """
     Return the union of two grids (merged active voxels).
 
@@ -171,20 +112,14 @@ def merged_grid(grid: Grid | GridBatch, other: Grid | GridBatch) -> Grid | GridB
         other: Second grid to merge with.
 
     Returns:
-        A new grid containing the union of active voxels, same type as ``grid``.
+        A new grid containing the union of active voxels.
     """
-    from ..grid import Grid
-
-    impl = grid.data.merged_grid(other.data)
-    if isinstance(grid, Grid):
-        return Grid(data=impl)
-    from ..grid_batch import GridBatch as GB
-
-    return GB(data=impl)
+    grid_data, unwrap_grid = _prepare_grid(grid)
+    return unwrap_grid(grid_data.merged_grid(other.data))
 
 
 @overload
-def pruned_grid(grid: Grid, mask: torch.Tensor) -> Grid: ...
+def pruned_grid(grid: GridBatch, mask: torch.Tensor) -> GridBatch: ...
 
 
 @overload
@@ -192,9 +127,9 @@ def pruned_grid(grid: GridBatch, mask: JaggedTensor) -> GridBatch: ...
 
 
 def pruned_grid(
-    grid: Grid | GridBatch,
+    grid: GridBatch,
     mask: torch.Tensor | JaggedTensor,
-) -> Grid | GridBatch:
+) -> GridBatch:
     """
     Return a grid containing only voxels where ``mask`` is ``True``.
 
@@ -203,16 +138,12 @@ def pruned_grid(
         mask: Boolean mask for each voxel.
 
     Returns:
-        A new pruned grid, same type as ``grid``.
+        A new pruned grid.
     """
-    from ..grid import Grid
-
-    if isinstance(grid, Grid):
-        jt_m = JaggedTensor(mask)
-        return Grid(data=grid.data.pruned_grid(jt_m._impl))
-    from ..grid_batch import GridBatch as GB
-
-    return GB(data=grid.data.pruned_grid(mask._impl))
+    grid_data, unwrap_grid = _prepare_grid(grid)
+    if isinstance(mask, torch.Tensor):
+        mask = JaggedTensor(mask)
+    return unwrap_grid(grid_data.pruned_grid(mask._impl))
 
 
 # ---------------------------------------------------------------------------
@@ -220,19 +151,11 @@ def pruned_grid(
 # ---------------------------------------------------------------------------
 
 
-@overload
-def conv_grid(grid: Grid, kernel_size: NumericMaxRank1, stride: NumericMaxRank1 = 1) -> Grid: ...
-
-
-@overload
-def conv_grid(grid: GridBatch, kernel_size: NumericMaxRank1, stride: NumericMaxRank1 = 1) -> GridBatch: ...
-
-
 def conv_grid(
-    grid: Grid | GridBatch,
+    grid: GridBatch,
     kernel_size: NumericMaxRank1,
     stride: NumericMaxRank1 = 1,
-) -> Grid | GridBatch:
+) -> GridBatch:
     """
     Return the grid representing active voxels at the output of a convolution
     with the given kernel size and stride.
@@ -243,33 +166,19 @@ def conv_grid(
         stride: Stride, broadcastable to ``(3,)``, integer dtype.
 
     Returns:
-        Output grid for the convolution, same type as ``grid``.
+        Output grid for the convolution.
     """
-    from ..grid import Grid
-
+    grid_data, unwrap_grid = _prepare_grid(grid)
     ks = to_Vec3iBroadcastable(kernel_size, value_constraint=ValueConstraint.POSITIVE)
     st = to_Vec3iBroadcastable(stride, value_constraint=ValueConstraint.POSITIVE)
-    impl = grid.data.conv_grid(ks, st)
-    if isinstance(grid, Grid):
-        return Grid(data=impl)
-    from ..grid_batch import GridBatch as GB
-
-    return GB(data=impl)
-
-
-@overload
-def conv_transpose_grid(grid: Grid, kernel_size: NumericMaxRank1, stride: NumericMaxRank1 = 1) -> Grid: ...
-
-
-@overload
-def conv_transpose_grid(grid: GridBatch, kernel_size: NumericMaxRank1, stride: NumericMaxRank1 = 1) -> GridBatch: ...
+    return unwrap_grid(grid_data.conv_grid(ks, st))
 
 
 def conv_transpose_grid(
-    grid: Grid | GridBatch,
+    grid: GridBatch,
     kernel_size: NumericMaxRank1,
     stride: NumericMaxRank1 = 1,
-) -> Grid | GridBatch:
+) -> GridBatch:
     """
     Return the grid representing active voxels at the output of a transposed
     convolution with the given kernel size and stride.
@@ -280,18 +189,12 @@ def conv_transpose_grid(
         stride: Stride, broadcastable to ``(3,)``, integer dtype.
 
     Returns:
-        Output grid for the transposed convolution, same type as ``grid``.
+        Output grid for the transposed convolution.
     """
-    from ..grid import Grid
-
+    grid_data, unwrap_grid = _prepare_grid(grid)
     ks = to_Vec3iBroadcastable(kernel_size, value_constraint=ValueConstraint.POSITIVE)
     st = to_Vec3iBroadcastable(stride, value_constraint=ValueConstraint.POSITIVE)
-    impl = grid.data.conv_transpose_grid(ks, st)
-    if isinstance(grid, Grid):
-        return Grid(data=impl)
-    from ..grid_batch import GridBatch as GB
-
-    return GB(data=impl)
+    return unwrap_grid(grid_data.conv_transpose_grid(ks, st))
 
 
 # ---------------------------------------------------------------------------
@@ -299,15 +202,7 @@ def conv_transpose_grid(
 # ---------------------------------------------------------------------------
 
 
-@overload
-def morton(grid: Grid, offset: torch.Tensor | None = None) -> torch.Tensor: ...
-
-
-@overload
-def morton(grid: GridBatch, offset: NumericMaxRank1 | None = None) -> JaggedTensor: ...
-
-
-def morton(grid: Grid | GridBatch, offset: torch.Tensor | NumericMaxRank1 | None = None) -> torch.Tensor | JaggedTensor:
+def morton(grid: GridBatch, offset: torch.Tensor | NumericMaxRank1 | None = None) -> JaggedTensor:
     """
     Return Morton (Z-order) codes for active voxels. Uses xyz bit interleaving.
 
@@ -319,30 +214,14 @@ def morton(grid: Grid | GridBatch, offset: torch.Tensor | NumericMaxRank1 | None
     Returns:
         Morton codes for each active voxel.
     """
-    from ..grid import Grid
-
-    if isinstance(grid, Grid):
-        if offset is None:
-            offset = -torch.min(grid.data.ijk.jdata, dim=0).values
-        return grid.data.morton(offset).jdata
     if offset is None:
         offset = -torch.min(grid.data.ijk.jdata, dim=0).values
-    else:
+    elif not isinstance(offset, torch.Tensor):
         offset = to_Vec3i(offset)
     return JaggedTensor(impl=grid.data.morton(offset))
 
 
-@overload
-def morton_zyx(grid: Grid, offset: torch.Tensor | None = None) -> torch.Tensor: ...
-
-
-@overload
-def morton_zyx(grid: GridBatch, offset: NumericMaxRank1 | None = None) -> JaggedTensor: ...
-
-
-def morton_zyx(
-    grid: Grid | GridBatch, offset: torch.Tensor | NumericMaxRank1 | None = None
-) -> torch.Tensor | JaggedTensor:
+def morton_zyx(grid: GridBatch, offset: torch.Tensor | NumericMaxRank1 | None = None) -> JaggedTensor:
     """
     Return transposed Morton codes (zyx bit interleaving) for active voxels.
 
@@ -353,30 +232,14 @@ def morton_zyx(
     Returns:
         Transposed Morton codes for each active voxel.
     """
-    from ..grid import Grid
-
-    if isinstance(grid, Grid):
-        if offset is None:
-            offset = -torch.min(grid.data.ijk.jdata, dim=0).values
-        return grid.data.morton_zyx(offset).jdata
     if offset is None:
         offset = -torch.min(grid.data.ijk.jdata, dim=0).values
-    else:
+    elif not isinstance(offset, torch.Tensor):
         offset = to_Vec3i(offset)
     return JaggedTensor(impl=grid.data.morton_zyx(offset))
 
 
-@overload
-def hilbert(grid: Grid, offset: torch.Tensor | None = None) -> torch.Tensor: ...
-
-
-@overload
-def hilbert(grid: GridBatch, offset: NumericMaxRank1 | None = None) -> JaggedTensor: ...
-
-
-def hilbert(
-    grid: Grid | GridBatch, offset: torch.Tensor | NumericMaxRank1 | None = None
-) -> torch.Tensor | JaggedTensor:
+def hilbert(grid: GridBatch, offset: torch.Tensor | NumericMaxRank1 | None = None) -> JaggedTensor:
     """
     Return Hilbert curve codes for active voxels. Better spatial locality than
     Morton codes.
@@ -388,30 +251,14 @@ def hilbert(
     Returns:
         Hilbert codes for each active voxel.
     """
-    from ..grid import Grid
-
-    if isinstance(grid, Grid):
-        if offset is None:
-            offset = -torch.min(grid.data.ijk.jdata, dim=0).values
-        return grid.data.hilbert(offset).jdata
     if offset is None:
         offset = -torch.min(grid.data.ijk.jdata, dim=0).values
-    else:
+    elif not isinstance(offset, torch.Tensor):
         offset = to_Vec3i(offset)
     return JaggedTensor(impl=grid.data.hilbert(offset))
 
 
-@overload
-def hilbert_zyx(grid: Grid, offset: torch.Tensor | None = None) -> torch.Tensor: ...
-
-
-@overload
-def hilbert_zyx(grid: GridBatch, offset: NumericMaxRank1 | None = None) -> JaggedTensor: ...
-
-
-def hilbert_zyx(
-    grid: Grid | GridBatch, offset: torch.Tensor | NumericMaxRank1 | None = None
-) -> torch.Tensor | JaggedTensor:
+def hilbert_zyx(grid: GridBatch, offset: torch.Tensor | NumericMaxRank1 | None = None) -> JaggedTensor:
     """
     Return transposed Hilbert curve codes (zyx ordering) for active voxels.
 
@@ -422,15 +269,9 @@ def hilbert_zyx(
     Returns:
         Transposed Hilbert codes for each active voxel.
     """
-    from ..grid import Grid
-
-    if isinstance(grid, Grid):
-        if offset is None:
-            offset = -torch.min(grid.data.ijk.jdata, dim=0).values
-        return grid.data.hilbert_zyx(offset).jdata
     if offset is None:
         offset = -torch.min(grid.data.ijk.jdata, dim=0).values
-    else:
+    elif not isinstance(offset, torch.Tensor):
         offset = to_Vec3i(offset)
     return JaggedTensor(impl=grid.data.hilbert_zyx(offset))
 
@@ -440,7 +281,7 @@ def hilbert_zyx(
 # ---------------------------------------------------------------------------
 
 
-def edge_network(grid: Grid | GridBatch, return_voxel_coordinates: bool = False) -> tuple[JaggedTensor, JaggedTensor]:
+def edge_network(grid: GridBatch, return_voxel_coordinates: bool = False) -> tuple[JaggedTensor, JaggedTensor]:
     """
     Return the edge network of the grid (pairs of adjacent voxels).
 

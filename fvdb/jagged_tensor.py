@@ -48,7 +48,7 @@ from ._fvdb_cpp import jzeros as jzeros_cpp
 from .types import DeviceIdentifier, LShapeSpec, RShapeSpec
 
 if TYPE_CHECKING:
-    from .grid import Grid
+    pass
 
 # --- JaggedTensor.__torch_function__ whitelist ---
 # Whitelist of torch.<fn> names supported by JaggedTensor.__torch_function__.

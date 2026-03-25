@@ -4,11 +4,12 @@
 """
 ``fvdb.functional`` -- Functional API for fVDB sparse grid operations.
 
-Every function in this module accepts either a :class:`~fvdb.Grid` (single grid)
-or a :class:`~fvdb.GridBatch` (batch of grids) as its first argument and returns
-the corresponding type.  This mirrors ``torch.nn.functional`` and provides a
-pure-function alternative to the equivalent methods on
-:class:`~fvdb.Grid` / :class:`~fvdb.GridBatch`.
+Every function in this module accepts a :class:`~fvdb.GridBatch` as its first
+argument.  Data arguments (voxel features, query points, etc.) can be passed as
+either ``torch.Tensor`` (single-grid convenience) or :class:`~fvdb.JaggedTensor`
+(batched), and the return type matches the input type.  This mirrors
+``torch.nn.functional`` and provides a pure-function alternative to the
+equivalent methods on :class:`~fvdb.GridBatch`.
 """
 
 # Interpolation

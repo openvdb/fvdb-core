@@ -10,21 +10,21 @@ import torch
 
 from ..jagged_tensor import JaggedTensor
 from ..types import NumericMaxRank1, ValueConstraint, to_Vec3iBroadcastable
+from ._dispatch import _prepare_args
 
 if TYPE_CHECKING:
     from .._fvdb_cpp import GridBatch as GridBatchCpp
-    from ..grid import Grid
     from ..grid_batch import GridBatch
 
 
 @overload
 def max_pool(
-    grid: Grid,
+    grid: GridBatch,
     pool_factor: NumericMaxRank1,
     data: torch.Tensor,
     stride: NumericMaxRank1 = 0,
-    coarse_grid: Grid | None = None,
-) -> tuple[torch.Tensor, Grid]: ...
+    coarse_grid: GridBatch | None = None,
+) -> tuple[torch.Tensor, GridBatch]: ...
 
 
 @overload
@@ -38,12 +38,12 @@ def max_pool(
 
 
 def max_pool(
-    grid: Grid | GridBatch,
+    grid: GridBatch,
     pool_factor: NumericMaxRank1,
     data: torch.Tensor | JaggedTensor,
     stride: NumericMaxRank1 = 0,
-    coarse_grid: Grid | GridBatch | None = None,
-) -> tuple[torch.Tensor, Grid] | tuple[JaggedTensor, GridBatch]:
+    coarse_grid: GridBatch | None = None,
+) -> tuple[torch.Tensor, GridBatch] | tuple[JaggedTensor, GridBatch]:
     """
     Apply max pooling to voxel data, reducing resolution by ``pool_factor``.
 
@@ -65,30 +65,25 @@ def max_pool(
 
     .. seealso:: :func:`avg_pool`
     """
-    from ..grid import Grid
+    from ..grid_batch import GridBatch as GB
 
     pool_factor_t = to_Vec3iBroadcastable(pool_factor, value_constraint=ValueConstraint.POSITIVE)
     stride_t = to_Vec3iBroadcastable(stride, value_constraint=ValueConstraint.NON_NEGATIVE)
     coarse_impl: GridBatchCpp | None = coarse_grid.data if coarse_grid else None
 
-    if isinstance(grid, Grid):
-        jt_data = JaggedTensor(data)
-        rd, rg = grid.data.max_pool(pool_factor_t, jt_data._impl, stride_t, coarse_impl)
-        return rd.jdata, Grid(data=rg)
-    rd, rg = grid.data.max_pool(pool_factor_t, data._impl, stride_t, coarse_impl)
-    from ..grid_batch import GridBatch as GB
-
-    return JaggedTensor(impl=rd), GB(data=rg)
+    grid_data, (data,), unwrap = _prepare_args(grid, data)
+    rd, rg = grid_data.max_pool(pool_factor_t, data._impl, stride_t, coarse_impl)
+    return unwrap(rd), GB(data=rg)
 
 
 @overload
 def avg_pool(
-    grid: Grid,
+    grid: GridBatch,
     pool_factor: NumericMaxRank1,
     data: torch.Tensor,
     stride: NumericMaxRank1 = 0,
-    coarse_grid: Grid | None = None,
-) -> tuple[torch.Tensor, Grid]: ...
+    coarse_grid: GridBatch | None = None,
+) -> tuple[torch.Tensor, GridBatch]: ...
 
 
 @overload
@@ -102,12 +97,12 @@ def avg_pool(
 
 
 def avg_pool(
-    grid: Grid | GridBatch,
+    grid: GridBatch,
     pool_factor: NumericMaxRank1,
     data: torch.Tensor | JaggedTensor,
     stride: NumericMaxRank1 = 0,
-    coarse_grid: Grid | GridBatch | None = None,
-) -> tuple[torch.Tensor, Grid] | tuple[JaggedTensor, GridBatch]:
+    coarse_grid: GridBatch | None = None,
+) -> tuple[torch.Tensor, GridBatch] | tuple[JaggedTensor, GridBatch]:
     """
     Apply average pooling to voxel data, reducing resolution by ``pool_factor``.
 
@@ -128,30 +123,25 @@ def avg_pool(
 
     .. seealso:: :func:`max_pool`
     """
-    from ..grid import Grid
+    from ..grid_batch import GridBatch as GB
 
     pool_factor_t = to_Vec3iBroadcastable(pool_factor, value_constraint=ValueConstraint.POSITIVE)
     stride_t = to_Vec3iBroadcastable(stride, value_constraint=ValueConstraint.NON_NEGATIVE)
     coarse_impl: GridBatchCpp | None = coarse_grid.data if coarse_grid else None
 
-    if isinstance(grid, Grid):
-        jt_data = JaggedTensor(data)
-        rd, rg = grid.data.avg_pool(pool_factor_t, jt_data._impl, stride_t, coarse_impl)
-        return rd.jdata, Grid(data=cast("GridBatchCpp", rg))
-    rd, rg = grid.data.avg_pool(pool_factor_t, data._impl, stride_t, coarse_impl)
-    from ..grid_batch import GridBatch as GB
-
-    return JaggedTensor(impl=rd), GB(data=cast("GridBatchCpp", rg))
+    grid_data, (data,), unwrap = _prepare_args(grid, data)
+    rd, rg = grid_data.avg_pool(pool_factor_t, data._impl, stride_t, coarse_impl)
+    return unwrap(rd), GB(data=cast("GridBatchCpp", rg))
 
 
 @overload
 def refine(
-    grid: Grid,
+    grid: GridBatch,
     subdiv_factor: NumericMaxRank1,
     data: torch.Tensor,
     mask: torch.Tensor | None = None,
-    fine_grid: Grid | None = None,
-) -> tuple[torch.Tensor, Grid]: ...
+    fine_grid: GridBatch | None = None,
+) -> tuple[torch.Tensor, GridBatch]: ...
 
 
 @overload
@@ -165,12 +155,12 @@ def refine(
 
 
 def refine(
-    grid: Grid | GridBatch,
+    grid: GridBatch,
     subdiv_factor: NumericMaxRank1,
     data: torch.Tensor | JaggedTensor,
     mask: torch.Tensor | JaggedTensor | None = None,
-    fine_grid: Grid | GridBatch | None = None,
-) -> tuple[torch.Tensor, Grid] | tuple[JaggedTensor, GridBatch]:
+    fine_grid: GridBatch | None = None,
+) -> tuple[torch.Tensor, GridBatch] | tuple[JaggedTensor, GridBatch]:
     """
     Refine (upsample) voxel data by subdividing each voxel by ``subdiv_factor``.
 
@@ -190,18 +180,17 @@ def refine(
     Returns:
         A tuple ``(refined_data, fine_grid)``.
     """
-    from ..grid import Grid
+    from ..grid_batch import GridBatch as GB
 
     subdiv_t = to_Vec3iBroadcastable(subdiv_factor, value_constraint=ValueConstraint.POSITIVE)
     fine_impl: GridBatchCpp | None = fine_grid.data if fine_grid else None
 
-    if isinstance(grid, Grid):
-        jt_data = JaggedTensor(data)
-        mask_impl = JaggedTensor(mask)._impl if mask is not None else None
-        rd, rg = grid.data.refine(subdiv_t, jt_data._impl, mask_impl, fine_impl)
-        return rd.jdata, Grid(data=rg)
-    mask_impl = mask._impl if mask is not None else None
-    rd, rg = grid.data.refine(subdiv_t, data._impl, mask_impl, fine_impl)
-    from ..grid_batch import GridBatch as GB
-
-    return JaggedTensor(impl=rd), GB(data=rg)
+    grid_data, (data,), unwrap = _prepare_args(grid, data)
+    if mask is not None:
+        if isinstance(mask, torch.Tensor):
+            mask = JaggedTensor(mask)
+        mask_impl = mask._impl
+    else:
+        mask_impl = None
+    rd, rg = grid_data.refine(subdiv_t, data._impl, mask_impl, fine_impl)
+    return unwrap(rd), GB(data=rg)

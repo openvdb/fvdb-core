@@ -9,15 +9,15 @@ from typing import TYPE_CHECKING, overload
 import torch
 
 from ..jagged_tensor import JaggedTensor
+from ._dispatch import _prepare_args
 
 if TYPE_CHECKING:
-    from ..grid import Grid
     from ..grid_batch import GridBatch
 
 
 @overload
 def marching_cubes(
-    grid: Grid, field: torch.Tensor, level: float = 0.0
+    grid: GridBatch, field: torch.Tensor, level: float = 0.0
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]: ...
 
 
@@ -28,7 +28,7 @@ def marching_cubes(
 
 
 def marching_cubes(
-    grid: Grid | GridBatch,
+    grid: GridBatch,
     field: torch.Tensor | JaggedTensor,
     level: float = 0.0,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor] | tuple[JaggedTensor, JaggedTensor, JaggedTensor]:
@@ -46,27 +46,22 @@ def marching_cubes(
     Returns:
         A tuple ``(vertices, face_indices, vertex_normals)``.
     """
-    from ..grid import Grid
-
-    if isinstance(grid, Grid):
-        jt_f = JaggedTensor(field)
-        v, f, n = grid.data.marching_cubes(jt_f._impl, level)
-        return v.jdata, f.jdata, n.jdata
-    v, f, n = grid.data.marching_cubes(field._impl, level)
-    return JaggedTensor(impl=v), JaggedTensor(impl=f), JaggedTensor(impl=n)
+    grid_data, (field,), unwrap = _prepare_args(grid, field)
+    v, f, n = grid_data.marching_cubes(field._impl, level)
+    return unwrap(v), unwrap(f), unwrap(n)
 
 
 @overload
 def integrate_tsdf(
-    grid: Grid,
+    grid: GridBatch,
     truncation_distance: float,
-    projection_matrix: torch.Tensor,
-    cam_to_world_matrix: torch.Tensor,
+    projection_matrices: torch.Tensor,
+    cam_to_world_matrices: torch.Tensor,
     tsdf: torch.Tensor,
     weights: torch.Tensor,
-    depth_image: torch.Tensor,
-    weight_image: torch.Tensor | None = None,
-) -> tuple[Grid, torch.Tensor, torch.Tensor]: ...
+    depth_images: torch.Tensor,
+    weight_images: torch.Tensor | None = None,
+) -> tuple[GridBatch, torch.Tensor, torch.Tensor]: ...
 
 
 @overload
@@ -83,60 +78,44 @@ def integrate_tsdf(
 
 
 def integrate_tsdf(
-    grid,
-    truncation_distance,
-    projection_matrix_or_matrices,
-    cam_to_world_matrix_or_matrices,
-    tsdf,
-    weights,
-    depth_image_or_images,
-    weight_image_or_images=None,
-):
+    grid: GridBatch,
+    truncation_distance: float,
+    projection_matrices: torch.Tensor,
+    cam_to_world_matrices: torch.Tensor,
+    tsdf: torch.Tensor | JaggedTensor,
+    weights: torch.Tensor | JaggedTensor,
+    depth_images: torch.Tensor,
+    weight_images: torch.Tensor | None = None,
+) -> tuple[GridBatch, torch.Tensor, torch.Tensor] | tuple[GridBatch, JaggedTensor, JaggedTensor]:
     """
     Integrate depth images into a TSDF volume.
 
     Updates TSDF values and weights by integrating depth observations from camera
-    viewpoints. For :class:`~fvdb.Grid`, inputs are single-view tensors; for
-    :class:`~fvdb.GridBatch`, they are batched.
+    viewpoints.
 
     Args:
         grid: The grid structure.
         truncation_distance: Maximum TSDF truncation distance.
-        projection_matrix_or_matrices: Camera projection matrix(es).
-        cam_to_world_matrix_or_matrices: Camera-to-world transform(s).
+        projection_matrices: Camera projection matrices, shape ``(B, 4, 4)``.
+        cam_to_world_matrices: Camera-to-world transforms, shape ``(B, 4, 4)``.
         tsdf: Current TSDF values.
         weights: Current integration weights.
-        depth_image_or_images: Depth image(s).
-        weight_image_or_images: Optional per-pixel weight image(s).
+        depth_images: Depth images, shape ``(B, H, W)``.
+        weight_images: Optional per-pixel weight images.
 
     Returns:
         A tuple ``(updated_grid, updated_tsdf, updated_weights)``.
     """
-    from ..grid import Grid
-
-    if isinstance(grid, Grid):
-        jt_tsdf = JaggedTensor(tsdf)
-        jt_w = JaggedTensor(weights)
-        rg, rt, rw = grid.data.integrate_tsdf(
-            truncation_distance,
-            projection_matrix_or_matrices.unsqueeze(0),
-            cam_to_world_matrix_or_matrices.unsqueeze(0),
-            jt_tsdf._impl,
-            jt_w._impl,
-            depth_image_or_images.unsqueeze(0),
-            weight_image_or_images.unsqueeze(0) if weight_image_or_images is not None else None,
-        )
-        return Grid(data=rg), rt.jdata, rw.jdata
-
     from ..grid_batch import GridBatch as GB
 
-    rg, rt, rw = grid.data.integrate_tsdf(
+    grid_data, (tsdf, weights), unwrap = _prepare_args(grid, tsdf, weights)
+    rg, rt, rw = grid_data.integrate_tsdf(
         truncation_distance,
-        projection_matrix_or_matrices,
-        cam_to_world_matrix_or_matrices,
+        projection_matrices,
+        cam_to_world_matrices,
         tsdf._impl,
         weights._impl,
-        depth_image_or_images,
-        weight_image_or_images,
+        depth_images,
+        weight_images,
     )
-    return GB(data=rg), JaggedTensor(impl=rt), JaggedTensor(impl=rw)
+    return GB(data=rg), unwrap(rt), unwrap(rw)

@@ -30,9 +30,7 @@ from parameterized import parameterized
 from fvdb import JaggedTensor
 
 from .grid_utils import (
-    make_dense_grid_and_point_data,
     make_dense_grid_batch_and_jagged_point_data,
-    make_grid_and_point_data,
     make_grid_batch_and_jagged_point_data,
 )
 from .gsplat_utils import (
@@ -905,10 +903,8 @@ __all__ = [
     "set_testing_git_tag",
     "get_fvdb_test_data_path",
     "get_fvdb_example_data_path",
-    "make_dense_grid_and_point_data",
     "make_dense_grid_batch_and_jagged_point_data",
     "make_grid_batch_and_jagged_point_data",
-    "make_grid_and_point_data",
     "generate_random_4x4_xform",
     "create_uniform_grid_points_at_depth",
     "generate_center_frame_point_at_depth",
