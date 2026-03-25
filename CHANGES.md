@@ -3,6 +3,11 @@ fVDB Version History
 
 Version 0.5.0 - In Development
 
+Version 0.4.2 - March 25, 2026
+
+**Bug Fixes:**
+- Build warning fix for GCC 14.
+
 Version 0.4.1 - March 25, 2026
 
 **Bug Fixes:**
