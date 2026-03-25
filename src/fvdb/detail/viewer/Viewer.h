@@ -135,7 +135,7 @@ class Viewer {
     float cameraFar(const std::string &scene_name);
     void setCameraFar(const std::string &scene_name, float far);
 
-    void setCameraModel(const std::string &scene_name, GaussianSplat3d::CameraModel mode);
+    void setCameraModel(const std::string &scene_name, GaussianSplat3d::CameraModel model);
     GaussianSplat3d::CameraModel cameraModel(const std::string &scene_name);
 
     std::string

@@ -202,18 +202,18 @@ bind_viewer(py::module &m) {
             "set_camera_model",
             [](fvdb::detail::viewer::Viewer &viewer,
                const std::string &sceneName,
-               fvdb::GaussianSplat3d::CameraModel mode) {
-                if (mode != fvdb::GaussianSplat3d::CameraModel::PINHOLE &&
-                    mode != fvdb::GaussianSplat3d::CameraModel::ORTHOGRAPHIC) {
+               fvdb::GaussianSplat3d::CameraModel model) {
+                if (model != fvdb::GaussianSplat3d::CameraModel::PINHOLE &&
+                    model != fvdb::GaussianSplat3d::CameraModel::ORTHOGRAPHIC) {
                     PyErr_SetString(PyExc_NotImplementedError,
                                     "Viewer currently only supports CameraModel.PINHOLE and "
                                     "CameraModel.ORTHOGRAPHIC");
                     throw py::error_already_set();
                 }
-                viewer.setCameraModel(sceneName, mode);
+                viewer.setCameraModel(sceneName, model);
             },
             py::arg("scene_name"),
-            py::arg("mode"),
+            py::arg("model"),
             "Set the viewer camera model (currently pinhole or orthographic)")
         .def("add_camera_view",
              py::overload_cast<const std::string &,

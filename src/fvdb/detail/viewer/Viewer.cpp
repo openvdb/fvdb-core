@@ -365,10 +365,10 @@ Viewer::cameraModel(const std::string &scene_name) {
                                                  : GaussianSplat3d::CameraModel::PINHOLE;
 }
 void
-Viewer::setCameraModel(const std::string &scene_name, GaussianSplat3d::CameraModel mode) {
-    if (mode == GaussianSplat3d::CameraModel::PINHOLE) {
+Viewer::setCameraModel(const std::string &scene_name, GaussianSplat3d::CameraModel model) {
+    if (model == GaussianSplat3d::CameraModel::PINHOLE) {
         mEditor.camera.config.is_orthographic = PNANOVDB_FALSE;
-    } else if (mode == GaussianSplat3d::CameraModel::ORTHOGRAPHIC) {
+    } else if (model == GaussianSplat3d::CameraModel::ORTHOGRAPHIC) {
         mEditor.camera.config.is_orthographic = PNANOVDB_TRUE;
     } else {
         throw std::invalid_argument(
