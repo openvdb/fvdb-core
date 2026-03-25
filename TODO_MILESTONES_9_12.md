@@ -1,228 +1,176 @@
 # Milestones 9-12: Complete the GridBatch Retirement
 
+## Build & Environment
+
+- **Conda environment:** `conda activate fvdb`
+- **Build command:** `./build.sh install editor_skip -e`
+  - C++ build takes **7-10 minutes**. Only rebuild after C++ changes (Milestones 10-11).
+  - Phase 1 and Phase 3 are Python-only; no rebuild needed.
+- **Run tests:** `cd tests && pytest unit -v`
+  - Full suite takes **~5 minutes**.
+  - Exclude known pre-existing failures: `--ignore=unit/test_gaussian_splat_3d.py`
+    (imports retired `Grid` class) and `--ignore=unit/test_jagged_tensor.py`
+    (`torch_scatter` segfault).
+- **Quick smoke test:** `cd tests && pytest unit/test_basic_ops.py unit/test_inject.py
+  unit/test_empty_grids.py unit/test_io.py -q --tb=line` (~3 minutes)
+
 ## Status
 
-Milestones 1-9f are complete. The remaining work (milestones 10-11) is deferred
-pending the full migration of `grid_batch.py` instance methods from
-`self.data.<method>()` (C++ GridBatch) to raw `_fvdb_cpp.<op>()` calls.
+Milestones 1-9c are complete. Milestone 9d (switch `self.data` storage) is next,
+followed by Milestone 10 (IO layer) and Milestone 11 (deletion).
 
 ```
-f412ab7 Milestone 9f:    Update convolution bindings to accept GridBatchData
-6960a43 Milestone 9g:    Update tests from Grid to GridBatch
-aa0d804 Milestone 9b+9e: Python autograd + raw ops in functional layer
-09f1bba Milestone 9a-d:  Retire Grid class, add _prepare/_unwrap dispatch helpers
+4338af2 Milestone 9c (cont): Fix remaining Phase 1 test failures
+43e6474 Milestone 9c (cont): Fix functional layer bugs exposed by delegation
+329cbc1 Milestone 9c:        Make GridBatch methods delegate to functional/raw ops
+94f94eb Update milestone plan to reflect completed 9a-9g work
+f412ab7 Milestone 9f:        Update convolution bindings to accept GridBatchData
+6960a43 Milestone 9g:        Update tests from Grid to GridBatch
+aa0d804 Milestone 9b+9e:     Python autograd + raw ops in functional layer
+09f1bba Milestone 9a-d:      Retire Grid class, add _prepare/_unwrap dispatch helpers
 06d2723 Update TODO milestones to reflect frozen-struct refactor
 61cce44 Refactor GridBatchData into frozen struct with single constructor
 b67c353 Add detailed TODO for Milestones 9-12
-31699a5 Milestone 8.75: Rename GridBatchImpl -> GridBatchData, _impl -> data
-cd328a1 Milestone 8.5:  Align C++ op names with Python API
-986c664 Milestones 3-8: Expose raw C++ ops and create fvdb.functional API
-e4f862c Milestone 2:    Remove Vec3*OrScalar type system from C++
-9e37a3f Milestone 1:    Bind GridBatchData to Python via pybind11
+31699a5 Milestone 8.75:      Rename GridBatchImpl -> GridBatchData, _impl -> data
+cd328a1 Milestone 8.5:       Align C++ op names with Python API
+986c664 Milestones 3-8:      Expose raw C++ ops and create fvdb.functional API
+e4f862c Milestone 2:         Remove Vec3*OrScalar type system from C++
+9e37a3f Milestone 1:         Bind GridBatchData to Python via pybind11
 ```
 
-### What exists now
+### Current architecture
 
-- **Grid class retired.** `fvdb.Grid` has been deleted. `fvdb.GridBatch` is the sole
-  user-facing grid type. Single-grid users pass plain `torch.Tensor` to functional ops
-  (overloaded: `Tensor -> Tensor`, `JaggedTensor -> JaggedTensor`).
-- **`_prepare`/`unwrap` dispatch helpers** in `fvdb/functional/_dispatch.py` normalize
-  `Tensor | JaggedTensor` inputs to canonical JaggedTensor form, following the
-  established `to_Vec3iBroadcastable` pattern. Each functional op is written once.
-- **Python autograd** replaces C++ autograd for all differentiable ops (~16 autograd
-  Function classes). These call raw `_fvdb_cpp.<op>()` free functions via the
-  `_get_grid_data()` bridge.
-- **Functional layer fully on raw ops.** All 42 `fvdb.functional` functions call
-  `_fvdb_cpp.<op>(grid_data, ...)` instead of `grid.data.<method>(...)`. The
-  `_get_grid_data()` bridge transparently extracts `GridBatchData` from either the
-  old C++ GridBatch wrapper or a direct GridBatchData reference.
-- **Convolution bindings** in `Bindings.cpp` accept `GridBatchData` directly (not
-  `GridBatch`). `convolution_plan.py` uses `_get_grid_data()` for the bridge.
-- **Tests updated.** All test files that used `Grid` now use `GridBatch` with
-  `grid_count == 1`.
-- **`GridBatch.data` still stores `_fvdb_cpp.GridBatch`** (the C++ wrapper). The ~80
-  instance methods on `grid_batch.py` still call `self.data.<method>(...)` and have not
-  been migrated to raw ops yet.
-- `GridBatchData` (C++) is a frozen struct with read-only properties, per-grid queries,
-  and pickle support (`GridBatchDataBinding.cpp`). ~65 raw C++ ops are bound as
-  `_fvdb_cpp.<op>` in `GridBatchOps.cpp`.
+- **`GridBatch` is the sole user-facing grid type.** `fvdb.Grid` was deleted.
+- **`GridBatch.data` stores `_fvdb_cpp.GridBatch`** (the old C++ wrapper). This is
+  what Milestone 9d will change to `_fvdb_cpp.GridBatchData`.
+- **All 61 instance methods on `GridBatch`** now delegate to either `fvdb.functional`
+  (~36 methods) or raw `_fvdb_cpp.<op>()` calls (~15 methods) instead of calling
+  `self.data.<method>(...)`. The `_get_grid_data()` bridge in `_dispatch.py`
+  transparently extracts `GridBatchData` from the old wrapper.
+- **Properties** (voxel_sizes, origins, num_voxels, etc.) still read from
+  `self.data.<property>` but now normalize dtype (float32) and device to ensure
+  consistency whether `self.data` is `GridBatch` or `GridBatchData`.
+- **`voxel_to_world` / `world_to_voxel`** are implemented in pure PyTorch using the
+  grid's 4x4 affine matrices (row-major convention: `result = input @ M[:3,:3] + M[3,:3]`).
+  The C++ raw ops `_fvdb_cpp.voxel_to_world` / `world_to_voxel` use NanoVDB's internal
+  transform which has inverted scale vs. fvdb convention -- do NOT use them.
+- **`_InjectFn` autograd** uses `mark_dirty` for in-place inject with gradient tracking.
+  Works for contiguous tensors; 12 tests fail for non-contiguous strided views (PyTorch
+  limitation with in-place autograd on views).
+- **Factory classmethods** (`from_ijk`, `from_points`, etc.) still use
+  `GridBatchCpp(device)` + `set_from_*()`. Milestone 9d will switch to
+  `_fvdb_cpp.create_from_*()` free functions.
+- **IO methods** (`save_nanovdb`, `from_nanovdb`) still pass `self.data` (C++ GridBatch)
+  to `_fvdb_cpp.save`/`load`. Milestone 10 will update these to accept GridBatchData.
+- **`from_cat`** already uses `_fvdb_cpp.concatenate_grids` (accepts GridBatchData).
 
-### What changed vs. the original milestone plan
+### Test results
 
-Milestone 12 (enforce immutability) is **already done** -- it was folded into the
-struct refactor. The remaining milestones (9-11) need updating to reflect the new
-reality:
+**707/719 tests pass** across the core test files (test_basic_ops, test_basic_ops_single,
+test_accessors, test_inject, test_dual, test_empty_grids, test_morton_hilbert,
+test_dense_interface).
 
-- `_fvdb_cpp.GridBatchData` no longer has factory or topology methods. Those are now
-  free-function ops: e.g. `_fvdb_cpp.create_from_ijk(...)` not
-  `_fvdb_cpp.GridBatchData.create_from_ijk(...)`.
-- Construction uses `_fvdb_cpp.create_from_empty(device, voxel_size, origin)` etc.
-  There is no `GridBatchData(device)` constructor exposed to Python.
-- Topology ops are `_fvdb_cpp.coarsen_grid(grid, factor)` not `grid.coarsen(factor)`.
-- The struct is already fully public and immutable, so no further C++ immutability
-  work is needed.
+**12 remaining failures:** All `test_inject_in_place_non_contiguous_subset_into_non_contiguous_superset_backprop`
+-- PyTorch does not fully support `mark_dirty` in-place autograd on non-contiguous
+strided view tensors. The gradient chain through strided views breaks. This edge case
+may require a different approach (e.g., making the tensor contiguous before inject,
+or using a custom view-aware backward).
+
+### Key files modified in Milestone 9c
+
+- `fvdb/grid_batch.py` -- method delegations, property normalization, pure-PyTorch
+  transforms
+- `fvdb/functional/_interpolation.py` -- fixed splat unwrap (grid structure, not points)
+- `fvdb/functional/_pooling.py` -- fixed pool/refine unwrap, strided coarse grid
+- `fvdb/functional/_dense.py` -- fixed origins shape, feature reshape, `_InjectFn`
+  autograd
+- `fvdb/functional/_query.py` -- fixed scalar-to-list for cube ops
+- `fvdb/functional/_topology.py` -- fixed dilate dilation vector
+- `fvdb/functional/_meshing.py` -- fixed marching cubes / TSDF output wrapping
+
+### Known issues / gotchas
+
+1. **GridBatchData properties return CPU tensors** for metadata (num_voxels, cum_voxels,
+   voxel_sizes, origins, bboxes) and float64 for coordinates. The GridBatch Python
+   wrapper normalizes these with `.to(device=self.device)` and `.float()`.
+2. **`_fvdb_cpp.voxel_to_world` raw op is BROKEN** for fvdb use -- it uses NanoVDB's
+   internal transform (scale = 1/voxel_size). Do not delegate to it. Use the
+   pure-PyTorch matrix implementation in `grid_batch.py` instead.
+3. **`to_Vec3fBroadcastable(scalar).tolist()`** returns a scalar, not a 3-element list.
+   Always expand scalar results before passing to C++ ops that expect sequences.
+4. **`GridBatchData.num_leaves`** vs **`GridBatch.num_leaf_nodes`** -- different
+   attribute name. The property in `grid_batch.py` handles both via `hasattr`.
+5. **`ijk_to_inv_index`** only exists on the C++ `GridBatch` wrapper, not as a raw op
+   and not on `GridBatchData`. It still calls `self.data.ijk_to_inv_index()` and will
+   need attention in Milestone 9d/11 (add raw op or implement in Python).
 
 ---
 
-## Milestone 9: Make Grid/GridBatch Thin Wrappers
+## ~~Milestone 9a-c: Python autograd, functional layer, method delegation~~ (DONE)
 
-The largest milestone. The goal is to cut the dependency on the C++ `GridBatch` wrapper
-and C++ autograd layer, replacing them with direct calls to raw ops + Python autograd.
+Completed in commits `09f1bba` through `4338af2`.
 
-### Pre-requisite: `batched` flag on GridBatchData
-
-A Python-only `batched` boolean on `GridBatchData` resolves an ambiguity: when
-`grid_count == 1`, there is no way to tell whether data arguments should be
-`JaggedTensor` (batched) or `torch.Tensor` (unbatched) based on the grid alone.
-
-- Create a Python wrapper class (e.g. `fvdb/grid_data.py`) that holds the C++ `_fvdb_cpp.GridBatchData`
-  plus an immutable `batched: bool`.
-- `__getattr__` delegates all C++ properties transparently.
-- Batched and unbatched factory methods set the flag at construction time.
-- `Grid` always creates `GridBatchData(cpp, batched=False)`.
-- `GridBatch` always creates `GridBatchData(cpp, batched=True)`.
-- Topology-deriving ops preserve the flag: `coarsened_grid(gd)` returns a new
-  `GridBatchData` with the same `batched` value.
-
-### 9a. Implement Python autograd Functions (~16 classes)
-
-Add `torch.autograd.Function` subclasses to each functional module, following the
-`convolution_plan.py` pattern. The tracked tensor (the one autograd differentiates through)
-is passed as the first positional arg to `.apply()`; non-tensor args (GridBatchData, C++ JaggedTensor)
-go through `ctx`.
-
-#### Adjoint pairs (backward of one IS the forward of the other)
-
-| Autograd class         | Forward op                    | Backward op (adjoint)         |
-|------------------------|-------------------------------|-------------------------------|
-| `_SampleTrilinearFn`   | `_fvdb_cpp.sample_trilinear`  | `_fvdb_cpp.splat_trilinear`   |
-| `_SplatTrilinearFn`    | `_fvdb_cpp.splat_trilinear`   | `_fvdb_cpp.sample_trilinear`  |
-| `_SampleBezierFn`      | `_fvdb_cpp.sample_bezier`     | `_fvdb_cpp.splat_bezier`      |
-| `_SplatBezierFn`       | `_fvdb_cpp.splat_bezier`      | `_fvdb_cpp.sample_bezier`     |
-| `_InjectFromDenseCminorFn` | `inject_from_dense_cminor` | `inject_to_dense_cminor`      |
-| `_InjectFromDenseCmajorFn` | `inject_from_dense_cmajor` | `inject_to_dense_cmajor`      |
-| `_InjectToDenseCminorFn`   | `inject_to_dense_cminor`   | `inject_from_dense_cminor`    |
-| `_InjectToDenseCmajorFn`   | `inject_to_dense_cmajor`   | `inject_from_dense_cmajor`    |
-
-#### Explicit backward ops
-
-| Autograd class                  | Forward op                          | Backward op                              | Saved tensors     |
-|---------------------------------|-------------------------------------|------------------------------------------|-------------------|
-| `_SampleTrilinearWithGradFn`    | `sample_trilinear_with_grad`        | `sample_trilinear_with_grad_bwd`         | `data`            |
-| `_SampleBezierWithGradFn`       | `sample_bezier_with_grad`           | `sample_bezier_with_grad_bwd`            | `data`            |
-| `_VoxelToWorldFn`               | `voxel_to_world`                    | `voxel_to_world_bwd`                     | (none)            |
-| `_WorldToVoxelFn`               | `world_to_voxel`                    | `world_to_voxel_bwd`                     | (none)            |
-| `_MaxPoolFn`                    | `max_pool`                          | `max_pool_bwd`                           | input `data`      |
-| `_AvgPoolFn`                    | `avg_pool`                          | `avg_pool_bwd`                           | input `data`      |
-| `_RefineFn`                     | `refine`                            | `refine_bwd`                             | coarse `data`     |
-
-#### Self-adjoint
-
-| Autograd class | Forward op            | Backward                               |
-|----------------|-----------------------|----------------------------------------|
-| `_InjectFn`    | `_fvdb_cpp.inject_op` | inject gradient in the reverse direction |
-
-### 9b. Update functional/ to call raw ops + GridBatchData
-
-Each functional module switches from `grid.data.<method>(...)` (calling C++ GridBatch)
-to raw C++ ops via `_fvdb_cpp.<op>(grid.data._cpp, ...)`.
-
-Pattern for differentiable ops:
-```python
-def sample_trilinear(grid_data, points, voxel_data):
-    if isinstance(points, torch.Tensor):
-        # Unbatched (Grid) path
-        jt_pts = JaggedTensor(points)
-        result = _SampleTrilinearFn.apply(voxel_data, grid_data._cpp, jt_pts._impl)
-        return result
-    else:
-        # Batched (GridBatch) path
-        result = _SampleTrilinearFn.apply(voxel_data.jdata, grid_data._cpp, points._impl)
-        return points.jagged_like(result)
-```
-
-For topology ops, call the free-function ops directly:
-- `coarsened_grid` -> `_fvdb_cpp.coarsen_grid(grid_data._cpp, factor)`, wrap in new `GridBatchData`
-- `refined_grid` -> `_fvdb_cpp.upsample_grid(grid_data._cpp, factor, mask)`
-- `dual_grid` -> `_fvdb_cpp.dual_grid(grid_data._cpp, exclude_border)`
-- `dilated_grid` -> `_fvdb_cpp.dilate_grid(grid_data._cpp, dilation)`
-- `merged_grid` -> `_fvdb_cpp.merge_grids(grid_data._cpp, other._cpp)`
-- `pruned_grid` -> `_fvdb_cpp.prune_grid(grid_data._cpp, mask._impl)`
-- `conv_grid` -> `_fvdb_cpp.conv_grid(grid_data._cpp, ks, st)`
-- `conv_transpose_grid` -> `_fvdb_cpp.conv_transpose_grid(grid_data._cpp, ks, st)`
-
-For non-differentiable ops (queries, rays, meshing), call `_fvdb_cpp.<op>` directly.
-
-For space-filling curves, call `_fvdb_cpp.serialize_encode(grid_data._cpp, order, offset)`.
-
-### 9c. Make Grid/GridBatch methods one-liner delegations
-
-Every operation method becomes a delegation to `fvdb.functional`. Docstrings stay.
-
-```python
-# grid_batch.py
-def sample_trilinear(self, points: JaggedTensor, voxel_data: JaggedTensor) -> JaggedTensor:
-    """... existing docstring ..."""
-    return fvdb.functional.sample_trilinear(self.data, points, voxel_data)
-
-# grid.py
-def sample_trilinear(self, points: torch.Tensor, voxel_data: torch.Tensor) -> torch.Tensor:
-    """... existing docstring ..."""
-    return fvdb.functional.sample_trilinear(self.data, points, voxel_data)
-```
-
-Property accessors that read grid metadata stay as direct `self.data.<property>` reads.
-
-### 9d. Switch Grid/GridBatch.data to GridBatchData
-
-1. Change import: `from .grid_data import GridBatchData`
-2. Change `__init__`: stores `GridBatchData` (Python wrapper with `batched` flag)
-3. Update ALL factory classmethods to use the free-function ops:
-   - `from_ijk` -> `_fvdb_cpp.create_from_ijk(ijk, voxel_sizes, origins)`
-   - `from_points` -> `_fvdb_cpp.create_from_points(points, voxel_sizes, origins)`
-   - `from_mesh` -> `_fvdb_cpp.create_from_mesh(vertices, faces, voxel_sizes, origins)`
-   - `from_nearest_voxels_to_points` -> `_fvdb_cpp.create_from_nearest_voxels_to_points(...)`
-   - `from_dense` -> `_fvdb_cpp.create_dense(...)`
-   - `from_zero_voxels` -> `_fvdb_cpp.create_from_empty(device, voxel_size, origin)`
-   - `from_zero_grids` -> NOT directly possible (no default constructor exposed);
-     use `_fvdb_cpp.create_from_empty(device, [1,1,1], [0,0,0])` with zero voxels,
-     or add a dedicated `_fvdb_cpp.create_empty_grid(device)` binding
-   - `from_cat` -> `_fvdb_cpp.concatenate_grids(impls)`
-   - `from_nanovdb` -> bridge through `_load()` (may need Milestone 10 for full switch)
-4. Remove `_grid_batch_data` bridge accessor (now redundant)
-5. Remove `_gridbatch` property
-
-### 9e. Update convolution_plan.py
-
-1. Replace `GridBatch(data=source_grid.data)` patterns
-2. Update `_fvdb_cpp.GridBatch` type hints to `_fvdb_cpp.GridBatchData`
-3. Update `gs_build_topology` / `gs_build_transpose_topology` bindings to accept
-   `GridBatchData` instead of `GridBatch`
-4. Update `pred_gather_igemm_conv` binding similarly
-5. In `Bindings.cpp`: update convolution lambdas to accept
-   `const fvdb::detail::GridBatchData &` and call ops directly
-
-### Files touched
-
-- `fvdb/grid_data.py` (NEW)
-- `fvdb/functional/_interpolation.py`, `_transforms.py`, `_pooling.py`, `_dense.py`
-- `fvdb/functional/_query.py`, `_ray.py`, `_meshing.py`, `_topology.py`
-- `fvdb/functional/__init__.py`
-- `fvdb/grid_batch.py`, `fvdb/grid.py`
-- `fvdb/convolution_plan.py`
-- `fvdb/__init__.py`
-- `src/python/Bindings.cpp` (convolution bindings only)
+- 9a: Python autograd Functions (~16 classes) in each functional module
+- 9b: Functional layer calls raw `_fvdb_cpp.<op>()` ops
+- 9c: GridBatch methods delegate to functional or raw ops
+- 9e: Convolution plan uses `_get_grid_data()` bridge
+- 9f: Convolution bindings accept `GridBatchData`
+- 9g: Tests updated from Grid to GridBatch
 
 ---
 
-## Milestone 10: Update IO Layer and FVDB Free Functions
+## Milestone 9d: Switch GridBatch.data to GridBatchData
 
-Change C++ IO and FVDB free functions to use `GridBatchData` / `c10::intrusive_ptr<GridBatchData>`.
+**Goal:** `GridBatch.data` stores `_fvdb_cpp.GridBatchData` directly instead of
+`_fvdb_cpp.GridBatch`. Factory classmethods use `_fvdb_cpp.create_from_*` free
+functions. The `_get_grid_data` bridge is eliminated.
+
+**No `grid_data.py` wrapper needed** -- the `batched` flag concept from the original
+plan is obsolete since `Grid` was retired.
+
+### Factory classmethod migration
+
+| Current pattern | New pattern |
+|---|---|
+| `GridBatchCpp(device)` + `set_from_ijk(...)` | `_fvdb_cpp.create_from_ijk(ijk, voxel_sizes, origins)` |
+| `GridBatchCpp(device)` + `set_from_points(...)` | `_fvdb_cpp.create_from_points(points, voxel_sizes, origins)` |
+| `GridBatchCpp(device)` + `set_from_mesh(...)` | `_fvdb_cpp.create_from_mesh(vertices, faces, voxel_sizes, origins)` |
+| `GridBatchCpp(device)` + `set_from_nearest_voxels_to_points(...)` | `_fvdb_cpp.create_from_nearest_voxels_to_points(...)` |
+| `GridBatchCpp(device)` + `set_from_dense_grid(...)` | `_fvdb_cpp.create_dense(...)` |
+| `GridBatchCpp(voxel_sizes=..., origins=..., device=...)` | `_fvdb_cpp.create_from_empty(device, voxel_size, origin)` |
+| `GridBatchCpp(device=device)` (zero grids) | `_fvdb_cpp.create_from_empty(device)` or add new binding |
+| `jcat_cpp(grid_impls)` | `_fvdb_cpp.concatenate_grids(grid_datas)` (already done) |
+| `_load(path, ...)` | Returns `GridBatchData` after Milestone 10 |
+
+### Tasks
+
+- [ ] Change `__init__` to accept `GridBatchData` instead of `GridBatchCpp`
+- [ ] Rewrite all 10 factory classmethods to use `_fvdb_cpp.create_from_*`
+- [ ] Remove `from ._fvdb_cpp import GridBatch as GridBatchCpp` import
+- [ ] Remove `_gridbatch` property
+- [ ] Simplify `_dispatch.py::_get_grid_data()` -- just `return grid.data`
+- [ ] Update `convolution_plan.py` type hints
+- [ ] Update `_fvdb_cpp.pyi` -- add `GridBatchData` class, `create_from_*` stubs
+- [ ] Handle `ijk_to_inv_index` (add raw op or implement in Python)
+- [ ] Handle `from_zero_grids` (needs empty GridBatchData with 0 grids)
+
+### Dependencies
+
+Milestone 9d depends on Milestone 10 for IO methods: `save_nanovdb` passes `self.data`
+to `_fvdb_cpp.save` (currently expects GridBatch). Either:
+- Do Milestone 10 first (update IO to accept GridBatchData), then 9d
+- Or add a temporary bridge in `save_nanovdb`/`from_nanovdb`
+
+---
+
+## Milestone 10: Update IO Layer
+
+Change C++ IO and FVDB free functions to use `GridBatchData`.
 
 ### Tasks
 
 - [ ] `src/fvdb/detail/io/LoadNanovdb.h/.cpp`:
-      `fromNVDB` / `loadNVDB` return `tuple<c10::intrusive_ptr<GridBatchData>, ...>`
+      `fromNVDB` / `loadNVDB` return `c10::intrusive_ptr<GridBatchData>`
 - [ ] `src/fvdb/detail/io/SaveNanoVDB.h/.cpp`:
       `toNVDB` / `saveNVDB` take `const GridBatchData &`
 - [ ] `src/fvdb/FVDB.h/.cpp`:
@@ -230,9 +178,11 @@ Change C++ IO and FVDB free functions to use `GridBatchData` / `c10::intrusive_p
       `jcat`, `save`, `load` switch to `GridBatchData`.
       Remove `#include <fvdb/GridBatch.h>`.
 - [ ] `src/python/Bindings.cpp`:
-      Update `gridbatch_from_*`, `load`, `save`, `jcat` bindings
-- [ ] `fvdb/grid_batch.py` / `fvdb/grid.py`:
-      Update `from_nanovdb` factories if deferred from Milestone 9
+      Update `load`, `save`, `jcat` lambda bindings
+- [ ] `fvdb/grid_batch.py`:
+      Update `save_nanovdb` / `from_nanovdb` to pass GridBatchData
+
+**Requires C++ rebuild** (`./build.sh install editor_skip -e`, ~7-10 min).
 
 ---
 
@@ -240,45 +190,59 @@ Change C++ IO and FVDB free functions to use `GridBatchData` / `c10::intrusive_p
 
 Remove all code that is no longer called. Net deletion: ~3,000+ lines of C++.
 
-### Tasks
+### Files to delete
 
-- [ ] Delete `src/fvdb/GridBatch.h` (~950 lines)
-- [ ] Delete `src/fvdb/GridBatch.cpp` (~1200 lines)
-- [ ] Delete `src/python/GridBatchBinding.cpp` (~750 lines)
-- [ ] Delete C++ autograd files replaced by Python autograd:
-  - `src/fvdb/detail/autograd/SampleGrid.h` + `.cpp`
-  - `src/fvdb/detail/autograd/SplatIntoGrid.h` + `.cpp`
-  - `src/fvdb/detail/autograd/TransformPoints.h` + `.cpp`
-  - `src/fvdb/detail/autograd/MaxPoolGrid.h` + `.cpp`
-  - `src/fvdb/detail/autograd/AvgPoolGrid.h` + `.cpp`
-  - `src/fvdb/detail/autograd/UpsampleGrid.h` + `.cpp`
-  - `src/fvdb/detail/autograd/Inject.h` + `.cpp`
-  - `src/fvdb/detail/autograd/ReadFromDense.h` + `.cpp`
-  - `src/fvdb/detail/autograd/ReadIntoDense.h` + `.cpp`
-  - (18 files total)
-  - **Keep**: `VolumeRender`, `Gaussian*`, `JaggedReduce`, `EvaluateSphericalHarmonics`
-- [ ] Update `src/CMakeLists.txt`: remove GridBatch.cpp + deleted autograd .cpp files
-- [ ] Update root `CMakeLists.txt`: remove `GridBatchBinding.cpp` from `FVDB_BINDINGS_CPP_FILES`
-- [ ] Remove `m.class_<fvdb::GridBatch>("GridBatch")` from `TORCH_LIBRARY` in `Bindings.cpp`
-- [ ] Remove dead `#include <fvdb/GridBatch.h>` from `Viewer.h` and anywhere else
-- [ ] Update `fvdb/_fvdb_cpp.pyi`: remove `GridBatch` class, remove autograd entries
+- `src/fvdb/GridBatch.h` (~943 lines)
+- `src/fvdb/GridBatch.cpp` (~1193 lines)
+- `src/python/GridBatchBinding.cpp` (~728 lines)
+- 9 C++ autograd file pairs (18 files) in `src/fvdb/detail/autograd/`:
+  `SampleGrid`, `SplatIntoGrid`, `TransformPoints`, `MaxPoolGrid`, `AvgPoolGrid`,
+  `UpsampleGrid`, `Inject`, `ReadFromDense`, `ReadIntoDense`
+- **Keep**: `VolumeRender`, `Gaussian*`, `JaggedReduce`, `EvaluateSphericalHarmonics`
+
+### Build system updates
+
+- `src/CMakeLists.txt`: remove `fvdb/GridBatch.cpp` from `FVDB_CPP_FILES`,
+  remove 9 autograd `.cpp` files
+- Root `CMakeLists.txt`: remove `src/python/GridBatchBinding.cpp` from
+  `FVDB_BINDINGS_CPP_FILES`
+- `src/python/Bindings.cpp`: remove `bind_grid_batch(m)` call, remove
+  `m.class_<fvdb::GridBatch>("GridBatch")` from `TORCH_LIBRARY`
+
+### Cleanup
+
+- Remove dead `#include <fvdb/GridBatch.h>` from remaining files
+- Update `fvdb/_fvdb_cpp.pyi`: remove `GridBatch` class and autograd stubs
+
+**Requires C++ rebuild.**
 
 ---
 
 ## ~~Milestone 12: Enforce Immutability on GridBatchData~~ (DONE)
 
-Completed in commit `61cce44` as part of the frozen-struct refactor. All public
-setters removed, `nanoGridHandleMut()` removed, no post-construction mutation.
-`GridBatchData` is now a frozen struct with a single constructor that bundles
-pre-computed fields.
+Completed in commit `61cce44`.
+
+---
+
+## Recommended execution order
+
+```
+Phase 1 (DONE):  Milestone 9c -- delegate methods (Python-only, no rebuild)
+Phase 2 (NEXT):  Milestone 10 -- update IO layer (C++ changes, rebuild required)
+Phase 3:         Milestone 9d -- switch self.data storage (Python-only)
+Phase 4:         Milestone 11 -- delete dead code (C++ changes, rebuild required)
+```
+
+Phase 2 must come before Phase 3 because `save_nanovdb`/`from_nanovdb` pass `self.data`
+to `_fvdb_cpp.save`/`load` which currently accept `GridBatch`. The IO bindings must
+accept `GridBatchData` before we switch `self.data`.
 
 ---
 
 ## Risk Notes
 
-- **Milestone 9** is the riskiest: Python autograd must exactly reproduce C++ autograd
-  behavior. Test each autograd Function incrementally if possible.
-- **Milestone 10** is moderate risk: IO type changes cascade through several files.
-- **Milestone 11** is low risk: deleting dead code.
-- Milestone 9 is mostly Python-only (except convolution bindings in `Bindings.cpp`).
-  Milestones 10-11 require C++ rebuilds.
+- **Milestone 9d** has subtle issues: factory method argument translation must be exact
+  (voxel_sizes/origins broadcasting, device resolution). Validate against existing
+  `set_from_*` call patterns.
+- **Milestone 10** is moderate risk: IO type changes cascade through several C++ files.
+- **Milestone 11** is low risk: deleting dead code. Verify clean build and tests.
