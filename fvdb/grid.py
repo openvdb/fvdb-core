@@ -2432,3 +2432,14 @@ class Grid:
     def _gridbatch(self):
         # Access underlying GridBatchCpp - use sparingly during migration
         return self._impl
+
+    def acoustic_ray_samples(
+        self, ray_origins: JaggedTensor, ray_directions: JaggedTensor, sound_speeds: JaggedTensor, step_size: float
+    ) -> JaggedTensor:
+        """
+        Generate samples along each ray with a given step size where samples are taken
+        by bending the ray according to Snell's law.
+        """
+        return JaggedTensor(
+            impl=self._impl.acoustic_ray_samples(ray_origins._impl, ray_directions._impl, sound_speeds._impl, step_size)
+        )

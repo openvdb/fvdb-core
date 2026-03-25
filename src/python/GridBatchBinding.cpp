@@ -154,6 +154,13 @@ bind_grid_batch(py::module &m) {
         .def_property_readonly("dual_bbox", &fvdb::GridBatch::dual_bbox)
         .def_property_readonly("address", &fvdb::GridBatch::address)
 
+
+        .def("acoustic_ray_samples",
+             &fvdb::GridBatch::acoustic_ray_samples,
+             py::arg("ray_origins"),
+             py::arg("ray_directions"),
+             py::arg("sound_speeds"),
+             py::arg("step_size"))
         // Read a property for a single grid in the batch
         .def("voxel_size_at",
              [](const fvdb::GridBatch &self, int64_t bi) {

@@ -75,6 +75,7 @@ set(FVDB_CPP_FILES
 
 set(FVDB_CU_FILES
     fvdb/detail/GridBatchImpl.cu
+    fvdb/detail/ops/AcousticRaySamples.cu
     fvdb/detail/ops/ActiveGridGoords.cu
     fvdb/detail/ops/ActiveVoxelsInBoundsMask.cu
     fvdb/detail/ops/BuildCoarseGridFromFine.cu

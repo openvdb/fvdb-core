@@ -305,6 +305,13 @@ struct GridBatch : torch::CustomClassHolder {
                                         const std::optional<Vec3iBatch> &min_coord = std::nullopt,
                                         const std::optional<Vec3i> &grid_size = std::nullopt) const;
 
+
+    std::vector<JaggedTensor> acoustic_ray_samples(const JaggedTensor &ray_origins,
+                                                  const JaggedTensor &ray_directions,
+                                                  const JaggedTensor &sound_speeds,
+                                                  float step_size) const;
+
+
     /// @brief Convert grid coordinates to world coordinates
     /// @param ijk A JaggedTensor of grid coordinates with shape [B, -1, 3] (one point set per grid
     /// in the batch)
