@@ -64,12 +64,13 @@ jobs:
       run:
         shell: bash -el {0}
     steps:
+      - name: Install system dependencies
+        run: dnf install -y git procps-ng findutils
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # Fetch all history for all branches
-          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.ref || github.ref }}
-          # For pull requests, this automatically checks out the merge commit
-          # For pushes, this checks out the pushed commit
+          ref: ${{ github.event.inputs.branch }}
 
       - name: Fetch PR branch
         if: github.event_name == 'pull_request_target'
@@ -114,7 +115,7 @@ jobs:
       - name: Build docs
         run: |
           micromamba activate fvdb
-          which sphinx-build
+          command -v sphinx-build
           sphinx-build docs/ -E -a _docs_build
           sphinx-build fvdb-reality-capture/docs -E -a _docs_build/reality-capture
 
@@ -151,12 +152,9 @@ jobs:
           role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
           aws-region: us-east-2
       - name: Stop EC2 runner
-        uses: machulav/ec2-github-runner@v2.4.1
+        uses: machulav/ec2-github-runner@v2.4.3
         with:
           mode: stop
           github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
           label: ${{ needs.start-build-runner.outputs.label }}
           ec2-instance-id: ${{ needs.start-build-runner.outputs.ec2-instance-id }}
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: _build/
-          force_orphan: true

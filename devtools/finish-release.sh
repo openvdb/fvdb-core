@@ -2,7 +2,7 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 #
-# Finish a release: tag, merge PR, create GitHub Release.
+# Finish a release: tag, create adopt branch, open adopt PR, create GitHub Release.
 #
 # Usage: ./devtools/finish-release.sh <version> [options]
 # Example: ./devtools/finish-release.sh 0.4.0 --remote upstream
@@ -23,8 +23,8 @@ usage() {
     cat <<EOF
 Usage: $(basename "$0") <version> [options]
 
-Finish a release by tagging the release branch, merging the PR into main, and
-creating a GitHub Release.
+Finish a release by tagging the release branch, creating an adopt branch to
+reconcile versions, and creating a GitHub Release.
 
 Arguments:
   <version>       Release version in MAJOR.MINOR.PATCH format (e.g. 0.4.0)
@@ -33,7 +33,7 @@ Options:
   --remote NAME   Git remote to push to (default: upstream)
   --dry-run       Print what would happen without making changes
   --no-push       Skip git push and GitHub operations (for testing)
-  --no-pr         Skip PR merge and GitHub Release creation (for testing)
+  --no-pr         Skip PR close/create and GitHub Release (for testing)
   -h, --help      Show this help message
 EOF
 }
@@ -55,6 +55,30 @@ release_branch_suffix() {
     local major minor _patch
     IFS='.' read -r major minor _patch <<< "$ver"
     echo "${major}.${minor}"
+}
+
+assert_branch_current() {
+    local branch="$1"
+    local remote_ref="$REMOTE/$branch"
+    if ! git show-ref --verify --quiet "refs/remotes/$remote_ref"; then
+        die "$branch not found on $REMOTE; push it first"
+    fi
+    local local_rev remote_rev
+    local_rev="$(git rev-parse --short "$branch")"
+    remote_rev="$(git rev-parse --short "$remote_ref")"
+    if [[ "$local_rev" != "$remote_rev" ]]; then
+        die "$branch ($local_rev) differs from $remote_ref ($remote_rev); pull or reset first"
+    fi
+}
+
+get_version_from_ref() {
+    local ref="$1"
+    git show "${ref}:pyproject.toml" | grep '^version = ' | sed 's/^version = "\(.*\)"/\1/'
+}
+
+set_version() {
+    local new_version="$1"
+    sed -i "s/^version = \".*\"/version = \"${new_version}\"/" "$REPO_ROOT/pyproject.toml"
 }
 
 # --- argument parsing ---------------------------------------------------------
@@ -80,6 +104,7 @@ done
 # --- derived values -----------------------------------------------------------
 BRANCH_SUFFIX="$(release_branch_suffix "$VERSION")"
 RELEASE_BRANCH="release/v${BRANCH_SUFFIX}"
+ADOPT_BRANCH="adopt/v${BRANCH_SUFFIX}"
 TAG="v${VERSION}"
 
 # --- pre-flight checks -------------------------------------------------------
@@ -87,17 +112,33 @@ cd "$REPO_ROOT"
 
 log "Release version:     $VERSION"
 log "Release branch:      $RELEASE_BRANCH"
+log "Adopt branch:        $ADOPT_BRANCH"
 log "Tag:                 $TAG"
 log "Remote:              $REMOTE"
 echo ""
 
 if ! $DRY_RUN; then
+    if ! git diff --quiet || ! git diff --cached --quiet; then
+        die "working tree is not clean; commit or stash changes first"
+    fi
+
     if ! git show-ref --verify --quiet "refs/heads/$RELEASE_BRANCH"; then
-        die "branch $RELEASE_BRANCH does not exist"
+        die "branch $RELEASE_BRANCH does not exist locally"
+    fi
+
+    if ! $NO_PUSH; then
+        log "Fetching $REMOTE..."
+        git fetch "$REMOTE"
+        assert_branch_current "$RELEASE_BRANCH"
+        assert_branch_current main
     fi
 
     if git rev-parse "$TAG" >/dev/null 2>&1; then
         die "tag $TAG already exists"
+    fi
+
+    if git show-ref --verify --quiet "refs/heads/$ADOPT_BRANCH"; then
+        die "branch $ADOPT_BRANCH already exists; delete it first if re-running"
     fi
 fi
 
@@ -143,9 +184,29 @@ else
     git push "$REMOTE" "$TAG"
 fi
 
-# --- merge the release PR -----------------------------------------------------
+# --- create adopt branch with version fixup -----------------------------------
+log "Creating $ADOPT_BRANCH from $RELEASE_BRANCH..."
+run git checkout -b "$ADOPT_BRANCH" "$RELEASE_BRANCH"
+
+if ! $DRY_RUN; then
+    MAIN_VERSION="$(get_version_from_ref main)"
+    log "Setting version to $MAIN_VERSION (from main) on $ADOPT_BRANCH..."
+    set_version "$MAIN_VERSION"
+    git add pyproject.toml
+    git commit -s -S -m "Set version to $MAIN_VERSION for merge into main"
+fi
+
+# --- push adopt branch --------------------------------------------------------
+if $NO_PUSH || $DRY_RUN; then
+    log "Skipping adopt branch push"
+else
+    log "Pushing $ADOPT_BRANCH to $REMOTE..."
+    git push "$REMOTE" "$ADOPT_BRANCH"
+fi
+
+# --- close release PR and open adopt PR ---------------------------------------
 if $NO_PR || $DRY_RUN; then
-    log "Skipping PR merge and GitHub Release"
+    log "Skipping PR operations and GitHub Release"
 else
     REPO_SLUG="$(gh repo view --json nameWithOwner -q .nameWithOwner)"
 
@@ -158,32 +219,43 @@ else
         --json number \
         -q '.[0].number')"
 
-    if [[ -z "$PR_NUMBER" ]]; then
-        die "no open PR found from $RELEASE_BRANCH to main"
+    if [[ -n "$PR_NUMBER" ]]; then
+        log "Closing release PR #${PR_NUMBER}..."
+        gh pr close "$PR_NUMBER" \
+            --repo "$REPO_SLUG" \
+            --comment "Closed by finish-release.sh. Release changes will be merged via $ADOPT_BRANCH."
+    else
+        log "No open release PR found from $RELEASE_BRANCH to main (skipping close)"
     fi
 
-    log "Checking PR #${PR_NUMBER} approval status..."
-    REVIEW_DECISION="$(gh pr view "$PR_NUMBER" \
+    log "Creating PR from $ADOPT_BRANCH to main..."
+
+    ADOPT_PR_BODY="$(cat <<EOF
+## Adopt release v${VERSION}
+
+Merge release changes from \`${RELEASE_BRANCH}\` into \`main\` via the
+\`${ADOPT_BRANCH}\` branch. The version in \`pyproject.toml\` has been set to
+the current \`main\` development version to avoid conflicts.
+
+**Tag:** \`${TAG}\`
+
+This PR replaces the original release PR${PR_NUMBER:+ (#${PR_NUMBER})} which was
+closed because \`${RELEASE_BRANCH}\` intentionally carries a different version
+string (\`${VERSION}\`) than \`main\`.
+
+### To merge
+
+Merge this PR once CI passes. Use a **merge commit** (not squash) to preserve
+the release branch history on \`main\`.
+EOF
+)"
+
+    gh pr create \
         --repo "$REPO_SLUG" \
-        --json reviewDecision \
-        -q '.reviewDecision')"
-
-    if [[ "$REVIEW_DECISION" != "APPROVED" ]]; then
-        echo "ERROR: PR #${PR_NUMBER} review status is: ${REVIEW_DECISION:-NONE}" >&2
-        die "aborted -- get the PR approved first"
-    fi
-
-    log "Marking PR #${PR_NUMBER} as ready for review..."
-    gh pr ready "$PR_NUMBER" --repo "$REPO_SLUG"
-
-    log "Merging PR #${PR_NUMBER} with merge commit"
-    log "NOTE: The merge will conflict on the version line in pyproject.toml."
-    log "      Resolve by keeping the main branch version (the .dev0 version)."
-
-    gh pr merge "$PR_NUMBER" \
-        --repo "$REPO_SLUG" \
-        --merge \
-        --subject "Merge $RELEASE_BRANCH for release $TAG"
+        --base main \
+        --head "$ADOPT_BRANCH" \
+        --title "Adopt release v${VERSION}" \
+        --body "$ADOPT_PR_BODY"
 
     log "Creating GitHub Release $TAG..."
     gh release create "$TAG" \
@@ -197,7 +269,8 @@ log "Switching back to main..."
 run git checkout main
 
 echo ""
-log "Done. Release $TAG complete."
-if ! $NO_PUSH && ! $DRY_RUN; then
+log "Done. Release $TAG tagged."
+if ! $NO_PR && ! $DRY_RUN; then
     log "The GitHub Release will trigger the publish workflow."
+    log "Merge the adopt PR from $ADOPT_BRANCH once CI passes."
 fi

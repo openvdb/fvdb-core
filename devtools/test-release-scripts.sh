@@ -86,9 +86,11 @@ git config tag.gpgsign false
 mkdir -p devtools
 cp "$SCRIPT_DIR/start-release.sh" devtools/
 cp "$SCRIPT_DIR/finish-release.sh" devtools/
-chmod +x devtools/start-release.sh devtools/finish-release.sh
+cp "$SCRIPT_DIR/update-doc-versions.sh" devtools/
+chmod +x devtools/start-release.sh devtools/finish-release.sh devtools/update-doc-versions.sh
 START_RELEASE="$WORK_REPO/devtools/start-release.sh"
 FINISH_RELEASE="$WORK_REPO/devtools/finish-release.sh"
+UPDATE_DOC_VERSIONS="$WORK_REPO/devtools/update-doc-versions.sh"
 
 cat > pyproject.toml <<'PYPROJECT'
 [project]
@@ -96,7 +98,17 @@ name = "fvdb-core"
 version = "0.3.1"
 PYPROJECT
 
-git add pyproject.toml
+mkdir -p docs
+cat > docs/conf.py <<'CONFPY'
+project = "fVDB"
+fvdb_core_stable_version = "0.3.0"
+rst_prolog = f"""\
+.. |fvdb_core_version_pt210_cu128| replace:: {fvdb_core_stable_version}+pt210.cu128
+.. |fvdb_core_version_pt210_cu130| replace:: {fvdb_core_stable_version}+pt210.cu130
+"""
+CONFPY
+
+git add pyproject.toml docs/conf.py
 git commit -s -m "Initial commit" >/dev/null 2>&1
 git tag v0.3.0
 git push origin main >/dev/null 2>&1
@@ -146,6 +158,9 @@ git checkout release/v0.4 >/dev/null 2>&1
 RELEASE_VERSION="$(get_version)"
 assert_eq "release branch version is 0.4.0" "0.4.0" "$RELEASE_VERSION"
 
+RELEASE_DOC_VERSION="$(grep '^fvdb_core_stable_version = ' docs/conf.py | sed 's/^fvdb_core_stable_version = "\(.*\)"/\1/')"
+assert_eq "release branch docs/conf.py updated to 0.4.0" "0.4.0" "$RELEASE_DOC_VERSION"
+
 RELEASE_LOG="$(git log -1 --format='%B' release/v0.4)"
 assert_contains "release commit has DCO sign-off" "$RELEASE_LOG" "Signed-off-by:"
 
@@ -185,6 +200,66 @@ fi
 
 echo ""
 echo "============================================="
+echo " Test: update-doc-versions.sh --help"
+echo "============================================="
+
+UDHELP_OUTPUT="$("$UPDATE_DOC_VERSIONS" --help 2>&1)"
+assert_contains "update-doc-versions help mentions version" "$UDHELP_OUTPUT" "MAJOR.MINOR.PATCH"
+assert_contains "update-doc-versions help mentions --dry-run" "$UDHELP_OUTPUT" "--dry-run"
+
+echo ""
+echo "============================================="
+echo " Test: update-doc-versions.sh --dry-run"
+echo "============================================="
+
+UDDRY_OUTPUT="$("$UPDATE_DOC_VERSIONS" 0.9.0 --dry-run 2>&1)"
+assert_contains "dry-run mentions docs/conf.py" "$UDDRY_OUTPUT" "docs/conf.py"
+
+CONF_BEFORE_DRY="$(grep '^fvdb_core_stable_version = ' docs/conf.py | sed 's/^fvdb_core_stable_version = "\(.*\)"/\1/')"
+"$UPDATE_DOC_VERSIONS" 0.9.0 --dry-run >/dev/null 2>&1
+CONF_AFTER_DRY="$(grep '^fvdb_core_stable_version = ' docs/conf.py | sed 's/^fvdb_core_stable_version = "\(.*\)"/\1/')"
+assert_eq "docs/conf.py unchanged after dry-run" "$CONF_BEFORE_DRY" "$CONF_AFTER_DRY"
+
+echo ""
+echo "============================================="
+echo " Test: update-doc-versions.sh with dependency"
+echo "============================================="
+
+# Simulate a repo that depends on fvdb-core (like fvdb-reality-capture)
+cat > pyproject.toml <<'PYPROJECT'
+[project]
+name = "fvdb-reality-capture"
+version = "0.5.0.dev0"
+dependencies = [
+    "fvdb-core>=0.3.0",
+    "numpy",
+]
+PYPROJECT
+
+"$UPDATE_DOC_VERSIONS" 0.7.0 2>&1
+
+UPDATED_DEP="$(grep 'fvdb-core>=' pyproject.toml | sed 's/.*fvdb-core>=\([^"]*\).*/\1/')"
+assert_eq "update-doc-versions bumps fvdb-core dep floor" "0.7.0" "$UPDATED_DEP"
+
+UPDATED_CONF="$(grep '^fvdb_core_stable_version = ' docs/conf.py | sed 's/^fvdb_core_stable_version = "\(.*\)"/\1/')"
+assert_eq "update-doc-versions updates conf.py" "0.7.0" "$UPDATED_CONF"
+
+# Restore state for remaining tests
+git checkout -- pyproject.toml docs/conf.py 2>/dev/null || true
+
+echo ""
+echo "============================================="
+echo " Test: update-doc-versions.sh validates version"
+echo "============================================="
+
+if "$UPDATE_DOC_VERSIONS" "bad" 2>&1; then
+    fail "update-doc-versions should reject invalid version"
+else
+    pass "update-doc-versions rejects invalid version"
+fi
+
+echo ""
+echo "============================================="
 echo " Test: finish-release.sh --help"
 echo "============================================="
 
@@ -200,6 +275,7 @@ echo "============================================="
 FDRY_OUTPUT="$("$FINISH_RELEASE" 0.4.0 --dry-run 2>&1)"
 assert_contains "finish dry-run mentions tag" "$FDRY_OUTPUT" "v0.4.0"
 assert_contains "finish dry-run mentions release branch" "$FDRY_OUTPUT" "release/v0.4"
+assert_contains "finish dry-run mentions adopt branch" "$FDRY_OUTPUT" "adopt/v0.4"
 
 echo ""
 echo "============================================="
@@ -217,26 +293,37 @@ assert_eq "tag points to release branch HEAD" "$RELEASE_HEAD" "$TAG_COMMIT"
 CURRENT_AFTER="$(git rev-parse --abbrev-ref HEAD)"
 assert_eq "on main after finish-release" "main" "$CURRENT_AFTER"
 
+assert_branch_exists "adopt/v0.4 branch exists" "adopt/v0.4"
+
+git checkout adopt/v0.4 >/dev/null 2>&1
+ADOPT_VERSION="$(get_version)"
+assert_eq "adopt branch version is 0.5.0.dev0" "0.5.0.dev0" "$ADOPT_VERSION"
+
+ADOPT_LOG="$(git log -1 --format='%B' adopt/v0.4)"
+assert_contains "adopt commit has DCO sign-off" "$ADOPT_LOG" "Signed-off-by:"
+git checkout main >/dev/null 2>&1
+
+git checkout release/v0.4 >/dev/null 2>&1
+RELEASE_VERSION_AFTER="$(get_version)"
+assert_eq "release branch still at 0.4.0 after finish" "0.4.0" "$RELEASE_VERSION_AFTER"
+git checkout main >/dev/null 2>&1
+
 echo ""
 echo "============================================="
-echo " Test: release branch is mergeable into main"
+echo " Test: adopt branch merges cleanly into main"
 echo "============================================="
 
-MERGE_OUTPUT="$(git merge --no-commit --no-ff release/v0.4 2>&1 || true)"
-if git diff --cached --quiet 2>/dev/null; then
-    pass "release branch merges cleanly (no conflicts)"
+set +e
+MERGE_OUTPUT="$(git merge --no-commit --no-ff adopt/v0.4 2>&1)"
+MERGE_EXIT=$?
+set -e
+git reset --hard HEAD >/dev/null 2>&1
+
+if [[ $MERGE_EXIT -eq 0 ]]; then
+    pass "adopt branch merges cleanly into main"
 else
-    git merge --abort 2>/dev/null || true
-    # Even with conflicts this isn't necessarily a failure of the scripts,
-    # since the version lines intentionally diverge. Check if the only
-    # conflict is pyproject.toml (expected).
-    if [[ "$MERGE_OUTPUT" == *"CONFLICT"* ]] && [[ "$MERGE_OUTPUT" == *"pyproject.toml"* ]]; then
-        pass "release branch merge has expected version conflict only"
-    else
-        fail "unexpected merge conflict: $MERGE_OUTPUT"
-    fi
+    fail "adopt branch has merge conflicts with main: $MERGE_OUTPUT"
 fi
-git merge --abort 2>/dev/null || true
 
 echo ""
 echo "============================================="
