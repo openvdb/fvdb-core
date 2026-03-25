@@ -34,6 +34,7 @@
 #include <fvdb/detail/ops/VoxelsAlongRays.h>
 #include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/nanovdb/TorchNanoConversions.h>
+#include <fvdb/detail/ops/AcousticRaySamples.h>
 
 #include <torch/types.h>
 

@@ -22,13 +22,11 @@ __global__ void countAcousticRaySamplesKernel(
     const JaggedAccessor<ScalarType, 2> rayDirections,
     const JaggedAccessor<ScalarType, 1> soundSpeeds,
     float stepSize,
-    JaggedAccessor<int32_t, 1> outCounts) {
+    fvdb::TorchRAcc64<int32_t, 1> outCounts) {
 
         // Kernel parallelizes over rays.
         // For each ray, we count the number of samples we will take.
-    }
-
-} // anonymous namespace
+}
 
 template <typename ScalarType>
 __global__ void accousticRaySamplesKernel(
@@ -41,7 +39,7 @@ __global__ void accousticRaySamplesKernel(
 
         // Kernel parallelizes over rays.
         // For each ray, we take a step, query the sound speeds, write a value, and bend the ray according to Snell's law.
-    }
+}
 
 } // anonymous namespace
 
@@ -54,15 +52,24 @@ std::vector<JaggedTensor> acousticRaySamples(
     const JaggedTensor &soundSpeeds,
     float stepSize) {
 
-    const JaggedTensor outputSamples = JaggedTensor::empty({rayOrigins.size(0), rayOrigins.size(1), 2}, rayOrigins.options());
-    const JaggedTensor outputPositions = JaggedTensor::empty({rayOrigins.size(0), rayOrigins.size(1), 3}, rayOrigins.options());
-    const JaggedTensor outputTimes = JaggedTensor::empty({rayOrigins.size(0), rayOrigins.size(1)}, rayOrigins.options());
+    const auto gridBatchAcc = gridBatchAccessor<DeviceTag>(batchHdl);
+    const auto rayOriginsAcc = jaggedAccessor<DeviceTag, scalar_t, 2>(rayOrigins);
+    const auto rayDirectionsAcc = jaggedAccessor<DeviceTag, scalar_t, 2>(rayDirections);
+    const auto soundSpeedsAcc = jaggedAccessor<DeviceTag, scalar_t, 1>(soundSpeeds);
+
+    const int64_t N = rayOrigins.jdata().size(0);
+    auto outSamplesData = torch::empty({N, 2}, rayOrigins.jdata().options());
+    auto outPositionsData = torch::empty({N, 3}, rayOrigins.jdata().options());
+    auto outTimesData = torch::empty({N}, rayOrigins.jdata().options());
+    fvdb::JaggedTensor outSamples = rayOrigins.jagged_like(outSamplesData);
+    fvdb::JaggedTensor outPositions = rayOrigins.jagged_like(outPositionsData);
+    fvdb::JaggedTensor outTimes = rayOrigins.jagged_like(outTimesData);
 
     // 1. Count the number of samples we will take for each ray.
 
     // 2. Generate the samples.
 
-    return {outputSamples, outputPositions, outputTimes};
+    return {outSamples, outPositions, outTimes};
 }
 
 } // namespace ops
