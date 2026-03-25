@@ -1021,6 +1021,11 @@ class GridBatch:
         Returns:
             world_coords (JaggedTensor): World coordinates. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_points_for_grid_b, 3)``.
         """
+        if ijk.jdata.device != self.device:
+            raise RuntimeError(
+                f"Expected all tensors to be on the same device, but found at least two devices, "
+                f"{self.device} and {ijk.jdata.device}!"
+            )
         float_data = ijk.jdata if ijk.jdata.is_floating_point() else ijk.jdata.float()
         matrices = self.voxel_to_world_matrices.to(dtype=float_data.dtype, device=float_data.device)
         per_pt = matrices[ijk.jidx]
@@ -2137,6 +2142,11 @@ class GridBatch:
             voxel_points (JaggedTensor): Grid coordinates. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_points_for_grid_b, 3)``.
                 Can contain fractional values.
         """
+        if points.jdata.device != self.device:
+            raise RuntimeError(
+                f"Expected all tensors to be on the same device, but found at least two devices, "
+                f"{self.device} and {points.jdata.device}!"
+            )
         float_data = points.jdata if points.jdata.is_floating_point() else points.jdata.float()
         matrices = self.world_to_voxel_matrices.to(dtype=float_data.dtype, device=float_data.device)
         per_pt = matrices[points.jidx]

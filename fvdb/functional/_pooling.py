@@ -139,7 +139,8 @@ def max_pool(
     if coarse_grid is not None:
         coarse_grid_data = _get_grid_data(coarse_grid)
     else:
-        coarse_grid_data = _fvdb_cpp.coarsen_grid(grid_data, factor_list)
+        coarse_factor = [s if s > 0 else f for s, f in zip(stride_list, factor_list)]
+        coarse_grid_data = _fvdb_cpp.coarsen_grid(grid_data, coarse_factor)
     result = _MaxPoolFn.apply(data.jdata, grid_data, coarse_grid_data, factor_list, stride_list)
     coarse_gb = GB(data=coarse_grid_data)
     if is_flat:
@@ -204,7 +205,8 @@ def avg_pool(
     if coarse_grid is not None:
         coarse_grid_data = _get_grid_data(coarse_grid)
     else:
-        coarse_grid_data = _fvdb_cpp.coarsen_grid(grid_data, factor_list)
+        coarse_factor = [s if s > 0 else f for s, f in zip(stride_list, factor_list)]
+        coarse_grid_data = _fvdb_cpp.coarsen_grid(grid_data, coarse_factor)
     result = _AvgPoolFn.apply(data.jdata, grid_data, coarse_grid_data, factor_list, stride_list)
     coarse_gb = GB(data=coarse_grid_data)
     if is_flat:
