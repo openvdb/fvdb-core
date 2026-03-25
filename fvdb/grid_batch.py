@@ -672,12 +672,12 @@ class GridBatch:
         Returns:
             grid_batch (GridBatch): A new :class:`fvdb.GridBatch` object.
         """
-        grid_impls: list[GridBatchCpp] = []
+        grid_datas = []
         for grid in grids:
             if not isinstance(grid, GridBatch):
                 raise TypeError(f"Expected GridBatch, got {type(grid)}")
-            grid_impls.append(grid.data)
-        return cls(data=jcat_cpp(grid_impls))
+            grid_datas.append(_get_grid_data(grid))
+        return cls(data=_fvdb_cpp.concatenate_grids(grid_datas))
 
     # ============================================================
     #                Regular Instance Methods Begin
@@ -1024,8 +1024,8 @@ class GridBatch:
         float_data = ijk.jdata if ijk.jdata.is_floating_point() else ijk.jdata.float()
         matrices = self.voxel_to_world_matrices.to(dtype=float_data.dtype, device=float_data.device)
         per_pt = matrices[ijk.jidx]
-        world = torch.einsum("nij,nj->ni", per_pt[:, :3, :3], float_data) + per_pt[:, :3, 3]
-        return self.jagged_like(world)
+        world = torch.einsum("ni,nij->nj", float_data, per_pt[:, :3, :3]) + per_pt[:, 3, :3]
+        return ijk.jagged_like(world)
 
     def has_same_address_and_grid_count(self, other: Any) -> bool:
         """
@@ -2140,8 +2140,8 @@ class GridBatch:
         float_data = points.jdata if points.jdata.is_floating_point() else points.jdata.float()
         matrices = self.world_to_voxel_matrices.to(dtype=float_data.dtype, device=float_data.device)
         per_pt = matrices[points.jidx]
-        voxel = torch.einsum("nij,nj->ni", per_pt[:, :3, :3], float_data) + per_pt[:, :3, 3]
-        return self.jagged_like(voxel)
+        voxel = torch.einsum("ni,nij->nj", float_data, per_pt[:, :3, :3]) + per_pt[:, 3, :3]
+        return points.jagged_like(voxel)
 
     def inject_to_dense_cminor(
         self,
@@ -2414,7 +2414,7 @@ class GridBatch:
             if self.all_have_zero_voxels:
                 return torch.zeros((self.grid_count, 2, 3), dtype=torch.int32, device=self.device)
             elif self.any_have_zero_voxels:
-                bboxes = self.data.bbox
+                bboxes = self.data.bbox.to(self.device)
 
                 fixed_bboxes = []
                 for i in range(self.grid_count):
@@ -2425,7 +2425,7 @@ class GridBatch:
 
                 return torch.stack(fixed_bboxes, dim=0)
             else:
-                return self.data.bbox
+                return self.data.bbox.to(self.device)
 
     @property
     def cum_voxels(self) -> torch.Tensor:
@@ -2444,7 +2444,7 @@ class GridBatch:
         if self.has_zero_grids:
             return torch.empty((0,), dtype=torch.int64, device=self.device)
         else:
-            return self.data.cum_voxels
+            return self.data.cum_voxels.to(self.device)
 
     @property
     def device(self) -> torch.device:
@@ -2487,7 +2487,7 @@ class GridBatch:
             if self.all_have_zero_voxels:
                 return torch.zeros((self.grid_count, 2, 3), dtype=torch.int32, device=self.device)
             elif self.any_have_zero_voxels:
-                bboxes = self.data.dual_bbox
+                bboxes = self.data.dual_bbox.to(self.device)
 
                 fixed_bboxes = []
                 for i in range(self.grid_count):
@@ -2498,7 +2498,7 @@ class GridBatch:
 
                 return torch.stack(fixed_bboxes, dim=0)
             else:
-                return self.data.dual_bbox
+                return self.data.dual_bbox.to(self.device)
 
     @property
     def grid_count(self) -> int:
@@ -2523,7 +2523,7 @@ class GridBatch:
         if self.has_zero_grids:
             return torch.empty((0, 4, 4), dtype=torch.float32, device=self.device)
         else:
-            return self.data.voxel_to_world_matrices
+            return self.data.voxel_to_world_matrices.to(dtype=torch.float32, device=self.device)
 
     @property
     def has_zero_grids(self) -> bool:
@@ -2674,7 +2674,7 @@ class GridBatch:
         if self.has_zero_grids:
             return torch.empty((0,), dtype=torch.int64, device=self.device)
         else:
-            return self.data.num_bytes
+            return self.data.num_bytes.to(self.device)
 
     @property
     def num_leaf_nodes(self) -> torch.Tensor:
@@ -2687,8 +2687,9 @@ class GridBatch:
         """
         if self.has_zero_grids:
             return torch.empty((0,), dtype=torch.int64, device=self.device)
-        else:
-            return self.data.num_leaf_nodes
+        data = self.data
+        result = data.num_leaves if hasattr(data, "num_leaves") else data.num_leaf_nodes
+        return result.to(self.device)
 
     @property
     def num_voxels(self) -> torch.Tensor:
@@ -2702,7 +2703,7 @@ class GridBatch:
         if self.has_zero_grids:
             return torch.empty((0,), dtype=torch.int64, device=self.device)
         else:
-            return self.data.num_voxels
+            return self.data.num_voxels.to(self.device)
 
     @property
     def origins(self) -> torch.Tensor:
@@ -2715,7 +2716,7 @@ class GridBatch:
         if self.has_zero_grids:
             return torch.empty((0, 3), dtype=torch.float32, device=self.device)
         else:
-            return self.data.origins
+            return self.data.origins.to(dtype=torch.float32, device=self.device)
 
     @property
     def total_bbox(self) -> torch.Tensor:
@@ -2734,7 +2735,7 @@ class GridBatch:
         if self.has_zero_grids or self.all_have_zero_voxels:
             return torch.zeros((2, 3), dtype=torch.int32, device=self.device)
         else:
-            return self.data.total_bbox
+            return self.data.total_bbox.to(self.device)
 
     @property
     def total_bytes(self) -> int:
@@ -2786,7 +2787,7 @@ class GridBatch:
         if self.has_zero_grids:
             return torch.empty((0, 3), dtype=torch.float32, device=self.device)
         else:
-            return self.data.voxel_sizes
+            return self.data.voxel_sizes.to(dtype=torch.float32, device=self.device)
 
     @property
     def world_to_voxel_matrices(self) -> torch.Tensor:
@@ -2801,7 +2802,7 @@ class GridBatch:
         if self.has_zero_grids:
             return torch.empty((0, 4, 4), dtype=torch.float32, device=self.device)
         else:
-            return self.data.world_to_voxel_matrices
+            return self.data.world_to_voxel_matrices.to(dtype=torch.float32, device=self.device)
 
     # Expose underlying implementation for compatibility
     @property

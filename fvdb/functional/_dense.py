@@ -94,6 +94,8 @@ def _resolve_dense_params(grid_data, sparse_data, min_coord, grid_size):
     bbox = grid_data.total_bbox
     if min_coord is not None:
         mc = to_Vec3iBatchBroadcastable(min_coord).to(device=sparse_data.jdata.device)
+        if mc.dim() == 0:
+            mc = mc.unsqueeze(0).expand(3)
         if mc.dim() == 1 and mc.size(0) == 3:
             mc = mc.unsqueeze(0).expand(grid_data.grid_count, 3)
         origins = mc.to(torch.int32)
@@ -101,7 +103,10 @@ def _resolve_dense_params(grid_data, sparse_data, min_coord, grid_size):
         origins = bbox[0].to(torch.int32).unsqueeze(0).expand(grid_data.grid_count, 3).to(sparse_data.jdata.device)
 
     if grid_size is not None:
-        gs_list = to_Vec3iBroadcastable(grid_size, value_constraint=ValueConstraint.POSITIVE).tolist()
+        gs_t = to_Vec3iBroadcastable(grid_size, value_constraint=ValueConstraint.POSITIVE)
+        if gs_t.dim() == 0:
+            gs_t = gs_t.expand(3)
+        gs_list = gs_t.tolist()
     else:
         bbox_min = bbox[0]
         bbox_max = bbox[1]
@@ -138,7 +143,7 @@ def inject_from_dense_cminor(
     .. seealso:: :func:`inject_from_dense_cmajor`, :func:`inject_to_dense_cminor`
     """
     grid_data = _get_grid_data(grid)
-    origin = to_Vec3i(dense_origin)
+    origin = to_Vec3i(dense_origin).unsqueeze(0).expand(grid_data.grid_count, 3).to(dtype=torch.int32, device=dense_data.device).contiguous()
     result = _InjectFromDenseCminorFn.apply(dense_data, grid_data, origin)
     return grid.jagged_like(result)
 
@@ -166,7 +171,7 @@ def inject_from_dense_cmajor(
     .. seealso:: :func:`inject_from_dense_cminor`, :func:`inject_to_dense_cmajor`
     """
     grid_data = _get_grid_data(grid)
-    origin = to_Vec3i(dense_origin)
+    origin = to_Vec3i(dense_origin).unsqueeze(0).expand(grid_data.grid_count, 3).to(dtype=torch.int32, device=dense_data.device).contiguous()
     result = _InjectFromDenseCmajorFn.apply(dense_data, grid_data, origin)
     return grid.jagged_like(result)
 
@@ -280,6 +285,25 @@ def inject_to_dense_cmajor(
 # ---------------------------------------------------------------------------
 
 
+class _InjectFn(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, src_jdata, dst_grid_data, src_grid_data, dst_jt_impl, src_jt_impl):
+        ctx.dst_grid_data = dst_grid_data
+        ctx.src_grid_data = src_grid_data
+        ctx.dst_jt_impl = dst_jt_impl
+        ctx.src_jt_impl = src_jt_impl
+        _fvdb_cpp.inject_op(dst_grid_data, src_grid_data, dst_jt_impl, src_jt_impl)
+        return dst_jt_impl.jdata.clone()
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        grad_src = torch.zeros_like(ctx.src_jt_impl.jdata)
+        grad_src_jt = ctx.src_jt_impl.jagged_like(grad_src)
+        grad_dst_jt = ctx.dst_jt_impl.jagged_like(grad_output)
+        _fvdb_cpp.inject_op(ctx.src_grid_data, ctx.dst_grid_data, grad_src_jt, grad_dst_jt)
+        return grad_src_jt.jdata, None, None, None, None
+
+
 @overload
 def inject(
     dst_grid: GridBatch,
@@ -339,8 +363,8 @@ def inject(
         else:
             raw_dst = dst
         jt_dst = JaggedTensor(raw_dst)
-        _fvdb_cpp.inject_op(dst_grid_data, src_grid_data, jt_dst._impl, jt_src._impl)
-        return jt_dst.jdata
+        result = _InjectFn.apply(src, dst_grid_data, src_grid_data, jt_dst._impl, jt_src._impl)
+        return result
 
     jt_src = src
     if dst is None:
@@ -352,5 +376,7 @@ def inject(
         jt_dst_b = dst
     if jt_dst_b.eshape != jt_src.eshape:
         raise ValueError(f"src and dst must have the same element shape, got src: {jt_src.eshape}, dst: {jt_dst_b.eshape}")
-    _fvdb_cpp.inject_op(dst_grid_data, src_grid_data, jt_dst_b._impl, jt_src._impl)
-    return jt_dst_b
+    result = _InjectFn.apply(jt_src.jdata, dst_grid_data, src_grid_data, jt_dst_b._impl, jt_src._impl)
+    if is_flat:
+        return result
+    return jt_dst_b.jagged_like(result)
