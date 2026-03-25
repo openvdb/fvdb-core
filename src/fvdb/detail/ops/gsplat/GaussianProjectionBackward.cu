@@ -195,10 +195,9 @@ projectionBackwardKernel(const int32_t offset,
         const T norm   = nanovdb::math::Sqrt(dldm2x * dldm2x + dldm2y * dldm2y);
         gpuAtomicAdd(outDLossDMeans2dNormAccum + gId, norm);
         gpuAtomicAdd(outGradientStepCounts + gId, 1);
-    }
-
-    if (outMaxRadiiAccum != nullptr) {
-        atomicMax(outMaxRadiiAccum + gId, radii[idx]);
+        if (outMaxRadiiAccum != nullptr) {
+            atomicMax(outMaxRadiiAccum + gId, radii[idx]);
+        }
     }
 }
 
