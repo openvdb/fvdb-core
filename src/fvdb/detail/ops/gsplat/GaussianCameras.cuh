@@ -205,7 +205,11 @@ template <typename T> struct PerspectiveCamera {
         return 2 * sizeof(Mat3) + sizeof(Vec3);
     }
 
-    /// @brief Loads per-camera intrinsics/extrinsics into dynamic shared memory.
+    /// @brief Load camera intrinsics/extrinsics into dynamic shared memory for the specified camera
+    /// id. For pinhole projection, we launch a 2D grid where the Y axis corresponds to the camera
+    /// id and the X axis corresponds to the Gaussians matching the stride order of the input/output
+    /// arrays. In particular, blockDim.y == 1, so each block only needs to load one camera into
+    /// shared memory.
     inline __device__ void
     loadSharedMemory(const int64_t cid, void *sharedMemory) {
         projectionMatShared         = reinterpret_cast<Mat3 *>(sharedMemory);
@@ -483,7 +487,11 @@ template <typename T> struct OrthographicCamera {
         return 2 * sizeof(Mat3) + sizeof(Vec3);
     }
 
-    /// @brief Loads per-camera intrinsics/extrinsics into dynamic shared memory.
+    /// @brief Load camera intrinsics/extrinsics into dynamic shared memory for the specified camera
+    /// id. For pinhole projection, we launch a 2D grid where the Y axis corresponds to the camera
+    /// id and the X axis corresponds to the Gaussians matching the stride order of the input/output
+    /// arrays. In particular, blockDim.y == 1, so each block only needs to load one camera into
+    /// shared memory.
     inline __device__ void
     loadSharedMemory(int64_t cid, void *sharedMemory) {
         projectionMatShared         = reinterpret_cast<Mat3 *>(sharedMemory);
