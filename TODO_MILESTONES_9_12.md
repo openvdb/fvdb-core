@@ -2,10 +2,16 @@
 
 ## Status
 
-Milestones 1-8.75 are complete, plus the GridBatchData struct refactor. The branch
-has these commits:
+Milestones 1-9f are complete. The remaining work (milestones 10-11) is deferred
+pending the full migration of `grid_batch.py` instance methods from
+`self.data.<method>()` (C++ GridBatch) to raw `_fvdb_cpp.<op>()` calls.
 
 ```
+f412ab7 Milestone 9f:    Update convolution bindings to accept GridBatchData
+6960a43 Milestone 9g:    Update tests from Grid to GridBatch
+aa0d804 Milestone 9b+9e: Python autograd + raw ops in functional layer
+09f1bba Milestone 9a-d:  Retire Grid class, add _prepare/_unwrap dispatch helpers
+06d2723 Update TODO milestones to reflect frozen-struct refactor
 61cce44 Refactor GridBatchData into frozen struct with single constructor
 b67c353 Add detailed TODO for Milestones 9-12
 31699a5 Milestone 8.75: Rename GridBatchImpl -> GridBatchData, _impl -> data
@@ -17,37 +23,29 @@ e4f862c Milestone 2:    Remove Vec3*OrScalar type system from C++
 
 ### What exists now
 
-- `GridBatchData` (C++) is a frozen struct: all public fields, single constructor
-  that bundles pre-computed fields, no methods beyond const getters. Bound to Python
-  with read-only properties, per-grid queries, and pickle support
-  (`GridBatchDataBinding.cpp`).
-- Construction goes through `makeGridBatchData()` / `makeEmptyGridBatchData()` factory
-  functions in `GridBatchDataFactory.{h,cu}`. These are used by all ops that produce
-  grids.
-- All factory/topology/mutation methods have been removed from GridBatchData and exist
-  only as free-function ops:
-  - Grid construction: `createNanoGridFromIJK`, `buildGridFromPoints`,
-    `buildGridFromMesh`, `buildGridFromNearestVoxelsToPoints`, `createNanoGridFromDense`
-  - Topology: `buildCoarseGridFromFine`, `buildFineGridFromCoarse`, `buildPaddedGrid`,
-    `dilateGrid`, `mergeGrids`, `pruneGrid`, `buildGridForConv`,
-    `buildGridForConvTranspose`
-  - Batch ops: `concatenateGrids`, `makeContiguous`, `cloneGrid`, `indexGrid` (5
-    overloads), `clipGrid`, `clipGridWithMask`, `clipGridFeaturesWithMask`
-  - Serialization: `serializeGrid`, `deserializeGrid`
-- ~65 raw C++ ops are bound as `_fvdb_cpp.<op>` in `GridBatchOps.cpp` (the original
-  39 plus the newly-exposed factory/topology/batch/serialization ops).
-- `fvdb.functional` has 42 public functions with `@overload` for Grid/GridBatch dispatch.
-  Currently these delegate to `grid.data.<method>()` (the C++ `GridBatch` wrapper).
-- `Grid.data` and `GridBatch.data` both store a `_fvdb_cpp.GridBatch` (C++ wrapper).
-- All public setters are removed (`setGlobalVoxelSize`, `setGlobalVoxelOrigin`, etc.).
-  `set_global_voxel_size` / `set_global_origin` removed from `GridBatch` API.
-- `nanoGridHandleMut()` is removed. Ops that need non-const device grid pointers
-  access `mGridHdl` directly (public field).
-- No post-construction mutation: `BuildCoarseGridFromFine` and `BuildFineGridFromCoarse`
-  precompute correct voxel sizes/origins; `BuildPaddedGrid` uses low-level metadata API
-  to set transforms before construction.
-- Voxel size computation helpers in `VoxelSizeUtils.h` (`coarseVoxelSize`,
-  `fineVoxelSize`, etc.).
+- **Grid class retired.** `fvdb.Grid` has been deleted. `fvdb.GridBatch` is the sole
+  user-facing grid type. Single-grid users pass plain `torch.Tensor` to functional ops
+  (overloaded: `Tensor -> Tensor`, `JaggedTensor -> JaggedTensor`).
+- **`_prepare`/`unwrap` dispatch helpers** in `fvdb/functional/_dispatch.py` normalize
+  `Tensor | JaggedTensor` inputs to canonical JaggedTensor form, following the
+  established `to_Vec3iBroadcastable` pattern. Each functional op is written once.
+- **Python autograd** replaces C++ autograd for all differentiable ops (~16 autograd
+  Function classes). These call raw `_fvdb_cpp.<op>()` free functions via the
+  `_get_grid_data()` bridge.
+- **Functional layer fully on raw ops.** All 42 `fvdb.functional` functions call
+  `_fvdb_cpp.<op>(grid_data, ...)` instead of `grid.data.<method>(...)`. The
+  `_get_grid_data()` bridge transparently extracts `GridBatchData` from either the
+  old C++ GridBatch wrapper or a direct GridBatchData reference.
+- **Convolution bindings** in `Bindings.cpp` accept `GridBatchData` directly (not
+  `GridBatch`). `convolution_plan.py` uses `_get_grid_data()` for the bridge.
+- **Tests updated.** All test files that used `Grid` now use `GridBatch` with
+  `grid_count == 1`.
+- **`GridBatch.data` still stores `_fvdb_cpp.GridBatch`** (the C++ wrapper). The ~80
+  instance methods on `grid_batch.py` still call `self.data.<method>(...)` and have not
+  been migrated to raw ops yet.
+- `GridBatchData` (C++) is a frozen struct with read-only properties, per-grid queries,
+  and pickle support (`GridBatchDataBinding.cpp`). ~65 raw C++ ops are bound as
+  `_fvdb_cpp.<op>` in `GridBatchOps.cpp`.
 
 ### What changed vs. the original milestone plan
 
