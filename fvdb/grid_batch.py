@@ -28,14 +28,12 @@ mesh extraction, and coordinate transformations on sparse voxel data.
 """
 
 from collections.abc import Iterator
-from typing import TYPE_CHECKING, Any, Sequence, overload
+from typing import Any, Sequence, overload
 
 import numpy as np
 import torch
 
 from . import _fvdb_cpp, _parse_device_string
-from ._fvdb_cpp import GridBatch as GridBatchCpp
-from ._fvdb_cpp import jcat as jcat_cpp
 from .functional._dispatch import _get_grid_data
 from .jagged_tensor import JaggedTensor
 from .types import (
@@ -53,8 +51,25 @@ from .types import (
     to_Vec3iBroadcastable,
 )
 
-if TYPE_CHECKING:
-    pass
+def _to_vec3d_batch(t: torch.Tensor, batch_size: int | None = None) -> list[list[float]]:
+    """Convert a broadcastable tensor to list[list[float]] for C++ bindings.
+
+    If *batch_size* is given the result is broadcast-expanded to that many rows.
+    """
+    t = t.to(torch.float64)
+    if t.dim() == 0:
+        v = t.item()
+        row = [v, v, v]
+        n = batch_size if batch_size is not None else 1
+        return [row] * n
+    if t.dim() == 1:
+        row = t.tolist()
+        n = batch_size if batch_size is not None else 1
+        return [row] * n
+    # t.dim() >= 2
+    if batch_size is not None and t.size(0) == 1 and batch_size > 1:
+        return t.expand(batch_size, -1).tolist()
+    return t.tolist()
 
 
 class GridBatch:
@@ -141,11 +156,11 @@ class GridBatch:
     """
 
     #: :meta private: # NOTE: This is here for sphinx to not complain that the attribute is double defined in the class and in the class documentation.
-    max_grids_per_batch: int = GridBatchCpp.max_grids_per_batch
+    max_grids_per_batch: int = _fvdb_cpp.GridBatchData.MAX_GRIDS_PER_BATCH
 
-    def __init__(self, *, data: GridBatchCpp):
+    def __init__(self, *, data: "_fvdb_cpp.GridBatchData") -> None:
         """
-        Constructor for internal use only. - use the GridBatch.from_* classmethods instead.
+        Constructor for internal use only — use the ``GridBatch.from_*`` classmethods instead.
         """
         self.data = data
 
@@ -224,9 +239,11 @@ class GridBatch:
         voxel_sizes = to_Vec3fBatchBroadcastable(voxel_sizes, value_constraint=ValueConstraint.POSITIVE)
         origins = to_Vec3fBatch(origins)
 
-        grid_batch_impl = GridBatchCpp(resolved_device)
-        grid_batch_impl.set_from_dense_grid(num_grids, dense_dims, ijk_min, voxel_sizes, origins, mask)
-        return cls(data=grid_batch_impl)
+        grid_data = _fvdb_cpp.gridbatch_from_dense(
+            num_grids, dense_dims.tolist(), ijk_min.tolist(),
+            _to_vec3d_batch(voxel_sizes, num_grids), _to_vec3d_batch(origins, num_grids),
+            mask, str(resolved_device))
+        return cls(data=grid_data)
 
     @classmethod
     def from_dense_axis_aligned_bounds(
@@ -333,9 +350,10 @@ class GridBatch:
         voxel_sizes = to_Vec3fBatchBroadcastable(voxel_sizes, value_constraint=ValueConstraint.POSITIVE)
         origins = to_Vec3fBatch(origins)
 
-        grid_batch_impl = GridBatchCpp(resolved_device)
-        grid_batch_impl.set_from_ijk(ijk._impl, voxel_sizes, origins)
-        return cls(data=grid_batch_impl)
+        n = ijk.num_tensors
+        grid_data = _fvdb_cpp.gridbatch_from_ijk(
+            ijk._impl, _to_vec3d_batch(voxel_sizes, n), _to_vec3d_batch(origins, n))
+        return cls(data=grid_data)
 
     @classmethod
     def from_mesh(
@@ -386,9 +404,11 @@ class GridBatch:
         voxel_sizes = to_Vec3fBatchBroadcastable(voxel_sizes, value_constraint=ValueConstraint.POSITIVE)
         origins = to_Vec3fBatch(origins)
 
-        grid_batch_impl = GridBatchCpp(resolved_device)
-        grid_batch_impl.set_from_mesh(mesh_vertices._impl, mesh_faces._impl, voxel_sizes, origins)
-        return cls(data=grid_batch_impl)
+        n = mesh_vertices.num_tensors
+        grid_data = _fvdb_cpp.gridbatch_from_mesh(
+            mesh_vertices._impl, mesh_faces._impl,
+            _to_vec3d_batch(voxel_sizes, n), _to_vec3d_batch(origins, n))
+        return cls(data=grid_data)
 
     # Load and save functions
     @overload
@@ -548,9 +568,10 @@ class GridBatch:
         voxel_sizes = to_Vec3fBatchBroadcastable(voxel_sizes, value_constraint=ValueConstraint.POSITIVE)
         origins = to_Vec3fBatch(origins)
 
-        grid_batch_impl = GridBatchCpp(resolved_device)
-        grid_batch_impl.set_from_nearest_voxels_to_points(points._impl, voxel_sizes, origins)
-        return cls(data=grid_batch_impl)
+        n = points.num_tensors
+        grid_data = _fvdb_cpp.gridbatch_from_nearest_voxels_to_points(
+            points._impl, _to_vec3d_batch(voxel_sizes, n), _to_vec3d_batch(origins, n))
+        return cls(data=grid_data)
 
     @classmethod
     def from_points(
@@ -594,9 +615,10 @@ class GridBatch:
         voxel_sizes = to_Vec3fBatchBroadcastable(voxel_sizes, value_constraint=ValueConstraint.POSITIVE)
         origins = to_Vec3fBatch(origins)
 
-        grid_batch_impl = GridBatchCpp(resolved_device)
-        grid_batch_impl.set_from_points(points._impl, voxel_sizes, origins)
-        return cls(data=grid_batch_impl)
+        n = points.num_tensors
+        grid_data = _fvdb_cpp.gridbatch_from_points(
+            points._impl, _to_vec3d_batch(voxel_sizes, n), _to_vec3d_batch(origins, n))
+        return cls(data=grid_data)
 
     @classmethod
     def from_zero_grids(cls, device: DeviceIdentifier = "cpu") -> "GridBatch":
@@ -620,7 +642,7 @@ class GridBatch:
                 grid_batch.grid_count # 0
 
         """
-        return cls(data=GridBatchCpp(device=resolve_device(device)))
+        return cls(data=_fvdb_cpp.create_from_empty(str(resolve_device(device))))
 
     @classmethod
     def from_zero_voxels(
@@ -658,8 +680,10 @@ class GridBatch:
         resolved_device = resolve_device(device)
         voxel_sizes = to_Vec3fBatch(voxel_sizes, value_constraint=ValueConstraint.POSITIVE)
         origins = to_Vec3fBatch(origins)
-        grid_batch_impl = GridBatchCpp(voxel_sizes=voxel_sizes, grid_origins=origins, device=resolved_device)
-        return cls(data=grid_batch_impl)
+        return cls(data=_fvdb_cpp.create_from_empty(
+            str(resolved_device),
+            _to_vec3d_batch(voxel_sizes),
+            _to_vec3d_batch(origins)))
 
     @classmethod
     def from_cat(cls, grids: "Sequence[GridBatch]") -> "GridBatch":
@@ -1036,7 +1060,7 @@ class GridBatch:
         """
         Check if two grid batches have the same address and grid count.
         """
-        if isinstance(other, (GridBatch, GridBatchCpp)):
+        if isinstance(other, GridBatch):
             return self.address == other.address and self.grid_count == other.grid_count
         else:
             return False
@@ -1087,7 +1111,7 @@ class GridBatch:
             inv_map (JaggedTensor): Inverse permutation for :meth:`ijk_to_index`.
                 A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_queries_for_grid_b)``.
         """
-        return JaggedTensor(impl=self.data.ijk_to_inv_index(ijk._impl, cumulative))
+        return JaggedTensor(impl=_fvdb_cpp.ijk_to_inv_index(_get_grid_data(self), ijk._impl, cumulative))
 
     def inject_from(
         self,
@@ -1322,7 +1346,7 @@ class GridBatch:
         Returns:
             is_contiguous (bool): True if the data is contiguous, False otherwise.
         """
-        return self.data.is_contiguous()
+        return self.data.is_contiguous
 
     def is_same(self, other: "GridBatch") -> bool:
         """
@@ -1983,17 +2007,17 @@ class GridBatch:
         # Handle the overloaded signature - if name is provided, use it
         data_impl = data._impl if data else None
         if name is not None:
-            _save(path, self.data, data_impl, name, compressed, verbose)
+            _save(path, _get_grid_data(self), data_impl, name, compressed, verbose)
         elif names is not None:
             if isinstance(names, str):
                 # Handle case where names is actually a single name
-                _save(path, self.data, data_impl, names, compressed, verbose)
+                _save(path, _get_grid_data(self), data_impl, names, compressed, verbose)
             else:
                 # Handle case where names is a list
-                _save(path, self.data, data_impl, names, compressed, verbose)
+                _save(path, _get_grid_data(self), data_impl, names, compressed, verbose)
         else:
             # Default case with empty names list
-            _save(path, self.data, data_impl, [], compressed, verbose)
+            _save(path, _get_grid_data(self), data_impl, [], compressed, verbose)
 
     def uniform_ray_samples(
         self,
@@ -2291,7 +2315,8 @@ class GridBatch:
         Returns:
             grid_batch (GridBatch): A new GridBatch containing the selected grids.
         """
-        return GridBatch(data=_fvdb_cpp.index_grid_slice(_get_grid_data(self), s))
+        start, stop, step = s.indices(self.grid_count)
+        return GridBatch(data=_fvdb_cpp.index_grid_slice(_get_grid_data(self), start, stop, step))
 
     def index_tensor(self, indices: torch.Tensor) -> "GridBatch":
         """
@@ -2360,12 +2385,12 @@ class GridBatch:
     @property
     def address(self) -> int:
         """
-        The address of the underlying C++ NanoVDB grid batch object.
+        The identity of the underlying C++ GridBatchData object.
 
         Returns:
-            address (int): The memory address of the underlying C++ object.
+            address (int): A unique identifier for the underlying C++ object.
         """
-        return self.data.address
+        return id(self.data)
 
     @property
     def all_have_zero_voxels(self) -> bool:
@@ -2698,7 +2723,7 @@ class GridBatch:
         if self.has_zero_grids:
             return torch.empty((0,), dtype=torch.int64, device=self.device)
         data = self.data
-        result = data.num_leaves if hasattr(data, "num_leaves") else data.num_leaf_nodes
+        result = data.num_leaves
         return result.to(self.device)
 
     @property
@@ -2771,7 +2796,7 @@ class GridBatch:
         if self.has_zero_grids:
             return 0
         else:
-            return self.data.total_leaf_nodes
+            return self.data.total_leaves
 
     @property
     def total_voxels(self) -> int:
@@ -2814,11 +2839,6 @@ class GridBatch:
         else:
             return self.data.world_to_voxel_matrices.to(dtype=torch.float32, device=self.device)
 
-    # Expose underlying implementation for compatibility
-    @property
-    def _gridbatch(self):
-        # Access underlying GridBatchCpp - use sparingly during migration
-        return self.data
 
 
 def gcat(grids: "Sequence[GridBatch]") -> GridBatch:

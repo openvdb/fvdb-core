@@ -24,15 +24,8 @@ from ..jagged_tensor import JaggedTensor
 
 
 def _get_grid_data(grid: Any) -> Any:
-    """Extract the GridBatchData C++ object from a GridBatch.
-
-    During migration this handles both old (.data is _fvdb_cpp.GridBatch with
-    a _grid_batch_data bridge) and new (.data is _fvdb_cpp.GridBatchData directly).
-    """
-    data = grid.data
-    if hasattr(data, "_grid_batch_data"):
-        return data._grid_batch_data
-    return data
+    """Extract the GridBatchData C++ object from a GridBatch."""
+    return grid.data
 
 
 def _prepare_args(

@@ -44,21 +44,12 @@ execute_process(
 # Source files
 set(FVDB_CPP_FILES
     fvdb/Config.cpp
-    fvdb/detail/autograd/AvgPoolGrid.cpp
     fvdb/detail/autograd/EvaluateSphericalHarmonics.cpp
-    fvdb/detail/autograd/Inject.cpp
     fvdb/detail/autograd/GaussianProjection.cpp
     fvdb/detail/autograd/GaussianRasterize.cpp
     fvdb/detail/autograd/GaussianRasterizeFromWorld.cpp
     fvdb/detail/autograd/GaussianRasterizeSparse.cpp
     fvdb/detail/autograd/JaggedReduce.cpp
-    fvdb/detail/autograd/MaxPoolGrid.cpp
-    fvdb/detail/autograd/ReadFromDense.cpp
-    fvdb/detail/autograd/ReadIntoDense.cpp
-    fvdb/detail/autograd/SampleGrid.cpp
-    fvdb/detail/autograd/SplatIntoGrid.cpp
-    fvdb/detail/autograd/TransformPoints.cpp
-    fvdb/detail/autograd/UpsampleGrid.cpp
     fvdb/detail/autograd/VolumeRender.cpp
     fvdb/detail/io/GaussianPlyIO.cpp
     fvdb/detail/io/LoadNanovdb.cpp
@@ -69,7 +60,6 @@ set(FVDB_CPP_FILES
     fvdb/detail/viewer/Viewer.cpp
     fvdb/FVDB.cpp
     fvdb/GaussianSplat3d.cpp
-    fvdb/GridBatch.cpp
     fvdb/JaggedTensor.cpp
 )
 

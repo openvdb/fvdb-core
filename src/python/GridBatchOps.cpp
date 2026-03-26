@@ -38,6 +38,7 @@
 #include <fvdb/detail/ops/CoordsInGrid.h>
 #include <fvdb/detail/ops/CubesInGrid.h>
 #include <fvdb/detail/ops/IjkToIndex.h>
+#include <fvdb/detail/ops/IjkToInvIndex.h>
 #include <fvdb/detail/ops/PointsInGrid.h>
 #include <fvdb/detail/ops/NeighborIndexes.h>
 
@@ -382,6 +383,7 @@ bind_grid_batch_ops(py::module &m) {
         py::arg("pad_max"));
 
     m.def("ijk_to_index", &ops::ijkToIndex, py::arg("grid"), py::arg("ijk"), py::arg("cumulative"));
+    m.def("ijk_to_inv_index", &ops::ijkToInvIndex, py::arg("grid"), py::arg("ijk"), py::arg("cumulative"));
 
     m.def("neighbor_indexes",
           &ops::neighborIndexes,

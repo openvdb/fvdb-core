@@ -7,6 +7,7 @@
 
 #include <fvdb/Config.h>
 #include <fvdb/FVDB.h>
+#include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/utils/nanovdb/TorchNanoConversions.h>
 #include <fvdb/detail/ops/convolution/GatherScatterDefault.h>
 #include <fvdb/detail/ops/convolution/PredGatherIGemm.h>
@@ -19,7 +20,6 @@
 
 #include <cuda_runtime_api.h>
 
-void bind_grid_batch(py::module &m);
 void bind_grid_batch_data(py::module &m);
 void bind_grid_batch_ops(py::module &m);
 void bind_jagged_tensor(py::module &m);
@@ -133,7 +133,6 @@ pyToCoord(const torch::Tensor &t) {
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     bind_grid_batch_data(m);
-    bind_grid_batch(m);
     bind_grid_batch_ops(m);
     bind_jagged_tensor(m);
     bind_gaussian_splat3d(m);
@@ -179,19 +178,14 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     // Concatenate grids or jagged tensors
     m.def("jcat",
-          py::overload_cast<const std::vector<fvdb::GridBatch> &>(&fvdb::jcat),
+          py::overload_cast<const std::vector<c10::intrusive_ptr<fvdb::detail::GridBatchData>> &>(
+              &fvdb::jcat),
           py::arg("grid_batches"));
     m.def("jcat",
           py::overload_cast<const std::vector<fvdb::JaggedTensor> &, std::optional<int64_t>>(
               &fvdb::jcat),
           py::arg("jagged_tensors"),
           py::arg("dim") = std::nullopt);
-
-    // Build a jagged tensor from a grid batch or another jagged tensor and a data tensor. They will
-    // have the same offset structure m.def("jagged_like", py::overload_cast<fvdb::JaggedTensor,
-    // torch::Tensor>(&fvdb::jagged_like), py::arg("like"), py::arg("data")); m.def("jagged_like",
-    // py::overload_cast<fvdb::GridBatch, torch::Tensor>(&fvdb::jagged_like), py::arg("like"),
-    // py::arg("data"));
 
     // Static grid construction
     m.def(
@@ -263,6 +257,36 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           py::arg("faces"),
           py::arg("voxel_sizes") = 1.0,
           py::arg("origins")     = torch::zeros({3}));
+
+    // Empty grid batch construction
+    m.def(
+        "create_from_empty",
+        [](const std::string &device) {
+            return fvdb::detail::makeEmptyGridBatchData(fvdb::parseDeviceString(device));
+        },
+        py::arg("device") = "cpu");
+    m.def(
+        "create_from_empty",
+        [](const std::string &device,
+           const std::vector<double> &voxel_size,
+           const std::vector<double> &origin) {
+            return fvdb::detail::makeEmptyGridBatchData(
+                fvdb::parseDeviceString(device), vecToVec3d(voxel_size), vecToVec3d(origin));
+        },
+        py::arg("device"),
+        py::arg("voxel_size"),
+        py::arg("origin"));
+    m.def(
+        "create_from_empty",
+        [](const std::string &device,
+           const std::vector<std::vector<double>> &voxel_sizes,
+           const std::vector<std::vector<double>> &origins) {
+            return fvdb::detail::makeEmptyGridBatchData(
+                fvdb::parseDeviceString(device), vecsToVec3ds(voxel_sizes), vecsToVec3ds(origins));
+        },
+        py::arg("device"),
+        py::arg("voxel_sizes"),
+        py::arg("origins"));
 
     // Loading and saving grids
     m.def("load",
@@ -372,7 +396,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     m.def("save",
           py::overload_cast<const std::string &,
-                            const fvdb::GridBatch &,
+                            const fvdb::detail::GridBatchData &,
                             const std::optional<fvdb::JaggedTensor>,
                             const std::vector<std::string> &,
                             bool,
@@ -385,7 +409,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           py::arg("verbose")    = false);
     m.def("save",
           py::overload_cast<const std::string &,
-                            const fvdb::GridBatch &,
+                            const fvdb::detail::GridBatchData &,
                             const std::optional<fvdb::JaggedTensor>,
                             const std::string &,
                             bool,
@@ -571,7 +595,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 }
 
 TORCH_LIBRARY(fvdb, m) {
-    m.class_<fvdb::GridBatch>("GridBatch");
     m.class_<fvdb::JaggedTensor>("JaggedTensor");
     m.class_<fvdb::detail::GridBatchData>("GridBatchData");
 
