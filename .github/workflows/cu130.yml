@@ -1,7 +1,7 @@
 name: fVDB CUDA 13.0.2 Build and Test
 
 on:
-  pull_request:
+  pull_request_target:
     branches:
       - '**'
 
