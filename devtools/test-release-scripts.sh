@@ -340,7 +340,7 @@ fi
 
 # Clean up adopt/v0.4 to simulate post-merge state
 git checkout main >/dev/null 2>&1
-git branch -D adopt/v0.4 >/dev/null 2>&1
+git branch -D adopt/v0.4 >/dev/null 2>&1 || true
 
 echo ""
 echo "============================================="
