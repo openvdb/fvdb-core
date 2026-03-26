@@ -426,7 +426,9 @@ class Scene:
         Args:
             fov_radians (float): Vertical field of view in radians (must be positive and less than pi).
         """
-        if fov_radians <= 0.0 or fov_radians >= 3.14159265358979:
+        if not np.isfinite(fov_radians):
+            raise ValueError(f"FOV must be a finite value, got {fov_radians}")
+        if fov_radians <= 0.0 or fov_radians >= np.pi:
             raise ValueError(f"FOV must be between 0 and pi radians, got {fov_radians}")
         server = _get_viewer_server_cpp()
         server.set_camera_fov(self._name, fov_radians)
