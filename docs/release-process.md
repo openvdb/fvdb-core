@@ -144,7 +144,7 @@ This will:
 After the script finishes, **merge the adopt PR** once CI passes. Use a
 merge commit (not squash) to preserve the release branch history on `main`.
 The `release/v0.4` branch is left untouched at version `0.4.0`, available
-as the base for future hotfix branches.
+as the base for future hotfix releases.
 
 After merging, **re-deploy the documentation** to GitHub Pages so it reflects
 the new release version:
