@@ -412,6 +412,8 @@ class Scene:
         """
         Return the camera's vertical field of view in radians.
 
+        This is the full angle from the top of the frame to the bottom of the frame.
+
         Returns:
             fov (float): Vertical field of view in radians.
         """
@@ -422,6 +424,8 @@ class Scene:
     def camera_fov(self, fov_radians: float):
         """
         Set the camera's vertical field of view in radians.
+
+        This is the full angle from the top of the frame to the bottom of the frame.
 
         Args:
             fov_radians (float): Vertical field of view in radians (must be positive and less than pi).
