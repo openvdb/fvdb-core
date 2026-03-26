@@ -259,6 +259,13 @@ jobs:
       - name: Apt update and install git and wget
         run: apt update && apt install -y git wget
 
+      - name: Install GCC ${{ needs.versions.outputs.gcc-toolset }} runtime
+        run: |
+          apt-get install -y software-properties-common
+          add-apt-repository -y ppa:ubuntu-toolchain-r/test
+          apt-get update
+          apt-get install -y libstdc++6
+
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0 # Fetch all history for all branches
@@ -362,6 +369,13 @@ jobs:
       - name: Apt update and install git and wget
         run: apt update && apt install -y git wget
 
+      - name: Install GCC ${{ needs.versions.outputs.gcc-toolset }} runtime
+        run: |
+          apt-get install -y software-properties-common
+          add-apt-repository -y ppa:ubuntu-toolchain-r/test
+          apt-get update
+          apt-get install -y libstdc++6
+
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0 # Fetch all history for all branches
@@ -451,6 +465,13 @@ jobs:
     steps:
       - name: Apt update and install git and wget
         run: apt update && apt install -y git wget
+
+      - name: Install GCC ${{ needs.versions.outputs.gcc-toolset }} runtime
+        run: |
+          apt-get install -y software-properties-common
+          add-apt-repository -y ppa:ubuntu-toolchain-r/test
+          apt-get update
+          apt-get install -y libstdc++6
 
       - uses: actions/checkout@v6
         with:
