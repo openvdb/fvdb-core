@@ -485,7 +485,7 @@ echo "============================================="
 echo " Test: successive hotfix (start-release.sh 0.4.2)"
 echo "============================================="
 
-git branch -D adopt/v0.4.1 >/dev/null 2>&1
+git branch -D adopt/v0.4.1 >/dev/null 2>&1 || true
 
 HSTART2_OUTPUT="$("$START_RELEASE" 0.4.2 --no-push --no-pr 2>&1)"
 
