@@ -305,7 +305,11 @@ run git checkout main
 echo ""
 log "Done. Release $TAG tagged."
 if ! $NO_PR && ! $DRY_RUN; then
-    log "The GitHub Release will trigger the publish workflow."
-    log "Merge the adopt PR from $ADOPT_BRANCH once CI passes."
-    log "After merging, re-deploy docs: gh workflow run docs.yml --ref main"
+    log "Next steps:"
+    log "  1. Wait for the publish workflow (triggered by the GitHub Release)"
+    log "  2. Merge the adopt PR from $ADOPT_BRANCH once CI passes"
+    log "     - Use 'Squash and merge' if the release only cherry-picked commits from main"
+    log "       (the only new change will be the version bump in docs)"
+    log "     - Use 'Create a merge commit' if the release included novel work or branch merges"
+    log "  3. Re-deploy docs: gh workflow run docs.yml --ref main"
 fi
