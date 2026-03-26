@@ -288,6 +288,7 @@ Viewer::cameraOrbitCenter(const std::string &scene_name) {
 }
 void
 Viewer::setCameraOrbitCenter(const std::string &scene_name, float x, float y, float z) {
+    getCamera(scene_name);
     mEditor.camera.state.position.x = x;
     mEditor.camera.state.position.y = y;
     mEditor.camera.state.position.z = z;
@@ -301,6 +302,7 @@ Viewer::cameraOrbitRadius(const std::string &scene_name) {
 }
 void
 Viewer::setCameraOrbitRadius(const std::string &scene_name, float radius) {
+    getCamera(scene_name);
     mEditor.camera.state.eye_distance_from_position = radius;
     updateCamera(scene_name);
 }
@@ -314,6 +316,7 @@ Viewer::cameraViewDirection(const std::string &scene_name) {
 }
 void
 Viewer::setCameraViewDirection(const std::string &scene_name, float x, float y, float z) {
+    getCamera(scene_name);
     mEditor.camera.state.eye_direction.x = x;
     mEditor.camera.state.eye_direction.y = y;
     mEditor.camera.state.eye_direction.z = z;
@@ -329,6 +332,7 @@ Viewer::cameraUpDirection(const std::string &scene_name) {
 }
 void
 Viewer::setCameraUpDirection(const std::string &scene_name, float x, float y, float z) {
+    getCamera(scene_name);
     mEditor.camera.state.eye_up.x = x;
     mEditor.camera.state.eye_up.y = y;
     mEditor.camera.state.eye_up.z = z;
@@ -342,6 +346,7 @@ Viewer::cameraFov(const std::string &scene_name) {
 }
 void
 Viewer::setCameraFov(const std::string &scene_name, float fov_radians) {
+    getCamera(scene_name);
     mEditor.camera.config.fov_angle_y = fov_radians;
     updateCamera(scene_name);
 }
@@ -353,6 +358,7 @@ Viewer::cameraNear(const std::string &scene_name) {
 }
 void
 Viewer::setCameraNear(const std::string &scene_name, float near) {
+    getCamera(scene_name);
     mEditor.camera.config.near_plane = near;
     updateCamera(scene_name);
 }
@@ -364,6 +370,7 @@ Viewer::cameraFar(const std::string &scene_name) {
 }
 void
 Viewer::setCameraFar(const std::string &scene_name, float far) {
+    getCamera(scene_name);
     mEditor.camera.config.far_plane = far;
     updateCamera(scene_name);
 }
@@ -377,6 +384,7 @@ Viewer::cameraProjectionType(const std::string &scene_name) {
 void
 Viewer::setCameraProjectionType(const std::string &scene_name,
                                 GaussianSplat3d::ProjectionType mode) {
+    getCamera(scene_name);
     mEditor.camera.config.is_orthographic =
         (mode == GaussianSplat3d::ProjectionType::ORTHOGRAPHIC) ? PNANOVDB_TRUE : PNANOVDB_FALSE;
 
