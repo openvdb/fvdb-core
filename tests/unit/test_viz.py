@@ -125,6 +125,31 @@ class TestViewerScene(unittest.TestCase):
         rgba_flat2 = rgba_data2.reshape(-1)
         view.update(rgba_flat2)
 
+    def test_camera_fov(self):
+        scene = fvdb.viz.Scene("test_camera_fov")
+
+        fov = 1.2
+        scene.camera_fov = fov
+        assert scene.camera_fov == pytest.approx(fov)
+
+        scene.camera_fov = 0.5
+        assert scene.camera_fov == pytest.approx(0.5)
+
+        with pytest.raises(ValueError):
+            scene.camera_fov = 0.0
+
+        with pytest.raises(ValueError):
+            scene.camera_fov = -1.0
+
+        with pytest.raises(ValueError):
+            scene.camera_fov = np.pi
+
+        with pytest.raises(ValueError):
+            scene.camera_fov = float("inf")
+
+        with pytest.raises(ValueError):
+            scene.camera_fov = float("nan")
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
