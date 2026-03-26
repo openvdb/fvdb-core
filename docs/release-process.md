@@ -293,8 +293,10 @@ is:
    ```
 
    After each `finish-release.sh` run, merge the resulting `adopt/v*` PR
-   on GitHub, deleting the `adopt/v*` branch, once CI passes.  We will keep
-   the `release/v*` branch around for any future hotfix branches.
+   on GitHub, deleting the `adopt/v*` branch once CI passes. We keep the
+   corresponding `release/vX.Y` branch for any future hotfix releases
+   (PATCH > 0), reusing the same release branch rather than creating
+   separate hotfix branches.
 
 4. **Re-deploy documentation** after both adopt PRs are merged:
    ```bash
