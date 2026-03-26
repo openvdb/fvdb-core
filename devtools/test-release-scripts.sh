@@ -103,8 +103,8 @@ cat > docs/conf.py <<'CONFPY'
 project = "fVDB"
 fvdb_core_stable_version = "0.3.0"
 rst_prolog = f"""\
-.. |fvdb_core_version_pt210_cu128| replace:: {fvdb_core_stable_version}+pt210.cu128
-.. |fvdb_core_version_pt210_cu130| replace:: {fvdb_core_stable_version}+pt210.cu130
+.. |fvdb_core_version_pt211_cu128| replace:: {fvdb_core_stable_version}+pt211.cu128
+.. |fvdb_core_version_pt211_cu130| replace:: {fvdb_core_stable_version}+pt211.cu130
 """
 CONFPY
 

@@ -3,6 +3,9 @@ fVDB Version History
 
 Version 0.5.0 - In Development
 
+- Upgraded to PyTorch 2.11 and added Python 3.14 support.
+- Added SM 8.6 to the CUDA architecture list for published wheels to match PyTorch's support.
+
 Version 0.4.2 - March 25, 2026
 
 **Bug Fixes:**

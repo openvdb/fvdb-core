@@ -26,7 +26,7 @@ dependencies:
   - py-opencv>=4.10[build=headless*]
   - pytest-benchmark
   - python=3.12
-  - pytorch-gpu=2.10.0
+  - pytorch-gpu=2.11.0
   - rich
   - scikit-learn
   - sphinx_rtd_theme
@@ -45,8 +45,8 @@ dependencies:
     - gsplat
     - pytest-markdown-docs
     - point-cloud-utils
-    - torchsparse @ https://fvdb-packages.s3.us-east-2.amazonaws.com/dev-whls/pt210cu130/torchsparse-2.1.0-cp312-cp312-linux_x86_64.whl
-    - torch_scatter @ https://fvdb-packages.s3.us-east-2.amazonaws.com/dev-whls/pt210cu130/torch_scatter-2.1.2-cp312-cp312-linux_x86_64.whl
+    - torchsparse @ https://fvdb-packages.s3.us-east-2.amazonaws.com/dev-whls/pt211cu130/torchsparse-2.1.0-cp312-cp312-linux_x86_64.whl
+    - torch_scatter @ https://fvdb-packages.s3.us-east-2.amazonaws.com/dev-whls/pt211cu130/torch_scatter-2.1.2-cp312-cp312-linux_x86_64.whl
     ## 3dgs tests
     - oiio-static-python
 platforms:
