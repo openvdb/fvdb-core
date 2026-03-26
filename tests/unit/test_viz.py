@@ -125,7 +125,6 @@ class TestViewerScene(unittest.TestCase):
         rgba_flat2 = rgba_data2.reshape(-1)
         view.update(rgba_flat2)
 
-
     def test_camera_fov(self):
         scene = fvdb.viz.Scene("test_camera_fov")
 
