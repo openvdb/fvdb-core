@@ -108,20 +108,19 @@ jobs:
           echo "cuda_version=$CUDA_VER" >> $GITHUB_OUTPUT
           echo "cuda_image_tag=$CUDA_IMAGE_TAG" >> $GITHUB_OUTPUT
           echo "Test env: python=$PY_VER torch=$TORCH_VER cuda=$CUDA_VER image=$CUDA_IMAGE_TAG"
+
+  versions:
+    uses: ./.github/workflows/load-versions.yml
+    with:
+      ref: ${{ inputs.branch || '' }}
+
   start-build-runner:
     name: Start CPU-only EC2 runner for build
     runs-on: ubuntu-latest
-    strategy: &matrix-strategy
+    needs: versions
+    strategy:
       fail-fast: false
-      matrix:
-        python-version: ['3.10', '3.11', '3.12', '3.13']
-        torch-version: ['2.10']
-        cuda-version: ['12.8', '13.0']
-        include:
-          - cuda-version: '12.8'
-            cuda-image-tag: '12.8.1'
-          - cuda-version: '13.0'
-            cuda-image-tag: '13.0.2'
+      matrix: ${{ fromJSON(needs.versions.outputs.publish-matrix) }}
     steps:
       - name: Stagger job starts to avoid API rate limits
         run: |
@@ -132,18 +131,18 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v6
         with:
-          role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
-          aws-region: us-east-2
+          role-to-assume: ${{ needs.versions.outputs.aws-role }}
+          aws-region: ${{ needs.versions.outputs.aws-region }}
       - name: Start EC2 runner
         id: start-build-runner
         uses: machulav/ec2-github-runner@v2
         with:
           mode: start
           github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
-          ec2-image-id: ami-0e14a711dad782a70
-          ec2-instance-type: m6a.16xlarge
-          subnet-id: subnet-03f2320d6e6e0005b
-          security-group-id: sg-0cd08bd89d6212223
+          ec2-image-id: ${{ needs.versions.outputs.aws-cpu-ami }}
+          ec2-instance-type: m6a.8xlarge
+          subnet-id: ${{ needs.versions.outputs.aws-subnet }}
+          security-group-id: ${{ needs.versions.outputs.aws-security-group }}
           label: ec2-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
           aws-resource-tags: >
             [
@@ -156,7 +155,7 @@ jobs:
 
   fvdb-build:
     name: fVDB Build
-    needs: [start-build-runner, pr-flags] # start when runner is ready and flags computed
+    needs: [start-build-runner, pr-flags, versions] # start when runner is ready and flags computed
     runs-on: ec2-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }} # run the job on the newly created runner
     container:
       image: nvidia/cuda:${{ matrix.cuda-image-tag }}-cudnn-devel-rockylinux8
@@ -168,12 +167,14 @@ jobs:
     defaults:
       run:
         shell: bash -el {0}
-    strategy: *matrix-strategy
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.versions.outputs.publish-matrix) }}
     steps:
       - name: Install prerequisites
         run: |
-          dnf install -y git wget procps-ng findutils gcc-toolset-14
-          echo 'source /opt/rh/gcc-toolset-14/enable' > /etc/profile.d/gcc-toolset-14.sh
+          dnf install -y git wget procps-ng findutils gcc-toolset-${{ needs.versions.outputs.gcc-toolset }}
+          echo 'source /opt/rh/gcc-toolset-${{ needs.versions.outputs.gcc-toolset }}/enable' > /etc/profile.d/gcc-toolset-${{ needs.versions.outputs.gcc-toolset }}.sh
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0 # Fetch all history for all branches
@@ -198,7 +199,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
         with:
-          version: "0.7.5"
+          version: "${{ needs.versions.outputs.uv-version }}"
 
       - name: Set up Python
         run: |
@@ -207,9 +208,9 @@ jobs:
 
       - name: Install CMake
         run: >
-          wget -nv https://github.com/Kitware/CMake/releases/download/v4.0.3/cmake-4.0.3-linux-x86_64.sh &&
+          wget -nv https://github.com/Kitware/CMake/releases/download/v${{ needs.versions.outputs.cmake-version }}/cmake-${{ needs.versions.outputs.cmake-version }}-linux-x86_64.sh &&
           mkdir /opt/cmake &&
-          sh cmake-4.0.3-linux-x86_64.sh --prefix=/usr/local --skip-license &&
+          sh cmake-${{ needs.versions.outputs.cmake-version }}-linux-x86_64.sh --prefix=/usr/local --skip-license &&
           cmake --version
 
       - name: Install system dependencies
@@ -249,7 +250,7 @@ jobs:
       - name: Build fvdb
         run: |
           source .venv/bin/activate
-          ./build.sh wheel strip_symbols verbose --cuda-arch-list '7.5;8.0;9.0;10.0;12.0+PTX'
+          ./build.sh wheel strip_symbols verbose --cuda-arch-list '${{ needs.versions.outputs.cuda-arch-publish }}'
 
       - name: Repair wheel for manylinux
         if: ${{ needs.pr-flags.outputs.s3 != 'true' || needs.pr-flags.outputs.release_push == 'true' || needs.pr-flags.outputs.release == 'true' }}
@@ -310,6 +311,7 @@ jobs:
     needs:
       - pr-flags
       - fvdb-build
+      - versions
     if: ${{ !cancelled() && needs.fvdb-build.result == 'success' && needs.pr-flags.outputs.pypi == 'true' }}
     runs-on: ubuntu-latest
 
@@ -328,7 +330,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '${{ needs.versions.outputs.python-default }}'
       - name: Add post-release to version (TestPyPI only)
         if: ${{ needs.pr-flags.outputs.release != 'true' }}
         run: |
@@ -356,7 +358,7 @@ jobs:
 
   publish-to-s3:
     name: Publish wheels to custom S3 Simple Index
-    needs: [pr-flags, fvdb-build]
+    needs: [pr-flags, fvdb-build, versions]
     if: ${{ !cancelled() && needs.pr-flags.outputs.s3 == 'true' && needs.fvdb-build.result == 'success' }}
     runs-on: ubuntu-latest
     env:
@@ -366,8 +368,8 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v6
         with:
-          role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
-          aws-region: us-east-2
+          role-to-assume: ${{ needs.versions.outputs.aws-role }}
+          aws-region: ${{ needs.versions.outputs.aws-region }}
 
       - name: Download all built wheels
         uses: actions/download-artifact@v8
@@ -529,10 +531,12 @@ jobs:
   ##############################################################################
   start-validation-runner:
     name: Start GPU EC2 runner for validation
-    needs: [pr-flags, fvdb-build]
+    needs: [pr-flags, fvdb-build, versions]
     if: ${{ !cancelled() && needs.fvdb-build.result == 'success' && (needs.pr-flags.outputs.release_push == 'true' || needs.pr-flags.outputs.release == 'true' || inputs.run_validation == true) }}
     runs-on: ubuntu-latest
-    strategy: *matrix-strategy
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.versions.outputs.publish-matrix) }}
     steps:
       - name: Stagger job starts to avoid API rate limits
         run: |
@@ -542,18 +546,18 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v6
         with:
-          role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
-          aws-region: us-east-2
+          role-to-assume: ${{ needs.versions.outputs.aws-role }}
+          aws-region: ${{ needs.versions.outputs.aws-region }}
       - name: Start EC2 GPU runner
         id: start-validation-runner
         uses: machulav/ec2-github-runner@v2
         with:
           mode: start
           github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
-          ec2-image-id: ami-0f5c0b65fde08ae43
+          ec2-image-id: ${{ needs.versions.outputs.aws-gpu-ami }}
           ec2-instance-type: g6.xlarge
-          subnet-id: subnet-03f2320d6e6e0005b
-          security-group-id: sg-0cd08bd89d6212223
+          subnet-id: ${{ needs.versions.outputs.aws-subnet }}
+          security-group-id: ${{ needs.versions.outputs.aws-security-group }}
           label: val-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
           aws-resource-tags: >
             [
@@ -566,7 +570,7 @@ jobs:
 
   validate-smoke-test:
     name: Smoke test built wheel
-    needs: [start-validation-runner, fvdb-build, pr-flags]
+    needs: [start-validation-runner, fvdb-build, pr-flags, versions]
     if: ${{ !cancelled() && needs.start-validation-runner.result == 'success' }}
     runs-on: val-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
     container:
@@ -577,7 +581,9 @@ jobs:
     defaults:
       run:
         shell: bash -el {0}
-    strategy: *matrix-strategy
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.versions.outputs.publish-matrix) }}
     steps:
       - name: Install prerequisites
         run: dnf install -y git wget procps-ng findutils
@@ -585,7 +591,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
         with:
-          version: "0.7.5"
+          version: "${{ needs.versions.outputs.uv-version }}"
 
       - name: Set up Python
         run: |
@@ -674,15 +680,18 @@ jobs:
       - start-validation-runner
       - validate-smoke-test
       - validate-unit-tests
+      - versions
     runs-on: ubuntu-latest
     if: ${{ always() && needs.start-validation-runner.result != 'skipped' }}
-    strategy: *matrix-strategy
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.versions.outputs.publish-matrix) }}
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v6
         with:
-          role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
-          aws-region: us-east-2
+          role-to-assume: ${{ needs.versions.outputs.aws-role }}
+          aws-region: ${{ needs.versions.outputs.aws-region }}
       - name: Find EC2 instance ID by label
         id: find-instance
         run: |
@@ -716,15 +725,18 @@ jobs:
     needs:
       - start-build-runner # required to get output from the start-build-runner job
       - fvdb-build # required to wait when the main job is done
+      - versions
     runs-on: ubuntu-latest
     if: ${{ always() }} # required to stop the runner even if the error happened in the previous jobs
-    strategy: *matrix-strategy
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.versions.outputs.publish-matrix) }}
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v6
         with:
-          role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
-          aws-region: us-east-2
+          role-to-assume: ${{ needs.versions.outputs.aws-role }}
+          aws-region: ${{ needs.versions.outputs.aws-region }}
       - name: Find EC2 instance ID by label
         id: find-instance
         run: |
