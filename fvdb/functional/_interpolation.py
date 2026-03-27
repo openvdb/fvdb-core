@@ -4,7 +4,7 @@
 """Functional API for sparse grid interpolation: sampling and splatting."""
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, overload
+from typing import Any, TYPE_CHECKING, cast, overload
 
 import torch
 
@@ -30,7 +30,9 @@ class _SampleTrilinearFn(torch.autograd.Function):
         return result_list[0]
 
     @staticmethod
-    def backward(ctx, grad_output):
+    def backward(ctx: Any, *grad_outputs: torch.Tensor | None) -> tuple[torch.Tensor | None, ...]:
+        (grad_output,) = grad_outputs
+        assert grad_output is not None
         grad_data = _fvdb_cpp.splat_trilinear(ctx.grid_data, ctx.pts_impl, grad_output)
         return grad_data, None, None
 
@@ -43,7 +45,9 @@ class _SplatTrilinearFn(torch.autograd.Function):
         return _fvdb_cpp.splat_trilinear(grid_data, pts_impl, points_data)
 
     @staticmethod
-    def backward(ctx, grad_output):
+    def backward(ctx: Any, *grad_outputs: torch.Tensor | None) -> tuple[torch.Tensor | None, ...]:
+        (grad_output,) = grad_outputs
+        assert grad_output is not None
         result_list = _fvdb_cpp.sample_trilinear(ctx.grid_data, ctx.pts_impl, grad_output)
         return result_list[0], None, None
 
@@ -57,7 +61,9 @@ class _SampleBezierFn(torch.autograd.Function):
         return result_list[0]
 
     @staticmethod
-    def backward(ctx, grad_output):
+    def backward(ctx: Any, *grad_outputs: torch.Tensor | None) -> tuple[torch.Tensor | None, ...]:
+        (grad_output,) = grad_outputs
+        assert grad_output is not None
         grad_data = _fvdb_cpp.splat_bezier(ctx.grid_data, ctx.pts_impl, grad_output)
         return grad_data, None, None
 
@@ -70,7 +76,9 @@ class _SplatBezierFn(torch.autograd.Function):
         return _fvdb_cpp.splat_bezier(grid_data, pts_impl, points_data)
 
     @staticmethod
-    def backward(ctx, grad_output):
+    def backward(ctx: Any, *grad_outputs: torch.Tensor | None) -> tuple[torch.Tensor | None, ...]:
+        (grad_output,) = grad_outputs
+        assert grad_output is not None
         result_list = _fvdb_cpp.sample_bezier(ctx.grid_data, ctx.pts_impl, grad_output)
         return result_list[0], None, None
 
@@ -85,7 +93,9 @@ class _SampleTrilinearWithGradFn(torch.autograd.Function):
         return result_list[0], result_list[1]
 
     @staticmethod
-    def backward(ctx, grad_features, grad_grad_features):
+    def backward(ctx: Any, *grad_outputs: torch.Tensor | None) -> tuple[torch.Tensor | None, ...]:
+        grad_features, grad_grad_features = grad_outputs
+        assert grad_features is not None and grad_grad_features is not None
         (voxel_data,) = ctx.saved_tensors
         grad_data = _fvdb_cpp.sample_trilinear_with_grad_bwd(
             ctx.grid_data, ctx.pts_impl, voxel_data, grad_features, grad_grad_features
@@ -103,7 +113,9 @@ class _SampleBezierWithGradFn(torch.autograd.Function):
         return result_list[0], result_list[1]
 
     @staticmethod
-    def backward(ctx, grad_features, grad_grad_features):
+    def backward(ctx: Any, *grad_outputs: torch.Tensor | None) -> tuple[torch.Tensor | None, ...]:
+        grad_features, grad_grad_features = grad_outputs
+        assert grad_features is not None and grad_grad_features is not None
         (voxel_data,) = ctx.saved_tensors
         grad_data = _fvdb_cpp.sample_bezier_with_grad_bwd(
             ctx.grid_data, ctx.pts_impl, grad_features, grad_grad_features, voxel_data
@@ -151,8 +163,9 @@ def sample_trilinear(
 
     .. seealso:: :func:`sample_bezier`, :func:`sample_trilinear_with_grad`
     """
-    grid_data, (points, voxel_data), unwrap = _prepare_args(grid, points, voxel_data)
-    result = _SampleTrilinearFn.apply(voxel_data.jdata, grid_data, points._impl)
+    grid_data, (points_jt, voxel_data_jt), unwrap = _prepare_args(grid, points, voxel_data)
+    assert points_jt is not None and voxel_data_jt is not None
+    result = cast(torch.Tensor, _SampleTrilinearFn.apply(voxel_data_jt.jdata, grid_data, points_jt._impl))
     return unwrap(result)
 
 
@@ -192,8 +205,10 @@ def sample_trilinear_with_grad(
 
     .. seealso:: :func:`sample_trilinear`, :func:`sample_bezier_with_grad`
     """
-    grid_data, (points, voxel_data), unwrap = _prepare_args(grid, points, voxel_data)
-    rd, rg = _SampleTrilinearWithGradFn.apply(voxel_data.jdata, grid_data, points._impl)
+    grid_data, (points_jt, voxel_data_jt), unwrap = _prepare_args(grid, points, voxel_data)
+    assert points_jt is not None and voxel_data_jt is not None
+    _result = cast(tuple[torch.Tensor, torch.Tensor], _SampleTrilinearWithGradFn.apply(voxel_data_jt.jdata, grid_data, points_jt._impl))
+    rd, rg = _result
     return unwrap(rd), unwrap(rg)
 
 
@@ -228,8 +243,9 @@ def sample_bezier(
 
     .. seealso:: :func:`sample_trilinear`, :func:`sample_bezier_with_grad`
     """
-    grid_data, (points, voxel_data), unwrap = _prepare_args(grid, points, voxel_data)
-    result = _SampleBezierFn.apply(voxel_data.jdata, grid_data, points._impl)
+    grid_data, (points_jt, voxel_data_jt), unwrap = _prepare_args(grid, points, voxel_data)
+    assert points_jt is not None and voxel_data_jt is not None
+    result = cast(torch.Tensor, _SampleBezierFn.apply(voxel_data_jt.jdata, grid_data, points_jt._impl))
     return unwrap(result)
 
 
@@ -265,8 +281,10 @@ def sample_bezier_with_grad(
 
     .. seealso:: :func:`sample_bezier`, :func:`sample_trilinear_with_grad`
     """
-    grid_data, (points, voxel_data), unwrap = _prepare_args(grid, points, voxel_data)
-    rd, rg = _SampleBezierWithGradFn.apply(voxel_data.jdata, grid_data, points._impl)
+    grid_data, (points_jt, voxel_data_jt), unwrap = _prepare_args(grid, points, voxel_data)
+    assert points_jt is not None and voxel_data_jt is not None
+    _result = cast(tuple[torch.Tensor, torch.Tensor], _SampleBezierWithGradFn.apply(voxel_data_jt.jdata, grid_data, points_jt._impl))
+    rd, rg = _result
     return unwrap(rd), unwrap(rg)
 
 
@@ -302,8 +320,9 @@ def splat_trilinear(
     .. seealso:: :func:`splat_bezier`, :func:`sample_trilinear`
     """
     is_flat = isinstance(points, torch.Tensor)
-    grid_data, (points, points_data), unwrap = _prepare_args(grid, points, points_data)
-    result = _SplatTrilinearFn.apply(points_data.jdata, grid_data, points._impl)
+    grid_data, (points_jt, points_data_jt), unwrap = _prepare_args(grid, points, points_data)
+    assert points_jt is not None and points_data_jt is not None
+    result = cast(torch.Tensor, _SplatTrilinearFn.apply(points_data_jt.jdata, grid_data, points_jt._impl))
     if is_flat:
         return result
     return grid.jagged_like(result)
@@ -340,8 +359,9 @@ def splat_bezier(
     .. seealso:: :func:`splat_trilinear`, :func:`sample_bezier`
     """
     is_flat = isinstance(points, torch.Tensor)
-    grid_data, (points, points_data), unwrap = _prepare_args(grid, points, points_data)
-    result = _SplatBezierFn.apply(points_data.jdata, grid_data, points._impl)
+    grid_data, (points_jt, points_data_jt), unwrap = _prepare_args(grid, points, points_data)
+    assert points_jt is not None and points_data_jt is not None
+    result = cast(torch.Tensor, _SplatBezierFn.apply(points_data_jt.jdata, grid_data, points_jt._impl))
     if is_flat:
         return result
     return grid.jagged_like(result)

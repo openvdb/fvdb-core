@@ -16,22 +16,26 @@ caller gets back the same type they passed in.
 """
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, cast
 
 import torch
 
+from .._fvdb_cpp import GridBatchData
 from ..jagged_tensor import JaggedTensor
 
+if TYPE_CHECKING:
+    from ..grid_batch import GridBatch
 
-def _get_grid_data(grid: Any) -> Any:
+
+def _get_grid_data(grid: GridBatch) -> GridBatchData:
     """Extract the GridBatchData C++ object from a GridBatch."""
     return grid.data
 
 
 def _prepare_args(
-    grid: Any,
+    grid: GridBatch,
     *data_args: torch.Tensor | JaggedTensor | None,
-) -> tuple[Any, tuple[JaggedTensor | None, ...], Callable]:
+) -> tuple[GridBatchData, tuple[JaggedTensor | None, ...], Callable]:
     """
     Normalize ``Tensor | JaggedTensor`` data arguments for the batched C++ path.
 
@@ -65,15 +69,19 @@ def _prepare_args(
 
         return grid_data, normed, _unwrap_flat
 
-    proto = first
+    assert isinstance(first, JaggedTensor), "At least one non-None JaggedTensor argument is required"
+    proto: JaggedTensor = first
 
     def _unwrap_jagged(result: torch.Tensor) -> JaggedTensor:
         return proto.jagged_like(result)
 
-    return grid_data, data_args, _unwrap_jagged
+    # In the non-flat branch all non-None args are JaggedTensor (plain Tensors
+    # would have taken the is_flat path above), so the downcast is safe.
+    normed = cast(tuple[JaggedTensor | None, ...], data_args)
+    return grid_data, normed, _unwrap_jagged
 
 
-def _prepare_grid(grid: Any) -> tuple[Any, Callable]:
+def _prepare_grid(grid: GridBatch) -> tuple[GridBatchData, Callable[[GridBatchData], GridBatch]]:
     """
     Prepare a grid argument for topology ops that return a new grid.
 
@@ -85,7 +93,7 @@ def _prepare_grid(grid: Any) -> tuple[Any, Callable]:
 
     grid_data = _get_grid_data(grid)
 
-    def _unwrap_grid(cpp_impl: Any) -> GridBatch:
+    def _unwrap_grid(cpp_impl: GridBatchData) -> GridBatch:
         return GridBatch(data=cpp_impl)
 
     return grid_data, _unwrap_grid

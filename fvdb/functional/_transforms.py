@@ -4,7 +4,7 @@
 """Functional API for coordinate transforms between voxel and world space."""
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, overload
+from typing import Any, TYPE_CHECKING, cast, overload
 
 import torch
 
@@ -24,7 +24,9 @@ class _VoxelToWorldFn(torch.autograd.Function):
         return _fvdb_cpp.voxel_to_world(grid_data, pts_impl, True)
 
     @staticmethod
-    def backward(ctx, grad_output):
+    def backward(ctx: Any, *grad_outputs: torch.Tensor | None) -> tuple[torch.Tensor | None, ...]:
+        (grad_output,) = grad_outputs
+        assert grad_output is not None
         grad_jt = ctx.pts_impl.jagged_like(grad_output)
         return _fvdb_cpp.voxel_to_world_bwd(ctx.grid_data, grad_jt, True), None, None
 
@@ -37,7 +39,9 @@ class _WorldToVoxelFn(torch.autograd.Function):
         return _fvdb_cpp.world_to_voxel(grid_data, pts_impl, True)
 
     @staticmethod
-    def backward(ctx, grad_output):
+    def backward(ctx: Any, *grad_outputs: torch.Tensor | None) -> tuple[torch.Tensor | None, ...]:
+        (grad_output,) = grad_outputs
+        assert grad_output is not None
         grad_jt = ctx.pts_impl.jagged_like(grad_output)
         return _fvdb_cpp.world_to_voxel_bwd(ctx.grid_data, grad_jt, True), None, None
 
@@ -71,8 +75,9 @@ def voxel_to_world(
 
     .. seealso:: :func:`world_to_voxel`
     """
-    grid_data, (ijk,), unwrap = _prepare_args(grid, ijk)
-    result = _VoxelToWorldFn.apply(ijk.jdata, grid_data, ijk._impl)
+    grid_data, (ijk_jt,), unwrap = _prepare_args(grid, ijk)
+    assert ijk_jt is not None
+    result = cast(torch.Tensor, _VoxelToWorldFn.apply(ijk_jt.jdata, grid_data, ijk_jt._impl))
     return unwrap(result)
 
 
@@ -105,6 +110,7 @@ def world_to_voxel(
 
     .. seealso:: :func:`voxel_to_world`
     """
-    grid_data, (points,), unwrap = _prepare_args(grid, points)
-    result = _WorldToVoxelFn.apply(points.jdata, grid_data, points._impl)
+    grid_data, (points_jt,), unwrap = _prepare_args(grid, points)
+    assert points_jt is not None
+    result = cast(torch.Tensor, _WorldToVoxelFn.apply(points_jt.jdata, grid_data, points_jt._impl))
     return unwrap(result)

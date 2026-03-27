@@ -65,9 +65,10 @@ def voxels_along_rays(
         A tuple ``(voxels, distances)`` where ``voxels`` contains ijk coordinates
         or linear indices, and ``distances`` contains ``(t_entry, t_exit)`` pairs.
     """
-    grid_data, (ray_origins, ray_directions), _ = _prepare_args(grid, ray_origins, ray_directions)
+    grid_data, (ray_origins_jt, ray_directions_jt), _ = _prepare_args(grid, ray_origins, ray_directions)
+    assert ray_origins_jt is not None and ray_directions_jt is not None
     result = _fvdb_cpp.voxels_along_rays(
-        grid_data, ray_origins._impl, ray_directions._impl, max_voxels, eps, return_ijk, cumulative
+        grid_data, ray_origins_jt._impl, ray_directions_jt._impl, max_voxels, eps, return_ijk, cumulative
     )
     return JaggedTensor(impl=result[0]), JaggedTensor(impl=result[1])
 
@@ -113,9 +114,10 @@ def segments_along_rays(
     Returns:
         A :class:`~fvdb.JaggedTensor` of segments with eshape ``(2,)``.
     """
-    grid_data, (ray_origins, ray_directions), _ = _prepare_args(grid, ray_origins, ray_directions)
+    grid_data, (ray_origins_jt, ray_directions_jt), _ = _prepare_args(grid, ray_origins, ray_directions)
+    assert ray_origins_jt is not None and ray_directions_jt is not None
     return JaggedTensor(
-        impl=_fvdb_cpp.segments_along_rays(grid_data, ray_origins._impl, ray_directions._impl, max_segments, eps)
+        impl=_fvdb_cpp.segments_along_rays(grid_data, ray_origins_jt._impl, ray_directions_jt._impl, max_segments, eps)
     )
 
 
@@ -179,16 +181,18 @@ def uniform_ray_samples(
     Returns:
         A :class:`~fvdb.JaggedTensor` of sample distances.
     """
-    grid_data, (ray_origins, ray_directions, t_min, t_max), _ = _prepare_args(
+    grid_data, (ray_origins_jt, ray_directions_jt, t_min_jt, t_max_jt), _ = _prepare_args(
         grid, ray_origins, ray_directions, t_min, t_max
     )
+    assert ray_origins_jt is not None and ray_directions_jt is not None
+    assert t_min_jt is not None and t_max_jt is not None
     return JaggedTensor(
         impl=_fvdb_cpp.uniform_ray_samples(
             grid_data,
-            ray_origins._impl,
-            ray_directions._impl,
-            t_min._impl,
-            t_max._impl,
+            ray_origins_jt._impl,
+            ray_directions_jt._impl,
+            t_min_jt._impl,
+            t_max_jt._impl,
             step_size,
             cone_angle,
             include_end_segments,
@@ -239,10 +243,11 @@ def ray_implicit_intersection(
     Returns:
         Intersection distance along each ray, or ``-1`` if no intersection.
     """
-    grid_data, (ray_origins, ray_directions, grid_scalars), unwrap = _prepare_args(
+    grid_data, (ray_origins_jt, ray_directions_jt, grid_scalars_jt), unwrap = _prepare_args(
         grid, ray_origins, ray_directions, grid_scalars
     )
+    assert ray_origins_jt is not None and ray_directions_jt is not None and grid_scalars_jt is not None
     result_impl = _fvdb_cpp.ray_implicit_intersection(
-        grid_data, ray_origins._impl, ray_directions._impl, grid_scalars._impl, eps
+        grid_data, ray_origins_jt._impl, ray_directions_jt._impl, grid_scalars_jt._impl, eps
     )
     return unwrap(result_impl.jdata)

@@ -28,7 +28,7 @@ mesh extraction, and coordinate transformations on sparse voxel data.
 """
 
 from collections.abc import Iterator
-from typing import Any, Sequence, overload
+from typing import Any, Sequence, cast, overload
 
 import numpy as np
 import torch
@@ -2302,8 +2302,8 @@ class GridBatch:
         """
         grid_data = _get_grid_data(self)
         if len(indices) > 0 and isinstance(indices[0], bool):
-            return GridBatch(data=_fvdb_cpp.index_grid_bool_list(grid_data, indices))
-        return GridBatch(data=_fvdb_cpp.index_grid_int64_list(grid_data, indices))
+            return GridBatch(data=_fvdb_cpp.index_grid_bool_list(grid_data, cast(list[bool], indices)))
+        return GridBatch(data=_fvdb_cpp.index_grid_int64_list(grid_data, cast(list[int], indices)))
 
     def index_slice(self, s: slice) -> "GridBatch":
         """

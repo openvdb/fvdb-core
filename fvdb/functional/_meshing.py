@@ -48,8 +48,9 @@ def marching_cubes(
         A tuple ``(vertices, face_indices, vertex_normals)``.
     """
     is_flat = isinstance(field, torch.Tensor)
-    grid_data, (field,), unwrap = _prepare_args(grid, field)
-    result = _fvdb_cpp.marching_cubes(grid_data, field._impl, level)
+    grid_data, (field_jt,), unwrap = _prepare_args(grid, field)
+    assert field_jt is not None
+    result = _fvdb_cpp.marching_cubes(grid_data, field_jt._impl, level)
     if is_flat:
         return result[0].jdata, result[1].jdata, result[2].jdata
     return JaggedTensor(impl=result[0]), JaggedTensor(impl=result[1]), JaggedTensor(impl=result[2])
@@ -113,14 +114,15 @@ def integrate_tsdf(
     from ..grid_batch import GridBatch as GB
 
     is_flat = isinstance(tsdf, torch.Tensor)
-    grid_data, (tsdf, weights), unwrap = _prepare_args(grid, tsdf, weights)
+    grid_data, (tsdf_jt, weights_jt), unwrap = _prepare_args(grid, tsdf, weights)
+    assert tsdf_jt is not None and weights_jt is not None
     rg, rt, rw = _fvdb_cpp.integrate_tsdf(
         grid_data,
         truncation_distance,
         projection_matrices,
         cam_to_world_matrices,
-        tsdf._impl,
-        weights._impl,
+        tsdf_jt._impl,
+        weights_jt._impl,
         depth_images,
         weight_images,
     )

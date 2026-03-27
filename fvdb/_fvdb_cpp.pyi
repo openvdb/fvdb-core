@@ -513,10 +513,51 @@ def create_from_nearest_voxels_to_points(
     voxel_sizes: list[list[float]],
     origins: list[list[float]],
 ) -> GridBatchData: ...
+@overload
 def create_from_empty(
-    device: torch.device,
+    device: str,
+) -> GridBatchData: ...
+@overload
+def create_from_empty(
+    device: str,
     voxel_size: list[float],
     origin: list[float],
+) -> GridBatchData: ...
+@overload
+def create_from_empty(
+    device: str,
+    voxel_sizes: list[list[float]],
+    origins: list[list[float]],
+) -> GridBatchData: ...
+def gridbatch_from_points(
+    points: JaggedTensor,
+    voxel_sizes: list[list[float]],
+    origins: list[list[float]],
+) -> GridBatchData: ...
+def gridbatch_from_nearest_voxels_to_points(
+    points: JaggedTensor,
+    voxel_sizes: list[list[float]],
+    origins: list[list[float]],
+) -> GridBatchData: ...
+def gridbatch_from_ijk(
+    ijk: JaggedTensor,
+    voxel_sizes: list[list[float]],
+    origins: list[list[float]],
+) -> GridBatchData: ...
+def gridbatch_from_dense(
+    num_grids: int,
+    dense_dims: list[int],
+    ijk_min: list[int],
+    voxel_sizes: list[list[float]],
+    origins: list[list[float]],
+    mask: torch.Tensor | None = ...,
+    device: str = ...,
+) -> GridBatchData: ...
+def gridbatch_from_mesh(
+    vertices: JaggedTensor,
+    faces: JaggedTensor,
+    voxel_sizes: list[list[float]],
+    origins: list[list[float]],
 ) -> GridBatchData: ...
 def create_dense(
     num_grids: int,
