@@ -413,14 +413,13 @@ jobs:
           AGENT_TOOLSDIRECTORY: "/opt/hostedtoolcache"
 
       - name: Install apt dependencies
-        run: apt install -y zlib1g-dev libpng-dev libsparsehash-dev
+        run: apt install -y zlib1g-dev libpng-dev
 
       - name: Install pip dependencies
         run: |
           uv venv
           uv pip install --no-cache-dir -r env/test_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu130 --index-strategy unsafe-best-match
           uv pip install --no-cache-dir setuptools
-          TORCH_CUDA_ARCH_LIST="${{ needs.versions.outputs.cuda-arch-pr }}" uv pip install -v --no-build-isolation git+https://github.com/heiwang1997/torchsparse.git
 
       - name: Download package
         uses: actions/download-artifact@v8

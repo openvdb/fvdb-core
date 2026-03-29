@@ -174,6 +174,16 @@ bind_viewer(py::module &m) {
              py::arg("dz"),
              "Set the camera view direction")
 
+        .def("camera_fov",
+             &fvdb::detail::viewer::Viewer::cameraFov,
+             py::arg("scene_name"),
+             "Get the camera vertical field of view in radians")
+        .def("set_camera_fov",
+             &fvdb::detail::viewer::Viewer::setCameraFov,
+             py::arg("scene_name"),
+             py::arg("fov_radians"),
+             "Set the camera vertical field of view in radians")
+
         .def("camera_near",
              &fvdb::detail::viewer::Viewer::cameraNear,
              py::arg("scene_name"),

@@ -24,7 +24,6 @@ dependencies:
   - pytest-benchmark
   - python=3.12
   - pytorch-gpu=2.10.0
-  - sparsehash
   - tensorboard
   - tqdm
   ## 3dgs
@@ -38,4 +37,3 @@ dependencies:
   - viser
   - pip:
     - point-cloud-utils
-    - https://fvdb-packages.s3.us-east-2.amazonaws.com/dev-whls/pt210cu130/torchsparse-2.1.0-cp312-cp312-linux_x86_64.whl

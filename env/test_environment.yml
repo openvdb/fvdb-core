@@ -45,7 +45,6 @@ dependencies:
     - gsplat
     - pytest-markdown-docs
     - point-cloud-utils
-    - torchsparse @ https://fvdb-packages.s3.us-east-2.amazonaws.com/dev-whls/pt210cu130/torchsparse-2.1.0-cp312-cp312-linux_x86_64.whl
     ## 3dgs tests
     - oiio-static-python
 platforms:
