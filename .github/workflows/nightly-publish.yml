@@ -1,0 +1,416 @@
+# Copyright Contributors to the OpenVDB Project
+# SPDX-License-Identifier: Apache-2.0
+
+name: fVDB Nightly Wheel Publish
+
+on:
+  schedule:
+    - cron: "0 8 * * *"  # daily at 8am UTC
+  workflow_dispatch:
+
+concurrency:
+  group: nightly-publish
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  ##############################################################################
+  # GATE: SKIP BUILD IF NO NEW COMMITS ON MAIN (bypass for manual dispatch)
+  ##############################################################################
+  check-new-commits:
+    name: Check for new commits on main
+    if: github.repository == 'openvdb/fvdb-core'
+    runs-on: ubuntu-latest
+    outputs:
+      should_build: ${{ steps.decide.outputs.should_build }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Decide whether to build
+        id: decide
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "Manual dispatch -- always build"
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          SINCE=$(date -u -d '24 hours ago' '+%Y-%m-%dT%H:%M:%SZ')
+          COUNT=$(git log --oneline --since="$SINCE" | wc -l)
+          echo "Commits on main since $SINCE: $COUNT"
+          if [ "$COUNT" -gt 0 ]; then
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No new commits -- skipping nightly build"
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  versions:
+    uses: ./.github/workflows/load-versions.yml
+
+  ##############################################################################
+  # START EC2 BUILD RUNNERS
+  ##############################################################################
+  start-build-runner:
+    name: Start CPU-only EC2 runner for nightly build
+    needs: [check-new-commits, versions]
+    if: needs.check-new-commits.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.versions.outputs.publish-matrix) }}
+    steps:
+      - name: Stagger job starts to avoid API rate limits
+        run: |
+          DELAY=$((RANDOM % 16))
+          echo "Delaying start by ${DELAY} seconds for Python ${{ matrix.python-version }}"
+          sleep $DELAY
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ needs.versions.outputs.aws-role }}
+          aws-region: ${{ needs.versions.outputs.aws-region }}
+      - name: Start EC2 runner
+        id: start-build-runner
+        uses: machulav/ec2-github-runner@v2
+        with:
+          mode: start
+          github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
+          ec2-image-id: ${{ needs.versions.outputs.aws-cpu-ami }}
+          ec2-instance-type: t3a.large
+          subnet-id: ${{ needs.versions.outputs.aws-subnet }}
+          security-group-id: ${{ needs.versions.outputs.aws-security-group }}
+          label: nightly-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
+          aws-resource-tags: >
+            [
+              {"Key": "RunnerLabel", "Value": "nightly-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}"},
+              {"Key": "PythonVersion", "Value": "${{ matrix.python-version }}"},
+              {"Key": "TorchVersion", "Value": "${{ matrix.torch-version }}"},
+              {"Key": "CudaVersion", "Value": "${{ matrix.cuda-version }}"},
+              {"Key": "GitHubRunId", "Value": "${{ github.run_id }}"}
+            ]
+
+  ##############################################################################
+  # BUILD NIGHTLY WHEELS
+  ##############################################################################
+  nightly-build:
+    name: fVDB Nightly Build
+    needs: [start-build-runner, check-new-commits, versions]
+    if: needs.check-new-commits.outputs.should_build == 'true'
+    runs-on: nightly-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
+    container:
+      image: nvidia/cuda:${{ matrix.cuda-image-tag }}-cudnn-devel-rockylinux8
+      env:
+        PYTHONPATH: ""
+        CPM_SOURCE_CACHE: "/__w/cpm_cache"
+        FORCE_CUDA: 1
+      options: --rm
+    defaults:
+      run:
+        shell: bash -el {0}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.versions.outputs.publish-matrix) }}
+    steps:
+      - name: Install prerequisites
+        run: |
+          dnf install -y git wget procps-ng findutils gcc-toolset-${{ needs.versions.outputs.gcc-toolset }}
+          echo 'source /opt/rh/gcc-toolset-${{ needs.versions.outputs.gcc-toolset }}/enable' > /etc/profile.d/gcc-toolset-${{ needs.versions.outputs.gcc-toolset }}.sh
+
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
+        with:
+          version: "${{ needs.versions.outputs.uv-version }}"
+
+      - name: Set up Python
+        run: |
+          uv python install ${{ matrix.python-version }}
+          uv venv
+
+      - name: Install CMake
+        run: >
+          wget -nv https://github.com/Kitware/CMake/releases/download/v${{ needs.versions.outputs.cmake-version }}/cmake-${{ needs.versions.outputs.cmake-version }}-linux-x86_64.sh &&
+          mkdir /opt/cmake &&
+          sh cmake-${{ needs.versions.outputs.cmake-version }}-linux-x86_64.sh --prefix=/usr/local --skip-license &&
+          cmake --version
+
+      - name: Install system dependencies
+        run: dnf install -y zlib-devel libpng-devel pkgconfig unzip procps-ng findutils
+
+      - name: Install pip dependencies
+        run: |
+          CUDA_TAG="cu$(echo "${{ matrix.cuda-version }}" | tr -d '.')"
+          TORCH_VERSION="${{ matrix.torch-version }}"
+          echo "Installing PyTorch ${TORCH_VERSION} for ${CUDA_TAG}"
+          uv venv
+          uv pip install --no-cache torch==${TORCH_VERSION}.0 -r env/build_requirements.txt --extra-index-url https://download.pytorch.org/whl/${CUDA_TAG}
+
+      - name: Set nightly version
+        run: |
+          TORCH_TAG="$(echo "${{ matrix.torch-version }}" | tr -d '.')"
+          CUDA_TAG="$(echo "${{ matrix.cuda-version }}" | tr -d '.')"
+          NIGHTLY_VERSION="0.0.0.dev$(date -u '+%Y%m%d')+pt${TORCH_TAG}.cu${CUDA_TAG}"
+          sed -i -E "s/^version *= *\"[^\"]+\"/version = \"${NIGHTLY_VERSION}\"/" pyproject.toml
+          echo "Nightly version: $NIGHTLY_VERSION"
+          grep '^version' pyproject.toml
+
+      - name: Build fvdb
+        run: |
+          source .venv/bin/activate
+          ./build.sh wheel strip_symbols verbose --cuda-arch-list '${{ needs.versions.outputs.cuda-arch-publish }}'
+
+      - name: Repair wheel for manylinux
+        run: |
+          source .venv/bin/activate
+          pip install auditwheel patchelf
+          ldd --version | head -n1
+          CUDA_MAJOR=$(echo "${{ matrix.cuda-version }}" | cut -d. -f1)
+          auditwheel repair dist/fvdb_core-*.whl -w dist/ \
+            --exclude libcuda.so.1 \
+            --exclude libcudart.so.${CUDA_MAJOR} \
+            --exclude libcufile.so.1 \
+            --exclude libnvrtc.so.${CUDA_MAJOR} \
+            --exclude libnvToolsExt.so.1 \
+            --exclude libcublas.so.${CUDA_MAJOR} \
+            --exclude libcublasLt.so.${CUDA_MAJOR} \
+            --exclude libcudnn.so.9 \
+            --exclude libcufft.so.11 \
+            --exclude libcurand.so.10 \
+            --exclude libcusolver.so.11 \
+            --exclude libcusparse.so.${CUDA_MAJOR} \
+            --exclude libnvJitLink.so.${CUDA_MAJOR} \
+            --exclude libtorch.so \
+            --exclude libtorch_cpu.so \
+            --exclude libtorch_cuda.so \
+            --exclude libtorch_python.so \
+            --exclude libc10.so \
+            --exclude libc10_cuda.so \
+            --exclude libmkl_core.so.2 \
+            --exclude libmkl_intel_lp64.so.2 \
+            --exclude libmkl_intel_thread.so.2 \
+            --exclude libomp.so \
+            --exclude libprotobuf.so.31 \
+            || echo "auditwheel failed, keeping original wheel"
+          if ls dist/fvdb_core-*-manylinux*.whl 1> /dev/null 2>&1; then
+            rm dist/fvdb_core-*-linux_x86_64.whl
+          fi
+          ls -lh dist/
+
+      - name: Upload wheel
+        uses: actions/upload-artifact@v7
+        with:
+          name: fvdb-nightly-${{ matrix.python-version }}-torch${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}
+          path: dist/fvdb_core-*.whl
+          retention-days: 7
+
+  ##############################################################################
+  # PUBLISH NIGHTLY WHEELS TO S3 SIMPLE INDEX
+  ##############################################################################
+  publish-to-s3:
+    name: Publish nightly wheels to S3
+    needs: [nightly-build, versions]
+    if: ${{ !cancelled() && needs.nightly-build.result == 'success' }}
+    runs-on: ubuntu-latest
+    env:
+      S3_BUCKET: fvdb-packages
+      SIMPLE_PREFIX: simple-nightly
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ needs.versions.outputs.aws-role }}
+          aws-region: ${{ needs.versions.outputs.aws-region }}
+
+      - name: Download all built wheels
+        uses: actions/download-artifact@v8
+        with:
+          pattern: fvdb-nightly-*
+          path: dist
+          merge-multiple: true
+
+      - name: Determine normalized project name from wheel
+        id: proj
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          FIRST_WHL=$(ls dist/*.whl | head -n1)
+          if [ -z "${FIRST_WHL:-}" ]; then
+            echo "No wheels found in dist/" >&2; exit 1
+          fi
+          BASE=$(basename "$FIRST_WHL")
+          PROJECT=${BASE%%-*}
+          NORM=$(echo "$PROJECT" | tr '[:upper:]' '[:lower:]' | sed -E 's/[-_.]+/-/g')
+          echo "project_name=$PROJECT" >> $GITHUB_OUTPUT
+          echo "normalized=$NORM" >> $GITHUB_OUTPUT
+          echo "Project: $PROJECT, Normalized: $NORM"
+
+      - name: Prune nightly wheels older than 30 days
+        run: |
+          set -euo pipefail
+          CUTOFF=$(date -u -d '30 days ago' '+%Y-%m-%d')
+          echo "Pruning nightly wheels uploaded before $CUTOFF"
+          LISTING=$(aws s3 ls "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${{ steps.proj.outputs.normalized }}/" 2>/dev/null || true)
+          if [ -z "$LISTING" ]; then
+            echo "No existing wheels found (first run or empty prefix) -- nothing to prune"
+            exit 0
+          fi
+          DELETED=0
+          while read -r line; do
+            DATE_PART=$(echo "$line" | awk '{print $1}')
+            FILE_PART=$(echo "$line" | awk '{print $4}')
+            if [[ "$FILE_PART" == *.whl ]] && [[ "$DATE_PART" < "$CUTOFF" ]]; then
+              echo "Removing: $FILE_PART (uploaded $DATE_PART)"
+              aws s3 rm "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${{ steps.proj.outputs.normalized }}/$FILE_PART" --only-show-errors
+              DELETED=$((DELETED + 1))
+            fi
+          done <<< "$LISTING"
+          echo "Pruned $DELETED old nightly wheel(s)"
+
+      - name: Upload wheels to S3 project directory
+        run: |
+          set -euo pipefail
+          DEST="s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${{ steps.proj.outputs.normalized }}/"
+          echo "Uploading wheels to $DEST"
+          shopt -s nullglob
+          upload_failed=0
+          for whl in dist/*.whl; do
+            echo "Uploading $whl"
+            if aws s3 cp "$whl" "$DEST"; then
+              echo "Successfully uploaded $whl"
+            else
+              echo "FAILED to upload $whl"
+              upload_failed=1
+            fi
+          done
+          if [ $upload_failed -eq 1 ]; then
+            echo "ERROR: One or more wheel uploads failed"
+            exit 1
+          fi
+          echo "All wheels uploaded successfully"
+          sleep 2
+
+      - name: Generate project index.html
+        run: |
+          set -euo pipefail
+          OUTDIR="dist/index-gen/${{ steps.proj.outputs.normalized }}"
+          mkdir -p "$OUTDIR"
+          INDEX_FILE="$OUTDIR/index.html"
+          TITLE="Links for ${{ steps.proj.outputs.project_name }}"
+          wheels=$(aws s3 ls "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${{ steps.proj.outputs.normalized }}/" | { grep -E '\.whl$' || true; } | awk '{print $4}')
+
+          echo "Found wheels in S3:"
+          echo "$wheels"
+
+          if [ -z "$wheels" ]; then
+            echo "WARNING: No wheels found in S3 at s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${{ steps.proj.outputs.normalized }}/"
+            echo "This may indicate an upload failure or timing issue"
+          fi
+
+          {
+            echo "<!DOCTYPE html>";
+            echo "<html><head><meta charset=\"utf-8\"><title>${TITLE}</title></head><body>";
+            echo "<h1>${TITLE}</h1>";
+            wheel_count=0
+            for whl in $wheels; do
+              wheel_count=$((wheel_count + 1))
+              echo "Processing wheel ${wheel_count}: $whl" >&2
+              if [ -f "dist/$whl" ]; then
+                sha=$(sha256sum "dist/$whl" | awk '{print $1}')
+                echo "  Computed SHA256 from local file: ${sha:0:16}..." >&2
+              else
+                echo "  Downloading $whl to compute hash..." >&2
+                if aws s3 cp "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${{ steps.proj.outputs.normalized }}/$whl" "/tmp/$whl" --only-show-errors; then
+                  sha=$(sha256sum "/tmp/$whl" | awk '{print $1}')
+                  rm "/tmp/$whl"
+                  echo "  Computed SHA256 from S3 file: ${sha:0:16}..." >&2
+                else
+                  echo "  ERROR: Failed to download $whl from S3" >&2
+                  exit 1
+                fi
+              fi
+              echo "<a href=\"${whl}#sha256=${sha}\">${whl}</a><br/>";
+            done;
+            echo "</body></html>";
+          } > "$INDEX_FILE"
+
+          echo "Total wheels processed: $wheel_count"
+          echo "Generated index.html:"
+          cat "$INDEX_FILE"
+
+          aws s3 cp "$INDEX_FILE" "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${{ steps.proj.outputs.normalized }}/index.html" --content-type text/html --only-show-errors
+          echo "Index uploaded successfully"
+
+      - name: Generate root simple index.html
+        run: |
+          set -euo pipefail
+          TMPDIR=$(mktemp -d)
+          ROOT_INDEX="$TMPDIR/index.html"
+          echo "Building root simple index from s3://${S3_BUCKET}/${SIMPLE_PREFIX}/"
+          projects=$(aws s3 ls "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/" | awk '{print $2}' | sed 's:/$::')
+          TITLE="Simple index"
+          {
+            echo "<!DOCTYPE html>";
+            echo "<html><head><meta charset=\"utf-8\"><title>${TITLE}</title></head><body>";
+            echo "<h1>${TITLE}</h1>";
+            for p in $projects; do
+              echo "<a href=\"${p}/\">${p}</a><br/>";
+            done;
+            echo "</body></html>";
+          } > "$ROOT_INDEX"
+          aws s3 cp "$ROOT_INDEX" "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/index.html" --content-type text/html --only-show-errors
+
+  ##############################################################################
+  # STOP EC2 BUILD RUNNERS
+  ##############################################################################
+  stop-build-runner:
+    name: Stop CPU-only EC2 runner for nightly build
+    needs:
+      - start-build-runner
+      - nightly-build
+      - versions
+    runs-on: ubuntu-latest
+    if: ${{ always() && needs.start-build-runner.result != 'skipped' }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.versions.outputs.publish-matrix) }}
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ needs.versions.outputs.aws-role }}
+          aws-region: ${{ needs.versions.outputs.aws-region }}
+      - name: Find EC2 instance ID by label
+        id: find-instance
+        run: |
+          LABEL="nightly-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}"
+          echo "Looking for instance with RunnerLabel: $LABEL"
+
+          INSTANCE_ID=$(aws ec2 describe-instances \
+            --filters "Name=tag:RunnerLabel,Values=$LABEL" "Name=instance-state-name,Values=running,pending,stopping,stopped" \
+            --query 'Reservations[0].Instances[0].InstanceId' \
+            --output text)
+
+          if [ "$INSTANCE_ID" == "None" ] || [ -z "$INSTANCE_ID" ]; then
+            echo "ERROR: No instance found with RunnerLabel=$LABEL"
+            echo "instance-id=" >> $GITHUB_OUTPUT
+            exit 1
+          else
+            echo "Found instance: $INSTANCE_ID"
+            echo "instance-id=$INSTANCE_ID" >> $GITHUB_OUTPUT
+          fi
+      - name: Stop EC2 runner
+        if: steps.find-instance.outputs.instance-id != ''
+        uses: machulav/ec2-github-runner@v2
+        with:
+          mode: stop
+          github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
+          label: nightly-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
+          ec2-instance-id: ${{ steps.find-instance.outputs.instance-id }}

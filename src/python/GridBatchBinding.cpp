@@ -292,6 +292,10 @@ bind_grid_batch(py::module &m) {
              py::arg("mask") = nullptr)
         .def("clipped_grid", &fvdb::GridBatch::clipped_grid, py::arg("ijk_min"), py::arg("ijk_max"))
         .def("conv_grid", &fvdb::GridBatch::conv_grid, py::arg("kernel_size"), py::arg("stride"))
+        .def("conv_transpose_grid",
+             &fvdb::GridBatch::conv_transpose_grid,
+             py::arg("kernel_size"),
+             py::arg("stride"))
         .def("dilated_grid", &fvdb::GridBatch::dilated_grid, py::arg("dilation"))
         .def("merged_grid", &fvdb::GridBatch::merged_grid, py::arg("other"))
         .def("pruned_grid", &fvdb::GridBatch::pruned_grid, py::arg("mask"))
@@ -424,13 +428,6 @@ bind_grid_batch(py::module &m) {
              py::arg("field"),
              py::arg("level") = 0.0)
 
-        // Convolution
-        .def("sparse_conv_halo",
-             &fvdb::GridBatch::sparse_conv_halo,
-             py::arg("input"),
-             py::arg("weight"),
-             py::arg("variant") = 8)
-
         // Coordinate transform
         .def("grid_to_world", &fvdb::GridBatch::grid_to_world, py::arg("ijk"))
         .def("world_to_grid", &fvdb::GridBatch::world_to_grid, py::arg("points"))
@@ -468,18 +465,6 @@ bind_grid_batch(py::module &m) {
         // .def("clone", &fvdb::GridBatch::clone) // TODO: We totally want this
 
         .def("is_same", &fvdb::GridBatch::is_same, py::arg("other"))
-        .def(
-            "sparse_conv_kernel_map",
-            [](fvdb::GridBatch &self,
-               fvdb::Vec3iOrScalar kernelSize,
-               fvdb::Vec3iOrScalar stride,
-               std::optional<fvdb::GridBatch> targetGrid) {
-                auto ret = fvdb::SparseConvPackInfo(kernelSize, stride, self, targetGrid);
-                return std::make_tuple(ret, ret.targetGrid());
-            },
-            py::arg("kernel_size"),
-            py::arg("stride"),
-            py::arg("target_grid") = nullptr)
         .def("integrate_tsdf",
              &fvdb::GridBatch::integrate_tsdf,
              py::arg("voxel_truncation_distance"),

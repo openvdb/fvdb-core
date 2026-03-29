@@ -5,6 +5,16 @@ cmake_minimum_required(VERSION 3.25 FATAL_ERROR)
 
 project(fvdb LANGUAGES CXX CUDA)
 
+# Build options - must be defined before subdirectories that use them
+option(FVDB_BUILD_TESTS "Configure CMake to build tests" ON)
+option(FVDB_BUILD_BENCHMARKS "Configure CMake to build (google & nvbench) benchmarks" OFF)
+option(FVDB_STRIP_SYMBOLS "Strip symbols from the build" OFF)
+option(FVDB_LINEINFO "Enable lineinfo in the build" OFF)
+
+message(STATUS "FVDB: Configure CMake to build tests: ${FVDB_BUILD_TESTS}")
+message(STATUS "FVDB: Configure CMake to build (google & nvbench) benchmarks: ${FVDB_BUILD_BENCHMARKS}")
+message(STATUS "FVDB_STRIP_SYMBOLS: ${FVDB_STRIP_SYMBOLS}")
+
 # Get dependencies
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_cpm.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_nvtx.cmake)
@@ -14,14 +24,11 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_cutlass.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_nanovdb.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_blosc.cmake)
 
-# Build options
-option(FVDB_BUILD_TESTS "Configure CMake to build tests" ON)
-option(FVDB_BUILD_BENCHMARKS "Configure CMake to build (google & nvbench) benchmarks" OFF)
-option(FVDB_STRIP_SYMBOLS "Strip symbols from the build" OFF)
+# Enable testing at this level so CTest discovers tests from all subdirectories
+enable_testing()
 
-message(STATUS "FVDB: Configure CMake to build tests: ${FVDB_BUILD_TESTS}")
-message(STATUS "FVDB: Configure CMake to build (google & nvbench) benchmarks: ${FVDB_BUILD_BENCHMARKS}")
-message(STATUS "FVDB_STRIP_SYMBOLS: ${FVDB_STRIP_SYMBOLS}")
+# Add dispatch interface library (header-only)
+add_subdirectory(dispatch)
 
 
 # Generate compile_commands.json
@@ -39,16 +46,16 @@ set(FVDB_CPP_FILES
     fvdb/Config.cpp
     fvdb/detail/autograd/AvgPoolGrid.cpp
     fvdb/detail/autograd/EvaluateSphericalHarmonics.cpp
-    fvdb/detail/autograd/GaussianRender.cpp
     fvdb/detail/autograd/Inject.cpp
+    fvdb/detail/autograd/GaussianProjection.cpp
+    fvdb/detail/autograd/GaussianRasterize.cpp
+    fvdb/detail/autograd/GaussianRasterizeFromWorld.cpp
+    fvdb/detail/autograd/GaussianRasterizeSparse.cpp
     fvdb/detail/autograd/JaggedReduce.cpp
     fvdb/detail/autograd/MaxPoolGrid.cpp
     fvdb/detail/autograd/ReadFromDense.cpp
     fvdb/detail/autograd/ReadIntoDense.cpp
     fvdb/detail/autograd/SampleGrid.cpp
-    fvdb/detail/autograd/SparseConvolutionHalo.cpp
-    fvdb/detail/autograd/SparseConvolutionImplicitGEMM.cpp
-    fvdb/detail/autograd/SparseConvolutionKernelMap.cpp
     fvdb/detail/autograd/SplatIntoGrid.cpp
     fvdb/detail/autograd/TransformPoints.cpp
     fvdb/detail/autograd/UpsampleGrid.cpp
@@ -56,6 +63,7 @@ set(FVDB_CPP_FILES
     fvdb/detail/io/GaussianPlyIO.cpp
     fvdb/detail/io/LoadNanovdb.cpp
     fvdb/detail/io/SaveNanoVDB.cpp
+    fvdb/detail/ops/gsplat/GaussianUtils.cpp
     fvdb/detail/TorchDeviceBuffer.cpp
     fvdb/detail/viewer/GaussianSplat3dView.cpp
     fvdb/detail/viewer/Viewer.cpp
@@ -63,7 +71,6 @@ set(FVDB_CPP_FILES
     fvdb/GaussianSplat3d.cpp
     fvdb/GridBatch.cpp
     fvdb/JaggedTensor.cpp
-    fvdb/SparseConvPackInfo.cpp
 )
 
 set(FVDB_CU_FILES
@@ -75,6 +82,7 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/BuildDilatedGrid.cu
     fvdb/detail/ops/BuildFineGridFromCoarse.cu
     fvdb/detail/ops/BuildGridForConv.cu
+    fvdb/detail/ops/BuildGridForConvTranspose.cu
     fvdb/detail/ops/BuildGridFromIjk.cu
     fvdb/detail/ops/BuildGridFromMesh.cu
     fvdb/detail/ops/BuildGridFromNearestVoxelsToPoints.cu
@@ -83,19 +91,8 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/BuildPaddedGrid.cu
     fvdb/detail/ops/BuildPrunedGrid.cu
     fvdb/detail/ops/CoarseIjkForFineGrid.cu
-    fvdb/detail/ops/convolution/backend/MESparseConvolution.cu
-    fvdb/detail/ops/convolution/backend/SparseConvolutionCutlass.cu
-    fvdb/detail/ops/convolution/backend/SparseConvolutionHalo.cu
-    fvdb/detail/ops/convolution/backend/SparseConvolutionHaloGrad.cu
-    fvdb/detail/ops/convolution/backend/SparseConvolutionImplicitGEMM.cu
-    fvdb/detail/ops/convolution/backend/SparseConvolutionImplicitGEMMGrad.cu
-    fvdb/detail/ops/convolution/backend/SparseConvolutionImplicitGEMMGradSorted.cu
-    fvdb/detail/ops/convolution/backend/SparseConvolutionImplicitGEMMSorted.cu
-    fvdb/detail/ops/convolution/backend/SparseConvolutionKernelMap.cu
-    fvdb/detail/ops/convolution/backend/SparseConvolutionLggs.cu
-    fvdb/detail/ops/convolution/pack_info/BrickHaloBuffer.cu
-    fvdb/detail/ops/convolution/pack_info/ConvolutionKernelMap.cu
-    fvdb/detail/ops/convolution/pack_info/IGEMMBitOperations.cu
+    fvdb/detail/ops/convolution/GatherScatterDefault.cu
+    fvdb/detail/ops/convolution/PredGatherIGemm.cu
     fvdb/detail/ops/CoordsInGrid.cu
     fvdb/detail/ops/CubesInGrid.cu
     fvdb/detail/ops/DownsampleGridAvgPool.cu
@@ -103,12 +100,17 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/GridEdgeNetwork.cu
     fvdb/detail/ops/gsplat/FusedSSIM.cu
     fvdb/detail/ops/gsplat/GaussianComputeNanInfMask.cu
+    fvdb/detail/ops/gsplat/GaussianMCMCAddNoise.cu
+    fvdb/detail/ops/gsplat/GaussianMCMCRelocation.cu
     fvdb/detail/ops/gsplat/GaussianProjectionBackward.cu
     fvdb/detail/ops/gsplat/GaussianProjectionForward.cu
+    fvdb/detail/ops/gsplat/GaussianProjectionUT.cu
     fvdb/detail/ops/gsplat/GaussianProjectionJaggedBackward.cu
     fvdb/detail/ops/gsplat/GaussianProjectionJaggedForward.cu
     fvdb/detail/ops/gsplat/GaussianRasterizeBackward.cu
     fvdb/detail/ops/gsplat/GaussianRasterizeForward.cu
+    fvdb/detail/ops/gsplat/GaussianRasterizeFromWorldBackward.cu
+    fvdb/detail/ops/gsplat/GaussianRasterizeFromWorldForward.cu
     fvdb/detail/ops/gsplat/GaussianRasterizeNumContributingGaussians.cu
     fvdb/detail/ops/gsplat/GaussianRasterizeTopContributingGaussianIds.cu
     fvdb/detail/ops/gsplat/GaussianRasterizeContributingGaussianIds.cu
@@ -197,6 +199,9 @@ target_compile_options(fvdb PRIVATE
     $<$<COMPILE_LANGUAGE:CXX>:
     "-Wno-unknown-pragmas"
     "-Wno-class-memaccess"
+    "-Wno-array-bounds"
+    "-Wno-stringop-overflow"
+    "-Wno-maybe-uninitialized"
     "-fdiagnostics-color=always"
     "-DNANOVDB_USE_BLOSC"
     "-fvisibility=default"
@@ -210,12 +215,13 @@ target_compile_options(fvdb PRIVATE
     "-fvisibility=default"
     "-Werror=all-warnings"
     "--threads=$ENV{NVCC_THREADS}"
-    "-Xcompiler=-Wall,-Werror"
+    "-Xcompiler=-Wall,-Werror,-Wno-maybe-uninitialized"
     ${TORCH_CUDA_COMMON_FLAGS}
-    >)
+    >
+    $<$<AND:$<BOOL:${FVDB_LINEINFO}>,$<COMPILE_LANGUAGE:CUDA>>:-lineinfo>)
 
 target_link_libraries(fvdb PRIVATE
-    ${TORCH_LIBRARIES} tinyply cutlass blosc::blosc)
+    ${TORCH_LIBRARIES} tinyply cutlass blosc::blosc dispatch)
 
 # Add linker flags for Debug builds to preserve symbols
 if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")

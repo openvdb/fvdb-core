@@ -16,9 +16,9 @@ namespace ops {
 // This kernel computes the offsets for an integer indexing operation
 __global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
 getJOffsetsIndexMask(const int64_t idxVal,
-                     const TorchRAcc32<JLIdxType, 2> jlidx,
-                     const TorchRAcc32<JOffsetsType, 1> inJoffsets,
-                     TorchRAcc32<JOffsetsType, 1> offsetsAndRange) {
+                     const TorchRAcc64<JLIdxType, 2> jlidx,
+                     const TorchRAcc64<JOffsetsType, 1> inJoffsets,
+                     TorchRAcc64<JOffsetsType, 1> offsetsAndRange) {
     int32_t idx = threadIdx.x + blockIdx.x * blockDim.x;
 
     if (idx >= jlidx.size(0)) {
@@ -53,9 +53,9 @@ __global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
 makeDataSliceMask(const int64_t start,
                   const int64_t end,
                   const int64_t step,
-                  const TorchRAcc32<JIdxType, 1> inJIdx,
-                  const TorchRAcc32<JLIdxType, 2> inJLidx,
-                  TorchRAcc32<bool, 1> outDataMask,
+                  const TorchRAcc64<JIdxType, 1> inJIdx,
+                  const TorchRAcc64<JLIdxType, 2> inJLidx,
+                  TorchRAcc64<bool, 1> outDataMask,
                   bool isLdim1,
                   bool oneTensor) {
     int32_t idx = threadIdx.x + blockIdx.x * blockDim.x;
@@ -86,11 +86,11 @@ __global__ void
 makeOffsetsSliceMask(const int64_t start,
                      const int64_t end,
                      const int64_t step,
-                     const TorchRAcc32<JOffsetsType, 1> inJoffsets,
-                     const TorchRAcc32<JLIdxType, 2> inJLidx,
-                     TorchRAcc32<bool, 1> outOffsetsMask,
-                     TorchRAcc32<JOffsetsType, 1> outTensorSizes,
-                     TorchRAcc32<JLIdxType, 2> outJLIdx,
+                     const TorchRAcc64<JOffsetsType, 1> inJoffsets,
+                     const TorchRAcc64<JLIdxType, 2> inJLidx,
+                     TorchRAcc64<bool, 1> outOffsetsMask,
+                     TorchRAcc64<JOffsetsType, 1> outTensorSizes,
+                     TorchRAcc64<JLIdxType, 2> outJLIdx,
                      bool isLdim1) {
     int32_t idx = threadIdx.x + blockIdx.x * blockDim.x;
 
@@ -281,14 +281,14 @@ jaggedTensorIndexSliceCuda(const JaggedTensor &jt, int64_t start, int64_t end, i
     torch::Tensor outJLIdx    = torch::empty_like(jt.jlidx());
     torch::Tensor outJOffsets = torch::empty_like(jt.joffsets());
 
-    auto joffsetsAcc = jt.joffsets().packed_accessor32<JOffsetsType, 1, torch::RestrictPtrTraits>();
-    auto jidxAcc     = jt.jidx().packed_accessor32<JIdxType, 1, torch::RestrictPtrTraits>();
-    auto jlidxAcc    = jt.jlidx().packed_accessor32<JLIdxType, 2, torch::RestrictPtrTraits>();
-    auto dataMaskAcc = dataMask.packed_accessor32<bool, 1, torch::RestrictPtrTraits>();
-    auto offsetsMaskAcc = offsetsMask.packed_accessor32<bool, 1, torch::RestrictPtrTraits>();
+    auto joffsetsAcc = jt.joffsets().packed_accessor64<JOffsetsType, 1, torch::RestrictPtrTraits>();
+    auto jidxAcc     = jt.jidx().packed_accessor64<JIdxType, 1, torch::RestrictPtrTraits>();
+    auto jlidxAcc    = jt.jlidx().packed_accessor64<JLIdxType, 2, torch::RestrictPtrTraits>();
+    auto dataMaskAcc = dataMask.packed_accessor64<bool, 1, torch::RestrictPtrTraits>();
+    auto offsetsMaskAcc = offsetsMask.packed_accessor64<bool, 1, torch::RestrictPtrTraits>();
     auto outJOffsetsAcc =
-        outJOffsets.packed_accessor32<JOffsetsType, 1, torch::RestrictPtrTraits>();
-    auto outJLIdxAcc = outJLIdx.packed_accessor32<JLIdxType, 2, torch::RestrictPtrTraits>();
+        outJOffsets.packed_accessor64<JOffsetsType, 1, torch::RestrictPtrTraits>();
+    auto outJLIdxAcc = outJLIdx.packed_accessor64<JLIdxType, 2, torch::RestrictPtrTraits>();
 
     auto callKernel = [=]() {
         const int64_t MAX_BLOCKS    = 4194302; // floor((2^32 - 1) / 1024)
@@ -562,10 +562,10 @@ jaggedTensorIndexIntCuda(const JaggedTensor &jt, int64_t idxVal) {
         {4},
         torch::TensorOptions().dtype(JOffsetsScalarType).device(torch::kCPU).pinned_memory(true));
     offsetsAndRange    = offsetsAndRange.to(jt.device());
-    auto inJLidxAcc    = jlidx.packed_accessor32<JLIdxType, 2, torch::RestrictPtrTraits>();
-    auto inJOffsetsAcc = joffsets.packed_accessor32<JOffsetsType, 1, torch::RestrictPtrTraits>();
+    auto inJLidxAcc    = jlidx.packed_accessor64<JLIdxType, 2, torch::RestrictPtrTraits>();
+    auto inJOffsetsAcc = joffsets.packed_accessor64<JOffsetsType, 1, torch::RestrictPtrTraits>();
     auto offsetsAndRangeAcc =
-        offsetsAndRange.packed_accessor32<JOffsetsType, 1, torch::RestrictPtrTraits>();
+        offsetsAndRange.packed_accessor64<JOffsetsType, 1, torch::RestrictPtrTraits>();
 
     const int64_t MAX_BLOCKS = 4194302; // floor((2^32 - 1) / 1024)
     const int64_t numBlocks  = GET_BLOCKS(joffsets.size(0), DEFAULT_BLOCK_DIM);
@@ -591,7 +591,7 @@ jaggedTensorIndexIntCuda(const JaggedTensor &jt, int64_t idxVal) {
         // const auto lidxOpts =
         // torch::TensorOptions().dtype(JLIdxScalarType).device(jdata.device()); retListIdx =
         // torch::empty({retOffsets.size(0)-1, 2}, lidxOpts); auto outJLidxAcc =
-        // retListIdx.packed_accessor32<JLIdxType, 2, torch::RestrictPtrTraits>(); const int
+        // retListIdx.packed_accessor64<JLIdxType, 2, torch::RestrictPtrTraits>(); const int
         // numBlocksJLidx = GET_BLOCKS(retListIdx.size(0), 1024); computeJLidx<<<numBlocksJLidx,
         // 1024>>>(startIdx, idxVal, inJLidxAcc, outJLidxAcc); C10_CUDA_KERNEL_LAUNCH_CHECK();
         // retNumOuterLists = std::get<0>(torch::unique_dim(retListIdx, 0)).size(0);
@@ -692,64 +692,47 @@ jaggedTensorIndexIntPrivateUse1(const JaggedTensor &jt, int64_t idxVal) {
 // This corresponds to indexing with an integer
 // i.e. jt = JaggedTensor([...])
 //      jt[2] -> JaggedTensor([...]) where the 3rd list is selected
-template <>
 JaggedTensor
-dispatchJaggedTensorIndexInt<torch::kCPU>(const JaggedTensor &jt, int64_t idxVal) {
-    return jaggedTensorIndexIntCpu(jt, idxVal);
-}
-template <>
-JaggedTensor
-dispatchJaggedTensorIndexInt<torch::kCUDA>(const JaggedTensor &jt, int64_t idxVal) {
-    c10::cuda::CUDAGuard deviceGuard(jt.device());
-    return jaggedTensorIndexIntCuda(jt, idxVal);
-}
-template <>
-JaggedTensor
-dispatchJaggedTensorIndexInt<torch::kPrivateUse1>(const JaggedTensor &jt, int64_t idxVal) {
-    return jaggedTensorIndexIntPrivateUse1(jt, idxVal);
+jaggedTensorIndexInt(const JaggedTensor &jt, int64_t idxVal) {
+    if (jt.device().is_cuda()) {
+        c10::cuda::CUDAGuard deviceGuard(jt.device());
+        return jaggedTensorIndexIntCuda(jt, idxVal);
+    } else if (jt.device().is_privateuseone()) {
+        return jaggedTensorIndexIntPrivateUse1(jt, idxVal);
+    } else {
+        return jaggedTensorIndexIntCpu(jt, idxVal);
+    }
 }
 
-// This corresponds to indexing with a slice
-// i.e. jt = JaggedTensor([...])
-//      jt[2:11:4] -> JaggedTensor([...]) where every fourth entry from the third to the tenth list
-//      (inclusive) is selected
-template <>
 JaggedTensor
-dispatchJaggedTensorIndexSlice<torch::kCPU>(const JaggedTensor &jt,
-                                            int64_t start,
-                                            int64_t end,
-                                            int64_t step) {
-    return jaggedTensorIndexSliceCpu(jt, start, end, step);
-}
-template <>
-JaggedTensor
-dispatchJaggedTensorIndexSlice<torch::kCUDA>(const JaggedTensor &jt,
-                                             int64_t start,
-                                             int64_t end,
-                                             int64_t step) {
-    c10::cuda::CUDAGuard deviceGuard(jt.device());
-    return jaggedTensorIndexSliceCuda(jt, start, end, step);
+jaggedTensorIndexSlice(const JaggedTensor &jt, int64_t start, int64_t end, int64_t step) {
+    TORCH_CHECK_VALUE(step >= 1, "step in slice must be >= 1");
+    if (start >= at::indexing::INDEX_MAX) {
+        start = jt.num_outer_lists();
+    }
+    if (end <= at::indexing::INDEX_MIN) {
+        end = 0;
+    }
+    if (jt.device().is_cuda()) {
+        c10::cuda::CUDAGuard deviceGuard(jt.device());
+        return jaggedTensorIndexSliceCuda(jt, start, end, step);
+    } else if (jt.device().is_cpu()) {
+        return jaggedTensorIndexSliceCpu(jt, start, end, step);
+    } else {
+        TORCH_CHECK(false, "Only CPU and CUDA devices are supported");
+    }
 }
 
-// This corresponds to indexing with a JaggedTensor. i.e. using each tensor in an indexing
-// JaggedTensor to index the corresponding tensor in the JaggedTensor
-// i.e. jt = JaggedTensor([[t_11, t_12], [t_21, t_22, t_23], ...])
-//      indices = JaggedTensor([[i_11, i_12], [i_21, i_22, i_23], ...])
-//      jt[indices] -> JaggedTensor([[t_11[i_11], t_12[i_12]], [t_21[i_21], t_22[i_22], t_23[i_23]],
-//      ...])
-// Here indices can be integers or a boolean mask
-template <>
 JaggedTensor
-dispatchJaggedTensorIndexJaggedTensor<torch::kCPU>(const JaggedTensor &jt,
-                                                   const JaggedTensor &idx) {
-    return jaggedTensorIndexJaggedTensorImpl(jt, idx);
-}
-template <>
-JaggedTensor
-dispatchJaggedTensorIndexJaggedTensor<torch::kCUDA>(const JaggedTensor &jt,
-                                                    const JaggedTensor &idx) {
-    c10::cuda::CUDAGuard deviceGuard(jt.device());
-    return jaggedTensorIndexJaggedTensorImpl(jt, idx);
+jaggedTensorIndexJaggedTensor(const JaggedTensor &jt, const JaggedTensor &idx) {
+    if (jt.device().is_cuda()) {
+        c10::cuda::CUDAGuard deviceGuard(jt.device());
+        return jaggedTensorIndexJaggedTensorImpl(jt, idx);
+    } else if (jt.device().is_cpu()) {
+        return jaggedTensorIndexJaggedTensorImpl(jt, idx);
+    } else {
+        TORCH_CHECK(false, "Only CPU and CUDA devices are supported");
+    }
 }
 
 } // namespace ops

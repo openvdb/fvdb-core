@@ -4,6 +4,7 @@
 #include <fvdb/detail/ops/DownsampleGridAvgPool.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
+#include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 
 #include <ATen/AccumulateType.h>
@@ -157,7 +158,7 @@ DownsampleGridAvgPool(const GridBatchImpl &fineBatchHdl,
                                                       int32_t voxelIdx,
                                                       int32_t channelIdx,
                                                       GridBatchImpl::Accessor coarseBatchAccessor) {
-                    avgPoolVoxelCallback<scalar_t, TorchRAcc32>(batchIdx,
+                    avgPoolVoxelCallback<scalar_t, TorchRAcc64>(batchIdx,
                                                                 leafIdx,
                                                                 voxelIdx,
                                                                 channelIdx,
@@ -237,7 +238,7 @@ DownsampleGridAvgPoolBackward(const GridBatchImpl &coarseBatchHdl,
                                                     int32_t voxelIdx,
                                                     int32_t channelIdx,
                                                     GridBatchImpl::Accessor coarseBatchAccessor) {
-                               avgPoolBackwardVoxelCallback<scalar_t, TorchRAcc32>(
+                               avgPoolBackwardVoxelCallback<scalar_t, TorchRAcc64>(
                                    batchIdx,
                                    leafIdx,
                                    voxelIdx,
@@ -282,50 +283,30 @@ DownsampleGridAvgPoolBackward(const GridBatchImpl &coarseBatchHdl,
     return outGradInReshape.reshape(spliceShape({fineData.size(0)}, coarseGradOut));
 }
 
-template <>
 torch::Tensor
-dispatchDownsampleGridAvgPool<torch::kCUDA>(const GridBatchImpl &fineBatchHdl,
-                                            const GridBatchImpl &coarseBatchHdl,
-                                            const torch::Tensor &fineData,
-                                            nanovdb::Coord poolingFactor,
-                                            nanovdb::Coord stride) {
-    return DownsampleGridAvgPool<torch::kCUDA>(
-        fineBatchHdl, coarseBatchHdl, fineData, poolingFactor, stride);
+downsampleGridAvgPool(const GridBatchImpl &fineBatchHdl,
+                      const GridBatchImpl &coarseBatchHdl,
+                      const torch::Tensor &fineData,
+                      nanovdb::Coord poolingFactor,
+                      nanovdb::Coord stride) {
+    return FVDB_DISPATCH_KERNEL_DEVICE(fineData.device(), [&]() {
+        return DownsampleGridAvgPool<DeviceTag>(
+            fineBatchHdl, coarseBatchHdl, fineData, poolingFactor, stride);
+    });
 }
 
-template <>
 torch::Tensor
-dispatchDownsampleGridAvgPool<torch::kCPU>(const GridBatchImpl &fineBatchHdl,
-                                           const GridBatchImpl &coarseBatchHdl,
-                                           const torch::Tensor &fineData,
-                                           nanovdb::Coord poolingFactor,
-                                           nanovdb::Coord stride) {
-    return DownsampleGridAvgPool<torch::kCPU>(
-        fineBatchHdl, coarseBatchHdl, fineData, poolingFactor, stride);
-}
-
-template <>
-torch::Tensor
-dispatchDownsampleGridAvgPoolBackward<torch::kCUDA>(const GridBatchImpl &coarseBatchHdl,
-                                                    const GridBatchImpl &fineBatchHdl,
-                                                    const torch::Tensor &fineData,
-                                                    const torch::Tensor &coarseGradOut,
-                                                    nanovdb::Coord poolingFactor,
-                                                    nanovdb::Coord stride) {
-    return DownsampleGridAvgPoolBackward<torch::kCUDA>(
-        coarseBatchHdl, fineBatchHdl, fineData, coarseGradOut, poolingFactor, stride);
-}
-
-template <>
-torch::Tensor
-dispatchDownsampleGridAvgPoolBackward<torch::kCPU>(const GridBatchImpl &coarseBatchHdl,
-                                                   const GridBatchImpl &fineBatchHdl,
-                                                   const torch::Tensor &fineData,
-                                                   const torch::Tensor &coarseGradOut,
-                                                   nanovdb::Coord poolingFactor,
-                                                   nanovdb::Coord stride) {
-    return DownsampleGridAvgPoolBackward<torch::kCPU>(
-        coarseBatchHdl, fineBatchHdl, fineData, coarseGradOut, poolingFactor, stride);
+downsampleGridAvgPoolBackward(const GridBatchImpl &coarseBatchHdl,
+                              const GridBatchImpl &fineBatchHdl,
+                              const torch::Tensor &fineData,
+                              const torch::Tensor &coarseGradOut,
+                              nanovdb::Coord poolingFactor,
+                              nanovdb::Coord stride) {
+    torch::Tensor gradOutContig = coarseGradOut.contiguous();
+    return FVDB_DISPATCH_KERNEL_DEVICE(gradOutContig.device(), [&]() {
+        return DownsampleGridAvgPoolBackward<DeviceTag>(
+            coarseBatchHdl, fineBatchHdl, fineData, gradOutContig, poolingFactor, stride);
+    });
 }
 
 } // namespace ops

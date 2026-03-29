@@ -1,4 +1,4 @@
-name: fVDB Nightly Build and Tests -- CUDA 13.0.1
+name: fVDB Nightly Build and Tests -- CUDA 13.0.2
 
 on:
 #   schedule:
@@ -13,13 +13,17 @@ permissions:
   issues: read
 
 jobs:
+  versions:
+    uses: ./.github/workflows/load-versions.yml
+
   fvdb-build:
     if: ${{ github.repository == 'openvdb/fvdb-core' && !startsWith(github.event.pull_request.title, 'Draft:') }}
+    needs: versions
     name: fVDB Build
     runs-on:
       - self-hosted
     container:
-      image: nvidia/cuda:13.0.1-cudnn-devel-ubuntu22.04
+      image: nvidia/cuda:${{ needs.versions.outputs.cuda-130-patch }}-cudnn-devel-${{ needs.versions.outputs.docker-os-ubuntu }}
       env:
         PYTHONPATH: ""
         CPM_SOURCE_CACHE: "/__w/cpm_cache"
@@ -40,8 +44,17 @@ jobs:
             && apt update \
             && apt install gh -y
           which jq || apt install -y jq
+      - name: Install GCC ${{ needs.versions.outputs.gcc-toolset }}
+        run: |
+          apt-get update
+          apt-get install -y software-properties-common
+          add-apt-repository -y ppa:ubuntu-toolchain-r/test
+          apt-get update
+          apt-get install -y gcc-${{ needs.versions.outputs.gcc-toolset }} g++-${{ needs.versions.outputs.gcc-toolset }}
+          update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-${{ needs.versions.outputs.gcc-toolset }} 100
+          update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-${{ needs.versions.outputs.gcc-toolset }} 100
       ### Get the PR branch and apply changes to the target branch
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0 # Fetch all history for all branches
       - name: Determine the target branch of the PR
@@ -102,19 +115,19 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
         with:
-          version: "0.7.5"
+          version: "${{ needs.versions.outputs.uv-version }}"
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '${{ needs.versions.outputs.python-default }}'
         env:
           AGENT_TOOLSDIRECTORY: "/opt/hostedtoolcache"
 
       - name: Install CMake
         run: >
-          wget -nv https://github.com/Kitware/CMake/releases/download/v4.0.3/cmake-4.0.3-linux-x86_64.sh &&
+          wget -nv https://github.com/Kitware/CMake/releases/download/v${{ needs.versions.outputs.cmake-version }}/cmake-${{ needs.versions.outputs.cmake-version }}-linux-x86_64.sh &&
           mkdir /opt/cmake &&
-          sh cmake-4.0.3-linux-x86_64.sh --prefix=/usr/local --skip-license &&
+          sh cmake-${{ needs.versions.outputs.cmake-version }}-linux-x86_64.sh --prefix=/usr/local --skip-license &&
           cmake --version
 
       - name: Install apt dependencies
@@ -129,10 +142,10 @@ jobs:
         run: |
           source .venv/bin/activate
           cd fvdb;
-          ./build.sh wheel verbose gtests benchmarks --cuda-arch-list '8.0;8.6+PTX'
+          ./build.sh wheel verbose gtests benchmarks --cuda-arch-list '${{ needs.versions.outputs.cuda-arch-pr }}'
 
       - name: Upload wheel
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
             name: fvdb-test-package
             path: fvdb/dist/*.whl
@@ -144,7 +157,7 @@ jobs:
         run: tar -cvf fvdb-gtest.tar fvdb/build/
 
       - name: Upload gtests
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
             name: fvdb-gtest
             path: fvdb-gtest.tar
@@ -159,12 +172,12 @@ jobs:
 
   fvdb-benchmarks:
     if: ${{ github.repository == 'openvdb/fvdb-core' }}
-    needs: [fvdb-build]
+    needs: [fvdb-build, versions]
     name: fVDB Continuous Benchmarking
     runs-on:
       - self-hosted
     container:
-      image: nvidia/cuda:13.0.1-cudnn-devel-ubuntu22.04
+      image: nvidia/cuda:${{ needs.versions.outputs.cuda-130-patch }}-cudnn-devel-${{ needs.versions.outputs.docker-os-ubuntu }}
       env:
         PYTHONPATH: ""
       options: --rm
@@ -185,7 +198,7 @@ jobs:
             && apt install gh -y
           which jq || apt install -y jq
       ### Get the PR branch and apply changes to the target branch
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0 # Fetch all history for all branches
       - name: Determine the target branch of the PR
@@ -246,11 +259,11 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
         with:
-          version: "0.7.5"
+          version: "${{ needs.versions.outputs.uv-version }}"
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '${{ needs.versions.outputs.python-default }}'
         env:
           AGENT_TOOLSDIRECTORY: "/opt/hostedtoolcache"
 
@@ -263,7 +276,7 @@ jobs:
           uv pip install --no-cache-dir -r fvdb/env/test_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu130
 
       - name: Download package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
             name: fvdb-test-package
             path: ./dist

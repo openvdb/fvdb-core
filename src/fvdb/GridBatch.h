@@ -7,6 +7,8 @@
 #include <fvdb/JaggedTensor.h>
 #include <fvdb/Types.h>
 #include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/ops/convolution/GatherScatterDefault.h>
+#include <fvdb/detail/ops/convolution/PredGatherIGemm.h>
 #include <fvdb/detail/utils/Utils.h>
 
 #include <nanovdb/NanoVDB.h>
@@ -633,6 +635,12 @@ struct GridBatch : torch::CustomClassHolder {
     /// @return A GridBatch representing the convolved grid.
     GridBatch conv_grid(Vec3iOrScalar kernel_size, Vec3iOrScalar stride) const;
 
+    /// @brief Return a batch of grids representing the output of a transposed convolution.
+    /// @param kernel_size The kernel size of convolution
+    /// @param stride The stride of the convolution
+    /// @return A GridBatch representing the transposed convolved grid.
+    GridBatch conv_transpose_grid(Vec3iOrScalar kernel_size, Vec3iOrScalar stride) const;
+
     /// @brief Return a batch of grids representing the dilated version of this batch of grids.
     /// @param dilation The dilation factor of the grid batch
     /// @return A GridBatch representing the dilated version of this batch of grids.
@@ -673,15 +681,6 @@ struct GridBatch : torch::CustomClassHolder {
     /// @param level level set of the surface to extract
     /// @return vertices and faces arrays of the extracted isosurface
     std::vector<JaggedTensor> marching_cubes(const JaggedTensor &field, double level = 0.0) const;
-
-    /// @brief Perform in-grid convolution using fast halo buffer method. Currently only supports
-    /// kernel_size = 3.
-    /// @param features A JaggedTensor of shape [B, -1, *] containing features associated with this
-    /// batch of grids.
-    /// @param kernel A tensor of shape [Out, In, 3, 3, 3] containing the kernel to convolve with.
-    /// @return A JaggedTensor of shape [B, -1, *] containing the convolved features.
-    JaggedTensor
-    sparse_conv_halo(const JaggedTensor &features, const torch::Tensor &kernel, int variant) const;
 
     /// @brief Return a grid batch on the specified device. If the passed in device is the same as
     /// this grid batch's
@@ -819,13 +818,46 @@ struct GridBatch : torch::CustomClassHolder {
 
     static GridBatch concatenate(const std::vector<GridBatch> &vec);
 
-    static void computeConvolutionKernelMap(const GridBatch &source,
-                                            const GridBatch &target,
-                                            torch::Tensor &kernelMap,
-                                            const Vec3iOrScalar &kernelSize,
-                                            const Vec3iOrScalar &stride);
+    /// @brief Build the forward compacted CSR topology for gather-scatter convolution.
+    /// @param feature_grid Grid batch containing the input feature voxels.
+    /// @param output_grid  Grid batch containing the output voxels.
+    /// @param kernelSize   Spatial kernel dimensions (scalar or 3-vector).
+    /// @param stride       Convolution stride (scalar or 3-vector).
+    /// @return A GatherScatterDefaultTopology with direction=Forward.
+    static detail::ops::GatherScatterDefaultTopology
+    buildGatherScatterDefaultTopology(const GridBatch &feature_grid,
+                                      const GridBatch &output_grid,
+                                      const Vec3iOrScalar &kernelSize,
+                                      const Vec3iOrScalar &stride);
 
-    std::vector<torch::Tensor> computeBrickHaloBuffer(bool benchmark) const;
+    /// @brief Build the transposed compacted CSR topology for gather-scatter convolution.
+    /// @param feature_grid Grid batch containing the input feature voxels.
+    /// @param output_grid  Grid batch containing the output voxels.
+    /// @param kernelSize   Spatial kernel dimensions (scalar or 3-vector).
+    /// @param stride       Convolution stride (scalar or 3-vector).
+    /// @return A GatherScatterDefaultTopology with direction=Transposed.
+    static detail::ops::GatherScatterDefaultTopology
+    buildGatherScatterDefaultTransposeTopology(const GridBatch &feature_grid,
+                                               const GridBatch &output_grid,
+                                               const Vec3iOrScalar &kernelSize,
+                                               const Vec3iOrScalar &stride);
+
+    // ---- PredGatherIGemm convolution (CUTLASS IGEMM, SM80+) ----
+
+    /// @brief Forward pass of predicated-gather IGEMM sparse convolution.
+    /// @param features      Input features, shape [N_in, C], float32.
+    /// @param weights       Kernel weights, shape [K, C, ks, ks, ks], float32.
+    /// @param feature_grid  Grid batch for input voxels.
+    /// @param output_grid   Grid batch for output voxels.
+    /// @param kernel_size   Uniform spatial kernel extent (3, 5, or 7).
+    /// @param stride        Uniform convolution stride (1 or 2).
+    /// @return Output features, shape [N_out, K], float32.
+    static torch::Tensor predGatherIGemmConv(torch::Tensor features,
+                                             torch::Tensor weights,
+                                             const GridBatch &feature_grid,
+                                             const GridBatch &output_grid,
+                                             int kernel_size,
+                                             int stride);
 
     /// @brief Perform one integration step of the TSDF fusion algorithm on a batch of sparse grids.
     ///        The TSDF fusion algorithm integrates depth and feature images (e.g. colors)

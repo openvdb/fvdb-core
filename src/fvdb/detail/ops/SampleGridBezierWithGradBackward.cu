@@ -5,6 +5,7 @@
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/BezierInterpolationWithGradIterator.h>
 #include <fvdb/detail/utils/ForEachCPU.h>
+#include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 
 #include <ATen/OpMathType.h>
@@ -93,11 +94,11 @@ SampleGridBezierWithGradBackward(const GridBatchImpl &batchHdl,
                 auto cb = [=] __device__(int32_t bidx,
                                          int32_t eidx,
                                          int32_t cidx,
-                                         JaggedRAcc32<scalar_t, 2> pts) {
+                                         JaggedRAcc64<scalar_t, 2> pts) {
                     sampleBezierWithGradBackwardCallback<DeviceTag,
                                                          scalar_t,
-                                                         JaggedRAcc32,
-                                                         TorchRAcc32>(bidx,
+                                                         JaggedRAcc64,
+                                                         TorchRAcc64>(bidx,
                                                                       eidx,
                                                                       cidx,
                                                                       pts,
@@ -130,26 +131,16 @@ SampleGridBezierWithGradBackward(const GridBatchImpl &batchHdl,
     return outGrad.reshape(outShape);
 }
 
-template <>
 torch::Tensor
-dispatchSampleGridBezierWithGradBackward<torch::kCUDA>(const GridBatchImpl &batchHdl,
-                                                       const JaggedTensor &points,
-                                                       const torch::Tensor &gradOutFeatures,
-                                                       const torch::Tensor &gradOutGradFeatures,
-                                                       const torch::Tensor &data) {
-    return SampleGridBezierWithGradBackward<torch::kCUDA>(
-        batchHdl, points, gradOutFeatures, gradOutGradFeatures, data);
-}
-
-template <>
-torch::Tensor
-dispatchSampleGridBezierWithGradBackward<torch::kCPU>(const GridBatchImpl &batchHdl,
-                                                      const JaggedTensor &points,
-                                                      const torch::Tensor &gradOutFeatures,
-                                                      const torch::Tensor &gradOutGradFeatures,
-                                                      const torch::Tensor &data) {
-    return SampleGridBezierWithGradBackward<torch::kCPU>(
-        batchHdl, points, gradOutFeatures, gradOutGradFeatures, data);
+sampleGridBezierWithGradBackward(const GridBatchImpl &batchHdl,
+                                 const JaggedTensor &points,
+                                 const torch::Tensor &gradOutFeatures,
+                                 const torch::Tensor &gradOutGradFeatures,
+                                 const torch::Tensor &data) {
+    return FVDB_DISPATCH_KERNEL_DEVICE(points.device(), [&]() {
+        return SampleGridBezierWithGradBackward<DeviceTag>(
+            batchHdl, points, gradOutFeatures, gradOutGradFeatures, data);
+    });
 }
 
 } // namespace ops

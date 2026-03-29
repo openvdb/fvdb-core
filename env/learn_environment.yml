@@ -6,7 +6,7 @@ dependencies:
   - blas=*=mkl
   - ca-certificates
   - certifi
-  - cuda-version=12.9
+  - cuda-version=13.0
   - git
   - gitpython
   - ipython
@@ -20,12 +20,10 @@ dependencies:
   - pip
   - pkg-config
   - polyscope
-  - pybind11=2.13.6
   - pyrender
   - pytest-benchmark
   - python=3.12
-  - pytorch-gpu=2.8.0
-  - sparsehash
+  - pytorch-gpu=2.10.0
   - tensorboard
   - tqdm
   ## 3dgs
@@ -39,6 +37,4 @@ dependencies:
   - viser
   - pip:
     - point-cloud-utils
-    - https://nksr.s3.ap-northeast-1.amazonaws.com/dev-whls/pt28cu129/torchsparse-2.1.0-cp312-cp312-linux_x86_64.whl
-    - https://nksr.s3.ap-northeast-1.amazonaws.com/dev-whls/pt28cu129/torchsparse_20-2.0.0b0-cp312-cp312-linux_x86_64.whl
-    - https://nksr.s3.ap-northeast-1.amazonaws.com/dev-whls/pt28cu129/torch_scatter-2.1.2-cp312-cp312-linux_x86_64.whl
+    - https://fvdb-packages.s3.us-east-2.amazonaws.com/dev-whls/pt210cu130/torch_scatter-2.1.2-cp312-cp312-linux_x86_64.whl

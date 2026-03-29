@@ -11,6 +11,28 @@ namespace detail {
 namespace ops {
 enum ProjectionType { PERSPECTIVE, ORTHOGRAPHIC };
 
+struct RenderWindow2D {
+    std::uint32_t width   = 0;
+    std::uint32_t height  = 0;
+    std::uint32_t originW = 0;
+    std::uint32_t originH = 0;
+
+    inline constexpr std::uint32_t
+    pixelCountPerCamera() const {
+        return width * height;
+    }
+
+    inline constexpr std::uint32_t
+    tileExtentW(const std::uint32_t tileSize) const {
+        return (width + tileSize - 1) / tileSize;
+    }
+
+    inline constexpr std::uint32_t
+    tileExtentH(const std::uint32_t tileSize) const {
+        return (height + tileSize - 1) / tileSize;
+    }
+};
+
 struct RenderSettings {
     enum class RenderMode {
         RGB   = 0,

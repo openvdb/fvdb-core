@@ -12,15 +12,12 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-template <torch::DeviceType>
-JaggedTensor dispatchJaggedTensorIndexInt(const JaggedTensor &jt, int64_t idxVal);
+JaggedTensor jaggedTensorIndexInt(const JaggedTensor &jt, int64_t idxVal);
 
-template <torch::DeviceType>
 JaggedTensor
-dispatchJaggedTensorIndexSlice(const JaggedTensor &jt, int64_t start, int64_t end, int64_t step);
+jaggedTensorIndexSlice(const JaggedTensor &jt, int64_t start, int64_t end, int64_t step);
 
-template <torch::DeviceType>
-JaggedTensor dispatchJaggedTensorIndexJaggedTensor(const JaggedTensor &jt, const JaggedTensor &idx);
+JaggedTensor jaggedTensorIndexJaggedTensor(const JaggedTensor &jt, const JaggedTensor &idx);
 
 } // namespace ops
 } // namespace detail

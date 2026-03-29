@@ -5,11 +5,14 @@
 #define FVDB_GAUSSIANSPLAT3D_H
 
 #include <fvdb/JaggedTensor.h>
+#include <fvdb/detail/ops/gsplat/GaussianCameras.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianRenderSettings.h>
 
 #include <ATen/core/TensorBody.h>
 #include <c10/core/Device.h>
 #include <torch/types.h>
+
+#include <optional>
 
 namespace fvdb {
 
@@ -57,7 +60,7 @@ class GaussianSplat3d {
         torch::Tensor perGaussianConic;          // [C, N, 3]
         torch::Tensor perGaussianRenderQuantity; // [C, N, 3]
         torch::Tensor perGaussianDepth;          // [C, N, 1]
-        torch::Tensor perGaussianOpacity;        // [N]
+        torch::Tensor perGaussianOpacity;        // [N] or [C, N] if antialias is true
         torch::Tensor perGaussianRadius;         // [C, N]
         torch::Tensor tileOffsets;               // [C, num_tiles_h, num_tiles_w, 2]
         torch::Tensor tileGaussianIds; // [C, num_tiles_h, num_tiles_w, max_gaussians_per_tile]
@@ -131,6 +134,12 @@ class GaussianSplat3d {
 
         torch::Tensor
         opacities() const {
+            if (perGaussianOpacity.dim() == 1) {
+                // perGaussianOpacity is [N]; expand to [C, N] view
+                const int64_t C = perGaussian2dMean.size(0);
+                return perGaussianOpacity.unsqueeze(0).expand({C, -1});
+            }
+            // Already [C, N] (e.g. antialias case where compensation varies per camera)
             return perGaussianOpacity;
         }
 
@@ -148,6 +157,24 @@ class GaussianSplat3d {
         gaussianIds() const {
             return tileGaussianIds;
         }
+    };
+
+    /// @brief A set of projected Gaussians with sparse tile intersection data for sparse rendering.
+    /// This struct extends ProjectedGaussianSplats with additional sparse-specific tensors.
+    struct SparseProjectedGaussianSplats : public ProjectedGaussianSplats {
+        torch::Tensor activeTiles;     // [num_active_tiles] - tile IDs of active tiles
+        torch::Tensor activeTileMask;  // [C, TH, TW] - boolean mask of active tiles
+        torch::Tensor tilePixelMask;   // [num_active_tiles, words_per_tile] - bitmask of pixels
+        torch::Tensor tilePixelCumsum; // [num_active_tiles] - cumulative sum of active pixels
+        torch::Tensor pixelMap;        // [num_active_pixels] - mapping for pixel write order
+        // Note: tileOffsets (inherited) is 1D [num_active_tiles + 1] in sparse mode
+
+        // Duplicate pixel handling: when pixelsToRender contains duplicates, we deduplicate
+        // before rendering and scatter results back. inverseIndices maps each original pixel
+        // position to its corresponding unique pixel index.
+        torch::Tensor inverseIndices;      // [total_pixels] maps original -> unique index
+        JaggedTensor uniquePixelsToRender; // deduplicated pixels passed to computeSparseInfo
+        bool hasDuplicates = false;
     };
 
   public:
@@ -853,7 +880,8 @@ class GaussianSplat3d {
                                  const ssize_t cropOriginW                       = -1,
                                  const ssize_t cropOriginH                       = -1,
                                  const size_t tileSize                           = 16,
-                                 const std::optional<torch::Tensor> &backgrounds = std::nullopt);
+                                 const std::optional<torch::Tensor> &backgrounds = std::nullopt,
+                                 const std::optional<torch::Tensor> &masks       = std::nullopt);
 
     /// @brief Render images of this Gaussian splat scene from the given camera matrices and
     /// projection matrices.
@@ -886,7 +914,37 @@ class GaussianSplat3d {
                  const float minRadius2d                         = 0.0,
                  const float eps2d                               = 0.3,
                  const bool antialias                            = false,
-                 const std::optional<torch::Tensor> &backgrounds = std::nullopt);
+                 const std::optional<torch::Tensor> &backgrounds = std::nullopt,
+                 const std::optional<torch::Tensor> &masks       = std::nullopt);
+
+    /// @brief Render images by rasterizing directly from world-space 3D Gaussians.
+    ///
+    /// This is similar to @ref renderImages but performs rasterization directly from world-space
+    /// Gaussians (means/quats/log-scales) rather than from their 2D projections. This enables
+    /// geometry gradients through the rasterization step.
+    ///
+    /// Tile intersections are still computed using a (non-differentiable) projection step:
+    /// - For `cameraModel == DistortionModel::PINHOLE` or `DistortionModel::ORTHOGRAPHIC`, we
+    ///   reuse the classic projection path.
+    /// - For OpenCV camera models, we use the Unscented Transform (UT) projection kernel to
+    ///   compute per-Gaussian radii and depths for sorting / tiling, then rasterize with 3DGS.
+    std::tuple<torch::Tensor, torch::Tensor>
+    renderImagesFromWorld(const torch::Tensor &worldToCameraMatrices,
+                          const torch::Tensor &projectionMatrices,
+                          const size_t imageWidth,
+                          const size_t imageHeight,
+                          const float near,
+                          const float far,
+                          const fvdb::detail::ops::DistortionModel cameraModel =
+                              fvdb::detail::ops::DistortionModel::PINHOLE,
+                          const std::optional<torch::Tensor> &distortionCoeffs = std::nullopt,
+                          const int64_t shDegreeToUse                          = -1,
+                          const size_t tileSize                                = 16,
+                          const float minRadius2d                              = 0.0,
+                          const float eps2d                                    = 0.3,
+                          const bool antialias                                 = false,
+                          const std::optional<torch::Tensor> &backgrounds      = std::nullopt,
+                          const std::optional<torch::Tensor> &masks            = std::nullopt);
 
     /// @brief Render depths of this Gaussian splat scene from the given camera matrices and
     /// projection matrices.
@@ -917,7 +975,8 @@ class GaussianSplat3d {
                  const float minRadius2d                         = 0.0,
                  const float eps2d                               = 0.3,
                  const bool antialias                            = false,
-                 const std::optional<torch::Tensor> &backgrounds = std::nullopt);
+                 const std::optional<torch::Tensor> &backgrounds = std::nullopt,
+                 const std::optional<torch::Tensor> &masks       = std::nullopt);
 
     std::tuple<torch::Tensor, torch::Tensor>
     renderImagesAndDepths(const torch::Tensor &worldToCameraMatrices,
@@ -932,7 +991,58 @@ class GaussianSplat3d {
                           const float minRadius2d             = 0.0,
                           const float eps2d                   = 0.3,
                           const bool antialias                = false,
-                          const std::optional<torch::Tensor> &backgrounds = std::nullopt);
+                          const std::optional<torch::Tensor> &backgrounds = std::nullopt,
+                          const std::optional<torch::Tensor> &masks       = std::nullopt);
+
+    std::tuple<JaggedTensor, JaggedTensor>
+    sparseRenderImages(const fvdb::JaggedTensor &pixelsToRender,
+                       const torch::Tensor &worldToCameraMatrices,
+                       const torch::Tensor &projectionMatrices,
+                       const size_t imageWidth,
+                       const size_t imageHeight,
+                       const float near,
+                       const float far,
+                       const ProjectionType projectionType = ProjectionType::PERSPECTIVE,
+                       const int64_t shDegreeToUse         = -1,
+                       const size_t tileSize               = 16,
+                       const float minRadius2d             = 0.0,
+                       const float eps2d                   = 0.3,
+                       const bool antialias                = false,
+                       const std::optional<torch::Tensor> &backgrounds = std::nullopt,
+                       const std::optional<torch::Tensor> &masks       = std::nullopt);
+
+    std::tuple<JaggedTensor, JaggedTensor>
+    sparseRenderDepths(const fvdb::JaggedTensor &pixelsToRender,
+                       const torch::Tensor &worldToCameraMatrices,
+                       const torch::Tensor &projectionMatrices,
+                       const size_t imageWidth,
+                       const size_t imageHeight,
+                       const float near,
+                       const float far,
+                       const ProjectionType projectionType = ProjectionType::PERSPECTIVE,
+                       const size_t tileSize               = 16,
+                       const float minRadius2d             = 0.0,
+                       const float eps2d                   = 0.3,
+                       const bool antialias                = false,
+                       const std::optional<torch::Tensor> &backgrounds = std::nullopt,
+                       const std::optional<torch::Tensor> &masks       = std::nullopt);
+
+    std::tuple<JaggedTensor, JaggedTensor>
+    sparseRenderImagesAndDepths(const fvdb::JaggedTensor &pixelsToRender,
+                                const torch::Tensor &worldToCameraMatrices,
+                                const torch::Tensor &projectionMatrices,
+                                const size_t imageWidth,
+                                const size_t imageHeight,
+                                const float near,
+                                const float far,
+                                const ProjectionType projectionType = ProjectionType::PERSPECTIVE,
+                                const int64_t shDegreeToUse         = -1,
+                                const size_t tileSize               = 16,
+                                const float minRadius2d             = 0.0,
+                                const float eps2d                   = 0.3,
+                                const bool antialias                = false,
+                                const std::optional<torch::Tensor> &backgrounds = std::nullopt,
+                                const std::optional<torch::Tensor> &masks       = std::nullopt);
 
     /// @brief Render the number of contributing Gaussians for each pixel in the image.
     /// @param worldToCameraMatrices [C, 4, 4] Camera-to-world matrices
@@ -1145,6 +1255,28 @@ class GaussianSplat3d {
         const bool antialias                = false,
         const int topKContributors          = 0);
 
+    /// @brief Relocate Gaussians by adjusting opacity and scale based on replication ratio.
+    /// @param logScales Log scales of the Gaussians to relocate [N, 3].
+    /// @param logitOpacities Logit opacities of the Gaussians to relocate [N].
+    /// @param ratios Replication ratios per Gaussian [N].
+    /// @param binomialCoeffs Binomial coefficients table [nMax, nMax].
+    /// @param nMax Maximum replication ratio (size of binomial table).
+    /// @param minOpacity Minimum opacity
+    /// @return Tuple of (logitOpacitiesNew [N], logScalesNew [N, 3])
+    std::tuple<torch::Tensor, torch::Tensor>
+    relocateGaussians(const torch::Tensor &logScales,      // [N, 3]
+                      const torch::Tensor &logitOpacities, // [N]
+                      const torch::Tensor &ratios,         // [N]
+                      const torch::Tensor &binomialCoeffs, // [nMax, nMax]
+                      const int nMax,
+                      const float minOpacity);
+
+    /// @brief Add noise to the Gaussian positions (means), scaled by noiseScale.
+    /// @param noiseScale Noise scale
+    /// @param t Cutoff for opacity scaling
+    /// @param k Exponent for opacity scaling
+    void addNoiseToMeans(const float noiseScale, const float t = 0.005, const float k = 100.0);
+
     /// @brief Select a subset of the Gaussians in this scene based on the given slice.
     /// @param begin The start index of the slice (inclusive)
     /// @param end The end index of the slice (exclusive)
@@ -1218,6 +1350,18 @@ class GaussianSplat3d {
                                                  const torch::Tensor &projectionMatrices,
                                                  const fvdb::detail::ops::RenderSettings &settings);
 
+    /// @brief Project Gaussians with sparse tile intersection for efficient sparse rendering.
+    /// @param pixelsToRender JaggedTensor of pixel coordinates to render [P1 + P2 + ..., 2]
+    /// @param worldToCameraMatrices [C, 4, 4] Camera-to-world matrices
+    /// @param projectionMatrices [C, 3, 3] Projection matrices
+    /// @param settings Render settings
+    /// @return SparseProjectedGaussianSplats containing projected Gaussians and sparse tile data
+    SparseProjectedGaussianSplats
+    sparseProjectGaussiansImpl(const JaggedTensor &pixelsToRender,
+                               const torch::Tensor &worldToCameraMatrices,
+                               const torch::Tensor &projectionMatrices,
+                               const fvdb::detail::ops::RenderSettings &settings);
+
     std::tuple<torch::Tensor, torch::Tensor> renderCropFromProjectedGaussiansImpl(
         const ProjectedGaussianSplats &state,
         const size_t tileSize,
@@ -1225,7 +1369,8 @@ class GaussianSplat3d {
         const ssize_t cropHeight,
         const ssize_t cropOriginW,
         const ssize_t cropOriginH,
-        const std::optional<torch::Tensor> &backgrounds = std::nullopt);
+        const std::optional<torch::Tensor> &backgrounds = std::nullopt,
+        const std::optional<torch::Tensor> &masks       = std::nullopt);
 
     /// @brief Implements index set with a tensor of booleans or integer indices
     /// @param indexOrMask A 1D tensor of indices in the range [0, numGaussians-1] or a boolean mask
@@ -1241,17 +1386,21 @@ class GaussianSplat3d {
     ///         The mask must have the same length as the number of Gaussians in this scene.
     GaussianSplat3d tensorIndexGetImpl(const torch::Tensor &indexOrMask) const;
 
-    /// @brief Render the gaussian splatting scene
-    ///         This function returns a single render quantity (RGB, depth, RGB+D) and
-    ///         single alpha value per pixel.
+    /// @brief Render the scene described by the Gaussian splats at the specified pixels in the
+    ///        specified views. This function returns a single render quantity (RGB, depth, RGB+D)
+    ///        and single alpha value per pixel.
+    /// @param pixelsToRender [P1 + P2 + ..., 2] JaggedTensor of pixels per camera to render.
     /// @param worldToCameraMatrices [C, 4, 4]
     /// @param projectionMatrices [C, 3, 3]
     /// @param settings
     /// @return Tuple of (render quantity, alpha value)
-    std::tuple<torch::Tensor, torch::Tensor>
-    renderImpl(const torch::Tensor &worldToCameraMatrices,
-               const torch::Tensor &projectionMatrices,
-               const fvdb::detail::ops::RenderSettings &settings);
+    std::tuple<JaggedTensor, JaggedTensor>
+    sparseRenderImpl(const JaggedTensor &pixelsToRender,
+                     const torch::Tensor &worldToCameraMatrices,
+                     const torch::Tensor &projectionMatrices,
+                     const fvdb::detail::ops::RenderSettings &settings,
+                     const std::optional<torch::Tensor> &backgrounds = std::nullopt,
+                     const std::optional<torch::Tensor> &masks       = std::nullopt);
 
     /// @brief Render the number of contributing Gaussians for each pixel in the image.
     /// @param worldToCameraMatrices [C, 4, 4]
@@ -1281,56 +1430,6 @@ class GaussianSplat3d {
                                              const torch::Tensor &worldToCameraMatrices,
                                              const torch::Tensor &projectionMatrices,
                                              const fvdb::detail::ops::RenderSettings &settings);
-
-    /// @brief Render the gaussian splatting scene
-    ///         For every pixel being rendered, this function returns multiple samples in depth of
-    ///         the gaussian IDs and multiple samples of the weighted alpha values. The number of
-    ///         samples per pixel is determined by the sampling parameters in the settings. If
-    ///         the size of the requested number of samples is greater than the number of
-    ///         contributing samples for a pixel, the remaining samples' weights are filled with
-    ///         zeros and the IDs are filled with -1.  The samples are ordered front to back in
-    ///         their depth ordering from camera.
-    /// @param worldToCameraMatrices [C, 4, 4]
-    /// @param projectionMatrices [C, 3, 3]
-    /// @param settings
-    /// @return Tuple of two tensors:
-    ///     ids: A [B, H, W, K] tensor containing the the IDs of the top K contributors to the
-    ///          rendered pixel for each camera
-    ///     weights: A [B, H, W, K] tensor containing the weights of the top K contributors to the
-    ///              rendered pixel for each camera. The weights are normalized to sum to the alpha
-    ///              value of the final rendered pixel if the list is exahustive of all contributing
-    ///              samples.
-    std::tuple<torch::Tensor, torch::Tensor>
-    renderTopContributingGaussianIdsImpl(const torch::Tensor &worldToCameraMatrices,
-                                         const torch::Tensor &projectionMatrices,
-                                         const fvdb::detail::ops::RenderSettings &settings);
-
-    /// @brief Sparse render the gaussian splatting scene
-    ///         For every pixel being rendered, this function returns multiple samples in depth of
-    ///         the gaussian IDs and multiple samples of the weighted alpha values. The number of
-    ///         samples per pixel is determined by the sampling parameters in the settings. If
-    ///         the size of the requested number of samples is greater than the number of
-    ///         contributing samples for a pixel, the remaining samples' weights are filled with
-    ///         zeros and the IDs are filled with -1.  The samples are ordered front to back in
-    ///         their depth ordering from camera.
-    /// @param pixelsToRender [P1 + P2 + ..., 2] JaggedTensor of pixels per camera to render.
-    /// @param worldToCameraMatrices [C, 4, 4]
-    /// @param projectionMatrices [C, 3, 3]
-    /// @param settings
-    /// @return Tuple of two tensors:
-    ///     ids: A [P1 + P2 + ..., K] jagged tensor containing the the IDs of the top K contributors
-    ///     to the
-    ///          rendered pixel for each camera
-    ///     weights: A [P1 + P2 + ..., K] jagged tensor containing the weights of the top K
-    ///     contributors to the
-    ///              rendered pixel for each camera. The weights are normalized to sum to the alpha
-    ///              value of the final rendered pixel if the list is exahustive of all contributing
-    ///              samples.
-    std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor>
-    sparseRenderTopContributingGaussianIdsImpl(const fvdb::JaggedTensor &pixelsToRender,
-                                               const torch::Tensor &worldToCameraMatrices,
-                                               const torch::Tensor &projectionMatrices,
-                                               const fvdb::detail::ops::RenderSettings &settings);
 
     /// @brief Render the gaussian splatting scene
     ///         For every pixel being rendered, this function returns multiple samples in depth of
@@ -1417,7 +1516,8 @@ gaussianRenderJagged(const JaggedTensor &means,     // [N1 + N2 + ..., 3]
                      const bool return_debug_info                    = false,
                      const bool render_depth_only                    = false,
                      const bool ortho                                = false,
-                     const std::optional<torch::Tensor> &backgrounds = std::nullopt);
+                     const std::optional<torch::Tensor> &backgrounds = std::nullopt,
+                     const std::optional<torch::Tensor> &masks       = std::nullopt);
 
 } // namespace fvdb
 

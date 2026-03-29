@@ -342,17 +342,17 @@ class Scene:
     @property
     def camera_orbit_direction(self) -> torch.Tensor:
         """
-        Return the direction pointing from the orbit center to the camera position.
+        Return the direction pointing from the camera position toward the orbit center.
 
         .. seealso:: :attr:`camera_orbit_radius`
         .. seealso:: :attr:`camera_orbit_center`
 
         .. note::
-            The camera itself is positioned at: ``camera_position = orbit_center + orbit_radius * orbit_direction``
+            The camera itself is positioned at: ``camera_position = orbit_center - orbit_radius * orbit_direction``
 
         Returns:
-            direction (torch.Tensor): A tensor of shape ``(3,)`` representing the direction pointing from the orbit
-                center to the camera position.
+            direction (torch.Tensor): A tensor of shape ``(3,)`` representing the direction pointing from the
+                camera position toward the orbit center.
         """
         server = _get_viewer_server_cpp()
         dx, dy, dz = server.camera_view_direction(self._name)
@@ -361,17 +361,17 @@ class Scene:
     @camera_orbit_direction.setter
     def camera_orbit_direction(self, direction: NumericMaxRank1):
         """
-        Set the direction pointing from the orbit center to the camera position.
+        Set the direction pointing from the camera position toward the orbit center.
 
         .. seealso:: :attr:`camera_orbit_radius`
         .. seealso:: :attr:`camera_orbit_center`
 
         .. note::
-            The camera itself is positioned at: ``camera_position = orbit_center + orbit_radius * orbit_direction``
+            The camera itself is positioned at: ``camera_position = orbit_center - orbit_radius * orbit_direction``
 
         Args:
-            direction (NumericMaxRank1): A tensor-like object of shape ``(3,)`` representing the direction pointing from the orbit
-                center to the camera position.
+            direction (NumericMaxRank1): A tensor-like object of shape ``(3,)`` representing the direction pointing from the
+                camera position toward the orbit center.
         """
         server = _get_viewer_server_cpp()
         dir_vec3f = to_Vec3f(direction).cpu().numpy()
@@ -406,6 +406,36 @@ class Scene:
             raise ValueError("Camera up direction cannot be a zero vector.")
         up_vec3f /= np.linalg.norm(up_vec3f)
         server.set_camera_up_direction(self._name, *up_vec3f)
+
+    @property
+    def camera_fov(self) -> float:
+        """
+        Return the camera's vertical field of view in radians.
+
+        This is the full angle from the top of the frame to the bottom of the frame.
+
+        Returns:
+            fov (float): Vertical field of view in radians.
+        """
+        server = _get_viewer_server_cpp()
+        return server.camera_fov(self._name)
+
+    @camera_fov.setter
+    def camera_fov(self, fov_radians: float):
+        """
+        Set the camera's vertical field of view in radians.
+
+        This is the full angle from the top of the frame to the bottom of the frame.
+
+        Args:
+            fov_radians (float): Vertical field of view in radians (must be positive and less than pi).
+        """
+        if not np.isfinite(fov_radians):
+            raise ValueError(f"FOV must be a finite value, got {fov_radians}")
+        if fov_radians <= 0.0 or fov_radians >= np.pi:
+            raise ValueError(f"FOV must be between 0 and pi radians, got {fov_radians}")
+        server = _get_viewer_server_cpp()
+        server.set_camera_fov(self._name, fov_radians)
 
     @property
     def camera_near(self) -> float:

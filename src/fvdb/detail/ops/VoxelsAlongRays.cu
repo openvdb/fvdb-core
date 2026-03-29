@@ -4,6 +4,7 @@
 #include <fvdb/detail/ops/VoxelsAlongRays.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
+#include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 
 #include <c10/cuda/CUDAException.h>
@@ -12,6 +13,7 @@
 namespace fvdb {
 namespace detail {
 namespace ops {
+namespace {
 
 // Called for each ray
 template <bool returnIjk,
@@ -230,8 +232,8 @@ VoxelsAlongRays(const GridBatchImpl &batchHdl,
                 auto cb1 = [=] __device__(int32_t bidx,
                                           int32_t eidx,
                                           int32_t cidx,
-                                          JaggedRAcc32<scalar_t, 2> rOA) {
-                    countVoxelsAlongRaysCallback<scalar_t, JaggedRAcc32, TorchRAcc32>(
+                                          JaggedRAcc64<scalar_t, 2> rOA) {
+                    countVoxelsAlongRaysCallback<scalar_t, JaggedRAcc64, TorchRAcc64>(
                         bidx, eidx, rOA, rayDirectionsAcc, outCountsAcc, batchAcc, maxVox, eps);
                 };
                 forEachJaggedElementChannelCUDA<scalar_t, 2>(numThreads, 1, rayOrigins, cb1);
@@ -272,8 +274,8 @@ VoxelsAlongRays(const GridBatchImpl &batchHdl,
                 auto cbIjk = [=] __device__(int32_t bidx,
                                             int32_t eidx,
                                             int32_t cidx,
-                                            JaggedRAcc32<scalar_t, 2> rayOriginsAcc) {
-                    voxelsAlongRaysCallback<true, scalar_t, JaggedRAcc32, TorchRAcc32>(
+                                            JaggedRAcc64<scalar_t, 2> rayOriginsAcc) {
+                    voxelsAlongRaysCallback<true, scalar_t, JaggedRAcc64, TorchRAcc64>(
                         bidx,
                         eidx,
                         rayOriginsAcc,
@@ -291,8 +293,8 @@ VoxelsAlongRays(const GridBatchImpl &batchHdl,
                 auto cbIdx = [=] __device__(int32_t bidx,
                                             int32_t eidx,
                                             int32_t cidx,
-                                            JaggedRAcc32<scalar_t, 2> rayOriginsAcc) {
-                    voxelsAlongRaysCallback<false, scalar_t, JaggedRAcc32, TorchRAcc32>(
+                                            JaggedRAcc64<scalar_t, 2> rayOriginsAcc) {
+                    voxelsAlongRaysCallback<false, scalar_t, JaggedRAcc64, TorchRAcc64>(
                         bidx,
                         eidx,
                         rayOriginsAcc,
@@ -371,30 +373,30 @@ VoxelsAlongRays(const GridBatchImpl &batchHdl,
         c10::kHalf);
 }
 
-template <>
-std::vector<JaggedTensor>
-dispatchVoxelsAlongRays<torch::kCUDA>(const GridBatchImpl &batchHdl,
-                                      const JaggedTensor &rayOrigins,
-                                      const JaggedTensor &rayDirections,
-                                      int64_t maxVox,
-                                      float eps,
-                                      bool returnIjk,
-                                      bool cumulative) {
-    return VoxelsAlongRays<torch::kCUDA>(
-        batchHdl, rayOrigins, rayDirections, maxVox, eps, returnIjk, cumulative);
-}
+} // anonymous namespace
 
-template <>
 std::vector<JaggedTensor>
-dispatchVoxelsAlongRays<torch::kCPU>(const GridBatchImpl &batchHdl,
-                                     const JaggedTensor &rayOrigins,
-                                     const JaggedTensor &rayDirections,
-                                     int64_t maxVox,
-                                     float eps,
-                                     bool returnIjk,
-                                     bool cumulative) {
-    return VoxelsAlongRays<torch::kCPU>(
-        batchHdl, rayOrigins, rayDirections, maxVox, eps, returnIjk, cumulative);
+voxelsAlongRays(const GridBatchImpl &batchHdl,
+                const JaggedTensor &rayOrigins,
+                const JaggedTensor &rayDirections,
+                int64_t maxVox,
+                float eps,
+                bool returnIjk,
+                bool cumulative) {
+    TORCH_CHECK_VALUE(
+        rayOrigins.ldim() == 1,
+        "Expected ray_origins to have 1 list dimension, i.e. be a single list of coordinate values, but got",
+        rayOrigins.ldim(),
+        "list dimensions");
+    TORCH_CHECK_VALUE(
+        rayDirections.ldim() == 1,
+        "Expected ray_directions to have 1 list dimension, i.e. be a single list of coordinate values, but got",
+        rayDirections.ldim(),
+        "list dimensions");
+    return FVDB_DISPATCH_KERNEL_DEVICE(rayOrigins.device(), [&]() {
+        return VoxelsAlongRays<DeviceTag>(
+            batchHdl, rayOrigins, rayDirections, maxVox, eps, returnIjk, cumulative);
+    });
 }
 
 } // namespace ops

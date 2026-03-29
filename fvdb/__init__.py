@@ -56,9 +56,9 @@ if _spec is not None and _spec.origin is not None:
         pass
 
 # isort: off
-from ._fvdb_cpp import ConvPackBackend
 from ._fvdb_cpp import scaled_dot_product_attention as _scaled_dot_product_attention_cpp
 from ._fvdb_cpp import gaussian_render_jagged as _gaussian_render_jagged_cpp
+from ._fvdb_cpp import evaluate_spherical_harmonics
 from ._fvdb_cpp import (
     config,
     volume_render,
@@ -99,6 +99,7 @@ def gaussian_render_jagged(
     return_debug_info: bool = False,
     ortho: bool = False,
     backgrounds: torch.Tensor | None = None,
+    masks: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]:
     return _gaussian_render_jagged_cpp(
         means=means._impl,
@@ -121,12 +122,13 @@ def gaussian_render_jagged(
         return_debug_info=return_debug_info,
         ortho=ortho,
         backgrounds=backgrounds,
+        masks=masks,
     )
 
 
 from .convolution_plan import ConvolutionPlan
 from .gaussian_splatting import GaussianSplat3d, ProjectedGaussianSplats
-from .enums import ProjectionType, ShOrderingMode
+from .enums import DistortionModel, ProjectionType, RollingShutterType, ShOrderingMode
 
 # Import torch-compatible functions that work with both Tensor and JaggedTensor
 from .torch_jagged import (
@@ -178,7 +180,7 @@ from .torch_jagged import (
 # The following import needs to come after all classes and functions are defined
 # in order to avoid a circular dependency error.
 # Make these available without an explicit submodule import
-from . import nn, utils, viz
+from . import nn, utils, version, viz
 from .version import __version__
 
 __version_info__ = tuple(map(int, __version__.split(".")))
@@ -190,6 +192,8 @@ __all__ = [
     "JaggedTensor",
     "GaussianSplat3d",
     "ProjectedGaussianSplats",
+    "DistortionModel",
+    "RollingShutterType",
     "ProjectionType",
     "ShOrderingMode",
     "ConvolutionPlan",
@@ -203,6 +207,7 @@ __all__ = [
     "scaled_dot_product_attention",
     "volume_render",
     "gaussian_render_jagged",
+    "evaluate_spherical_harmonics",
     # Torch-compatible functions (work with both Tensor and JaggedTensor)
     "relu",
     "relu_",
@@ -246,6 +251,7 @@ __all__ = [
     # Config
     "config",
     # Submodules
+    "version",
     "viz",
     "nn",
     "utils",

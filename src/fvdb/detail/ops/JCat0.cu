@@ -18,7 +18,7 @@ namespace ops {
 __global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
 computeTensorSizes(const JOffsetsType *__restrict__ const *__restrict__ offsets,
                    const size_t numOffsets,
-                   TorchRAcc32<JOffsetsType, 1> outTensorSizes) {
+                   TorchRAcc64<JOffsetsType, 1> outTensorSizes) {
     int32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
 
     if (idx > outTensorSizes.size(0) - 1) {
@@ -45,11 +45,11 @@ computeIndexPutArg(
     const JOffsetsType *__restrict__ const *__restrict__ offsets,
     const size_t numOffsets,
     const size_t numElements,
-    const TorchRAcc32<JIdxType, 1> inJIdxI,         // Jidx of the i^th input tensor
-    const TorchRAcc32<JOffsetsType, 1> inJoffsetsI, // JOffsets of the i^th input tensor
-    const TorchRAcc32<JOffsetsType, 1> outJOffsets, // Output JOffsets (already computed earlier)
-    TorchRAcc32<IdxT, 1> outSelIdx,                 // Output selection indices
-    TorchRAcc32<JIdxType, 1> outJIdx                // Output Jidx
+    const TorchRAcc64<JIdxType, 1> inJIdxI,         // Jidx of the i^th input tensor
+    const TorchRAcc64<JOffsetsType, 1> inJoffsetsI, // JOffsets of the i^th input tensor
+    const TorchRAcc64<JOffsetsType, 1> outJOffsets, // Output JOffsets (already computed earlier)
+    TorchRAcc64<IdxT, 1> outSelIdx,                 // Output selection indices
+    TorchRAcc64<JIdxType, 1> outJIdx                // Output Jidx
 ) {
     int32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -85,9 +85,8 @@ computeIndexPutArg(
         jidx;            // Which tensor the current element belongs to in the output
 }
 
-template <>
 JaggedTensor
-dispatchJCat0<torch::kCUDA>(const std::vector<JaggedTensor> &vec) {
+jCat0CUDA(const std::vector<JaggedTensor> &vec) {
     c10::cuda::CUDAGuard deviceGuard(vec[0].device());
 
     int64_t totalElements = 0;
@@ -122,7 +121,7 @@ dispatchJCat0<torch::kCUDA>(const std::vector<JaggedTensor> &vec) {
     computeTensorSizes<<<numBlocksCalcTensorSizes, DEFAULT_BLOCK_DIM>>>(
         thrust::raw_pointer_cast(offsets_d.data()),
         offsets_d.size(),
-        outJOffsets.packed_accessor32<JOffsetsType, 1, torch::RestrictPtrTraits>());
+        outJOffsets.packed_accessor64<JOffsetsType, 1, torch::RestrictPtrTraits>());
     C10_CUDA_KERNEL_LAUNCH_CHECK();
     torch::cumsum_out(outJOffsets, outJOffsets, 0);
 
@@ -158,11 +157,11 @@ dispatchJCat0<torch::kCUDA>(const std::vector<JaggedTensor> &vec) {
                     thrust::raw_pointer_cast(offsets_d.data()),
                     offsets_d.size(),
                     jt.jdata().size(0),
-                    jt.jidx().packed_accessor32<JIdxType, 1, torch::RestrictPtrTraits>(),
-                    jt.joffsets().packed_accessor32<JOffsetsType, 1, torch::RestrictPtrTraits>(),
-                    outJOffsets.packed_accessor32<JOffsetsType, 1, torch::RestrictPtrTraits>(),
-                    selectIndices.packed_accessor32<scalar_t, 1, torch::RestrictPtrTraits>(),
-                    outJIdx.packed_accessor32<JIdxType, 1, torch::RestrictPtrTraits>());
+                    jt.jidx().packed_accessor64<JIdxType, 1, torch::RestrictPtrTraits>(),
+                    jt.joffsets().packed_accessor64<JOffsetsType, 1, torch::RestrictPtrTraits>(),
+                    outJOffsets.packed_accessor64<JOffsetsType, 1, torch::RestrictPtrTraits>(),
+                    selectIndices.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>(),
+                    outJIdx.packed_accessor64<JIdxType, 1, torch::RestrictPtrTraits>());
                 C10_CUDA_KERNEL_LAUNCH_CHECK();
 
                 torch::Tensor selIdxI =
@@ -177,9 +176,8 @@ dispatchJCat0<torch::kCUDA>(const std::vector<JaggedTensor> &vec) {
         outJData, outJOffsets, outJIdx, vec[0].jlidx(), vec[0].num_outer_lists());
 }
 
-template <>
 JaggedTensor
-dispatchJCat0<torch::kCPU>(const std::vector<JaggedTensor> &vec) {
+jCat0CPU(const std::vector<JaggedTensor> &vec) {
     const auto device = vec[0].device();
     const auto dtype  = vec[0].scalar_type();
 
@@ -232,6 +230,17 @@ dispatchJCat0<torch::kCPU>(const std::vector<JaggedTensor> &vec) {
     }
     return JaggedTensor::from_jdata_joffsets_jidx_and_lidx_unsafe(
         outJdata, outJoffsets, outJidx, outJLidx, outNumOuterLists);
+}
+
+JaggedTensor
+jCat0(const std::vector<JaggedTensor> &tensors) {
+    if (tensors[0].device().is_cuda()) {
+        return jCat0CUDA(tensors);
+    } else if (tensors[0].device().is_cpu()) {
+        return jCat0CPU(tensors);
+    } else {
+        TORCH_CHECK(false, "Only CPU and CUDA devices are supported");
+    }
 }
 
 } // namespace ops

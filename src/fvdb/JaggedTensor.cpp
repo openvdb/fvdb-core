@@ -11,7 +11,6 @@
 #include <fvdb/detail/ops/JOffsetsFromJIdx.h>
 #include <fvdb/detail/ops/JaggedTensorIndex.h>
 #include <fvdb/detail/ops/jagged/JaggedSort.h>
-#include <fvdb/detail/utils/Utils.h>
 
 #include <optional>
 
@@ -42,16 +41,12 @@ torch::Tensor
 JaggedTensor::joffsets_from_jidx_and_jdata(torch::Tensor jidx,
                                            torch::Tensor jdata,
                                            int64_t num_tensors) {
-    return FVDB_DISPATCH_KERNEL(jdata.device(), [&]() {
-        return detail::ops::dispatchJOffsetsFromJIdx<DeviceTag>(jidx, jdata, num_tensors);
-    });
+    return detail::ops::jOffsetsFromJIdx(jidx, jdata, num_tensors);
 }
 
 torch::Tensor
 JaggedTensor::jidx_from_joffsets(torch::Tensor joffsets, int64_t num_elements) {
-    return FVDB_DISPATCH_KERNEL(joffsets.device(), [&]() {
-        return detail::ops::dispatchJIdxForJOffsets<DeviceTag>(joffsets, num_elements);
-    });
+    return detail::ops::jIdxForJOffsets(joffsets, num_elements);
 }
 
 JaggedTensor::JaggedTensor(torch::Tensor data)
@@ -79,9 +74,12 @@ JaggedTensor::JaggedTensor(const std::vector<torch::Tensor> &tensors) {
                     "assigned data must have shape [N, ...], but got data.dim() = 0");
         mBatchIdx =
             torch::empty({0}, torch::TensorOptions().dtype(JIdxScalarType).device(mData.device()));
-        mOffsets =
-            torch::tensor({JOffsetsType(0), mData.size(0)},
-                          torch::TensorOptions().dtype(JOffsetsScalarType).device(mData.device()));
+        mOffsets = torch::tensor(
+            {JOffsetsType(0), mData.size(0)},
+            torch::TensorOptions()
+                .dtype(JOffsetsScalarType)
+                .device(mData.device())
+                .pinned_memory(mData.device().is_cuda() || mData.device().is_privateuseone()));
         mListIdx = torch::empty(
             {0, 1}, torch::TensorOptions().dtype(JLIdxScalarType).device(mData.device()));
         mNumOuterLists = 1;
@@ -598,33 +596,17 @@ JaggedTensor::rmask(const torch::Tensor &mask) const {
 
 JaggedTensor
 JaggedTensor::index(int64_t index) const {
-    return FVDB_DISPATCH_KERNEL(mData.device(), [&]() {
-        return detail::ops::dispatchJaggedTensorIndexInt<DeviceTag>(*this, index);
-    });
+    return detail::ops::jaggedTensorIndexInt(*this, index);
 }
 
 JaggedTensor
 JaggedTensor::index(int64_t start, int64_t stop, int64_t step) const {
-    TORCH_CHECK_VALUE(step >= 1, "step in slice must be >= 1");
-
-    // Deal with symbolic int
-    if (start >= at::indexing::INDEX_MAX) {
-        start = mNumOuterLists;
-    }
-    if (stop <= at::indexing::INDEX_MIN) {
-        stop = 0;
-    }
-
-    return FVDB_DISPATCH_KERNEL_DEVICE(mData.device(), [&]() {
-        return detail::ops::dispatchJaggedTensorIndexSlice<DeviceTag>(*this, start, stop, step);
-    });
+    return detail::ops::jaggedTensorIndexSlice(*this, start, stop, step);
 }
 
 JaggedTensor
 JaggedTensor::index(const JaggedTensor &indices) const {
-    return FVDB_DISPATCH_KERNEL_DEVICE(mData.device(), [&]() {
-        return detail::ops::dispatchJaggedTensorIndexJaggedTensor<DeviceTag>(*this, indices);
-    });
+    return detail::ops::jaggedTensorIndexJaggedTensor(*this, indices);
 }
 
 JaggedTensor
@@ -682,9 +664,7 @@ JaggedTensor::jflatten(const int64_t dim) const {
 }
 // JaggedTensor JaggedTensor::jagged_argsort() {
 //     jidx_from_joffsets(); // why??
-//     torch::Tensor argsortIdx = FVDB_DISPATCH_KERNEL_DEVICE(device(), [&]() {
-//         return detail::ops::dispatchJaggedArgsort<DeviceTag>(*this);
-//     });
+//     torch::Tensor argsortIdx = detail::ops::jaggedArgsort(*this);
 //
 //     return jagged_like(argsortIdx);
 // }
@@ -878,8 +858,7 @@ JaggedTensor::jcat(const std::vector<JaggedTensor> &vec, std::optional<int64_t> 
         }
 
         if (dim == 0) {
-            return FVDB_DISPATCH_KERNEL_DEVICE(
-                vec[0].device(), [&]() { return detail::ops::dispatchJCat0<DeviceTag>(vec); });
+            return detail::ops::jCat0(vec);
         } else {
             std::vector<torch::Tensor> data;
             for (const auto &jvec: vec) {

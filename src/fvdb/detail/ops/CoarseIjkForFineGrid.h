@@ -7,17 +7,11 @@
 #include <fvdb/JaggedTensor.h>
 #include <fvdb/detail/GridBatchImpl.h>
 
-#include <nanovdb/NanoVDB.h>
-
-#include <torch/types.h>
-
 namespace fvdb {
 namespace detail {
 namespace ops {
 
-template <torch::DeviceType>
-JaggedTensor dispatchCoarseIJKForFineGrid(const GridBatchImpl &batchHdl,
-                                          nanovdb::Coord coarseningFactor);
+JaggedTensor coarseIJKForFineGrid(const GridBatchImpl &batchHdl, nanovdb::Coord coarseningFactor);
 
 } // namespace ops
 } // namespace detail

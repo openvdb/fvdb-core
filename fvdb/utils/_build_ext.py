@@ -1,13 +1,10 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 #
+from __future__ import annotations
+
 import os
 from typing import Any, Sequence
-
-import setuptools
-from torch.utils import cpp_extension
-
-import fvdb
 
 
 def fvdbCudaExtension(name: str, sources: Sequence[str], *args: Any, **kwargs: Any) -> setuptools.Extension:
@@ -17,9 +14,9 @@ def fvdbCudaExtension(name: str, sources: Sequence[str], *args: Any, **kwargs: A
 
     .. code-block:: python
 
-            from fvdb.utils import FVDBExtension
+            from fvdb.utils import fvdbCudaExtension
 
-            ext = FVDBExtension(
+            ext = fvdbCudaExtension(
                 name='my_extension',
                 sources=['my_extension.cpp'],
                 extra_compile_args={'cxx': ['-std=c++17']},
@@ -36,6 +33,9 @@ def fvdbCudaExtension(name: str, sources: Sequence[str], *args: Any, **kwargs: A
        cpp_extension (setuptools.Extension) A :class:`setuptools.Extension` object which can be used
            to build a PyTorch C++ extension that depends on fVDB.
     """
+    from torch.utils import cpp_extension
+
+    import fvdb
 
     libraries = kwargs.get("libraries", [])
     libraries.append("fvdb")

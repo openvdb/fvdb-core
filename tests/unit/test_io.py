@@ -54,6 +54,37 @@ all_names_compressed_devices_dtypes_and_dims = list(
     )
 )
 
+_voxelsize_standard_type_params = list(
+    itertools.product(
+        ["cpu", "cuda"],
+        [
+            (torch.float16, 1),
+            (torch.float32, 1),
+            (torch.float32, 3),
+            (torch.float32, 4),
+            (torch.float64, 1),
+            (torch.float64, 3),
+            (torch.float64, 4),
+            (torch.int32, 1),
+            (torch.int64, 1),
+            (torch.uint8, 4),
+        ],
+    )
+)
+
+_voxelsize_nonstandard_shape_params = list(
+    itertools.product(
+        ["cpu", "cuda"],
+        [
+            (torch.float32, (5,)),
+            (torch.float32, (3, 3)),
+            (torch.float32, (4, 3, 2)),
+            (torch.int32, (4, 7)),
+            (torch.float64, (5,)),
+        ],
+    )
+)
+
 
 class TestIO(unittest.TestCase):
     def setUp(self):
@@ -326,6 +357,130 @@ class TestIO(unittest.TestCase):
 
             self.assertTrue(torch.all(test_grid.voxel_sizes == test_grid_from_file.voxel_sizes))
             self.assertTrue(torch.all(test_grid.origins == test_grid_from_file.origins))
+
+    @parameterized.expand(_voxelsize_standard_type_params)
+    def test_voxelsize_preserved_with_standard_nanovdb_types(self, device, dtype_and_channels):
+        """Issue #123: all standard NanoVDB data types should preserve voxel size and origin."""
+        dtype, channels = dtype_and_channels
+        torch.manual_seed(0)
+        np.random.seed(0)
+
+        pts = fvdb.JaggedTensor([torch.rand((100, 3)) for _ in range(4)]).to(device)
+        voxel_sizes = [0.1, 0.2, 0.3]
+        origins = [1.0, -2.0, 3.0]
+
+        test_grid = fvdb.GridBatch.from_points(pts, voxel_sizes=voxel_sizes, origins=origins)
+        n = test_grid.total_voxels
+
+        if dtype in (torch.int32, torch.int64):
+            if channels > 1:
+                raw = torch.randint(0, 100, (n, channels), dtype=dtype, device=device)
+            else:
+                raw = torch.randint(0, 100, (n,), dtype=dtype, device=device)
+        elif dtype == torch.uint8:
+            raw = torch.randint(0, 256, (n, channels), dtype=dtype, device=device)
+        else:
+            if channels > 1:
+                raw = (torch.rand(n, channels, device=device) * 100).to(dtype)
+            else:
+                raw = (torch.rand(n, device=device) * 100).to(dtype)
+
+        data = test_grid.jagged_like(raw)
+
+        with tempfile.NamedTemporaryFile() as temp:
+            test_grid.save_nanovdb(temp.name, data)
+            loaded_grid, _, _ = fvdb.GridBatch.from_nanovdb(temp.name, device=device)
+
+            self.assertTrue(
+                torch.all(test_grid.voxel_sizes == loaded_grid.voxel_sizes),
+                f"Voxel sizes not preserved for dtype={dtype}, channels={channels}: "
+                f"{test_grid.voxel_sizes} vs {loaded_grid.voxel_sizes}",
+            )
+            self.assertTrue(
+                torch.all(test_grid.origins == loaded_grid.origins),
+                f"Origins not preserved for dtype={dtype}, channels={channels}: "
+                f"{test_grid.origins} vs {loaded_grid.origins}",
+            )
+
+    @parameterized.expand(_voxelsize_nonstandard_shape_params)
+    def test_voxelsize_preserved_with_nonstandard_shapes(self, device, dtype_and_shape):
+        """Issue #123: non-standard shapes (TensorGrid/blind data path) should preserve voxel size and origin."""
+        dtype, extra_dims = dtype_and_shape
+        torch.manual_seed(0)
+        np.random.seed(0)
+
+        pts = fvdb.JaggedTensor([torch.rand((100, 3)) for _ in range(4)]).to(device)
+        voxel_sizes = [0.1, 0.2, 0.3]
+        origins = [1.0, -2.0, 3.0]
+
+        test_grid = fvdb.GridBatch.from_points(pts, voxel_sizes=voxel_sizes, origins=origins)
+        n = test_grid.total_voxels
+        shape = (n,) + extra_dims
+
+        if dtype in (torch.int32, torch.int64):
+            raw = torch.randint(0, 100, shape, dtype=dtype, device=device)
+        else:
+            raw = (torch.rand(*shape, device=device) * 100).to(dtype)
+
+        data = test_grid.jagged_like(raw)
+
+        with tempfile.NamedTemporaryFile() as temp:
+            test_grid.save_nanovdb(temp.name, data)
+            loaded_grid, _, _ = fvdb.GridBatch.from_nanovdb(temp.name, device=device)
+
+            self.assertTrue(
+                torch.all(test_grid.voxel_sizes == loaded_grid.voxel_sizes),
+                f"Voxel sizes not preserved for dtype={dtype}, shape={extra_dims}: "
+                f"{test_grid.voxel_sizes} vs {loaded_grid.voxel_sizes}",
+            )
+            self.assertTrue(
+                torch.all(test_grid.origins == loaded_grid.origins),
+                f"Origins not preserved for dtype={dtype}, shape={extra_dims}: "
+                f"{test_grid.origins} vs {loaded_grid.origins}",
+            )
+
+    @parameterized.expand(["cpu", "cuda"])
+    def test_voxelsize_preserved_with_different_scales_per_grid(self, device):
+        """Issue #123: batches with per-grid voxel sizes should preserve each grid's transform."""
+        torch.manual_seed(0)
+        np.random.seed(0)
+
+        batch_size = 4
+        per_grid_voxel_sizes = [
+            [0.1, 0.1, 0.1],
+            [0.15, 0.15, 0.15],
+            [0.05, 0.1, 0.2],
+            [0.3, 0.3, 0.3],
+        ]
+        per_grid_origins = [
+            [0.0, 0.0, 0.0],
+            [1.0, 2.0, 3.0],
+            [-1.0, 0.5, -0.5],
+            [10.0, -10.0, 0.0],
+        ]
+
+        pts = fvdb.JaggedTensor([torch.rand((100, 3)) for _ in range(batch_size)]).to(device)
+        test_grid = fvdb.GridBatch.from_points(
+            pts,
+            voxel_sizes=per_grid_voxel_sizes,
+            origins=per_grid_origins,
+        )
+
+        data = test_grid.jagged_like(torch.rand(test_grid.total_voxels, device=device))
+
+        with tempfile.NamedTemporaryFile() as temp:
+            test_grid.save_nanovdb(temp.name, data)
+            loaded_grid, _, _ = fvdb.GridBatch.from_nanovdb(temp.name, device=device)
+
+            for bi in range(batch_size):
+                self.assertTrue(
+                    torch.all(test_grid.voxel_sizes[bi] == loaded_grid.voxel_sizes[bi]),
+                    f"Grid {bi} voxel sizes mismatch: {test_grid.voxel_sizes[bi]} vs {loaded_grid.voxel_sizes[bi]}",
+                )
+                self.assertTrue(
+                    torch.all(test_grid.origins[bi] == loaded_grid.origins[bi]),
+                    f"Grid {bi} origins mismatch: {test_grid.origins[bi]} vs {loaded_grid.origins[bi]}",
+                )
 
 
 if __name__ == "__main__":

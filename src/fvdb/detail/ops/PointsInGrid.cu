@@ -4,6 +4,7 @@
 #include <fvdb/detail/ops/PointsInGrid.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
+#include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 #include <fvdb/detail/utils/cuda/ForEachPrivateUse1.cuh>
 
@@ -47,15 +48,15 @@ PointsInGrid(const GridBatchImpl &batchHdl, const JaggedTensor &points) {
     auto outMaskAccessor = tensorAccessor<DeviceTag, bool, 1>(outMask);
     if constexpr (DeviceTag == torch::kCUDA) {
         auto cb = [=]
-            __device__(int32_t bidx, int32_t eidx, int32_t cidx, JaggedRAcc32<scalar_t, 2> ptsA) {
-                pointsInGridCallback<scalar_t, JaggedRAcc32, TorchRAcc32>(
+            __device__(int32_t bidx, int32_t eidx, int32_t cidx, JaggedRAcc64<scalar_t, 2> ptsA) {
+                pointsInGridCallback<scalar_t, JaggedRAcc64, TorchRAcc64>(
                     bidx, eidx, ptsA, outMaskAccessor, batchAcc);
             };
         forEachJaggedElementChannelCUDA<scalar_t, 2>(1024, 1, points, cb);
     } else if constexpr (DeviceTag == torch::kPrivateUse1) {
         auto cb = [=]
-            __device__(int32_t bidx, int32_t eidx, int32_t cidx, JaggedRAcc32<scalar_t, 2> ptsA) {
-                pointsInGridCallback<scalar_t, JaggedRAcc32, TorchRAcc32>(
+            __device__(int32_t bidx, int32_t eidx, int32_t cidx, JaggedRAcc64<scalar_t, 2> ptsA) {
+                pointsInGridCallback<scalar_t, JaggedRAcc64, TorchRAcc64>(
                     bidx, eidx, ptsA, outMaskAccessor, batchAcc);
             };
         forEachJaggedElementChannelPrivateUse1<scalar_t, 2>(1, points, cb);
@@ -70,9 +71,11 @@ PointsInGrid(const GridBatchImpl &batchHdl, const JaggedTensor &points) {
     return points.jagged_like(outMask);
 }
 
+namespace {
+
 template <torch::DeviceType DeviceTag>
 JaggedTensor
-dispatchPointsInGrid<DeviceTag>(const GridBatchImpl &batchHdl, const JaggedTensor &points) {
+dispatchPointsInGrid(const GridBatchImpl &batchHdl, const JaggedTensor &points) {
     batchHdl.checkNonEmptyGrid();
     batchHdl.checkDevice(points);
     TORCH_CHECK_TYPE(points.is_floating_point(), "points must have a floating point type");
@@ -92,12 +95,18 @@ dispatchPointsInGrid<DeviceTag>(const GridBatchImpl &batchHdl, const JaggedTenso
         c10::kHalf);
 }
 
-template JaggedTensor dispatchPointsInGrid<torch::kCPU>(const GridBatchImpl &,
-                                                        const JaggedTensor &);
-template JaggedTensor dispatchPointsInGrid<torch::kCUDA>(const GridBatchImpl &,
-                                                         const JaggedTensor &);
-template JaggedTensor dispatchPointsInGrid<torch::kPrivateUse1>(const GridBatchImpl &,
-                                                                const JaggedTensor &);
+} // namespace
+
+JaggedTensor
+pointsInGrid(const GridBatchImpl &batchHdl, const JaggedTensor &points) {
+    TORCH_CHECK_VALUE(
+        points.ldim() == 1,
+        "Expected points to have 1 list dimension, i.e. be a single list of coordinate values, but got",
+        points.ldim(),
+        "list dimensions");
+    return FVDB_DISPATCH_KERNEL(
+        points.device(), [&]() { return dispatchPointsInGrid<DeviceTag>(batchHdl, points); });
+}
 
 } // namespace ops
 } // namespace detail

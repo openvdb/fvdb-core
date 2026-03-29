@@ -17,9 +17,9 @@ def _parse_device_string(device_string: str | torch.device) -> torch.device: ...
 # The following import needs to come after the GridBatch and JaggedTensor imports
 # immediately above in order to avoid a circular dependency error.
 from . import nn, utils, viz
-from ._fvdb_cpp import ConvPackBackend, config, hilbert, morton, volume_render
+from ._fvdb_cpp import config, hilbert, morton, volume_render
 from .convolution_plan import ConvolutionPlan
-from .enums import ProjectionType, ShOrderingMode
+from .enums import DistortionModel, ProjectionType, RollingShutterType, ShOrderingMode
 from .gaussian_splatting import GaussianSplat3d, ProjectedGaussianSplats
 from .grid import Grid
 from .grid_batch import GridBatch, gcat
@@ -92,6 +92,14 @@ def gaussian_render_jagged(
     ortho: bool = False,
     backgrounds: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]: ...
+def evaluate_spherical_harmonics(
+    sh_degree: int,
+    num_cameras: int,
+    sh0: torch.Tensor,
+    radii: torch.Tensor,
+    shN: torch.Tensor | None = None,
+    view_directions: torch.Tensor | None = None,
+) -> torch.Tensor: ...
 
 __all__ = [
     # Core classes
@@ -101,6 +109,12 @@ __all__ = [
     "GaussianSplat3d",
     "ProjectedGaussianSplats",
     "ConvolutionPlan",
+    "DistortionModel",
+    "RollingShutterType",
+    "ProjectionType",
+    "ShOrderingMode",
+    "Grid",
+    # JaggedTensor operations
     # Concatenation of jagged tensors or grid/grid batches
     "jcat",
     "gcat",
@@ -111,6 +125,7 @@ __all__ = [
     "scaled_dot_product_attention",
     "volume_render",
     "gaussian_render_jagged",
+    "evaluate_spherical_harmonics",
     # Torch-compatible functions (work with both Tensor and JaggedTensor)
     "relu",
     "relu_",

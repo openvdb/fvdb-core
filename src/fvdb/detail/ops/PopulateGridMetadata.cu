@@ -112,6 +112,16 @@ populateGridMetadataCUDA(uint32_t numGrids,
         numGrids, grids, voxelSizes, voxelOrigins, outBatchOffsets, perGridMetadata, batchMetadata);
 }
 
+template <torch::DeviceType>
+void dispatchPopulateGridMetadata(const nanovdb::GridHandle<TorchDeviceBuffer> &gridHdl,
+                                  const std::vector<nanovdb::Vec3d> &voxelSizes,
+                                  const std::vector<nanovdb::Vec3d> &voxelOrigins,
+                                  torch::Tensor &outBatchOffsets,
+                                  GridBatchImpl::GridMetadata *outPerGridMetadataHost,
+                                  GridBatchImpl::GridMetadata *outPerGridMetadataDevice,
+                                  GridBatchImpl::GridBatchMetadata *outBatchMetadataHost,
+                                  GridBatchImpl::GridBatchMetadata *outBatchMetadataDevice);
+
 template <>
 void
 dispatchPopulateGridMetadata<torch::kCUDA>(
@@ -143,12 +153,12 @@ dispatchPopulateGridMetadata<torch::kCUDA>(
     // Read metadata into device buffers
     TORCH_CHECK(gridHdl.deviceData() != nullptr, "GridHandle is empty");
     const nanovdb::OnIndexGrid *grids = (nanovdb::OnIndexGrid *)gridHdl.deviceData();
-    populateGridMetadataCUDA<TorchRAcc32><<<1, NUM_THREADS>>>(
+    populateGridMetadataCUDA<TorchRAcc64><<<1, NUM_THREADS>>>(
         gridHdl.gridCount(),
         grids,
         (const nanovdb::Vec3d *)deviceVoxSizesPtr,
         (const nanovdb::Vec3d *)deviceVoxOriginsPtr,
-        outBatchOffsets.packed_accessor32<fvdb::JOffsetsType, 1, torch::RestrictPtrTraits>(),
+        outBatchOffsets.packed_accessor64<fvdb::JOffsetsType, 1, torch::RestrictPtrTraits>(),
         outPerGridMetadataDevice,
         outBatchMetadataDevice);
 
@@ -211,6 +221,39 @@ dispatchPopulateGridMetadata<torch::kPrivateUse1>(
                                          outBatchOffsets.accessor<fvdb::JOffsetsType, 1>(),
                                          outPerGridMetadataHost,
                                          outBatchMetadataHost);
+}
+
+void
+populateGridMetadata(const nanovdb::GridHandle<TorchDeviceBuffer> &batchHdl,
+                     const std::vector<nanovdb::Vec3d> &voxelSizes,
+                     const std::vector<nanovdb::Vec3d> &voxelOrigins,
+                     torch::Tensor &outBatchOffsets,
+                     GridBatchImpl::GridMetadata *outPerGridMetadataHost,
+                     GridBatchImpl::GridMetadata *outPerGridMetadataDevice,
+                     GridBatchImpl::GridBatchMetadata *outBatchMetadataHost) {
+    const torch::Device device = batchHdl.buffer().device();
+    FVDB_DISPATCH_KERNEL(device, [&]() {
+        GridBatchImpl::GridBatchMetadata *deviceBatchMetadataPtr = nullptr;
+        if constexpr (DeviceTag == torch::kCUDA) {
+            c10::cuda::CUDAGuard deviceGuard(device);
+            auto wrapper = c10::cuda::getCurrentCUDAStream(device.index());
+            auto data    = c10::cuda::CUDACachingAllocator::raw_alloc_with_stream(
+                sizeof(GridBatchImpl::GridBatchMetadata), wrapper.stream());
+            deviceBatchMetadataPtr = static_cast<GridBatchImpl::GridBatchMetadata *>(data);
+        }
+        dispatchPopulateGridMetadata<DeviceTag>(batchHdl,
+                                                voxelSizes,
+                                                voxelOrigins,
+                                                outBatchOffsets,
+                                                outPerGridMetadataHost,
+                                                outPerGridMetadataDevice,
+                                                outBatchMetadataHost,
+                                                deviceBatchMetadataPtr);
+        if constexpr (DeviceTag == torch::kCUDA) {
+            c10::cuda::CUDAGuard deviceGuard(device);
+            c10::cuda::CUDACachingAllocator::raw_delete(deviceBatchMetadataPtr);
+        }
+    });
 }
 
 } // namespace ops

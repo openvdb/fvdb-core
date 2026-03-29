@@ -281,13 +281,14 @@ Viewer::waitForInteerrupt() {
 
 std::tuple<float, float, float>
 Viewer::cameraOrbitCenter(const std::string &scene_name) {
-    (void)scene_name;
+    getCamera(scene_name);
     return std::make_tuple(mEditor.camera.state.position.x,
                            mEditor.camera.state.position.y,
                            mEditor.camera.state.position.z);
 }
 void
 Viewer::setCameraOrbitCenter(const std::string &scene_name, float x, float y, float z) {
+    getCamera(scene_name);
     mEditor.camera.state.position.x = x;
     mEditor.camera.state.position.y = y;
     mEditor.camera.state.position.z = z;
@@ -296,24 +297,26 @@ Viewer::setCameraOrbitCenter(const std::string &scene_name, float x, float y, fl
 
 float
 Viewer::cameraOrbitRadius(const std::string &scene_name) {
-    (void)scene_name;
+    getCamera(scene_name);
     return mEditor.camera.state.eye_distance_from_position;
 }
 void
 Viewer::setCameraOrbitRadius(const std::string &scene_name, float radius) {
+    getCamera(scene_name);
     mEditor.camera.state.eye_distance_from_position = radius;
     updateCamera(scene_name);
 }
 
 std::tuple<float, float, float>
 Viewer::cameraViewDirection(const std::string &scene_name) {
-    (void)scene_name;
+    getCamera(scene_name);
     return std::make_tuple(mEditor.camera.state.eye_direction.x,
                            mEditor.camera.state.eye_direction.y,
                            mEditor.camera.state.eye_direction.z);
 }
 void
 Viewer::setCameraViewDirection(const std::string &scene_name, float x, float y, float z) {
+    getCamera(scene_name);
     mEditor.camera.state.eye_direction.x = x;
     mEditor.camera.state.eye_direction.y = y;
     mEditor.camera.state.eye_direction.z = z;
@@ -329,9 +332,22 @@ Viewer::cameraUpDirection(const std::string &scene_name) {
 }
 void
 Viewer::setCameraUpDirection(const std::string &scene_name, float x, float y, float z) {
+    getCamera(scene_name);
     mEditor.camera.state.eye_up.x = x;
     mEditor.camera.state.eye_up.y = y;
     mEditor.camera.state.eye_up.z = z;
+    updateCamera(scene_name);
+}
+
+float
+Viewer::cameraFov(const std::string &scene_name) {
+    getCamera(scene_name);
+    return mEditor.camera.config.fov_angle_y;
+}
+void
+Viewer::setCameraFov(const std::string &scene_name, float fov_radians) {
+    getCamera(scene_name);
+    mEditor.camera.config.fov_angle_y = fov_radians;
     updateCamera(scene_name);
 }
 
@@ -342,6 +358,7 @@ Viewer::cameraNear(const std::string &scene_name) {
 }
 void
 Viewer::setCameraNear(const std::string &scene_name, float near) {
+    getCamera(scene_name);
     mEditor.camera.config.near_plane = near;
     updateCamera(scene_name);
 }
@@ -353,6 +370,7 @@ Viewer::cameraFar(const std::string &scene_name) {
 }
 void
 Viewer::setCameraFar(const std::string &scene_name, float far) {
+    getCamera(scene_name);
     mEditor.camera.config.far_plane = far;
     updateCamera(scene_name);
 }
@@ -366,6 +384,7 @@ Viewer::cameraProjectionType(const std::string &scene_name) {
 void
 Viewer::setCameraProjectionType(const std::string &scene_name,
                                 GaussianSplat3d::ProjectionType mode) {
+    getCamera(scene_name);
     mEditor.camera.config.is_orthographic =
         (mode == GaussianSplat3d::ProjectionType::ORTHOGRAPHIC) ? PNANOVDB_TRUE : PNANOVDB_FALSE;
 

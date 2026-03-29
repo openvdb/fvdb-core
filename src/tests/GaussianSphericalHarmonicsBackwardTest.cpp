@@ -162,7 +162,7 @@ struct SphericalHarmonincsBackwardTestFixture : public ::testing::TestWithParam<
             setHalfOfRadiiToZero();
         }
         torch::Tensor expectedDLossDSh0Coeffs =
-            torch::full({numGaussians, numCameras, numChannels}, 0.282095, floatOptsCUDA);
+            torch::full({numGaussians, 1, numChannels}, 0.282095f * numCameras, floatOptsCUDA);
         if (setZeroRadii) {
             expectedDLossDSh0Coeffs.index_put_({torch::indexing::Slice(0, -1, 2),
                                                 torch::indexing::Slice(),

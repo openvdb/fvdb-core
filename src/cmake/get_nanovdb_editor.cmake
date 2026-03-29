@@ -15,12 +15,12 @@ option(NANOVDB_EDITOR_SKIP "Skip nanovdb_editor wheel build" OFF)
 set(NANOVDB_EDITOR_BUILD_TYPE "Release" CACHE STRING "Build type for nanovdb_editor (Release/Debug)")
 
 # For fVDB main use nanovdb-editor main
-set(NANOVDB_EDITOR_TAG 90f0733dd61b7a4753772a3e2a154c6bbd2185ec)
-set(NANOVDB_EDITOR_VERSION 0.0.19)   # version at this commit
+set(NANOVDB_EDITOR_TAG 62861a3b7f0fe2d4d61e7025b7f5b872086e965c)
+set(NANOVDB_EDITOR_VERSION 0.0.23)   # version at this commit
 
 # If skip is set, get the latest tagged version to prevent unnecessary rebuilds each hash update
 if(NANOVDB_EDITOR_SKIP)
-    set(NANOVDB_EDITOR_VERSION 0.0.19)   # latest tagged version
+    set(NANOVDB_EDITOR_VERSION 0.0.23)   # latest tagged version
     set(NANOVDB_EDITOR_TAG v${NANOVDB_EDITOR_VERSION}-dev)  # use dev tag according to PyPI published wheel
 endif()
 
@@ -144,17 +144,24 @@ if (NOT NANOVDB_EDITOR_FORCE)
         if(NUM_LATEST_WHEELS GREATER 0)
             list(GET LATEST_WHEELS 0 LATEST_WHEEL)
             message(STATUS "Found wheel in dist for the latest version ${NANOVDB_EDITOR_LATEST_VERSION}: ${LATEST_WHEEL}")
+            message(STATUS "Installing nanovdb_editor wheel with: ${Python3_EXECUTABLE} -m pip install --force-reinstall -v ${LATEST_WHEEL}")
+            # CPM's nanovdb_editor_BINARY_DIR may not exist yet on this fast-path (installing a prebuilt wheel),
+            # but execute_process requires WORKING_DIRECTORY to exist.
+            file(MAKE_DIRECTORY ${nanovdb_editor_BINARY_DIR})
             execute_process(
-                COMMAND bash -lc "
-                ${Python3_EXECUTABLE} -m pip install --force-reinstall ${LATEST_WHEEL}
-                "
+                COMMAND ${Python3_EXECUTABLE} -m pip install --force-reinstall -v ${LATEST_WHEEL}
                 WORKING_DIRECTORY ${nanovdb_editor_BINARY_DIR}
                 RESULT_VARIABLE install_result
                 OUTPUT_VARIABLE install_output
                 ERROR_VARIABLE install_error
             )
             if(NOT install_result EQUAL 0)
-                message(FATAL_ERROR "nanovdb_editor wheel install failed.\nSTDOUT:\n${install_output}\n\nSTDERR:\n${install_error}")
+                message(FATAL_ERROR
+                    "nanovdb_editor wheel install failed (exit=${install_result}).\n"
+                    "Python3_EXECUTABLE: ${Python3_EXECUTABLE}\n"
+                    "Wheel: ${LATEST_WHEEL}\n"
+                    "WORKING_DIRECTORY: ${nanovdb_editor_BINARY_DIR}\n"
+                    "STDOUT:\n${install_output}\n\nSTDERR:\n${install_error}")
             else()
                 message(STATUS "Successfully installed: ${install_output}")
 
@@ -229,6 +236,7 @@ execute_process(
         -Cbuild-dir=${nanovdb_editor_SOURCE_DIR}/../build \
         -Cbuild.verbose=false \
         -Clogging.level=WARNING \
+        -Ccmake.define.CMAKE_MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM} \
         -Ccmake.define.NANOVDB_EDITOR_USE_GLFW=OFF \
         -Ccmake.define.NANOVDB_EDITOR_BUILD_TESTS=OFF \
         -Ccmake.define.NANOVDB_EDITOR_COMMIT_HASH=${NANOVDB_EDITOR_COMMIT_HASH} \

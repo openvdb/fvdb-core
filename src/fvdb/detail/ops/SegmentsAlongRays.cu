@@ -4,6 +4,7 @@
 #include <fvdb/detail/ops/SegmentsAlongRays.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
+#include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 
 #include <c10/cuda/CUDAException.h>
@@ -11,6 +12,7 @@
 namespace fvdb {
 namespace detail {
 namespace ops {
+namespace {
 
 template <typename ScalarType,
           template <typename T, int32_t D>
@@ -190,8 +192,8 @@ SegmentsAlongRays(const GridBatchImpl &batchHdl,
                 auto cb1 = [=] __device__(int32_t bidx,
                                           int32_t eidx,
                                           int32_t cidx,
-                                          JaggedRAcc32<scalar_t, 2> rOA) {
-                    countSegmentsAlongRaysCallback<scalar_t, JaggedRAcc32, TorchRAcc32>(
+                                          JaggedRAcc64<scalar_t, 2> rOA) {
+                    countSegmentsAlongRaysCallback<scalar_t, JaggedRAcc64, TorchRAcc64>(
                         bidx,
                         eidx,
                         rOA,
@@ -246,8 +248,8 @@ SegmentsAlongRays(const GridBatchImpl &batchHdl,
                 auto cb2 = [=] __device__(int32_t bidx,
                                           int32_t eidx,
                                           int32_t cidx,
-                                          JaggedRAcc32<scalar_t, 2> rayOriginsAcc) {
-                    segmentsAlongRaysCallback<scalar_t, JaggedRAcc32, TorchRAcc32>(bidx,
+                                          JaggedRAcc64<scalar_t, 2> rayOriginsAcc) {
+                    segmentsAlongRaysCallback<scalar_t, JaggedRAcc64, TorchRAcc64>(bidx,
                                                                                    eidx,
                                                                                    rayOriginsAcc,
                                                                                    rayDirectionsAcc,
@@ -287,24 +289,27 @@ SegmentsAlongRays(const GridBatchImpl &batchHdl,
         c10::kHalf);
 }
 
-template <>
-JaggedTensor
-dispatchSegmentsAlongRays<torch::kCUDA>(const GridBatchImpl &batchHdl,
-                                        const JaggedTensor &rayOrigins,
-                                        const JaggedTensor &rayDirections,
-                                        int64_t maxSegments,
-                                        const double eps) {
-    return SegmentsAlongRays<torch::kCUDA>(batchHdl, rayOrigins, rayDirections, maxSegments, eps);
-}
+} // anonymous namespace
 
-template <>
 JaggedTensor
-dispatchSegmentsAlongRays<torch::kCPU>(const GridBatchImpl &batchHdl,
-                                       const JaggedTensor &rayOrigins,
-                                       const JaggedTensor &rayDirections,
-                                       int64_t maxSegments,
-                                       const double eps) {
-    return SegmentsAlongRays<torch::kCPU>(batchHdl, rayOrigins, rayDirections, maxSegments, eps);
+segmentsAlongRays(const GridBatchImpl &batchHdl,
+                  const JaggedTensor &rayOrigins,
+                  const JaggedTensor &rayDirections,
+                  int64_t maxSegments,
+                  const double eps) {
+    TORCH_CHECK_VALUE(
+        rayOrigins.ldim() == 1,
+        "Expected ray_origins to have 1 list dimension, i.e. be a single list of coordinate values, but got",
+        rayOrigins.ldim(),
+        "list dimensions");
+    TORCH_CHECK_VALUE(
+        rayDirections.ldim() == 1,
+        "Expected ray_directions to have 1 list dimension, i.e. be a single list of coordinate values, but got",
+        rayDirections.ldim(),
+        "list dimensions");
+    return FVDB_DISPATCH_KERNEL_DEVICE(rayOrigins.device(), [&]() {
+        return SegmentsAlongRays<DeviceTag>(batchHdl, rayOrigins, rayDirections, maxSegments, eps);
+    });
 }
 
 } // namespace ops

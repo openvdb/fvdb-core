@@ -4,6 +4,7 @@
 #include <fvdb/detail/ops/CoordsInGrid.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
+#include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 
 #include <c10/cuda/CUDAException.h>
@@ -58,8 +59,8 @@ CoordsInGrid(const GridBatchImpl &batchHdl, const JaggedTensor &ijk) {
                            auto cb = [=] __device__(int32_t bidx,
                                                     int32_t eidx,
                                                     int32_t cidx,
-                                                    JaggedRAcc32<scalar_t, 2> ijkAcc) {
-                               coordsInGridCallback<scalar_t, JaggedRAcc32, TorchRAcc32>(
+                                                    JaggedRAcc64<scalar_t, 2> ijkAcc) {
+                               coordsInGridCallback<scalar_t, JaggedRAcc64, TorchRAcc64>(
                                    bidx, eidx, ijkAcc, outMaskAccessor, batchAcc);
                            };
                            forEachJaggedElementChannelCUDA<scalar_t, 2>(1024, 1, ijk, cb);
@@ -79,16 +80,15 @@ CoordsInGrid(const GridBatchImpl &batchHdl, const JaggedTensor &ijk) {
     return ijk.jagged_like(outMask);
 }
 
-template <>
 JaggedTensor
-dispatchCoordsInGrid<torch::kCUDA>(const GridBatchImpl &batchHdl, const JaggedTensor &coords) {
-    return CoordsInGrid<torch::kCUDA>(batchHdl, coords);
-}
-
-template <>
-JaggedTensor
-dispatchCoordsInGrid<torch::kCPU>(const GridBatchImpl &batchHdl, const JaggedTensor &coords) {
-    return CoordsInGrid<torch::kCPU>(batchHdl, coords);
+coordsInGrid(const GridBatchImpl &batchHdl, const JaggedTensor &coords) {
+    TORCH_CHECK_VALUE(
+        coords.ldim() == 1,
+        "Expected ijk to have 1 list dimension, i.e. be a single list of coordinate values, but got",
+        coords.ldim(),
+        "list dimensions");
+    return FVDB_DISPATCH_KERNEL_DEVICE(coords.device(),
+                                       [&]() { return CoordsInGrid<DeviceTag>(batchHdl, coords); });
 }
 
 } // namespace ops

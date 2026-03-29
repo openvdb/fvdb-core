@@ -4,13 +4,6 @@ on:
   pull_request_target:
     branches:
       - '**'
-    paths-ignore:
-        - 'CODEOWNERS'
-        - '**.md'
-        - 'debug/**'
-        - 'examples/**'
-        - 'notebooks/**'
-        - 'scripts/**'
   workflow_dispatch:
     inputs:
       branch:
@@ -33,50 +26,65 @@ permissions:
 
 jobs:
   ##############################################################################
+  # CHECK FOR RELEVANT CHANGES
+  ##############################################################################
+  check-changes:
+    uses: ./.github/workflows/check-changes.yml
+
+  versions:
+    uses: ./.github/workflows/load-versions.yml
+
+  ##############################################################################
   # BUILD FVDB
   ##############################################################################
   start-build-runner:
     name: Start CPU-only EC2 runner for build
+    needs: [check-changes, versions]
     runs-on: ubuntu-latest
-    if: github.event.pull_request.draft == false || github.event_name != 'pull_request_target'
+    if: >-
+      needs.check-changes.outputs.should_test == 'true'
+      && (github.event.pull_request.draft == false || github.event_name != 'pull_request_target')
     outputs:
       label: ${{ steps.start-build-runner.outputs.label }}
       ec2-instance-id: ${{ steps.start-build-runner.outputs.ec2-instance-id }}
     steps:
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
-          role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
-          aws-region: us-east-2
+          role-to-assume: ${{ needs.versions.outputs.aws-role }}
+          aws-region: ${{ needs.versions.outputs.aws-region }}
       - name: Start EC2 runner
         id: start-build-runner
-        uses: machulav/ec2-github-runner@v2.4.3
+        uses: machulav/ec2-github-runner@v2
         with:
           mode: start
           github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
-          ec2-image-id: ami-0e14a711dad782a70
+          ec2-image-id: ${{ needs.versions.outputs.aws-cpu-ami }}
           ec2-instance-type: m6a.8xlarge
-          subnet-id: subnet-03f2320d6e6e0005b
-          security-group-id: sg-0cd08bd89d6212223
+          subnet-id: ${{ needs.versions.outputs.aws-subnet }}
+          security-group-id: ${{ needs.versions.outputs.aws-security-group }}
   fvdb-build:
     name: fVDB Build
-    needs: start-build-runner # required to start the main job when the runner is ready
+    needs: [start-build-runner, versions] # required to start the main job when the runner is ready
     runs-on: ${{ needs.start-build-runner.outputs.label }} # run the job on the newly created runner
     container:
-      image: aswf/ci-openvdb:2024-clang17.2
+      image: rockylinux/rockylinux:8
       env:
         PYTHONPATH: ""
         CPM_SOURCE_CACHE: "/__w/cpm_cache"
-        CONDA_OVERRIDE_CUDA: "12.9"  # this is to build an environment on machines that lack a CUDA device and needs to be >= the CUDA version in the build_environment.yml file
+        CONDA_OVERRIDE_CUDA: ${{ needs.versions.outputs.cuda-conda-override }}
       options: --rm
     defaults:
       run:
         shell: bash -el {0}
     steps:
-      - uses: actions/checkout@v4
+      - name: Install system dependencies
+        run: dnf install -y git procps-ng findutils
+
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0 # Fetch all history for all branches
-          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.ref || github.ref }}
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || github.sha }}
 
       - name: Fetch PR branch
         if: github.event_name == 'pull_request_target'
@@ -86,7 +94,8 @@ jobs:
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git config --global --add safe.directory "$(pwd)"
-          git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_branch
+          git fetch origin ${{ github.event.pull_request.head.sha }}
+          git branch pr_branch FETCH_HEAD
 
       - name: Merge PR branch into base
         if: github.event_name == 'pull_request_target'
@@ -124,7 +133,7 @@ jobs:
           ./build.sh wheel verbose gtests benchmarks --cuda-arch-list '8.9+PTX'
 
       - name: Upload wheel
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
             name: fvdb-test-package
             path: dist/*.whl
@@ -136,7 +145,7 @@ jobs:
         run: tar -cvf fvdb-gtest.tar build/
 
       - name: Upload gtests
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
             name: fvdb-gtest
             path: fvdb-gtest.tar
@@ -147,16 +156,19 @@ jobs:
     needs:
       - start-build-runner # required to get output from the start-build-runner job
       - fvdb-build # required to wait when the main job is done
+      - versions
     runs-on: ubuntu-latest
-    if: ${{ always() }} # required to stop the runner even if the error happened in the previous jobs
+    # required to stop the runner even if the error happened in the previous jobs, but only if the
+    # start-build-runner job was not skipped
+    if: ${{ always() && needs.start-build-runner.result != 'skipped' }}
     steps:
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
-          role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
-          aws-region: us-east-2
+          role-to-assume: ${{ needs.versions.outputs.aws-role }}
+          aws-region: ${{ needs.versions.outputs.aws-region }}
       - name: Stop EC2 runner
-        uses: machulav/ec2-github-runner@v2.4.3
+        uses: machulav/ec2-github-runner@v2
         with:
           mode: stop
           github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
@@ -169,49 +181,53 @@ jobs:
   ##############################################################################
   start-tests-gpu-runner:
     name: Start EC2 GPU runner for tests
-    needs: fvdb-build
+    needs: [fvdb-build, versions]
     runs-on: ubuntu-latest
     outputs:
       label: ${{ steps.start-tests-gpu-runner.outputs.label }}
       ec2-instance-id: ${{ steps.start-tests-gpu-runner.outputs.ec2-instance-id }}
     steps:
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
-          role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
-          aws-region: us-east-2
+          role-to-assume: ${{ needs.versions.outputs.aws-role }}
+          aws-region: ${{ needs.versions.outputs.aws-region }}
       - name: Start EC2 GPU runner
         id: start-tests-gpu-runner
-        uses: machulav/ec2-github-runner@v2.4.3
+        uses: machulav/ec2-github-runner@v2
         with:
           mode: start
           github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
-          ec2-image-id: ami-0f5c0b65fde08ae43
+          ec2-image-id: ${{ needs.versions.outputs.aws-gpu-ami }}
           ec2-instance-type: g6.xlarge # 4 CPU-core, L4 GPU
-          subnet-id: subnet-03f2320d6e6e0005b
-          security-group-id: sg-0cd08bd89d6212223
+          subnet-id: ${{ needs.versions.outputs.aws-subnet }}
+          security-group-id: ${{ needs.versions.outputs.aws-security-group }}
 
   ##############################################################################
   # RUN FVDB GTESTS
   ##############################################################################
   fvdb-gtests:
-    needs: start-tests-gpu-runner # required to start the main job when the runner is ready
+    needs: [start-tests-gpu-runner, versions] # required to start the main job when the runner is ready
     name: fVDB GTests
     runs-on: ${{ needs.start-tests-gpu-runner.outputs.label }} # run the job on the newly created runner
     container:
-      image: aswf/ci-openvdb:2024-clang17.2
+      image: nvidia/cuda:${{ needs.versions.outputs.cuda-130-patch }}-base-${{ needs.versions.outputs.docker-os-rocky }}
       env:
         PYTHONPATH: ""
         CPM_SOURCE_CACHE: "/__w/cpm_cache"
-      options: --rm
+        CONDA_PKGS_DIRS: "/opt/conda-pkgs-cache"
+      options: --rm -v /tmp/conda-pkgs-cache:/opt/conda-pkgs-cache
     defaults:
       run:
         shell: bash -el {0}
     steps:
-      - uses: actions/checkout@v4
+      - name: Install system dependencies
+        run: dnf install -y git procps-ng findutils
+
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0 # Fetch all history for all branches
-          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.ref || github.ref }}
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || github.sha }}
 
       - name: Fetch PR branch
         if: github.event_name == 'pull_request_target'
@@ -221,7 +237,8 @@ jobs:
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git config --global --add safe.directory "$(pwd)"
-          git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_branch
+          git fetch origin ${{ github.event.pull_request.head.sha }}
+          git branch pr_branch FETCH_HEAD
       - name: Merge PR branch into base
         if: github.event_name == 'pull_request_target'
         run: |
@@ -237,7 +254,7 @@ jobs:
           environment-file: env/test_environment.yml
 
       - name: Download package with nanovdb_editor
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
             name: fvdb-test-package
             path: ./dist
@@ -248,7 +265,7 @@ jobs:
             pip install ./dist/nanovdb_editor*.whl
 
       - name: Download gtests
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
             name: fvdb-gtest
             path: .
@@ -267,23 +284,27 @@ jobs:
   # RUN FVDB UNIT TESTS
   ##############################################################################
   fvdb-unit-tests:
-    needs: start-tests-gpu-runner # required to start the main job when the runner is ready
+    needs: [start-tests-gpu-runner, versions] # required to start the main job when the runner is ready
     name: fVDB Unit Tests
     runs-on: ${{ needs.start-tests-gpu-runner.outputs.label }} # run the job on the newly created runner
     container:
-      image: aswf/ci-openvdb:2024-clang17.2
+      image: nvidia/cuda:${{ needs.versions.outputs.cuda-130-patch }}-base-${{ needs.versions.outputs.docker-os-rocky }}
       env:
         PYTHONPATH: ""
         CPM_SOURCE_CACHE: "/__w/cpm_cache"
-      options: --rm
+        CONDA_PKGS_DIRS: "/opt/conda-pkgs-cache"
+      options: --rm -v /tmp/conda-pkgs-cache:/opt/conda-pkgs-cache
     defaults:
       run:
         shell: bash -el {0}
     steps:
-      - uses: actions/checkout@v4
+      - name: Install system dependencies
+        run: dnf install -y git procps-ng findutils
+
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0 # Fetch all history for all branches
-          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.ref || github.ref }}
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || github.sha }}
 
       - name: Fetch PR branch
         if: github.event_name == 'pull_request_target'
@@ -293,7 +314,8 @@ jobs:
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git config --global --add safe.directory "$(pwd)"
-          git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_branch
+          git fetch origin ${{ github.event.pull_request.head.sha }}
+          git branch pr_branch FETCH_HEAD
 
       - name: Merge PR branch into base
         if: github.event_name == 'pull_request_target'
@@ -310,7 +332,7 @@ jobs:
           environment-file: env/test_environment.yml
 
       - name: Download package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
             name: fvdb-test-package
             path: ./dist
@@ -330,22 +352,26 @@ jobs:
   # RUN FVDB DOCUMENTATION TESTS
   ##############################################################################
   fvdb-docs-test:
-    needs: start-tests-gpu-runner # required to start the main job when the runner is ready
+    needs: [start-tests-gpu-runner, versions] # required to start the main job when the runner is ready
     name: fVDB Documentation Tests
     runs-on: ${{ needs.start-tests-gpu-runner.outputs.label }} # run the job on the newly created runner
     container:
-      image: aswf/ci-openvdb:2024-clang17.2
+      image: nvidia/cuda:${{ needs.versions.outputs.cuda-130-patch }}-base-${{ needs.versions.outputs.docker-os-rocky }}
       env:
         PYTHONPATH: ""
-      options: --rm
+        CONDA_PKGS_DIRS: "/opt/conda-pkgs-cache"
+      options: --rm -v /tmp/conda-pkgs-cache:/opt/conda-pkgs-cache
     defaults:
       run:
         shell: bash -el {0}
     steps:
-      - uses: actions/checkout@v4
+      - name: Install system dependencies
+        run: dnf install -y git procps-ng findutils
+
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0 # Fetch all history for all branches
-          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.ref || github.ref }}
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || github.sha }}
 
       - name: Fetch PR branch
         if: github.event_name == 'pull_request_target'
@@ -355,7 +381,8 @@ jobs:
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git config --global --add safe.directory "$(pwd)"
-          git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_branch
+          git fetch origin ${{ github.event.pull_request.head.sha }}
+          git branch pr_branch FETCH_HEAD
 
       - name: Merge PR branch into base
         if: github.event_name == 'pull_request_target'
@@ -372,7 +399,7 @@ jobs:
           environment-file: env/test_environment.yml
 
       - name: Download package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
             name: fvdb-test-package
             path: ./dist
@@ -382,10 +409,20 @@ jobs:
             micromamba activate fvdb_test
             pip install ./dist/*.whl
 
-      - name: Run tests
+      - name: Run markdown docs tests
         run: |
             micromamba activate fvdb_test
             pytest --markdown-docs docs --ignore-glob="**/wip/**"
+
+      - name: Run notebook tests
+        run: |
+            micromamba activate fvdb_test
+            pytest --nbmake notebooks/
+
+      - name: Run example tests
+        run: |
+            micromamba activate fvdb_test
+            pytest tests/test_examples.py -v
 
   ##############################################################################
   # STOP FVDB TESTS GPU RUNNER
@@ -397,16 +434,19 @@ jobs:
       - fvdb-gtests # required to wait when the main job is done
       - fvdb-unit-tests # required to wait when the main job is done
       - fvdb-docs-test # required to wait when the main job is done
+      - versions
     runs-on: ubuntu-latest
-    if: ${{ always() }} # required to stop the runner even if the error happened in the previous jobs
+    # required to stop the runner even if the error happened in the previous jobs
+    # but only if the start-tests-gpu-runner job was not skipped
+    if: ${{ always() && needs.start-tests-gpu-runner.result != 'skipped' }}
     steps:
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
-          role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
-          aws-region: us-east-2
+          role-to-assume: ${{ needs.versions.outputs.aws-role }}
+          aws-region: ${{ needs.versions.outputs.aws-region }}
       - name: Stop EC2 runner
-        uses: machulav/ec2-github-runner@v2.4.3
+        uses: machulav/ec2-github-runner@v2
         with:
           mode: stop
           github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}

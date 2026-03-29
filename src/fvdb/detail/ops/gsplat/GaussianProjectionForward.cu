@@ -1,6 +1,7 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <fvdb/detail/ops/gsplat/GaussianCameras.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianProjectionForward.h>
 #include <fvdb/detail/ops/gsplat/GaussianUtils.cuh>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
@@ -18,7 +19,7 @@ namespace ops {
 
 namespace {
 
-template <typename T, bool Ortho> struct ProjectionForward {
+template <typename T, typename Camera> struct ProjectionForward {
     using Mat3 = nanovdb::math::Mat3<T>;
     using Vec3 = nanovdb::math::Vec3<T>;
     using Vec4 = nanovdb::math::Vec4<T>;
@@ -28,22 +29,16 @@ template <typename T, bool Ortho> struct ProjectionForward {
     const int64_t C;
     const int64_t N;
 
-    const int32_t mImageWidth;
-    const int32_t mImageHeight;
     const T mEps2d;
-    const T mNearPlane;
-    const T mFarPlane;
     const T mRadiusClip;
 
     // TODO: We don't support raw covariances but we could
     // fvdb::TorchRAcc64<T, 2> mCovarsAcc;             // [N, 6] optional
 
     // Inputs
-    fvdb::TorchRAcc64<T, 2> mMeansAcc;              // [N, 3]
-    fvdb::TorchRAcc64<T, 2> mQuatsAcc;              // [N, 4]
-    fvdb::TorchRAcc64<T, 2> mLogScalesAcc;          // [N, 3]
-    fvdb::TorchRAcc32<T, 3> mWorldToCamMatricesAcc; // [C, 4, 4]
-    fvdb::TorchRAcc32<T, 3> mProjectionMatricesAcc; // [C, 3, 3]
+    fvdb::TorchRAcc64<T, 2> mMeansAcc;     // [N, 3]
+    fvdb::TorchRAcc64<T, 2> mQuatsAcc;     // [N, 4]
+    fvdb::TorchRAcc64<T, 2> mLogScalesAcc; // [N, 3]
 
     // Outputs
     fvdb::TorchRAcc64<int32_t, 2> mOutRadiiAcc; // [C, N]
@@ -55,51 +50,31 @@ template <typename T, bool Ortho> struct ProjectionForward {
     // This is okay since we allocate the memory and know the striding apriori.
     T *__restrict__ mOutCompensationsAcc; // [C, N] optional
 
-    Mat3 *__restrict__ projectionMatsShared    = nullptr;
-    Mat3 *__restrict__ worldToCamRotMatsShared = nullptr;
-    Vec3 *__restrict__ worldToCamTranslation   = nullptr;
+    Camera mCamera;
 
-    ProjectionForward(const int64_t imageWidth,
-                      const int64_t imageHeight,
+    ProjectionForward(Camera camera,
                       const T eps2d,
-                      const T nearPlane,
-                      const T farPlane,
                       const T radiusClip,
                       const bool calcCompensations,
-                      const torch::Tensor &means,              // [N, 3]
-                      const torch::Tensor &quats,              // [N, 4]
-                      const torch::Tensor &logScales,          // [N, 3]
-                      const torch::Tensor &worldToCamMatrices, // [C, 4, 4]
-                      const torch::Tensor &projectionMatrices, // [C, 3, 3]
-                      torch::Tensor outRadii,                  // [C, N]
-                      torch::Tensor outMeans2d,                // [C, N, 2]
-                      torch::Tensor outDepths,                 // [C, N]
-                      torch::Tensor outConics,                 // [C, N, 3]
-                      torch::Tensor outCompensations)          // [C, N] optional
-        : C(worldToCamMatrices.size(0)), N(means.size(0)), mImageWidth(imageWidth),
-          mImageHeight(imageHeight), mEps2d(eps2d), mNearPlane(nearPlane), mFarPlane(farPlane),
-          mRadiusClip(radiusClip),
+                      const torch::Tensor &means,     // [N, 3]
+                      const torch::Tensor &quats,     // [N, 4]
+                      const torch::Tensor &logScales, // [N, 3]
+                      torch::Tensor outRadii,         // [C, N]
+                      torch::Tensor outMeans2d,       // [C, N, 2]
+                      torch::Tensor outDepths,        // [C, N]
+                      torch::Tensor outConics,        // [C, N, 3]
+                      torch::Tensor outCompensations) // [C, N] optional
+        : C(outRadii.size(0)), N(means.size(0)), mEps2d(eps2d), mRadiusClip(radiusClip),
           mMeansAcc(means.packed_accessor64<T, 2, torch::RestrictPtrTraits>()),
           mQuatsAcc(quats.packed_accessor64<T, 2, torch::RestrictPtrTraits>()),
           mLogScalesAcc(logScales.packed_accessor64<T, 2, torch::RestrictPtrTraits>()),
-          mWorldToCamMatricesAcc(
-              worldToCamMatrices.packed_accessor32<T, 3, torch::RestrictPtrTraits>()),
-          mProjectionMatricesAcc(
-              projectionMatrices.packed_accessor32<T, 3, torch::RestrictPtrTraits>()),
           mOutRadiiAcc(outRadii.packed_accessor64<int32_t, 2, torch::RestrictPtrTraits>()),
           mOutMeans2dAcc(outMeans2d.packed_accessor64<T, 3, torch::RestrictPtrTraits>()),
           mOutDepthsAcc(outDepths.packed_accessor64<T, 2, torch::RestrictPtrTraits>()),
           mOutConicsAcc(outConics.packed_accessor64<T, 3, torch::RestrictPtrTraits>()),
           mOutCompensationsAcc(outCompensations.defined() ? outCompensations.data_ptr<T>()
-                                                          : nullptr) {
-        mMeansAcc     = means.packed_accessor64<T, 2, torch::RestrictPtrTraits>();
-        mQuatsAcc     = quats.packed_accessor64<T, 2, torch::RestrictPtrTraits>();
-        mLogScalesAcc = logScales.packed_accessor64<T, 2, torch::RestrictPtrTraits>();
-        mWorldToCamMatricesAcc =
-            worldToCamMatrices.packed_accessor32<T, 3, torch::RestrictPtrTraits>();
-        mProjectionMatricesAcc =
-            projectionMatrices.packed_accessor32<T, 3, torch::RestrictPtrTraits>();
-    }
+                                                          : nullptr),
+          mCamera(camera) {}
 
     inline __device__ Mat3
     computeCovarianceMatrix(int64_t gid) const {
@@ -118,43 +93,21 @@ template <typename T, bool Ortho> struct ProjectionForward {
                  ::cuda::std::exp(logScaleAcc[2])));
     }
 
+    /// @brief Project one (camera, gaussian) pair and write packed 2D outputs.
     inline __device__ void
-    projectionForward(int idx) {
-        if (idx >= C * N) {
+    projectionForward(int cid, int gid) {
+        if (gid >= N) {
             return;
         }
-        const auto cid = idx / N; // camera id
-        const auto gid = idx % N; // gaussian id
 
-        const Mat3 &projectionMatrix    = projectionMatsShared[cid];
-        const Mat3 &worldToCamRotMatrix = worldToCamRotMatsShared[cid];
-        const Vec3 &worldToCamTrans     = worldToCamTranslation[cid];
-
-        // transform Gaussian center to camera space
         const Vec3 meanWorldSpace(mMeansAcc[gid][0], mMeansAcc[gid][1], mMeansAcc[gid][2]);
-        const nanovdb::math::Vec3<T> meansCamSpace =
-            transformPointWorldToCam(worldToCamRotMatrix, worldToCamTrans, meanWorldSpace);
-        if (meansCamSpace[2] < mNearPlane || meansCamSpace[2] > mFarPlane) {
+        const Mat3 covar = computeCovarianceMatrix(gid);
+        auto [covar2d, mean2d, depthCam] =
+            mCamera.projectWorldGaussianTo2D(cid, meanWorldSpace, covar);
+        if (!mCamera.isDepthVisible(depthCam)) {
             mOutRadiiAcc[cid][gid] = 0;
             return;
         }
-
-        // transform Gaussian covariance to camera space
-        const Mat3 covar         = computeCovarianceMatrix(gid);
-        const Mat3 covarCamSpace = transformCovarianceWorldToCam(worldToCamRotMatrix, covar);
-
-        // camera projection
-        const T fx = projectionMatrix[0][0], cx = projectionMatrix[0][2],
-                fy = projectionMatrix[1][1], cy = projectionMatrix[1][2];
-        auto [covar2d, mean2d] = [&]() {
-            if constexpr (Ortho) {
-                return projectGaussianOrthographic<T>(
-                    meansCamSpace, covarCamSpace, fx, fy, cx, cy, mImageWidth, mImageHeight);
-            } else {
-                return projectGaussianPerspective<T>(
-                    meansCamSpace, covarCamSpace, fx, fy, cx, cy, mImageWidth, mImageHeight);
-            }
-        }();
 
         T compensation;
         const T det = addBlur(mEps2d, covar2d, compensation);
@@ -165,10 +118,8 @@ template <typename T, bool Ortho> struct ProjectionForward {
 
         const Mat2 covar2dInverse = covar2d.inverse();
 
-        // take 3 sigma as the radius
-        const T b      = 0.5f * (covar2d[0][0] + covar2d[1][1]);
-        const T v1     = b + sqrt(max(0.01f, b * b - det));
-        const T radius = ceil(3.f * sqrt(v1));
+        // take 3 sigma as the radius (non-differentiable)
+        const T radius = radiusFromCovariance2dDet(covar2d, det, T(3));
 
         if (radius <= mRadiusClip) {
             mOutRadiiAcc[cid][gid] = 0;
@@ -176,73 +127,46 @@ template <typename T, bool Ortho> struct ProjectionForward {
         }
 
         // Mask out gaussians outside the image region
-        if (mean2d[0] + radius <= 0 || mean2d[0] - radius >= mImageWidth ||
-            mean2d[1] + radius <= 0 || mean2d[1] - radius >= mImageHeight) {
+        if (mCamera.isProjectedFootprintOutsideImage(mean2d, radius, radius)) {
             mOutRadiiAcc[cid][gid] = 0;
             return;
         }
 
         // Write outputs
-        mOutRadiiAcc[cid][gid]      = int32_t(radius);
-        mOutMeans2dAcc[cid][gid][0] = mean2d[0];
-        mOutMeans2dAcc[cid][gid][1] = mean2d[1];
-        mOutDepthsAcc[cid][gid]     = meansCamSpace[2];
-        mOutConicsAcc[cid][gid][0]  = covar2dInverse[0][0];
-        mOutConicsAcc[cid][gid][1]  = covar2dInverse[0][1];
-        mOutConicsAcc[cid][gid][2]  = covar2dInverse[1][1];
+        mOutRadiiAcc[cid][gid]                   = int32_t(radius);
+        mOutMeans2dAcc[cid][gid][0]              = mean2d[0];
+        mOutMeans2dAcc[cid][gid][1]              = mean2d[1];
+        mOutDepthsAcc[cid][gid]                  = depthCam;
+        const nanovdb::math::Vec3<T> conicPacked = packConicRowMajor3(covar2dInverse);
+        mOutConicsAcc[cid][gid][0]               = conicPacked[0];
+        mOutConicsAcc[cid][gid][1]               = conicPacked[1];
+        mOutConicsAcc[cid][gid][2]               = conicPacked[2];
         if (mOutCompensationsAcc != nullptr) {
-            mOutCompensationsAcc[idx] = compensation;
+            mOutCompensationsAcc[cid * N + gid] = compensation;
         }
     }
 
+    /// @brief Stage per-camera projection and pose matrices into shared memory.
     inline __device__ void
-    loadCamerasIntoSharedMemory() {
-        // Load projection matrices and world-to-camera matrices into shared memory
+    loadCameraIntoSharedMemory(unsigned int cid) {
         alignas(Mat3) extern __shared__ char sharedMemory[];
-
-        projectionMatsShared    = reinterpret_cast<Mat3 *>(sharedMemory);
-        worldToCamRotMatsShared = reinterpret_cast<Mat3 *>(sharedMemory + C * sizeof(Mat3));
-        worldToCamTranslation   = reinterpret_cast<Vec3 *>(sharedMemory + C * 2 * sizeof(Mat3));
-
-        const int64_t totalElements = C * (9 + 9 + 3);
-        for (int64_t i = threadIdx.x; i < totalElements; i += blockDim.x) {
-            if (i < C * 9) {
-                const auto camId   = i / 9;
-                const auto entryId = i % 9;
-                const auto rowId   = entryId / 3;
-                const auto colId   = entryId % 3;
-                projectionMatsShared[camId][rowId][colId] =
-                    mProjectionMatricesAcc[camId][rowId][colId];
-            } else if (i < 2 * C * 9) {
-                const auto baseIdx = i - C * 9;
-                const auto camId   = baseIdx / 9;
-                const auto entryId = baseIdx % 9;
-                const auto rowId   = entryId / 3;
-                const auto colId   = entryId % 3;
-                worldToCamRotMatsShared[camId][rowId][colId] =
-                    mWorldToCamMatricesAcc[camId][rowId][colId];
-            } else {
-                const auto baseIdx                    = i - 2 * C * 9;
-                const auto camId                      = baseIdx / 3;
-                const auto entryId                    = baseIdx % 3;
-                worldToCamTranslation[camId][entryId] = mWorldToCamMatricesAcc[camId][entryId][3];
-            }
-        }
+        mCamera.loadSharedMemory(cid, sharedMemory);
     }
 };
 
-template <typename T, bool Ortho>
+template <typename T, typename Camera>
 __global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
 projectionForwardKernel(int64_t offset,
                         int64_t count,
-                        ProjectionForward<T, Ortho> projectionForward) {
-    projectionForward.loadCamerasIntoSharedMemory();
+                        ProjectionForward<T, Camera> projectionForward) {
+    auto cid = blockIdx.y;
+    projectionForward.loadCameraIntoSharedMemory(cid);
     __syncthreads();
 
-    // parallelize over C * N.
-    for (auto idx = blockIdx.x * blockDim.x + threadIdx.x; idx < count;
-         idx += blockDim.x * gridDim.x) {
-        projectionForward.projectionForward(idx + offset);
+    // parallelize over N.
+    for (auto gid = blockIdx.x * blockDim.x + threadIdx.x; gid < count;
+         gid += blockDim.x * gridDim.x) {
+        projectionForward.projectionForward(cid, gid + offset);
     }
 }
 
@@ -295,53 +219,57 @@ dispatchGaussianProjectionForward<torch::kCUDA>(
 
     using scalar_t = float;
 
-    const size_t NUM_BLOCKS = GET_BLOCKS(C * N, DEFAULT_BLOCK_DIM);
-    const size_t SHARD_MEM_SIZE =
-        C * (2 * sizeof(nanovdb::math::Mat3<scalar_t>) + sizeof(nanovdb::math::Vec3<scalar_t>));
+    const dim3 NUM_BLOCKS(GET_BLOCKS(N, DEFAULT_BLOCK_DIM), C);
 
     if (ortho) {
-        ProjectionForward<scalar_t, true> projectionForward(imageWidth,
-                                                            imageHeight,
-                                                            eps2d,
-                                                            nearPlane,
-                                                            farPlane,
-                                                            radiusClip,
-                                                            calcCompensations,
-                                                            means,
-                                                            quats,
-                                                            logScales,
-                                                            worldToCamMatrices,
-                                                            projectionMatrices,
-                                                            outRadii,
-                                                            outMeans2d,
-                                                            outDepths,
-                                                            outConics,
-                                                            outCompensations);
-        projectionForwardKernel<scalar_t, true>
-            <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, SHARD_MEM_SIZE, stream>>>(
-                0, C * N, projectionForward);
+        const auto camera = OrthographicCamera<scalar_t>{projectionMatrices,
+                                                         worldToCamMatrices,
+                                                         static_cast<int32_t>(C),
+                                                         static_cast<int32_t>(imageWidth),
+                                                         static_cast<int32_t>(imageHeight),
+                                                         nearPlane,
+                                                         farPlane};
+        ProjectionForward<scalar_t, OrthographicCamera<scalar_t>> projectionForward(
+            camera,
+            eps2d,
+            radiusClip,
+            calcCompensations,
+            means,
+            quats,
+            logScales,
+            outRadii,
+            outMeans2d,
+            outDepths,
+            outConics,
+            outCompensations);
+        projectionForwardKernel<scalar_t, OrthographicCamera<scalar_t>>
+            <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, camera.numSharedMemBytes(), stream>>>(
+                0, N, projectionForward);
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     } else {
-        ProjectionForward<scalar_t, false> projectionForward(imageWidth,
-                                                             imageHeight,
-                                                             eps2d,
-                                                             nearPlane,
-                                                             farPlane,
-                                                             radiusClip,
-                                                             calcCompensations,
-                                                             means,
-                                                             quats,
-                                                             logScales,
-                                                             worldToCamMatrices,
-                                                             projectionMatrices,
-                                                             outRadii,
-                                                             outMeans2d,
-                                                             outDepths,
-                                                             outConics,
-                                                             outCompensations);
-        projectionForwardKernel<scalar_t, false>
-            <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, SHARD_MEM_SIZE, stream>>>(
-                0, C * N, projectionForward);
+        const auto camera = PerspectiveCamera<scalar_t>{projectionMatrices,
+                                                        worldToCamMatrices,
+                                                        static_cast<int32_t>(C),
+                                                        static_cast<int32_t>(imageWidth),
+                                                        static_cast<int32_t>(imageHeight),
+                                                        nearPlane,
+                                                        farPlane};
+        ProjectionForward<scalar_t, PerspectiveCamera<scalar_t>> projectionForward(
+            camera,
+            eps2d,
+            radiusClip,
+            calcCompensations,
+            means,
+            quats,
+            logScales,
+            outRadii,
+            outMeans2d,
+            outDepths,
+            outConics,
+            outCompensations);
+        projectionForwardKernel<scalar_t, PerspectiveCamera<scalar_t>>
+            <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, camera.numSharedMemBytes(), stream>>>(
+                0, N, projectionForward);
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     }
     return std::make_tuple(outRadii, outMeans2d, outDepths, outConics, outCompensations);
@@ -396,54 +324,58 @@ dispatchGaussianProjectionForward<torch::kPrivateUse1>(
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
 
         int64_t deviceProblemOffset, deviceProblemSize;
-        std::tie(deviceProblemOffset, deviceProblemSize) = deviceChunk(C * N, deviceId);
+        std::tie(deviceProblemOffset, deviceProblemSize) = deviceChunk(N, deviceId);
 
-        const size_t NUM_BLOCKS = GET_BLOCKS(deviceProblemSize, DEFAULT_BLOCK_DIM);
-        const size_t SHARD_MEM_SIZE =
-            C * (2 * sizeof(nanovdb::math::Mat3<scalar_t>) + sizeof(nanovdb::math::Vec3<scalar_t>));
+        const dim3 NUM_BLOCKS(GET_BLOCKS(deviceProblemSize, DEFAULT_BLOCK_DIM), C);
 
         if (ortho) {
-            ProjectionForward<scalar_t, true> projectionForward(imageWidth,
-                                                                imageHeight,
-                                                                eps2d,
-                                                                nearPlane,
-                                                                farPlane,
-                                                                radiusClip,
-                                                                calcCompensations,
-                                                                means,
-                                                                quats,
-                                                                logScales,
-                                                                worldToCamMatrices,
-                                                                projectionMatrices,
-                                                                outRadii,
-                                                                outMeans2d,
-                                                                outDepths,
-                                                                outConics,
-                                                                outCompensations);
-            projectionForwardKernel<scalar_t, true>
-                <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, SHARD_MEM_SIZE, stream>>>(
+            const auto camera = OrthographicCamera<scalar_t>{projectionMatrices,
+                                                             worldToCamMatrices,
+                                                             static_cast<int32_t>(C),
+                                                             static_cast<int32_t>(imageWidth),
+                                                             static_cast<int32_t>(imageHeight),
+                                                             nearPlane,
+                                                             farPlane};
+            ProjectionForward<scalar_t, OrthographicCamera<scalar_t>> projectionForward(
+                camera,
+                eps2d,
+                radiusClip,
+                calcCompensations,
+                means,
+                quats,
+                logScales,
+                outRadii,
+                outMeans2d,
+                outDepths,
+                outConics,
+                outCompensations);
+            projectionForwardKernel<scalar_t, OrthographicCamera<scalar_t>>
+                <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, camera.numSharedMemBytes(), stream>>>(
                     deviceProblemOffset, deviceProblemSize, projectionForward);
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         } else {
-            ProjectionForward<scalar_t, false> projectionForward(imageWidth,
-                                                                 imageHeight,
-                                                                 eps2d,
-                                                                 nearPlane,
-                                                                 farPlane,
-                                                                 radiusClip,
-                                                                 calcCompensations,
-                                                                 means,
-                                                                 quats,
-                                                                 logScales,
-                                                                 worldToCamMatrices,
-                                                                 projectionMatrices,
-                                                                 outRadii,
-                                                                 outMeans2d,
-                                                                 outDepths,
-                                                                 outConics,
-                                                                 outCompensations);
-            projectionForwardKernel<scalar_t, false>
-                <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, SHARD_MEM_SIZE, stream>>>(
+            const auto camera = PerspectiveCamera<scalar_t>{projectionMatrices,
+                                                            worldToCamMatrices,
+                                                            static_cast<int32_t>(C),
+                                                            static_cast<int32_t>(imageWidth),
+                                                            static_cast<int32_t>(imageHeight),
+                                                            nearPlane,
+                                                            farPlane};
+            ProjectionForward<scalar_t, PerspectiveCamera<scalar_t>> projectionForward(
+                camera,
+                eps2d,
+                radiusClip,
+                calcCompensations,
+                means,
+                quats,
+                logScales,
+                outRadii,
+                outMeans2d,
+                outDepths,
+                outConics,
+                outCompensations);
+            projectionForwardKernel<scalar_t, PerspectiveCamera<scalar_t>>
+                <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, camera.numSharedMemBytes(), stream>>>(
                     deviceProblemOffset, deviceProblemSize, projectionForward);
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         }

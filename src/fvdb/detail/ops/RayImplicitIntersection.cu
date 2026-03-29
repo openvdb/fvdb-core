@@ -4,6 +4,7 @@
 #include <fvdb/detail/ops/RayImplicitIntersection.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
+#include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 
 #include <c10/cuda/CUDAException.h>
@@ -11,11 +12,12 @@
 namespace fvdb {
 namespace detail {
 namespace ops {
+namespace {
 
-static const int INVALID_SIGN = 10;
+constexpr int INVALID_SIGN = 10;
 
 template <typename T>
-static __forceinline__ __hostdev__ int
+__forceinline__ __hostdev__ int
 sgn(const T &val) {
     if (val != val) {
         return INVALID_SIGN;
@@ -160,8 +162,8 @@ RayImplicitIntersection(const GridBatchImpl &batchHdl,
                 auto cb = [=] __device__(int32_t bidx,
                                          int32_t eidx,
                                          int32_t cidx,
-                                         JaggedRAcc32<scalar_t, 2> rOA) {
-                    rayImplicitCallback<scalar_t, JaggedRAcc32, TorchRAcc32>(
+                                         JaggedRAcc64<scalar_t, 2> rOA) {
+                    rayImplicitCallback<scalar_t, JaggedRAcc64, TorchRAcc64>(
                         bidx, eidx, rOA, rayDAcc, gridScalarsAcc, batchAcc, outTimesAcc, eps);
                 };
                 forEachJaggedElementChannelCUDA<scalar_t, 2>(numThreads, 1, rayO, cb);
@@ -179,26 +181,33 @@ RayImplicitIntersection(const GridBatchImpl &batchHdl,
     return rayO.jagged_like(outTimes);
 }
 
-template <>
-JaggedTensor
-dispatchRayImplicitIntersection<torch::kCUDA>(const GridBatchImpl &batchHdl,
-                                              const JaggedTensor &rayOrigins,
-                                              const JaggedTensor &rayDirections,
-                                              const JaggedTensor &gridScalars,
-                                              float eps) {
-    return RayImplicitIntersection<torch::kCUDA>(
-        batchHdl, rayOrigins, rayDirections, gridScalars, eps);
-}
+} // anonymous namespace
 
-template <>
 JaggedTensor
-dispatchRayImplicitIntersection<torch::kCPU>(const GridBatchImpl &batchHdl,
-                                             const JaggedTensor &rayOrigins,
-                                             const JaggedTensor &rayDirections,
-                                             const JaggedTensor &gridScalars,
-                                             float eps) {
-    return RayImplicitIntersection<torch::kCPU>(
-        batchHdl, rayOrigins, rayDirections, gridScalars, eps);
+rayImplicitIntersection(const GridBatchImpl &batchHdl,
+                        const JaggedTensor &rayOrigins,
+                        const JaggedTensor &rayDirections,
+                        const JaggedTensor &gridScalars,
+                        float eps) {
+    TORCH_CHECK_VALUE(
+        rayOrigins.ldim() == 1,
+        "Expected ray_origins to have 1 list dimension, i.e. be a single list of coordinate values, but got",
+        rayOrigins.ldim(),
+        "list dimensions");
+    TORCH_CHECK_VALUE(
+        rayDirections.ldim() == 1,
+        "Expected ray_directions to have 1 list dimension, i.e. be a single list of coordinate values, but got",
+        rayDirections.ldim(),
+        "list dimensions");
+    TORCH_CHECK_VALUE(
+        gridScalars.ldim() == 1,
+        "Expected grid_scalars to have 1 list dimension, i.e. be a single list of coordinate values, but got",
+        gridScalars.ldim(),
+        "list dimensions");
+    return FVDB_DISPATCH_KERNEL_DEVICE(rayOrigins.device(), [&]() {
+        return RayImplicitIntersection<DeviceTag>(
+            batchHdl, rayOrigins, rayDirections, gridScalars, eps);
+    });
 }
 
 } // namespace ops

@@ -26,8 +26,10 @@ usage() {
   echo "  editor_skip    Skip building and installing the nanovdb_editor dependency (sets NANOVDB_EDITOR_SKIP=ON)."
   echo "  editor_force   Force rebuild of the nanovdb_editor dependency (sets NANOVDB_EDITOR_FORCE=ON)."
   echo "  debug          Build in debug mode with full debug symbols and no optimizations."
+  echo "  lineinfo       Enable CUDA lineinfo (sets FVDB_LINEINFO=ON)."
   echo "  strip_symbols  Strip symbols from the build (will be ignored if debug is enabled)."
   echo "  verbose        Enable verbose build output for pip and CMake."
+  echo "  trace          Enable CMake trace output for debugging configuration."
   echo ""
   echo "  Any modifier arguments not matching above are passed through to pip."
   exit 0
@@ -144,6 +146,70 @@ PY
   fi
 }
 
+# --- Path Sanitization for Virtualized Environments ---
+# In certain virtualized or hybrid environments, the PATH may include directories
+# on slow or remote-mounted filesystems (e.g., /mnt/* host mounts, /media/sf_* for
+# VirtualBox, /mnt/hgfs/* for VMware). CMake's find_library() searches these paths,
+# and each filesystem operation on such mounts can go through slow protocols (9P, vboxsf,
+# vmhgfs-fuse), causing significant delays during configuration.
+# By filtering out these paths, we prevent CMake from crawling slow directories.
+
+has_slow_host_mounts() {
+  # Detect virtualized environments that may have slow host filesystem mounts
+  # - WSL/WSL2: /mnt/* paths use 9P protocol
+  # - VirtualBox: /media/sf_* paths use vboxsf
+  # - VMware: /mnt/hgfs/* paths use vmhgfs-fuse
+  if [ -f /proc/version ]; then
+    grep -qi "microsoft\|wsl" /proc/version && return 0
+  fi
+  # VirtualBox Guest Additions
+  if [ -d /media/sf_* ] 2>/dev/null || grep -q vboxsf /proc/filesystems 2>/dev/null; then
+    return 0
+  fi
+  # VMware Tools
+  if [ -d /mnt/hgfs ] || grep -q vmhgfs /proc/filesystems 2>/dev/null; then
+    return 0
+  fi
+  return 1
+}
+
+filter_slow_mount_paths() {
+  local input_path="$1"
+  if has_slow_host_mounts; then
+    # Filter out paths on slow host filesystem mounts:
+    # - /mnt/* (WSL host mounts, VMware hgfs)
+    # - /media/sf_* (VirtualBox shared folders)
+    echo "$input_path" | tr ':' '\n' | grep -v -E "^/mnt/|^/media/sf_" | tr '\n' ':' | sed 's/:$//'
+  else
+    echo "$input_path"
+  fi
+}
+
+run_with_sanitized_paths() {
+  # Run a command with sanitized paths in virtualized environments, or normally otherwise.
+  # This prevents CMake from searching slow host-mounted filesystems.
+  if has_slow_host_mounts; then
+    local sanitized_path
+    sanitized_path=$(filter_slow_mount_paths "$PATH")
+
+    # Build env command with sanitized variables
+    local env_args=("PATH=$sanitized_path")
+
+    # Also sanitize CMAKE_PREFIX_PATH and CMAKE_LIBRARY_PATH if set
+    if [ -n "$CMAKE_PREFIX_PATH" ]; then
+      env_args+=("CMAKE_PREFIX_PATH=$(filter_slow_mount_paths "$CMAKE_PREFIX_PATH")")
+    fi
+    if [ -n "$CMAKE_LIBRARY_PATH" ]; then
+      env_args+=("CMAKE_LIBRARY_PATH=$(filter_slow_mount_paths "$CMAKE_LIBRARY_PATH")")
+    fi
+
+    echo "Virtualized environment detected: Running with sanitized paths (excluding slow host mounts for performance)"
+    env "${env_args[@]}" "$@"
+  else
+    "$@"
+  fi
+}
+
 if [[ "$1" == "-h" || "$1" == "--help" ]]; then
   usage
 fi
@@ -168,6 +234,40 @@ CONFIG_SETTINGS=""
 PASS_THROUGH_ARGS=""
 CUDA_ARCH_LIST_ARG="default"
 
+# --- Set CUDA_HOME / Hints ---
+# This helps scikit-build-core find the CUDA toolkit directly.
+#
+# We only auto-detect CUDA_HOME for Conda environments, and only when:
+#   1. CUDA_HOME is not already set (respect user's explicit choice)
+#   2. The Conda environment actually has nvcc installed
+#
+# In venv environments, PyTorch ships with rpathed CUDA libraries, so we leave
+# CUDA_HOME unset to avoid version mismatches. Users can still set CUDA_HOME
+# explicitly if needed.
+
+if [ -n "$CONDA_PREFIX" ] && [ -z "$CUDA_HOME" ] && [ -x "$CONDA_PREFIX/bin/nvcc" ]; then
+    echo "Conda environment with CUDA detected. Setting CUDA_HOME to $CONDA_PREFIX"
+    export CUDA_HOME="$CONDA_PREFIX"
+elif [ -n "$CONDA_PREFIX" ] && [ -n "$CUDA_HOME" ]; then
+    echo "Conda environment detected, but CUDA_HOME is already set to $CUDA_HOME (keeping existing value)"
+fi
+
+# Export hints to help CMake find CUDA (only if CUDA_HOME is set)
+if [ -n "$CUDA_HOME" ]; then
+    # Always pass CUDA_TOOLKIT_ROOT_DIR as a search hint
+    CONFIG_SETTINGS+=" --config-settings=cmake.define.CUDA_TOOLKIT_ROOT_DIR=$CUDA_HOME"
+
+    # Only set CUDACXX and CMAKE_CUDA_COMPILER if nvcc actually exists at that location.
+    # This avoids hard failures when CUDA_HOME points to a runtime-only installation.
+    if [ -x "$CUDA_HOME/bin/nvcc" ]; then
+        export CUDACXX="${CUDA_HOME}/bin/nvcc"
+        CONFIG_SETTINGS+=" --config-settings=cmake.define.CMAKE_CUDA_COMPILER=$CUDACXX"
+    else
+        echo "Warning: CUDA_HOME is set to $CUDA_HOME but nvcc not found at $CUDA_HOME/bin/nvcc"
+        echo "         CMake will attempt to find nvcc elsewhere."
+    fi
+fi
+
 # Default values for nanovdb_editor build options
 NANOVDB_EDITOR_SKIP=OFF
 NANOVDB_EDITOR_FORCE=OFF
@@ -187,9 +287,17 @@ while (( "$#" )); do
       echo "Enabling verbose build"
       CONFIG_SETTINGS+=" -v -C build.verbose=true"
       is_config_arg_handled=true
+    elif [[ "$1" == "trace" ]]; then
+      echo "Enabling CMake trace"
+      CONFIG_SETTINGS+=" --config-settings=cmake.args=--trace-expand"
+      is_config_arg_handled=true
     elif [[ "$1" == "debug" ]]; then
       echo "Enabling debug build"
       CONFIG_SETTINGS+=" --config-settings=cmake.build-type=Debug  -C cmake.define.CMAKE_BUILD_TYPE=Debug"
+      is_config_arg_handled=true
+    elif [[ "$1" == "lineinfo" ]]; then
+      echo "Enabling CUDA lineinfo"
+      CONFIG_SETTINGS+=" --config-settings=cmake.define.FVDB_LINEINFO=ON"
       is_config_arg_handled=true
     elif [[ "$1" == "strip_symbols" ]]; then
       echo "Enabling strip symbols build"
@@ -229,6 +337,11 @@ done
 CONFIG_SETTINGS+=" --config-settings=cmake.define.NANOVDB_EDITOR_SKIP=$NANOVDB_EDITOR_SKIP"
 CONFIG_SETTINGS+=" --config-settings=cmake.define.NANOVDB_EDITOR_FORCE=$NANOVDB_EDITOR_FORCE"
 
+NINJA_PATH=$(command -v ninja 2>/dev/null || command -v ninja-build 2>/dev/null)
+if [ -n "$NINJA_PATH" ]; then
+    CONFIG_SETTINGS+=" --config-settings=cmake.define.CMAKE_MAKE_PROGRAM=$NINJA_PATH"
+fi
+
 # Construct PIP_ARGS with potential CMake args and other pass-through args
 export PIP_ARGS="--no-build-isolation$CONFIG_SETTINGS$PASS_THROUGH_ARGS"
 
@@ -243,16 +356,16 @@ fi
 if [ "$BUILD_TYPE" == "wheel" ]; then
     echo "Build wheel"
     echo "pip wheel . --no-deps --wheel-dir dist/ $PIP_ARGS"
-    pip wheel . --no-deps --wheel-dir dist/ $PIP_ARGS
+    run_with_sanitized_paths pip wheel . --no-deps --wheel-dir dist/ $PIP_ARGS
+
 elif [ "$BUILD_TYPE" == "install" ]; then
     echo "Build and install package"
+    # Always use --force-reinstall to ensure the freshly built package is installed,
+    # even if pip thinks the version is already satisfied. The --no-deps flag ensures
+    # this only affects fvdb-core itself, not dependencies like torch.
     echo "pip install --no-deps --force-reinstall $PIP_ARGS ."
-    pip install --no-deps --force-reinstall $PIP_ARGS .
-# TODO: Fix editable install
-# else
-#     echo "Build and install editable package"
-#     echo "pip install $PIP_ARGS -e .  "
-#     pip install $PIP_ARGS -e .
+    run_with_sanitized_paths pip install --no-deps --force-reinstall $PIP_ARGS .
+
 elif [ "$BUILD_TYPE" == "ctest" ]; then
 
     # --- Ensure Test Data is Cached via CMake Configure Step ---
@@ -274,7 +387,7 @@ elif [ "$BUILD_TYPE" == "ctest" ]; then
 
     echo "Running CMake configure in temporary directory ($TEMP_BUILD_DIR) to trigger data download..."
     pushd "$TEMP_BUILD_DIR" > /dev/null
-    cmake "$SOURCE_DIR/src/cmake/download_test_data"
+    run_with_sanitized_paths cmake -G Ninja "$SOURCE_DIR/src/cmake/download_test_data"
     popd > /dev/null # Back to SOURCE_DIR
 
     # Clean up temporary directory
@@ -284,14 +397,24 @@ elif [ "$BUILD_TYPE" == "ctest" ]; then
 
     # --- Find and Run Tests ---
     echo "Searching for test build directory..."
-    # Find the directory containing the compiled tests (adjust if needed)
-    # Using -print -quit to stop after the first match for efficiency
-    BUILD_DIR=$(find build -name tests -type d -print -quit)
+    # Find CMakeCache.txt to locate the build root
+    CMAKE_CACHE=$(find build -name CMakeCache.txt -type f -print -quit 2>/dev/null)
 
-    if [ -z "$BUILD_DIR" ]; then
-        echo "Error: Could not find build directory with tests"
-        echo "Please enable tests by building with pip argument"
-        echo "-C cmake.define.FVDB_BUILD_TESTS=ON"
+    if [ -z "$CMAKE_CACHE" ]; then
+        echo "Error: Could not find CMakeCache.txt in build directory"
+        echo "Please build the project first with tests enabled:"
+        echo "pip install . -C cmake.define.FVDB_BUILD_TESTS=ON"
+        exit 1
+    fi
+
+    # Construct the test directory path (where CTestTestfile.cmake is generated)
+    # This discovers all tests from both src/tests/ and src/dispatch/
+    BUILD_DIR="$(dirname "$CMAKE_CACHE")/src"
+
+    if [ ! -f "$BUILD_DIR/CTestTestfile.cmake" ]; then
+        echo "Error: No CTestTestfile.cmake found in $BUILD_DIR"
+        echo "Please enable tests by building with:"
+        echo "pip install . -C cmake.define.FVDB_BUILD_TESTS=ON"
         exit 1
     fi
     echo "Found test build directory: $BUILD_DIR"
@@ -301,9 +424,10 @@ elif [ "$BUILD_TYPE" == "ctest" ]; then
     add_python_pkg_lib_to_ld_path "nanovdb_editor" "NanoVDB Editor" "libpnanovdb*.so"
 
     # Run ctest within the test build directory
+    # Note: ctest doesn't need path sanitization as it doesn't search for libraries
     pushd "$BUILD_DIR" > /dev/null
     echo "Running ctest..."
-    ctest --output-on-failure
+    ctest --output-on-failure -LE compile_fail
     CTEST_EXIT_CODE=$?
     popd > /dev/null # Back to SOURCE_DIR
 

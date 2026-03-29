@@ -343,3 +343,61 @@ TYPED_TEST(ComputeSparseInfo, StridedUVs) {
         fvdb::test::printStatus();
     }
 }
+
+// Test that a single pixel produces correct results (edge case for dedup)
+TYPED_TEST(ComputeSparseInfo, SinglePixel) {
+    this->setTiling(1, 4, 4);
+    auto opts = tensorOpts<TypeParam>(torch::kCPU);
+
+    auto uvsCPU    = torch::tensor({{2, 3}}, opts);
+    auto uniqueUVs = fvdb::JaggedTensor(std::vector<torch::Tensor>{uvsCPU}).to(torch::kCUDA);
+
+    auto [activeTiles, activeTileMask, tileBitMasks, tilePixelOffsets, pixelMap] =
+        fvdb::detail::ops::computeSparseInfo(
+            this->mTileSize, this->mNumTilesPerAxis, this->mNumTilesPerAxis, uniqueUVs);
+
+    EXPECT_EQ(activeTiles.size(0), 1);
+    EXPECT_EQ(pixelMap.size(0), 1);
+    EXPECT_EQ(tilePixelOffsets.index({0}).template item<std::int64_t>(), 1);
+}
+
+// Test with two distinct pixels in the same tile
+TYPED_TEST(ComputeSparseInfo, TwoPixelsSameTile) {
+    this->setTiling(1, 4, 4);
+    auto opts = tensorOpts<TypeParam>(torch::kCPU);
+
+    auto uvsCPU = torch::tensor({{0, 0}, {1, 1}}, opts);
+    auto uvs    = fvdb::JaggedTensor(std::vector<torch::Tensor>{uvsCPU}).to(torch::kCUDA);
+
+    auto [activeTiles, activeTileMask, tileBitMasks, tilePixelOffsets, pixelMap] =
+        fvdb::detail::ops::computeSparseInfo(
+            this->mTileSize, this->mNumTilesPerAxis, this->mNumTilesPerAxis, uvs);
+
+    EXPECT_EQ(activeTiles.size(0), 1);
+    EXPECT_EQ(pixelMap.size(0), 2);
+    EXPECT_EQ(tilePixelOffsets.index({0}).template item<std::int64_t>(), 2);
+}
+
+// Test with pixels spanning multiple tiles across multiple images
+TYPED_TEST(ComputeSparseInfo, MultiImageMultiTile) {
+    auto uniqueUVsCPU = this->makeStridedUVs(3, 4, 4, 4);
+    auto uniqueUVs    = uniqueUVsCPU.to(torch::kCUDA);
+
+    auto [activeTiles, activeTileMask, tileBitMasks, tilePixelOffsets, pixelMap] =
+        fvdb::detail::ops::computeSparseInfo(
+            this->mTileSize, this->mNumTilesPerAxis, this->mNumTilesPerAxis, uniqueUVs);
+
+    auto [expectedActiveTiles,
+          expectedActiveTileMask,
+          expectedBitMasks,
+          expectedPixelOffsets,
+          expectedPixelMap] =
+        expectedTensors<TypeParam>(
+            uniqueUVsCPU, this->mTileSize, this->mNumTilesPerAxis, this->mNumPixelsPerAxis);
+
+    EXPECT_TRUE(torch::equal(activeTiles, expectedActiveTiles.to(activeTiles.device())));
+    EXPECT_TRUE(torch::equal(activeTileMask, expectedActiveTileMask.to(activeTileMask.device())));
+    EXPECT_TRUE(torch::equal(tileBitMasks, expectedBitMasks.to(tileBitMasks.device())));
+    EXPECT_TRUE(torch::equal(tilePixelOffsets, expectedPixelOffsets.to(tilePixelOffsets.device())));
+    EXPECT_TRUE(torch::equal(pixelMap, expectedPixelMap.to(pixelMap.device())));
+}

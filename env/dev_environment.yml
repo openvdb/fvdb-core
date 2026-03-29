@@ -14,13 +14,15 @@ dependencies:
   - cuda-compiler
   - cuda-nvrtc-dev
   - cuda-nvtx-dev
-  - cuda-version=12.9
+  - cuda-version=13.0
   - cxx-compiler
-  - gcc_linux-64=13
+  - gcc_linux-64=14.3
+  - gh
   - git
   - gitpython
-  - gxx_linux-64=13
+  - gxx_linux-64=14.3
   - ipython
+  - ipykernel
   - jupyterlab
   - libclang
   - libcublas-dev
@@ -33,6 +35,7 @@ dependencies:
   - matplotlib
   - msgpack-python
   - myst-parser
+  - nbmake
   - ninja
   - numpy
   - openssl
@@ -43,16 +46,16 @@ dependencies:
   - pkg-config
   - polyscope
   - psutil
-  - pybind11=2.13.6
+  - pybind11
   - py-opencv>=4.10[build=headless*]
   - pyrender
   - pytest-benchmark
   - python=3.12
-  - pytorch-gpu=2.8.0
+  - pytorch-gpu=2.10.0
   - rich
+  - seaborn
   - scikit-build-core
   - setuptools>=68.2.2
-  - sparsehash
   - sphinx_rtd_theme
   - sphinx>=7.0.0
   - tensorboard
@@ -72,9 +75,6 @@ dependencies:
   - pip:
     - point-cloud-utils
     - pytest-markdown-docs
-    - https://nksr.s3.ap-northeast-1.amazonaws.com/dev-whls/pt28cu129/torchsparse-2.1.0-cp312-cp312-linux_x86_64.whl
-    - https://nksr.s3.ap-northeast-1.amazonaws.com/dev-whls/pt28cu129/torchsparse_20-2.0.0b0-cp312-cp312-linux_x86_64.whl
-    - https://nksr.s3.ap-northeast-1.amazonaws.com/dev-whls/pt28cu129/torch_scatter-2.1.2-cp312-cp312-linux_x86_64.whl
     ## 3dgs tests
     - dlnr_lite
     - einops

@@ -7,17 +7,47 @@
 # add these directories to sys.path here. If the directory is relative to the
 # documentation root, use os.path.abspath to make it absolute, like shown here.
 
+import json
 import os
 import sys
 
 sys.path.insert(0, os.path.abspath(".."))
 
+_versions_path = os.path.join(os.path.dirname(__file__), "..", ".github", "versions.json")
+with open(_versions_path) as _f:
+    _versions = json.load(_f)
+
+_torch_full = _versions["torch"]["full_version"]
+_torch_short = _versions["torch"]["version"].replace(".", "")
+_cuda_versions = list(_versions["cuda"]["versions"].keys())
+_python_matrix = _versions["python"]["matrix"]
+
 
 # -- Project information -----------------------------------------------------
 
-project = "fVDB"
+project = "ƒVDB"
 copyright = "Contributors to the OpenVDB Project"
 author = "Contributors to the OpenVDB Project"
+
+# Stable fvdb-core version shown in installation examples.
+# Updated automatically by devtools/update-doc-versions.sh during release.
+fvdb_core_stable_version = "0.4.2"
+
+_subs = []
+for _cv in _cuda_versions:
+    _tag = f"cu{_cv.replace('.', '')}"
+    _subs.append(
+        f".. |fvdb_core_version_pt{_torch_short}_{_tag}| replace:: {fvdb_core_stable_version}+pt{_torch_short}.{_tag}"
+    )
+_subs.append(f".. |torch_full_version| replace:: {_torch_full}")
+_subs.append(f".. |torch_short| replace:: {_torch_short}")
+_subs.append(f".. |python_range| replace:: {_python_matrix[0]} - {_python_matrix[-1]}")
+_subs.append(f".. |cuda_versions| replace:: {', '.join(_cuda_versions)}")
+for _cv in _cuda_versions:
+    _tag = f"cu{_cv.replace('.', '')}"
+    _subs.append(f".. |{_tag}_ver| replace:: {_cv}")
+    _subs.append(f".. |{_tag}_tag| replace:: {_tag}")
+rst_prolog = "\n".join(_subs) + "\n"
 
 
 # -- General configuration ---------------------------------------------------
@@ -76,6 +106,9 @@ html_theme_options = {"analytics_id": "G-60P7VJJ09C"}  # Google Analytics ID
 # relative to this directory. They are copied after the builtin static files,
 # so a file named "default.css" will overwrite the builtin "default.css".
 html_static_path = ["imgs"]
+html_css_files = [
+    "css/custom.css",
+]
 
 
 # -- Custom hooks ------------------------------------------------------------

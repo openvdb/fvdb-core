@@ -5,6 +5,7 @@
 #include <fvdb/detail/GridBatchImpl.h>
 #include <fvdb/detail/TorchDeviceBuffer.h>
 #include <fvdb/detail/ops/Inject.h>
+#include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/Utils.cuh>
 #include <fvdb/detail/utils/nanovdb/ActiveVoxelIterator.h>
 
@@ -25,6 +26,8 @@
 #include <c10/util/SmallVector.h>
 
 namespace fvdb::detail::ops {
+
+namespace {
 
 /// @brief Given a pointer offset into a contiguous nDim-dimensional tensor whose strides are
 /// contigStrides, compute the corresponding
@@ -193,6 +196,12 @@ template <typename ValueType, int64_t Offset = -1> struct InjectGridPytorchFunct
         }
     }
 };
+
+template <torch::DeviceType DeviceTag>
+void dispatchInject(const GridBatchImpl &dstGridBatch,
+                    const GridBatchImpl &srcGridBatch,
+                    JaggedTensor &dst,
+                    const JaggedTensor &src);
 
 template <>
 void
@@ -406,6 +415,37 @@ dispatchInject<torch::kCPU>(const GridBatchImpl &dstGridBatch,
                    }),
                    AT_EXPAND(AT_ALL_TYPES),
                    torch::kFloat16);
+}
+
+} // anonymous namespace
+
+void
+inject(const GridBatchImpl &dstGridBatch,
+       const GridBatchImpl &srcGridBatch,
+       JaggedTensor &dst,
+       const JaggedTensor &src) {
+    TORCH_CHECK(
+        !(dst.jdata().is_leaf() && dst.jdata().requires_grad()),
+        "tried to perform an in-place operation (Inject) on a leaf tensor that requires grad. ");
+    TORCH_CHECK_VALUE(srcGridBatch.batchSize() == src.num_outer_lists(),
+                      "Source GridBatch should match number of tensors");
+    TORCH_CHECK_VALUE(dstGridBatch.batchSize() == dst.num_outer_lists(),
+                      "Destination GridBatch should match number of tensors");
+    TORCH_CHECK_VALUE(srcGridBatch.device() == dstGridBatch.device(),
+                      "Source/destination GridBatches should be on the same device");
+    TORCH_CHECK_VALUE(src.device() == srcGridBatch.device(),
+                      "Source features must be on the same device as source Grid");
+    TORCH_CHECK_VALUE(dst.device() == dstGridBatch.device(),
+                      "Destination features must be on the same device as destination Grid");
+    TORCH_CHECK_VALUE(src.ldim() == 1, "Source data should be a list of tensors");
+    TORCH_CHECK_VALUE(dst.ldim() == 1, "Destination data should be a list of tensors");
+    TORCH_CHECK_VALUE(src.jdata().size(0) == srcGridBatch.totalVoxels(),
+                      "Source features must conform to source Grid");
+    TORCH_CHECK_VALUE(dst.jdata().size(0) == dstGridBatch.totalVoxels(),
+                      "Destination features must conform to destination Grid");
+    FVDB_DISPATCH_KERNEL(srcGridBatch.device(), [&]() {
+        dispatchInject<DeviceTag>(dstGridBatch, srcGridBatch, dst, src);
+    });
 }
 
 } // namespace fvdb::detail::ops

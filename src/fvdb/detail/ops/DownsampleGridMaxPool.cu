@@ -4,6 +4,7 @@
 #include <fvdb/detail/ops/DownsampleGridMaxPool.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
+#include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 #include <fvdb/detail/utils/cuda/ForEachPrivateUse1.cuh>
 
@@ -170,7 +171,7 @@ DownsampleGridMaxPool(const GridBatchImpl &fineBatchHdl,
                                                       int32_t voxelIdx,
                                                       int32_t channelIdx,
                                                       GridBatchImpl::Accessor coarseBatchAccessor) {
-                    maxPoolVoxelCallback<scalar_t, TorchRAcc32>(batchIdx,
+                    maxPoolVoxelCallback<scalar_t, TorchRAcc64>(batchIdx,
                                                                 leafIdx,
                                                                 voxelIdx,
                                                                 channelIdx,
@@ -188,7 +189,7 @@ DownsampleGridMaxPool(const GridBatchImpl &fineBatchHdl,
                                                       int32_t voxelIdx,
                                                       int32_t channelIdx,
                                                       GridBatchImpl::Accessor coarseBatchAccessor) {
-                    maxPoolVoxelCallback<scalar_t, TorchRAcc32>(batchIdx,
+                    maxPoolVoxelCallback<scalar_t, TorchRAcc64>(batchIdx,
                                                                 leafIdx,
                                                                 voxelIdx,
                                                                 channelIdx,
@@ -263,7 +264,7 @@ DownsampleGridMaxPoolBackward(const GridBatchImpl &coarseBatchHdl,
                                          int32_t voxelIdx,
                                          int32_t channelIdx,
                                          GridBatchImpl::Accessor coarseBatchAccessor) {
-                    maxPoolBackwardVoxelCallback<scalar_t, TorchRAcc32>(batchIdx,
+                    maxPoolBackwardVoxelCallback<scalar_t, TorchRAcc64>(batchIdx,
                                                                         leafIdx,
                                                                         voxelIdx,
                                                                         channelIdx,
@@ -282,7 +283,7 @@ DownsampleGridMaxPoolBackward(const GridBatchImpl &coarseBatchHdl,
                                          int32_t voxelIdx,
                                          int32_t channelIdx,
                                          GridBatchImpl::Accessor coarseBatchAccessor) {
-                    maxPoolBackwardVoxelCallback<scalar_t, TorchRAcc32>(batchIdx,
+                    maxPoolBackwardVoxelCallback<scalar_t, TorchRAcc64>(batchIdx,
                                                                         leafIdx,
                                                                         voxelIdx,
                                                                         channelIdx,
@@ -323,64 +324,31 @@ DownsampleGridMaxPoolBackward(const GridBatchImpl &coarseBatchHdl,
     return outGradInReshape.reshape(spliceShape({fineData.size(0)}, coarseGradOut));
 }
 
-template <torch::DeviceType DeviceTag>
 torch::Tensor
-dispatchDownsampleGridMaxPool<DeviceTag>(const GridBatchImpl &fineBatchHdl,
-                                         const GridBatchImpl &coarseBatchHdl,
-                                         const torch::Tensor &fineData,
-                                         nanovdb::Coord poolingFactor,
-                                         nanovdb::Coord stride) {
-    return DownsampleGridMaxPool<DeviceTag>(
-        fineBatchHdl, coarseBatchHdl, fineData, poolingFactor, stride);
+downsampleGridMaxPool(const GridBatchImpl &fineBatchHdl,
+                      const GridBatchImpl &coarseBatchHdl,
+                      const torch::Tensor &fineData,
+                      nanovdb::Coord poolingFactor,
+                      nanovdb::Coord stride) {
+    return FVDB_DISPATCH_KERNEL(fineData.device(), [&]() {
+        return DownsampleGridMaxPool<DeviceTag>(
+            fineBatchHdl, coarseBatchHdl, fineData, poolingFactor, stride);
+    });
 }
 
-template <torch::DeviceType DeviceTag>
 torch::Tensor
-dispatchDownsampleGridMaxPoolBackward<DeviceTag>(const GridBatchImpl &coarseBatchHdl,
-                                                 const GridBatchImpl &fineBatchHdl,
-                                                 const torch::Tensor &fineData,
-                                                 const torch::Tensor &coarseGradOut,
-                                                 nanovdb::Coord poolingFactor,
-                                                 nanovdb::Coord stride) {
-    return DownsampleGridMaxPoolBackward<DeviceTag>(
-        coarseBatchHdl, fineBatchHdl, fineData, coarseGradOut, poolingFactor, stride);
+downsampleGridMaxPoolBackward(const GridBatchImpl &coarseBatchHdl,
+                              const GridBatchImpl &fineBatchHdl,
+                              const torch::Tensor &fineData,
+                              const torch::Tensor &coarseGradOut,
+                              nanovdb::Coord poolingFactor,
+                              nanovdb::Coord stride) {
+    torch::Tensor gradOutContig = coarseGradOut.contiguous();
+    return FVDB_DISPATCH_KERNEL(gradOutContig.device(), [&]() {
+        return DownsampleGridMaxPoolBackward<DeviceTag>(
+            coarseBatchHdl, fineBatchHdl, fineData, gradOutContig, poolingFactor, stride);
+    });
 }
-
-template torch::Tensor dispatchDownsampleGridMaxPool<torch::kCPU>(const GridBatchImpl &,
-                                                                  const GridBatchImpl &,
-                                                                  const torch::Tensor &,
-                                                                  nanovdb::Coord,
-                                                                  nanovdb::Coord);
-template torch::Tensor dispatchDownsampleGridMaxPool<torch::kCUDA>(const GridBatchImpl &,
-                                                                   const GridBatchImpl &,
-                                                                   const torch::Tensor &,
-                                                                   nanovdb::Coord,
-                                                                   nanovdb::Coord);
-template torch::Tensor dispatchDownsampleGridMaxPool<torch::kPrivateUse1>(const GridBatchImpl &,
-                                                                          const GridBatchImpl &,
-                                                                          const torch::Tensor &,
-                                                                          nanovdb::Coord,
-                                                                          nanovdb::Coord);
-
-template torch::Tensor dispatchDownsampleGridMaxPoolBackward<torch::kCPU>(const GridBatchImpl &,
-                                                                          const GridBatchImpl &,
-                                                                          const torch::Tensor &,
-                                                                          const torch::Tensor &,
-                                                                          nanovdb::Coord,
-                                                                          nanovdb::Coord);
-template torch::Tensor dispatchDownsampleGridMaxPoolBackward<torch::kCUDA>(const GridBatchImpl &,
-                                                                           const GridBatchImpl &,
-                                                                           const torch::Tensor &,
-                                                                           const torch::Tensor &,
-                                                                           nanovdb::Coord,
-                                                                           nanovdb::Coord);
-template torch::Tensor
-dispatchDownsampleGridMaxPoolBackward<torch::kPrivateUse1>(const GridBatchImpl &,
-                                                           const GridBatchImpl &,
-                                                           const torch::Tensor &,
-                                                           const torch::Tensor &,
-                                                           nanovdb::Coord,
-                                                           nanovdb::Coord);
 
 } // namespace ops
 } // namespace detail

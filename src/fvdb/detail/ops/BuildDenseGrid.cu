@@ -30,7 +30,7 @@ __global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
 ijkForDense(uint64_t offset,
             nanovdb::Coord ijkMin,
             nanovdb::Coord size,
-            TorchRAcc32<int32_t, 2> outIJKAccessor) {
+            TorchRAcc64<int32_t, 2> outIJKAccessor) {
     const uint64_t tid = (static_cast<uint64_t>(blockIdx.x) * blockDim.x) + threadIdx.x + offset;
 
     if (tid >= outIJKAccessor.size(0)) {
@@ -73,6 +73,14 @@ checkInputs(const torch::Device device,
 
 } // namespace
 
+template <torch::DeviceType>
+nanovdb::GridHandle<TorchDeviceBuffer>
+dispatchCreateNanoGridFromDense(int64_t batchSize,
+                                nanovdb::Coord ijkMin,
+                                nanovdb::Coord size,
+                                torch::Device device,
+                                const std::optional<torch::Tensor> &mask);
+
 template <>
 nanovdb::GridHandle<TorchDeviceBuffer>
 dispatchCreateNanoGridFromDense<torch::kCUDA>(int64_t batchSize,
@@ -96,7 +104,7 @@ dispatchCreateNanoGridFromDense<torch::kCUDA>(int64_t batchSize,
 
     if (NUM_BLOCKS > 0) {
         ijkForDense<<<NUM_BLOCKS, DEFAULT_BLOCK_DIM>>>(
-            0u, ijkMin, size, ijkData.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>());
+            0u, ijkMin, size, ijkData.packed_accessor64<int32_t, 2, torch::RestrictPtrTraits>());
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     }
 
@@ -168,7 +176,7 @@ dispatchCreateNanoGridFromDense<torch::kPrivateUse1>(int64_t batchSize,
                 deviceOffset,
                 ijkMin,
                 size,
-                ijkData.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>());
+                ijkData.packed_accessor64<int32_t, 2, torch::RestrictPtrTraits>());
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         }
     }
@@ -286,6 +294,42 @@ dispatchCreateNanoGridFromDense<torch::kCPU>(int64_t batchSize,
     } else {
         return nanovdb::mergeGrids(batchHandles);
     }
+}
+
+c10::intrusive_ptr<GridBatchImpl>
+createNanoGridFromDense(int64_t batchSize,
+                        nanovdb::Coord ijkMin,
+                        nanovdb::Coord size,
+                        torch::Device device,
+                        const std::optional<torch::Tensor> &maybeMask,
+                        const std::vector<nanovdb::Vec3d> &voxelSizes,
+                        const std::vector<nanovdb::Vec3d> &origins) {
+    TORCH_CHECK_VALUE(batchSize >= 0, "numGrids must be non-negative");
+    if (maybeMask.has_value()) {
+        TORCH_CHECK_VALUE(maybeMask.value().dtype() == torch::kBool,
+                          "mask must be a boolean type or None");
+        TORCH_CHECK_VALUE(maybeMask.value().dim() == 3, "mask must be 3 dimensional");
+        TORCH_CHECK_VALUE(maybeMask.value().size(0) == size[0],
+                          "mask must have shape (w, h, d) = denseDims");
+        TORCH_CHECK_VALUE(maybeMask.value().size(1) == size[1],
+                          "mask must have shape (w, h, d) = denseDims");
+        TORCH_CHECK_VALUE(maybeMask.value().size(2) == size[2],
+                          "mask must have shape (w, h, d) = denseDims");
+    }
+    TORCH_CHECK_VALUE(size[0] >= 0 && size[1] >= 0 && size[2] >= 0,
+                      "denseDims must be non-negative");
+    TORCH_CHECK_VALUE(batchSize <= GridBatchImpl::MAX_GRIDS_PER_BATCH,
+                      "Cannot create a grid with more than ",
+                      GridBatchImpl::MAX_GRIDS_PER_BATCH,
+                      " grids in a batch. ",
+                      "You requested ",
+                      batchSize,
+                      " grids.");
+    auto handle = FVDB_DISPATCH_KERNEL(device, [&]() {
+        return dispatchCreateNanoGridFromDense<DeviceTag>(
+            batchSize, ijkMin, size, device, maybeMask);
+    });
+    return c10::make_intrusive<GridBatchImpl>(std::move(handle), voxelSizes, origins);
 }
 
 } // namespace ops

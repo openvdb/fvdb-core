@@ -149,25 +149,24 @@ computeSh(
 ) {
     // parallelize over C * N * D
     auto idx = blockIdx.x * blockDim.x + threadIdx.x; // cidx * N * D + gidx * D + kidx
-    if (idx >= count) {
+    if (idx >= count * C * D) {
         return;
     }
-    idx += offset;
 
-    const auto eid = idx / D; // cidx * N + gidx
-    const auto cid = eid / N; // camera index
-    const auto gid = eid % N; // gaussian index
-    const auto c   = idx % D; // render channel
+    const auto eid = idx / D;              // cidx * N + gidx
+    const auto cid = eid / count;          // camera index
+    const auto gid = eid % count + offset; // gaussian index
+    const auto c   = idx % D;              // render channel
 
     T result = T(0);
-    if (!(radii != nullptr && radii[eid] <= 0)) {
+    if (!(radii != nullptr && radii[cid * N + gid] <= 0)) {
         using vec3t            = typename Vec3Type<T>::type;
         const bool hasViewDirs = viewDirs.size(0) > 0;
         const vec3t dir        = hasViewDirs ? *reinterpret_cast<vec3t *>(viewDirs[cid][gid].data())
                                              : vec3t{0.f, 0.f, 0.f};
         result = evalShFunction(shDegreeToUse, cid, gid, c, dir, sh0Coeffs, shNCoeffs);
     }
-    outRenderQuantities[eid * D + c] = result;
+    outRenderQuantities[(cid * N + gid) * D + c] = result;
 }
 
 template <typename T>
@@ -182,18 +181,19 @@ computeShDiffuseOnly(const int64_t offset,
                      T *__restrict__ outRenderQuantities) {
     // parallelize over C * N * D
     auto idx = blockIdx.x * blockDim.x + threadIdx.x; // cidx * N * D + gidx * D + kidx
-    if (idx >= count) {
+    if (idx >= count * C * D) {
         return;
     }
-    idx += offset;
 
-    const auto eid = idx / D; // cidx * N + gidx
-    const auto gid = eid % N; // gaussian index
-    const auto c   = idx % D; // render channel
-    if (radii != nullptr && radii[eid] <= 0) {
-        outRenderQuantities[eid * D + c] = T(0);
+    const auto eid = idx / D;              // cidx * N + gidx
+    const auto cid = eid / count;          // camera index
+    const auto gid = eid % count + offset; // gaussian index
+    const auto c   = idx % D;              // render channel
+    if (radii != nullptr && radii[cid * N + gid] <= 0) {
+        outRenderQuantities[(cid * N + gid) * D + c] = T(0);
     } else {
-        outRenderQuantities[eid * D + c] = T(0.2820947917738781) * sh0Coeffs[gid][0][c] + T(0.5);
+        outRenderQuantities[(cid * N + gid) * D + c] =
+            T(0.2820947917738781) * sh0Coeffs[gid][0][c] + T(0.5);
     }
 }
 
@@ -274,7 +274,7 @@ dispatchSphericalHarmonicsForward<torch::kCUDA>(const int64_t shDegreeToUse,
     if (hasShNCoeffs && shDegreeToUse > 0) {
         computeSh<scalar_t><<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
             0,
-            TOTAL_ELEMS,
+            N,
             C,
             N,
             D,
@@ -288,7 +288,7 @@ dispatchSphericalHarmonicsForward<torch::kCUDA>(const int64_t shDegreeToUse,
     } else {
         computeShDiffuseOnly<scalar_t><<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
             0,
-            TOTAL_ELEMS,
+            N,
             C,
             N,
             D,
@@ -310,6 +310,7 @@ dispatchSphericalHarmonicsForward<torch::kPrivateUse1>(
     const torch::Tensor &shNCoeffs, // [N, K-1, D]
     const torch::Tensor &radii      // [C, N]
 ) {
+    FVDB_FUNC_RANGE();
     // Valid modes:
     // 0: sh0Coeffs only
     // 1: sh0Coeffs + radii
@@ -373,11 +374,9 @@ dispatchSphericalHarmonicsForward<torch::kPrivateUse1>(
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
 
         int64_t elementOffset, elementCount;
-        std::tie(elementOffset, elementCount) = deviceChunk(N * C, deviceId);
-        elementCount *= D;
-        elementOffset *= D;
+        std::tie(elementOffset, elementCount) = deviceChunk(N, deviceId);
 
-        const auto NUM_BLOCKS = GET_BLOCKS(elementCount, DEFAULT_BLOCK_DIM);
+        const auto NUM_BLOCKS = GET_BLOCKS(C * elementCount * D, DEFAULT_BLOCK_DIM);
 
         if (hasShNCoeffs && shDegreeToUse > 0) {
             computeSh<scalar_t><<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(

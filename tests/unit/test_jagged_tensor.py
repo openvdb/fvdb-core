@@ -30,6 +30,8 @@ import fvdb
 
 all_device_dtype_combos = [
     ["cuda", torch.float16],
+    ["cuda", torch.bfloat16],
+    ["cpu", torch.bfloat16],
     ["cpu", torch.float32],
     ["cuda", torch.float32],
     ["cpu", torch.float64],
@@ -622,6 +624,8 @@ class TestJaggedTensor(unittest.TestCase):
 
     @parameterized.expand(all_device_dtype_combos)
     def test_jagged_tensor_one_element(self, device, dtype):
+        if dtype == torch.bfloat16:
+            self.skipTest("GridBatch.from_points does not support bfloat16")
         # Make sure we can pass in JaggedTensors with a single thing explicitly
         pts_list = []
         while len(pts_list) == 0:
@@ -645,6 +649,8 @@ class TestJaggedTensor(unittest.TestCase):
 
     @parameterized.expand(all_device_dtype_combos)
     def test_indexing(self, device, dtype):
+        if dtype == torch.bfloat16:
+            self.skipTest("GridBatch.from_points does not support bfloat16")
         pts_list: List[torch.Tensor] = []
         ijk_list: List[torch.Tensor] = []
         while len(pts_list) == 0:
@@ -878,7 +884,10 @@ class TestJaggedTensor(unittest.TestCase):
         self.check_lshape(res, pts_list)
 
         res2 = randpts_b % randpts_c
-        if dtype != torch.float16:  # Not stable in float 16, but not important for this test
+        if dtype not in (
+            torch.float16,
+            torch.bfloat16,
+        ):  # Not stable in reduced precision, but not important for this test
             self.assertTrue(torch.allclose(res2.jdata, randpts_b.jdata % randpts_c.jdata))
             self.check_lshape(res2, pts_list)
             fvdb.config.pedantic_error_checking = True
@@ -1144,7 +1153,10 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertTrue(torch.allclose(res.jdata, randpts.jdata / randpts_b.jdata))
         self.check_lshape(res, pts_list)
 
-        if dtype != torch.float16:  # Not stable in float 16, but not important for this test
+        if dtype not in (
+            torch.float16,
+            torch.bfloat16,
+        ):  # Not stable in reduced precision, but not important for this test
             res2 = randpts / randpts_c
             self.assertTrue(torch.allclose(res2.jdata, randpts.jdata / randpts_c.jdata))
             self.check_lshape(res2, pts_list)
@@ -1161,7 +1173,10 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertTrue(torch.allclose(res.jdata, randpts.jdata // randpts_b.jdata))
         self.check_lshape(res, pts_list)
 
-        if dtype != torch.float16:  # Not stable in float 16, but not important for this test
+        if dtype not in (
+            torch.float16,
+            torch.bfloat16,
+        ):  # Not stable in reduced precision, but not important for this test
             res2 = randpts // randpts_c
             self.assertTrue(torch.allclose(res2.jdata, randpts.jdata // randpts_c.jdata))
             self.check_lshape(res2, pts_list)
@@ -1332,13 +1347,15 @@ class TestJaggedTensor(unittest.TestCase):
         pass_percentage=80,
         conditional_args=[
             ["cuda"],
-            [torch.float16, torch.float32],
+            [torch.float16, torch.bfloat16, torch.float32],
         ],
     )
     def test_jsum(self, device, dtype):
         torch.random.manual_seed(111)
         np.random.seed(111)
-        if dtype == torch.float16:
+        if dtype == torch.bfloat16:
+            min_num = 50
+        elif dtype == torch.float16:
             min_num = 100
         else:
             min_num = 1000
@@ -1375,7 +1392,10 @@ class TestJaggedTensor(unittest.TestCase):
             grad_ptscatter = jt.jdata.grad.clone()
 
             tol = {}
-            if dtype == torch.float16:
+            if dtype == torch.bfloat16:
+                tol["rtol"] = 2e-1
+                tol["atol"] = 2e-1
+            elif dtype == torch.float16:
                 tol["rtol"] = 1e-1
                 tol["atol"] = 1e-1
             elif dtype == torch.float32:
@@ -1396,7 +1416,7 @@ class TestJaggedTensor(unittest.TestCase):
 
     @parameterized.expand(all_device_dtype_combos)
     def test_jmin(self, device, dtype):
-        if dtype == torch.float16:
+        if dtype in (torch.float16, torch.bfloat16):
             min_num = 100
         else:
             min_num = 1000
@@ -1451,7 +1471,7 @@ class TestJaggedTensor(unittest.TestCase):
 
     @parameterized.expand(all_device_dtype_combos)
     def test_jmax(self, device, dtype):
-        if dtype == torch.float16:
+        if dtype in (torch.float16, torch.bfloat16):
             min_num = 100
         else:
             min_num = 1000
@@ -1503,7 +1523,7 @@ class TestJaggedTensor(unittest.TestCase):
 
     @parameterized.expand(all_device_dtype_combos)
     def test_jmin_list_of_lists(self, device, dtype):
-        if dtype == torch.float16:
+        if dtype in (torch.float16, torch.bfloat16):
             min_num = 100
         else:
             min_num = 1000
@@ -1581,7 +1601,7 @@ class TestJaggedTensor(unittest.TestCase):
 
     @parameterized.expand(all_device_dtype_combos)
     def test_jmax_list_of_lists(self, device, dtype):
-        if dtype == torch.float16:
+        if dtype in (torch.float16, torch.bfloat16):
             min_num = 100
         else:
             min_num = 1000
@@ -1647,16 +1667,31 @@ class TestJaggedTensor(unittest.TestCase):
             self.assertTrue(torch.allclose(zgours, zgcmp))
 
     @parameterized.expand(all_device_dtype_combos)
+    @probabilistic_test(
+        iterations=20,
+        pass_percentage=80,
+        conditional_args=[
+            ["cuda"],
+            [torch.float16, torch.bfloat16, torch.float32],
+        ],
+    )
     def test_jsum_list_of_lists(self, device, dtype):
+        torch.random.manual_seed(111)
+        np.random.seed(111)
         tol = {}
-        if dtype == torch.float16:
+        if dtype == torch.bfloat16:
+            tol["rtol"] = 2e-1
+            tol["atol"] = 2e-1
+        elif dtype == torch.float16:
             tol["rtol"] = 1e-1
             tol["atol"] = 1e-1
         elif dtype == torch.float32:
             tol["rtol"] = 1e-3
             tol["atol"] = 1e-4
 
-        if dtype == torch.float16:
+        if dtype == torch.bfloat16:
+            min_num = 50
+        elif dtype == torch.float16:
             min_num = 100
         else:
             min_num = 1000
@@ -1764,7 +1799,10 @@ class TestJaggedTensor(unittest.TestCase):
 
         atol = 1e-8
         rtol = 1e-5
-        if dtype == torch.float16:
+        if dtype == torch.bfloat16:
+            atol = 1e-2
+            rtol = 1e-2
+        elif dtype == torch.float16:
             atol = 1e-3
             rtol = 1e-3
         elif dtype == torch.bfloat16:
@@ -2401,6 +2439,8 @@ class TestJaggedTensor(unittest.TestCase):
 
     @parameterized.expand(all_device_dtype_combos)
     def test_assignment(self, device, dtype):
+        if dtype == torch.bfloat16 and device == "cpu":
+            self.skipTest("PyTorch in-place division not truly in-place for bfloat16 on CPU")
         jt1 = fvdb.JaggedTensor.from_randn(
             [[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype
         )
@@ -2756,6 +2796,28 @@ class TestJaggedTensor(unittest.TestCase):
     #         data_sorted, _ = torch.sort(data[i])
     #         self.assertTrue(torch.all(data_sorted == jt_s[i].jdata).item())
     #         self.assertTrue(torch.all(data_sorted == jt[i].jdata[idx[i].jdata]).item())
+
+    def test_cpu_single_element_no_cuda_init(self):
+        """Test that constructing a single-element CPU JaggedTensor does not use pinned memory.
+
+        Pinned memory allocation triggers CUDA runtime initialization, which causes crashes
+        in forked DataLoader worker processes. This test verifies the fix for issue #467.
+        """
+        # Test the list-of-tensors constructor (single element)
+        cpu_tensor = torch.randn(5, 3)
+        jt = fvdb.JaggedTensor([cpu_tensor])
+        self.assertFalse(jt.joffsets.is_pinned(), "CPU single-element JaggedTensor offsets should not be pinned")
+        self.assertEqual(jt.joffsets.device.type, "cpu")
+        self.assertEqual(jt.jdata.shape, torch.Size([5, 3]))
+        self.assertTrue(torch.equal(jt.jdata, cpu_tensor))
+
+        # Test the bare-tensor constructor (dispatches through joffsetsFromJIdx)
+        cpu_tensor2 = torch.randn(10)
+        jt2 = fvdb.JaggedTensor(cpu_tensor2)
+        self.assertFalse(jt2.joffsets.is_pinned(), "CPU bare-tensor JaggedTensor offsets should not be pinned")
+        self.assertEqual(jt2.joffsets.device.type, "cpu")
+        self.assertEqual(jt2.jdata.shape, torch.Size([10]))
+        self.assertTrue(torch.equal(jt2.jdata, cpu_tensor2))
 
 
 if __name__ == "__main__":

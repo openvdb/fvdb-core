@@ -16,40 +16,10 @@ from fvdb.types import NumericMaxRank1, ValueConstraint, to_Vec3i
 
 from fvdb import Grid, GridBatch, JaggedTensor
 
-from ._fvdb_cpp import ConvPackBackend
-from ._fvdb_cpp import JaggedTensor as JaggedTensorCpp
-from ._fvdb_cpp import SparseConvPackInfo as SparseConvPackInfoCpp
-
-_CUTLASS_SUPPORTED_CHANNELS: tuple[tuple[int, int], ...] = (
-    (32, 64),
-    (64, 128),
-    (128, 256),
-    (32, 32),
-    (64, 64),
-    (128, 128),
-    (256, 256),
-    (128, 64),
-    (64, 32),
-    (256, 128),
-    (384, 256),
-    (192, 128),
-    (256, 512),
-    (512, 256),
-    (512, 512),
-)
-
-_DEFAULT_DTYPES: tuple[torch.dtype, ...] = (
-    torch.float16,
-    torch.bfloat16,
-    torch.float32,
-    torch.float64,
-)
+from . import _fvdb_cpp
 
 _DEFAULT_CONFIG: dict[str, Any] = {
     "backend": "default",
-    "allow_tf32": True,
-    "weight_dtypes": _DEFAULT_DTYPES,
-    "feature_dtypes": _DEFAULT_DTYPES,
 }
 
 _ANY_CHANNEL_PAIRS: tuple[tuple[int, int], ...] = ()
@@ -63,6 +33,107 @@ def _channel_pair_supported(in_channels: int, out_channels: int, channel_pairs: 
     if len(channel_pairs) == 0:
         return True
     return (in_channels, out_channels) in channel_pairs
+
+
+# ============================================================
+#  Autograd functions for gather-scatter convolution
+# ============================================================
+
+
+class _GatherScatterConvFn(torch.autograd.Function):
+    """Autograd wrapper for the default gather-scatter convolution (forward + transposed)."""
+
+    @staticmethod
+    def forward(ctx, features: torch.Tensor, weights: torch.Tensor, topo: _fvdb_cpp.GatherScatterDefaultTopology, transposed: bool) -> torch.Tensor:  # type: ignore[override]
+        if transposed:
+            output = _fvdb_cpp.gs_conv_transpose(features, weights, topo)
+        else:
+            output = _fvdb_cpp.gs_conv(features, weights, topo)
+        ctx.save_for_backward(features, weights)
+        ctx.topo = topo
+        ctx.transposed = transposed
+        return output
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, None, None]:  # type: ignore[override]
+        features, weights = ctx.saved_tensors
+        grad_output = grad_output.contiguous()
+        if ctx.transposed:
+            grad_feat, grad_w = _fvdb_cpp.gs_conv_transpose_backward(grad_output, features, weights, ctx.topo)
+        else:
+            grad_feat, grad_w = _fvdb_cpp.gs_conv_backward(grad_output, features, weights, ctx.topo)
+        return grad_feat, grad_w, None, None
+
+
+class _PredGatherIGemmConvFn(torch.autograd.Function):
+    """Autograd wrapper for the PredGatherIGemm CUTLASS IGEMM convolution.
+
+    Forward uses the IGEMM kernel; backward falls back to GatherScatterDefault.
+    """
+
+    @staticmethod
+    def forward(  # type: ignore[override]
+        ctx,
+        features: torch.Tensor,
+        weights: torch.Tensor,
+        feature_grid: _fvdb_cpp.GridBatch,
+        output_grid: _fvdb_cpp.GridBatch,
+        gs_topo: _fvdb_cpp.GatherScatterDefaultTopology,
+        kernel_size: int,
+        stride: int,
+    ) -> torch.Tensor:
+        output = _fvdb_cpp.pred_gather_igemm_conv(features, weights, feature_grid, output_grid, kernel_size, stride)
+        ctx.save_for_backward(features, weights)
+        ctx.gs_topo = gs_topo
+        return output
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, None, None, None, None, None]:  # type: ignore[override]
+        features, weights = ctx.saved_tensors
+        grad_output = grad_output.contiguous()
+        grad_feat, grad_w = _fvdb_cpp.gs_conv_backward(grad_output, features, weights, ctx.gs_topo)
+        return grad_feat, grad_w, None, None, None, None, None
+
+
+# ============================================================
+#  Backend data classes — cached precomputed data per method
+# ============================================================
+
+
+@dataclass(frozen=True)
+class _MatmulBackend:
+    """1x1x1 convolution with stride 1 — pure matmul, no precomputed data."""
+
+    pass
+
+
+@dataclass(frozen=True)
+class _DenseBackend:
+    """Dense convolution via torch.nn.functional — no precomputed data."""
+
+    pass
+
+
+@dataclass(frozen=True)
+class _GatherScatterBackend:
+    """Default gather-scatter convolution with precomputed compacted topology (Python autograd)."""
+
+    topology: _fvdb_cpp.GatherScatterDefaultTopology
+
+
+@dataclass(frozen=True)
+class _PredGatherIGemmBackend:
+    """CUTLASS IGEMM convolution with predicated gather (SM80+, forward only).
+
+    The GatherScatterDefault topology is precomputed for backward pass fallback.
+    """
+
+    gs_topology: _fvdb_cpp.GatherScatterDefaultTopology
+    kernel_size: int
+    stride: int
+
+
+_Backend = _MatmulBackend | _DenseBackend | _GatherScatterBackend | _PredGatherIGemmBackend
 
 
 @dataclass(frozen=True)
@@ -82,8 +153,7 @@ class ConvolutionPlan:
 
     Transposition is treated as just a different kind of kernel, so the inputs and outputs and
     weights are treated the same as if it were a regular convolution. For the default padded case,
-    transposed outputs can't automatically infer the target_grid, so it must be provided, unless
-    the dense, halo, and lggs backends are used.
+    transposed outputs can't automatically infer the target_grid, so it must be provided.
 
     Usage Pattern:
 
@@ -121,11 +191,17 @@ class ConvolutionPlan:
         - Channel pairs can be specified at plan creation time for optimal backend selection
     """
 
-    _pack_info: SparseConvPackInfoCpp
+    _source_grid: GridBatch
+    _target_grid: GridBatch
+    _kernel_size: torch.Tensor
+    _stride: torch.Tensor
     _channel_pairs: tuple[tuple[int, int], ...]
     _transposed: bool
-    _expert_config: dict[str, Any]
-    _backend: ConvPackBackend
+    _backend: _Backend
+
+    # ============================================================
+    #                 Factory methods
+    # ============================================================
 
     @classmethod
     def from_grid_batch(
@@ -152,15 +228,12 @@ class ConvolutionPlan:
             source_grid (GridBatch): :class:`fvdb.GridBatch` encoding the structure of the input domain.
             target_grid (GridBatch | None): :class:`fvdb.GridBatch` encoding the structure of the output domain.
                 If ``None``, the ``target_grid`` is automatically computed
-                based on ``kernel_size`` and ``stride`` applied to ``source_grid``. *(except for the case of the dense, halo, and
-                lggs backends where it uses ``target_grid = source_grid``.
-                For those backends, ``target_grid`` must be ``None``.)*
+                based on ``kernel_size`` and ``stride`` applied to ``source_grid``.
+                *(For the dense backend, ``target_grid`` must be ``None``.)*
             expert_config (dict[str, Any]): Advanced configuration options *(rarely needed by typical users)*.
             channel_pairs (tuple[tuple[int, int], ...]): Supported input/output channel combinations as tuples.
                 Each tuple represents (input_channels, output_channels).
                 *e.g*: ``((32, 64), (64, 128))`` supports 32->64 and 64->128 convolutions.
-                This parameter can be useful to select a more performant backend when the
-                channel configurations are known in advance.
                 Defaults to ``_ANY_CHANNEL_PAIRS``, which means any channel pairs are supported.
 
         Returns:
@@ -189,28 +262,17 @@ class ConvolutionPlan:
         kernel_size = to_Vec3i(kernel_size, value_constraint=ValueConstraint.POSITIVE)
         stride = to_Vec3i(stride, value_constraint=ValueConstraint.POSITIVE)
 
-        if not _vec_is_all(stride, 1):
-            raise NotImplementedError("Strides not equal to 1 are not currently supported")
+        backend_name = expert_config.get("backend", "default")
 
-        if not _vec_is_all(stride, stride[0].item()):
-            raise NotImplementedError("Non-uniform strides are not currently supported")
-
-        backend = expert_config.get("backend", "default")
-        if backend != "default":
-            raise NotImplementedError("Non-default backends are not currently supported")
-
-        if backend in ["dense", "halo", "lggs"]:
+        if backend_name == "dense":
             if target_grid is not None:
-                raise ValueError("Target grid must be None for dense, halo, and lggs backends.")
+                raise ValueError("Target grid must be None for dense backend.")
             target_grid = source_grid
         elif target_grid is None:
             target_grid = source_grid.conv_grid(kernel_size, stride)
 
-        pack_info = SparseConvPackInfoCpp(kernel_size, stride, source_grid._impl, target_grid._impl)
-
-        transposed = False
-        backend = cls._configure_backend(pack_info, channel_pairs, transposed, expert_config)
-        return cls(pack_info, channel_pairs, transposed, expert_config, backend)
+        backend = cls._build_backend(source_grid, target_grid, kernel_size, stride, channel_pairs, expert_config)
+        return cls(source_grid, target_grid, kernel_size, stride, channel_pairs, False, backend)
 
     @classmethod
     def from_grid_batch_transposed(
@@ -240,11 +302,6 @@ class ConvolutionPlan:
             convolution with a different kernel than deconvolution, but it is otherwise the same kind
             of abstract operation.
 
-        .. note::
-
-            For most backends, ``target_grid`` can be automatically computed. Only certain
-            expert backends require specific ``target_grid`` configurations.
-
         Args:
             kernel_size (NumericMaxRank1): Size of the convolution kernel. Can be a single int (cubic kernel)
                         or a 3-element sequence for ``(x, y, z)`` dimensions.
@@ -253,46 +310,30 @@ class ConvolutionPlan:
             target_grid (GridBatch | None): :class:`fvdb.GridBatch` encoding the structure of the output domain.
                 If ``None``, the ``target_grid`` is automatically computed
                 based on ``kernel_size`` and ``stride`` applied to ``source_grid``.
-                *(except for the case of the dense, halo, and lggs backends where it uses ``target_grid = source_grid``.
-                For those backends, ``target_grid`` must be ``None``.)*
+                *(For the dense backend, ``target_grid`` must be ``None``.)*
             expert_config (dict[str, Any]): Advanced configuration options (rarely needed by typical users).
             channel_pairs (tuple[tuple[int, int], ...]): Supported input/output channel combinations as tuples.
-                Each tuple represents (input_channels, output_channels).
-                *e.g*: ``((32, 64), (64, 128))`` supports 32->64 and 64->128 convolutions.
-                This parameter can be useful to select a more performant backend when the
-                channel configurations are known in advance.
                 Defaults to ``_ANY_CHANNEL_PAIRS``, which means any channel pairs are supported.
 
         Returns:
             convolution_plan (ConvolutionPlan): Configured plan ready for transposed convolution operations via :meth:`execute()`.
-
-
         """
         kernel_size = to_Vec3i(kernel_size, value_constraint=ValueConstraint.POSITIVE)
         stride = to_Vec3i(stride, value_constraint=ValueConstraint.POSITIVE)
 
-        if not _vec_is_all(stride, 1):
-            raise NotImplementedError("Strides not equal to 1 are not currently supported")
+        backend_name = expert_config.get("backend", "default")
 
-        if not _vec_is_all(stride, stride[0].item()):
-            raise NotImplementedError("Non-uniform strides are not currently supported")
-
-        backend = expert_config.get("backend", "default")
-        if backend != "default":
-            raise NotImplementedError("Non-default backends are not currently supported")
-
-        if backend == "dense":
+        if backend_name == "dense":
             if target_grid is not None:
                 raise ValueError("Target grid must be None for dense backend, transposed.")
             target_grid = source_grid
         elif target_grid is None:
             raise ValueError("Target grid must be provided for transposed convolution, except for dense backend.")
 
-        pack_info = SparseConvPackInfoCpp(kernel_size, stride, source_grid._impl, target_grid._impl)
-
-        transposed = True
-        backend = cls._configure_backend(pack_info, channel_pairs, transposed, expert_config)
-        return cls(pack_info, channel_pairs, transposed, expert_config, backend)
+        backend = cls._build_backend(
+            source_grid, target_grid, kernel_size, stride, channel_pairs, expert_config, transposed=True
+        )
+        return cls(source_grid, target_grid, kernel_size, stride, channel_pairs, True, backend)
 
     @classmethod
     def from_grid(
@@ -319,15 +360,10 @@ class ConvolutionPlan:
             source_grid (Grid): :class:`fvdb.Grid` encoding the structure of the input domain.
             target_grid (Grid | None): :class:`fvdb.Grid` encoding the structure of the output domain.
                 If ``None``, the ``target_grid`` is automatically computed
-                based on ``kernel_size`` and ``stride`` applied to ``source_grid``. *(except for the case of the dense, halo, and
-                lggs backends where it uses ``target_grid = source_grid``.
-                For those backends, ``target_grid`` must be ``None``.)*
+                based on ``kernel_size`` and ``stride`` applied to ``source_grid``.
+                *(For the dense backend, ``target_grid`` must be ``None``.)*
             expert_config (dict[str, Any]): Advanced configuration options (rarely needed by typical users).
             channel_pairs (tuple[tuple[int, int], ...]): Supported input/output channel combinations as tuples.
-                Each tuple represents (input_channels, output_channels).
-                *e.g*: ``((32, 64), (64, 128))`` supports 32->64 and 64->128 convolutions.
-                This parameter can be useful to select a more performant backend when the
-                channel configurations are known in advance.
                 Defaults to ``_ANY_CHANNEL_PAIRS``, which means any channel pairs are supported.
 
         Returns:
@@ -356,28 +392,22 @@ class ConvolutionPlan:
         kernel_size = to_Vec3i(kernel_size, value_constraint=ValueConstraint.POSITIVE)
         stride = to_Vec3i(stride, value_constraint=ValueConstraint.POSITIVE)
 
-        if not _vec_is_all(stride, 1):
-            raise NotImplementedError("Strides not equal to 1 are not currently supported")
+        backend_name = expert_config.get("backend", "default")
 
-        if not _vec_is_all(stride, stride[0].item()):
-            raise NotImplementedError("Non-uniform strides are not currently supported")
-
-        backend = expert_config.get("backend", "default")
-        if backend != "default":
-            raise NotImplementedError("Non-default backends are not currently supported")
-
-        if backend in ["dense", "halo", "lggs"]:
+        source_grid_batch = GridBatch(impl=source_grid._impl)
+        if backend_name == "dense":
             if target_grid is not None:
-                raise ValueError("Target grid must be None for dense, halo, and lggs backends.")
-            target_grid = source_grid
+                raise ValueError("Target grid must be None for dense backend.")
+            target_grid_batch = source_grid_batch
         elif target_grid is None:
-            target_grid = source_grid.conv_grid(kernel_size, stride)
+            target_grid_batch = source_grid_batch.conv_grid(kernel_size, stride)
+        else:
+            target_grid_batch = GridBatch(impl=target_grid._impl)
 
-        pack_info = SparseConvPackInfoCpp(kernel_size, stride, source_grid._impl, target_grid._impl)
-
-        transposed = False
-        backend = cls._configure_backend(pack_info, channel_pairs, transposed, expert_config)
-        return cls(pack_info, channel_pairs, transposed, expert_config, backend)
+        backend = cls._build_backend(
+            source_grid_batch, target_grid_batch, kernel_size, stride, channel_pairs, expert_config
+        )
+        return cls(source_grid_batch, target_grid_batch, kernel_size, stride, channel_pairs, False, backend)
 
     @classmethod
     def from_grid_transposed(
@@ -391,25 +421,7 @@ class ConvolutionPlan:
         channel_pairs: tuple[tuple[int, int], ...] = _ANY_CHANNEL_PAIRS,
     ) -> "ConvolutionPlan":
         """
-        Create a :class:`ConvolutionPlan` for *transposed* convolution on a single grid. *i.e.* transposed convolution where the input
-        and output domains are both of type :class:`fvdb.Grid`.
-
-        Transposed convolution (also known as deconvolution) is commonly used for
-        upsampling operations, such as in decoder networks or generative models.
-        It performs the mathematical transpose of the convolution operation.
-
-        .. note::
-
-            Though deconvolution is the "reverse" of convolution in some sense, this configuration
-            still treats input and output channels as inputs and outputs, it doesn't swap them.
-            The source and target grids are not swapped, it is best to think of deconvolution as
-            convolution with a different kernel than deconvolution, but it is otherwise the same kind
-            of abstract operation.
-
-        .. note::
-
-            For most backends, ``target_grid`` can be automatically computed. Only certain
-            expert backends require specific ``target_grid`` configurations.
+        Create a :class:`ConvolutionPlan` for *transposed* convolution on a single grid.
 
         Args:
             kernel_size (NumericMaxRank1): Size of the convolution kernel. Can be a single int (cubic kernel)
@@ -418,46 +430,34 @@ class ConvolutionPlan:
             source_grid (Grid): :class:`fvdb.Grid` encoding the structure of the input domain.
             target_grid (Grid | None): :class:`fvdb.Grid` encoding the structure of the output domain.
                 If ``None``, the ``target_grid`` is automatically computed
-                based on ``kernel_size`` and ``stride`` applied to ``source_grid``. *(except for the case of the dense, halo, and
-                lggs backends where it uses ``target_grid = source_grid``.
-                For those backends, ``target_grid`` must be ``None``.)*
+                based on ``kernel_size`` and ``stride`` applied to ``source_grid``.
+                *(For the dense backend, ``target_grid`` must be ``None``.)*
             expert_config (dict[str, Any]): Advanced configuration options (rarely needed by typical users).
             channel_pairs (tuple[tuple[int, int], ...]): Supported input/output channel combinations as tuples.
-                Each tuple represents (input_channels, output_channels).
-                *e.g*: ``((32, 64), (64, 128))`` supports 32->64 and 64->128 convolutions.
-                This parameter can be useful to select a more performant backend when the
-                channel configurations are known in advance.
                 Defaults to ``_ANY_CHANNEL_PAIRS``, which means any channel pairs are supported.
 
         Returns:
             convolution_plan (ConvolutionPlan): Configured plan ready for transposed convolution operations.
-
         """
         kernel_size = to_Vec3i(kernel_size, value_constraint=ValueConstraint.POSITIVE)
         stride = to_Vec3i(stride, value_constraint=ValueConstraint.POSITIVE)
 
-        if not _vec_is_all(stride, 1):
-            raise NotImplementedError("Strides not equal to 1 are not currently supported")
+        backend_name = expert_config.get("backend", "default")
 
-        if not _vec_is_all(stride, stride[0].item()):
-            raise NotImplementedError("Non-uniform strides are not currently supported")
-
-        backend = expert_config.get("backend", "default")
-        if backend != "default":
-            raise NotImplementedError("Non-default backends are not currently supported")
-
-        if backend == "dense":
+        source_grid_batch = GridBatch(impl=source_grid._impl)
+        if backend_name == "dense":
             if target_grid is not None:
                 raise ValueError("Target grid must be None for dense backend, transposed.")
-            target_grid = source_grid
+            target_grid_batch = source_grid_batch
         elif target_grid is None:
             raise ValueError("Target grid must be provided for transposed convolution, except for dense backend.")
+        else:
+            target_grid_batch = GridBatch(impl=target_grid._impl)
 
-        pack_info = SparseConvPackInfoCpp(kernel_size, stride, source_grid._impl, target_grid._impl)
-
-        transposed = True
-        backend = cls._configure_backend(pack_info, channel_pairs, transposed, expert_config)
-        return cls(pack_info, channel_pairs, transposed, expert_config, backend)
+        backend = cls._build_backend(
+            source_grid_batch, target_grid_batch, kernel_size, stride, channel_pairs, expert_config, transposed=True
+        )
+        return cls(source_grid_batch, target_grid_batch, kernel_size, stride, channel_pairs, True, backend)
 
     @classmethod
     def from_plan_transposed(cls, plan: "ConvolutionPlan") -> "ConvolutionPlan":
@@ -493,19 +493,26 @@ class ConvolutionPlan:
             # Create the corresponding backward/transpose plan
             transposed_plan = ConvolutionPlan.from_plan_transposed(forward_plan)
         """
-        kernel_size = to_Vec3i(plan._pack_info.kernel_size, value_constraint=ValueConstraint.POSITIVE)
-        stride = to_Vec3i(plan._pack_info.stride, value_constraint=ValueConstraint.POSITIVE)
-
-        # Transposing!
-        source_grid = plan._pack_info.target_grid
-        target_grid = plan._pack_info.source_grid
+        # Swap source/target grids, flip transposed flag, reverse channel pairs
+        source_grid = plan._target_grid
+        target_grid = plan._source_grid
         transposed = not plan._transposed
         channel_pairs = tuple((dst, src) for src, dst in plan._channel_pairs)
-        expert_config = plan._expert_config
 
-        t_pack_info = SparseConvPackInfoCpp(kernel_size, stride, source_grid, target_grid)
-        t_backend = cls._configure_backend(t_pack_info, channel_pairs, transposed, expert_config)
-        return cls(t_pack_info, channel_pairs, transposed, expert_config, t_backend)
+        backend = cls._build_backend(
+            source_grid,
+            target_grid,
+            plan._kernel_size,
+            plan._stride,
+            channel_pairs,
+            _DEFAULT_CONFIG,
+            transposed=transposed,
+        )
+        return cls(source_grid, target_grid, plan._kernel_size, plan._stride, channel_pairs, transposed, backend)
+
+    # ============================================================
+    #                 Validation
+    # ============================================================
 
     def valid_usage(
         self,
@@ -533,15 +540,16 @@ class ConvolutionPlan:
         kernel_size = to_Vec3i(kernel_size, value_constraint=ValueConstraint.POSITIVE)
         stride = to_Vec3i(stride, value_constraint=ValueConstraint.POSITIVE)
 
-        self_kernel_size = to_Vec3i(self._pack_info.kernel_size, value_constraint=ValueConstraint.POSITIVE)
-        self_stride = to_Vec3i(self._pack_info.stride, value_constraint=ValueConstraint.POSITIVE)
-
         return (
             _channel_pair_supported(in_channels, out_channels, self._channel_pairs)
-            and torch.equal(kernel_size, self_kernel_size)
-            and torch.equal(stride, self_stride)
+            and torch.equal(kernel_size, self._kernel_size)
+            and torch.equal(stride, self._stride)
             and transposed == self._transposed
         )
+
+    # ============================================================
+    #                 Execute
+    # ============================================================
 
     @overload
     def execute(self, data: torch.Tensor, weights: torch.Tensor) -> torch.Tensor: ...
@@ -598,8 +606,6 @@ class ConvolutionPlan:
             # Batched example
             batch_features = JaggedTensor(torch.randn(5, 1000, 32, device="cuda"))
             output = plan.execute(batch_features, weights)  # Shape: (5, output_voxels, 64)
-
-
         """
         out_c = weights.shape[0]
         in_c = weights.shape[1]
@@ -611,11 +617,13 @@ class ConvolutionPlan:
 
         is_flat: bool = isinstance(data, torch.Tensor)
         if is_flat:
-            if self._pack_info.source_grid.grid_count != 1:
+            if self._source_grid.grid_count != 1:
                 raise ValueError("Source grid must have batch size of 1 for flat data")
 
-        # Handle the simple matmul case before the more complex cases
-        if self._backend == ConvPackBackend.MATMUL:
+        backend = self._backend
+
+        # Matmul: 1x1x1 kernel, stride 1 — no kernel map needed
+        if isinstance(backend, _MatmulBackend):
             if is_flat:
                 return data.matmul(weights.transpose(0, 1))
             else:
@@ -625,15 +633,37 @@ class ConvolutionPlan:
         if is_flat:
             data = JaggedTensor(data)
 
-        if self._backend == ConvPackBackend.HALO:
-            result = self._execute_halo(data, weights)
-        elif self._backend == ConvPackBackend.DENSE:
+        # Dense: pure-Python path via torch.nn.functional
+        if isinstance(backend, _DenseBackend):
             result = self._execute_dense(data, weights)
+
+        # Gather-scatter (new): precomputed topology with Python autograd
+        elif isinstance(backend, _GatherScatterBackend):
+            out_tensor = _GatherScatterConvFn.apply(data.jdata, weights, backend.topology, self._transposed)
+            if out_tensor is None:
+                raise ValueError("Gather-scatter convolution returned None")
+            if not isinstance(out_tensor, torch.Tensor):
+                raise ValueError("Gather-scatter convolution returned non-tensor")
+            result = self._target_grid.jagged_like(out_tensor)
+
+        elif isinstance(backend, _PredGatherIGemmBackend):
+            out_tensor = _PredGatherIGemmConvFn.apply(
+                data.jdata,
+                weights,
+                self._source_grid._impl,
+                self._target_grid._impl,
+                backend.gs_topology,
+                backend.kernel_size,
+                backend.stride,
+            )
+            if out_tensor is None:
+                raise ValueError("PredGatherIGemm convolution returned None")
+            if not isinstance(out_tensor, torch.Tensor):
+                raise ValueError("PredGatherIGemm convolution returned non-tensor")
+            result = self._target_grid.jagged_like(out_tensor)
+
         else:
-            if self._transposed:
-                result = JaggedTensor(impl=self._pack_info.sparse_transpose_conv_3d(data._impl, weights, self._backend))
-            else:
-                result = JaggedTensor(impl=self._pack_info.sparse_conv_3d(data._impl, weights, self._backend))
+            raise TypeError(f"Unknown backend type: {type(backend)}")
 
         if is_flat:
             return result.jdata
@@ -656,10 +686,9 @@ class ConvolutionPlan:
         Raises:
             ValueError: If the plan was created for a batch of grids.
         """
-        source_grid_impl = self._pack_info.source_grid
-        if source_grid_impl.grid_count != 1:
-            raise ValueError("Source grid impl must have batch size of 1 for Grid")
-        return Grid(impl=source_grid_impl)
+        if self._source_grid.grid_count != 1:
+            raise ValueError("Source grid must have batch size of 1 for Grid")
+        return Grid(impl=self._source_grid._impl)
 
     @property
     def source_grid_batch(self) -> GridBatch:
@@ -670,8 +699,7 @@ class ConvolutionPlan:
         Returns:
             source_grid_batch (GridBatch): The source :class:`fvdb.GridBatch` of the convolution plan.
         """
-
-        return GridBatch(impl=self._pack_info.source_grid)
+        return self._source_grid
 
     @property
     def target_grid(self) -> Grid:
@@ -685,10 +713,9 @@ class ConvolutionPlan:
         Raises:
             ValueError: If the plan was created for a batch of grids.
         """
-        target_grid_impl = self._pack_info.target_grid
-        if target_grid_impl.grid_count != 1:
-            raise ValueError("Target grid impl must have batch size of 1 for Grid")
-        return Grid(impl=target_grid_impl)
+        if self._target_grid.grid_count != 1:
+            raise ValueError("Target grid must have batch size of 1 for Grid")
+        return Grid(impl=self._target_grid._impl)
 
     @property
     def target_grid_batch(self) -> GridBatch:
@@ -699,229 +726,98 @@ class ConvolutionPlan:
         Returns:
             target_grid_batch (GridBatch): The target :class:`fvdb.GridBatch` of the convolution plan.
         """
-        return GridBatch(impl=self._pack_info.target_grid)
+        return self._target_grid
 
     @property
     def has_fixed_topology(self) -> bool:
         """
         Returns ``True`` if the source and target grids have the same topology,
-        meaning the same voxel structure. This is often required by certain backends.
+        meaning the same voxel structure.
 
         Returns:
             has_fixed_topology (bool): ``True`` if source and target grids are the same topology, ``False`` otherwise.
         """
-        return self._pack_info.source_grid.is_same(self._pack_info.target_grid)
+        return self._source_grid._impl.is_same(self._target_grid._impl)
 
     # ============================================================
     #                 Private methods
     # ============================================================
 
     @staticmethod
-    def _configure_backend(
-        pack_info: SparseConvPackInfoCpp,
+    def _build_backend(
+        source_grid: GridBatch,
+        target_grid: GridBatch,
+        kernel_size: torch.Tensor,
+        stride: torch.Tensor,
         channel_pairs: tuple[tuple[int, int], ...],
-        transposed: bool,
         expert_config: dict[str, Any],
-    ) -> ConvPackBackend:
+        transposed: bool = False,
+    ) -> _Backend:
         """
-        Configures the pack_info in place, building whatever backend structure was asked for. Returns the backend to
+        Determine the convolution method and build the appropriate backend.
         """
-
         for channel_pair in channel_pairs:
             if len(channel_pair) != 2 or channel_pair[0] <= 0 or channel_pair[1] <= 0:
                 raise ValueError("channel_pair must be a tuple of two positive integers")
 
-        backend = expert_config.get("backend", "default")
-        allow_tf32 = expert_config.get("allow_tf32", True)
-        weight_dtypes = expert_config.get("weight_dtypes", _DEFAULT_DTYPES)
-        feature_dtypes = expert_config.get("feature_dtypes", _DEFAULT_DTYPES)
-        is_cuda = pack_info.source_grid.device.type == "cuda"
+        backend_name = expert_config.get("backend", "default")
 
-        kernel_size = to_Vec3i(pack_info.kernel_size, value_constraint=ValueConstraint.POSITIVE)
-        stride = to_Vec3i(pack_info.stride, value_constraint=ValueConstraint.POSITIVE)
-
-        all_dtypes = set(weight_dtypes + feature_dtypes)
-
-        sm_arch = (
-            0.0 if not is_cuda else torch.cuda.get_device_capability()[0] + torch.cuda.get_device_capability()[1] / 10
-        )
-
-        # tf32 requires compute capability >= 8.0 (Ampere)
-        if allow_tf32 and is_cuda:
-            if sm_arch < 8:
-                raise ValueError("TF32 requires GPU with compute capability >= 8.0")
-
-        # bf16 requires compute capability >= 8.0 (Ampere)
-        if is_cuda and torch.bfloat16 in all_dtypes:
-            if sm_arch < 8:
-                raise ValueError("BF16 requires GPU with compute capability >= 8.0")
-
-        # float16 requires compute capability >= 7.5 (Turing)
-        if is_cuda and torch.float16 in all_dtypes:
-            if sm_arch < 7.5:
-                raise ValueError("FP16 requires GPU with compute capability >= 7.5")
-
-        if backend == "default":
-            if (not is_cuda) or torch.float64 in all_dtypes:
-                backend = "legacy"
-            else:
-                backend = "igemm_mode1"
-
-        # -------------------------------------------------------------------------------------------
-        # Choose the actual backend
-        # -------------------------------------------------------------------------------------------
+        # 1x1x1 conv with stride 1 is just a matmul — no kernel map needed
         if _vec_is_all(stride, 1) and _vec_is_all(kernel_size, 1):
-            return ConvPackBackend.MATMUL
+            return _MatmulBackend()
 
-        elif backend == "halo":
-            if not is_cuda:
-                raise ValueError("Halo backend requires GPU")
-
-            if sm_arch < 8:
-                raise ValueError("Halo backend requires GPU with compute capability >= 8.0")
-
-            if not _vec_is_all(stride, 1) or not _vec_is_all(kernel_size, 3):
-                raise ValueError("Halo backend requires stride 1 and kernel_size 3.")
-
-            if not pack_info.source_grid.is_same(pack_info.target_grid):
-                raise ValueError("Halo backend requires source_grid and target_grid to be the same.")
-
-            if transposed:
-                raise ValueError("Halo backend does not support transposed convolution.")
-
-            return ConvPackBackend.HALO
-
-        elif backend == "dense":
+        # Dense backend — pure Python, no kernel map
+        if backend_name == "dense":
             if not _vec_is_all(stride, 1):
                 raise ValueError("Dense backend requires stride 1.")
-
-            if not pack_info.source_grid.is_same(pack_info.target_grid):
+            if not source_grid._impl.is_same(target_grid._impl):
                 raise ValueError("Dense backend requires source_grid and target_grid to be the same.")
+            return _DenseBackend()
 
-            return ConvPackBackend.DENSE
-
-        elif backend == "cutlass":
-            if not is_cuda:
-                raise ValueError("Cutlass backend requires GPU")
-
-            if sm_arch < 8:
-                raise ValueError("Cutlass backend requires GPU with compute capability >= 8.0")
-
+        # Gather-scatter default — precomputed compacted topology with Python autograd
+        if backend_name in ("gather_scatter", "default"):
             if transposed:
-                raise ValueError("Cutlass backend does not support transposed convolution.")
+                topo = _fvdb_cpp.gs_build_transpose_topology(source_grid._impl, target_grid._impl, kernel_size, stride)
+            else:
+                topo = _fvdb_cpp.gs_build_topology(source_grid._impl, target_grid._impl, kernel_size, stride)
+            return _GatherScatterBackend(topology=topo)
 
-            if len(channel_pairs) == 0:
-                raise ValueError("Cutlass backend requires channel_pairs to be non-empty")
-
-            for channel_pair in channel_pairs:
-                if channel_pair not in _CUTLASS_SUPPORTED_CHANNELS:
-                    raise ValueError(f"Cutlass backend does not support {channel_pair} convolution.")
-
-            pack_info.build_cutlass(benchmark=False)
-            return ConvPackBackend.CUTLASS
-
-        elif backend == "lggs":
-            if not is_cuda:
-                raise ValueError("LGGS backend requires GPU")
-
-            if sm_arch < 8:
-                raise ValueError("LGGS backend requires GPU with compute capability >= 8.0")
-
-            if channel_pairs != [(128, 128)]:
-                raise ValueError("LGGS backend only supports 128 to 128 convolution.")
-
+        # PredGatherIGemm — CUTLASS IGEMM on SM80+, forward only
+        if backend_name == "pred_gather_igemm":
             if transposed:
-                raise ValueError("LGGS backend does not support transposed convolution.")
+                raise ValueError("PredGatherIGemm backend does not support transposed convolution.")
+            ks_vals = kernel_size.tolist()
+            if len(set(ks_vals)) != 1 or ks_vals[0] not in (3, 5, 7):
+                raise ValueError(f"PredGatherIGemm supports uniform kernel sizes 3, 5, 7; got {ks_vals}.")
+            st_vals = stride.tolist()
+            if len(set(st_vals)) != 1 or st_vals[0] not in (1, 2):
+                raise ValueError(f"PredGatherIGemm supports uniform strides 1, 2; got {st_vals}.")
+            for cin, cout in channel_pairs:
+                if cin % 32 != 0 or cout % 32 != 0:
+                    raise ValueError(f"PredGatherIGemm requires channel counts divisible by 32, got ({cin}, {cout}).")
+            gs_topo = _fvdb_cpp.gs_build_topology(source_grid._impl, target_grid._impl, kernel_size, stride)
+            return _PredGatherIGemmBackend(gs_topology=gs_topo, kernel_size=int(ks_vals[0]), stride=int(st_vals[0]))
 
-            if not _vec_is_all(kernel_size, 3):
-                raise ValueError("LGGS backend requires kernel_size 3.")
+        raise ValueError(f"Unknown backend: {backend_name!r}")
 
-            pack_info.build_lggs()
-            return ConvPackBackend.LGGS
-
-        elif backend == "legacy":
-            pack_info.build_gather_scatter(False)
-            return ConvPackBackend.GATHER_SCATTER
-
-        elif backend == "me":
-            pack_info.build_gather_scatter(True)
-            return ConvPackBackend.GATHER_SCATTER
-
-        elif backend == "igemm_mode0":
-            if torch.float64 in all_dtypes:
-                raise ValueError("IGEMM backend does not support float64.")
-            # TODO(chorvath): training has to be set to True because we can't change it later.
-            # This is a bug, issue #9.
-            pack_info.build_implicit_gemm(
-                sorted=False,
-                split_mask_num=1,
-                training=True,
-                split_mask_num_bwd=3,
-                use_tf32=allow_tf32,
-            )
-            return ConvPackBackend.IGEMM
-
-        elif backend == "igemm_mode1":
-            if torch.float64 in all_dtypes:
-                raise ValueError("IGEMM backend does not support float64.")
-            # TODO(chorvath): training has to be set to True because we can't change it later.
-            # This is a bug, issue #9.
-            pack_info.build_implicit_gemm(
-                sorted=True,
-                split_mask_num=1,
-                training=True,
-                split_mask_num_bwd=3,
-                use_tf32=allow_tf32,
-            )
-            return ConvPackBackend.IGEMM
-
-        elif backend == "igemm_mode2":
-            if torch.float64 in all_dtypes:
-                raise ValueError("IGEMM backend does not support float64.")
-            # TODO(chorvath): training has to be set to True because we can't change it later.
-            # This is a bug, issue #9.
-            pack_info.build_implicit_gemm(
-                sorted=True,
-                split_mask_num=3,
-                training=True,
-                split_mask_num_bwd=3,
-                use_tf32=allow_tf32,
-            )
-            return ConvPackBackend.IGEMM
-
-        else:
-            raise NotImplementedError(f"Backend {backend} is not supported")
-
-    def _execute_halo(self, data: JaggedTensor | torch.Tensor, weights: torch.Tensor) -> JaggedTensor:
-        assert not self._transposed, "Halo backend does not support transposed convolution."
-
-        if isinstance(data, torch.Tensor):
-            data = JaggedTensor(data)
-
-        return JaggedTensor(impl=self._pack_info.source_grid.sparse_conv_halo(data._impl, weights, 8))
-
-    def _execute_dense(self, data: JaggedTensor | torch.Tensor, weights: torch.Tensor) -> JaggedTensor:
-        source_grid = self._pack_info.source_grid
-        target_grid = self._pack_info.target_grid
-        assert source_grid.is_same(target_grid)
-
-        if isinstance(data, torch.Tensor):
-            data = JaggedTensor(data)
+    def _execute_dense(self, data: JaggedTensor, weights: torch.Tensor) -> JaggedTensor:
+        source_grid = self._source_grid
+        assert source_grid._impl.is_same(self._target_grid._impl)
 
         min_coord = source_grid.ijk.jdata.min(dim=0).values
         # BXYZC -> BCXYZ
-        dense_feature = source_grid.write_to_dense_cmajor(data._impl, min_coord=min_coord)
+        dense_feature = source_grid.inject_to_dense_cmajor(data, min_coord=min_coord)
         if self._transposed:
             dense_feature = torch.nn.functional.conv_transpose3d(dense_feature, weights, padding=1, stride=1)
         else:
             dense_feature = torch.nn.functional.conv3d(dense_feature, weights, padding=1, stride=1)
         # BCXYZ -> BXYZC
         dense_feature = dense_feature.contiguous()
-        return JaggedTensor(impl=source_grid.read_from_dense_cmajor(dense_feature, dense_origins=min_coord))
+        return source_grid.inject_from_dense_cmajor(dense_feature, dense_origins=min_coord)
 
 
 # These tests are to validate that the type-checking is happy. They won't actually run because
-# the grid genenration is nonsense.
+# the grid generation is nonsense.
 
 
 def _grid_test_for_typing():

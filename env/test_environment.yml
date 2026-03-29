@@ -6,12 +6,14 @@ dependencies:
   - blas=*=mkl
   - ca-certificates
   - certifi
-  - cuda-version=12.9
+  - cmake
+  - cuda-version=13.0
   - git
   - gitpython
   - ipython
   - libpng
   - linkify-it-py
+  - ninja
   - matplotlib
   - myst-parser
   - numpy
@@ -21,11 +23,10 @@ dependencies:
   - pip>=23.3.1
   - pkg-config
   - polyscope
-  - pybind11=2.13.6
   - py-opencv>=4.10[build=headless*]
   - pytest-benchmark
   - python=3.12
-  - pytorch-gpu=2.8.0
+  - pytorch-gpu=2.10.0
   - rich
   - scikit-learn
   - sphinx_rtd_theme
@@ -38,13 +39,13 @@ dependencies:
   - scikit-image
   - torchvision
   - viser
+  - ipykernel
+  - nbmake
   - pip:
     - gsplat
     - pytest-markdown-docs
     - point-cloud-utils
-    - torchsparse @ https://nksr.s3.ap-northeast-1.amazonaws.com/dev-whls/pt28cu129/torchsparse-2.1.0-cp312-cp312-linux_x86_64.whl
-    - torchsparse_20 @ https://nksr.s3.ap-northeast-1.amazonaws.com/dev-whls/pt28cu129/torchsparse_20-2.0.0b0-cp312-cp312-linux_x86_64.whl
-    - torch_scatter @ https://nksr.s3.ap-northeast-1.amazonaws.com/dev-whls/pt28cu129/torch_scatter-2.1.2-cp312-cp312-linux_x86_64.whl
+    - torch_scatter @ https://fvdb-packages.s3.us-east-2.amazonaws.com/dev-whls/pt210cu130/torch_scatter-2.1.2-cp312-cp312-linux_x86_64.whl
     ## 3dgs tests
     - oiio-static-python
 platforms:

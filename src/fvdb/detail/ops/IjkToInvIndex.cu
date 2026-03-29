@@ -4,6 +4,7 @@
 #include <fvdb/detail/ops/IjkToInvIndex.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
+#include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 
 #include <c10/cuda/CUDAException.h>
@@ -63,8 +64,8 @@ IjkToInvIndex(const GridBatchImpl &batchHdl, const JaggedTensor &ijk, bool cumul
                            auto cb = [=] __device__(fvdb::JIdxType bidx,
                                                     int64_t eidx,
                                                     int64_t cidx,
-                                                    JaggedRAcc32<scalar_t, 2> ijkAcc) {
-                               ijkToInvIndexCallback<scalar_t, JaggedRAcc32, TorchRAcc32>(
+                                                    JaggedRAcc64<scalar_t, 2> ijkAcc) {
+                               ijkToInvIndexCallback<scalar_t, JaggedRAcc64, TorchRAcc64>(
                                    bidx, eidx, batchAcc, ijkAcc, outInvIndexAcc, cumulative);
                            };
                            forEachJaggedElementChannelCUDA<scalar_t, 2>(512, 1, ijk, cb);
@@ -84,20 +85,15 @@ IjkToInvIndex(const GridBatchImpl &batchHdl, const JaggedTensor &ijk, bool cumul
     return batchHdl.jaggedTensor(outInvIndex);
 }
 
-template <>
 JaggedTensor
-dispatchIjkToInvIndex<torch::kCUDA>(const GridBatchImpl &batchHdl,
-                                    const JaggedTensor &ijk,
-                                    bool cumulative) {
-    return IjkToInvIndex<torch::kCUDA>(batchHdl, ijk, cumulative);
-}
-
-template <>
-JaggedTensor
-dispatchIjkToInvIndex<torch::kCPU>(const GridBatchImpl &batchHdl,
-                                   const JaggedTensor &ijk,
-                                   bool cumulative) {
-    return IjkToInvIndex<torch::kCPU>(batchHdl, ijk, cumulative);
+ijkToInvIndex(const GridBatchImpl &batchHdl, const JaggedTensor &ijk, bool cumulative) {
+    TORCH_CHECK_VALUE(
+        ijk.ldim() == 1,
+        "Expected ijk to have 1 list dimension, i.e. be a single list of coordinate values, but got",
+        ijk.ldim(),
+        "list dimensions");
+    return FVDB_DISPATCH_KERNEL_DEVICE(
+        ijk.device(), [&]() { return IjkToInvIndex<DeviceTag>(batchHdl, ijk, cumulative); });
 }
 
 } // namespace ops

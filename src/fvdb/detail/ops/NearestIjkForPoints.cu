@@ -18,7 +18,7 @@ template <typename ScalarT>
 __device__ void
 nearestNeighborIJKForPointCallback(fvdb::JIdxType bidx,
                                    int32_t eidx,
-                                   const JaggedRAcc32<ScalarT, 2> points,
+                                   const JaggedRAcc64<ScalarT, 2> points,
                                    const VoxelCoordTransform *transforms,
                                    TorchRAcc64<int32_t, 2> outIJKData,
                                    TorchRAcc64<fvdb::JIdxType, 1> outIJKBIdx) {
@@ -49,6 +49,13 @@ nearestNeighborIJKForPointCallback(fvdb::JIdxType bidx,
         }
     }
 }
+
+namespace {
+
+template <torch::DeviceType>
+JaggedTensor
+dispatchNearestNeighborIJKForPoints(const JaggedTensor &jaggedPoints,
+                                    const std::vector<VoxelCoordTransform> &transforms);
 
 template <>
 JaggedTensor
@@ -81,7 +88,7 @@ dispatchNearestNeighborIJKForPoints<torch::kCUDA>(
             auto cb = [=] __device__(int32_t bidx,
                                      int32_t eidx,
                                      int32_t cidx,
-                                     JaggedRAcc32<scalar_t, 2> pacc) {
+                                     JaggedRAcc64<scalar_t, 2> pacc) {
                 nearestNeighborIJKForPointCallback(
                     bidx, eidx, pacc, transformDevPtr, outIJKAcc, outIJKBIdxAcc);
             };
@@ -93,6 +100,15 @@ dispatchNearestNeighborIJKForPoints<torch::kCUDA>(
 
     return JaggedTensor::from_data_offsets_and_list_ids(
         outIJK, jaggedPoints.joffsets() * 8, jaggedPoints.jlidx());
+}
+
+} // namespace
+
+JaggedTensor
+nearestNeighborIJKForPoints(const JaggedTensor &points,
+                            const std::vector<VoxelCoordTransform> &transforms) {
+    TORCH_CHECK(points.device().is_cuda(), "nearestNeighborIJKForPoints only supports CUDA");
+    return dispatchNearestNeighborIJKForPoints<torch::kCUDA>(points, transforms);
 }
 
 } // namespace ops

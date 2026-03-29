@@ -20,24 +20,14 @@ TransformPoints::forward(TransformPoints::AutogradContext *ctx,
                          Variable pointsData,
                          bool isInverse,
                          bool isDual) {
-    grid->checkDevice(points);
-    TORCH_CHECK_VALUE(points.rdim() == 2, "points must have shape [B*N, 3]");
-    TORCH_CHECK_VALUE(points.rsize(-1) == 3, "points must have shape [B*N, 3]");
-    TORCH_CHECK_TYPE(points.is_floating_point(), "points must have a floating point type");
-    points.check_valid();
-
     // FIXME: (@fwilliams) This is a hack because we need to pass tensors to the autograd engine :/
     JaggedTensor pointsWrap = points.jagged_like(pointsData);
 
     torch::Tensor outTxPoints;
     if (isInverse) {
-        outTxPoints = FVDB_DISPATCH_KERNEL(points.device(), [&]() {
-            return ops::dispatchInvTransformPointsToGrid<DeviceTag>(*grid, pointsWrap, !isDual);
-        });
+        outTxPoints = ops::invTransformPointsToGrid(*grid, pointsWrap, !isDual);
     } else {
-        outTxPoints = FVDB_DISPATCH_KERNEL(points.device(), [&]() {
-            return ops::dispatchTransformPointsToGrid<DeviceTag>(*grid, pointsWrap, !isDual);
-        });
+        outTxPoints = ops::transformPointsToGrid(*grid, pointsWrap, !isDual);
     }
 
     ctx->save_for_backward({points.joffsets(), points.jlidx()});
@@ -63,21 +53,17 @@ TransformPoints::backward(TransformPoints::AutogradContext *ctx,
     const bool isDual    = ctx->saved_data["isDual"].toBool();
     const bool isInverse = ctx->saved_data["isInverse"].toBool();
 
-    Variable outGradIn; // = torch::empty_like(gradOut);  // [B*N, 3]
+    Variable outGradIn;
     if (isInverse) {
-        outGradIn = FVDB_DISPATCH_KERNEL(gradOut.device(), [&]() {
-            return ops::dispatchInvTransformPointsToGridBackward<DeviceTag>(
-                *grid,
-                JaggedTensor::from_data_offsets_and_list_ids(gradOut, pointsJOffsets, pointsJLidx),
-                !isDual);
-        });
+        outGradIn = ops::invTransformPointsToGridBackward(
+            *grid,
+            JaggedTensor::from_data_offsets_and_list_ids(gradOut, pointsJOffsets, pointsJLidx),
+            !isDual);
     } else {
-        outGradIn = FVDB_DISPATCH_KERNEL(gradOut.device(), [&]() {
-            return ops::dispatchTransformPointsToGridBackward<DeviceTag>(
-                *grid,
-                JaggedTensor::from_data_offsets_and_list_ids(gradOut, pointsJOffsets, pointsJLidx),
-                !isDual);
-        });
+        outGradIn = ops::transformPointsToGridBackward(
+            *grid,
+            JaggedTensor::from_data_offsets_and_list_ids(gradOut, pointsJOffsets, pointsJLidx),
+            !isDual);
     }
 
     // Variable outGradIn = outGradInReshape.reshape(getShapeButReplaceFirstDim(fineData.size(0),

@@ -335,8 +335,12 @@ getIndexGrid(const GridBatch &gridBatch, const std::vector<std::string> names = 
                               "Grid name " + name + " exceeds maximum character length of " +
                                   std::to_string(nanovdb::GridData::MaxNameSize) + ".");
             nanovdb::GridData *retGridData = (nanovdb::GridData *)(retHandle.gridData(bi));
+#pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wstringop-truncation"
+#pragma GCC diagnostic ignored "-Wstringop-overflow"
+#pragma GCC diagnostic ignored "-Warray-bounds"
             strncpy(retGridData->mGridName, names[bi].c_str(), nanovdb::GridData::MaxNameSize);
+#pragma GCC diagnostic pop
         }
     }
 
@@ -431,6 +435,25 @@ saveIndexGridWithBlindData(const std::string &path,
             writeGridData->mGridName, nanovdb::GridData::MaxNameSize, name, "Grid name " + name);
         writeGridData->mGridSize =
             sourceGridByteSize + sizeof(nanovdb::GridBlindMetaData) + paddedBlindDataSizes[bi];
+
+        // Write voxelSize and origin
+        torch::Tensor voxelSize    = gridBatch.voxel_size_at(bi, torch::kFloat64).to(torch::kCPU);
+        torch::Tensor origin       = gridBatch.origin_at(bi, torch::kFloat64).to(torch::kCPU);
+        const double *voxelSizePtr = voxelSize.data_ptr<double>();
+        const double sx            = voxelSizePtr[0];
+        const double sy            = voxelSizePtr[1];
+        const double sz            = voxelSizePtr[2];
+        writeGridData->mVoxelSize  = {sx, sy, sz};
+        const double mat[3][3]     = {{sx, 0.0, 0.0},        // row 0
+                                      {0.0, sy, 0.0},        // row 1
+                                      {0.0, 0.0, sz}};       // row 2
+        const double invMat[3][3]  = {{1.0 / sx, 0.0, 0.0},  // row 0
+                                      {0.0, 1.0 / sy, 0.0},  // row 1
+                                      {0.0, 0.0, 1.0 / sz}}; // row 2
+        const double *originPtr    = origin.data_ptr<double>();
+        nanovdb::Vec3d trans       = {originPtr[0], originPtr[1], originPtr[2]};
+        writeGridData->mMap.set(mat, invMat, trans);
+
         readHead += sourceGridByteSize;
         writeHead += sourceGridByteSize;
 
