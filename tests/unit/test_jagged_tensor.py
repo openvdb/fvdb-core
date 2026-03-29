@@ -1805,9 +1805,6 @@ class TestJaggedTensor(unittest.TestCase):
         elif dtype == torch.float16:
             atol = 1e-3
             rtol = 1e-3
-        elif dtype == torch.bfloat16:
-            atol = 1e-2
-            rtol = 1e-2
         self.assertTrue(torch.allclose(out_jagged_torch_forloop.jdata, out_jagged_fvdb.jdata, atol=atol, rtol=rtol))
         self.assertTrue(torch.all(out_jagged_torch_forloop.joffsets == out_jagged_fvdb.joffsets))
 
