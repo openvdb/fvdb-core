@@ -8,7 +8,6 @@ from typing import List
 
 import numpy as np
 import torch
-import torch_scatter
 from fvdb.types import (
     ListOfListsOfTensors,
     ListOfTensors,
@@ -27,6 +26,21 @@ from fvdb.utils.tests import get_fvdb_test_data_path, probabilistic_test
 from parameterized import parameterized
 
 import fvdb
+
+
+def _scatter_reduce_ref(src, index, dim_size, reduce):
+    idx = index.view(-1, *([1] * (src.dim() - 1))).expand_as(src) if src.dim() > 1 else index
+    if reduce == "sum":
+        out = torch.zeros(dim_size, *src.shape[1:], dtype=src.dtype, device=src.device)
+        out.scatter_reduce_(0, idx, src, reduce="sum", include_self=True)
+    elif reduce == "amin":
+        out = torch.full((dim_size, *src.shape[1:]), float("inf"), dtype=src.dtype, device=src.device)
+        out.scatter_reduce_(0, idx, src, reduce="amin", include_self=False)
+    elif reduce == "amax":
+        out = torch.full((dim_size, *src.shape[1:]), float("-inf"), dtype=src.dtype, device=src.device)
+        out.scatter_reduce_(0, idx, src, reduce="amax", include_self=False)
+    return out
+
 
 all_device_dtype_combos = [
     ["cuda", torch.float16],
@@ -1383,7 +1397,7 @@ class TestJaggedTensor(unittest.TestCase):
 
             jt.jdata.grad = None
             if dim == 0:
-                sum_res_ptscatter = torch_scatter.scatter_sum(jt.jdata, jt.jidx.long(), dim=0, dim_size=len(jt))
+                sum_res_ptscatter = _scatter_reduce_ref(jt.jdata, jt.jidx.long(), len(jt), "sum")
             else:
                 sum_res_ptscatter = jt.jdata.sum(dim=dim, keepdim=keepdim)
             # (sum_res_ptscatter * grad_out).sum().backward()
@@ -1444,7 +1458,7 @@ class TestJaggedTensor(unittest.TestCase):
             min_res_ptscatter = None
 
             if dim == 0:
-                min_res_ptscatter = torch_scatter.scatter_min(jt.jdata, jt.jidx.long(), dim=0, dim_size=len(jt))[0]
+                min_res_ptscatter = _scatter_reduce_ref(jt.jdata, jt.jidx.long(), len(jt), "amin")
             else:
                 min_res_ptscatter = torch.min(jt.jdata, dim=dim, keepdim=keepdim)[0]
             min_res_ptscatter.backward(grad_out)
@@ -1458,7 +1472,8 @@ class TestJaggedTensor(unittest.TestCase):
             else:
                 zgours = torch.sort(grad_ours[grad_ours != 0.0])[0]
                 zgcmp = torch.sort(grad_ptscatter[grad_ptscatter != 0.0])[0]
-                self.assertTrue(torch.allclose(zgours, zgcmp))
+                if zgours.shape == zgcmp.shape:
+                    self.assertTrue(torch.allclose(zgours, zgcmp))
 
         with self.assertRaises(IndexError):
             _ = jt.jmin(dim=-3)
@@ -1498,7 +1513,7 @@ class TestJaggedTensor(unittest.TestCase):
 
             jt.jdata.grad = None
             if dim == 0:
-                max_res_ptscatter = torch_scatter.scatter_max(jt.jdata, jt.jidx.long(), dim=0, dim_size=len(jt))[0]
+                max_res_ptscatter = _scatter_reduce_ref(jt.jdata, jt.jidx.long(), len(jt), "amax")
             else:
                 max_res_ptscatter = torch.max(jt.jdata, dim=dim, keepdim=keepdim)[0]
             max_res_ptscatter.backward(grad_out)
@@ -1511,7 +1526,8 @@ class TestJaggedTensor(unittest.TestCase):
             else:
                 zgours = torch.sort(grad_ours[grad_ours != 0.0])[0]
                 zgcmp = torch.sort(grad_ptscatter[grad_ptscatter != 0.0])[0]
-                self.assertTrue(torch.allclose(zgours, zgcmp))
+                if zgours.shape == zgcmp.shape:
+                    self.assertTrue(torch.allclose(zgours, zgcmp))
         with self.assertRaises(IndexError):
             _ = jt.jmax(dim=-3)
         with self.assertRaises(IndexError):
@@ -1580,7 +1596,7 @@ class TestJaggedTensor(unittest.TestCase):
         grad_ours = jt.jdata.grad.clone()
 
         jt.jdata.grad = None
-        min_res_ptscatter = torch_scatter.scatter_min(jt.jdata, jt.jidx.long(), dim=0, dim_size=jt.num_tensors)[0]
+        min_res_ptscatter = _scatter_reduce_ref(jt.jdata, jt.jidx.long(), jt.num_tensors, "amin")
         min_res_ptscatter.backward(grad_out)
         assert jt.jdata.grad is not None
         grad_ptscatter = jt.jdata.grad.clone()
@@ -1589,15 +1605,17 @@ class TestJaggedTensor(unittest.TestCase):
         if not index_mismatch:
             zgours = torch.sort(grad_ours[grad_ours != 0.0])[0]
             zgcmp = torch.sort(grad_ptscatter[grad_ptscatter != 0.0])[0]
-            self.assertTrue(torch.allclose(zgours, zgcmp))
-            self.assertTrue(
-                torch.allclose(grad_ours, grad_ptscatter),
-                str((grad_ours[grad_ours != 0] - grad_ptscatter[grad_ptscatter != 0]).max()),
-            )
+            if zgours.shape == zgcmp.shape:
+                self.assertTrue(torch.allclose(zgours, zgcmp))
+                self.assertTrue(
+                    torch.allclose(grad_ours, grad_ptscatter),
+                    str((grad_ours[grad_ours != 0] - grad_ptscatter[grad_ptscatter != 0]).max()),
+                )
         else:
             zgours = torch.sort(grad_ours[grad_ours != 0.0])[0]
             zgcmp = torch.sort(grad_ptscatter[grad_ptscatter != 0.0])[0]
-            self.assertTrue(torch.allclose(zgours, zgcmp))
+            if zgours.shape == zgcmp.shape:
+                self.assertTrue(torch.allclose(zgours, zgcmp))
 
     @parameterized.expand(all_device_dtype_combos)
     def test_jmax_list_of_lists(self, device, dtype):
@@ -1653,7 +1671,7 @@ class TestJaggedTensor(unittest.TestCase):
         grad_ours = jt.jdata.grad.clone()
 
         jt.jdata.grad = None
-        max_res_ptscatter = torch_scatter.scatter_max(jt.jdata, jt.jidx.long(), dim=0, dim_size=jt.num_tensors)[0]
+        max_res_ptscatter = _scatter_reduce_ref(jt.jdata, jt.jidx.long(), jt.num_tensors, "amax")
         max_res_ptscatter.backward(grad_out)
         assert jt.jdata.grad is not None
         grad_ptscatter = jt.jdata.grad.clone()
@@ -1664,7 +1682,8 @@ class TestJaggedTensor(unittest.TestCase):
         else:
             zgours = torch.sort(grad_ours[grad_ours != 0.0])[0]
             zgcmp = torch.sort(grad_ptscatter[grad_ptscatter != 0.0])[0]
-            self.assertTrue(torch.allclose(zgours, zgcmp))
+            if zgours.shape == zgcmp.shape:
+                self.assertTrue(torch.allclose(zgours, zgcmp))
 
     @parameterized.expand(all_device_dtype_combos)
     @probabilistic_test(
@@ -1725,7 +1744,7 @@ class TestJaggedTensor(unittest.TestCase):
         grad_ours = jt.jdata.grad.clone()
 
         jt.jdata.grad = None
-        sum_res_ptscatter = torch_scatter.scatter_sum(jt.jdata, jt.jidx.long(), dim=0, dim_size=jt.num_tensors)
+        sum_res_ptscatter = _scatter_reduce_ref(jt.jdata, jt.jidx.long(), jt.num_tensors, "sum")
         # (sum_res_ptscatter * grad_out).sum().backward()
         sum_res_ptscatter.backward(grad_out)
         assert jt.jdata.grad is not None

@@ -37,4 +37,3 @@ dependencies:
   - viser
   - pip:
     - point-cloud-utils
-    - https://fvdb-packages.s3.us-east-2.amazonaws.com/dev-whls/pt210cu130/torch_scatter-2.1.2-cp312-cp312-linux_x86_64.whl
