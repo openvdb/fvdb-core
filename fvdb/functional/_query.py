@@ -239,6 +239,38 @@ def neighbor_indexes(
     return JaggedTensor(impl=_fvdb_cpp.neighbor_indexes(grid_data, ijk._impl, extent, bitshift))
 
 
+@overload
+def ijk_to_inv_index(grid: GridBatch, ijk: torch.Tensor, cumulative: bool = False) -> torch.Tensor: ...
+
+
+@overload
+def ijk_to_inv_index(grid: GridBatch, ijk: JaggedTensor, cumulative: bool = False) -> JaggedTensor: ...
+
+
+def ijk_to_inv_index(
+    grid: GridBatch,
+    ijk: torch.Tensor | JaggedTensor,
+    cumulative: bool = False,
+) -> torch.Tensor | JaggedTensor:
+    """
+    Get inverse permutation of :func:`ijk_to_index`. For each voxel in each
+    grid, return the index in the input ``ijk`` tensor.
+
+    Args:
+        grid: The grid to index into.
+        ijk: Voxel coordinates with integer dtype.
+        cumulative: If ``True``, return indices cumulative across the batch.
+
+    Returns:
+        Inverse permutation indices.
+    """
+    grid_data = _get_grid_data(grid)
+    if isinstance(ijk, torch.Tensor):
+        jt = JaggedTensor(ijk)
+        return _fvdb_cpp.ijk_to_inv_index(grid_data, jt._impl, cumulative).jdata
+    return JaggedTensor(impl=_fvdb_cpp.ijk_to_inv_index(grid_data, ijk._impl, cumulative))
+
+
 def active_grid_coords(grid: GridBatch) -> JaggedTensor:
     """
     Return the voxel coordinates of every active voxel in the grid, in index order.

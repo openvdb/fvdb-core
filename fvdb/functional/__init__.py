@@ -33,6 +33,7 @@ from ._dense import (
     inject,
     inject_from_dense_cmajor,
     inject_from_dense_cminor,
+    inject_from_ijk,
     inject_to_dense_cmajor,
     inject_to_dense_cminor,
 )
@@ -44,6 +45,7 @@ from ._query import (
     cubes_in_grid,
     cubes_intersect_grid,
     ijk_to_index,
+    ijk_to_inv_index,
     neighbor_indexes,
     points_in_grid,
 )
@@ -51,17 +53,22 @@ from ._query import (
 # Ray operations
 from ._ray import (
     ray_implicit_intersection,
+    rays_intersect_voxels,
     segments_along_rays,
     uniform_ray_samples,
     voxels_along_rays,
 )
 
 # Meshing / TSDF
-from ._meshing import integrate_tsdf, marching_cubes
+from ._meshing import integrate_tsdf, integrate_tsdf_with_features, marching_cubes
 
 # Grid topology
 from ._topology import (
+    clip,
+    clipped_grid,
+    clone_grid,
     coarsened_grid,
+    contiguous,
     conv_grid,
     conv_transpose_grid,
     dilated_grid,
@@ -75,6 +82,9 @@ from ._topology import (
     pruned_grid,
     refined_grid,
 )
+
+# Grid indexing
+from ._indexing import index_grid
 
 __all__ = [
     # Interpolation
@@ -94,6 +104,7 @@ __all__ = [
     # Dense I/O
     "inject_from_dense_cminor",
     "inject_from_dense_cmajor",
+    "inject_from_ijk",
     "inject_to_dense_cminor",
     "inject_to_dense_cmajor",
     "inject",
@@ -103,17 +114,24 @@ __all__ = [
     "cubes_in_grid",
     "cubes_intersect_grid",
     "ijk_to_index",
+    "ijk_to_inv_index",
     "neighbor_indexes",
     "active_grid_coords",
     # Rays
     "voxels_along_rays",
+    "rays_intersect_voxels",
     "segments_along_rays",
     "uniform_ray_samples",
     "ray_implicit_intersection",
     # Meshing
     "marching_cubes",
     "integrate_tsdf",
+    "integrate_tsdf_with_features",
     # Topology
+    "clip",
+    "clipped_grid",
+    "clone_grid",
+    "contiguous",
     "coarsened_grid",
     "refined_grid",
     "dual_grid",
@@ -127,4 +145,6 @@ __all__ = [
     "hilbert",
     "hilbert_zyx",
     "edge_network",
+    # Indexing
+    "index_grid",
 ]

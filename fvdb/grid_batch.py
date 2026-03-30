@@ -28,7 +28,7 @@ mesh extraction, and coordinate transformations on sparse voxel data.
 """
 
 from collections.abc import Iterator
-from typing import Any, Sequence, cast, overload
+from typing import Any, Sequence, overload
 
 import numpy as np
 import torch
@@ -47,7 +47,6 @@ from .types import (
     to_Vec3fBatchBroadcastable,
     to_Vec3fBroadcastable,
     to_Vec3i,
-    to_Vec3iBatchBroadcastable,
     to_Vec3iBroadcastable,
 )
 
@@ -785,17 +784,9 @@ class GridBatch:
             clipped_features (JaggedTensor): A :class:`fvdb.JaggedTensor` containing the clipped voxel features with shape ``(batch_size, clipped_total_voxels, channels)``.
             clipped_grid (GridBatch): A new :class:`fvdb.GridBatch` containing only voxels within the specified bounds for each grid.
         """
-        grid_data = _get_grid_data(self)
-        ijk_min_t = to_Vec3iBatchBroadcastable(ijk_min)
-        ijk_max_t = to_Vec3iBatchBroadcastable(ijk_max)
-        if ijk_min_t.dim() == 1:
-            ijk_min_t = ijk_min_t.unsqueeze(0).expand(grid_data.grid_count, 3)
-        if ijk_max_t.dim() == 1:
-            ijk_max_t = ijk_max_t.unsqueeze(0).expand(grid_data.grid_count, 3)
-        result_features_impl, result_grid_impl = _fvdb_cpp.clip_grid_features_with_mask(
-            grid_data, features._impl, ijk_min_t.tolist(), ijk_max_t.tolist()
-        )
-        return JaggedTensor(impl=result_features_impl), GridBatch(data=result_grid_impl)
+        from . import functional
+
+        return functional.clip(self, features, ijk_min, ijk_max)
 
     def clipped_grid(
         self,
@@ -813,14 +804,9 @@ class GridBatch:
         Returns:
             clipped_grid (GridBatch): A :class:`GridBatch` representing the clipped version of this grid batch.
         """
-        grid_data = _get_grid_data(self)
-        ijk_min_t = to_Vec3iBatchBroadcastable(ijk_min)
-        ijk_max_t = to_Vec3iBatchBroadcastable(ijk_max)
-        if ijk_min_t.dim() == 1:
-            ijk_min_t = ijk_min_t.unsqueeze(0).expand(grid_data.grid_count, 3)
-        if ijk_max_t.dim() == 1:
-            ijk_max_t = ijk_max_t.unsqueeze(0).expand(grid_data.grid_count, 3)
-        return GridBatch(data=_fvdb_cpp.clip_grid(grid_data, ijk_min_t.tolist(), ijk_max_t.tolist()))
+        from . import functional
+
+        return functional.clipped_grid(self, ijk_min, ijk_max)
 
     def coarsened_grid(self, coarsening_factor: NumericMaxRank1) -> "GridBatch":
         """
@@ -848,7 +834,9 @@ class GridBatch:
         Returns:
             grid_batch (GridBatch): A new GridBatch with contiguous memory layout.
         """
-        return GridBatch(data=_fvdb_cpp.make_contiguous(_get_grid_data(self)))
+        from . import functional
+
+        return functional.contiguous(self)
 
     def conv_grid(self, kernel_size: NumericMaxRank1, stride: NumericMaxRank1 = 1) -> "GridBatch":
         """
@@ -903,7 +891,7 @@ class GridBatch:
         Returns:
             grid_batch (GridBatch): A new :class:`fvdb.GridBatch` on CPU device.
         """
-        return GridBatch(data=_fvdb_cpp.clone_grid(_get_grid_data(self), torch.device("cpu")))
+        return self.to("cpu")
 
     def cubes_in_grid(
         self, cube_centers: JaggedTensor, cube_min: NumericMaxRank1 = 0, cube_max: NumericMaxRank1 = 0
@@ -962,7 +950,7 @@ class GridBatch:
         Returns:
             grid_batch (GridBatch): A new :class:`fvdb.GridBatch` on CUDA device.
         """
-        return GridBatch(data=_fvdb_cpp.clone_grid(_get_grid_data(self), torch.device("cuda")))
+        return self.to("cuda")
 
     def cum_voxels_at(self, bi: int) -> int:
         """
@@ -1045,16 +1033,9 @@ class GridBatch:
         Returns:
             world_coords (JaggedTensor): World coordinates. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_points_for_grid_b, 3)``.
         """
-        if ijk.jdata.device != self.device:
-            raise RuntimeError(
-                f"Expected all tensors to be on the same device, but found at least two devices, "
-                f"{self.device} and {ijk.jdata.device}!"
-            )
-        float_data = ijk.jdata if ijk.jdata.is_floating_point() else ijk.jdata.float()
-        matrices = self.voxel_to_world_matrices.to(dtype=float_data.dtype, device=float_data.device)
-        per_pt = matrices[ijk.jidx]
-        world = torch.einsum("ni,nij->nj", float_data, per_pt[:, :3, :3]) + per_pt[:, 3, :3]
-        return ijk.jagged_like(world)
+        from . import functional
+
+        return functional.voxel_to_world(self, ijk)
 
     def has_same_address_and_grid_count(self, other: Any) -> bool:
         """
@@ -1111,7 +1092,9 @@ class GridBatch:
             inv_map (JaggedTensor): Inverse permutation for :meth:`ijk_to_index`.
                 A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_queries_for_grid_b)``.
         """
-        return JaggedTensor(impl=_fvdb_cpp.ijk_to_inv_index(_get_grid_data(self), ijk._impl, cumulative))
+        from . import functional
+
+        return functional.ijk_to_inv_index(self, ijk, cumulative)
 
     def inject_from(
         self,
@@ -1181,31 +1164,9 @@ class GridBatch:
             default_value (float | int | bool): Value to fill in for voxels that do not have corresponding data in `src`.
                 Default is 0.
         """
+        from . import functional
 
-        if not isinstance(src_ijk, JaggedTensor):
-            raise TypeError(f"src_ijk must be a JaggedTensor, but got {type(src_ijk)}")
-
-        if not isinstance(src, JaggedTensor):
-            raise TypeError(f"src must be a JaggedTensor, but got {type(src)}")
-
-        if dst is None:
-            dst_shape = [self.total_voxels]
-            dst_shape.extend(src.eshape)
-            dst = self.jagged_like(torch.full(dst_shape, fill_value=default_value, dtype=src.dtype, device=src.device))
-        else:
-            if not isinstance(dst, JaggedTensor):
-                raise TypeError(f"dst must be a JaggedTensor, but got {type(dst)}")
-
-        if dst.eshape != src.eshape:
-            raise ValueError(
-                f"src and dst must have the same element shape, but got src: {src.eshape}, dst: {dst.eshape}"
-            )
-
-        src_idx = self.ijk_to_index(src_ijk, cumulative=True).jdata
-        src_mask = src_idx >= 0
-        src_idx = src_idx[src_mask]
-        dst.jdata[src_idx] = src.jdata[src_mask]
-        return dst
+        return functional.inject_from_ijk(self, src_ijk, src, dst, default_value)
 
     def inject_to(
         self,
@@ -1332,12 +1293,12 @@ class GridBatch:
             updated_weights (JaggedTensor): Updated weights as JaggedTensor.
             updated_features (JaggedTensor): Updated features as JaggedTensor.
         """
-        grid_data = _get_grid_data(self)
-        rg, rt, rw, rf = _fvdb_cpp.integrate_tsdf_with_features(
-            grid_data, truncation_distance, projection_matrices, cam_to_world_matrices, tsdf._impl, features._impl,
-            weights._impl, depth_images, feature_images, weight_images,
+        from . import functional
+
+        return functional.integrate_tsdf_with_features(
+            self, truncation_distance, projection_matrices, cam_to_world_matrices, tsdf, features,
+            weights, depth_images, feature_images, weight_images,
         )
-        return GridBatch(data=rg), JaggedTensor(impl=rt), JaggedTensor(impl=rw), JaggedTensor(impl=rf)
 
     def is_contiguous(self) -> bool:
         """
@@ -1955,6 +1916,8 @@ class GridBatch:
         Returns:
             grid_batch (GridBatch): A new GridBatch on the target device.
         """
+        from . import functional
+
         if isinstance(target, str):
             device = _parse_device_string(target)
         elif isinstance(target, torch.device):
@@ -1967,7 +1930,7 @@ class GridBatch:
             device = target.device
         else:
             raise TypeError(f"Unsupported type for to(): {type(target)}")
-        return GridBatch(data=_fvdb_cpp.clone_grid(_get_grid_data(self), device))
+        return functional.clone_grid(self, device)
 
     def save_nanovdb(
         self,
@@ -2097,17 +2060,9 @@ class GridBatch:
             hit_mask (JaggedTensor): A :class:`fvdb.JaggedTensor` indicating whether each ray hit a voxel.
                 *i.e.* a boolean :class:`fvdb.JaggedTensor` of the form ``[hit_0, ..., hit_B]`` where ``hit_I`` has shape ``[N_I]``.
         """
-        _, ray_times = self.voxels_along_rays(
-            ray_origins=ray_origins,
-            ray_directions=ray_directions,
-            max_voxels=1,
-            eps=eps,
-            return_ijk=False,
-            cumulative=False,
-        )
+        from . import functional
 
-        did_hit = (ray_times.joffsets[1:] - ray_times.joffsets[:-1]) > 0
-        return ray_origins.jagged_like(did_hit)
+        return functional.rays_intersect_voxels(self, ray_origins, ray_directions, eps)
 
     def voxels_along_rays(
         self,
@@ -2166,16 +2121,9 @@ class GridBatch:
             voxel_points (JaggedTensor): Grid coordinates. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_points_for_grid_b, 3)``.
                 Can contain fractional values.
         """
-        if points.jdata.device != self.device:
-            raise RuntimeError(
-                f"Expected all tensors to be on the same device, but found at least two devices, "
-                f"{self.device} and {points.jdata.device}!"
-            )
-        float_data = points.jdata if points.jdata.is_floating_point() else points.jdata.float()
-        matrices = self.world_to_voxel_matrices.to(dtype=float_data.dtype, device=float_data.device)
-        per_pt = matrices[points.jidx]
-        voxel = torch.einsum("ni,nij->nj", float_data, per_pt[:, :3, :3]) + per_pt[:, 3, :3]
-        return points.jagged_like(voxel)
+        from . import functional
+
+        return functional.world_to_voxel(self, points)
 
     def inject_to_dense_cminor(
         self,
@@ -2288,7 +2236,9 @@ class GridBatch:
         Returns:
             grid_batch (GridBatch): A new GridBatch containing the selected grid.
         """
-        return GridBatch(data=_fvdb_cpp.index_grid_int(_get_grid_data(self), int(bi)))
+        from . import functional
+
+        return functional.index_grid(self, int(bi))
 
     def index_list(self, indices: list[bool] | list[int]) -> "GridBatch":
         """
@@ -2300,10 +2250,9 @@ class GridBatch:
         Returns:
             grid_batch (GridBatch): A new GridBatch containing the selected grids.
         """
-        grid_data = _get_grid_data(self)
-        if len(indices) > 0 and isinstance(indices[0], bool):
-            return GridBatch(data=_fvdb_cpp.index_grid_bool_list(grid_data, cast(list[bool], indices)))
-        return GridBatch(data=_fvdb_cpp.index_grid_int64_list(grid_data, cast(list[int], indices)))
+        from . import functional
+
+        return functional.index_grid(self, indices)
 
     def index_slice(self, s: slice) -> "GridBatch":
         """
@@ -2315,8 +2264,9 @@ class GridBatch:
         Returns:
             grid_batch (GridBatch): A new GridBatch containing the selected grids.
         """
-        start, stop, step = s.indices(self.grid_count)
-        return GridBatch(data=_fvdb_cpp.index_grid_slice(_get_grid_data(self), start, stop, step))
+        from . import functional
+
+        return functional.index_grid(self, s)
 
     def index_tensor(self, indices: torch.Tensor) -> "GridBatch":
         """
@@ -2328,7 +2278,9 @@ class GridBatch:
         Returns:
             grid_batch (GridBatch): A new GridBatch containing the selected grids.
         """
-        return GridBatch(data=_fvdb_cpp.index_grid_tensor(_get_grid_data(self), indices))
+        from . import functional
+
+        return functional.index_grid(self, indices)
 
     # Special methods
     def __getitem__(self, index: GridBatchIndex) -> "GridBatch":
@@ -2579,7 +2531,9 @@ class GridBatch:
             ijk (JaggedTensor): A :class:`fvdb.JaggedTensor` with shape ``(batch_size, total_voxels, 3)`` containing the
                 voxel coordinates of each active voxel in index order for each grid.
         """
-        return JaggedTensor(impl=_fvdb_cpp.active_grid_coords(_get_grid_data(self)))
+        from . import functional
+
+        return functional.active_grid_coords(self)
 
     def morton(self, offset: NumericMaxRank1 | None = None) -> JaggedTensor:
         """

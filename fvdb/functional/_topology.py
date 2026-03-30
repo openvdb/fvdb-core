@@ -10,7 +10,7 @@ import torch
 
 from ..jagged_tensor import JaggedTensor
 from .. import _fvdb_cpp
-from ..types import NumericMaxRank1, ValueConstraint, to_Vec3i, to_Vec3i
+from ..types import NumericMaxRank1, NumericMaxRank2, ValueConstraint, to_Vec3i, to_Vec3iBatchBroadcastable
 from ._dispatch import _get_grid_data
 
 if TYPE_CHECKING:
@@ -152,6 +152,97 @@ def pruned_grid(
     if isinstance(mask, torch.Tensor):
         mask = JaggedTensor(mask)
     return _wrap_grid(_fvdb_cpp.prune_grid(grid_data, mask._impl))
+
+
+def _normalize_clip_bounds(
+    grid_data: _fvdb_cpp.GridBatchData,
+    ijk_min: NumericMaxRank2,
+    ijk_max: NumericMaxRank2,
+) -> tuple[list, list]:
+    """Normalize clip bounds, expanding 1D inputs to (grid_count, 3)."""
+    ijk_min_t = to_Vec3iBatchBroadcastable(ijk_min)
+    ijk_max_t = to_Vec3iBatchBroadcastable(ijk_max)
+    if ijk_min_t.dim() == 1:
+        ijk_min_t = ijk_min_t.unsqueeze(0).expand(grid_data.grid_count, 3)
+    if ijk_max_t.dim() == 1:
+        ijk_max_t = ijk_max_t.unsqueeze(0).expand(grid_data.grid_count, 3)
+    return ijk_min_t.tolist(), ijk_max_t.tolist()
+
+
+def clipped_grid(
+    grid: GridBatch,
+    ijk_min: NumericMaxRank2,
+    ijk_max: NumericMaxRank2,
+) -> GridBatch:
+    """
+    Return a grid containing only voxels within ``[ijk_min, ijk_max]``.
+
+    Args:
+        grid: The grid to clip.
+        ijk_min: Minimum voxel-space bounds, broadcastable to ``(B, 3)``, integer dtype.
+        ijk_max: Maximum voxel-space bounds, broadcastable to ``(B, 3)``, integer dtype.
+
+    Returns:
+        A new clipped grid.
+    """
+    grid_data = _get_grid_data(grid)
+    mn, mx = _normalize_clip_bounds(grid_data, ijk_min, ijk_max)
+    return _wrap_grid(_fvdb_cpp.clip_grid(grid_data, mn, mx))
+
+
+def clip(
+    grid: GridBatch,
+    features: JaggedTensor,
+    ijk_min: NumericMaxRank2,
+    ijk_max: NumericMaxRank2,
+) -> tuple[JaggedTensor, GridBatch]:
+    """
+    Clip a grid and its associated features to ``[ijk_min, ijk_max]``.
+
+    Supports backpropagation through the clipping operation.
+
+    Args:
+        grid: The grid to clip.
+        features: Voxel features to clip alongside the grid.
+        ijk_min: Minimum voxel-space bounds, broadcastable to ``(B, 3)``, integer dtype.
+        ijk_max: Maximum voxel-space bounds, broadcastable to ``(B, 3)``, integer dtype.
+
+    Returns:
+        A tuple ``(clipped_features, clipped_grid)``.
+    """
+    grid_data = _get_grid_data(grid)
+    mn, mx = _normalize_clip_bounds(grid_data, ijk_min, ijk_max)
+    result_features_impl, result_grid_impl = _fvdb_cpp.clip_grid_features_with_mask(
+        grid_data, features._impl, mn, mx
+    )
+    return JaggedTensor(impl=result_features_impl), _wrap_grid(result_grid_impl)
+
+
+def contiguous(grid: GridBatch) -> GridBatch:
+    """
+    Return a contiguous copy of the grid batch.
+
+    Args:
+        grid: The grid to make contiguous.
+
+    Returns:
+        A new grid with contiguous memory layout.
+    """
+    return _wrap_grid(_fvdb_cpp.make_contiguous(_get_grid_data(grid)))
+
+
+def clone_grid(grid: GridBatch, device: torch.device) -> GridBatch:
+    """
+    Clone a grid to the specified device.
+
+    Args:
+        grid: The grid to clone.
+        device: Target device.
+
+    Returns:
+        A new grid on the target device.
+    """
+    return _wrap_grid(_fvdb_cpp.clone_grid(_get_grid_data(grid), device))
 
 
 # ---------------------------------------------------------------------------

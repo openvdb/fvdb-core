@@ -10,7 +10,7 @@ import torch
 
 from .. import _fvdb_cpp
 from ..jagged_tensor import JaggedTensor
-from ._dispatch import _prepare_args
+from ._dispatch import _get_grid_data, _prepare_args
 
 if TYPE_CHECKING:
     from ..grid_batch import GridBatch
@@ -130,3 +130,92 @@ def integrate_tsdf(
     if is_flat:
         return new_grid, rt.jdata, rw.jdata
     return new_grid, JaggedTensor(impl=rt), JaggedTensor(impl=rw)
+
+
+@overload
+def integrate_tsdf_with_features(
+    grid: GridBatch,
+    truncation_distance: float,
+    projection_matrices: torch.Tensor,
+    cam_to_world_matrices: torch.Tensor,
+    tsdf: torch.Tensor,
+    features: torch.Tensor,
+    weights: torch.Tensor,
+    depth_images: torch.Tensor,
+    feature_images: torch.Tensor,
+    weight_images: torch.Tensor | None = None,
+) -> tuple[GridBatch, torch.Tensor, torch.Tensor, torch.Tensor]: ...
+
+
+@overload
+def integrate_tsdf_with_features(
+    grid: GridBatch,
+    truncation_distance: float,
+    projection_matrices: torch.Tensor,
+    cam_to_world_matrices: torch.Tensor,
+    tsdf: JaggedTensor,
+    features: JaggedTensor,
+    weights: JaggedTensor,
+    depth_images: torch.Tensor,
+    feature_images: torch.Tensor,
+    weight_images: torch.Tensor | None = None,
+) -> tuple[GridBatch, JaggedTensor, JaggedTensor, JaggedTensor]: ...
+
+
+def integrate_tsdf_with_features(
+    grid: GridBatch,
+    truncation_distance: float,
+    projection_matrices: torch.Tensor,
+    cam_to_world_matrices: torch.Tensor,
+    tsdf: torch.Tensor | JaggedTensor,
+    features: torch.Tensor | JaggedTensor,
+    weights: torch.Tensor | JaggedTensor,
+    depth_images: torch.Tensor,
+    feature_images: torch.Tensor,
+    weight_images: torch.Tensor | None = None,
+) -> (
+    tuple[GridBatch, torch.Tensor, torch.Tensor, torch.Tensor]
+    | tuple[GridBatch, JaggedTensor, JaggedTensor, JaggedTensor]
+):
+    """
+    Integrate depth and feature images into a TSDF volume with features.
+
+    Similar to :func:`integrate_tsdf` but also integrates feature observations
+    (e.g., color) along with the depth information.
+
+    Args:
+        grid: The grid structure.
+        truncation_distance: Maximum TSDF truncation distance.
+        projection_matrices: Camera projection matrices, shape ``(B, 3, 3)``.
+        cam_to_world_matrices: Camera-to-world transforms, shape ``(B, 4, 4)``.
+        tsdf: Current TSDF values.
+        features: Current feature values at each voxel.
+        weights: Current integration weights.
+        depth_images: Depth images, shape ``(B, H, W)``.
+        feature_images: Feature images (e.g., RGB), shape ``(B, H, W, C)``.
+        weight_images: Optional per-pixel weight images.
+
+    Returns:
+        A tuple ``(updated_grid, updated_tsdf, updated_weights, updated_features)``.
+    """
+    from ..grid_batch import GridBatch as GB
+
+    is_flat = isinstance(tsdf, torch.Tensor)
+    grid_data, (tsdf_jt, features_jt, weights_jt), unwrap = _prepare_args(grid, tsdf, features, weights)
+    assert tsdf_jt is not None and features_jt is not None and weights_jt is not None
+    rg, rt, rw, rf = _fvdb_cpp.integrate_tsdf_with_features(
+        grid_data,
+        truncation_distance,
+        projection_matrices,
+        cam_to_world_matrices,
+        tsdf_jt._impl,
+        features_jt._impl,
+        weights_jt._impl,
+        depth_images,
+        feature_images,
+        weight_images,
+    )
+    new_grid = GB(data=rg)
+    if is_flat:
+        return new_grid, rt.jdata, rw.jdata, rf.jdata
+    return new_grid, JaggedTensor(impl=rt), JaggedTensor(impl=rw), JaggedTensor(impl=rf)

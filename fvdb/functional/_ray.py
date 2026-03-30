@@ -10,7 +10,7 @@ import torch
 
 from .. import _fvdb_cpp
 from ..jagged_tensor import JaggedTensor
-from ._dispatch import _prepare_args
+from ._dispatch import _get_grid_data, _prepare_args
 
 if TYPE_CHECKING:
     from ..grid_batch import GridBatch
@@ -251,3 +251,64 @@ def ray_implicit_intersection(
         grid_data, ray_origins_jt._impl, ray_directions_jt._impl, grid_scalars_jt._impl, eps
     )
     return unwrap(result_impl.jdata)
+
+
+@overload
+def rays_intersect_voxels(
+    grid: GridBatch,
+    ray_origins: torch.Tensor,
+    ray_directions: torch.Tensor,
+    eps: float = 0.0,
+) -> JaggedTensor: ...
+
+
+@overload
+def rays_intersect_voxels(
+    grid: GridBatch,
+    ray_origins: JaggedTensor,
+    ray_directions: JaggedTensor,
+    eps: float = 0.0,
+) -> JaggedTensor: ...
+
+
+def rays_intersect_voxels(
+    grid: GridBatch,
+    ray_origins: torch.Tensor | JaggedTensor,
+    ray_directions: torch.Tensor | JaggedTensor,
+    eps: float = 0.0,
+) -> JaggedTensor:
+    """
+    Check whether rays hit any voxels in the grid.
+
+    Args:
+        grid: The grid to test against.
+        ray_origins: Ray start positions in world space.
+        ray_directions: Ray direction vectors.
+        eps: Epsilon for numerical stability.
+
+    Returns:
+        A boolean :class:`~fvdb.JaggedTensor` indicating whether each ray hit
+        a voxel.
+    """
+    # Normalize to JaggedTensor for the internal call
+    if isinstance(ray_origins, torch.Tensor):
+        ray_origins_jt = JaggedTensor(ray_origins)
+    else:
+        ray_origins_jt = ray_origins
+    if isinstance(ray_directions, torch.Tensor):
+        ray_directions_jt = JaggedTensor(ray_directions)
+    else:
+        ray_directions_jt = ray_directions
+
+    _, ray_times = voxels_along_rays(
+        grid,
+        ray_origins=ray_origins_jt,
+        ray_directions=ray_directions_jt,
+        max_voxels=1,
+        eps=eps,
+        return_ijk=False,
+        cumulative=False,
+    )
+
+    did_hit = (ray_times.joffsets[1:] - ray_times.joffsets[:-1]) > 0
+    return ray_origins_jt.jagged_like(did_hit)

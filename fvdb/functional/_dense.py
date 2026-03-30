@@ -410,3 +410,58 @@ def inject(
         raise ValueError(f"src and dst must have the same element shape, got src: {jt_src.eshape}, dst: {jt_dst_b.eshape}")
     _InjectFn.apply(jt_src.jdata, jt_dst_b.jdata, dst_grid_data, src_grid_data, jt_dst_b._impl, jt_src._impl)
     return jt_dst_b
+
+
+def inject_from_ijk(
+    grid: GridBatch,
+    src_ijk: JaggedTensor,
+    src: JaggedTensor,
+    dst: JaggedTensor | None = None,
+    default_value: float | int | bool = 0,
+) -> JaggedTensor:
+    """
+    Inject data from source voxel coordinates to a sidecar for the given grid.
+
+    This function supports backpropagation through the injection operation.
+
+    Args:
+        grid: The destination grid.
+        src_ijk: Voxel coordinates from which to copy data.
+            Shape: ``(B, num_src_voxels, 3)``.
+        src: Source data to inject. Shape: ``(B, num_src_voxels, *)``.
+        dst: Optional destination data (modified in-place). If ``None``, a new
+            :class:`~fvdb.JaggedTensor` is created filled with ``default_value``.
+        default_value: Fill value for voxels without source data. Default ``0``.
+
+    Returns:
+        The destination data after injection.
+    """
+    from . import _query
+
+    if not isinstance(src_ijk, JaggedTensor):
+        raise TypeError(f"src_ijk must be a JaggedTensor, but got {type(src_ijk)}")
+
+    if not isinstance(src, JaggedTensor):
+        raise TypeError(f"src must be a JaggedTensor, but got {type(src)}")
+
+    grid_data = _get_grid_data(grid)
+    if dst is None:
+        dst_shape: list[int] = [grid.total_voxels]
+        dst_shape.extend(src.eshape)
+        dst = JaggedTensor(impl=grid_data.jagged_like(
+            torch.full(dst_shape, fill_value=default_value, dtype=src.dtype, device=src.device)
+        ))
+    else:
+        if not isinstance(dst, JaggedTensor):
+            raise TypeError(f"dst must be a JaggedTensor, but got {type(dst)}")
+
+    if dst.eshape != src.eshape:
+        raise ValueError(
+            f"src and dst must have the same element shape, but got src: {src.eshape}, dst: {dst.eshape}"
+        )
+
+    src_idx = _query.ijk_to_index(grid, src_ijk, cumulative=True).jdata
+    src_mask = src_idx >= 0
+    src_idx = src_idx[src_mask]
+    dst.jdata[src_idx] = src.jdata[src_mask]
+    return dst
