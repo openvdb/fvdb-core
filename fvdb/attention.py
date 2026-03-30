@@ -18,8 +18,9 @@ def _make_nested_view(jt: JaggedTensor) -> torch.Tensor:
     """Create a zero-copy nested tensor view from a JaggedTensor.
 
     Constructs a PyTorch nested tensor that shares storage with the JaggedTensor's
-    underlying ``jdata`` buffer.  This avoids any data copy but only works with the
-    memory-efficient attention backend.
+    underlying ``jdata`` buffer. This avoids any data copy and is intended for
+    use with attention backends that support nested tensors (for example,
+    the memory-efficient and cuDNN scaled dot product attention backends).
 
     Args:
         jt: A JaggedTensor with ``ldim == 1`` and ``jdata`` of shape ``(Total, H, D)``.
