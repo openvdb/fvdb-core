@@ -16,8 +16,6 @@ services:
         target: /workspace/build
       - type: volume
         target: /workspace/dist
-      - type: volume
-        target: /workspace/_skbuild
     # Uncomment and adjust the following as needed
     # ports:
     #   - "8888:8888"  # Example for Jupyter notebook
