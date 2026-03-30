@@ -11,6 +11,7 @@ from torch.nn.attention import SDPBackend
 
 from .jagged_tensor import JaggedTensor
 
+_SDP_FLASH = SDPBackend.FLASH_ATTENTION.value
 _SDP_MATH = SDPBackend.MATH.value
 
 
@@ -96,8 +97,12 @@ def scaled_dot_product_attention(
     The SDP backend (flash, memory-efficient, math, or cuDNN) is chosen
     automatically based on the context set by
     :func:`torch.nn.attention.sdpa_kernel`.  Each backend has different nested
-    tensor requirements, so this function probes the enabled backends and
-    constructs the nested tensors accordingly.
+    tensor requirements, so this function probes the actual backend selection
+    via ``_fused_sdp_choice`` and constructs the nested tensors accordingly:
+
+    - **Efficient / cuDNN**: zero-copy view into the JaggedTensor buffer
+    - **Flash**: copy-based nested tensor (required by the kernel)
+    - **Math**: copy-based nested tensor, made contiguous after transpose
 
     See `PyTorch SDPA documentation
     <https://pytorch.org/docs/stable/generated/torch.nn.functional.scaled_dot_product_attention.html>`_
@@ -118,31 +123,39 @@ def scaled_dot_product_attention(
         output, with the same jagged structure as the query.
     """
 
-    flash_enabled = torch.backends.cuda.flash_sdp_enabled()
-    mem_efficient_enabled = torch.backends.cuda.mem_efficient_sdp_enabled()
-    math_enabled = torch.backends.cuda.math_sdp_enabled()
-    cudnn_enabled = torch.backends.cuda.cudnn_sdp_enabled()
+    for name, jt in [("query", query), ("key", key), ("value", value)]:
+        if jt.ldim != 1:
+            raise ValueError(
+                f"{name} must have ldim == 1 (a flat list of tensors), got ldim == {jt.ldim}. "
+                f"Nested jagged structures (list of lists) are not supported by SDPA."
+            )
+        if jt.jdata.ndim != 3:
+            raise ValueError(f"{name}.jdata must be 3-dimensional (Total, H, D), got shape {tuple(jt.jdata.shape)}")
 
-    math_only = math_enabled and not flash_enabled and not mem_efficient_enabled and not cudnn_enabled
+    if query.num_tensors != key.num_tensors or query.num_tensors != value.num_tensors:
+        raise ValueError(
+            f"query, key, and value must have the same batch size (num_tensors), "
+            f"got {query.num_tensors}, {key.num_tensors}, {value.num_tensors}"
+        )
+    if not torch.equal(key.joffsets, value.joffsets):
+        raise ValueError("key and value must have matching sequence lengths (joffsets differ)")
 
-    # Flash and math-only need copy-based nested tensors; efficient/cudnn can use zero-copy views.
-    if flash_enabled or math_only:
+    # Build zero-copy views first (cheap metadata, no data copy), then probe
+    # which backend PyTorch will actually select for the given inputs.
+    q_nested = _make_nested_view(query).transpose(1, 2)
+    k_nested = _make_nested_view(key).transpose(1, 2)
+    v_nested = _make_nested_view(value).transpose(1, 2)
+
+    backend = torch._fused_sdp_choice(q_nested, k_nested, v_nested, None, 0.0, False, scale=scale)
+
+    if backend == _SDP_FLASH:
         q_nested = _make_nested_tensor(query).transpose(1, 2)
         k_nested = _make_nested_tensor(key).transpose(1, 2)
         v_nested = _make_nested_tensor(value).transpose(1, 2)
-    else:
-        q_nested = _make_nested_view(query).transpose(1, 2)
-        k_nested = _make_nested_view(key).transpose(1, 2)
-        v_nested = _make_nested_view(value).transpose(1, 2)
-
-    # Math backend requires contiguous nested tensors after transpose.
-    if math_only or (
-        math_enabled
-        and torch._fused_sdp_choice(q_nested, k_nested, v_nested, None, 0.0, False, scale=scale) == _SDP_MATH
-    ):
-        q_nested = q_nested.contiguous()
-        k_nested = k_nested.contiguous()
-        v_nested = v_nested.contiguous()
+    elif backend == _SDP_MATH:
+        q_nested = _make_nested_tensor(query).transpose(1, 2).contiguous()
+        k_nested = _make_nested_tensor(key).transpose(1, 2).contiguous()
+        v_nested = _make_nested_tensor(value).transpose(1, 2).contiguous()
 
     out_nested = F.scaled_dot_product_attention(q_nested, k_nested, v_nested, scale=scale)
 
