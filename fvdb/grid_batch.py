@@ -34,41 +34,13 @@ import numpy as np
 import torch
 
 from . import _fvdb_cpp, _parse_device_string
-from .functional._dispatch import _get_grid_data
 from .jagged_tensor import JaggedTensor
 from .types import (
     DeviceIdentifier,
     GridBatchIndex,
     NumericMaxRank1,
     NumericMaxRank2,
-    ValueConstraint,
-    resolve_device,
-    to_Vec3fBatch,
-    to_Vec3fBatchBroadcastable,
-    to_Vec3fBroadcastable,
-    to_Vec3i,
-    to_Vec3iBroadcastable,
 )
-
-def _to_vec3d_batch(t: torch.Tensor, batch_size: int | None = None) -> list[list[float]]:
-    """Convert a broadcastable tensor to list[list[float]] for C++ bindings.
-
-    If *batch_size* is given the result is broadcast-expanded to that many rows.
-    """
-    t = t.to(torch.float64)
-    if t.dim() == 0:
-        v = t.item()
-        row = [v, v, v]
-        n = batch_size if batch_size is not None else 1
-        return [row] * n
-    if t.dim() == 1:
-        row = t.tolist()
-        n = batch_size if batch_size is not None else 1
-        return [row] * n
-    # t.dim() >= 2
-    if batch_size is not None and t.size(0) == 1 and batch_size > 1:
-        return t.expand(batch_size, -1).tolist()
-    return t.tolist()
 
 
 class GridBatch:
@@ -231,18 +203,9 @@ class GridBatch:
                 grid_batch.origins == tensor([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]])
 
         """
-        resolved_device = resolve_device(device, inherit_from=mask)
+        from . import functional
 
-        dense_dims = to_Vec3iBroadcastable(dense_dims, value_constraint=ValueConstraint.POSITIVE)
-        ijk_min = to_Vec3i(ijk_min)
-        voxel_sizes = to_Vec3fBatchBroadcastable(voxel_sizes, value_constraint=ValueConstraint.POSITIVE)
-        origins = to_Vec3fBatch(origins)
-
-        grid_data = _fvdb_cpp.gridbatch_from_dense(
-            num_grids, dense_dims.tolist(), ijk_min.tolist(),
-            _to_vec3d_batch(voxel_sizes, num_grids), _to_vec3d_batch(origins, num_grids),
-            mask, str(resolved_device))
-        return cls(data=grid_data)
+        return functional.gridbatch_from_dense(num_grids, dense_dims, ijk_min, voxel_sizes, origins, mask, device)
 
     @classmethod
     def from_dense_axis_aligned_bounds(
@@ -291,21 +254,11 @@ class GridBatch:
                 grid_batch.origins # tensor([[-.9, -.9, -.9], [-.9, -.9, -.9], [-.9, -.9, -.9], [-.9, -.9, -.9], [-.9, -.9, -.9]])
         """
 
-        dense_dims = to_Vec3iBroadcastable(dense_dims, value_constraint=ValueConstraint.POSITIVE)
-        bounds_min = to_Vec3fBroadcastable(bounds_min)
-        bounds_max = to_Vec3fBroadcastable(bounds_max)
+        from . import functional
 
-        if torch.any(bounds_max <= bounds_min):
-            raise ValueError("bounds_max must be greater than bounds_min in all axes")
-
-        if voxel_center:
-            voxel_size = (bounds_max - bounds_min) / (dense_dims.to(torch.float64) - 1.0)
-            origin = bounds_min
-        else:
-            voxel_size = (bounds_max - bounds_min) / dense_dims.to(torch.float64)
-            origin = bounds_min + 0.5 * voxel_size
-
-        return cls.from_dense(num_grids, dense_dims=dense_dims, voxel_sizes=voxel_size, origins=origin, device=device)
+        return functional.gridbatch_from_dense_axis_aligned_bounds(
+            num_grids, dense_dims, bounds_min, bounds_max, voxel_center, device
+        )
 
     @classmethod
     def from_ijk(
@@ -344,15 +297,9 @@ class GridBatch:
                 grid_batch.ijk.jdata == tensor([[0, 0, 0], [0, 0, 1], [0, 1, 0], [1, 0, 0], [1, 1, 0], [1, 0, 1], [0, 1, 1], [1, 1, 1]])
 
         """
-        resolved_device = resolve_device(device, inherit_from=ijk)
+        from . import functional
 
-        voxel_sizes = to_Vec3fBatchBroadcastable(voxel_sizes, value_constraint=ValueConstraint.POSITIVE)
-        origins = to_Vec3fBatch(origins)
-
-        n = ijk.num_tensors
-        grid_data = _fvdb_cpp.gridbatch_from_ijk(
-            ijk._impl, _to_vec3d_batch(voxel_sizes, n), _to_vec3d_batch(origins, n))
-        return cls(data=grid_data)
+        return functional.gridbatch_from_ijk(ijk, voxel_sizes, origins, device)
 
     @classmethod
     def from_mesh(
@@ -398,16 +345,9 @@ class GridBatch:
                 grid_batch.ijk.jdata == tensor([[0, 0, 0], [0, 0, 1], [0, 1, 0], [1, 0, 0], [1, 1, 0], [1, 0, 1], [0, 1, 1], [1, 1, 1]])
 
         """
-        resolved_device = resolve_device(device, inherit_from=mesh_vertices)
+        from . import functional
 
-        voxel_sizes = to_Vec3fBatchBroadcastable(voxel_sizes, value_constraint=ValueConstraint.POSITIVE)
-        origins = to_Vec3fBatch(origins)
-
-        n = mesh_vertices.num_tensors
-        grid_data = _fvdb_cpp.gridbatch_from_mesh(
-            mesh_vertices._impl, mesh_faces._impl,
-            _to_vec3d_batch(voxel_sizes, n), _to_vec3d_batch(origins, n))
-        return cls(data=grid_data)
+        return functional.gridbatch_from_mesh(mesh_vertices, mesh_faces, voxel_sizes, origins, device)
 
     # Load and save functions
     @overload
@@ -492,30 +432,18 @@ class GridBatch:
             data (JaggedTensor): A :class:`fvdb.JaggedTensor` containing the data of the grids.
             names (list[str]): A list of strings containing the name of each grid.
         """
-        from ._fvdb_cpp import load as _load
+        from . import functional
 
-        device = resolve_device(device)
-
-        # Check that only one selector is provided
-        selectors = [indices is not None, index is not None, names is not None, name is not None]
-        if sum(selectors) > 1:
-            raise ValueError("Only one of indices, index, names, or name can be specified")
-
-        # Call the appropriate overload
         if indices is not None:
-            grid_impl, data_impl, names_out = _load(path, indices, device, verbose)
+            return functional.load_nanovdb(path, indices=indices, device=device, verbose=verbose)
         elif index is not None:
-            grid_impl, data_impl, names_out = _load(path, index, device, verbose)
+            return functional.load_nanovdb(path, index=index, device=device, verbose=verbose)
         elif names is not None:
-            grid_impl, data_impl, names_out = _load(path, names, device, verbose)
+            return functional.load_nanovdb(path, names=names, device=device, verbose=verbose)
         elif name is not None:
-            grid_impl, data_impl, names_out = _load(path, name, device, verbose)
+            return functional.load_nanovdb(path, name=name, device=device, verbose=verbose)
         else:
-            # Load all grids
-            grid_impl, data_impl, names_out = _load(path, device, verbose)
-
-        # Wrap the GridBatch implementation with the Python wrapper
-        return cls(data=grid_impl), JaggedTensor(impl=data_impl), names_out
+            return functional.load_nanovdb(path, device=device, verbose=verbose)
 
     @classmethod
     def from_nearest_voxels_to_points(
@@ -562,15 +490,9 @@ class GridBatch:
 
 
         """
-        resolved_device = resolve_device(device, inherit_from=points)
+        from . import functional
 
-        voxel_sizes = to_Vec3fBatchBroadcastable(voxel_sizes, value_constraint=ValueConstraint.POSITIVE)
-        origins = to_Vec3fBatch(origins)
-
-        n = points.num_tensors
-        grid_data = _fvdb_cpp.gridbatch_from_nearest_voxels_to_points(
-            points._impl, _to_vec3d_batch(voxel_sizes, n), _to_vec3d_batch(origins, n))
-        return cls(data=grid_data)
+        return functional.gridbatch_from_nearest_voxels_to_points(points, voxel_sizes, origins, device)
 
     @classmethod
     def from_points(
@@ -609,15 +531,9 @@ class GridBatch:
                 grid_batch.ijk.jdata == tensor([[0, 0, 0], [0, 0, 1], [0, 1, 0], [1, 0, 0], [1, 1, 0], [1, 0, 1], [0, 1, 1], [1, 1, 1]])
 
         """
-        resolved_device = resolve_device(device, inherit_from=points)
+        from . import functional
 
-        voxel_sizes = to_Vec3fBatchBroadcastable(voxel_sizes, value_constraint=ValueConstraint.POSITIVE)
-        origins = to_Vec3fBatch(origins)
-
-        n = points.num_tensors
-        grid_data = _fvdb_cpp.gridbatch_from_points(
-            points._impl, _to_vec3d_batch(voxel_sizes, n), _to_vec3d_batch(origins, n))
-        return cls(data=grid_data)
+        return functional.gridbatch_from_points(points, voxel_sizes, origins, device)
 
     @classmethod
     def from_zero_grids(cls, device: DeviceIdentifier = "cpu") -> "GridBatch":
@@ -641,7 +557,9 @@ class GridBatch:
                 grid_batch.grid_count # 0
 
         """
-        return cls(data=_fvdb_cpp.create_from_empty(str(resolve_device(device))))
+        from . import functional
+
+        return functional.gridbatch_from_zero_grids(device)
 
     @classmethod
     def from_zero_voxels(
@@ -676,13 +594,9 @@ class GridBatch:
                 grid_batch = GridBatch.from_zero_voxels(voxel_sizes=1, origins=0)  # defaults to CPU
 
         """
-        resolved_device = resolve_device(device)
-        voxel_sizes = to_Vec3fBatch(voxel_sizes, value_constraint=ValueConstraint.POSITIVE)
-        origins = to_Vec3fBatch(origins)
-        return cls(data=_fvdb_cpp.create_from_empty(
-            str(resolved_device),
-            _to_vec3d_batch(voxel_sizes),
-            _to_vec3d_batch(origins)))
+        from . import functional
+
+        return functional.gridbatch_from_zero_voxels(device, voxel_sizes, origins)
 
     @classmethod
     def from_cat(cls, grids: "Sequence[GridBatch]") -> "GridBatch":
@@ -695,12 +609,9 @@ class GridBatch:
         Returns:
             grid_batch (GridBatch): A new :class:`fvdb.GridBatch` object.
         """
-        grid_datas = []
-        for grid in grids:
-            if not isinstance(grid, GridBatch):
-                raise TypeError(f"Expected GridBatch, got {type(grid)}")
-            grid_datas.append(_get_grid_data(grid))
-        return cls(data=_fvdb_cpp.concatenate_grids(grid_datas))
+        from . import functional
+
+        return functional.concatenate_grids(grids)
 
     # ============================================================
     #                Regular Instance Methods Begin
@@ -1965,22 +1876,9 @@ class GridBatch:
             grid names. Use 'name' for a single name applied to all grids, or 'names'
             for individual names per grid.
         """
-        from ._fvdb_cpp import save as _save
+        from . import functional
 
-        # Handle the overloaded signature - if name is provided, use it
-        data_impl = data._impl if data else None
-        if name is not None:
-            _save(path, _get_grid_data(self), data_impl, name, compressed, verbose)
-        elif names is not None:
-            if isinstance(names, str):
-                # Handle case where names is actually a single name
-                _save(path, _get_grid_data(self), data_impl, names, compressed, verbose)
-            else:
-                # Handle case where names is a list
-                _save(path, _get_grid_data(self), data_impl, names, compressed, verbose)
-        else:
-            # Default case with empty names list
-            _save(path, _get_grid_data(self), data_impl, [], compressed, verbose)
+        functional.save_nanovdb(self, path, data, names, name, compressed, verbose)
 
     def uniform_ray_samples(
         self,
