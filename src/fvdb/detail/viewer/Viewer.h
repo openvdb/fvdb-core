@@ -129,6 +129,9 @@ class Viewer {
     float cameraOrbitRadius(const std::string &scene_name);
     void setCameraOrbitRadius(const std::string &scene_name, float radius);
 
+    float cameraFov(const std::string &scene_name);
+    void setCameraFov(const std::string &scene_name, float fov_radians);
+
     float cameraNear(const std::string &scene_name);
     void setCameraNear(const std::string &scene_name, float near);
 
