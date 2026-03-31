@@ -9,8 +9,9 @@
 set(NANOVDB_EDITOR_BUILD_TYPE "Release" CACHE STRING "Build type for nanovdb_editor (Release/Debug)")
 
 # fVDB pins NanoVDB Editor headers to an exact source commit via CPM
-set(NANOVDB_EDITOR_TAG 62861a3b7f0fe2d4d61e7025b7f5b872086e965c)
-set(NANOVDB_EDITOR_VERSION 0.0.23)   # version at this commit
+# Note: only change this when the interfaces have changed
+set(NANOVDB_EDITOR_TAG 73f066b8387eb53a718eba1ef1f7b91738df6ba8)
+set(NANOVDB_EDITOR_VERSION 0.0.24)   # version at this commit
 
 CPMAddPackage(
     NAME nanovdb_editor
@@ -39,20 +40,23 @@ endif()
 #   NANOVDB_EDITOR_PACKAGE_DIR - output variable for package directory path
 #   NANOVDB_EDITOR_INSTALLED - output variable indicating if nanovdb_editor is installed
 function(get_installed_nanovdb_editor_dir NANOVDB_EDITOR_PACKAGE_DIR NANOVDB_EDITOR_INSTALLED)
+    set(${NANOVDB_EDITOR_INSTALLED} OFF PARENT_SCOPE)
+    set(${NANOVDB_EDITOR_PACKAGE_DIR} "" PARENT_SCOPE)
     execute_process(
-        COMMAND ${CMAKE_COMMAND} -E env PYTHONPATH=${Python3_SITELIB} ${Python3_EXECUTABLE} -c
+        COMMAND ${CMAKE_COMMAND} -E env "PYTHONPATH=${Python3_SITELIB}" ${Python3_EXECUTABLE} -c
 [[import os
+import sys
 try:
     import nanovdb_editor
-    print(os.path.dirname(nanovdb_editor.__file__))
 except Exception:
-    pass
+    sys.exit(1)
+print(os.path.dirname(nanovdb_editor.__file__))
 ]]
         OUTPUT_VARIABLE _NANOVDB_EDITOR_PACKAGE_DIR
         RESULT_VARIABLE NANOVDB_EDITOR_IMPORTED
         OUTPUT_STRIP_TRAILING_WHITESPACE
     )
-    if(NANOVDB_EDITOR_IMPORTED EQUAL 0)
+    if(NANOVDB_EDITOR_IMPORTED EQUAL 0 AND NOT "${_NANOVDB_EDITOR_PACKAGE_DIR}" STREQUAL "")
         set(${NANOVDB_EDITOR_INSTALLED} ON PARENT_SCOPE)
         set(${NANOVDB_EDITOR_PACKAGE_DIR} ${_NANOVDB_EDITOR_PACKAGE_DIR} PARENT_SCOPE)
     endif()
@@ -60,7 +64,7 @@ endfunction()
 
 function(get_installed_nanovdb_editor_version NANOVDB_EDITOR_INSTALLED_VERSION)
     execute_process(
-        COMMAND ${CMAKE_COMMAND} -E env PYTHONPATH=${Python3_SITELIB} ${Python3_EXECUTABLE} -c
+        COMMAND ${CMAKE_COMMAND} -E env "PYTHONPATH=${Python3_SITELIB}" ${Python3_EXECUTABLE} -c
 [[try:
     import importlib.metadata as md
     print(md.version('nanovdb-editor'), end='')

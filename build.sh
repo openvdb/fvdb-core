@@ -318,6 +318,10 @@ while (( "$#" )); do
     case "$1" in
       -C)
         shift
+        if [ "$#" -eq 0 ] || [[ "$1" == -* ]]; then
+          echo "Error: -C requires a value argument." >&2
+          exit 1
+        fi
         record_nanovdb_editor_source_override "$1"
         PASS_THROUGH_ARGS+=" -C $(printf "%q" "$1")"
         is_config_arg_handled=true
