@@ -54,6 +54,7 @@
 #include <fvdb/JaggedTensor.h>
 #include <fvdb/detail/GridBatchData.h>
 #include <fvdb/detail/GridBatchDataFactory.h>
+#include <fvdb/detail/ops/BuildGridForConv.h>
 #include <fvdb/detail/ops/BuildGridFromIjk.h>
 #include <fvdb/detail/ops/convolution/GatherScatterDefault.h>
 
@@ -368,7 +369,7 @@ TEST_P(GatherScatterDefaultForwardTest, DifferentGrids) {
 
     nanovdb::Coord kernel_size(3, 3, 3);
     nanovdb::Coord stride(1, 1, 1);
-    auto dst_grid = src_grid->convolutionOutput(kernel_size, stride);
+    auto dst_grid = ops::buildGridForConv(*src_grid, kernel_size, stride);
 
     auto topo =
         ops::gatherScatterDefaultSparseConvTopology(*src_grid, *dst_grid, kernel_size, stride);
@@ -505,7 +506,7 @@ TEST_P(GatherScatterDefaultStridedTest, StridedForward) {
     nanovdb::Coord kernel_size(3, 3, 3);
     nanovdb::Coord stride(2, 2, 2);
 
-    auto dst_grid = src_grid->convolutionOutput(kernel_size, stride);
+    auto dst_grid = ops::buildGridForConv(*src_grid, kernel_size, stride);
 
     auto topo =
         ops::gatherScatterDefaultSparseConvTopology(*src_grid, *dst_grid, kernel_size, stride);
@@ -533,7 +534,7 @@ TEST_P(GatherScatterDefaultStridedTest, StridedBackward) {
     nanovdb::Coord kernel_size(3, 3, 3);
     nanovdb::Coord stride(2, 2, 2);
 
-    auto dst_grid = src_grid->convolutionOutput(kernel_size, stride);
+    auto dst_grid = ops::buildGridForConv(*src_grid, kernel_size, stride);
 
     auto topo =
         ops::gatherScatterDefaultSparseConvTopology(*src_grid, *dst_grid, kernel_size, stride);
@@ -907,7 +908,7 @@ TEST(GatherScatterDefaultValue, StridedConv) {
         auto src_grid = makeStridedTestGrid(device);
         nanovdb::Coord kernel_size(3, 3, 3);
         nanovdb::Coord stride(2, 2, 2);
-        auto dst_grid = src_grid->convolutionOutput(kernel_size, stride);
+        auto dst_grid = ops::buildGridForConv(*src_grid, kernel_size, stride);
 
         auto topo =
             ops::gatherScatterDefaultSparseConvTopology(*src_grid, *dst_grid, kernel_size, stride);
@@ -938,7 +939,7 @@ TEST(GatherScatterDefaultValue, SingleVoxel) {
         auto src_grid = makeGrid(ijk, device);
         nanovdb::Coord kernel_size(3, 3, 3);
         nanovdb::Coord stride(1, 1, 1);
-        auto dst_grid = src_grid->convolutionOutput(kernel_size, stride);
+        auto dst_grid = ops::buildGridForConv(*src_grid, kernel_size, stride);
 
         auto topo =
             ops::gatherScatterDefaultSparseConvTopology(*src_grid, *dst_grid, kernel_size, stride);
@@ -1031,7 +1032,7 @@ TEST(GatherScatterDefaultAdjoint, ForwardAdjointStrided) {
         auto src_grid = makeStridedTestGrid(device);
         nanovdb::Coord kernel_size(3, 3, 3);
         nanovdb::Coord stride(2, 2, 2);
-        auto dst_grid = src_grid->convolutionOutput(kernel_size, stride);
+        auto dst_grid = ops::buildGridForConv(*src_grid, kernel_size, stride);
         auto topo =
             ops::gatherScatterDefaultSparseConvTopology(*src_grid, *dst_grid, kernel_size, stride);
 
@@ -1087,7 +1088,7 @@ TEST(GatherScatterDefaultAdjoint, StridedTransposeAdjoint) {
         auto src_grid = makeStridedTestGrid(device);
         nanovdb::Coord kernel_size(3, 3, 3);
         nanovdb::Coord stride(2, 2, 2);
-        auto fwd_dst = src_grid->convolutionOutput(kernel_size, stride);
+        auto fwd_dst = ops::buildGridForConv(*src_grid, kernel_size, stride);
 
         auto topo = ops::gatherScatterDefaultSparseConvTransposeTopology(
             *fwd_dst, *src_grid, kernel_size, stride);
@@ -1263,7 +1264,7 @@ TEST_P(GatherScatterDefaultStridedTransposeTest, StridedTransposeForward) {
     auto src_grid = makeStridedTestGrid(device);
     nanovdb::Coord kernel_size(3, 3, 3);
     nanovdb::Coord stride(2, 2, 2);
-    auto fwd_dst = src_grid->convolutionOutput(kernel_size, stride);
+    auto fwd_dst = ops::buildGridForConv(*src_grid, kernel_size, stride);
 
     auto topo = ops::gatherScatterDefaultSparseConvTransposeTopology(
         *fwd_dst, *src_grid, kernel_size, stride);
@@ -1290,7 +1291,7 @@ TEST_P(GatherScatterDefaultStridedTransposeTest, StridedTransposeBackward) {
     auto src_grid = makeStridedTestGrid(device);
     nanovdb::Coord kernel_size(3, 3, 3);
     nanovdb::Coord stride(2, 2, 2);
-    auto fwd_dst = src_grid->convolutionOutput(kernel_size, stride);
+    auto fwd_dst = ops::buildGridForConv(*src_grid, kernel_size, stride);
 
     auto topo = ops::gatherScatterDefaultSparseConvTransposeTopology(
         *fwd_dst, *src_grid, kernel_size, stride);
@@ -1324,7 +1325,7 @@ TEST(GatherScatterDefaultAsymmetricStride, ForwardBackwardAdjoint) {
         auto src_grid = makeDenseTestGrid(6, device);
         nanovdb::Coord kernel_size(3, 3, 3);
         nanovdb::Coord stride(1, 2, 3);
-        auto dst_grid = src_grid->convolutionOutput(kernel_size, stride);
+        auto dst_grid = ops::buildGridForConv(*src_grid, kernel_size, stride);
 
         auto topo =
             ops::gatherScatterDefaultSparseConvTopology(*src_grid, *dst_grid, kernel_size, stride);

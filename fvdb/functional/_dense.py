@@ -102,11 +102,16 @@ class _InjectFn(torch.autograd.Function):
         ctx.src_grid_data = src_grid_data
         ctx.dst_jt_impl = dst_jt_impl
         ctx.src_jt_impl = src_jt_impl
-        ctx.mark_dirty(dst_jdata)
+        # Clone dst so the op is out-of-place.  mark_dirty on non-contiguous
+        # views disconnects _InjectFnBackward from the autograd graph (PyTorch
+        # inserts AsStridedBackward → CopySlices that bypasses the custom
+        # backward entirely).  Cloning avoids this and keeps gradients correct.
+        dst_out = dst_jdata.clone().contiguous()
+        dst_out_jt = dst_jt_impl.jagged_like(dst_out)
         src_contig = src_jdata.contiguous()
         src_contig_jt = src_jt_impl.jagged_like(src_contig)
-        _fvdb_cpp.inject_op(dst_grid_data, src_grid_data, dst_jt_impl, src_contig_jt)
-        return dst_jdata
+        _fvdb_cpp.inject_op(dst_grid_data, src_grid_data, dst_out_jt, src_contig_jt)
+        return dst_out
 
     @staticmethod
     def backward(ctx: Any, *grad_outputs: torch.Tensor | None) -> tuple[torch.Tensor | None, ...]:
@@ -469,7 +474,16 @@ def inject_batch(
         raise ValueError(
             f"src and dst must have the same element shape, got src: {jt_src.eshape}, dst: {jt_dst.eshape}"
         )
-    _InjectFn.apply(jt_src.jdata, jt_dst.jdata, dst_grid_data, src_grid_data, jt_dst._impl, jt_src._impl)
+    if jt_dst.jdata.requires_grad and jt_dst.jdata.is_leaf:
+        raise RuntimeError(
+            "inject: destination tensor is a leaf variable that requires grad. "
+            "Use a non-leaf tensor (e.g. dst = dst * 1.0) or detach it first."
+        )
+    dst_out = cast(
+        torch.Tensor,
+        _InjectFn.apply(jt_src.jdata, jt_dst.jdata, dst_grid_data, src_grid_data, jt_dst._impl, jt_src._impl),
+    )
+    jt_dst.jdata = dst_out
     return jt_dst
 
 
@@ -510,9 +524,15 @@ def inject_single(
         raw_dst = torch.full(dst_shape, fill_value=default_value, dtype=src.dtype, device=src.device)
     else:
         raw_dst = dst
+    if raw_dst.requires_grad and raw_dst.is_leaf:
+        raise RuntimeError(
+            "inject: destination tensor is a leaf variable that requires grad. "
+            "Use a non-leaf tensor (e.g. dst = dst * 1.0) or detach it first."
+        )
     jt_dst = JaggedTensor(raw_dst)
     dst_out = cast(
-        torch.Tensor, _InjectFn.apply(src, jt_dst.jdata, dst_grid_data, src_grid_data, jt_dst._impl, jt_src._impl)
+        torch.Tensor,
+        _InjectFn.apply(jt_src.jdata, jt_dst.jdata, dst_grid_data, src_grid_data, jt_dst._impl, jt_src._impl),
     )
     return dst_out
 
