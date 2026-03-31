@@ -10,16 +10,16 @@ development code. Release branches (`release/vX.Y`) are created for
 stabilization. At release time, an adopt branch (`adopt/vX.Y`) reconciles
 the version in `pyproject.toml` and merges the release work back into `main`,
 keeping the release branch available for future hotfix releases. Hotfix
-releases (PATCH > 0) reuse the same release branch with a version-specific
-adopt branch (`adopt/vX.Y.Z`).
+releases (PATCH > 0) reuse the same release branch but do not create an
+adopt branch -- hotfix changes are assumed to already be on `main` (via
+cherry-pick) or to be specific to that minor release.
 
 ```
-main:           ──A──B──C──D──────────G──H──────────────K── ...
-                       \             /       \          /
-release/v0.4:           E──F──T─────/─────P──Q──U      /
-                               \   /              \   /
-adopt/v0.4:                     V─┘                \ /
-adopt/v0.4.1:                                       W
+main:           ──A──B──C──D──────────G──H── ...
+                       \             /       \
+release/v0.4:           E──F──T─────/─────P──Q──U
+                               \   /
+adopt/v0.4:                     V─┘
                         (v0.4.0)             (v0.4.1)
 ```
 
@@ -35,16 +35,13 @@ adopt/v0.4.1:                                       W
 - **P**: version bumped to `0.4.1` on the release branch (`start-release.sh 0.4.1`)
 - **Q**: cherry-picked fix
 - **U**: release tag `v0.4.1` created on the release branch
-- **W**: adopt branch `adopt/v0.4.1` created from `U`; version set to match `main`
-- **K**: merge commit bringing hotfix into `main` via `adopt/v0.4.1`
 
 ## Branch Naming
 
 | Purpose | Pattern | Example |
 |---------|---------|---------|
 | Release | `release/vMAJOR.MINOR` | `release/v0.4` |
-| Adopt | `adopt/vMAJOR.MINOR` | `adopt/v0.4` |
-| Adopt (hotfix) | `adopt/vMAJOR.MINOR.PATCH` | `adopt/v0.4.1` |
+| Adopt (minor releases only) | `adopt/vMAJOR.MINOR` | `adopt/v0.4` |
 
 ## Version Management
 
@@ -56,7 +53,6 @@ The version in `pyproject.toml` is the single source of truth.
 | `release/vX.Y` (hotfix) | `X.Y.Z` | `0.4.1` |
 | `main` (after branching) | `X.Z.0.dev0` | `0.5.0.dev0` |
 | `adopt/vX.Y` | `X.Z.0.dev0` (matches `main`) | `0.5.0.dev0` |
-| `adopt/vX.Y.Z` | `X.Z.0.dev0` (matches `main`) | `0.5.0.dev0` |
 
 The `.dev0` suffix on `main` is a [PEP 440](https://peps.python.org/pep-0440/)
 pre-release marker that signals unreleased development code. It does not affect
@@ -68,10 +64,10 @@ A typical release takes about one week:
 
 | Phase | Duration | What happens |
 |-------|----------|--------------|
-| **Burndown start** | Day 0 | Create release branch, bump `main` version, open merge PR |
+| **Burndown start** | Day 0 | Create release branch, bump `main` version, open draft PR |
 | **Burndown** | ~4-6 days | Stabilize: fix bugs on the release branch, continue features on `main` |
 | **Code freeze** | 1-3 days | Only critical fixes on the release branch (admin merge only) |
-| **Release day** | Day ~7 | Tag, create adopt branch + PR, create GitHub Release, merge adopt PR |
+| **Release day** | Day ~7 | Tag, create adopt branch + PR, create GitHub Release |
 
 ## Procedures
 
@@ -85,7 +81,8 @@ Run from a clean, up-to-date checkout of `main`:
 
 This will:
 1. Create `release/v0.4` from current `main`
-2. Set the version to `0.4.0` on the release branch
+2. Set the version to `0.4.0` on the release branch (both `pyproject.toml`
+   and `fvdb_core_stable_version` in `docs/conf.py`)
 3. Bump `main` to `0.5.0.dev0`
 4. Push both branches to `upstream`
 5. Open a **draft** PR from `release/v0.4` into `main` (tracks burndown;
@@ -140,21 +137,21 @@ This will:
 6. Close the draft release PR
 7. Open a new PR from `adopt/v0.4` into `main`
 8. Create a GitHub Release (triggers the publish workflow)
+9. Trigger the `sync-doc-version.yml` workflow to create a PR updating
+   `docs/conf.py` to the new release version
 
 After the script finishes, **merge the adopt PR** once CI passes. Use a
 merge commit (not squash) to preserve the release branch history on `main`.
 The `release/v0.4` branch is left untouched at version `0.4.0`, available
 as the base for future hotfix releases.
 
-After merging, **re-deploy the documentation** to GitHub Pages so it reflects
-the new release version:
+Then **merge the doc version sync PR**. Documentation is rebuilt
+automatically when anything under `docs/` changes on `main` (via a push
+trigger on `docs.yml`). To rebuild docs manually as a fallback:
 
 ```bash
 gh workflow run docs.yml --ref main
 ```
-
-Or use the GitHub Actions UI: **Actions > fvdb-core Documentation > Run
-workflow** (select `main`).
 
 Use `--remote origin` to target a different remote.
 Use `--dry-run` to preview without making changes.
@@ -162,7 +159,9 @@ Use `--dry-run` to preview without making changes.
 ### Hotfix Releases
 
 The same scripts handle hotfix releases. Pass a version with PATCH > 0
-(e.g. `0.4.1`) to enter hotfix mode.
+(e.g. `0.4.1`) to enter hotfix mode. Hotfix releases do **not** create an
+adopt branch or PR to merge changes back into `main` -- the fixes should
+already be on `main` (the commits for the hotfix should have been cherry-picked from `main`) or be specific to the minor version.
 
 1. **Start the hotfix:**
    ```bash
@@ -187,15 +186,11 @@ The same scripts handle hotfix releases. Pass a version with PATCH > 0
    ```bash
    ./devtools/finish-release.sh 0.4.1
    ```
-   This tags `v0.4.1`, creates `adopt/v0.4.1` with a version fixup, opens
-   a PR into `main`, and creates a GitHub Release.
+   This tags `v0.4.1`, creates a GitHub Release, and triggers the
+   `sync-doc-version.yml` workflow to update `docs/conf.py`.
 
-5. **Merge the adopt PR** once CI passes (use a merge commit, not squash).
-
-6. **Re-deploy documentation** after the adopt PR is merged:
-   ```bash
-   gh workflow run docs.yml --ref main
-   ```
+5. **Merge the doc version sync PR** once CI passes. Documentation is
+   rebuilt automatically when the PR merges.
 
 ## GitHub Branch Protection
 
@@ -215,7 +210,7 @@ During code freeze, additionally:
 | Script | Purpose |
 |--------|---------|
 | `devtools/start-release.sh` | Create release branch (or prepare hotfix), bump versions, open PR |
-| `devtools/finish-release.sh` | Tag release, create adopt branch + PR, create GitHub Release |
+| `devtools/finish-release.sh` | Tag release, create adopt branch + PR (minor only), create GitHub Release |
 | `devtools/test-release-scripts.sh` | End-to-end tests for the release scripts (including hotfix) |
 
 All scripts support `--help`, `--dry-run`, and `--remote <name>` flags.
@@ -298,10 +293,9 @@ is:
    (PATCH > 0), reusing the same release branch rather than creating
    separate hotfix branches.
 
-4. **Re-deploy documentation** after both adopt PRs are merged:
-   ```bash
-   gh workflow run docs.yml --ref main
-   ```
+4. **Merge the doc version sync PRs** created by `sync-doc-version.yml`.
+   Documentation is rebuilt automatically when `docs/conf.py` changes on
+   `main`.
 
 `finish-release.sh` checks that the latest `publish.yml` run on the release
 branch succeeded before proceeding. If the workflow failed or hasn't run, it
@@ -312,3 +306,20 @@ prompts for confirmation.
 Both workflows also support manual triggering via `workflow_dispatch` with
 options to select the publish target (`s3`, `testpypi`, `none`) and whether
 to run GPU validation.
+
+## Automated Doc Version Sync
+
+The `sync-doc-version.yml` workflow keeps the stable version shown in
+documentation (`fvdb_core_stable_version` in `docs/conf.py`) in sync with
+the latest GitHub Release. It runs:
+
+- **Nightly** (cron schedule) as a safety net
+- **On demand** via `workflow_dispatch`, triggered automatically by
+  `finish-release.sh` after creating a GitHub Release
+
+When the doc version is out of date, the workflow creates (or updates) a PR
+on the `auto/sync-doc-version` branch using `devtools/update-doc-versions.sh`.
+
+The `docs.yml` workflow has a push trigger filtered to `docs/**` on `main`,
+so merging the sync PR (or any doc change) automatically rebuilds and deploys
+the documentation to GitHub Pages.

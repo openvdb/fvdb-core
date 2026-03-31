@@ -60,6 +60,15 @@ assert_tag_exists() {
     fi
 }
 
+assert_no_branch() {
+    local desc="$1" branch="$2"
+    if git show-ref --verify --quiet "refs/heads/$branch"; then
+        fail "$desc (branch '$branch' unexpectedly exists)"
+    else
+        pass "$desc"
+    fi
+}
+
 get_version() {
     grep '^version = ' pyproject.toml | sed 's/^version = "\(.*\)"/\1/'
 }
@@ -437,37 +446,12 @@ assert_eq "hotfix tag points to release branch HEAD" "$RELEASE_HEAD_041" "$TAG_C
 CURRENT_AFTER_HFINISH="$(git rev-parse --abbrev-ref HEAD)"
 assert_eq "on main after hotfix finish" "main" "$CURRENT_AFTER_HFINISH"
 
-assert_branch_exists "adopt/v0.4.1 branch exists" "adopt/v0.4.1"
-
-git checkout adopt/v0.4.1 >/dev/null 2>&1
-ADOPT_HOTFIX_VERSION="$(get_version)"
-assert_eq "hotfix adopt branch version is 0.5.0.dev0" "0.5.0.dev0" "$ADOPT_HOTFIX_VERSION"
-
-ADOPT_HOTFIX_LOG="$(git log -1 --format='%B')"
-assert_contains "hotfix adopt commit has DCO sign-off" "$ADOPT_HOTFIX_LOG" "Signed-off-by:"
-git checkout main >/dev/null 2>&1
+assert_no_branch "no adopt branch for hotfix" "adopt/v0.4.1"
 
 git checkout release/v0.4 >/dev/null 2>&1
 RELEASE_VERSION_AFTER_HOTFIX="$(get_version)"
 assert_eq "release branch still at 0.4.1 after hotfix finish" "0.4.1" "$RELEASE_VERSION_AFTER_HOTFIX"
 git checkout main >/dev/null 2>&1
-
-echo ""
-echo "============================================="
-echo " Test: hotfix adopt branch merges cleanly into main"
-echo "============================================="
-
-set +e
-MERGE_HOTFIX_OUTPUT="$(git merge --no-commit --no-ff adopt/v0.4.1 2>&1)"
-MERGE_HOTFIX_EXIT=$?
-set -e
-git reset --hard HEAD >/dev/null 2>&1
-
-if [[ $MERGE_HOTFIX_EXIT -eq 0 ]]; then
-    pass "hotfix adopt branch merges cleanly into main"
-else
-    fail "hotfix adopt branch has merge conflicts with main: $MERGE_HOTFIX_OUTPUT"
-fi
 
 echo ""
 echo "============================================="
@@ -484,8 +468,6 @@ echo ""
 echo "============================================="
 echo " Test: successive hotfix (start-release.sh 0.4.2)"
 echo "============================================="
-
-git branch -D adopt/v0.4.1 >/dev/null 2>&1 || true
 
 HSTART2_OUTPUT="$("$START_RELEASE" 0.4.2 --no-push --no-pr 2>&1)"
 

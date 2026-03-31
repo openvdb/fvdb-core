@@ -1,0 +1,70 @@
+# Copyright Contributors to the OpenVDB Project
+# SPDX-License-Identifier: Apache-2.0
+
+name: Sync Doc Version
+
+on:
+  schedule:
+    - cron: "0 8 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync-version:
+    if: github.repository == 'openvdb/fvdb-core'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get latest release version
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="$(gh release view --json tagName -q .tagName 2>/dev/null || echo "")"
+          if [[ -z "$TAG" ]]; then
+            echo "No GitHub releases found; nothing to sync."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          VERSION="${TAG#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Latest release: $TAG (version $VERSION)"
+
+      - name: Get current doc version
+        if: steps.release.outputs.skip != 'true'
+        id: current
+        run: |
+          CURRENT="$(grep '^fvdb_core_stable_version = ' docs/conf.py \
+            | sed 's/^fvdb_core_stable_version = "\(.*\)"/\1/')"
+          echo "version=$CURRENT" >> "$GITHUB_OUTPUT"
+          echo "Current doc version: $CURRENT"
+
+      - name: Update doc version
+        if: >-
+          steps.release.outputs.skip != 'true' &&
+          steps.release.outputs.version != steps.current.outputs.version
+        run: |
+          echo "Updating doc version from ${{ steps.current.outputs.version }} to ${{ steps.release.outputs.version }}"
+          ./devtools/update-doc-versions.sh "${{ steps.release.outputs.version }}"
+
+      - name: Create pull request
+        if: >-
+          steps.release.outputs.skip != 'true' &&
+          steps.release.outputs.version != steps.current.outputs.version
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
+          commit-message: "Update doc stable version to ${{ steps.release.outputs.version }}"
+          signoff: true
+          branch: auto/sync-doc-version
+          title: "Update doc stable version to ${{ steps.release.outputs.version }}"
+          body: |
+            Automated PR to update `fvdb_core_stable_version` in `docs/conf.py`
+            to match the latest GitHub Release (`v${{ steps.release.outputs.version }}`).
+
+            When merged, a docs rebuild will be triggered automatically.
+          labels: automation

@@ -4,6 +4,7 @@
 #
 # Finish a release: tag, create adopt branch, open adopt PR, create GitHub Release.
 # Works for both minor releases (PATCH == 0) and hotfix releases (PATCH > 0).
+# Hotfix releases skip the adopt branch -- changes are not merged back into main.
 #
 # Usage: ./devtools/finish-release.sh <version> [options]
 # Example: ./devtools/finish-release.sh 0.4.0 --remote upstream
@@ -25,9 +26,11 @@ usage() {
     cat <<EOF
 Usage: $(basename "$0") <version> [options]
 
-Finish a release by tagging the release branch, creating an adopt branch to
-reconcile versions, and creating a GitHub Release. Works for both minor
-releases (PATCH == 0) and hotfix releases (PATCH > 0).
+Finish a release by tagging the release branch and creating a GitHub Release.
+For minor releases (PATCH == 0), also creates an adopt branch to reconcile
+versions and merge release work back into main. Hotfix releases (PATCH > 0)
+skip the adopt branch since fixes should already be on main or are specific
+to the release branch.
 
 Arguments:
   <version>       Release version in MAJOR.MINOR.PATCH format (e.g. 0.4.0)
@@ -114,9 +117,7 @@ _PATCH="${VERSION##*.}"
 IS_HOTFIX=false
 [[ "$_PATCH" -gt 0 ]] && IS_HOTFIX=true
 
-if $IS_HOTFIX; then
-    ADOPT_BRANCH="adopt/v${VERSION}"
-else
+if ! $IS_HOTFIX; then
     ADOPT_BRANCH="adopt/v${BRANCH_SUFFIX}"
 fi
 
@@ -125,7 +126,11 @@ cd "$REPO_ROOT"
 
 log "Release version:     $VERSION"
 log "Release branch:      $RELEASE_BRANCH"
-log "Adopt branch:        $ADOPT_BRANCH"
+if ! $IS_HOTFIX; then
+    log "Adopt branch:        $ADOPT_BRANCH"
+else
+    log "Mode:                hotfix (no adopt branch)"
+fi
 log "Tag:                 $TAG"
 log "Remote:              $REMOTE"
 echo ""
@@ -150,8 +155,10 @@ if ! $DRY_RUN; then
         die "tag $TAG already exists"
     fi
 
-    if git show-ref --verify --quiet "refs/heads/$ADOPT_BRANCH"; then
-        die "branch $ADOPT_BRANCH already exists; delete it first if re-running"
+    if ! $IS_HOTFIX; then
+        if git show-ref --verify --quiet "refs/heads/$ADOPT_BRANCH"; then
+            die "branch $ADOPT_BRANCH already exists; delete it first if re-running"
+        fi
     fi
 fi
 
@@ -197,27 +204,28 @@ else
     git push "$REMOTE" "$TAG"
 fi
 
-# --- create adopt branch with version fixup -----------------------------------
-log "Creating $ADOPT_BRANCH from $RELEASE_BRANCH..."
-run git checkout -b "$ADOPT_BRANCH" "$RELEASE_BRANCH"
+# --- create adopt branch with version fixup (minor releases only) -------------
+if ! $IS_HOTFIX; then
+    log "Creating $ADOPT_BRANCH from $RELEASE_BRANCH..."
+    run git checkout -b "$ADOPT_BRANCH" "$RELEASE_BRANCH"
 
-if ! $DRY_RUN; then
-    MAIN_VERSION="$(get_version_from_ref main)"
-    log "Setting version to $MAIN_VERSION (from main) on $ADOPT_BRANCH..."
-    set_version "$MAIN_VERSION"
-    git add pyproject.toml
-    git commit -s -S -m "Set version to $MAIN_VERSION for merge into main"
+    if ! $DRY_RUN; then
+        MAIN_VERSION="$(get_version_from_ref main)"
+        log "Setting version to $MAIN_VERSION (from main) on $ADOPT_BRANCH..."
+        set_version "$MAIN_VERSION"
+        git add pyproject.toml
+        git commit -s -S -m "Set version to $MAIN_VERSION for merge into main"
+    fi
+
+    if $NO_PUSH || $DRY_RUN; then
+        log "Skipping adopt branch push"
+    else
+        log "Pushing $ADOPT_BRANCH to $REMOTE..."
+        git push "$REMOTE" "$ADOPT_BRANCH"
+    fi
 fi
 
-# --- push adopt branch --------------------------------------------------------
-if $NO_PUSH || $DRY_RUN; then
-    log "Skipping adopt branch push"
-else
-    log "Pushing $ADOPT_BRANCH to $REMOTE..."
-    git push "$REMOTE" "$ADOPT_BRANCH"
-fi
-
-# --- close release PR and open adopt PR ---------------------------------------
+# --- close release PR, open adopt PR, create GitHub Release -------------------
 if $NO_PR || $DRY_RUN; then
     log "Skipping PR operations and GitHub Release"
 else
@@ -234,32 +242,21 @@ else
 
     if [[ -n "$PR_NUMBER" ]]; then
         log "Closing release PR #${PR_NUMBER}..."
+        if $IS_HOTFIX; then
+            CLOSE_COMMENT="Closed by finish-release.sh. Hotfix $TAG released; changes are not merged back into main."
+        else
+            CLOSE_COMMENT="Closed by finish-release.sh. Release changes will be merged via $ADOPT_BRANCH."
+        fi
         gh pr close "$PR_NUMBER" \
             --repo "$REPO_SLUG" \
-            --comment "Closed by finish-release.sh. Release changes will be merged via $ADOPT_BRANCH."
+            --comment "$CLOSE_COMMENT"
     else
         log "No open release PR found from $RELEASE_BRANCH to main (skipping close)"
     fi
 
-    log "Creating PR from $ADOPT_BRANCH to main..."
+    if ! $IS_HOTFIX; then
+        log "Creating PR from $ADOPT_BRANCH to main..."
 
-    if $IS_HOTFIX; then
-        ADOPT_PR_BODY="$(cat <<EOF
-## Adopt hotfix v${VERSION}
-
-Merge hotfix changes from \`${RELEASE_BRANCH}\` into \`main\` via the
-\`${ADOPT_BRANCH}\` branch. The version in \`pyproject.toml\` has been set to
-the current \`main\` development version to avoid conflicts.
-
-**Tag:** \`${TAG}\`
-
-### To merge
-
-Merge this PR once CI passes. Use a **merge commit** (not squash) to preserve
-the release branch history on \`main\`.
-EOF
-)"
-    else
         ADOPT_PR_BODY="$(cat <<EOF
 ## Adopt release v${VERSION}
 
@@ -279,23 +276,23 @@ Merge this PR once CI passes. Use a **merge commit** (not squash) to preserve
 the release branch history on \`main\`.
 EOF
 )"
+
+        gh pr create \
+            --repo "$REPO_SLUG" \
+            --base main \
+            --head "$ADOPT_BRANCH" \
+            --title "Adopt release v${VERSION}" \
+            --body "$ADOPT_PR_BODY"
     fi
-
-    ADOPT_KIND="release"
-    $IS_HOTFIX && ADOPT_KIND="hotfix"
-
-    gh pr create \
-        --repo "$REPO_SLUG" \
-        --base main \
-        --head "$ADOPT_BRANCH" \
-        --title "Adopt $ADOPT_KIND v${VERSION}" \
-        --body "$ADOPT_PR_BODY"
 
     log "Creating GitHub Release $TAG..."
     gh release create "$TAG" \
         --repo "$REPO_SLUG" \
         --title "Release $TAG" \
         --generate-notes
+
+    log "Triggering doc version sync workflow..."
+    gh workflow run sync-doc-version.yml --repo "$REPO_SLUG"
 fi
 
 # --- switch back to main ------------------------------------------------------
@@ -307,9 +304,13 @@ log "Done. Release $TAG tagged."
 if ! $NO_PR && ! $DRY_RUN; then
     log "Next steps:"
     log "  1. Wait for the publish workflow (triggered by the GitHub Release)"
-    log "  2. Merge the adopt PR from $ADOPT_BRANCH once CI passes"
-    log "     - Use 'Squash and merge' if the release only cherry-picked commits from main"
-    log "       (the only new change will be the version bump in docs)"
-    log "     - Use 'Create a merge commit' if the release included novel work or branch merges"
-    log "  3. Re-deploy docs: gh workflow run docs.yml --ref main"
+    if $IS_HOTFIX; then
+        log "  2. Merge the doc version sync PR once CI passes"
+        log "     Docs will rebuild automatically when the PR merges"
+    else
+        log "  2. Merge the adopt PR from $ADOPT_BRANCH once CI passes"
+        log "     Use 'Create a merge commit' (not squash) to preserve release branch history"
+        log "  3. Merge the doc version sync PR once CI passes"
+        log "     Docs will rebuild automatically when the PR merges"
+    fi
 fi
