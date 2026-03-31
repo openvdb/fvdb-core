@@ -147,28 +147,6 @@ PY
   fi
 }
 
-install_nanovdb_editor_dependency() {
-  local requirement
-  requirement=$(python - <<'PY'
-import pathlib
-import re
-
-text = pathlib.Path("pyproject.toml").read_text()
-match = re.search(r'"(nanovdb-editor[^"]*)"', text)
-if match:
-  print(match.group(1))
-PY
-)
-
-  if [ -z "$requirement" ]; then
-    echo "Warning: Could not find a nanovdb-editor requirement in pyproject.toml"
-    return 0
-  fi
-
-  echo "Ensuring NanoVDB Editor pip package is installed: $requirement"
-  run_with_sanitized_paths pip install --upgrade "$requirement"
-}
-
 record_nanovdb_editor_source_override() {
   local setting="$1"
   case "$setting" in
@@ -397,12 +375,10 @@ elif [ "$BUILD_TYPE" == "install" ]; then
     echo "Build and install package"
     if [ -n "$NANOVDB_EDITOR_SOURCE_OVERRIDE" ]; then
         echo "Using local NanoVDB Editor source override: $NANOVDB_EDITOR_SOURCE_OVERRIDE"
-    else
-        install_nanovdb_editor_dependency || exit $?
     fi
     # Always use --force-reinstall to ensure the freshly built package is installed,
     # even if pip thinks the version is already satisfied. The --no-deps flag ensures
-    # this only affects fvdb-core itself; nanovdb-editor is synced separately above.
+    # this only affects fvdb-core itself, not dependencies like torch.
     echo "pip install --no-deps --force-reinstall $PIP_ARGS ."
     run_with_sanitized_paths pip install --no-deps --force-reinstall $PIP_ARGS .
 

@@ -1,12 +1,9 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 
-#   * To build with a local NanoVDB Editor repository, override the CPM source:
-#       ./build.sh install -C cmake.define.CPM_nanovdb_editor_SOURCE=/path/to/nanovdb-editor
-#       NOTE: the variable is cached by CMake; to clear it without a clean build:
-#       ./build.sh install -C cmake.define.CPM_nanovdb_editor_SOURCE=
-#   * By default, fVDB uses CPM-pinned NanoVDB Editor headers and expects the
-#     runtime binaries to come from the installed nanovdb-editor pip package.
+#   * fVDB always uses CPM-pinned NanoVDB Editor headers during builds.
+#   * Viewer/runtime binaries are optional and come from the installed
+#     nanovdb-editor pip package unless a local source checkout is provided.
 #   * When CPM_nanovdb_editor_SOURCE points at a local repository, fVDB builds
 #     and installs nanovdb_editor from that source checkout instead.
 set(NANOVDB_EDITOR_BUILD_TYPE "Release" CACHE STRING "Build type for nanovdb_editor (Release/Debug)")
@@ -85,10 +82,10 @@ if(NANOVDB_EDITOR_INSTALLED)
         message(STATUS "Using installed nanovdb_editor binaries version ${NANOVDB_EDITOR_INSTALLED_VERSION} from ${NANOVDB_EDITOR_PACKAGE_DIR}")
     endif()
 else()
-    message(WARNING
-        "nanovdb_editor is not installed. fVDB will compile against CPM-pinned headers, "
-        "but runtime viewer features need the nanovdb-editor pip package. "
-        "Install the version range declared in pyproject.toml or set CPM_nanovdb_editor_SOURCE.")
+    message(STATUS
+        "nanovdb_editor is not installed. This is fine for core builds; "
+        "viewer runtime features require the optional nanovdb-editor package "
+        "or a local CPM_nanovdb_editor_SOURCE checkout.")
 endif()
 
 if(NOT NANOVDB_EDITOR_BUILD_FROM_SOURCE)

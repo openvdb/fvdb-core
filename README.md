@@ -166,7 +166,7 @@ The build script automatically detects the CUDA architectures to build for based
 ./build.sh --cuda-arch-list=8.0;8.6+PTX
 ```
 
-By default, fVDB uses CPM to fetch NanoVDB Editor headers at the pinned source commit and uses the `nanovdb-editor` pip package for runtime binaries. To build NanoVDB Editor from a local source checkout instead, pass `-C cmake.define.CPM_nanovdb_editor_SOURCE=/path/to/nanovdb-editor`.
+fVDB always uses CPM to fetch NanoVDB Editor headers at the pinned source commit during builds. Viewer/runtime support remains optional and requires the `nanovdb-editor` Python package, which you can install with `pip install "fvdb-core[viewer]"` or provide from a local checkout via `-C cmake.define.CPM_nanovdb_editor_SOURCE=/path/to/nanovdb-editor`.
 
 #### Build Modifiers
 
