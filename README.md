@@ -166,14 +166,14 @@ The build script automatically detects the CUDA architectures to build for based
 ./build.sh --cuda-arch-list=8.0;8.6+PTX
 ```
 
+By default, fVDB uses CPM to fetch NanoVDB Editor headers at the pinned source commit and uses the `nanovdb-editor` pip package for runtime binaries. To build NanoVDB Editor from a local source checkout instead, pass `-C cmake.define.CPM_nanovdb_editor_SOURCE=/path/to/nanovdb-editor`.
+
 #### Build Modifiers
 
 The build script supports the following build modifiers:
 
 - `gtests`: Enable building the gtest C++ unit tests.
 - `benchmarks`: Enable building the benchmarks.
-- `editor_skip`: Skip building the nanovdb_editor dependency.
-- `editor_force`: Force rebuild of the nanovdb_editor dependency.
 - `debug`: Build in debug mode with full debug symbols and no optimizations.
 - `strip_symbols`: Strip symbols from the build (will be ignored if debug is enabled).
 - `verbose`: Enable verbose build output for pip and CMake.

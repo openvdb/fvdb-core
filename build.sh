@@ -23,8 +23,6 @@ usage() {
   echo "Build Modifiers (for 'install' and 'wheel' build types, typically passed after build_type):"
   echo "  gtests         Enable building tests (sets FVDB_BUILD_TESTS=ON)."
   echo "  benchmarks     Enable building benchmarks (sets FVDB_BUILD_BENCHMARKS=ON)."
-  echo "  editor_skip    Skip building and installing the nanovdb_editor dependency (sets NANOVDB_EDITOR_SKIP=ON)."
-  echo "  editor_force   Force rebuild of the nanovdb_editor dependency (sets NANOVDB_EDITOR_FORCE=ON)."
   echo "  debug          Build in debug mode with full debug symbols and no optimizations."
   echo "  lineinfo       Enable CUDA lineinfo (sets FVDB_LINEINFO=ON)."
   echo "  strip_symbols  Strip symbols from the build (will be ignored if debug is enabled)."
@@ -32,6 +30,9 @@ usage() {
   echo "  trace          Enable CMake trace output for debugging configuration."
   echo ""
   echo "  Any modifier arguments not matching above are passed through to pip."
+  echo ""
+  echo "  To build NanoVDB Editor from a local repository, pass:"
+  echo "    -C cmake.define.CPM_nanovdb_editor_SOURCE=/path/to/nanovdb-editor"
   exit 0
 }
 
@@ -144,6 +145,37 @@ PY
   else
     echo "Warning: Could not determine ${friendly_name} lib directory; gtests may fail to find ${missing_lib_hint}"
   fi
+}
+
+install_nanovdb_editor_dependency() {
+  local requirement
+  requirement=$(python - <<'PY'
+import pathlib
+import re
+
+text = pathlib.Path("pyproject.toml").read_text()
+match = re.search(r'"(nanovdb-editor[^"]*)"', text)
+if match:
+  print(match.group(1))
+PY
+)
+
+  if [ -z "$requirement" ]; then
+    echo "Warning: Could not find a nanovdb-editor requirement in pyproject.toml"
+    return 0
+  fi
+
+  echo "Ensuring NanoVDB Editor pip package is installed: $requirement"
+  run_with_sanitized_paths pip install --upgrade "$requirement"
+}
+
+record_nanovdb_editor_source_override() {
+  local setting="$1"
+  case "$setting" in
+    cmake.define.CPM_nanovdb_editor_SOURCE=*)
+      NANOVDB_EDITOR_SOURCE_OVERRIDE="${setting#cmake.define.CPM_nanovdb_editor_SOURCE=}"
+      ;;
+  esac
 }
 
 # --- Path Sanitization for Virtualized Environments ---
@@ -268,9 +300,7 @@ if [ -n "$CUDA_HOME" ]; then
     fi
 fi
 
-# Default values for nanovdb_editor build options
-NANOVDB_EDITOR_SKIP=OFF
-NANOVDB_EDITOR_FORCE=OFF
+NANOVDB_EDITOR_SOURCE_OVERRIDE=""
 
 while (( "$#" )); do
   is_config_arg_handled=false
@@ -303,19 +333,27 @@ while (( "$#" )); do
       echo "Enabling strip symbols build"
       CONFIG_SETTINGS+=" --config-settings=cmake.define.FVDB_STRIP_SYMBOLS=ON"
       is_config_arg_handled=true
-    elif [[ "$1" == "editor_skip" ]]; then
-      echo "Detected 'editor_skip' flag for $BUILD_TYPE build. Enabling NANOVDB_EDITOR_SKIP."
-      NANOVDB_EDITOR_SKIP=ON
-      is_config_arg_handled=true
-    elif [[ "$1" == "editor_force" ]]; then
-      echo "Detected 'editor_force' flag for $BUILD_TYPE build. Enabling NANOVDB_EDITOR_FORCE."
-      NANOVDB_EDITOR_FORCE=ON
-      is_config_arg_handled=true
     fi
   fi
 
   if ! $is_config_arg_handled; then
     case "$1" in
+      -C)
+        shift
+        record_nanovdb_editor_source_override "$1"
+        PASS_THROUGH_ARGS+=" -C $(printf "%q" "$1")"
+        is_config_arg_handled=true
+        ;;
+      -C*)
+        record_nanovdb_editor_source_override "${1#-C}"
+        PASS_THROUGH_ARGS+=" $(printf "%q" "$1")"
+        is_config_arg_handled=true
+        ;;
+      --config-settings=*)
+        record_nanovdb_editor_source_override "${1#--config-settings=}"
+        PASS_THROUGH_ARGS+=" $(printf "%q" "$1")"
+        is_config_arg_handled=true
+        ;;
       --cuda-arch-list=*)
         CUDA_ARCH_LIST_ARG="${1#*=}"
         is_config_arg_handled=true
@@ -333,9 +371,6 @@ while (( "$#" )); do
   fi
   shift
 done
-
-CONFIG_SETTINGS+=" --config-settings=cmake.define.NANOVDB_EDITOR_SKIP=$NANOVDB_EDITOR_SKIP"
-CONFIG_SETTINGS+=" --config-settings=cmake.define.NANOVDB_EDITOR_FORCE=$NANOVDB_EDITOR_FORCE"
 
 NINJA_PATH=$(command -v ninja 2>/dev/null || command -v ninja-build 2>/dev/null)
 if [ -n "$NINJA_PATH" ]; then
@@ -360,9 +395,14 @@ if [ "$BUILD_TYPE" == "wheel" ]; then
 
 elif [ "$BUILD_TYPE" == "install" ]; then
     echo "Build and install package"
+    if [ -n "$NANOVDB_EDITOR_SOURCE_OVERRIDE" ]; then
+        echo "Using local NanoVDB Editor source override: $NANOVDB_EDITOR_SOURCE_OVERRIDE"
+    else
+        install_nanovdb_editor_dependency || exit $?
+    fi
     # Always use --force-reinstall to ensure the freshly built package is installed,
     # even if pip thinks the version is already satisfied. The --no-deps flag ensures
-    # this only affects fvdb-core itself, not dependencies like torch.
+    # this only affects fvdb-core itself; nanovdb-editor is synced separately above.
     echo "pip install --no-deps --force-reinstall $PIP_ARGS ."
     run_with_sanitized_paths pip install --no-deps --force-reinstall $PIP_ARGS .
 
