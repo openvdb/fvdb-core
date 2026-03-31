@@ -86,20 +86,23 @@ def load_nanovdb(
     device: DeviceIdentifier = "cpu",
     verbose: bool = False,
 ) -> tuple[GridBatch, JaggedTensor, list[str]]:
-    """
-    Load a grid batch from a ``.nvdb`` file.
+    """Load a grid batch from a ``.nvdb`` file.
 
     Args:
-        path: Path to the ``.nvdb`` file.
-        indices: Optional list of grid indices to load.
-        index: Optional single grid index to load.
-        names: Optional list of grid names to load.
-        name: Optional single grid name to load.
-        device: Device to load onto. Defaults to ``"cpu"``.
-        verbose: Print information about loaded grids.
+        path (str): Path to the ``.nvdb`` file.
+        indices (list[int] | None): Optional list of grid indices to load.
+        index (int | None): Optional single grid index to load.
+        names (list[str] | None): Optional list of grid names to load.
+        name (str | None): Optional single grid name to load.
+        device (DeviceIdentifier): Device to load onto. Defaults to ``"cpu"``.
+        verbose (bool): Print information about loaded grids.
 
     Returns:
-        A tuple ``(grid_batch, data, names)``.
+        grid_batch (GridBatch): The loaded grid batch.
+        data (JaggedTensor): Per-voxel data.
+        names (list[str]): Grid names.
+
+    .. seealso:: :func:`load_nanovdb_single`
     """
     from .._fvdb_cpp import load as _load
 
@@ -137,17 +140,18 @@ def save_nanovdb(
     compressed: bool = False,
     verbose: bool = False,
 ) -> None:
-    """
-    Save a grid batch and optional voxel data to a ``.nvdb`` file.
+    """Save a grid batch and optional voxel data to a ``.nvdb`` file.
 
     Args:
-        grid: The grid batch to save.
-        path: File path (should have ``.nvdb`` extension).
-        data: Optional voxel data to save with the grids.
-        names: Names for each grid, or a single name for all.
-        name: Single name for all grids (takes precedence over ``names``).
-        compressed: Use Blosc compression. Default ``False``.
-        verbose: Print information about saved grids. Default ``False``.
+        grid (GridBatch): The grid batch to save.
+        path (str): File path (should have ``.nvdb`` extension).
+        data (JaggedTensor | None): Optional voxel data to save with the grids.
+        names (list[str] | str | None): Names for each grid, or a single name for all.
+        name (str | None): Single name for all grids (takes precedence over ``names``).
+        compressed (bool): Use Blosc compression. Default ``False``.
+        verbose (bool): Print information about saved grids. Default ``False``.
+
+    .. seealso:: :func:`save_nanovdb_single`
     """
     from .._fvdb_cpp import save as _save
 
@@ -186,14 +190,18 @@ def load_nanovdb_single(
     """Load a single grid from a ``.nvdb`` file.
 
     Args:
-        path: Path to the ``.nvdb`` file.
-        index: Grid index to load. Default ``0``.
-        name: Optional grid name to load (overrides ``index``).
-        device: Device to load onto. Defaults to ``"cpu"``.
-        verbose: Print information about loaded grids.
+        path (str): Path to the ``.nvdb`` file.
+        index (int): Grid index to load. Default ``0``.
+        name (str | None): Optional grid name to load (overrides ``index``).
+        device (DeviceIdentifier): Device to load onto. Defaults to ``"cpu"``.
+        verbose (bool): Print information about loaded grids.
 
     Returns:
-        A tuple ``(grid, data, name)``.
+        grid (Grid): The loaded single grid.
+        data (torch.Tensor): Per-voxel data.
+        name (str): Grid name.
+
+    .. seealso:: :func:`load_nanovdb`
     """
     import torch
 
@@ -216,12 +224,14 @@ def save_nanovdb_single(
     """Save a single grid and optional voxel data to a ``.nvdb`` file.
 
     Args:
-        grid: The single grid to save.
-        path: File path (should have ``.nvdb`` extension).
-        data: Optional voxel data as a plain tensor.
-        name: Optional name for the grid.
-        compressed: Use Blosc compression.
-        verbose: Print information about saved grids.
+        grid (Grid): The single grid to save.
+        path (str): File path (should have ``.nvdb`` extension).
+        data (torch.Tensor | None): Optional voxel data as a plain tensor.
+        name (str | None): Optional name for the grid.
+        compressed (bool): Use Blosc compression. Default ``False``.
+        verbose (bool): Print information about saved grids. Default ``False``.
+
+    .. seealso:: :func:`save_nanovdb`
     """
     import torch
     from .._fvdb_cpp import save as _save

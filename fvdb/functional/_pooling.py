@@ -94,7 +94,23 @@ def max_pool_batch(
     stride: NumericMaxRank1 = 0,
     coarse_grid: GridBatch | None = None,
 ) -> tuple[JaggedTensor, GridBatch]:
-    """Max-pool voxel data, reducing resolution by *pool_factor*."""
+    """Max-pool voxel data on a grid batch, reducing resolution by *pool_factor*.
+
+    Supports backpropagation.
+
+    Args:
+        grid (GridBatch): The fine grid batch.
+        pool_factor (NumericMaxRank1): Pooling factor per axis, broadcastable to ``(3,)``.
+        data (JaggedTensor): Per-voxel feature data on the fine grid.
+        stride (NumericMaxRank1): Pooling stride per axis. Default ``0`` uses *pool_factor*.
+        coarse_grid (GridBatch | None): Optional pre-computed coarse grid batch.
+
+    Returns:
+        pooled_data (JaggedTensor): Pooled feature data on the coarse grid.
+        coarse_grid (GridBatch): The coarse grid batch.
+
+    .. seealso:: :func:`max_pool_single`
+    """
     from ..grid_batch import GridBatch as GB
 
     factor_list = to_Vec3i(pool_factor, value_constraint=ValueConstraint.POSITIVE).tolist()
@@ -122,7 +138,23 @@ def max_pool_single(
     stride: NumericMaxRank1 = 0,
     coarse_grid: Grid | None = None,
 ) -> tuple[torch.Tensor, Grid]:
-    """Max-pool voxel data for a single grid."""
+    """Max-pool voxel data on a single grid, reducing resolution by *pool_factor*.
+
+    Supports backpropagation.
+
+    Args:
+        grid (Grid): The fine single grid.
+        pool_factor (NumericMaxRank1): Pooling factor per axis, broadcastable to ``(3,)``.
+        data (torch.Tensor): Per-voxel feature data on the fine grid.
+        stride (NumericMaxRank1): Pooling stride per axis. Default ``0`` uses *pool_factor*.
+        coarse_grid (Grid | None): Optional pre-computed coarse grid.
+
+    Returns:
+        pooled_data (torch.Tensor): Pooled feature data on the coarse grid.
+        coarse_grid (Grid): The coarse grid.
+
+    .. seealso:: :func:`max_pool_batch`
+    """
     from ..grid import Grid as G
 
     factor_list = to_Vec3i(pool_factor, value_constraint=ValueConstraint.POSITIVE).tolist()
@@ -150,7 +182,23 @@ def avg_pool_batch(
     stride: NumericMaxRank1 = 0,
     coarse_grid: GridBatch | None = None,
 ) -> tuple[JaggedTensor, GridBatch]:
-    """Average-pool voxel data, reducing resolution by *pool_factor*."""
+    """Average-pool voxel data on a grid batch, reducing resolution by *pool_factor*.
+
+    Supports backpropagation.
+
+    Args:
+        grid (GridBatch): The fine grid batch.
+        pool_factor (NumericMaxRank1): Pooling factor per axis, broadcastable to ``(3,)``.
+        data (JaggedTensor): Per-voxel feature data on the fine grid.
+        stride (NumericMaxRank1): Pooling stride per axis. Default ``0`` uses *pool_factor*.
+        coarse_grid (GridBatch | None): Optional pre-computed coarse grid batch.
+
+    Returns:
+        pooled_data (JaggedTensor): Pooled feature data on the coarse grid.
+        coarse_grid (GridBatch): The coarse grid batch.
+
+    .. seealso:: :func:`avg_pool_single`
+    """
     from ..grid_batch import GridBatch as GB
 
     factor_list = to_Vec3i(pool_factor, value_constraint=ValueConstraint.POSITIVE).tolist()
@@ -178,7 +226,23 @@ def avg_pool_single(
     stride: NumericMaxRank1 = 0,
     coarse_grid: Grid | None = None,
 ) -> tuple[torch.Tensor, Grid]:
-    """Average-pool voxel data for a single grid."""
+    """Average-pool voxel data on a single grid, reducing resolution by *pool_factor*.
+
+    Supports backpropagation.
+
+    Args:
+        grid (Grid): The fine single grid.
+        pool_factor (NumericMaxRank1): Pooling factor per axis, broadcastable to ``(3,)``.
+        data (torch.Tensor): Per-voxel feature data on the fine grid.
+        stride (NumericMaxRank1): Pooling stride per axis. Default ``0`` uses *pool_factor*.
+        coarse_grid (Grid | None): Optional pre-computed coarse grid.
+
+    Returns:
+        pooled_data (torch.Tensor): Pooled feature data on the coarse grid.
+        coarse_grid (Grid): The coarse grid.
+
+    .. seealso:: :func:`avg_pool_batch`
+    """
     from ..grid import Grid as G
 
     factor_list = to_Vec3i(pool_factor, value_constraint=ValueConstraint.POSITIVE).tolist()
@@ -206,7 +270,23 @@ def refine_batch(
     mask: JaggedTensor | None = None,
     refined: GridBatch | None = None,
 ) -> tuple[JaggedTensor, GridBatch]:
-    """Refine (upsample) voxel data by subdividing each voxel."""
+    """Refine (upsample) voxel data by subdividing each voxel on a grid batch.
+
+    Supports backpropagation.
+
+    Args:
+        grid (GridBatch): The coarse grid batch.
+        subdiv_factor (NumericMaxRank1): Subdivision factor per axis, broadcastable to ``(3,)``.
+        data (JaggedTensor): Per-voxel feature data on the coarse grid.
+        mask (JaggedTensor | None): Optional boolean mask selecting voxels to refine.
+        refined (GridBatch | None): Optional pre-computed fine grid batch.
+
+    Returns:
+        refined_data (JaggedTensor): Refined feature data on the fine grid.
+        fine_grid (GridBatch): The fine grid batch.
+
+    .. seealso:: :func:`refine_single`
+    """
     from ..grid_batch import GridBatch as GB
 
     factor_list = to_Vec3i(subdiv_factor, value_constraint=ValueConstraint.POSITIVE).tolist()
@@ -232,7 +312,23 @@ def refine_single(
     mask: torch.Tensor | None = None,
     refined: Grid | None = None,
 ) -> tuple[torch.Tensor, Grid]:
-    """Refine (upsample) voxel data for a single grid."""
+    """Refine (upsample) voxel data by subdividing each voxel on a single grid.
+
+    Supports backpropagation.
+
+    Args:
+        grid (Grid): The coarse single grid.
+        subdiv_factor (NumericMaxRank1): Subdivision factor per axis, broadcastable to ``(3,)``.
+        data (torch.Tensor): Per-voxel feature data on the coarse grid.
+        mask (torch.Tensor | None): Optional boolean mask selecting voxels to refine.
+        refined (Grid | None): Optional pre-computed fine grid.
+
+    Returns:
+        refined_data (torch.Tensor): Refined feature data on the fine grid.
+        fine_grid (Grid): The fine grid.
+
+    .. seealso:: :func:`refine_batch`
+    """
     from ..grid import Grid as G
 
     factor_list = to_Vec3i(subdiv_factor, value_constraint=ValueConstraint.POSITIVE).tolist()

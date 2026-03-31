@@ -30,10 +30,22 @@ def voxels_along_rays_batch(
     return_ijk: bool = False,
     cumulative: bool = False,
 ) -> tuple[JaggedTensor, JaggedTensor]:
-    """Enumerate voxels intersected by rays using a DDA traversal.
+    """Enumerate voxels intersected by rays using a DDA traversal on a grid batch.
 
-    Returns ``(voxels, distances)`` where ``voxels`` contains ijk coordinates
-    or linear indices and ``distances`` contains ``(t_entry, t_exit)`` pairs.
+    Args:
+        grid (GridBatch): The grid batch to trace through.
+        ray_origins (JaggedTensor): Ray origin positions, shape ``(B, -1, 3)``.
+        ray_directions (JaggedTensor): Ray direction vectors, shape ``(B, -1, 3)``.
+        max_voxels (int): Maximum number of voxels to return per ray.
+        eps (float): Small offset to avoid self-intersection. Default ``0.0``.
+        return_ijk (bool): If ``True``, return voxel coordinates instead of linear indices.
+        cumulative (bool): If ``True``, return cumulative indices across the batch.
+
+    Returns:
+        voxels (JaggedTensor): Voxel coordinates or linear indices per ray hit.
+        distances (JaggedTensor): ``(t_entry, t_exit)`` pairs per ray hit.
+
+    .. seealso:: :func:`voxels_along_rays_single`
     """
     grid_data = grid.data
     result = _fvdb_cpp.voxels_along_rays(
@@ -49,9 +61,19 @@ def segments_along_rays_batch(
     max_segments: int,
     eps: float = 0.0,
 ) -> JaggedTensor:
-    """Return continuous segments of ray traversal through the grid.
+    """Return continuous segments of ray traversal through a grid batch.
 
-    Each segment is a ``(t_start, t_end)`` pair of distances along the ray.
+    Args:
+        grid (GridBatch): The grid batch to trace through.
+        ray_origins (JaggedTensor): Ray origin positions, shape ``(B, -1, 3)``.
+        ray_directions (JaggedTensor): Ray direction vectors, shape ``(B, -1, 3)``.
+        max_segments (int): Maximum number of segments to return per ray.
+        eps (float): Small offset to avoid self-intersection. Default ``0.0``.
+
+    Returns:
+        segments (JaggedTensor): ``(t_start, t_end)`` pairs per ray segment.
+
+    .. seealso:: :func:`segments_along_rays_single`
     """
     grid_data = grid.data
     return JaggedTensor(
@@ -71,7 +93,25 @@ def uniform_ray_samples_batch(
     return_midpoints: bool = False,
     eps: float = 0.0,
 ) -> JaggedTensor:
-    """Generate uniformly spaced samples along rays that intersect active voxels."""
+    """Generate uniformly spaced samples along rays that intersect active voxels of a grid batch.
+
+    Args:
+        grid (GridBatch): The grid batch to sample through.
+        ray_origins (JaggedTensor): Ray origin positions, shape ``(B, -1, 3)``.
+        ray_directions (JaggedTensor): Ray direction vectors, shape ``(B, -1, 3)``.
+        t_min (JaggedTensor): Minimum ray distances per ray.
+        t_max (JaggedTensor): Maximum ray distances per ray.
+        step_size (float): Distance between consecutive samples.
+        cone_angle (float): Cone angle for mip-mapping. Default ``0.0``.
+        include_end_segments (bool): Include segment endpoints. Default ``True``.
+        return_midpoints (bool): Return midpoints instead of boundaries. Default ``False``.
+        eps (float): Small offset to avoid self-intersection. Default ``0.0``.
+
+    Returns:
+        samples (JaggedTensor): Sample distances along each ray.
+
+    .. seealso:: :func:`uniform_ray_samples_single`
+    """
     grid_data = grid.data
     return JaggedTensor(
         impl=_fvdb_cpp.uniform_ray_samples(
@@ -96,9 +136,19 @@ def ray_implicit_intersection_batch(
     grid_scalars: JaggedTensor,
     eps: float = 0.0,
 ) -> JaggedTensor:
-    """Find ray intersections with an implicit surface defined by grid scalars.
+    """Find ray intersections with an implicit surface defined by grid scalars on a grid batch.
 
-    Returns intersection distance along each ray, or ``-1`` if no intersection.
+    Args:
+        grid (GridBatch): The grid batch defining the implicit surface topology.
+        ray_origins (JaggedTensor): Ray origin positions, shape ``(B, -1, 3)``.
+        ray_directions (JaggedTensor): Ray direction vectors, shape ``(B, -1, 3)``.
+        grid_scalars (JaggedTensor): Per-voxel scalar values defining the implicit surface.
+        eps (float): Small offset to avoid self-intersection. Default ``0.0``.
+
+    Returns:
+        distances (JaggedTensor): Intersection distance per ray, or ``-1`` if no intersection.
+
+    .. seealso:: :func:`ray_implicit_intersection_single`
     """
     grid_data = grid.data
     result_impl = _fvdb_cpp.ray_implicit_intersection(
@@ -113,10 +163,18 @@ def rays_intersect_voxels_batch(
     ray_directions: JaggedTensor,
     eps: float = 0.0,
 ) -> JaggedTensor:
-    """Check whether rays hit any voxels in the grid.
+    """Check whether rays hit any voxels in a grid batch.
 
-    Returns a boolean :class:`~fvdb.JaggedTensor` indicating whether each ray
-    hit a voxel.
+    Args:
+        grid (GridBatch): The grid batch to test against.
+        ray_origins (JaggedTensor): Ray origin positions, shape ``(B, -1, 3)``.
+        ray_directions (JaggedTensor): Ray direction vectors, shape ``(B, -1, 3)``.
+        eps (float): Small offset to avoid self-intersection. Default ``0.0``.
+
+    Returns:
+        hit (JaggedTensor): Boolean mask indicating whether each ray hit a voxel.
+
+    .. seealso:: :func:`rays_intersect_voxels_single`
     """
     _, ray_times = voxels_along_rays_batch(
         grid,
@@ -144,9 +202,21 @@ def voxels_along_rays_single(
     eps: float = 0.0,
     return_ijk: bool = False,
 ) -> tuple[JaggedTensor, JaggedTensor]:
-    """Enumerate voxels intersected by rays using a DDA traversal for a single grid.
+    """Enumerate voxels intersected by rays using a DDA traversal on a single grid.
 
-    Returns ``(voxels, distances)`` as :class:`~fvdb.JaggedTensor` (per-ray jagged).
+    Args:
+        grid (Grid): The single grid to trace through.
+        ray_origins (torch.Tensor): Ray origin positions, shape ``(N, 3)``.
+        ray_directions (torch.Tensor): Ray direction vectors, shape ``(N, 3)``.
+        max_voxels (int): Maximum number of voxels to return per ray.
+        eps (float): Small offset to avoid self-intersection. Default ``0.0``.
+        return_ijk (bool): If ``True``, return voxel coordinates instead of linear indices.
+
+    Returns:
+        voxels (JaggedTensor): Voxel coordinates or linear indices per ray hit.
+        distances (JaggedTensor): ``(t_entry, t_exit)`` pairs per ray hit.
+
+    .. seealso:: :func:`voxels_along_rays_batch`
     """
     grid_data = grid.data
     origins_jt = JaggedTensor(ray_origins)
@@ -166,7 +236,17 @@ def segments_along_rays_single(
 ) -> JaggedTensor:
     """Return continuous segments of ray traversal through a single grid.
 
-    Each segment is a ``(t_start, t_end)`` pair of distances along the ray.
+    Args:
+        grid (Grid): The single grid to trace through.
+        ray_origins (torch.Tensor): Ray origin positions, shape ``(N, 3)``.
+        ray_directions (torch.Tensor): Ray direction vectors, shape ``(N, 3)``.
+        max_segments (int): Maximum number of segments to return per ray.
+        eps (float): Small offset to avoid self-intersection. Default ``0.0``.
+
+    Returns:
+        segments (JaggedTensor): ``(t_start, t_end)`` pairs per ray segment.
+
+    .. seealso:: :func:`segments_along_rays_batch`
     """
     grid_data = grid.data
     origins_jt = JaggedTensor(ray_origins)
@@ -188,7 +268,25 @@ def uniform_ray_samples_single(
     return_midpoints: bool = False,
     eps: float = 0.0,
 ) -> JaggedTensor:
-    """Generate uniformly spaced samples along rays that intersect active voxels in a single grid."""
+    """Generate uniformly spaced samples along rays that intersect active voxels of a single grid.
+
+    Args:
+        grid (Grid): The single grid to sample through.
+        ray_origins (torch.Tensor): Ray origin positions, shape ``(N, 3)``.
+        ray_directions (torch.Tensor): Ray direction vectors, shape ``(N, 3)``.
+        t_min (torch.Tensor): Minimum ray distances per ray.
+        t_max (torch.Tensor): Maximum ray distances per ray.
+        step_size (float): Distance between consecutive samples.
+        cone_angle (float): Cone angle for mip-mapping. Default ``0.0``.
+        include_end_segments (bool): Include segment endpoints. Default ``True``.
+        return_midpoints (bool): Return midpoints instead of boundaries. Default ``False``.
+        eps (float): Small offset to avoid self-intersection. Default ``0.0``.
+
+    Returns:
+        samples (JaggedTensor): Sample distances along each ray.
+
+    .. seealso:: :func:`uniform_ray_samples_batch`
+    """
     grid_data = grid.data
     origins_jt = JaggedTensor(ray_origins)
     directions_jt = JaggedTensor(ray_directions)
@@ -217,9 +315,19 @@ def ray_implicit_intersection_single(
     grid_scalars: torch.Tensor,
     eps: float = 0.0,
 ) -> torch.Tensor:
-    """Find ray intersections with an implicit surface for a single grid.
+    """Find ray intersections with an implicit surface defined by grid scalars on a single grid.
 
-    Returns intersection distance along each ray, or ``-1`` if no intersection.
+    Args:
+        grid (Grid): The single grid defining the implicit surface topology.
+        ray_origins (torch.Tensor): Ray origin positions, shape ``(N, 3)``.
+        ray_directions (torch.Tensor): Ray direction vectors, shape ``(N, 3)``.
+        grid_scalars (torch.Tensor): Per-voxel scalar values defining the implicit surface.
+        eps (float): Small offset to avoid self-intersection. Default ``0.0``.
+
+    Returns:
+        distances (torch.Tensor): Intersection distance per ray, or ``-1`` if no intersection.
+
+    .. seealso:: :func:`ray_implicit_intersection_batch`
     """
     grid_data = grid.data
     origins_jt = JaggedTensor(ray_origins)
@@ -239,7 +347,16 @@ def rays_intersect_voxels_single(
 ) -> torch.Tensor:
     """Check whether rays hit any voxels in a single grid.
 
-    Returns a boolean tensor indicating whether each ray hit a voxel.
+    Args:
+        grid (Grid): The single grid to test against.
+        ray_origins (torch.Tensor): Ray origin positions, shape ``(N, 3)``.
+        ray_directions (torch.Tensor): Ray direction vectors, shape ``(N, 3)``.
+        eps (float): Small offset to avoid self-intersection. Default ``0.0``.
+
+    Returns:
+        hit (torch.Tensor): Boolean mask indicating whether each ray hit a voxel.
+
+    .. seealso:: :func:`rays_intersect_voxels_batch`
     """
     _, ray_times = voxels_along_rays_single(
         grid,

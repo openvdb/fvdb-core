@@ -52,38 +52,36 @@ class _WorldToVoxelFn(torch.autograd.Function):
 
 
 def voxel_to_world_batch(grid: GridBatch, ijk: JaggedTensor) -> JaggedTensor:
-    """
-    Transform voxel-space coordinates to world-space positions.
+    """Transform voxel-space coordinates to world-space positions for a grid batch.
 
-    This function supports backpropagation.
+    Supports backpropagation.
 
     Args:
-        grid: The grid batch whose transforms to use.
-        ijk: Voxel-space coordinates. Shape: ``(B, -1, 3)``.
+        grid (GridBatch): The grid batch whose transforms to use.
+        ijk (JaggedTensor): Voxel-space coordinates, shape ``(B, -1, 3)``.
 
     Returns:
-        World-space coordinates as a :class:`~fvdb.JaggedTensor`.
+        result (JaggedTensor): World-space coordinates, shape ``(B, -1, 3)``.
 
-    .. seealso:: :func:`world_to_voxel_batch`, :func:`voxel_to_world_single`
+    .. seealso:: :func:`voxel_to_world_single`
     """
     result = cast(torch.Tensor, _VoxelToWorldFn.apply(ijk.jdata, grid.data, ijk._impl))
     return ijk.jagged_like(result)
 
 
 def world_to_voxel_batch(grid: GridBatch, points: JaggedTensor) -> JaggedTensor:
-    """
-    Convert world-space coordinates to voxel-space coordinates.
+    """Transform world-space coordinates to voxel-space positions for a grid batch.
 
-    This function supports backpropagation.
+    Supports backpropagation.
 
     Args:
-        grid: The grid batch whose transforms to use.
-        points: World-space positions. Shape: ``(B, -1, 3)``.
+        grid (GridBatch): The grid batch whose transforms to use.
+        points (JaggedTensor): World-space positions, shape ``(B, -1, 3)``.
 
     Returns:
-        Voxel-space coordinates as a :class:`~fvdb.JaggedTensor`.
+        result (JaggedTensor): Voxel-space coordinates, shape ``(B, -1, 3)``.
 
-    .. seealso:: :func:`voxel_to_world_batch`, :func:`world_to_voxel_single`
+    .. seealso:: :func:`world_to_voxel_single`
     """
     result = cast(torch.Tensor, _WorldToVoxelFn.apply(points.jdata, grid.data, points._impl))
     return points.jagged_like(result)
@@ -95,38 +93,36 @@ def world_to_voxel_batch(grid: GridBatch, points: JaggedTensor) -> JaggedTensor:
 
 
 def voxel_to_world_single(grid: Grid, ijk: torch.Tensor) -> torch.Tensor:
-    """
-    Transform voxel-space coordinates to world-space positions for a single grid.
+    """Transform voxel-space coordinates to world-space positions for a single grid.
 
-    This function supports backpropagation.
+    Supports backpropagation.
 
     Args:
-        grid: The single grid whose transform to use.
-        ijk: Voxel-space coordinates, shape ``(N, 3)``.
+        grid (Grid): The single grid whose transform to use.
+        ijk (torch.Tensor): Voxel-space coordinates, shape ``(N, 3)``.
 
     Returns:
-        World-space coordinates, shape ``(N, 3)``.
+        result (torch.Tensor): World-space coordinates, shape ``(N, 3)``.
 
-    .. seealso:: :func:`world_to_voxel_single`, :func:`voxel_to_world_batch`
+    .. seealso:: :func:`voxel_to_world_batch`
     """
     ijk_jt = JaggedTensor(ijk)
     return cast(torch.Tensor, _VoxelToWorldFn.apply(ijk_jt.jdata, grid.data, ijk_jt._impl))
 
 
 def world_to_voxel_single(grid: Grid, points: torch.Tensor) -> torch.Tensor:
-    """
-    Convert world-space coordinates to voxel-space coordinates for a single grid.
+    """Transform world-space coordinates to voxel-space positions for a single grid.
 
-    This function supports backpropagation.
+    Supports backpropagation.
 
     Args:
-        grid: The single grid whose transform to use.
-        points: World-space positions, shape ``(N, 3)``.
+        grid (Grid): The single grid whose transform to use.
+        points (torch.Tensor): World-space positions, shape ``(N, 3)``.
 
     Returns:
-        Voxel-space coordinates, shape ``(N, 3)``.
+        result (torch.Tensor): Voxel-space coordinates, shape ``(N, 3)``.
 
-    .. seealso:: :func:`voxel_to_world_single`, :func:`world_to_voxel_batch`
+    .. seealso:: :func:`world_to_voxel_batch`
     """
     pts_jt = JaggedTensor(points)
     return cast(torch.Tensor, _WorldToVoxelFn.apply(pts_jt.jdata, grid.data, pts_jt._impl))

@@ -131,7 +131,20 @@ class _SampleBezierWithGradFn(torch.autograd.Function):
 def sample_trilinear_batch(
     grid: GridBatch, points: JaggedTensor, voxel_data: JaggedTensor,
 ) -> JaggedTensor:
-    """Sample voxel data at world-space points using trilinear interpolation (batched)."""
+    """Sample voxel data at world-space points using trilinear interpolation for a grid batch.
+
+    Supports backpropagation.
+
+    Args:
+        grid (GridBatch): The grid batch defining the sparse topology.
+        points (JaggedTensor): World-space query points, shape ``(B, -1, 3)``.
+        voxel_data (JaggedTensor): Per-voxel feature data.
+
+    Returns:
+        result (JaggedTensor): Interpolated values at each query point.
+
+    .. seealso:: :func:`sample_trilinear_single`
+    """
     result = cast(torch.Tensor, _SampleTrilinearFn.apply(voxel_data.jdata, grid.data, points._impl))
     return points.jagged_like(result)
 
@@ -139,7 +152,20 @@ def sample_trilinear_batch(
 def sample_trilinear_single(
     grid: Grid, points: torch.Tensor, voxel_data: torch.Tensor,
 ) -> torch.Tensor:
-    """Sample voxel data at world-space points using trilinear interpolation (single grid)."""
+    """Sample voxel data at world-space points using trilinear interpolation for a single grid.
+
+    Supports backpropagation.
+
+    Args:
+        grid (Grid): The single grid defining the sparse topology.
+        points (torch.Tensor): World-space query points, shape ``(N, 3)``.
+        voxel_data (torch.Tensor): Per-voxel feature data.
+
+    Returns:
+        result (torch.Tensor): Interpolated values at each query point.
+
+    .. seealso:: :func:`sample_trilinear_batch`
+    """
     pts_jt = JaggedTensor(points)
     vd_jt = JaggedTensor(voxel_data)
     return cast(torch.Tensor, _SampleTrilinearFn.apply(vd_jt.jdata, grid.data, pts_jt._impl))
@@ -153,7 +179,21 @@ def sample_trilinear_single(
 def sample_trilinear_with_grad_batch(
     grid: GridBatch, points: JaggedTensor, voxel_data: JaggedTensor,
 ) -> tuple[JaggedTensor, JaggedTensor]:
-    """Sample with trilinear interpolation and return spatial gradients (batched)."""
+    """Sample with trilinear interpolation and return spatial gradients for a grid batch.
+
+    Supports backpropagation.
+
+    Args:
+        grid (GridBatch): The grid batch defining the sparse topology.
+        points (JaggedTensor): World-space query points, shape ``(B, -1, 3)``.
+        voxel_data (JaggedTensor): Per-voxel feature data.
+
+    Returns:
+        values (JaggedTensor): Interpolated values at each query point.
+        gradients (JaggedTensor): Spatial gradients at each query point.
+
+    .. seealso:: :func:`sample_trilinear_with_grad_single`
+    """
     rd, rg = cast(
         tuple[torch.Tensor, torch.Tensor],
         _SampleTrilinearWithGradFn.apply(voxel_data.jdata, grid.data, points._impl),
@@ -164,7 +204,21 @@ def sample_trilinear_with_grad_batch(
 def sample_trilinear_with_grad_single(
     grid: Grid, points: torch.Tensor, voxel_data: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Sample with trilinear interpolation and return spatial gradients (single grid)."""
+    """Sample with trilinear interpolation and return spatial gradients for a single grid.
+
+    Supports backpropagation.
+
+    Args:
+        grid (Grid): The single grid defining the sparse topology.
+        points (torch.Tensor): World-space query points, shape ``(N, 3)``.
+        voxel_data (torch.Tensor): Per-voxel feature data.
+
+    Returns:
+        values (torch.Tensor): Interpolated values at each query point.
+        gradients (torch.Tensor): Spatial gradients at each query point.
+
+    .. seealso:: :func:`sample_trilinear_with_grad_batch`
+    """
     pts_jt = JaggedTensor(points)
     vd_jt = JaggedTensor(voxel_data)
     return cast(
@@ -181,7 +235,20 @@ def sample_trilinear_with_grad_single(
 def sample_bezier_batch(
     grid: GridBatch, points: JaggedTensor, voxel_data: JaggedTensor,
 ) -> JaggedTensor:
-    """Sample voxel data at world-space points using Bezier interpolation (batched)."""
+    """Sample voxel data at world-space points using Bezier interpolation for a grid batch.
+
+    Supports backpropagation.
+
+    Args:
+        grid (GridBatch): The grid batch defining the sparse topology.
+        points (JaggedTensor): World-space query points, shape ``(B, -1, 3)``.
+        voxel_data (JaggedTensor): Per-voxel feature data.
+
+    Returns:
+        result (JaggedTensor): Interpolated values at each query point.
+
+    .. seealso:: :func:`sample_bezier_single`
+    """
     result = cast(torch.Tensor, _SampleBezierFn.apply(voxel_data.jdata, grid.data, points._impl))
     return points.jagged_like(result)
 
@@ -189,7 +256,20 @@ def sample_bezier_batch(
 def sample_bezier_single(
     grid: Grid, points: torch.Tensor, voxel_data: torch.Tensor,
 ) -> torch.Tensor:
-    """Sample voxel data at world-space points using Bezier interpolation (single grid)."""
+    """Sample voxel data at world-space points using Bezier interpolation for a single grid.
+
+    Supports backpropagation.
+
+    Args:
+        grid (Grid): The single grid defining the sparse topology.
+        points (torch.Tensor): World-space query points, shape ``(N, 3)``.
+        voxel_data (torch.Tensor): Per-voxel feature data.
+
+    Returns:
+        result (torch.Tensor): Interpolated values at each query point.
+
+    .. seealso:: :func:`sample_bezier_batch`
+    """
     pts_jt = JaggedTensor(points)
     vd_jt = JaggedTensor(voxel_data)
     return cast(torch.Tensor, _SampleBezierFn.apply(vd_jt.jdata, grid.data, pts_jt._impl))
@@ -203,7 +283,21 @@ def sample_bezier_single(
 def sample_bezier_with_grad_batch(
     grid: GridBatch, points: JaggedTensor, voxel_data: JaggedTensor,
 ) -> tuple[JaggedTensor, JaggedTensor]:
-    """Sample with Bezier interpolation and return spatial gradients (batched)."""
+    """Sample with Bezier interpolation and return spatial gradients for a grid batch.
+
+    Supports backpropagation.
+
+    Args:
+        grid (GridBatch): The grid batch defining the sparse topology.
+        points (JaggedTensor): World-space query points, shape ``(B, -1, 3)``.
+        voxel_data (JaggedTensor): Per-voxel feature data.
+
+    Returns:
+        values (JaggedTensor): Interpolated values at each query point.
+        gradients (JaggedTensor): Spatial gradients at each query point.
+
+    .. seealso:: :func:`sample_bezier_with_grad_single`
+    """
     rd, rg = cast(
         tuple[torch.Tensor, torch.Tensor],
         _SampleBezierWithGradFn.apply(voxel_data.jdata, grid.data, points._impl),
@@ -214,7 +308,21 @@ def sample_bezier_with_grad_batch(
 def sample_bezier_with_grad_single(
     grid: Grid, points: torch.Tensor, voxel_data: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Sample with Bezier interpolation and return spatial gradients (single grid)."""
+    """Sample with Bezier interpolation and return spatial gradients for a single grid.
+
+    Supports backpropagation.
+
+    Args:
+        grid (Grid): The single grid defining the sparse topology.
+        points (torch.Tensor): World-space query points, shape ``(N, 3)``.
+        voxel_data (torch.Tensor): Per-voxel feature data.
+
+    Returns:
+        values (torch.Tensor): Interpolated values at each query point.
+        gradients (torch.Tensor): Spatial gradients at each query point.
+
+    .. seealso:: :func:`sample_bezier_with_grad_batch`
+    """
     pts_jt = JaggedTensor(points)
     vd_jt = JaggedTensor(voxel_data)
     return cast(
@@ -231,7 +339,20 @@ def sample_bezier_with_grad_single(
 def splat_trilinear_batch(
     grid: GridBatch, points: JaggedTensor, points_data: JaggedTensor,
 ) -> JaggedTensor:
-    """Splat point data into voxels using trilinear weights (batched)."""
+    """Splat point data into voxels using trilinear weights for a grid batch.
+
+    Supports backpropagation.
+
+    Args:
+        grid (GridBatch): The grid batch defining the sparse topology.
+        points (JaggedTensor): World-space point positions, shape ``(B, -1, 3)``.
+        points_data (JaggedTensor): Per-point feature data to splat.
+
+    Returns:
+        result (JaggedTensor): Accumulated voxel data.
+
+    .. seealso:: :func:`splat_trilinear_single`
+    """
     result = cast(torch.Tensor, _SplatTrilinearFn.apply(points_data.jdata, grid.data, points._impl))
     return JaggedTensor(impl=grid.data.jagged_like(result))
 
@@ -239,7 +360,20 @@ def splat_trilinear_batch(
 def splat_trilinear_single(
     grid: Grid, points: torch.Tensor, points_data: torch.Tensor,
 ) -> torch.Tensor:
-    """Splat point data into voxels using trilinear weights (single grid)."""
+    """Splat point data into voxels using trilinear weights for a single grid.
+
+    Supports backpropagation.
+
+    Args:
+        grid (Grid): The single grid defining the sparse topology.
+        points (torch.Tensor): World-space point positions, shape ``(N, 3)``.
+        points_data (torch.Tensor): Per-point feature data to splat.
+
+    Returns:
+        result (torch.Tensor): Accumulated voxel data.
+
+    .. seealso:: :func:`splat_trilinear_batch`
+    """
     pts_jt = JaggedTensor(points)
     pd_jt = JaggedTensor(points_data)
     return cast(torch.Tensor, _SplatTrilinearFn.apply(pd_jt.jdata, grid.data, pts_jt._impl))
@@ -253,7 +387,20 @@ def splat_trilinear_single(
 def splat_bezier_batch(
     grid: GridBatch, points: JaggedTensor, points_data: JaggedTensor,
 ) -> JaggedTensor:
-    """Splat point data into voxels using Bezier weights (batched)."""
+    """Splat point data into voxels using Bezier weights for a grid batch.
+
+    Supports backpropagation.
+
+    Args:
+        grid (GridBatch): The grid batch defining the sparse topology.
+        points (JaggedTensor): World-space point positions, shape ``(B, -1, 3)``.
+        points_data (JaggedTensor): Per-point feature data to splat.
+
+    Returns:
+        result (JaggedTensor): Accumulated voxel data.
+
+    .. seealso:: :func:`splat_bezier_single`
+    """
     result = cast(torch.Tensor, _SplatBezierFn.apply(points_data.jdata, grid.data, points._impl))
     return JaggedTensor(impl=grid.data.jagged_like(result))
 
@@ -261,7 +408,20 @@ def splat_bezier_batch(
 def splat_bezier_single(
     grid: Grid, points: torch.Tensor, points_data: torch.Tensor,
 ) -> torch.Tensor:
-    """Splat point data into voxels using Bezier weights (single grid)."""
+    """Splat point data into voxels using Bezier weights for a single grid.
+
+    Supports backpropagation.
+
+    Args:
+        grid (Grid): The single grid defining the sparse topology.
+        points (torch.Tensor): World-space point positions, shape ``(N, 3)``.
+        points_data (torch.Tensor): Per-point feature data to splat.
+
+    Returns:
+        result (torch.Tensor): Accumulated voxel data.
+
+    .. seealso:: :func:`splat_bezier_batch`
+    """
     pts_jt = JaggedTensor(points)
     pd_jt = JaggedTensor(points_data)
     return cast(torch.Tensor, _SplatBezierFn.apply(pd_jt.jdata, grid.data, pts_jt._impl))

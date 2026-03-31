@@ -5,14 +5,13 @@ import numpy as np
 import torch
 from fvdb.types import DeviceIdentifier
 
-from fvdb import GridBatch, JaggedTensor
+from fvdb import Grid, GridBatch, JaggedTensor
 
 
-def make_dense_grid_batch_and_jagged_point_data(
+def make_dense_grid_and_point_data(
     num_voxels_single_axis: int, device: DeviceIdentifier, dtype: torch.dtype
-) -> tuple[GridBatch, GridBatch, JaggedTensor]:
-    """
-    Create a dense grid batch (size 1) and point data for testing.
+) -> tuple[Grid, Grid, torch.Tensor]:
+    """Create a dense single grid and point data for testing.
 
     Args:
         num_voxels_single_axis: Number of voxels along a single side of the cube.
@@ -20,7 +19,7 @@ def make_dense_grid_batch_and_jagged_point_data(
         dtype: Data type for tensors
 
     Returns:
-        tuple: (primal_grid_batch, dual_grid_batch, jagged_points)
+        tuple: (primal_grid, dual_grid, points)
     """
     grid_origin = (0.0, 0.0, 0.0)
     voxel_size = 1.0 / (np.floor(0.5 * num_voxels_single_axis) + 0.5)
@@ -28,25 +27,25 @@ def make_dense_grid_batch_and_jagged_point_data(
     target_corners = int(2 * np.floor(0.5 * num_voxels_single_axis) + 2) ** 3
 
     p = (2.0 * torch.rand(1, 3) - 1.0).to(device).to(dtype)
-    grid: GridBatch | None = None
-    while grid is None or grid.total_voxels != target_vox:
+    grid: Grid | None = None
+    while grid is None or grid.num_voxels != target_vox:
         p = (2.0 * torch.rand(10 * p.shape[0], 3) - 1.0).to(device)
         p = torch.clip(p, -1.0 + 0.25 * voxel_size, 1.0 - 0.25 * voxel_size).to(dtype)
-        grid = GridBatch.from_points(JaggedTensor(p), voxel_sizes=voxel_size, origins=grid_origin, device=device)
+        grid = Grid.from_points(p, voxel_size=voxel_size, origin=grid_origin, device=device)
 
     grid_d = grid.dual_grid()
-    assert grid_d.total_voxels == target_corners
+    assert grid_d.num_voxels == target_corners
     dual_corners_xyz = grid_d.voxel_to_world(grid_d.ijk.float())
-    assert torch.allclose(dual_corners_xyz.jdata.min(0)[0], -torch.ones(3).to(dual_corners_xyz.jdata))
-    assert torch.allclose(dual_corners_xyz.jdata.max(0)[0], torch.ones(3).to(dual_corners_xyz.jdata))
+    assert torch.allclose(dual_corners_xyz.min(0)[0], -torch.ones(3).to(dual_corners_xyz))
+    assert torch.allclose(dual_corners_xyz.max(0)[0], torch.ones(3).to(dual_corners_xyz))
 
-    return grid, grid_d, JaggedTensor(p)
+    return grid, grid_d, p
 
 
-def make_grid_batch_and_jagged_point_data(
+def make_grid_and_point_data(
     device: DeviceIdentifier, dtype: torch.dtype, include_boundary_points: bool = False, expand: int = 10
-) -> tuple[GridBatch, GridBatch, JaggedTensor]:
-    """Create a grid batch (batch size 1) and jagged point data for testing.
+) -> tuple[Grid, Grid, torch.Tensor]:
+    """Create a single grid and point data for testing.
 
     Args:
         device: Device to create tensors on
@@ -55,23 +54,23 @@ def make_grid_batch_and_jagged_point_data(
         expand: Number of times to replicate points when creating boundary samples
 
     Returns:
-        tuple: (primal_grid_batch, dual_grid_batch, jagged_points)
+        tuple: (primal_grid, dual_grid, points)
     """
     p = torch.randn((100, 3), device=device, dtype=dtype)
-    grid = GridBatch.from_points(JaggedTensor(p), voxel_sizes=0.05, origins=0, device=device).dilated_grid(1)
+    grid = Grid.from_points(p, voxel_size=0.05, origin=0, device=device).dilated_grid(1)
     grid_d = grid.dual_grid()
 
     if not include_boundary_points:
-        return grid, grid_d, JaggedTensor(p)
+        return grid, grid_d, p
 
     found = False
     mask = torch.zeros(1)
     samples = torch.zeros(1)
     while not found:
         primal_pts = grid.voxel_to_world(grid.ijk.double())
-        samples = torch.cat([primal_pts.jdata] * expand, dim=0)
-        samples += torch.randn_like(samples) * grid.voxel_sizes[0, 0].item()
-        mask = grid.points_in_grid(JaggedTensor(samples)).jdata.squeeze(-1).bool()
+        samples = torch.cat([primal_pts] * expand, dim=0)
+        samples += torch.randn_like(samples) * grid.voxel_size[0].item()
+        mask = grid.points_in_grid(samples)
         found = not (torch.all(mask) or torch.all(~mask))
 
     samples = samples.to(dtype)
@@ -79,4 +78,20 @@ def make_grid_batch_and_jagged_point_data(
     assert not torch.all(mask)
     assert not torch.all(~mask)
 
-    return grid, grid_d, JaggedTensor(samples)
+    return grid, grid_d, samples
+
+
+def make_dense_grid_batch_and_jagged_point_data(
+    num_voxels_single_axis: int, device: DeviceIdentifier, dtype: torch.dtype
+) -> tuple[GridBatch, GridBatch, JaggedTensor]:
+    """Create a dense grid batch (size 1) and point data for testing."""
+    grid, grid_d, points = make_dense_grid_and_point_data(num_voxels_single_axis, device, dtype)
+    return GridBatch(data=grid.data), GridBatch(data=grid_d.data), JaggedTensor(points)
+
+
+def make_grid_batch_and_jagged_point_data(
+    device: DeviceIdentifier, dtype: torch.dtype, include_boundary_points: bool = False, expand: int = 10
+) -> tuple[GridBatch, GridBatch, JaggedTensor]:
+    """Create a grid batch (batch size 1) and jagged point data for testing."""
+    grid, grid_d, points = make_grid_and_point_data(device, dtype, include_boundary_points, expand)
+    return GridBatch(data=grid.data), GridBatch(data=grid_d.data), JaggedTensor(points)

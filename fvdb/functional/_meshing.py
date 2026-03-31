@@ -26,7 +26,20 @@ def marching_cubes_batch(
     field: JaggedTensor,
     level: float = 0.0,
 ) -> tuple[JaggedTensor, JaggedTensor, JaggedTensor]:
-    """Extract isosurface meshes using marching cubes."""
+    """Extract isosurface meshes using marching cubes on a grid batch.
+
+    Args:
+        grid (GridBatch): The grid batch defining the sparse topology.
+        field (JaggedTensor): Per-voxel scalar field values.
+        level (float): Isovalue at which to extract the surface. Default ``0.0``.
+
+    Returns:
+        vertices (JaggedTensor): Mesh vertex positions, shape ``(B, -1, 3)``.
+        faces (JaggedTensor): Triangle face indices.
+        normals (JaggedTensor): Per-vertex normals.
+
+    .. seealso:: :func:`marching_cubes_single`
+    """
     grid_data = grid.data
     result = _fvdb_cpp.marching_cubes(grid_data, field._impl, level)
     return JaggedTensor(impl=result[0]), JaggedTensor(impl=result[1]), JaggedTensor(impl=result[2])
@@ -37,7 +50,20 @@ def marching_cubes_single(
     field: torch.Tensor,
     level: float = 0.0,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Extract isosurface mesh using marching cubes for a single grid."""
+    """Extract isosurface mesh using marching cubes on a single grid.
+
+    Args:
+        grid (Grid): The single grid defining the sparse topology.
+        field (torch.Tensor): Per-voxel scalar field values.
+        level (float): Isovalue at which to extract the surface. Default ``0.0``.
+
+    Returns:
+        vertices (torch.Tensor): Mesh vertex positions, shape ``(N, 3)``.
+        faces (torch.Tensor): Triangle face indices.
+        normals (torch.Tensor): Per-vertex normals.
+
+    .. seealso:: :func:`marching_cubes_batch`
+    """
     grid_data = grid.data
     field_jt = JaggedTensor(field)
     result = _fvdb_cpp.marching_cubes(grid_data, field_jt._impl, level)
@@ -54,7 +80,25 @@ def integrate_tsdf_batch(
     depth_images: torch.Tensor,
     weight_images: torch.Tensor | None = None,
 ) -> tuple[GridBatch, JaggedTensor, JaggedTensor]:
-    """Integrate depth images into a TSDF volume."""
+    """Integrate depth images into a TSDF volume for a grid batch.
+
+    Args:
+        grid (GridBatch): The grid batch defining the TSDF topology.
+        truncation_distance (float): TSDF truncation distance.
+        projection_matrices (torch.Tensor): Camera projection matrices.
+        cam_to_world_matrices (torch.Tensor): Camera-to-world transform matrices.
+        tsdf (JaggedTensor): Current TSDF values.
+        weights (JaggedTensor): Current integration weights.
+        depth_images (torch.Tensor): Depth images to integrate.
+        weight_images (torch.Tensor | None): Optional per-pixel weight images.
+
+    Returns:
+        updated_grid (GridBatch): The updated grid batch.
+        updated_tsdf (JaggedTensor): Updated TSDF values.
+        updated_weights (JaggedTensor): Updated integration weights.
+
+    .. seealso:: :func:`integrate_tsdf_single`
+    """
     from ..grid_batch import GridBatch as GB
 
     grid_data = grid.data
@@ -81,7 +125,25 @@ def integrate_tsdf_single(
     depth_images: torch.Tensor,
     weight_images: torch.Tensor | None = None,
 ) -> tuple[Grid, torch.Tensor, torch.Tensor]:
-    """Integrate depth images into a TSDF volume for a single grid."""
+    """Integrate depth images into a TSDF volume for a single grid.
+
+    Args:
+        grid (Grid): The single grid defining the TSDF topology.
+        truncation_distance (float): TSDF truncation distance.
+        projection_matrices (torch.Tensor): Camera projection matrices.
+        cam_to_world_matrices (torch.Tensor): Camera-to-world transform matrices.
+        tsdf (torch.Tensor): Current TSDF values.
+        weights (torch.Tensor): Current integration weights.
+        depth_images (torch.Tensor): Depth images to integrate.
+        weight_images (torch.Tensor | None): Optional per-pixel weight images.
+
+    Returns:
+        updated_grid (Grid): The updated grid.
+        updated_tsdf (torch.Tensor): Updated TSDF values.
+        updated_weights (torch.Tensor): Updated integration weights.
+
+    .. seealso:: :func:`integrate_tsdf_batch`
+    """
     from ..grid import Grid as G
 
     grid_data = grid.data
@@ -112,7 +174,28 @@ def integrate_tsdf_with_features_batch(
     feature_images: torch.Tensor,
     weight_images: torch.Tensor | None = None,
 ) -> tuple[GridBatch, JaggedTensor, JaggedTensor, JaggedTensor]:
-    """Integrate depth and feature images into a TSDF volume with features."""
+    """Integrate depth and feature images into a TSDF volume with features for a grid batch.
+
+    Args:
+        grid (GridBatch): The grid batch defining the TSDF topology.
+        truncation_distance (float): TSDF truncation distance.
+        projection_matrices (torch.Tensor): Camera projection matrices.
+        cam_to_world_matrices (torch.Tensor): Camera-to-world transform matrices.
+        tsdf (JaggedTensor): Current TSDF values.
+        features (JaggedTensor): Current per-voxel features.
+        weights (JaggedTensor): Current integration weights.
+        depth_images (torch.Tensor): Depth images to integrate.
+        feature_images (torch.Tensor): Feature images to integrate.
+        weight_images (torch.Tensor | None): Optional per-pixel weight images.
+
+    Returns:
+        updated_grid (GridBatch): The updated grid batch.
+        updated_tsdf (JaggedTensor): Updated TSDF values.
+        updated_weights (JaggedTensor): Updated integration weights.
+        updated_features (JaggedTensor): Updated per-voxel features.
+
+    .. seealso:: :func:`integrate_tsdf_with_features_single`
+    """
     from ..grid_batch import GridBatch as GB
 
     grid_data = grid.data
@@ -143,7 +226,28 @@ def integrate_tsdf_with_features_single(
     feature_images: torch.Tensor,
     weight_images: torch.Tensor | None = None,
 ) -> tuple[Grid, torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Integrate depth and feature images into a TSDF volume with features for a single grid."""
+    """Integrate depth and feature images into a TSDF volume with features for a single grid.
+
+    Args:
+        grid (Grid): The single grid defining the TSDF topology.
+        truncation_distance (float): TSDF truncation distance.
+        projection_matrices (torch.Tensor): Camera projection matrices.
+        cam_to_world_matrices (torch.Tensor): Camera-to-world transform matrices.
+        tsdf (torch.Tensor): Current TSDF values.
+        features (torch.Tensor): Current per-voxel features.
+        weights (torch.Tensor): Current integration weights.
+        depth_images (torch.Tensor): Depth images to integrate.
+        feature_images (torch.Tensor): Feature images to integrate.
+        weight_images (torch.Tensor | None): Optional per-pixel weight images.
+
+    Returns:
+        updated_grid (Grid): The updated grid.
+        updated_tsdf (torch.Tensor): Updated TSDF values.
+        updated_weights (torch.Tensor): Updated integration weights.
+        updated_features (torch.Tensor): Updated per-voxel features.
+
+    .. seealso:: :func:`integrate_tsdf_with_features_batch`
+    """
     from ..grid import Grid as G
 
     grid_data = grid.data
