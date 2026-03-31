@@ -13,9 +13,7 @@ def main() -> None:
     with Path("pyproject.toml").open("rb") as f:
         viewer_deps = tomllib.load(f)["project"]["optional-dependencies"]["viewer"]
 
-    print(
-        next(dep for dep in viewer_deps if dep.startswith("nanovdb-editor"))
-    )
+    print(next(dep for dep in viewer_deps if dep.startswith("nanovdb-editor")))
 
 
 if __name__ == "__main__":

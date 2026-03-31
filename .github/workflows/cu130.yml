@@ -157,6 +157,8 @@ jobs:
       - name: Build fvdb
         run: |
           source .venv/bin/activate
+          NANOVDB_EDITOR_SPEC=$(python .github/scripts/get_viewer_dependency.py)
+          pip install "$NANOVDB_EDITOR_SPEC"
           ./build.sh wheel verbose gtests benchmarks --cuda-arch-list '${{ needs.versions.outputs.cuda-arch-pr }}'
 
       - name: Upload wheel
@@ -424,6 +426,8 @@ jobs:
       - name: Run tests
         run: |
           source .venv/bin/activate
+          NANOVDB_EDITOR_SPEC=$(python .github/scripts/get_viewer_dependency.py)
+          pip install "$NANOVDB_EDITOR_SPEC"
           cd tests;
           pytest -v unit
 
