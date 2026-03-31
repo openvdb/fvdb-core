@@ -13,12 +13,12 @@ namespace detail {
 namespace ops {
 
 torch::Tensor injectFromDenseCminor(const GridBatchData &batchHdl,
-                                  const torch::Tensor &denseData,
-                                  const torch::Tensor &denseOrigins);
+                                    const torch::Tensor &denseData,
+                                    const torch::Tensor &denseOrigins);
 
 torch::Tensor injectFromDenseCmajor(const GridBatchData &batchHdl,
-                                  const torch::Tensor &denseData,
-                                  const torch::Tensor &denseOrigins);
+                                    const torch::Tensor &denseData,
+                                    const torch::Tensor &denseOrigins);
 
 } // namespace ops
 } // namespace detail

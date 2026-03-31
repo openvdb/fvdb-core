@@ -440,8 +440,8 @@ buildPaddedGrid(const GridBatchData &baseBatchHdl, int bmin, int bmax, bool excl
         return dispatchBuildPaddedGrid<DeviceTag>(baseBatchHdl, bmin, bmax, excludeBorder);
     });
 
-    const int64_t bs            = hdl.gridCount();
-    const torch::Device device  = hdl.buffer().device();
+    const int64_t bs           = hdl.gridCount();
+    const torch::Device device = hdl.buffer().device();
 
     GridBatchData::GridMetadata *hostMeta   = nullptr;
     GridBatchData::GridMetadata *deviceMeta = nullptr;
@@ -467,8 +467,8 @@ buildPaddedGrid(const GridBatchData &baseBatchHdl, int bmin, int bmax, bool excl
     }
     syncMetadataToDevice(hostMeta, deviceMeta, bs, device, true);
 
-    const torch::Tensor listIndices = torch::empty(
-        {0, 1}, torch::TensorOptions().dtype(fvdb::JLIdxScalarType).device(device));
+    const torch::Tensor listIndices =
+        torch::empty({0, 1}, torch::TensorOptions().dtype(fvdb::JLIdxScalarType).device(device));
     std::vector<torch::Tensor> leafBatchIdxs;
     leafBatchIdxs.reserve(bs);
     for (int64_t i = 0; i < bs; i += 1) {
@@ -479,12 +479,16 @@ buildPaddedGrid(const GridBatchData &baseBatchHdl, int bmin, int bmax, bool excl
     }
     torch::Tensor leafBatchIndices = torch::cat(leafBatchIdxs, 0);
 
-    auto gridHdlPtr =
-        std::make_shared<nanovdb::GridHandle<TorchDeviceBuffer>>(std::move(hdl));
+    auto gridHdlPtr = std::make_shared<nanovdb::GridHandle<TorchDeviceBuffer>>(std::move(hdl));
 
-    return c10::make_intrusive<GridBatchData>(
-        std::move(gridHdlPtr), hostMeta, deviceMeta, bs, std::move(batchMeta),
-        std::move(leafBatchIndices), std::move(batchOffsets), std::move(listIndices));
+    return c10::make_intrusive<GridBatchData>(std::move(gridHdlPtr),
+                                              hostMeta,
+                                              deviceMeta,
+                                              bs,
+                                              std::move(batchMeta),
+                                              std::move(leafBatchIndices),
+                                              std::move(batchOffsets),
+                                              std::move(listIndices));
 }
 
 } // namespace ops

@@ -20,13 +20,13 @@ template <typename ScalarType,
           typename TensorAccessor>
 __hostdev__ inline void
 neighborIndexesCallback(int32_t bidx,
-                          int32_t eidx,
-                          JaggedAccessor<ScalarType, 2> coords,
-                          TensorAccessor<int64_t, 4> outIndex,
-                          BatchGridAccessor batchAccessor,
-                          nanovdb::Coord extentMin,
-                          nanovdb::Coord extentMax,
-                          int32_t shift) {
+                        int32_t eidx,
+                        JaggedAccessor<ScalarType, 2> coords,
+                        TensorAccessor<int64_t, 4> outIndex,
+                        BatchGridAccessor batchAccessor,
+                        nanovdb::Coord extentMin,
+                        nanovdb::Coord extentMax,
+                        int32_t shift) {
     const nanovdb::OnIndexGrid *gpuGrid = batchAccessor.grid(bidx);
     auto acc                            = gpuGrid->getAccessor();
 
@@ -105,9 +105,9 @@ VoxelNeighborhood(const GridBatchData &batchHdl,
 
 JaggedTensor
 neighborIndexes(const GridBatchData &batchHdl,
-                  const JaggedTensor &coords,
-                  int32_t extent,
-                  int32_t shift) {
+                const JaggedTensor &coords,
+                int32_t extent,
+                int32_t shift) {
     TORCH_CHECK_VALUE(
         coords.ldim() == 1,
         "Expected ijk to have 1 list dimension, i.e. be a single list of coordinate values, but got",

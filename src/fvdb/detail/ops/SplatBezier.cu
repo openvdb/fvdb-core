@@ -23,12 +23,12 @@ template <torch::DeviceType DeviceTag,
           typename TensorAccessor>
 __hostdev__ void
 splatBezierCallback(int32_t bidx,
-                            int32_t eidx,
-                            int32_t cidx,
-                            JaggedAccessor<ScalarType, 2> points,
-                            TensorAccessor<ScalarType, 2> pointsData,
-                            BatchGridAccessor batchAccessor,
-                            TensorAccessor<at::opmath_type<ScalarType>, 2> outGridData) {
+                    int32_t eidx,
+                    int32_t cidx,
+                    JaggedAccessor<ScalarType, 2> points,
+                    TensorAccessor<ScalarType, 2> pointsData,
+                    BatchGridAccessor batchAccessor,
+                    TensorAccessor<at::opmath_type<ScalarType>, 2> outGridData) {
     using MathType = at::opmath_type<ScalarType>;
 
     const auto pointCoords               = points.data();
@@ -117,8 +117,8 @@ SplatIntoGridBezier(const GridBatchData &batchHdl,
 
 torch::Tensor
 splatBezier(const GridBatchData &batchHdl,
-                    const JaggedTensor &points,
-                    const torch::Tensor &pointsData) {
+            const JaggedTensor &points,
+            const torch::Tensor &pointsData) {
     batchHdl.checkNonEmptyGrid();
     TORCH_CHECK_VALUE(points.device() == pointsData.device(),
                       "points and data must be on the same device");

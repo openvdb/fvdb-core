@@ -31,9 +31,10 @@ torch::Tensor computeBatchOffsets(GridBatchData::GridMetadata *hostMeta,
                                   int64_t batchSize,
                                   torch::Device device);
 
-c10::intrusive_ptr<GridBatchData> makeGridBatchData(nanovdb::GridHandle<TorchDeviceBuffer> &&gridHdl,
-                                                    const std::vector<nanovdb::Vec3d> &voxelSizes,
-                                                    const std::vector<nanovdb::Vec3d> &voxelOrigins);
+c10::intrusive_ptr<GridBatchData>
+makeGridBatchData(nanovdb::GridHandle<TorchDeviceBuffer> &&gridHdl,
+                  const std::vector<nanovdb::Vec3d> &voxelSizes,
+                  const std::vector<nanovdb::Vec3d> &voxelOrigins);
 
 c10::intrusive_ptr<GridBatchData> makeEmptyGridBatchData(const torch::Device &device);
 
@@ -41,9 +42,10 @@ c10::intrusive_ptr<GridBatchData> makeEmptyGridBatchData(const torch::Device &de
                                                          const nanovdb::Vec3d &voxelSize,
                                                          const nanovdb::Vec3d &origin);
 
-c10::intrusive_ptr<GridBatchData> makeEmptyGridBatchData(const torch::Device &device,
-                                                         const std::vector<nanovdb::Vec3d> &voxelSizes,
-                                                         const std::vector<nanovdb::Vec3d> &origins);
+c10::intrusive_ptr<GridBatchData>
+makeEmptyGridBatchData(const torch::Device &device,
+                       const std::vector<nanovdb::Vec3d> &voxelSizes,
+                       const std::vector<nanovdb::Vec3d> &origins);
 
 } // namespace detail
 } // namespace fvdb

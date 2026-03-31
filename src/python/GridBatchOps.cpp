@@ -39,8 +39,8 @@
 #include <fvdb/detail/ops/CubesInGrid.h>
 #include <fvdb/detail/ops/IjkToIndex.h>
 #include <fvdb/detail/ops/IjkToInvIndex.h>
-#include <fvdb/detail/ops/PointsInGrid.h>
 #include <fvdb/detail/ops/NeighborIndexes.h>
+#include <fvdb/detail/ops/PointsInGrid.h>
 
 // Rays
 #include <fvdb/detail/ops/RayImplicitIntersection.h>
@@ -96,7 +96,7 @@ std::vector<nanovdb::Vec3d>
 vecsToVec3ds(const std::vector<std::vector<double>> &vecs) {
     std::vector<nanovdb::Vec3d> result;
     result.reserve(vecs.size());
-    for (const auto &v : vecs) {
+    for (const auto &v: vecs) {
         result.push_back(vecToVec3d(v));
     }
     return result;
@@ -106,7 +106,7 @@ std::vector<nanovdb::Coord>
 vecsToCoords(const std::vector<std::vector<int32_t>> &vecs) {
     std::vector<nanovdb::Coord> result;
     result.reserve(vecs.size());
-    for (const auto &v : vecs) {
+    for (const auto &v: vecs) {
         result.push_back(vecToCoord(v));
     }
     return result;
@@ -116,8 +116,8 @@ vecsToCoords(const std::vector<std::vector<int32_t>> &vecs) {
 
 void
 bind_grid_batch_ops(py::module &m) {
-    using GBI = fvdb::detail::GridBatchData;
-    using JT  = fvdb::JaggedTensor;
+    using GBI     = fvdb::detail::GridBatchData;
+    using JT      = fvdb::JaggedTensor;
     namespace ops = fvdb::detail::ops;
 
     // -----------------------------------------------------------------------
@@ -130,11 +130,7 @@ bind_grid_batch_ops(py::module &m) {
           py::arg("points"),
           py::arg("data"));
 
-    m.def("sample_bezier",
-          &ops::sampleBezier,
-          py::arg("grid"),
-          py::arg("points"),
-          py::arg("data"));
+    m.def("sample_bezier", &ops::sampleBezier, py::arg("grid"), py::arg("points"), py::arg("data"));
 
     m.def("splat_trilinear",
           &ops::splatTrilinear,
@@ -142,11 +138,7 @@ bind_grid_batch_ops(py::module &m) {
           py::arg("points"),
           py::arg("data"));
 
-    m.def("splat_bezier",
-          &ops::splatBezier,
-          py::arg("grid"),
-          py::arg("points"),
-          py::arg("data"));
+    m.def("splat_bezier", &ops::splatBezier, py::arg("grid"), py::arg("points"), py::arg("data"));
 
     // Interpolation: with-gradient forward
     m.def("sample_trilinear_with_grad",
@@ -308,7 +300,12 @@ bind_grid_batch_ops(py::module &m) {
     // Dense I/O
     // -----------------------------------------------------------------------
 
-    m.def("inject_op", &ops::inject, py::arg("dst_grid"), py::arg("src_grid"), py::arg("dst"), py::arg("src"));
+    m.def("inject_op",
+          &ops::inject,
+          py::arg("dst_grid"),
+          py::arg("src_grid"),
+          py::arg("dst"),
+          py::arg("src"));
 
     m.def("inject_from_dense_cminor",
           &ops::injectFromDenseCminor,
@@ -375,7 +372,8 @@ bind_grid_batch_ops(py::module &m) {
            const JT &cubeCenters,
            const std::vector<double> &padMin,
            const std::vector<double> &padMax) {
-            return ops::cubesIntersectGrid(grid, cubeCenters, vecToVec3d(padMin), vecToVec3d(padMax));
+            return ops::cubesIntersectGrid(
+                grid, cubeCenters, vecToVec3d(padMin), vecToVec3d(padMax));
         },
         py::arg("grid"),
         py::arg("cube_centers"),
@@ -383,7 +381,11 @@ bind_grid_batch_ops(py::module &m) {
         py::arg("pad_max"));
 
     m.def("ijk_to_index", &ops::ijkToIndex, py::arg("grid"), py::arg("ijk"), py::arg("cumulative"));
-    m.def("ijk_to_inv_index", &ops::ijkToInvIndex, py::arg("grid"), py::arg("ijk"), py::arg("cumulative"));
+    m.def("ijk_to_inv_index",
+          &ops::ijkToInvIndex,
+          py::arg("grid"),
+          py::arg("ijk"),
+          py::arg("cumulative"));
 
     m.def("neighbor_indexes",
           &ops::neighborIndexes,
@@ -441,7 +443,8 @@ bind_grid_batch_ops(py::module &m) {
     // Meshing / TSDF
     // -----------------------------------------------------------------------
 
-    m.def("marching_cubes", &ops::marchingCubes, py::arg("grid"), py::arg("field"), py::arg("level"));
+    m.def(
+        "marching_cubes", &ops::marchingCubes, py::arg("grid"), py::arg("field"), py::arg("level"));
 
     m.def("integrate_tsdf",
           &ops::integrateTSDF,
@@ -521,7 +524,8 @@ bind_grid_batch_ops(py::module &m) {
         [](const JT &points,
            const std::vector<std::vector<double>> &voxelSizes,
            const std::vector<std::vector<double>> &origins) {
-            return ops::buildGridFromPoints(points, vecsToVec3ds(voxelSizes), vecsToVec3ds(origins));
+            return ops::buildGridFromPoints(
+                points, vecsToVec3ds(voxelSizes), vecsToVec3ds(origins));
         },
         py::arg("points"),
         py::arg("voxel_sizes"),
@@ -558,7 +562,8 @@ bind_grid_batch_ops(py::module &m) {
         [](const torch::Device &device,
            const std::vector<double> &voxelSize,
            const std::vector<double> &origin) {
-            return fvdb::detail::makeEmptyGridBatchData(device, vecToVec3d(voxelSize), vecToVec3d(origin));
+            return fvdb::detail::makeEmptyGridBatchData(
+                device, vecToVec3d(voxelSize), vecToVec3d(origin));
         },
         py::arg("device"),
         py::arg("voxel_size"),
@@ -574,12 +579,12 @@ bind_grid_batch_ops(py::module &m) {
            const std::vector<std::vector<double>> &origins,
            std::optional<torch::Tensor> mask) {
             return ops::createNanoGridFromDense(numGrids,
-                                               vecToCoord(ijkMin),
-                                               vecToCoord(denseDims),
-                                               device,
-                                               mask,
-                                               vecsToVec3ds(voxelSizes),
-                                               vecsToVec3ds(origins));
+                                                vecToCoord(ijkMin),
+                                                vecToCoord(denseDims),
+                                                device,
+                                                mask,
+                                                vecsToVec3ds(voxelSizes),
+                                                vecsToVec3ds(origins));
         },
         py::arg("num_grids"),
         py::arg("device"),
@@ -661,7 +666,8 @@ bind_grid_batch_ops(py::module &m) {
            const JT &features,
            const std::vector<std::vector<int32_t>> &ijkMin,
            const std::vector<std::vector<int32_t>> &ijkMax) {
-            return ops::clipGridFeaturesWithMask(grid, features, vecsToCoords(ijkMin), vecsToCoords(ijkMax));
+            return ops::clipGridFeaturesWithMask(
+                grid, features, vecsToCoords(ijkMin), vecsToCoords(ijkMax));
         },
         py::arg("grid"),
         py::arg("features"),
@@ -735,9 +741,7 @@ bind_grid_batch_ops(py::module &m) {
 
     m.def(
         "clone_grid",
-        [](const GBI &grid, const torch::Device &device) {
-            return ops::cloneGrid(grid, device);
-        },
+        [](const GBI &grid, const torch::Device &device) { return ops::cloneGrid(grid, device); },
         py::arg("grid"),
         py::arg("device"));
 
@@ -761,9 +765,7 @@ bind_grid_batch_ops(py::module &m) {
 
     m.def(
         "index_grid_tensor",
-        [](const GBI &grid, const torch::Tensor &indices) {
-            return ops::indexGrid(grid, indices);
-        },
+        [](const GBI &grid, const torch::Tensor &indices) { return ops::indexGrid(grid, indices); },
         py::arg("grid"),
         py::arg("indices"));
 

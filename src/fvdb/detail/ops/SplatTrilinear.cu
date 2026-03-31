@@ -28,13 +28,13 @@ template <torch::DeviceType DeviceTag,
           typename TensorAccessor>
 __hostdev__ void
 splatTrilinearStencilCallback(int32_t bidx,
-                                      int32_t eidx,
-                                      int32_t /*cidx*/,
-                                      JaggedAccessor<ScalarType, 2> points,
-                                      TensorAccessor<ScalarType, 2> pointsData,
-                                      BatchGridAccessor batchAccessor,
-                                      TensorAccessor<at::opmath_type<ScalarType>, 2> outGridData,
-                                      int64_t numChannels) {
+                              int32_t eidx,
+                              int32_t /*cidx*/,
+                              JaggedAccessor<ScalarType, 2> points,
+                              TensorAccessor<ScalarType, 2> pointsData,
+                              BatchGridAccessor batchAccessor,
+                              TensorAccessor<at::opmath_type<ScalarType>, 2> outGridData,
+                              int64_t numChannels) {
     using MathType = at::opmath_type<ScalarType>;
 
     const auto &pointCoordData = points.data();
@@ -82,13 +82,13 @@ template <torch::DeviceType DeviceTag,
           typename TensorAccessor>
 __device__ void
 splatTrilinearStencilCallbackVec4(int32_t bidx,
-                                          int32_t eidx,
-                                          int32_t /*cidx*/,
-                                          JaggedAccessor<float, 2> points,
-                                          TensorAccessor<float, 2> pointsData,
-                                          BatchGridAccessor batchAccessor,
-                                          TensorAccessor<float, 2> outGridData,
-                                          int64_t numChannels) {
+                                  int32_t eidx,
+                                  int32_t /*cidx*/,
+                                  JaggedAccessor<float, 2> points,
+                                  TensorAccessor<float, 2> pointsData,
+                                  BatchGridAccessor batchAccessor,
+                                  TensorAccessor<float, 2> outGridData,
+                                  int64_t numChannels) {
     const auto &pointCoordData = points.data();
 
     const nanovdb::OnIndexGrid *gpuGrid  = batchAccessor.grid(bidx);
@@ -189,17 +189,15 @@ SplatIntoGridTrilinear(const GridBatchData &batchHdl,
                                          int32_t eidx,
                                          int32_t cidx,
                                          JaggedRAcc64<float, 2> pts) {
-                    splatTrilinearStencilCallback<DeviceTag,
-                                                          float,
-                                                          JaggedRAcc64,
-                                                          TorchRAcc64>(bidx,
-                                                                       eidx,
-                                                                       cidx,
-                                                                       pts,
-                                                                       pointsDataAcc,
-                                                                       batchAcc,
-                                                                       outGridDataAcc,
-                                                                       numChannels);
+                    splatTrilinearStencilCallback<DeviceTag, float, JaggedRAcc64, TorchRAcc64>(
+                        bidx,
+                        eidx,
+                        cidx,
+                        pts,
+                        pointsDataAcc,
+                        batchAcc,
+                        outGridDataAcc,
+                        numChannels);
                 };
                 dispatchForEach(cb);
             }
@@ -208,10 +206,7 @@ SplatIntoGridTrilinear(const GridBatchData &batchHdl,
                                      int32_t eidx,
                                      int32_t cidx,
                                      JaggedRAcc64<scalar_t, 2> pts) {
-                splatTrilinearStencilCallback<DeviceTag,
-                                                      scalar_t,
-                                                      JaggedRAcc64,
-                                                      TorchRAcc64>(
+                splatTrilinearStencilCallback<DeviceTag, scalar_t, JaggedRAcc64, TorchRAcc64>(
                     bidx, eidx, cidx, pts, pointsDataAcc, batchAcc, outGridDataAcc, numChannels);
             };
             dispatchForEach(cb);
@@ -260,8 +255,8 @@ template torch::Tensor dispatchSplatIntoGridTrilinear<torch::kPrivateUse1>(const
 
 torch::Tensor
 splatTrilinear(const GridBatchData &batchHdl,
-                       const JaggedTensor &points,
-                       const torch::Tensor &pointsData) {
+               const JaggedTensor &points,
+               const torch::Tensor &pointsData) {
     batchHdl.checkNonEmptyGrid();
     TORCH_CHECK_VALUE(points.device() == pointsData.device(),
                       "points and data must be on the same device");

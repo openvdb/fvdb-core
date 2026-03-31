@@ -13,17 +13,17 @@ namespace detail {
 namespace ops {
 
 torch::Tensor avgPool(const GridBatchData &fineBatchHdl,
-                                    const GridBatchData &coarseBatchHdl,
-                                    const torch::Tensor &fineData,
-                                    nanovdb::Coord poolingFactor,
-                                    nanovdb::Coord stride);
+                      const GridBatchData &coarseBatchHdl,
+                      const torch::Tensor &fineData,
+                      nanovdb::Coord poolingFactor,
+                      nanovdb::Coord stride);
 
 torch::Tensor avgPoolBackward(const GridBatchData &coarseBatchHdl,
-                                            const GridBatchData &fineBatchHdl,
-                                            const torch::Tensor &fineData,
-                                            const torch::Tensor &coarseGradOut,
-                                            nanovdb::Coord poolingFactor,
-                                            nanovdb::Coord stride);
+                              const GridBatchData &fineBatchHdl,
+                              const torch::Tensor &fineData,
+                              const torch::Tensor &coarseGradOut,
+                              nanovdb::Coord poolingFactor,
+                              nanovdb::Coord stride);
 
 } // namespace ops
 } // namespace detail

@@ -16,8 +16,8 @@ namespace detail {
 namespace ops {
 
 std::vector<torch::Tensor> sampleBezierWithGrad(const GridBatchData &batchHdl,
-                                                    const JaggedTensor &points,
-                                                    const torch::Tensor &gridData);
+                                                const JaggedTensor &points,
+                                                const torch::Tensor &gridData);
 
 } // namespace ops
 } // namespace detail

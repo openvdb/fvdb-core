@@ -102,8 +102,8 @@ SampleGridBezier(const GridBatchData &batchHdl,
 
 std::vector<torch::Tensor>
 sampleBezier(const GridBatchData &batchHdl,
-                 const JaggedTensor &points,
-                 const torch::Tensor &gridData) {
+             const JaggedTensor &points,
+             const torch::Tensor &gridData) {
     batchHdl.checkNonEmptyGrid();
     TORCH_CHECK_VALUE(points.device() == gridData.device(),
                       "points and data must be on the same device");

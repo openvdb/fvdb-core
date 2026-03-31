@@ -22,8 +22,7 @@ cloneGrid(const GridBatchData &grid, const torch::Device &device, bool blocking)
     std::vector<nanovdb::Vec3d> voxelSizes, voxelOrigins;
     grid.gridVoxelSizesAndOrigins(voxelSizes, voxelOrigins);
 
-    return makeContiguous(
-        makeGridBatchData(std::move(clonedHdl), voxelSizes, voxelOrigins));
+    return makeContiguous(makeGridBatchData(std::move(clonedHdl), voxelSizes, voxelOrigins));
 }
 
 } // namespace ops

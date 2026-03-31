@@ -4,10 +4,10 @@
 #ifndef PYTHON_TYPECASTERS_H
 #define PYTHON_TYPECASTERS_H
 
+#include <fvdb/detail/utils/nanovdb/TorchNanoConversions.h>
+
 #include <torch/extension.h>
 #include <torch/version.h>
-
-#include <fvdb/detail/utils/nanovdb/TorchNanoConversions.h>
 
 namespace pybind11 {
 namespace detail {

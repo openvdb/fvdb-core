@@ -23,11 +23,11 @@ template <typename ScalarType,
           typename TensorAccessor>
 __hostdev__ inline void
 voxelToWorldCallback(int32_t bidx,
-                              int32_t eidx,
-                              JaggedAccessor<ScalarType, 2> pts,
-                              TensorAccessor<ScalarType, 2> outPts,
-                              BatchGridAccessor batchAccessor,
-                              bool primal) {
+                     int32_t eidx,
+                     JaggedAccessor<ScalarType, 2> pts,
+                     TensorAccessor<ScalarType, 2> outPts,
+                     BatchGridAccessor batchAccessor,
+                     bool primal) {
     const auto tx =
         primal ? batchAccessor.primalTransform(bidx) : batchAccessor.dualTransform(bidx);
 
@@ -45,18 +45,19 @@ template <typename ScalarType,
           typename TensorAccessor>
 __hostdev__ inline void
 voxelToWorldBackwardCallback(int32_t bidx,
-                                      int32_t eidx,
-                                      JaggedAccessor<ScalarType, 2> gradOut,
-                                      TensorAccessor<ScalarType, 2> outGradIn,
-                                      BatchGridAccessor batchAccessor,
-                                      bool primal) {
+                             int32_t eidx,
+                             JaggedAccessor<ScalarType, 2> gradOut,
+                             TensorAccessor<ScalarType, 2> outGradIn,
+                             BatchGridAccessor batchAccessor,
+                             bool primal) {
     const auto tx =
         primal ? batchAccessor.primalTransform(bidx) : batchAccessor.dualTransform(bidx);
-    const auto gradOutI                       = gradOut.data()[eidx];
-    const nanovdb::math::Vec3<ScalarType> wci = tx.applyInvGrad(gradOutI[0], gradOutI[1], gradOutI[2]);
-    outGradIn[eidx][0]                        = wci[0] * gradOutI[0];
-    outGradIn[eidx][1]                        = wci[1] * gradOutI[1];
-    outGradIn[eidx][2]                        = wci[2] * gradOutI[2];
+    const auto gradOutI = gradOut.data()[eidx];
+    const nanovdb::math::Vec3<ScalarType> wci =
+        tx.applyInvGrad(gradOutI[0], gradOutI[1], gradOutI[2]);
+    outGradIn[eidx][0] = wci[0] * gradOutI[0];
+    outGradIn[eidx][1] = wci[1] * gradOutI[1];
+    outGradIn[eidx][2] = wci[2] * gradOutI[2];
 }
 
 template <typename ScalarType,
@@ -66,11 +67,11 @@ template <typename ScalarType,
           typename TensorAccessor>
 __hostdev__ inline void
 worldToVoxelCallback(int32_t bidx,
-                                 int32_t eidx,
-                                 JaggedAccessor<ScalarType, 2> pts,
-                                 TensorAccessor<ScalarType, 2> outPts,
-                                 BatchGridAccessor batchAccessor,
-                                 bool primal) {
+                     int32_t eidx,
+                     JaggedAccessor<ScalarType, 2> pts,
+                     TensorAccessor<ScalarType, 2> outPts,
+                     BatchGridAccessor batchAccessor,
+                     bool primal) {
     const auto tx =
         primal ? batchAccessor.primalTransform(bidx) : batchAccessor.dualTransform(bidx);
     const auto pt                             = pts.data()[eidx];
@@ -87,19 +88,18 @@ template <typename ScalarType,
           typename TensorAccessor>
 __hostdev__ inline void
 worldToVoxelBackwardCallback(int32_t bidx,
-                                         int32_t eidx,
-                                         JaggedAccessor<ScalarType, 2> gradOut,
-                                         TensorAccessor<ScalarType, 2> outGradIn,
-                                         BatchGridAccessor batchAccessor,
-                                         bool primal) {
+                             int32_t eidx,
+                             JaggedAccessor<ScalarType, 2> gradOut,
+                             TensorAccessor<ScalarType, 2> outGradIn,
+                             BatchGridAccessor batchAccessor,
+                             bool primal) {
     const auto tx =
         primal ? batchAccessor.primalTransform(bidx) : batchAccessor.dualTransform(bidx);
-    const auto gradOutI = gradOut.data()[eidx];
-    const nanovdb::math::Vec3<ScalarType> wci =
-        tx.applyGrad(gradOutI[0], gradOutI[1], gradOutI[2]);
-    outGradIn[eidx][0] = wci[0] * gradOutI[0];
-    outGradIn[eidx][1] = wci[1] * gradOutI[1];
-    outGradIn[eidx][2] = wci[2] * gradOutI[2];
+    const auto gradOutI                       = gradOut.data()[eidx];
+    const nanovdb::math::Vec3<ScalarType> wci = tx.applyGrad(gradOutI[0], gradOutI[1], gradOutI[2]);
+    outGradIn[eidx][0]                        = wci[0] * gradOutI[0];
+    outGradIn[eidx][1]                        = wci[1] * gradOutI[1];
+    outGradIn[eidx][2]                        = wci[2] * gradOutI[2];
 }
 
 template <torch::DeviceType DeviceTag, typename scalar_t>
@@ -335,18 +335,14 @@ worldToVoxel(const GridBatchData &batchHdl, const JaggedTensor &points, bool isP
 }
 
 torch::Tensor
-voxelToWorldBackward(const GridBatchData &batchHdl,
-                              const JaggedTensor &gradOut,
-                              bool isPrimal) {
+voxelToWorldBackward(const GridBatchData &batchHdl, const JaggedTensor &gradOut, bool isPrimal) {
     return FVDB_DISPATCH_KERNEL(gradOut.device(), [&]() {
         return dispatchTransformPointsToGridBackward<DeviceTag>(batchHdl, gradOut, isPrimal);
     });
 }
 
 torch::Tensor
-worldToVoxelBackward(const GridBatchData &batchHdl,
-                                 const JaggedTensor &gradOut,
-                                 bool isPrimal) {
+worldToVoxelBackward(const GridBatchData &batchHdl, const JaggedTensor &gradOut, bool isPrimal) {
     return FVDB_DISPATCH_KERNEL(gradOut.device(), [&]() {
         return dispatchInvTransformPointsToGridBackward<DeviceTag>(batchHdl, gradOut, isPrimal);
     });

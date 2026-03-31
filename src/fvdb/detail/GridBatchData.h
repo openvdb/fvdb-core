@@ -53,10 +53,10 @@ struct GridBatchData : public torch::CustomClassHolder {
     };
 
     struct GridBatchMetadata {
-        uint32_t version = 1;
-        int64_t mTotalLeaves  = 0;
-        int64_t mTotalVoxels  = 0;
-        int64_t mMaxVoxels    = 0;
+        uint32_t version       = 1;
+        int64_t mTotalLeaves   = 0;
+        int64_t mTotalVoxels   = 0;
+        int64_t mMaxVoxels     = 0;
         uint32_t mMaxLeafCount = 0;
         nanovdb::CoordBBox mTotalBBox;
         bool mIsContiguous = true;

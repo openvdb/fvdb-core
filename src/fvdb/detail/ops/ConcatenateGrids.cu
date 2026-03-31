@@ -93,8 +93,7 @@ concatenateGrids(const std::vector<c10::intrusive_ptr<GridBatchData>> &elements)
 
                 nanovdb::GridData *dst =
                     reinterpret_cast<nanovdb::GridData *>(buffer.data() + writeOffset);
-                const uint8_t *src =
-                    elements[i]->nanoGridHandle().buffer().data() + readOffset;
+                const uint8_t *src = elements[i]->nanoGridHandle().buffer().data() + readOffset;
                 memcpy((void *)dst, (void *)src, numBytes);
                 nanovdb::tools::updateGridCount(dst, count++, totalGrids);
             }

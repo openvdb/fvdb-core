@@ -106,9 +106,9 @@ syncMetadataToDevice(GridBatchData::GridMetadata *hostMeta,
 
 torch::Tensor
 computeBatchOffsets(GridBatchData::GridMetadata *hostMeta,
-                   GridBatchData::GridMetadata *deviceMeta,
-                   int64_t batchSize,
-                   torch::Device device) {
+                    GridBatchData::GridMetadata *deviceMeta,
+                    int64_t batchSize,
+                    torch::Device device) {
     torch::Tensor offsets = torch::empty(
         {batchSize + 1}, torch::TensorOptions().dtype(fvdb::JOffsetsScalarType).device(device));
     if (device.is_cuda()) {
@@ -171,8 +171,8 @@ makeGridBatchData(nanovdb::GridHandle<TorchDeviceBuffer> &&gridHdl,
         gridHdl, voxelSizes, voxelOrigins, batchOffsets, hostMeta, deviceMeta, &batchMeta);
     batchMeta.mIsContiguous = true;
 
-    const torch::Tensor listIndices = torch::empty(
-        {0, 1}, torch::TensorOptions().dtype(fvdb::JLIdxScalarType).device(device));
+    const torch::Tensor listIndices =
+        torch::empty({0, 1}, torch::TensorOptions().dtype(fvdb::JLIdxScalarType).device(device));
     TORCH_CHECK(listIndices.numel() == 0 || listIndices.size(0) == (batchOffsets.size(0) - 1),
                 "Invalid list indices when building grid");
 
@@ -186,12 +186,16 @@ makeGridBatchData(nanovdb::GridHandle<TorchDeviceBuffer> &&gridHdl,
     }
     torch::Tensor leafBatchIndices = torch::cat(leafBatchIdxs, 0);
 
-    auto gridHdlPtr =
-        std::make_shared<nanovdb::GridHandle<TorchDeviceBuffer>>(std::move(gridHdl));
+    auto gridHdlPtr = std::make_shared<nanovdb::GridHandle<TorchDeviceBuffer>>(std::move(gridHdl));
 
-    return c10::make_intrusive<GridBatchData>(
-        std::move(gridHdlPtr), hostMeta, deviceMeta, batchSize, std::move(batchMeta),
-        std::move(leafBatchIndices), std::move(batchOffsets), std::move(listIndices));
+    return c10::make_intrusive<GridBatchData>(std::move(gridHdlPtr),
+                                              hostMeta,
+                                              deviceMeta,
+                                              batchSize,
+                                              std::move(batchMeta),
+                                              std::move(leafBatchIndices),
+                                              std::move(batchOffsets),
+                                              std::move(listIndices));
 }
 
 c10::intrusive_ptr<GridBatchData>
@@ -206,16 +210,20 @@ makeEmptyGridBatchData(const torch::Device &device) {
     torch::Tensor listIndices =
         torch::empty({0, 1}, deviceTensorOptions.dtype(fvdb::JLIdxScalarType));
 
-    auto gridHdl = createEmptyGridHandle(device);
-    auto gridHdlPtr =
-        std::make_shared<nanovdb::GridHandle<TorchDeviceBuffer>>(std::move(gridHdl));
+    auto gridHdl    = createEmptyGridHandle(device);
+    auto gridHdlPtr = std::make_shared<nanovdb::GridHandle<TorchDeviceBuffer>>(std::move(gridHdl));
 
     GridBatchData::GridBatchMetadata batchMeta;
     batchMeta.mIsContiguous = true;
 
-    return c10::make_intrusive<GridBatchData>(
-        std::move(gridHdlPtr), nullptr, nullptr, 0, std::move(batchMeta),
-        std::move(leafBatchIndices), std::move(batchOffsets), std::move(listIndices));
+    return c10::make_intrusive<GridBatchData>(std::move(gridHdlPtr),
+                                              nullptr,
+                                              nullptr,
+                                              0,
+                                              std::move(batchMeta),
+                                              std::move(leafBatchIndices),
+                                              std::move(batchOffsets),
+                                              std::move(listIndices));
 }
 
 c10::intrusive_ptr<GridBatchData>

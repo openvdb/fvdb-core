@@ -14,9 +14,9 @@ namespace detail {
 namespace ops {
 
 JaggedTensor neighborIndexes(const GridBatchData &batchHdl,
-                               const JaggedTensor &coords,
-                               int32_t extent,
-                               int32_t shift);
+                             const JaggedTensor &coords,
+                             int32_t extent,
+                             int32_t shift);
 
 } // namespace ops
 } // namespace detail

@@ -14,11 +14,11 @@
 #include <fvdb/detail/io/SaveNanoVDB.h>
 
 // Grid construction ops
-#include <fvdb/detail/ops/BuildGridFromPoints.h>
+#include <fvdb/detail/ops/BuildDenseGrid.h>
 #include <fvdb/detail/ops/BuildGridFromIjk.h>
 #include <fvdb/detail/ops/BuildGridFromMesh.h>
 #include <fvdb/detail/ops/BuildGridFromNearestVoxelsToPoints.h>
-#include <fvdb/detail/ops/BuildDenseGrid.h>
+#include <fvdb/detail/ops/BuildGridFromPoints.h>
 #include <fvdb/detail/ops/ConcatenateGrids.h>
 
 #include <ATen/cuda/CUDAContext.h>
@@ -219,7 +219,8 @@ gridbatch_from_dense(const int64_t numGrids,
                      const std::vector<nanovdb::Vec3d> &origins,
                      std::optional<torch::Tensor> mask,
                      const torch::Device &device) {
-    return detail::ops::createNanoGridFromDense(numGrids, ijkMin, denseDims, device, mask, voxel_sizes, origins);
+    return detail::ops::createNanoGridFromDense(
+        numGrids, ijkMin, denseDims, device, mask, voxel_sizes, origins);
 }
 
 c10::intrusive_ptr<detail::GridBatchData>

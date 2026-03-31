@@ -15,12 +15,11 @@ namespace ops {
 
 c10::intrusive_ptr<GridBatchData> indexGrid(const GridBatchData &grid, int64_t bi);
 
-c10::intrusive_ptr<GridBatchData> indexGrid(const GridBatchData &grid,
-                                            ssize_t start,
-                                            ssize_t stop,
-                                            ssize_t step);
+c10::intrusive_ptr<GridBatchData>
+indexGrid(const GridBatchData &grid, ssize_t start, ssize_t stop, ssize_t step);
 
-c10::intrusive_ptr<GridBatchData> indexGrid(const GridBatchData &grid, const torch::Tensor &indices);
+c10::intrusive_ptr<GridBatchData> indexGrid(const GridBatchData &grid,
+                                            const torch::Tensor &indices);
 
 c10::intrusive_ptr<GridBatchData> indexGrid(const GridBatchData &grid,
                                             const std::vector<int64_t> &indices);

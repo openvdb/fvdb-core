@@ -46,8 +46,7 @@ dispatchPruneGrid<torch::kCUDA>(const GridBatchData &gridBatch, const JaggedTens
     std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> handles;
     for (int i = 0; i < gridBatch.batchSize(); i += 1) {
         nanovdb::GridHandle<TorchDeviceBuffer> handle;
-        nanovdb::OnIndexGrid *grid =
-            gridBatch.mGridHdl->deviceGrid<nanovdb::ValueOnIndex>(i);
+        nanovdb::OnIndexGrid *grid = gridBatch.mGridHdl->deviceGrid<nanovdb::ValueOnIndex>(i);
         TORCH_CHECK(grid, "Grid is null");
 
         const torch::Tensor maskI = mask.index(i).jdata();

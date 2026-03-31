@@ -55,8 +55,7 @@ dispatchDilateGrid<torch::kCUDA>(const GridBatchData &gridBatch,
                 dstBuf.deviceData(), srcData, gridBytes, cudaMemcpyDeviceToDevice, stream.stream());
             handle = nanovdb::GridHandle<TorchDeviceBuffer>(std::move(dstBuf));
         } else {
-            nanovdb::OnIndexGrid *grid =
-                gridBatch.mGridHdl->deviceGrid<nanovdb::ValueOnIndex>(i);
+            nanovdb::OnIndexGrid *grid = gridBatch.mGridHdl->deviceGrid<nanovdb::ValueOnIndex>(i);
             TORCH_CHECK(grid, "Grid is null");
 
             for (auto j = 0; j < dilationAmount[i]; j += 1) {

@@ -326,10 +326,10 @@ DownsampleGridMaxPoolBackward(const GridBatchData &coarseBatchHdl,
 
 torch::Tensor
 maxPool(const GridBatchData &fineBatchHdl,
-                      const GridBatchData &coarseBatchHdl,
-                      const torch::Tensor &fineData,
-                      nanovdb::Coord poolingFactor,
-                      nanovdb::Coord stride) {
+        const GridBatchData &coarseBatchHdl,
+        const torch::Tensor &fineData,
+        nanovdb::Coord poolingFactor,
+        nanovdb::Coord stride) {
     return FVDB_DISPATCH_KERNEL(fineData.device(), [&]() {
         return DownsampleGridMaxPool<DeviceTag>(
             fineBatchHdl, coarseBatchHdl, fineData, poolingFactor, stride);
@@ -338,11 +338,11 @@ maxPool(const GridBatchData &fineBatchHdl,
 
 torch::Tensor
 maxPoolBackward(const GridBatchData &coarseBatchHdl,
-                              const GridBatchData &fineBatchHdl,
-                              const torch::Tensor &fineData,
-                              const torch::Tensor &coarseGradOut,
-                              nanovdb::Coord poolingFactor,
-                              nanovdb::Coord stride) {
+                const GridBatchData &fineBatchHdl,
+                const torch::Tensor &fineData,
+                const torch::Tensor &coarseGradOut,
+                nanovdb::Coord poolingFactor,
+                nanovdb::Coord stride) {
     torch::Tensor gradOutContig = coarseGradOut.contiguous();
     return FVDB_DISPATCH_KERNEL(gradOutContig.device(), [&]() {
         return DownsampleGridMaxPoolBackward<DeviceTag>(

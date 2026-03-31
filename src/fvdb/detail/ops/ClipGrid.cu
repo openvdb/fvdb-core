@@ -15,8 +15,8 @@ std::tuple<c10::intrusive_ptr<GridBatchData>, JaggedTensor>
 clipGridWithMask(const GridBatchData &grid,
                  const std::vector<nanovdb::Coord> &ijkMin,
                  const std::vector<nanovdb::Coord> &ijkMax) {
-    JaggedTensor activeVoxelMask = activeVoxelsInBoundsMask(grid, ijkMin, ijkMax);
-    JaggedTensor activeVoxelCoords = activeGridCoords(grid);
+    JaggedTensor activeVoxelMask       = activeVoxelsInBoundsMask(grid, ijkMin, ijkMax);
+    JaggedTensor activeVoxelCoords     = activeGridCoords(grid);
     JaggedTensor activeVoxelMaskCoords = activeVoxelCoords.rmask(activeVoxelMask.jdata());
 
     std::vector<nanovdb::Vec3d> voxS, voxO;

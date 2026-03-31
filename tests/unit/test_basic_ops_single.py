@@ -342,7 +342,6 @@ class TestBasicOpsSingle(unittest.TestCase):
 
         grid2 = Grid.from_dense([16, 16, 16], [0, 0, 0], voxel_size=1.0 / 16, origin=[0, 0, 0])
         self.assertFalse(grid.is_same(grid2))
-        self.assertNotEqual(grid.address, grid2.address)
 
     @parameterized.expand(all_device_dtype_combos)
     def test_voxel_neighborhood(self, device, dtype):
@@ -1120,7 +1119,7 @@ class TestBasicOpsSingle(unittest.TestCase):
         def build_from_dense(vsize, vorigin):
             return Grid.from_dense([10, 10, 10], [0, 0, 0], vsize, vorigin, device=device)
 
-        vox_size = np.random.rand(3) * 0.2 + 0.05
+        vox_size = torch.rand(3) * 0.2 + 0.05
         vox_origin = torch.rand(3).to(device).to(dtype)
 
         pts = torch.randn(10000, 3).to(device=device, dtype=dtype)

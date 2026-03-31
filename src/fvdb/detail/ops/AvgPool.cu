@@ -285,10 +285,10 @@ DownsampleGridAvgPoolBackward(const GridBatchData &coarseBatchHdl,
 
 torch::Tensor
 avgPool(const GridBatchData &fineBatchHdl,
-                      const GridBatchData &coarseBatchHdl,
-                      const torch::Tensor &fineData,
-                      nanovdb::Coord poolingFactor,
-                      nanovdb::Coord stride) {
+        const GridBatchData &coarseBatchHdl,
+        const torch::Tensor &fineData,
+        nanovdb::Coord poolingFactor,
+        nanovdb::Coord stride) {
     return FVDB_DISPATCH_KERNEL_DEVICE(fineData.device(), [&]() {
         return DownsampleGridAvgPool<DeviceTag>(
             fineBatchHdl, coarseBatchHdl, fineData, poolingFactor, stride);
@@ -297,11 +297,11 @@ avgPool(const GridBatchData &fineBatchHdl,
 
 torch::Tensor
 avgPoolBackward(const GridBatchData &coarseBatchHdl,
-                              const GridBatchData &fineBatchHdl,
-                              const torch::Tensor &fineData,
-                              const torch::Tensor &coarseGradOut,
-                              nanovdb::Coord poolingFactor,
-                              nanovdb::Coord stride) {
+                const GridBatchData &fineBatchHdl,
+                const torch::Tensor &fineData,
+                const torch::Tensor &coarseGradOut,
+                nanovdb::Coord poolingFactor,
+                nanovdb::Coord stride) {
     torch::Tensor gradOutContig = coarseGradOut.contiguous();
     return FVDB_DISPATCH_KERNEL_DEVICE(gradOutContig.device(), [&]() {
         return DownsampleGridAvgPoolBackward<DeviceTag>(

@@ -8,9 +8,9 @@
 #include <fvdb/Config.h>
 #include <fvdb/FVDB.h>
 #include <fvdb/detail/GridBatchDataFactory.h>
-#include <fvdb/detail/utils/nanovdb/TorchNanoConversions.h>
 #include <fvdb/detail/ops/convolution/GatherScatterDefault.h>
 #include <fvdb/detail/ops/convolution/PredGatherIGemm.h>
+#include <fvdb/detail/utils/nanovdb/TorchNanoConversions.h>
 
 #include <nanovdb/NanoVDB.h>
 
@@ -83,7 +83,7 @@ void bind_viewer(py::module &m);
     __FVDB__BUILDER_INNER(FUNC_NAME, FUNC_STR, std::vector<int64_t>) \
     __FVDB__BUILDER_INNER(FUNC_NAME, FUNC_STR, std::vector<std::vector<int64_t>>)
 void
-bind_jt_build_functions(py::module &m){
+bind_jt_build_functions(py::module &m) {
     // clang-format off
     __FVDB__BUILDER(jrand, "jrand")
     __FVDB__BUILDER(jrandn, "jrandn")
@@ -113,7 +113,7 @@ std::vector<nanovdb::Vec3d>
 vecsToVec3ds(const std::vector<std::vector<double>> &vecs) {
     std::vector<nanovdb::Vec3d> result;
     result.reserve(vecs.size());
-    for (const auto &v : vecs) {
+    for (const auto &v: vecs) {
         result.push_back(vecToVec3d(v));
     }
     return result;
@@ -193,7 +193,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         [](const fvdb::JaggedTensor &points,
            const std::vector<std::vector<double>> &voxel_sizes,
            const std::vector<std::vector<double>> &origins) {
-            return fvdb::gridbatch_from_points(points, vecsToVec3ds(voxel_sizes), vecsToVec3ds(origins));
+            return fvdb::gridbatch_from_points(
+                points, vecsToVec3ds(voxel_sizes), vecsToVec3ds(origins));
         },
         py::arg("points"),
         py::arg("voxel_sizes"),
@@ -253,10 +254,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
             return fvdb::gridbatch_from_mesh(
                 vertices, faces, vecsToVec3ds(voxel_sizes), vecsToVec3ds(origins));
         },
-          py::arg("vertices"),
-          py::arg("faces"),
-          py::arg("voxel_sizes") = 1.0,
-          py::arg("origins")     = torch::zeros({3}));
+        py::arg("vertices"),
+        py::arg("faces"),
+        py::arg("voxel_sizes") = 1.0,
+        py::arg("origins")     = torch::zeros({3}));
 
     // Empty grid batch construction
     m.def(

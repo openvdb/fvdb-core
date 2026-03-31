@@ -14,10 +14,10 @@ namespace detail {
 namespace ops {
 
 torch::Tensor sampleBezierWithGradBackward(const GridBatchData &batchHdl,
-                                               const JaggedTensor &points,
-                                               const torch::Tensor &gradOutFeatures,
-                                               const torch::Tensor &gradOutGradFeatures,
-                                               const torch::Tensor &data);
+                                           const JaggedTensor &points,
+                                           const torch::Tensor &gradOutFeatures,
+                                           const torch::Tensor &gradOutGradFeatures,
+                                           const torch::Tensor &data);
 
 } // namespace ops
 } // namespace detail

@@ -10,9 +10,8 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-c10::intrusive_ptr<GridBatchData> cloneGrid(const GridBatchData &grid,
-                                            const torch::Device &device,
-                                            bool blocking = false);
+c10::intrusive_ptr<GridBatchData>
+cloneGrid(const GridBatchData &grid, const torch::Device &device, bool blocking = false);
 
 } // namespace ops
 } // namespace detail

@@ -40,11 +40,9 @@ dispatchMergeGrids<torch::kCUDA>(const GridBatchData &gridBatch1, const GridBatc
     // Create a grid for each batch item and store the handles
     std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> handles;
     for (int i = 0; i < gridBatch1.batchSize(); i += 1) {
-        nanovdb::OnIndexGrid *grid1 =
-            gridBatch1.mGridHdl->deviceGrid<nanovdb::ValueOnIndex>(i);
+        nanovdb::OnIndexGrid *grid1 = gridBatch1.mGridHdl->deviceGrid<nanovdb::ValueOnIndex>(i);
         TORCH_CHECK(grid1, "First Grid is null");
-        nanovdb::OnIndexGrid *grid2 =
-            gridBatch2.mGridHdl->deviceGrid<nanovdb::ValueOnIndex>(i);
+        nanovdb::OnIndexGrid *grid2 = gridBatch2.mGridHdl->deviceGrid<nanovdb::ValueOnIndex>(i);
         TORCH_CHECK(grid2, "Second Grid is null");
 
         nanovdb::tools::cuda::MergeGrids<nanovdb::ValueOnIndex> mergeOp(grid1, grid2, stream);

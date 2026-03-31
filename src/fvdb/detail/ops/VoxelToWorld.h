@@ -19,13 +19,11 @@ voxelToWorld(const GridBatchData &batchHdl, const JaggedTensor &points, bool isP
 torch::Tensor
 worldToVoxel(const GridBatchData &batchHdl, const JaggedTensor &points, bool isPrimal);
 
-torch::Tensor voxelToWorldBackward(const GridBatchData &batchHdl,
-                                            const JaggedTensor &gradOut,
-                                            bool isPrimal);
+torch::Tensor
+voxelToWorldBackward(const GridBatchData &batchHdl, const JaggedTensor &gradOut, bool isPrimal);
 
-torch::Tensor worldToVoxelBackward(const GridBatchData &batchHdl,
-                                               const JaggedTensor &gradOut,
-                                               bool isPrimal);
+torch::Tensor
+worldToVoxelBackward(const GridBatchData &batchHdl, const JaggedTensor &gradOut, bool isPrimal);
 
 } // namespace ops
 } // namespace detail

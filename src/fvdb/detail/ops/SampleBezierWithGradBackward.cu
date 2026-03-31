@@ -133,10 +133,10 @@ SampleGridBezierWithGradBackward(const GridBatchData &batchHdl,
 
 torch::Tensor
 sampleBezierWithGradBackward(const GridBatchData &batchHdl,
-                                 const JaggedTensor &points,
-                                 const torch::Tensor &gradOutFeatures,
-                                 const torch::Tensor &gradOutGradFeatures,
-                                 const torch::Tensor &data) {
+                             const JaggedTensor &points,
+                             const torch::Tensor &gradOutFeatures,
+                             const torch::Tensor &gradOutGradFeatures,
+                             const torch::Tensor &data) {
     return FVDB_DISPATCH_KERNEL_DEVICE(points.device(), [&]() {
         return SampleGridBezierWithGradBackward<DeviceTag>(
             batchHdl, points, gradOutFeatures, gradOutGradFeatures, data);

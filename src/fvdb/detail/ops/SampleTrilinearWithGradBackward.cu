@@ -315,10 +315,10 @@ dispatchSampleGridTrilinearWithGradBackward<torch::kPrivateUse1>(const GridBatch
 
 torch::Tensor
 sampleTrilinearWithGradBackward(const GridBatchData &batchHdl,
-                                    const JaggedTensor &points,
-                                    const torch::Tensor &data,
-                                    const torch::Tensor &gradOutFeatures,
-                                    const torch::Tensor &gradOutGradFeatures) {
+                                const JaggedTensor &points,
+                                const torch::Tensor &data,
+                                const torch::Tensor &gradOutFeatures,
+                                const torch::Tensor &gradOutGradFeatures) {
     return FVDB_DISPATCH_KERNEL(points.device(), [&]() {
         return dispatchSampleGridTrilinearWithGradBackward<DeviceTag>(
             batchHdl, points, data, gradOutFeatures, gradOutGradFeatures);

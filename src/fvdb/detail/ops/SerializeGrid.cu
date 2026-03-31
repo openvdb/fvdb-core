@@ -34,9 +34,8 @@ serializeGrid(const GridBatchData &grid) {
     int64_t numGrids   = self->nanoGridHandle().gridCount();
     int64_t hdlBufSize = self->nanoGridHandle().buffer().size();
 
-    const int64_t headerSize =
-        sizeof(V01Header) + numGrids * sizeof(GridBatchData::GridMetadata) +
-        sizeof(GridBatchData::GridBatchMetadata);
+    const int64_t headerSize = sizeof(V01Header) + numGrids * sizeof(GridBatchData::GridMetadata) +
+                               sizeof(GridBatchData::GridBatchMetadata);
     const int64_t totalByteSize = headerSize + hdlBufSize;
 
     V01Header header;
@@ -84,8 +83,8 @@ deserializeGrid(const torch::Tensor &serialized) {
     const uint64_t numGrids = header->numGrids;
 
     const GridBatchData::GridBatchMetadata *batchMetadata =
-        reinterpret_cast<const GridBatchData::GridBatchMetadata *>(
-            serializedPtr + sizeof(V01Header));
+        reinterpret_cast<const GridBatchData::GridBatchMetadata *>(serializedPtr +
+                                                                   sizeof(V01Header));
     TORCH_CHECK(batchMetadata->version == 1,
                 "Serialized data is not a valid grid handle. Bad batch metadata version.");
 
@@ -100,9 +99,8 @@ deserializeGrid(const torch::Tensor &serialized) {
                                sizeof(GridBatchData::GridBatchMetadata) +
                                numGrids * sizeof(GridBatchData::GridMetadata);
 
-    const uint64_t sizeofMetadata =
-        sizeof(V01Header) + sizeof(GridBatchData::GridBatchMetadata) +
-        numGrids * sizeof(GridBatchData::GridMetadata);
+    const uint64_t sizeofMetadata = sizeof(V01Header) + sizeof(GridBatchData::GridBatchMetadata) +
+                                    numGrids * sizeof(GridBatchData::GridMetadata);
     const uint64_t sizeofGrid = header->totalBytes - sizeofMetadata;
 
     auto buf = TorchDeviceBuffer(sizeofGrid, torch::kCPU);

@@ -157,12 +157,12 @@ fvdbToNanovdbGridWithValues(const GridBatchData &gridBatchData,
         const int64_t numVoxels = end - start;
         const int64_t numData =
             data.joffsets()[bi + 1].item<int>() - data.joffsets()[bi].item<int>();
-        TORCH_CHECK_VALUE(numData == gridBatchData.numVoxelsAt(bi),
-                          "Invalid number of voxels in jagged tensor at index " +
-                              std::to_string(bi) +
-                              ". Expected it to match the number of voxels at grid index " +
-                              std::to_string(bi) + ". " + "Got " + std::to_string(numVoxels) +
-                              " but expected " + std::to_string(gridBatchData.numVoxelsAt(bi)) + ".");
+        TORCH_CHECK_VALUE(
+            numData == gridBatchData.numVoxelsAt(bi),
+            "Invalid number of voxels in jagged tensor at index " + std::to_string(bi) +
+                ". Expected it to match the number of voxels at grid index " + std::to_string(bi) +
+                ". " + "Got " + std::to_string(numVoxels) + " but expected " +
+                std::to_string(gridBatchData.numVoxelsAt(bi)) + ".");
         for (int i = 0; i < numVoxels; i += 1) {
             const GridValueT &value =
                 valueGetter<InScalarType, GridValueT>(jdataAccessor, start + i);
@@ -318,11 +318,11 @@ getIndexGrid(const GridBatchData &gridBatchData, const std::vector<std::string> 
 
     // Write voxelSize and origin information to the output buffer
     for (int64_t bi = 0; bi < gridBatchData.batchSize(); bi += 1) {
-        nanovdb::GridData *retGridData    = (nanovdb::GridData *)(retHandle.gridData(bi));
-        const nanovdb::Vec3d &vs          = gridBatchData.voxelSizeAt(bi);
-        const nanovdb::Vec3d vo           = gridBatchData.voxelOriginAt(bi);
-        retGridData->mVoxelSize           = {vs[0], vs[1], vs[2]};
-        retGridData->mMap                 = nanovdb::Map(vs[0], {vo[0], vo[1], vo[2]});
+        nanovdb::GridData *retGridData = (nanovdb::GridData *)(retHandle.gridData(bi));
+        const nanovdb::Vec3d &vs       = gridBatchData.voxelSizeAt(bi);
+        const nanovdb::Vec3d vo        = gridBatchData.voxelOriginAt(bi);
+        retGridData->mVoxelSize        = {vs[0], vs[1], vs[2]};
+        retGridData->mMap              = nanovdb::Map(vs[0], {vo[0], vo[1], vo[2]});
     }
 
     // If you passed in grid names, write them to the output buffer
@@ -394,10 +394,10 @@ saveIndexGridWithBlindData(const std::string &path,
     }
 
     // Allocate a big enough buffer to allocate the index grid and blind data
-    const size_t allocSize = nanoGridHdl.buffer().size() + // Grids (32B aligned)
+    const size_t allocSize = nanoGridHdl.buffer().size() +   // Grids (32B aligned)
                              sizeof(nanovdb::GridBlindMetaData) *
-                                 gridBatchData.batchSize() +  // Blind metadata (32B aligned)
-                             totalBlindDataSize;              // Blind data (32B aligned)
+                                 gridBatchData.batchSize() + // Blind metadata (32B aligned)
+                             totalBlindDataSize;             // Blind data (32B aligned)
     nanovdb::HostBuffer writeBuf(allocSize);
 
     // Get pointer to read (possibly on the device) and write pointers
@@ -437,17 +437,17 @@ saveIndexGridWithBlindData(const std::string &path,
         // Write voxelSize and origin
         const nanovdb::Vec3d &vs  = gridBatchData.voxelSizeAt(bi);
         const nanovdb::Vec3d vo   = gridBatchData.voxelOriginAt(bi);
-        const double sx            = vs[0];
-        const double sy            = vs[1];
-        const double sz            = vs[2];
-        writeGridData->mVoxelSize  = {sx, sy, sz};
-        const double mat[3][3]     = {{sx, 0.0, 0.0},        // row 0
-                                      {0.0, sy, 0.0},        // row 1
-                                      {0.0, 0.0, sz}};       // row 2
-        const double invMat[3][3]  = {{1.0 / sx, 0.0, 0.0},  // row 0
-                                      {0.0, 1.0 / sy, 0.0},  // row 1
-                                      {0.0, 0.0, 1.0 / sz}}; // row 2
-        nanovdb::Vec3d trans       = {vo[0], vo[1], vo[2]};
+        const double sx           = vs[0];
+        const double sy           = vs[1];
+        const double sz           = vs[2];
+        writeGridData->mVoxelSize = {sx, sy, sz};
+        const double mat[3][3]    = {{sx, 0.0, 0.0},        // row 0
+                                     {0.0, sy, 0.0},        // row 1
+                                     {0.0, 0.0, sz}};       // row 2
+        const double invMat[3][3] = {{1.0 / sx, 0.0, 0.0},  // row 0
+                                     {0.0, 1.0 / sy, 0.0},  // row 1
+                                     {0.0, 0.0, 1.0 / sz}}; // row 2
+        nanovdb::Vec3d trans      = {vo[0], vo[1], vo[2]};
         writeGridData->mMap.set(mat, invMat, trans);
 
         readHead += sourceGridByteSize;

@@ -30,8 +30,8 @@ inline nanovdb::Vec3d
 fineVoxelOrigin(const nanovdb::Vec3d &voxelSize,
                 const nanovdb::Vec3d &voxelOrigin,
                 const nanovdb::Coord &subdivFactor) {
-    return voxelOrigin -
-           (subdivFactor.asVec3d() - nanovdb::Vec3d(1.0)) * (voxelSize / subdivFactor.asVec3d()) * 0.5;
+    return voxelOrigin - (subdivFactor.asVec3d() - nanovdb::Vec3d(1.0)) *
+                             (voxelSize / subdivFactor.asVec3d()) * 0.5;
 }
 
 } // namespace detail

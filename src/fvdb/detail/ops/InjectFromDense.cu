@@ -92,10 +92,10 @@ injectFromDenseCmajorVoxelCallback(
 template <typename ScalarType>
 void
 injectFromDenseCminorCPU(const GridBatchData::Accessor &gridHandle,
-                       const torch::TensorAccessor<ScalarType, 5> inDenseTensor,
-                       const torch::TensorAccessor<int32_t, 2> denseOrigins,
-                       torch::TensorAccessor<ScalarType, 2> outSparseTensor,
-                       bool isContiguous) {
+                         const torch::TensorAccessor<ScalarType, 5> inDenseTensor,
+                         const torch::TensorAccessor<int32_t, 2> denseOrigins,
+                         torch::TensorAccessor<ScalarType, 2> outSparseTensor,
+                         bool isContiguous) {
     for (int64_t bi = 0; bi < gridHandle.batchSize(); bi += 1) {
         const nanovdb::OnIndexGrid *grid = gridHandle.grid(bi);
         const nanovdb::Coord denseOrigin(
@@ -128,9 +128,9 @@ injectFromDenseCminorCPU(const GridBatchData::Accessor &gridHandle,
 template <typename ScalarType>
 void
 injectFromDenseCmajorCPU(const GridBatchData::Accessor &gridHandle,
-                       const torch::TensorAccessor<ScalarType, 5> inDenseTensor,
-                       const torch::TensorAccessor<int32_t, 2> denseOrigins,
-                       torch::TensorAccessor<ScalarType, 2> outSparseTensor) {
+                         const torch::TensorAccessor<ScalarType, 5> inDenseTensor,
+                         const torch::TensorAccessor<int32_t, 2> denseOrigins,
+                         torch::TensorAccessor<ScalarType, 2> outSparseTensor) {
     for (int64_t bi = 0; bi < gridHandle.batchSize(); bi += 1) {
         const nanovdb::OnIndexGrid *grid = gridHandle.grid(bi);
         const nanovdb::Coord denseOrigin(
@@ -156,9 +156,9 @@ injectFromDenseCmajorCPU(const GridBatchData::Accessor &gridHandle,
 
 void
 injectFromDenseCminorCUDA(const GridBatchData &batchHdl,
-                        const torch::Tensor &inDenseTensor,
-                        const torch::Tensor &denseOrigins,
-                        torch::Tensor &outSparseTensor) {
+                          const torch::Tensor &inDenseTensor,
+                          const torch::Tensor &denseOrigins,
+                          torch::Tensor &outSparseTensor) {
     AT_DISPATCH_V2(
         inDenseTensor.scalar_type(),
         "injectFromDenseCminor",
@@ -186,9 +186,9 @@ injectFromDenseCminorCUDA(const GridBatchData &batchHdl,
 
 void
 injectFromDenseCminorPrivateUse1(const GridBatchData &batchHdl,
-                               const torch::Tensor &inDenseTensor,
-                               const torch::Tensor &denseOrigins,
-                               torch::Tensor &outSparseTensor) {
+                                 const torch::Tensor &inDenseTensor,
+                                 const torch::Tensor &denseOrigins,
+                                 torch::Tensor &outSparseTensor) {
     AT_DISPATCH_V2(
         inDenseTensor.scalar_type(),
         "injectFromDenseCminor",
@@ -216,19 +216,19 @@ injectFromDenseCminorPrivateUse1(const GridBatchData &batchHdl,
 
 void
 injectFromDenseCminorCPUDispatch(const GridBatchData &gridHdl,
-                               const torch::Tensor &inDenseTensor,
-                               const torch::Tensor &denseOrigins,
-                               torch::Tensor &outSparseTensor) {
+                                 const torch::Tensor &inDenseTensor,
+                                 const torch::Tensor &denseOrigins,
+                                 torch::Tensor &outSparseTensor) {
     bool isContiguous = inDenseTensor.is_contiguous() && outSparseTensor.is_contiguous();
 
     AT_DISPATCH_V2(inDenseTensor.scalar_type(),
                    "injectFromDenseCminor",
                    AT_WRAP([&]() {
                        injectFromDenseCminorCPU(gridHdl.hostAccessor(),
-                                              inDenseTensor.accessor<scalar_t, 5>(),
-                                              denseOrigins.accessor<int32_t, 2>(),
-                                              outSparseTensor.accessor<scalar_t, 2>(),
-                                              isContiguous);
+                                                inDenseTensor.accessor<scalar_t, 5>(),
+                                                denseOrigins.accessor<int32_t, 2>(),
+                                                outSparseTensor.accessor<scalar_t, 2>(),
+                                                isContiguous);
                    }),
                    AT_EXPAND(AT_FLOATING_TYPES),
                    c10::kHalf,
@@ -237,9 +237,9 @@ injectFromDenseCminorCPUDispatch(const GridBatchData &gridHdl,
 
 void
 injectFromDenseCmajorCUDA(const GridBatchData &batchHdl,
-                        const torch::Tensor &inDenseTensor,
-                        const torch::Tensor &denseOrigins,
-                        torch::Tensor &outSparseTensor) {
+                          const torch::Tensor &inDenseTensor,
+                          const torch::Tensor &denseOrigins,
+                          torch::Tensor &outSparseTensor) {
     AT_DISPATCH_V2(
         inDenseTensor.scalar_type(),
         "injectFromDenseCmajor",
@@ -267,9 +267,9 @@ injectFromDenseCmajorCUDA(const GridBatchData &batchHdl,
 
 void
 injectFromDenseCmajorPrivateUse1(const GridBatchData &batchHdl,
-                               const torch::Tensor &inDenseTensor,
-                               const torch::Tensor &denseOrigins,
-                               torch::Tensor &outSparseTensor) {
+                                 const torch::Tensor &inDenseTensor,
+                                 const torch::Tensor &denseOrigins,
+                                 torch::Tensor &outSparseTensor) {
     AT_DISPATCH_V2(
         inDenseTensor.scalar_type(),
         "injectFromDenseCmajor",
@@ -297,16 +297,16 @@ injectFromDenseCmajorPrivateUse1(const GridBatchData &batchHdl,
 
 void
 injectFromDenseCmajorCPUDispatch(const GridBatchData &gridHdl,
-                               const torch::Tensor &inDenseTensor,
-                               const torch::Tensor &denseOrigins,
-                               torch::Tensor &outSparseTensor) {
+                                 const torch::Tensor &inDenseTensor,
+                                 const torch::Tensor &denseOrigins,
+                                 torch::Tensor &outSparseTensor) {
     AT_DISPATCH_V2(inDenseTensor.scalar_type(),
                    "injectFromDenseCmajor",
                    AT_WRAP([&]() {
                        injectFromDenseCmajorCPU(gridHdl.hostAccessor(),
-                                              inDenseTensor.accessor<scalar_t, 5>(),
-                                              denseOrigins.accessor<int32_t, 2>(),
-                                              outSparseTensor.accessor<scalar_t, 2>());
+                                                inDenseTensor.accessor<scalar_t, 5>(),
+                                                denseOrigins.accessor<int32_t, 2>(),
+                                                outSparseTensor.accessor<scalar_t, 2>());
                    }),
                    AT_EXPAND(AT_FLOATING_TYPES),
                    c10::kHalf,
@@ -315,8 +315,8 @@ injectFromDenseCmajorCPUDispatch(const GridBatchData &gridHdl,
 
 torch::Tensor
 injectFromDenseCminor(const GridBatchData &batchHdl,
-                    const torch::Tensor &denseData,
-                    const torch::Tensor &denseOrigins) {
+                      const torch::Tensor &denseData,
+                      const torch::Tensor &denseOrigins) {
     batchHdl.checkNonEmptyGrid();
     batchHdl.checkDevice(denseData);
     TORCH_CHECK_VALUE(denseData.dim() > 4, "dense data must have shape [B, X, Y, Z, C]");
@@ -346,8 +346,8 @@ injectFromDenseCminor(const GridBatchData &batchHdl,
 
 torch::Tensor
 injectFromDenseCmajor(const GridBatchData &batchHdl,
-                    const torch::Tensor &denseData,
-                    const torch::Tensor &denseOrigins) {
+                      const torch::Tensor &denseData,
+                      const torch::Tensor &denseOrigins) {
     batchHdl.checkNonEmptyGrid();
     batchHdl.checkDevice(denseData);
     TORCH_CHECK_VALUE(denseData.dim() > 4, "dense data must have shape [B, *, X, Y, Z]");

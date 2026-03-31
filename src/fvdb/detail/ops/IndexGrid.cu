@@ -96,9 +96,14 @@ indexGridInternal(const fvdb::detail::GridBatchData &grid, const Indexable &idx,
         listIndices = grid.mListIndices;
     }
 
-    return c10::make_intrusive<GridBatchData>(
-        grid.mGridHdl, hostMeta, deviceMeta, size, std::move(batchMeta),
-        std::move(leafBatchIndices), std::move(batchOffsets), std::move(listIndices));
+    return c10::make_intrusive<GridBatchData>(grid.mGridHdl,
+                                              hostMeta,
+                                              deviceMeta,
+                                              size,
+                                              std::move(batchMeta),
+                                              std::move(leafBatchIndices),
+                                              std::move(batchOffsets),
+                                              std::move(listIndices));
 }
 
 struct RangeAccessor {
@@ -171,8 +176,7 @@ indexGrid(const GridBatchData &grid, const torch::Tensor &indices) {
             indices.numel() == grid.batchSize(),
             "bool indices must have the same number of entries as grids in the batch");
         numericIndices = torch::arange(
-            grid.batchSize(),
-            torch::TensorOptions().dtype(torch::kInt64).device(indices.device()));
+            grid.batchSize(), torch::TensorOptions().dtype(torch::kInt64).device(indices.device()));
         numericIndices = numericIndices.masked_select(indices);
     } else {
         numericIndices = indices;

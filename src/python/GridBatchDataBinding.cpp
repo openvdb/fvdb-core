@@ -27,8 +27,7 @@ bind_grid_batch_data(py::module &m) {
         .def_property_readonly("is_empty", &GBI::isEmpty)
         .def_property_readonly("is_contiguous", &GBI::isContiguous)
         .def_property_readonly_static(
-            "MAX_GRIDS_PER_BATCH",
-            [](py::object) -> int64_t { return GBI::MAX_GRIDS_PER_BATCH; })
+            "MAX_GRIDS_PER_BATCH", [](py::object) -> int64_t { return GBI::MAX_GRIDS_PER_BATCH; })
 
         // -- Tensor properties --
         .def_property_readonly("joffsets", &GBI::voxelOffsets)
@@ -75,7 +74,7 @@ bind_grid_batch_data(py::module &m) {
             },
             [](const torch::Tensor &t) {
                 namespace ops = fvdb::detail::ops;
-                auto impl = ops::deserializeGrid(t.cpu());
+                auto impl     = ops::deserializeGrid(t.cpu());
                 if (t.device() != torch::kCPU) {
                     impl = ops::cloneGrid(*impl, t.device());
                 }

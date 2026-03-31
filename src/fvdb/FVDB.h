@@ -160,8 +160,8 @@ gridbatch_from_dense(const int64_t numGrids,
                      const nanovdb::Coord &ijkMin,
                      const std::vector<nanovdb::Vec3d> &voxel_sizes,
                      const std::vector<nanovdb::Vec3d> &origins,
-                     std::optional<torch::Tensor> mask     = std::nullopt,
-                     const torch::Device &device           = torch::kCPU);
+                     std::optional<torch::Tensor> mask = std::nullopt,
+                     const torch::Device &device       = torch::kCPU);
 
 /// @brief Return a grid batch from a jagged batch of triangle meshes (i.e. each voxel intersects
 /// the mesh)
@@ -181,8 +181,8 @@ gridbatch_from_mesh(const JaggedTensor &vertices,
 
 /// @brief Return a grid batch, tensors of data, and names from a nanovdb grid handle
 /// @param handle nanovdb grid handle
-/// @return A triple (gridbatch_data, data, names) where gridbatch_data is a GridBatchData containing the
-/// converted grids,
+/// @return A triple (gridbatch_data, data, names) where gridbatch_data is a GridBatchData
+/// containing the converted grids,
 ///         data is a JaggedTensor containing the data of the grids, and names is a list of strings
 ///         containing the name of each grid
 std::tuple<c10::intrusive_ptr<detail::GridBatchData>, JaggedTensor, std::vector<std::string>>

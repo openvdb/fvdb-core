@@ -14,8 +14,8 @@ namespace detail {
 namespace ops {
 
 torch::Tensor splatBezier(const GridBatchData &batchHdl,
-                                  const JaggedTensor &points,
-                                  const torch::Tensor &pointsData);
+                          const JaggedTensor &points,
+                          const torch::Tensor &pointsData);
 
 } // namespace ops
 } // namespace detail
