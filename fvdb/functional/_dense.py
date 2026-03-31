@@ -534,6 +534,10 @@ def inject_single(
         torch.Tensor,
         _InjectFn.apply(jt_src.jdata, jt_dst.jdata, dst_grid_data, src_grid_data, jt_dst._impl, jt_src._impl),
     )
+    # Copy result back into the caller's tensor so in-place semantics are
+    # preserved even when the caller doesn't capture the return value.
+    if dst is not None:
+        dst.data.copy_(dst_out.data)
     return dst_out
 
 
