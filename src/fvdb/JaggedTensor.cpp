@@ -3,7 +3,6 @@
 //
 #include <fvdb/Config.h>
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/autograd/JaggedReduce.h>
 
 // Ops headers
 #include <fvdb/detail/ops/JCat0.h>
@@ -12,6 +11,8 @@
 #include <fvdb/detail/ops/JaggedTensorIndex.h>
 #include <fvdb/detail/ops/jagged/JaggedSort.h>
 
+#include <cmath>
+#include <limits>
 #include <optional>
 
 namespace fvdb {
@@ -669,6 +670,23 @@ JaggedTensor::jflatten(const int64_t dim) const {
 //     return jagged_like(argsortIdx);
 // }
 
+namespace {
+
+// Expand a 1-D index tensor to broadcast across all trailing dims of data:
+//   [N] -> [N, 1, 1, ...].expand_as(data)
+torch::Tensor
+expandIdxLike(const torch::Tensor &idx1d, const torch::Tensor &data) {
+    torch::Tensor idx = idx1d.to(torch::kLong);
+    if (data.dim() > 1) {
+        std::vector<int64_t> viewShape(data.dim(), 1);
+        viewShape[0] = -1;
+        idx          = idx.view(viewShape).expand_as(data);
+    }
+    return idx;
+}
+
+} // anonymous namespace
+
 JaggedTensor
 JaggedTensor::jsum(int64_t dim, bool keepdim) const {
     const int64_t jdim = mData.dim();
@@ -690,8 +708,11 @@ JaggedTensor::jsum(int64_t dim, bool keepdim) const {
         if (mBatchIdx.size(0) == 0) {
             retData = mData.sum(0).unsqueeze(0);
         } else {
-            retData =
-                detail::autograd::JaggedSum::apply(jdata(), jidx(), joffsets(), num_tensors())[0];
+            torch::Tensor idx = expandIdxLike(mBatchIdx, mData);
+            auto outShape     = mData.sizes().vec();
+            outShape[0]       = num_tensors();
+            retData           = torch::zeros(outShape, mData.options());
+            retData.scatter_reduce_(0, idx, mData, "sum", /*include_self=*/true);
         }
         const torch::Tensor retOffsets = torch::arange(
             0,
@@ -726,10 +747,29 @@ JaggedTensor::jmin(int64_t dim, bool keepdim) const {
             minVals       = std::get<0>(minTuple).unsqueeze(0);
             minIndices    = std::get<1>(minTuple).unsqueeze(0);
         } else {
-            auto minTuple =
-                detail::autograd::JaggedMin::apply(jdata(), jidx(), joffsets(), num_tensors());
-            minVals    = minTuple[0];
-            minIndices = minTuple[1];
+            torch::Tensor idx = expandIdxLike(mBatchIdx, mData);
+            auto outShape     = mData.sizes().vec();
+            outShape[0]       = num_tensors();
+
+            minVals =
+                torch::full(outShape, std::numeric_limits<double>::infinity(), mData.options());
+            minVals.scatter_reduce_(0, idx, mData, "amin", /*include_self=*/false);
+            minVals = torch::where(torch::isinf(minVals), torch::zeros_like(minVals), minVals);
+
+            torch::Tensor gatheredMin = minVals.detach().index({mBatchIdx.to(torch::kLong)});
+            torch::Tensor matches     = (mData.detach() == gatheredMin);
+            torch::Tensor globalPos   = torch::arange(
+                mData.size(0), torch::TensorOptions().dtype(torch::kLong).device(mData.device()));
+            torch::Tensor baseOff  = mOffsets.index({mBatchIdx.to(torch::kLong)}).to(torch::kLong);
+            torch::Tensor localPos = expandIdxLike(globalPos - baseOff, mData);
+            torch::Tensor maskedPos =
+                torch::where(matches, localPos, torch::full_like(localPos, -1));
+
+            minIndices =
+                torch::full(outShape,
+                            (int64_t)-1,
+                            torch::TensorOptions().dtype(torch::kLong).device(mData.device()));
+            minIndices.scatter_reduce_(0, idx, maskedPos, "amax", /*include_self=*/false);
         }
 
         const torch::Tensor retOffsets = torch::arange(
@@ -779,10 +819,29 @@ JaggedTensor::jmax(int64_t dim, bool keepdim) const {
             maxVals       = std::get<0>(maxTuple).unsqueeze(0);
             maxIndices    = std::get<1>(maxTuple).unsqueeze(0);
         } else {
-            auto maxTuple =
-                detail::autograd::JaggedMax::apply(jdata(), jidx(), joffsets(), num_tensors());
-            maxVals    = maxTuple[0];
-            maxIndices = maxTuple[1];
+            torch::Tensor idx = expandIdxLike(mBatchIdx, mData);
+            auto outShape     = mData.sizes().vec();
+            outShape[0]       = num_tensors();
+
+            maxVals =
+                torch::full(outShape, -std::numeric_limits<double>::infinity(), mData.options());
+            maxVals.scatter_reduce_(0, idx, mData, "amax", /*include_self=*/false);
+            maxVals = torch::where(torch::isinf(maxVals), torch::zeros_like(maxVals), maxVals);
+
+            torch::Tensor gatheredMax = maxVals.detach().index({mBatchIdx.to(torch::kLong)});
+            torch::Tensor matches     = (mData.detach() == gatheredMax);
+            torch::Tensor globalPos   = torch::arange(
+                mData.size(0), torch::TensorOptions().dtype(torch::kLong).device(mData.device()));
+            torch::Tensor baseOff  = mOffsets.index({mBatchIdx.to(torch::kLong)}).to(torch::kLong);
+            torch::Tensor localPos = expandIdxLike(globalPos - baseOff, mData);
+            torch::Tensor maskedPos =
+                torch::where(matches, localPos, torch::full_like(localPos, -1));
+
+            maxIndices =
+                torch::full(outShape,
+                            (int64_t)-1,
+                            torch::TensorOptions().dtype(torch::kLong).device(mData.device()));
+            maxIndices.scatter_reduce_(0, idx, maskedPos, "amax", /*include_self=*/false);
         }
 
         const torch::Tensor retOffsets = torch::arange(
