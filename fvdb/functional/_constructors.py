@@ -23,6 +23,7 @@ from ..types import (
     to_Vec3i,
     to_Vec3iBroadcastable,
 )
+
 if TYPE_CHECKING:
     from ..grid import Grid
     from ..grid_batch import GridBatch
@@ -93,9 +94,14 @@ def gridbatch_from_dense(
     origins_t = to_Vec3fBatch(origins)
 
     grid_data = _fvdb_cpp.gridbatch_from_dense(
-        num_grids, dense_dims_t.tolist(), ijk_min_t.tolist(),
-        _to_vec3d_batch(voxel_sizes_t, num_grids), _to_vec3d_batch(origins_t, num_grids),
-        mask, str(resolved_device))
+        num_grids,
+        dense_dims_t.tolist(),
+        ijk_min_t.tolist(),
+        _to_vec3d_batch(voxel_sizes_t, num_grids),
+        _to_vec3d_batch(origins_t, num_grids),
+        mask,
+        str(resolved_device),
+    )
     return _wrap_grid(grid_data)
 
 
@@ -136,7 +142,9 @@ def gridbatch_from_dense_axis_aligned_bounds(
         voxel_size = (bounds_max_t - bounds_min_t) / dense_dims_t.to(torch.float64)
         origin = bounds_min_t + 0.5 * voxel_size
 
-    return gridbatch_from_dense(num_grids, dense_dims=dense_dims_t, voxel_sizes=voxel_size, origins=origin, device=device)
+    return gridbatch_from_dense(
+        num_grids, dense_dims=dense_dims_t, voxel_sizes=voxel_size, origins=origin, device=device
+    )
 
 
 def gridbatch_from_ijk(
@@ -165,7 +173,8 @@ def gridbatch_from_ijk(
 
     n = ijk.num_tensors
     grid_data = _fvdb_cpp.gridbatch_from_ijk(
-        ijk._impl, _to_vec3d_batch(voxel_sizes_t, n), _to_vec3d_batch(origins_t, n))
+        ijk._impl, _to_vec3d_batch(voxel_sizes_t, n), _to_vec3d_batch(origins_t, n)
+    )
     return _wrap_grid(grid_data)
 
 
@@ -197,8 +206,8 @@ def gridbatch_from_mesh(
 
     n = mesh_vertices.num_tensors
     grid_data = _fvdb_cpp.gridbatch_from_mesh(
-        mesh_vertices._impl, mesh_faces._impl,
-        _to_vec3d_batch(voxel_sizes_t, n), _to_vec3d_batch(origins_t, n))
+        mesh_vertices._impl, mesh_faces._impl, _to_vec3d_batch(voxel_sizes_t, n), _to_vec3d_batch(origins_t, n)
+    )
     return _wrap_grid(grid_data)
 
 
@@ -228,7 +237,8 @@ def gridbatch_from_nearest_voxels_to_points(
 
     n = points.num_tensors
     grid_data = _fvdb_cpp.gridbatch_from_nearest_voxels_to_points(
-        points._impl, _to_vec3d_batch(voxel_sizes_t, n), _to_vec3d_batch(origins_t, n))
+        points._impl, _to_vec3d_batch(voxel_sizes_t, n), _to_vec3d_batch(origins_t, n)
+    )
     return _wrap_grid(grid_data)
 
 
@@ -258,7 +268,8 @@ def gridbatch_from_points(
 
     n = points.num_tensors
     grid_data = _fvdb_cpp.gridbatch_from_points(
-        points._impl, _to_vec3d_batch(voxel_sizes_t, n), _to_vec3d_batch(origins_t, n))
+        points._impl, _to_vec3d_batch(voxel_sizes_t, n), _to_vec3d_batch(origins_t, n)
+    )
     return _wrap_grid(grid_data)
 
 
@@ -299,10 +310,9 @@ def gridbatch_from_zero_voxels(
     resolved_device = resolve_device(device)
     voxel_sizes_t = to_Vec3fBatch(voxel_sizes, value_constraint=ValueConstraint.POSITIVE)
     origins_t = to_Vec3fBatch(origins)
-    return _wrap_grid(_fvdb_cpp.create_from_empty(
-        str(resolved_device),
-        _to_vec3d_batch(voxel_sizes_t),
-        _to_vec3d_batch(origins_t)))
+    return _wrap_grid(
+        _fvdb_cpp.create_from_empty(str(resolved_device), _to_vec3d_batch(voxel_sizes_t), _to_vec3d_batch(origins_t))
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -1135,9 +1135,7 @@ class Grid:
         """
         from . import functional
 
-        return functional.voxels_along_rays_single(
-            self, ray_origins, ray_directions, max_voxels, eps, return_ijk
-        )
+        return functional.voxels_along_rays_single(self, ray_origins, ray_directions, max_voxels, eps, return_ijk)
 
     def segments_along_rays(
         self,
@@ -1161,9 +1159,7 @@ class Grid:
         """
         from . import functional
 
-        return functional.segments_along_rays_single(
-            self, ray_origins, ray_directions, max_segments, eps
-        )
+        return functional.segments_along_rays_single(self, ray_origins, ray_directions, max_segments, eps)
 
     def uniform_ray_samples(
         self,
@@ -1196,8 +1192,16 @@ class Grid:
         from . import functional
 
         return functional.uniform_ray_samples_single(
-            self, ray_origins, ray_directions, t_min, t_max, step_size,
-            cone_angle, include_end_segments, return_midpoints, eps,
+            self,
+            ray_origins,
+            ray_directions,
+            t_min,
+            t_max,
+            step_size,
+            cone_angle,
+            include_end_segments,
+            return_midpoints,
+            eps,
         )
 
     def ray_implicit_intersection(
@@ -1225,9 +1229,7 @@ class Grid:
         """
         from . import functional
 
-        return functional.ray_implicit_intersection_single(
-            self, ray_origins, ray_directions, grid_scalars, eps
-        )
+        return functional.ray_implicit_intersection_single(self, ray_origins, ray_directions, grid_scalars, eps)
 
     def rays_intersect_voxels(
         self,
@@ -1493,8 +1495,13 @@ class Grid:
         from . import functional
 
         return functional.integrate_tsdf_single(
-            self, truncation_distance, projection_matrices,
-            cam_to_world_matrices, tsdf, weights, depth_images,
+            self,
+            truncation_distance,
+            projection_matrices,
+            cam_to_world_matrices,
+            tsdf,
+            weights,
+            depth_images,
             weight_images,
         )
 
@@ -1538,9 +1545,16 @@ class Grid:
         from . import functional
 
         return functional.integrate_tsdf_with_features_single(
-            self, truncation_distance, projection_matrices,
-            cam_to_world_matrices, tsdf, features, weights,
-            depth_images, feature_images, weight_images,
+            self,
+            truncation_distance,
+            projection_matrices,
+            cam_to_world_matrices,
+            tsdf,
+            features,
+            weights,
+            depth_images,
+            feature_images,
+            weight_images,
         )
 
     # ============================================================
@@ -1618,7 +1632,10 @@ class Grid:
         functional.save_nanovdb_single(
             self,
             str(path) if isinstance(path, pathlib.Path) else path,
-            data, name, compressed, verbose,
+            data,
+            name,
+            compressed,
+            verbose,
         )
 
     # ============================================================

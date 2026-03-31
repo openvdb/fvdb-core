@@ -10,7 +10,14 @@ import torch
 
 from .. import _fvdb_cpp
 from ..jagged_tensor import JaggedTensor
-from ..types import NumericMaxRank1, NumericMaxRank2, ValueConstraint, to_Vec3i, to_Vec3iBatchBroadcastable, to_Vec3iBroadcastable
+from ..types import (
+    NumericMaxRank1,
+    NumericMaxRank2,
+    ValueConstraint,
+    to_Vec3i,
+    to_Vec3iBatchBroadcastable,
+    to_Vec3iBroadcastable,
+)
 
 if TYPE_CHECKING:
     from ..grid import Grid
@@ -175,7 +182,13 @@ def inject_from_dense_cminor_batch(
     .. seealso:: :func:`inject_from_dense_cminor_single`
     """
     grid_data = grid.data
-    origin = to_Vec3i(dense_origin).unsqueeze(0).expand(grid_data.grid_count, 3).to(dtype=torch.int32, device=dense_data.device).contiguous()
+    origin = (
+        to_Vec3i(dense_origin)
+        .unsqueeze(0)
+        .expand(grid_data.grid_count, 3)
+        .to(dtype=torch.int32, device=dense_data.device)
+        .contiguous()
+    )
     result = cast(torch.Tensor, _InjectFromDenseCminorFn.apply(dense_data, grid_data, origin))
     feature_shape = list(dense_data.shape[4:])
     if feature_shape:
@@ -203,7 +216,13 @@ def inject_from_dense_cmajor_batch(
     .. seealso:: :func:`inject_from_dense_cmajor_single`
     """
     grid_data = grid.data
-    origin = to_Vec3i(dense_origin).unsqueeze(0).expand(grid_data.grid_count, 3).to(dtype=torch.int32, device=dense_data.device).contiguous()
+    origin = (
+        to_Vec3i(dense_origin)
+        .unsqueeze(0)
+        .expand(grid_data.grid_count, 3)
+        .to(dtype=torch.int32, device=dense_data.device)
+        .contiguous()
+    )
     result = cast(torch.Tensor, _InjectFromDenseCmajorFn.apply(dense_data, grid_data, origin))
     feature_shape = list(dense_data.shape[1:-3])
     if feature_shape:
@@ -236,7 +255,13 @@ def inject_from_dense_cminor_single(
     .. seealso:: :func:`inject_from_dense_cminor_batch`
     """
     grid_data = grid.data
-    origin = to_Vec3i(dense_origin).unsqueeze(0).expand(grid_data.grid_count, 3).to(dtype=torch.int32, device=dense_data.device).contiguous()
+    origin = (
+        to_Vec3i(dense_origin)
+        .unsqueeze(0)
+        .expand(grid_data.grid_count, 3)
+        .to(dtype=torch.int32, device=dense_data.device)
+        .contiguous()
+    )
     result = cast(torch.Tensor, _InjectFromDenseCminorFn.apply(dense_data, grid_data, origin))
     feature_shape = list(dense_data.shape[4:])
     if feature_shape:
@@ -264,7 +289,13 @@ def inject_from_dense_cmajor_single(
     .. seealso:: :func:`inject_from_dense_cmajor_batch`
     """
     grid_data = grid.data
-    origin = to_Vec3i(dense_origin).unsqueeze(0).expand(grid_data.grid_count, 3).to(dtype=torch.int32, device=dense_data.device).contiguous()
+    origin = (
+        to_Vec3i(dense_origin)
+        .unsqueeze(0)
+        .expand(grid_data.grid_count, 3)
+        .to(dtype=torch.int32, device=dense_data.device)
+        .contiguous()
+    )
     result = cast(torch.Tensor, _InjectFromDenseCmajorFn.apply(dense_data, grid_data, origin))
     feature_shape = list(dense_data.shape[1:-3])
     if feature_shape:
@@ -435,7 +466,9 @@ def inject_batch(
     else:
         jt_dst = dst
     if jt_dst.eshape != jt_src.eshape:
-        raise ValueError(f"src and dst must have the same element shape, got src: {jt_src.eshape}, dst: {jt_dst.eshape}")
+        raise ValueError(
+            f"src and dst must have the same element shape, got src: {jt_src.eshape}, dst: {jt_dst.eshape}"
+        )
     _InjectFn.apply(jt_src.jdata, jt_dst.jdata, dst_grid_data, src_grid_data, jt_dst._impl, jt_src._impl)
     return jt_dst
 
@@ -478,7 +511,9 @@ def inject_single(
     else:
         raw_dst = dst
     jt_dst = JaggedTensor(raw_dst)
-    dst_out = cast(torch.Tensor, _InjectFn.apply(src, jt_dst.jdata, dst_grid_data, src_grid_data, jt_dst._impl, jt_src._impl))
+    dst_out = cast(
+        torch.Tensor, _InjectFn.apply(src, jt_dst.jdata, dst_grid_data, src_grid_data, jt_dst._impl, jt_src._impl)
+    )
     return dst_out
 
 
@@ -521,17 +556,17 @@ def inject_from_ijk_batch(
     if dst is None:
         dst_shape: list[int] = [grid_data.total_voxels]
         dst_shape.extend(src.eshape)
-        dst = JaggedTensor(impl=grid_data.jagged_like(
-            torch.full(dst_shape, fill_value=default_value, dtype=src.dtype, device=src.device)
-        ))
+        dst = JaggedTensor(
+            impl=grid_data.jagged_like(
+                torch.full(dst_shape, fill_value=default_value, dtype=src.dtype, device=src.device)
+            )
+        )
     else:
         if not isinstance(dst, JaggedTensor):
             raise TypeError(f"dst must be a JaggedTensor, but got {type(dst)}")
 
     if dst.eshape != src.eshape:
-        raise ValueError(
-            f"src and dst must have the same element shape, but got src: {src.eshape}, dst: {dst.eshape}"
-        )
+        raise ValueError(f"src and dst must have the same element shape, but got src: {src.eshape}, dst: {dst.eshape}")
 
     src_idx = _query.ijk_to_index_batch(grid, src_ijk, cumulative=True).jdata
     src_mask = src_idx >= 0

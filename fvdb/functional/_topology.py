@@ -328,9 +328,7 @@ def clip_batch(
     .. seealso:: :func:`clip_single`
     """
     mn, mx = _normalize_clip_bounds(grid.data, ijk_min, ijk_max)
-    result_features_impl, result_grid_impl = _fvdb_cpp.clip_grid_features_with_mask(
-        grid.data, features._impl, mn, mx
-    )
+    result_features_impl, result_grid_impl = _fvdb_cpp.clip_grid_features_with_mask(grid.data, features._impl, mn, mx)
     return JaggedTensor(impl=result_features_impl), _wrap_grid(result_grid_impl)
 
 
@@ -358,9 +356,7 @@ def clip_single(
     """
     mn, mx = _normalize_clip_bounds(grid.data, ijk_min, ijk_max)
     jt = JaggedTensor(features)
-    result_features_impl, result_grid_impl = _fvdb_cpp.clip_grid_features_with_mask(
-        grid.data, jt._impl, mn, mx
-    )
+    result_features_impl, result_grid_impl = _fvdb_cpp.clip_grid_features_with_mask(grid.data, jt._impl, mn, mx)
     return JaggedTensor(impl=result_features_impl).jdata, _wrap_single_grid(result_grid_impl)
 
 

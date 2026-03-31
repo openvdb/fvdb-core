@@ -129,7 +129,9 @@ class _SampleBezierWithGradFn(torch.autograd.Function):
 
 
 def sample_trilinear_batch(
-    grid: GridBatch, points: JaggedTensor, voxel_data: JaggedTensor,
+    grid: GridBatch,
+    points: JaggedTensor,
+    voxel_data: JaggedTensor,
 ) -> JaggedTensor:
     """Sample voxel data at world-space points using trilinear interpolation for a grid batch.
 
@@ -150,7 +152,9 @@ def sample_trilinear_batch(
 
 
 def sample_trilinear_single(
-    grid: Grid, points: torch.Tensor, voxel_data: torch.Tensor,
+    grid: Grid,
+    points: torch.Tensor,
+    voxel_data: torch.Tensor,
 ) -> torch.Tensor:
     """Sample voxel data at world-space points using trilinear interpolation for a single grid.
 
@@ -177,7 +181,9 @@ def sample_trilinear_single(
 
 
 def sample_trilinear_with_grad_batch(
-    grid: GridBatch, points: JaggedTensor, voxel_data: JaggedTensor,
+    grid: GridBatch,
+    points: JaggedTensor,
+    voxel_data: JaggedTensor,
 ) -> tuple[JaggedTensor, JaggedTensor]:
     """Sample with trilinear interpolation and return spatial gradients for a grid batch.
 
@@ -202,7 +208,9 @@ def sample_trilinear_with_grad_batch(
 
 
 def sample_trilinear_with_grad_single(
-    grid: Grid, points: torch.Tensor, voxel_data: torch.Tensor,
+    grid: Grid,
+    points: torch.Tensor,
+    voxel_data: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Sample with trilinear interpolation and return spatial gradients for a single grid.
 
@@ -233,7 +241,9 @@ def sample_trilinear_with_grad_single(
 
 
 def sample_bezier_batch(
-    grid: GridBatch, points: JaggedTensor, voxel_data: JaggedTensor,
+    grid: GridBatch,
+    points: JaggedTensor,
+    voxel_data: JaggedTensor,
 ) -> JaggedTensor:
     """Sample voxel data at world-space points using Bezier interpolation for a grid batch.
 
@@ -254,7 +264,9 @@ def sample_bezier_batch(
 
 
 def sample_bezier_single(
-    grid: Grid, points: torch.Tensor, voxel_data: torch.Tensor,
+    grid: Grid,
+    points: torch.Tensor,
+    voxel_data: torch.Tensor,
 ) -> torch.Tensor:
     """Sample voxel data at world-space points using Bezier interpolation for a single grid.
 
@@ -281,7 +293,9 @@ def sample_bezier_single(
 
 
 def sample_bezier_with_grad_batch(
-    grid: GridBatch, points: JaggedTensor, voxel_data: JaggedTensor,
+    grid: GridBatch,
+    points: JaggedTensor,
+    voxel_data: JaggedTensor,
 ) -> tuple[JaggedTensor, JaggedTensor]:
     """Sample with Bezier interpolation and return spatial gradients for a grid batch.
 
@@ -306,7 +320,9 @@ def sample_bezier_with_grad_batch(
 
 
 def sample_bezier_with_grad_single(
-    grid: Grid, points: torch.Tensor, voxel_data: torch.Tensor,
+    grid: Grid,
+    points: torch.Tensor,
+    voxel_data: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Sample with Bezier interpolation and return spatial gradients for a single grid.
 
@@ -337,7 +353,9 @@ def sample_bezier_with_grad_single(
 
 
 def splat_trilinear_batch(
-    grid: GridBatch, points: JaggedTensor, points_data: JaggedTensor,
+    grid: GridBatch,
+    points: JaggedTensor,
+    points_data: JaggedTensor,
 ) -> JaggedTensor:
     """Splat point data into voxels using trilinear weights for a grid batch.
 
@@ -358,7 +376,9 @@ def splat_trilinear_batch(
 
 
 def splat_trilinear_single(
-    grid: Grid, points: torch.Tensor, points_data: torch.Tensor,
+    grid: Grid,
+    points: torch.Tensor,
+    points_data: torch.Tensor,
 ) -> torch.Tensor:
     """Splat point data into voxels using trilinear weights for a single grid.
 
@@ -385,7 +405,9 @@ def splat_trilinear_single(
 
 
 def splat_bezier_batch(
-    grid: GridBatch, points: JaggedTensor, points_data: JaggedTensor,
+    grid: GridBatch,
+    points: JaggedTensor,
+    points_data: JaggedTensor,
 ) -> JaggedTensor:
     """Splat point data into voxels using Bezier weights for a grid batch.
 
@@ -406,7 +428,9 @@ def splat_bezier_batch(
 
 
 def splat_bezier_single(
-    grid: Grid, points: torch.Tensor, points_data: torch.Tensor,
+    grid: Grid,
+    points: torch.Tensor,
+    points_data: torch.Tensor,
 ) -> torch.Tensor:
     """Splat point data into voxels using Bezier weights for a single grid.
 

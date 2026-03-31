@@ -915,7 +915,13 @@ class GridBatch:
         from . import functional
 
         return functional.integrate_tsdf_batch(
-            self, truncation_distance, projection_matrices, cam_to_world_matrices, tsdf, weights, depth_images,
+            self,
+            truncation_distance,
+            projection_matrices,
+            cam_to_world_matrices,
+            tsdf,
+            weights,
+            depth_images,
             weight_images,
         )
 
@@ -955,8 +961,16 @@ class GridBatch:
         from . import functional
 
         return functional.integrate_tsdf_with_features_batch(
-            self, truncation_distance, projection_matrices, cam_to_world_matrices, tsdf, features,
-            weights, depth_images, feature_images, weight_images,
+            self,
+            truncation_distance,
+            projection_matrices,
+            cam_to_world_matrices,
+            tsdf,
+            features,
+            weights,
+            depth_images,
+            feature_images,
+            weight_images,
         )
 
     def is_contiguous(self) -> bool:
@@ -1454,8 +1468,16 @@ class GridBatch:
         from . import functional
 
         return functional.uniform_ray_samples_batch(
-            self, ray_origins, ray_directions, t_min, t_max, step_size, cone_angle, include_end_segments,
-            return_midpoints, eps,
+            self,
+            ray_origins,
+            ray_directions,
+            t_min,
+            t_max,
+            step_size,
+            cone_angle,
+            include_end_segments,
+            return_midpoints,
+            eps,
         )
 
     def voxel_size_at(self, bi: int) -> torch.Tensor:
@@ -1515,7 +1537,9 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.voxels_along_rays_batch(self, ray_origins, ray_directions, max_voxels, eps, return_ijk, cumulative)
+        return functional.voxels_along_rays_batch(
+            self, ray_origins, ray_directions, max_voxels, eps, return_ijk, cumulative
+        )
 
     def world_to_voxel(self, points: JaggedTensor) -> JaggedTensor:
         """Transform world-space coordinates to voxel-space coordinates for this grid batch.
@@ -1938,7 +1962,6 @@ class GridBatch:
             return torch.empty((0, 4, 4), dtype=torch.float32, device=self.device)
         else:
             return self.data.world_to_voxel_matrices.to(dtype=torch.float32, device=self.device)
-
 
 
 def gcat(grids: "Sequence[GridBatch]") -> GridBatch:

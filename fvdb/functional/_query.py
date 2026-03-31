@@ -29,6 +29,7 @@ if TYPE_CHECKING:
 # points_in_grid
 # ---------------------------------------------------------------------------
 
+
 def points_in_grid_batch(grid: GridBatch, points: JaggedTensor) -> JaggedTensor:
     """Check if world-space points are located within active voxels of a grid batch.
 
@@ -64,6 +65,7 @@ def points_in_grid_single(grid: Grid, points: torch.Tensor) -> torch.Tensor:
 # coords_in_grid
 # ---------------------------------------------------------------------------
 
+
 def coords_in_grid_batch(grid: GridBatch, ijk: JaggedTensor) -> JaggedTensor:
     """Check which voxel-space coordinates lie on active voxels of a grid batch.
 
@@ -98,6 +100,7 @@ def coords_in_grid_single(grid: Grid, ijk: torch.Tensor) -> torch.Tensor:
 # ---------------------------------------------------------------------------
 # cubes_in_grid
 # ---------------------------------------------------------------------------
+
 
 def cubes_in_grid_batch(
     grid: GridBatch,
@@ -152,6 +155,7 @@ def cubes_in_grid_single(
 # cubes_intersect_grid
 # ---------------------------------------------------------------------------
 
+
 def cubes_intersect_grid_batch(
     grid: GridBatch,
     cube_centers: JaggedTensor,
@@ -205,6 +209,7 @@ def cubes_intersect_grid_single(
 # ijk_to_index
 # ---------------------------------------------------------------------------
 
+
 def ijk_to_index_batch(
     grid: GridBatch,
     ijk: JaggedTensor,
@@ -250,6 +255,7 @@ def ijk_to_index_single(
 # ijk_to_inv_index
 # ---------------------------------------------------------------------------
 
+
 def ijk_to_inv_index_batch(
     grid: GridBatch,
     ijk: JaggedTensor,
@@ -294,6 +300,7 @@ def ijk_to_inv_index_single(
 # ---------------------------------------------------------------------------
 # neighbor_indexes
 # ---------------------------------------------------------------------------
+
 
 def neighbor_indexes_batch(
     grid: GridBatch,
@@ -343,6 +350,7 @@ def neighbor_indexes_single(
 # ---------------------------------------------------------------------------
 # active_grid_coords
 # ---------------------------------------------------------------------------
+
 
 def active_grid_coords_batch(grid: GridBatch) -> JaggedTensor:
     """Return the voxel coordinates of every active voxel in a grid batch, in index order.

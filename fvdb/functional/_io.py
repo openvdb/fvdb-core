@@ -11,6 +11,7 @@ import torch
 from .. import _fvdb_cpp
 from ..jagged_tensor import JaggedTensor
 from ..types import DeviceIdentifier, resolve_device
+
 if TYPE_CHECKING:
     from ..grid import Grid
     from ..grid_batch import GridBatch
