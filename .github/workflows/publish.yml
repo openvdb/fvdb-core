@@ -671,6 +671,8 @@ jobs:
       - name: Run unit tests
         run: |
           micromamba activate fvdb_test
+          NANOVDB_EDITOR_SPEC=$(python .github/scripts/get_viewer_dependency.py)
+          pip install "$NANOVDB_EDITOR_SPEC"
           cd tests
           pytest -v unit
 
