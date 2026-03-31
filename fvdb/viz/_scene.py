@@ -408,6 +408,36 @@ class Scene:
         server.set_camera_up_direction(self._name, *up_vec3f)
 
     @property
+    def camera_fov(self) -> float:
+        """
+        Return the camera's vertical field of view in radians.
+
+        This is the full angle from the top of the frame to the bottom of the frame.
+
+        Returns:
+            fov (float): Vertical field of view in radians.
+        """
+        server = _get_viewer_server_cpp()
+        return server.camera_fov(self._name)
+
+    @camera_fov.setter
+    def camera_fov(self, fov_radians: float):
+        """
+        Set the camera's vertical field of view in radians.
+
+        This is the full angle from the top of the frame to the bottom of the frame.
+
+        Args:
+            fov_radians (float): Vertical field of view in radians (must be positive and less than pi).
+        """
+        if not np.isfinite(fov_radians):
+            raise ValueError(f"FOV must be a finite value, got {fov_radians}")
+        if fov_radians <= 0.0 or fov_radians >= np.pi:
+            raise ValueError(f"FOV must be between 0 and pi radians, got {fov_radians}")
+        server = _get_viewer_server_cpp()
+        server.set_camera_fov(self._name, fov_radians)
+
+    @property
     def camera_near(self) -> float:
         """
         Get the near clipping plane distance for rendering. Objects closer to the camera than this distance

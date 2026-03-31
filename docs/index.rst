@@ -99,6 +99,13 @@ algorithms for 3D reconstruction from sensor data.
    api/nn
    api/utils
 
+.. toctree::
+   :maxdepth: 1
+   :caption: Development Process
+
+   release-process
+   markdown/clangd
+
 .. raw:: html
 
    <hr>

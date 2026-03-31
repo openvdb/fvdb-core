@@ -25,52 +25,6 @@ namespace {
 
 namespace cg = cooperative_groups;
 
-template <typename T, bool TRACK_MAX_RADII>
-__global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
-computeGradientState(const int32_t offset,
-                     const int32_t count,
-                     const uint32_t C,
-                     const uint32_t N,
-                     const int32_t imageWidth,
-                     const int32_t imageHeight,
-                     const int32_t *__restrict__ radii,
-                     const T *__restrict__ dLossDMeans2d,
-                     T *__restrict__ outDLossDMeans2dNormAccum,
-                     int32_t *__restrict__ outMaxRadiiAccum,
-                     int32_t *__restrict__ outGradientStepCounts) {
-    auto idx = cg::this_grid().thread_rank();
-    if (idx >= count) {
-        return;
-    }
-    idx += offset;
-
-    T normAccum       = T(0);
-    int32_t stepCount = 0;
-    for (auto i = 0; i < C * N; i += N) {
-        const int32_t ri = radii[idx + i];
-        if (ri <= 0) {
-            continue;
-        }
-        const T dldm2x = dLossDMeans2d[(idx + i) * 2] * (T(imageWidth) / T(2) * T(C));
-        const T dldm2y = dLossDMeans2d[(idx + i) * 2 + 1] * (T(imageHeight) / T(2) * T(C));
-        normAccum += nanovdb::math::Sqrt(dldm2x * dldm2x + dldm2y * dldm2y);
-        stepCount += 1;
-    }
-    if constexpr (TRACK_MAX_RADII) {
-        int32_t maxRad = 0;
-        for (auto i = 0; i < C * N; i += N) {
-            const int32_t ri = radii[idx + i];
-            if (ri <= 0) {
-                continue;
-            }
-            maxRad = nanovdb::math::Max(maxRad, ri);
-        }
-        outMaxRadiiAccum[idx] = nanovdb::math::Max(outMaxRadiiAccum[idx], maxRad);
-    }
-    outDLossDMeans2dNormAccum[idx] += normAccum;
-    outGradientStepCounts[idx] += stepCount;
-}
-
 template <typename T, typename Camera>
 __global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
 projectionBackwardKernel(const int32_t offset,
@@ -94,25 +48,30 @@ projectionBackwardKernel(const int32_t offset,
                          const T *__restrict__ dLossDConics,        // [C, N, 3]
                          const T *__restrict__ dLossDCompensations, // [C, N] optional
                          // grad inputs
-                         T *__restrict__ outDLossDMeans,             // [N, 3]
-                         T *__restrict__ outDLossDCovars,            // [N, 6] optional
-                         T *__restrict__ outDLossDQuats,             // [N, 4] optional
-                         T *__restrict__ outDLossDScales,            // [N, 3] optional
-                         T *__restrict__ outDLossDWorldToCamMatrices // [C, 4, 4] optional
+                         T *__restrict__ outDLossDMeans,              // [N, 3]
+                         T *__restrict__ outDLossDCovars,             // [N, 6] optional
+                         T *__restrict__ outDLossDQuats,              // [N, 4] optional
+                         T *__restrict__ outDLossDScales,             // [N, 3] optional
+                         T *__restrict__ outDLossDWorldToCamMatrices, // [C, 4, 4] optional
+                         // gradient state outputs (all nullable)
+                         const int32_t imageWidth,
+                         const int32_t imageHeight,
+                         T *__restrict__ outDLossDMeans2dNormAccum,  // [N]
+                         int32_t *__restrict__ outMaxRadiiAccum,     // [N]
+                         int32_t *__restrict__ outGradientStepCounts // [N]
 ) {
+    uint32_t cId = blockIdx.y;
     alignas(nanovdb::math::Mat3<T>) extern __shared__ char sharedMemory[];
-    camera.loadSharedMemory(sharedMemory);
+    camera.loadSharedMemory(cId, sharedMemory);
     __syncthreads();
 
-    // parallelize over C * N.
-    uint32_t idx = cg::this_grid().thread_rank();
-    if (idx >= C * count) {
+    // parallelize over N.
+    uint32_t gId = blockIdx.x * blockDim.x + threadIdx.x;
+    if (gId >= count) {
         return;
     }
-    const uint32_t cId = idx / count;          // camera id
-    const uint32_t gId = idx % count + offset; // gaussian id
-
-    idx = cId * N + gId;
+    gId += offset;
+    auto idx = cId * N + gId;
     if (radii[idx] <= 0) {
         return;
     }
@@ -228,6 +187,17 @@ projectionBackwardKernel(const int32_t offset,
             }
         }
     }
+    // Fused gradient state computation (replaces separate computeGradientState kernel)
+    if (outDLossDMeans2dNormAccum != nullptr && outGradientStepCounts != nullptr) {
+        const T dldm2x = dLossDMeans2d[0] * (T(imageWidth) / T(2) * T(C));
+        const T dldm2y = dLossDMeans2d[1] * (T(imageHeight) / T(2) * T(C));
+        const T norm   = nanovdb::math::Sqrt(dldm2x * dldm2x + dldm2y * dldm2y);
+        gpuAtomicAdd(outDLossDMeans2dNormAccum + gId, norm);
+        gpuAtomicAdd(outGradientStepCounts + gId, 1);
+        if (outMaxRadiiAccum != nullptr) {
+            atomicMax(outMaxRadiiAccum + gId, radii[idx]);
+        }
+    }
 }
 
 } // namespace
@@ -305,7 +275,7 @@ dispatchGaussianProjectionBackward<torch::kCUDA>(
         dLossDWorldToCamMatrices = torch::zeros_like(worldToCamMatrices);
     }
     if (C && N) {
-        const unsigned int NUM_BLOCKS = GET_BLOCKS(C * N, DEFAULT_BLOCK_DIM);
+        const dim3 NUM_BLOCKS(GET_BLOCKS(N, DEFAULT_BLOCK_DIM), C);
         if (ortho) {
             const auto camera = OrthographicCamera<float>{projectionMatrices,
                                                           worldToCamMatrices,
@@ -339,7 +309,18 @@ dispatchGaussianProjectionBackward<torch::kCUDA>(
                     covars.has_value() ? nullptr : dLossDQuats.data_ptr<float>(),
                     covars.has_value() ? nullptr : dLossDScales.data_ptr<float>(),
                     worldToCamMatricesRequiresGrad ? dLossDWorldToCamMatrices.data_ptr<float>()
-                                                   : nullptr);
+                                                   : nullptr,
+                    static_cast<int32_t>(imageWidth),
+                    static_cast<int32_t>(imageHeight),
+                    outNormalizeddLossdMeans2dNormAccum.has_value()
+                        ? outNormalizeddLossdMeans2dNormAccum.value().data_ptr<float>()
+                        : nullptr,
+                    outNormalizedMaxRadiiAccum.has_value()
+                        ? outNormalizedMaxRadiiAccum.value().data_ptr<int32_t>()
+                        : nullptr,
+                    outGradientStepCounts.has_value()
+                        ? outGradientStepCounts.value().data_ptr<int32_t>()
+                        : nullptr);
         } else {
             const auto camera = PerspectiveCamera<float>{projectionMatrices,
                                                          worldToCamMatrices,
@@ -373,49 +354,20 @@ dispatchGaussianProjectionBackward<torch::kCUDA>(
                     covars.has_value() ? nullptr : dLossDQuats.data_ptr<float>(),
                     covars.has_value() ? nullptr : dLossDScales.data_ptr<float>(),
                     worldToCamMatricesRequiresGrad ? dLossDWorldToCamMatrices.data_ptr<float>()
-                                                   : nullptr);
+                                                   : nullptr,
+                    static_cast<int32_t>(imageWidth),
+                    static_cast<int32_t>(imageHeight),
+                    outNormalizeddLossdMeans2dNormAccum.has_value()
+                        ? outNormalizeddLossdMeans2dNormAccum.value().data_ptr<float>()
+                        : nullptr,
+                    outNormalizedMaxRadiiAccum.has_value()
+                        ? outNormalizedMaxRadiiAccum.value().data_ptr<int32_t>()
+                        : nullptr,
+                    outGradientStepCounts.has_value()
+                        ? outGradientStepCounts.value().data_ptr<int32_t>()
+                        : nullptr);
         }
         C10_CUDA_KERNEL_LAUNCH_CHECK();
-
-        if (outNormalizeddLossdMeans2dNormAccum.has_value()) {
-            float *outNormalizeddLossdMeans2dNormAccumPtr =
-                outNormalizeddLossdMeans2dNormAccum.value().data_ptr<float>();
-            int32_t *outGradientStepCountsPtr = outGradientStepCounts.value().data_ptr<int32_t>();
-
-            if (outNormalizedMaxRadiiAccum.has_value()) {
-                int32_t *outNormalizedMaxRadiiAccumPtr =
-                    outNormalizedMaxRadiiAccum.value().data_ptr<int32_t>();
-
-                const size_t NUM_BLOCKS = GET_BLOCKS(N, DEFAULT_BLOCK_DIM);
-                computeGradientState<float, true><<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
-                    0,
-                    N,
-                    C,
-                    N,
-                    imageWidth,
-                    imageHeight,
-                    radii.data_ptr<int32_t>(),
-                    dLossDMeans2d.data_ptr<float>(),
-                    outNormalizeddLossdMeans2dNormAccumPtr,
-                    outNormalizedMaxRadiiAccumPtr,
-                    outGradientStepCountsPtr);
-            } else {
-                const size_t NUM_BLOCKS = GET_BLOCKS(N, DEFAULT_BLOCK_DIM);
-                computeGradientState<float, false><<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
-                    0,
-                    N,
-                    C,
-                    N,
-                    imageWidth,
-                    imageHeight,
-                    radii.data_ptr<int32_t>(),
-                    dLossDMeans2d.data_ptr<float>(),
-                    outNormalizeddLossdMeans2dNormAccumPtr,
-                    nullptr,
-                    outGradientStepCountsPtr);
-            }
-            C10_CUDA_KERNEL_LAUNCH_CHECK();
-        }
     }
     return std::make_tuple(
         dLossDMeans, dLossDCovars, dLossDQuats, dLossDScales, dLossDWorldToCamMatrices);
@@ -475,7 +427,7 @@ dispatchGaussianProjectionBackward<torch::kPrivateUse1>(
 
             int64_t deviceProblemOffset, deviceProblemSize;
             std::tie(deviceProblemOffset, deviceProblemSize) = deviceChunk(N, deviceId);
-            const unsigned int NUM_BLOCKS = GET_BLOCKS(C * deviceProblemSize, DEFAULT_BLOCK_DIM);
+            const dim3 NUM_BLOCKS(GET_BLOCKS(deviceProblemSize, DEFAULT_BLOCK_DIM), C);
 
             if (ortho) {
                 const auto camera = OrthographicCamera<float>{projectionMatrices,
@@ -512,7 +464,18 @@ dispatchGaussianProjectionBackward<torch::kPrivateUse1>(
                         covars.has_value() ? nullptr : dLossDQuats.data_ptr<float>(),
                         covars.has_value() ? nullptr : dLossDScales.data_ptr<float>(),
                         worldToCamMatricesRequiresGrad ? dLossDWorldToCamMatrices.data_ptr<float>()
-                                                       : nullptr);
+                                                       : nullptr,
+                        static_cast<int32_t>(imageWidth),
+                        static_cast<int32_t>(imageHeight),
+                        outNormalizeddLossdMeans2dNormAccum.has_value()
+                            ? outNormalizeddLossdMeans2dNormAccum.value().data_ptr<float>()
+                            : nullptr,
+                        outNormalizedMaxRadiiAccum.has_value()
+                            ? outNormalizedMaxRadiiAccum.value().data_ptr<int32_t>()
+                            : nullptr,
+                        outGradientStepCounts.has_value()
+                            ? outGradientStepCounts.value().data_ptr<int32_t>()
+                            : nullptr);
             } else {
                 const auto camera = PerspectiveCamera<float>{projectionMatrices,
                                                              worldToCamMatrices,
@@ -548,74 +511,23 @@ dispatchGaussianProjectionBackward<torch::kPrivateUse1>(
                         covars.has_value() ? nullptr : dLossDQuats.data_ptr<float>(),
                         covars.has_value() ? nullptr : dLossDScales.data_ptr<float>(),
                         worldToCamMatricesRequiresGrad ? dLossDWorldToCamMatrices.data_ptr<float>()
-                                                       : nullptr);
+                                                       : nullptr,
+                        static_cast<int32_t>(imageWidth),
+                        static_cast<int32_t>(imageHeight),
+                        outNormalizeddLossdMeans2dNormAccum.has_value()
+                            ? outNormalizeddLossdMeans2dNormAccum.value().data_ptr<float>()
+                            : nullptr,
+                        outNormalizedMaxRadiiAccum.has_value()
+                            ? outNormalizedMaxRadiiAccum.value().data_ptr<int32_t>()
+                            : nullptr,
+                        outGradientStepCounts.has_value()
+                            ? outGradientStepCounts.value().data_ptr<int32_t>()
+                            : nullptr);
             }
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         }
 
         mergeStreams();
-
-        if (outNormalizeddLossdMeans2dNormAccum.has_value()) {
-            float *outNormalizeddLossdMeans2dNormAccumPtr =
-                outNormalizeddLossdMeans2dNormAccum.value().data_ptr<float>();
-            int32_t *outGradientStepCountsPtr = outGradientStepCounts.value().data_ptr<int32_t>();
-            if (outNormalizedMaxRadiiAccum.has_value()) {
-                int32_t *outNormalizedMaxRadiiAccumPtr =
-                    outNormalizedMaxRadiiAccum.value().data_ptr<int32_t>();
-
-                for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-                    C10_CUDA_CHECK(cudaSetDevice(deviceId));
-                    auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
-
-                    int64_t deviceProblemOffset, deviceProblemSize;
-                    std::tie(deviceProblemOffset, deviceProblemSize) = deviceChunk(N, deviceId);
-                    const size_t NUM_BLOCKS = GET_BLOCKS(deviceProblemSize, DEFAULT_BLOCK_DIM);
-
-                    computeGradientState<float, true><<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
-                        deviceProblemOffset,
-                        deviceProblemSize,
-                        C,
-                        N,
-                        imageWidth,
-                        imageHeight,
-                        radii.data_ptr<int32_t>(),
-                        dLossDMeans2d.data_ptr<float>(),
-                        outNormalizeddLossdMeans2dNormAccumPtr,
-                        outNormalizedMaxRadiiAccumPtr,
-                        outGradientStepCountsPtr);
-                    C10_CUDA_KERNEL_LAUNCH_CHECK();
-                }
-
-                mergeStreams();
-
-            } else {
-                for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-                    C10_CUDA_CHECK(cudaSetDevice(deviceId));
-                    auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
-
-                    int64_t deviceProblemOffset, deviceProblemSize;
-                    std::tie(deviceProblemOffset, deviceProblemSize) = deviceChunk(N, deviceId);
-                    const size_t NUM_BLOCKS = GET_BLOCKS(deviceProblemSize, DEFAULT_BLOCK_DIM);
-
-                    computeGradientState<float, false>
-                        <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
-                            deviceProblemOffset,
-                            deviceProblemSize,
-                            C,
-                            N,
-                            imageWidth,
-                            imageHeight,
-                            radii.data_ptr<int32_t>(),
-                            dLossDMeans2d.data_ptr<float>(),
-                            outNormalizeddLossdMeans2dNormAccumPtr,
-                            nullptr,
-                            outGradientStepCountsPtr);
-                    C10_CUDA_KERNEL_LAUNCH_CHECK();
-                }
-
-                mergeStreams();
-            }
-        }
     }
     return std::make_tuple(
         dLossDMeans, dLossDCovars, dLossDQuats, dLossDScales, dLossDWorldToCamMatrices);

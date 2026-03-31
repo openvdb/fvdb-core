@@ -57,7 +57,7 @@ def _is_editable_install() -> bool:
             return False
     # check if we're in the source directory
     module_dir = module_path.parent.parent.parent.parent
-    return (module_dir / "setup.py").is_file()
+    return (module_dir / "pyproject.toml").is_file()
 
 
 def _get_local_repo_path(repo_name: str) -> Path:

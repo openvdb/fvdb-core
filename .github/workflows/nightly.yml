@@ -15,8 +15,12 @@ permissions:
   id-token: write
 
 jobs:
+  versions:
+    uses: ./.github/workflows/load-versions.yml
+
   fvdb-build:
     if: ${{ github.repository == 'openvdb/fvdb-core' && !startsWith(github.event.pull_request.title, 'Draft:') }}
+    needs: versions
     name: fVDB Build
     runs-on:
       - self-hosted
@@ -31,7 +35,7 @@ jobs:
         shell: bash -el {0}
     steps:
       ### Get the PR branch and apply changes to the target branch
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0 # Fetch all history for all branches
       - name: Determine the target branch of the PR
@@ -103,10 +107,10 @@ jobs:
 
       - name: Build fvdb
         run: |
-          TORCH_CUDA_ARCH_LIST="7.0;7.5;8.0;8.6+PTX" conda run --no-capture-output -n fvdb_build ./build.sh wheel verbose gtests benchmarks
+          TORCH_CUDA_ARCH_LIST="${{ needs.versions.outputs.cuda-arch-publish }}" conda run --no-capture-output -n fvdb_build ./build.sh wheel verbose gtests benchmarks
 
       - name: Upload wheel
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
             name: fvdb-test-package
             path: dist/*.whl
@@ -118,7 +122,7 @@ jobs:
         run: tar -cvf fvdb-gtest.tar build/
 
       - name: Upload gtests
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
             name: fvdb-gtest
             path: fvdb-gtest.tar
@@ -133,7 +137,7 @@ jobs:
 
   fvdb-benchmarks:
     if: ${{ github.repository == 'openvdb/fvdb-core' }}
-    needs: [fvdb-build]
+    needs: [fvdb-build, versions]
     name: fVDB Continuous Benchmarking
     runs-on:
       - self-hosted
@@ -147,7 +151,7 @@ jobs:
         shell: bash -el {0}
     steps:
       ### Get the PR branch and apply changes to the target branch
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0 # Fetch all history for all branches
       - name: Determine the target branch of the PR
@@ -218,7 +222,7 @@ jobs:
           environment-file: env/test_environment.yml
 
       - name: Download package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
             name: fvdb-test-package
             path: ./dist
