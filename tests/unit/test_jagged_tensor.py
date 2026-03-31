@@ -34,10 +34,12 @@ def _scatter_reduce_ref(src, index, dim_size, reduce):
         out = torch.zeros(dim_size, *src.shape[1:], dtype=src.dtype, device=src.device)
         out.scatter_reduce_(0, idx, src, reduce="sum", include_self=True)
     elif reduce == "amin":
-        out = torch.full((dim_size, *src.shape[1:]), float("inf"), dtype=src.dtype, device=src.device)
+        fill = float("inf") if src.is_floating_point() else torch.iinfo(src.dtype).max
+        out = torch.full((dim_size, *src.shape[1:]), fill, dtype=src.dtype, device=src.device)
         out.scatter_reduce_(0, idx, src, reduce="amin", include_self=False)
     elif reduce == "amax":
-        out = torch.full((dim_size, *src.shape[1:]), float("-inf"), dtype=src.dtype, device=src.device)
+        fill = float("-inf") if src.is_floating_point() else torch.iinfo(src.dtype).min
+        out = torch.full((dim_size, *src.shape[1:]), fill, dtype=src.dtype, device=src.device)
         out.scatter_reduce_(0, idx, src, reduce="amax", include_self=False)
     return out
 
@@ -1843,21 +1845,80 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertTrue(torch.allclose(s.jdata, ref))
         self.assertTrue(torch.all(s[1].jdata == 0))
 
-        # jmin -- empty group: value should be 0 (inf masked), index should be -1
+        # jmin -- empty group: value should be 0, index should be -1
         min_vals, min_idxs = jt.jmin(dim=0)
         ref_min = _scatter_reduce_ref(jt.jdata, jt.jidx.long(), len(jt), "amin")
-        ref_min = torch.where(torch.isinf(ref_min), torch.zeros_like(ref_min), ref_min)
+        ref_min[1] = 0  # empty group zeroed
         self.assertTrue(torch.allclose(min_vals.jdata, ref_min))
         self.assertTrue(torch.all(min_vals[1].jdata == 0))
         self.assertTrue(torch.all(min_idxs[1].jdata == -1))
 
-        # jmax -- empty group: value should be 0 (-inf masked), index should be -1
+        # jmax -- empty group: value should be 0, index should be -1
         max_vals, max_idxs = jt.jmax(dim=0)
         ref_max = _scatter_reduce_ref(jt.jdata, jt.jidx.long(), len(jt), "amax")
-        ref_max = torch.where(torch.isinf(ref_max), torch.zeros_like(ref_max), ref_max)
+        ref_max[1] = 0  # empty group zeroed
         self.assertTrue(torch.allclose(max_vals.jdata, ref_max))
         self.assertTrue(torch.all(max_vals[1].jdata == 0))
         self.assertTrue(torch.all(max_idxs[1].jdata == -1))
+
+    @parameterized.expand([("cpu", torch.int32), ("cpu", torch.int64), ("cuda", torch.int32), ("cuda", torch.int64)])
+    def test_jmin_jmax_integral_dtypes(self, device, dtype):
+        """jmin/jmax with integral dtypes and the scatter_reduce dim=0 path."""
+        data_list = [torch.randint(-100, 100, (n, 3), device=device, dtype=dtype) for n in [10, 15, 5]]
+        jt = fvdb.JaggedTensor(data_list)
+
+        min_vals, min_idxs = jt.jmin(dim=0)
+        max_vals, max_idxs = jt.jmax(dim=0)
+
+        for k, dl in enumerate(data_list):
+            expected_min, expected_min_idx = dl.min(dim=0)
+            expected_max, expected_max_idx = dl.max(dim=0)
+            self.assertTrue(torch.equal(min_vals[k].jdata.squeeze(0), expected_min))
+            self.assertTrue(torch.equal(max_vals[k].jdata.squeeze(0), expected_max))
+
+    @parameterized.expand([("cpu", torch.int32), ("cpu", torch.int64), ("cuda", torch.int32), ("cuda", torch.int64)])
+    def test_reduce_empty_groups_integral(self, device, dtype):
+        """jmin/jmax with empty groups and integral dtypes."""
+        d0 = torch.randint(-50, 50, (5, 3), device=device, dtype=dtype)
+        d1 = torch.empty(0, 3, device=device, dtype=dtype)
+        d2 = torch.randint(-50, 50, (8, 3), device=device, dtype=dtype)
+        jt = fvdb.JaggedTensor([d0, d1, d2])
+
+        min_vals, min_idxs = jt.jmin(dim=0)
+        self.assertTrue(torch.all(min_vals[1].jdata == 0))
+        self.assertTrue(torch.all(min_idxs[1].jdata == -1))
+        self.assertTrue(torch.equal(min_vals[0].jdata.squeeze(0), d0.min(dim=0)[0]))
+        self.assertTrue(torch.equal(min_vals[2].jdata.squeeze(0), d2.min(dim=0)[0]))
+
+        max_vals, max_idxs = jt.jmax(dim=0)
+        self.assertTrue(torch.all(max_vals[1].jdata == 0))
+        self.assertTrue(torch.all(max_idxs[1].jdata == -1))
+        self.assertTrue(torch.equal(max_vals[0].jdata.squeeze(0), d0.max(dim=0)[0]))
+        self.assertTrue(torch.equal(max_vals[2].jdata.squeeze(0), d2.max(dim=0)[0]))
+
+    @parameterized.expand([("cpu",), ("cuda",)])
+    def test_jmin_jmax_preserves_inf(self, device):
+        """Legitimate inf values in inputs should be preserved, not masked to zero."""
+        d0 = torch.tensor([[1.0, float("inf"), -1.0], [2.0, 3.0, float("-inf")]], device=device)
+        d1 = torch.tensor([[float("inf"), 0.0, 5.0]], device=device)
+        jt = fvdb.JaggedTensor([d0, d1])
+
+        min_vals, _ = jt.jmin(dim=0)
+        max_vals, _ = jt.jmax(dim=0)
+
+        self.assertTrue(torch.equal(min_vals[0].jdata.squeeze(0), d0.min(dim=0)[0]))
+        self.assertTrue(torch.equal(max_vals[0].jdata.squeeze(0), d0.max(dim=0)[0]))
+        self.assertTrue(torch.equal(min_vals[1].jdata.squeeze(0), d1.min(dim=0)[0]))
+        self.assertTrue(torch.equal(max_vals[1].jdata.squeeze(0), d1.max(dim=0)[0]))
+
+    @parameterized.expand([("cpu",), ("cuda",)])
+    def test_jmin_jmax_bool_rejected(self, device):
+        """jmin/jmax should reject bool dtype."""
+        jt = fvdb.JaggedTensor([torch.ones(5, 3, device=device, dtype=torch.bool)])
+        with self.assertRaises(RuntimeError):
+            jt.jmin(dim=0)
+        with self.assertRaises(RuntimeError):
+            jt.jmax(dim=0)
 
     @parameterized.expand([(torch.float16,), (torch.bfloat16,), (torch.float32,), (torch.float64,)])
     def test_sdpa(self, dtype):

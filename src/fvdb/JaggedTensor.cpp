@@ -11,6 +11,8 @@
 #include <fvdb/detail/ops/JaggedTensorIndex.h>
 #include <fvdb/detail/ops/jagged/JaggedSort.h>
 
+#include <ATen/Dispatch.h>
+
 #include <cmath>
 #include <limits>
 #include <optional>
@@ -672,8 +674,16 @@ JaggedTensor::jflatten(const int64_t dim) const {
 
 namespace {
 
-// Expand a 1-D index tensor to broadcast across all trailing dims of data:
-//   [N] -> [N, 1, 1, ...].expand_as(data)
+/// @brief Expand a 1-D index tensor so it can be used with scatter_reduce_ on
+///        a multi-dimensional data tensor.
+///
+/// Reshapes @p idx1d from [N] to [N, 1, 1, ...] and broadcasts it to match
+/// the full shape of @p data. The result is cast to kLong.
+///
+/// @param idx1d 1-D index tensor of length N (e.g. batch indices)
+/// @param data  The data tensor whose shape the index should match
+/// @return A kLong tensor with the same shape as @p data, suitable for
+///         scatter_reduce_ along dimension 0
 torch::Tensor
 expandIdxLike(const torch::Tensor &idx1d, const torch::Tensor &data) {
     torch::Tensor idx = idx1d.to(torch::kLong);
@@ -683,6 +693,71 @@ expandIdxLike(const torch::Tensor &idx1d, const torch::Tensor &data) {
         idx          = idx.view(viewShape).expand_as(data);
     }
     return idx;
+}
+
+/// @brief Return the identity element for a minimum reduction over the given dtype.
+///
+/// For floating-point types this is +infinity. For integral types it is the
+/// largest representable value (e.g. INT32_MAX for kInt). Bool is not supported
+/// and must be rejected by the caller.
+///
+/// @param dtype Scalar type of the tensor being reduced
+/// @return A Scalar that, when used as the initial value for scatter_reduce_
+///         with "amin", acts as a neutral element
+torch::Scalar
+minIdentity(at::ScalarType dtype) {
+    if (at::isFloatingType(dtype)) {
+        return std::numeric_limits<double>::infinity();
+    }
+    torch::Scalar val;
+    AT_DISPATCH_INTEGRAL_TYPES(dtype, "jmin_identity", [&] {
+        val = static_cast<int64_t>(std::numeric_limits<scalar_t>::max());
+    });
+    return val;
+}
+
+/// @brief Return the identity element for a maximum reduction over the given dtype.
+///
+/// For floating-point types this is -infinity. For integral types it is the
+/// smallest representable value (e.g. INT32_MIN for kInt). Bool is not supported
+/// and must be rejected by the caller.
+///
+/// @param dtype Scalar type of the tensor being reduced
+/// @return A Scalar that, when used as the initial value for scatter_reduce_
+///         with "amax", acts as a neutral element
+torch::Scalar
+maxIdentity(at::ScalarType dtype) {
+    if (at::isFloatingType(dtype)) {
+        return -std::numeric_limits<double>::infinity();
+    }
+    torch::Scalar val;
+    AT_DISPATCH_INTEGRAL_TYPES(dtype, "jmax_identity", [&] {
+        val = static_cast<int64_t>(std::numeric_limits<scalar_t>::lowest());
+    });
+    return val;
+}
+
+/// @brief Compute a boolean mask indicating which groups contain zero elements.
+///
+/// Derives per-group sizes from consecutive differences in @p offsets and
+/// returns a mask that is @c true for empty groups. The mask is shaped
+/// [numGroups, 1, 1, ...] (with @p outDim total dimensions) so it can be
+/// broadcast directly with the reduction output tensor via torch::where.
+///
+/// @param offsets  The JaggedTensor offsets tensor of length numGroups + 1
+/// @param numGroups Number of groups (i.e. num_tensors())
+/// @param outDim   Dimensionality of the reduction output tensor
+/// @return A boolean tensor broadcastable with shape [numGroups, ...]
+torch::Tensor
+emptyGroupMask(const torch::Tensor &offsets, int64_t numGroups, int64_t outDim) {
+    torch::Tensor sizes = offsets.slice(0, 1, numGroups + 1) - offsets.slice(0, 0, numGroups);
+    torch::Tensor mask  = (sizes == 0);
+    if (outDim > 1) {
+        std::vector<int64_t> viewShape(outDim, 1);
+        viewShape[0] = numGroups;
+        mask         = mask.view(viewShape);
+    }
+    return mask;
 }
 
 } // anonymous namespace
@@ -740,6 +815,8 @@ JaggedTensor::jmin(int64_t dim, bool keepdim) const {
         dim += jdim;
     }
 
+    TORCH_CHECK(mData.scalar_type() != at::kBool, "jmin does not support bool dtype");
+
     if (dim == 0) {
         torch::Tensor minVals, minIndices;
         if (mBatchIdx.size(0) == 0) {
@@ -751,10 +828,10 @@ JaggedTensor::jmin(int64_t dim, bool keepdim) const {
             auto outShape     = mData.sizes().vec();
             outShape[0]       = num_tensors();
 
-            minVals =
-                torch::full(outShape, std::numeric_limits<double>::infinity(), mData.options());
+            minVals = torch::full(outShape, minIdentity(mData.scalar_type()), mData.options());
             minVals.scatter_reduce_(0, idx, mData, "amin", /*include_self=*/false);
-            minVals = torch::where(torch::isinf(minVals), torch::zeros_like(minVals), minVals);
+            torch::Tensor emptyMask = emptyGroupMask(mOffsets, num_tensors(), minVals.dim());
+            minVals                 = torch::where(emptyMask, torch::zeros_like(minVals), minVals);
 
             torch::Tensor gatheredMin = minVals.detach().index({mBatchIdx.to(torch::kLong)});
             torch::Tensor matches     = (mData.detach() == gatheredMin);
@@ -812,6 +889,8 @@ JaggedTensor::jmax(int64_t dim, bool keepdim) const {
         dim += jdim;
     }
 
+    TORCH_CHECK(mData.scalar_type() != at::kBool, "jmax does not support bool dtype");
+
     if (dim == 0) {
         torch::Tensor maxVals, maxIndices;
         if (mBatchIdx.size(0) == 0) {
@@ -823,10 +902,10 @@ JaggedTensor::jmax(int64_t dim, bool keepdim) const {
             auto outShape     = mData.sizes().vec();
             outShape[0]       = num_tensors();
 
-            maxVals =
-                torch::full(outShape, -std::numeric_limits<double>::infinity(), mData.options());
+            maxVals = torch::full(outShape, maxIdentity(mData.scalar_type()), mData.options());
             maxVals.scatter_reduce_(0, idx, mData, "amax", /*include_self=*/false);
-            maxVals = torch::where(torch::isinf(maxVals), torch::zeros_like(maxVals), maxVals);
+            torch::Tensor emptyMask = emptyGroupMask(mOffsets, num_tensors(), maxVals.dim());
+            maxVals                 = torch::where(emptyMask, torch::zeros_like(maxVals), maxVals);
 
             torch::Tensor gatheredMax = maxVals.detach().index({mBatchIdx.to(torch::kLong)});
             torch::Tensor matches     = (mData.detach() == gatheredMax);
