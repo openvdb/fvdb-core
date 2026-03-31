@@ -5,9 +5,9 @@
     conda activate fvdb
     ```
 
-2. Build and install fvdb from this README's directory (if not already installed):
+2. Build and install fvdb from the repository root (if not already installed):
     ```bash
-    pushd ../.. && python setup.py develop  && popd
+    pushd ../.. && ./build.sh && popd
     ```
 
 3. Build the tests:

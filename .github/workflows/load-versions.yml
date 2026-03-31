@@ -1,0 +1,129 @@
+# Copyright Contributors to the OpenVDB Project
+# SPDX-License-Identifier: Apache-2.0
+
+name: Load Versions
+on:
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        required: false
+        default: ''
+    outputs:
+      cmake-version:
+        value: ${{ jobs.load.outputs.cmake-version }}
+      uv-version:
+        value: ${{ jobs.load.outputs.uv-version }}
+      uv-action-sha:
+        value: ${{ jobs.load.outputs.uv-action-sha }}
+      gcc-toolset:
+        value: ${{ jobs.load.outputs.gcc-toolset }}
+      python-default:
+        value: ${{ jobs.load.outputs.python-default }}
+      torch-version:
+        value: ${{ jobs.load.outputs.torch-version }}
+      torch-full-version:
+        value: ${{ jobs.load.outputs.torch-full-version }}
+      cuda-default:
+        value: ${{ jobs.load.outputs.cuda-default }}
+      cuda-128-patch:
+        value: ${{ jobs.load.outputs.cuda-128-patch }}
+      cuda-130-patch:
+        value: ${{ jobs.load.outputs.cuda-130-patch }}
+      cuda-conda-override:
+        value: ${{ jobs.load.outputs.cuda-conda-override }}
+      cuda-arch-pr:
+        value: ${{ jobs.load.outputs.cuda-arch-pr }}
+      cuda-arch-publish:
+        value: ${{ jobs.load.outputs.cuda-arch-publish }}
+      cuda-patch-map:
+        value: ${{ jobs.load.outputs.cuda-patch-map }}
+      docker-os-rocky:
+        value: ${{ jobs.load.outputs.docker-os-rocky }}
+      docker-os-ubuntu:
+        value: ${{ jobs.load.outputs.docker-os-ubuntu }}
+      aws-role:
+        value: ${{ jobs.load.outputs.aws-role }}
+      aws-region:
+        value: ${{ jobs.load.outputs.aws-region }}
+      aws-cpu-ami:
+        value: ${{ jobs.load.outputs.aws-cpu-ami }}
+      aws-gpu-ami:
+        value: ${{ jobs.load.outputs.aws-gpu-ami }}
+      aws-subnet:
+        value: ${{ jobs.load.outputs.aws-subnet }}
+      aws-security-group:
+        value: ${{ jobs.load.outputs.aws-security-group }}
+      publish-matrix:
+        value: ${{ jobs.load.outputs.publish-matrix }}
+      auditwheel-excludes:
+        value: ${{ jobs.load.outputs.auditwheel-excludes }}
+      auditwheel-excludes-cuda-major:
+        value: ${{ jobs.load.outputs.auditwheel-excludes-cuda-major }}
+
+jobs:
+  load:
+    runs-on: ubuntu-latest
+    outputs:
+      cmake-version: ${{ steps.parse.outputs.cmake-version }}
+      uv-version: ${{ steps.parse.outputs.uv-version }}
+      uv-action-sha: ${{ steps.parse.outputs.uv-action-sha }}
+      gcc-toolset: ${{ steps.parse.outputs.gcc-toolset }}
+      python-default: ${{ steps.parse.outputs.python-default }}
+      torch-version: ${{ steps.parse.outputs.torch-version }}
+      torch-full-version: ${{ steps.parse.outputs.torch-full-version }}
+      cuda-default: ${{ steps.parse.outputs.cuda-default }}
+      cuda-128-patch: ${{ steps.parse.outputs.cuda-128-patch }}
+      cuda-130-patch: ${{ steps.parse.outputs.cuda-130-patch }}
+      cuda-conda-override: ${{ steps.parse.outputs.cuda-conda-override }}
+      cuda-arch-pr: ${{ steps.parse.outputs.cuda-arch-pr }}
+      cuda-arch-publish: ${{ steps.parse.outputs.cuda-arch-publish }}
+      cuda-patch-map: ${{ steps.parse.outputs.cuda-patch-map }}
+      docker-os-rocky: ${{ steps.parse.outputs.docker-os-rocky }}
+      docker-os-ubuntu: ${{ steps.parse.outputs.docker-os-ubuntu }}
+      aws-role: ${{ steps.parse.outputs.aws-role }}
+      aws-region: ${{ steps.parse.outputs.aws-region }}
+      aws-cpu-ami: ${{ steps.parse.outputs.aws-cpu-ami }}
+      aws-gpu-ami: ${{ steps.parse.outputs.aws-gpu-ami }}
+      aws-subnet: ${{ steps.parse.outputs.aws-subnet }}
+      aws-security-group: ${{ steps.parse.outputs.aws-security-group }}
+      publish-matrix: ${{ steps.parse.outputs.publish-matrix }}
+      auditwheel-excludes: ${{ steps.parse.outputs.auditwheel-excludes }}
+      auditwheel-excludes-cuda-major: ${{ steps.parse.outputs.auditwheel-excludes-cuda-major }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: .github/versions.json
+          sparse-checkout-cone-mode: false
+          ref: ${{ inputs.ref || '' }}
+      - name: Parse versions.json
+        id: parse
+        run: |
+          CFG=".github/versions.json"
+          {
+            echo "cmake-version=$(jq -r '.cmake_version' $CFG)"
+            echo "uv-version=$(jq -r '.uv.version' $CFG)"
+            echo "uv-action-sha=$(jq -r '.uv.action_sha' $CFG)"
+            echo "gcc-toolset=$(jq -r '.gcc.toolset' $CFG)"
+            echo "python-default=$(jq -r '.python.default' $CFG)"
+            echo "torch-version=$(jq -r '.torch.version' $CFG)"
+            echo "torch-full-version=$(jq -r '.torch.full_version' $CFG)"
+            echo "cuda-default=$(jq -r '.cuda.default' $CFG)"
+            echo "cuda-128-patch=$(jq -r '.cuda.versions["12.8"].patch' $CFG)"
+            echo "cuda-130-patch=$(jq -r '.cuda.versions["13.0"].patch' $CFG)"
+            echo "cuda-conda-override=$(jq -r '.cuda.conda_override' $CFG)"
+            echo "cuda-arch-pr=$(jq -r '.cuda.arch_list_pr' $CFG)"
+            echo "cuda-arch-publish=$(jq -r '.cuda.arch_list_publish' $CFG)"
+            echo "cuda-patch-map=$(jq -c '[.cuda.versions | to_entries[] | {key: .key, value: .value.patch}] | from_entries' $CFG)"
+            echo "docker-os-rocky=$(jq -r '.docker_os.rocky' $CFG)"
+            echo "docker-os-ubuntu=$(jq -r '.docker_os.ubuntu' $CFG)"
+            echo "aws-role=$(jq -r '.aws.role' $CFG)"
+            echo "aws-region=$(jq -r '.aws.region' $CFG)"
+            echo "aws-cpu-ami=$(jq -r '.aws.cpu_ami' $CFG)"
+            echo "aws-gpu-ami=$(jq -r '.aws.gpu_ami' $CFG)"
+            echo "aws-subnet=$(jq -r '.aws.subnet' $CFG)"
+            echo "aws-security-group=$(jq -r '.aws.security_group' $CFG)"
+            echo "publish-matrix=$(jq -c '.publish_matrix' $CFG)"
+            echo "auditwheel-excludes=$(jq -c '.auditwheel_excludes' $CFG)"
+            echo "auditwheel-excludes-cuda-major=$(jq -c '.auditwheel_excludes_cuda_major' $CFG)"
+          } >> "$GITHUB_OUTPUT"

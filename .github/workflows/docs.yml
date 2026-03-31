@@ -26,53 +26,58 @@ permissions:
   pages: write
 
 jobs:
+  versions:
+    uses: ./.github/workflows/load-versions.yml
+
   ##############################################################################
   # BUILD FVDB
   ##############################################################################
   start-build-runner:
     name: Start CPU-only EC2 runner for build
+    needs: versions
     runs-on: ubuntu-latest
     outputs:
       label: ${{ steps.start-build-runner.outputs.label }}
       ec2-instance-id: ${{ steps.start-build-runner.outputs.ec2-instance-id }}
     steps:
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
-          role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
-          aws-region: us-east-2
+          role-to-assume: ${{ needs.versions.outputs.aws-role }}
+          aws-region: ${{ needs.versions.outputs.aws-region }}
       - name: Start EC2 runner
         id: start-build-runner
-        uses: machulav/ec2-github-runner@v2.4.1
+        uses: machulav/ec2-github-runner@v2
         with:
           mode: start
           github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
-          ec2-image-id: ami-0e14a711dad782a70
+          ec2-image-id: ${{ needs.versions.outputs.aws-cpu-ami }}
           ec2-instance-type: m6a.8xlarge
-          subnet-id: subnet-03f2320d6e6e0005b
-          security-group-id: sg-0cd08bd89d6212223
+          subnet-id: ${{ needs.versions.outputs.aws-subnet }}
+          security-group-id: ${{ needs.versions.outputs.aws-security-group }}
 
   fvdb-core-build-docs:
     name: fvdb-core Build and Docs
-    needs: start-build-runner # required to start the main job when the runner is ready
+    needs: [start-build-runner, versions] # required to start the main job when the runner is ready
     runs-on: ${{ needs.start-build-runner.outputs.label }} # run the job on the newly created runner
     container:
       image: rockylinux/rockylinux:8
       env:
         PYTHONPATH: ""
         CPM_SOURCE_CACHE: "/__w/cpm_cache"
-        CONDA_OVERRIDE_CUDA: "13.0"  # this is to build an environment on machines that lack a CUDA device and needs to match the CUDA version in the build_environment.yml file
+        CONDA_OVERRIDE_CUDA: ${{ needs.versions.outputs.cuda-conda-override }}
       options: --rm
     defaults:
       run:
         shell: bash -el {0}
     steps:
-      - uses: actions/checkout@v4
+      - name: Install system dependencies
+        run: dnf install -y git procps-ng findutils
+
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0 # Fetch all history for all branches
-          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.ref || github.ref }}
-          # For pull requests, this automatically checks out the merge commit
-          # For pushes, this checks out the pushed commit
+          ref: ${{ github.event.inputs.branch }}
 
       - name: Fetch PR branch
         if: github.event_name == 'pull_request_target'
@@ -93,7 +98,7 @@ jobs:
       - name: Set up fvdb Conda env
         uses: mamba-org/setup-micromamba@v2
         env:
-          CONDA_OVERRIDE_CUDA: "13.0"
+          CONDA_OVERRIDE_CUDA: ${{ needs.versions.outputs.cuda-conda-override }}
         with:
           post-cleanup: 'all'
           environment-name: fvdb
@@ -103,7 +108,7 @@ jobs:
         run: |
           echo "Building fvdb"
           micromamba activate fvdb
-          ./build.sh install verbose --cuda-arch-list '8.9+PTX' -e
+          ./build.sh install verbose --cuda-arch-list '${{ needs.versions.outputs.cuda-arch-pr }}' -e
 
       - name: Clone and build fvdb-reality-capture
         run: |
@@ -117,7 +122,7 @@ jobs:
       - name: Build docs
         run: |
           micromamba activate fvdb
-          which sphinx-build
+          command -v sphinx-build
           sphinx-build docs/ -E -a _docs_build
           sphinx-build fvdb-reality-capture/docs -E -a _docs_build/reality-capture
 
@@ -145,21 +150,19 @@ jobs:
     needs:
       - start-build-runner # required to get output from the start-build-runner job
       - fvdb-core-build-docs # required to wait when the main job is done
+      - versions
     runs-on: ubuntu-latest
     if: ${{ always() }} # required to stop the runner even if the error happened in the previous jobs
     steps:
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
-          role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
-          aws-region: us-east-2
+          role-to-assume: ${{ needs.versions.outputs.aws-role }}
+          aws-region: ${{ needs.versions.outputs.aws-region }}
       - name: Stop EC2 runner
-        uses: machulav/ec2-github-runner@v2.4.1
+        uses: machulav/ec2-github-runner@v2
         with:
           mode: stop
           github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
           label: ${{ needs.start-build-runner.outputs.label }}
           ec2-instance-id: ${{ needs.start-build-runner.outputs.ec2-instance-id }}
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: _build/
-          force_orphan: true
