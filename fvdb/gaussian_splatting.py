@@ -13,6 +13,7 @@ from . import _fvdb_cpp as _C
 from ._fvdb_cpp import GaussianSplat3d as GaussianSplat3dCpp
 from ._fvdb_cpp import JaggedTensor as JaggedTensorCpp
 from ._fvdb_cpp import ProjectedGaussianSplats as ProjectedGaussianSplatsCpp
+from .grid import Grid
 from .grid_batch import GridBatch
 from .jagged_tensor import JaggedTensor
 from .types import DeviceIdentifier, cast_check, resolve_device
@@ -2953,7 +2954,7 @@ class GaussianSplat3d:
                     if isinstance(other, (torch.Tensor, JaggedTensor, GaussianSplat3d)):
                         device = other.device
                         dtype = other.dtype
-                    elif isinstance(other, GridBatch):
+                    elif isinstance(other, (GridBatch, Grid)):
                         device = other.device
                         dtype = self.dtype
                 else:
@@ -2978,7 +2979,7 @@ class GaussianSplat3d:
             # .to(other)
             device = args[0].device
             dtype = args[0].dtype
-        elif len(args) == 1 and isinstance(args[0], GridBatch):
+        elif len(args) == 1 and isinstance(args[0], (GridBatch, Grid)):
             # .to(other)
             device = args[0].device
             dtype = self.dtype

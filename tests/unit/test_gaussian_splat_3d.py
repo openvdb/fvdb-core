@@ -449,7 +449,7 @@ class TestGaussianSplatTo(BaseGaussianTestCase):
         gs3d = self.gs3d.to(cpu_f16_tensor)
         self.check_device_and_dtype(gs3d, torch.device("cpu"), torch.float16)
 
-        grid = Grid.from_dense(1, 0, device="cuda")
+        grid = Grid.from_dense(dense_dims=1, ijk_min=0, device="cuda")
         gs3d = gs3d.to(grid)
         self.check_device_and_dtype(gs3d, torch.device(grid.device), torch.float16)
 
@@ -478,7 +478,7 @@ class TestGaussianSplatTo(BaseGaussianTestCase):
         gs3d = self.gs3d.to(other=cpu_f16_tensor)
         self.check_device_and_dtype(gs3d, torch.device("cpu"), torch.float16)
 
-        grid = Grid.from_dense(1, 0, device="cuda")
+        grid = Grid.from_dense(dense_dims=1, ijk_min=0, device="cuda")
         gs3d = gs3d.to(other=grid)
         self.check_device_and_dtype(gs3d, torch.device(grid.device), torch.float16)
 

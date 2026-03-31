@@ -89,7 +89,7 @@ def gridbatch_from_dense(
     """
     resolved_device = resolve_device(device, inherit_from=mask)
 
-    dense_dims_t = to_Vec3iBroadcastable(dense_dims, value_constraint=ValueConstraint.POSITIVE)
+    dense_dims_t = to_Vec3i(dense_dims, value_constraint=ValueConstraint.POSITIVE)
     ijk_min_t = to_Vec3i(ijk_min)
     voxel_sizes_t = to_Vec3fBatchBroadcastable(voxel_sizes, value_constraint=ValueConstraint.POSITIVE)
     origins_t = to_Vec3fBatch(origins)
