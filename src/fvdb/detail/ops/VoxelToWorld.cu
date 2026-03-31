@@ -32,7 +32,7 @@ voxelToWorldCallback(int32_t bidx,
         primal ? batchAccessor.primalTransform(bidx) : batchAccessor.dualTransform(bidx);
 
     const auto pt                             = pts.data()[eidx];
-    const nanovdb::math::Vec3<ScalarType> wci = tx.apply(pt[0], pt[1], pt[2]);
+    const nanovdb::math::Vec3<ScalarType> wci = tx.applyInv(pt[0], pt[1], pt[2]);
     outPts[eidx][0]                           = wci[0];
     outPts[eidx][1]                           = wci[1];
     outPts[eidx][2]                           = wci[2];
@@ -53,7 +53,7 @@ voxelToWorldBackwardCallback(int32_t bidx,
     const auto tx =
         primal ? batchAccessor.primalTransform(bidx) : batchAccessor.dualTransform(bidx);
     const auto gradOutI                       = gradOut.data()[eidx];
-    const nanovdb::math::Vec3<ScalarType> wci = tx.applyGrad(gradOutI[0], gradOutI[1], gradOutI[2]);
+    const nanovdb::math::Vec3<ScalarType> wci = tx.applyInvGrad(gradOutI[0], gradOutI[1], gradOutI[2]);
     outGradIn[eidx][0]                        = wci[0] * gradOutI[0];
     outGradIn[eidx][1]                        = wci[1] * gradOutI[1];
     outGradIn[eidx][2]                        = wci[2] * gradOutI[2];
@@ -74,7 +74,7 @@ worldToVoxelCallback(int32_t bidx,
     const auto tx =
         primal ? batchAccessor.primalTransform(bidx) : batchAccessor.dualTransform(bidx);
     const auto pt                             = pts.data()[eidx];
-    const nanovdb::math::Vec3<ScalarType> wci = tx.applyInv(pt[0], pt[1], pt[2]);
+    const nanovdb::math::Vec3<ScalarType> wci = tx.apply(pt[0], pt[1], pt[2]);
     outPts[eidx][0]                           = wci[0];
     outPts[eidx][1]                           = wci[1];
     outPts[eidx][2]                           = wci[2];
@@ -96,7 +96,7 @@ worldToVoxelBackwardCallback(int32_t bidx,
         primal ? batchAccessor.primalTransform(bidx) : batchAccessor.dualTransform(bidx);
     const auto gradOutI = gradOut.data()[eidx];
     const nanovdb::math::Vec3<ScalarType> wci =
-        tx.applyInvGrad(gradOutI[0], gradOutI[1], gradOutI[2]);
+        tx.applyGrad(gradOutI[0], gradOutI[1], gradOutI[2]);
     outGradIn[eidx][0] = wci[0] * gradOutI[0];
     outGradIn[eidx][1] = wci[1] * gradOutI[1];
     outGradIn[eidx][2] = wci[2] * gradOutI[2];

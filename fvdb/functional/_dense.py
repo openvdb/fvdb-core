@@ -372,7 +372,7 @@ def inject_to_dense_cmajor_batch(
 def inject_to_dense_cminor_single(
     grid: Grid,
     sparse_data: torch.Tensor,
-    min_coord: NumericMaxRank1 | NumericMaxRank2 | None = None,
+    min_coord: NumericMaxRank1 | None = None,
     grid_size: NumericMaxRank1 | None = None,
 ) -> torch.Tensor:
     """Write sparse voxel data into a dense tensor (XYZC order) for a single grid.
@@ -382,7 +382,7 @@ def inject_to_dense_cminor_single(
     Args:
         grid (Grid): The single grid defining the sparse topology.
         sparse_data (torch.Tensor): Per-voxel feature data.
-        min_coord (NumericMaxRank1 | NumericMaxRank2 | None): Minimum voxel coordinate for the dense grid.
+        min_coord (NumericMaxRank1 | None): Minimum voxel coordinate for the dense grid.
         grid_size (NumericMaxRank1 | None): Size of the dense grid, broadcastable to ``(3,)``.
 
     Returns:
@@ -401,7 +401,7 @@ def inject_to_dense_cminor_single(
 def inject_to_dense_cmajor_single(
     grid: Grid,
     sparse_data: torch.Tensor,
-    min_coord: NumericMaxRank1 | NumericMaxRank2 | None = None,
+    min_coord: NumericMaxRank1 | None = None,
     grid_size: NumericMaxRank1 | None = None,
 ) -> torch.Tensor:
     """Write sparse voxel data into a dense tensor (CXYZ order) for a single grid.
@@ -411,7 +411,7 @@ def inject_to_dense_cmajor_single(
     Args:
         grid (Grid): The single grid defining the sparse topology.
         sparse_data (torch.Tensor): Per-voxel feature data.
-        min_coord (NumericMaxRank1 | NumericMaxRank2 | None): Minimum voxel coordinate for the dense grid.
+        min_coord (NumericMaxRank1 | None): Minimum voxel coordinate for the dense grid.
         grid_size (NumericMaxRank1 | None): Size of the dense grid, broadcastable to ``(3,)``.
 
     Returns:

@@ -286,15 +286,15 @@ def clipped_grid_batch(
 
 def clipped_grid_single(
     grid: Grid,
-    ijk_min: NumericMaxRank2,
-    ijk_max: NumericMaxRank2,
+    ijk_min: NumericMaxRank1,
+    ijk_max: NumericMaxRank1,
 ) -> Grid:
     """Return a single grid clipped to the voxel-space range ``[ijk_min, ijk_max]``.
 
     Args:
         grid (Grid): The single grid to clip.
-        ijk_min (NumericMaxRank2): Minimum voxel coordinate bound.
-        ijk_max (NumericMaxRank2): Maximum voxel coordinate bound.
+        ijk_min (NumericMaxRank1): Minimum voxel coordinate bound.
+        ijk_max (NumericMaxRank1): Maximum voxel coordinate bound.
 
     Returns:
         result (Grid): The clipped grid.
@@ -335,8 +335,8 @@ def clip_batch(
 def clip_single(
     grid: Grid,
     features: torch.Tensor,
-    ijk_min: NumericMaxRank2,
-    ijk_max: NumericMaxRank2,
+    ijk_min: NumericMaxRank1,
+    ijk_max: NumericMaxRank1,
 ) -> tuple[torch.Tensor, Grid]:
     """Clip a single grid and its features to the voxel-space range ``[ijk_min, ijk_max]``.
 
@@ -345,8 +345,8 @@ def clip_single(
     Args:
         grid (Grid): The single grid to clip.
         features (torch.Tensor): Per-voxel feature data.
-        ijk_min (NumericMaxRank2): Minimum voxel coordinate bound.
-        ijk_max (NumericMaxRank2): Maximum voxel coordinate bound.
+        ijk_min (NumericMaxRank1): Minimum voxel coordinate bound.
+        ijk_max (NumericMaxRank1): Maximum voxel coordinate bound.
 
     Returns:
         clipped_features (torch.Tensor): Features for the clipped voxels.

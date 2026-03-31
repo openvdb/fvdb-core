@@ -36,7 +36,6 @@ from .jagged_tensor import JaggedTensor
 from .types import (
     DeviceIdentifier,
     NumericMaxRank1,
-    NumericMaxRank2,
 )
 
 if TYPE_CHECKING:
@@ -100,6 +99,12 @@ class Grid:
 
     def __setattr__(self, name: str, value: Any) -> None:
         raise AttributeError("Grid is immutable")
+
+    def __getstate__(self) -> dict:
+        return {"data": self.data}
+
+    def __setstate__(self, state: dict) -> None:
+        object.__setattr__(self, "data", state["data"])
 
     # ============================================================
     #                  Grid from_* constructors
@@ -392,7 +397,7 @@ class Grid:
         Returns:
             voxel_size (torch.Tensor): Shape ``(3,)``.
         """
-        return self.data.voxel_size_at(0)
+        return self.data.voxel_size_at(0).to(self.device)
 
     @property
     def origin(self) -> torch.Tensor:
@@ -401,7 +406,7 @@ class Grid:
         Returns:
             origin (torch.Tensor): Shape ``(3,)``.
         """
-        return self.data.origin_at(0)
+        return self.data.origin_at(0).to(self.device)
 
     @property
     def bbox(self) -> torch.Tensor:
@@ -414,7 +419,7 @@ class Grid:
         """
         if self.has_zero_voxels:
             return torch.zeros((2, 3), dtype=torch.int32, device=self.device)
-        return self.data.bbox_at(0)
+        return self.data.bbox_at(0).to(self.device)
 
     @property
     def dual_bbox(self) -> torch.Tensor:
@@ -430,7 +435,7 @@ class Grid:
         """
         if self.has_zero_voxels:
             return torch.zeros((2, 3), dtype=torch.int32, device=self.device)
-        return self.data.dual_bbox_at(0)
+        return self.data.dual_bbox_at(0).to(self.device)
 
     @property
     def ijk(self) -> torch.Tensor:
@@ -800,15 +805,15 @@ class Grid:
 
     def clipped_grid(
         self,
-        ijk_min: NumericMaxRank2,
-        ijk_max: NumericMaxRank2,
+        ijk_min: NumericMaxRank1,
+        ijk_max: NumericMaxRank1,
     ) -> Grid:
         """Return a :class:`Grid` clipped to the region ``[ijk_min, ijk_max]``.
 
         Args:
-            ijk_min (NumericMaxRank2): Minimum voxel bounds, broadcastable to
+            ijk_min (NumericMaxRank1): Minimum voxel bounds, broadcastable to
                 shape ``(3,)``, integer dtype.
-            ijk_max (NumericMaxRank2): Maximum voxel bounds, broadcastable to
+            ijk_max (NumericMaxRank1): Maximum voxel bounds, broadcastable to
                 shape ``(3,)``, integer dtype.
 
         Returns:
@@ -822,16 +827,16 @@ class Grid:
     def clip(
         self,
         features: torch.Tensor,
-        ijk_min: NumericMaxRank2,
-        ijk_max: NumericMaxRank2,
+        ijk_min: NumericMaxRank1,
+        ijk_max: NumericMaxRank1,
     ) -> tuple[torch.Tensor, Grid]:
         """Clip this :class:`Grid` and its features to the region ``[ijk_min, ijk_max]``.
 
         Args:
             features (torch.Tensor): Voxel features of shape
                 ``(num_voxels, channels*)``.
-            ijk_min (NumericMaxRank2): Minimum voxel bounds.
-            ijk_max (NumericMaxRank2): Maximum voxel bounds.
+            ijk_min (NumericMaxRank1): Minimum voxel bounds.
+            ijk_max (NumericMaxRank1): Maximum voxel bounds.
 
         Returns:
             clipped_features (torch.Tensor): Clipped features.
