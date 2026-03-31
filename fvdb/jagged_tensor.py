@@ -172,6 +172,8 @@ class JaggedTensor:
 
     Example usage:
 
+    .. code-block:: python
+
         # Create a JaggedTensor from a list of tensors
         jt = JaggedTensor.from_list_of_tensors([torch.randn(3, 4), torch.randn(2, 4), torch.randn(5, 4)])
 
@@ -289,7 +291,7 @@ class JaggedTensor:
 
         Example:
 
-        ... code-block:: python
+        .. code-block:: python
 
             jt = jempty([2, 3, 4], rsizes=[5])
             print(jt)  # Output: A JaggedTensor containing tensors [of shapes (2, 5), (3, 5), (4, 5)] with uninitialized values.
@@ -337,15 +339,15 @@ class JaggedTensor:
 
         Example:
 
-        ... code-block:: python
+        .. code-block:: python
 
             jt = jones([2, 3, 4], rsizes=[5])
             print(jt)  # Output: A JaggedTensor containing tensors
-                [of shapes (2, 5), (3, 5), (4, 5)] filled with ones.
+                # [of shapes (2, 5), (3, 5), (4, 5)] filled with ones.
 
             jt = jones([[2, 3], [4]], rsizes=[5, 6])
             print(jt)  # Output: A JaggedTensor containing tensors
-                [of shapes (2, 5, 6), (3, 5, 6), (4, 5, 6)] filled with ones.
+                # [of shapes (2, 5, 6), (3, 5, 6), (4, 5, 6)] filled with ones.
 
 
         Args:
@@ -387,15 +389,15 @@ class JaggedTensor:
 
         Example:
 
-        ... code-block:: python
+        .. code-block:: python
 
             jt = jrand([2, 3, 4], rsizes=[5])
             print(jt)  # Output: A JaggedTensor containing tensors
-                [of shapes (2, 5), (3, 5), (4, 5)] with random values.
+                # [of shapes (2, 5), (3, 5), (4, 5)] with random values.
 
             jt = jrand([[2, 3], [4]], rsizes=[5, 6])
             print(jt)  # Output: A JaggedTensor containing tensors
-                [of shapes (2, 5, 6), (3, 5, 6), (4, 5, 6)] with random values.
+                # [of shapes (2, 5, 6), (3, 5, 6), (4, 5, 6)] with random values.
 
         Args:
             lsizes (Sequence[int] | Sequence[Sequence[int]]): Sizes for the jagged dimensions.
@@ -436,15 +438,15 @@ class JaggedTensor:
 
         Example:
 
-        ... code-block:: python
+        .. code-block:: python
 
             jt = jrandn([2, 3, 4], rsizes=[5])
             print(jt)  # Output: A JaggedTensor containing tensors
-                [of shapes (2, 5), (3, 5), (4, 5)] with normal random values.
+                # [of shapes (2, 5), (3, 5), (4, 5)] with normal random values.
 
             jt = jrandn([[2, 3], [4]], rsizes=[5, 6])
             print(jt)  # Output: A JaggedTensor containing tensors
-                [of shapes (2, 5, 6), (3, 5, 6), (4, 5, 6)] with normal random values.
+                # [of shapes (2, 5, 6), (3, 5, 6), (4, 5, 6)] with normal random values.
 
         Args:
             lsizes (Sequence[int] | Sequence[Sequence[int]]): Sizes for the jagged dimensions.
@@ -485,13 +487,15 @@ class JaggedTensor:
 
         Example:
 
+        .. code-block:: python
+
             jt = jzeros([2, 3, 4], rsizes=[5])
             print(jt)  # Output: A JaggedTensor containing tensors
-                [of shapes (2, 5), (3, 5), (4, 5)] filled with zeros
+                # [of shapes (2, 5), (3, 5), (4, 5)] filled with zeros
 
             jt = jzeros([[2, 3], [4]], rsizes=[5, 6])
             print(jt)  # Output: A JaggedTensor containing tensors
-                [of shapes (2, 5, 6), (3, 5, 6), (4, 5, 6)] filled with zeros
+                # [of shapes (2, 5, 6), (3, 5, 6), (4, 5, 6)] filled with zeros
 
 
         Args:
@@ -589,6 +593,8 @@ class JaggedTensor:
 
         Example:
 
+        .. code-block:: python
+
             data = torch.tensor([1, 2, 3, 4, 5, 6])
             indices = torch.tensor([0, 0, 1, 1, 1, 2])
 
@@ -598,6 +604,7 @@ class JaggedTensor:
             #  - tensor 0: [1, 2]
             #  - tensor 1: [3, 4, 5]
             #  - tensor 2: [6]
+
         Args:
             data (torch.Tensor): Flattened data tensor containing all elements.
                 Shape: ``(total_elements, ...)``.
@@ -872,6 +879,8 @@ class JaggedTensor:
 
         Example:
 
+        .. code-block:: python
+
             # Original jagged tensor with 2 jagged dimensions
             # representing a tensor of shape [ [ t_00, t_01, ... ], [ t_b0, t_b1, ... ] ]
             jt = JaggedTensor.from_list_of_lists_of_tensors(...)
@@ -881,7 +890,6 @@ class JaggedTensor:
 
             # jt_flat is now a jagged tensor with 1 jagged dimension and represents
             # [ t_00, t_01, ..., t_b0, t_b1, ... ]
-
 
         Args:
             dim (int): The dimension from which to start flattening. Defaults to 0.
@@ -898,6 +906,8 @@ class JaggedTensor:
         Returns both the maximum values and the indices where they occur.
 
         Example:
+
+        .. code-block:: python
 
             # Create a jagged tensor from a list of tensors of each of shape (L_i, D)
             jt = JaggedTensor.from_list_of_lists_of_tensors([t1, t2, t3])
@@ -1572,14 +1582,17 @@ class JaggedTensor:
         layout (offsets/indices) is *not* changed.
 
         Examples:
-            torch.relu(jt)              -> applies relu to jt.jdata (returns JaggedTensor)
-            torch.add(jt, 1.0)         -> elementwise add on jt.jdata (returns JaggedTensor)
-            torch.sum(jt, dim=-1)      -> reduces trailing dim(s) but preserves leading dim
-            torch.relu_(jt)            -> in-place on jt.jdata, returns the mutated JaggedTensor
+
+        .. code-block:: text
+
+            torch.relu(jt)          -> applies relu to jt.jdata (returns JaggedTensor)
+            torch.add(jt, 1.0)      -> elementwise add on jt.jdata (returns JaggedTensor)
+            torch.sum(jt, dim=-1)   -> reduces trailing dim(s) but preserves leading dim
+            torch.relu_(jt)         -> in-place on jt.jdata, returns the mutated JaggedTensor
 
         Unsupported:
-            - Any op that would change or reduce the leading dimension (e.g., torch.sum(jt) with dim=None)
-            - Shape-rearranging ops like reshape/permute/transpose/cat/stack, etc. (use the provided j* APIs)
+            - Any op that would change or reduce the leading dimension (e.g., ``torch.sum(jt)`` with ``dim=None``)
+            - Shape-rearranging ops like reshape/permute/transpose/cat/stack, etc. (use the provided ``j*`` APIs)
         """
         if kwargs is None:
             kwargs = {}
@@ -1696,6 +1709,8 @@ class JaggedTensor:
         This operation does not modify the jagged layout (offsets/indices).
 
         Example:
+
+        .. code-block:: python
 
             jt = JaggedTensor.from_list_of_tensors([torch.randn(2, 4), torch.randn(3, 4)])
             print(jt.jdata.shape)  # Output: torch.Size([5, 4])
