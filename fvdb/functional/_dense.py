@@ -4,16 +4,16 @@
 """Functional API for dense <-> sparse grid data transfer and grid-to-grid injection."""
 from __future__ import annotations
 
-from typing import Any, TYPE_CHECKING, cast, overload
+from typing import Any, TYPE_CHECKING, cast
 
 import torch
 
 from .. import _fvdb_cpp
 from ..jagged_tensor import JaggedTensor
 from ..types import NumericMaxRank1, NumericMaxRank2, ValueConstraint, to_Vec3i, to_Vec3iBatchBroadcastable, to_Vec3iBroadcastable
-from ._dispatch import _get_grid_data, _prepare_args
 
 if TYPE_CHECKING:
+    from ..grid import Grid
     from ..grid_batch import GridBatch
 
 
@@ -88,219 +88,6 @@ class _InjectToDenseCmajorFn(torch.autograd.Function):
         return grad.view(ctx.sparse_shape), None, None, None
 
 
-# ---------------------------------------------------------------------------
-#  Helpers
-# ---------------------------------------------------------------------------
-
-
-def _resolve_dense_params(grid_data, sparse_data, min_coord, grid_size):
-    """Compute origins tensor and grid_size list for inject_to_dense ops.
-
-    When ``min_coord`` or ``grid_size`` is ``None``, defaults are derived from
-    the grid's total bounding box (mirroring the C++ autograd logic).
-    """
-    bbox = grid_data.total_bbox
-    if min_coord is not None:
-        mc = to_Vec3iBatchBroadcastable(min_coord).to(device=sparse_data.jdata.device)
-        if mc.dim() == 0:
-            mc = mc.unsqueeze(0).expand(3)
-        if mc.dim() == 1 and mc.size(0) == 3:
-            mc = mc.unsqueeze(0).expand(grid_data.grid_count, 3)
-        origins = mc.to(torch.int32)
-    else:
-        origins = bbox[0].to(torch.int32).unsqueeze(0).expand(grid_data.grid_count, 3).to(sparse_data.jdata.device)
-
-    if grid_size is not None:
-        gs_t = to_Vec3iBroadcastable(grid_size, value_constraint=ValueConstraint.POSITIVE)
-        if gs_t.dim() == 0:
-            gs_t = gs_t.expand(3)
-        gs_list = gs_t.tolist()
-    else:
-        bbox_min = bbox[0]
-        bbox_max = bbox[1]
-        gs_list = (bbox_max - bbox_min + 1).tolist()
-
-    return origins, gs_list
-
-
-# ---------------------------------------------------------------------------
-#  Dense -> Sparse  (inject_from_dense)
-# ---------------------------------------------------------------------------
-
-
-def inject_from_dense_cminor(
-    grid: GridBatch,
-    dense_data: torch.Tensor,
-    dense_origin: NumericMaxRank1 = 0,
-) -> JaggedTensor:
-    """
-    Inject values from a dense tensor (XYZC order) into sparse voxel data.
-
-    ``dense_data`` has shape ``(B, X, Y, Z, C*)``.
-
-    This function supports backpropagation.
-
-    Args:
-        grid: The grid structure.
-        dense_data: Dense tensor to read from.
-        dense_origin: Origin of the dense tensor in voxel space, broadcastable to ``(3,)``.
-
-    Returns:
-        Sparse data at active voxel locations as a :class:`~fvdb.JaggedTensor`.
-
-    .. seealso:: :func:`inject_from_dense_cmajor`, :func:`inject_to_dense_cminor`
-    """
-    grid_data = _get_grid_data(grid)
-    origin = to_Vec3i(dense_origin).unsqueeze(0).expand(grid_data.grid_count, 3).to(dtype=torch.int32, device=dense_data.device).contiguous()
-    result = cast(torch.Tensor, _InjectFromDenseCminorFn.apply(dense_data, grid_data, origin))
-    feature_shape = list(dense_data.shape[4:])
-    if feature_shape:
-        result = result.view(result.shape[0], *feature_shape)
-    return grid.jagged_like(result)
-
-
-def inject_from_dense_cmajor(
-    grid: GridBatch,
-    dense_data: torch.Tensor,
-    dense_origin: NumericMaxRank1 = 0,
-) -> JaggedTensor:
-    """
-    Inject values from a dense tensor (CXYZ order) into sparse voxel data.
-
-    ``dense_data`` has shape ``(B, C*, X, Y, Z)``.
-
-    This function supports backpropagation.
-
-    Args:
-        grid: The grid structure.
-        dense_data: Dense tensor to read from.
-        dense_origin: Origin of the dense tensor in voxel space, broadcastable to ``(3,)``.
-
-    Returns:
-        Sparse data at active voxel locations as a :class:`~fvdb.JaggedTensor`.
-
-    .. seealso:: :func:`inject_from_dense_cminor`, :func:`inject_to_dense_cmajor`
-    """
-    grid_data = _get_grid_data(grid)
-    origin = to_Vec3i(dense_origin).unsqueeze(0).expand(grid_data.grid_count, 3).to(dtype=torch.int32, device=dense_data.device).contiguous()
-    result = cast(torch.Tensor, _InjectFromDenseCmajorFn.apply(dense_data, grid_data, origin))
-    feature_shape = list(dense_data.shape[1:-3])
-    if feature_shape:
-        result = result.view(result.shape[0], *feature_shape)
-    return grid.jagged_like(result)
-
-
-# ---------------------------------------------------------------------------
-#  Sparse -> Dense  (inject_to_dense)
-# ---------------------------------------------------------------------------
-
-
-@overload
-def inject_to_dense_cminor(
-    grid: GridBatch,
-    sparse_data: torch.Tensor,
-    min_coord: NumericMaxRank1 | NumericMaxRank2 | None = None,
-    grid_size: NumericMaxRank1 | None = None,
-) -> torch.Tensor: ...
-
-
-@overload
-def inject_to_dense_cminor(
-    grid: GridBatch,
-    sparse_data: JaggedTensor,
-    min_coord: NumericMaxRank1 | NumericMaxRank2 | None = None,
-    grid_size: NumericMaxRank1 | None = None,
-) -> torch.Tensor: ...
-
-
-def inject_to_dense_cminor(
-    grid: GridBatch,
-    sparse_data: torch.Tensor | JaggedTensor,
-    min_coord: NumericMaxRank1 | NumericMaxRank2 | None = None,
-    grid_size: NumericMaxRank1 | None = None,
-) -> torch.Tensor:
-    """
-    Write sparse voxel data into a dense tensor (XYZC order).
-
-    Voxels not present in the grid are filled with zeros.
-
-    This function supports backpropagation.
-
-    Args:
-        grid: The grid structure.
-        sparse_data: Sparse voxel data to write.
-        min_coord: Minimum voxel coordinate for the dense tensor origin.
-            ``None`` defaults to the grid's bounding box minimum.
-        grid_size: Size of the output dense tensor. ``None`` computes it to fit all active voxels.
-
-    Returns:
-        Dense tensor with shape ``(B, X, Y, Z, C*)``.
-
-    .. seealso:: :func:`inject_to_dense_cmajor`, :func:`inject_from_dense_cminor`
-    """
-    grid_data, (sparse_data_jt,), _ = _prepare_args(grid, sparse_data)
-    assert sparse_data_jt is not None
-    origins, gs_list = _resolve_dense_params(grid_data, sparse_data_jt, min_coord, grid_size)
-    result = cast(torch.Tensor, _InjectToDenseCminorFn.apply(sparse_data_jt.jdata, grid_data, origins, gs_list))
-    feature_shape = list(sparse_data_jt.jdata.shape[1:])
-    return result.view([grid.grid_count] + gs_list + feature_shape)
-
-
-@overload
-def inject_to_dense_cmajor(
-    grid: GridBatch,
-    sparse_data: torch.Tensor,
-    min_coord: NumericMaxRank1 | NumericMaxRank2 | None = None,
-    grid_size: NumericMaxRank1 | None = None,
-) -> torch.Tensor: ...
-
-
-@overload
-def inject_to_dense_cmajor(
-    grid: GridBatch,
-    sparse_data: JaggedTensor,
-    min_coord: NumericMaxRank1 | NumericMaxRank2 | None = None,
-    grid_size: NumericMaxRank1 | None = None,
-) -> torch.Tensor: ...
-
-
-def inject_to_dense_cmajor(
-    grid: GridBatch,
-    sparse_data: torch.Tensor | JaggedTensor,
-    min_coord: NumericMaxRank1 | NumericMaxRank2 | None = None,
-    grid_size: NumericMaxRank1 | None = None,
-) -> torch.Tensor:
-    """
-    Write sparse voxel data into a dense tensor (CXYZ order).
-
-    Voxels not present in the grid are filled with zeros.
-
-    This function supports backpropagation.
-
-    Args:
-        grid: The grid structure.
-        sparse_data: Sparse voxel data to write.
-        min_coord: Minimum voxel coordinate for the dense tensor origin.
-        grid_size: Size of the output dense tensor.
-
-    Returns:
-        Dense tensor with shape ``(B, C*, X, Y, Z)``.
-
-    .. seealso:: :func:`inject_to_dense_cminor`, :func:`inject_from_dense_cmajor`
-    """
-    grid_data, (sparse_data_jt,), _ = _prepare_args(grid, sparse_data)
-    assert sparse_data_jt is not None
-    origins, gs_list = _resolve_dense_params(grid_data, sparse_data_jt, min_coord, grid_size)
-    result = cast(torch.Tensor, _InjectToDenseCmajorFn.apply(sparse_data_jt.jdata, grid_data, origins, gs_list))
-    feature_shape = list(sparse_data_jt.jdata.shape[1:])
-    return result.view([grid.grid_count] + feature_shape + gs_list)
-
-
-# ---------------------------------------------------------------------------
-#  Grid-to-grid injection
-# ---------------------------------------------------------------------------
-
-
 class _InjectFn(torch.autograd.Function):
     @staticmethod
     def forward(ctx, src_jdata, dst_jdata, dst_grid_data, src_grid_data, dst_jt_impl, src_jt_impl):
@@ -332,121 +119,297 @@ class _InjectFn(torch.autograd.Function):
         return grad_src_jt.jdata, grad_dst_jt.jdata, None, None, None, None
 
 
-@overload
-def inject(
-    dst_grid: GridBatch,
-    src_grid: GridBatch,
-    src: torch.Tensor,
-    dst: torch.Tensor | None = None,
-    default_value: float | int | bool = 0,
-) -> torch.Tensor: ...
+# ---------------------------------------------------------------------------
+#  Helpers
+# ---------------------------------------------------------------------------
 
 
-@overload
-def inject(
+def _resolve_dense_params(grid_data, sparse_data, min_coord, grid_size):
+    """Compute origins tensor and grid_size list for inject_to_dense ops."""
+    bbox = grid_data.total_bbox
+    if min_coord is not None:
+        mc = to_Vec3iBatchBroadcastable(min_coord).to(device=sparse_data.jdata.device)
+        if mc.dim() == 0:
+            mc = mc.unsqueeze(0).expand(3)
+        if mc.dim() == 1 and mc.size(0) == 3:
+            mc = mc.unsqueeze(0).expand(grid_data.grid_count, 3)
+        origins = mc.to(torch.int32)
+    else:
+        origins = bbox[0].to(torch.int32).unsqueeze(0).expand(grid_data.grid_count, 3).to(sparse_data.jdata.device)
+
+    if grid_size is not None:
+        gs_t = to_Vec3iBroadcastable(grid_size, value_constraint=ValueConstraint.POSITIVE)
+        if gs_t.dim() == 0:
+            gs_t = gs_t.expand(3)
+        gs_list = gs_t.tolist()
+    else:
+        bbox_min = bbox[0]
+        bbox_max = bbox[1]
+        gs_list = (bbox_max - bbox_min + 1).tolist()
+
+    return origins, gs_list
+
+
+# ---------------------------------------------------------------------------
+#  Dense -> Sparse  (inject_from_dense) -- batch variants
+# ---------------------------------------------------------------------------
+
+
+def inject_from_dense_cminor_batch(
+    grid: GridBatch,
+    dense_data: torch.Tensor,
+    dense_origin: NumericMaxRank1 = 0,
+) -> JaggedTensor:
+    """Inject values from a dense tensor (XYZC order) into sparse voxel data.
+
+    ``dense_data`` has shape ``(B, X, Y, Z, C*)``.
+    Supports backpropagation.
+    """
+    grid_data = grid.data
+    origin = to_Vec3i(dense_origin).unsqueeze(0).expand(grid_data.grid_count, 3).to(dtype=torch.int32, device=dense_data.device).contiguous()
+    result = cast(torch.Tensor, _InjectFromDenseCminorFn.apply(dense_data, grid_data, origin))
+    feature_shape = list(dense_data.shape[4:])
+    if feature_shape:
+        result = result.view(result.shape[0], *feature_shape)
+    return JaggedTensor(impl=grid_data.jagged_like(result))
+
+
+def inject_from_dense_cmajor_batch(
+    grid: GridBatch,
+    dense_data: torch.Tensor,
+    dense_origin: NumericMaxRank1 = 0,
+) -> JaggedTensor:
+    """Inject values from a dense tensor (CXYZ order) into sparse voxel data.
+
+    ``dense_data`` has shape ``(B, C*, X, Y, Z)``.
+    Supports backpropagation.
+    """
+    grid_data = grid.data
+    origin = to_Vec3i(dense_origin).unsqueeze(0).expand(grid_data.grid_count, 3).to(dtype=torch.int32, device=dense_data.device).contiguous()
+    result = cast(torch.Tensor, _InjectFromDenseCmajorFn.apply(dense_data, grid_data, origin))
+    feature_shape = list(dense_data.shape[1:-3])
+    if feature_shape:
+        result = result.view(result.shape[0], *feature_shape)
+    return JaggedTensor(impl=grid_data.jagged_like(result))
+
+
+# ---------------------------------------------------------------------------
+#  Dense -> Sparse  (inject_from_dense) -- single variants
+# ---------------------------------------------------------------------------
+
+
+def inject_from_dense_cminor_single(
+    grid: Grid,
+    dense_data: torch.Tensor,
+    dense_origin: NumericMaxRank1 = 0,
+) -> torch.Tensor:
+    """Inject values from a dense tensor (XYZC order) into sparse voxel data for a single grid.
+
+    ``dense_data`` has shape ``(1, X, Y, Z, C*)``.
+    Supports backpropagation.
+    """
+    grid_data = grid.data
+    origin = to_Vec3i(dense_origin).unsqueeze(0).expand(grid_data.grid_count, 3).to(dtype=torch.int32, device=dense_data.device).contiguous()
+    result = cast(torch.Tensor, _InjectFromDenseCminorFn.apply(dense_data, grid_data, origin))
+    feature_shape = list(dense_data.shape[4:])
+    if feature_shape:
+        result = result.view(result.shape[0], *feature_shape)
+    return result
+
+
+def inject_from_dense_cmajor_single(
+    grid: Grid,
+    dense_data: torch.Tensor,
+    dense_origin: NumericMaxRank1 = 0,
+) -> torch.Tensor:
+    """Inject values from a dense tensor (CXYZ order) into sparse voxel data for a single grid.
+
+    ``dense_data`` has shape ``(1, C*, X, Y, Z)``.
+    Supports backpropagation.
+    """
+    grid_data = grid.data
+    origin = to_Vec3i(dense_origin).unsqueeze(0).expand(grid_data.grid_count, 3).to(dtype=torch.int32, device=dense_data.device).contiguous()
+    result = cast(torch.Tensor, _InjectFromDenseCmajorFn.apply(dense_data, grid_data, origin))
+    feature_shape = list(dense_data.shape[1:-3])
+    if feature_shape:
+        result = result.view(result.shape[0], *feature_shape)
+    return result
+
+
+# ---------------------------------------------------------------------------
+#  Sparse -> Dense  (inject_to_dense) -- batch variants
+# ---------------------------------------------------------------------------
+
+
+def inject_to_dense_cminor_batch(
+    grid: GridBatch,
+    sparse_data: JaggedTensor,
+    min_coord: NumericMaxRank1 | NumericMaxRank2 | None = None,
+    grid_size: NumericMaxRank1 | None = None,
+) -> torch.Tensor:
+    """Write sparse voxel data into a dense tensor (XYZC order).
+
+    Returns dense tensor with shape ``(B, X, Y, Z, C*)``.
+    Supports backpropagation.
+    """
+    grid_data = grid.data
+    origins, gs_list = _resolve_dense_params(grid_data, sparse_data, min_coord, grid_size)
+    result = cast(torch.Tensor, _InjectToDenseCminorFn.apply(sparse_data.jdata, grid_data, origins, gs_list))
+    feature_shape = list(sparse_data.jdata.shape[1:])
+    return result.view([grid_data.grid_count] + gs_list + feature_shape)
+
+
+def inject_to_dense_cmajor_batch(
+    grid: GridBatch,
+    sparse_data: JaggedTensor,
+    min_coord: NumericMaxRank1 | NumericMaxRank2 | None = None,
+    grid_size: NumericMaxRank1 | None = None,
+) -> torch.Tensor:
+    """Write sparse voxel data into a dense tensor (CXYZ order).
+
+    Returns dense tensor with shape ``(B, C*, X, Y, Z)``.
+    Supports backpropagation.
+    """
+    grid_data = grid.data
+    origins, gs_list = _resolve_dense_params(grid_data, sparse_data, min_coord, grid_size)
+    result = cast(torch.Tensor, _InjectToDenseCmajorFn.apply(sparse_data.jdata, grid_data, origins, gs_list))
+    feature_shape = list(sparse_data.jdata.shape[1:])
+    return result.view([grid_data.grid_count] + feature_shape + gs_list)
+
+
+# ---------------------------------------------------------------------------
+#  Sparse -> Dense  (inject_to_dense) -- single variants
+# ---------------------------------------------------------------------------
+
+
+def inject_to_dense_cminor_single(
+    grid: Grid,
+    sparse_data: torch.Tensor,
+    min_coord: NumericMaxRank1 | NumericMaxRank2 | None = None,
+    grid_size: NumericMaxRank1 | None = None,
+) -> torch.Tensor:
+    """Write sparse voxel data into a dense tensor (XYZC order) for a single grid.
+
+    Returns dense tensor with shape ``(1, X, Y, Z, C*)``.
+    Supports backpropagation.
+    """
+    grid_data = grid.data
+    sparse_jt = JaggedTensor(sparse_data)
+    origins, gs_list = _resolve_dense_params(grid_data, sparse_jt, min_coord, grid_size)
+    result = cast(torch.Tensor, _InjectToDenseCminorFn.apply(sparse_jt.jdata, grid_data, origins, gs_list))
+    feature_shape = list(sparse_jt.jdata.shape[1:])
+    return result.view([grid_data.grid_count] + gs_list + feature_shape)
+
+
+def inject_to_dense_cmajor_single(
+    grid: Grid,
+    sparse_data: torch.Tensor,
+    min_coord: NumericMaxRank1 | NumericMaxRank2 | None = None,
+    grid_size: NumericMaxRank1 | None = None,
+) -> torch.Tensor:
+    """Write sparse voxel data into a dense tensor (CXYZ order) for a single grid.
+
+    Returns dense tensor with shape ``(1, C*, X, Y, Z)``.
+    Supports backpropagation.
+    """
+    grid_data = grid.data
+    sparse_jt = JaggedTensor(sparse_data)
+    origins, gs_list = _resolve_dense_params(grid_data, sparse_jt, min_coord, grid_size)
+    result = cast(torch.Tensor, _InjectToDenseCmajorFn.apply(sparse_jt.jdata, grid_data, origins, gs_list))
+    feature_shape = list(sparse_jt.jdata.shape[1:])
+    return result.view([grid_data.grid_count] + feature_shape + gs_list)
+
+
+# ---------------------------------------------------------------------------
+#  Grid-to-grid injection -- batch variant
+# ---------------------------------------------------------------------------
+
+
+def inject_batch(
     dst_grid: GridBatch,
     src_grid: GridBatch,
     src: JaggedTensor,
     dst: JaggedTensor | None = None,
     default_value: float | int | bool = 0,
-) -> JaggedTensor: ...
+) -> JaggedTensor:
+    """Inject data from ``src_grid`` into ``dst_grid`` in voxel space.
 
-
-def inject(
-    dst_grid: GridBatch,
-    src_grid: GridBatch,
-    src: torch.Tensor | JaggedTensor,
-    dst: torch.Tensor | JaggedTensor | None = None,
-    default_value: float | int | bool = 0,
-) -> torch.Tensor | JaggedTensor:
+    Copies sidecar data for voxels shared between the two grids.
+    Supports backpropagation.
     """
-    Inject data from ``src_grid`` into ``dst_grid`` in voxel space.
-
-    Copies sidecar data for voxels shared between the two grids. If ``dst`` is
-    ``None``, a new tensor/JaggedTensor filled with ``default_value`` is created.
-    If ``dst`` is provided it is modified in-place.
-
-    This function supports backpropagation.
-
-    Args:
-        dst_grid: Destination grid.
-        src_grid: Source grid.
-        src: Source data associated with ``src_grid``.
-        dst: Optional destination data (modified in-place). ``None`` allocates a new tensor.
-        default_value: Fill value for voxels without corresponding source data.
-
-    Returns:
-        The destination data after injection.
-    """
-    is_flat = isinstance(src, torch.Tensor)
-    dst_grid_data = _get_grid_data(dst_grid)
-    src_grid_data = _get_grid_data(src_grid)
-
-    if is_flat:
-        assert isinstance(src, torch.Tensor)
-        jt_src = JaggedTensor(src)
-        if dst is None:
-            eshape = list(src.shape[1:]) if src.dim() > 1 else []
-            dst_shape = [dst_grid.total_voxels] + eshape
-            raw_dst = torch.full(dst_shape, fill_value=default_value, dtype=src.dtype, device=src.device)
-        else:
-            assert isinstance(dst, torch.Tensor)
-            raw_dst = dst
-        jt_dst = JaggedTensor(raw_dst)
-        dst_out = cast(torch.Tensor, _InjectFn.apply(src, jt_dst.jdata, dst_grid_data, src_grid_data, jt_dst._impl, jt_src._impl))
-        return dst_out
-
-    assert isinstance(src, JaggedTensor)
+    dst_grid_data = dst_grid.data
+    src_grid_data = src_grid.data
     jt_src = src
     if dst is None:
-        dst_shape_list: list[int] = [dst_grid.total_voxels]
-        dst_shape_list.extend(src.eshape)
-        raw_dst_t = torch.full(dst_shape_list, fill_value=default_value, dtype=src.dtype, device=src.device)
-        jt_dst_b = dst_grid.jagged_like(raw_dst_t)
+        dst_shape: list[int] = [dst_grid_data.total_voxels]
+        dst_shape.extend(src.eshape)
+        raw_dst_t = torch.full(dst_shape, fill_value=default_value, dtype=src.dtype, device=src.device)
+        jt_dst = JaggedTensor(impl=dst_grid_data.jagged_like(raw_dst_t))
     else:
-        assert isinstance(dst, JaggedTensor)
-        jt_dst_b = dst
-    if jt_dst_b.eshape != jt_src.eshape:
-        raise ValueError(f"src and dst must have the same element shape, got src: {jt_src.eshape}, dst: {jt_dst_b.eshape}")
-    _InjectFn.apply(jt_src.jdata, jt_dst_b.jdata, dst_grid_data, src_grid_data, jt_dst_b._impl, jt_src._impl)
-    return jt_dst_b
+        jt_dst = dst
+    if jt_dst.eshape != jt_src.eshape:
+        raise ValueError(f"src and dst must have the same element shape, got src: {jt_src.eshape}, dst: {jt_dst.eshape}")
+    _InjectFn.apply(jt_src.jdata, jt_dst.jdata, dst_grid_data, src_grid_data, jt_dst._impl, jt_src._impl)
+    return jt_dst
 
 
-def inject_from_ijk(
+# ---------------------------------------------------------------------------
+#  Grid-to-grid injection -- single variant
+# ---------------------------------------------------------------------------
+
+
+def inject_single(
+    dst_grid: Grid,
+    src_grid: Grid,
+    src: torch.Tensor,
+    dst: torch.Tensor | None = None,
+    default_value: float | int | bool = 0,
+) -> torch.Tensor:
+    """Inject data from ``src_grid`` into ``dst_grid`` in voxel space for single grids.
+
+    Copies sidecar data for voxels shared between the two grids.
+    Supports backpropagation.
+    """
+    dst_grid_data = dst_grid.data
+    src_grid_data = src_grid.data
+    jt_src = JaggedTensor(src)
+    if dst is None:
+        eshape = list(src.shape[1:]) if src.dim() > 1 else []
+        dst_shape = [dst_grid_data.total_voxels] + eshape
+        raw_dst = torch.full(dst_shape, fill_value=default_value, dtype=src.dtype, device=src.device)
+    else:
+        raw_dst = dst
+    jt_dst = JaggedTensor(raw_dst)
+    dst_out = cast(torch.Tensor, _InjectFn.apply(src, jt_dst.jdata, dst_grid_data, src_grid_data, jt_dst._impl, jt_src._impl))
+    return dst_out
+
+
+# ---------------------------------------------------------------------------
+#  inject_from_ijk -- batch variant
+# ---------------------------------------------------------------------------
+
+
+def inject_from_ijk_batch(
     grid: GridBatch,
     src_ijk: JaggedTensor,
     src: JaggedTensor,
     dst: JaggedTensor | None = None,
     default_value: float | int | bool = 0,
 ) -> JaggedTensor:
-    """
-    Inject data from source voxel coordinates to a sidecar for the given grid.
+    """Inject data from source voxel coordinates to a sidecar for the given grid.
 
-    This function supports backpropagation through the injection operation.
-
-    Args:
-        grid: The destination grid.
-        src_ijk: Voxel coordinates from which to copy data.
-            Shape: ``(B, num_src_voxels, 3)``.
-        src: Source data to inject. Shape: ``(B, num_src_voxels, *)``.
-        dst: Optional destination data (modified in-place). If ``None``, a new
-            :class:`~fvdb.JaggedTensor` is created filled with ``default_value``.
-        default_value: Fill value for voxels without source data. Default ``0``.
-
-    Returns:
-        The destination data after injection.
+    Supports backpropagation through the injection operation.
     """
     from . import _query
 
     if not isinstance(src_ijk, JaggedTensor):
         raise TypeError(f"src_ijk must be a JaggedTensor, but got {type(src_ijk)}")
-
     if not isinstance(src, JaggedTensor):
         raise TypeError(f"src must be a JaggedTensor, but got {type(src)}")
 
-    grid_data = _get_grid_data(grid)
+    grid_data = grid.data
     if dst is None:
-        dst_shape: list[int] = [grid.total_voxels]
+        dst_shape: list[int] = [grid_data.total_voxels]
         dst_shape.extend(src.eshape)
         dst = JaggedTensor(impl=grid_data.jagged_like(
             torch.full(dst_shape, fill_value=default_value, dtype=src.dtype, device=src.device)
@@ -460,8 +423,41 @@ def inject_from_ijk(
             f"src and dst must have the same element shape, but got src: {src.eshape}, dst: {dst.eshape}"
         )
 
-    src_idx = _query.ijk_to_index(grid, src_ijk, cumulative=True).jdata
+    src_idx = _query.ijk_to_index_batch(grid, src_ijk, cumulative=True).jdata
     src_mask = src_idx >= 0
     src_idx = src_idx[src_mask]
     dst.jdata[src_idx] = src.jdata[src_mask]
     return dst
+
+
+# ---------------------------------------------------------------------------
+#  inject_from_ijk -- single variant
+# ---------------------------------------------------------------------------
+
+
+def inject_from_ijk_single(
+    grid: Grid,
+    src_ijk: torch.Tensor,
+    src: torch.Tensor,
+    dst: torch.Tensor | None = None,
+    default_value: float | int | bool = 0,
+) -> torch.Tensor:
+    """Inject data from source voxel coordinates to a sidecar for a single grid.
+
+    Supports backpropagation through the injection operation.
+    """
+    from . import _query
+
+    grid_data = grid.data
+    if dst is None:
+        eshape = list(src.shape[1:]) if src.dim() > 1 else []
+        dst_shape = [grid_data.total_voxels] + eshape
+        raw_dst = torch.full(dst_shape, fill_value=default_value, dtype=src.dtype, device=src.device)
+    else:
+        raw_dst = dst
+
+    src_idx = _query.ijk_to_index_single(grid, src_ijk, cumulative=True)
+    src_mask = src_idx >= 0
+    src_idx = src_idx[src_mask]
+    raw_dst[src_idx] = src[src_mask]
+    return raw_dst

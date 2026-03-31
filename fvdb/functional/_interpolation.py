@@ -4,15 +4,15 @@
 """Functional API for sparse grid interpolation: sampling and splatting."""
 from __future__ import annotations
 
-from typing import Any, TYPE_CHECKING, cast, overload
+from typing import Any, TYPE_CHECKING, cast
 
 import torch
 
 from .. import _fvdb_cpp
 from ..jagged_tensor import JaggedTensor
-from ._dispatch import _prepare_args
 
 if TYPE_CHECKING:
+    from ..grid import Grid
     from ..grid_batch import GridBatch
 
 
@@ -124,244 +124,144 @@ class _SampleBezierWithGradFn(torch.autograd.Function):
 
 
 # ---------------------------------------------------------------------------
-#  Public API
+#  Public API -- sample_trilinear
 # ---------------------------------------------------------------------------
 
 
-@overload
-def sample_trilinear(grid: GridBatch, points: torch.Tensor, voxel_data: torch.Tensor) -> torch.Tensor: ...
+def sample_trilinear_batch(
+    grid: GridBatch, points: JaggedTensor, voxel_data: JaggedTensor,
+) -> JaggedTensor:
+    """Sample voxel data at world-space points using trilinear interpolation (batched)."""
+    result = cast(torch.Tensor, _SampleTrilinearFn.apply(voxel_data.jdata, grid.data, points._impl))
+    return points.jagged_like(result)
 
 
-@overload
-def sample_trilinear(grid: GridBatch, points: JaggedTensor, voxel_data: JaggedTensor) -> JaggedTensor: ...
+def sample_trilinear_single(
+    grid: Grid, points: torch.Tensor, voxel_data: torch.Tensor,
+) -> torch.Tensor:
+    """Sample voxel data at world-space points using trilinear interpolation (single grid)."""
+    pts_jt = JaggedTensor(points)
+    vd_jt = JaggedTensor(voxel_data)
+    return cast(torch.Tensor, _SampleTrilinearFn.apply(vd_jt.jdata, grid.data, pts_jt._impl))
 
 
-def sample_trilinear(
-    grid: GridBatch,
-    points: torch.Tensor | JaggedTensor,
-    voxel_data: torch.Tensor | JaggedTensor,
-) -> torch.Tensor | JaggedTensor:
-    """
-    Sample data associated with ``grid`` at world-space ``points`` using trilinear interpolation.
-
-    Interpolates data values at arbitrary continuous positions in world space,
-    based on values defined at voxel centers. Samples outside the grid return zero.
-
-    This function supports backpropagation through the interpolation operation.
-
-    Args:
-        grid: The grid structure to sample from.
-        points: World-space points to sample at.
-            For a single grid: shape ``(num_points, 3)``.
-            For a batch: a :class:`~fvdb.JaggedTensor` with shape ``(B, -1, 3)``.
-        voxel_data: Data associated with each voxel.
-            For a single grid: shape ``(total_voxels, channels*)``.
-            For a batch: a :class:`~fvdb.JaggedTensor` with shape ``(B, -1, channels*)``.
-
-    Returns:
-        Interpolated data at each point, same type and batch structure as ``points``.
-
-    .. seealso:: :func:`sample_bezier`, :func:`sample_trilinear_with_grad`
-    """
-    grid_data, (points_jt, voxel_data_jt), unwrap = _prepare_args(grid, points, voxel_data)
-    assert points_jt is not None and voxel_data_jt is not None
-    result = cast(torch.Tensor, _SampleTrilinearFn.apply(voxel_data_jt.jdata, grid_data, points_jt._impl))
-    return unwrap(result)
+# ---------------------------------------------------------------------------
+#  Public API -- sample_trilinear_with_grad
+# ---------------------------------------------------------------------------
 
 
-@overload
-def sample_trilinear_with_grad(
-    grid: GridBatch, points: torch.Tensor, voxel_data: torch.Tensor
-) -> tuple[torch.Tensor, torch.Tensor]: ...
+def sample_trilinear_with_grad_batch(
+    grid: GridBatch, points: JaggedTensor, voxel_data: JaggedTensor,
+) -> tuple[JaggedTensor, JaggedTensor]:
+    """Sample with trilinear interpolation and return spatial gradients (batched)."""
+    rd, rg = cast(
+        tuple[torch.Tensor, torch.Tensor],
+        _SampleTrilinearWithGradFn.apply(voxel_data.jdata, grid.data, points._impl),
+    )
+    return points.jagged_like(rd), points.jagged_like(rg)
 
 
-@overload
-def sample_trilinear_with_grad(
-    grid: GridBatch, points: JaggedTensor, voxel_data: JaggedTensor
-) -> tuple[JaggedTensor, JaggedTensor]: ...
+def sample_trilinear_with_grad_single(
+    grid: Grid, points: torch.Tensor, voxel_data: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Sample with trilinear interpolation and return spatial gradients (single grid)."""
+    pts_jt = JaggedTensor(points)
+    vd_jt = JaggedTensor(voxel_data)
+    return cast(
+        tuple[torch.Tensor, torch.Tensor],
+        _SampleTrilinearWithGradFn.apply(vd_jt.jdata, grid.data, pts_jt._impl),
+    )
 
 
-def sample_trilinear_with_grad(
-    grid: GridBatch,
-    points: torch.Tensor | JaggedTensor,
-    voxel_data: torch.Tensor | JaggedTensor,
-) -> tuple[torch.Tensor, torch.Tensor] | tuple[JaggedTensor, JaggedTensor]:
-    """
-    Sample data using trilinear interpolation, also returning spatial gradients.
-
-    Returns both the interpolated data and the gradients of the interpolated data
-    with respect to the world coordinates at each sample point.
-
-    This function supports backpropagation.
-
-    Args:
-        grid: The grid structure to sample from.
-        points: World-space points to sample at.
-        voxel_data: Data associated with each voxel.
-
-    Returns:
-        A tuple ``(interpolated_data, interpolation_gradients)``.
-        Gradient shape has an extra ``3`` dimension for the spatial gradient.
-
-    .. seealso:: :func:`sample_trilinear`, :func:`sample_bezier_with_grad`
-    """
-    grid_data, (points_jt, voxel_data_jt), unwrap = _prepare_args(grid, points, voxel_data)
-    assert points_jt is not None and voxel_data_jt is not None
-    _result = cast(tuple[torch.Tensor, torch.Tensor], _SampleTrilinearWithGradFn.apply(voxel_data_jt.jdata, grid_data, points_jt._impl))
-    rd, rg = _result
-    return unwrap(rd), unwrap(rg)
+# ---------------------------------------------------------------------------
+#  Public API -- sample_bezier
+# ---------------------------------------------------------------------------
 
 
-@overload
-def sample_bezier(grid: GridBatch, points: torch.Tensor, voxel_data: torch.Tensor) -> torch.Tensor: ...
+def sample_bezier_batch(
+    grid: GridBatch, points: JaggedTensor, voxel_data: JaggedTensor,
+) -> JaggedTensor:
+    """Sample voxel data at world-space points using Bezier interpolation (batched)."""
+    result = cast(torch.Tensor, _SampleBezierFn.apply(voxel_data.jdata, grid.data, points._impl))
+    return points.jagged_like(result)
 
 
-@overload
-def sample_bezier(grid: GridBatch, points: JaggedTensor, voxel_data: JaggedTensor) -> JaggedTensor: ...
+def sample_bezier_single(
+    grid: Grid, points: torch.Tensor, voxel_data: torch.Tensor,
+) -> torch.Tensor:
+    """Sample voxel data at world-space points using Bezier interpolation (single grid)."""
+    pts_jt = JaggedTensor(points)
+    vd_jt = JaggedTensor(voxel_data)
+    return cast(torch.Tensor, _SampleBezierFn.apply(vd_jt.jdata, grid.data, pts_jt._impl))
 
 
-def sample_bezier(
-    grid: GridBatch,
-    points: torch.Tensor | JaggedTensor,
-    voxel_data: torch.Tensor | JaggedTensor,
-) -> torch.Tensor | JaggedTensor:
-    """
-    Sample data associated with ``grid`` at world-space ``points`` using Bezier interpolation.
-
-    Uses cubic Bezier interpolation to interpolate data values at arbitrary continuous
-    positions in world space. Samples outside the grid return zero.
-
-    This function supports backpropagation.
-
-    Args:
-        grid: The grid structure to sample from.
-        points: World-space points to sample at.
-        voxel_data: Data associated with each voxel.
-
-    Returns:
-        Interpolated data at each point, same type and batch structure as ``points``.
-
-    .. seealso:: :func:`sample_trilinear`, :func:`sample_bezier_with_grad`
-    """
-    grid_data, (points_jt, voxel_data_jt), unwrap = _prepare_args(grid, points, voxel_data)
-    assert points_jt is not None and voxel_data_jt is not None
-    result = cast(torch.Tensor, _SampleBezierFn.apply(voxel_data_jt.jdata, grid_data, points_jt._impl))
-    return unwrap(result)
+# ---------------------------------------------------------------------------
+#  Public API -- sample_bezier_with_grad
+# ---------------------------------------------------------------------------
 
 
-@overload
-def sample_bezier_with_grad(
-    grid: GridBatch, points: torch.Tensor, voxel_data: torch.Tensor
-) -> tuple[torch.Tensor, torch.Tensor]: ...
+def sample_bezier_with_grad_batch(
+    grid: GridBatch, points: JaggedTensor, voxel_data: JaggedTensor,
+) -> tuple[JaggedTensor, JaggedTensor]:
+    """Sample with Bezier interpolation and return spatial gradients (batched)."""
+    rd, rg = cast(
+        tuple[torch.Tensor, torch.Tensor],
+        _SampleBezierWithGradFn.apply(voxel_data.jdata, grid.data, points._impl),
+    )
+    return points.jagged_like(rd), points.jagged_like(rg)
 
 
-@overload
-def sample_bezier_with_grad(
-    grid: GridBatch, points: JaggedTensor, voxel_data: JaggedTensor
-) -> tuple[JaggedTensor, JaggedTensor]: ...
+def sample_bezier_with_grad_single(
+    grid: Grid, points: torch.Tensor, voxel_data: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Sample with Bezier interpolation and return spatial gradients (single grid)."""
+    pts_jt = JaggedTensor(points)
+    vd_jt = JaggedTensor(voxel_data)
+    return cast(
+        tuple[torch.Tensor, torch.Tensor],
+        _SampleBezierWithGradFn.apply(vd_jt.jdata, grid.data, pts_jt._impl),
+    )
 
 
-def sample_bezier_with_grad(
-    grid: GridBatch,
-    points: torch.Tensor | JaggedTensor,
-    voxel_data: torch.Tensor | JaggedTensor,
-) -> tuple[torch.Tensor, torch.Tensor] | tuple[JaggedTensor, JaggedTensor]:
-    """
-    Sample data using Bezier interpolation, also returning spatial gradients.
-
-    This function supports backpropagation.
-
-    Args:
-        grid: The grid structure to sample from.
-        points: World-space points to sample at.
-        voxel_data: Data associated with each voxel.
-
-    Returns:
-        A tuple ``(interpolated_data, interpolation_gradients)``.
-
-    .. seealso:: :func:`sample_bezier`, :func:`sample_trilinear_with_grad`
-    """
-    grid_data, (points_jt, voxel_data_jt), unwrap = _prepare_args(grid, points, voxel_data)
-    assert points_jt is not None and voxel_data_jt is not None
-    _result = cast(tuple[torch.Tensor, torch.Tensor], _SampleBezierWithGradFn.apply(voxel_data_jt.jdata, grid_data, points_jt._impl))
-    rd, rg = _result
-    return unwrap(rd), unwrap(rg)
+# ---------------------------------------------------------------------------
+#  Public API -- splat_trilinear
+# ---------------------------------------------------------------------------
 
 
-@overload
-def splat_trilinear(grid: GridBatch, points: torch.Tensor, points_data: torch.Tensor) -> torch.Tensor: ...
+def splat_trilinear_batch(
+    grid: GridBatch, points: JaggedTensor, points_data: JaggedTensor,
+) -> JaggedTensor:
+    """Splat point data into voxels using trilinear weights (batched)."""
+    result = cast(torch.Tensor, _SplatTrilinearFn.apply(points_data.jdata, grid.data, points._impl))
+    return JaggedTensor(impl=grid.data.jagged_like(result))
 
 
-@overload
-def splat_trilinear(grid: GridBatch, points: JaggedTensor, points_data: JaggedTensor) -> JaggedTensor: ...
+def splat_trilinear_single(
+    grid: Grid, points: torch.Tensor, points_data: torch.Tensor,
+) -> torch.Tensor:
+    """Splat point data into voxels using trilinear weights (single grid)."""
+    pts_jt = JaggedTensor(points)
+    pd_jt = JaggedTensor(points_data)
+    return cast(torch.Tensor, _SplatTrilinearFn.apply(pd_jt.jdata, grid.data, pts_jt._impl))
 
 
-def splat_trilinear(
-    grid: GridBatch,
-    points: torch.Tensor | JaggedTensor,
-    points_data: torch.Tensor | JaggedTensor,
-) -> torch.Tensor | JaggedTensor:
-    """
-    Splat point data into voxels using trilinear interpolation weights.
-
-    Each point distributes its data to the surrounding voxels using trilinear
-    interpolation weights. This is the adjoint of :func:`sample_trilinear`.
-
-    This function supports backpropagation.
-
-    Args:
-        grid: The grid structure to splat into.
-        points: World-space positions of points. Same type conventions as :func:`sample_trilinear`.
-        points_data: Data associated with each point.
-
-    Returns:
-        Accumulated features at each voxel after splatting.
-
-    .. seealso:: :func:`splat_bezier`, :func:`sample_trilinear`
-    """
-    is_flat = isinstance(points, torch.Tensor)
-    grid_data, (points_jt, points_data_jt), unwrap = _prepare_args(grid, points, points_data)
-    assert points_jt is not None and points_data_jt is not None
-    result = cast(torch.Tensor, _SplatTrilinearFn.apply(points_data_jt.jdata, grid_data, points_jt._impl))
-    if is_flat:
-        return result
-    return grid.jagged_like(result)
+# ---------------------------------------------------------------------------
+#  Public API -- splat_bezier
+# ---------------------------------------------------------------------------
 
 
-@overload
-def splat_bezier(grid: GridBatch, points: torch.Tensor, points_data: torch.Tensor) -> torch.Tensor: ...
+def splat_bezier_batch(
+    grid: GridBatch, points: JaggedTensor, points_data: JaggedTensor,
+) -> JaggedTensor:
+    """Splat point data into voxels using Bezier weights (batched)."""
+    result = cast(torch.Tensor, _SplatBezierFn.apply(points_data.jdata, grid.data, points._impl))
+    return JaggedTensor(impl=grid.data.jagged_like(result))
 
 
-@overload
-def splat_bezier(grid: GridBatch, points: JaggedTensor, points_data: JaggedTensor) -> JaggedTensor: ...
-
-
-def splat_bezier(
-    grid: GridBatch,
-    points: torch.Tensor | JaggedTensor,
-    points_data: torch.Tensor | JaggedTensor,
-) -> torch.Tensor | JaggedTensor:
-    """
-    Splat point data into voxels using cubic Bezier interpolation weights.
-
-    This is the adjoint of :func:`sample_bezier`.
-
-    This function supports backpropagation.
-
-    Args:
-        grid: The grid structure to splat into.
-        points: World-space positions of points.
-        points_data: Data associated with each point.
-
-    Returns:
-        Accumulated features at each voxel after splatting.
-
-    .. seealso:: :func:`splat_trilinear`, :func:`sample_bezier`
-    """
-    is_flat = isinstance(points, torch.Tensor)
-    grid_data, (points_jt, points_data_jt), unwrap = _prepare_args(grid, points, points_data)
-    assert points_jt is not None and points_data_jt is not None
-    result = cast(torch.Tensor, _SplatBezierFn.apply(points_data_jt.jdata, grid_data, points_jt._impl))
-    if is_flat:
-        return result
-    return grid.jagged_like(result)
+def splat_bezier_single(
+    grid: Grid, points: torch.Tensor, points_data: torch.Tensor,
+) -> torch.Tensor:
+    """Splat point data into voxels using Bezier weights (single grid)."""
+    pts_jt = JaggedTensor(points)
+    pd_jt = JaggedTensor(points_data)
+    return cast(torch.Tensor, _SplatBezierFn.apply(pd_jt.jdata, grid.data, pts_jt._impl))

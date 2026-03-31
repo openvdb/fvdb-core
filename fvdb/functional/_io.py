@@ -6,12 +6,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, overload
 
+import torch
+
 from .. import _fvdb_cpp
 from ..jagged_tensor import JaggedTensor
 from ..types import DeviceIdentifier, resolve_device
-from ._dispatch import _get_grid_data
-
 if TYPE_CHECKING:
+    from ..grid import Grid
     from ..grid_batch import GridBatch
 
 
@@ -150,7 +151,7 @@ def save_nanovdb(
     """
     from .._fvdb_cpp import save as _save
 
-    grid_data = _get_grid_data(grid)
+    grid_data = grid.data
     data_impl = data._impl if data else None
     if name is not None:
         _save(path, grid_data, data_impl, name, compressed, verbose)
@@ -159,5 +160,78 @@ def save_nanovdb(
             _save(path, grid_data, data_impl, names, compressed, verbose)
         else:
             _save(path, grid_data, data_impl, names, compressed, verbose)
+    else:
+        _save(path, grid_data, data_impl, [], compressed, verbose)
+
+
+# ---------------------------------------------------------------------------
+#  Single variants (Grid + torch.Tensor)
+# ---------------------------------------------------------------------------
+
+
+def _wrap_single_grid(cpp_impl):
+    from ..grid import Grid
+
+    return Grid(data=cpp_impl)
+
+
+def load_nanovdb_single(
+    path: str,
+    *,
+    index: int = 0,
+    name: str | None = None,
+    device: DeviceIdentifier = "cpu",
+    verbose: bool = False,
+) -> tuple[Grid, torch.Tensor, str]:
+    """Load a single grid from a ``.nvdb`` file.
+
+    Args:
+        path: Path to the ``.nvdb`` file.
+        index: Grid index to load. Default ``0``.
+        name: Optional grid name to load (overrides ``index``).
+        device: Device to load onto. Defaults to ``"cpu"``.
+        verbose: Print information about loaded grids.
+
+    Returns:
+        A tuple ``(grid, data, name)``.
+    """
+    import torch
+
+    if name is not None:
+        gb, jt_data, names_out = load_nanovdb(path, name=name, device=device, verbose=verbose)
+    else:
+        gb, jt_data, names_out = load_nanovdb(path, index=index, device=device, verbose=verbose)
+
+    return _wrap_single_grid(gb.data), jt_data.jdata, names_out[0] if names_out else ""
+
+
+def save_nanovdb_single(
+    grid: Grid,
+    path: str,
+    data: torch.Tensor | None = None,
+    name: str | None = None,
+    compressed: bool = False,
+    verbose: bool = False,
+) -> None:
+    """Save a single grid and optional voxel data to a ``.nvdb`` file.
+
+    Args:
+        grid: The single grid to save.
+        path: File path (should have ``.nvdb`` extension).
+        data: Optional voxel data as a plain tensor.
+        name: Optional name for the grid.
+        compressed: Use Blosc compression.
+        verbose: Print information about saved grids.
+    """
+    import torch
+    from .._fvdb_cpp import save as _save
+
+    grid_data = grid.data
+    if data is not None:
+        data_impl = JaggedTensor(data)._impl
+    else:
+        data_impl = None
+    if name is not None:
+        _save(path, grid_data, data_impl, name, compressed, verbose)
     else:
         _save(path, grid_data, data_impl, [], compressed, verbose)

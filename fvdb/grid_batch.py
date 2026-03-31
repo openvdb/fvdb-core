@@ -654,7 +654,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.avg_pool(self, pool_factor, data, stride, coarse_grid)
+        return functional.avg_pool_batch(self, pool_factor, data, stride, coarse_grid)
 
     def bbox_at(self, bi: int) -> torch.Tensor:
         """
@@ -697,7 +697,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.clip(self, features, ijk_min, ijk_max)
+        return functional.clip_batch(self, features, ijk_min, ijk_max)
 
     def clipped_grid(
         self,
@@ -717,7 +717,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.clipped_grid(self, ijk_min, ijk_max)
+        return functional.clipped_grid_batch(self, ijk_min, ijk_max)
 
     def coarsened_grid(self, coarsening_factor: NumericMaxRank1) -> "GridBatch":
         """
@@ -733,7 +733,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.coarsened_grid(self, coarsening_factor)
+        return functional.coarsened_grid_batch(self, coarsening_factor)
 
     def contiguous(self) -> "GridBatch":
         """
@@ -747,7 +747,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.contiguous(self)
+        return functional.contiguous_batch(self)
 
     def conv_grid(self, kernel_size: NumericMaxRank1, stride: NumericMaxRank1 = 1) -> "GridBatch":
         """
@@ -763,7 +763,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.conv_grid(self, kernel_size, stride)
+        return functional.conv_grid_batch(self, kernel_size, stride)
 
     def conv_transpose_grid(self, kernel_size: NumericMaxRank1, stride: NumericMaxRank1 = 1) -> "GridBatch":
         """
@@ -779,7 +779,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.conv_transpose_grid(self, kernel_size, stride)
+        return functional.conv_transpose_grid_batch(self, kernel_size, stride)
 
     def coords_in_grid(self, ijk: JaggedTensor) -> JaggedTensor:
         """
@@ -793,7 +793,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.coords_in_grid(self, ijk)
+        return functional.coords_in_grid_batch(self, ijk)
 
     def cpu(self) -> "GridBatch":
         """
@@ -827,7 +827,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.cubes_in_grid(self, cube_centers, cube_min, cube_max)
+        return functional.cubes_in_grid_batch(self, cube_centers, cube_min, cube_max)
 
     def cubes_intersect_grid(
         self, cube_centers: JaggedTensor, cube_min: NumericMaxRank1 = 0, cube_max: NumericMaxRank1 = 0
@@ -852,7 +852,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.cubes_intersect_grid(self, cube_centers, cube_min, cube_max)
+        return functional.cubes_intersect_grid_batch(self, cube_centers, cube_min, cube_max)
 
     def cuda(self) -> "GridBatch":
         """
@@ -887,7 +887,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.dilated_grid(self, dilation)
+        return functional.dilated_grid_batch(self, dilation)
 
     def dual_bbox_at(self, bi: int) -> torch.Tensor:
         """
@@ -926,7 +926,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.dual_grid(self, exclude_border)
+        return functional.dual_grid_batch(self, exclude_border)
 
     def voxel_to_world(self, ijk: JaggedTensor) -> JaggedTensor:
         """
@@ -946,7 +946,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.voxel_to_world(self, ijk)
+        return functional.voxel_to_world_batch(self, ijk)
 
     def has_same_address_and_grid_count(self, other: Any) -> bool:
         """
@@ -986,7 +986,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.ijk_to_index(self, ijk, cumulative)
+        return functional.ijk_to_index_batch(self, ijk, cumulative)
 
     def ijk_to_inv_index(self, ijk: JaggedTensor, cumulative: bool = False) -> JaggedTensor:
         """
@@ -1005,7 +1005,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.ijk_to_inv_index(self, ijk, cumulative)
+        return functional.ijk_to_inv_index_batch(self, ijk, cumulative)
 
     def inject_from(
         self,
@@ -1048,7 +1048,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.inject(self, src_grid, src, dst, default_value)
+        return functional.inject_batch(self, src_grid, src, dst, default_value)
 
     def inject_from_ijk(
         self,
@@ -1077,7 +1077,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.inject_from_ijk(self, src_ijk, src, dst, default_value)
+        return functional.inject_from_ijk_batch(self, src_ijk, src, dst, default_value)
 
     def inject_to(
         self,
@@ -1114,7 +1114,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.inject(dst_grid, self, src, dst, default_value)
+        return functional.inject_batch(dst_grid, self, src, dst, default_value)
 
     def integrate_tsdf(
         self,
@@ -1156,7 +1156,7 @@ class GridBatch:
 
         from . import functional
 
-        return functional.integrate_tsdf(
+        return functional.integrate_tsdf_batch(
             self, truncation_distance, projection_matrices, cam_to_world_matrices, tsdf, weights, depth_images,
             weight_images,
         )
@@ -1206,7 +1206,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.integrate_tsdf_with_features(
+        return functional.integrate_tsdf_with_features_batch(
             self, truncation_distance, projection_matrices, cam_to_world_matrices, tsdf, features,
             weights, depth_images, feature_images, weight_images,
         )
@@ -1266,7 +1266,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.marching_cubes(self, field, level)
+        return functional.marching_cubes_batch(self, field, level)
 
     def max_pool(
         self,
@@ -1305,7 +1305,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.max_pool(self, pool_factor, data, stride, coarse_grid)
+        return functional.max_pool_batch(self, pool_factor, data, stride, coarse_grid)
 
     def merged_grid(self, other: "GridBatch") -> "GridBatch":
         """
@@ -1322,7 +1322,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.merged_grid(self, other)
+        return functional.merged_grid_batch(self, other)
 
     def neighbor_indexes(self, ijk: JaggedTensor, extent: int, bitshift: int = 0) -> JaggedTensor:
         """
@@ -1342,7 +1342,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.neighbor_indexes(self, ijk, extent, bitshift)
+        return functional.neighbor_indexes_batch(self, ijk, extent, bitshift)
 
     def num_voxels_at(self, bi: int) -> int:
         """
@@ -1371,7 +1371,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.pruned_grid(self, mask)
+        return functional.pruned_grid_batch(self, mask)
 
     def origin_at(self, bi: int) -> torch.Tensor:
         """
@@ -1401,7 +1401,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.points_in_grid(self, points)
+        return functional.points_in_grid_batch(self, points)
 
     def ray_implicit_intersection(
         self,
@@ -1430,7 +1430,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.ray_implicit_intersection(self, ray_origins, ray_directions, grid_scalars, eps)
+        return functional.ray_implicit_intersection_batch(self, ray_origins, ray_directions, grid_scalars, eps)
 
     def inject_from_dense_cminor(self, dense_data: torch.Tensor, dense_origins: NumericMaxRank1 = 0) -> JaggedTensor:
         """
@@ -1462,7 +1462,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.inject_from_dense_cminor(self, dense_data, dense_origins)
+        return functional.inject_from_dense_cminor_batch(self, dense_data, dense_origins)
 
     def inject_from_dense_cmajor(self, dense_data: torch.Tensor, dense_origins: NumericMaxRank1 = 0) -> JaggedTensor:
         """
@@ -1494,7 +1494,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.inject_from_dense_cmajor(self, dense_data, dense_origins)
+        return functional.inject_from_dense_cmajor_batch(self, dense_data, dense_origins)
 
     def sample_bezier(self, points: JaggedTensor, voxel_data: JaggedTensor) -> JaggedTensor:
         """
@@ -1531,7 +1531,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.sample_bezier(self, points, voxel_data)
+        return functional.sample_bezier_batch(self, points, voxel_data)
 
     def sample_bezier_with_grad(
         self, points: JaggedTensor, voxel_data: JaggedTensor
@@ -1574,7 +1574,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.sample_bezier_with_grad(self, points, voxel_data)
+        return functional.sample_bezier_with_grad_batch(self, points, voxel_data)
 
     def sample_trilinear(self, points: JaggedTensor, voxel_data: JaggedTensor) -> JaggedTensor:
         """
@@ -1611,7 +1611,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.sample_trilinear(self, points, voxel_data)
+        return functional.sample_trilinear_batch(self, points, voxel_data)
 
     def sample_trilinear_with_grad(
         self, points: JaggedTensor, voxel_data: JaggedTensor
@@ -1654,7 +1654,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.sample_trilinear_with_grad(self, points, voxel_data)
+        return functional.sample_trilinear_with_grad_batch(self, points, voxel_data)
 
     def segments_along_rays(
         self,
@@ -1681,7 +1681,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.segments_along_rays(self, ray_origins, ray_directions, max_segments, eps)
+        return functional.segments_along_rays_batch(self, ray_origins, ray_directions, max_segments, eps)
 
     def splat_bezier(self, points: JaggedTensor, points_data: JaggedTensor) -> JaggedTensor:
         """
@@ -1708,7 +1708,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.splat_bezier(self, points, points_data)
+        return functional.splat_bezier_batch(self, points, points_data)
 
     def splat_trilinear(self, points: JaggedTensor, points_data: JaggedTensor) -> JaggedTensor:
         """
@@ -1735,7 +1735,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.splat_trilinear(self, points, points_data)
+        return functional.splat_trilinear_batch(self, points, points_data)
 
     def refine(
         self,
@@ -1781,7 +1781,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.refine(self, subdiv_factor, data, mask, fine_grid)
+        return functional.refine_batch(self, subdiv_factor, data, mask, fine_grid)
 
     def refined_grid(
         self,
@@ -1810,7 +1810,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.refined_grid(self, subdiv_factor, mask)
+        return functional.refined_grid_batch(self, subdiv_factor, mask)
 
     def to(self, target: "str | torch.device | torch.Tensor | JaggedTensor | GridBatch") -> "GridBatch":
         """
@@ -1841,7 +1841,7 @@ class GridBatch:
             device = target.device
         else:
             raise TypeError(f"Unsupported type for to(): {type(target)}")
-        return functional.clone_grid(self, device)
+        return functional.clone_grid_batch(self, device)
 
     def save_nanovdb(
         self,
@@ -1923,7 +1923,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.uniform_ray_samples(
+        return functional.uniform_ray_samples_batch(
             self, ray_origins, ray_directions, t_min, t_max, step_size, cone_angle, include_end_segments,
             return_midpoints, eps,
         )
@@ -1960,7 +1960,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.rays_intersect_voxels(self, ray_origins, ray_directions, eps)
+        return functional.rays_intersect_voxels_batch(self, ray_origins, ray_directions, eps)
 
     def voxels_along_rays(
         self,
@@ -1997,7 +1997,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.voxels_along_rays(self, ray_origins, ray_directions, max_voxels, eps, return_ijk, cumulative)
+        return functional.voxels_along_rays_batch(self, ray_origins, ray_directions, max_voxels, eps, return_ijk, cumulative)
 
     def world_to_voxel(self, points: JaggedTensor) -> JaggedTensor:
         """
@@ -2021,7 +2021,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.world_to_voxel(self, points)
+        return functional.world_to_voxel_batch(self, points)
 
     def inject_to_dense_cminor(
         self,
@@ -2069,7 +2069,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.inject_to_dense_cminor(self, sparse_data, min_coord, grid_size)
+        return functional.inject_to_dense_cminor_batch(self, sparse_data, min_coord, grid_size)
 
     def inject_to_dense_cmajor(
         self,
@@ -2117,7 +2117,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.inject_to_dense_cmajor(self, sparse_data, min_coord, grid_size)
+        return functional.inject_to_dense_cmajor_batch(self, sparse_data, min_coord, grid_size)
 
     # ============================================================
     #                Indexing and Special Functions
@@ -2431,7 +2431,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.active_grid_coords(self)
+        return functional.active_grid_coords_batch(self)
 
     def morton(self, offset: NumericMaxRank1 | None = None) -> JaggedTensor:
         """
@@ -2451,7 +2451,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.morton(self, offset)
+        return functional.morton_batch(self, offset)
 
     def morton_zyx(self, offset: NumericMaxRank1 | None = None) -> JaggedTensor:
         """
@@ -2470,7 +2470,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.morton_zyx(self, offset)
+        return functional.morton_zyx_batch(self, offset)
 
     def hilbert(self, offset: NumericMaxRank1 | None = None) -> JaggedTensor:
         """
@@ -2489,7 +2489,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.hilbert(self, offset)
+        return functional.hilbert_batch(self, offset)
 
     def hilbert_zyx(self, offset: NumericMaxRank1 | None = None) -> JaggedTensor:
         """
@@ -2508,7 +2508,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.hilbert_zyx(self, offset)
+        return functional.hilbert_zyx_batch(self, offset)
 
     @property
     def jidx(self) -> torch.Tensor:

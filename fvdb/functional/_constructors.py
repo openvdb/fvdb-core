@@ -23,9 +23,8 @@ from ..types import (
     to_Vec3i,
     to_Vec3iBroadcastable,
 )
-from ._dispatch import _get_grid_data
-
 if TYPE_CHECKING:
+    from ..grid import Grid
     from ..grid_batch import GridBatch
 
 
@@ -324,5 +323,101 @@ def concatenate_grids(grids: Sequence[GridBatch]) -> GridBatch:
     for grid in grids:
         if not isinstance(grid, GB):
             raise TypeError(f"Expected GridBatch, got {type(grid)}")
-        grid_datas.append(_get_grid_data(grid))
+        grid_datas.append(grid.data)
     return _wrap_grid(_fvdb_cpp.concatenate_grids(grid_datas))
+
+
+# ---------------------------------------------------------------------------
+#  Single-grid constructors (Grid + torch.Tensor)
+# ---------------------------------------------------------------------------
+
+
+def _wrap_single_grid(cpp_impl):
+    from ..grid import Grid
+
+    return Grid(data=cpp_impl)
+
+
+def grid_from_dense(
+    dense_dims: NumericMaxRank1,
+    ijk_min: NumericMaxRank1 = 0,
+    voxel_sizes: NumericMaxRank2 = 1,
+    origins: NumericMaxRank2 = 0,
+    mask: torch.Tensor | None = None,
+    device: DeviceIdentifier | None = None,
+) -> Grid:
+    """Create a single dense grid."""
+    gb = gridbatch_from_dense(1, dense_dims, ijk_min, voxel_sizes, origins, mask, device)
+    return _wrap_single_grid(gb.data)
+
+
+def grid_from_dense_axis_aligned_bounds(
+    dense_dims: NumericMaxRank1,
+    bounds_min: NumericMaxRank1 = 0,
+    bounds_max: NumericMaxRank1 = 1,
+    voxel_center: bool = False,
+    device: DeviceIdentifier = "cpu",
+) -> Grid:
+    """Create a single dense grid defined by axis-aligned world-space bounds."""
+    gb = gridbatch_from_dense_axis_aligned_bounds(1, dense_dims, bounds_min, bounds_max, voxel_center, device)
+    return _wrap_single_grid(gb.data)
+
+
+def grid_from_ijk(
+    ijk: torch.Tensor,
+    voxel_sizes: NumericMaxRank2 = 1,
+    origins: NumericMaxRank2 = 0,
+    device: DeviceIdentifier | None = None,
+) -> Grid:
+    """Create a single grid from voxel-space coordinates."""
+    jt = JaggedTensor(ijk)
+    gb = gridbatch_from_ijk(jt, voxel_sizes, origins, device)
+    return _wrap_single_grid(gb.data)
+
+
+def grid_from_mesh(
+    mesh_vertices: torch.Tensor,
+    mesh_faces: torch.Tensor,
+    voxel_sizes: NumericMaxRank2 = 1,
+    origins: NumericMaxRank2 = 0,
+    device: DeviceIdentifier | None = None,
+) -> Grid:
+    """Create a single grid by voxelizing a triangle mesh surface."""
+    verts_jt = JaggedTensor(mesh_vertices)
+    faces_jt = JaggedTensor(mesh_faces)
+    gb = gridbatch_from_mesh(verts_jt, faces_jt, voxel_sizes, origins, device)
+    return _wrap_single_grid(gb.data)
+
+
+def grid_from_nearest_voxels_to_points(
+    points: torch.Tensor,
+    voxel_sizes: NumericMaxRank2 = 1,
+    origins: NumericMaxRank2 = 0,
+    device: DeviceIdentifier | None = None,
+) -> Grid:
+    """Create a single grid by adding the eight nearest voxels to every input point."""
+    jt = JaggedTensor(points)
+    gb = gridbatch_from_nearest_voxels_to_points(jt, voxel_sizes, origins, device)
+    return _wrap_single_grid(gb.data)
+
+
+def grid_from_points(
+    points: torch.Tensor,
+    voxel_sizes: NumericMaxRank2 = 1,
+    origins: NumericMaxRank2 = 0,
+    device: DeviceIdentifier | None = None,
+) -> Grid:
+    """Create a single grid from a point cloud."""
+    jt = JaggedTensor(points)
+    gb = gridbatch_from_points(jt, voxel_sizes, origins, device)
+    return _wrap_single_grid(gb.data)
+
+
+def grid_from_zero_voxels(
+    device: DeviceIdentifier = "cpu",
+    voxel_sizes: NumericMaxRank2 = 1,
+    origins: NumericMaxRank2 = 0,
+) -> Grid:
+    """Create a single grid with zero voxels."""
+    gb = gridbatch_from_zero_voxels(device, voxel_sizes, origins)
+    return _wrap_single_grid(gb.data)

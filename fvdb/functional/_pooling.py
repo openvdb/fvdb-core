@@ -4,16 +4,16 @@
 """Functional API for pooling and refinement operations on sparse grids."""
 from __future__ import annotations
 
-from typing import Any, TYPE_CHECKING, cast, overload
+from typing import Any, TYPE_CHECKING, cast
 
 import torch
 
 from .. import _fvdb_cpp
 from ..jagged_tensor import JaggedTensor
 from ..types import NumericMaxRank1, ValueConstraint, to_Vec3i
-from ._dispatch import _get_grid_data, _prepare_args
 
 if TYPE_CHECKING:
+    from ..grid import Grid
     from ..grid_batch import GridBatch
 
 
@@ -83,209 +83,170 @@ class _RefineFn(torch.autograd.Function):
 
 
 # ---------------------------------------------------------------------------
-#  Public API
+#  Batch API  (GridBatch + JaggedTensor)
 # ---------------------------------------------------------------------------
 
 
-@overload
-def max_pool(
-    grid: GridBatch,
-    pool_factor: NumericMaxRank1,
-    data: torch.Tensor,
-    stride: NumericMaxRank1 = 0,
-    coarse_grid: GridBatch | None = None,
-) -> tuple[torch.Tensor, GridBatch]: ...
-
-
-@overload
-def max_pool(
+def max_pool_batch(
     grid: GridBatch,
     pool_factor: NumericMaxRank1,
     data: JaggedTensor,
     stride: NumericMaxRank1 = 0,
     coarse_grid: GridBatch | None = None,
-) -> tuple[JaggedTensor, GridBatch]: ...
-
-
-def max_pool(
-    grid: GridBatch,
-    pool_factor: NumericMaxRank1,
-    data: torch.Tensor | JaggedTensor,
-    stride: NumericMaxRank1 = 0,
-    coarse_grid: GridBatch | None = None,
-) -> tuple[torch.Tensor, GridBatch] | tuple[JaggedTensor, GridBatch]:
-    """
-    Apply max pooling to voxel data, reducing resolution by ``pool_factor``.
-
-    Each output voxel contains the maximum of the corresponding input voxels
-    within the pooling window. If ``coarse_grid`` is ``None``, a new coarse grid
-    is created with voxel sizes multiplied by ``pool_factor``.
-
-    This function supports backpropagation.
-
-    Args:
-        grid: The fine grid whose data to pool.
-        pool_factor: Downsample factor, broadcastable to ``(3,)``, integer dtype.
-        data: Voxel data to pool.
-        stride: Pooling stride. If ``0`` (default), equals ``pool_factor``.
-        coarse_grid: Optional pre-allocated coarse grid for output.
-
-    Returns:
-        A tuple ``(pooled_data, coarse_grid)``.
-
-    .. seealso:: :func:`avg_pool`
-    """
+) -> tuple[JaggedTensor, GridBatch]:
+    """Max-pool voxel data, reducing resolution by *pool_factor*."""
     from ..grid_batch import GridBatch as GB
 
-    is_flat = isinstance(data, torch.Tensor)
     factor_list = to_Vec3i(pool_factor, value_constraint=ValueConstraint.POSITIVE).tolist()
     stride_list = to_Vec3i(stride, value_constraint=ValueConstraint.NON_NEGATIVE).tolist()
 
-    grid_data, (data_jt,), unwrap = _prepare_args(grid, data)
-    assert data_jt is not None
+    grid_data = grid.data
     if coarse_grid is not None:
-        coarse_grid_data = _get_grid_data(coarse_grid)
+        coarse_grid_data = coarse_grid.data
     else:
         coarse_factor = [s if s > 0 else f for s, f in zip(stride_list, factor_list)]
         coarse_grid_data = _fvdb_cpp.coarsen_grid(grid_data, coarse_factor)
-    result = cast(torch.Tensor, _MaxPoolFn.apply(data_jt.jdata, grid_data, coarse_grid_data, factor_list, stride_list))
+
+    result = cast(
+        torch.Tensor,
+        _MaxPoolFn.apply(data.jdata, grid_data, coarse_grid_data, factor_list, stride_list),
+    )
     coarse_gb = GB(data=coarse_grid_data)
-    if is_flat:
-        return result, coarse_gb
     return coarse_gb.jagged_like(result), coarse_gb
 
 
-@overload
-def avg_pool(
-    grid: GridBatch,
+def max_pool_single(
+    grid: Grid,
     pool_factor: NumericMaxRank1,
     data: torch.Tensor,
     stride: NumericMaxRank1 = 0,
-    coarse_grid: GridBatch | None = None,
-) -> tuple[torch.Tensor, GridBatch]: ...
+    coarse_grid: Grid | None = None,
+) -> tuple[torch.Tensor, Grid]:
+    """Max-pool voxel data for a single grid."""
+    from ..grid import Grid as G
+
+    factor_list = to_Vec3i(pool_factor, value_constraint=ValueConstraint.POSITIVE).tolist()
+    stride_list = to_Vec3i(stride, value_constraint=ValueConstraint.NON_NEGATIVE).tolist()
+
+    grid_data = grid.data
+    if coarse_grid is not None:
+        coarse_grid_data = coarse_grid.data
+    else:
+        coarse_factor = [s if s > 0 else f for s, f in zip(stride_list, factor_list)]
+        coarse_grid_data = _fvdb_cpp.coarsen_grid(grid_data, coarse_factor)
+
+    data_jt = JaggedTensor(data)
+    result = cast(
+        torch.Tensor,
+        _MaxPoolFn.apply(data_jt.jdata, grid_data, coarse_grid_data, factor_list, stride_list),
+    )
+    return result, G(data=coarse_grid_data)
 
 
-@overload
-def avg_pool(
+def avg_pool_batch(
     grid: GridBatch,
     pool_factor: NumericMaxRank1,
     data: JaggedTensor,
     stride: NumericMaxRank1 = 0,
     coarse_grid: GridBatch | None = None,
-) -> tuple[JaggedTensor, GridBatch]: ...
-
-
-def avg_pool(
-    grid: GridBatch,
-    pool_factor: NumericMaxRank1,
-    data: torch.Tensor | JaggedTensor,
-    stride: NumericMaxRank1 = 0,
-    coarse_grid: GridBatch | None = None,
-) -> tuple[torch.Tensor, GridBatch] | tuple[JaggedTensor, GridBatch]:
-    """
-    Apply average pooling to voxel data, reducing resolution by ``pool_factor``.
-
-    Each output voxel contains the average of the corresponding input voxels
-    within the pooling window.
-
-    This function supports backpropagation.
-
-    Args:
-        grid: The fine grid whose data to pool.
-        pool_factor: Downsample factor, broadcastable to ``(3,)``, integer dtype.
-        data: Voxel data to pool.
-        stride: Pooling stride. If ``0`` (default), equals ``pool_factor``.
-        coarse_grid: Optional pre-allocated coarse grid for output.
-
-    Returns:
-        A tuple ``(pooled_data, coarse_grid)``.
-
-    .. seealso:: :func:`max_pool`
-    """
+) -> tuple[JaggedTensor, GridBatch]:
+    """Average-pool voxel data, reducing resolution by *pool_factor*."""
     from ..grid_batch import GridBatch as GB
 
-    is_flat = isinstance(data, torch.Tensor)
     factor_list = to_Vec3i(pool_factor, value_constraint=ValueConstraint.POSITIVE).tolist()
     stride_list = to_Vec3i(stride, value_constraint=ValueConstraint.NON_NEGATIVE).tolist()
 
-    grid_data, (data_jt,), unwrap = _prepare_args(grid, data)
-    assert data_jt is not None
+    grid_data = grid.data
     if coarse_grid is not None:
-        coarse_grid_data = _get_grid_data(coarse_grid)
+        coarse_grid_data = coarse_grid.data
     else:
         coarse_factor = [s if s > 0 else f for s, f in zip(stride_list, factor_list)]
         coarse_grid_data = _fvdb_cpp.coarsen_grid(grid_data, coarse_factor)
-    result = cast(torch.Tensor, _AvgPoolFn.apply(data_jt.jdata, grid_data, coarse_grid_data, factor_list, stride_list))
+
+    result = cast(
+        torch.Tensor,
+        _AvgPoolFn.apply(data.jdata, grid_data, coarse_grid_data, factor_list, stride_list),
+    )
     coarse_gb = GB(data=coarse_grid_data)
-    if is_flat:
-        return result, coarse_gb
     return coarse_gb.jagged_like(result), coarse_gb
 
 
-@overload
-def refine(
-    grid: GridBatch,
-    subdiv_factor: NumericMaxRank1,
+def avg_pool_single(
+    grid: Grid,
+    pool_factor: NumericMaxRank1,
     data: torch.Tensor,
-    mask: torch.Tensor | None = None,
-    fine_grid: GridBatch | None = None,
-) -> tuple[torch.Tensor, GridBatch]: ...
+    stride: NumericMaxRank1 = 0,
+    coarse_grid: Grid | None = None,
+) -> tuple[torch.Tensor, Grid]:
+    """Average-pool voxel data for a single grid."""
+    from ..grid import Grid as G
+
+    factor_list = to_Vec3i(pool_factor, value_constraint=ValueConstraint.POSITIVE).tolist()
+    stride_list = to_Vec3i(stride, value_constraint=ValueConstraint.NON_NEGATIVE).tolist()
+
+    grid_data = grid.data
+    if coarse_grid is not None:
+        coarse_grid_data = coarse_grid.data
+    else:
+        coarse_factor = [s if s > 0 else f for s, f in zip(stride_list, factor_list)]
+        coarse_grid_data = _fvdb_cpp.coarsen_grid(grid_data, coarse_factor)
+
+    data_jt = JaggedTensor(data)
+    result = cast(
+        torch.Tensor,
+        _AvgPoolFn.apply(data_jt.jdata, grid_data, coarse_grid_data, factor_list, stride_list),
+    )
+    return result, G(data=coarse_grid_data)
 
 
-@overload
-def refine(
+def refine_batch(
     grid: GridBatch,
     subdiv_factor: NumericMaxRank1,
     data: JaggedTensor,
     mask: JaggedTensor | None = None,
-    fine_grid: GridBatch | None = None,
-) -> tuple[JaggedTensor, GridBatch]: ...
-
-
-def refine(
-    grid: GridBatch,
-    subdiv_factor: NumericMaxRank1,
-    data: torch.Tensor | JaggedTensor,
-    mask: torch.Tensor | JaggedTensor | None = None,
-    fine_grid: GridBatch | None = None,
-) -> tuple[torch.Tensor, GridBatch] | tuple[JaggedTensor, GridBatch]:
-    """
-    Refine (upsample) voxel data by subdividing each voxel by ``subdiv_factor``.
-
-    For each voxel ``(i, j, k)``, copies its data to all sub-voxels in the fine grid.
-    If ``fine_grid`` is ``None``, a new fine grid is created with voxel sizes
-    divided by ``subdiv_factor``.
-
-    This function supports backpropagation.
-
-    Args:
-        grid: The coarse grid whose data to refine.
-        subdiv_factor: Subdivision factor, broadcastable to ``(3,)``, integer dtype.
-        data: Voxel data to refine.
-        mask: Optional boolean mask selecting which voxels to refine.
-        fine_grid: Optional pre-allocated fine grid for output.
-
-    Returns:
-        A tuple ``(refined_data, fine_grid)``.
-    """
+    refined: GridBatch | None = None,
+) -> tuple[JaggedTensor, GridBatch]:
+    """Refine (upsample) voxel data by subdividing each voxel."""
     from ..grid_batch import GridBatch as GB
 
-    is_flat = isinstance(data, torch.Tensor)
     factor_list = to_Vec3i(subdiv_factor, value_constraint=ValueConstraint.POSITIVE).tolist()
 
-    grid_data, (data_jt,), unwrap = _prepare_args(grid, data)
-    assert data_jt is not None
-    if fine_grid is not None:
-        fine_grid_data = _get_grid_data(fine_grid)
+    grid_data = grid.data
+    if refined is not None:
+        fine_grid_data = refined.data
     else:
         if mask is not None:
-            if isinstance(mask, torch.Tensor):
-                mask = JaggedTensor(mask)
             fine_grid_data = _fvdb_cpp.upsample_grid(grid_data, factor_list, mask._impl)
         else:
             fine_grid_data = _fvdb_cpp.upsample_grid(grid_data, factor_list)
-    result = cast(torch.Tensor, _RefineFn.apply(data_jt.jdata, grid_data, fine_grid_data, factor_list))
+
+    result = cast(torch.Tensor, _RefineFn.apply(data.jdata, grid_data, fine_grid_data, factor_list))
     fine_gb = GB(data=fine_grid_data)
-    if is_flat:
-        return result, fine_gb
     return fine_gb.jagged_like(result), fine_gb
+
+
+def refine_single(
+    grid: Grid,
+    subdiv_factor: NumericMaxRank1,
+    data: torch.Tensor,
+    mask: torch.Tensor | None = None,
+    refined: Grid | None = None,
+) -> tuple[torch.Tensor, Grid]:
+    """Refine (upsample) voxel data for a single grid."""
+    from ..grid import Grid as G
+
+    factor_list = to_Vec3i(subdiv_factor, value_constraint=ValueConstraint.POSITIVE).tolist()
+
+    grid_data = grid.data
+    if refined is not None:
+        fine_grid_data = refined.data
+    else:
+        if mask is not None:
+            mask_jt = JaggedTensor(mask)
+            fine_grid_data = _fvdb_cpp.upsample_grid(grid_data, factor_list, mask_jt._impl)
+        else:
+            fine_grid_data = _fvdb_cpp.upsample_grid(grid_data, factor_list)
+
+    data_jt = JaggedTensor(data)
+    result = cast(torch.Tensor, _RefineFn.apply(data_jt.jdata, grid_data, fine_grid_data, factor_list))
+    return result, G(data=fine_grid_data)

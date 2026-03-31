@@ -68,6 +68,7 @@ from ._fvdb_cpp import (
 
 # Import JaggedTensor from jagged_tensor.py
 from .jagged_tensor import JaggedTensor, jcat
+from .grid import Grid
 from .grid_batch import GridBatch, gcat
 
 
@@ -186,6 +187,7 @@ __version_info__ = tuple(map(int, __version__.split(".")))
 
 __all__ = [
     # Core classes
+    "Grid",
     "GridBatch",
     "JaggedTensor",
     "GaussianSplat3d",
