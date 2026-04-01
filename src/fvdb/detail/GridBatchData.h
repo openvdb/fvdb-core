@@ -1,8 +1,8 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#ifndef FVDB_DETAIL_GRIDBATCHIMPL_H
-#define FVDB_DETAIL_GRIDBATCHIMPL_H
+#ifndef FVDB_DETAIL_GRIDBATCHDATA_H
+#define FVDB_DETAIL_GRIDBATCHDATA_H
 
 #include <fvdb/JaggedTensor.h>
 #include <fvdb/detail/TorchDeviceBuffer.h>
@@ -486,4 +486,4 @@ using BatchGridAccessor = typename GridBatchData::Accessor;
 } // namespace detail
 } // namespace fvdb
 
-#endif // FVDB_DETAIL_GRIDBATCHIMPL_H
+#endif // FVDB_DETAIL_GRIDBATCHDATA_H
