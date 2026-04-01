@@ -34,6 +34,7 @@
 #include <fvdb/detail/ops/VoxelsAlongRays.h>
 #include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/nanovdb/TorchNanoConversions.h>
+#include <fvdb/detail/ops/AcousticRaySamples.h>
 
 #include <torch/types.h>
 
@@ -862,6 +863,14 @@ GridBatch::voxels_along_rays(const JaggedTensor &ray_origins,
 
     return fvdb::detail::ops::voxelsAlongRays(
         *mImpl, ray_origins, ray_directions, max_vox, eps, return_ijk, cumulative);
+}
+
+std::vector<JaggedTensor>
+GridBatch::acoustic_ray_samples(const JaggedTensor &ray_origins,
+                                const JaggedTensor &ray_directions,
+                                const JaggedTensor &sound_speeds,
+                                float step_size) const {
+    return fvdb::detail::ops::acousticRaySamples(*mImpl, ray_origins, ray_directions, sound_speeds, step_size);
 }
 
 JaggedTensor
