@@ -100,7 +100,7 @@ grid.num_voxels_at(0) # active voxels in grid 0
 grid.ijk.jdata        # torch.Tensor of shape [total_voxels, 3], dtype=int32
 
 # Convert ijk → world-space center of each voxel
-world_centers = grid.grid_to_world(grid.ijk.float())  # returns JaggedTensor
+world_centers = grid.voxel_to_world(grid.ijk.float())  # returns JaggedTensor
 ```
 
 ### The `jagged_like` Pattern
@@ -115,7 +115,7 @@ flat_feat = torch.randn(grid.total_voxels, 8, device='cuda')  # shape [1600, 8]
 features  = grid.jagged_like(flat_feat)
 # features.jdata     → the same [1600, 8] tensor
 # features.jidx      → [1600] ints: 500×0, then 700×1, then 400×2
-# features.joffsets  → [[0,500],[500,1200],[1200,1600]]
+# features.joffsets  → tensor([0, 500, 1200, 1600])
 ```
 
 `jagged_like` copies no data — it only attaches the grid's index structure to your tensor. This is how you attach data to a grid.
@@ -150,7 +150,7 @@ Batch item 2: Tensor[N_2, C]
 **Internal representation:**
 - `jdata`: flat `Tensor[N_total, *]` — all elements concatenated
 - `jidx`: flat `Tensor[N_total]` of int — which batch item each element belongs to
-- `joffsets`: `Tensor[B, 2]` — `[start, end)` index in `jdata` for each batch item
+- `joffsets`: `Tensor[B+1]` — cumulative offsets into `jdata`; item `i` spans `jdata[joffsets[i]:joffsets[i+1]]`
 
 ### Creating JaggedTensors
 
@@ -167,11 +167,11 @@ jt = fvdb.JaggedTensor([t0, t1, t2])
 print(jt.num_tensors)       # 3
 print(jt.jdata.shape)       # torch.Size([370, 3])
 print(jt.jidx[:5])          # tensor([0, 0, 0, 0, 0])  ← first 5 belong to item 0
-print(jt.joffsets)          # tensor([[0, 100], [100, 250], [250, 370]])
+print(jt.joffsets)          # tensor([0, 100, 250, 370])
 
-# Factory functions (like torch.zeros/ones/randn but jagged)
-jt_z = fvdb.jzeros(lsizes=[100, 150, 120], rsizes=[3], device='cuda')
-jt_r = fvdb.jrandn(lsizes=[100, 150, 120], rsizes=[3])
+# Factory class methods (like torch.zeros/ones/randn but jagged)
+jt_z = fvdb.JaggedTensor.from_zeros(lsizes=[100, 150, 120], rsizes=[3], device='cuda')
+jt_r = fvdb.JaggedTensor.from_randn(lsizes=[100, 150, 120], rsizes=[3])
 
 # From flat data + indices
 data = torch.randn(370, 3)
@@ -771,9 +771,9 @@ The backbone doesn't change. Only the head and the loss do.
 
 **Quiz 2**
 - (a) `colors = fvdb.JaggedTensor([colors_0, colors_1])`
-- (b) `tensor([[0, 5000], [5000, 13000]])`
+- (b) `tensor([0, 5000, 13000])`
 - (c) `fvdb.relu(colors)`
-- (d) `jdata` shape `[1600, 8]`; `jidx` is `[1600]` with 500 zeros, then 700 ones, then 400 twos; `joffsets` is `[[0,500],[500,1200],[1200,1600]]`.
+- (d) `jdata` shape `[1600, 8]`; `jidx` is `[1600]` with 500 zeros, then 700 ones, then 400 twos; `joffsets` is `tensor([0, 500, 1200, 1600])`.
 
 **Quiz 3**
 - (a) `grid = fvdb.GridBatch.from_mesh(fvdb.JaggedTensor([vA.cuda(), vB.cuda()]), fvdb.JaggedTensor([fA.long().cuda(), fB.long().cuda()]), voxel_sizes=[[0.02]*3, [0.05]*3])`
@@ -794,6 +794,9 @@ The backbone doesn't change. Only the head and the loss do.
 - (a) `0.05 × 4 = 0.20`
 - (b) They are **not** the same in general. `coarsened(2)` creates a topology derived from the original voxels by grouping. `SparseConv3d(stride=2)` creates a topology determined by the kernel map computation in the convolution. The resulting voxel sets may differ depending on the grid structure.
 - (c) When you want convolutions to "see" the neighborhood outside the immediate surface — e.g., encoding free-space voxels adjacent to the surface, or when your network's first layer needs context from the empty voxels surrounding the shape.
+
+**Capstone — head input channels**
+- `dec0` outputs 16 channels. The skip connection concatenates `enc0`'s 16-channel output via `fvdb.jcat([dec0_out, enc0_out], dim=1)`, giving 32 channels. So the head is `SparseConv3d(32, 1, kernel_size=1)` in Stage 1 and `SparseConv3d(32, 3, kernel_size=1)` in Stage 2.
 
 ---
 
@@ -824,4 +827,4 @@ The backbone doesn't change. Only the head and the loss do.
 
 ---
 
-*This lesson was generated from the fvdb-core repository documentation and is versioned alongside the code at `docs/fvdb_interactive_lesson.md`.*
+*This lesson was generated from the fvdb-core repository documentation and is versioned alongside the code at `docs/TEACHME/fvdb_core_lesson.md`.*

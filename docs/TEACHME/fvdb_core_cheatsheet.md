@@ -21,19 +21,19 @@ A batch of tensors with variable first dimension. Stored flat on GPU.
 
 ```python
 # --- Creation ---
-jt = fvdb.JaggedTensor([t0, t1, t2])          # from list of Tensors
-jt = fvdb.jzeros(lsizes=[100,150], rsizes=[3]) # zeros;  lsizes=per-item counts, rsizes=feature shape
-jt = fvdb.jones(lsizes=[100,150],  rsizes=[3]) # ones
-jt = fvdb.jrandn(lsizes=[100,150], rsizes=[3]) # normal random
-jt = fvdb.jrand(lsizes=[100,150],  rsizes=[3]) # uniform random
+jt = fvdb.JaggedTensor([t0, t1, t2])                          # from list of Tensors
+jt = fvdb.JaggedTensor.from_zeros(lsizes=[100,150], rsizes=[3]) # zeros;  lsizes=per-item counts, rsizes=feature shape
+jt = fvdb.JaggedTensor.from_ones(lsizes=[100,150],  rsizes=[3]) # ones
+jt = fvdb.JaggedTensor.from_randn(lsizes=[100,150], rsizes=[3]) # normal random
+jt = fvdb.JaggedTensor.from_rand(lsizes=[100,150],  rsizes=[3]) # uniform random
 
 jt = fvdb.JaggedTensor.from_data_and_indices(data, idx, num_tensors=B)
-jt = fvdb.JaggedTensor.from_data_and_offsets(data, offsets)  # offsets: [B+1] or [B,2]
+jt = fvdb.JaggedTensor.from_data_and_offsets(data, offsets)  # offsets: [B+1] cumulative
 
 # --- Key properties ---
 jt.jdata       # Tensor[N_total, *]  — flat concatenated data
 jt.jidx        # Tensor[N_total]     — batch index of each element (int)
-jt.joffsets    # Tensor[B, 2]        — [start, end) slice per batch item (exclusive end)
+jt.joffsets    # Tensor[B+1]         — cumulative offsets; item i is jdata[joffsets[i]:joffsets[i+1]]
 jt.num_tensors # int — number of items in the batch
 jt.rshape      # tuple — shape of the non-jagged dimensions
 
