@@ -111,7 +111,7 @@ features = grid.jagged_like(torch.zeros(grid.total_voxels, C, device='cuda'))
 
 ```python
 # World-space xyz → index-space ijk (float, for interpolation)
-ijk_float = grid.world_to_grid(pts_JT)       # JaggedTensor[N, 3] float
+ijk_float = grid.world_to_voxel(pts_JT)      # JaggedTensor[N, 3] float
 
 # Index-space ijk (float) → world-space xyz
 xyz = grid.voxel_to_world(ijk_JT.float())    # JaggedTensor[N, 3] float
@@ -151,9 +151,9 @@ mask = grid.coords_in_grid(ijk_JT)          # JaggedTensor of bool — is each i
 ### Topology Operations
 
 ```python
-grid2 = grid.coarsened(factor)    # merge factor×factor×factor blocks; voxel_sizes × factor
-grid2 = grid.subdivided(factor)   # split each voxel; voxel_sizes / factor
-grid2 = grid.dilated(radius)      # add all voxels within radius shells (26-neighbors per shell)
+grid2 = grid.coarsened_grid(factor)    # merge factor×factor×factor blocks; voxel_sizes × factor
+grid2 = grid.refined_grid(factor)     # split each voxel; voxel_sizes / factor
+grid2 = grid.dilated_grid(radius)     # add all voxels within Chebyshev distance (26-neighbors per shell)
 grid2 = grid.dual_grid()          # voxels at corners of primal voxels — useful for SDF
 ```
 

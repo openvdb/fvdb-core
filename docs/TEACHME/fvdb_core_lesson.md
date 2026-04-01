@@ -307,8 +307,8 @@ grid = fvdb.GridBatch.from_dense(num_grids=2, dense_dims=[32, 32, 32], device='c
 ```python
 grid = fvdb.GridBatch.from_points(points, voxel_sizes=0.1)
 
-# World → ijk (index space, floating-point)
-ijk_float = grid.world_to_grid(points)          # JaggedTensor of float ijk
+# World → ijk (voxel index space, floating-point)
+ijk_float = grid.world_to_voxel(points)          # JaggedTensor of float ijk
 
 # IJK → world (center of each voxel)
 world_xyz  = grid.voxel_to_world(grid.ijk.float())   # JaggedTensor of xyz
@@ -406,7 +406,7 @@ for _ in range(iters):
 > **Q:** You have a grid built from a point cloud, with per-voxel RGB colors in `vox_colors` (a `JaggedTensor`).
 > (a) You want to render colors at 10,000 new query points. Write the sampling call.
 > (b) You want to accumulate per-point normals into voxel features. Write the splatting call.
-> (c) `sample_trilinear` is differentiable. With respect to what — the query points, the voxel features, or both?
+> (c) `sample_trilinear` supports backpropagation. What are the primary inputs that gradients flow back to?
 
 *(Answer key at end of document.)*
 
@@ -590,40 +590,38 @@ Sparse 3D networks need multi-scale representations, just like 2D CNNs. In fVDB,
 import fvdb
 
 # Coarsen by factor 2 (merge 2×2×2 blocks into one voxel)
-grid_coarse = grid.coarsened(2)   # voxel_sizes × 2, fewer voxels
+grid_coarse = grid.coarsened_grid(2)   # voxel_sizes × 2, fewer voxels
 
 # Refine: split each voxel into 2×2×2 = 8 children
-grid_fine   = grid.subdivided(2)  # voxel_sizes / 2, up to 8× more voxels
+grid_fine   = grid.refined_grid(2)  # voxel_sizes / 2, up to 8× more voxels
 
-# Note: coarsen/refine only change topology; features are not transferred
+# Note: coarsened_grid/refined_grid only change topology; features are not transferred
 # Use sample_trilinear / splat_trilinear to transfer features across resolutions
 ```
 
 ### Dilation
 
 ```python
-# Expand the grid: add all voxels within Manhattan distance `d`
-grid_dilated = grid.dilated(1)   # adds all 26-neighbors of each active voxel
+# Expand the grid: add all voxels within Chebyshev distance `d`
+grid_dilated = grid.dilated_grid(1)   # adds all 26-neighbors of each active voxel (3×3×3 neighborhood)
 ```
 
-**Why dilate?** Sparse convolution with kernel size 3 only reads within the existing voxel set. If you want to convolve features near (but outside) the surface, you need to pre-dilate the grid before building features.
+**Why dilate?** Sparse convolution with kernel size 3 only reads within the existing voxel set. If you want to convolve features near (but outside) the surface, you need to pre-dilate the grid with `dilated_grid` before building features.
 
 ### Voxel Neighborhood Queries
 
 ```python
-# Get the 6-connected, 26-connected, or arbitrary neighborhood of voxels
-neighbors, masks = grid.neighbor_indexes(offsets)
-# offsets: Tensor[K, 3] of ijk offsets to query
-# neighbors: JaggedTensor of neighbor flat indices (-1 for empty)
-# masks: JaggedTensor of bool
+# Get the N-ring neighborhood of voxels (extent=1 for 26-connected 1-ring)
+neighbors = grid.neighbor_indexes(grid.ijk, extent=1)
+# neighbors: JaggedTensor of neighbor flat indices (-1 for inactive neighbors)
 ```
 
 ### Quiz 6
 
 > **Q:**
-> (a) A grid has `voxel_sizes=0.05`. After `coarsened(4)`, what is the voxel size?
-> (b) You want a `stride=2` encoder followed by upsampling back to the original resolution. What is the relationship between the output of `coarsened(2)` and the output of a `stride=2` `SparseConv3d`? Are they the same?
-> (c) When would you use `dilated(1)` before building features?
+> (a) A grid has `voxel_sizes=0.05`. After `coarsened_grid(4)`, what is the voxel size?
+> (b) You want a `stride=2` encoder followed by upsampling back to the original resolution. What is the relationship between the output of `coarsened_grid(2)` and the output of a `stride=2` `SparseConv3d`? Are they the same?
+> (c) When would you use `dilated_grid(1)` before building features?
 
 *(Answer key at end of document.)*
 
@@ -783,7 +781,7 @@ The backbone doesn't change. Only the head and the loss do.
 **Quiz 4**
 - (a) `sampled = grid.sample_trilinear(query_pts, vox_colors)`
 - (b) `vox_normals = grid.splat_trilinear(points, point_normals)`
-- (c) Differentiable w.r.t. the **voxel features** (not the query point locations in the standard implementation). Gradients flow through the interpolation weights back to `vox_feat`.
+- (c) Gradients flow through the interpolation weights back to the **voxel features** (`vox_feat`). The operation supports backpropagation (see also `sample_trilinear_with_grad` for explicit spatial gradients w.r.t. query points).
 
 **Quiz 5**
 - (a) `stride=1` → output grid has the same topology as input. `stride=2` → output grid is coarser; roughly 1/8 the voxels (each output voxel covers a 2×2×2 block).
@@ -792,7 +790,7 @@ The backbone doesn't change. Only the head and the loss do.
 
 **Quiz 6**
 - (a) `0.05 × 4 = 0.20`
-- (b) They are **not** the same in general. `coarsened(2)` creates a topology derived from the original voxels by grouping. `SparseConv3d(stride=2)` creates a topology determined by the kernel map computation in the convolution. The resulting voxel sets may differ depending on the grid structure.
+- (b) They are **not** the same in general. `coarsened_grid(2)` creates a topology derived from the original voxels by grouping. `SparseConv3d(stride=2)` creates a topology determined by the kernel map computation in the convolution. The resulting voxel sets may differ depending on the grid structure.
 - (c) When you want convolutions to "see" the neighborhood outside the immediate surface — e.g., encoding free-space voxels adjacent to the surface, or when your network's first layer needs context from the empty voxels surrounding the shape.
 
 **Capstone — head input channels**
@@ -810,13 +808,13 @@ The backbone doesn't change. Only the head and the loss do.
 | Attach features to grid | `grid.jagged_like(flat_tensor)` |
 | Sample grid at points | `grid.sample_trilinear(pts_JT, feat_JT)` |
 | Splat points onto grid | `grid.splat_trilinear(pts_JT, feat_JT)` |
-| World → ijk | `grid.world_to_grid(pts_JT)` |
-| IJK → world | `grid.grid_to_world(ijk_JT)` |
+| World → ijk | `grid.world_to_voxel(pts_JT)` |
+| IJK → world | `grid.voxel_to_world(ijk_JT)` |
 | IJK → flat index | `grid.ijk_to_index(ijk_JT)` → -1 if absent |
 | Point in grid? | `grid.points_in_grid(pts_JT)` → bool JT |
-| Coarsen topology | `grid.coarsened(factor)` |
-| Refine topology | `grid.subdivided(factor)` |
-| Dilate topology | `grid.dilated(radius)` |
+| Coarsen topology | `grid.coarsened_grid(factor)` |
+| Refine topology | `grid.refined_grid(factor)` |
+| Dilate topology | `grid.dilated_grid(radius)` |
 | Conv plan (same/down) | `ConvolutionPlan.from_grid_batch(kernel_size, stride, source_grid, target_grid=)` |
 | Conv plan (transposed) | `ConvolutionPlan.from_grid_batch_transposed(kernel_size, stride, source_grid, target_grid)` |
 | Output grid from plan | `plan.target_grid_batch` |
