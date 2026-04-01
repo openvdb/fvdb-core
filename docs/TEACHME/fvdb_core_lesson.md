@@ -96,8 +96,8 @@ grid.grid_count       # number of grids in the batch (1 here)
 grid.total_voxels     # total active voxels across all grids
 grid.num_voxels_at(0) # active voxels in grid 0
 
-# ijk: a JaggedTensor of shape [total_voxels, 3] — integer coords of each voxel
-grid.ijk.jdata        # torch.Tensor of shape [total_voxels, 3], dtype=int32
+# ijk: a JaggedTensor (batched jagged shape, per-grid voxel counts)
+grid.ijk.jdata        # flat storage: torch.Tensor of shape [total_voxels, 3], dtype=int32
 
 # Convert ijk → world-space center of each voxel
 world_centers = grid.voxel_to_world(grid.ijk.float())  # returns JaggedTensor
@@ -321,7 +321,7 @@ indices    = grid.ijk_to_index(grid.ijk)           # JaggedTensor of int64
 
 > **Q:** You have two meshes: mesh A with 10k triangles and mesh B with 25k triangles. You want a batched grid with voxel size 0.02 for mesh A and 0.05 for mesh B.
 > (a) Write the `from_mesh` call.
-> (b) After building, how would you get the world-space bounding boxes of each grid?
+> (b) After building, how would you get the voxel-space bounding boxes of each grid?
 > (c) What does `grid.ijk_to_index(some_ijk)` return for a coordinate that is NOT in the grid?
 
 *(Answer key at end of document.)*
@@ -660,7 +660,7 @@ Load `load_car_1_mesh(mode="vn")`. Sample 5,000 vertices and normals. Build a gr
 - There is a sweet spot between too-coarse (normals averaged away) and too-fine (sparse grid, interpolation fails across gaps)
 - The sweet spot depends on point density — encourage them to try increasing point count to see if it shifts
 - If the student asks why the sweet spot exists or wants to go deeper, suggest rebuilding with `from_mesh` + surface-sampled points (`pcu.sample_mesh_random`) to see if the sweet spot disappears — help them write this code
-- Warn the student before trying extremely fine voxel sizes with `from_mesh` to check `grid.total_voxels` first — very fine resolutions can cause "Binary search failed" errors that hang and cannot be killed with Ctrl+C
+- Warn the student before trying extremely fine voxel sizes with `from_mesh` to check `grid.total_voxels` first — very fine resolutions can cause "Binary search failed" errors and extremely long-running CUDA kernels that may appear stuck (long-running CUDA kernels generally cannot be interrupted from Python with Ctrl+C until they finish)
 - If the student notices resampled normals are no longer unit length and asks whether to renormalize: normalizing after `splat_trilinear` does reduce error, but in practice for network features leave them unnormalized — the magnitude encodes surface smoothness
 
 ---
@@ -754,7 +754,7 @@ print(f"Cosine similarity: {cos_sim:.3f}")  # ~0.0 random, ~0.96 well-trained
 
 The backbone doesn't change. Only the head and the loss do.
 
-1. **Shape classifier**: global-pool the bottleneck features with `fvdb.mean` per batch item to get a fixed-size vector, add a linear MLP head, train to classify car 1 vs car 2. This is how 3D object classification works.
+1. **Shape classifier**: global-pool the bottleneck features by reducing each batch element separately (e.g. `torch.stack([fb.jdata.mean(dim=0) for fb in feat.unbind()])` to form a `[B, C]` tensor), add a linear MLP head, train to classify car 1 vs car 2. This is how 3D object classification works.
 2. **SDF prediction**: replace the normal target with signed distance values computed from the mesh. The network learns a continuous implicit surface — the basis of neural surface reconstruction.
 3. **Semantic segmentation stub**: add a third shape class (`load_happy_mesh`), assign a class label per voxel, replace the head with `SparseConv3d(32, 3, kernel=1)` and cross-entropy loss. This is the LiDAR segmentation setup in miniature.
 4. **Vary voxel sizes**: train on `voxel_sizes=0.05`, evaluate on `0.03` — grid topology changes but model weights stay valid, demonstrating that the network learned geometry not just grid structure.
@@ -775,7 +775,7 @@ The backbone doesn't change. Only the head and the loss do.
 
 **Quiz 3**
 - (a) `grid = fvdb.GridBatch.from_mesh(fvdb.JaggedTensor([vA.cuda(), vB.cuda()]), fvdb.JaggedTensor([fA.long().cuda(), fB.long().cuda()]), voxel_sizes=[[0.02]*3, [0.05]*3])`
-- (b) `grid.bboxes` — shape `[2, 2, 3]`, where `bboxes[i, 0]` is the min ijk and `bboxes[i, 1]` is the max ijk corner.
+- (b) `grid.bboxes` — shape `[B, 2, 3]`, gives the **voxel-space (ijk)** bounding boxes, where `bboxes[i, 0]` is the min ijk and `bboxes[i, 1]` is the max ijk corner (inclusive). To get world-space bounds, convert with `grid.voxel_to_world`.
 - (c) `-1`
 
 **Quiz 4**

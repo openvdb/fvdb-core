@@ -96,7 +96,7 @@ grid.num_voxels_at(i)    # int — active voxels in grid i
 grid.voxel_sizes         # Tensor[B, 3]
 grid.origins             # Tensor[B, 3]
 grid.bboxes              # Tensor[B, 2, 3] — min/max ijk corners per grid
-grid.ijk                 # JaggedTensor[total_voxels, 3] int32 — ijk of each active voxel
+grid.ijk                 # JaggedTensor (batched, per-grid voxel counts); .jdata is int32 Tensor[total_voxels, 3]
 ```
 
 ### Attaching Features
@@ -250,7 +250,7 @@ weights = torch.randn(out_ch, in_ch, 3, 3, 3, device=grid.device)
 out_feat = plan.execute(vox_feat_JT, weights)   # differentiable
 ```
 
-The kernel map is expensive to compute — cache and reuse `plan` when applying multiple convolutions with the same kernel size/stride on the same grid. `fvnn.SparseConv3d` does this automatically.
+The kernel map is expensive to compute — construct and reuse `plan` across forward passes. `fvnn.SparseConv3d` does not automatically build or cache plans; you must pass one explicitly.
 
 ---
 
