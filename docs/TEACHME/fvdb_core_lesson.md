@@ -395,7 +395,7 @@ optimizer = torch.optim.Adam([features.jdata], lr=1e-2)
 
 for _ in range(iters):
     sdf_pred = dual.sample_trilinear(query_pts, features)
-    loss = F.mse_loss(sdf_pred.jdata, sdf_gt)
+    loss = torch.nn.functional.mse_loss(sdf_pred.jdata, sdf_gt)
     loss.backward()
     optimizer.step()
     optimizer.zero_grad()
@@ -552,8 +552,8 @@ class SparseBlock(torch.nn.Module):
 You can bypass `SparseConv3d` entirely and drive the kernel map directly:
 
 ```python
-# Weights: shape [k, k, k, in_ch, out_ch]
-weights = torch.randn(3, 3, 3, 32, 64, device=grid.device)
+# Weights: shape [out_ch, in_ch, kx, ky, kz]
+weights = torch.randn(64, 32, 3, 3, 3, device=grid.device)
 
 # Execute (differentiable w.r.t. feat and weights)
 out_feat = plan.execute(feat, weights)
@@ -736,12 +736,12 @@ target   = features  # autoencoder: reconstruct the input
 - `enc0`: `SparseConv3d(3 → 16, ...)` — 3 input channels
 - `head`: `SparseConv3d(? → 3, kernel=1)` — 3 output channels
 
-**Loss:** `F.mse_loss(pred.jdata, target.jdata)`
+**Loss:** `torch.nn.functional.mse_loss(pred.jdata, target.jdata)`
 
 **Evaluation:** Cosine similarity between predicted and target normals:
 ```python
-pred_n = F.normalize(feat_out.jdata, dim=-1)
-tgt_n  = F.normalize(target.jdata, dim=-1)
+pred_n = torch.nn.functional.normalize(feat_out.jdata, dim=-1)
+tgt_n  = torch.nn.functional.normalize(target.jdata, dim=-1)
 cos_sim = (pred_n * tgt_n).sum(dim=-1).mean().item()
 print(f"Cosine similarity: {cos_sim:.3f}")  # ~0.0 random, ~0.96 well-trained
 ```

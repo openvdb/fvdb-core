@@ -244,8 +244,8 @@ Use when you need direct control over the kernel map (e.g. custom conv loops).
 plan = ConvolutionPlan.from_grid_batch(kernel_size=3, stride=1,
                                        source_grid=grid, target_grid=grid)
 
-# weights shape: [k, k, k, in_channels, out_channels]
-weights = torch.randn(3, 3, 3, in_ch, out_ch, device=grid.device)
+# weights shape: [out_channels, in_channels, kx, ky, kz]
+weights = torch.randn(out_ch, in_ch, 3, 3, 3, device=grid.device)
 
 out_feat = plan.execute(vox_feat_JT, weights)   # differentiable
 ```
@@ -286,7 +286,7 @@ plan = ConvolutionPlan.from_grid_batch(3, 1, source_grid=grid, target_grid=grid)
 feat_out = relu(bn(conv(feat_JT, plan), grid))    # all JaggedTensors
 
 # Loss computation — access .jdata directly from the output JaggedTensor
-loss = F.mse_loss(feat_out.jdata, target_JT.jdata)
+loss = torch.nn.functional.mse_loss(feat_out.jdata, target_JT.jdata)
 
 # Typical U-Net encoder/decoder with explicit plans and grids
 #   Encoder
