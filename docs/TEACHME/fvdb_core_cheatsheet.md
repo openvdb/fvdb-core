@@ -116,10 +116,12 @@ ijk_float = grid.world_to_voxel(pts_JT)      # JaggedTensor[N, 3] float
 # Index-space ijk (float) → world-space xyz
 xyz = grid.voxel_to_world(ijk_JT.float())    # JaggedTensor[N, 3] float
 
-# Integer ijk → flat linear index (-1 if voxel not active)
-idx = grid.ijk_to_index(ijk_JT)             # JaggedTensor[N] int64
+# Integer ijk → per-grid linear index (-1 if voxel not active)
+idx = grid.ijk_to_index(ijk_JT)                        # JaggedTensor[N] int64, per-grid
+# For a single flat index space across the whole batch (to index grid.ijk.jdata):
+flat_idx = grid.ijk_to_index(ijk_JT, cumulative=True)  # JaggedTensor[N] int64, batch-global
 
-# Flat index → ijk: just index into grid.ijk directly
+# Flat index → ijk: index into grid.ijk.jdata with cumulative indices
 grid.ijk.jdata[flat_idx]                    # Tensor[K, 3]
 
 # Reorder features to match grid's ijk ordering

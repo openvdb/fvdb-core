@@ -313,8 +313,10 @@ ijk_float = grid.world_to_voxel(points)          # JaggedTensor of float ijk
 # IJK → world (center of each voxel)
 world_xyz  = grid.voxel_to_world(grid.ijk.float())   # JaggedTensor of xyz
 
-# IJK (int) → flat index (-1 if not in grid)
-indices    = grid.ijk_to_index(grid.ijk)           # JaggedTensor of int64
+# IJK (int) → per-grid index (-1 if not in grid)
+indices    = grid.ijk_to_index(grid.ijk)                       # per-grid by default
+# For batch-global flat indices (to index grid.ijk.jdata directly):
+flat_idx   = grid.ijk_to_index(grid.ijk, cumulative=True)      # cumulative across batch
 ```
 
 ### Quiz 3
@@ -373,7 +375,7 @@ mask = grid.points_in_grid(query_pts)   # JaggedTensor of bool
 # Boolean mask: which integer ijk coordinates are active voxels?
 mask = grid.coords_in_grid(ijk_coords)  # JaggedTensor of bool
 
-# IJK → flat index; -1 for misses
+# IJK → per-grid index; -1 for misses (use cumulative=True for batch-global)
 idx = grid.ijk_to_index(ijk_coords)
 
 # Inverse: flat index ordering → ijk ordering (for permuting features)
