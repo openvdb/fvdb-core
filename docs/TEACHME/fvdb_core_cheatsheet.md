@@ -83,7 +83,7 @@ grid = fvdb.GridBatch.from_mesh(
 # Dilated from points — includes all 2×2×2 neighbors of each occupied voxel
 grid = fvdb.GridBatch.from_nearest_voxels_to_points(pts_JT, voxel_sizes=0.1)
 
-# Fully dense D×H×W box
+# Fully dense W×H×D box (dense_dims = [W, H, D])
 grid = fvdb.GridBatch.from_dense(num_grids=2, dense_dims=[32,32,32], device='cuda')
 ```
 
@@ -122,7 +122,8 @@ idx = grid.ijk_to_index(ijk_JT)                        # JaggedTensor[N] int64, 
 flat_idx = grid.ijk_to_index(ijk_JT, cumulative=True)  # JaggedTensor[N] int64, batch-global
 
 # Flat index → ijk: index into grid.ijk.jdata with cumulative indices
-grid.ijk.jdata[flat_idx]                    # Tensor[K, 3]
+valid = flat_idx.jdata != -1
+grid.ijk.jdata[flat_idx.jdata[valid]]       # Tensor[K, 3], K = valid.sum()
 
 # Reorder features to match grid's ijk ordering
 inv_idx = grid.ijk_to_inv_index(misordered_ijk)
@@ -139,7 +140,7 @@ sampled = grid.sample_bezier(query_pts_JT, vox_feat_JT)     # smoother, higher-o
 
 # Scatter point features onto voxels (adjoint of sample)
 # Differentiable w.r.t. point_feat
-vox_feat = grid.splat_trilinear(pts_JT, point_feat_JT)      # → JaggedTensor[total_voxels, C]
+vox_feat = grid.splat_trilinear(pts_JT, point_feat_JT)      # → JaggedTensor; .jdata shape [grid.total_voxels, C]
 vox_feat = grid.splat_bezier(pts_JT, point_feat_JT)
 ```
 

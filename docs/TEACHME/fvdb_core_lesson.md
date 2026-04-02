@@ -298,7 +298,7 @@ grid   = fvdb.GridBatch.from_mesh(mesh_v, mesh_f, voxel_sizes=0.025)
 ### From Dense
 
 ```python
-# All D×H×W voxels active — useful for testing or dense baselines
+# Dense box of size W×H×D in (i,j,k); all voxels active — useful for testing or dense baselines
 grid = fvdb.GridBatch.from_dense(num_grids=2, dense_dims=[32, 32, 32], device='cuda')
 ```
 
@@ -361,7 +361,7 @@ The adjoint of sampling: scatter point features onto voxels. Also differentiable
 ```python
 # points: JaggedTensor of xyz, point_feat: JaggedTensor of features per point
 vox_feat = grid.splat_trilinear(points, point_feat)
-# vox_feat: JaggedTensor of shape [total_voxels, C]
+# vox_feat: JaggedTensor matching grid.ijk batch structure; vox_feat.jdata has shape [grid.total_voxels, C]
 ```
 
 **Mental model:** `splat` is the transpose of `sample`. If you sample a grid at a point and then splat the result back, you get a filtered version of the original features.
