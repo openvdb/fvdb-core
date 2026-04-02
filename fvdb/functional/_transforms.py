@@ -57,7 +57,7 @@ def voxel_to_world_batch(grid: GridBatch, ijk: JaggedTensor) -> JaggedTensor:
     Supports backpropagation.
 
     Args:
-        grid (GridBatch): The grid batch whose transforms to use.
+        grid (GridBatch): The grid batch supplying the voxel-to-world transforms.
         ijk (JaggedTensor): Voxel-space coordinates, shape ``(B, -1, 3)``.
 
     Returns:
@@ -75,7 +75,7 @@ def world_to_voxel_batch(grid: GridBatch, points: JaggedTensor) -> JaggedTensor:
     Supports backpropagation.
 
     Args:
-        grid (GridBatch): The grid batch whose transforms to use.
+        grid (GridBatch): The grid batch supplying the world-to-voxel transforms.
         points (JaggedTensor): World-space positions, shape ``(B, -1, 3)``.
 
     Returns:
@@ -98,7 +98,7 @@ def voxel_to_world_single(grid: Grid, ijk: torch.Tensor) -> torch.Tensor:
     Supports backpropagation.
 
     Args:
-        grid (Grid): The single grid whose transform to use.
+        grid (Grid): The grid supplying the voxel-to-world transform.
         ijk (torch.Tensor): Voxel-space coordinates, shape ``(N, 3)``.
 
     Returns:
@@ -116,7 +116,7 @@ def world_to_voxel_single(grid: Grid, points: torch.Tensor) -> torch.Tensor:
     Supports backpropagation.
 
     Args:
-        grid (Grid): The single grid whose transform to use.
+        grid (Grid): The grid supplying the world-to-voxel transform.
         points (torch.Tensor): World-space positions, shape ``(N, 3)``.
 
     Returns:

@@ -28,7 +28,7 @@ mesh extraction, and coordinate transformations on sparse voxel data.
 """
 
 from collections.abc import Iterator
-from typing import Any, Sequence, overload
+from typing import TYPE_CHECKING, Any, Sequence, overload
 
 import numpy as np
 import torch
@@ -41,6 +41,9 @@ from .types import (
     NumericMaxRank1,
     NumericMaxRank2,
 )
+
+if TYPE_CHECKING:
+    from .grid import Grid
 
 
 class GridBatch:
@@ -83,7 +86,7 @@ class GridBatch:
 
         # Create a GridBatch containing 3 grids with the 3 sets of voxel coordinates such that the voxels
         # have a world space size of 1x1x1, and where the [0, 0, 0] voxel in voxel space of each grid is at world space origin (0, 0, 0).
-        grid_batch = fvdb.GridBatch.from_ijk(batch_voxel_coords, voxel_sizes=1.0, origins=0.0, device="cuda")
+        grid_batch = fvdb.GridBatch.from_ijk(batch_voxel_coords, voxel_sizes=1.0, origins=0.0)
 
         # Create some data associated with the grids - here we have 9 voxels and 2 channels per voxel
         voxel_data = torch.randn(grid_batch.total_voxels, 2, device="cuda")  # Index space data
@@ -126,6 +129,8 @@ class GridBatch:
 
     """
 
+    __slots__ = ("data",)
+
     #: :meta private: # NOTE: This is here for sphinx to not complain that the attribute is double defined in the class and in the class documentation.
     max_grids_per_batch: int = _fvdb_cpp.GridBatchData.MAX_GRIDS_PER_BATCH
 
@@ -135,7 +140,16 @@ class GridBatch:
         Args:
             data (_fvdb_cpp.GridBatchData): The underlying C++ grid batch data object.
         """
-        self.data = data
+        object.__setattr__(self, "data", data)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise AttributeError("GridBatch is immutable")
+
+    def __getstate__(self) -> dict:
+        return {"data": self.data}
+
+    def __setstate__(self, state: dict) -> None:
+        object.__setattr__(self, "data", state["data"])
 
     # ============================================================
     #                  GridBatch from_* constructors
@@ -212,7 +226,6 @@ class GridBatch:
         ijk: JaggedTensor,
         voxel_sizes: NumericMaxRank2 = 1,
         origins: NumericMaxRank2 = 0,
-        device: DeviceIdentifier | None = None,
     ) -> "GridBatch":
         """Create a grid batch from explicit voxel-space coordinates.
 
@@ -220,7 +233,6 @@ class GridBatch:
             ijk (JaggedTensor): Per-grid voxel coordinates. Shape: ``(batch_size, num_voxels_for_grid_b, 3)``, integer dtype.
             voxel_sizes (NumericMaxRank2): Size of each voxel, per-grid; broadcastable to shape ``(batch_size, 3)``, floating dtype.
             origins (NumericMaxRank2): World-space origin of each grid, per-grid; broadcastable to shape ``(batch_size, 3)``, floating dtype.
-            device (DeviceIdentifier | None): Device to create the grid batch on. Defaults to ``None``.
 
         Returns:
             grid_batch (GridBatch): A new :class:`GridBatch` with the specified voxel coordinates.
@@ -229,7 +241,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.gridbatch_from_ijk(ijk, voxel_sizes, origins, device)
+        return functional.gridbatch_from_ijk(ijk, voxel_sizes, origins)
 
     @classmethod
     def from_mesh(
@@ -238,7 +250,6 @@ class GridBatch:
         mesh_faces: JaggedTensor,
         voxel_sizes: NumericMaxRank2 = 1,
         origins: NumericMaxRank2 = 0,
-        device: DeviceIdentifier | None = None,
     ) -> "GridBatch":
         """Create a grid batch by voxelizing the surface of triangle meshes.
 
@@ -247,7 +258,6 @@ class GridBatch:
             mesh_faces (JaggedTensor): Per-grid mesh face indices. Shape: ``(batch_size, num_faces_for_grid_b, 3)``.
             voxel_sizes (NumericMaxRank2): Size of each voxel, per-grid; broadcastable to shape ``(batch_size, 3)``, floating dtype.
             origins (NumericMaxRank2): World-space origin of each grid, per-grid; broadcastable to shape ``(batch_size, 3)``, floating dtype.
-            device (DeviceIdentifier | None): Device to create the grid batch on. Defaults to ``None``.
 
         Returns:
             grid_batch (GridBatch): A new :class:`GridBatch` with voxels covering mesh surfaces.
@@ -256,7 +266,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.gridbatch_from_mesh(mesh_vertices, mesh_faces, voxel_sizes, origins, device)
+        return functional.gridbatch_from_mesh(mesh_vertices, mesh_faces, voxel_sizes, origins)
 
     # Load and save functions
     @overload
@@ -362,7 +372,6 @@ class GridBatch:
         points: JaggedTensor,
         voxel_sizes: NumericMaxRank2 = 1,
         origins: NumericMaxRank2 = 0,
-        device: DeviceIdentifier | None = None,
     ) -> "GridBatch":
         """Create a grid batch by adding the eight nearest voxels to every input point.
 
@@ -370,7 +379,6 @@ class GridBatch:
             points (JaggedTensor): Per-grid world-space point positions. Shape: ``(batch_size, num_points_for_grid_b, 3)``.
             voxel_sizes (NumericMaxRank2): Size of each voxel, per-grid; broadcastable to shape ``(batch_size, 3)``, floating dtype.
             origins (NumericMaxRank2): World-space origin of each grid, per-grid; broadcastable to shape ``(batch_size, 3)``, floating dtype.
-            device (DeviceIdentifier | None): Device to create the grid batch on. Defaults to ``None``.
 
         Returns:
             grid_batch (GridBatch): A new :class:`GridBatch` with voxels surrounding each point.
@@ -379,7 +387,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.gridbatch_from_nearest_voxels_to_points(points, voxel_sizes, origins, device)
+        return functional.gridbatch_from_nearest_voxels_to_points(points, voxel_sizes, origins)
 
     @classmethod
     def from_points(
@@ -387,7 +395,6 @@ class GridBatch:
         points: JaggedTensor,
         voxel_sizes: NumericMaxRank2 = 1,
         origins: NumericMaxRank2 = 0,
-        device: DeviceIdentifier | None = None,
     ) -> "GridBatch":
         """Create a grid batch from point clouds by voxelizing each point's location.
 
@@ -395,7 +402,6 @@ class GridBatch:
             points (JaggedTensor): Per-grid world-space point positions. Shape: ``(batch_size, num_points_for_grid_b, 3)``.
             voxel_sizes (NumericMaxRank2): Size of each voxel, per-grid; broadcastable to shape ``(batch_size, 3)``, floating dtype.
             origins (NumericMaxRank2): World-space origin of each grid, per-grid; broadcastable to shape ``(batch_size, 3)``, floating dtype.
-            device (DeviceIdentifier | None): Device to create the grid batch on. Defaults to ``None``.
 
         Returns:
             grid_batch (GridBatch): A new :class:`GridBatch` with one voxel per occupied point location.
@@ -404,7 +410,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.gridbatch_from_points(points, voxel_sizes, origins, device)
+        return functional.gridbatch_from_points(points, voxel_sizes, origins)
 
     @classmethod
     def from_zero_grids(cls, device: DeviceIdentifier = "cpu") -> "GridBatch":
@@ -441,11 +447,11 @@ class GridBatch:
         return functional.gridbatch_from_zero_voxels(device, voxel_sizes, origins)
 
     @classmethod
-    def from_cat(cls, grids: "Sequence[GridBatch]") -> "GridBatch":
-        """Create a grid batch by concatenating a sequence of grid batches along the batch dimension.
+    def from_cat(cls, grids: "Sequence[GridBatch | Grid]") -> "GridBatch":
+        """Create a grid batch by concatenating a sequence of grids or grid batches along the batch dimension.
 
         Args:
-            grids (Sequence[GridBatch]): Grid batches to concatenate.
+            grids (Sequence[GridBatch | Grid]): Grids or grid batches to concatenate.
 
         Returns:
             grid_batch (GridBatch): A new :class:`GridBatch` containing all grids from the inputs.
@@ -1383,11 +1389,11 @@ class GridBatch:
 
         return functional.refined_grid_batch(self, subdiv_factor, mask)
 
-    def to(self, target: "str | torch.device | torch.Tensor | JaggedTensor | GridBatch") -> "GridBatch":
+    def to(self, target: "str | torch.device | torch.Tensor | JaggedTensor | Grid | GridBatch") -> "GridBatch":
         """Move this grid batch to a target device or match the device of a target object.
 
         Args:
-            target (str | torch.device | torch.Tensor | JaggedTensor | GridBatch): Device or object whose device to match.
+            target (str | torch.device | torch.Tensor | JaggedTensor | Grid | GridBatch): Device or object whose device to match.
 
         Returns:
             grid_batch (GridBatch): A new :class:`GridBatch` on the target device.
@@ -1395,6 +1401,7 @@ class GridBatch:
         .. seealso:: :meth:`Grid.to`
         """
         from . import functional
+        from .grid import Grid
 
         if isinstance(target, str):
             device = _parse_device_string(target)
@@ -1404,7 +1411,7 @@ class GridBatch:
             device = target.device
         elif isinstance(target, JaggedTensor):
             device = target.jdata.device
-        elif isinstance(target, GridBatch):
+        elif isinstance(target, (GridBatch, Grid)):
             device = target.device
         else:
             raise TypeError(f"Unsupported type for to(): {type(target)}")
@@ -1622,7 +1629,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.index_grid(self, int(bi))
+        return functional.index_grid_batch(self, int(bi))
 
     def index_list(self, indices: list[bool] | list[int]) -> "GridBatch":
         """Select grids from this grid batch using a list of indices or booleans.
@@ -1635,7 +1642,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.index_grid(self, indices)
+        return functional.index_grid_batch(self, indices)
 
     def index_slice(self, s: slice) -> "GridBatch":
         """Select grids from this grid batch using a slice.
@@ -1648,7 +1655,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.index_grid(self, s)
+        return functional.index_grid_batch(self, s)
 
     def index_tensor(self, indices: torch.Tensor) -> "GridBatch":
         """Select grids from this grid batch using a tensor of indices.
@@ -1661,7 +1668,7 @@ class GridBatch:
         """
         from . import functional
 
-        return functional.index_grid(self, indices)
+        return functional.index_grid_batch(self, indices)
 
     # Special methods
     def __getitem__(self, index: GridBatchIndex) -> "GridBatch":

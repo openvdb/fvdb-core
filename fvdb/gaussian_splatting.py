@@ -2913,6 +2913,12 @@ class GaussianSplat3d:
     @overload
     def to(
         self,
+        other: Grid,
+    ) -> "GaussianSplat3d": ...
+
+    @overload
+    def to(
+        self,
         other: GridBatch,
     ) -> "GaussianSplat3d": ...
 
@@ -2931,10 +2937,11 @@ class GaussianSplat3d:
         Move the :class:`GaussianSplat3d` instance to a different device or change its data type or both.
 
         Args:
-            other (DeviceIdentifier | torch.Tensor | GaussianSplat3d | GridBatch | JaggedTensor):
+            other (DeviceIdentifier | torch.Tensor | GaussianSplat3d | Grid | GridBatch | JaggedTensor):
                 The target :class:`torch.Device`, :class:`torch.Tensor`,
-                :class:`~fvdb.GridBatch`, :class:`~fvdb.JaggedTensor`, or :class:`~fvdb.GaussianSplat3d` instance
-                to which the :class:`GaussianSplat3d` instance should be moved.
+                :class:`~fvdb.Grid`, :class:`~fvdb.GridBatch`, :class:`~fvdb.JaggedTensor`,
+                or :class:`~fvdb.GaussianSplat3d` instance to which the
+                :class:`GaussianSplat3d` instance should be moved.
             device (DeviceIdentifier, optional): The target ``device`` to move the :class:`GaussianSplat3d` instance to.
             dtype (torch.dtype, optional): The target data type for the :class:`GaussianSplat3d` instance.
 

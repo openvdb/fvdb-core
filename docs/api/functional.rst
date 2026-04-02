@@ -179,7 +179,7 @@ Edge Network
 Grid Indexing
 -------------
 
-.. autofunction:: index_grid
+.. autofunction:: index_grid_batch
 
 
 Grid Constructors (Batch)

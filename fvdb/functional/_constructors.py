@@ -152,7 +152,6 @@ def gridbatch_from_ijk(
     ijk: JaggedTensor,
     voxel_sizes: NumericMaxRank2 = 1,
     origins: NumericMaxRank2 = 0,
-    device: DeviceIdentifier | None = None,
 ) -> GridBatch:
     """Create a grid batch from voxel-space coordinates.
 
@@ -160,15 +159,12 @@ def gridbatch_from_ijk(
         ijk (JaggedTensor): Per-grid voxel coordinates, shape ``(B, -1, 3)`` with integer dtype.
         voxel_sizes (NumericMaxRank2): Voxel size per grid, broadcastable to ``(B, 3)``.
         origins (NumericMaxRank2): Origin per grid, broadcastable to ``(B, 3)``.
-        device (DeviceIdentifier | None): Device to create on. Defaults to ijk's device.
 
     Returns:
         result (GridBatch): A new grid batch.
 
     .. seealso:: :func:`grid_from_ijk`
     """
-    resolved_device = resolve_device(device, inherit_from=ijk)
-
     voxel_sizes_t = to_Vec3fBatchBroadcastable(voxel_sizes, value_constraint=ValueConstraint.POSITIVE)
     origins_t = to_Vec3fBatch(origins)
 
@@ -184,7 +180,6 @@ def gridbatch_from_mesh(
     mesh_faces: JaggedTensor,
     voxel_sizes: NumericMaxRank2 = 1,
     origins: NumericMaxRank2 = 0,
-    device: DeviceIdentifier | None = None,
 ) -> GridBatch:
     """Create a grid batch by voxelizing triangle mesh surfaces.
 
@@ -193,15 +188,12 @@ def gridbatch_from_mesh(
         mesh_faces (JaggedTensor): Per-grid face indices, shape ``(B, -1, 3)``.
         voxel_sizes (NumericMaxRank2): Voxel size per grid, broadcastable to ``(B, 3)``.
         origins (NumericMaxRank2): Origin per grid, broadcastable to ``(B, 3)``.
-        device (DeviceIdentifier | None): Device to create on. Defaults to mesh_vertices' device.
 
     Returns:
         result (GridBatch): A new grid batch.
 
     .. seealso:: :func:`grid_from_mesh`
     """
-    resolved_device = resolve_device(device, inherit_from=mesh_vertices)
-
     voxel_sizes_t = to_Vec3fBatchBroadcastable(voxel_sizes, value_constraint=ValueConstraint.POSITIVE)
     origins_t = to_Vec3fBatch(origins)
 
@@ -216,7 +208,6 @@ def gridbatch_from_nearest_voxels_to_points(
     points: JaggedTensor,
     voxel_sizes: NumericMaxRank2 = 1,
     origins: NumericMaxRank2 = 0,
-    device: DeviceIdentifier | None = None,
 ) -> GridBatch:
     """Create a grid batch by adding the eight nearest voxels to every input point.
 
@@ -224,15 +215,12 @@ def gridbatch_from_nearest_voxels_to_points(
         points (JaggedTensor): Per-grid point positions, shape ``(B, -1, 3)``.
         voxel_sizes (NumericMaxRank2): Voxel size per grid, broadcastable to ``(B, 3)``.
         origins (NumericMaxRank2): Origin per grid, broadcastable to ``(B, 3)``.
-        device (DeviceIdentifier | None): Device to create on. Defaults to points' device.
 
     Returns:
         result (GridBatch): A new grid batch.
 
     .. seealso:: :func:`grid_from_nearest_voxels_to_points`
     """
-    resolved_device = resolve_device(device, inherit_from=points)
-
     voxel_sizes_t = to_Vec3fBatchBroadcastable(voxel_sizes, value_constraint=ValueConstraint.POSITIVE)
     origins_t = to_Vec3fBatch(origins)
 
@@ -247,7 +235,6 @@ def gridbatch_from_points(
     points: JaggedTensor,
     voxel_sizes: NumericMaxRank2 = 1,
     origins: NumericMaxRank2 = 0,
-    device: DeviceIdentifier | None = None,
 ) -> GridBatch:
     """Create a grid batch from point clouds.
 
@@ -255,15 +242,12 @@ def gridbatch_from_points(
         points (JaggedTensor): Per-grid point positions, shape ``(B, -1, 3)``.
         voxel_sizes (NumericMaxRank2): Voxel size per grid, broadcastable to ``(B, 3)``.
         origins (NumericMaxRank2): Origin per grid, broadcastable to ``(B, 3)``.
-        device (DeviceIdentifier | None): Device to create on. Defaults to points' device.
 
     Returns:
         result (GridBatch): A new grid batch.
 
     .. seealso:: :func:`grid_from_points`
     """
-    resolved_device = resolve_device(device, inherit_from=points)
-
     voxel_sizes_t = to_Vec3fBatchBroadcastable(voxel_sizes, value_constraint=ValueConstraint.POSITIVE)
     origins_t = to_Vec3fBatch(origins)
 
@@ -321,21 +305,22 @@ def gridbatch_from_zero_voxels(
 # ---------------------------------------------------------------------------
 
 
-def concatenate_grids(grids: Sequence[GridBatch]) -> GridBatch:
-    """Concatenate a sequence of grid batches into one.
+def concatenate_grids(grids: Sequence[GridBatch | Grid]) -> GridBatch:
+    """Concatenate a sequence of grids or grid batches into one.
 
     Args:
-        grids (Sequence[GridBatch]): Grid batches to concatenate.
+        grids (Sequence[GridBatch | Grid]): Grids or grid batches to concatenate.
 
     Returns:
         result (GridBatch): A new grid batch containing all grids.
     """
+    from ..grid import Grid
     from ..grid_batch import GridBatch as GB
 
     grid_datas = []
     for grid in grids:
-        if not isinstance(grid, GB):
-            raise TypeError(f"Expected GridBatch, got {type(grid)}")
+        if not isinstance(grid, (GB, Grid)):
+            raise TypeError(f"Expected GridBatch or Grid, got {type(grid)}")
         grid_datas.append(grid.data)
     return _wrap_grid(_fvdb_cpp.concatenate_grids(grid_datas))
 
@@ -354,8 +339,8 @@ def _wrap_single_grid(cpp_impl):
 def grid_from_dense(
     dense_dims: NumericMaxRank1,
     ijk_min: NumericMaxRank1 = 0,
-    voxel_sizes: NumericMaxRank1 = 1,
-    origins: NumericMaxRank1 = 0,
+    voxel_size: NumericMaxRank1 = 1,
+    origin: NumericMaxRank1 = 0,
     mask: torch.Tensor | None = None,
     device: DeviceIdentifier | None = None,
 ) -> Grid:
@@ -364,8 +349,8 @@ def grid_from_dense(
     Args:
         dense_dims (NumericMaxRank1): Dimensions of the dense grid, broadcastable to ``(3,)``.
         ijk_min (NumericMaxRank1): Minimum voxel index, broadcastable to ``(3,)``.
-        voxel_sizes (NumericMaxRank1): Voxel size, broadcastable to ``(3,)``.
-        origins (NumericMaxRank1): Origin, broadcastable to ``(3,)``.
+        voxel_size (NumericMaxRank1): Voxel size, broadcastable to ``(3,)``.
+        origin (NumericMaxRank1): Origin, broadcastable to ``(3,)``.
         mask (torch.Tensor | None): Optional boolean mask ``(W, H, D)`` selecting active voxels.
         device (DeviceIdentifier | None): Device to create on. Defaults to mask's device or ``"cpu"``.
 
@@ -374,8 +359,8 @@ def grid_from_dense(
 
     .. seealso:: :func:`gridbatch_from_dense`
     """
-    validate_rank1_voxel_params(voxel_sizes, origins)
-    gb = gridbatch_from_dense(1, dense_dims, ijk_min, voxel_sizes, origins, mask, device)
+    validate_rank1_voxel_params(voxel_size, origin)
+    gb = gridbatch_from_dense(1, dense_dims, ijk_min, voxel_size, origin, mask, device)
     return _wrap_single_grid(gb.data)
 
 
@@ -406,124 +391,116 @@ def grid_from_dense_axis_aligned_bounds(
 
 def grid_from_ijk(
     ijk: torch.Tensor,
-    voxel_sizes: NumericMaxRank1 = 1,
-    origins: NumericMaxRank1 = 0,
-    device: DeviceIdentifier | None = None,
+    voxel_size: NumericMaxRank1 = 1,
+    origin: NumericMaxRank1 = 0,
 ) -> Grid:
     """Create a single grid from voxel-space coordinates.
 
     Args:
         ijk (torch.Tensor): Voxel coordinates, shape ``(N, 3)`` with integer dtype.
-        voxel_sizes (NumericMaxRank1): Voxel size, broadcastable to ``(3,)``.
-        origins (NumericMaxRank1): Origin, broadcastable to ``(3,)``.
-        device (DeviceIdentifier | None): Device to create on. Defaults to ijk's device.
+        voxel_size (NumericMaxRank1): Voxel size, broadcastable to ``(3,)``.
+        origin (NumericMaxRank1): Origin, broadcastable to ``(3,)``.
 
     Returns:
         result (Grid): A new single grid.
 
     .. seealso:: :func:`gridbatch_from_ijk`
     """
-    validate_rank1_voxel_params(voxel_sizes, origins)
+    validate_rank1_voxel_params(voxel_size, origin)
     jt = JaggedTensor(ijk)
-    gb = gridbatch_from_ijk(jt, voxel_sizes, origins, device)
+    gb = gridbatch_from_ijk(jt, voxel_size, origin)
     return _wrap_single_grid(gb.data)
 
 
 def grid_from_mesh(
     mesh_vertices: torch.Tensor,
     mesh_faces: torch.Tensor,
-    voxel_sizes: NumericMaxRank1 = 1,
-    origins: NumericMaxRank1 = 0,
-    device: DeviceIdentifier | None = None,
+    voxel_size: NumericMaxRank1 = 1,
+    origin: NumericMaxRank1 = 0,
 ) -> Grid:
     """Create a single grid by voxelizing a triangle mesh surface.
 
     Args:
         mesh_vertices (torch.Tensor): Vertex positions, shape ``(N, 3)``.
         mesh_faces (torch.Tensor): Face indices, shape ``(F, 3)``.
-        voxel_sizes (NumericMaxRank1): Voxel size, broadcastable to ``(3,)``.
-        origins (NumericMaxRank1): Origin, broadcastable to ``(3,)``.
-        device (DeviceIdentifier | None): Device to create on. Defaults to mesh_vertices' device.
+        voxel_size (NumericMaxRank1): Voxel size, broadcastable to ``(3,)``.
+        origin (NumericMaxRank1): Origin, broadcastable to ``(3,)``.
 
     Returns:
         result (Grid): A new single grid.
 
     .. seealso:: :func:`gridbatch_from_mesh`
     """
-    validate_rank1_voxel_params(voxel_sizes, origins)
+    validate_rank1_voxel_params(voxel_size, origin)
     verts_jt = JaggedTensor(mesh_vertices)
     faces_jt = JaggedTensor(mesh_faces)
-    gb = gridbatch_from_mesh(verts_jt, faces_jt, voxel_sizes, origins, device)
+    gb = gridbatch_from_mesh(verts_jt, faces_jt, voxel_size, origin)
     return _wrap_single_grid(gb.data)
 
 
 def grid_from_nearest_voxels_to_points(
     points: torch.Tensor,
-    voxel_sizes: NumericMaxRank1 = 1,
-    origins: NumericMaxRank1 = 0,
-    device: DeviceIdentifier | None = None,
+    voxel_size: NumericMaxRank1 = 1,
+    origin: NumericMaxRank1 = 0,
 ) -> Grid:
     """Create a single grid by adding the eight nearest voxels to every input point.
 
     Args:
         points (torch.Tensor): Point positions, shape ``(N, 3)``.
-        voxel_sizes (NumericMaxRank1): Voxel size, broadcastable to ``(3,)``.
-        origins (NumericMaxRank1): Origin, broadcastable to ``(3,)``.
-        device (DeviceIdentifier | None): Device to create on. Defaults to points' device.
+        voxel_size (NumericMaxRank1): Voxel size, broadcastable to ``(3,)``.
+        origin (NumericMaxRank1): Origin, broadcastable to ``(3,)``.
 
     Returns:
         result (Grid): A new single grid.
 
     .. seealso:: :func:`gridbatch_from_nearest_voxels_to_points`
     """
-    validate_rank1_voxel_params(voxel_sizes, origins)
+    validate_rank1_voxel_params(voxel_size, origin)
     jt = JaggedTensor(points)
-    gb = gridbatch_from_nearest_voxels_to_points(jt, voxel_sizes, origins, device)
+    gb = gridbatch_from_nearest_voxels_to_points(jt, voxel_size, origin)
     return _wrap_single_grid(gb.data)
 
 
 def grid_from_points(
     points: torch.Tensor,
-    voxel_sizes: NumericMaxRank1 = 1,
-    origins: NumericMaxRank1 = 0,
-    device: DeviceIdentifier | None = None,
+    voxel_size: NumericMaxRank1 = 1,
+    origin: NumericMaxRank1 = 0,
 ) -> Grid:
     """Create a single grid from a point cloud.
 
     Args:
         points (torch.Tensor): Point positions, shape ``(N, 3)``.
-        voxel_sizes (NumericMaxRank1): Voxel size, broadcastable to ``(3,)``.
-        origins (NumericMaxRank1): Origin, broadcastable to ``(3,)``.
-        device (DeviceIdentifier | None): Device to create on. Defaults to points' device.
+        voxel_size (NumericMaxRank1): Voxel size, broadcastable to ``(3,)``.
+        origin (NumericMaxRank1): Origin, broadcastable to ``(3,)``.
 
     Returns:
         result (Grid): A new single grid.
 
     .. seealso:: :func:`gridbatch_from_points`
     """
-    validate_rank1_voxel_params(voxel_sizes, origins)
+    validate_rank1_voxel_params(voxel_size, origin)
     jt = JaggedTensor(points)
-    gb = gridbatch_from_points(jt, voxel_sizes, origins, device)
+    gb = gridbatch_from_points(jt, voxel_size, origin)
     return _wrap_single_grid(gb.data)
 
 
 def grid_from_zero_voxels(
     device: DeviceIdentifier = "cpu",
-    voxel_sizes: NumericMaxRank1 = 1,
-    origins: NumericMaxRank1 = 0,
+    voxel_size: NumericMaxRank1 = 1,
+    origin: NumericMaxRank1 = 0,
 ) -> Grid:
     """Create a single grid with zero voxels.
 
     Args:
         device (DeviceIdentifier): Device to create on. Defaults to ``"cpu"``.
-        voxel_sizes (NumericMaxRank1): Voxel size, broadcastable to ``(3,)``.
-        origins (NumericMaxRank1): Origin, broadcastable to ``(3,)``.
+        voxel_size (NumericMaxRank1): Voxel size, broadcastable to ``(3,)``.
+        origin (NumericMaxRank1): Origin, broadcastable to ``(3,)``.
 
     Returns:
         result (Grid): A new single grid with zero voxels.
 
     .. seealso:: :func:`gridbatch_from_zero_voxels`
     """
-    validate_rank1_voxel_params(voxel_sizes, origins)
-    gb = gridbatch_from_zero_voxels(device, voxel_sizes, origins)
+    validate_rank1_voxel_params(voxel_size, origin)
+    gb = gridbatch_from_zero_voxels(device, voxel_size, origin)
     return _wrap_single_grid(gb.data)

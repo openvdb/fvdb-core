@@ -177,7 +177,6 @@ class Grid:
         ijk: torch.Tensor,
         voxel_size: NumericMaxRank1 = 1,
         origin: NumericMaxRank1 = 0,
-        device: DeviceIdentifier | None = None,
     ) -> Grid:
         """Create a :class:`Grid` from voxel coordinates.
 
@@ -191,15 +190,13 @@ class Grid:
                 shape ``(3,)``, floating dtype.
             origin (NumericMaxRank1): World-space position of the center of the
                 ``[0,0,0]`` voxel, broadcastable to shape ``(3,)``, floating dtype.
-            device (DeviceIdentifier | None): Device to create the grid on.
-                Defaults to ``None``, which inherits the device of ``ijk``.
 
         Returns:
             grid (Grid): A new :class:`Grid` object.
         """
         from . import functional
 
-        return functional.grid_from_ijk(ijk, voxel_size, origin, device)
+        return functional.grid_from_ijk(ijk, voxel_size, origin)
 
     @classmethod
     def from_mesh(
@@ -208,7 +205,6 @@ class Grid:
         mesh_faces: torch.Tensor,
         voxel_size: NumericMaxRank1 = 1,
         origin: NumericMaxRank1 = 0,
-        device: DeviceIdentifier | None = None,
     ) -> Grid:
         """Create a :class:`Grid` by voxelizing the surface of a triangle mesh.
 
@@ -219,14 +215,13 @@ class Grid:
                 shape ``(3,)``, floating dtype.
             origin (NumericMaxRank1): World-space position of the center of the
                 ``[0,0,0]`` voxel, broadcastable to shape ``(3,)``, floating dtype.
-            device (DeviceIdentifier | None): Device to create the grid on.
 
         Returns:
             grid (Grid): A new :class:`Grid` with voxels covering the mesh surface.
         """
         from . import functional
 
-        return functional.grid_from_mesh(mesh_vertices, mesh_faces, voxel_size, origin, device)
+        return functional.grid_from_mesh(mesh_vertices, mesh_faces, voxel_size, origin)
 
     @classmethod
     def from_points(
@@ -234,7 +229,6 @@ class Grid:
         points: torch.Tensor,
         voxel_size: NumericMaxRank1 = 1,
         origin: NumericMaxRank1 = 0,
-        device: DeviceIdentifier | None = None,
     ) -> Grid:
         """Create a :class:`Grid` from a point cloud.
 
@@ -244,14 +238,13 @@ class Grid:
                 shape ``(3,)``, floating dtype.
             origin (NumericMaxRank1): World-space position of the center of the
                 ``[0,0,0]`` voxel, broadcastable to shape ``(3,)``, floating dtype.
-            device (DeviceIdentifier | None): Device to create the grid on.
 
         Returns:
             grid (Grid): A new :class:`Grid` object.
         """
         from . import functional
 
-        return functional.grid_from_points(points, voxel_size, origin, device)
+        return functional.grid_from_points(points, voxel_size, origin)
 
     @classmethod
     def from_nearest_voxels_to_points(
@@ -259,7 +252,6 @@ class Grid:
         points: torch.Tensor,
         voxel_size: NumericMaxRank1 = 1,
         origin: NumericMaxRank1 = 0,
-        device: DeviceIdentifier | None = None,
     ) -> Grid:
         """Create a :class:`Grid` by adding the eight nearest voxels to every point.
 
@@ -269,14 +261,13 @@ class Grid:
                 shape ``(3,)``, floating dtype.
             origin (NumericMaxRank1): World-space position of the center of the
                 ``[0,0,0]`` voxel, broadcastable to shape ``(3,)``, floating dtype.
-            device (DeviceIdentifier | None): Device to create the grid on.
 
         Returns:
             grid (Grid): A new :class:`Grid` object.
         """
         from . import functional
 
-        return functional.grid_from_nearest_voxels_to_points(points, voxel_size, origin, device)
+        return functional.grid_from_nearest_voxels_to_points(points, voxel_size, origin)
 
     @classmethod
     def from_zero_voxels(
@@ -1263,12 +1254,13 @@ class Grid:
     def inject_from_dense_cminor(self, dense_data: torch.Tensor, dense_origin: NumericMaxRank1 = 0) -> torch.Tensor:
         """Inject values from a dense tensor (XYZC order) into sparse voxel data.
 
-        ``dense_data`` has shape ``(X, Y, Z, C*)`` or ``(1, X, Y, Z, C*)``.
+        ``dense_data`` has shape ``(1, X, Y, Z, C*)``.
 
         .. note:: Supports backpropagation.
 
         Args:
-            dense_data (torch.Tensor): Dense tensor to read from.
+            dense_data (torch.Tensor): Dense tensor to read from, shape
+                ``(1, X, Y, Z, C*)``.
             dense_origin (NumericMaxRank1): Origin of the dense tensor in voxel
                 space, broadcastable to shape ``(3,)``, integer dtype.
 
@@ -1282,12 +1274,13 @@ class Grid:
     def inject_from_dense_cmajor(self, dense_data: torch.Tensor, dense_origin: NumericMaxRank1 = 0) -> torch.Tensor:
         """Inject values from a dense tensor (CXYZ order) into sparse voxel data.
 
-        ``dense_data`` has shape ``(C*, X, Y, Z)`` or ``(1, C*, X, Y, Z)``.
+        ``dense_data`` has shape ``(1, C*, X, Y, Z)``.
 
         .. note:: Supports backpropagation.
 
         Args:
-            dense_data (torch.Tensor): Dense tensor to read from.
+            dense_data (torch.Tensor): Dense tensor to read from, shape
+                ``(1, C*, X, Y, Z)``.
             dense_origin (NumericMaxRank1): Origin of the dense tensor in voxel
                 space, broadcastable to shape ``(3,)``, integer dtype.
 
@@ -1582,18 +1575,20 @@ class Grid:
         """
         return self.to("cuda")
 
-    def to(self, target: str | torch.device | torch.Tensor | JaggedTensor | Grid) -> Grid:
+    def to(self, target: str | torch.device | torch.Tensor | JaggedTensor | Grid | GridBatch) -> Grid:
         """Move this :class:`Grid` to the target device.
 
         Args:
             target: Target device specification. Can be a string, a
                 :class:`torch.device`, a :class:`torch.Tensor`, a
-                :class:`~fvdb.JaggedTensor`, or another :class:`Grid`.
+                :class:`~fvdb.JaggedTensor`, a :class:`~fvdb.Grid`, or a
+                :class:`~fvdb.GridBatch`.
 
         Returns:
             grid (Grid): A :class:`Grid` on the target device.
         """
         from . import _parse_device_string, functional
+        from .grid_batch import GridBatch as GB
 
         if isinstance(target, str):
             device = _parse_device_string(target)
@@ -1603,7 +1598,7 @@ class Grid:
             device = target.device
         elif isinstance(target, JaggedTensor):
             device = target.jdata.device
-        elif isinstance(target, Grid):
+        elif isinstance(target, (Grid, GB)):
             device = target.device
         else:
             raise TypeError(f"Unsupported type for to(): {type(target)}")

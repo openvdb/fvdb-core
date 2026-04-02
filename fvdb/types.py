@@ -1080,7 +1080,12 @@ def to_Vec3fBroadcastable(
 def validate_rank1_voxel_params(voxel_sizes: NumericMaxRank1, origins: NumericMaxRank1) -> None:
     """Validate that voxel_sizes and origins are rank-1 for single-grid operations.
 
-    Raises :class:`TypeError` if either argument is rank-2 (e.g. a list of lists).
+    Args:
+        voxel_sizes (NumericMaxRank1): Voxel size, broadcastable to ``(3,)``.
+        origins (NumericMaxRank1): Grid origin, broadcastable to ``(3,)``.
+
+    Raises:
+        TypeError: If either argument is rank-2 (e.g. a list of lists).
     """
     to_Vec3fBroadcastable(voxel_sizes)
     to_Vec3fBroadcastable(origins)

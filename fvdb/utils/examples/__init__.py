@@ -26,7 +26,7 @@ def make_grid_batch_from_points(
 ) -> GridBatch:
     logging.info("Building GridBatch from points...")
     start = timeit.default_timer()
-    grid_batch = GridBatch.from_points(points, voxel_sizes=voxel_sizes, origins=origins, device=points.device)
+    grid_batch = GridBatch.from_points(points, voxel_sizes=voxel_sizes, origins=origins)
     grid_batch = grid_batch.dilated_grid(padding)
     torch.cuda.synchronize()
     logging.info(f"Done in {timeit.default_timer() - start}s")

@@ -143,7 +143,7 @@ from ._topology import (
 )
 
 # Grid indexing
-from ._indexing import index_grid
+from ._indexing import index_grid_batch
 
 # Grid constructors (batch)
 from ._constructors import (
@@ -283,7 +283,7 @@ __all__ = [
     "edge_network_batch",
     "edge_network_single",
     # Indexing
-    "index_grid",
+    "index_grid_batch",
     # Constructors (batch)
     "gridbatch_from_dense",
     "gridbatch_from_dense_axis_aligned_bounds",

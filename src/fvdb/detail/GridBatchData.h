@@ -24,21 +24,24 @@ namespace fvdb {
 namespace detail {
 
 struct GridBatchData : public torch::CustomClassHolder {
-    static constexpr int64_t MAX_GRIDS_PER_BATCH = 1024;
+    static constexpr int64_t MAX_GRIDS_PER_BATCH = 1024; // Maximum number of grids in a batch
 
+    // Metadata about a single grid in the batch
     struct GridMetadata {
-        uint32_t version = 1;
+        uint32_t version = 1;   // Version of this struct
 
-        int64_t mCumLeaves = 0;
-        int64_t mCumVoxels = 0;
-        uint64_t mCumBytes = 0;
-        VoxelCoordTransform mPrimalTransform;
-        VoxelCoordTransform mDualTransform;
-        nanovdb::Vec3d mVoxelSize;
-        uint32_t mNumLeaves;
-        int64_t mNumVoxels;
-        uint64_t mNumBytes;
-        nanovdb::CoordBBox mBBox;
+        int64_t mCumLeaves = 0; // Cumulative number of leaf nodes in the batch up to this grid
+        int64_t mCumVoxels = 0; // Cumulative number of voxels in the batch up to this grid
+        uint64_t mCumBytes = 0; // Cumulative number of bytes in the buffer of grids up to this grid
+        VoxelCoordTransform mPrimalTransform; // Primal Transform of this grid (i.e. transform which
+                                              // aligns origin with voxel center)
+        VoxelCoordTransform mDualTransform;   // Dual Transform of this grid (i.e. transform which
+                                              // aligns origin with voxel corner)
+        nanovdb::Vec3d mVoxelSize;            // Size of a single voxel in world space
+        uint32_t mNumLeaves;                  // Number of leaf nodes in this grid
+        int64_t mNumVoxels;                   // Number of voxels in this grid
+        uint64_t mNumBytes;                   // Number of bytes in the buffer of this grid
+        nanovdb::CoordBBox mBBox;             // Bounding box of this grid
 
         __hostdev__ nanovdb::Vec3d
         voxelOrigin() const {
@@ -52,27 +55,40 @@ struct GridBatchData : public torch::CustomClassHolder {
         }
     };
 
+    // Metadata about the whole batch
     struct GridBatchMetadata {
-        uint32_t version       = 1;
-        int64_t mTotalLeaves   = 0;
-        int64_t mTotalVoxels   = 0;
-        int64_t mMaxVoxels     = 0;
+        uint32_t version = 1; // Version of this struct
+
+        // Total number of leaf nodes across all grids
+        int64_t mTotalLeaves = 0;
+
+        // Total number of voxels across all grids
+        int64_t mTotalVoxels = 0;
+
+        // Maximum number of voxels in any grid. Used to set thread count
+        int64_t mMaxVoxels = 0;
+
+        // Maximum number of leaf nodes in any grid. Used to set thread count
         uint32_t mMaxLeafCount = 0;
+
+        // Bounding box enclosing all the grids in the batch
         nanovdb::CoordBBox mTotalBBox;
+
+        // Is this grid contiguous
         bool mIsContiguous = true;
     };
 
     // -----------------------------------------------------------------------
     // Data fields (all public, immutable after construction)
     // -----------------------------------------------------------------------
-    GridMetadata *mHostGridMetadata{nullptr};
-    GridMetadata *mDeviceGridMetadata{nullptr};
+    GridMetadata *mHostGridMetadata{nullptr};   // CPU only
+    GridMetadata *mDeviceGridMetadata{nullptr}; // CUDA only
     int64_t mBatchSize{0};
-    GridBatchMetadata mBatchMetadata;
-    std::shared_ptr<nanovdb::GridHandle<TorchDeviceBuffer>> mGridHdl;
-    torch::Tensor mLeafBatchIndices;
-    torch::Tensor mBatchOffsets;
-    torch::Tensor mListIndices;
+    GridBatchMetadata mBatchMetadata;           // Metadata about the whole batch
+    std::shared_ptr<nanovdb::GridHandle<TorchDeviceBuffer>> mGridHdl; // NanoVDB grid handle
+    torch::Tensor mLeafBatchIndices; // Indices of leaf nodes in the batch shape = [total_leafs]
+    torch::Tensor mBatchOffsets;     // Batch indices for grid
+    torch::Tensor mListIndices;      // List indices for grid (same as JaggedTensor)
 
     // -----------------------------------------------------------------------
     // Single constructor: bundles pre-computed fields (takes ownership of
