@@ -698,7 +698,7 @@ The capstone has two stages. Build Stage 1 first to verify your plumbing is corr
 
 ### Stage 1: Occupancy Autoencoder (plumbing check)
 
-**Task:** Input is all-ones per-voxel occupancy. Target is the same. Loss is binary cross-entropy. This is a degenerate task — any network that outputs positive numbers solves it — but it lets you verify that gradients flow correctly through the full sparse pipeline before adding complexity.
+**Task:** Input is all-ones per-voxel occupancy. Target is the same. Loss is binary cross-entropy with logits (`torch.nn.functional.binary_cross_entropy_with_logits`). This is a degenerate task — any network that outputs positive logits solves it — but it lets you verify that gradients flow correctly through the full sparse pipeline before adding complexity.
 
 **Data:** Load both car meshes. Sample 5,000 points randomly each batch (re-sample every iteration so the grid topology varies slightly). Build a batched grid with `voxel_sizes=0.05`. Input features: all-ones `[total_voxels, 1]`. Target: all-ones.
 
@@ -742,7 +742,7 @@ target   = features  # autoencoder: reconstruct the input
 
 **Evaluation:** Cosine similarity between predicted and target normals:
 ```python
-pred_n = torch.nn.functional.normalize(feat_out.jdata, dim=-1)
+pred_n = torch.nn.functional.normalize(pred.jdata, dim=-1)
 tgt_n  = torch.nn.functional.normalize(target.jdata, dim=-1)
 cos_sim = (pred_n * tgt_n).sum(dim=-1).mean().item()
 print(f"Cosine similarity: {cos_sim:.3f}")  # ~0.0 random, ~0.96 well-trained
