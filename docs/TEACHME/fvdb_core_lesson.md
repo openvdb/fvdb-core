@@ -274,8 +274,8 @@ points = fvdb.JaggedTensor([pts1, pts2])
 grid = fvdb.GridBatch.from_points(points, voxel_sizes=0.1)
 print(grid.total_voxels)  # ≤ 13000 (points sharing a voxel are merged)
 
-# Dilated: include all 2×2×2 neighbors of each occupied voxel (good for conv)
-grid_dilated = fvdb.GridBatch.from_nearest_voxels_to_points(points, voxel_sizes=0.1)
+# Nearest-voxel padding: add the 2×2×2 nearest voxels around each input point (good for conv)
+grid_padded = fvdb.GridBatch.from_nearest_voxels_to_points(points, voxel_sizes=0.1)
 ```
 
 ### From Explicit IJK Coordinates

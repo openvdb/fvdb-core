@@ -80,7 +80,7 @@ grid = fvdb.GridBatch.from_mesh(
     origins=[0., 0., 0.]
 )
 
-# Dilated from points — includes all 2×2×2 neighbors of each occupied voxel
+# From nearest voxels — activates up to eight nearby voxels (2×2×2) per input point
 grid = fvdb.GridBatch.from_nearest_voxels_to_points(pts_JT, voxel_sizes=0.1)
 
 # Fully dense W×H×D box (dense_dims = [W, H, D])
