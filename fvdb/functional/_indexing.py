@@ -66,15 +66,15 @@ def index_grid_batch(
     grid_data = _get_grid_data(grid)
 
     if isinstance(index, (int, np.integer)):
-        return _wrap_grid(_fvdb_cpp.index_grid_batch_int(grid_data, int(index)))
+        return _wrap_grid(_fvdb_cpp.index_grid_int(grid_data, int(index)))
     elif isinstance(index, slice):
         start, stop, step = index.indices(grid_data.grid_count)
-        return _wrap_grid(_fvdb_cpp.index_grid_batch_slice(grid_data, start, stop, step))
+        return _wrap_grid(_fvdb_cpp.index_grid_slice(grid_data, start, stop, step))
     elif isinstance(index, list):
         if len(index) > 0 and isinstance(index[0], bool):
-            return _wrap_grid(_fvdb_cpp.index_grid_batch_bool_list(grid_data, cast(list[bool], index)))
-        return _wrap_grid(_fvdb_cpp.index_grid_batch_int64_list(grid_data, cast(list[int], index)))
+            return _wrap_grid(_fvdb_cpp.index_grid_bool_list(grid_data, cast(list[bool], index)))
+        return _wrap_grid(_fvdb_cpp.index_grid_int64_list(grid_data, cast(list[int], index)))
     elif isinstance(index, torch.Tensor):
-        return _wrap_grid(_fvdb_cpp.index_grid_batch_tensor(grid_data, index))
+        return _wrap_grid(_fvdb_cpp.index_grid_tensor(grid_data, index))
     else:
         raise TypeError(f"Unsupported index type: {type(index)}")
