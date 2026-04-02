@@ -257,7 +257,7 @@ jt_scaled = jt * 2.0  # returns a new JaggedTensor
 
 `GridBatch.from_*` factory methods all take `JaggedTensor` inputs (one per batch element) and two key parameters:
 - `voxel_sizes`: scalar or `[sx, sy, sz]` — world-space size of one voxel
-- `origins`: world-space coordinates of voxel `(0,0,0)` (default `[0,0,0]`)
+- `origins`: world-space coordinates of the center of voxel `(0,0,0)` (default `[0,0,0]`)
 
 The grid topology is determined at construction; features are attached separately.
 
@@ -369,7 +369,7 @@ vox_feat = grid.splat_trilinear(points, point_feat)
 ### Spatial Queries
 
 ```python
-# Boolean mask: which points fall inside the grid?
+# Boolean mask: which points fall inside an active voxel of the grid?
 mask = grid.points_in_grid(query_pts)   # JaggedTensor of bool
 
 # Boolean mask: which integer ijk coordinates are active voxels?
@@ -709,7 +709,7 @@ The capstone has two stages. Build Stage 1 first to verify your plumbing is corr
 - Skip connection from `enc0` output concatenated into `dec0` output
 - `head`: `SparseConv3d(? → 1, kernel=1)`
 
-**Training:** Adam lr=1e-3, 200 steps. Evaluate with `(pred > 0).float().mean()` — should reach 1.0 quickly (within ~10 steps). If it does, your plumbing is correct.
+**Training:** Adam lr=1e-3, 200 steps. Evaluate with `(pred.jdata > 0).float().mean()` — should reach 1.0 quickly (within ~10 steps). If it does, your plumbing is correct.
 
 **What to figure out:**
 - Where to save grids and why

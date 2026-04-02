@@ -62,7 +62,7 @@ Sparse voxel grid batch. Stores topology only — features live in a separate `J
 grid = fvdb.GridBatch.from_points(
     pts_JT,              # JaggedTensor[B, N_i, 3] float
     voxel_sizes=0.1,     # scalar | [sx,sy,sz] | [[sx,sy,sz], ...] one per grid
-    origins=[0., 0., 0.] # world coords of voxel (0,0,0); default zeros
+    origins=[0., 0., 0.] # world coords of center of voxel (0,0,0); default zeros
 )
 
 # From integer ijk coordinates directly
