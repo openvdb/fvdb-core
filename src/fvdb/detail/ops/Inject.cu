@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 #include <fvdb/detail/TorchDeviceBuffer.h>
 #include <fvdb/detail/ops/Inject.h>
 #include <fvdb/detail/utils/Utils.h>
@@ -198,15 +198,15 @@ template <typename ValueType, int64_t Offset = -1> struct InjectGridPytorchFunct
 };
 
 template <torch::DeviceType DeviceTag>
-void dispatchInject(const GridBatchImpl &dstGridBatch,
-                    const GridBatchImpl &srcGridBatch,
+void dispatchInject(const GridBatchData &dstGridBatch,
+                    const GridBatchData &srcGridBatch,
                     JaggedTensor &dst,
                     const JaggedTensor &src);
 
 template <>
 void
-dispatchInject<torch::kCUDA>(const GridBatchImpl &dstGridBatch,
-                             const GridBatchImpl &srcGridBatch,
+dispatchInject<torch::kCUDA>(const GridBatchData &dstGridBatch,
+                             const GridBatchData &srcGridBatch,
                              JaggedTensor &dst,
                              const JaggedTensor &src) {
     c10::cuda::CUDAGuard deviceGuard(dstGridBatch.device());
@@ -277,8 +277,8 @@ dispatchInject<torch::kCUDA>(const GridBatchImpl &dstGridBatch,
 
 template <>
 void
-dispatchInject<torch::kPrivateUse1>(const GridBatchImpl &dstGridBatch,
-                                    const GridBatchImpl &srcGridBatch,
+dispatchInject<torch::kPrivateUse1>(const GridBatchData &dstGridBatch,
+                                    const GridBatchData &srcGridBatch,
                                     JaggedTensor &dst,
                                     const JaggedTensor &src) {
     TORCH_CHECK_VALUE(dst.rdim() == src.rdim(),
@@ -357,8 +357,8 @@ dispatchInject<torch::kPrivateUse1>(const GridBatchImpl &dstGridBatch,
 
 template <>
 void
-dispatchInject<torch::kCPU>(const GridBatchImpl &dstGridBatch,
-                            const GridBatchImpl &srcGridBatch,
+dispatchInject<torch::kCPU>(const GridBatchData &dstGridBatch,
+                            const GridBatchData &srcGridBatch,
                             JaggedTensor &dst,
                             const JaggedTensor &src) {
     TORCH_CHECK_VALUE(dst.rdim() == src.rdim(),
@@ -420,8 +420,8 @@ dispatchInject<torch::kCPU>(const GridBatchImpl &dstGridBatch,
 } // anonymous namespace
 
 void
-inject(const GridBatchImpl &dstGridBatch,
-       const GridBatchImpl &srcGridBatch,
+inject(const GridBatchData &dstGridBatch,
+       const GridBatchData &srcGridBatch,
        JaggedTensor &dst,
        const JaggedTensor &src) {
     TORCH_CHECK(

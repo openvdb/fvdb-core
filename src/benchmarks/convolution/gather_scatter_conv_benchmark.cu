@@ -22,7 +22,8 @@
 #endif
 
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
+#include <fvdb/detail/ops/BuildGridFromIjk.h>
 #include <fvdb/detail/ops/convolution/GatherScatterDefault.h>
 
 #include <torch/torch.h>
@@ -44,16 +45,16 @@ namespace F = torch::nn::functional;
 // Grid factory helpers
 // ============================================================================
 
-static c10::intrusive_ptr<GridBatchImpl>
+static c10::intrusive_ptr<GridBatchData>
 makeGrid(torch::Tensor ijk_2d, torch::Device device) {
     auto ijk_dev = ijk_2d.to(device);
     JaggedTensor jt(ijk_dev);
     std::vector<nanovdb::Vec3d> voxel_sizes = {{1.0, 1.0, 1.0}};
     std::vector<nanovdb::Vec3d> origins     = {{0.0, 0.0, 0.0}};
-    return GridBatchImpl::createFromIjk(jt, voxel_sizes, origins);
+    return ops::createNanoGridFromIJK(jt, voxel_sizes, origins);
 }
 
-static c10::intrusive_ptr<GridBatchImpl>
+static c10::intrusive_ptr<GridBatchData>
 makeDenseGrid(int dim, torch::Device device) {
     std::vector<int32_t> flat;
     flat.reserve(dim * dim * dim * 3);
@@ -69,7 +70,7 @@ makeDenseGrid(int dim, torch::Device device) {
     return makeGrid(ijk, device);
 }
 
-static c10::intrusive_ptr<GridBatchImpl>
+static c10::intrusive_ptr<GridBatchData>
 makeSparseGrid(int bbox_dim, int occupancy_pct, torch::Device device) {
     int64_t total = static_cast<int64_t>(bbox_dim) * bbox_dim * bbox_dim;
     int64_t N     = std::max<int64_t>(1, total * occupancy_pct / 100);

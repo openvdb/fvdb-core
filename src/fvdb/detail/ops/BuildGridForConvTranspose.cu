@@ -1,7 +1,8 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
+#include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/BuildFineGridFromCoarse.h>
 #include <fvdb/detail/ops/BuildGridForConvTranspose.h>
 #include <fvdb/detail/ops/BuildGridFromIjk.h>
@@ -24,12 +25,12 @@ namespace ops {
 
 template <torch::DeviceType>
 nanovdb::GridHandle<TorchDeviceBuffer>
-dispatchBuildGridForConvTranspose(const GridBatchImpl &baseBatchHdl,
+dispatchBuildGridForConvTranspose(const GridBatchData &baseBatchHdl,
                                   const nanovdb::Coord &kernelSize,
                                   const nanovdb::Coord &stride);
 
 nanovdb::GridHandle<TorchDeviceBuffer>
-buildFineGridFromCoarseGridCPU(const GridBatchImpl &coarseBatchHdl,
+buildFineGridFromCoarseGridCPU(const GridBatchData &coarseBatchHdl,
                                const nanovdb::Coord subdivisionFactor) {
     using GridT     = nanovdb::ValueOnIndex;
     using IndexTree = nanovdb::NanoTree<GridT>;
@@ -82,7 +83,7 @@ convTransposeIjkForGridCallback(int32_t bidx,
                                 int32_t lidx,
                                 int32_t vidx,
                                 int32_t cidx,
-                                const GridBatchImpl::Accessor batchAcc,
+                                const GridBatchData::Accessor batchAcc,
                                 const nanovdb::Coord &kernelSize,
                                 const nanovdb::Coord &stride,
                                 int kernelVolume,
@@ -131,11 +132,11 @@ convTransposeIjkForGridCallback(int32_t bidx,
 }
 
 JaggedTensor
-convTransposeIJKForGrid(const GridBatchImpl &batchHdl,
+convTransposeIJKForGrid(const GridBatchData &batchHdl,
                         const nanovdb::Coord &kernelSize,
                         const nanovdb::Coord &stride) {
-    TORCH_CHECK(batchHdl.device().is_cuda(), "GridBatchImpl must be on CUDA device");
-    TORCH_CHECK(batchHdl.device().has_index(), "GridBatchImpl must have a valid index");
+    TORCH_CHECK(batchHdl.device().is_cuda(), "GridBatchData must be on CUDA device");
+    TORCH_CHECK(batchHdl.device().has_index(), "GridBatchData must have a valid index");
 
     // Special case: kernel size 1 or stride equals kernel size is pure subdivision
     if (kernelSize == nanovdb::Coord(1) || stride == kernelSize) {
@@ -160,7 +161,7 @@ convTransposeIJKForGrid(const GridBatchImpl &batchHdl,
                              int32_t lidx,
                              int32_t vidx,
                              int32_t cidx,
-                             GridBatchImpl::Accessor bacc) {
+                             GridBatchData::Accessor bacc) {
         convTransposeIjkForGridCallback(bidx,
                                         lidx,
                                         vidx,
@@ -180,7 +181,7 @@ convTransposeIJKForGrid(const GridBatchImpl &batchHdl,
 
 template <>
 nanovdb::GridHandle<TorchDeviceBuffer>
-dispatchBuildGridForConvTranspose<torch::kCUDA>(const GridBatchImpl &baseGridHdl,
+dispatchBuildGridForConvTranspose<torch::kCUDA>(const GridBatchData &baseGridHdl,
                                                 const nanovdb::Coord &kernelSize,
                                                 const nanovdb::Coord &stride) {
     JaggedTensor coords = convTransposeIJKForGrid(baseGridHdl, kernelSize, stride);
@@ -189,7 +190,7 @@ dispatchBuildGridForConvTranspose<torch::kCUDA>(const GridBatchImpl &baseGridHdl
 
 template <>
 nanovdb::GridHandle<TorchDeviceBuffer>
-dispatchBuildGridForConvTranspose<torch::kCPU>(const GridBatchImpl &baseBatchHdl,
+dispatchBuildGridForConvTranspose<torch::kCPU>(const GridBatchData &baseBatchHdl,
                                                const nanovdb::Coord &kernelSize,
                                                const nanovdb::Coord &stride) {
     using GridT = nanovdb::ValueOnIndex;
@@ -254,8 +255,8 @@ dispatchBuildGridForConvTranspose<torch::kCPU>(const GridBatchImpl &baseBatchHdl
     }
 }
 
-c10::intrusive_ptr<GridBatchImpl>
-buildGridForConvTranspose(const GridBatchImpl &baseBatchHdl,
+c10::intrusive_ptr<GridBatchData>
+buildGridForConvTranspose(const GridBatchData &baseBatchHdl,
                           const nanovdb::Coord &kernelSize,
                           const nanovdb::Coord &stride) {
     TORCH_CHECK_VALUE(nanovdb::Coord(0) < kernelSize, "kernel_size must be strictly positive.");
@@ -265,7 +266,7 @@ buildGridForConvTranspose(const GridBatchImpl &baseBatchHdl,
     auto hdl = FVDB_DISPATCH_KERNEL_DEVICE(baseBatchHdl.device(), [&]() {
         return dispatchBuildGridForConvTranspose<DeviceTag>(baseBatchHdl, kernelSize, stride);
     });
-    return c10::make_intrusive<GridBatchImpl>(std::move(hdl), voxS, voxO);
+    return makeGridBatchData(std::move(hdl), voxS, voxO);
 }
 
 } // namespace ops

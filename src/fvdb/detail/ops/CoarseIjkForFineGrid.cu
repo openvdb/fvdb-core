@@ -19,7 +19,7 @@ coarseIjkForFineGridVoxelCallback(int32_t bidx,
                                   int32_t lidx,
                                   int32_t vidx,
                                   int32_t cidx,
-                                  const GridBatchImpl::Accessor batchAcc,
+                                  const GridBatchData::Accessor batchAcc,
                                   nanovdb::Coord coarseningFactor,
                                   TorchRAcc64<int32_t, 2> outIJKData,
                                   TorchRAcc64<fvdb::JIdxType, 1> outIJKBIdx) {
@@ -43,15 +43,15 @@ coarseIjkForFineGridVoxelCallback(int32_t bidx,
 namespace {
 
 template <torch::DeviceType>
-JaggedTensor dispatchCoarseIJKForFineGrid(const GridBatchImpl &batchHdl,
+JaggedTensor dispatchCoarseIJKForFineGrid(const GridBatchData &batchHdl,
                                           nanovdb::Coord coarseningFactor);
 
 template <>
 JaggedTensor
-dispatchCoarseIJKForFineGrid<torch::kCUDA>(const GridBatchImpl &batchHdl,
+dispatchCoarseIJKForFineGrid<torch::kCUDA>(const GridBatchData &batchHdl,
                                            nanovdb::Coord coarseningFactor) {
-    TORCH_CHECK(batchHdl.device().is_cuda(), "GridBatchImpl must be on CUDA device");
-    TORCH_CHECK(batchHdl.device().has_index(), "GridBatchImpl must have a valid index");
+    TORCH_CHECK(batchHdl.device().is_cuda(), "GridBatchData must be on CUDA device");
+    TORCH_CHECK(batchHdl.device().has_index(), "GridBatchData must have a valid index");
 
     const torch::TensorOptions optsData =
         torch::TensorOptions().dtype(torch::kInt32).device(batchHdl.device());
@@ -69,7 +69,7 @@ dispatchCoarseIJKForFineGrid<torch::kCUDA>(const GridBatchImpl &batchHdl,
                              int32_t lidx,
                              int32_t vidx,
                              int32_t cidx,
-                             GridBatchImpl::Accessor bacc) {
+                             GridBatchData::Accessor bacc) {
         coarseIjkForFineGridVoxelCallback(
             bidx, lidx, vidx, cidx, bacc, coarseningFactor, outIJKAcc, outIJKBIdxAcc);
     };
@@ -82,10 +82,10 @@ dispatchCoarseIJKForFineGrid<torch::kCUDA>(const GridBatchImpl &batchHdl,
 
 template <>
 JaggedTensor
-dispatchCoarseIJKForFineGrid<torch::kPrivateUse1>(const GridBatchImpl &batchHdl,
+dispatchCoarseIJKForFineGrid<torch::kPrivateUse1>(const GridBatchData &batchHdl,
                                                   nanovdb::Coord coarseningFactor) {
     TORCH_CHECK(batchHdl.device().is_privateuseone(),
-                "GridBatchImpl must be on PrivateUse1 device");
+                "GridBatchData must be on PrivateUse1 device");
 
     const torch::TensorOptions optsData =
         torch::TensorOptions().dtype(torch::kInt32).device(batchHdl.device());
@@ -103,7 +103,7 @@ dispatchCoarseIJKForFineGrid<torch::kPrivateUse1>(const GridBatchImpl &batchHdl,
                              int32_t lidx,
                              int32_t vidx,
                              int32_t cidx,
-                             GridBatchImpl::Accessor bacc) {
+                             GridBatchData::Accessor bacc) {
         coarseIjkForFineGridVoxelCallback(
             bidx, lidx, vidx, cidx, bacc, coarseningFactor, outIJKAcc, outIJKBIdxAcc);
     };
@@ -117,7 +117,7 @@ dispatchCoarseIJKForFineGrid<torch::kPrivateUse1>(const GridBatchImpl &batchHdl,
 } // namespace
 
 JaggedTensor
-coarseIJKForFineGrid(const GridBatchImpl &batchHdl, nanovdb::Coord coarseningFactor) {
+coarseIJKForFineGrid(const GridBatchData &batchHdl, nanovdb::Coord coarseningFactor) {
     if (batchHdl.device().is_cuda()) {
         return dispatchCoarseIJKForFineGrid<torch::kCUDA>(batchHdl, coarseningFactor);
     } else if (batchHdl.device().is_privateuseone()) {

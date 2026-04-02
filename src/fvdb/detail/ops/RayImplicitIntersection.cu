@@ -103,7 +103,7 @@ rayImplicitCallback(int32_t bidx,
 
 template <torch::DeviceType DeviceTag>
 JaggedTensor
-RayImplicitIntersection(const GridBatchImpl &batchHdl,
+RayImplicitIntersection(const GridBatchData &batchHdl,
                         const JaggedTensor &rayO,
                         const JaggedTensor &rayD,
                         const JaggedTensor &gridScalars,
@@ -184,7 +184,7 @@ RayImplicitIntersection(const GridBatchImpl &batchHdl,
 } // anonymous namespace
 
 JaggedTensor
-rayImplicitIntersection(const GridBatchImpl &batchHdl,
+rayImplicitIntersection(const GridBatchData &batchHdl,
                         const JaggedTensor &rayOrigins,
                         const JaggedTensor &rayDirections,
                         const JaggedTensor &gridScalars,

@@ -4,7 +4,7 @@
 #ifndef FVDB_DETAIL_UTILS_SIMPLEOPHELPER_H
 #define FVDB_DETAIL_UTILS_SIMPLEOPHELPER_H
 
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
@@ -88,7 +88,7 @@ validateDevice(torch::Device const &device) {
 
 template <torch::DeviceType DeviceTag, typename ElementType>
 torch::Tensor
-makeOutTensorFromGridBatch(GridBatchImpl const &grid_batch, ElementType const &element_type) {
+makeOutTensorFromGridBatch(GridBatchData const &grid_batch, ElementType const &element_type) {
     grid_batch.checkNonEmptyGrid();
     validateDevice<DeviceTag>(grid_batch.device());
 
@@ -198,7 +198,7 @@ struct BasePerActiveVoxelProcessor {
                int64_t const leafIdx,
                int64_t const voxelIdx,
                int64_t,
-               GridBatchImpl::Accessor gridAccessor,
+               GridBatchData::Accessor gridAccessor,
                Out_t out_accessor) const {
         auto const *grid      = gridAccessor.grid(batchIdx);
         auto const &leaf      = grid->tree().template getFirstNode<0>()[leafIdx];
@@ -212,7 +212,7 @@ struct BasePerActiveVoxelProcessor {
     }
 
     JaggedTensor
-    execute(GridBatchImpl const &grid_batch,
+    execute(GridBatchData const &grid_batch,
             OutElementType const &out_element = OutElementType{},
             int const num_threads             = 1024) const {
         auto out_tensor =

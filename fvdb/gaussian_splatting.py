@@ -3217,9 +3217,10 @@ class GaussianSplat3d:
 
         Args:
             other (DeviceIdentifier | torch.Tensor | GaussianSplat3d | Grid | GridBatch | JaggedTensor):
-                The target :class:`torch.Device`, :class:`torch.Tensor`, :class:`~fvdb.Grid`,
-                :class:`~fvdb.GridBatch`, :class:`~fvdb.JaggedTensor`, or :class:`~fvdb.GaussianSplat3d` instance
-                to which the :class:`GaussianSplat3d` instance should be moved.
+                The target :class:`torch.Device`, :class:`torch.Tensor`,
+                :class:`~fvdb.Grid`, :class:`~fvdb.GridBatch`, :class:`~fvdb.JaggedTensor`,
+                or :class:`~fvdb.GaussianSplat3d` instance to which the
+                :class:`GaussianSplat3d` instance should be moved.
             device (DeviceIdentifier, optional): The target ``device`` to move the :class:`GaussianSplat3d` instance to.
             dtype (torch.dtype, optional): The target data type for the :class:`GaussianSplat3d` instance.
 
@@ -3239,7 +3240,7 @@ class GaussianSplat3d:
                     if isinstance(other, (torch.Tensor, JaggedTensor, GaussianSplat3d)):
                         device = other.device
                         dtype = other.dtype
-                    elif isinstance(other, (Grid, GridBatch)):
+                    elif isinstance(other, (GridBatch, Grid)):
                         device = other.device
                         dtype = self.dtype
                 else:
@@ -3264,7 +3265,7 @@ class GaussianSplat3d:
             # .to(other)
             device = args[0].device
             dtype = args[0].dtype
-        elif len(args) == 1 and isinstance(args[0], (Grid, GridBatch)):
+        elif len(args) == 1 and isinstance(args[0], (GridBatch, Grid)):
             # .to(other)
             device = args[0].device
             dtype = self.dtype
@@ -3278,7 +3279,7 @@ class GaussianSplat3d:
             dtype = args[1]
         else:
             raise TypeError(
-                f"Invalid arguments for to(): {args}. Expected a DeviceIdentifier, torch.Tensor, GaussianSplat3d, Grid, GridBatch, or JaggedTensor."
+                f"Invalid arguments for to(): {args}. Expected a DeviceIdentifier, torch.Tensor, GaussianSplat3d, GridBatch, or JaggedTensor."
             )
 
         device = resolve_device(device, inherit_from=self)

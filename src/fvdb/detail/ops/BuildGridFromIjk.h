@@ -5,7 +5,7 @@
 #define FVDB_DETAIL_OPS_BUILDGRIDFROMIJK_H
 
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 
 #include <vector>
 
@@ -17,7 +17,7 @@ namespace ops {
 // etc.)
 nanovdb::GridHandle<TorchDeviceBuffer> _createNanoGridFromIJK(const JaggedTensor &ijk);
 
-c10::intrusive_ptr<GridBatchImpl>
+c10::intrusive_ptr<GridBatchData>
 createNanoGridFromIJK(const JaggedTensor &ijk,
                       const std::vector<nanovdb::Vec3d> &voxelSizes,
                       const std::vector<nanovdb::Vec3d> &origins);

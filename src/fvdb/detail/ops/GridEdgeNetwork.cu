@@ -21,7 +21,7 @@ __hostdev__ inline void
 gridEdgeNetworkCallback(int64_t batchIdx,
                         int32_t leafIdx,
                         int32_t voxelIdx,
-                        GridBatchImpl::Accessor gridAccessor,
+                        GridBatchData::Accessor gridAccessor,
                         TorchAccessor<float, 2> outV,
                         TorchAccessor<fvdb::JIdxType, 1> outVBidx,
                         TorchAccessor<int64_t, 2> outE,
@@ -91,7 +91,7 @@ gridEdgeNetworkCallback(int64_t batchIdx,
 
 template <torch::DeviceType DeviceTag>
 std::vector<JaggedTensor>
-GridEdgeNetwork(const GridBatchImpl &batchHdl, bool returnVoxelCoordinates) {
+GridEdgeNetwork(const GridBatchData &batchHdl, bool returnVoxelCoordinates) {
     batchHdl.checkNonEmptyGrid();
 
     const auto totVoxels = batchHdl.totalVoxels();
@@ -116,7 +116,7 @@ GridEdgeNetwork(const GridBatchImpl &batchHdl, bool returnVoxelCoordinates) {
                                  int32_t leafIdx,
                                  int32_t voxelIdx,
                                  int32_t,
-                                 GridBatchImpl::Accessor gridAccessor) {
+                                 GridBatchData::Accessor gridAccessor) {
             gridEdgeNetworkCallback<TorchRAcc64>(batchIdx,
                                                  leafIdx,
                                                  voxelIdx,
@@ -133,7 +133,7 @@ GridEdgeNetwork(const GridBatchImpl &batchHdl, bool returnVoxelCoordinates) {
                       int32_t leafIdx,
                       int32_t voxelIdx,
                       int32_t,
-                      GridBatchImpl::Accessor gridAccessor) {
+                      GridBatchData::Accessor gridAccessor) {
             gridEdgeNetworkCallback<TorchAcc>(batchIdx,
                                               leafIdx,
                                               voxelIdx,
@@ -159,7 +159,7 @@ GridEdgeNetwork(const GridBatchImpl &batchHdl, bool returnVoxelCoordinates) {
 }
 
 std::vector<JaggedTensor>
-gridEdgeNetwork(const GridBatchImpl &gridHdl, bool returnVoxelCoordinates) {
+gridEdgeNetwork(const GridBatchData &gridHdl, bool returnVoxelCoordinates) {
     return FVDB_DISPATCH_KERNEL_DEVICE(gridHdl.device(), [&]() {
         return GridEdgeNetwork<DeviceTag>(gridHdl, returnVoxelCoordinates);
     });

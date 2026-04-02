@@ -28,7 +28,7 @@ segmentsAlongRaysCallback(int32_t bidx,
                           TensorAccessor<fvdb::JIdxType, 1> outJIdx,
                           TensorAccessor<fvdb::JLIdxType, 2> outJLIdx,
                           TensorAccessor<ScalarType, 2> outSegments,
-                          GridBatchImpl::Accessor batchAccessor,
+                          GridBatchData::Accessor batchAccessor,
                           int64_t maxSegments,
                           ScalarType eps) {
     const nanovdb::OnIndexGrid *gpuGrid = batchAccessor.grid(bidx);
@@ -129,7 +129,7 @@ countSegmentsAlongRaysCallback(int32_t bidx,
 
 template <torch::DeviceType DeviceTag>
 JaggedTensor
-SegmentsAlongRays(const GridBatchImpl &batchHdl,
+SegmentsAlongRays(const GridBatchData &batchHdl,
                   const JaggedTensor &rayOrigins,
                   const JaggedTensor &rayDirections,
                   int64_t maxSegments,
@@ -292,7 +292,7 @@ SegmentsAlongRays(const GridBatchImpl &batchHdl,
 } // anonymous namespace
 
 JaggedTensor
-segmentsAlongRays(const GridBatchImpl &batchHdl,
+segmentsAlongRays(const GridBatchData &batchHdl,
                   const JaggedTensor &rayOrigins,
                   const JaggedTensor &rayDirections,
                   int64_t maxSegments,

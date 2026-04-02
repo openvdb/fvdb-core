@@ -1,7 +1,7 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 #include <fvdb/detail/ops/JIdxForGrid.h>
 #include <fvdb/detail/ops/JIdxForJOffsets.h>
 #include <fvdb/detail/utils/Utils.h>
@@ -13,7 +13,7 @@ namespace detail {
 namespace ops {
 
 torch::Tensor
-jIdxForGrid(const GridBatchImpl &batchHdl) {
+jIdxForGrid(const GridBatchData &batchHdl) {
     if (batchHdl.batchSize() == 1 || batchHdl.totalVoxels() == 0) {
         return torch::empty(
             {0}, torch::TensorOptions().dtype(fvdb::JIdxScalarType).device(batchHdl.device()));

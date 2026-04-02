@@ -38,7 +38,7 @@ ijkToInvIndexCallback(fvdb::JIdxType bidx,
 
 template <torch::DeviceType DeviceTag>
 JaggedTensor
-IjkToInvIndex(const GridBatchImpl &batchHdl, const JaggedTensor &ijk, bool cumulative) {
+IjkToInvIndex(const GridBatchData &batchHdl, const JaggedTensor &ijk, bool cumulative) {
     batchHdl.checkNonEmptyGrid();
     batchHdl.checkDevice(ijk);
     TORCH_CHECK_TYPE(at::isIntegralType(ijk.scalar_type(), false), "ijk must have an integer type");
@@ -86,7 +86,7 @@ IjkToInvIndex(const GridBatchImpl &batchHdl, const JaggedTensor &ijk, bool cumul
 }
 
 JaggedTensor
-ijkToInvIndex(const GridBatchImpl &batchHdl, const JaggedTensor &ijk, bool cumulative) {
+ijkToInvIndex(const GridBatchData &batchHdl, const JaggedTensor &ijk, bool cumulative) {
     TORCH_CHECK_VALUE(
         ijk.ldim() == 1,
         "Expected ijk to have 1 list dimension, i.e. be a single list of coordinate values, but got",

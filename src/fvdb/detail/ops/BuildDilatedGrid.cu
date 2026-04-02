@@ -1,8 +1,10 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/TorchDeviceBuffer.h>
 #include <fvdb/detail/ops/BuildDilatedGrid.h>
+#include <fvdb/detail/ops/CloneGrid.h>
 #include <fvdb/detail/utils/Utils.h>
 
 #include <nanovdb/NanoVDB.h>
@@ -20,11 +22,11 @@ namespace fvdb::detail::ops {
 
 template <torch::DeviceType>
 nanovdb::GridHandle<TorchDeviceBuffer>
-dispatchDilateGrid(const GridBatchImpl &gridBatch, const std::vector<int64_t> &dilationAmount);
+dispatchDilateGrid(const GridBatchData &gridBatch, const std::vector<int64_t> &dilationAmount);
 
 template <>
 nanovdb::GridHandle<TorchDeviceBuffer>
-dispatchDilateGrid<torch::kCUDA>(const GridBatchImpl &gridBatch,
+dispatchDilateGrid<torch::kCUDA>(const GridBatchData &gridBatch,
                                  const std::vector<int64_t> &dilationAmount) {
     c10::cuda::CUDAGuard deviceGuard(gridBatch.device());
 
@@ -53,8 +55,7 @@ dispatchDilateGrid<torch::kCUDA>(const GridBatchImpl &gridBatch,
                 dstBuf.deviceData(), srcData, gridBytes, cudaMemcpyDeviceToDevice, stream.stream());
             handle = nanovdb::GridHandle<TorchDeviceBuffer>(std::move(dstBuf));
         } else {
-            nanovdb::OnIndexGrid *grid =
-                gridBatch.nanoGridHandleMut().deviceGrid<nanovdb::ValueOnIndex>(i);
+            nanovdb::OnIndexGrid *grid = gridBatch.mGridHdl->deviceGrid<nanovdb::ValueOnIndex>(i);
             TORCH_CHECK(grid, "Grid is null");
 
             for (auto j = 0; j < dilationAmount[i]; j += 1) {
@@ -85,7 +86,7 @@ dispatchDilateGrid<torch::kCUDA>(const GridBatchImpl &gridBatch,
 
 template <>
 nanovdb::GridHandle<TorchDeviceBuffer>
-dispatchDilateGrid<torch::kCPU>(const GridBatchImpl &gridBatch,
+dispatchDilateGrid<torch::kCPU>(const GridBatchData &gridBatch,
                                 const std::vector<int64_t> &dilationAmount) {
     using GridT     = nanovdb::ValueOnIndex;
     using IndexTree = nanovdb::NanoTree<GridT>;
@@ -133,8 +134,8 @@ dispatchDilateGrid<torch::kCPU>(const GridBatchImpl &gridBatch,
     }
 }
 
-c10::intrusive_ptr<GridBatchImpl>
-dilateGrid(const GridBatchImpl &gridBatch, const std::vector<int64_t> &dilationAmount) {
+c10::intrusive_ptr<GridBatchData>
+dilateGrid(const GridBatchData &gridBatch, const std::vector<int64_t> &dilationAmount) {
     TORCH_CHECK_VALUE(static_cast<int64_t>(dilationAmount.size()) == gridBatch.batchSize(),
                       "dilationAmount should have same size as batch size, got ",
                       dilationAmount.size(),
@@ -148,7 +149,7 @@ dilateGrid(const GridBatchImpl &gridBatch, const std::vector<int64_t> &dilationA
     if (std::all_of(dilationAmount.begin(), dilationAmount.end(), [](int64_t amount) {
             return amount == 0;
         })) {
-        return gridBatch.clone(gridBatch.device());
+        return ops::cloneGrid(gridBatch, gridBatch.device());
     }
 
     std::vector<nanovdb::Vec3d> voxS, voxO;
@@ -156,7 +157,7 @@ dilateGrid(const GridBatchImpl &gridBatch, const std::vector<int64_t> &dilationA
     auto hdl = FVDB_DISPATCH_KERNEL_DEVICE(gridBatch.device(), [&]() {
         return dispatchDilateGrid<DeviceTag>(gridBatch, dilationAmount);
     });
-    return c10::make_intrusive<GridBatchImpl>(std::move(hdl), voxS, voxO);
+    return makeGridBatchData(std::move(hdl), voxS, voxO);
 }
 
 } // namespace fvdb::detail::ops

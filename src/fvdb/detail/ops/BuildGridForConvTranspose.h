@@ -7,7 +7,7 @@
 #ifndef FVDB_DETAIL_OPS_BUILDGRIDFORCONVTRANSPOSE_H
 #define FVDB_DETAIL_OPS_BUILDGRIDFORCONVTRANSPOSE_H
 
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 
 namespace fvdb {
 namespace detail {
@@ -22,8 +22,8 @@ namespace ops {
 /// @param baseBatchHdl  Input grid batch providing the source topology.
 /// @param kernelSize    Spatial kernel dimensions [k0, k1, k2].
 /// @param stride        Convolution stride [s0, s1, s2].
-/// @return An intrusive pointer to the constructed GridBatchImpl.
-c10::intrusive_ptr<GridBatchImpl> buildGridForConvTranspose(const GridBatchImpl &baseBatchHdl,
+/// @return An intrusive pointer to the constructed GridBatchData.
+c10::intrusive_ptr<GridBatchData> buildGridForConvTranspose(const GridBatchData &baseBatchHdl,
                                                             const nanovdb::Coord &kernelSize,
                                                             const nanovdb::Coord &stride);
 

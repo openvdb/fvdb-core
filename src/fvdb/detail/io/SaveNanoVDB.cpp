@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/detail/io/SaveNanoVDB.h>
+#include <fvdb/detail/ops/ActiveGridCoords.h>
 #include <fvdb/detail/utils/Utils.h>
 
 #include <nanovdb/NanoVDB.h>
@@ -95,21 +96,21 @@ valueGetter(torch::TensorAccessor<uint8_t, 2> &acc, int rowIdx) {
 /// @return A nanovdb grid handle with the copied data stored in the leaves
 template <typename OutGridT, typename InScalarType>
 nanovdb::GridHandle<nanovdb::HostBuffer>
-fvdbToNanovdbGridWithValues(const GridBatch &gridBatch,
+fvdbToNanovdbGridWithValues(const GridBatchData &gridBatchData,
                             const JaggedTensor &data,
                             const std::vector<std::string> &names) {
     TORCH_CHECK(
-        names.size() == 0 || names.size() == (size_t)gridBatch.grid_count(),
+        names.size() == 0 || names.size() == (size_t)gridBatchData.batchSize(),
         "Invalid parameter for names, must be empty or a list of the same length as the batch size. Got " +
             std::to_string(names.size()) + " names for batch size " +
-            std::to_string(gridBatch.grid_count()));
+            std::to_string(gridBatchData.batchSize()));
 
     using ProxyGridT     = nanovdb::tools::build::Grid<OutGridT>;
     using GridValueT     = typename ProxyGridT::ValueType;
     using HostGridHandle = nanovdb::GridHandle<nanovdb::HostBuffer>;
 
     // We'll build each grid from the ijk values and data, so get accessors for these
-    JaggedTensor ijkValues = gridBatch.ijk().cpu();
+    JaggedTensor ijkValues = ops::activeGridCoords(gridBatchData).cpu();
 
     // Get a contiguous CPU copy of the data tensor and make sure it has 2 dimensions
     torch::Tensor jdataCpu = data.cpu().jdata().squeeze().contiguous();
@@ -119,15 +120,15 @@ fvdbToNanovdbGridWithValues(const GridBatch &gridBatch,
     if (jdataCpu.ndimension() == 1) {
         jdataCpu = jdataCpu.unsqueeze(1);
     }
-    TORCH_CHECK(jdataCpu.size(0) == gridBatch.total_voxels(),
+    TORCH_CHECK(jdataCpu.size(0) == gridBatchData.totalVoxels(),
                 "Invalid data tensor size. Must match number of voxels in grid batch.");
 
     auto ijkAccessor   = ijkValues.jdata().accessor<int, 2>();
     auto jdataAccessor = jdataCpu.accessor<InScalarType, 2>();
 
     // Populate a vector of host buffers for each grid in the batch
-    std::vector<HostGridHandle> buffers(gridBatch.grid_count());
-    for (int64_t bi = 0; bi < gridBatch.grid_count(); bi += 1) {
+    std::vector<HostGridHandle> buffers(gridBatchData.batchSize());
+    for (int64_t bi = 0; bi < gridBatchData.batchSize(); bi += 1) {
         const std::string name = names.size() > 0 ? names[bi] : "";
         TORCH_CHECK_VALUE(name.size() < nanovdb::GridData::MaxNameSize,
                           "Grid name " + name + " exceeds maximum character length of " +
@@ -135,18 +136,18 @@ fvdbToNanovdbGridWithValues(const GridBatch &gridBatch,
 
         auto proxyGrid = std::make_shared<ProxyGridT>(GridValueT(0), name);
 
-        const double sx           = gridBatch.voxel_size_at(bi, torch::kFloat64)[0].item<double>();
-        const double sy           = gridBatch.voxel_size_at(bi, torch::kFloat64)[1].item<double>();
-        const double sz           = gridBatch.voxel_size_at(bi, torch::kFloat64)[2].item<double>();
+        const nanovdb::Vec3d &vs  = gridBatchData.voxelSizeAt(bi);
+        const double sx           = vs[0];
+        const double sy           = vs[1];
+        const double sz           = vs[2];
         const double mat[3][3]    = {{sx, 0.0, 0.0},        // row 0
                                      {0.0, sy, 0.0},        // row 1
                                      {0.0, 0.0, sz}};       // row 2
         const double invMat[3][3] = {{1.0 / sx, 0.0, 0.0},  // row 0
                                      {0.0, 1.0 / sy, 0.0},  // row 1
                                      {0.0, 0.0, 1.0 / sz}}; // row 2
-        nanovdb::Vec3d trans      = {gridBatch.origin_at(bi, torch::kFloat64)[0].item<double>(),
-                                     gridBatch.origin_at(bi, torch::kFloat64)[1].item<double>(),
-                                     gridBatch.origin_at(bi, torch::kFloat64)[2].item<double>()};
+        const nanovdb::Vec3d vo   = gridBatchData.voxelOriginAt(bi);
+        nanovdb::Vec3d trans      = {vo[0], vo[1], vo[2]};
         proxyGrid.get()->mMap.set(mat, invMat, trans);
 
         auto proxyGridAccessor = proxyGrid->getWriteAccessor();
@@ -156,12 +157,12 @@ fvdbToNanovdbGridWithValues(const GridBatch &gridBatch,
         const int64_t numVoxels = end - start;
         const int64_t numData =
             data.joffsets()[bi + 1].item<int>() - data.joffsets()[bi].item<int>();
-        TORCH_CHECK_VALUE(numData == gridBatch.num_voxels_at(bi),
-                          "Invalid number of voxels in jagged tensor at index " +
-                              std::to_string(bi) +
-                              ". Expected it to match the number of voxels at grid index " +
-                              std::to_string(bi) + ". " + "Got " + std::to_string(numVoxels) +
-                              " but expected " + std::to_string(gridBatch.num_voxels_at(bi)) + ".");
+        TORCH_CHECK_VALUE(
+            numData == gridBatchData.numVoxelsAt(bi),
+            "Invalid number of voxels in jagged tensor at index " + std::to_string(bi) +
+                ". Expected it to match the number of voxels at grid index " + std::to_string(bi) +
+                ". " + "Got " + std::to_string(numVoxels) + " but expected " +
+                std::to_string(gridBatchData.numVoxelsAt(bi)) + ".");
         for (int i = 0; i < numVoxels; i += 1) {
             const GridValueT &value =
                 valueGetter<InScalarType, GridValueT>(jdataAccessor, start + i);
@@ -205,8 +206,8 @@ fvdbToNanovdbGridWithValues(const GridBatch &gridBatch,
 }
 
 nanovdb::GridHandle<nanovdb::HostBuffer>
-maybeConvertToStandardNanovdbGrid(const fvdb::GridBatch &gridBatch,
-                                  const fvdb::JaggedTensor data,
+maybeConvertToStandardNanovdbGrid(const GridBatchData &gridBatchData,
+                                  const JaggedTensor data,
                                   const std::vector<std::string> names) {
     // Get a squeezed view of the tensor so we can save data with redundant dimensions
     // (e.g. shape (N, 1, 3) can get saved as a Vec3f grid)
@@ -220,47 +221,47 @@ maybeConvertToStandardNanovdbGrid(const fvdb::GridBatch &gridBatch,
     if (data.dtype() == torch::kHalf) {
         if (jdataSqueezed.dim() == 1 || (jdataSqueezed.dim() == 2 && jdataSqueezed.size(1) == 1)) {
             using GridT = nanovdb::Fp16;
-            return fvdbToNanovdbGridWithValues<GridT, c10::Half>(gridBatch, data, names);
+            return fvdbToNanovdbGridWithValues<GridT, c10::Half>(gridBatchData, data, names);
         }
     } else if (data.dtype() == torch::kFloat32) {
         if (jdataSqueezed.dim() == 1 || (jdataSqueezed.dim() == 2 && jdataSqueezed.size(1) == 1)) {
             using GridT = float;
-            return fvdbToNanovdbGridWithValues<GridT, float>(gridBatch, data, names);
+            return fvdbToNanovdbGridWithValues<GridT, float>(gridBatchData, data, names);
         } else if (jdataSqueezed.dim() == 2 && jdataSqueezed.size(1) == 3) {
             using GridT = nanovdb::Vec3f;
-            return fvdbToNanovdbGridWithValues<GridT, float>(gridBatch, data, names);
+            return fvdbToNanovdbGridWithValues<GridT, float>(gridBatchData, data, names);
         } else if (jdataSqueezed.dim() == 2 && jdataSqueezed.size(1) == 4) {
             using GridT = nanovdb::Vec4f;
-            return fvdbToNanovdbGridWithValues<GridT, float>(gridBatch, data, names);
+            return fvdbToNanovdbGridWithValues<GridT, float>(gridBatchData, data, names);
         }
     } else if (data.dtype() == torch::kFloat64) {
         if (jdataSqueezed.dim() == 1 || (jdataSqueezed.dim() == 2 && jdataSqueezed.size(1) == 1)) {
             using GridT = double;
-            return fvdbToNanovdbGridWithValues<GridT, double>(gridBatch, data, names);
+            return fvdbToNanovdbGridWithValues<GridT, double>(gridBatchData, data, names);
         } else if (jdataSqueezed.dim() == 2 && jdataSqueezed.size(1) == 3) {
             using GridT = nanovdb::Vec3d;
-            return fvdbToNanovdbGridWithValues<GridT, double>(gridBatch, data, names);
+            return fvdbToNanovdbGridWithValues<GridT, double>(gridBatchData, data, names);
         } else if (jdataSqueezed.dim() == 2 && jdataSqueezed.size(1) == 4) {
             using GridT = nanovdb::Vec4d;
-            return fvdbToNanovdbGridWithValues<GridT, double>(gridBatch, data, names);
+            return fvdbToNanovdbGridWithValues<GridT, double>(gridBatchData, data, names);
         }
     } else if (data.dtype() == torch::kInt32) {
         if (jdataSqueezed.dim() == 1 || (jdataSqueezed.dim() == 2 && jdataSqueezed.size(1) == 1)) {
             using GridT = int32_t;
-            return fvdbToNanovdbGridWithValues<GridT, int32_t>(gridBatch, data, names);
+            return fvdbToNanovdbGridWithValues<GridT, int32_t>(gridBatchData, data, names);
         } else if (jdataSqueezed.dim() == 2 && jdataSqueezed.size(1) == 3) {
             using GridT = nanovdb::Vec3i;
-            return fvdbToNanovdbGridWithValues<GridT, int32_t>(gridBatch, data, names);
+            return fvdbToNanovdbGridWithValues<GridT, int32_t>(gridBatchData, data, names);
         }
     } else if (data.dtype() == torch::kInt64) {
         if (jdataSqueezed.dim() == 1 || (jdataSqueezed.dim() == 2 && jdataSqueezed.size(1) == 1)) {
             using GridT = int64_t;
-            return fvdbToNanovdbGridWithValues<GridT, int64_t>(gridBatch, data, names);
+            return fvdbToNanovdbGridWithValues<GridT, int64_t>(gridBatchData, data, names);
         }
     } else if (data.dtype() == torch::kUInt8) {
         if (jdataSqueezed.dim() == 2 && jdataSqueezed.size(1) == 4) {
             using GridT = nanovdb::math::Rgba8;
-            return fvdbToNanovdbGridWithValues<GridT, uint8_t>(gridBatch, data, names);
+            return fvdbToNanovdbGridWithValues<GridT, uint8_t>(gridBatchData, data, names);
         }
     }
 
@@ -269,13 +270,13 @@ maybeConvertToStandardNanovdbGrid(const fvdb::GridBatch &gridBatch,
 
 bool
 maybeSaveStandardNanovdbGrid(const std::string &path,
-                             const GridBatch &gridBatch,
+                             const GridBatchData &gridBatchData,
                              const JaggedTensor data,
                              const std::vector<std::string> names,
                              nanovdb::io::Codec codec,
                              bool verbose) {
     nanovdb::GridHandle<nanovdb::HostBuffer> gridHandle =
-        maybeConvertToStandardNanovdbGrid(gridBatch, data, names);
+        maybeConvertToStandardNanovdbGrid(gridBatchData, data, names);
     if (gridHandle.isEmpty()) {
         return false;
     }
@@ -285,8 +286,8 @@ maybeSaveStandardNanovdbGrid(const std::string &path,
 }
 
 nanovdb::GridHandle<nanovdb::HostBuffer>
-getIndexGrid(const GridBatch &gridBatch, const std::vector<std::string> names = {}) {
-    const nanovdb::GridHandle<TorchDeviceBuffer> &nanoGridHdl = gridBatch.nanovdb_grid_handle();
+getIndexGrid(const GridBatchData &gridBatchData, const std::vector<std::string> names = {}) {
+    const nanovdb::GridHandle<TorchDeviceBuffer> &nanoGridHdl = gridBatchData.nanoGridHandle();
 
     // Allocate memory and get pointer to host grid buffer
     nanovdb::HostBuffer writeBuf(nanoGridHdl.buffer().size());
@@ -299,9 +300,9 @@ getIndexGrid(const GridBatch &gridBatch, const std::vector<std::string> names = 
 
     // Write out the full grid to the buffer
     if (isCuda) {
-        c10::cuda::CUDAGuard deviceGuard(gridBatch.device());
+        c10::cuda::CUDAGuard deviceGuard(gridBatchData.device());
         at::cuda::CUDAStream defaultStream =
-            at::cuda::getCurrentCUDAStream(gridBatch.device().index());
+            at::cuda::getCurrentCUDAStream(gridBatchData.device().index());
         cudaMemcpyAsync(writeHead,
                         readHead,
                         sourceGridByteSize,
@@ -316,20 +317,17 @@ getIndexGrid(const GridBatch &gridBatch, const std::vector<std::string> names = 
         nanovdb::GridHandle<nanovdb::HostBuffer>(std::move(writeBuf));
 
     // Write voxelSize and origin information to the output buffer
-    for (int64_t bi = 0; bi < gridBatch.grid_count(); bi += 1) {
+    for (int64_t bi = 0; bi < gridBatchData.batchSize(); bi += 1) {
         nanovdb::GridData *retGridData = (nanovdb::GridData *)(retHandle.gridData(bi));
-        torch::Tensor voxelSize        = gridBatch.voxel_size_at(bi, torch::kFloat64);
-        torch::Tensor origin           = gridBatch.origin_at(bi, torch::kFloat64);
-        retGridData->mVoxelSize        = {
-            voxelSize[0].item<double>(), voxelSize[1].item<double>(), voxelSize[2].item<double>()};
-        retGridData->mMap = nanovdb::Map(
-            voxelSize[0].item<double>(),
-            {origin[0].item<double>(), origin[1].item<double>(), origin[2].item<double>()});
+        const nanovdb::Vec3d &vs       = gridBatchData.voxelSizeAt(bi);
+        const nanovdb::Vec3d vo        = gridBatchData.voxelOriginAt(bi);
+        retGridData->mVoxelSize        = {vs[0], vs[1], vs[2]};
+        retGridData->mMap              = nanovdb::Map(vs[0], {vo[0], vo[1], vo[2]});
     }
 
     // If you passed in grid names, write them to the output buffer
     if (names.size() > 0) {
-        for (int64_t bi = 0; bi < gridBatch.grid_count(); bi += 1) {
+        for (int64_t bi = 0; bi < gridBatchData.batchSize(); bi += 1) {
             const std::string name = names.size() > 0 ? names[bi] : "";
             TORCH_CHECK_VALUE(name.size() < nanovdb::GridData::MaxNameSize,
                               "Grid name " + name + " exceeds maximum character length of " +
@@ -350,12 +348,12 @@ getIndexGrid(const GridBatch &gridBatch, const std::vector<std::string> names = 
 
 void
 saveIndexGrid(const std::string &path,
-              const GridBatch &gridBatch,
+              const GridBatchData &gridBatchData,
               const std::vector<std::string> names,
               nanovdb::io::Codec codec,
               bool verbose) {
     // If you don't pass in data, then we just write the grid
-    nanovdb::GridHandle<nanovdb::HostBuffer> writeHandle = getIndexGrid(gridBatch, names);
+    nanovdb::GridHandle<nanovdb::HostBuffer> writeHandle = getIndexGrid(gridBatchData, names);
 
     // Save the grid to disk
     nanovdb::io::writeGrid(path, writeHandle, codec, verbose);
@@ -363,12 +361,12 @@ saveIndexGrid(const std::string &path,
 
 void
 saveIndexGridWithBlindData(const std::string &path,
-                           const GridBatch &gridBatch,
+                           const GridBatchData &gridBatchData,
                            const JaggedTensor data,
                            const std::vector<std::string> names,
                            nanovdb::io::Codec codec,
                            bool verbose) {
-    const nanovdb::GridHandle<TorchDeviceBuffer> &nanoGridHdl = gridBatch.nanovdb_grid_handle();
+    const nanovdb::GridHandle<TorchDeviceBuffer> &nanoGridHdl = gridBatchData.nanoGridHandle();
 
     // Make a (possible) cpu copy of the data jagged tensor
     JaggedTensor cpuData = data.cpu().contiguous();
@@ -378,16 +376,16 @@ saveIndexGridWithBlindData(const std::string &path,
     std::vector<uint64_t> paddedBlindDataSizes; // The amount of padding added to each blind data to
                                                 // achieve 32 byte alignment
     uint64_t totalBlindDataSize = 0;
-    for (int bi = 0; bi < gridBatch.grid_count(); bi += 1) {
+    for (int64_t bi = 0; bi < gridBatchData.batchSize(); bi += 1) {
         JaggedTensor dataBi        = cpuData.index({bi});
-        const int64_t numVoxelsBi  = gridBatch.num_voxels_at(bi);
+        const int64_t numVoxelsBi  = gridBatchData.numVoxelsAt(bi);
         const int64_t jdataBytesBi = dataBi.jdata().numel() * dataBi.jdata().element_size();
         TORCH_CHECK_VALUE(
             numVoxelsBi == dataBi.rsize(0),
             "Invalid number of voxels in jagged tensor at index " + std::to_string(bi) +
                 ". Expected it to match the number of voxels at grid index " + std::to_string(bi) +
                 ". " + "Got " + std::to_string(dataBi.jdata().size(0)) + " but expected " +
-                std::to_string(gridBatch.num_voxels_at(bi)) + ".");
+                std::to_string(gridBatchData.numVoxelsAt(bi)) + ".");
         const uint64_t blindDataSizeBi       = jdataBytesBi + sizeof(int64_t) * (dataBi.rdim() + 1);
         const uint64_t paddedBlindDataSizeBi = nanovdb::math::AlignUp<32UL>(blindDataSizeBi);
         blindDataPadding.push_back(paddedBlindDataSizeBi - blindDataSizeBi);
@@ -396,10 +394,10 @@ saveIndexGridWithBlindData(const std::string &path,
     }
 
     // Allocate a big enough buffer to allocate the index grid and blind data
-    const size_t allocSize = nanoGridHdl.buffer().size() + // Grids (32B aligned)
+    const size_t allocSize = nanoGridHdl.buffer().size() +   // Grids (32B aligned)
                              sizeof(nanovdb::GridBlindMetaData) *
-                                 gridBatch.grid_count() +  // Blind metadata (32B aligned)
-                             totalBlindDataSize;           // Blind data (32B aligned)
+                                 gridBatchData.batchSize() + // Blind metadata (32B aligned)
+                             totalBlindDataSize;             // Blind data (32B aligned)
     nanovdb::HostBuffer writeBuf(allocSize);
 
     // Get pointer to read (possibly on the device) and write pointers
@@ -409,13 +407,13 @@ saveIndexGridWithBlindData(const std::string &path,
                                                       : nanoGridHdl.buffer().data());
 
     // Copy each grid and each entry in the jagged tensor
-    for (int bi = 0; bi < gridBatch.grid_count(); bi += 1) {
+    for (int64_t bi = 0; bi < gridBatchData.batchSize(); bi += 1) {
         // Copy the full bi^th index grid to the buffer
         const size_t sourceGridByteSize = nanoGridHdl.gridSize(bi);
         if (isCuda) {
-            c10::cuda::CUDAGuard deviceGuard(gridBatch.device());
+            c10::cuda::CUDAGuard deviceGuard(gridBatchData.device());
             at::cuda::CUDAStream defaultStream =
-                at::cuda::getCurrentCUDAStream(gridBatch.device().index());
+                at::cuda::getCurrentCUDAStream(gridBatchData.device().index());
             cudaMemcpyAsync((void *)writeHead,
                             (void *)readHead,
                             sourceGridByteSize,
@@ -437,21 +435,19 @@ saveIndexGridWithBlindData(const std::string &path,
             sourceGridByteSize + sizeof(nanovdb::GridBlindMetaData) + paddedBlindDataSizes[bi];
 
         // Write voxelSize and origin
-        torch::Tensor voxelSize    = gridBatch.voxel_size_at(bi, torch::kFloat64).to(torch::kCPU);
-        torch::Tensor origin       = gridBatch.origin_at(bi, torch::kFloat64).to(torch::kCPU);
-        const double *voxelSizePtr = voxelSize.data_ptr<double>();
-        const double sx            = voxelSizePtr[0];
-        const double sy            = voxelSizePtr[1];
-        const double sz            = voxelSizePtr[2];
-        writeGridData->mVoxelSize  = {sx, sy, sz};
-        const double mat[3][3]     = {{sx, 0.0, 0.0},        // row 0
-                                      {0.0, sy, 0.0},        // row 1
-                                      {0.0, 0.0, sz}};       // row 2
-        const double invMat[3][3]  = {{1.0 / sx, 0.0, 0.0},  // row 0
-                                      {0.0, 1.0 / sy, 0.0},  // row 1
-                                      {0.0, 0.0, 1.0 / sz}}; // row 2
-        const double *originPtr    = origin.data_ptr<double>();
-        nanovdb::Vec3d trans       = {originPtr[0], originPtr[1], originPtr[2]};
+        const nanovdb::Vec3d &vs  = gridBatchData.voxelSizeAt(bi);
+        const nanovdb::Vec3d vo   = gridBatchData.voxelOriginAt(bi);
+        const double sx           = vs[0];
+        const double sy           = vs[1];
+        const double sz           = vs[2];
+        writeGridData->mVoxelSize = {sx, sy, sz};
+        const double mat[3][3]    = {{sx, 0.0, 0.0},        // row 0
+                                     {0.0, sy, 0.0},        // row 1
+                                     {0.0, 0.0, sz}};       // row 2
+        const double invMat[3][3] = {{1.0 / sx, 0.0, 0.0},  // row 0
+                                     {0.0, 1.0 / sy, 0.0},  // row 1
+                                     {0.0, 0.0, 1.0 / sz}}; // row 2
+        nanovdb::Vec3d trans      = {vo[0], vo[1], vo[2]};
         writeGridData->mMap.set(mat, invMat, trans);
 
         readHead += sourceGridByteSize;
@@ -500,7 +496,7 @@ saveIndexGridWithBlindData(const std::string &path,
     // Synchronize cuda stream if we just did a bunch of GPU -> CPU transfers
     if (isCuda) {
         at::cuda::CUDAStream defaultStream =
-            at::cuda::getCurrentCUDAStream(gridBatch.device().index());
+            at::cuda::getCurrentCUDAStream(gridBatchData.device().index());
         cudaStreamSynchronize(defaultStream.stream());
     }
 
@@ -510,28 +506,28 @@ saveIndexGridWithBlindData(const std::string &path,
 }
 
 nanovdb::GridHandle<nanovdb::HostBuffer>
-toNVDB(const GridBatch &gridBatch,
+toNVDB(const GridBatchData &gridBatchData,
        const std::optional<JaggedTensor> maybeData,
        const std::vector<std::string> &names) {
     // Get optional names
     if (!names.empty()) {
         TORCH_CHECK_VALUE(
-            names.size() == (size_t)gridBatch.grid_count(),
+            names.size() == (size_t)gridBatchData.batchSize(),
             "Invalid parameter for names, must be empty or a list of the same length as the batch size. Got " +
                 std::to_string(names.size()) + " names for batch size " +
-                std::to_string(gridBatch.grid_count()));
+                std::to_string(gridBatchData.batchSize()));
     }
 
     if (maybeData.has_value()) {
-        return maybeConvertToStandardNanovdbGrid(gridBatch, maybeData.value(), names);
+        return maybeConvertToStandardNanovdbGrid(gridBatchData, maybeData.value(), names);
     } else {
-        return getIndexGrid(gridBatch, names);
+        return getIndexGrid(gridBatchData, names);
     }
 }
 
 void
 saveNVDB(const std::string &path,
-         const GridBatch &gridBatch,
+         const GridBatchData &gridBatchData,
          const std::optional<JaggedTensor> maybeData,
          const std::vector<std::string> &names,
          bool compressed,
@@ -542,35 +538,35 @@ saveNVDB(const std::string &path,
     // Get optional names
     if (!names.empty()) {
         TORCH_CHECK_VALUE(
-            names.size() == (size_t)gridBatch.grid_count(),
+            names.size() == (size_t)gridBatchData.batchSize(),
             "Invalid parameter for names, must be empty or a list of the same length as the batch size. Got " +
                 std::to_string(names.size()) + " names for batch size " +
-                std::to_string(gridBatch.grid_count()));
+                std::to_string(gridBatchData.batchSize()));
     }
 
     JaggedTensor data;
     if (maybeData.has_value()) {
         data = maybeData.value();
     } else {
-        saveIndexGrid(path, gridBatch, names, codec, verbose);
+        saveIndexGrid(path, gridBatchData, names, codec, verbose);
         return;
     }
 
     TORCH_CHECK_VALUE(data.jdata().ndimension() >= 1, "Invalid jagged data shape in save_nvdb");
-    TORCH_CHECK_VALUE(gridBatch.total_voxels() == data.jdata().size(0),
+    TORCH_CHECK_VALUE(gridBatchData.totalVoxels() == data.jdata().size(0),
                       "Invalid jagged data shape in save_nvdb. Must match number of voxels");
-    TORCH_CHECK_VALUE(gridBatch.device() == data.device(),
+    TORCH_CHECK_VALUE(gridBatchData.device() == data.device(),
                       "Device should match between grid batch and data");
 
     // Heuristically determine if we can use a standard nanovdb grid (e.g. vec3f, float, vec3i,
     // etc...) to store the data If so, we save such a grid -- otherwise we save an index grid with
     // custom blind data
-    if (maybeSaveStandardNanovdbGrid(path, gridBatch, data, names, codec, verbose)) {
+    if (maybeSaveStandardNanovdbGrid(path, gridBatchData, data, names, codec, verbose)) {
         return;
     } else {
         // If we didn't manage to save a standard nanovdb grid, just save a tensor grid with blind
         // data
-        saveIndexGridWithBlindData(path, gridBatch, data, names, codec, verbose);
+        saveIndexGridWithBlindData(path, gridBatchData, data, names, codec, verbose);
     }
 }
 

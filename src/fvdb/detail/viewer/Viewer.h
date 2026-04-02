@@ -5,7 +5,6 @@
 #define FVDB_DETAIL_VIEWER_VIEWER_H
 
 #include <fvdb/GaussianSplat3d.h>
-#include <fvdb/GridBatch.h>
 #include <fvdb/detail/viewer/CameraView.h>
 #include <fvdb/detail/viewer/GaussianSplat3dView.h>
 

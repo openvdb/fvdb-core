@@ -16,7 +16,7 @@
 #ifndef FVDB_DETAIL_OPS_CONVOLUTION_PREDGATHERIGEMM_H
 #define FVDB_DETAIL_OPS_CONVOLUTION_PREDGATHERIGEMM_H
 
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 
 #include <torch/types.h>
 
@@ -39,8 +39,8 @@ namespace ops {
 /// @return              Output features, shape [N_out, K], float32.
 torch::Tensor predGatherIGemmSparseConv(torch::Tensor features,
                                         torch::Tensor weights,
-                                        GridBatchImpl const &feature_grid,
-                                        GridBatchImpl const &output_grid,
+                                        GridBatchData const &feature_grid,
+                                        GridBatchData const &output_grid,
                                         int kernel_size,
                                         int stride);
 

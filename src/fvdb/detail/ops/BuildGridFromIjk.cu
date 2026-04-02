@@ -1,7 +1,8 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
+#include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/BuildGridFromIjk.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Utils.h>
@@ -225,9 +226,9 @@ _createNanoGridFromIJK(const JaggedTensor &ijk) {
                           std::to_string(ijk.rsize(1)));
     TORCH_CHECK(ijk.num_tensors() == ijk.num_outer_lists(),
                 "If this happens, Francis' paranoia was justified. File a bug");
-    TORCH_CHECK_VALUE(ijk.num_outer_lists() <= GridBatchImpl::MAX_GRIDS_PER_BATCH,
+    TORCH_CHECK_VALUE(ijk.num_outer_lists() <= GridBatchData::MAX_GRIDS_PER_BATCH,
                       "Cannot create a batch of grids with more than ",
-                      GridBatchImpl::MAX_GRIDS_PER_BATCH,
+                      GridBatchData::MAX_GRIDS_PER_BATCH,
                       " grids in it. ",
                       "You passed in ",
                       ijk.num_outer_lists(),
@@ -239,12 +240,12 @@ _createNanoGridFromIJK(const JaggedTensor &ijk) {
                                 [&]() { return dispatchCreateNanoGridFromIJK<DeviceTag>(ijk); });
 }
 
-c10::intrusive_ptr<GridBatchImpl>
+c10::intrusive_ptr<GridBatchData>
 createNanoGridFromIJK(const JaggedTensor &ijk,
                       const std::vector<nanovdb::Vec3d> &voxelSizes,
                       const std::vector<nanovdb::Vec3d> &origins) {
     auto handle = _createNanoGridFromIJK(ijk);
-    return c10::make_intrusive<GridBatchImpl>(std::move(handle), voxelSizes, origins);
+    return makeGridBatchData(std::move(handle), voxelSizes, origins);
 }
 
 } // namespace ops

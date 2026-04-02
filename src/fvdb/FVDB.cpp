@@ -13,6 +13,14 @@
 #include <fvdb/detail/io/LoadNanovdb.h>
 #include <fvdb/detail/io/SaveNanoVDB.h>
 
+// Grid construction ops
+#include <fvdb/detail/ops/BuildDenseGrid.h>
+#include <fvdb/detail/ops/BuildGridFromIjk.h>
+#include <fvdb/detail/ops/BuildGridFromMesh.h>
+#include <fvdb/detail/ops/BuildGridFromNearestVoxelsToPoints.h>
+#include <fvdb/detail/ops/BuildGridFromPoints.h>
+#include <fvdb/detail/ops/ConcatenateGrids.h>
+
 #include <ATen/cuda/CUDAContext.h>
 
 namespace fvdb {
@@ -113,21 +121,21 @@ scaledDotProductAttention(const JaggedTensor &query,
     return JaggedTensor(outList);
 }
 
-std::tuple<GridBatch, JaggedTensor, std::vector<std::string>>
+std::tuple<c10::intrusive_ptr<detail::GridBatchData>, JaggedTensor, std::vector<std::string>>
 from_nanovdb(nanovdb::GridHandle<nanovdb::HostBuffer> &handle) {
     return detail::io::fromNVDB(handle);
 }
 
 nanovdb::GridHandle<nanovdb::HostBuffer>
-to_nanovdb(const GridBatch &gridBatch,
+to_nanovdb(const detail::GridBatchData &gridBatchData,
            const std::optional<JaggedTensor> maybeData,
            const std::vector<std::string> &names) {
-    return detail::io::toNVDB(gridBatch, maybeData, names);
+    return detail::io::toNVDB(gridBatchData, maybeData, names);
 }
 
-GridBatch
-jcat(const std::vector<GridBatch> &vec) {
-    return GridBatch::concatenate(vec);
+c10::intrusive_ptr<detail::GridBatchData>
+jcat(const std::vector<c10::intrusive_ptr<detail::GridBatchData>> &vec) {
+    return detail::ops::concatenateGrids(vec);
 }
 
 JaggedTensor
@@ -137,31 +145,31 @@ jcat(const std::vector<JaggedTensor> &vec, std::optional<int64_t> dim) {
 
 void
 save(const std::string &path,
-     const GridBatch &gridBatch,
+     const detail::GridBatchData &gridBatchData,
      const std::optional<JaggedTensor> maybeData,
      const std::vector<std::string> &names,
      bool compressed,
      bool verbose) {
-    detail::io::saveNVDB(path, gridBatch, maybeData, names, compressed, verbose);
+    detail::io::saveNVDB(path, gridBatchData, maybeData, names, compressed, verbose);
 }
 
 void
 save(const std::string &path,
-     const GridBatch &gridBatch,
+     const detail::GridBatchData &gridBatchData,
      const std::optional<JaggedTensor> maybeData,
      const std::string &name,
      bool compressed,
      bool verbose) {
     if (name.empty()) {
-        detail::io::saveNVDB(path, gridBatch, maybeData, {}, compressed, verbose);
+        detail::io::saveNVDB(path, gridBatchData, maybeData, {}, compressed, verbose);
     } else {
-        std::vector<std::string> names(gridBatch.grid_count());
+        std::vector<std::string> names(gridBatchData.batchSize());
         std::fill(names.begin(), names.end(), name);
-        detail::io::saveNVDB(path, gridBatch, maybeData, names, compressed, verbose);
+        detail::io::saveNVDB(path, gridBatchData, maybeData, names, compressed, verbose);
     }
 }
 
-std::tuple<GridBatch, JaggedTensor, std::vector<std::string>>
+std::tuple<c10::intrusive_ptr<detail::GridBatchData>, JaggedTensor, std::vector<std::string>>
 load(const std::string &path,
      const std::vector<uint64_t> &indices,
      const torch::Device &device,
@@ -169,7 +177,7 @@ load(const std::string &path,
     return detail::io::loadNVDB(path, indices, device, verbose);
 }
 
-std::tuple<GridBatch, JaggedTensor, std::vector<std::string>>
+std::tuple<c10::intrusive_ptr<detail::GridBatchData>, JaggedTensor, std::vector<std::string>>
 load(const std::string &path,
      const std::vector<std::string> &names,
      const torch::Device &device,
@@ -177,59 +185,50 @@ load(const std::string &path,
     return detail::io::loadNVDB(path, names, device, verbose);
 }
 
-std::tuple<GridBatch, JaggedTensor, std::vector<std::string>>
+std::tuple<c10::intrusive_ptr<detail::GridBatchData>, JaggedTensor, std::vector<std::string>>
 load(const std::string &path, const torch::Device &device, bool verbose) {
     return detail::io::loadNVDB(path, device, verbose);
 }
 
-GridBatch
+c10::intrusive_ptr<detail::GridBatchData>
 gridbatch_from_points(const JaggedTensor &points,
-                      const Vec3dBatchOrScalar &voxel_sizes,
-                      const Vec3dBatch &origins) {
-    auto ret = GridBatch(points.device());
-    ret.set_from_points(points, voxel_sizes, origins);
-    return ret;
+                      const std::vector<nanovdb::Vec3d> &voxel_sizes,
+                      const std::vector<nanovdb::Vec3d> &origins) {
+    return detail::ops::buildGridFromPoints(points, voxel_sizes, origins);
 }
 
-GridBatch
+c10::intrusive_ptr<detail::GridBatchData>
 gridbatch_from_ijk(const JaggedTensor &ijk,
-                   const Vec3dBatchOrScalar &voxel_sizes,
-                   const Vec3dBatch &origins) {
-    auto ret = GridBatch(ijk.device());
-    ret.set_from_ijk(ijk, voxel_sizes, origins);
-    return ret;
+                   const std::vector<nanovdb::Vec3d> &voxel_sizes,
+                   const std::vector<nanovdb::Vec3d> &origins) {
+    return detail::ops::createNanoGridFromIJK(ijk, voxel_sizes, origins);
 }
 
-GridBatch
+c10::intrusive_ptr<detail::GridBatchData>
 gridbatch_from_nearest_voxels_to_points(const JaggedTensor &points,
-                                        const Vec3dBatchOrScalar &voxel_sizes,
-                                        const Vec3dBatch &origins) {
-    auto ret = GridBatch(points.device());
-    ret.set_from_nearest_voxels_to_points(points, voxel_sizes, origins);
-    return ret;
+                                        const std::vector<nanovdb::Vec3d> &voxel_sizes,
+                                        const std::vector<nanovdb::Vec3d> &origins) {
+    return detail::ops::buildGridFromNearestVoxelsToPoints(points, voxel_sizes, origins);
 }
 
-GridBatch
+c10::intrusive_ptr<detail::GridBatchData>
 gridbatch_from_dense(const int64_t numGrids,
-                     const Vec3i &denseDims,
-                     const Vec3i &ijkMin,
-                     const Vec3dBatchOrScalar &voxel_sizes,
-                     const Vec3dBatch &origins,
+                     const nanovdb::Coord &denseDims,
+                     const nanovdb::Coord &ijkMin,
+                     const std::vector<nanovdb::Vec3d> &voxel_sizes,
+                     const std::vector<nanovdb::Vec3d> &origins,
                      std::optional<torch::Tensor> mask,
                      const torch::Device &device) {
-    auto ret = GridBatch(device);
-    ret.set_from_dense_grid(numGrids, denseDims, ijkMin, voxel_sizes, origins, mask);
-    return ret;
+    return detail::ops::createNanoGridFromDense(
+        numGrids, ijkMin, denseDims, device, mask, voxel_sizes, origins);
 }
 
-GridBatch
+c10::intrusive_ptr<detail::GridBatchData>
 gridbatch_from_mesh(const JaggedTensor &vertices,
                     const JaggedTensor &faces,
-                    const Vec3dBatchOrScalar &voxel_sizes,
-                    const Vec3dBatch &origins) {
-    auto ret = GridBatch(vertices.device());
-    ret.set_from_mesh(vertices, faces, voxel_sizes, origins);
-    return ret;
+                    const std::vector<nanovdb::Vec3d> &voxel_sizes,
+                    const std::vector<nanovdb::Vec3d> &origins) {
+    return detail::ops::buildGridFromMesh(vertices, faces, voxel_sizes, origins);
 }
 
 std::vector<int64_t>

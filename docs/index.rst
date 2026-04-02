@@ -92,6 +92,7 @@ algorithms for 3D reconstruction from sensor data.
    api/jagged_tensor
    api/convolution_plan
    api/sparse_grids
+   api/functional
    api/gaussian_splatting
    api/viz
    api/enums

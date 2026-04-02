@@ -5,7 +5,7 @@
 #define FVDB_DETAIL_UTILS_FOREACHCPU_H
 
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 
 #include <nanovdb/NanoVDB.h>
 
@@ -14,7 +14,7 @@ namespace fvdb {
 /// @brief Run the given function on each leaf in the grid batch on the CPU.
 ///        The callback has the form:
 ///            void(int32_t bidx, int32_t lidx, int32_t cidx,
-///            fvdb::detail::GridBatchImpl::Accessor batchAcc, Args...)
+///            fvdb::detail::GridBatchData::Accessor batchAcc, Args...)
 ///        Where:
 ///            - bidx is the batch index of the current leaf
 ///            - lidx is the index of the leaf within the bidx^th grid in the batch
@@ -22,7 +22,7 @@ namespace fvdb {
 /// @tparam Func The type of the callback function to run on each leaf. It must be a callable of the
 /// form
 ///         void(int32_t, int32_t, int32_t,
-///         fvdb::detail::GridBatchImpl::Accessor, Args...)
+///         fvdb::detail::GridBatchData::Accessor, Args...)
 /// @tparam Args... The types of any extra arguments to pass to the callback function
 ///
 /// @param stream Which cuda stream to run the kernel on
@@ -34,7 +34,7 @@ namespace fvdb {
 template <typename Func, typename... Args>
 __host__ void
 forEachLeafCPU(int64_t channelsPerLeaf,
-               const fvdb::detail::GridBatchImpl &batchHdl,
+               const fvdb::detail::GridBatchData &batchHdl,
                Func func,
                Args... args) {
     TORCH_CHECK(batchHdl.device().is_cpu(), "Grid batch must be on the CPU");
@@ -76,7 +76,7 @@ template <typename Func, typename... Args>
 void
 forEachLeafInOneGridCPU(int64_t numChannels,
                         int64_t batchIdx,
-                        const fvdb::detail::GridBatchImpl &batchHdl,
+                        const fvdb::detail::GridBatchData &batchHdl,
                         Func func,
                         Args... args) {
     TORCH_CHECK(batchHdl.device().is_cpu(), "Grid batch must be on the CPU");
@@ -98,7 +98,7 @@ forEachLeafInOneGridCPU(int64_t numChannels,
 /// @brief Run the given function on each voxel in the grid batch on the CPU.
 ///        The callback has the form:
 ///            void(int32_t bidx, int32_t lidx, int32_t vidx, int32_t cidx,
-///            fvdb::detail::GridBatchImpl::Accessor batchAcc, Args...)
+///            fvdb::detail::GridBatchData::Accessor batchAcc, Args...)
 ///         Where:
 ///             - bidx is the batch index of the current voxel
 ///             - lidx is the index of the leaf containing the voxelwithin the bidx^th grid in the
@@ -111,7 +111,7 @@ forEachLeafInOneGridCPU(int64_t numChannels,
 /// @tparam Func The type of the callback function to run on each voxel. It must be a callable of
 /// the form
 ///         void(int32_t, int32_t, int32_t, int32_t,
-///         fvdb::detail::GridBatchImpl::Accessor, Args...)
+///         fvdb::detail::GridBatchData::Accessor, Args...)
 /// @tparam Args... The types of any extra arguments to pass to the callback function
 ///
 /// @param stream Which cuda stream to run the kernel on
@@ -123,7 +123,7 @@ forEachLeafInOneGridCPU(int64_t numChannels,
 template <typename Func, typename... Args>
 __host__ void
 forEachVoxelCPU(int64_t numChannels,
-                const fvdb::detail::GridBatchImpl &batchHdl,
+                const fvdb::detail::GridBatchData &batchHdl,
                 Func func,
                 Args... args) {
     TORCH_CHECK(batchHdl.device().is_cpu(), "Grid batch must be on the CPU");
