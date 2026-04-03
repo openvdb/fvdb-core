@@ -20,11 +20,6 @@ std::vector<torch::Tensor> volumeRender(const torch::Tensor &sigmas,
                                         const torch::Tensor &packInfo,
                                         double transmittanceThresh);
 
-JaggedTensor scaledDotProductAttention(const JaggedTensor &query,
-                                       const JaggedTensor &key,
-                                       const JaggedTensor &value,
-                                       float scale);
-
 /// @brief Concatenate a list of grid batches into a single grid batch
 /// @param vec A list of grid batches to concatenate
 /// @return A GridBatchData representing the concatenated grid batch
