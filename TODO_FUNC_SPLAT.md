@@ -66,16 +66,15 @@ conda activate fvdb
 - [x] `fvdb/functional/__init__.py` updated to expose `splat` submodule
 - [x] Build passes, all 135 tests pass, all imports verified
 
-### Milestone 6: Create Python Autograd for Rasterization
-- [ ] `_rasterize.py` - dense rasterization autograd
-- [ ] `_rasterize_from_world.py` - world-space rasterization autograd
-- [ ] `_rasterize_sparse.py` - sparse rasterization autograd
-- [ ] `_sparse_utils.py` - dedup, sparse info
-- [ ] `_queries.py` - contributing gaussian queries
-- [ ] `_mcmc.py` - relocate, add noise
-- [ ] `_io.py` - PLY I/O
-- [ ] Composite pipeline functions in `__init__.py`
-- [ ] Build passes, all tests pass
+### Milestone 6: Create Python Rasterization and Pipeline Functions -- DONE
+- [x] `_rasterize.py` - `rasterize_from_projected()` (dense)
+- [x] `_rasterize_from_world.py` - `rasterize_from_world()` (world-space geometry grads)
+- [x] `_rasterize_sparse.py` - `sparse_render()` (sparse pixel rendering)
+- [x] `_queries.py` - `render_num_contributing_gaussians`, `render_contributing_gaussian_ids` + sparse variants
+- [x] `_render.py` - 6 composite pipeline functions: `render_images`, `render_depths`, `render_images_and_depths`, + 3 from-world variants
+- [x] `_mcmc.py` - placeholder (MCMC ops still on class, will become free functions in M9)
+- [x] `__init__.py` updated with all 16 public exports
+- [x] Build passes, all 135 tests pass
 
 ### Milestone 7: Rewire `GaussianSplat3d` Python Class to Delegate to Functional
 - [ ] Store tensors directly as Python attributes
