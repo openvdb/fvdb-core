@@ -550,16 +550,17 @@ class GaussianSplat3d:
         if isinstance(filename, pathlib.Path):
             filename = str(filename)
 
-        gs_impl, metadata = GaussianSplat3dCpp.from_ply(filename=filename, device=device)
+        means, quats, log_scales, logit_opacities, sh0, shN, metadata = _C.gsplat_load_ply(
+            filename, device
+        )
 
-        # Extract tensors from the C++ object to build a pure-Python GaussianSplat3d
         result = cls.__new__(cls)
-        result._means = gs_impl.means
-        result._quats = gs_impl.quats
-        result._log_scales = gs_impl.log_scales
-        result._logit_opacities = gs_impl.logit_opacities
-        result._sh0 = gs_impl.sh0
-        result._shN = gs_impl.shN
+        result._means = means
+        result._quats = quats
+        result._log_scales = log_scales
+        result._logit_opacities = logit_opacities
+        result._sh0 = sh0
+        result._shN = shN
         result._accumulate_mean_2d_gradients = False
         result._accumulate_max_2d_radii = False
         result._accum_grad_norms = None
@@ -2975,23 +2976,13 @@ class GaussianSplat3d:
                 Each element represents the alpha value (opacity) at a pixel such that ``0 <= alpha < 1``,
                 and 0 means the pixel is fully transparent, and 1 means the pixel is fully opaque.
         """
-        # Use a temporary C++ GaussianSplat3d for this complex query operation
-        tmp = self._make_cpp_impl()
-        return tmp.render_num_contributing_gaussians(
-            world_to_camera_matrices=world_to_camera_matrices,
-            projection_matrices=projection_matrices,
-            image_width=image_width,
-            image_height=image_height,
-            near=near,
-            far=far,
-            camera_model=self._camera_model_to_cpp(camera_model),
-            projection_method=self._projection_method_to_cpp(projection_method),
-            distortion_coeffs=distortion_coeffs,
-            tile_size=tile_size,
-            min_radius_2d=min_radius_2d,
-            eps_2d=eps_2d,
-            antialias=antialias,
+        settings = _build_settings(image_width, image_height, near, far, 0, tile_size, min_radius_2d, eps_2d, antialias, "depth")
+        state = self._project_with_accum(
+            world_to_camera_matrices, projection_matrices, settings,
+            self._camera_model_to_cpp(camera_model),
+            self._projection_method_to_cpp(projection_method), distortion_coeffs,
         )
+        return _C.gsplat_render_num_contributing(state, settings)
 
     @overload
     def sparse_render_num_contributing_gaussians(
@@ -3405,14 +3396,8 @@ class GaussianSplat3d:
         Returns:
             tuple[torch.Tensor, torch.Tensor]: Tuple of (logit_opacities_new [N], log_scales_new [N, 3]).
         """
-        tmp = self._make_cpp_impl()
-        return tmp.relocate_gaussians(
-            log_scales,
-            logit_opacities,
-            ratios,
-            binomial_coeffs,
-            n_max,
-            min_opacity,
+        return _C.gsplat_relocate_gaussians(
+            log_scales, logit_opacities, ratios, binomial_coeffs, n_max, min_opacity,
         )
 
     def add_noise_to_means(self, noise_scale: float, t: float = 0.005, k: float = 100.0) -> None:
@@ -3424,12 +3409,11 @@ class GaussianSplat3d:
             t (float): Parameter t for noise scaling. Defaults to 0.005.
             k (float): Parameter k for noise scaling. Defaults to 100.0.
         """
-        tmp = self._make_cpp_impl()
-        tmp.add_noise_to_means(noise_scale, t, k)
-        # The C++ method mutates the means tensor in-place via the C++ object;
-        # since our self._means tensor is the same underlying storage (passed by reference),
-        # the mutation is reflected here. But to be safe, read back:
-        self._means = tmp.means
+        # The C++ kernel mutates means in-place
+        _C.gsplat_add_noise_to_means(
+            self._means, self._log_scales, self._logit_opacities, self._quats,
+            noise_scale, t, k,
+        )
 
     def reset_accumulated_gradient_state(self) -> None:
         """
@@ -3468,8 +3452,10 @@ class GaussianSplat3d:
         """
         if isinstance(filename, pathlib.Path):
             filename = str(filename)
-        tmp = self._make_cpp_impl()
-        tmp.save_ply(filename, metadata)  # type: ignore -- mapping to dict is fine here
+        _C.gsplat_save_ply(
+            self._means, self._quats, self._log_scales, self._logit_opacities,
+            self._sh0, self._shN, filename, dict(metadata) if metadata is not None else None,
+        )
 
     @overload
     def to(self, dtype: torch.dtype | None = None) -> "GaussianSplat3d": ...

@@ -19,6 +19,10 @@
 #include <pybind11/stl.h>
 
 #include <fvdb/detail/ops/gsplat/GaussianSplatOps.h>
+#include <fvdb/detail/ops/gsplat/GaussianMCMCAddNoise.h>
+#include <fvdb/detail/ops/gsplat/GaussianMCMCRelocation.h>
+#include <fvdb/detail/io/GaussianPlyIO.h>
+#include <fvdb/detail/utils/Utils.h>
 
 #include <torch/extension.h>
 
@@ -421,4 +425,101 @@ bind_gaussian_splat_ops(py::module &m) {
           py::arg("pixels_to_render"),
           py::arg("settings"),
           py::arg("num_contributing_gaussians"));
+
+    // -----------------------------------------------------------------------
+    // MCMC operations (thin dispatch wrappers)
+    // -----------------------------------------------------------------------
+
+    m.def(
+        "gsplat_relocate_gaussians",
+        [](const torch::Tensor &logScales,
+           const torch::Tensor &logitOpacities,
+           const torch::Tensor &ratios,
+           const torch::Tensor &binomialCoeffs,
+           int nMax,
+           float minOpacity) {
+            return FVDB_DISPATCH_KERNEL(logScales.device(), [&]() {
+                return ops::dispatchGaussianRelocation<DeviceTag>(
+                    logScales, logitOpacities, ratios, binomialCoeffs, nMax, minOpacity);
+            });
+        },
+        py::arg("log_scales"),
+        py::arg("logit_opacities"),
+        py::arg("ratios"),
+        py::arg("binomial_coeffs"),
+        py::arg("n_max"),
+        py::arg("min_opacity"));
+
+    m.def(
+        "gsplat_add_noise_to_means",
+        [](torch::Tensor &means,
+           const torch::Tensor &logScales,
+           const torch::Tensor &logitOpacities,
+           const torch::Tensor &quats,
+           float noiseScale,
+           float t,
+           float k) {
+            FVDB_DISPATCH_KERNEL(means.device(), [&]() {
+                return ops::dispatchGaussianMCMCAddNoise<DeviceTag>(
+                    means, logScales, logitOpacities, quats, noiseScale, t, k);
+            });
+        },
+        py::arg("means"),
+        py::arg("log_scales"),
+        py::arg("logit_opacities"),
+        py::arg("quats"),
+        py::arg("noise_scale"),
+        py::arg("t"),
+        py::arg("k"));
+
+    // -----------------------------------------------------------------------
+    // PLY I/O (wraps C++ PLY functions, creates temporary GaussianSplat3d internally)
+    // -----------------------------------------------------------------------
+
+    m.def(
+        "gsplat_save_ply",
+        [](const torch::Tensor &means,
+           const torch::Tensor &quats,
+           const torch::Tensor &logScales,
+           const torch::Tensor &logitOpacities,
+           const torch::Tensor &sh0,
+           const torch::Tensor &shN,
+           const std::string &filename,
+           std::optional<std::unordered_map<std::string, fvdb::GaussianSplat3d::PlyMetadataTypes>>
+               metadata) {
+            fvdb::GaussianSplat3d gs(means, quats, logScales, logitOpacities, sh0, shN,
+                                     false, false, false);
+            gs.savePly(filename, metadata);
+        },
+        py::arg("means"),
+        py::arg("quats"),
+        py::arg("log_scales"),
+        py::arg("logit_opacities"),
+        py::arg("sh0"),
+        py::arg("shN"),
+        py::arg("filename"),
+        py::arg("metadata"));
+
+    m.def(
+        "gsplat_load_ply",
+        [](const std::string &filename,
+           torch::Device device)
+            -> std::tuple<torch::Tensor,
+                          torch::Tensor,
+                          torch::Tensor,
+                          torch::Tensor,
+                          torch::Tensor,
+                          torch::Tensor,
+                          std::unordered_map<std::string, fvdb::GaussianSplat3d::PlyMetadataTypes>> {
+            auto [gs, metadata] = fvdb::GaussianSplat3d::fromPly(filename, device);
+            return {gs.means(),
+                    gs.quats(),
+                    gs.logScales(),
+                    gs.logitOpacities(),
+                    gs.sh0(),
+                    gs.shN(),
+                    metadata};
+        },
+        py::arg("filename"),
+        py::arg("device") = torch::kCPU);
 }
