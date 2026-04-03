@@ -1,11 +1,20 @@
 # Functional Gaussian Splatting API - Progress Tracker
 
-## Build Instructions
+## Build & Test Instructions
 ```bash
-conda activate fvdb
+source ~/miniforge3/etc/profile.d/conda.sh && conda activate fvdb
 ./build.sh install editor_skip -e          # standard build
 ./build.sh install gtests editor_skip -e   # with gtests
+pytest tests/unit/test_gaussian_splat_3d.py -v   # must pass after every milestone
 ```
+
+## Context
+- **Branch:** `feature/functional-gaussian` on `blackencino/fvdb-core` fork
+- **Predecessor:** PR #582 did the same transformation for GridBatch ops. The pattern in
+  `fvdb/functional/_transforms.py` (e.g., `_VoxelToWorldFn`) is the reference for Python
+  autograd wrapping pybind fwd/bwd dispatch functions.
+- **Issue:** https://github.com/openvdb/fvdb-core/issues/459
+- **Commit style:** `Short description (milestone N/10)` with `Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>`
 
 ## Notes
 - **kPrivateUse1 / Universal Memory / MultiGPU:** The splatting code uses these intentionally. Do not break them, but do not test them (WSL can't use universal memory).

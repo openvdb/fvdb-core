@@ -14,6 +14,9 @@ from . import _fvdb_cpp as _C
 from ._fvdb_cpp import GaussianSplat3d as GaussianSplat3dCpp
 from ._fvdb_cpp import JaggedTensor as JaggedTensorCpp
 from ._fvdb_cpp import ProjectedGaussianSplats as ProjectedGaussianSplatsCpp
+from .functional.splat._projection import _ProjectGaussiansFn
+from .functional.splat._rasterize import _RasterizeDenseFn
+from .functional.splat._sh import _EvalSHFn
 from .functional.splat._tile_intersection import build_render_settings
 from .grid import Grid
 from .grid_batch import GridBatch
@@ -89,6 +92,35 @@ def _build_settings(
         sh_degree_to_use=sh_degree_to_use,
         render_mode=render_mode,
     )
+
+
+class _PyProjectedImpl:
+    """Python-side equivalent of the C++ ProjectedGaussianSplats struct.
+
+    Holds the decomposed tensors from the Python autograd projection pipeline,
+    with the same attribute interface as the C++ struct's pybind-exposed properties.
+    """
+
+    def __init__(self, means2d, conics, render_quantities, depths, opacities, radii,
+                 tile_offsets, tile_gaussian_ids, settings, camera_model):
+        self.means2d = means2d
+        self.conics = conics
+        self.render_quantities = render_quantities
+        self.depths = depths
+        self.opacities = opacities
+        self.radii = radii
+        self.tile_offsets = tile_offsets
+        self.tile_gaussian_ids = tile_gaussian_ids
+        self.image_width = settings.image_width
+        self.image_height = settings.image_height
+        self.near_plane = settings.near_plane
+        self.far_plane = settings.far_plane
+        self.eps_2d = settings.eps_2d
+        self.antialias = settings.antialias
+        self.sh_degree_to_use = settings.sh_degree_to_use
+        self.min_radius_2d = settings.radius_clip
+        self.camera_model = camera_model
+        self.projection_method = _C.ProjectionMethod.ANALYTIC
 
 
 class ProjectedGaussianSplats:
@@ -1587,6 +1619,181 @@ class GaussianSplat3d:
         )
         return state
 
+    @staticmethod
+    def _uses_opencv_distortion(camera_model: _C.CameraModel) -> bool:
+        return camera_model in (
+            _C.CameraModel.OPENCV_RADTAN_5,
+            _C.CameraModel.OPENCV_RATIONAL_8,
+            _C.CameraModel.OPENCV_RADTAN_THIN_PRISM_9,
+            _C.CameraModel.OPENCV_THIN_PRISM_12,
+        )
+
+    def _project_validated(
+        self,
+        world_to_camera_matrices: torch.Tensor,
+        projection_matrices: torch.Tensor,
+        settings: _C.RenderSettings,
+        camera_model: _C.CameraModel,
+        projection_method: _C.ProjectionMethod,
+        distortion_coeffs: torch.Tensor | None,
+    ):
+        """Validate camera args, resolve projection method, and project.
+
+        Uses the Python decomposed pipeline for ANALYTIC projection.
+        Falls back to the C++ pipeline for UNSCENTED (non-differentiable).
+        """
+        # Validate camera args (mirrors C++ validateCameraProjectionArgs)
+        C = world_to_camera_matrices.size(0)
+        if C == 0:
+            raise RuntimeError("At least one camera must be provided (got 0)")
+        if list(world_to_camera_matrices.shape) != [C, 4, 4]:
+            raise RuntimeError("worldToCameraMatrices must have shape (C, 4, 4)")
+        if list(projection_matrices.shape) != [C, 3, 3]:
+            raise RuntimeError("projectionMatrices must have shape (C, 3, 3)")
+        if not world_to_camera_matrices.is_contiguous():
+            raise RuntimeError("worldToCameraMatrices must be contiguous")
+        if not projection_matrices.is_contiguous():
+            raise RuntimeError("projectionMatrices must be contiguous")
+        if distortion_coeffs is not None:
+            if list(distortion_coeffs.shape) != [C, 12]:
+                raise RuntimeError("distortionCoeffs must have shape (C, 12)")
+            if not distortion_coeffs.is_contiguous():
+                raise RuntimeError("distortionCoeffs must be contiguous")
+
+        uses_opencv = self._uses_opencv_distortion(camera_model)
+        # Resolve AUTO → ANALYTIC or UNSCENTED
+        resolved = projection_method
+        if resolved == _C.ProjectionMethod.AUTO:
+            resolved = _C.ProjectionMethod.UNSCENTED if uses_opencv else _C.ProjectionMethod.ANALYTIC
+
+        if uses_opencv:
+            if distortion_coeffs is None:
+                raise RuntimeError("distortionCoeffs must be provided for OpenCV camera models")
+            if resolved != _C.ProjectionMethod.UNSCENTED:
+                raise RuntimeError("OpenCV camera models require ProjectionMethod::UNSCENTED or AUTO")
+
+        if resolved == _C.ProjectionMethod.ANALYTIC:
+            return self._project_decomposed(
+                world_to_camera_matrices, projection_matrices, settings, camera_model,
+            )
+        else:
+            # UT path — fall back to C++ (non-differentiable)
+            return self._project_with_accum(
+                world_to_camera_matrices, projection_matrices, settings,
+                camera_model, projection_method, distortion_coeffs,
+            )
+
+    def _project_decomposed(
+        self,
+        world_to_camera_matrices: torch.Tensor,
+        projection_matrices: torch.Tensor,
+        settings: _C.RenderSettings,
+        camera_model: _C.CameraModel,
+    ) -> tuple:
+        """Decomposed projection pipeline using Python autograd Functions.
+
+        Returns a tuple of raw tensors needed for rasterization:
+            (means2d, conics, features, opacities, radii, depths,
+             tile_offsets, tile_ids, settings)
+        """
+        ortho = (camera_model == _C.CameraModel.ORTHOGRAPHIC)
+        C = world_to_camera_matrices.size(0)
+        N = self._means.size(0)
+
+        # Lazily initialize accumulators (matches C++ behavior)
+        if self._accumulate_mean_2d_gradients:
+            if self._accum_grad_norms is None:
+                self._accum_grad_norms = torch.zeros(N, device=self._means.device, dtype=self._means.dtype)
+            if self._accum_step_counts is None:
+                self._accum_step_counts = torch.zeros(N, device=self._means.device, dtype=torch.int32)
+        if self._accumulate_max_2d_radii:
+            if self._accum_max_2d_radii is None:
+                self._accum_max_2d_radii = torch.zeros(N, device=self._means.device, dtype=torch.int32)
+
+        # 1. Projection with fresh-zeros accumulator pattern
+        proj_result = _ProjectGaussiansFn.apply(
+            self._means, self._quats, self._log_scales,
+            world_to_camera_matrices, projection_matrices,
+            settings.image_width, settings.image_height,
+            settings.eps_2d, settings.near_plane, settings.far_plane,
+            settings.radius_clip, settings.antialias, ortho,
+            self._accum_grad_norms, self._accum_step_counts, self._accum_max_2d_radii,
+        )
+        radii = proj_result[0]
+        means2d = proj_result[1]
+        depths = proj_result[2]
+        conics = proj_result[3]
+        compensations = proj_result[4] if settings.antialias else None
+
+        # 2. Per-gaussian opacity [C, N]
+        opacities = torch.sigmoid(self._logit_opacities).repeat(C, 1)
+        if compensations is not None:
+            opacities = opacities * compensations
+
+        # 3. Render quantity (SH features or depths)
+        render_mode = settings.render_mode
+        if render_mode == _C.RenderMode.DEPTH:
+            features = depths.unsqueeze(-1)
+        else:
+            # SH evaluation
+            K = self._shN.size(1) + 1
+            actual_sh_degree = settings.sh_degree_to_use if settings.sh_degree_to_use >= 0 else int(math.sqrt(K)) - 1
+            if actual_sh_degree == 0:
+                # Degree 0: no view directions needed. Pass zero-sized view_dirs
+                # and the actual shN (shape [N, 0, D]) to the dispatch.
+                view_dirs = torch.zeros(C, N, 3, device=self._means.device, dtype=self._means.dtype)
+            else:
+                cam_to_world = torch.linalg.inv(world_to_camera_matrices)
+                camera_pos = cam_to_world[:, :3, 3]
+                view_dirs = self._means[None, :, :] - camera_pos[:, None, :]
+            features = _EvalSHFn.apply(actual_sh_degree, C, view_dirs, self._sh0, self._shN, radii)
+            if render_mode == _C.RenderMode.RGBD:
+                features = torch.cat([features, depths.unsqueeze(-1)], -1)
+
+        # 4. Tile intersection (non-differentiable)
+        num_tiles_w = math.ceil(settings.image_width / settings.tile_size)
+        num_tiles_h = math.ceil(settings.image_height / settings.tile_size)
+        tile_offsets, tile_ids = _C.gsplat_tile_intersection(
+            means2d, radii, depths, C, settings.tile_size, num_tiles_h, num_tiles_w)
+
+        return _PyProjectedImpl(
+            means2d=means2d, conics=conics, render_quantities=features,
+            depths=depths, opacities=opacities, radii=radii,
+            tile_offsets=tile_offsets, tile_gaussian_ids=tile_ids,
+            settings=settings, camera_model=camera_model,
+        )
+
+    def _rasterize_decomposed(
+        self,
+        means2d: torch.Tensor,
+        conics: torch.Tensor,
+        features: torch.Tensor,
+        opacities: torch.Tensor,
+        tile_offsets: torch.Tensor,
+        tile_ids: torch.Tensor,
+        settings: _C.RenderSettings,
+        tile_size: int,
+        crop_width: int,
+        crop_height: int,
+        crop_origin_w: int,
+        crop_origin_h: int,
+        backgrounds: torch.Tensor | None,
+        masks: torch.Tensor | None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Rasterize using Python autograd."""
+        w = crop_width if crop_width > 0 else settings.image_width
+        h = crop_height if crop_height > 0 else settings.image_height
+        ow = crop_origin_w if crop_origin_w >= 0 else 0
+        oh = crop_origin_h if crop_origin_h >= 0 else 0
+
+        return _RasterizeDenseFn.apply(
+            means2d, conics, features, opacities,
+            w, h, ow, oh, tile_size,
+            tile_offsets, tile_ids,
+            False,  # absgrad
+            backgrounds, masks,
+        )
+
     def project_gaussians_for_depths(
         self,
         world_to_camera_matrices: torch.Tensor,
@@ -1681,7 +1888,7 @@ class GaussianSplat3d:
             sh_degree_to_use=-1, tile_size=16, radius_clip=min_radius_2d,
             eps_2d=eps_2d, antialias=antialias, render_mode="depth",
         )
-        state = self._project_with_accum(
+        state = self._project_validated(
             world_to_camera_matrices, projection_matrices, settings,
             self._camera_model_to_cpp(camera_model),
             self._projection_method_to_cpp(projection_method),
@@ -1784,7 +1991,7 @@ class GaussianSplat3d:
             sh_degree_to_use=sh_degree_to_use, tile_size=16, radius_clip=min_radius_2d,
             eps_2d=eps_2d, antialias=antialias, render_mode="rgb",
         )
-        state = self._project_with_accum(
+        state = self._project_validated(
             world_to_camera_matrices, projection_matrices, settings,
             self._camera_model_to_cpp(camera_model),
             self._projection_method_to_cpp(projection_method),
@@ -1893,7 +2100,7 @@ class GaussianSplat3d:
             sh_degree_to_use=sh_degree_to_use, tile_size=16, radius_clip=min_radius_2d,
             eps_2d=eps_2d, antialias=antialias, render_mode="rgbd",
         )
-        state = self._project_with_accum(
+        state = self._project_validated(
             world_to_camera_matrices, projection_matrices, settings,
             self._camera_model_to_cpp(camera_model),
             self._projection_method_to_cpp(projection_method),
@@ -1996,15 +2203,12 @@ class GaussianSplat3d:
         """
         tile_masks = _pixel_mask_to_tile_mask(masks, tile_size) if masks is not None else None
 
-        features, alphas = _C.gsplat_render_crop_from_projected(
-            projected_gaussians._impl,
-            tile_size,
-            crop_width,
-            crop_height,
-            crop_origin_w,
-            crop_origin_h,
-            backgrounds,
-            tile_masks,
+        impl = projected_gaussians._impl
+        features, alphas = self._rasterize_decomposed(
+            impl.means2d, impl.conics, impl.render_quantities, impl.opacities,
+            impl.tile_offsets, impl.tile_gaussian_ids, impl,
+            tile_size, crop_width, crop_height, crop_origin_w, crop_origin_h,
+            backgrounds, tile_masks,
         )
 
         if masks is not None:
@@ -2101,14 +2305,17 @@ class GaussianSplat3d:
             sh_degree_to_use=-1, tile_size=tile_size, radius_clip=min_radius_2d,
             eps_2d=eps_2d, antialias=antialias, render_mode="depth",
         )
-        state = self._project_with_accum(
+        state = self._project_validated(
             world_to_camera_matrices, projection_matrices, settings,
             self._camera_model_to_cpp(camera_model),
             self._projection_method_to_cpp(projection_method),
             distortion_coeffs,
         )
-        features, alphas = _C.gsplat_render_crop_from_projected(
-            state, tile_size, image_width, image_height, 0, 0, backgrounds, tile_masks,
+        features, alphas = self._rasterize_decomposed(
+            state.means2d, state.conics, state.render_quantities, state.opacities,
+            state.tile_offsets, state.tile_gaussian_ids, state,
+            tile_size, image_width, image_height, 0, 0,
+            backgrounds, tile_masks,
         )
 
         if masks is not None:
@@ -2318,14 +2525,17 @@ class GaussianSplat3d:
             sh_degree_to_use=sh_degree_to_use, tile_size=tile_size, radius_clip=min_radius_2d,
             eps_2d=eps_2d, antialias=antialias, render_mode="rgb",
         )
-        state = self._project_with_accum(
+        state = self._project_validated(
             world_to_camera_matrices, projection_matrices, settings,
             self._camera_model_to_cpp(camera_model),
             self._projection_method_to_cpp(projection_method),
             distortion_coeffs,
         )
-        features, alphas = _C.gsplat_render_crop_from_projected(
-            state, tile_size, image_width, image_height, 0, 0, backgrounds, tile_masks,
+        features, alphas = self._rasterize_decomposed(
+            state.means2d, state.conics, state.render_quantities, state.opacities,
+            state.tile_offsets, state.tile_gaussian_ids, state,
+            tile_size, image_width, image_height, 0, 0,
+            backgrounds, tile_masks,
         )
 
         if masks is not None:
@@ -2832,14 +3042,17 @@ class GaussianSplat3d:
             sh_degree_to_use=sh_degree_to_use, tile_size=tile_size, radius_clip=min_radius_2d,
             eps_2d=eps_2d, antialias=antialias, render_mode="rgbd",
         )
-        state = self._project_with_accum(
+        state = self._project_validated(
             world_to_camera_matrices, projection_matrices, settings,
             self._camera_model_to_cpp(camera_model),
             self._projection_method_to_cpp(projection_method),
             distortion_coeffs,
         )
-        features, alphas = _C.gsplat_render_crop_from_projected(
-            state, tile_size, image_width, image_height, 0, 0, backgrounds, tile_masks,
+        features, alphas = self._rasterize_decomposed(
+            state.means2d, state.conics, state.render_quantities, state.opacities,
+            state.tile_offsets, state.tile_gaussian_ids, state,
+            tile_size, image_width, image_height, 0, 0,
+            backgrounds, tile_masks,
         )
 
         if masks is not None:

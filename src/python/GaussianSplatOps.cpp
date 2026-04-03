@@ -23,6 +23,17 @@
 #include <fvdb/detail/ops/gsplat/GaussianMCMCRelocation.h>
 #include <fvdb/detail/io/GaussianPlyIO.h>
 #include <fvdb/detail/utils/Utils.h>
+#include <fvdb/detail/ops/gsplat/GaussianProjectionForward.h>
+#include <fvdb/detail/ops/gsplat/GaussianProjectionBackward.h>
+#include <fvdb/detail/ops/gsplat/GaussianSphericalHarmonicsForward.h>
+#include <fvdb/detail/ops/gsplat/GaussianSphericalHarmonicsBackward.h>
+#include <fvdb/detail/ops/gsplat/GaussianRasterizeForward.h>
+#include <fvdb/detail/ops/gsplat/GaussianRasterizeBackward.h>
+#include <fvdb/detail/ops/gsplat/GaussianRasterizeFromWorldForward.h>
+#include <fvdb/detail/ops/gsplat/GaussianRasterizeFromWorldBackward.h>
+#include <fvdb/detail/ops/gsplat/GaussianProjectionJaggedForward.h>
+#include <fvdb/detail/ops/gsplat/GaussianProjectionJaggedBackward.h>
+#include <fvdb/detail/ops/gsplat/GaussianTileIntersection.h>
 
 #include <torch/extension.h>
 
@@ -32,6 +43,7 @@ bind_gaussian_splat_ops(py::module &m) {
     using RenderSettings  = fvdb::detail::ops::RenderSettings;
     using DistortionModel = fvdb::detail::ops::DistortionModel;
     using ProjectionMethod = fvdb::detail::ops::ProjectionMethod;
+    using RollingShutterType = fvdb::detail::ops::RollingShutterType;
 
     // -----------------------------------------------------------------------
     // Data types needed by the functional ops
@@ -522,4 +534,571 @@ bind_gaussian_splat_ops(py::module &m) {
         },
         py::arg("filename"),
         py::arg("device") = torch::kCPU);
+
+    // ------- Raw forward/backward dispatch (for Python autograd) -------
+
+    // 1. gsplat_projection_fwd
+    m.def(
+        "gsplat_projection_fwd",
+        [](const torch::Tensor &means,
+           const torch::Tensor &quats,
+           const torch::Tensor &scales,
+           const torch::Tensor &worldToCamMatrices,
+           const torch::Tensor &projectionMatrices,
+           int64_t imageWidth,
+           int64_t imageHeight,
+           float eps2d,
+           float nearPlane,
+           float farPlane,
+           float minRadius2d,
+           bool calcCompensations,
+           bool ortho) {
+            return FVDB_DISPATCH_KERNEL(means.device(), [&]() {
+                return ops::dispatchGaussianProjectionForward<DeviceTag>(
+                    means, quats, scales, worldToCamMatrices, projectionMatrices,
+                    imageWidth, imageHeight, eps2d, nearPlane, farPlane,
+                    minRadius2d, calcCompensations, ortho);
+            });
+        },
+        py::arg("means"),
+        py::arg("quats"),
+        py::arg("scales"),
+        py::arg("world_to_cam_matrices"),
+        py::arg("projection_matrices"),
+        py::arg("image_width"),
+        py::arg("image_height"),
+        py::arg("eps2d"),
+        py::arg("near_plane"),
+        py::arg("far_plane"),
+        py::arg("min_radius_2d"),
+        py::arg("calc_compensations"),
+        py::arg("ortho"));
+
+    // 2. gsplat_projection_bwd
+    m.def(
+        "gsplat_projection_bwd",
+        [](const torch::Tensor &means,
+           const torch::Tensor &quats,
+           const torch::Tensor &scales,
+           const torch::Tensor &worldToCamMatrices,
+           const torch::Tensor &projectionMatrices,
+           const at::optional<torch::Tensor> &compensations,
+           uint32_t imageWidth,
+           uint32_t imageHeight,
+           float eps2d,
+           const torch::Tensor &radii,
+           const torch::Tensor &conics,
+           const torch::Tensor &dLossDMeans2d,
+           const torch::Tensor &dLossDDepths,
+           const torch::Tensor &dLossDConics,
+           const at::optional<torch::Tensor> &dLossDCompensations,
+           bool worldToCamMatricesRequiresGrad,
+           bool ortho,
+           at::optional<torch::Tensor> outNormalizeddLossdMeans2dNormAccum,
+           at::optional<torch::Tensor> outNormalizedMaxRadiiAccum,
+           at::optional<torch::Tensor> outGradientStepCounts) {
+            return FVDB_DISPATCH_KERNEL(means.device(), [&]() {
+                return ops::dispatchGaussianProjectionBackward<DeviceTag>(
+                    means, quats, scales, worldToCamMatrices, projectionMatrices,
+                    compensations, imageWidth, imageHeight, eps2d,
+                    radii, conics, dLossDMeans2d, dLossDDepths, dLossDConics,
+                    dLossDCompensations, worldToCamMatricesRequiresGrad, ortho,
+                    outNormalizeddLossdMeans2dNormAccum,
+                    outNormalizedMaxRadiiAccum,
+                    outGradientStepCounts);
+            });
+        },
+        py::arg("means"),
+        py::arg("quats"),
+        py::arg("scales"),
+        py::arg("world_to_cam_matrices"),
+        py::arg("projection_matrices"),
+        py::arg("compensations"),
+        py::arg("image_width"),
+        py::arg("image_height"),
+        py::arg("eps2d"),
+        py::arg("radii"),
+        py::arg("conics"),
+        py::arg("d_loss_d_means2d"),
+        py::arg("d_loss_d_depths"),
+        py::arg("d_loss_d_conics"),
+        py::arg("d_loss_d_compensations"),
+        py::arg("world_to_cam_matrices_requires_grad"),
+        py::arg("ortho"),
+        py::arg("out_normalized_d_loss_d_means2d_norm_accum") = py::none(),
+        py::arg("out_normalized_max_radii_accum") = py::none(),
+        py::arg("out_gradient_step_counts") = py::none());
+
+    // 3. gsplat_sh_eval_fwd
+    m.def(
+        "gsplat_sh_eval_fwd",
+        [](int64_t shDegreeToUse,
+           int64_t numCameras,
+           const torch::Tensor &viewDirs,
+           const torch::Tensor &sh0Coeffs,
+           const torch::Tensor &shNCoeffs,
+           const torch::Tensor &radii) {
+            return FVDB_DISPATCH_KERNEL(sh0Coeffs.device(), [&]() {
+                return ops::dispatchSphericalHarmonicsForward<DeviceTag>(
+                    shDegreeToUse, numCameras, viewDirs, sh0Coeffs, shNCoeffs, radii);
+            });
+        },
+        py::arg("sh_degree_to_use"),
+        py::arg("num_cameras"),
+        py::arg("view_dirs"),
+        py::arg("sh0_coeffs"),
+        py::arg("sh_n_coeffs"),
+        py::arg("radii"));
+
+    // 4. gsplat_sh_eval_bwd
+    m.def(
+        "gsplat_sh_eval_bwd",
+        [](int64_t shDegreeToUse,
+           int64_t numCameras,
+           int64_t numGaussians,
+           const torch::Tensor &viewDirs,
+           const torch::Tensor &shNCoeffs,
+           const torch::Tensor &dLossDColors,
+           const torch::Tensor &radii,
+           bool computeDLossDViewDirs) {
+            return FVDB_DISPATCH_KERNEL(dLossDColors.device(), [&]() {
+                return ops::dispatchSphericalHarmonicsBackward<DeviceTag>(
+                    shDegreeToUse, numCameras, numGaussians,
+                    viewDirs, shNCoeffs, dLossDColors, radii,
+                    computeDLossDViewDirs);
+            });
+        },
+        py::arg("sh_degree_to_use"),
+        py::arg("num_cameras"),
+        py::arg("num_gaussians"),
+        py::arg("view_dirs"),
+        py::arg("sh_n_coeffs"),
+        py::arg("d_loss_d_colors"),
+        py::arg("radii"),
+        py::arg("compute_d_loss_d_view_dirs"));
+
+    // 5. gsplat_rasterize_fwd
+    m.def(
+        "gsplat_rasterize_fwd",
+        [](const torch::Tensor &means2d,
+           const torch::Tensor &conics,
+           const torch::Tensor &features,
+           const torch::Tensor &opacities,
+           uint32_t imageWidth,
+           uint32_t imageHeight,
+           uint32_t imageOriginW,
+           uint32_t imageOriginH,
+           uint32_t tileSize,
+           const torch::Tensor &tileOffsets,
+           const torch::Tensor &tileGaussianIds,
+           const at::optional<torch::Tensor> &backgrounds,
+           const at::optional<torch::Tensor> &masks) {
+            return FVDB_DISPATCH_KERNEL(means2d.device(), [&]() {
+                const ops::RenderWindow2D renderWindow{imageWidth, imageHeight,
+                                                       imageOriginW, imageOriginH};
+                return ops::dispatchGaussianRasterizeForward<DeviceTag>(
+                    means2d, conics, features, opacities,
+                    renderWindow, tileSize, tileOffsets, tileGaussianIds,
+                    backgrounds, masks);
+            });
+        },
+        py::arg("means2d"),
+        py::arg("conics"),
+        py::arg("features"),
+        py::arg("opacities"),
+        py::arg("image_width"),
+        py::arg("image_height"),
+        py::arg("image_origin_w"),
+        py::arg("image_origin_h"),
+        py::arg("tile_size"),
+        py::arg("tile_offsets"),
+        py::arg("tile_gaussian_ids"),
+        py::arg("backgrounds"),
+        py::arg("masks"));
+
+    // 6. gsplat_rasterize_bwd
+    m.def(
+        "gsplat_rasterize_bwd",
+        [](const torch::Tensor &means2d,
+           const torch::Tensor &conics,
+           const torch::Tensor &features,
+           const torch::Tensor &opacities,
+           uint32_t imageWidth,
+           uint32_t imageHeight,
+           uint32_t imageOriginW,
+           uint32_t imageOriginH,
+           uint32_t tileSize,
+           const torch::Tensor &tileOffsets,
+           const torch::Tensor &tileGaussianIds,
+           const torch::Tensor &renderedAlphas,
+           const torch::Tensor &lastIds,
+           const torch::Tensor &dLossDRenderedFeatures,
+           const torch::Tensor &dLossDRenderedAlphas,
+           bool absGrad,
+           int64_t numSharedChannelsOverride,
+           const at::optional<torch::Tensor> &backgrounds,
+           const at::optional<torch::Tensor> &masks) {
+            return FVDB_DISPATCH_KERNEL(means2d.device(), [&]() {
+                const ops::RenderWindow2D renderWindow{imageWidth, imageHeight,
+                                                       imageOriginW, imageOriginH};
+                return ops::dispatchGaussianRasterizeBackward<DeviceTag>(
+                    means2d, conics, features, opacities,
+                    renderWindow, tileSize, tileOffsets, tileGaussianIds,
+                    renderedAlphas, lastIds,
+                    dLossDRenderedFeatures, dLossDRenderedAlphas,
+                    absGrad, numSharedChannelsOverride,
+                    backgrounds, masks);
+            });
+        },
+        py::arg("means2d"),
+        py::arg("conics"),
+        py::arg("features"),
+        py::arg("opacities"),
+        py::arg("image_width"),
+        py::arg("image_height"),
+        py::arg("image_origin_w"),
+        py::arg("image_origin_h"),
+        py::arg("tile_size"),
+        py::arg("tile_offsets"),
+        py::arg("tile_gaussian_ids"),
+        py::arg("rendered_alphas"),
+        py::arg("last_ids"),
+        py::arg("d_loss_d_rendered_features"),
+        py::arg("d_loss_d_rendered_alphas"),
+        py::arg("abs_grad"),
+        py::arg("num_shared_channels_override") = -1,
+        py::arg("backgrounds") = py::none(),
+        py::arg("masks") = py::none());
+
+    // 7. gsplat_rasterize_sparse_fwd
+    m.def(
+        "gsplat_rasterize_sparse_fwd",
+        [](const fvdb::JaggedTensor &pixelsToRender,
+           const torch::Tensor &means2d,
+           const torch::Tensor &conics,
+           const torch::Tensor &features,
+           const torch::Tensor &opacities,
+           uint32_t imageWidth,
+           uint32_t imageHeight,
+           uint32_t imageOriginW,
+           uint32_t imageOriginH,
+           uint32_t tileSize,
+           const torch::Tensor &tileOffsets,
+           const torch::Tensor &tileGaussianIds,
+           const torch::Tensor &activeTiles,
+           const torch::Tensor &tilePixelMask,
+           const torch::Tensor &tilePixelCumsum,
+           const torch::Tensor &pixelMap,
+           const at::optional<torch::Tensor> &backgrounds,
+           const at::optional<torch::Tensor> &masks) {
+            return FVDB_DISPATCH_KERNEL_DEVICE(means2d.device(), [&]() {
+                const ops::RenderWindow2D renderWindow{imageWidth, imageHeight,
+                                                       imageOriginW, imageOriginH};
+                return ops::dispatchGaussianSparseRasterizeForward<DeviceTag>(
+                    pixelsToRender, means2d, conics, features, opacities,
+                    renderWindow, tileSize, tileOffsets, tileGaussianIds,
+                    activeTiles, tilePixelMask, tilePixelCumsum, pixelMap,
+                    backgrounds, masks);
+            });
+        },
+        py::arg("pixels_to_render"),
+        py::arg("means2d"),
+        py::arg("conics"),
+        py::arg("features"),
+        py::arg("opacities"),
+        py::arg("image_width"),
+        py::arg("image_height"),
+        py::arg("image_origin_w"),
+        py::arg("image_origin_h"),
+        py::arg("tile_size"),
+        py::arg("tile_offsets"),
+        py::arg("tile_gaussian_ids"),
+        py::arg("active_tiles"),
+        py::arg("tile_pixel_mask"),
+        py::arg("tile_pixel_cumsum"),
+        py::arg("pixel_map"),
+        py::arg("backgrounds"),
+        py::arg("masks"));
+
+    // 8. gsplat_rasterize_sparse_bwd
+    m.def(
+        "gsplat_rasterize_sparse_bwd",
+        [](const fvdb::JaggedTensor &pixelsToRender,
+           const torch::Tensor &means2d,
+           const torch::Tensor &conics,
+           const torch::Tensor &features,
+           const torch::Tensor &opacities,
+           uint32_t imageWidth,
+           uint32_t imageHeight,
+           uint32_t imageOriginW,
+           uint32_t imageOriginH,
+           uint32_t tileSize,
+           const torch::Tensor &tileOffsets,
+           const torch::Tensor &tileGaussianIds,
+           const fvdb::JaggedTensor &renderedAlphas,
+           const fvdb::JaggedTensor &lastIds,
+           const fvdb::JaggedTensor &dLossDRenderedFeatures,
+           const fvdb::JaggedTensor &dLossDRenderedAlphas,
+           const torch::Tensor &activeTiles,
+           const torch::Tensor &tilePixelMask,
+           const torch::Tensor &tilePixelCumsum,
+           const torch::Tensor &pixelMap,
+           bool absGrad,
+           int64_t numSharedChannelsOverride,
+           const at::optional<torch::Tensor> &backgrounds,
+           const at::optional<torch::Tensor> &masks) {
+            return FVDB_DISPATCH_KERNEL_DEVICE(means2d.device(), [&]() {
+                const ops::RenderWindow2D renderWindow{imageWidth, imageHeight,
+                                                       imageOriginW, imageOriginH};
+                return ops::dispatchGaussianSparseRasterizeBackward<DeviceTag>(
+                    pixelsToRender, means2d, conics, features, opacities,
+                    renderWindow, tileSize, tileOffsets, tileGaussianIds,
+                    renderedAlphas, lastIds,
+                    dLossDRenderedFeatures, dLossDRenderedAlphas,
+                    activeTiles, tilePixelMask, tilePixelCumsum, pixelMap,
+                    absGrad, numSharedChannelsOverride,
+                    backgrounds, masks);
+            });
+        },
+        py::arg("pixels_to_render"),
+        py::arg("means2d"),
+        py::arg("conics"),
+        py::arg("features"),
+        py::arg("opacities"),
+        py::arg("image_width"),
+        py::arg("image_height"),
+        py::arg("image_origin_w"),
+        py::arg("image_origin_h"),
+        py::arg("tile_size"),
+        py::arg("tile_offsets"),
+        py::arg("tile_gaussian_ids"),
+        py::arg("rendered_alphas"),
+        py::arg("last_ids"),
+        py::arg("d_loss_d_rendered_features"),
+        py::arg("d_loss_d_rendered_alphas"),
+        py::arg("active_tiles"),
+        py::arg("tile_pixel_mask"),
+        py::arg("tile_pixel_cumsum"),
+        py::arg("pixel_map"),
+        py::arg("abs_grad"),
+        py::arg("num_shared_channels_override") = -1,
+        py::arg("backgrounds") = py::none(),
+        py::arg("masks") = py::none());
+
+    // 9. gsplat_rasterize_from_world_fwd
+    m.def(
+        "gsplat_rasterize_from_world_fwd",
+        [](const torch::Tensor &means,
+           const torch::Tensor &quats,
+           const torch::Tensor &logScales,
+           const torch::Tensor &features,
+           const torch::Tensor &opacities,
+           const torch::Tensor &worldToCamMatricesStart,
+           const torch::Tensor &worldToCamMatricesEnd,
+           const torch::Tensor &projectionMatrices,
+           const torch::Tensor &distortionCoeffs,
+           RollingShutterType rollingShutterType,
+           DistortionModel cameraModel,
+           const RenderSettings &settings,
+           const torch::Tensor &tileOffsets,
+           const torch::Tensor &tileGaussianIds,
+           const at::optional<torch::Tensor> &backgrounds,
+           const at::optional<torch::Tensor> &masks) {
+            return FVDB_DISPATCH_KERNEL_DEVICE(means.device(), [&]() {
+                return ops::dispatchGaussianRasterizeFromWorld3DGSForward<DeviceTag>(
+                    means, quats, logScales,
+                    features, opacities,
+                    worldToCamMatricesStart, worldToCamMatricesEnd,
+                    projectionMatrices, distortionCoeffs,
+                    rollingShutterType, cameraModel, settings,
+                    tileOffsets, tileGaussianIds,
+                    backgrounds, masks);
+            });
+        },
+        py::arg("means"),
+        py::arg("quats"),
+        py::arg("log_scales"),
+        py::arg("features"),
+        py::arg("opacities"),
+        py::arg("world_to_cam_matrices_start"),
+        py::arg("world_to_cam_matrices_end"),
+        py::arg("projection_matrices"),
+        py::arg("distortion_coeffs"),
+        py::arg("rolling_shutter_type"),
+        py::arg("camera_model"),
+        py::arg("settings"),
+        py::arg("tile_offsets"),
+        py::arg("tile_gaussian_ids"),
+        py::arg("backgrounds"),
+        py::arg("masks"));
+
+    // 10. gsplat_rasterize_from_world_bwd
+    m.def(
+        "gsplat_rasterize_from_world_bwd",
+        [](const torch::Tensor &means,
+           const torch::Tensor &quats,
+           const torch::Tensor &logScales,
+           const torch::Tensor &features,
+           const torch::Tensor &opacities,
+           const torch::Tensor &worldToCamMatricesStart,
+           const torch::Tensor &worldToCamMatricesEnd,
+           const torch::Tensor &projectionMatrices,
+           const torch::Tensor &distortionCoeffs,
+           RollingShutterType rollingShutterType,
+           DistortionModel cameraModel,
+           const RenderSettings &settings,
+           const torch::Tensor &tileOffsets,
+           const torch::Tensor &tileGaussianIds,
+           const torch::Tensor &renderedAlphas,
+           const torch::Tensor &lastIds,
+           const torch::Tensor &dLossDRenderedFeatures,
+           const torch::Tensor &dLossDRenderedAlphas,
+           const at::optional<torch::Tensor> &backgrounds,
+           const at::optional<torch::Tensor> &masks) {
+            return FVDB_DISPATCH_KERNEL_DEVICE(means.device(), [&]() {
+                return ops::dispatchGaussianRasterizeFromWorld3DGSBackward<DeviceTag>(
+                    means, quats, logScales,
+                    features, opacities,
+                    worldToCamMatricesStart, worldToCamMatricesEnd,
+                    projectionMatrices, distortionCoeffs,
+                    rollingShutterType, cameraModel, settings,
+                    tileOffsets, tileGaussianIds,
+                    renderedAlphas, lastIds,
+                    dLossDRenderedFeatures, dLossDRenderedAlphas,
+                    backgrounds, masks);
+            });
+        },
+        py::arg("means"),
+        py::arg("quats"),
+        py::arg("log_scales"),
+        py::arg("features"),
+        py::arg("opacities"),
+        py::arg("world_to_cam_matrices_start"),
+        py::arg("world_to_cam_matrices_end"),
+        py::arg("projection_matrices"),
+        py::arg("distortion_coeffs"),
+        py::arg("rolling_shutter_type"),
+        py::arg("camera_model"),
+        py::arg("settings"),
+        py::arg("tile_offsets"),
+        py::arg("tile_gaussian_ids"),
+        py::arg("rendered_alphas"),
+        py::arg("last_ids"),
+        py::arg("d_loss_d_rendered_features"),
+        py::arg("d_loss_d_rendered_alphas"),
+        py::arg("backgrounds"),
+        py::arg("masks"));
+
+    // 11. gsplat_projection_jagged_fwd
+    m.def(
+        "gsplat_projection_jagged_fwd",
+        [](const torch::Tensor &gSizes,
+           const torch::Tensor &means,
+           const torch::Tensor &quats,
+           const torch::Tensor &scales,
+           const torch::Tensor &cSizes,
+           const torch::Tensor &worldToCamMatrices,
+           const torch::Tensor &projectionMatrices,
+           uint32_t imageWidth,
+           uint32_t imageHeight,
+           float eps2d,
+           float nearPlane,
+           float farPlane,
+           float minRadius2d,
+           bool ortho) {
+            return FVDB_DISPATCH_KERNEL_DEVICE(means.device(), [&]() {
+                return ops::dispatchGaussianProjectionJaggedForward<DeviceTag>(
+                    gSizes, means, quats, scales, cSizes,
+                    worldToCamMatrices, projectionMatrices,
+                    imageWidth, imageHeight, eps2d,
+                    nearPlane, farPlane, minRadius2d, ortho);
+            });
+        },
+        py::arg("g_sizes"),
+        py::arg("means"),
+        py::arg("quats"),
+        py::arg("scales"),
+        py::arg("c_sizes"),
+        py::arg("world_to_cam_matrices"),
+        py::arg("projection_matrices"),
+        py::arg("image_width"),
+        py::arg("image_height"),
+        py::arg("eps2d"),
+        py::arg("near_plane"),
+        py::arg("far_plane"),
+        py::arg("min_radius_2d"),
+        py::arg("ortho"));
+
+    // 12. gsplat_projection_jagged_bwd
+    m.def(
+        "gsplat_projection_jagged_bwd",
+        [](const torch::Tensor &gSizes,
+           const torch::Tensor &means,
+           const torch::Tensor &quats,
+           const torch::Tensor &scales,
+           const torch::Tensor &cSizes,
+           const torch::Tensor &worldToCamMatrices,
+           const torch::Tensor &projectionMatrices,
+           uint32_t imageWidth,
+           uint32_t imageHeight,
+           float eps2d,
+           const torch::Tensor &radii,
+           const torch::Tensor &conics,
+           const torch::Tensor &dLossDMeans2d,
+           const torch::Tensor &dLossDDepths,
+           const torch::Tensor &dLossDConics,
+           bool worldToCamMatricesRequiresGrad,
+           bool ortho) {
+            return FVDB_DISPATCH_KERNEL_DEVICE(means.device(), [&]() {
+                return ops::dispatchGaussianProjectionJaggedBackward<DeviceTag>(
+                    gSizes, means, quats, scales, cSizes,
+                    worldToCamMatrices, projectionMatrices,
+                    imageWidth, imageHeight, eps2d,
+                    radii, conics,
+                    dLossDMeans2d, dLossDDepths, dLossDConics,
+                    worldToCamMatricesRequiresGrad, ortho);
+            });
+        },
+        py::arg("g_sizes"),
+        py::arg("means"),
+        py::arg("quats"),
+        py::arg("scales"),
+        py::arg("c_sizes"),
+        py::arg("world_to_cam_matrices"),
+        py::arg("projection_matrices"),
+        py::arg("image_width"),
+        py::arg("image_height"),
+        py::arg("eps2d"),
+        py::arg("radii"),
+        py::arg("conics"),
+        py::arg("d_loss_d_means2d"),
+        py::arg("d_loss_d_depths"),
+        py::arg("d_loss_d_conics"),
+        py::arg("world_to_cam_matrices_requires_grad"),
+        py::arg("ortho"));
+
+    // ------- Tile intersection (non-differentiable) -------
+
+    m.def(
+        "gsplat_tile_intersection",
+        [](const torch::Tensor &means2d,
+           const torch::Tensor &radii,
+           const torch::Tensor &depths,
+           uint32_t numCameras,
+           uint32_t tileSize,
+           uint32_t numTilesH,
+           uint32_t numTilesW) {
+            return FVDB_DISPATCH_KERNEL(means2d.device(), [&]() {
+                return ops::dispatchGaussianTileIntersection<DeviceTag>(
+                    means2d, radii, depths, at::nullopt,
+                    numCameras, tileSize, numTilesH, numTilesW);
+            });
+        },
+        py::arg("means2d"),
+        py::arg("radii"),
+        py::arg("depths"),
+        py::arg("num_cameras"),
+        py::arg("tile_size"),
+        py::arg("num_tiles_h"),
+        py::arg("num_tiles_w"));
 }

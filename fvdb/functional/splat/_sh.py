@@ -4,9 +4,64 @@
 """Functional API for spherical harmonics evaluation."""
 from __future__ import annotations
 
+from typing import Any
+
 import torch
 
 from ... import _fvdb_cpp as _C
+
+
+# ---------------------------------------------------------------------------
+#  Autograd function (raw dispatch wrapper)
+# ---------------------------------------------------------------------------
+
+
+class _EvalSHFn(torch.autograd.Function):
+    """Python autograd wrapper for the SH evaluation forward/backward dispatch."""
+
+    @staticmethod
+    def forward(
+        ctx,
+        sh_degree_to_use: int,
+        num_cameras: int,
+        view_dirs: torch.Tensor,       # [C, N, 3] or empty
+        sh0_coeffs: torch.Tensor,      # [N, 1, D]
+        shN_coeffs: torch.Tensor,      # [N, K-1, D] or empty
+        radii: torch.Tensor,           # [C, N]
+    ) -> torch.Tensor:
+        render_quantities = _C.gsplat_sh_eval_fwd(
+            sh_degree_to_use, num_cameras, view_dirs, sh0_coeffs, shN_coeffs, radii,
+        )
+
+        ctx.save_for_backward(view_dirs, shN_coeffs, radii)
+        ctx.sh_degree_to_use = sh_degree_to_use
+        ctx.num_cameras = num_cameras
+        ctx.num_gaussians = sh0_coeffs.size(0)
+
+        return render_quantities
+
+    @staticmethod
+    def backward(ctx: Any, d_loss_d_colors: torch.Tensor):
+        if d_loss_d_colors is not None:
+            d_loss_d_colors = d_loss_d_colors.contiguous()
+
+        view_dirs, shN_coeffs, radii = ctx.saved_tensors
+
+        compute_d_loss_d_view_dirs = view_dirs.numel() > 0 and view_dirs.requires_grad
+
+        d_sh0, d_shN, d_view_dirs = _C.gsplat_sh_eval_bwd(
+            ctx.sh_degree_to_use,
+            ctx.num_cameras,
+            ctx.num_gaussians,
+            view_dirs,
+            shN_coeffs,
+            d_loss_d_colors,
+            radii,
+            compute_d_loss_d_view_dirs,
+        )
+
+        # Order: sh_degree_to_use, num_cameras, view_dirs, sh0_coeffs, shN_coeffs, radii
+        return (None, None, d_view_dirs, d_sh0, d_shN, None)
 
 
 def evaluate_spherical_harmonics(
