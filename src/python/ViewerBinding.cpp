@@ -7,7 +7,7 @@
 
 #include "TypeCasters.h"
 
-#include <fvdb/GaussianSplat3d.h>
+#include <fvdb/detail/ops/gsplat/GaussianCameras.cuh>
 #include <fvdb/detail/viewer/CameraView.h>
 #include <fvdb/detail/viewer/GaussianSplat3dView.h>
 #include <fvdb/detail/viewer/Viewer.h>
@@ -88,10 +88,15 @@ bind_viewer(py::module &m) {
             &fvdb::detail::viewer::Viewer::addGaussianSplat3dView,
             py::arg("scene_name"),
             py::arg("name"),
-            py::arg("gaussian_splat_3d"),
+            py::arg("means"),
+            py::arg("quats"),
+            py::arg("log_scales"),
+            py::arg("logit_opacities"),
+            py::arg("sh0"),
+            py::arg("shN"),
             py::return_value_policy::reference_internal, // preserve reference; tie lifetime to
                                                          // parent
-            "Register a Gaussian splat 3D view with the viewer (accepts Python or C++ GaussianSplat3d)")
+            "Register a Gaussian splat 3D view with the viewer (accepts raw tensors)")
         .def("has_gaussian_splat_3d_view",
              &fvdb::detail::viewer::Viewer::hasGaussianSplat3dView,
              py::arg("name"),
@@ -212,9 +217,9 @@ bind_viewer(py::module &m) {
             "set_camera_model",
             [](fvdb::detail::viewer::Viewer &viewer,
                const std::string &sceneName,
-               fvdb::GaussianSplat3d::CameraModel model) {
-                if (model != fvdb::GaussianSplat3d::CameraModel::PINHOLE &&
-                    model != fvdb::GaussianSplat3d::CameraModel::ORTHOGRAPHIC) {
+               fvdb::detail::ops::DistortionModel model) {
+                if (model != fvdb::detail::ops::DistortionModel::PINHOLE &&
+                    model != fvdb::detail::ops::DistortionModel::ORTHOGRAPHIC) {
                     PyErr_SetString(PyExc_NotImplementedError,
                                     "Viewer currently only supports CameraModel.PINHOLE and "
                                     "CameraModel.ORTHOGRAPHIC");

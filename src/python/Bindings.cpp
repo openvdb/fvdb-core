@@ -136,8 +136,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     bind_grid_batch_data(m);
     bind_grid_batch_ops(m);
     bind_jagged_tensor(m);
-    bind_gaussian_splat3d(m);
     bind_gaussian_splat_ops(m);
+    bind_gaussian_splat3d(m);
     bind_viewer(m);
 
     //

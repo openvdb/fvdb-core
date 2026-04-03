@@ -4,9 +4,9 @@
 #ifndef FVDB_DETAIL_OPS_GSPLAT_GAUSSIANSPLATOPS_H
 #define FVDB_DETAIL_OPS_GSPLAT_GAUSSIANSPLATOPS_H
 
-#include <fvdb/GaussianSplat3d.h>
 #include <fvdb/JaggedTensor.h>
 #include <fvdb/detail/ops/gsplat/GaussianCameras.cuh>
+#include <fvdb/detail/ops/gsplat/GaussianProjectionTypes.h>
 #include <fvdb/detail/ops/gsplat/GaussianRenderSettings.h>
 
 #include <ATen/core/TensorBody.h>
@@ -110,7 +110,7 @@ torch::Tensor evalSphericalHarmonics(const torch::Tensor &means,
 ///       that present a strictly functional interface to Python. When autograd moves to Python
 ///       (Milestones 5-7), the Python GaussianSplat3d class will own these accumulators and
 ///       pass them through to the C++ backward dispatch.
-fvdb::GaussianSplat3d::ProjectedGaussianSplats projectGaussiansAnalytic(
+fvdb::ProjectedGaussianSplats projectGaussiansAnalytic(
     const torch::Tensor &means,
     const torch::Tensor &quats,
     const torch::Tensor &logScales,
@@ -129,7 +129,7 @@ fvdb::GaussianSplat3d::ProjectedGaussianSplats projectGaussiansAnalytic(
 
 /// @brief Project Gaussians using unscented transform, evaluate SH, and compute tile intersection.
 ///        Non-differentiable (no gradient accumulation support).
-fvdb::GaussianSplat3d::ProjectedGaussianSplats projectGaussiansUT(
+fvdb::ProjectedGaussianSplats projectGaussiansUT(
     const torch::Tensor &means,
     const torch::Tensor &quats,
     const torch::Tensor &logScales,
@@ -144,7 +144,7 @@ fvdb::GaussianSplat3d::ProjectedGaussianSplats projectGaussiansUT(
 
 /// @brief Project Gaussians for a given camera model, dispatching between analytic and UT paths.
 ///        Validates camera args and resolves projection method.
-fvdb::GaussianSplat3d::ProjectedGaussianSplats projectGaussiansForCamera(
+fvdb::ProjectedGaussianSplats projectGaussiansForCamera(
     const torch::Tensor &means,
     const torch::Tensor &quats,
     const torch::Tensor &logScales,
@@ -170,7 +170,7 @@ fvdb::GaussianSplat3d::ProjectedGaussianSplats projectGaussiansForCamera(
 /// @brief Project Gaussians using analytic projection for sparse rendering.
 ///        Deduplicates pixels, computes sparse tile info, runs analytic projection,
 ///        evaluates SH, and performs sparse tile intersection.
-fvdb::GaussianSplat3d::SparseProjectedGaussianSplats sparseProjectGaussiansAnalytic(
+fvdb::SparseProjectedGaussianSplats sparseProjectGaussiansAnalytic(
     const fvdb::JaggedTensor &pixelsToRender,
     const torch::Tensor &means,
     const torch::Tensor &quats,
@@ -190,7 +190,7 @@ fvdb::GaussianSplat3d::SparseProjectedGaussianSplats sparseProjectGaussiansAnaly
 
 /// @brief Project Gaussians using unscented transform for sparse rendering.
 ///        Non-differentiable (no gradient accumulation support).
-fvdb::GaussianSplat3d::SparseProjectedGaussianSplats sparseProjectGaussiansUT(
+fvdb::SparseProjectedGaussianSplats sparseProjectGaussiansUT(
     const fvdb::JaggedTensor &pixelsToRender,
     const torch::Tensor &means,
     const torch::Tensor &quats,
@@ -206,7 +206,7 @@ fvdb::GaussianSplat3d::SparseProjectedGaussianSplats sparseProjectGaussiansUT(
 
 /// @brief Project Gaussians for a given camera model for sparse rendering,
 ///        dispatching between analytic and UT paths.
-fvdb::GaussianSplat3d::SparseProjectedGaussianSplats sparseProjectGaussiansForCamera(
+fvdb::SparseProjectedGaussianSplats sparseProjectGaussiansForCamera(
     const fvdb::JaggedTensor &pixelsToRender,
     const torch::Tensor &means,
     const torch::Tensor &quats,
@@ -233,7 +233,7 @@ fvdb::GaussianSplat3d::SparseProjectedGaussianSplats sparseProjectGaussiansForCa
 /// @brief Rasterize a cropped region from pre-projected Gaussians.
 ///        Validates crop dimensions and calls dispatchGaussianRasterizeForward.
 std::tuple<torch::Tensor, torch::Tensor> renderCropFromProjected(
-    const fvdb::GaussianSplat3d::ProjectedGaussianSplats &projectedGaussians,
+    const fvdb::ProjectedGaussianSplats &projectedGaussians,
     size_t tileSize,
     ssize_t cropWidth,
     ssize_t cropHeight,
@@ -272,7 +272,7 @@ std::tuple<torch::Tensor, torch::Tensor> rasterizeFromWorld(
     const torch::Tensor &means,
     const torch::Tensor &quats,
     const torch::Tensor &logScales,
-    const fvdb::GaussianSplat3d::ProjectedGaussianSplats &projectedState,
+    const fvdb::ProjectedGaussianSplats &projectedState,
     const torch::Tensor &worldToCameraMatrices,
     const torch::Tensor &projectionMatrices,
     const torch::Tensor &distortionCoeffs,
@@ -289,24 +289,24 @@ std::tuple<torch::Tensor, torch::Tensor> rasterizeFromWorld(
 
 /// @brief Render the number of contributing Gaussians per pixel (dense).
 std::tuple<torch::Tensor, torch::Tensor> renderNumContributing(
-    const fvdb::GaussianSplat3d::ProjectedGaussianSplats &state,
+    const fvdb::ProjectedGaussianSplats &state,
     const RenderSettings &settings);
 
 /// @brief Render the number of contributing Gaussians per pixel (sparse).
 std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor> sparseRenderNumContributing(
-    const fvdb::GaussianSplat3d::SparseProjectedGaussianSplats &state,
+    const fvdb::SparseProjectedGaussianSplats &state,
     const fvdb::JaggedTensor &pixelsToRender,
     const RenderSettings &settings);
 
 /// @brief Render the IDs of contributing Gaussians per pixel (dense).
 std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor> renderContributingIds(
-    const fvdb::GaussianSplat3d::ProjectedGaussianSplats &state,
+    const fvdb::ProjectedGaussianSplats &state,
     const RenderSettings &settings,
     const std::optional<torch::Tensor> &maybeNumContributingGaussians);
 
 /// @brief Render the IDs of contributing Gaussians per pixel (sparse).
 std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor> sparseRenderContributingIds(
-    const fvdb::GaussianSplat3d::SparseProjectedGaussianSplats &state,
+    const fvdb::SparseProjectedGaussianSplats &state,
     const fvdb::JaggedTensor &pixelsToRender,
     const RenderSettings &settings,
     const std::optional<fvdb::JaggedTensor> &maybeNumContributingGaussians);

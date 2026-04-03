@@ -6,6 +6,7 @@
 
 #include <fvdb/JaggedTensor.h>
 #include <fvdb/detail/ops/gsplat/GaussianCameras.cuh>
+#include <fvdb/detail/ops/gsplat/GaussianProjectionTypes.h>
 #include <fvdb/detail/ops/gsplat/GaussianRenderSettings.h>
 
 #include <ATen/core/TensorBody.h>
@@ -33,7 +34,7 @@ class GaussianSplat3d {
 
     inline static const std::string PLY_VERSION_STRING = "fvdb_ply 1.0.0";
 
-    using PlyMetadataTypes = std::variant<std::string, int64_t, double, torch::Tensor>;
+    using PlyMetadataTypes = fvdb::PlyMetadataTypes;
 
     GaussianSplat3d(const torch::Tensor &means,
                     const torch::Tensor &quats,
@@ -55,135 +56,9 @@ class GaussianSplat3d {
     using CameraModel      = fvdb::detail::ops::DistortionModel;
     using ProjectionMethod = fvdb::detail::ops::ProjectionMethod;
 
-    /// @brief A set of projected Gaussians that can be used to render images.
-    struct ProjectedGaussianSplats {
-        torch::Tensor perGaussian2dMean;         // [C, N, 2]
-        torch::Tensor perGaussianConic;          // [C, N, 3]
-        torch::Tensor perGaussianRenderQuantity; // [C, N, 3]
-        torch::Tensor perGaussianDepth;          // [C, N, 1]
-        torch::Tensor perGaussianOpacity;        // [N] or [C, N] if antialias is true
-        torch::Tensor perGaussianRadius;         // [C, N]
-        torch::Tensor tileOffsets;               // [C, num_tiles_h, num_tiles_w, 2]
-        torch::Tensor tileGaussianIds; // [C, num_tiles_h, num_tiles_w, max_gaussians_per_tile]
-
-        fvdb::detail::ops::RenderSettings mRenderSettings;
-        CameraModel mCameraModel           = CameraModel::PINHOLE;
-        ProjectionMethod mProjectionMethod = ProjectionMethod::ANALYTIC;
-
-        ssize_t
-        imageHeight() const {
-            return mRenderSettings.imageHeight;
-        }
-
-        ssize_t
-        imageWidth() const {
-            return mRenderSettings.imageWidth;
-        }
-
-        float
-        nearPlane() const {
-            return mRenderSettings.nearPlane;
-        }
-
-        float
-        farPlane() const {
-            return mRenderSettings.farPlane;
-        }
-
-        CameraModel
-        cameraModel() const {
-            return mCameraModel;
-        }
-
-        ProjectionMethod
-        projectionMethod() const {
-            return mProjectionMethod;
-        }
-
-        int64_t
-        shDegreeToUse() const {
-            return mRenderSettings.shDegreeToUse;
-        }
-
-        float
-        minRadius2d() const {
-            return mRenderSettings.radiusClip;
-        }
-
-        float
-        eps2d() const {
-            return mRenderSettings.eps2d;
-        }
-
-        bool
-        antialias() const {
-            return mRenderSettings.antialias;
-        }
-
-        torch::Tensor
-        means2d() const {
-            return perGaussian2dMean;
-        }
-
-        torch::Tensor
-        conics() const {
-            return perGaussianConic;
-        }
-
-        torch::Tensor
-        renderQuantities() const {
-            return perGaussianRenderQuantity;
-        }
-
-        torch::Tensor
-        depths() const {
-            return perGaussianDepth;
-        }
-
-        torch::Tensor
-        opacities() const {
-            if (perGaussianOpacity.dim() == 1) {
-                // perGaussianOpacity is [N]; expand to [C, N] view
-                const int64_t C = perGaussian2dMean.size(0);
-                return perGaussianOpacity.unsqueeze(0).expand({C, -1});
-            }
-            // Already [C, N] (e.g. antialias case where compensation varies per camera)
-            return perGaussianOpacity;
-        }
-
-        torch::Tensor
-        radii() const {
-            return perGaussianRadius;
-        }
-
-        torch::Tensor
-        offsets() const {
-            return tileOffsets;
-        }
-
-        torch::Tensor
-        gaussianIds() const {
-            return tileGaussianIds;
-        }
-    };
-
-    /// @brief A set of projected Gaussians with sparse tile intersection data for sparse rendering.
-    /// This struct extends ProjectedGaussianSplats with additional sparse-specific tensors.
-    struct SparseProjectedGaussianSplats : public ProjectedGaussianSplats {
-        torch::Tensor activeTiles;     // [num_active_tiles] - tile IDs of active tiles
-        torch::Tensor activeTileMask;  // [C, TH, TW] - boolean mask of active tiles
-        torch::Tensor tilePixelMask;   // [num_active_tiles, words_per_tile] - bitmask of pixels
-        torch::Tensor tilePixelCumsum; // [num_active_tiles] - cumulative sum of active pixels
-        torch::Tensor pixelMap;        // [num_active_pixels] - mapping for pixel write order
-        // Note: tileOffsets (inherited) is 1D [num_active_tiles + 1] in sparse mode
-
-        // Duplicate pixel handling: when pixelsToRender contains duplicates, we deduplicate
-        // before rendering and scatter results back. inverseIndices maps each original pixel
-        // position to its corresponding unique pixel index.
-        torch::Tensor inverseIndices;      // [total_pixels] maps original -> unique index
-        JaggedTensor uniquePixelsToRender; // deduplicated pixels passed to computeSparseInfo
-        bool hasDuplicates = false;
-    };
+    // Type aliases pointing to the standalone types in GaussianProjectionTypes.h
+    using ProjectedGaussianSplats       = fvdb::ProjectedGaussianSplats;
+    using SparseProjectedGaussianSplats = fvdb::SparseProjectedGaussianSplats;
 
   public:
     /// @brief Concatenate a vector of GaussianSplat3d objects into a single GaussianSplat3d object.

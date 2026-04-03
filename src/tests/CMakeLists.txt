@@ -152,7 +152,7 @@ ConfigureTest(GaussianSphericalHarmonicsBackwardTest "GaussianSphericalHarmonics
 ConfigureTest(GaussianProjectionForwardTest "GaussianProjectionForwardTest.cpp")
 ConfigureTest(GaussianProjectionBackwardTest "GaussianProjectionBackwardTest.cpp")
 ConfigureTest(GaussianProjectionUTTest "GaussianProjectionUTTest.cpp")
-ConfigureTest(GaussianSplat3dCameraApiTest "GaussianSplat3dCameraApiTest.cpp")
+
 ConfigureTest(GaussianCamerasTest "GaussianCamerasTest.cu")
 ConfigureTest(GaussianUtilsTest "GaussianUtilsTest.cu")
 ConfigureTest(GaussianRasterizeTopContributorsTest "GaussianRasterizeTopContributorsTest.cpp")

@@ -4,7 +4,7 @@
 #ifndef FVDB_DETAIL_VIEWER_VIEWER_H
 #define FVDB_DETAIL_VIEWER_VIEWER_H
 
-#include <fvdb/GaussianSplat3d.h>
+#include <fvdb/detail/ops/gsplat/GaussianCameras.cuh>
 #include <fvdb/detail/viewer/CameraView.h>
 #include <fvdb/detail/viewer/GaussianSplat3dView.h>
 
@@ -69,7 +69,12 @@ class Viewer {
 
     GaussianSplat3dView &addGaussianSplat3dView(const std::string &scene_name,
                                                 const std::string &name,
-                                                const GaussianSplat3d &splats);
+                                                const torch::Tensor &means,
+                                                const torch::Tensor &quats,
+                                                const torch::Tensor &logScales,
+                                                const torch::Tensor &logitOpacities,
+                                                const torch::Tensor &sh0,
+                                                const torch::Tensor &shN);
     CameraView &addCameraView(const std::string &scene_name,
                               const std::string &name,
                               const torch::Tensor &cameraToWorldMatrices,
@@ -137,8 +142,8 @@ class Viewer {
     float cameraFar(const std::string &scene_name);
     void setCameraFar(const std::string &scene_name, float far);
 
-    void setCameraModel(const std::string &scene_name, GaussianSplat3d::CameraModel model);
-    GaussianSplat3d::CameraModel cameraModel(const std::string &scene_name);
+    void setCameraModel(const std::string &scene_name, fvdb::detail::ops::DistortionModel model);
+    fvdb::detail::ops::DistortionModel cameraModel(const std::string &scene_name);
 
     std::string
     ipAddress() const {

@@ -264,7 +264,7 @@ prepareAccumulators(const int64_t N,
 
 } // anonymous namespace
 
-fvdb::GaussianSplat3d::ProjectedGaussianSplats
+fvdb::ProjectedGaussianSplats
 projectGaussiansAnalytic(const torch::Tensor &means,
                          const torch::Tensor &quats,
                          const torch::Tensor &logScales,
@@ -285,7 +285,7 @@ projectGaussiansAnalytic(const torch::Tensor &means,
     const int C      = worldToCameraMatrices.size(0);
     const int N      = means.size(0);
 
-    fvdb::GaussianSplat3d::ProjectedGaussianSplats ret;
+    fvdb::ProjectedGaussianSplats ret;
     ret.mRenderSettings   = settings;
     ret.mCameraModel      = cameraModel;
     ret.mProjectionMethod = ProjectionMethod::ANALYTIC;
@@ -344,7 +344,7 @@ projectGaussiansAnalytic(const torch::Tensor &means,
     return ret;
 }
 
-fvdb::GaussianSplat3d::ProjectedGaussianSplats
+fvdb::ProjectedGaussianSplats
 projectGaussiansUT(const torch::Tensor &means,
                    const torch::Tensor &quats,
                    const torch::Tensor &logScales,
@@ -359,7 +359,7 @@ projectGaussiansUT(const torch::Tensor &means,
     FVDB_FUNC_RANGE();
     const int C = worldToCameraMatrices.size(0);
 
-    fvdb::GaussianSplat3d::ProjectedGaussianSplats ret;
+    fvdb::ProjectedGaussianSplats ret;
     ret.mRenderSettings   = settings;
     ret.mCameraModel      = cameraModel;
     ret.mProjectionMethod = resolveProjectionMethod(cameraModel, ProjectionMethod::UNSCENTED);
@@ -419,7 +419,7 @@ projectGaussiansUT(const torch::Tensor &means,
     return ret;
 }
 
-fvdb::GaussianSplat3d::ProjectedGaussianSplats
+fvdb::ProjectedGaussianSplats
 projectGaussiansForCamera(const torch::Tensor &means,
                           const torch::Tensor &quats,
                           const torch::Tensor &logScales,
@@ -464,7 +464,7 @@ projectGaussiansForCamera(const torch::Tensor &means,
 // Sparse projection: analytic path
 // ---------------------------------------------------------------------------
 
-fvdb::GaussianSplat3d::SparseProjectedGaussianSplats
+fvdb::SparseProjectedGaussianSplats
 sparseProjectGaussiansAnalytic(const fvdb::JaggedTensor &pixelsToRender,
                                const torch::Tensor &means,
                                const torch::Tensor &quats,
@@ -493,7 +493,7 @@ sparseProjectGaussiansAnalytic(const fvdb::JaggedTensor &pixelsToRender,
                 C,
                 " cameras. ");
 
-    fvdb::GaussianSplat3d::SparseProjectedGaussianSplats ret;
+    fvdb::SparseProjectedGaussianSplats ret;
     ret.mRenderSettings   = settings;
     ret.mCameraModel      = cameraModel;
     ret.mProjectionMethod = ProjectionMethod::ANALYTIC;
@@ -574,7 +574,7 @@ sparseProjectGaussiansAnalytic(const fvdb::JaggedTensor &pixelsToRender,
 // Sparse projection: unscented transform path
 // ---------------------------------------------------------------------------
 
-fvdb::GaussianSplat3d::SparseProjectedGaussianSplats
+fvdb::SparseProjectedGaussianSplats
 sparseProjectGaussiansUT(const fvdb::JaggedTensor &pixelsToRender,
                          const torch::Tensor &means,
                          const torch::Tensor &quats,
@@ -597,7 +597,7 @@ sparseProjectGaussiansUT(const fvdb::JaggedTensor &pixelsToRender,
                 C,
                 " cameras. ");
 
-    fvdb::GaussianSplat3d::SparseProjectedGaussianSplats ret;
+    fvdb::SparseProjectedGaussianSplats ret;
     ret.mRenderSettings   = settings;
     ret.mCameraModel      = cameraModel;
     ret.mProjectionMethod = resolveProjectionMethod(cameraModel, ProjectionMethod::UNSCENTED);
@@ -683,7 +683,7 @@ sparseProjectGaussiansUT(const fvdb::JaggedTensor &pixelsToRender,
 // Sparse projection: camera dispatch (analytic vs UT)
 // ---------------------------------------------------------------------------
 
-fvdb::GaussianSplat3d::SparseProjectedGaussianSplats
+fvdb::SparseProjectedGaussianSplats
 sparseProjectGaussiansForCamera(const fvdb::JaggedTensor &pixelsToRender,
                                 const torch::Tensor &means,
                                 const torch::Tensor &quats,
@@ -731,7 +731,7 @@ sparseProjectGaussiansForCamera(const fvdb::JaggedTensor &pixelsToRender,
 // ---------------------------------------------------------------------------
 
 std::tuple<torch::Tensor, torch::Tensor>
-renderCropFromProjected(const fvdb::GaussianSplat3d::ProjectedGaussianSplats &projectedGaussians,
+renderCropFromProjected(const fvdb::ProjectedGaussianSplats &projectedGaussians,
                         const size_t tileSize,
                         const ssize_t cropWidth,
                         const ssize_t cropHeight,
@@ -857,7 +857,7 @@ std::tuple<torch::Tensor, torch::Tensor>
 rasterizeFromWorld(const torch::Tensor &means,
                    const torch::Tensor &quats,
                    const torch::Tensor &logScales,
-                   const fvdb::GaussianSplat3d::ProjectedGaussianSplats &projectedState,
+                   const fvdb::ProjectedGaussianSplats &projectedState,
                    const torch::Tensor &worldToCameraMatrices,
                    const torch::Tensor &projectionMatrices,
                    const torch::Tensor &distortionCoeffs,
@@ -903,7 +903,7 @@ rasterizeFromWorld(const torch::Tensor &means,
 // ---------------------------------------------------------------------------
 
 std::tuple<torch::Tensor, torch::Tensor>
-renderNumContributing(const fvdb::GaussianSplat3d::ProjectedGaussianSplats &state,
+renderNumContributing(const fvdb::ProjectedGaussianSplats &state,
                       const RenderSettings &settings) {
     FVDB_FUNC_RANGE();
     return FVDB_DISPATCH_KERNEL_DEVICE(state.perGaussian2dMean.device(), [&]() {
@@ -922,7 +922,7 @@ renderNumContributing(const fvdb::GaussianSplat3d::ProjectedGaussianSplats &stat
 // ---------------------------------------------------------------------------
 
 std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor>
-sparseRenderNumContributing(const fvdb::GaussianSplat3d::SparseProjectedGaussianSplats &state,
+sparseRenderNumContributing(const fvdb::SparseProjectedGaussianSplats &state,
                             const fvdb::JaggedTensor &pixelsToRender,
                             const RenderSettings &settings) {
     FVDB_FUNC_RANGE();
@@ -956,7 +956,7 @@ sparseRenderNumContributing(const fvdb::GaussianSplat3d::SparseProjectedGaussian
 // ---------------------------------------------------------------------------
 
 std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor>
-renderContributingIds(const fvdb::GaussianSplat3d::ProjectedGaussianSplats &state,
+renderContributingIds(const fvdb::ProjectedGaussianSplats &state,
                       const RenderSettings &settings,
                       const std::optional<torch::Tensor> &maybeNumContributingGaussians) {
     FVDB_FUNC_RANGE();
@@ -978,7 +978,7 @@ renderContributingIds(const fvdb::GaussianSplat3d::ProjectedGaussianSplats &stat
 
 std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor>
 sparseRenderContributingIds(
-    const fvdb::GaussianSplat3d::SparseProjectedGaussianSplats &state,
+    const fvdb::SparseProjectedGaussianSplats &state,
     const fvdb::JaggedTensor &pixelsToRender,
     const RenderSettings &settings,
     const std::optional<fvdb::JaggedTensor> &maybeNumContributingGaussians) {

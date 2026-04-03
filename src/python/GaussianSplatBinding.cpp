@@ -8,67 +8,15 @@
 #include <fvdb/FVDB.h>
 #include <fvdb/GaussianSplat3d.h>
 #include <fvdb/detail/ops/gsplat/GaussianCameras.cuh>
-#include <fvdb/detail/ops/gsplat/GaussianSphericalHarmonicsForward.h>
 #include <fvdb/detail/utils/Utils.h>
 
 #include <torch/extension.h>
 
 void
 bind_gaussian_splat3d(py::module &m) {
-    py::enum_<fvdb::detail::ops::RollingShutterType>(m, "RollingShutterType")
-        .value("NONE", fvdb::detail::ops::RollingShutterType::NONE)
-        .value("VERTICAL", fvdb::detail::ops::RollingShutterType::VERTICAL)
-        .value("HORIZONTAL", fvdb::detail::ops::RollingShutterType::HORIZONTAL)
-        .export_values();
-
-    py::enum_<fvdb::detail::ops::DistortionModel>(m, "CameraModel")
-        .value("PINHOLE", fvdb::detail::ops::DistortionModel::PINHOLE)
-        .value("OPENCV_RADTAN_5", fvdb::detail::ops::DistortionModel::OPENCV_RADTAN_5)
-        .value("OPENCV_RATIONAL_8", fvdb::detail::ops::DistortionModel::OPENCV_RATIONAL_8)
-        .value("OPENCV_RADTAN_THIN_PRISM_9",
-               fvdb::detail::ops::DistortionModel::OPENCV_RADTAN_THIN_PRISM_9)
-        .value("OPENCV_THIN_PRISM_12", fvdb::detail::ops::DistortionModel::OPENCV_THIN_PRISM_12)
-        .value("ORTHOGRAPHIC", fvdb::detail::ops::DistortionModel::ORTHOGRAPHIC)
-        .export_values();
-
-    py::enum_<fvdb::detail::ops::ProjectionMethod>(m, "ProjectionMethod")
-        .value("AUTO", fvdb::detail::ops::ProjectionMethod::AUTO)
-        .value("ANALYTIC", fvdb::detail::ops::ProjectionMethod::ANALYTIC)
-        .value("UNSCENTED", fvdb::detail::ops::ProjectionMethod::UNSCENTED)
-        .export_values();
-
-    py::class_<fvdb::GaussianSplat3d::ProjectedGaussianSplats>(m, "ProjectedGaussianSplats")
-        .def_property_readonly("means2d", &fvdb::GaussianSplat3d::ProjectedGaussianSplats::means2d)
-        .def_property_readonly("conics", &fvdb::GaussianSplat3d::ProjectedGaussianSplats::conics)
-        .def_property_readonly("render_quantities",
-                               &fvdb::GaussianSplat3d::ProjectedGaussianSplats::renderQuantities)
-        .def_property_readonly("depths", &fvdb::GaussianSplat3d::ProjectedGaussianSplats::depths)
-        .def_property_readonly("opacities",
-                               &fvdb::GaussianSplat3d::ProjectedGaussianSplats::opacities)
-        .def_property_readonly("radii", &fvdb::GaussianSplat3d::ProjectedGaussianSplats::radii)
-        .def_property_readonly("tile_offsets",
-                               &fvdb::GaussianSplat3d::ProjectedGaussianSplats::offsets)
-        .def_property_readonly("tile_gaussian_ids",
-                               &fvdb::GaussianSplat3d::ProjectedGaussianSplats::gaussianIds)
-        .def_property_readonly("image_width",
-                               &fvdb::GaussianSplat3d::ProjectedGaussianSplats::imageWidth)
-        .def_property_readonly("image_height",
-                               &fvdb::GaussianSplat3d::ProjectedGaussianSplats::imageHeight)
-        .def_property_readonly("near_plane",
-                               &fvdb::GaussianSplat3d::ProjectedGaussianSplats::nearPlane)
-        .def_property_readonly("far_plane",
-                               &fvdb::GaussianSplat3d::ProjectedGaussianSplats::farPlane)
-        .def_property_readonly("camera_model",
-                               &fvdb::GaussianSplat3d::ProjectedGaussianSplats::cameraModel)
-        .def_property_readonly("projection_method",
-                               &fvdb::GaussianSplat3d::ProjectedGaussianSplats::projectionMethod)
-        .def_property_readonly("sh_degree_to_use",
-                               &fvdb::GaussianSplat3d::ProjectedGaussianSplats::shDegreeToUse)
-        .def_property_readonly("min_radius_2d",
-                               &fvdb::GaussianSplat3d::ProjectedGaussianSplats::minRadius2d)
-        .def_property_readonly("eps_2d", &fvdb::GaussianSplat3d::ProjectedGaussianSplats::eps2d)
-        .def_property_readonly("antialias",
-                               &fvdb::GaussianSplat3d::ProjectedGaussianSplats::antialias);
+    // NOTE: Enum bindings (RollingShutterType, CameraModel, ProjectionMethod) and
+    // ProjectedGaussianSplats / SparseProjectedGaussianSplats class bindings have been
+    // moved to GaussianSplatOps.cpp (Milestone 9). They are registered there now.
 
     py::class_<fvdb::GaussianSplat3d> gs3d(m, "GaussianSplat3d", "A gaussian splat scene");
 
@@ -508,50 +456,5 @@ bind_gaussian_splat3d(py::module &m) {
           py::arg("backgrounds")          = std::nullopt,
           py::arg("masks")                = std::nullopt);
 
-    m.def(
-        "evaluate_spherical_harmonics",
-        [](int64_t shDegree,
-           int64_t numCameras,
-           const torch::Tensor &sh0,
-           const torch::Tensor &radii,
-           const std::optional<torch::Tensor> &shN,
-           const std::optional<torch::Tensor> &viewDirections) {
-            const torch::Tensor viewDirsValue = viewDirections.value_or(torch::Tensor());
-            const torch::Tensor shNValue      = shN.value_or(torch::Tensor());
-            return FVDB_DISPATCH_KERNEL(sh0.device(), [&]() {
-                return fvdb::detail::ops::dispatchSphericalHarmonicsForward<DeviceTag>(
-                    shDegree, numCameras, viewDirsValue, sh0, shNValue, radii);
-            });
-        },
-        R"doc(
-Evaluate spherical harmonics to compute view-dependent features/colors.
-
-This function evaluates spherical harmonics (SH) coefficients to compute
-features (typically RGB colors) for a set of points, optionally considering
-view directions for view-dependent appearance.
-
-Args:
-    sh_degree: Degree of spherical harmonics to use (0-3 typically).
-               Degree 0 uses only sh0 (view-independent).
-               Higher degrees require view_directions and shN.
-    num_cameras: Number of camera views (C). The output will have shape [C, N, D].
-    sh0: DC term coefficients with shape [N, 1, D] where N is the number of
-         points and D is the number of feature channels.
-    radii: Projected radii with shape [C, N] (int32). Points with radii <= 0
-           will output zeros (used to skip invisible gaussians). Pass a tensor
-           of ones to evaluate all points.
-    shN: Higher-order SH coefficients with shape [N, K-1, D] where
-         K = (sh_degree+1)^2. Required when sh_degree > 0. Pass None for degree 0.
-    view_directions: Unnormalized view directions with shape [C, N, 3].
-                     Required when sh_degree > 0. Pass None for degree 0.
-
-Returns:
-    Tensor of shape [C, N, D] containing the evaluated features/colors.
-)doc",
-        py::arg("sh_degree"),
-        py::arg("num_cameras"),
-        py::arg("sh0"),
-        py::arg("radii"),
-        py::arg("shN")             = std::nullopt,
-        py::arg("view_directions") = std::nullopt);
+    // NOTE: evaluate_spherical_harmonics binding has been moved to GaussianSplatOps.cpp (M9)
 }

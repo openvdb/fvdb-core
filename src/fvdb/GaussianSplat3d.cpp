@@ -623,12 +623,17 @@ void
 GaussianSplat3d::savePly(
     const std::string &filename,
     std::optional<std::unordered_map<std::string, PlyMetadataTypes>> metadata) const {
-    detail::io::saveGaussianPly(filename, *this, metadata);
+    detail::io::saveGaussianPly(filename, mMeans, mQuats, mLogScales, mLogitOpacities,
+                                mSh0, mShN, metadata);
 }
 
 std::tuple<GaussianSplat3d, std::unordered_map<std::string, GaussianSplat3d::PlyMetadataTypes>>
 GaussianSplat3d::fromPly(const std::string &filename, torch::Device device) {
-    return detail::io::loadGaussianPly(filename, device);
+    auto [means, quats, logScales, logitOpacities, sh0, shN, metadata] =
+        detail::io::loadGaussianPly(filename, device);
+    return std::make_tuple(
+        GaussianSplat3d(means, quats, logScales, logitOpacities, sh0, shN, false, false, false),
+        metadata);
 }
 
 std::tuple<torch::Tensor, torch::Tensor>
