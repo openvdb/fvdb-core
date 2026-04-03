@@ -57,8 +57,6 @@ if _spec is not None and _spec.origin is not None:
 
 # isort: off
 from ._fvdb_cpp import scaled_dot_product_attention as _scaled_dot_product_attention_cpp
-from ._fvdb_cpp import gaussian_render_jagged as _gaussian_render_jagged_cpp
-from ._fvdb_cpp import evaluate_spherical_harmonics as _evaluate_spherical_harmonics_cpp
 from ._fvdb_cpp import (
     config,
     volume_render,

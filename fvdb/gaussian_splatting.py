@@ -11,7 +11,6 @@ import torch.nn.functional as F
 from fvdb.enums import CameraModel, ProjectionMethod
 
 from . import _fvdb_cpp as _C
-from ._fvdb_cpp import GaussianSplat3d as GaussianSplat3dCpp
 from ._fvdb_cpp import JaggedTensor as JaggedTensorCpp
 from ._fvdb_cpp import ProjectedGaussianSplats as ProjectedGaussianSplatsCpp
 from .functional.splat._projection import _ProjectGaussiansFn
@@ -3379,57 +3378,35 @@ class GaussianSplat3d:
                 Each element represents the alpha value (opacity) at that pixel such that ``0 <= alpha < 1``,
                 and 0 means the pixel is fully transparent, and 1 means the pixel is fully opaque.
         """
-        tmp = self._make_cpp_impl()
+        settings = _build_settings(image_width, image_height, near, far, 0, tile_size, min_radius_2d, eps_2d, antialias, "depth")
 
         if isinstance(pixels_to_render, torch.Tensor):
             C, R, _ = pixels_to_render.shape
             tensors = [pixels_to_render[i] for i in range(C)]
             pixels_to_render_jagged = JaggedTensor(tensors)
+        else:
+            pixels_to_render_jagged = pixels_to_render
 
-            result_num_contributing_gaussians, result_alphas = tmp.sparse_render_num_contributing_gaussians(
-                pixels_to_render=pixels_to_render_jagged._impl,
-                world_to_camera_matrices=world_to_camera_matrices,
-                projection_matrices=projection_matrices,
-                image_width=image_width,
-                image_height=image_height,
-                near=near,
-                far=far,
-                camera_model=self._camera_model_to_cpp(camera_model),
-                projection_method=self._projection_method_to_cpp(projection_method),
-                distortion_coeffs=distortion_coeffs,
-                tile_size=tile_size,
-                min_radius_2d=min_radius_2d,
-                eps_2d=eps_2d,
-                antialias=antialias,
-            )
+        sparse_state = _C.gsplat_sparse_project_gaussians_for_camera(
+            pixels_to_render_jagged._impl,
+            self._means, self._quats, self._log_scales, self._logit_opacities,
+            self._sh0, self._shN,
+            world_to_camera_matrices, projection_matrices, settings,
+            self._camera_model_to_cpp(camera_model),
+            self._projection_method_to_cpp(projection_method), distortion_coeffs,
+        )
+        result_num_impl, result_alphas_impl = _C.gsplat_sparse_render_num_contributing(
+            sparse_state, pixels_to_render_jagged._impl, settings,
+        )
 
-            num_contributing_gaussians_list = result_num_contributing_gaussians.unbind()
-            alphas_list = result_alphas.unbind()
+        if isinstance(pixels_to_render, torch.Tensor):
+            num_contributing_gaussians_list = result_num_impl.unbind()
+            alphas_list = result_alphas_impl.unbind()
             dense_num_contributing_gaussians = torch.stack(num_contributing_gaussians_list, dim=0)  # type: ignore # Shape: (C, R)
             dense_alphas = torch.stack(alphas_list, dim=0)  # type: ignore # Shape: (C, R)
-
             return dense_num_contributing_gaussians, dense_alphas
         else:
-            # Already a JaggedTensor, call C++ implementation directly
-            result_num_contributing_gaussians_impl, result_alphas_impl = (
-                tmp.sparse_render_num_contributing_gaussians(
-                    pixels_to_render=pixels_to_render._impl,
-                    world_to_camera_matrices=world_to_camera_matrices,
-                    projection_matrices=projection_matrices,
-                    image_width=image_width,
-                    image_height=image_height,
-                    near=near,
-                    far=far,
-                    camera_model=self._camera_model_to_cpp(camera_model),
-                    projection_method=self._projection_method_to_cpp(projection_method),
-                    distortion_coeffs=distortion_coeffs,
-                    tile_size=tile_size,
-                    min_radius_2d=min_radius_2d,
-                    eps_2d=eps_2d,
-                    antialias=antialias,
-                )
-            )
-            return JaggedTensor(impl=result_num_contributing_gaussians_impl), JaggedTensor(impl=result_alphas_impl)
+            return JaggedTensor(impl=result_num_impl), JaggedTensor(impl=result_alphas_impl)
 
     def render_contributing_gaussian_ids(
         self,
@@ -3485,24 +3462,25 @@ class GaussianSplat3d:
                 jagged tensor containing the weights of the contributing Gaussians of each rendered pixel for each camera. The weights are in row-major order and
                 sum to 1 for each pixel if that pixel is opaque (alpha=1).
         """
-        tmp = self._make_cpp_impl()
-        ids, weights = tmp.render_contributing_gaussian_ids(
-            world_to_camera_matrices=world_to_camera_matrices,
-            projection_matrices=projection_matrices,
-            image_width=image_width,
-            image_height=image_height,
-            near=near,
-            far=far,
-            camera_model=self._camera_model_to_cpp(camera_model),
-            projection_method=self._projection_method_to_cpp(projection_method),
-            distortion_coeffs=distortion_coeffs,
-            tile_size=tile_size,
-            min_radius_2d=min_radius_2d,
-            eps_2d=eps_2d,
-            antialias=antialias,
-            top_k_contributors=top_k_contributors,
+        settings = _build_settings(image_width, image_height, near, far, 0, tile_size, min_radius_2d, eps_2d, antialias, "depth")
+        settings.num_depth_samples = top_k_contributors
+
+        state = self._project_with_accum(
+            world_to_camera_matrices, projection_matrices, settings,
+            self._camera_model_to_cpp(camera_model),
+            self._projection_method_to_cpp(projection_method), distortion_coeffs,
         )
-        return JaggedTensor(impl=ids), JaggedTensor(impl=weights)
+
+        if top_k_contributors > 0:
+            # Top-k path: numDepthSamples is set on settings, pass None for num_contributing
+            num_contributing = None
+        else:
+            # Standard path: compute actual num contributing, pass it to the ids kernel
+            num_contributing_images, _ = _C.gsplat_render_num_contributing(state, settings)
+            num_contributing = num_contributing_images
+
+        ids_impl, weights_impl = _C.gsplat_render_contributing_ids(state, settings, num_contributing)
+        return JaggedTensor(impl=ids_impl), JaggedTensor(impl=weights_impl)
 
     @overload
     def sparse_render_contributing_gaussian_ids(
@@ -3605,67 +3583,39 @@ class GaussianSplat3d:
             weights (fvdb.JaggedTensor): A ``[[C1P1 + C1P2 + ... C1PN1, 1], ... [CNP1 + CNP2 + ... CNPNN, 1]]`` jagged tensor
                 containing the weights of the contributing Gaussians of each rendered pixel for each camera. The weights are in row-major order and sum to 1 for each pixel if that pixel is opaque (alpha=1).
         """
-        tmp = self._make_cpp_impl()
+        settings = _build_settings(image_width, image_height, near, far, 0, tile_size, min_radius_2d, eps_2d, antialias, "depth")
+        settings.num_depth_samples = top_k_contributors
 
         if isinstance(pixels_to_render, torch.Tensor):
             C, R, _ = pixels_to_render.shape
             tensors = [pixels_to_render[i] for i in range(C)]
-            pixels_to_render_jagged = JaggedTensor(tensors)
-
-            result_ids, result_weights = tmp.sparse_render_contributing_gaussian_ids(
-                pixels_to_render=pixels_to_render_jagged._impl,
-                world_to_camera_matrices=world_to_camera_matrices,
-                projection_matrices=projection_matrices,
-                image_width=image_width,
-                image_height=image_height,
-                near=near,
-                far=far,
-                camera_model=self._camera_model_to_cpp(camera_model),
-                projection_method=self._projection_method_to_cpp(projection_method),
-                distortion_coeffs=distortion_coeffs,
-                tile_size=tile_size,
-                min_radius_2d=min_radius_2d,
-                eps_2d=eps_2d,
-                antialias=antialias,
-                top_k_contributors=top_k_contributors,
-            )
-
-            return JaggedTensor(impl=result_ids), JaggedTensor(impl=result_weights)
+            pixels_jt = JaggedTensor(tensors)
         else:
-            # Already a JaggedTensor, call C++ implementation directly
-            result_ids_impl, result_weights_impl = tmp.sparse_render_contributing_gaussian_ids(
-                pixels_to_render=pixels_to_render._impl,
-                world_to_camera_matrices=world_to_camera_matrices,
-                projection_matrices=projection_matrices,
-                image_width=image_width,
-                image_height=image_height,
-                near=near,
-                far=far,
-                camera_model=self._camera_model_to_cpp(camera_model),
-                projection_method=self._projection_method_to_cpp(projection_method),
-                distortion_coeffs=distortion_coeffs,
-                tile_size=tile_size,
-                min_radius_2d=min_radius_2d,
-                eps_2d=eps_2d,
-                antialias=antialias,
-                top_k_contributors=top_k_contributors,
-            )
-            return JaggedTensor(impl=result_ids_impl), JaggedTensor(impl=result_weights_impl)
+            pixels_jt = pixels_to_render
 
-    def _make_cpp_impl(self) -> GaussianSplat3dCpp:
-        """Create a temporary C++ GaussianSplat3dCpp from our tensors for operations
-        that still require the C++ class (PLY I/O, MCMC, query ops)."""
-        return GaussianSplat3dCpp(
-            means=self._means,
-            quats=self._quats,
-            log_scales=self._log_scales,
-            logit_opacities=self._logit_opacities,
-            sh0=self._sh0,
-            shN=self._shN,
-            accumulate_mean_2d_gradients=False,
-            accumulate_max_2d_radii=False,
-            detach=False,
+        sparse_state = _C.gsplat_sparse_project_gaussians_for_camera(
+            pixels_jt._impl,
+            self._means, self._quats, self._log_scales, self._logit_opacities,
+            self._sh0, self._shN,
+            world_to_camera_matrices, projection_matrices, settings,
+            self._camera_model_to_cpp(camera_model),
+            self._projection_method_to_cpp(projection_method), distortion_coeffs,
         )
+
+        if top_k_contributors > 0:
+            # Top-k path: numDepthSamples is set on settings, pass None for num_contributing
+            num_contributing = None
+        else:
+            # Standard path: compute actual num contributing, pass it to the ids kernel
+            num_contributing_jt, _ = _C.gsplat_sparse_render_num_contributing(
+                sparse_state, pixels_jt._impl, settings,
+            )
+            num_contributing = num_contributing_jt
+
+        ids_impl, weights_impl = _C.gsplat_sparse_render_contributing_ids(
+            sparse_state, pixels_jt._impl, settings, num_contributing,
+        )
+        return JaggedTensor(impl=ids_impl), JaggedTensor(impl=weights_impl)
 
     def relocate_gaussians(
         self,

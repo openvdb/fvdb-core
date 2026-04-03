@@ -23,7 +23,6 @@
 void bind_grid_batch_data(py::module &m);
 void bind_grid_batch_ops(py::module &m);
 void bind_jagged_tensor(py::module &m);
-void bind_gaussian_splat3d(py::module &m);
 void bind_gaussian_splat_ops(py::module &m);
 void bind_viewer(py::module &m);
 
@@ -137,7 +136,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     bind_grid_batch_ops(m);
     bind_jagged_tensor(m);
     bind_gaussian_splat_ops(m);
-    bind_gaussian_splat3d(m);
     bind_viewer(m);
 
     //

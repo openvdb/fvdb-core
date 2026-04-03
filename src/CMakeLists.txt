@@ -55,7 +55,6 @@ set(FVDB_CPP_FILES
     fvdb/detail/viewer/GaussianSplat3dView.cpp
     fvdb/detail/viewer/Viewer.cpp
     fvdb/FVDB.cpp
-    fvdb/GaussianSplat3d.cpp
     fvdb/JaggedTensor.cpp
 )
 
