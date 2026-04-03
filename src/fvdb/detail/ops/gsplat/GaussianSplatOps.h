@@ -4,8 +4,10 @@
 #ifndef FVDB_DETAIL_OPS_GSPLAT_GAUSSIANSPLATOPS_H
 #define FVDB_DETAIL_OPS_GSPLAT_GAUSSIANSPLATOPS_H
 
+#include <fvdb/GaussianSplat3d.h>
 #include <fvdb/JaggedTensor.h>
 #include <fvdb/detail/ops/gsplat/GaussianCameras.cuh>
+#include <fvdb/detail/ops/gsplat/GaussianRenderSettings.h>
 
 #include <ATen/core/TensorBody.h>
 
@@ -65,6 +67,91 @@ std::tuple<fvdb::JaggedTensor, torch::Tensor, bool>
 deduplicatePixels(const fvdb::JaggedTensor &pixelsToRender,
                   int64_t imageWidth,
                   int64_t imageHeight);
+
+/// @brief Evaluate spherical harmonics for Gaussian splats.
+/// @param means [N, 3] Gaussian means
+/// @param sh0 [N, 1, D] Degree-0 SH coefficients
+/// @param shN [N, K-1, D] Higher-degree SH coefficients
+/// @param shDegreeToUse SH degree to use (-1 for all)
+/// @param worldToCameraMatrices [C, 4, 4] Camera matrices
+/// @param perGaussianProjectedRadii [C, N] Projected radii
+/// @return [C, N, D] Evaluated SH features
+torch::Tensor evalSphericalHarmonics(const torch::Tensor &means,
+                                     const torch::Tensor &sh0,
+                                     const torch::Tensor &shN,
+                                     int64_t shDegreeToUse,
+                                     const torch::Tensor &worldToCameraMatrices,
+                                     const torch::Tensor &perGaussianProjectedRadii);
+
+/// @brief Project Gaussians using analytic projection, evaluate SH, and compute tile intersection.
+/// @param means [N, 3]
+/// @param quats [N, 4]
+/// @param logScales [N, 3]
+/// @param logitOpacities [N]
+/// @param sh0 [N, 1, D]
+/// @param shN [N, K-1, D]
+/// @param worldToCameraMatrices [C, 4, 4]
+/// @param projectionMatrices [C, 3, 3]
+/// @param settings Render settings
+/// @param cameraModel Camera/distortion model
+/// @param accumulateMean2dGradients Whether to accumulate mean 2D gradient norms
+/// @param accumulateMax2dRadii Whether to accumulate max 2D radii
+/// @param accumGradNorms [in/out] Optional accumulator for gradient norms (lazily initialized)
+/// @param accumStepCounts [in/out] Optional accumulator for step counts (lazily initialized)
+/// @param accumMax2dRadii [in/out] Optional accumulator for max 2D radii (lazily initialized)
+/// @return ProjectedGaussianSplats with all projection results
+fvdb::GaussianSplat3d::ProjectedGaussianSplats projectGaussiansAnalytic(
+    const torch::Tensor &means,
+    const torch::Tensor &quats,
+    const torch::Tensor &logScales,
+    const torch::Tensor &logitOpacities,
+    const torch::Tensor &sh0,
+    const torch::Tensor &shN,
+    const torch::Tensor &worldToCameraMatrices,
+    const torch::Tensor &projectionMatrices,
+    const RenderSettings &settings,
+    DistortionModel cameraModel,
+    bool accumulateMean2dGradients,
+    bool accumulateMax2dRadii,
+    std::optional<torch::Tensor> &accumGradNorms,
+    std::optional<torch::Tensor> &accumStepCounts,
+    std::optional<torch::Tensor> &accumMax2dRadii);
+
+/// @brief Project Gaussians using unscented transform, evaluate SH, and compute tile intersection.
+///        Non-differentiable (no gradient accumulation support).
+fvdb::GaussianSplat3d::ProjectedGaussianSplats projectGaussiansUT(
+    const torch::Tensor &means,
+    const torch::Tensor &quats,
+    const torch::Tensor &logScales,
+    const torch::Tensor &logitOpacities,
+    const torch::Tensor &sh0,
+    const torch::Tensor &shN,
+    const torch::Tensor &worldToCameraMatrices,
+    const torch::Tensor &projectionMatrices,
+    const torch::Tensor &distortionCoeffs,
+    const RenderSettings &settings,
+    DistortionModel cameraModel);
+
+/// @brief Project Gaussians for a given camera model, dispatching between analytic and UT paths.
+///        Validates camera args and resolves projection method.
+fvdb::GaussianSplat3d::ProjectedGaussianSplats projectGaussiansForCamera(
+    const torch::Tensor &means,
+    const torch::Tensor &quats,
+    const torch::Tensor &logScales,
+    const torch::Tensor &logitOpacities,
+    const torch::Tensor &sh0,
+    const torch::Tensor &shN,
+    const torch::Tensor &worldToCameraMatrices,
+    const torch::Tensor &projectionMatrices,
+    const RenderSettings &settings,
+    DistortionModel cameraModel,
+    ProjectionMethod projectionMethod,
+    const std::optional<torch::Tensor> &distortionCoeffs,
+    bool accumulateMean2dGradients,
+    bool accumulateMax2dRadii,
+    std::optional<torch::Tensor> &accumGradNorms,
+    std::optional<torch::Tensor> &accumStepCounts,
+    std::optional<torch::Tensor> &accumMax2dRadii);
 
 } // namespace fvdb::detail::ops
 

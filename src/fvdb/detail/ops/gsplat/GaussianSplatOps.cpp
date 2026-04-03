@@ -3,6 +3,13 @@
 //
 #include <fvdb/detail/ops/gsplat/GaussianSplatOps.h>
 
+#include <fvdb/detail/autograd/EvaluateSphericalHarmonics.h>
+#include <fvdb/detail/autograd/GaussianProjection.h>
+#include <fvdb/detail/ops/gsplat/GaussianProjectionUT.h>
+#include <fvdb/detail/ops/gsplat/GaussianTileIntersection.h>
+#include <fvdb/detail/utils/Nvtx.h>
+#include <fvdb/detail/utils/Utils.h>
+
 #include <torch/csrc/autograd/generated/variable_factories.h>
 
 namespace fvdb::detail::ops {
@@ -161,6 +168,295 @@ deduplicatePixels(const fvdb::JaggedTensor &pixelsToRender,
         uniqueJData, newOffsets, newJidx, pixelsToRender.jlidx(), numLists);
 
     return {uniquePixels, inverseIndices, true};
+}
+
+torch::Tensor
+evalSphericalHarmonics(const torch::Tensor &means,
+                       const torch::Tensor &sh0,
+                       const torch::Tensor &shN,
+                       const int64_t shDegreeToUse,
+                       const torch::Tensor &worldToCameraMatrices,
+                       const torch::Tensor &perGaussianProjectedRadii) {
+    FVDB_FUNC_RANGE();
+    const auto K              = shN.size(1) + 1;              // number of SH bases
+    const auto C              = worldToCameraMatrices.size(0); // number of cameras
+    const auto actualShDegree = shDegreeToUse < 0 ? (std::sqrt(K) - 1) : shDegreeToUse;
+    if (actualShDegree == 0) {
+        return fvdb::detail::autograd::EvaluateSphericalHarmonics::apply(
+            actualShDegree, C, torch::nullopt, sh0, torch::nullopt, perGaussianProjectedRadii)[0];
+    } else {
+        auto [camToWorldMatrices, info] = torch::linalg_inv_ex(worldToCameraMatrices);
+        const torch::Tensor viewDirs =
+            means.index(
+                {torch::indexing::None, torch::indexing::Slice(), torch::indexing::Slice()}) -
+            camToWorldMatrices.index({torch::indexing::Slice(),
+                                      torch::indexing::None,
+                                      torch::indexing::Slice(0, 3),
+                                      3}); // [1, N, 3] - [C, 1, 3]
+        return fvdb::detail::autograd::EvaluateSphericalHarmonics::apply(
+            actualShDegree, C, viewDirs, sh0, shN, perGaussianProjectedRadii)[0];
+    }
+}
+
+namespace {
+
+/// @brief Compute render quantities (SH colors, depths, or both) for projected Gaussians.
+torch::Tensor
+computeRenderQuantity(const torch::Tensor &means,
+                      const torch::Tensor &sh0,
+                      const torch::Tensor &shN,
+                      const RenderSettings &settings,
+                      const torch::Tensor &worldToCameraMatrices,
+                      const torch::Tensor &perGaussianRadius,
+                      const torch::Tensor &perGaussianDepth) {
+    using RenderMode = RenderSettings::RenderMode;
+    if (settings.renderMode == RenderMode::DEPTH) {
+        return perGaussianDepth.unsqueeze(-1); // [C, N, 1]
+    } else if (settings.renderMode == RenderMode::RGB || settings.renderMode == RenderMode::RGBD) {
+        auto renderQuantity = evalSphericalHarmonics(
+            means, sh0, shN, settings.shDegreeToUse, worldToCameraMatrices, perGaussianRadius);
+        if (settings.renderMode == RenderMode::RGBD) {
+            renderQuantity =
+                torch::cat({renderQuantity, perGaussianDepth.unsqueeze(-1)}, -1); // [C, N, D + 1]
+        }
+        return renderQuantity;
+    } else {
+        TORCH_CHECK_VALUE(false, "Invalid render mode");
+    }
+}
+
+/// @brief Prepare accumulator tensors for projection, lazily initializing them if needed.
+void
+prepareAccumulators(const int64_t N,
+                    const torch::Tensor &means,
+                    bool accumulateMean2dGradients,
+                    bool accumulateMax2dRadii,
+                    std::optional<torch::Tensor> &accumGradNorms,
+                    std::optional<torch::Tensor> &accumStepCounts,
+                    std::optional<torch::Tensor> &accumMax2dRadii) {
+    if (accumulateMean2dGradients) {
+        if (!accumGradNorms.has_value() || accumGradNorms->numel() != N) {
+            accumGradNorms = torch::zeros({N}, means.options());
+        }
+        if (!accumStepCounts.has_value() || accumStepCounts->numel() != N) {
+            accumStepCounts = torch::zeros(
+                {N}, torch::TensorOptions().dtype(torch::kInt32).device(means.device()));
+        }
+    }
+    if (accumulateMax2dRadii) {
+        if (!accumMax2dRadii.has_value() || accumMax2dRadii->numel() != N) {
+            accumMax2dRadii = torch::zeros(
+                {N}, torch::TensorOptions().dtype(torch::kInt32).device(means.device()));
+        }
+    }
+}
+
+} // anonymous namespace
+
+fvdb::GaussianSplat3d::ProjectedGaussianSplats
+projectGaussiansAnalytic(const torch::Tensor &means,
+                         const torch::Tensor &quats,
+                         const torch::Tensor &logScales,
+                         const torch::Tensor &logitOpacities,
+                         const torch::Tensor &sh0,
+                         const torch::Tensor &shN,
+                         const torch::Tensor &worldToCameraMatrices,
+                         const torch::Tensor &projectionMatrices,
+                         const RenderSettings &settings,
+                         const DistortionModel cameraModel,
+                         const bool accumulateMean2dGradients,
+                         const bool accumulateMax2dRadii,
+                         std::optional<torch::Tensor> &accumGradNorms,
+                         std::optional<torch::Tensor> &accumStepCounts,
+                         std::optional<torch::Tensor> &accumMax2dRadii) {
+    FVDB_FUNC_RANGE();
+    const bool ortho = cameraModel == DistortionModel::ORTHOGRAPHIC;
+    const int C      = worldToCameraMatrices.size(0);
+    const int N      = means.size(0);
+
+    fvdb::GaussianSplat3d::ProjectedGaussianSplats ret;
+    ret.mRenderSettings   = settings;
+    ret.mCameraModel      = cameraModel;
+    ret.mProjectionMethod = ProjectionMethod::ANALYTIC;
+
+    // Prepare accumulators
+    prepareAccumulators(
+        N, means, accumulateMean2dGradients, accumulateMax2dRadii, accumGradNorms, accumStepCounts,
+        accumMax2dRadii);
+
+    std::optional<torch::Tensor> maybeGradNorms =
+        accumulateMean2dGradients ? accumGradNorms : std::nullopt;
+    std::optional<torch::Tensor> maybeStepCounts =
+        accumulateMean2dGradients ? accumStepCounts : std::nullopt;
+    std::optional<torch::Tensor> maybeMax2dRadii =
+        accumulateMax2dRadii ? accumMax2dRadii : std::nullopt;
+
+    // Project to image plane
+    const auto projectionResults =
+        fvdb::detail::autograd::ProjectGaussians::apply(means,
+                                                        quats,
+                                                        logScales,
+                                                        worldToCameraMatrices,
+                                                        projectionMatrices,
+                                                        settings.imageWidth,
+                                                        settings.imageHeight,
+                                                        settings.eps2d,
+                                                        settings.nearPlane,
+                                                        settings.farPlane,
+                                                        settings.radiusClip,
+                                                        settings.antialias,
+                                                        ortho,
+                                                        maybeGradNorms,
+                                                        maybeMax2dRadii,
+                                                        maybeStepCounts);
+    ret.perGaussianRadius = projectionResults[0];
+    ret.perGaussian2dMean = projectionResults[1];
+    ret.perGaussianDepth  = projectionResults[2];
+    ret.perGaussianConic  = projectionResults[3];
+
+    ret.perGaussianOpacity = torch::sigmoid(logitOpacities).repeat({C, 1});
+    if (settings.antialias) {
+        ret.perGaussianOpacity *= projectionResults[4];
+        ret.perGaussianOpacity = ret.perGaussianOpacity.contiguous();
+    }
+
+    ret.perGaussianRenderQuantity = computeRenderQuantity(
+        means, sh0, shN, settings, worldToCameraMatrices, ret.perGaussianRadius,
+        ret.perGaussianDepth);
+
+    // Intersect projected Gaussians with image tiles [non-differentiable]
+    const int numTilesW = std::ceil(settings.imageWidth / static_cast<float>(settings.tileSize));
+    const int numTilesH = std::ceil(settings.imageHeight / static_cast<float>(settings.tileSize));
+    const auto [tileOffsets, tileGaussianIds] = FVDB_DISPATCH_KERNEL(means.device(), [&]() {
+        return dispatchGaussianTileIntersection<DeviceTag>(ret.perGaussian2dMean,
+                                                           ret.perGaussianRadius,
+                                                           ret.perGaussianDepth,
+                                                           at::nullopt,
+                                                           C,
+                                                           settings.tileSize,
+                                                           numTilesH,
+                                                           numTilesW);
+    });
+    ret.tileOffsets     = tileOffsets;
+    ret.tileGaussianIds = tileGaussianIds;
+
+    return ret;
+}
+
+fvdb::GaussianSplat3d::ProjectedGaussianSplats
+projectGaussiansUT(const torch::Tensor &means,
+                   const torch::Tensor &quats,
+                   const torch::Tensor &logScales,
+                   const torch::Tensor &logitOpacities,
+                   const torch::Tensor &sh0,
+                   const torch::Tensor &shN,
+                   const torch::Tensor &worldToCameraMatrices,
+                   const torch::Tensor &projectionMatrices,
+                   const torch::Tensor &distortionCoeffs,
+                   const RenderSettings &settings,
+                   const DistortionModel cameraModel) {
+    FVDB_FUNC_RANGE();
+    const int C = worldToCameraMatrices.size(0);
+
+    fvdb::GaussianSplat3d::ProjectedGaussianSplats ret;
+    ret.mRenderSettings   = settings;
+    ret.mCameraModel      = cameraModel;
+    ret.mProjectionMethod = resolveProjectionMethod(cameraModel, ProjectionMethod::UNSCENTED);
+
+    UTParams utParams            = UTParams{};
+    const auto projectionResults = FVDB_DISPATCH_KERNEL(means.device(), [&]() {
+        return dispatchGaussianProjectionForwardUT<DeviceTag>(means,
+                                                              quats,
+                                                              logScales,
+                                                              worldToCameraMatrices,
+                                                              worldToCameraMatrices,
+                                                              projectionMatrices,
+                                                              RollingShutterType::NONE,
+                                                              utParams,
+                                                              cameraModel,
+                                                              distortionCoeffs,
+                                                              static_cast<int64_t>(settings.imageWidth),
+                                                              static_cast<int64_t>(settings.imageHeight),
+                                                              settings.eps2d,
+                                                              settings.nearPlane,
+                                                              settings.farPlane,
+                                                              settings.radiusClip,
+                                                              settings.antialias);
+    });
+
+    ret.perGaussianRadius = std::get<0>(projectionResults);
+    ret.perGaussian2dMean = std::get<1>(projectionResults);
+    ret.perGaussianDepth  = std::get<2>(projectionResults);
+    ret.perGaussianConic  = std::get<3>(projectionResults);
+
+    ret.perGaussianOpacity = torch::sigmoid(logitOpacities).repeat({C, 1});
+    if (settings.antialias) {
+        const torch::Tensor compensations = std::get<4>(projectionResults);
+        TORCH_CHECK(compensations.defined(),
+                    "UT projection returned an undefined compensation tensor in antialias mode");
+        ret.perGaussianOpacity *= compensations;
+        ret.perGaussianOpacity = ret.perGaussianOpacity.contiguous();
+    }
+
+    ret.perGaussianRenderQuantity = computeRenderQuantity(
+        means, sh0, shN, settings, worldToCameraMatrices, ret.perGaussianRadius,
+        ret.perGaussianDepth);
+
+    const int numTilesW = std::ceil(settings.imageWidth / static_cast<float>(settings.tileSize));
+    const int numTilesH = std::ceil(settings.imageHeight / static_cast<float>(settings.tileSize));
+    std::tie(ret.tileOffsets, ret.tileGaussianIds) = FVDB_DISPATCH_KERNEL(means.device(), [&]() {
+        return dispatchGaussianTileIntersection<DeviceTag>(ret.perGaussian2dMean,
+                                                           ret.perGaussianRadius,
+                                                           ret.perGaussianDepth,
+                                                           at::nullopt,
+                                                           C,
+                                                           settings.tileSize,
+                                                           numTilesH,
+                                                           numTilesW);
+    });
+
+    return ret;
+}
+
+fvdb::GaussianSplat3d::ProjectedGaussianSplats
+projectGaussiansForCamera(const torch::Tensor &means,
+                          const torch::Tensor &quats,
+                          const torch::Tensor &logScales,
+                          const torch::Tensor &logitOpacities,
+                          const torch::Tensor &sh0,
+                          const torch::Tensor &shN,
+                          const torch::Tensor &worldToCameraMatrices,
+                          const torch::Tensor &projectionMatrices,
+                          const RenderSettings &settings,
+                          const DistortionModel cameraModel,
+                          const ProjectionMethod projectionMethod,
+                          const std::optional<torch::Tensor> &distortionCoeffs,
+                          const bool accumulateMean2dGradients,
+                          const bool accumulateMax2dRadii,
+                          std::optional<torch::Tensor> &accumGradNorms,
+                          std::optional<torch::Tensor> &accumStepCounts,
+                          std::optional<torch::Tensor> &accumMax2dRadii) {
+    FVDB_FUNC_RANGE();
+    validateCameraProjectionArgs(
+        worldToCameraMatrices, projectionMatrices, cameraModel, projectionMethod, distortionCoeffs);
+
+    const ProjectionMethod resolvedMethod = resolveProjectionMethod(cameraModel, projectionMethod);
+
+    if (resolvedMethod == ProjectionMethod::ANALYTIC) {
+        return projectGaussiansAnalytic(means, quats, logScales, logitOpacities, sh0, shN,
+                                        worldToCameraMatrices, projectionMatrices, settings,
+                                        cameraModel, accumulateMean2dGradients, accumulateMax2dRadii,
+                                        accumGradNorms, accumStepCounts, accumMax2dRadii);
+    }
+
+    const int C                              = worldToCameraMatrices.size(0);
+    const torch::Tensor distortionCoeffsTensor = distortionCoeffs.has_value()
+                                                     ? distortionCoeffs.value()
+                                                     : torch::empty({C, 0}, means.options());
+
+    return projectGaussiansUT(means, quats, logScales, logitOpacities, sh0, shN,
+                              worldToCameraMatrices, projectionMatrices, distortionCoeffsTensor,
+                              settings, cameraModel);
 }
 
 } // namespace fvdb::detail::ops

@@ -27,13 +27,15 @@ conda activate fvdb
 
 **New files:** `src/fvdb/detail/ops/gsplat/GaussianSplatOps.h`, `src/fvdb/detail/ops/gsplat/GaussianSplatOps.cpp`
 
-### Milestone 2: Extract Projection Pipeline into Free Functions
-- [ ] `gsplat::projectGaussiansAnalytic(...)` free function
-- [ ] `gsplat::projectGaussiansUT(...)` free function
-- [ ] `gsplat::evalSphericalHarmonics(...)` free function
-- [ ] `gsplat::tileIntersection(...)` free function
-- [ ] Class methods become thin wrappers
-- [ ] Build passes, all tests pass
+### Milestone 2: Extract Projection Pipeline into Free Functions -- DONE
+- [x] `gsplat::evalSphericalHarmonics(...)` free function
+- [x] `gsplat::projectGaussiansAnalytic(...)` free function (with accumulator handling)
+- [x] `gsplat::projectGaussiansUT(...)` free function (non-differentiable UT path)
+- [x] `gsplat::projectGaussiansForCamera(...)` free function (dispatches between analytic/UT)
+- [x] Helper `computeRenderQuantity()` and `prepareAccumulators()` factored out
+- [x] Tile intersection integrated into projection functions (no separate wrapper needed)
+- [x] `evalSphericalHarmonicsImpl`, `projectGaussiansImpl`, `projectGaussiansForCameraImpl` now thin wrappers
+- [x] Build passes, all 135 tests pass
 
 ### Milestone 3: Extract Rendering, Queries, and Utilities into Free Functions
 - [ ] Dense rendering free function
