@@ -178,6 +178,60 @@ bind_gaussian_splat_ops(py::module &m) {
         py::arg("distortion_coeffs"));
 
     // -----------------------------------------------------------------------
+    // Dense projection with accumulator support (for OO layer)
+    // The accumulator tensors are mutated in-place during the backward pass
+    // by the CUDA projection kernel. The Python OO layer owns these tensors
+    // and passes them through so backward can find and update them.
+    // -----------------------------------------------------------------------
+
+    m.def(
+        "gsplat_project_gaussians_for_camera_with_accum",
+        [](const torch::Tensor &means,
+           const torch::Tensor &quats,
+           const torch::Tensor &logScales,
+           const torch::Tensor &logitOpacities,
+           const torch::Tensor &sh0,
+           const torch::Tensor &shN,
+           const torch::Tensor &worldToCameraMatrices,
+           const torch::Tensor &projectionMatrices,
+           const RenderSettings &settings,
+           DistortionModel cameraModel,
+           ProjectionMethod projectionMethod,
+           const std::optional<torch::Tensor> &distortionCoeffs,
+           bool accumulateMean2dGradients,
+           bool accumulateMax2dRadii,
+           std::optional<torch::Tensor> accumGradNorms,
+           std::optional<torch::Tensor> accumStepCounts,
+           std::optional<torch::Tensor> accumMax2dRadii) {
+            // Call the C++ function with mutable refs; accumulators may be
+            // lazily initialized inside.
+            auto result = ops::projectGaussiansForCamera(
+                means, quats, logScales, logitOpacities, sh0, shN, worldToCameraMatrices,
+                projectionMatrices, settings, cameraModel, projectionMethod, distortionCoeffs,
+                accumulateMean2dGradients, accumulateMax2dRadii, accumGradNorms, accumStepCounts,
+                accumMax2dRadii);
+            // Return the projected state plus the (possibly newly allocated) accumulators
+            return std::make_tuple(result, accumGradNorms, accumStepCounts, accumMax2dRadii);
+        },
+        py::arg("means"),
+        py::arg("quats"),
+        py::arg("log_scales"),
+        py::arg("logit_opacities"),
+        py::arg("sh0"),
+        py::arg("shN"),
+        py::arg("world_to_camera_matrices"),
+        py::arg("projection_matrices"),
+        py::arg("settings"),
+        py::arg("camera_model"),
+        py::arg("projection_method"),
+        py::arg("distortion_coeffs"),
+        py::arg("accumulate_mean_2d_gradients"),
+        py::arg("accumulate_max_2d_radii"),
+        py::arg("accum_grad_norms"),
+        py::arg("accum_step_counts"),
+        py::arg("accum_max_2d_radii"));
+
+    // -----------------------------------------------------------------------
     // Sparse projection (no accumulator exposure -- pure functional)
     // -----------------------------------------------------------------------
 
