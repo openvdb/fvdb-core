@@ -172,7 +172,12 @@ from ._constructors import (
 # I/O
 from ._io import load_nanovdb, load_nanovdb_single, save_nanovdb, save_nanovdb_single
 
+# Gaussian splatting (submodule)
+from . import splat  # noqa: F401 -- exposed as fvdb.functional.splat
+
 __all__ = [
+    # Gaussian splatting submodule
+    "splat",
     # Interpolation (batch)
     "sample_trilinear_batch",
     "sample_trilinear_with_grad_batch",

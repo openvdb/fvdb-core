@@ -58,13 +58,13 @@ conda activate fvdb
 - [x] Update `CMakeLists.txt` (add `GaussianSplatOps.cpp` to `FVDB_BINDINGS_CPP_FILES`)
 - [x] All 135 tests pass, all new bindings importable from `_fvdb_cpp`
 
-### Milestone 5: Create `fvdb.functional.splat` - Projection and SH Autograd
-- [ ] `fvdb/functional/splat/` directory and `__init__.py`
-- [ ] `_projection.py` with `_ProjectGaussiansFn` autograd
-- [ ] `_projection_ut.py` (non-differentiable)
-- [ ] `_sh.py` with `_EvalSHFn` autograd
-- [ ] `_tile_intersection.py` wrappers
-- [ ] Build passes, all tests pass
+### Milestone 5: Create `fvdb.functional.splat` - Projection and SH -- DONE
+- [x] `fvdb/functional/splat/` directory and `__init__.py`
+- [x] `_projection.py` with `project_gaussians()` and `project_gaussians_for_camera()` (delegates to pybind, C++ autograd still handles differentiation)
+- [x] `_sh.py` with `evaluate_spherical_harmonics()` (delegates to pybind)
+- [x] `_tile_intersection.py` with `build_render_settings()` helper
+- [x] `fvdb/functional/__init__.py` updated to expose `splat` submodule
+- [x] Build passes, all 135 tests pass, all imports verified
 
 ### Milestone 6: Create Python Autograd for Rasterization
 - [ ] `_rasterize.py` - dense rasterization autograd
