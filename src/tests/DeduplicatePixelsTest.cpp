@@ -4,18 +4,13 @@
 #include "utils/Tensor.h"
 
 #include <fvdb/JaggedTensor.h>
+#include <fvdb/detail/ops/gsplat/GaussianSplatOps.h>
 
 #include <gtest/gtest.h>
 
 #include <cstdint>
 #include <tuple>
 #include <vector>
-
-// Forward-declare the function under test (defined in GaussianSplat3d.cpp with external linkage).
-namespace fvdb {
-std::tuple<JaggedTensor, torch::Tensor, bool>
-deduplicatePixels(const JaggedTensor &pixelsToRender, int64_t imageWidth, int64_t imageHeight);
-} // namespace fvdb
 
 using fvdb::test::tensorOpts;
 
@@ -32,7 +27,7 @@ TYPED_TEST(DeduplicatePixelsTest, Empty) {
     auto pixels = fvdb::JaggedTensor(torch::empty({0, 2}, opts));
 
     auto [uniquePixels, inverseIndices, hasDuplicates] =
-        fvdb::deduplicatePixels(pixels, kImageWidth, kImageHeight);
+        fvdb::detail::ops::deduplicatePixels(pixels, kImageWidth, kImageHeight);
 
     EXPECT_FALSE(hasDuplicates);
     EXPECT_EQ(inverseIndices.size(0), 0);
@@ -45,7 +40,7 @@ TYPED_TEST(DeduplicatePixelsTest, SinglePixel) {
     auto pixels = fvdb::JaggedTensor(std::vector<torch::Tensor>{coords}).to(torch::kCUDA);
 
     auto [uniquePixels, inverseIndices, hasDuplicates] =
-        fvdb::deduplicatePixels(pixels, kImageWidth, kImageHeight);
+        fvdb::detail::ops::deduplicatePixels(pixels, kImageWidth, kImageHeight);
 
     EXPECT_FALSE(hasDuplicates);
     EXPECT_EQ(uniquePixels.rsize(0), 1);
@@ -57,7 +52,7 @@ TYPED_TEST(DeduplicatePixelsTest, AllUnique) {
     auto pixels = fvdb::JaggedTensor(std::vector<torch::Tensor>{coords}).to(torch::kCUDA);
 
     auto [uniquePixels, inverseIndices, hasDuplicates] =
-        fvdb::deduplicatePixels(pixels, kImageWidth, kImageHeight);
+        fvdb::detail::ops::deduplicatePixels(pixels, kImageWidth, kImageHeight);
 
     EXPECT_FALSE(hasDuplicates);
     EXPECT_EQ(uniquePixels.rsize(0), 5);
@@ -72,7 +67,7 @@ TYPED_TEST(DeduplicatePixelsTest, SomeDuplicates) {
     auto pixels = fvdb::JaggedTensor(std::vector<torch::Tensor>{coords}).to(torch::kCUDA);
 
     auto [uniquePixels, inverseIndices, hasDuplicates] =
-        fvdb::deduplicatePixels(pixels, kImageWidth, kImageHeight);
+        fvdb::detail::ops::deduplicatePixels(pixels, kImageWidth, kImageHeight);
 
     EXPECT_TRUE(hasDuplicates);
     EXPECT_EQ(uniquePixels.rsize(0), 3);
@@ -91,7 +86,7 @@ TYPED_TEST(DeduplicatePixelsTest, AllSamePixel) {
     auto pixels = fvdb::JaggedTensor(std::vector<torch::Tensor>{coords}).to(torch::kCUDA);
 
     auto [uniquePixels, inverseIndices, hasDuplicates] =
-        fvdb::deduplicatePixels(pixels, kImageWidth, kImageHeight);
+        fvdb::detail::ops::deduplicatePixels(pixels, kImageWidth, kImageHeight);
 
     EXPECT_TRUE(hasDuplicates);
     EXPECT_EQ(uniquePixels.rsize(0), 1);
@@ -112,7 +107,7 @@ TYPED_TEST(DeduplicatePixelsTest, MultiBatchNoDuplicates) {
     auto pixels = fvdb::JaggedTensor(std::vector<torch::Tensor>{batch0, batch1}).to(torch::kCUDA);
 
     auto [uniquePixels, inverseIndices, hasDuplicates] =
-        fvdb::deduplicatePixels(pixels, kImageWidth, kImageHeight);
+        fvdb::detail::ops::deduplicatePixels(pixels, kImageWidth, kImageHeight);
 
     EXPECT_FALSE(hasDuplicates);
     EXPECT_EQ(uniquePixels.rsize(0), 4);
@@ -127,7 +122,7 @@ TYPED_TEST(DeduplicatePixelsTest, MultiBatchWithDuplicates) {
     auto pixels = fvdb::JaggedTensor(std::vector<torch::Tensor>{batch0, batch1}).to(torch::kCUDA);
 
     auto [uniquePixels, inverseIndices, hasDuplicates] =
-        fvdb::deduplicatePixels(pixels, kImageWidth, kImageHeight);
+        fvdb::detail::ops::deduplicatePixels(pixels, kImageWidth, kImageHeight);
 
     EXPECT_TRUE(hasDuplicates);
     EXPECT_EQ(uniquePixels.num_outer_lists(), 2);
@@ -147,7 +142,7 @@ TYPED_TEST(DeduplicatePixelsTest, MultiBatchAllSamePixel) {
     auto pixels = fvdb::JaggedTensor(std::vector<torch::Tensor>{batch0, batch1}).to(torch::kCUDA);
 
     auto [uniquePixels, inverseIndices, hasDuplicates] =
-        fvdb::deduplicatePixels(pixels, kImageWidth, kImageHeight);
+        fvdb::detail::ops::deduplicatePixels(pixels, kImageWidth, kImageHeight);
 
     EXPECT_TRUE(hasDuplicates);
     EXPECT_EQ(uniquePixels.num_outer_lists(), 2);
@@ -171,7 +166,7 @@ TYPED_TEST(DeduplicatePixelsTest, RoundTripSomeDuplicates) {
     auto pixels = fvdb::JaggedTensor(std::vector<torch::Tensor>{coords}).to(torch::kCUDA);
 
     auto [uniquePixels, inverseIndices, hasDuplicates] =
-        fvdb::deduplicatePixels(pixels, kImageWidth, kImageHeight);
+        fvdb::detail::ops::deduplicatePixels(pixels, kImageWidth, kImageHeight);
 
     EXPECT_TRUE(hasDuplicates);
     EXPECT_EQ(uniquePixels.rsize(0), 4);
@@ -188,7 +183,7 @@ TYPED_TEST(DeduplicatePixelsTest, RoundTripMultiBatch) {
     auto pixels = fvdb::JaggedTensor(std::vector<torch::Tensor>{batch0, batch1}).to(torch::kCUDA);
 
     auto [uniquePixels, inverseIndices, hasDuplicates] =
-        fvdb::deduplicatePixels(pixels, kImageWidth, kImageHeight);
+        fvdb::detail::ops::deduplicatePixels(pixels, kImageWidth, kImageHeight);
 
     EXPECT_TRUE(hasDuplicates);
 
@@ -206,7 +201,7 @@ TYPED_TEST(DeduplicatePixelsTest, JaggedTensorOffsets) {
         fvdb::JaggedTensor(std::vector<torch::Tensor>{batch0, batch1, batch2}).to(torch::kCUDA);
 
     auto [uniquePixels, inverseIndices, hasDuplicates] =
-        fvdb::deduplicatePixels(pixels, kImageWidth, kImageHeight);
+        fvdb::detail::ops::deduplicatePixels(pixels, kImageWidth, kImageHeight);
 
     EXPECT_TRUE(hasDuplicates);
     EXPECT_EQ(uniquePixels.num_outer_lists(), 3);
