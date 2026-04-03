@@ -5,11 +5,12 @@
 #include <pybind11/numpy.h>
 #include <pybind11/stl.h>
 
-#include "TypeCasters.h"
-
 #include <fvdb/Config.h>
 #include <fvdb/FVDB.h>
+#include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/convolution/GatherScatterDefault.h>
+#include <fvdb/detail/ops/convolution/PredGatherIGemm.h>
+#include <fvdb/detail/utils/nanovdb/TorchNanoConversions.h>
 
 #include <nanovdb/NanoVDB.h>
 
@@ -19,7 +20,8 @@
 
 #include <cuda_runtime_api.h>
 
-void bind_grid_batch(py::module &m);
+void bind_grid_batch_data(py::module &m);
+void bind_grid_batch_ops(py::module &m);
 void bind_jagged_tensor(py::module &m);
 void bind_gaussian_splat3d(py::module &m);
 void bind_viewer(py::module &m);
@@ -81,7 +83,7 @@ void bind_viewer(py::module &m);
     __FVDB__BUILDER_INNER(FUNC_NAME, FUNC_STR, std::vector<int64_t>) \
     __FVDB__BUILDER_INNER(FUNC_NAME, FUNC_STR, std::vector<std::vector<int64_t>>)
 void
-bind_jt_build_functions(py::module &m){
+bind_jt_build_functions(py::module &m) {
     // clang-format off
     __FVDB__BUILDER(jrand, "jrand")
     __FVDB__BUILDER(jrandn, "jrandn")
@@ -93,18 +95,45 @@ bind_jt_build_functions(py::module &m){
 #undef __FVDB__BUILDER_INNER
 #undef __FVDB__BUILDER
 
-PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-    // Print types when the user passes in the wrong type
-    py::class_<fvdb::Vec3i>(m, "Vec3i");
-    py::class_<fvdb::Vec4i>(m, "Vec4i");
-    py::class_<fvdb::Vec3d>(m, "Vec3d");
-    py::class_<fvdb::Vec3dOrScalar>(m, "Vec3dOrScalar");
-    py::class_<fvdb::Vec3iOrScalar>(m, "Vec3iOrScalar");
-    py::class_<fvdb::Vec3dBatch>(m, "Vec3dBatch");
-    py::class_<fvdb::Vec3dBatchOrScalar>(m, "Vec3dBatchOrScalar");
-    py::class_<fvdb::Vec3iBatch>(m, "Vec3iBatch");
+namespace {
 
-    bind_grid_batch(m);
+nanovdb::Coord
+vecToCoord(const std::vector<int32_t> &v) {
+    TORCH_CHECK_VALUE(v.size() == 3, "Expected a list of 3 integers, got ", v.size());
+    return nanovdb::Coord(v[0], v[1], v[2]);
+}
+
+nanovdb::Vec3d
+vecToVec3d(const std::vector<double> &v) {
+    TORCH_CHECK_VALUE(v.size() == 3, "Expected a list of 3 doubles, got ", v.size());
+    return nanovdb::Vec3d(v[0], v[1], v[2]);
+}
+
+std::vector<nanovdb::Vec3d>
+vecsToVec3ds(const std::vector<std::vector<double>> &vecs) {
+    std::vector<nanovdb::Vec3d> result;
+    result.reserve(vecs.size());
+    for (const auto &v: vecs) {
+        result.push_back(vecToVec3d(v));
+    }
+    return result;
+}
+
+nanovdb::Coord
+pyToCoord(const torch::Tensor &t) {
+    torch::Tensor s = t.squeeze().cpu();
+    if (s.dim() == 0) {
+        auto v = s.item().toLong();
+        return nanovdb::Coord(v, v, v);
+    }
+    return fvdb::tensorToCoord(s);
+}
+
+} // namespace
+
+PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+    bind_grid_batch_data(m);
+    bind_grid_batch_ops(m);
     bind_jagged_tensor(m);
     bind_gaussian_splat3d(m);
     bind_viewer(m);
@@ -126,7 +155,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     // Concatenate grids or jagged tensors
     m.def("jcat",
-          py::overload_cast<const std::vector<fvdb::GridBatch> &>(&fvdb::jcat),
+          py::overload_cast<const std::vector<c10::intrusive_ptr<fvdb::detail::GridBatchData>> &>(
+              &fvdb::jcat),
           py::arg("grid_batches"));
     m.def("jcat",
           py::overload_cast<const std::vector<fvdb::JaggedTensor> &, std::optional<int64_t>>(
@@ -134,69 +164,107 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           py::arg("jagged_tensors"),
           py::arg("dim") = std::nullopt);
 
-    // Build a jagged tensor from a grid batch or another jagged tensor and a data tensor. They will
-    // have the same offset structure m.def("jagged_like", py::overload_cast<fvdb::JaggedTensor,
-    // torch::Tensor>(&fvdb::jagged_like), py::arg("like"), py::arg("data")); m.def("jagged_like",
-    // py::overload_cast<fvdb::GridBatch, torch::Tensor>(&fvdb::jagged_like), py::arg("like"),
-    // py::arg("data"));
-
     // Static grid construction
-    m.def("gridbatch_from_points",
-          &fvdb::gridbatch_from_points,
-          py::arg("points"),
-          py::arg("voxel_sizes") = 1.0,
-          py::arg("origins")     = torch::zeros({3}));
-    m.def("gridbatch_from_nearest_voxels_to_points",
-          &fvdb::gridbatch_from_nearest_voxels_to_points,
-          py::arg("points"),
-          py::arg("voxel_sizes") = 1.0,
-          py::arg("origins")     = torch::zeros({3}));
-    m.def("gridbatch_from_ijk",
-          &fvdb::gridbatch_from_ijk,
-          py::arg("ijk"),
-          py::arg("voxel_sizes") = 1.0,
-          py::arg("origins")     = torch::zeros({3}));
-    m.def("gridbatch_from_dense",
-          &fvdb::gridbatch_from_dense,
-          py::arg("num_grids"),
-          py::arg("dense_dims"),
-          py::arg("ijk_min")     = torch::zeros(3, torch::kInt32),
-          py::arg("voxel_sizes") = 1.0,
-          py::arg("origins")     = torch::zeros({3}),
-          py::arg("mask")        = nullptr,
-          py::arg("device")      = "cpu");
-
+    m.def(
+        "gridbatch_from_points",
+        [](const fvdb::JaggedTensor &points,
+           const std::vector<std::vector<double>> &voxel_sizes,
+           const std::vector<std::vector<double>> &origins) {
+            return fvdb::gridbatch_from_points(
+                points, vecsToVec3ds(voxel_sizes), vecsToVec3ds(origins));
+        },
+        py::arg("points"),
+        py::arg("voxel_sizes"),
+        py::arg("origins"));
+    m.def(
+        "gridbatch_from_nearest_voxels_to_points",
+        [](const fvdb::JaggedTensor &points,
+           const std::vector<std::vector<double>> &voxel_sizes,
+           const std::vector<std::vector<double>> &origins) {
+            return fvdb::gridbatch_from_nearest_voxels_to_points(
+                points, vecsToVec3ds(voxel_sizes), vecsToVec3ds(origins));
+        },
+        py::arg("points"),
+        py::arg("voxel_sizes"),
+        py::arg("origins"));
+    m.def(
+        "gridbatch_from_ijk",
+        [](const fvdb::JaggedTensor &ijk,
+           const std::vector<std::vector<double>> &voxel_sizes,
+           const std::vector<std::vector<double>> &origins) {
+            return fvdb::gridbatch_from_ijk(ijk, vecsToVec3ds(voxel_sizes), vecsToVec3ds(origins));
+        },
+        py::arg("ijk"),
+        py::arg("voxel_sizes"),
+        py::arg("origins"));
     m.def(
         "gridbatch_from_dense",
         [](const int64_t numGrids,
-           const fvdb::Vec3i &denseDims,
-           const fvdb::Vec3i &ijkMin,
-           const fvdb::Vec3dBatchOrScalar &voxel_sizes,
-           const fvdb::Vec3dBatch &origins,
+           const std::vector<int32_t> &denseDims,
+           const std::vector<int32_t> &ijkMin,
+           const std::vector<std::vector<double>> &voxel_sizes,
+           const std::vector<std::vector<double>> &origins,
            std::optional<torch::Tensor> mask,
            const std::string &device) {
             return fvdb::gridbatch_from_dense(numGrids,
-                                              denseDims,
-                                              ijkMin,
-                                              voxel_sizes,
-                                              origins,
+                                              vecToCoord(denseDims),
+                                              vecToCoord(ijkMin),
+                                              vecsToVec3ds(voxel_sizes),
+                                              vecsToVec3ds(origins),
                                               mask,
                                               fvdb::parseDeviceString(device));
         },
         py::arg("num_grids"),
         py::arg("dense_dims"),
-        py::arg("ijk_min")     = torch::zeros(3, torch::kInt32),
-        py::arg("voxel_sizes") = 1.0,
-        py::arg("origins")     = torch::zeros({3}),
-        py::arg("mask")        = nullptr,
-        py::arg("device")      = "cpu");
+        py::arg("ijk_min"),
+        py::arg("voxel_sizes"),
+        py::arg("origins"),
+        py::arg("mask")   = std::nullopt,
+        py::arg("device") = "cpu");
 
-    m.def("gridbatch_from_mesh",
-          &fvdb::gridbatch_from_mesh,
-          py::arg("vertices"),
-          py::arg("faces"),
-          py::arg("voxel_sizes") = 1.0,
-          py::arg("origins")     = torch::zeros({3}));
+    m.def(
+        "gridbatch_from_mesh",
+        [](const fvdb::JaggedTensor &vertices,
+           const fvdb::JaggedTensor &faces,
+           const std::vector<std::vector<double>> &voxel_sizes,
+           const std::vector<std::vector<double>> &origins) {
+            return fvdb::gridbatch_from_mesh(
+                vertices, faces, vecsToVec3ds(voxel_sizes), vecsToVec3ds(origins));
+        },
+        py::arg("vertices"),
+        py::arg("faces"),
+        py::arg("voxel_sizes") = 1.0,
+        py::arg("origins")     = torch::zeros({3}));
+
+    // Empty grid batch construction
+    m.def(
+        "create_from_empty",
+        [](const std::string &device) {
+            return fvdb::detail::makeEmptyGridBatchData(fvdb::parseDeviceString(device));
+        },
+        py::arg("device") = "cpu");
+    m.def(
+        "create_from_empty",
+        [](const std::string &device,
+           const std::vector<double> &voxel_size,
+           const std::vector<double> &origin) {
+            return fvdb::detail::makeEmptyGridBatchData(
+                fvdb::parseDeviceString(device), vecToVec3d(voxel_size), vecToVec3d(origin));
+        },
+        py::arg("device"),
+        py::arg("voxel_size"),
+        py::arg("origin"));
+    m.def(
+        "create_from_empty",
+        [](const std::string &device,
+           const std::vector<std::vector<double>> &voxel_sizes,
+           const std::vector<std::vector<double>> &origins) {
+            return fvdb::detail::makeEmptyGridBatchData(
+                fvdb::parseDeviceString(device), vecsToVec3ds(voxel_sizes), vecsToVec3ds(origins));
+        },
+        py::arg("device"),
+        py::arg("voxel_sizes"),
+        py::arg("origins"));
 
     // Loading and saving grids
     m.def("load",
@@ -306,7 +374,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     m.def("save",
           py::overload_cast<const std::string &,
-                            const fvdb::GridBatch &,
+                            const fvdb::detail::GridBatchData &,
                             const std::optional<fvdb::JaggedTensor>,
                             const std::vector<std::string> &,
                             bool,
@@ -319,7 +387,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           py::arg("verbose")    = false);
     m.def("save",
           py::overload_cast<const std::string &,
-                            const fvdb::GridBatch &,
+                            const fvdb::detail::GridBatchData &,
                             const std::optional<fvdb::JaggedTensor>,
                             const std::string &,
                             bool,
@@ -399,12 +467,12 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     m.def(
         "gs_build_topology",
-        [](const fvdb::GridBatch &feature_grid,
-           const fvdb::GridBatch &output_grid,
-           fvdb::Vec3iOrScalar kernelSize,
-           fvdb::Vec3iOrScalar stride) -> GSDTopo {
-            return fvdb::GridBatch::buildGatherScatterDefaultTopology(
-                feature_grid, output_grid, kernelSize, stride);
+        [](const fvdb::detail::GridBatchData &feature_grid,
+           const fvdb::detail::GridBatchData &output_grid,
+           const torch::Tensor &kernelSize,
+           const torch::Tensor &stride) -> GSDTopo {
+            return fvdb::detail::ops::gatherScatterDefaultSparseConvTopology(
+                feature_grid, output_grid, pyToCoord(kernelSize), pyToCoord(stride));
         },
         "Build the forward gather-scatter default topology.",
         py::arg("feature_grid"),
@@ -441,12 +509,12 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     m.def(
         "gs_build_transpose_topology",
-        [](const fvdb::GridBatch &feature_grid,
-           const fvdb::GridBatch &output_grid,
-           fvdb::Vec3iOrScalar kernelSize,
-           fvdb::Vec3iOrScalar stride) -> GSDTopo {
-            return fvdb::GridBatch::buildGatherScatterDefaultTransposeTopology(
-                feature_grid, output_grid, kernelSize, stride);
+        [](const fvdb::detail::GridBatchData &feature_grid,
+           const fvdb::detail::GridBatchData &output_grid,
+           const torch::Tensor &kernelSize,
+           const torch::Tensor &stride) -> GSDTopo {
+            return fvdb::detail::ops::gatherScatterDefaultSparseConvTransposeTopology(
+                feature_grid, output_grid, pyToCoord(kernelSize), pyToCoord(stride));
         },
         "Build the transposed gather-scatter default topology.",
         py::arg("feature_grid"),
@@ -488,11 +556,11 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         "pred_gather_igemm_conv",
         [](torch::Tensor features,
            torch::Tensor weights,
-           const fvdb::GridBatch &feature_grid,
-           const fvdb::GridBatch &output_grid,
+           const fvdb::detail::GridBatchData &feature_grid,
+           const fvdb::detail::GridBatchData &output_grid,
            int kernel_size,
            int stride) -> torch::Tensor {
-            return fvdb::GridBatch::predGatherIGemmConv(
+            return fvdb::detail::ops::predGatherIGemmSparseConv(
                 features, weights, feature_grid, output_grid, kernel_size, stride);
         },
         "PredGatherIGemm forward sparse convolution (SM80 CUTLASS IGEMM).",
@@ -505,9 +573,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 }
 
 TORCH_LIBRARY(fvdb, m) {
-    m.class_<fvdb::GridBatch>("GridBatch");
     m.class_<fvdb::JaggedTensor>("JaggedTensor");
-    m.class_<fvdb::detail::GridBatchImpl>("GridBatchImpl");
+    m.class_<fvdb::detail::GridBatchData>("GridBatchData");
 
     m.def(
         "_fused_ssim(float C1, float C2, Tensor img1, Tensor img2, bool train) -> (Tensor, Tensor, Tensor, Tensor)");

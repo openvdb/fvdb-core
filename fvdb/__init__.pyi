@@ -20,7 +20,7 @@ from . import nn, utils, viz
 from ._fvdb_cpp import config, hilbert, morton, volume_render
 from .attention import scaled_dot_product_attention
 from .convolution_plan import ConvolutionPlan
-from .enums import DistortionModel, ProjectionType, RollingShutterType, ShOrderingMode
+from .enums import CameraModel, ProjectionMethod, RollingShutterType, ShOrderingMode
 from .gaussian_splatting import GaussianSplat3d, ProjectedGaussianSplats
 from .grid import Grid
 from .grid_batch import GridBatch, gcat
@@ -107,9 +107,9 @@ __all__ = [
     "GaussianSplat3d",
     "ProjectedGaussianSplats",
     "ConvolutionPlan",
-    "DistortionModel",
+    "CameraModel",
+    "ProjectionMethod",
     "RollingShutterType",
-    "ProjectionType",
     "ShOrderingMode",
     "Grid",
     # JaggedTensor operations

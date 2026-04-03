@@ -2,7 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
+#include <fvdb/detail/ops/BuildDilatedGrid.h>
+#include <fvdb/detail/ops/BuildGridFromPoints.h>
+#include <fvdb/detail/ops/BuildMergedGrids.h>
 #include <fvdb/detail/ops/IntegrateTSDF.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Utils.h>
@@ -373,10 +376,10 @@ unprojectDepthMapToPoints(const torch::Tensor &depthImages,
     return outUnprojectedPoints;
 }
 
-c10::intrusive_ptr<GridBatchImpl>
+c10::intrusive_ptr<GridBatchData>
 buildPointGrid(const double truncationMargin,
                const torch::Tensor &unprojectedPoints,
-               const GridBatchImpl &grid) {
+               const GridBatchData &grid) {
     std::vector<int64_t> numPadVoxels;
     std::vector<torch::Tensor> jaggedPointsList;
     for (auto i = 0; i < unprojectedPoints.size(0); ++i) {
@@ -404,7 +407,8 @@ buildPointGrid(const double truncationMargin,
     std::vector<nanovdb::Vec3d> voxelSizes;
     std::vector<nanovdb::Vec3d> origins;
     grid.gridVoxelSizesAndOrigins(voxelSizes, origins);
-    return GridBatchImpl::createFromPoints(jaggedPoints, voxelSizes, origins)->dilate(numPadVoxels);
+    auto pointGrid = ops::buildGridFromPoints(jaggedPoints, voxelSizes, origins);
+    return ops::dilateGrid(*pointGrid, numPadVoxels);
 }
 
 #define DISPATCH_FEATURE_TYPE(...)                                \
@@ -425,8 +429,8 @@ doIntegrate(const float truncationMargin,
             const torch::Tensor &invProjectionMatrices,
             const torch::Tensor &camToWorldMatrices,
             const torch::Tensor &worldToCamMatrices,
-            const GridBatchImpl &unionGrid,
-            const GridBatchImpl &baseGrid,
+            const GridBatchData &unionGrid,
+            const GridBatchData &baseGrid,
             const JaggedTensor &tsdf,
             const JaggedTensor &weights,
             const JaggedTensor &features) {
@@ -616,7 +620,7 @@ checkInputTypes(const JaggedTensor &tsdf,
 }
 
 void
-checkInputSizes(const GridBatchImpl &grid,
+checkInputSizes(const GridBatchData &grid,
                 const JaggedTensor &tsdf,
                 const JaggedTensor &weights,
                 const std::optional<JaggedTensor> &features,
@@ -797,8 +801,8 @@ checkInputSizes(const GridBatchImpl &grid,
     }
 }
 
-std::tuple<c10::intrusive_ptr<GridBatchImpl>, JaggedTensor, JaggedTensor, JaggedTensor>
-integrateTSDFImpl(const c10::intrusive_ptr<GridBatchImpl> grid,
+std::tuple<c10::intrusive_ptr<GridBatchData>, JaggedTensor, JaggedTensor, JaggedTensor>
+integrateTSDFImpl(const c10::intrusive_ptr<GridBatchData> grid,
                   const double truncationMargin,
                   const torch::Tensor &projectionMatrices,
                   const torch::Tensor &camToWorldMatrices,
@@ -843,7 +847,8 @@ integrateTSDFImpl(const c10::intrusive_ptr<GridBatchImpl> grid,
         squeezedDepthImages, projectionMats, invProjectionMats, camToWorldMats);
 
     // Step 2: Build union grid grid from unprojected points and merge into with the old grid
-    const auto unionGrid = buildPointGrid(truncationMargin, unprojectedPoints, *grid)->merge(grid);
+    const auto pointGrid = buildPointGrid(truncationMargin, unprojectedPoints, *grid);
+    const auto unionGrid = ops::mergeGrids(*pointGrid, *grid);
 
     // Features are optional. If you don't pass them in, we will use placeholder values which are
     // just empty tensors.
@@ -885,8 +890,8 @@ integrateTSDFImpl(const c10::intrusive_ptr<GridBatchImpl> grid,
     return {unionGrid, outTsdf, outWeights, outFeatures};
 }
 
-std::tuple<c10::intrusive_ptr<GridBatchImpl>, JaggedTensor, JaggedTensor>
-integrateTSDF(const c10::intrusive_ptr<GridBatchImpl> grid,
+std::tuple<c10::intrusive_ptr<GridBatchData>, JaggedTensor, JaggedTensor>
+integrateTSDF(const c10::intrusive_ptr<GridBatchData> grid,
               const double truncationMargin,
               const torch::Tensor &projectionMatrices,
               const torch::Tensor &camToWorldMatrices,
@@ -909,8 +914,8 @@ integrateTSDF(const c10::intrusive_ptr<GridBatchImpl> grid,
     return {unionGrid, outTsdf, outWeights};
 }
 
-std::tuple<c10::intrusive_ptr<GridBatchImpl>, JaggedTensor, JaggedTensor, JaggedTensor>
-integrateTSDFWithFeatures(const c10::intrusive_ptr<GridBatchImpl> grid,
+std::tuple<c10::intrusive_ptr<GridBatchData>, JaggedTensor, JaggedTensor, JaggedTensor>
+integrateTSDFWithFeatures(const c10::intrusive_ptr<GridBatchData> grid,
                           const double truncationMargin,
                           const torch::Tensor &projectionMatrices,
                           const torch::Tensor &camToWorldMatrices,

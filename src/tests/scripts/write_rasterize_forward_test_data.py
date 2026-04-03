@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from fvdb import GaussianSplat3d, JaggedTensor, ProjectionType, gaussian_render_jagged
+from fvdb import CameraModel, GaussianSplat3d, JaggedTensor, gaussian_render_jagged
 
 device = "cuda:0"
 
@@ -64,8 +64,8 @@ projected_gaussians = gs3d.project_gaussians_for_images(
     height,
     near_plane,
     far_plane,
-    ProjectionType.PERSPECTIVE,
-    sh_degree,
+    camera_model=CameraModel.PINHOLE,
+    sh_degree_to_use=sh_degree,
     min_radius_2d=0.0,
     eps_2d=1e-4,
     antialias=True,

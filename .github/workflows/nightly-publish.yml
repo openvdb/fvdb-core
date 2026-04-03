@@ -162,6 +162,9 @@ jobs:
           echo "Nightly version: $NIGHTLY_VERSION"
           grep '^version' pyproject.toml
 
+      - name: Drop page cache to free RAM before build
+        run: sync && echo 3 > /proc/sys/vm/drop_caches
+
       - name: Build fvdb
         run: |
           source .venv/bin/activate

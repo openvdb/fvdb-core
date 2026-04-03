@@ -32,7 +32,7 @@ many torch operations to work seamlessly with jagged data structures.
 """
 
 import typing
-from typing import TYPE_CHECKING, Any, Sequence, cast, overload
+from typing import Any, Sequence, cast, overload
 
 import numpy as np
 import torch
@@ -47,8 +47,6 @@ from ._fvdb_cpp import jrandn as jrandn_cpp
 from ._fvdb_cpp import jzeros as jzeros_cpp
 from .types import DeviceIdentifier, LShapeSpec, RShapeSpec
 
-if TYPE_CHECKING:
-    from .grid import Grid
 
 # --- JaggedTensor.__torch_function__ whitelist ---
 # Whitelist of torch.<fn> names supported by JaggedTensor.__torch_function__.

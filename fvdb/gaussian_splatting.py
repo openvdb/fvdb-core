@@ -7,7 +7,7 @@ from typing import Any, Mapping, Sequence, TypeVar, overload
 import torch
 import torch.nn.functional as F
 
-from fvdb.enums import DistortionModel, ProjectionType
+from fvdb.enums import CameraModel, ProjectionMethod
 
 from . import _fvdb_cpp as _C
 from ._fvdb_cpp import GaussianSplat3d as GaussianSplat3dCpp
@@ -215,14 +215,24 @@ class ProjectedGaussianSplats:
         return self._impl.opacities
 
     @property
-    def projection_type(self) -> ProjectionType:
+    def camera_model(self) -> CameraModel:
         """
-        Return the projection type used during the projection of the Gaussian splats.
+        Return the camera model used during projection.
 
         Returns:
-            projection_type (ProjectionType): The projection type (*e.g.* :attr:`ProjectionType.PERSPECTIVE` or :attr:`ProjectionType.ORTHOGRAPHIC`).
+            camera_model (CameraModel): The camera model used during projection.
         """
-        return GaussianSplat3d._proj_type_from_cpp(self._impl.projection_type)
+        return GaussianSplat3d._camera_model_from_cpp(self._impl.camera_model)
+
+    @property
+    def projection_method(self) -> ProjectionMethod:
+        """
+        Return the resolved projection method used during projection.
+
+        Returns:
+            projection_method (ProjectionMethod): The resolved projection method.
+        """
+        return GaussianSplat3d._projection_method_from_cpp(self._impl.projection_method)
 
     @property
     def radii(self) -> torch.Tensor:
@@ -1279,7 +1289,9 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type=ProjectionType.PERSPECTIVE,
+        camera_model: CameraModel = CameraModel.PINHOLE,
+        projection_method: ProjectionMethod = ProjectionMethod.AUTO,
+        distortion_coeffs: torch.Tensor | None = None,
         min_radius_2d: float = 0.0,
         eps_2d: float = 0.3,
         antialias: bool = False,
@@ -1339,7 +1351,15 @@ class GaussianSplat3d:
             image_height (int): The height of the images to be rendered. Note that all images must have the same height.
             near (float): The near clipping plane distance for the projection.
             far (float): The far clipping plane distance for the projection.
-            projection_type (ProjectionType): The type of projection to use. Default is :attr:`ProjectionType.PERSPECTIVE`.
+            camera_model (CameraModel): Semantic camera model for projection. Default is
+                :attr:`fvdb.CameraModel.PINHOLE`.
+            projection_method (ProjectionMethod): Projection implementation selector. Default is
+                :attr:`fvdb.ProjectionMethod.AUTO`.
+            distortion_coeffs (torch.Tensor | None): Distortion coefficients with shape ``(C, 12)``.
+                Required for :class:`CameraModel.OPENCV_*` camera models. For
+                :class:`CameraModel.PINHOLE` and :class:`CameraModel.ORTHOGRAPHIC`, pass
+                ``None`` or a ``(C, 12)`` tensor, which is ignored. To represent no
+                distortion with an OpenCV camera model, pass a zero-filled tensor.
             min_radius_2d (float): The minimum radius (in pixels) below which Gaussians are ignored during rendering.
             eps_2d (float): A value used to pad Gaussians when projecting them onto the image plane, to avoid very projected Gaussians which create artifacts and
                 numerical issues.
@@ -1358,7 +1378,9 @@ class GaussianSplat3d:
                 image_height=image_height,
                 near=near,
                 far=far,
-                projection_type=self._proj_type_to_cpp(projection_type),
+                camera_model=self._camera_model_to_cpp(camera_model),
+                projection_method=self._projection_method_to_cpp(projection_method),
+                distortion_coeffs=distortion_coeffs,
                 min_radius_2d=min_radius_2d,
                 eps_2d=eps_2d,
                 antialias=antialias,
@@ -1374,7 +1396,9 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type=ProjectionType.PERSPECTIVE,
+        camera_model: CameraModel = CameraModel.PINHOLE,
+        projection_method: ProjectionMethod = ProjectionMethod.AUTO,
+        distortion_coeffs: torch.Tensor | None = None,
         sh_degree_to_use: int = -1,
         min_radius_2d: float = 0.0,
         eps_2d: float = 0.3,
@@ -1432,7 +1456,15 @@ class GaussianSplat3d:
             image_height (int): The height of the images to be rendered. Note that all images must have the same height.
             near (float): The near clipping plane distance for the projection.
             far (float): The far clipping plane distance for the projection.
-            projection_type (ProjectionType): The type of projection to use. Default is :attr:`ProjectionType.PERSPECTIVE`.
+            camera_model (CameraModel): Semantic camera model for projection. Default is
+                :attr:`fvdb.CameraModel.PINHOLE`.
+            projection_method (ProjectionMethod): Projection implementation selector. Default is
+                :attr:`fvdb.ProjectionMethod.AUTO`.
+            distortion_coeffs (torch.Tensor | None): Distortion coefficients with shape ``(C, 12)``.
+                Required for :class:`CameraModel.OPENCV_*` camera models. For
+                :class:`CameraModel.PINHOLE` and :class:`CameraModel.ORTHOGRAPHIC`, pass
+                ``None`` or a ``(C, 12)`` tensor, which is ignored. To represent no
+                distortion with an OpenCV camera model, pass a zero-filled tensor.
             sh_degree_to_use (int): The degree of spherical harmonics to use for rendering. -1 means use all available SH bases.
                 0 means use only the first SH base (constant color). Note that you can't use more SH bases than available in the GaussianSplat3d instance.
                 Default is -1.
@@ -1454,7 +1486,9 @@ class GaussianSplat3d:
                 image_height=image_height,
                 near=near,
                 far=far,
-                projection_type=self._proj_type_to_cpp(projection_type),
+                camera_model=self._camera_model_to_cpp(camera_model),
+                projection_method=self._projection_method_to_cpp(projection_method),
+                distortion_coeffs=distortion_coeffs,
                 sh_degree_to_use=sh_degree_to_use,
                 min_radius_2d=min_radius_2d,
                 eps_2d=eps_2d,
@@ -1471,7 +1505,9 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type=ProjectionType.PERSPECTIVE,
+        camera_model: CameraModel = CameraModel.PINHOLE,
+        projection_method: ProjectionMethod = ProjectionMethod.AUTO,
+        distortion_coeffs: torch.Tensor | None = None,
         sh_degree_to_use: int = -1,
         min_radius_2d: float = 0.0,
         eps_2d: float = 0.3,
@@ -1535,7 +1571,15 @@ class GaussianSplat3d:
             image_height (int): The height of the images to be rendered. Note that all images must have the same height.
             near (float): The near clipping plane distance for the projection.
             far (float): The far clipping plane distance for the projection.
-            projection_type (ProjectionType): The type of projection to use. Default is :attr:`fvdb.ProjectionType.PERSPECTIVE`.
+            camera_model (CameraModel): Semantic camera model for projection. Default is
+                :attr:`fvdb.CameraModel.PINHOLE`.
+            projection_method (ProjectionMethod): Projection implementation selector. Default is
+                :attr:`fvdb.ProjectionMethod.AUTO`.
+            distortion_coeffs (torch.Tensor | None): Distortion coefficients with shape ``(C, 12)``.
+                Required for :class:`CameraModel.OPENCV_*` camera models. For
+                :class:`CameraModel.PINHOLE` and :class:`CameraModel.ORTHOGRAPHIC`, pass
+                ``None`` or a ``(C, 12)`` tensor, which is ignored. To represent no
+                distortion with an OpenCV camera model, pass a zero-filled tensor.
             sh_degree_to_use (int): The degree of spherical harmonics to use for rendering. -1 means use all available SH bases.
                 0 means use only the first SH base (constant color). Note that you can't use more SH bases than available in the GaussianSplat3d instance.
                 Default is -1.
@@ -1557,7 +1601,9 @@ class GaussianSplat3d:
                 image_height=image_height,
                 near=near,
                 far=far,
-                projection_type=self._proj_type_to_cpp(projection_type),
+                camera_model=self._camera_model_to_cpp(camera_model),
+                projection_method=self._projection_method_to_cpp(projection_method),
+                distortion_coeffs=distortion_coeffs,
                 sh_degree_to_use=sh_degree_to_use,
                 min_radius_2d=min_radius_2d,
                 eps_2d=eps_2d,
@@ -1685,7 +1731,9 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type=ProjectionType.PERSPECTIVE,
+        camera_model: CameraModel = CameraModel.PINHOLE,
+        projection_method: ProjectionMethod = ProjectionMethod.AUTO,
+        distortion_coeffs: torch.Tensor | None = None,
         tile_size: int = 16,
         min_radius_2d: float = 0.3,
         eps_2d: float = 0.3,
@@ -1729,7 +1777,15 @@ class GaussianSplat3d:
             image_height (int): The height of the depth maps to be rendered. Note these are the same for all depth maps being rendered.
             near (float): The near clipping plane distance for the projection.
             far (float): The far clipping plane distance for the projection.
-            projection_type (ProjectionType): The type of projection to use. Default is :attr:`fvdb.ProjectionType.PERSPECTIVE`.
+            camera_model (CameraModel): Semantic camera model for projection. Default is
+                :attr:`fvdb.CameraModel.PINHOLE`.
+            projection_method (ProjectionMethod): Projection implementation selector. Default is
+                :attr:`fvdb.ProjectionMethod.AUTO`.
+            distortion_coeffs (torch.Tensor | None): Distortion coefficients with shape ``(C, 12)``.
+                Required for :class:`CameraModel.OPENCV_*` camera models. For
+                :class:`CameraModel.PINHOLE` and :class:`CameraModel.ORTHOGRAPHIC`, pass
+                ``None`` or a ``(C, 12)`` tensor, which is ignored. To represent no
+                distortion with an OpenCV camera model, pass a zero-filled tensor.
             tile_size (int): The size of the tiles to use for rendering. Default is 16. You shouldn't set this parameter unless you really know what you are doing.
             min_radius_2d (float): The minimum radius (in pixels) below which Gaussians are ignored during rendering.
             eps_2d (float): A value used to pad Gaussians when projecting them onto the image plane, to avoid very projected Gaussians which create artifacts and
@@ -1758,7 +1814,9 @@ class GaussianSplat3d:
             image_height=image_height,
             near=near,
             far=far,
-            projection_type=self._proj_type_to_cpp(projection_type),
+            camera_model=self._camera_model_to_cpp(camera_model),
+            projection_method=self._projection_method_to_cpp(projection_method),
+            distortion_coeffs=distortion_coeffs,
             tile_size=tile_size,
             min_radius_2d=min_radius_2d,
             eps_2d=eps_2d,
@@ -1781,7 +1839,9 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type=ProjectionType.PERSPECTIVE,
+        camera_model: CameraModel = CameraModel.PINHOLE,
+        projection_method: ProjectionMethod = ProjectionMethod.AUTO,
+        distortion_coeffs: torch.Tensor | None = None,
         tile_size: int = 16,
         min_radius_2d: float = 0.3,
         eps_2d: float = 0.3,
@@ -1825,7 +1885,15 @@ class GaussianSplat3d:
             image_height (int): The height of the images to be rendered. Note these are the same for all images being rendered.
             near (float): The near clipping plane distance for the projection.
             far (float): The far clipping plane distance for the projection.
-            projection_type (ProjectionType): The type of projection to use. Default is :attr:`fvdb.ProjectionType.PERSPECTIVE`.
+            camera_model (CameraModel): Semantic camera model for projection. Default is
+                :attr:`fvdb.CameraModel.PINHOLE`.
+            projection_method (ProjectionMethod): Projection implementation selector. Default is
+                :attr:`fvdb.ProjectionMethod.AUTO`.
+            distortion_coeffs (torch.Tensor | None): Distortion coefficients with shape ``(C, 12)``.
+                Required for :class:`CameraModel.OPENCV_*` camera models. For
+                :class:`CameraModel.PINHOLE` and :class:`CameraModel.ORTHOGRAPHIC`, pass
+                ``None`` or a ``(C, 12)`` tensor, which is ignored. To represent no
+                distortion with an OpenCV camera model, pass a zero-filled tensor.
             tile_size (int): The size of the tiles to use for rendering. Default is 16. You shouldn't set this parameter unless you really know what you are doing.
             min_radius_2d (float): The minimum radius (in pixels) below which Gaussians are ignored during rendering.
             eps_2d (float): A value used to pad Gaussians when projecting them onto the image plane, to avoid very projected Gaussians which create artifacts and
@@ -1861,7 +1929,9 @@ class GaussianSplat3d:
             image_height=image_height,
             near=near,
             far=far,
-            projection_type=self._proj_type_to_cpp(projection_type),
+            camera_model=self._camera_model_to_cpp(camera_model),
+            projection_method=self._projection_method_to_cpp(projection_method),
+            distortion_coeffs=distortion_coeffs,
             tile_size=tile_size,
             min_radius_2d=min_radius_2d,
             eps_2d=eps_2d,
@@ -1883,7 +1953,9 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type=ProjectionType.PERSPECTIVE,
+        camera_model: CameraModel = CameraModel.PINHOLE,
+        projection_method: ProjectionMethod = ProjectionMethod.AUTO,
+        distortion_coeffs: torch.Tensor | None = None,
         sh_degree_to_use: int = -1,
         tile_size: int = 16,
         min_radius_2d: float = 0.0,
@@ -1926,7 +1998,15 @@ class GaussianSplat3d:
             image_height (int): The height of the images to be rendered. Note these are the same for all images being rendered.
             near (float): The near clipping plane distance for the projection.
             far (float): The far clipping plane distance for the projection.
-            projection_type (ProjectionType): The type of projection to use. Default is :attr:`fvdb.ProjectionType.PERSPECTIVE`.
+            camera_model (CameraModel): Semantic camera model for projection. Default is
+                :attr:`fvdb.CameraModel.PINHOLE`.
+            projection_method (ProjectionMethod): Projection implementation selector. Default is
+                :attr:`fvdb.ProjectionMethod.AUTO`.
+            distortion_coeffs (torch.Tensor | None): Distortion coefficients with shape ``(C, 12)``.
+                Required for :class:`CameraModel.OPENCV_*` camera models. For
+                :class:`CameraModel.PINHOLE` and :class:`CameraModel.ORTHOGRAPHIC`, pass
+                ``None`` or a ``(C, 12)`` tensor, which is ignored. To represent no
+                distortion with an OpenCV camera model, pass a zero-filled tensor.
             sh_degree_to_use (int): The degree of spherical harmonics to use for rendering. -1 means use all available SH bases.
                 0 means use only the first SH base (constant color). Note that you can't use more SH bases than available in the GaussianSplat3d instance.
                 Default is -1.
@@ -1958,7 +2038,9 @@ class GaussianSplat3d:
             image_height=image_height,
             near=near,
             far=far,
-            projection_type=self._proj_type_to_cpp(projection_type),
+            camera_model=self._camera_model_to_cpp(camera_model),
+            projection_method=self._projection_method_to_cpp(projection_method),
+            distortion_coeffs=distortion_coeffs,
             sh_degree_to_use=sh_degree_to_use,
             tile_size=tile_size,
             min_radius_2d=min_radius_2d,
@@ -1981,7 +2063,8 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        camera_model: DistortionModel = DistortionModel.PINHOLE,
+        camera_model: CameraModel = CameraModel.PINHOLE,
+        projection_method: ProjectionMethod = ProjectionMethod.AUTO,
         distortion_coeffs: torch.Tensor | None = None,
         sh_degree_to_use: int = -1,
         tile_size: int = 16,
@@ -2027,7 +2110,7 @@ class GaussianSplat3d:
                 image_height=480,
                 near=0.01,
                 far=1e10,
-                camera_model=fvdb.DistortionModel.OPENCV_RATIONAL_8,
+                camera_model=fvdb.CameraModel.OPENCV_RATIONAL_8,
                 distortion_coeffs=dist_coeffs,  # [C,12]
                 backgrounds=bg,                 # [C,D]
                 masks=pixel_mask,              # [C,H,W] (optional)
@@ -2040,11 +2123,15 @@ class GaussianSplat3d:
             image_height (int): Output image height ``H``.
             near (float): Near clipping plane.
             far (float): Far clipping plane.
-            camera_model (DistortionModel): Distortion model used for ray generation and distortion.
-            distortion_coeffs (torch.Tensor | None): Distortion coefficients for OpenCV camera
-                models. Use ``None`` for no distortion. Expected shape is ``(C, 12)`` with packed
-                layout ``[k1,k2,k3,k4,k5,k6,p1,p2,s1,s2,s3,s4]``. For camera models that use fewer
-                coefficients, unused entries should be set to 0.
+            camera_model (CameraModel): Semantic camera model used for ray generation.
+            projection_method (ProjectionMethod): Projection implementation selector. Default is
+                :attr:`fvdb.ProjectionMethod.AUTO`.
+            distortion_coeffs (torch.Tensor | None): Distortion coefficients with shape
+                ``(C, 12)`` and packed layout ``[k1,k2,k3,k4,k5,k6,p1,p2,s1,s2,s3,s4]``.
+                Required for :class:`CameraModel.OPENCV_*` camera models; use a zero-filled
+                tensor to represent no distortion. For :class:`CameraModel.PINHOLE` and
+                :class:`CameraModel.ORTHOGRAPHIC`, pass ``None`` or a ``(C, 12)`` tensor,
+                which is ignored.
             sh_degree_to_use (int): SH degree to use. ``-1`` means use all available SH bases.
             tile_size (int): Tile size (in pixels). ``tileH = ceil(H / tile_size)``,
                 ``tileW = ceil(W / tile_size)``.
@@ -2062,11 +2149,6 @@ class GaussianSplat3d:
             images (torch.Tensor): Rendered images of shape ``(C, H, W, D)``.
             alpha_images (torch.Tensor): Alpha images of shape ``(C, H, W, 1)``.
         """
-        if isinstance(camera_model, DistortionModel):
-            camera_model_cpp = getattr(_C.DistortionModel, camera_model.name)
-        else:
-            camera_model_cpp = camera_model
-
         tile_masks = _pixel_mask_to_tile_mask(masks, tile_size) if masks is not None else None
 
         features, alphas = self._impl.render_images_from_world(
@@ -2076,9 +2158,59 @@ class GaussianSplat3d:
             image_height=image_height,
             near=near,
             far=far,
-            camera_model=camera_model_cpp,
+            camera_model=self._camera_model_to_cpp(camera_model),
+            projection_method=self._projection_method_to_cpp(projection_method),
             distortion_coeffs=distortion_coeffs,
             sh_degree_to_use=sh_degree_to_use,
+            tile_size=tile_size,
+            min_radius_2d=min_radius_2d,
+            eps_2d=eps_2d,
+            antialias=antialias,
+            backgrounds=backgrounds,
+            masks=tile_masks,
+        )
+
+        if masks is not None:
+            features, alphas = _apply_pixel_mask(features, alphas, masks, backgrounds)
+
+        return features, alphas
+
+    def render_depths_from_world(
+        self,
+        world_to_camera_matrices: torch.Tensor,
+        projection_matrices: torch.Tensor,
+        image_width: int,
+        image_height: int,
+        near: float,
+        far: float,
+        camera_model: CameraModel = CameraModel.PINHOLE,
+        projection_method: ProjectionMethod = ProjectionMethod.AUTO,
+        distortion_coeffs: torch.Tensor | None = None,
+        tile_size: int = 16,
+        min_radius_2d: float = 0.0,
+        eps_2d: float = 0.3,
+        antialias: bool = False,
+        backgrounds: torch.Tensor | None = None,
+        masks: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Render dense depth images by rasterizing directly from world-space 3D Gaussians.
+
+        This mirrors :meth:`render_images_from_world`, but renders depth-only outputs with the
+        same camera-model and projection-method dispatch.
+        """
+        tile_masks = _pixel_mask_to_tile_mask(masks, tile_size) if masks is not None else None
+
+        features, alphas = self._impl.render_depths_from_world(
+            world_to_camera_matrices=world_to_camera_matrices,
+            projection_matrices=projection_matrices,
+            image_width=image_width,
+            image_height=image_height,
+            near=near,
+            far=far,
+            camera_model=self._camera_model_to_cpp(camera_model),
+            projection_method=self._projection_method_to_cpp(projection_method),
+            distortion_coeffs=distortion_coeffs,
             tile_size=tile_size,
             min_radius_2d=min_radius_2d,
             eps_2d=eps_2d,
@@ -2101,7 +2233,9 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type=ProjectionType.PERSPECTIVE,
+        camera_model: CameraModel = CameraModel.PINHOLE,
+        projection_method: ProjectionMethod = ProjectionMethod.AUTO,
+        distortion_coeffs: torch.Tensor | None = None,
         sh_degree_to_use: int = -1,
         tile_size: int = 16,
         min_radius_2d: float = 0.0,
@@ -2144,7 +2278,15 @@ class GaussianSplat3d:
             image_height (int): The height of the images to be rendered. Note these are the same for all images being rendered.
             near (float): The near clipping plane distance for the projection.
             far (float): The far clipping plane distance for the projection.
-            projection_type (ProjectionType): The type of projection to use. Default is :attr:`fvdb.ProjectionType.PERSPECTIVE`.
+            camera_model (CameraModel): Semantic camera model for projection. Default is
+                :attr:`fvdb.CameraModel.PINHOLE`.
+            projection_method (ProjectionMethod): Projection implementation selector. Default is
+                :attr:`fvdb.ProjectionMethod.AUTO`.
+            distortion_coeffs (torch.Tensor | None): Distortion coefficients with shape ``(C, 12)``.
+                Required for :class:`CameraModel.OPENCV_*` camera models. For
+                :class:`CameraModel.PINHOLE` and :class:`CameraModel.ORTHOGRAPHIC`, pass
+                ``None`` or a ``(C, 12)`` tensor, which is ignored. To represent no
+                distortion with an OpenCV camera model, pass a zero-filled tensor.
             sh_degree_to_use (int): The degree of spherical harmonics to use for rendering. -1 means use all available SH bases.
                 0 means use only the first SH base (constant color). Note that you can't use more SH bases than available in the GaussianSplat3d instance.
                 Default is -1.
@@ -2185,7 +2327,9 @@ class GaussianSplat3d:
             image_height=image_height,
             near=near,
             far=far,
-            projection_type=self._proj_type_to_cpp(projection_type),
+            camera_model=self._camera_model_to_cpp(camera_model),
+            projection_method=self._projection_method_to_cpp(projection_method),
+            distortion_coeffs=distortion_coeffs,
             sh_degree_to_use=sh_degree_to_use,
             tile_size=tile_size,
             min_radius_2d=min_radius_2d,
@@ -2209,7 +2353,9 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type=ProjectionType.PERSPECTIVE,
+        camera_model: CameraModel = CameraModel.PINHOLE,
+        projection_method: ProjectionMethod = ProjectionMethod.AUTO,
+        distortion_coeffs: torch.Tensor | None = None,
         sh_degree_to_use: int = -1,
         tile_size: int = 16,
         min_radius_2d: float = 0.0,
@@ -2251,7 +2397,15 @@ class GaussianSplat3d:
             image_height (int): The height of the images to be rendered. Note these are the same for all images being rendered.
             near (float): The near clipping plane distance for the projection.
             far (float): The far clipping plane distance for the projection.
-            projection_type (ProjectionType): The type of projection to use. Default is :attr:`fvdb.ProjectionType.PERSPECTIVE`.
+            camera_model (CameraModel): Semantic camera model for projection. Default is
+                :attr:`fvdb.CameraModel.PINHOLE`.
+            projection_method (ProjectionMethod): Projection implementation selector. Default is
+                :attr:`fvdb.ProjectionMethod.AUTO`.
+            distortion_coeffs (torch.Tensor | None): Distortion coefficients with shape ``(C, 12)``.
+                Required for :class:`CameraModel.OPENCV_*` camera models. For
+                :class:`CameraModel.PINHOLE` and :class:`CameraModel.ORTHOGRAPHIC`, pass
+                ``None`` or a ``(C, 12)`` tensor, which is ignored. To represent no
+                distortion with an OpenCV camera model, pass a zero-filled tensor.
             sh_degree_to_use (int): The degree of spherical harmonics to use for rendering. -1 means use all available SH bases.
                 0 means use only the first SH base (constant color). Note that you can't use more SH bases than available in the GaussianSplat3d instance.
                 Default is -1.
@@ -2294,7 +2448,9 @@ class GaussianSplat3d:
             image_height=image_height,
             near=near,
             far=far,
-            projection_type=self._proj_type_to_cpp(projection_type),
+            camera_model=self._camera_model_to_cpp(camera_model),
+            projection_method=self._projection_method_to_cpp(projection_method),
+            distortion_coeffs=distortion_coeffs,
             sh_degree_to_use=sh_degree_to_use,
             tile_size=tile_size,
             min_radius_2d=min_radius_2d,
@@ -2317,7 +2473,9 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type=ProjectionType.PERSPECTIVE,
+        camera_model: CameraModel = CameraModel.PINHOLE,
+        projection_method: ProjectionMethod = ProjectionMethod.AUTO,
+        distortion_coeffs: torch.Tensor | None = None,
         sh_degree_to_use: int = -1,
         tile_size: int = 16,
         min_radius_2d: float = 0.0,
@@ -2364,7 +2522,15 @@ class GaussianSplat3d:
             image_height (int): The height of the images to be rendered. Note these are the same for all images being rendered.
             near (float): The near clipping plane distance for the projection.
             far (float): The far clipping plane distance for the projection.
-            projection_type (ProjectionType): The type of projection to use. Default is :attr:`fvdb.ProjectionType.PERSPECTIVE`.
+            camera_model (CameraModel): Semantic camera model for projection. Default is
+                :attr:`fvdb.CameraModel.PINHOLE`.
+            projection_method (ProjectionMethod): Projection implementation selector. Default is
+                :attr:`fvdb.ProjectionMethod.AUTO`.
+            distortion_coeffs (torch.Tensor | None): Distortion coefficients with shape ``(C, 12)``.
+                Required for :class:`CameraModel.OPENCV_*` camera models. For
+                :class:`CameraModel.PINHOLE` and :class:`CameraModel.ORTHOGRAPHIC`, pass
+                ``None`` or a ``(C, 12)`` tensor, which is ignored. To represent no
+                distortion with an OpenCV camera model, pass a zero-filled tensor.
             sh_degree_to_use (int): The degree of spherical harmonics to use for rendering. -1 means use all available SH bases.
                 0 means use only the first SH base (constant color). Note that you can't use more SH bases than available in the GaussianSplat3d instance.
                 Default is -1.
@@ -2395,7 +2561,60 @@ class GaussianSplat3d:
             image_height=image_height,
             near=near,
             far=far,
-            projection_type=self._proj_type_to_cpp(projection_type),
+            camera_model=self._camera_model_to_cpp(camera_model),
+            projection_method=self._projection_method_to_cpp(projection_method),
+            distortion_coeffs=distortion_coeffs,
+            sh_degree_to_use=sh_degree_to_use,
+            tile_size=tile_size,
+            min_radius_2d=min_radius_2d,
+            eps_2d=eps_2d,
+            antialias=antialias,
+            backgrounds=backgrounds,
+            masks=tile_masks,
+        )
+
+        if masks is not None:
+            features, alphas = _apply_pixel_mask(features, alphas, masks, backgrounds)
+
+        return features, alphas
+
+    def render_images_and_depths_from_world(
+        self,
+        world_to_camera_matrices: torch.Tensor,
+        projection_matrices: torch.Tensor,
+        image_width: int,
+        image_height: int,
+        near: float,
+        far: float,
+        camera_model: CameraModel = CameraModel.PINHOLE,
+        projection_method: ProjectionMethod = ProjectionMethod.AUTO,
+        distortion_coeffs: torch.Tensor | None = None,
+        sh_degree_to_use: int = -1,
+        tile_size: int = 16,
+        min_radius_2d: float = 0.0,
+        eps_2d: float = 0.3,
+        antialias: bool = False,
+        backgrounds: torch.Tensor | None = None,
+        masks: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Render dense RGBD images by rasterizing directly from world-space 3D Gaussians.
+
+        This mirrors :meth:`render_images_from_world`, but returns image channels with depth in the
+        final channel while using the same camera-model and projection-method dispatch.
+        """
+        tile_masks = _pixel_mask_to_tile_mask(masks, tile_size) if masks is not None else None
+
+        features, alphas = self._impl.render_images_and_depths_from_world(
+            world_to_camera_matrices=world_to_camera_matrices,
+            projection_matrices=projection_matrices,
+            image_width=image_width,
+            image_height=image_height,
+            near=near,
+            far=far,
+            camera_model=self._camera_model_to_cpp(camera_model),
+            projection_method=self._projection_method_to_cpp(projection_method),
+            distortion_coeffs=distortion_coeffs,
             sh_degree_to_use=sh_degree_to_use,
             tile_size=tile_size,
             min_radius_2d=min_radius_2d,
@@ -2418,7 +2637,9 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type=ProjectionType.PERSPECTIVE,
+        camera_model: CameraModel = CameraModel.PINHOLE,
+        projection_method: ProjectionMethod = ProjectionMethod.AUTO,
+        distortion_coeffs: torch.Tensor | None = None,
         tile_size: int = 16,
         min_radius_2d: float = 0.0,
         eps_2d: float = 0.3,
@@ -2460,7 +2681,15 @@ class GaussianSplat3d:
             image_height (int): The height of the images to be rendered. Note these are the same for all images being rendered.
             near (float): The near clipping plane distance for the projection.
             far (float): The far clipping plane distance for the projection.
-            projection_type (ProjectionType): The type of projection to use. Default is :attr:`fvdb.ProjectionType.PERSPECTIVE`.
+            camera_model (CameraModel): Semantic camera model for projection. Default is
+                :attr:`fvdb.CameraModel.PINHOLE`.
+            projection_method (ProjectionMethod): Projection implementation selector. Default is
+                :attr:`fvdb.ProjectionMethod.AUTO`.
+            distortion_coeffs (torch.Tensor | None): Distortion coefficients with shape ``(C, 12)``.
+                Required for :class:`CameraModel.OPENCV_*` camera models. For
+                :class:`CameraModel.PINHOLE` and :class:`CameraModel.ORTHOGRAPHIC`, pass
+                ``None`` or a ``(C, 12)`` tensor, which is ignored. To represent no
+                distortion with an OpenCV camera model, pass a zero-filled tensor.
             tile_size (int): The size of the tiles to use for rendering. Default is 16. You shouldn't set this parameter unless you really know what you are doing.
             min_radius_2d (float): The minimum radius (in pixels) below which Gaussians are ignored during rendering.
             eps_2d (float): A value used to pad Gaussians when projecting them onto the image plane, to avoid very projected Gaussians which create artifacts and
@@ -2483,7 +2712,9 @@ class GaussianSplat3d:
             image_height=image_height,
             near=near,
             far=far,
-            projection_type=self._proj_type_to_cpp(projection_type),
+            camera_model=self._camera_model_to_cpp(camera_model),
+            projection_method=self._projection_method_to_cpp(projection_method),
+            distortion_coeffs=distortion_coeffs,
             tile_size=tile_size,
             min_radius_2d=min_radius_2d,
             eps_2d=eps_2d,
@@ -2500,7 +2731,9 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type=ProjectionType.PERSPECTIVE,
+        camera_model: CameraModel = CameraModel.PINHOLE,
+        projection_method: ProjectionMethod = ProjectionMethod.AUTO,
+        distortion_coeffs: torch.Tensor | None = None,
         tile_size: int = 16,
         min_radius_2d: float = 0.0,
         eps_2d: float = 0.3,
@@ -2517,7 +2750,9 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type=ProjectionType.PERSPECTIVE,
+        camera_model: CameraModel = CameraModel.PINHOLE,
+        projection_method: ProjectionMethod = ProjectionMethod.AUTO,
+        distortion_coeffs: torch.Tensor | None = None,
         tile_size: int = 16,
         min_radius_2d: float = 0.0,
         eps_2d: float = 0.3,
@@ -2533,7 +2768,9 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type=ProjectionType.PERSPECTIVE,
+        camera_model: CameraModel = CameraModel.PINHOLE,
+        projection_method: ProjectionMethod = ProjectionMethod.AUTO,
+        distortion_coeffs: torch.Tensor | None = None,
         tile_size: int = 16,
         min_radius_2d: float = 0.0,
         eps_2d: float = 0.3,
@@ -2560,7 +2797,15 @@ class GaussianSplat3d:
             image_height (int): The height of the images to be rendered. Note these are the same for all images being rendered.
             near (float): The near clipping plane distance for the projection.
             far (float): The far clipping plane distance for the projection.
-            projection_type (ProjectionType): The type of projection to use. Default is :attr:`fvdb.ProjectionType.PERSPECTIVE`.
+            camera_model (CameraModel): Semantic camera model for projection. Default is
+                :attr:`fvdb.CameraModel.PINHOLE`.
+            projection_method (ProjectionMethod): Projection implementation selector. Default is
+                :attr:`fvdb.ProjectionMethod.AUTO`.
+            distortion_coeffs (torch.Tensor | None): Distortion coefficients with shape ``(C, 12)``.
+                Required for :class:`CameraModel.OPENCV_*` camera models. For
+                :class:`CameraModel.PINHOLE` and :class:`CameraModel.ORTHOGRAPHIC`, pass
+                ``None`` or a ``(C, 12)`` tensor, which is ignored. To represent no
+                distortion with an OpenCV camera model, pass a zero-filled tensor.
             tile_size (int): The size of the tiles to use for rendering. Default is 16. You shouldn't set this parameter unless you really know what you are doing.
             min_radius_2d (float): The minimum radius (in pixels) below which Gaussians are ignored during rendering.
             eps_2d (float): A value used to pad Gaussians when projecting them onto the image plane, to avoid very projected Gaussians which create artifacts and
@@ -2591,7 +2836,9 @@ class GaussianSplat3d:
                 image_height=image_height,
                 near=near,
                 far=far,
-                projection_type=self._proj_type_to_cpp(projection_type),
+                camera_model=self._camera_model_to_cpp(camera_model),
+                projection_method=self._projection_method_to_cpp(projection_method),
+                distortion_coeffs=distortion_coeffs,
                 tile_size=tile_size,
                 min_radius_2d=min_radius_2d,
                 eps_2d=eps_2d,
@@ -2615,7 +2862,9 @@ class GaussianSplat3d:
                     image_height=image_height,
                     near=near,
                     far=far,
-                    projection_type=self._proj_type_to_cpp(projection_type),
+                    camera_model=self._camera_model_to_cpp(camera_model),
+                    projection_method=self._projection_method_to_cpp(projection_method),
+                    distortion_coeffs=distortion_coeffs,
                     tile_size=tile_size,
                     min_radius_2d=min_radius_2d,
                     eps_2d=eps_2d,
@@ -2632,7 +2881,9 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type=ProjectionType.PERSPECTIVE,
+        camera_model: CameraModel = CameraModel.PINHOLE,
+        projection_method: ProjectionMethod = ProjectionMethod.AUTO,
+        distortion_coeffs: torch.Tensor | None = None,
         tile_size: int = 16,
         min_radius_2d: float = 0.0,
         eps_2d: float = 0.3,
@@ -2652,7 +2903,15 @@ class GaussianSplat3d:
             image_height (int): The height of the images to be rendered. Note these are the same for all images being rendered.
             near (float): The near clipping plane distance for the projection.
             far (float): The far clipping plane distance for the projection.
-            projection_type (ProjectionType): The type of projection to use. Default is :attr:`fvdb.ProjectionType.PERSPECTIVE`.
+            camera_model (CameraModel): Semantic camera model for projection. Default is
+                :attr:`fvdb.CameraModel.PINHOLE`.
+            projection_method (ProjectionMethod): Projection implementation selector. Default is
+                :attr:`fvdb.ProjectionMethod.AUTO`.
+            distortion_coeffs (torch.Tensor | None): Distortion coefficients with shape ``(C, 12)``.
+                Required for :class:`CameraModel.OPENCV_*` camera models. For
+                :class:`CameraModel.PINHOLE` and :class:`CameraModel.ORTHOGRAPHIC`, pass
+                ``None`` or a ``(C, 12)`` tensor, which is ignored. To represent no
+                distortion with an OpenCV camera model, pass a zero-filled tensor.
             tile_size (int): The size of the tiles to use for rendering. Default is 16. You shouldn't set this parameter unless you really know what you are doing.
             min_radius_2d (float): The minimum radius (in pixels) below which Gaussians are ignored during rendering.
             eps_2d (float): A value used to pad Gaussians when projecting them onto the image plane, to avoid very projected Gaussians which create artifacts and
@@ -2675,7 +2934,9 @@ class GaussianSplat3d:
             image_height=image_height,
             near=near,
             far=far,
-            projection_type=self._proj_type_to_cpp(projection_type),
+            camera_model=self._camera_model_to_cpp(camera_model),
+            projection_method=self._projection_method_to_cpp(projection_method),
+            distortion_coeffs=distortion_coeffs,
             tile_size=tile_size,
             min_radius_2d=min_radius_2d,
             eps_2d=eps_2d,
@@ -2694,7 +2955,9 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type=ProjectionType.PERSPECTIVE,
+        camera_model: CameraModel = CameraModel.PINHOLE,
+        projection_method: ProjectionMethod = ProjectionMethod.AUTO,
+        distortion_coeffs: torch.Tensor | None = None,
         tile_size: int = 16,
         min_radius_2d: float = 0.0,
         eps_2d: float = 0.3,
@@ -2712,7 +2975,9 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type=ProjectionType.PERSPECTIVE,
+        camera_model: CameraModel = CameraModel.PINHOLE,
+        projection_method: ProjectionMethod = ProjectionMethod.AUTO,
+        distortion_coeffs: torch.Tensor | None = None,
         tile_size: int = 16,
         min_radius_2d: float = 0.0,
         eps_2d: float = 0.3,
@@ -2729,7 +2994,9 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type=ProjectionType.PERSPECTIVE,
+        camera_model: CameraModel = CameraModel.PINHOLE,
+        projection_method: ProjectionMethod = ProjectionMethod.AUTO,
+        distortion_coeffs: torch.Tensor | None = None,
         tile_size: int = 16,
         min_radius_2d: float = 0.0,
         eps_2d: float = 0.3,
@@ -2756,7 +3023,15 @@ class GaussianSplat3d:
             image_height (int): The height of the images to be rendered. Note these are the same for all images being rendered.
             near (float): The near clipping plane distance for the projection.
             far (float): The far clipping plane distance for the projection.
-            projection_type (ProjectionType): The type of projection to use. Default is :attr:`fvdb.ProjectionType.PERSPECTIVE`.
+            camera_model (CameraModel): Semantic camera model for projection. Default is
+                :attr:`fvdb.CameraModel.PINHOLE`.
+            projection_method (ProjectionMethod): Projection implementation selector. Default is
+                :attr:`fvdb.ProjectionMethod.AUTO`.
+            distortion_coeffs (torch.Tensor | None): Distortion coefficients with shape ``(C, 12)``.
+                Required for :class:`CameraModel.OPENCV_*` camera models. For
+                :class:`CameraModel.PINHOLE` and :class:`CameraModel.ORTHOGRAPHIC`, pass
+                ``None`` or a ``(C, 12)`` tensor, which is ignored. To represent no
+                distortion with an OpenCV camera model, pass a zero-filled tensor.
             tile_size (int): The size of the tiles to use for rendering. Default is 16. You shouldn't set this parameter unless you really know what you are doing.
             min_radius_2d (float): The minimum radius (in pixels) below which Gaussians are ignored during rendering.
             eps_2d (float): A value used to pad Gaussians when projecting them onto the image plane, to avoid very projected Gaussians which create artifacts and
@@ -2784,7 +3059,9 @@ class GaussianSplat3d:
                 image_height=image_height,
                 near=near,
                 far=far,
-                projection_type=self._proj_type_to_cpp(projection_type),
+                camera_model=self._camera_model_to_cpp(camera_model),
+                projection_method=self._projection_method_to_cpp(projection_method),
+                distortion_coeffs=distortion_coeffs,
                 tile_size=tile_size,
                 min_radius_2d=min_radius_2d,
                 eps_2d=eps_2d,
@@ -2803,7 +3080,9 @@ class GaussianSplat3d:
                 image_height=image_height,
                 near=near,
                 far=far,
-                projection_type=self._proj_type_to_cpp(projection_type),
+                camera_model=self._camera_model_to_cpp(camera_model),
+                projection_method=self._projection_method_to_cpp(projection_method),
+                distortion_coeffs=distortion_coeffs,
                 tile_size=tile_size,
                 min_radius_2d=min_radius_2d,
                 eps_2d=eps_2d,
@@ -2938,9 +3217,10 @@ class GaussianSplat3d:
 
         Args:
             other (DeviceIdentifier | torch.Tensor | GaussianSplat3d | Grid | GridBatch | JaggedTensor):
-                The target :class:`torch.Device`, :class:`torch.Tensor`, :class:`~fvdb.Grid`,
-                :class:`~fvdb.GridBatch`, :class:`~fvdb.JaggedTensor`, or :class:`~fvdb.GaussianSplat3d` instance
-                to which the :class:`GaussianSplat3d` instance should be moved.
+                The target :class:`torch.Device`, :class:`torch.Tensor`,
+                :class:`~fvdb.Grid`, :class:`~fvdb.GridBatch`, :class:`~fvdb.JaggedTensor`,
+                or :class:`~fvdb.GaussianSplat3d` instance to which the
+                :class:`GaussianSplat3d` instance should be moved.
             device (DeviceIdentifier, optional): The target ``device`` to move the :class:`GaussianSplat3d` instance to.
             dtype (torch.dtype, optional): The target data type for the :class:`GaussianSplat3d` instance.
 
@@ -2960,7 +3240,7 @@ class GaussianSplat3d:
                     if isinstance(other, (torch.Tensor, JaggedTensor, GaussianSplat3d)):
                         device = other.device
                         dtype = other.dtype
-                    elif isinstance(other, (Grid, GridBatch)):
+                    elif isinstance(other, (GridBatch, Grid)):
                         device = other.device
                         dtype = self.dtype
                 else:
@@ -2985,7 +3265,7 @@ class GaussianSplat3d:
             # .to(other)
             device = args[0].device
             dtype = args[0].dtype
-        elif len(args) == 1 and isinstance(args[0], (Grid, GridBatch)):
+        elif len(args) == 1 and isinstance(args[0], (GridBatch, Grid)):
             # .to(other)
             device = args[0].device
             dtype = self.dtype
@@ -2999,7 +3279,7 @@ class GaussianSplat3d:
             dtype = args[1]
         else:
             raise TypeError(
-                f"Invalid arguments for to(): {args}. Expected a DeviceIdentifier, torch.Tensor, GaussianSplat3d, Grid, GridBatch, or JaggedTensor."
+                f"Invalid arguments for to(): {args}. Expected a DeviceIdentifier, torch.Tensor, GaussianSplat3d, GridBatch, or JaggedTensor."
             )
 
         device = resolve_device(device, inherit_from=self)
@@ -3093,19 +3373,27 @@ class GaussianSplat3d:
         return self._impl.state_dict()
 
     @staticmethod
-    def _proj_type_from_cpp(proj_type: GaussianSplat3dCpp.ProjectionType) -> ProjectionType:
-        if proj_type == GaussianSplat3dCpp.ProjectionType.PERSPECTIVE:
-            return ProjectionType.PERSPECTIVE
-        elif proj_type == GaussianSplat3dCpp.ProjectionType.ORTHOGRAPHIC:
-            return ProjectionType.ORTHOGRAPHIC
-        else:
-            raise ValueError(f"Invalid projection type: {proj_type}")
+    def _camera_model_from_cpp(camera_model: _C.CameraModel) -> CameraModel:
+        try:
+            return CameraModel[camera_model.name]
+        except KeyError as exc:
+            raise ValueError(f"Invalid camera model: {camera_model}") from exc
 
     @staticmethod
-    def _proj_type_to_cpp(proj_type: ProjectionType) -> GaussianSplat3dCpp.ProjectionType:
-        if proj_type == ProjectionType.PERSPECTIVE:
-            return GaussianSplat3dCpp.ProjectionType.PERSPECTIVE
-        elif proj_type == ProjectionType.ORTHOGRAPHIC:
-            return GaussianSplat3dCpp.ProjectionType.ORTHOGRAPHIC
-        else:
-            raise ValueError(f"Invalid projection type: {proj_type}")
+    def _camera_model_to_cpp(camera_model: CameraModel) -> _C.CameraModel:
+        if isinstance(camera_model, CameraModel):
+            return getattr(_C.CameraModel, camera_model.name)
+        return camera_model
+
+    @staticmethod
+    def _projection_method_from_cpp(projection_method: _C.ProjectionMethod) -> ProjectionMethod:
+        try:
+            return ProjectionMethod[projection_method.name]
+        except KeyError as exc:
+            raise ValueError(f"Invalid projection method: {projection_method}") from exc
+
+    @staticmethod
+    def _projection_method_to_cpp(projection_method: ProjectionMethod) -> _C.ProjectionMethod:
+        if isinstance(projection_method, ProjectionMethod):
+            return getattr(_C.ProjectionMethod, projection_method.name)
+        return projection_method

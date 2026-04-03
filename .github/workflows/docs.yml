@@ -1,6 +1,9 @@
 name: fvdb-core Documentation
 
 on:
+  push:
+    branches: [main]
+    paths: ['docs/**']
   workflow_dispatch:
     inputs:
       branch:

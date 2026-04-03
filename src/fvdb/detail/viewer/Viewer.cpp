@@ -15,6 +15,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include <stdexcept>
 
 inline void
 pNanoLogPrint(pnanovdb_compute_log_level_t level, const char *format, ...) {
@@ -375,18 +376,24 @@ Viewer::setCameraFar(const std::string &scene_name, float far) {
     updateCamera(scene_name);
 }
 
-GaussianSplat3d::ProjectionType
-Viewer::cameraProjectionType(const std::string &scene_name) {
+GaussianSplat3d::CameraModel
+Viewer::cameraModel(const std::string &scene_name) {
     getCamera(scene_name);
-    return mEditor.camera.config.is_orthographic ? GaussianSplat3d::ProjectionType::ORTHOGRAPHIC
-                                                 : GaussianSplat3d::ProjectionType::PERSPECTIVE;
+    return mEditor.camera.config.is_orthographic ? GaussianSplat3d::CameraModel::ORTHOGRAPHIC
+                                                 : GaussianSplat3d::CameraModel::PINHOLE;
 }
+
 void
-Viewer::setCameraProjectionType(const std::string &scene_name,
-                                GaussianSplat3d::ProjectionType mode) {
+Viewer::setCameraModel(const std::string &scene_name, GaussianSplat3d::CameraModel model) {
     getCamera(scene_name);
-    mEditor.camera.config.is_orthographic =
-        (mode == GaussianSplat3d::ProjectionType::ORTHOGRAPHIC) ? PNANOVDB_TRUE : PNANOVDB_FALSE;
+    if (model == GaussianSplat3d::CameraModel::PINHOLE) {
+        mEditor.camera.config.is_orthographic = PNANOVDB_FALSE;
+    } else if (model == GaussianSplat3d::CameraModel::ORTHOGRAPHIC) {
+        mEditor.camera.config.is_orthographic = PNANOVDB_TRUE;
+    } else {
+        throw std::invalid_argument(
+            "Viewer currently only supports CameraModel::PINHOLE and ORTHOGRAPHIC");
+    }
 
     updateCamera(scene_name);
 }

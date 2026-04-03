@@ -187,10 +187,10 @@ JaggedTensor
 dispatchIJKForMesh<torch::kCUDA>(const JaggedTensor &meshVertices,
                                  const JaggedTensor &meshFaces,
                                  const std::vector<VoxelCoordTransform> &transforms) {
-    TORCH_CHECK(meshVertices.device().is_cuda(), "GridBatchImpl must be on CUDA device");
-    TORCH_CHECK(meshVertices.device().has_index(), "GridBatchImpl must have a valid index");
-    TORCH_CHECK(meshFaces.device().is_cuda(), "GridBatchImpl must be on CUDA device");
-    TORCH_CHECK(meshFaces.device().has_index(), "GridBatchImpl must have a valid index");
+    TORCH_CHECK(meshVertices.device().is_cuda(), "GridBatchData must be on CUDA device");
+    TORCH_CHECK(meshVertices.device().has_index(), "GridBatchData must have a valid index");
+    TORCH_CHECK(meshFaces.device().is_cuda(), "GridBatchData must be on CUDA device");
+    TORCH_CHECK(meshFaces.device().has_index(), "GridBatchData must have a valid index");
 
     RAIIRawDeviceBuffer<VoxelCoordTransform> transformsDVec(transforms.size(),
                                                             meshVertices.device());

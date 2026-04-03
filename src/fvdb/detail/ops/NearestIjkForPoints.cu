@@ -61,8 +61,8 @@ template <>
 JaggedTensor
 dispatchNearestNeighborIJKForPoints<torch::kCUDA>(
     const JaggedTensor &jaggedPoints, const std::vector<VoxelCoordTransform> &transforms) {
-    TORCH_CHECK(jaggedPoints.device().is_cuda(), "GridBatchImpl must be on CUDA device");
-    TORCH_CHECK(jaggedPoints.device().has_index(), "GridBatchImpl must have a valid index");
+    TORCH_CHECK(jaggedPoints.device().is_cuda(), "GridBatchData must be on CUDA device");
+    TORCH_CHECK(jaggedPoints.device().has_index(), "GridBatchData must have a valid index");
 
     const torch::TensorOptions optsData =
         torch::TensorOptions().dtype(torch::kInt32).device(jaggedPoints.device());
