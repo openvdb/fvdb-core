@@ -11,6 +11,7 @@ conda activate fvdb
 - **kPrivateUse1 / Universal Memory / MultiGPU:** The splatting code uses these intentionally. Do not break them, but do not test them (WSL can't use universal memory).
 - **No kernel changes:** CUDA kernel bodies are never touched.
 - **Tests must not change:** `pytest tests/unit/test_gaussian_splat_3d.py` must pass after every milestone.
+- **Accumulator mutability:** The projection backward CUDA kernel mutates three accumulator tensors in-place (gradient norms, max 2D radii, step counts) via atomicAdd. These are used by Gaussian densification (split/clone/prune). The **forward** pass is pure. In the C++ free functions (`GaussianSplatOps.h`), accumulators are passed as mutable `std::optional<torch::Tensor>&` refs. The pybind layer (`GaussianSplatOps.cpp`) wraps these in lambdas that hide the mutability, presenting a **strictly functional interface** to Python. When autograd moves to Python (M5-7), the Python `GaussianSplat3d` class will own the accumulators and pass them through to the C++ backward dispatch.
 
 ---
 
@@ -48,12 +49,14 @@ conda activate fvdb
 - [x] Indexing ops and PLY I/O -- left as class methods (pure tensor/IO ops, will move to Python in M7)
 - [x] Build passes, all 135 tests pass
 
-### Milestone 4: Expose Free-Function Ops via pybind11
-- [ ] New `GaussianSplatOps.cpp` binding file
-- [ ] Expose fwd/bwd dispatch functions separately
-- [ ] Update `Bindings.cpp` and `CMakeLists.txt`
-- [ ] Update `_fvdb_cpp.pyi`
-- [ ] Build passes, all tests pass
+### Milestone 4: Expose Free-Function Ops via pybind11 -- DONE
+- [x] New `src/python/GaussianSplatOps.cpp` with `bind_gaussian_splat_ops()`
+- [x] All free functions exposed as `_fvdb_cpp.gsplat_*` pure functional (no mutable accumulator refs)
+- [x] Lambda wrappers for functions with accumulator args (accumulators hidden, not exposed to Python)
+- [x] `RenderSettings`, `RenderMode`, `SparseProjectedGaussianSplats` bound as Python types
+- [x] Update `Bindings.cpp` (declare + call `bind_gaussian_splat_ops`)
+- [x] Update `CMakeLists.txt` (add `GaussianSplatOps.cpp` to `FVDB_BINDINGS_CPP_FILES`)
+- [x] All 135 tests pass, all new bindings importable from `_fvdb_cpp`
 
 ### Milestone 5: Create `fvdb.functional.splat` - Projection and SH Autograd
 - [ ] `fvdb/functional/splat/` directory and `__init__.py`

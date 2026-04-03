@@ -100,6 +100,16 @@ torch::Tensor evalSphericalHarmonics(const torch::Tensor &means,
 /// @param accumStepCounts [in/out] Optional accumulator for step counts (lazily initialized)
 /// @param accumMax2dRadii [in/out] Optional accumulator for max 2D radii (lazily initialized)
 /// @return ProjectedGaussianSplats with all projection results
+///
+/// @note **Accumulator mutability:** The accumulator tensors (accumGradNorms, accumStepCounts,
+///       accumMax2dRadii) are passed by mutable reference because the CUDA projection backward
+///       kernel writes into them in-place via atomicAdd during backpropagation. This in-place
+///       mutation is used by Gaussian densification strategies (split/clone/prune) to track
+///       per-Gaussian gradient statistics across training steps. The forward pass itself is pure.
+///       The pybind11 layer (GaussianSplatOps.cpp) hides this mutability behind lambda wrappers
+///       that present a strictly functional interface to Python. When autograd moves to Python
+///       (Milestones 5-7), the Python GaussianSplat3d class will own these accumulators and
+///       pass them through to the C++ backward dispatch.
 fvdb::GaussianSplat3d::ProjectedGaussianSplats projectGaussiansAnalytic(
     const torch::Tensor &means,
     const torch::Tensor &quats,
