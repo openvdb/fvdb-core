@@ -37,15 +37,16 @@ conda activate fvdb
 - [x] `evalSphericalHarmonicsImpl`, `projectGaussiansImpl`, `projectGaussiansForCameraImpl` now thin wrappers
 - [x] Build passes, all 135 tests pass
 
-### Milestone 3: Extract Rendering, Queries, and Utilities into Free Functions
-- [ ] Dense rendering free function
-- [ ] From-world rendering free function
-- [ ] Sparse projection + rendering free functions
-- [ ] Query ops (contributing gaussians) free functions
-- [ ] MCMC ops free functions
-- [ ] Indexing ops free functions
-- [ ] PLY I/O refactored to accept raw tensors
-- [ ] Build passes, all tests pass
+### Milestone 3: Extract Rendering, Queries, and Utilities into Free Functions -- DONE
+- [x] Dense rasterization: `renderCropFromProjected()` free function
+- [x] From-world rasterization: `rasterizeFromWorld()` free function (used by all 3 from-world methods)
+- [x] Sparse projection: `sparseProjectGaussiansAnalytic()`, `sparseProjectGaussiansUT()`, `sparseProjectGaussiansForCamera()`
+- [x] Sparse rendering: `sparseRender()` free function
+- [x] Query ops: `renderNumContributing()`, `sparseRenderNumContributing()`, `renderContributingIds()`, `sparseRenderContributingIds()`
+- [x] All class impl methods are now thin wrappers
+- [x] MCMC ops (`relocateGaussians`, `addNoiseToMeans`) already thin dispatches -- left as-is
+- [x] Indexing ops and PLY I/O -- left as class methods (pure tensor/IO ops, will move to Python in M7)
+- [x] Build passes, all 135 tests pass
 
 ### Milestone 4: Expose Free-Function Ops via pybind11
 - [ ] New `GaussianSplatOps.cpp` binding file

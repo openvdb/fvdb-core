@@ -153,6 +153,154 @@ fvdb::GaussianSplat3d::ProjectedGaussianSplats projectGaussiansForCamera(
     std::optional<torch::Tensor> &accumStepCounts,
     std::optional<torch::Tensor> &accumMax2dRadii);
 
+// ---------------------------------------------------------------------------
+// Sparse projection functions
+// ---------------------------------------------------------------------------
+
+/// @brief Project Gaussians using analytic projection for sparse rendering.
+///        Deduplicates pixels, computes sparse tile info, runs analytic projection,
+///        evaluates SH, and performs sparse tile intersection.
+fvdb::GaussianSplat3d::SparseProjectedGaussianSplats sparseProjectGaussiansAnalytic(
+    const fvdb::JaggedTensor &pixelsToRender,
+    const torch::Tensor &means,
+    const torch::Tensor &quats,
+    const torch::Tensor &logScales,
+    const torch::Tensor &logitOpacities,
+    const torch::Tensor &sh0,
+    const torch::Tensor &shN,
+    const torch::Tensor &worldToCameraMatrices,
+    const torch::Tensor &projectionMatrices,
+    const RenderSettings &settings,
+    DistortionModel cameraModel,
+    bool accumulateMean2dGradients,
+    bool accumulateMax2dRadii,
+    std::optional<torch::Tensor> &accumGradNorms,
+    std::optional<torch::Tensor> &accumStepCounts,
+    std::optional<torch::Tensor> &accumMax2dRadii);
+
+/// @brief Project Gaussians using unscented transform for sparse rendering.
+///        Non-differentiable (no gradient accumulation support).
+fvdb::GaussianSplat3d::SparseProjectedGaussianSplats sparseProjectGaussiansUT(
+    const fvdb::JaggedTensor &pixelsToRender,
+    const torch::Tensor &means,
+    const torch::Tensor &quats,
+    const torch::Tensor &logScales,
+    const torch::Tensor &logitOpacities,
+    const torch::Tensor &sh0,
+    const torch::Tensor &shN,
+    const torch::Tensor &worldToCameraMatrices,
+    const torch::Tensor &projectionMatrices,
+    const torch::Tensor &distortionCoeffs,
+    const RenderSettings &settings,
+    DistortionModel cameraModel);
+
+/// @brief Project Gaussians for a given camera model for sparse rendering,
+///        dispatching between analytic and UT paths.
+fvdb::GaussianSplat3d::SparseProjectedGaussianSplats sparseProjectGaussiansForCamera(
+    const fvdb::JaggedTensor &pixelsToRender,
+    const torch::Tensor &means,
+    const torch::Tensor &quats,
+    const torch::Tensor &logScales,
+    const torch::Tensor &logitOpacities,
+    const torch::Tensor &sh0,
+    const torch::Tensor &shN,
+    const torch::Tensor &worldToCameraMatrices,
+    const torch::Tensor &projectionMatrices,
+    const RenderSettings &settings,
+    DistortionModel cameraModel,
+    ProjectionMethod projectionMethod,
+    const std::optional<torch::Tensor> &distortionCoeffs,
+    bool accumulateMean2dGradients,
+    bool accumulateMax2dRadii,
+    std::optional<torch::Tensor> &accumGradNorms,
+    std::optional<torch::Tensor> &accumStepCounts,
+    std::optional<torch::Tensor> &accumMax2dRadii);
+
+// ---------------------------------------------------------------------------
+// Rasterization functions
+// ---------------------------------------------------------------------------
+
+/// @brief Rasterize a cropped region from pre-projected Gaussians.
+///        Validates crop dimensions and calls RasterizeGaussiansToPixels::apply.
+std::tuple<torch::Tensor, torch::Tensor> renderCropFromProjected(
+    const fvdb::GaussianSplat3d::ProjectedGaussianSplats &projectedGaussians,
+    size_t tileSize,
+    ssize_t cropWidth,
+    ssize_t cropHeight,
+    ssize_t cropOriginW,
+    ssize_t cropOriginH,
+    const std::optional<torch::Tensor> &backgrounds,
+    const std::optional<torch::Tensor> &masks);
+
+/// @brief Sparse render: projects Gaussians, rasterizes at specified pixels,
+///        and scatters results back if there were duplicates.
+std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor> sparseRender(
+    const fvdb::JaggedTensor &pixelsToRender,
+    const torch::Tensor &means,
+    const torch::Tensor &quats,
+    const torch::Tensor &logScales,
+    const torch::Tensor &logitOpacities,
+    const torch::Tensor &sh0,
+    const torch::Tensor &shN,
+    const torch::Tensor &worldToCameraMatrices,
+    const torch::Tensor &projectionMatrices,
+    const RenderSettings &settings,
+    DistortionModel cameraModel,
+    ProjectionMethod projectionMethod,
+    const std::optional<torch::Tensor> &distortionCoeffs,
+    const std::optional<torch::Tensor> &backgrounds,
+    const std::optional<torch::Tensor> &masks,
+    bool accumulateMean2dGradients,
+    bool accumulateMax2dRadii,
+    std::optional<torch::Tensor> &accumGradNorms,
+    std::optional<torch::Tensor> &accumStepCounts,
+    std::optional<torch::Tensor> &accumMax2dRadii);
+
+/// @brief Rasterize from world-space 3D Gaussians using a pre-projected state.
+///        Calls RasterizeGaussiansToPixelsFromWorld3DGS::apply.
+std::tuple<torch::Tensor, torch::Tensor> rasterizeFromWorld(
+    const torch::Tensor &means,
+    const torch::Tensor &quats,
+    const torch::Tensor &logScales,
+    const fvdb::GaussianSplat3d::ProjectedGaussianSplats &projectedState,
+    const torch::Tensor &worldToCameraMatrices,
+    const torch::Tensor &projectionMatrices,
+    const torch::Tensor &distortionCoeffs,
+    DistortionModel cameraModel,
+    uint32_t imageWidth,
+    uint32_t imageHeight,
+    uint32_t tileSize,
+    const std::optional<torch::Tensor> &backgrounds,
+    const std::optional<torch::Tensor> &masks);
+
+// ---------------------------------------------------------------------------
+// Query operations on projected states
+// ---------------------------------------------------------------------------
+
+/// @brief Render the number of contributing Gaussians per pixel (dense).
+std::tuple<torch::Tensor, torch::Tensor> renderNumContributing(
+    const fvdb::GaussianSplat3d::ProjectedGaussianSplats &state,
+    const RenderSettings &settings);
+
+/// @brief Render the number of contributing Gaussians per pixel (sparse).
+std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor> sparseRenderNumContributing(
+    const fvdb::GaussianSplat3d::SparseProjectedGaussianSplats &state,
+    const fvdb::JaggedTensor &pixelsToRender,
+    const RenderSettings &settings);
+
+/// @brief Render the IDs of contributing Gaussians per pixel (dense).
+std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor> renderContributingIds(
+    const fvdb::GaussianSplat3d::ProjectedGaussianSplats &state,
+    const RenderSettings &settings,
+    const std::optional<torch::Tensor> &maybeNumContributingGaussians);
+
+/// @brief Render the IDs of contributing Gaussians per pixel (sparse).
+std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor> sparseRenderContributingIds(
+    const fvdb::GaussianSplat3d::SparseProjectedGaussianSplats &state,
+    const fvdb::JaggedTensor &pixelsToRender,
+    const RenderSettings &settings,
+    const std::optional<fvdb::JaggedTensor> &maybeNumContributingGaussians);
+
 } // namespace fvdb::detail::ops
 
 #endif // FVDB_DETAIL_OPS_GSPLAT_GAUSSIANSPLATOPS_H
