@@ -89,6 +89,15 @@ def evaluate_spherical_harmonics(
     Returns:
         ``[C, N, D]`` Evaluated SH features.
     """
-    return _C.gsplat_eval_sh(
-        means, sh0, shN, sh_degree_to_use, world_to_camera_matrices, per_gaussian_projected_radii
-    )
+    import math
+
+    K = shN.size(1) + 1
+    C = world_to_camera_matrices.size(0)
+    actual_sh_degree = sh_degree_to_use if sh_degree_to_use >= 0 else int(math.sqrt(K)) - 1
+    if actual_sh_degree == 0:
+        view_dirs = torch.zeros(C, means.size(0), 3, device=means.device, dtype=means.dtype)
+    else:
+        cam_to_world = torch.linalg.inv(world_to_camera_matrices)
+        camera_pos = cam_to_world[:, :3, 3]
+        view_dirs = means[None, :, :] - camera_pos[:, None, :]
+    return _EvalSHFn.apply(actual_sh_degree, C, view_dirs, sh0, shN, per_gaussian_projected_radii)

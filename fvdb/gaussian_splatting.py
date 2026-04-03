@@ -16,6 +16,7 @@ from ._fvdb_cpp import JaggedTensor as JaggedTensorCpp
 from ._fvdb_cpp import ProjectedGaussianSplats as ProjectedGaussianSplatsCpp
 from .functional.splat._projection import _ProjectGaussiansFn
 from .functional.splat._rasterize import _RasterizeDenseFn
+from .functional.splat._rasterize_sparse import _RasterizeSparseFn
 from .functional.splat._sh import _EvalSHFn
 from .functional.splat._tile_intersection import build_render_settings
 from .grid import Grid
@@ -1794,6 +1795,88 @@ class GaussianSplat3d:
             backgrounds, masks,
         )
 
+    def _sparse_render_decomposed(
+        self,
+        pixels_to_render_impl: JaggedTensorCpp,
+        world_to_camera_matrices: torch.Tensor,
+        projection_matrices: torch.Tensor,
+        settings: _C.RenderSettings,
+        camera_model_cpp: _C.CameraModel,
+        projection_method_cpp: _C.ProjectionMethod,
+        distortion_coeffs: torch.Tensor | None,
+        backgrounds: torch.Tensor | None,
+        masks: torch.Tensor | None,
+    ) -> tuple[JaggedTensorCpp, JaggedTensorCpp]:
+        """Decomposed sparse render using Python autograd for differentiability.
+
+        This method:
+        1. Runs the differentiable Python projection+SH pipeline to obtain
+           means2d, conics, features, opacities with autograd support.
+        2. Runs the non-differentiable C++ sparse projection to obtain the
+           sparse tile intersection data (active_tiles, tile_pixel_mask, etc.)
+           and deduplication info.  This duplicates the projection computation
+           but guarantees the tile assignments are consistent.
+        3. Calls ``_RasterizeSparseFn.apply`` with the differentiable tensors
+           from step 1 and the sparse tile data from step 2.
+        4. Handles duplicate-pixel scatter if needed.
+
+        Returns C++ JaggedTensors (features, alphas) with the same jagged
+        structure as *pixels_to_render_impl*.
+        """
+        # 1. Differentiable projection (Python autograd pipeline)
+        state = self._project_validated(
+            world_to_camera_matrices, projection_matrices, settings,
+            camera_model_cpp, projection_method_cpp, distortion_coeffs,
+        )
+
+        # 2. Non-diff sparse projection for tile data + dedup info
+        sparse_state = _C.gsplat_sparse_project_gaussians_for_camera(
+            pixels_to_render_impl,
+            self._means, self._quats, self._log_scales, self._logit_opacities,
+            self._sh0, self._shN,
+            world_to_camera_matrices, projection_matrices, settings,
+            camera_model_cpp, projection_method_cpp, distortion_coeffs,
+        )
+
+        # Determine which pixels to rasterize (unique if duplicates exist)
+        if sparse_state.has_duplicates:
+            render_pixels_jt = JaggedTensor(impl=sparse_state.unique_pixels_to_render)
+        else:
+            render_pixels_jt = JaggedTensor(impl=pixels_to_render_impl)
+
+        # 3. Differentiable sparse rasterization
+        rendered_colors_jdata, rendered_alphas_jdata = _RasterizeSparseFn.apply(
+            state.means2d,                        # differentiable
+            state.conics,                         # differentiable
+            state.render_quantities,              # differentiable
+            state.opacities,                      # differentiable
+            render_pixels_jt,                     # non-diff (unique pixels)
+            settings.image_width,
+            settings.image_height,
+            0,                                    # image_origin_w
+            0,                                    # image_origin_h
+            settings.tile_size,
+            sparse_state.tile_offsets,            # sparse 1D tile offsets
+            sparse_state.tile_gaussian_ids,       # sparse tile gaussian ids
+            sparse_state.active_tiles,
+            sparse_state.tile_pixel_mask,
+            sparse_state.tile_pixel_cumsum,
+            sparse_state.pixel_map,
+            False,                                # absgrad
+            backgrounds,
+            masks,
+        )
+
+        # 4. Scatter unique results back to all original positions (including duplicates)
+        pixels_jt = JaggedTensor(impl=pixels_to_render_impl)
+        if sparse_state.has_duplicates:
+            rendered_colors_jdata = rendered_colors_jdata.index_select(0, sparse_state.inverse_indices)
+            rendered_alphas_jdata = rendered_alphas_jdata.index_select(0, sparse_state.inverse_indices)
+
+        ret_features = pixels_jt.jagged_like(rendered_colors_jdata)
+        ret_alphas = pixels_jt.jagged_like(rendered_alphas_jdata)
+        return ret_features._impl, ret_alphas._impl
+
     def project_gaussians_for_depths(
         self,
         world_to_camera_matrices: torch.Tensor,
@@ -2419,9 +2502,8 @@ class GaussianSplat3d:
             sh_degree_to_use=-1, tile_size=tile_size, radius_clip=min_radius_2d,
             eps_2d=eps_2d, antialias=antialias, render_mode="depth",
         )
-        ret_depths, ret_alphas = _C.gsplat_sparse_render(
+        ret_depths, ret_alphas = self._sparse_render_decomposed(
             pixels_to_render_impl,
-            self._means, self._quats, self._log_scales, self._logit_opacities, self._sh0, self._shN,
             world_to_camera_matrices, projection_matrices, settings,
             self._camera_model_to_cpp(camera_model),
             self._projection_method_to_cpp(projection_method),
@@ -2817,9 +2899,8 @@ class GaussianSplat3d:
             sh_degree_to_use=sh_degree_to_use, tile_size=tile_size, radius_clip=min_radius_2d,
             eps_2d=eps_2d, antialias=antialias, render_mode="rgb",
         )
-        ret_features, ret_alphas = _C.gsplat_sparse_render(
+        ret_features, ret_alphas = self._sparse_render_decomposed(
             pixels_to_render_impl,
-            self._means, self._quats, self._log_scales, self._logit_opacities, self._sh0, self._shN,
             world_to_camera_matrices, projection_matrices, settings,
             self._camera_model_to_cpp(camera_model),
             self._projection_method_to_cpp(projection_method),
@@ -2933,9 +3014,8 @@ class GaussianSplat3d:
             sh_degree_to_use=sh_degree_to_use, tile_size=tile_size, radius_clip=min_radius_2d,
             eps_2d=eps_2d, antialias=antialias, render_mode="rgbd",
         )
-        ret_features, ret_alphas = _C.gsplat_sparse_render(
+        ret_features, ret_alphas = self._sparse_render_decomposed(
             pixels_to_render_impl,
-            self._means, self._quats, self._log_scales, self._logit_opacities, self._sh0, self._shN,
             world_to_camera_matrices, projection_matrices, settings,
             self._camera_model_to_cpp(camera_model),
             self._projection_method_to_cpp(projection_method),

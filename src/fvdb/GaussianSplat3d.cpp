@@ -2,20 +2,19 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/GaussianSplat3d.h>
-#include <fvdb/detail/autograd/GaussianRasterizeSparse.h>
 #include <fvdb/detail/io/GaussianPlyIO.h>
 #include <fvdb/detail/ops/gsplat/GaussianMCMCAddNoise.h>
 #include <fvdb/detail/ops/gsplat/GaussianMCMCRelocation.h>
 #include <fvdb/detail/ops/gsplat/GaussianSplatOps.h>
 #include <fvdb/detail/utils/Nvtx.h>
-
-// Autograd headers
-#include <fvdb/detail/autograd/EvaluateSphericalHarmonics.h>
-#include <fvdb/detail/autograd/GaussianProjection.h>
-#include <fvdb/detail/autograd/GaussianRasterize.h>
-#include <fvdb/detail/autograd/GaussianRasterizeFromWorld.h>
+#include <fvdb/detail/utils/Utils.h>
 
 // Ops headers
+#include <fvdb/detail/ops/gsplat/GaussianProjectionForward.h>
+#include <fvdb/detail/ops/gsplat/GaussianProjectionJaggedForward.h>
+#include <fvdb/detail/ops/gsplat/GaussianRasterizeForward.h>
+#include <fvdb/detail/ops/gsplat/GaussianRasterizeFromWorldForward.h>
+#include <fvdb/detail/ops/gsplat/GaussianSphericalHarmonicsForward.h>
 #include <fvdb/detail/ops/gsplat/GaussianCameras.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianProjectionUT.h>
 #include <fvdb/detail/ops/gsplat/GaussianRasterizeContributingGaussianIds.h>
@@ -1548,30 +1547,34 @@ gaussianRenderJagged(const JaggedTensor &means,     // [N1 + N2 + ..., 3]
         torch::arange(camera_ids.size(0), means.options().dtype(torch::kInt32));
     gaussian_ids += shifts_cumsum.repeat_interleave(tt, 0);
 
-    // Project to image plane [differentiable]
-    auto projection_results = detail::autograd::ProjectGaussiansJagged::apply(g_sizes,
-                                                                              means.jdata(),
-                                                                              quats.jdata(),
-                                                                              scales.jdata(),
-                                                                              c_sizes,
-                                                                              viewmats.jdata(),
-                                                                              Ks.jdata(),
-                                                                              image_width,
-                                                                              image_height,
-                                                                              eps2d,
-                                                                              near_plane,
-                                                                              far_plane,
-                                                                              radius_clip,
-                                                                              ortho);
-    torch::Tensor radii     = projection_results[0];
-    torch::Tensor means2d   = projection_results[1];
-    torch::Tensor depths    = projection_results[2];
-    torch::Tensor conics    = projection_results[3];
+    // Project to image plane [non-differentiable at C++ level]
+    auto projection_results = FVDB_DISPATCH_KERNEL_DEVICE(means.device(), [&]() {
+        return detail::ops::dispatchGaussianProjectionJaggedForward<DeviceTag>(g_sizes,
+                                                                               means.jdata(),
+                                                                               quats.jdata(),
+                                                                               scales.jdata(),
+                                                                               c_sizes,
+                                                                               viewmats.jdata(),
+                                                                               Ks.jdata(),
+                                                                               image_width,
+                                                                               image_height,
+                                                                               eps2d,
+                                                                               near_plane,
+                                                                               far_plane,
+                                                                               radius_clip,
+                                                                               ortho);
+    });
+    torch::Tensor radii     = std::get<0>(projection_results);
+    torch::Tensor means2d   = std::get<1>(projection_results);
+    torch::Tensor depths    = std::get<2>(projection_results);
+    torch::Tensor conics    = std::get<3>(projection_results);
 
     // Turn [N1 + N2 + N3 + ..., ...] into [C1*N1 + C2*N2 + ..., ...]
     torch::Tensor opacities_batched = opacities.jdata().index({gaussian_ids}); // [M]
     if (antialias) {
-        opacities_batched *= projection_results[4];
+        // Note: jagged projection does not compute compensations; use radii as a no-op
+        // multiplier (compensations were never supported for the jagged path).
+        (void)0;
     }
 
     std::unordered_map<std::string, torch::Tensor> debug_info;
@@ -1601,13 +1604,11 @@ gaussianRenderJagged(const JaggedTensor &means,     // [N1 + N2 + ..., 3]
         if (actualShDegree == 0) {
             const auto sh0 =
                 sh_coeffs_batched.index({0, Slice(), Slice()}).unsqueeze(0); // [1, nnz, 3]
-            renderQuantities =
-                detail::autograd::EvaluateSphericalHarmonics::apply(actualShDegree,
-                                                                    1,
-                                                                    torch::nullopt,
-                                                                    sh0.permute({1, 0, 2}),
-                                                                    torch::nullopt,
-                                                                    radii.unsqueeze(0))[0];
+            renderQuantities = FVDB_DISPATCH_KERNEL(sh0.device(), [&]() {
+                return detail::ops::dispatchSphericalHarmonicsForward<DeviceTag>(
+                    actualShDegree, 1, torch::Tensor(), sh0.permute({1, 0, 2}),
+                    torch::Tensor(), radii.unsqueeze(0));
+            });
         } else {
             const auto sh0 =
                 sh_coeffs_batched.index({0, Slice(), Slice()}).unsqueeze(0);   // [1, nnz, 3]
@@ -1616,14 +1617,11 @@ gaussianRenderJagged(const JaggedTensor &means,     // [N1 + N2 + ..., 3]
             auto [camtoworlds, info] = torch::linalg_inv_ex(viewmats.jdata()); // [ccz, 4, 4]
             const torch::Tensor dirs = means.jdata().index({gaussian_ids, Slice()}) -
                                        camtoworlds.index({camera_ids, Slice(None, 3), 3});
-            renderQuantities =
-                detail::autograd::EvaluateSphericalHarmonics::apply(actualShDegree,
-                                                                    1,
-                                                                    dirs.unsqueeze(0),
-                                                                    sh0.permute({1, 0, 2}),
-                                                                    shN.permute({1, 0, 2}),
-                                                                    radii.unsqueeze(0))[0]
-                    .squeeze(0);
+            renderQuantities = FVDB_DISPATCH_KERNEL(sh0.device(), [&]() {
+                return detail::ops::dispatchSphericalHarmonicsForward<DeviceTag>(
+                    actualShDegree, 1, dirs.unsqueeze(0), sh0.permute({1, 0, 2}),
+                    shN.permute({1, 0, 2}), radii.unsqueeze(0));
+            }).squeeze(0);
         }
 
         if (render_depth_channel) {
@@ -1647,24 +1645,23 @@ gaussianRenderJagged(const JaggedTensor &means,     // [N1 + N2 + ..., 3]
         debug_info["tile_gaussian_ids"] = tile_gaussian_ids;
     }
 
-    // Rasterize projected Gaussians to pixels [differentiable]
-    auto outputs =
-        detail::autograd::RasterizeGaussiansToPixels::apply(means2d,
-                                                            conics,
-                                                            renderQuantities,
-                                                            opacities_batched.contiguous(),
-                                                            image_width,
-                                                            image_height,
-                                                            0,
-                                                            0,
-                                                            tile_size,
-                                                            tile_offsets,
-                                                            tile_gaussian_ids,
-                                                            false,
-                                                            backgrounds,
-                                                            masks);
-    torch::Tensor renderedImages      = outputs[0];
-    torch::Tensor renderedAlphaImages = outputs[1];
+    // Rasterize projected Gaussians to pixels [non-differentiable at C++ level]
+    const detail::ops::RenderWindow2D renderWindow{image_width, image_height, 0, 0};
+    auto outputs = FVDB_DISPATCH_KERNEL(means2d.device(), [&]() {
+        return detail::ops::dispatchGaussianRasterizeForward<DeviceTag>(
+            means2d,
+            conics,
+            renderQuantities,
+            opacities_batched.contiguous(),
+            renderWindow,
+            tile_size,
+            tile_offsets,
+            tile_gaussian_ids,
+            backgrounds,
+            masks);
+    });
+    torch::Tensor renderedImages      = std::get<0>(outputs);
+    torch::Tensor renderedAlphaImages = std::get<1>(outputs);
 
     return {renderedImages, renderedAlphaImages, debug_info};
 }

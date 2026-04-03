@@ -58,7 +58,7 @@ if _spec is not None and _spec.origin is not None:
 # isort: off
 from ._fvdb_cpp import scaled_dot_product_attention as _scaled_dot_product_attention_cpp
 from ._fvdb_cpp import gaussian_render_jagged as _gaussian_render_jagged_cpp
-from ._fvdb_cpp import evaluate_spherical_harmonics
+from ._fvdb_cpp import evaluate_spherical_harmonics as _evaluate_spherical_harmonics_cpp
 from ._fvdb_cpp import (
     config,
     volume_render,
@@ -101,29 +101,134 @@ def gaussian_render_jagged(
     backgrounds: torch.Tensor | None = None,
     masks: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]:
-    return _gaussian_render_jagged_cpp(
-        means=means._impl,
-        quats=quats._impl,
-        scales=scales._impl,
-        opacities=opacities._impl,
-        sh_coeffs=sh_coeffs._impl,
-        viewmats=viewmats._impl,
-        Ks=Ks._impl,
-        image_width=image_width,
-        image_height=image_height,
-        near_plane=near_plane,
-        far_plane=far_plane,
-        sh_degree_to_use=sh_degree_to_use,
-        tile_size=tile_size,
-        radius_clip=radius_clip,
-        eps2d=eps2d,
-        antialias=antialias,
-        render_depth_channel=render_depth_channel,
-        return_debug_info=return_debug_info,
-        ortho=ortho,
-        backgrounds=backgrounds,
-        masks=masks,
+    import math
+
+    from . import _fvdb_cpp as _C
+    from .functional.splat._projection import _ProjectGaussiansJaggedFn
+    from .functional.splat._rasterize import _RasterizeDenseFn
+    from .functional.splat._sh import _EvalSHFn
+
+    ccz = viewmats.jdata.shape[0]  # total number of cameras
+    device = means.jdata.device
+    dtype = means.jdata.dtype
+
+    # ---- Step 1: Compute batch indices (camera_ids, gaussian_ids) ----
+    # g_sizes is [N1, N2, ...], c_sizes is [C1, C2, ...]
+    g_sizes = means.joffsets[1:] - means.joffsets[:-1]
+    c_sizes = Ks.joffsets[1:] - Ks.joffsets[:-1]
+
+    # camera_ids: for each element in the expanded (C_i * N_i) layout, which camera it belongs to
+    tt = g_sizes.repeat_interleave(c_sizes)
+    camera_ids = torch.arange(ccz, device=device, dtype=torch.int32).repeat_interleave(tt, 0)
+
+    # gaussian_ids: for each element, which gaussian (in the flat jdata) it belongs to
+    dd0 = means.joffsets[:-1].repeat_interleave(c_sizes, 0)
+    dd1 = means.joffsets[1:].repeat_interleave(c_sizes, 0)
+    shifts = dd0[1:] - dd1[:-1]
+    shifts = torch.cat([torch.tensor([0], device=device), shifts])
+    shifts_cumsum = shifts.cumsum(0)
+    gaussian_ids = torch.arange(camera_ids.shape[0], device=device, dtype=torch.int32)
+    gaussian_ids = gaussian_ids + shifts_cumsum.repeat_interleave(tt, 0)
+
+    # ---- Step 2: Jagged projection (differentiable via Python autograd) ----
+    radii, means2d, depths, conics = _ProjectGaussiansJaggedFn.apply(
+        g_sizes, means.jdata, quats.jdata, scales.jdata, c_sizes,
+        viewmats.jdata, Ks.jdata, image_width, image_height, eps2d,
+        near_plane, far_plane, radius_clip, ortho,
     )
+
+    # ---- Step 3: Gather opacities for the expanded layout ----
+    opacities_batched = opacities.jdata[gaussian_ids]  # [M]
+
+    # ---- Debug info (populated before SH eval so we capture projection outputs) ----
+    debug_info: dict[str, torch.Tensor] = {}
+    if return_debug_info:
+        debug_info["camera_ids"] = camera_ids
+        debug_info["gaussian_ids"] = gaussian_ids
+        debug_info["radii"] = radii
+        debug_info["means2d"] = means2d
+        debug_info["depths"] = depths
+        debug_info["conics"] = conics
+        debug_info["opacities"] = opacities_batched
+
+    # ---- Step 4: Compute render features (SH eval or depth) ----
+    nnz = camera_ids.shape[0]
+    D = sh_coeffs.jdata.shape[-1]  # feature dimension (typically 3 for RGB)
+
+    # sh_coeffs.jdata is [total_N, K, D]; permute to [K, total_N, D] then gather
+    sh_coeffs_batched = sh_coeffs.jdata.permute(1, 0, 2)[:, gaussian_ids, :]  # [K, nnz, D]
+    K = sh_coeffs_batched.shape[0]
+    actual_sh_degree = sh_degree_to_use if sh_degree_to_use >= 0 else int(math.sqrt(K)) - 1
+
+    if actual_sh_degree == 0:
+        sh0 = sh_coeffs_batched[0].unsqueeze(0)  # [1, nnz, D]
+        features = _EvalSHFn.apply(
+            actual_sh_degree, 1,
+            torch.zeros(1, nnz, 3, device=device, dtype=dtype),
+            sh0.permute(1, 0, 2),  # [nnz, 1, D]
+            torch.empty(nnz, 0, D, device=device, dtype=dtype),
+            radii.unsqueeze(0),  # [1, nnz]
+        )
+    else:
+        sh0 = sh_coeffs_batched[0].unsqueeze(0)  # [1, nnz, D]
+        shN = sh_coeffs_batched[1:]  # [K-1, nnz, D]
+        cam_to_world = torch.linalg.inv(viewmats.jdata)  # [ccz, 4, 4]
+        dirs = means.jdata[gaussian_ids] - cam_to_world[camera_ids, :3, 3]  # [nnz, 3]
+        features = _EvalSHFn.apply(
+            actual_sh_degree, 1,
+            dirs.unsqueeze(0),  # [1, nnz, 3]
+            sh0.permute(1, 0, 2),  # [nnz, 1, D]
+            shN.permute(1, 0, 2),  # [nnz, K-1, D]
+            radii.unsqueeze(0),  # [1, nnz]
+        )
+    features = features.squeeze(0)  # [C=1, nnz, D] -> [nnz, D]
+
+    if render_depth_channel:
+        features = torch.cat([features, depths[gaussian_ids].unsqueeze(-1)], -1)
+
+    # ---- Step 5: Tile intersection (non-differentiable) ----
+    num_tiles_w = math.ceil(image_width / tile_size)
+    num_tiles_h = math.ceil(image_height / tile_size)
+    tile_offsets, tile_gaussian_ids = _C.gsplat_tile_intersection(
+        means2d, radii, depths, ccz, tile_size, num_tiles_h, num_tiles_w,
+        camera_ids=camera_ids,
+    )
+
+    if return_debug_info:
+        debug_info["tile_offsets"] = tile_offsets
+        debug_info["tile_gaussian_ids"] = tile_gaussian_ids
+
+    # ---- Step 6: Rasterize (differentiable via Python autograd) ----
+    images, alphas = _RasterizeDenseFn.apply(
+        means2d, conics, features, opacities_batched.contiguous(),
+        image_width, image_height, 0, 0, tile_size,
+        tile_offsets, tile_gaussian_ids, False, backgrounds, masks,
+    )
+
+    return images, alphas, debug_info
+
+
+def evaluate_spherical_harmonics(
+    sh_degree: int,
+    num_cameras: int,
+    sh0: torch.Tensor,
+    radii: torch.Tensor,
+    shN: torch.Tensor | None = None,
+    view_directions: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Evaluate spherical harmonics (differentiable via Python autograd)."""
+    from .functional.splat._sh import _EvalSHFn
+
+    if sh_degree > 0:
+        if view_directions is None:
+            raise ValueError("view_directions must be provided when sh_degree > 0")
+        if shN is None:
+            raise ValueError("shN must be provided when sh_degree > 0")
+    view_dirs = view_directions if view_directions is not None else torch.zeros(
+        num_cameras, sh0.size(0), 3, device=sh0.device, dtype=sh0.dtype)
+    shN_val = shN if shN is not None else torch.empty(
+        sh0.size(0), 0, sh0.size(2), device=sh0.device, dtype=sh0.dtype)
+    return _EvalSHFn.apply(sh_degree, num_cameras, view_dirs, sh0, shN_val, radii)
 
 
 from .convolution_plan import ConvolutionPlan

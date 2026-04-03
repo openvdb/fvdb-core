@@ -231,7 +231,7 @@ fvdb::GaussianSplat3d::SparseProjectedGaussianSplats sparseProjectGaussiansForCa
 // ---------------------------------------------------------------------------
 
 /// @brief Rasterize a cropped region from pre-projected Gaussians.
-///        Validates crop dimensions and calls RasterizeGaussiansToPixels::apply.
+///        Validates crop dimensions and calls dispatchGaussianRasterizeForward.
 std::tuple<torch::Tensor, torch::Tensor> renderCropFromProjected(
     const fvdb::GaussianSplat3d::ProjectedGaussianSplats &projectedGaussians,
     size_t tileSize,
@@ -267,7 +267,7 @@ std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor> sparseRender(
     std::optional<torch::Tensor> &accumMax2dRadii);
 
 /// @brief Rasterize from world-space 3D Gaussians using a pre-projected state.
-///        Calls RasterizeGaussiansToPixelsFromWorld3DGS::apply.
+///        Calls dispatchGaussianRasterizeFromWorld3DGSForward.
 std::tuple<torch::Tensor, torch::Tensor> rasterizeFromWorld(
     const torch::Tensor &means,
     const torch::Tensor &quats,

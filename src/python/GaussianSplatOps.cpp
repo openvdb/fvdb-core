@@ -86,7 +86,9 @@ bind_gaussian_splat_ops(py::module &m) {
         .def_readonly("inverse_indices",
                       &fvdb::GaussianSplat3d::SparseProjectedGaussianSplats::inverseIndices)
         .def_readonly("has_duplicates",
-                      &fvdb::GaussianSplat3d::SparseProjectedGaussianSplats::hasDuplicates);
+                      &fvdb::GaussianSplat3d::SparseProjectedGaussianSplats::hasDuplicates)
+        .def_readonly("unique_pixels_to_render",
+                      &fvdb::GaussianSplat3d::SparseProjectedGaussianSplats::uniquePixelsToRender);
 
     // -----------------------------------------------------------------------
     // Validation & utility
@@ -1087,10 +1089,11 @@ bind_gaussian_splat_ops(py::module &m) {
            uint32_t numCameras,
            uint32_t tileSize,
            uint32_t numTilesH,
-           uint32_t numTilesW) {
+           uint32_t numTilesW,
+           const at::optional<torch::Tensor> &cameraIds) {
             return FVDB_DISPATCH_KERNEL(means2d.device(), [&]() {
                 return ops::dispatchGaussianTileIntersection<DeviceTag>(
-                    means2d, radii, depths, at::nullopt,
+                    means2d, radii, depths, cameraIds,
                     numCameras, tileSize, numTilesH, numTilesW);
             });
         },
@@ -1100,5 +1103,6 @@ bind_gaussian_splat_ops(py::module &m) {
         py::arg("num_cameras"),
         py::arg("tile_size"),
         py::arg("num_tiles_h"),
-        py::arg("num_tiles_w"));
+        py::arg("num_tiles_w"),
+        py::arg("camera_ids") = py::none());
 }

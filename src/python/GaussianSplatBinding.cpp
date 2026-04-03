@@ -7,8 +7,9 @@
 
 #include <fvdb/FVDB.h>
 #include <fvdb/GaussianSplat3d.h>
-#include <fvdb/detail/autograd/EvaluateSphericalHarmonics.h>
 #include <fvdb/detail/ops/gsplat/GaussianCameras.cuh>
+#include <fvdb/detail/ops/gsplat/GaussianSphericalHarmonicsForward.h>
+#include <fvdb/detail/utils/Utils.h>
 
 #include <torch/extension.h>
 
@@ -515,8 +516,12 @@ bind_gaussian_splat3d(py::module &m) {
            const torch::Tensor &radii,
            const std::optional<torch::Tensor> &shN,
            const std::optional<torch::Tensor> &viewDirections) {
-            return fvdb::detail::autograd::EvaluateSphericalHarmonics::apply(
-                shDegree, numCameras, viewDirections, sh0, shN, radii)[0];
+            const torch::Tensor viewDirsValue = viewDirections.value_or(torch::Tensor());
+            const torch::Tensor shNValue      = shN.value_or(torch::Tensor());
+            return FVDB_DISPATCH_KERNEL(sh0.device(), [&]() {
+                return fvdb::detail::ops::dispatchSphericalHarmonicsForward<DeviceTag>(
+                    shDegree, numCameras, viewDirsValue, sh0, shNValue, radii);
+            });
         },
         R"doc(
 Evaluate spherical harmonics to compute view-dependent features/colors.

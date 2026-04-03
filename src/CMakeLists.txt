@@ -44,11 +44,6 @@ execute_process(
 # Source files
 set(FVDB_CPP_FILES
     fvdb/Config.cpp
-    fvdb/detail/autograd/EvaluateSphericalHarmonics.cpp
-    fvdb/detail/autograd/GaussianProjection.cpp
-    fvdb/detail/autograd/GaussianRasterize.cpp
-    fvdb/detail/autograd/GaussianRasterizeFromWorld.cpp
-    fvdb/detail/autograd/GaussianRasterizeSparse.cpp
     fvdb/detail/autograd/JaggedReduce.cpp
     fvdb/detail/autograd/VolumeRender.cpp
     fvdb/detail/io/GaussianPlyIO.cpp
