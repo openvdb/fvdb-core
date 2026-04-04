@@ -124,19 +124,9 @@ class _ProjectGaussiansFn(torch.autograd.Function):
         conics = saved[6]
         compensations = saved[7] if ctx.calc_compensations else None
 
-        # --- Fresh-zeros pattern for accumulators ---
-        # Create per-call zero tensors; the kernel atomicAdds per-call contributions.
-        N = means.size(0)
-        device = means.device
-        fresh_grad_norms = None
-        fresh_step_counts = None
-        fresh_max_radii = None
-        if ctx.accum_grad_norms is not None:
-            fresh_grad_norms = torch.zeros(N, device=device, dtype=torch.float32)
-            fresh_step_counts = torch.zeros(N, device=device, dtype=torch.int32)
-        if ctx.accum_max_radii is not None:
-            fresh_max_radii = torch.zeros(N, device=device, dtype=torch.int32)
-
+        # --- Direct in-place accumulation ---
+        # The kernel uses gpuAtomicAdd/atomicMax which are inherently accumulative,
+        # so we pass the persistent accumulators directly — no temporary tensors needed.
         assert grad_means2d is not None
         assert grad_depths is not None
         assert grad_conics is not None
@@ -158,19 +148,10 @@ class _ProjectGaussiansFn(torch.autograd.Function):
             grad_compensations,
             ctx.needs_input_grad[3],  # world_to_cam requires_grad
             ctx.ortho,
-            fresh_grad_norms,
-            fresh_max_radii,
-            fresh_step_counts,
+            ctx.accum_grad_norms,
+            ctx.accum_max_radii,
+            ctx.accum_step_counts,
         )
-
-        # --- Explicit Python-side accumulation ---
-        # The kernel filled fresh_* with this call's contributions.
-        # Add deltas to the persistent accumulators.
-        if ctx.accum_grad_norms is not None and fresh_grad_norms is not None:
-            ctx.accum_grad_norms.add_(fresh_grad_norms)
-            ctx.accum_step_counts.add_(fresh_step_counts)
-        if ctx.accum_max_radii is not None and fresh_max_radii is not None:
-            torch.maximum(ctx.accum_max_radii, fresh_max_radii, out=ctx.accum_max_radii)
 
         # Return None for all non-differentiable inputs
         # Order: means, quats, log_scales, world_to_cam, projection_matrices,
@@ -544,9 +525,12 @@ def project_to_2d(
         radius_clip: Minimum projected radius for culling.
         antialias: Whether to compute antialiasing compensations.
         camera_model: Camera distortion model.
-        accum_grad_norms: ``[N]`` Accumulator for gradient norms (mutated in backward).
-        accum_step_counts: ``[N]`` Accumulator for step counts (mutated in backward).
-        accum_max_radii: ``[N]`` Accumulator for max radii (mutated in backward).
+        accum_grad_norms: ``[N]`` Persistent accumulator for gradient norms.
+            Mutated in-place during the backward pass via CUDA ``atomicAdd``.
+        accum_step_counts: ``[N]`` Persistent accumulator for gradient step counts.
+            Mutated in-place during the backward pass via CUDA ``atomicAdd``.
+        accum_max_radii: ``[N]`` Persistent accumulator for max projected radii.
+            Mutated in-place during the backward pass via CUDA ``atomicMax``.
 
     Returns:
         A :class:`RawProjection` containing radii, means2d, depths, conics,
