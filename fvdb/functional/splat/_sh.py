@@ -46,12 +46,14 @@ class _EvalSHFn(torch.autograd.Function):
         return render_quantities
 
     @staticmethod
-    def backward(ctx: Any, d_loss_d_colors: torch.Tensor):
+    def backward(ctx: Any, *grad_outputs: torch.Tensor | None) -> tuple[torch.Tensor | None, ...]:
+        d_loss_d_colors = grad_outputs[0]
         if d_loss_d_colors is not None:
             d_loss_d_colors = d_loss_d_colors.contiguous()
 
         view_dirs, shN_coeffs, radii = ctx.saved_tensors
 
+        assert d_loss_d_colors is not None
         compute_d_loss_d_view_dirs = view_dirs.numel() > 0 and view_dirs.requires_grad
 
         d_sh0, d_shN, d_view_dirs = _C.gsplat_sh_eval_bwd(
@@ -105,4 +107,6 @@ def evaluate_spherical_harmonics(
         cam_to_world = torch.linalg.inv(world_to_camera_matrices)
         camera_pos = cam_to_world[:, :3, 3]
         view_dirs = means[None, :, :] - camera_pos[:, None, :]
-    return _EvalSHFn.apply(actual_sh_degree, C, view_dirs, sh0, shN, per_gaussian_projected_radii)
+    result: Any = _EvalSHFn.apply(actual_sh_degree, C, view_dirs, sh0, shN, per_gaussian_projected_radii)
+    assert isinstance(result, torch.Tensor)
+    return result

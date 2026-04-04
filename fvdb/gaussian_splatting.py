@@ -3,7 +3,7 @@
 #
 import math
 import pathlib
-from typing import Any, Mapping, Optional, Sequence, TypeVar, overload
+from typing import Any, Mapping, Optional, Sequence, TypeVar, Union, overload
 
 import torch
 import torch.nn.functional as F
@@ -134,6 +134,11 @@ class _PyProjectedImpl:
         self.projection_method = _C.ProjectionMethod.ANALYTIC
 
 
+# Union type for the internal projected state: either the Python impl (analytic path)
+# or the C++ ProjectedGaussianSplats (UT fallback path).
+_ProjectedState = Union[_PyProjectedImpl, ProjectedGaussianSplatsCpp]
+
+
 class ProjectedGaussianSplats:
     """
     A class representing a set of Gaussian splats projected onto a batch of 2D image planes.
@@ -150,12 +155,12 @@ class ProjectedGaussianSplats:
 
     __PRIVATE__ = object()
 
-    def __init__(self, impl: ProjectedGaussianSplatsCpp, _private: Any = None) -> None:
+    def __init__(self, impl: _ProjectedState, _private: Any = None) -> None:
         """
         Private constructor. Use :meth:`GaussianSplat3d.project_gaussians_for_images` or similar methods to create instances.
 
         Args:
-            impl (ProjectedGaussianSplatsCpp): The underlying C++ implementation.
+            impl (_ProjectedState): The underlying projected state (C++ or Python implementation).
             _private (Any): A private object to prevent direct construction. Must be :attr:`ProjectedGaussianSplats.__PRIVATE__`.
         """
         if _private is not self.__PRIVATE__:
@@ -1450,7 +1455,7 @@ class GaussianSplat3d:
         return torch.exp(self._log_scales)
 
     @property
-    def accumulated_gradient_step_counts(self) -> torch.Tensor:
+    def accumulated_gradient_step_counts(self) -> torch.Tensor | None:
         """
         Returns the accumulated gradient step counts for each Gaussian.
 
@@ -1471,7 +1476,7 @@ class GaussianSplat3d:
         return self._accum_step_counts
 
     @property
-    def accumulated_max_2d_radii(self) -> torch.Tensor:
+    def accumulated_max_2d_radii(self) -> torch.Tensor | None:
         """
         Returns the maximum 2D projected radius (in pixels) for each Gaussian across all calls to `render_*` functions.
         This is used by certain optimization techniques to ensure that the Gaussians do not become too large or too small during the optimization process.
@@ -1570,7 +1575,7 @@ class GaussianSplat3d:
         self._accumulate_mean_2d_gradients = cast_check(value, bool, "accumulate_mean_2d_gradients")
 
     @property
-    def accumulated_mean_2d_gradient_norms(self) -> torch.Tensor:
+    def accumulated_mean_2d_gradient_norms(self) -> torch.Tensor | None:
         """
         Returns the average norm of the gradient of projected (2D) means for each Gaussian across every backward pass.
         This is used by certain optimization techniques to split/prune/duplicate Gaussians.
@@ -1645,7 +1650,7 @@ class GaussianSplat3d:
         camera_model: _C.CameraModel,
         projection_method: _C.ProjectionMethod,
         distortion_coeffs: torch.Tensor | None,
-    ):
+    ) -> _ProjectedState:
         """Validate camera args, resolve projection method, and project.
 
         Uses the Python decomposed pipeline for ANALYTIC projection.
@@ -1705,7 +1710,7 @@ class GaussianSplat3d:
         projection_matrices: torch.Tensor,
         settings: _C.RenderSettings,
         camera_model: _C.CameraModel,
-    ) -> tuple:
+    ) -> _PyProjectedImpl:
         """Decomposed projection pipeline using Python autograd Functions.
 
         Returns a tuple of raw tensors needed for rasterization:
@@ -1727,7 +1732,7 @@ class GaussianSplat3d:
                 self._accum_max_2d_radii = torch.zeros(N, device=self._means.device, dtype=torch.int32)
 
         # 1. Projection with fresh-zeros accumulator pattern
-        proj_result = _ProjectGaussiansFn.apply(
+        proj_result: Any = _ProjectGaussiansFn.apply(
             self._means,
             self._quats,
             self._log_scales,
@@ -1772,7 +1777,8 @@ class GaussianSplat3d:
                 cam_to_world = torch.linalg.inv(world_to_camera_matrices)
                 camera_pos = cam_to_world[:, :3, 3]
                 view_dirs = self._means[None, :, :] - camera_pos[:, None, :]
-            features = _EvalSHFn.apply(actual_sh_degree, C, view_dirs, self._sh0, self._shN, radii)
+            sh_result: Any = _EvalSHFn.apply(actual_sh_degree, C, view_dirs, self._sh0, self._shN, radii)
+            features: torch.Tensor = sh_result
             if render_mode == _C.RenderMode.RGBD:
                 features = torch.cat([features, depths.unsqueeze(-1)], -1)
 
@@ -1804,7 +1810,7 @@ class GaussianSplat3d:
         opacities: torch.Tensor,
         tile_offsets: torch.Tensor,
         tile_ids: torch.Tensor,
-        settings: _C.RenderSettings,
+        settings: _ProjectedState,
         tile_size: int,
         crop_width: int,
         crop_height: int,
@@ -1819,7 +1825,7 @@ class GaussianSplat3d:
         ow = crop_origin_w if crop_origin_w >= 0 else 0
         oh = crop_origin_h if crop_origin_h >= 0 else 0
 
-        return _RasterizeDenseFn.apply(
+        result: Any = _RasterizeDenseFn.apply(
             means2d,
             conics,
             features,
@@ -1835,6 +1841,7 @@ class GaussianSplat3d:
             backgrounds,
             masks,
         )
+        return result
 
     def _sparse_render_decomposed(
         self,
@@ -1898,7 +1905,7 @@ class GaussianSplat3d:
             render_pixels_jt = JaggedTensor(impl=pixels_to_render_impl)
 
         # 3. Differentiable sparse rasterization
-        rendered_colors_jdata, rendered_alphas_jdata = _RasterizeSparseFn.apply(
+        sparse_rast_result: Any = _RasterizeSparseFn.apply(
             state.means2d,  # differentiable
             state.conics,  # differentiable
             state.render_quantities,  # differentiable
@@ -1919,6 +1926,8 @@ class GaussianSplat3d:
             backgrounds,
             masks,
         )
+        rendered_colors_jdata: torch.Tensor = sparse_rast_result[0]
+        rendered_alphas_jdata: torch.Tensor = sparse_rast_result[1]
 
         # 4. Scatter unique results back to all original positions (including duplicates)
         pixels_jt = JaggedTensor(impl=pixels_to_render_impl)
@@ -4055,6 +4064,10 @@ class GaussianSplat3d:
         Returns:
            gaussian_splat_3d (GaussianSplat3d): A new instance of :class:`GaussianSplat3d` with the specified device and/or data type.
         """
+
+        # Initialize to satisfy pyright; all valid paths below assign both.
+        device: Any = None
+        dtype: Any = None
 
         # All values passed by keyword arguments
         if len(args) == 0:

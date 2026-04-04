@@ -126,7 +126,9 @@ class _RasterizeSparseFn(torch.autograd.Function):
         return rendered_colors_jt.jdata, rendered_alphas_jt.jdata
 
     @staticmethod
-    def backward(ctx: Any, d_loss_d_rendered_features_jdata, d_loss_d_rendered_alphas_jdata):
+    def backward(ctx: Any, *grad_outputs: torch.Tensor | None) -> tuple[torch.Tensor | None, ...]:
+        d_loss_d_rendered_features_jdata = grad_outputs[0]
+        d_loss_d_rendered_alphas_jdata = grad_outputs[1]
         if d_loss_d_rendered_features_jdata is not None:
             d_loss_d_rendered_features_jdata = d_loss_d_rendered_features_jdata.contiguous()
         if d_loss_d_rendered_alphas_jdata is not None:
@@ -165,6 +167,8 @@ class _RasterizeSparseFn(torch.autograd.Function):
         pixels_jt = JaggedTensor(impl=_C.JaggedTensor.from_data_offsets_and_list_ids(pixels_jdata, joffsets, jlidx))
         rendered_alphas_jt = pixels_jt.jagged_like(rendered_alphas_jdata)
         last_ids_jt = pixels_jt.jagged_like(last_ids_jdata)
+        assert d_loss_d_rendered_features_jdata is not None
+        assert d_loss_d_rendered_alphas_jdata is not None
         d_loss_d_rendered_features_jt = pixels_jt.jagged_like(d_loss_d_rendered_features_jdata)
         d_loss_d_rendered_alphas_jt = pixels_jt.jagged_like(d_loss_d_rendered_alphas_jdata)
 
@@ -253,7 +257,7 @@ def sparse_render(
     distortion_coeffs: Optional[torch.Tensor] = None,
     backgrounds: Optional[torch.Tensor] = None,
     masks: Optional[torch.Tensor] = None,
-) -> tuple[JaggedTensor, JaggedTensor]:
+) -> tuple[_C.JaggedTensor, _C.JaggedTensor]:
     """Render Gaussians at specified sparse pixel locations.
 
     Full pipeline: projects Gaussians, rasterizes at the given pixels, and

@@ -50,7 +50,7 @@ class _ProjectGaussiansFn(torch.autograd.Function):
         accum_step_counts: Optional[torch.Tensor],
         accum_max_radii: Optional[torch.Tensor],
     ):
-        result = _C.gsplat_projection_fwd(
+        result: Any = _C.gsplat_projection_fwd(
             means,
             quats,
             log_scales,
@@ -91,7 +91,12 @@ class _ProjectGaussiansFn(torch.autograd.Function):
         return radii, means2d, depths, conics
 
     @staticmethod
-    def backward(ctx: Any, grad_radii, grad_means2d, grad_depths, grad_conics, *maybe_grad_comp):
+    def backward(ctx: Any, *grad_outputs: torch.Tensor | None) -> tuple[torch.Tensor | None, ...]:
+        grad_radii = grad_outputs[0]
+        grad_means2d = grad_outputs[1]
+        grad_depths = grad_outputs[2]
+        grad_conics = grad_outputs[3]
+        maybe_grad_comp = grad_outputs[4:]
         # Make gradients contiguous (matching C++ autograd behavior)
         if grad_radii is not None:
             grad_radii = grad_radii.contiguous()
@@ -131,6 +136,9 @@ class _ProjectGaussiansFn(torch.autograd.Function):
         if ctx.accum_max_radii is not None:
             fresh_max_radii = torch.zeros(N, device=device, dtype=torch.int32)
 
+        assert grad_means2d is not None
+        assert grad_depths is not None
+        assert grad_conics is not None
         d_means, _, d_quats, d_scales, d_w2c = _C.gsplat_projection_bwd(
             means,
             quats,
@@ -245,7 +253,11 @@ class _ProjectGaussiansJaggedFn(torch.autograd.Function):
         return radii, means2d, depths, conics
 
     @staticmethod
-    def backward(ctx: Any, grad_radii, grad_means2d, grad_depths, grad_conics):
+    def backward(ctx: Any, *grad_outputs: torch.Tensor | None) -> tuple[torch.Tensor | None, ...]:
+        grad_radii = grad_outputs[0]
+        grad_means2d = grad_outputs[1]
+        grad_depths = grad_outputs[2]
+        grad_conics = grad_outputs[3]
         if grad_radii is not None:
             grad_radii = grad_radii.contiguous()
         if grad_means2d is not None:
@@ -258,6 +270,9 @@ class _ProjectGaussiansJaggedFn(torch.autograd.Function):
         g_sizes, means, quats, scales, c_sizes = ctx.saved_tensors[:5]
         world_to_cam, projection_matrices, radii, conics = ctx.saved_tensors[5:]
 
+        assert grad_means2d is not None
+        assert grad_depths is not None
+        assert grad_conics is not None
         d_means, _, d_quats, d_scales, d_w2c = _C.gsplat_projection_jagged_bwd(
             g_sizes,
             means,

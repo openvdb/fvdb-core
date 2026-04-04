@@ -33,7 +33,7 @@ def render_contributing_gaussian_ids(
     projected_state: _C.ProjectedGaussianSplats,
     settings: _C.RenderSettings,
     num_contributing_gaussians: Optional[torch.Tensor] = None,
-) -> tuple[JaggedTensor, JaggedTensor]:
+) -> tuple[_C.JaggedTensor, _C.JaggedTensor]:
     """Get the IDs of contributing Gaussians per pixel (dense).
 
     Args:
@@ -55,7 +55,7 @@ def sparse_render_num_contributing_gaussians(
     sparse_state: _C.SparseProjectedGaussianSplats,
     pixels_to_render: JaggedTensor,
     settings: _C.RenderSettings,
-) -> tuple[JaggedTensor, JaggedTensor]:
+) -> tuple[_C.JaggedTensor, _C.JaggedTensor]:
     """Count the number of contributing Gaussians per pixel (sparse).
 
     Args:
@@ -78,7 +78,7 @@ def sparse_render_contributing_gaussian_ids(
     pixels_to_render: JaggedTensor,
     settings: _C.RenderSettings,
     num_contributing_gaussians: Optional[JaggedTensor] = None,
-) -> tuple[JaggedTensor, JaggedTensor]:
+) -> tuple[_C.JaggedTensor, _C.JaggedTensor]:
     """Get the IDs of contributing Gaussians per pixel (sparse).
 
     Args:

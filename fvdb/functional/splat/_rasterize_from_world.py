@@ -4,7 +4,7 @@
 """Functional API for world-space Gaussian rasterization with geometry gradients."""
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 import torch
 
@@ -31,8 +31,8 @@ class _RasterizeFromWorldFn(torch.autograd.Function):
         world_to_cam_end: torch.Tensor,  # [C, 4, 4]
         projection_matrices: torch.Tensor,  # [C, 3, 3]
         distortion_coeffs: torch.Tensor,  # [C, K]
-        rolling_shutter_type: int,  # RollingShutterType enum value
-        camera_model: int,  # DistortionModel enum value
+        rolling_shutter_type: _C.RollingShutterType,
+        camera_model: _C.CameraModel,
         settings: _C.RenderSettings,
         tile_offsets: torch.Tensor,
         tile_gaussian_ids: torch.Tensor,
@@ -99,7 +99,9 @@ class _RasterizeFromWorldFn(torch.autograd.Function):
         return rendered_features, rendered_alphas
 
     @staticmethod
-    def backward(ctx: Any, d_loss_d_rendered_features, d_loss_d_rendered_alphas):
+    def backward(ctx: Any, *grad_outputs: torch.Tensor | None) -> tuple[torch.Tensor | None, ...]:
+        d_loss_d_rendered_features = grad_outputs[0]
+        d_loss_d_rendered_alphas = grad_outputs[1]
         if d_loss_d_rendered_features is not None:
             d_loss_d_rendered_features = d_loss_d_rendered_features.contiguous()
         if d_loss_d_rendered_alphas is not None:
@@ -138,6 +140,8 @@ class _RasterizeFromWorldFn(torch.autograd.Function):
         settings.image_origin_h = ctx.image_origin_h
         settings.tile_size = ctx.tile_size
 
+        assert d_loss_d_rendered_features is not None
+        assert d_loss_d_rendered_alphas is not None
         result = _C.gsplat_rasterize_from_world_bwd(
             means,
             quats,
@@ -148,8 +152,8 @@ class _RasterizeFromWorldFn(torch.autograd.Function):
             world_to_cam_end,
             projection_matrices,
             distortion_coeffs,
-            ctx.rolling_shutter_type,
-            ctx.camera_model,
+            cast(_C.RollingShutterType, ctx.rolling_shutter_type),
+            cast(_C.CameraModel, ctx.camera_model),
             settings,
             tile_offsets,
             tile_gaussian_ids,

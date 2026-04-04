@@ -88,7 +88,9 @@ class _RasterizeDenseFn(torch.autograd.Function):
         return rendered_colors, rendered_alphas
 
     @staticmethod
-    def backward(ctx: Any, d_loss_d_rendered_colors, d_loss_d_rendered_alphas):
+    def backward(ctx: Any, *grad_outputs: torch.Tensor | None) -> tuple[torch.Tensor | None, ...]:
+        d_loss_d_rendered_colors = grad_outputs[0]
+        d_loss_d_rendered_alphas = grad_outputs[1]
         if d_loss_d_rendered_colors is not None:
             d_loss_d_rendered_colors = d_loss_d_rendered_colors.contiguous()
         if d_loss_d_rendered_alphas is not None:
@@ -114,6 +116,8 @@ class _RasterizeDenseFn(torch.autograd.Function):
             masks = saved[opt_idx]
             opt_idx += 1
 
+        assert d_loss_d_rendered_colors is not None
+        assert d_loss_d_rendered_alphas is not None
         result = _C.gsplat_rasterize_bwd(
             means2d,
             conics,

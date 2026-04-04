@@ -91,6 +91,7 @@ def gaussian_render_jagged(
     render_depth_only: bool = False,
     ortho: bool = False,
     backgrounds: torch.Tensor | None = None,
+    masks: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]: ...
 def evaluate_spherical_harmonics(
     sh_degree: int,
