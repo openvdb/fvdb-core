@@ -45,7 +45,9 @@ def render_contributing_gaussian_ids(
         Tuple of (gaussian_ids, weights) as JaggedTensors.
     """
     return _C.gsplat_render_contributing_ids(
-        projected_state, settings, num_contributing_gaussians,
+        projected_state,
+        settings,
+        num_contributing_gaussians,
     )
 
 
@@ -65,7 +67,9 @@ def sparse_render_num_contributing_gaussians(
         Tuple of (num_contributing, weights) as JaggedTensors.
     """
     return _C.gsplat_sparse_render_num_contributing(
-        sparse_state, pixels_to_render._impl, settings,
+        sparse_state,
+        pixels_to_render._impl,
+        settings,
     )
 
 
@@ -88,5 +92,8 @@ def sparse_render_contributing_gaussian_ids(
     """
     jt_arg = num_contributing_gaussians._impl if num_contributing_gaussians is not None else None
     return _C.gsplat_sparse_render_contributing_ids(
-        sparse_state, pixels_to_render._impl, settings, jt_arg,
+        sparse_state,
+        pixels_to_render._impl,
+        settings,
+        jt_arg,
     )

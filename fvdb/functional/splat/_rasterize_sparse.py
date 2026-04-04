@@ -31,12 +31,12 @@ class _RasterizeSparseFn(torch.autograd.Function):
     def forward(
         ctx,
         # Differentiable inputs (plain tensors)
-        means2d: torch.Tensor,           # [C, N, 2]
-        conics: torch.Tensor,            # [C, N, 3]
-        features: torch.Tensor,          # [C, N, D]
-        opacities: torch.Tensor,         # [N]
+        means2d: torch.Tensor,  # [C, N, 2]
+        conics: torch.Tensor,  # [C, N, 3]
+        features: torch.Tensor,  # [C, N, D]
+        opacities: torch.Tensor,  # [N]
         # Non-differentiable inputs
-        pixels_to_render: JaggedTensor,   # JaggedTensor [C, num_pixels, 2]
+        pixels_to_render: JaggedTensor,  # JaggedTensor [C, num_pixels, 2]
         image_width: int,
         image_height: int,
         image_origin_w: int,
@@ -55,11 +55,23 @@ class _RasterizeSparseFn(torch.autograd.Function):
         # The pybind fwd takes a C++ JaggedTensor directly
         result = _C.gsplat_rasterize_sparse_fwd(
             pixels_to_render._impl,
-            means2d, conics, features, opacities,
-            image_width, image_height, image_origin_w, image_origin_h,
-            tile_size, tile_offsets, tile_gaussian_ids,
-            active_tiles, tile_pixel_mask, tile_pixel_cumsum, pixel_map,
-            backgrounds, masks,
+            means2d,
+            conics,
+            features,
+            opacities,
+            image_width,
+            image_height,
+            image_origin_w,
+            image_origin_h,
+            tile_size,
+            tile_offsets,
+            tile_gaussian_ids,
+            active_tiles,
+            tile_pixel_mask,
+            tile_pixel_cumsum,
+            pixel_map,
+            backgrounds,
+            masks,
         )
         # result is a tuple of 3 C++ JaggedTensors: (renderedColors, renderedAlphas, lastIds)
         rendered_colors_jt = JaggedTensor(impl=result[0])
@@ -72,23 +84,23 @@ class _RasterizeSparseFn(torch.autograd.Function):
         jlidx = pixels_to_render.jlidx
 
         to_save = [
-            means2d,                          # 0
-            conics,                           # 1
-            features,                         # 2
-            opacities,                        # 3
-            tile_offsets,                     # 4
-            tile_gaussian_ids,                # 5
-            pixels_to_render.jdata,           # 6
-            rendered_colors_jt.jdata,         # 7
-            rendered_alphas_jt.jdata,         # 8
-            last_ids_jt.jdata,                # 9
-            joffsets,                         # 10
-            jidx,                             # 11
-            jlidx,                            # 12
-            active_tiles,                     # 13
-            tile_pixel_mask,                  # 14
-            tile_pixel_cumsum,                # 15
-            pixel_map,                        # 16
+            means2d,  # 0
+            conics,  # 1
+            features,  # 2
+            opacities,  # 3
+            tile_offsets,  # 4
+            tile_gaussian_ids,  # 5
+            pixels_to_render.jdata,  # 6
+            rendered_colors_jt.jdata,  # 7
+            rendered_alphas_jt.jdata,  # 8
+            last_ids_jt.jdata,  # 9
+            joffsets,  # 10
+            jidx,  # 11
+            jlidx,  # 12
+            active_tiles,  # 13
+            tile_pixel_mask,  # 14
+            tile_pixel_cumsum,  # 15
+            pixel_map,  # 16
         ]
         if backgrounds is not None:
             to_save.append(backgrounds)
@@ -150,9 +162,7 @@ class _RasterizeSparseFn(torch.autograd.Function):
             opt_idx += 1
 
         # Reconstruct JaggedTensors from saved components
-        pixels_jt = JaggedTensor(
-            impl=_C.JaggedTensor.from_data_offsets_and_list_ids(pixels_jdata, joffsets, jlidx)
-        )
+        pixels_jt = JaggedTensor(impl=_C.JaggedTensor.from_data_offsets_and_list_ids(pixels_jdata, joffsets, jlidx))
         rendered_alphas_jt = pixels_jt.jagged_like(rendered_alphas_jdata)
         last_ids_jt = pixels_jt.jagged_like(last_ids_jdata)
         d_loss_d_rendered_features_jt = pixels_jt.jagged_like(d_loss_d_rendered_features_jdata)
@@ -160,17 +170,29 @@ class _RasterizeSparseFn(torch.autograd.Function):
 
         result = _C.gsplat_rasterize_sparse_bwd(
             pixels_jt._impl,
-            means2d, conics, features, opacities,
-            ctx.image_width, ctx.image_height,
-            ctx.image_origin_w, ctx.image_origin_h,
+            means2d,
+            conics,
+            features,
+            opacities,
+            ctx.image_width,
+            ctx.image_height,
+            ctx.image_origin_w,
+            ctx.image_origin_h,
             ctx.tile_size,
-            tile_offsets, tile_gaussian_ids,
-            rendered_alphas_jt._impl, last_ids_jt._impl,
+            tile_offsets,
+            tile_gaussian_ids,
+            rendered_alphas_jt._impl,
+            last_ids_jt._impl,
             d_loss_d_rendered_features_jt._impl,
             d_loss_d_rendered_alphas_jt._impl,
-            active_tiles, tile_pixel_mask, tile_pixel_cumsum, pixel_map,
-            ctx.absgrad, -1,
-            backgrounds, masks,
+            active_tiles,
+            tile_pixel_mask,
+            tile_pixel_cumsum,
+            pixel_map,
+            ctx.absgrad,
+            -1,
+            backgrounds,
+            masks,
         )
         # result: (dMean2dAbs, dMeans2d, dConics, dColors, dOpacities)
         d_means2d = result[1]
@@ -184,11 +206,25 @@ class _RasterizeSparseFn(torch.autograd.Function):
         #   tile_pixel_mask, tile_pixel_cumsum, pixel_map, absgrad,
         #   backgrounds, masks
         return (
-            d_means2d, d_conics, d_colors, d_opacities,
-            None, None, None, None, None,
-            None, None, None, None,
-            None, None, None, None,
-            None, None,
+            d_means2d,
+            d_conics,
+            d_colors,
+            d_opacities,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
         )
 
 
@@ -268,8 +304,19 @@ def sparse_render(
         render_mode=render_mode,
     )
     return _C.gsplat_sparse_render(
-        pixels_to_render._impl, means, quats, log_scales, logit_opacities, sh0, shN,
-        world_to_camera_matrices, projection_matrices, settings,
-        camera_model, projection_method, distortion_coeffs,
-        backgrounds, masks,
+        pixels_to_render._impl,
+        means,
+        quats,
+        log_scales,
+        logit_opacities,
+        sh0,
+        shN,
+        world_to_camera_matrices,
+        projection_matrices,
+        settings,
+        camera_model,
+        projection_method,
+        distortion_coeffs,
+        backgrounds,
+        masks,
     )

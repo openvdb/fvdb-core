@@ -114,11 +114,12 @@ then Python explicitly accumulates deltas into persistent state. See `_ProjectGa
 - [x] Deleted `GaussianSplat3dCameraApiTest.cpp` (covered by Python tests)
 - [x] All 135 tests pass
 
-### Milestone 10: Public API Polish and Documentation -- NOT YET DONE
-- [ ] Complete `fvdb/functional/splat/__init__.py` with `__all__` (export all public functions)
-- [ ] Update `fvdb/functional/__init__.py` exports
-- [ ] Update `fvdb/__init__.py` re-exports
-- [ ] Update `_fvdb_cpp.pyi` type stubs (add the 13 new `gsplat_*` dispatch bindings)
-- [ ] Add `docs/api/functional_splat.rst` documentation
-- [ ] Run `black` and `clang-format` on all changed files
-- [ ] Full test suite passes
+### Milestone 10: Public API Polish and Documentation -- DONE
+- [x] Complete `fvdb/functional/splat/__init__.py` with `__all__` (export all public functions)
+- [x] Update `fvdb/functional/__init__.py` exports
+- [x] Update `fvdb/__init__.py` re-exports
+- [x] Update `_fvdb_cpp.pyi` type stubs (removed stale C++ GaussianSplat3d class, added RenderSettings, RenderMode, SparseProjectedGaussianSplats, ~30 gsplat_* function stubs, updated Viewer signature)
+- [x] Add `docs/api/functional_splat.rst` documentation
+- [x] Rename `near`/`far` to `near_plane`/`far_plane` in GaussianSplat3d for consistency with functional API
+- [x] Run `black` and `clang-format` on all changed files
+- [x] All 135 tests pass

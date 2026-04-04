@@ -18,32 +18,32 @@
 
 #include <pybind11/stl.h>
 
-#include <fvdb/detail/ops/gsplat/GaussianSplatOps.h>
+#include <fvdb/detail/io/GaussianPlyIO.h>
 #include <fvdb/detail/ops/gsplat/GaussianMCMCAddNoise.h>
 #include <fvdb/detail/ops/gsplat/GaussianMCMCRelocation.h>
-#include <fvdb/detail/ops/gsplat/GaussianProjectionTypes.h>
-#include <fvdb/detail/io/GaussianPlyIO.h>
-#include <fvdb/detail/utils/Utils.h>
-#include <fvdb/detail/ops/gsplat/GaussianProjectionForward.h>
 #include <fvdb/detail/ops/gsplat/GaussianProjectionBackward.h>
-#include <fvdb/detail/ops/gsplat/GaussianSphericalHarmonicsForward.h>
-#include <fvdb/detail/ops/gsplat/GaussianSphericalHarmonicsBackward.h>
-#include <fvdb/detail/ops/gsplat/GaussianRasterizeForward.h>
-#include <fvdb/detail/ops/gsplat/GaussianRasterizeBackward.h>
-#include <fvdb/detail/ops/gsplat/GaussianRasterizeFromWorldForward.h>
-#include <fvdb/detail/ops/gsplat/GaussianRasterizeFromWorldBackward.h>
-#include <fvdb/detail/ops/gsplat/GaussianProjectionJaggedForward.h>
+#include <fvdb/detail/ops/gsplat/GaussianProjectionForward.h>
 #include <fvdb/detail/ops/gsplat/GaussianProjectionJaggedBackward.h>
+#include <fvdb/detail/ops/gsplat/GaussianProjectionJaggedForward.h>
+#include <fvdb/detail/ops/gsplat/GaussianProjectionTypes.h>
+#include <fvdb/detail/ops/gsplat/GaussianRasterizeBackward.h>
+#include <fvdb/detail/ops/gsplat/GaussianRasterizeForward.h>
+#include <fvdb/detail/ops/gsplat/GaussianRasterizeFromWorldBackward.h>
+#include <fvdb/detail/ops/gsplat/GaussianRasterizeFromWorldForward.h>
+#include <fvdb/detail/ops/gsplat/GaussianSphericalHarmonicsBackward.h>
+#include <fvdb/detail/ops/gsplat/GaussianSphericalHarmonicsForward.h>
+#include <fvdb/detail/ops/gsplat/GaussianSplatOps.h>
 #include <fvdb/detail/ops/gsplat/GaussianTileIntersection.h>
+#include <fvdb/detail/utils/Utils.h>
 
 #include <torch/extension.h>
 
 void
 bind_gaussian_splat_ops(py::module &m) {
-    namespace ops = fvdb::detail::ops;
-    using RenderSettings  = fvdb::detail::ops::RenderSettings;
-    using DistortionModel = fvdb::detail::ops::DistortionModel;
-    using ProjectionMethod = fvdb::detail::ops::ProjectionMethod;
+    namespace ops            = fvdb::detail::ops;
+    using RenderSettings     = fvdb::detail::ops::RenderSettings;
+    using DistortionModel    = fvdb::detail::ops::DistortionModel;
+    using ProjectionMethod   = fvdb::detail::ops::ProjectionMethod;
     using RollingShutterType = fvdb::detail::ops::RollingShutterType;
 
     // -----------------------------------------------------------------------
@@ -104,49 +104,31 @@ bind_gaussian_splat_ops(py::module &m) {
         .def_property_readonly("render_quantities",
                                &fvdb::ProjectedGaussianSplats::renderQuantities)
         .def_property_readonly("depths", &fvdb::ProjectedGaussianSplats::depths)
-        .def_property_readonly("opacities",
-                               &fvdb::ProjectedGaussianSplats::opacities)
+        .def_property_readonly("opacities", &fvdb::ProjectedGaussianSplats::opacities)
         .def_property_readonly("radii", &fvdb::ProjectedGaussianSplats::radii)
-        .def_property_readonly("tile_offsets",
-                               &fvdb::ProjectedGaussianSplats::offsets)
-        .def_property_readonly("tile_gaussian_ids",
-                               &fvdb::ProjectedGaussianSplats::gaussianIds)
-        .def_property_readonly("image_width",
-                               &fvdb::ProjectedGaussianSplats::imageWidth)
-        .def_property_readonly("image_height",
-                               &fvdb::ProjectedGaussianSplats::imageHeight)
-        .def_property_readonly("near_plane",
-                               &fvdb::ProjectedGaussianSplats::nearPlane)
-        .def_property_readonly("far_plane",
-                               &fvdb::ProjectedGaussianSplats::farPlane)
-        .def_property_readonly("camera_model",
-                               &fvdb::ProjectedGaussianSplats::cameraModel)
+        .def_property_readonly("tile_offsets", &fvdb::ProjectedGaussianSplats::offsets)
+        .def_property_readonly("tile_gaussian_ids", &fvdb::ProjectedGaussianSplats::gaussianIds)
+        .def_property_readonly("image_width", &fvdb::ProjectedGaussianSplats::imageWidth)
+        .def_property_readonly("image_height", &fvdb::ProjectedGaussianSplats::imageHeight)
+        .def_property_readonly("near_plane", &fvdb::ProjectedGaussianSplats::nearPlane)
+        .def_property_readonly("far_plane", &fvdb::ProjectedGaussianSplats::farPlane)
+        .def_property_readonly("camera_model", &fvdb::ProjectedGaussianSplats::cameraModel)
         .def_property_readonly("projection_method",
                                &fvdb::ProjectedGaussianSplats::projectionMethod)
-        .def_property_readonly("sh_degree_to_use",
-                               &fvdb::ProjectedGaussianSplats::shDegreeToUse)
-        .def_property_readonly("min_radius_2d",
-                               &fvdb::ProjectedGaussianSplats::minRadius2d)
+        .def_property_readonly("sh_degree_to_use", &fvdb::ProjectedGaussianSplats::shDegreeToUse)
+        .def_property_readonly("min_radius_2d", &fvdb::ProjectedGaussianSplats::minRadius2d)
         .def_property_readonly("eps_2d", &fvdb::ProjectedGaussianSplats::eps2d)
-        .def_property_readonly("antialias",
-                               &fvdb::ProjectedGaussianSplats::antialias);
+        .def_property_readonly("antialias", &fvdb::ProjectedGaussianSplats::antialias);
 
-    py::class_<fvdb::SparseProjectedGaussianSplats,
-               fvdb::ProjectedGaussianSplats>(m, "SparseProjectedGaussianSplats")
-        .def_readonly("active_tiles",
-                      &fvdb::SparseProjectedGaussianSplats::activeTiles)
-        .def_readonly("active_tile_mask",
-                      &fvdb::SparseProjectedGaussianSplats::activeTileMask)
-        .def_readonly("tile_pixel_mask",
-                      &fvdb::SparseProjectedGaussianSplats::tilePixelMask)
-        .def_readonly("tile_pixel_cumsum",
-                      &fvdb::SparseProjectedGaussianSplats::tilePixelCumsum)
-        .def_readonly("pixel_map",
-                      &fvdb::SparseProjectedGaussianSplats::pixelMap)
-        .def_readonly("inverse_indices",
-                      &fvdb::SparseProjectedGaussianSplats::inverseIndices)
-        .def_readonly("has_duplicates",
-                      &fvdb::SparseProjectedGaussianSplats::hasDuplicates)
+    py::class_<fvdb::SparseProjectedGaussianSplats, fvdb::ProjectedGaussianSplats>(
+        m, "SparseProjectedGaussianSplats")
+        .def_readonly("active_tiles", &fvdb::SparseProjectedGaussianSplats::activeTiles)
+        .def_readonly("active_tile_mask", &fvdb::SparseProjectedGaussianSplats::activeTileMask)
+        .def_readonly("tile_pixel_mask", &fvdb::SparseProjectedGaussianSplats::tilePixelMask)
+        .def_readonly("tile_pixel_cumsum", &fvdb::SparseProjectedGaussianSplats::tilePixelCumsum)
+        .def_readonly("pixel_map", &fvdb::SparseProjectedGaussianSplats::pixelMap)
+        .def_readonly("inverse_indices", &fvdb::SparseProjectedGaussianSplats::inverseIndices)
+        .def_readonly("has_duplicates", &fvdb::SparseProjectedGaussianSplats::hasDuplicates)
         .def_readonly("unique_pixels_to_render",
                       &fvdb::SparseProjectedGaussianSplats::uniquePixelsToRender);
 
@@ -193,9 +175,21 @@ bind_gaussian_splat_ops(py::module &m) {
            const RenderSettings &settings,
            DistortionModel cameraModel) {
             std::optional<torch::Tensor> gn, sc, mr;
-            return ops::projectGaussiansAnalytic(
-                means, quats, logScales, logitOpacities, sh0, shN, worldToCameraMatrices,
-                projectionMatrices, settings, cameraModel, false, false, gn, sc, mr);
+            return ops::projectGaussiansAnalytic(means,
+                                                 quats,
+                                                 logScales,
+                                                 logitOpacities,
+                                                 sh0,
+                                                 shN,
+                                                 worldToCameraMatrices,
+                                                 projectionMatrices,
+                                                 settings,
+                                                 cameraModel,
+                                                 false,
+                                                 false,
+                                                 gn,
+                                                 sc,
+                                                 mr);
         },
         py::arg("means"),
         py::arg("quats"),
@@ -237,10 +231,23 @@ bind_gaussian_splat_ops(py::module &m) {
            ProjectionMethod projectionMethod,
            const std::optional<torch::Tensor> &distortionCoeffs) {
             std::optional<torch::Tensor> gn, sc, mr;
-            return ops::projectGaussiansForCamera(
-                means, quats, logScales, logitOpacities, sh0, shN, worldToCameraMatrices,
-                projectionMatrices, settings, cameraModel, projectionMethod, distortionCoeffs,
-                false, false, gn, sc, mr);
+            return ops::projectGaussiansForCamera(means,
+                                                  quats,
+                                                  logScales,
+                                                  logitOpacities,
+                                                  sh0,
+                                                  shN,
+                                                  worldToCameraMatrices,
+                                                  projectionMatrices,
+                                                  settings,
+                                                  cameraModel,
+                                                  projectionMethod,
+                                                  distortionCoeffs,
+                                                  false,
+                                                  false,
+                                                  gn,
+                                                  sc,
+                                                  mr);
         },
         py::arg("means"),
         py::arg("quats"),
@@ -283,11 +290,23 @@ bind_gaussian_splat_ops(py::module &m) {
            std::optional<torch::Tensor> accumMax2dRadii) {
             // Call the C++ function with mutable refs; accumulators may be
             // lazily initialized inside.
-            auto result = ops::projectGaussiansForCamera(
-                means, quats, logScales, logitOpacities, sh0, shN, worldToCameraMatrices,
-                projectionMatrices, settings, cameraModel, projectionMethod, distortionCoeffs,
-                accumulateMean2dGradients, accumulateMax2dRadii, accumGradNorms, accumStepCounts,
-                accumMax2dRadii);
+            auto result = ops::projectGaussiansForCamera(means,
+                                                         quats,
+                                                         logScales,
+                                                         logitOpacities,
+                                                         sh0,
+                                                         shN,
+                                                         worldToCameraMatrices,
+                                                         projectionMatrices,
+                                                         settings,
+                                                         cameraModel,
+                                                         projectionMethod,
+                                                         distortionCoeffs,
+                                                         accumulateMean2dGradients,
+                                                         accumulateMax2dRadii,
+                                                         accumGradNorms,
+                                                         accumStepCounts,
+                                                         accumMax2dRadii);
             // Return the projected state plus the (possibly newly allocated) accumulators
             return std::make_tuple(result, accumGradNorms, accumStepCounts, accumMax2dRadii);
         },
@@ -327,10 +346,22 @@ bind_gaussian_splat_ops(py::module &m) {
            const RenderSettings &settings,
            DistortionModel cameraModel) {
             std::optional<torch::Tensor> gn, sc, mr;
-            return ops::sparseProjectGaussiansAnalytic(
-                pixelsToRender, means, quats, logScales, logitOpacities, sh0, shN,
-                worldToCameraMatrices, projectionMatrices, settings, cameraModel, false, false, gn,
-                sc, mr);
+            return ops::sparseProjectGaussiansAnalytic(pixelsToRender,
+                                                       means,
+                                                       quats,
+                                                       logScales,
+                                                       logitOpacities,
+                                                       sh0,
+                                                       shN,
+                                                       worldToCameraMatrices,
+                                                       projectionMatrices,
+                                                       settings,
+                                                       cameraModel,
+                                                       false,
+                                                       false,
+                                                       gn,
+                                                       sc,
+                                                       mr);
         },
         py::arg("pixels_to_render"),
         py::arg("means"),
@@ -375,10 +406,24 @@ bind_gaussian_splat_ops(py::module &m) {
            ProjectionMethod projectionMethod,
            const std::optional<torch::Tensor> &distortionCoeffs) {
             std::optional<torch::Tensor> gn, sc, mr;
-            return ops::sparseProjectGaussiansForCamera(
-                pixelsToRender, means, quats, logScales, logitOpacities, sh0, shN,
-                worldToCameraMatrices, projectionMatrices, settings, cameraModel, projectionMethod,
-                distortionCoeffs, false, false, gn, sc, mr);
+            return ops::sparseProjectGaussiansForCamera(pixelsToRender,
+                                                        means,
+                                                        quats,
+                                                        logScales,
+                                                        logitOpacities,
+                                                        sh0,
+                                                        shN,
+                                                        worldToCameraMatrices,
+                                                        projectionMatrices,
+                                                        settings,
+                                                        cameraModel,
+                                                        projectionMethod,
+                                                        distortionCoeffs,
+                                                        false,
+                                                        false,
+                                                        gn,
+                                                        sc,
+                                                        mr);
         },
         py::arg("pixels_to_render"),
         py::arg("means"),
@@ -431,10 +476,26 @@ bind_gaussian_splat_ops(py::module &m) {
            const std::optional<torch::Tensor> &backgrounds,
            const std::optional<torch::Tensor> &masks) {
             std::optional<torch::Tensor> gn, sc, mr;
-            return ops::sparseRender(pixelsToRender, means, quats, logScales, logitOpacities, sh0,
-                                     shN, worldToCameraMatrices, projectionMatrices, settings,
-                                     cameraModel, projectionMethod, distortionCoeffs, backgrounds,
-                                     masks, false, false, gn, sc, mr);
+            return ops::sparseRender(pixelsToRender,
+                                     means,
+                                     quats,
+                                     logScales,
+                                     logitOpacities,
+                                     sh0,
+                                     shN,
+                                     worldToCameraMatrices,
+                                     projectionMatrices,
+                                     settings,
+                                     cameraModel,
+                                     projectionMethod,
+                                     distortionCoeffs,
+                                     backgrounds,
+                                     masks,
+                                     false,
+                                     false,
+                                     gn,
+                                     sc,
+                                     mr);
         },
         py::arg("pixels_to_render"),
         py::arg("means"),
@@ -559,10 +620,9 @@ bind_gaussian_splat_ops(py::module &m) {
            const torch::Tensor &sh0,
            const torch::Tensor &shN,
            const std::string &filename,
-           std::optional<std::unordered_map<std::string, fvdb::PlyMetadataTypes>>
-               metadata) {
-            fvdb::detail::io::saveGaussianPly(filename, means, quats, logScales,
-                                              logitOpacities, sh0, shN, metadata);
+           std::optional<std::unordered_map<std::string, fvdb::PlyMetadataTypes>> metadata) {
+            fvdb::detail::io::saveGaussianPly(
+                filename, means, quats, logScales, logitOpacities, sh0, shN, metadata);
         },
         py::arg("means"),
         py::arg("quats"),
@@ -575,8 +635,7 @@ bind_gaussian_splat_ops(py::module &m) {
 
     m.def(
         "gsplat_load_ply",
-        [](const std::string &filename,
-           torch::Device device)
+        [](const std::string &filename, torch::Device device)
             -> std::tuple<torch::Tensor,
                           torch::Tensor,
                           torch::Tensor,
@@ -608,10 +667,19 @@ bind_gaussian_splat_ops(py::module &m) {
            bool calcCompensations,
            bool ortho) {
             return FVDB_DISPATCH_KERNEL(means.device(), [&]() {
-                return ops::dispatchGaussianProjectionForward<DeviceTag>(
-                    means, quats, scales, worldToCamMatrices, projectionMatrices,
-                    imageWidth, imageHeight, eps2d, nearPlane, farPlane,
-                    minRadius2d, calcCompensations, ortho);
+                return ops::dispatchGaussianProjectionForward<DeviceTag>(means,
+                                                                         quats,
+                                                                         scales,
+                                                                         worldToCamMatrices,
+                                                                         projectionMatrices,
+                                                                         imageWidth,
+                                                                         imageHeight,
+                                                                         eps2d,
+                                                                         nearPlane,
+                                                                         farPlane,
+                                                                         minRadius2d,
+                                                                         calcCompensations,
+                                                                         ortho);
             });
         },
         py::arg("means"),
@@ -653,10 +721,23 @@ bind_gaussian_splat_ops(py::module &m) {
            at::optional<torch::Tensor> outGradientStepCounts) {
             return FVDB_DISPATCH_KERNEL(means.device(), [&]() {
                 return ops::dispatchGaussianProjectionBackward<DeviceTag>(
-                    means, quats, scales, worldToCamMatrices, projectionMatrices,
-                    compensations, imageWidth, imageHeight, eps2d,
-                    radii, conics, dLossDMeans2d, dLossDDepths, dLossDConics,
-                    dLossDCompensations, worldToCamMatricesRequiresGrad, ortho,
+                    means,
+                    quats,
+                    scales,
+                    worldToCamMatrices,
+                    projectionMatrices,
+                    compensations,
+                    imageWidth,
+                    imageHeight,
+                    eps2d,
+                    radii,
+                    conics,
+                    dLossDMeans2d,
+                    dLossDDepths,
+                    dLossDConics,
+                    dLossDCompensations,
+                    worldToCamMatricesRequiresGrad,
+                    ortho,
                     outNormalizeddLossdMeans2dNormAccum,
                     outNormalizedMaxRadiiAccum,
                     outGradientStepCounts);
@@ -680,8 +761,8 @@ bind_gaussian_splat_ops(py::module &m) {
         py::arg("world_to_cam_matrices_requires_grad"),
         py::arg("ortho"),
         py::arg("out_normalized_d_loss_d_means2d_norm_accum") = py::none(),
-        py::arg("out_normalized_max_radii_accum") = py::none(),
-        py::arg("out_gradient_step_counts") = py::none());
+        py::arg("out_normalized_max_radii_accum")             = py::none(),
+        py::arg("out_gradient_step_counts")                   = py::none());
 
     // 3. gsplat_sh_eval_fwd
     m.def(
@@ -716,10 +797,14 @@ bind_gaussian_splat_ops(py::module &m) {
            const torch::Tensor &radii,
            bool computeDLossDViewDirs) {
             return FVDB_DISPATCH_KERNEL(dLossDColors.device(), [&]() {
-                return ops::dispatchSphericalHarmonicsBackward<DeviceTag>(
-                    shDegreeToUse, numCameras, numGaussians,
-                    viewDirs, shNCoeffs, dLossDColors, radii,
-                    computeDLossDViewDirs);
+                return ops::dispatchSphericalHarmonicsBackward<DeviceTag>(shDegreeToUse,
+                                                                          numCameras,
+                                                                          numGaussians,
+                                                                          viewDirs,
+                                                                          shNCoeffs,
+                                                                          dLossDColors,
+                                                                          radii,
+                                                                          computeDLossDViewDirs);
             });
         },
         py::arg("sh_degree_to_use"),
@@ -748,12 +833,18 @@ bind_gaussian_splat_ops(py::module &m) {
            const at::optional<torch::Tensor> &backgrounds,
            const at::optional<torch::Tensor> &masks) {
             return FVDB_DISPATCH_KERNEL(means2d.device(), [&]() {
-                const ops::RenderWindow2D renderWindow{imageWidth, imageHeight,
-                                                       imageOriginW, imageOriginH};
-                return ops::dispatchGaussianRasterizeForward<DeviceTag>(
-                    means2d, conics, features, opacities,
-                    renderWindow, tileSize, tileOffsets, tileGaussianIds,
-                    backgrounds, masks);
+                const ops::RenderWindow2D renderWindow{
+                    imageWidth, imageHeight, imageOriginW, imageOriginH};
+                return ops::dispatchGaussianRasterizeForward<DeviceTag>(means2d,
+                                                                        conics,
+                                                                        features,
+                                                                        opacities,
+                                                                        renderWindow,
+                                                                        tileSize,
+                                                                        tileOffsets,
+                                                                        tileGaussianIds,
+                                                                        backgrounds,
+                                                                        masks);
             });
         },
         py::arg("means2d"),
@@ -793,15 +884,24 @@ bind_gaussian_splat_ops(py::module &m) {
            const at::optional<torch::Tensor> &backgrounds,
            const at::optional<torch::Tensor> &masks) {
             return FVDB_DISPATCH_KERNEL(means2d.device(), [&]() {
-                const ops::RenderWindow2D renderWindow{imageWidth, imageHeight,
-                                                       imageOriginW, imageOriginH};
-                return ops::dispatchGaussianRasterizeBackward<DeviceTag>(
-                    means2d, conics, features, opacities,
-                    renderWindow, tileSize, tileOffsets, tileGaussianIds,
-                    renderedAlphas, lastIds,
-                    dLossDRenderedFeatures, dLossDRenderedAlphas,
-                    absGrad, numSharedChannelsOverride,
-                    backgrounds, masks);
+                const ops::RenderWindow2D renderWindow{
+                    imageWidth, imageHeight, imageOriginW, imageOriginH};
+                return ops::dispatchGaussianRasterizeBackward<DeviceTag>(means2d,
+                                                                         conics,
+                                                                         features,
+                                                                         opacities,
+                                                                         renderWindow,
+                                                                         tileSize,
+                                                                         tileOffsets,
+                                                                         tileGaussianIds,
+                                                                         renderedAlphas,
+                                                                         lastIds,
+                                                                         dLossDRenderedFeatures,
+                                                                         dLossDRenderedAlphas,
+                                                                         absGrad,
+                                                                         numSharedChannelsOverride,
+                                                                         backgrounds,
+                                                                         masks);
             });
         },
         py::arg("means2d"),
@@ -821,8 +921,8 @@ bind_gaussian_splat_ops(py::module &m) {
         py::arg("d_loss_d_rendered_alphas"),
         py::arg("abs_grad"),
         py::arg("num_shared_channels_override") = -1,
-        py::arg("backgrounds") = py::none(),
-        py::arg("masks") = py::none());
+        py::arg("backgrounds")                  = py::none(),
+        py::arg("masks")                        = py::none());
 
     // 7. gsplat_rasterize_sparse_fwd
     m.def(
@@ -846,13 +946,23 @@ bind_gaussian_splat_ops(py::module &m) {
            const at::optional<torch::Tensor> &backgrounds,
            const at::optional<torch::Tensor> &masks) {
             return FVDB_DISPATCH_KERNEL_DEVICE(means2d.device(), [&]() {
-                const ops::RenderWindow2D renderWindow{imageWidth, imageHeight,
-                                                       imageOriginW, imageOriginH};
-                return ops::dispatchGaussianSparseRasterizeForward<DeviceTag>(
-                    pixelsToRender, means2d, conics, features, opacities,
-                    renderWindow, tileSize, tileOffsets, tileGaussianIds,
-                    activeTiles, tilePixelMask, tilePixelCumsum, pixelMap,
-                    backgrounds, masks);
+                const ops::RenderWindow2D renderWindow{
+                    imageWidth, imageHeight, imageOriginW, imageOriginH};
+                return ops::dispatchGaussianSparseRasterizeForward<DeviceTag>(pixelsToRender,
+                                                                              means2d,
+                                                                              conics,
+                                                                              features,
+                                                                              opacities,
+                                                                              renderWindow,
+                                                                              tileSize,
+                                                                              tileOffsets,
+                                                                              tileGaussianIds,
+                                                                              activeTiles,
+                                                                              tilePixelMask,
+                                                                              tilePixelCumsum,
+                                                                              pixelMap,
+                                                                              backgrounds,
+                                                                              masks);
             });
         },
         py::arg("pixels_to_render"),
@@ -902,16 +1012,30 @@ bind_gaussian_splat_ops(py::module &m) {
            const at::optional<torch::Tensor> &backgrounds,
            const at::optional<torch::Tensor> &masks) {
             return FVDB_DISPATCH_KERNEL_DEVICE(means2d.device(), [&]() {
-                const ops::RenderWindow2D renderWindow{imageWidth, imageHeight,
-                                                       imageOriginW, imageOriginH};
+                const ops::RenderWindow2D renderWindow{
+                    imageWidth, imageHeight, imageOriginW, imageOriginH};
                 return ops::dispatchGaussianSparseRasterizeBackward<DeviceTag>(
-                    pixelsToRender, means2d, conics, features, opacities,
-                    renderWindow, tileSize, tileOffsets, tileGaussianIds,
-                    renderedAlphas, lastIds,
-                    dLossDRenderedFeatures, dLossDRenderedAlphas,
-                    activeTiles, tilePixelMask, tilePixelCumsum, pixelMap,
-                    absGrad, numSharedChannelsOverride,
-                    backgrounds, masks);
+                    pixelsToRender,
+                    means2d,
+                    conics,
+                    features,
+                    opacities,
+                    renderWindow,
+                    tileSize,
+                    tileOffsets,
+                    tileGaussianIds,
+                    renderedAlphas,
+                    lastIds,
+                    dLossDRenderedFeatures,
+                    dLossDRenderedAlphas,
+                    activeTiles,
+                    tilePixelMask,
+                    tilePixelCumsum,
+                    pixelMap,
+                    absGrad,
+                    numSharedChannelsOverride,
+                    backgrounds,
+                    masks);
             });
         },
         py::arg("pixels_to_render"),
@@ -936,8 +1060,8 @@ bind_gaussian_splat_ops(py::module &m) {
         py::arg("pixel_map"),
         py::arg("abs_grad"),
         py::arg("num_shared_channels_override") = -1,
-        py::arg("backgrounds") = py::none(),
-        py::arg("masks") = py::none());
+        py::arg("backgrounds")                  = py::none(),
+        py::arg("masks")                        = py::none());
 
     // 9. gsplat_rasterize_from_world_fwd
     m.def(
@@ -960,13 +1084,22 @@ bind_gaussian_splat_ops(py::module &m) {
            const at::optional<torch::Tensor> &masks) {
             return FVDB_DISPATCH_KERNEL_DEVICE(means.device(), [&]() {
                 return ops::dispatchGaussianRasterizeFromWorld3DGSForward<DeviceTag>(
-                    means, quats, logScales,
-                    features, opacities,
-                    worldToCamMatricesStart, worldToCamMatricesEnd,
-                    projectionMatrices, distortionCoeffs,
-                    rollingShutterType, cameraModel, settings,
-                    tileOffsets, tileGaussianIds,
-                    backgrounds, masks);
+                    means,
+                    quats,
+                    logScales,
+                    features,
+                    opacities,
+                    worldToCamMatricesStart,
+                    worldToCamMatricesEnd,
+                    projectionMatrices,
+                    distortionCoeffs,
+                    rollingShutterType,
+                    cameraModel,
+                    settings,
+                    tileOffsets,
+                    tileGaussianIds,
+                    backgrounds,
+                    masks);
             });
         },
         py::arg("means"),
@@ -1011,15 +1144,26 @@ bind_gaussian_splat_ops(py::module &m) {
            const at::optional<torch::Tensor> &masks) {
             return FVDB_DISPATCH_KERNEL_DEVICE(means.device(), [&]() {
                 return ops::dispatchGaussianRasterizeFromWorld3DGSBackward<DeviceTag>(
-                    means, quats, logScales,
-                    features, opacities,
-                    worldToCamMatricesStart, worldToCamMatricesEnd,
-                    projectionMatrices, distortionCoeffs,
-                    rollingShutterType, cameraModel, settings,
-                    tileOffsets, tileGaussianIds,
-                    renderedAlphas, lastIds,
-                    dLossDRenderedFeatures, dLossDRenderedAlphas,
-                    backgrounds, masks);
+                    means,
+                    quats,
+                    logScales,
+                    features,
+                    opacities,
+                    worldToCamMatricesStart,
+                    worldToCamMatricesEnd,
+                    projectionMatrices,
+                    distortionCoeffs,
+                    rollingShutterType,
+                    cameraModel,
+                    settings,
+                    tileOffsets,
+                    tileGaussianIds,
+                    renderedAlphas,
+                    lastIds,
+                    dLossDRenderedFeatures,
+                    dLossDRenderedAlphas,
+                    backgrounds,
+                    masks);
             });
         },
         py::arg("means"),
@@ -1061,11 +1205,20 @@ bind_gaussian_splat_ops(py::module &m) {
            float minRadius2d,
            bool ortho) {
             return FVDB_DISPATCH_KERNEL_DEVICE(means.device(), [&]() {
-                return ops::dispatchGaussianProjectionJaggedForward<DeviceTag>(
-                    gSizes, means, quats, scales, cSizes,
-                    worldToCamMatrices, projectionMatrices,
-                    imageWidth, imageHeight, eps2d,
-                    nearPlane, farPlane, minRadius2d, ortho);
+                return ops::dispatchGaussianProjectionJaggedForward<DeviceTag>(gSizes,
+                                                                               means,
+                                                                               quats,
+                                                                               scales,
+                                                                               cSizes,
+                                                                               worldToCamMatrices,
+                                                                               projectionMatrices,
+                                                                               imageWidth,
+                                                                               imageHeight,
+                                                                               eps2d,
+                                                                               nearPlane,
+                                                                               farPlane,
+                                                                               minRadius2d,
+                                                                               ortho);
             });
         },
         py::arg("g_sizes"),
@@ -1105,12 +1258,23 @@ bind_gaussian_splat_ops(py::module &m) {
            bool ortho) {
             return FVDB_DISPATCH_KERNEL_DEVICE(means.device(), [&]() {
                 return ops::dispatchGaussianProjectionJaggedBackward<DeviceTag>(
-                    gSizes, means, quats, scales, cSizes,
-                    worldToCamMatrices, projectionMatrices,
-                    imageWidth, imageHeight, eps2d,
-                    radii, conics,
-                    dLossDMeans2d, dLossDDepths, dLossDConics,
-                    worldToCamMatricesRequiresGrad, ortho);
+                    gSizes,
+                    means,
+                    quats,
+                    scales,
+                    cSizes,
+                    worldToCamMatrices,
+                    projectionMatrices,
+                    imageWidth,
+                    imageHeight,
+                    eps2d,
+                    radii,
+                    conics,
+                    dLossDMeans2d,
+                    dLossDDepths,
+                    dLossDConics,
+                    worldToCamMatricesRequiresGrad,
+                    ortho);
             });
         },
         py::arg("g_sizes"),
@@ -1145,8 +1309,7 @@ bind_gaussian_splat_ops(py::module &m) {
            const at::optional<torch::Tensor> &cameraIds) {
             return FVDB_DISPATCH_KERNEL(means2d.device(), [&]() {
                 return ops::dispatchGaussianTileIntersection<DeviceTag>(
-                    means2d, radii, depths, cameraIds,
-                    numCameras, tileSize, numTilesH, numTilesW);
+                    means2d, radii, depths, cameraIds, numCameras, tileSize, numTilesH, numTilesW);
             });
         },
         py::arg("means2d"),

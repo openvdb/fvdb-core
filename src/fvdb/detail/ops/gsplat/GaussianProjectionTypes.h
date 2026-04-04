@@ -34,7 +34,7 @@ struct ProjectedGaussianSplats {
     torch::Tensor tileGaussianIds; // [C, num_tiles_h, num_tiles_w, max_gaussians_per_tile]
 
     detail::ops::RenderSettings mRenderSettings;
-    detail::ops::DistortionModel mCameraModel      = detail::ops::DistortionModel::PINHOLE;
+    detail::ops::DistortionModel mCameraModel       = detail::ops::DistortionModel::PINHOLE;
     detail::ops::ProjectionMethod mProjectionMethod = detail::ops::ProjectionMethod::ANALYTIC;
 
     ssize_t
@@ -134,11 +134,11 @@ struct ProjectedGaussianSplats {
 
 /// @brief A set of projected Gaussians with sparse tile intersection data for sparse rendering.
 struct SparseProjectedGaussianSplats : public ProjectedGaussianSplats {
-    torch::Tensor activeTiles;     // [num_active_tiles]
-    torch::Tensor activeTileMask;  // [C, TH, TW]
-    torch::Tensor tilePixelMask;   // [num_active_tiles, words_per_tile]
-    torch::Tensor tilePixelCumsum; // [num_active_tiles]
-    torch::Tensor pixelMap;        // [num_active_pixels]
+    torch::Tensor activeTiles;         // [num_active_tiles]
+    torch::Tensor activeTileMask;      // [C, TH, TW]
+    torch::Tensor tilePixelMask;       // [num_active_tiles, words_per_tile]
+    torch::Tensor tilePixelCumsum;     // [num_active_tiles]
+    torch::Tensor pixelMap;            // [num_active_pixels]
 
     torch::Tensor inverseIndices;      // [total_pixels]
     JaggedTensor uniquePixelsToRender; // deduplicated pixels

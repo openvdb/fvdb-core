@@ -70,8 +70,8 @@ def _apply_pixel_mask(
 def _build_settings(
     image_width: int,
     image_height: int,
-    near: float,
-    far: float,
+    near_plane: float,
+    far_plane: float,
     sh_degree_to_use: int = -1,
     tile_size: int = 16,
     radius_clip: float = 0.0,
@@ -83,8 +83,8 @@ def _build_settings(
     return build_render_settings(
         image_width=image_width,
         image_height=image_height,
-        near_plane=near,
-        far_plane=far,
+        near_plane=near_plane,
+        far_plane=far_plane,
         tile_size=tile_size,
         radius_clip=radius_clip,
         eps_2d=eps_2d,
@@ -101,8 +101,19 @@ class _PyProjectedImpl:
     with the same attribute interface as the C++ struct's pybind-exposed properties.
     """
 
-    def __init__(self, means2d, conics, render_quantities, depths, opacities, radii,
-                 tile_offsets, tile_gaussian_ids, settings, camera_model):
+    def __init__(
+        self,
+        means2d,
+        conics,
+        render_quantities,
+        depths,
+        opacities,
+        radii,
+        tile_offsets,
+        tile_gaussian_ids,
+        settings,
+        camera_model,
+    ):
         self.means2d = means2d
         self.conics = conics
         self.render_quantities = render_quantities
@@ -582,9 +593,7 @@ class GaussianSplat3d:
         if isinstance(filename, pathlib.Path):
             filename = str(filename)
 
-        means, quats, log_scales, logit_opacities, sh0, shN, metadata = _C.gsplat_load_ply(
-            filename, device
-        )
+        means, quats, log_scales, logit_opacities, sh0, shN, metadata = _C.gsplat_load_ply(filename, device)
 
         result = cls.__new__(cls)
         result._means = means
@@ -1674,13 +1683,20 @@ class GaussianSplat3d:
 
         if resolved == _C.ProjectionMethod.ANALYTIC:
             return self._project_decomposed(
-                world_to_camera_matrices, projection_matrices, settings, camera_model,
+                world_to_camera_matrices,
+                projection_matrices,
+                settings,
+                camera_model,
             )
         else:
             # UT path — fall back to C++ (non-differentiable)
             return self._project_with_accum(
-                world_to_camera_matrices, projection_matrices, settings,
-                camera_model, projection_method, distortion_coeffs,
+                world_to_camera_matrices,
+                projection_matrices,
+                settings,
+                camera_model,
+                projection_method,
+                distortion_coeffs,
             )
 
     def _project_decomposed(
@@ -1696,7 +1712,7 @@ class GaussianSplat3d:
             (means2d, conics, features, opacities, radii, depths,
              tile_offsets, tile_ids, settings)
         """
-        ortho = (camera_model == _C.CameraModel.ORTHOGRAPHIC)
+        ortho = camera_model == _C.CameraModel.ORTHOGRAPHIC
         C = world_to_camera_matrices.size(0)
         N = self._means.size(0)
 
@@ -1712,12 +1728,22 @@ class GaussianSplat3d:
 
         # 1. Projection with fresh-zeros accumulator pattern
         proj_result = _ProjectGaussiansFn.apply(
-            self._means, self._quats, self._log_scales,
-            world_to_camera_matrices, projection_matrices,
-            settings.image_width, settings.image_height,
-            settings.eps_2d, settings.near_plane, settings.far_plane,
-            settings.radius_clip, settings.antialias, ortho,
-            self._accum_grad_norms, self._accum_step_counts, self._accum_max_2d_radii,
+            self._means,
+            self._quats,
+            self._log_scales,
+            world_to_camera_matrices,
+            projection_matrices,
+            settings.image_width,
+            settings.image_height,
+            settings.eps_2d,
+            settings.near_plane,
+            settings.far_plane,
+            settings.radius_clip,
+            settings.antialias,
+            ortho,
+            self._accum_grad_norms,
+            self._accum_step_counts,
+            self._accum_max_2d_radii,
         )
         radii = proj_result[0]
         means2d = proj_result[1]
@@ -1754,13 +1780,20 @@ class GaussianSplat3d:
         num_tiles_w = math.ceil(settings.image_width / settings.tile_size)
         num_tiles_h = math.ceil(settings.image_height / settings.tile_size)
         tile_offsets, tile_ids = _C.gsplat_tile_intersection(
-            means2d, radii, depths, C, settings.tile_size, num_tiles_h, num_tiles_w)
+            means2d, radii, depths, C, settings.tile_size, num_tiles_h, num_tiles_w
+        )
 
         return _PyProjectedImpl(
-            means2d=means2d, conics=conics, render_quantities=features,
-            depths=depths, opacities=opacities, radii=radii,
-            tile_offsets=tile_offsets, tile_gaussian_ids=tile_ids,
-            settings=settings, camera_model=camera_model,
+            means2d=means2d,
+            conics=conics,
+            render_quantities=features,
+            depths=depths,
+            opacities=opacities,
+            radii=radii,
+            tile_offsets=tile_offsets,
+            tile_gaussian_ids=tile_ids,
+            settings=settings,
+            camera_model=camera_model,
         )
 
     def _rasterize_decomposed(
@@ -1787,11 +1820,20 @@ class GaussianSplat3d:
         oh = crop_origin_h if crop_origin_h >= 0 else 0
 
         return _RasterizeDenseFn.apply(
-            means2d, conics, features, opacities,
-            w, h, ow, oh, tile_size,
-            tile_offsets, tile_ids,
+            means2d,
+            conics,
+            features,
+            opacities,
+            w,
+            h,
+            ow,
+            oh,
+            tile_size,
+            tile_offsets,
+            tile_ids,
             False,  # absgrad
-            backgrounds, masks,
+            backgrounds,
+            masks,
         )
 
     def _sparse_render_decomposed(
@@ -1824,17 +1866,29 @@ class GaussianSplat3d:
         """
         # 1. Differentiable projection (Python autograd pipeline)
         state = self._project_validated(
-            world_to_camera_matrices, projection_matrices, settings,
-            camera_model_cpp, projection_method_cpp, distortion_coeffs,
+            world_to_camera_matrices,
+            projection_matrices,
+            settings,
+            camera_model_cpp,
+            projection_method_cpp,
+            distortion_coeffs,
         )
 
         # 2. Non-diff sparse projection for tile data + dedup info
         sparse_state = _C.gsplat_sparse_project_gaussians_for_camera(
             pixels_to_render_impl,
-            self._means, self._quats, self._log_scales, self._logit_opacities,
-            self._sh0, self._shN,
-            world_to_camera_matrices, projection_matrices, settings,
-            camera_model_cpp, projection_method_cpp, distortion_coeffs,
+            self._means,
+            self._quats,
+            self._log_scales,
+            self._logit_opacities,
+            self._sh0,
+            self._shN,
+            world_to_camera_matrices,
+            projection_matrices,
+            settings,
+            camera_model_cpp,
+            projection_method_cpp,
+            distortion_coeffs,
         )
 
         # Determine which pixels to rasterize (unique if duplicates exist)
@@ -1845,23 +1899,23 @@ class GaussianSplat3d:
 
         # 3. Differentiable sparse rasterization
         rendered_colors_jdata, rendered_alphas_jdata = _RasterizeSparseFn.apply(
-            state.means2d,                        # differentiable
-            state.conics,                         # differentiable
-            state.render_quantities,              # differentiable
-            state.opacities,                      # differentiable
-            render_pixels_jt,                     # non-diff (unique pixels)
+            state.means2d,  # differentiable
+            state.conics,  # differentiable
+            state.render_quantities,  # differentiable
+            state.opacities,  # differentiable
+            render_pixels_jt,  # non-diff (unique pixels)
             settings.image_width,
             settings.image_height,
-            0,                                    # image_origin_w
-            0,                                    # image_origin_h
+            0,  # image_origin_w
+            0,  # image_origin_h
             settings.tile_size,
-            sparse_state.tile_offsets,            # sparse 1D tile offsets
-            sparse_state.tile_gaussian_ids,       # sparse tile gaussian ids
+            sparse_state.tile_offsets,  # sparse 1D tile offsets
+            sparse_state.tile_gaussian_ids,  # sparse tile gaussian ids
             sparse_state.active_tiles,
             sparse_state.tile_pixel_mask,
             sparse_state.tile_pixel_cumsum,
             sparse_state.pixel_map,
-            False,                                # absgrad
+            False,  # absgrad
             backgrounds,
             masks,
         )
@@ -1882,8 +1936,8 @@ class GaussianSplat3d:
         projection_matrices: torch.Tensor,
         image_width: int,
         image_height: int,
-        near: float,
-        far: float,
+        near_plane: float,
+        far_plane: float,
         camera_model: CameraModel = CameraModel.PINHOLE,
         projection_method: ProjectionMethod = ProjectionMethod.AUTO,
         distortion_coeffs: torch.Tensor | None = None,
@@ -1919,8 +1973,8 @@ class GaussianSplat3d:
                 projection_matrices, # tensor of shape [C, 3, 3]
                 image_width, # width of the C images
                 image_height, # height of the C images
-                near, # near clipping plane
-                far) # far clipping plane
+                near_plane, # near clipping plane
+                far_plane) # far clipping plane
 
             # Now render a crop of size 100x100 starting at (10, 10) from the projected Gaussians
             # in each image plane.
@@ -1944,8 +1998,8 @@ class GaussianSplat3d:
                 Each matrix projects points in camera space into homogeneous pixel coordinates.
             image_width (int): The width of the images to be rendered. Note that all images must have the same width.
             image_height (int): The height of the images to be rendered. Note that all images must have the same height.
-            near (float): The near clipping plane distance for the projection.
-            far (float): The far clipping plane distance for the projection.
+            near_plane (float): The near clipping plane distance for the projection.
+            far_plane (float): The far clipping plane distance for the projection.
             camera_model (CameraModel): Semantic camera model for projection. Default is
                 :attr:`fvdb.CameraModel.PINHOLE`.
             projection_method (ProjectionMethod): Projection implementation selector. Default is
@@ -1966,12 +2020,21 @@ class GaussianSplat3d:
 
         """
         settings = _build_settings(
-            image_width, image_height, near, far,
-            sh_degree_to_use=-1, tile_size=16, radius_clip=min_radius_2d,
-            eps_2d=eps_2d, antialias=antialias, render_mode="depth",
+            image_width,
+            image_height,
+            near_plane,
+            far_plane,
+            sh_degree_to_use=-1,
+            tile_size=16,
+            radius_clip=min_radius_2d,
+            eps_2d=eps_2d,
+            antialias=antialias,
+            render_mode="depth",
         )
         state = self._project_validated(
-            world_to_camera_matrices, projection_matrices, settings,
+            world_to_camera_matrices,
+            projection_matrices,
+            settings,
             self._camera_model_to_cpp(camera_model),
             self._projection_method_to_cpp(projection_method),
             distortion_coeffs,
@@ -1984,8 +2047,8 @@ class GaussianSplat3d:
         projection_matrices: torch.Tensor,
         image_width: int,
         image_height: int,
-        near: float,
-        far: float,
+        near_plane: float,
+        far_plane: float,
         camera_model: CameraModel = CameraModel.PINHOLE,
         projection_method: ProjectionMethod = ProjectionMethod.AUTO,
         distortion_coeffs: torch.Tensor | None = None,
@@ -2022,8 +2085,8 @@ class GaussianSplat3d:
                 projection_matrices, # tensor of shape [C, 3, 3]
                 image_width, # width of the C images
                 image_height, # height of the C images
-                near, # near clipping plane
-                far) # far clipping plane
+                near_plane, # near clipping plane
+                far_plane) # far clipping plane
 
             # Now render a crop of size 100x100 starting at (10, 10) from the projected Gaussians
             # in each image plane.
@@ -2044,8 +2107,8 @@ class GaussianSplat3d:
                 Each matrix projects points in camera space into homogeneous pixel coordinates.
             image_width (int): The width of the images to be rendered. Note that all images must have the same width.
             image_height (int): The height of the images to be rendered. Note that all images must have the same height.
-            near (float): The near clipping plane distance for the projection.
-            far (float): The far clipping plane distance for the projection.
+            near_plane (float): The near clipping plane distance for the projection.
+            far_plane (float): The far clipping plane distance for the projection.
             camera_model (CameraModel): Semantic camera model for projection. Default is
                 :attr:`fvdb.CameraModel.PINHOLE`.
             projection_method (ProjectionMethod): Projection implementation selector. Default is
@@ -2069,12 +2132,21 @@ class GaussianSplat3d:
 
         """
         settings = _build_settings(
-            image_width, image_height, near, far,
-            sh_degree_to_use=sh_degree_to_use, tile_size=16, radius_clip=min_radius_2d,
-            eps_2d=eps_2d, antialias=antialias, render_mode="rgb",
+            image_width,
+            image_height,
+            near_plane,
+            far_plane,
+            sh_degree_to_use=sh_degree_to_use,
+            tile_size=16,
+            radius_clip=min_radius_2d,
+            eps_2d=eps_2d,
+            antialias=antialias,
+            render_mode="rgb",
         )
         state = self._project_validated(
-            world_to_camera_matrices, projection_matrices, settings,
+            world_to_camera_matrices,
+            projection_matrices,
+            settings,
             self._camera_model_to_cpp(camera_model),
             self._projection_method_to_cpp(projection_method),
             distortion_coeffs,
@@ -2087,8 +2159,8 @@ class GaussianSplat3d:
         projection_matrices: torch.Tensor,
         image_width: int,
         image_height: int,
-        near: float,
-        far: float,
+        near_plane: float,
+        far_plane: float,
         camera_model: CameraModel = CameraModel.PINHOLE,
         projection_method: ProjectionMethod = ProjectionMethod.AUTO,
         distortion_coeffs: torch.Tensor | None = None,
@@ -2126,8 +2198,8 @@ class GaussianSplat3d:
                 projection_matrices, # tensor of shape [C, 3, 3]
                 image_width, # width of the C images
                 image_height, # height of the C images
-                near, # near clipping plane
-                far) # far clipping plane
+                near_plane, # near clipping plane
+                far_plane) # far clipping plane
 
             # Now render a crop of size 100x100 starting at (10, 10) from the projected Gaussians
             # in each image plane.
@@ -2153,8 +2225,8 @@ class GaussianSplat3d:
                 Each matrix projects points in camera space into homogeneous pixel coordinates.
             image_width (int): The width of the images to be rendered. Note that all images must have the same width.
             image_height (int): The height of the images to be rendered. Note that all images must have the same height.
-            near (float): The near clipping plane distance for the projection.
-            far (float): The far clipping plane distance for the projection.
+            near_plane (float): The near clipping plane distance for the projection.
+            far_plane (float): The far clipping plane distance for the projection.
             camera_model (CameraModel): Semantic camera model for projection. Default is
                 :attr:`fvdb.CameraModel.PINHOLE`.
             projection_method (ProjectionMethod): Projection implementation selector. Default is
@@ -2178,12 +2250,21 @@ class GaussianSplat3d:
 
         """
         settings = _build_settings(
-            image_width, image_height, near, far,
-            sh_degree_to_use=sh_degree_to_use, tile_size=16, radius_clip=min_radius_2d,
-            eps_2d=eps_2d, antialias=antialias, render_mode="rgbd",
+            image_width,
+            image_height,
+            near_plane,
+            far_plane,
+            sh_degree_to_use=sh_degree_to_use,
+            tile_size=16,
+            radius_clip=min_radius_2d,
+            eps_2d=eps_2d,
+            antialias=antialias,
+            render_mode="rgbd",
         )
         state = self._project_validated(
-            world_to_camera_matrices, projection_matrices, settings,
+            world_to_camera_matrices,
+            projection_matrices,
+            settings,
             self._camera_model_to_cpp(camera_model),
             self._projection_method_to_cpp(projection_method),
             distortion_coeffs,
@@ -2230,8 +2311,8 @@ class GaussianSplat3d:
                 projection_matrices, # tensor of shape [C, 3, 3]
                 image_width, # width of the C images
                 image_height, # height of the C images
-                near, # near clipping plane
-                far) # far clipping plane
+                near_plane, # near clipping plane
+                far_plane) # far clipping plane
 
             # Now render a crop of size 100x100 starting at (10, 10) from the projected Gaussians
             # in each image plane.
@@ -2287,10 +2368,20 @@ class GaussianSplat3d:
 
         impl = projected_gaussians._impl
         features, alphas = self._rasterize_decomposed(
-            impl.means2d, impl.conics, impl.render_quantities, impl.opacities,
-            impl.tile_offsets, impl.tile_gaussian_ids, impl,
-            tile_size, crop_width, crop_height, crop_origin_w, crop_origin_h,
-            backgrounds, tile_masks,
+            impl.means2d,
+            impl.conics,
+            impl.render_quantities,
+            impl.opacities,
+            impl.tile_offsets,
+            impl.tile_gaussian_ids,
+            impl,
+            tile_size,
+            crop_width,
+            crop_height,
+            crop_origin_w,
+            crop_origin_h,
+            backgrounds,
+            tile_masks,
         )
 
         if masks is not None:
@@ -2304,8 +2395,8 @@ class GaussianSplat3d:
         projection_matrices: torch.Tensor,
         image_width: int,
         image_height: int,
-        near: float,
-        far: float,
+        near_plane: float,
+        far_plane: float,
         camera_model: CameraModel = CameraModel.PINHOLE,
         projection_method: ProjectionMethod = ProjectionMethod.AUTO,
         distortion_coeffs: torch.Tensor | None = None,
@@ -2337,8 +2428,8 @@ class GaussianSplat3d:
                 projection_matrices, # tensor of shape [C, 3, 3]
                 image_width, # width of the depth maps
                 image_height, # height of the depth maps
-                near, # near clipping plane
-                far) # far clipping plane
+                near_plane, # near clipping plane
+                far_plane) # far clipping plane
 
             true_depths = depth_images / alpha_images  # Get true depth values by dividing by alpha
 
@@ -2350,8 +2441,8 @@ class GaussianSplat3d:
                 Each matrix projects points in camera space into homogeneous pixel coordinates.
             image_width (int): The width of the depth maps to be rendered. Note these are the same for all depth maps being rendered.
             image_height (int): The height of the depth maps to be rendered. Note these are the same for all depth maps being rendered.
-            near (float): The near clipping plane distance for the projection.
-            far (float): The far clipping plane distance for the projection.
+            near_plane (float): The near clipping plane distance for the projection.
+            far_plane (float): The far clipping plane distance for the projection.
             camera_model (CameraModel): Semantic camera model for projection. Default is
                 :attr:`fvdb.CameraModel.PINHOLE`.
             projection_method (ProjectionMethod): Projection implementation selector. Default is
@@ -2383,21 +2474,40 @@ class GaussianSplat3d:
         tile_masks = _pixel_mask_to_tile_mask(masks, tile_size) if masks is not None else None
 
         settings = _build_settings(
-            image_width, image_height, near, far,
-            sh_degree_to_use=-1, tile_size=tile_size, radius_clip=min_radius_2d,
-            eps_2d=eps_2d, antialias=antialias, render_mode="depth",
+            image_width,
+            image_height,
+            near_plane,
+            far_plane,
+            sh_degree_to_use=-1,
+            tile_size=tile_size,
+            radius_clip=min_radius_2d,
+            eps_2d=eps_2d,
+            antialias=antialias,
+            render_mode="depth",
         )
         state = self._project_validated(
-            world_to_camera_matrices, projection_matrices, settings,
+            world_to_camera_matrices,
+            projection_matrices,
+            settings,
             self._camera_model_to_cpp(camera_model),
             self._projection_method_to_cpp(projection_method),
             distortion_coeffs,
         )
         features, alphas = self._rasterize_decomposed(
-            state.means2d, state.conics, state.render_quantities, state.opacities,
-            state.tile_offsets, state.tile_gaussian_ids, state,
-            tile_size, image_width, image_height, 0, 0,
-            backgrounds, tile_masks,
+            state.means2d,
+            state.conics,
+            state.render_quantities,
+            state.opacities,
+            state.tile_offsets,
+            state.tile_gaussian_ids,
+            state,
+            tile_size,
+            image_width,
+            image_height,
+            0,
+            0,
+            backgrounds,
+            tile_masks,
         )
 
         if masks is not None:
@@ -2412,8 +2522,8 @@ class GaussianSplat3d:
         projection_matrices: torch.Tensor,
         image_width: int,
         image_height: int,
-        near: float,
-        far: float,
+        near_plane: float,
+        far_plane: float,
         camera_model: CameraModel = CameraModel.PINHOLE,
         projection_method: ProjectionMethod = ProjectionMethod.AUTO,
         distortion_coeffs: torch.Tensor | None = None,
@@ -2443,8 +2553,8 @@ class GaussianSplat3d:
                 projection_matrices, # tensor of shape [C, 3, 3]
                 image_width, # width of the images
                 image_height, # height of the images
-                near, # near clipping plane
-                far) # far clipping plane
+                near_plane, # near clipping plane
+                far_plane) # far clipping plane
 
             true_depths = depth_values / alpha_values  # Get true depth values by dividing by alpha
 
@@ -2458,8 +2568,8 @@ class GaussianSplat3d:
                 Each matrix projects points in camera space into homogeneous pixel coordinates.
             image_width (int): The width of the images to be rendered. Note these are the same for all images being rendered.
             image_height (int): The height of the images to be rendered. Note these are the same for all images being rendered.
-            near (float): The near clipping plane distance for the projection.
-            far (float): The far clipping plane distance for the projection.
+            near_plane (float): The near clipping plane distance for the projection.
+            far_plane (float): The far clipping plane distance for the projection.
             camera_model (CameraModel): Semantic camera model for projection. Default is
                 :attr:`fvdb.CameraModel.PINHOLE`.
             projection_method (ProjectionMethod): Projection implementation selector. Default is
@@ -2497,17 +2607,27 @@ class GaussianSplat3d:
             raise TypeError("pixels_to_render must be either a torch.Tensor or a fvdb.JaggedTensor")
 
         settings = _build_settings(
-            image_width, image_height, near, far,
-            sh_degree_to_use=-1, tile_size=tile_size, radius_clip=min_radius_2d,
-            eps_2d=eps_2d, antialias=antialias, render_mode="depth",
+            image_width,
+            image_height,
+            near_plane,
+            far_plane,
+            sh_degree_to_use=-1,
+            tile_size=tile_size,
+            radius_clip=min_radius_2d,
+            eps_2d=eps_2d,
+            antialias=antialias,
+            render_mode="depth",
         )
         ret_depths, ret_alphas = self._sparse_render_decomposed(
             pixels_to_render_impl,
-            world_to_camera_matrices, projection_matrices, settings,
+            world_to_camera_matrices,
+            projection_matrices,
+            settings,
             self._camera_model_to_cpp(camera_model),
             self._projection_method_to_cpp(projection_method),
             distortion_coeffs,
-            backgrounds, masks,
+            backgrounds,
+            masks,
         )
 
         if isinstance(pixels_to_render, torch.Tensor):
@@ -2521,8 +2641,8 @@ class GaussianSplat3d:
         projection_matrices: torch.Tensor,
         image_width: int,
         image_height: int,
-        near: float,
-        far: float,
+        near_plane: float,
+        far_plane: float,
         camera_model: CameraModel = CameraModel.PINHOLE,
         projection_method: ProjectionMethod = ProjectionMethod.AUTO,
         distortion_coeffs: torch.Tensor | None = None,
@@ -2555,8 +2675,8 @@ class GaussianSplat3d:
                 projection_matrices, # tensor of shape [C, 3, 3]
                 image_width, # width of the images
                 image_height, # height of the images
-                near, # near clipping plane
-                far) # far clipping plane
+                near_plane, # near clipping plane
+                far_plane) # far clipping plane
 
         Args:
             world_to_camera_matrices (torch.Tensor): Tensor of shape ``(C, 4, 4)`` representing the
@@ -2566,8 +2686,8 @@ class GaussianSplat3d:
                 Each matrix projects points in camera space into homogeneous pixel coordinates.
             image_width (int): The width of the images to be rendered. Note these are the same for all images being rendered.
             image_height (int): The height of the images to be rendered. Note these are the same for all images being rendered.
-            near (float): The near clipping plane distance for the projection.
-            far (float): The far clipping plane distance for the projection.
+            near_plane (float): The near clipping plane distance for the projection.
+            far_plane (float): The far clipping plane distance for the projection.
             camera_model (CameraModel): Semantic camera model for projection. Default is
                 :attr:`fvdb.CameraModel.PINHOLE`.
             projection_method (ProjectionMethod): Projection implementation selector. Default is
@@ -2602,21 +2722,40 @@ class GaussianSplat3d:
         tile_masks = _pixel_mask_to_tile_mask(masks, tile_size) if masks is not None else None
 
         settings = _build_settings(
-            image_width, image_height, near, far,
-            sh_degree_to_use=sh_degree_to_use, tile_size=tile_size, radius_clip=min_radius_2d,
-            eps_2d=eps_2d, antialias=antialias, render_mode="rgb",
+            image_width,
+            image_height,
+            near_plane,
+            far_plane,
+            sh_degree_to_use=sh_degree_to_use,
+            tile_size=tile_size,
+            radius_clip=min_radius_2d,
+            eps_2d=eps_2d,
+            antialias=antialias,
+            render_mode="rgb",
         )
         state = self._project_validated(
-            world_to_camera_matrices, projection_matrices, settings,
+            world_to_camera_matrices,
+            projection_matrices,
+            settings,
             self._camera_model_to_cpp(camera_model),
             self._projection_method_to_cpp(projection_method),
             distortion_coeffs,
         )
         features, alphas = self._rasterize_decomposed(
-            state.means2d, state.conics, state.render_quantities, state.opacities,
-            state.tile_offsets, state.tile_gaussian_ids, state,
-            tile_size, image_width, image_height, 0, 0,
-            backgrounds, tile_masks,
+            state.means2d,
+            state.conics,
+            state.render_quantities,
+            state.opacities,
+            state.tile_offsets,
+            state.tile_gaussian_ids,
+            state,
+            tile_size,
+            image_width,
+            image_height,
+            0,
+            0,
+            backgrounds,
+            tile_masks,
         )
 
         if masks is not None:
@@ -2630,8 +2769,8 @@ class GaussianSplat3d:
         projection_matrices: torch.Tensor,
         image_width: int,
         image_height: int,
-        near: float,
-        far: float,
+        near_plane: float,
+        far_plane: float,
         camera_model: CameraModel = CameraModel.PINHOLE,
         projection_method: ProjectionMethod = ProjectionMethod.AUTO,
         distortion_coeffs: torch.Tensor | None = None,
@@ -2677,8 +2816,8 @@ class GaussianSplat3d:
                 projection_matrices,       # [C,3,3]
                 image_width=640,
                 image_height=480,
-                near=0.01,
-                far=1e10,
+                near_plane=0.01,
+                far_plane=1e10,
                 camera_model=fvdb.CameraModel.OPENCV_RATIONAL_8,
                 distortion_coeffs=dist_coeffs,  # [C,12]
                 backgrounds=bg,                 # [C,D]
@@ -2690,8 +2829,8 @@ class GaussianSplat3d:
             projection_matrices (torch.Tensor): Tensor of shape ``(C, 3, 3)``.
             image_width (int): Output image width ``W``.
             image_height (int): Output image height ``H``.
-            near (float): Near clipping plane.
-            far (float): Far clipping plane.
+            near_plane (float): Near clipping plane.
+            far_plane (float): Far clipping plane.
             camera_model (CameraModel): Semantic camera model used for ray generation.
             projection_method (ProjectionMethod): Projection implementation selector. Default is
                 :attr:`fvdb.ProjectionMethod.AUTO`.
@@ -2722,23 +2861,45 @@ class GaussianSplat3d:
         cpp_camera_model = self._camera_model_to_cpp(camera_model)
 
         settings = _build_settings(
-            image_width, image_height, near, far,
-            sh_degree_to_use=sh_degree_to_use, tile_size=tile_size, radius_clip=min_radius_2d,
-            eps_2d=eps_2d, antialias=antialias, render_mode="rgb",
+            image_width,
+            image_height,
+            near_plane,
+            far_plane,
+            sh_degree_to_use=sh_degree_to_use,
+            tile_size=tile_size,
+            radius_clip=min_radius_2d,
+            eps_2d=eps_2d,
+            antialias=antialias,
+            render_mode="rgb",
         )
         state = self._project_with_accum(
-            world_to_camera_matrices, projection_matrices, settings,
+            world_to_camera_matrices,
+            projection_matrices,
+            settings,
             cpp_camera_model,
             self._projection_method_to_cpp(projection_method),
             distortion_coeffs,
         )
         C = world_to_camera_matrices.size(0)
-        dc = distortion_coeffs if distortion_coeffs is not None else torch.empty(C, 0, device=self._means.device, dtype=self._means.dtype)
+        dc = (
+            distortion_coeffs
+            if distortion_coeffs is not None
+            else torch.empty(C, 0, device=self._means.device, dtype=self._means.dtype)
+        )
         features, alphas = _C.gsplat_rasterize_from_world(
-            self._means, self._quats, self._log_scales, state,
-            world_to_camera_matrices, projection_matrices, dc,
-            cpp_camera_model, image_width, image_height, tile_size,
-            backgrounds, tile_masks,
+            self._means,
+            self._quats,
+            self._log_scales,
+            state,
+            world_to_camera_matrices,
+            projection_matrices,
+            dc,
+            cpp_camera_model,
+            image_width,
+            image_height,
+            tile_size,
+            backgrounds,
+            tile_masks,
         )
 
         if masks is not None:
@@ -2752,8 +2913,8 @@ class GaussianSplat3d:
         projection_matrices: torch.Tensor,
         image_width: int,
         image_height: int,
-        near: float,
-        far: float,
+        near_plane: float,
+        far_plane: float,
         camera_model: CameraModel = CameraModel.PINHOLE,
         projection_method: ProjectionMethod = ProjectionMethod.AUTO,
         distortion_coeffs: torch.Tensor | None = None,
@@ -2774,23 +2935,45 @@ class GaussianSplat3d:
         cpp_camera_model = self._camera_model_to_cpp(camera_model)
 
         settings = _build_settings(
-            image_width, image_height, near, far,
-            sh_degree_to_use=-1, tile_size=tile_size, radius_clip=min_radius_2d,
-            eps_2d=eps_2d, antialias=antialias, render_mode="depth",
+            image_width,
+            image_height,
+            near_plane,
+            far_plane,
+            sh_degree_to_use=-1,
+            tile_size=tile_size,
+            radius_clip=min_radius_2d,
+            eps_2d=eps_2d,
+            antialias=antialias,
+            render_mode="depth",
         )
         state = self._project_with_accum(
-            world_to_camera_matrices, projection_matrices, settings,
+            world_to_camera_matrices,
+            projection_matrices,
+            settings,
             cpp_camera_model,
             self._projection_method_to_cpp(projection_method),
             distortion_coeffs,
         )
         C = world_to_camera_matrices.size(0)
-        dc = distortion_coeffs if distortion_coeffs is not None else torch.empty(C, 0, device=self._means.device, dtype=self._means.dtype)
+        dc = (
+            distortion_coeffs
+            if distortion_coeffs is not None
+            else torch.empty(C, 0, device=self._means.device, dtype=self._means.dtype)
+        )
         features, alphas = _C.gsplat_rasterize_from_world(
-            self._means, self._quats, self._log_scales, state,
-            world_to_camera_matrices, projection_matrices, dc,
-            cpp_camera_model, image_width, image_height, tile_size,
-            backgrounds, tile_masks,
+            self._means,
+            self._quats,
+            self._log_scales,
+            state,
+            world_to_camera_matrices,
+            projection_matrices,
+            dc,
+            cpp_camera_model,
+            image_width,
+            image_height,
+            tile_size,
+            backgrounds,
+            tile_masks,
         )
 
         if masks is not None:
@@ -2805,8 +2988,8 @@ class GaussianSplat3d:
         projection_matrices: torch.Tensor,
         image_width: int,
         image_height: int,
-        near: float,
-        far: float,
+        near_plane: float,
+        far_plane: float,
         camera_model: CameraModel = CameraModel.PINHOLE,
         projection_method: ProjectionMethod = ProjectionMethod.AUTO,
         distortion_coeffs: torch.Tensor | None = None,
@@ -2837,8 +3020,8 @@ class GaussianSplat3d:
                 projection_matrices, # tensor of shape [C, 3, 3]
                 image_width, # width of the images
                 image_height, # height of the images
-                near, # near clipping plane
-                far) # far clipping plane
+                near_plane, # near clipping plane
+                far_plane) # far clipping plane
 
         Args:
             pixels_to_render (torch.Tensor | JaggedTensor): A tensor of shape ``(C, P, 2)`` or a :class:`~fvdb.JaggedTensor` where ``C`` is the number of camera views,
@@ -2850,8 +3033,8 @@ class GaussianSplat3d:
                 Each matrix projects points in camera space into homogeneous pixel coordinates.
             image_width (int): The width of the images to be rendered. Note these are the same for all images being rendered.
             image_height (int): The height of the images to be rendered. Note these are the same for all images being rendered.
-            near (float): The near clipping plane distance for the projection.
-            far (float): The far clipping plane distance for the projection.
+            near_plane (float): The near clipping plane distance for the projection.
+            far_plane (float): The far clipping plane distance for the projection.
             camera_model (CameraModel): Semantic camera model for projection. Default is
                 :attr:`fvdb.CameraModel.PINHOLE`.
             projection_method (ProjectionMethod): Projection implementation selector. Default is
@@ -2894,17 +3077,27 @@ class GaussianSplat3d:
             raise TypeError("pixels_to_render must be either a torch.Tensor or a fvdb.JaggedTensor")
 
         settings = _build_settings(
-            image_width, image_height, near, far,
-            sh_degree_to_use=sh_degree_to_use, tile_size=tile_size, radius_clip=min_radius_2d,
-            eps_2d=eps_2d, antialias=antialias, render_mode="rgb",
+            image_width,
+            image_height,
+            near_plane,
+            far_plane,
+            sh_degree_to_use=sh_degree_to_use,
+            tile_size=tile_size,
+            radius_clip=min_radius_2d,
+            eps_2d=eps_2d,
+            antialias=antialias,
+            render_mode="rgb",
         )
         ret_features, ret_alphas = self._sparse_render_decomposed(
             pixels_to_render_impl,
-            world_to_camera_matrices, projection_matrices, settings,
+            world_to_camera_matrices,
+            projection_matrices,
+            settings,
             self._camera_model_to_cpp(camera_model),
             self._projection_method_to_cpp(projection_method),
             distortion_coeffs,
-            backgrounds, masks,
+            backgrounds,
+            masks,
         )
 
         if isinstance(pixels_to_render, torch.Tensor):
@@ -2919,8 +3112,8 @@ class GaussianSplat3d:
         projection_matrices: torch.Tensor,
         image_width: int,
         image_height: int,
-        near: float,
-        far: float,
+        near_plane: float,
+        far_plane: float,
         camera_model: CameraModel = CameraModel.PINHOLE,
         projection_method: ProjectionMethod = ProjectionMethod.AUTO,
         distortion_coeffs: torch.Tensor | None = None,
@@ -2950,8 +3143,8 @@ class GaussianSplat3d:
                 projection_matrices, # tensor of shape [C, 3, 3]
                 image_width, # width of the images
                 image_height, # height of the images
-                near, # near clipping plane
-                far) # far clipping plane
+                near_plane, # near clipping plane
+                far_plane) # far clipping plane
 
         Args:
             pixels_to_render (torch.Tensor | JaggedTensor): A tensor of shape ``(C, P, 2)`` or a :class:`~fvdb.JaggedTensor` where ``C`` is the number of camera views,
@@ -2963,8 +3156,8 @@ class GaussianSplat3d:
                 Each matrix projects points in camera space into homogeneous pixel coordinates.
             image_width (int): The width of the images to be rendered. Note these are the same for all images being rendered.
             image_height (int): The height of the images to be rendered. Note these are the same for all images being rendered.
-            near (float): The near clipping plane distance for the projection.
-            far (float): The far clipping plane distance for the projection.
+            near_plane (float): The near clipping plane distance for the projection.
+            far_plane (float): The far clipping plane distance for the projection.
             camera_model (CameraModel): Semantic camera model for projection. Default is
                 :attr:`fvdb.CameraModel.PINHOLE`.
             projection_method (ProjectionMethod): Projection implementation selector. Default is
@@ -3009,17 +3202,27 @@ class GaussianSplat3d:
             raise TypeError("pixels_to_render must be either a torch.Tensor or a fvdb.JaggedTensor")
 
         settings = _build_settings(
-            image_width, image_height, near, far,
-            sh_degree_to_use=sh_degree_to_use, tile_size=tile_size, radius_clip=min_radius_2d,
-            eps_2d=eps_2d, antialias=antialias, render_mode="rgbd",
+            image_width,
+            image_height,
+            near_plane,
+            far_plane,
+            sh_degree_to_use=sh_degree_to_use,
+            tile_size=tile_size,
+            radius_clip=min_radius_2d,
+            eps_2d=eps_2d,
+            antialias=antialias,
+            render_mode="rgbd",
         )
         ret_features, ret_alphas = self._sparse_render_decomposed(
             pixels_to_render_impl,
-            world_to_camera_matrices, projection_matrices, settings,
+            world_to_camera_matrices,
+            projection_matrices,
+            settings,
             self._camera_model_to_cpp(camera_model),
             self._projection_method_to_cpp(projection_method),
             distortion_coeffs,
-            backgrounds, masks,
+            backgrounds,
+            masks,
         )
 
         if isinstance(pixels_to_render, torch.Tensor):
@@ -3033,8 +3236,8 @@ class GaussianSplat3d:
         projection_matrices: torch.Tensor,
         image_width: int,
         image_height: int,
-        near: float,
-        far: float,
+        near_plane: float,
+        far_plane: float,
         camera_model: CameraModel = CameraModel.PINHOLE,
         projection_method: ProjectionMethod = ProjectionMethod.AUTO,
         distortion_coeffs: torch.Tensor | None = None,
@@ -3067,8 +3270,8 @@ class GaussianSplat3d:
                 projection_matrices, # tensor of shape [C, 3, 3]
                 image_width, # width of the images
                 image_height, # height of the images
-                near, # near clipping plane
-                far) # far clipping plane
+                near_plane, # near clipping plane
+                far_plane) # far clipping plane
 
             images = images[..., :-1]  # Extract image channels
 
@@ -3082,8 +3285,8 @@ class GaussianSplat3d:
                 Each matrix projects points in camera space into homogeneous pixel coordinates.
             image_width (int): The width of the images to be rendered. Note these are the same for all images being rendered.
             image_height (int): The height of the images to be rendered. Note these are the same for all images being rendered.
-            near (float): The near clipping plane distance for the projection.
-            far (float): The far clipping plane distance for the projection.
+            near_plane (float): The near clipping plane distance for the projection.
+            far_plane (float): The far clipping plane distance for the projection.
             camera_model (CameraModel): Semantic camera model for projection. Default is
                 :attr:`fvdb.CameraModel.PINHOLE`.
             projection_method (ProjectionMethod): Projection implementation selector. Default is
@@ -3117,21 +3320,40 @@ class GaussianSplat3d:
         tile_masks = _pixel_mask_to_tile_mask(masks, tile_size) if masks is not None else None
 
         settings = _build_settings(
-            image_width, image_height, near, far,
-            sh_degree_to_use=sh_degree_to_use, tile_size=tile_size, radius_clip=min_radius_2d,
-            eps_2d=eps_2d, antialias=antialias, render_mode="rgbd",
+            image_width,
+            image_height,
+            near_plane,
+            far_plane,
+            sh_degree_to_use=sh_degree_to_use,
+            tile_size=tile_size,
+            radius_clip=min_radius_2d,
+            eps_2d=eps_2d,
+            antialias=antialias,
+            render_mode="rgbd",
         )
         state = self._project_validated(
-            world_to_camera_matrices, projection_matrices, settings,
+            world_to_camera_matrices,
+            projection_matrices,
+            settings,
             self._camera_model_to_cpp(camera_model),
             self._projection_method_to_cpp(projection_method),
             distortion_coeffs,
         )
         features, alphas = self._rasterize_decomposed(
-            state.means2d, state.conics, state.render_quantities, state.opacities,
-            state.tile_offsets, state.tile_gaussian_ids, state,
-            tile_size, image_width, image_height, 0, 0,
-            backgrounds, tile_masks,
+            state.means2d,
+            state.conics,
+            state.render_quantities,
+            state.opacities,
+            state.tile_offsets,
+            state.tile_gaussian_ids,
+            state,
+            tile_size,
+            image_width,
+            image_height,
+            0,
+            0,
+            backgrounds,
+            tile_masks,
         )
 
         if masks is not None:
@@ -3145,8 +3367,8 @@ class GaussianSplat3d:
         projection_matrices: torch.Tensor,
         image_width: int,
         image_height: int,
-        near: float,
-        far: float,
+        near_plane: float,
+        far_plane: float,
         camera_model: CameraModel = CameraModel.PINHOLE,
         projection_method: ProjectionMethod = ProjectionMethod.AUTO,
         distortion_coeffs: torch.Tensor | None = None,
@@ -3168,23 +3390,45 @@ class GaussianSplat3d:
         cpp_camera_model = self._camera_model_to_cpp(camera_model)
 
         settings = _build_settings(
-            image_width, image_height, near, far,
-            sh_degree_to_use=sh_degree_to_use, tile_size=tile_size, radius_clip=min_radius_2d,
-            eps_2d=eps_2d, antialias=antialias, render_mode="rgbd",
+            image_width,
+            image_height,
+            near_plane,
+            far_plane,
+            sh_degree_to_use=sh_degree_to_use,
+            tile_size=tile_size,
+            radius_clip=min_radius_2d,
+            eps_2d=eps_2d,
+            antialias=antialias,
+            render_mode="rgbd",
         )
         state = self._project_with_accum(
-            world_to_camera_matrices, projection_matrices, settings,
+            world_to_camera_matrices,
+            projection_matrices,
+            settings,
             cpp_camera_model,
             self._projection_method_to_cpp(projection_method),
             distortion_coeffs,
         )
         C = world_to_camera_matrices.size(0)
-        dc = distortion_coeffs if distortion_coeffs is not None else torch.empty(C, 0, device=self._means.device, dtype=self._means.dtype)
+        dc = (
+            distortion_coeffs
+            if distortion_coeffs is not None
+            else torch.empty(C, 0, device=self._means.device, dtype=self._means.dtype)
+        )
         features, alphas = _C.gsplat_rasterize_from_world(
-            self._means, self._quats, self._log_scales, state,
-            world_to_camera_matrices, projection_matrices, dc,
-            cpp_camera_model, image_width, image_height, tile_size,
-            backgrounds, tile_masks,
+            self._means,
+            self._quats,
+            self._log_scales,
+            state,
+            world_to_camera_matrices,
+            projection_matrices,
+            dc,
+            cpp_camera_model,
+            image_width,
+            image_height,
+            tile_size,
+            backgrounds,
+            tile_masks,
         )
 
         if masks is not None:
@@ -3198,8 +3442,8 @@ class GaussianSplat3d:
         projection_matrices: torch.Tensor,
         image_width: int,
         image_height: int,
-        near: float,
-        far: float,
+        near_plane: float,
+        far_plane: float,
         camera_model: CameraModel = CameraModel.PINHOLE,
         projection_method: ProjectionMethod = ProjectionMethod.AUTO,
         distortion_coeffs: torch.Tensor | None = None,
@@ -3229,8 +3473,8 @@ class GaussianSplat3d:
                 projection_matrices, # tensor of shape [C, 3, 3]
                 image_width, # width of the images
                 image_height, # height of the images
-                near, # near clipping plane
-                far) # far clipping plane
+                near_plane, # near clipping plane
+                far_plane) # far clipping plane
 
             num_gaussians_cij = num_gaussians[c, i, j, 0]  # Number of contributing Gaussians at pixel (i, j) in camera c
 
@@ -3242,8 +3486,8 @@ class GaussianSplat3d:
                 Each matrix projects points in camera space into homogeneous pixel coordinates.
             image_width (int): The width of the images to be rendered. Note these are the same for all images being rendered.
             image_height (int): The height of the images to be rendered. Note these are the same for all images being rendered.
-            near (float): The near clipping plane distance for the projection.
-            far (float): The far clipping plane distance for the projection.
+            near_plane (float): The near clipping plane distance for the projection.
+            far_plane (float): The far clipping plane distance for the projection.
             camera_model (CameraModel): Semantic camera model for projection. Default is
                 :attr:`fvdb.CameraModel.PINHOLE`.
             projection_method (ProjectionMethod): Projection implementation selector. Default is
@@ -3268,11 +3512,16 @@ class GaussianSplat3d:
                 Each element represents the alpha value (opacity) at a pixel such that ``0 <= alpha < 1``,
                 and 0 means the pixel is fully transparent, and 1 means the pixel is fully opaque.
         """
-        settings = _build_settings(image_width, image_height, near, far, 0, tile_size, min_radius_2d, eps_2d, antialias, "depth")
+        settings = _build_settings(
+            image_width, image_height, near_plane, far_plane, 0, tile_size, min_radius_2d, eps_2d, antialias, "depth"
+        )
         state = self._project_with_accum(
-            world_to_camera_matrices, projection_matrices, settings,
+            world_to_camera_matrices,
+            projection_matrices,
+            settings,
             self._camera_model_to_cpp(camera_model),
-            self._projection_method_to_cpp(projection_method), distortion_coeffs,
+            self._projection_method_to_cpp(projection_method),
+            distortion_coeffs,
         )
         return _C.gsplat_render_num_contributing(state, settings)
 
@@ -3284,8 +3533,8 @@ class GaussianSplat3d:
         projection_matrices: torch.Tensor,
         image_width: int,
         image_height: int,
-        near: float,
-        far: float,
+        near_plane: float,
+        far_plane: float,
         camera_model: CameraModel = CameraModel.PINHOLE,
         projection_method: ProjectionMethod = ProjectionMethod.AUTO,
         distortion_coeffs: torch.Tensor | None = None,
@@ -3303,8 +3552,8 @@ class GaussianSplat3d:
         projection_matrices: torch.Tensor,
         image_width: int,
         image_height: int,
-        near: float,
-        far: float,
+        near_plane: float,
+        far_plane: float,
         camera_model: CameraModel = CameraModel.PINHOLE,
         projection_method: ProjectionMethod = ProjectionMethod.AUTO,
         distortion_coeffs: torch.Tensor | None = None,
@@ -3321,8 +3570,8 @@ class GaussianSplat3d:
         projection_matrices: torch.Tensor,
         image_width: int,
         image_height: int,
-        near: float,
-        far: float,
+        near_plane: float,
+        far_plane: float,
         camera_model: CameraModel = CameraModel.PINHOLE,
         projection_method: ProjectionMethod = ProjectionMethod.AUTO,
         distortion_coeffs: torch.Tensor | None = None,
@@ -3350,8 +3599,8 @@ class GaussianSplat3d:
                 Each matrix projects points in camera space into homogeneous pixel coordinates.
             image_width (int): The width of the images to be rendered. Note these are the same for all images being rendered.
             image_height (int): The height of the images to be rendered. Note these are the same for all images being rendered.
-            near (float): The near clipping plane distance for the projection.
-            far (float): The far clipping plane distance for the projection.
+            near_plane (float): The near clipping plane distance for the projection.
+            far_plane (float): The far clipping plane distance for the projection.
             camera_model (CameraModel): Semantic camera model for projection. Default is
                 :attr:`fvdb.CameraModel.PINHOLE`.
             projection_method (ProjectionMethod): Projection implementation selector. Default is
@@ -3378,7 +3627,9 @@ class GaussianSplat3d:
                 Each element represents the alpha value (opacity) at that pixel such that ``0 <= alpha < 1``,
                 and 0 means the pixel is fully transparent, and 1 means the pixel is fully opaque.
         """
-        settings = _build_settings(image_width, image_height, near, far, 0, tile_size, min_radius_2d, eps_2d, antialias, "depth")
+        settings = _build_settings(
+            image_width, image_height, near_plane, far_plane, 0, tile_size, min_radius_2d, eps_2d, antialias, "depth"
+        )
 
         if isinstance(pixels_to_render, torch.Tensor):
             C, R, _ = pixels_to_render.shape
@@ -3389,14 +3640,23 @@ class GaussianSplat3d:
 
         sparse_state = _C.gsplat_sparse_project_gaussians_for_camera(
             pixels_to_render_jagged._impl,
-            self._means, self._quats, self._log_scales, self._logit_opacities,
-            self._sh0, self._shN,
-            world_to_camera_matrices, projection_matrices, settings,
+            self._means,
+            self._quats,
+            self._log_scales,
+            self._logit_opacities,
+            self._sh0,
+            self._shN,
+            world_to_camera_matrices,
+            projection_matrices,
+            settings,
             self._camera_model_to_cpp(camera_model),
-            self._projection_method_to_cpp(projection_method), distortion_coeffs,
+            self._projection_method_to_cpp(projection_method),
+            distortion_coeffs,
         )
         result_num_impl, result_alphas_impl = _C.gsplat_sparse_render_num_contributing(
-            sparse_state, pixels_to_render_jagged._impl, settings,
+            sparse_state,
+            pixels_to_render_jagged._impl,
+            settings,
         )
 
         if isinstance(pixels_to_render, torch.Tensor):
@@ -3414,8 +3674,8 @@ class GaussianSplat3d:
         projection_matrices: torch.Tensor,
         image_width: int,
         image_height: int,
-        near: float,
-        far: float,
+        near_plane: float,
+        far_plane: float,
         camera_model: CameraModel = CameraModel.PINHOLE,
         projection_method: ProjectionMethod = ProjectionMethod.AUTO,
         distortion_coeffs: torch.Tensor | None = None,
@@ -3436,8 +3696,8 @@ class GaussianSplat3d:
                 Each matrix projects points in camera space into homogeneous pixel coordinates.
             image_width (int): The width of the images to be rendered. Note these are the same for all images being rendered.
             image_height (int): The height of the images to be rendered. Note these are the same for all images being rendered.
-            near (float): The near clipping plane distance for the projection.
-            far (float): The far clipping plane distance for the projection.
+            near_plane (float): The near clipping plane distance for the projection.
+            far_plane (float): The far clipping plane distance for the projection.
             camera_model (CameraModel): Semantic camera model for projection. Default is
                 :attr:`fvdb.CameraModel.PINHOLE`.
             projection_method (ProjectionMethod): Projection implementation selector. Default is
@@ -3462,13 +3722,18 @@ class GaussianSplat3d:
                 jagged tensor containing the weights of the contributing Gaussians of each rendered pixel for each camera. The weights are in row-major order and
                 sum to 1 for each pixel if that pixel is opaque (alpha=1).
         """
-        settings = _build_settings(image_width, image_height, near, far, 0, tile_size, min_radius_2d, eps_2d, antialias, "depth")
+        settings = _build_settings(
+            image_width, image_height, near_plane, far_plane, 0, tile_size, min_radius_2d, eps_2d, antialias, "depth"
+        )
         settings.num_depth_samples = top_k_contributors
 
         state = self._project_with_accum(
-            world_to_camera_matrices, projection_matrices, settings,
+            world_to_camera_matrices,
+            projection_matrices,
+            settings,
             self._camera_model_to_cpp(camera_model),
-            self._projection_method_to_cpp(projection_method), distortion_coeffs,
+            self._projection_method_to_cpp(projection_method),
+            distortion_coeffs,
         )
 
         if top_k_contributors > 0:
@@ -3490,8 +3755,8 @@ class GaussianSplat3d:
         projection_matrices: torch.Tensor,
         image_width: int,
         image_height: int,
-        near: float,
-        far: float,
+        near_plane: float,
+        far_plane: float,
         camera_model: CameraModel = CameraModel.PINHOLE,
         projection_method: ProjectionMethod = ProjectionMethod.AUTO,
         distortion_coeffs: torch.Tensor | None = None,
@@ -3510,8 +3775,8 @@ class GaussianSplat3d:
         projection_matrices: torch.Tensor,
         image_width: int,
         image_height: int,
-        near: float,
-        far: float,
+        near_plane: float,
+        far_plane: float,
         camera_model: CameraModel = CameraModel.PINHOLE,
         projection_method: ProjectionMethod = ProjectionMethod.AUTO,
         distortion_coeffs: torch.Tensor | None = None,
@@ -3529,8 +3794,8 @@ class GaussianSplat3d:
         projection_matrices: torch.Tensor,
         image_width: int,
         image_height: int,
-        near: float,
-        far: float,
+        near_plane: float,
+        far_plane: float,
         camera_model: CameraModel = CameraModel.PINHOLE,
         projection_method: ProjectionMethod = ProjectionMethod.AUTO,
         distortion_coeffs: torch.Tensor | None = None,
@@ -3558,8 +3823,8 @@ class GaussianSplat3d:
                 Each matrix projects points in camera space into homogeneous pixel coordinates.
             image_width (int): The width of the images to be rendered. Note these are the same for all images being rendered.
             image_height (int): The height of the images to be rendered. Note these are the same for all images being rendered.
-            near (float): The near clipping plane distance for the projection.
-            far (float): The far clipping plane distance for the projection.
+            near_plane (float): The near clipping plane distance for the projection.
+            far_plane (float): The far clipping plane distance for the projection.
             camera_model (CameraModel): Semantic camera model for projection. Default is
                 :attr:`fvdb.CameraModel.PINHOLE`.
             projection_method (ProjectionMethod): Projection implementation selector. Default is
@@ -3583,7 +3848,9 @@ class GaussianSplat3d:
             weights (fvdb.JaggedTensor): A ``[[C1P1 + C1P2 + ... C1PN1, 1], ... [CNP1 + CNP2 + ... CNPNN, 1]]`` jagged tensor
                 containing the weights of the contributing Gaussians of each rendered pixel for each camera. The weights are in row-major order and sum to 1 for each pixel if that pixel is opaque (alpha=1).
         """
-        settings = _build_settings(image_width, image_height, near, far, 0, tile_size, min_radius_2d, eps_2d, antialias, "depth")
+        settings = _build_settings(
+            image_width, image_height, near_plane, far_plane, 0, tile_size, min_radius_2d, eps_2d, antialias, "depth"
+        )
         settings.num_depth_samples = top_k_contributors
 
         if isinstance(pixels_to_render, torch.Tensor):
@@ -3595,11 +3862,18 @@ class GaussianSplat3d:
 
         sparse_state = _C.gsplat_sparse_project_gaussians_for_camera(
             pixels_jt._impl,
-            self._means, self._quats, self._log_scales, self._logit_opacities,
-            self._sh0, self._shN,
-            world_to_camera_matrices, projection_matrices, settings,
+            self._means,
+            self._quats,
+            self._log_scales,
+            self._logit_opacities,
+            self._sh0,
+            self._shN,
+            world_to_camera_matrices,
+            projection_matrices,
+            settings,
             self._camera_model_to_cpp(camera_model),
-            self._projection_method_to_cpp(projection_method), distortion_coeffs,
+            self._projection_method_to_cpp(projection_method),
+            distortion_coeffs,
         )
 
         if top_k_contributors > 0:
@@ -3608,12 +3882,17 @@ class GaussianSplat3d:
         else:
             # Standard path: compute actual num contributing, pass it to the ids kernel
             num_contributing_jt, _ = _C.gsplat_sparse_render_num_contributing(
-                sparse_state, pixels_jt._impl, settings,
+                sparse_state,
+                pixels_jt._impl,
+                settings,
             )
             num_contributing = num_contributing_jt
 
         ids_impl, weights_impl = _C.gsplat_sparse_render_contributing_ids(
-            sparse_state, pixels_jt._impl, settings, num_contributing,
+            sparse_state,
+            pixels_jt._impl,
+            settings,
+            num_contributing,
         )
         return JaggedTensor(impl=ids_impl), JaggedTensor(impl=weights_impl)
 
@@ -3640,7 +3919,12 @@ class GaussianSplat3d:
             tuple[torch.Tensor, torch.Tensor]: Tuple of (logit_opacities_new [N], log_scales_new [N, 3]).
         """
         return _C.gsplat_relocate_gaussians(
-            log_scales, logit_opacities, ratios, binomial_coeffs, n_max, min_opacity,
+            log_scales,
+            logit_opacities,
+            ratios,
+            binomial_coeffs,
+            n_max,
+            min_opacity,
         )
 
     def add_noise_to_means(self, noise_scale: float, t: float = 0.005, k: float = 100.0) -> None:
@@ -3654,8 +3938,13 @@ class GaussianSplat3d:
         """
         # The C++ kernel mutates means in-place
         _C.gsplat_add_noise_to_means(
-            self._means, self._log_scales, self._logit_opacities, self._quats,
-            noise_scale, t, k,
+            self._means,
+            self._log_scales,
+            self._logit_opacities,
+            self._quats,
+            noise_scale,
+            t,
+            k,
         )
 
     def reset_accumulated_gradient_state(self) -> None:
@@ -3696,8 +3985,14 @@ class GaussianSplat3d:
         if isinstance(filename, pathlib.Path):
             filename = str(filename)
         _C.gsplat_save_ply(
-            self._means, self._quats, self._log_scales, self._logit_opacities,
-            self._sh0, self._shN, filename, dict(metadata) if metadata is not None else None,
+            self._means,
+            self._quats,
+            self._log_scales,
+            self._logit_opacities,
+            self._sh0,
+            self._shN,
+            filename,
+            dict(metadata) if metadata is not None else None,
         )
 
     @overload
@@ -3828,9 +4123,15 @@ class GaussianSplat3d:
         result._accumulate_mean_2d_gradients = self._accumulate_mean_2d_gradients
         result._accumulate_max_2d_radii = self._accumulate_max_2d_radii
         # Grad norms follow the main dtype; step counts and max radii are int32 (device-only move)
-        result._accum_grad_norms = self._accum_grad_norms.to(device=device, dtype=dtype) if self._accum_grad_norms is not None else None
-        result._accum_step_counts = self._accum_step_counts.to(device=device) if self._accum_step_counts is not None else None
-        result._accum_max_2d_radii = self._accum_max_2d_radii.to(device=device) if self._accum_max_2d_radii is not None else None
+        result._accum_grad_norms = (
+            self._accum_grad_norms.to(device=device, dtype=dtype) if self._accum_grad_norms is not None else None
+        )
+        result._accum_step_counts = (
+            self._accum_step_counts.to(device=device) if self._accum_step_counts is not None else None
+        )
+        result._accum_max_2d_radii = (
+            self._accum_max_2d_radii.to(device=device) if self._accum_max_2d_radii is not None else None
+        )
         return result
 
     def set_state(

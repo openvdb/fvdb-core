@@ -32,10 +32,10 @@ class _ProjectGaussiansFn(torch.autograd.Function):
     @staticmethod
     def forward(
         ctx,
-        means: torch.Tensor,              # [N, 3]
-        quats: torch.Tensor,              # [N, 4]
-        log_scales: torch.Tensor,         # [N, 3]
-        world_to_cam: torch.Tensor,       # [C, 4, 4]
+        means: torch.Tensor,  # [N, 3]
+        quats: torch.Tensor,  # [N, 4]
+        log_scales: torch.Tensor,  # [N, 3]
+        world_to_cam: torch.Tensor,  # [C, 4, 4]
         projection_matrices: torch.Tensor,  # [C, 3, 3]
         image_width: int,
         image_height: int,
@@ -51,9 +51,19 @@ class _ProjectGaussiansFn(torch.autograd.Function):
         accum_max_radii: Optional[torch.Tensor],
     ):
         result = _C.gsplat_projection_fwd(
-            means, quats, log_scales, world_to_cam, projection_matrices,
-            image_width, image_height, eps2d, near_plane, far_plane,
-            min_radius_2d, calc_compensations, ortho,
+            means,
+            quats,
+            log_scales,
+            world_to_cam,
+            projection_matrices,
+            image_width,
+            image_height,
+            eps2d,
+            near_plane,
+            far_plane,
+            min_radius_2d,
+            calc_compensations,
+            ortho,
         )
         radii = result[0]
         means2d = result[1]
@@ -122,11 +132,20 @@ class _ProjectGaussiansFn(torch.autograd.Function):
             fresh_max_radii = torch.zeros(N, device=device, dtype=torch.int32)
 
         d_means, _, d_quats, d_scales, d_w2c = _C.gsplat_projection_bwd(
-            means, quats, log_scales, world_to_cam, projection_matrices,
+            means,
+            quats,
+            log_scales,
+            world_to_cam,
+            projection_matrices,
             compensations,
-            ctx.image_width, ctx.image_height, ctx.eps2d,
-            radii, conics,
-            grad_means2d, grad_depths, grad_conics,
+            ctx.image_width,
+            ctx.image_height,
+            ctx.eps2d,
+            radii,
+            conics,
+            grad_means2d,
+            grad_depths,
+            grad_conics,
             grad_compensations,
             ctx.needs_input_grad[3],  # world_to_cam requires_grad
             ctx.ortho,
@@ -149,9 +168,22 @@ class _ProjectGaussiansFn(torch.autograd.Function):
         #   image_width, image_height, eps2d, near_plane, far_plane, min_radius_2d,
         #   calc_compensations, ortho, accum_grad_norms, accum_step_counts, accum_max_radii
         return (
-            d_means, d_quats, d_scales, d_w2c, None,
-            None, None, None, None, None, None,
-            None, None, None, None, None,
+            d_means,
+            d_quats,
+            d_scales,
+            d_w2c,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
         )
 
 
@@ -177,16 +209,33 @@ class _ProjectGaussiansJaggedFn(torch.autograd.Function):
         ortho: bool,
     ):
         result = _C.gsplat_projection_jagged_fwd(
-            g_sizes, means, quats, scales, c_sizes,
-            world_to_cam, projection_matrices,
-            image_width, image_height, eps2d, near_plane, far_plane,
-            min_radius_2d, ortho,
+            g_sizes,
+            means,
+            quats,
+            scales,
+            c_sizes,
+            world_to_cam,
+            projection_matrices,
+            image_width,
+            image_height,
+            eps2d,
+            near_plane,
+            far_plane,
+            min_radius_2d,
+            ortho,
         )
         radii, means2d, depths, conics = result[0], result[1], result[2], result[3]
 
         ctx.save_for_backward(
-            g_sizes, means, quats, scales, c_sizes,
-            world_to_cam, projection_matrices, radii, conics,
+            g_sizes,
+            means,
+            quats,
+            scales,
+            c_sizes,
+            world_to_cam,
+            projection_matrices,
+            radii,
+            conics,
         )
         ctx.image_width = image_width
         ctx.image_height = image_height
@@ -210,11 +259,21 @@ class _ProjectGaussiansJaggedFn(torch.autograd.Function):
         world_to_cam, projection_matrices, radii, conics = ctx.saved_tensors[5:]
 
         d_means, _, d_quats, d_scales, d_w2c = _C.gsplat_projection_jagged_bwd(
-            g_sizes, means, quats, scales, c_sizes,
-            world_to_cam, projection_matrices,
-            ctx.image_width, ctx.image_height, ctx.eps2d,
-            radii, conics,
-            grad_means2d, grad_depths, grad_conics,
+            g_sizes,
+            means,
+            quats,
+            scales,
+            c_sizes,
+            world_to_cam,
+            projection_matrices,
+            ctx.image_width,
+            ctx.image_height,
+            ctx.eps2d,
+            radii,
+            conics,
+            grad_means2d,
+            grad_depths,
+            grad_conics,
             ctx.needs_input_grad[5],  # world_to_cam requires_grad
             ctx.ortho,
         )
@@ -222,9 +281,20 @@ class _ProjectGaussiansJaggedFn(torch.autograd.Function):
         # g_sizes, means, quats, scales, c_sizes, world_to_cam, projection_matrices,
         # image_width, image_height, eps2d, near_plane, far_plane, min_radius_2d, ortho
         return (
-            None, d_means, d_quats, d_scales, None,
-            d_w2c, None,
-            None, None, None, None, None, None, None,
+            None,
+            d_means,
+            d_quats,
+            d_scales,
+            None,
+            d_w2c,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
         )
 
 
@@ -292,8 +362,16 @@ def project_gaussians(
         render_mode=render_mode,
     )
     return _C.gsplat_project_gaussians_analytic(
-        means, quats, log_scales, logit_opacities, sh0, shN,
-        world_to_camera_matrices, projection_matrices, settings, camera_model,
+        means,
+        quats,
+        log_scales,
+        logit_opacities,
+        sh0,
+        shN,
+        world_to_camera_matrices,
+        projection_matrices,
+        settings,
+        camera_model,
     )
 
 
@@ -368,7 +446,16 @@ def project_gaussians_for_camera(
         render_mode=render_mode,
     )
     return _C.gsplat_project_gaussians_for_camera(
-        means, quats, log_scales, logit_opacities, sh0, shN,
-        world_to_camera_matrices, projection_matrices, settings,
-        camera_model, projection_method, distortion_coeffs,
+        means,
+        quats,
+        log_scales,
+        logit_opacities,
+        sh0,
+        shN,
+        world_to_camera_matrices,
+        projection_matrices,
+        settings,
+        camera_model,
+        projection_method,
+        distortion_coeffs,
     )

@@ -22,42 +22,59 @@ class _RasterizeFromWorldFn(torch.autograd.Function):
     @staticmethod
     def forward(
         ctx,
-        means: torch.Tensor,                     # [N, 3]
-        quats: torch.Tensor,                     # [N, 4]
-        log_scales: torch.Tensor,                # [N, 3]
-        features: torch.Tensor,                  # [C, N, D]
-        opacities: torch.Tensor,                 # [C, N]
-        world_to_cam_start: torch.Tensor,        # [C, 4, 4]
-        world_to_cam_end: torch.Tensor,          # [C, 4, 4]
-        projection_matrices: torch.Tensor,       # [C, 3, 3]
-        distortion_coeffs: torch.Tensor,         # [C, K]
-        rolling_shutter_type: int,               # RollingShutterType enum value
-        camera_model: int,                       # DistortionModel enum value
+        means: torch.Tensor,  # [N, 3]
+        quats: torch.Tensor,  # [N, 4]
+        log_scales: torch.Tensor,  # [N, 3]
+        features: torch.Tensor,  # [C, N, D]
+        opacities: torch.Tensor,  # [C, N]
+        world_to_cam_start: torch.Tensor,  # [C, 4, 4]
+        world_to_cam_end: torch.Tensor,  # [C, 4, 4]
+        projection_matrices: torch.Tensor,  # [C, 3, 3]
+        distortion_coeffs: torch.Tensor,  # [C, K]
+        rolling_shutter_type: int,  # RollingShutterType enum value
+        camera_model: int,  # DistortionModel enum value
         settings: _C.RenderSettings,
         tile_offsets: torch.Tensor,
         tile_gaussian_ids: torch.Tensor,
-        backgrounds: Optional[torch.Tensor],     # [C, D] or None
-        masks: Optional[torch.Tensor],           # [C, tileH, tileW] or None
+        backgrounds: Optional[torch.Tensor],  # [C, D] or None
+        masks: Optional[torch.Tensor],  # [C, tileH, tileW] or None
     ):
         result = _C.gsplat_rasterize_from_world_fwd(
-            means, quats, log_scales,
-            features, opacities,
-            world_to_cam_start, world_to_cam_end,
-            projection_matrices, distortion_coeffs,
-            rolling_shutter_type, camera_model, settings,
-            tile_offsets, tile_gaussian_ids,
-            backgrounds, masks,
+            means,
+            quats,
+            log_scales,
+            features,
+            opacities,
+            world_to_cam_start,
+            world_to_cam_end,
+            projection_matrices,
+            distortion_coeffs,
+            rolling_shutter_type,
+            camera_model,
+            settings,
+            tile_offsets,
+            tile_gaussian_ids,
+            backgrounds,
+            masks,
         )
         rendered_features = result[0]
         rendered_alphas = result[1]
         last_ids = result[2]
 
         to_save = [
-            means, quats, log_scales, features, opacities,
-            world_to_cam_start, world_to_cam_end,
-            projection_matrices, distortion_coeffs,
-            tile_offsets, tile_gaussian_ids,
-            rendered_alphas, last_ids,
+            means,
+            quats,
+            log_scales,
+            features,
+            opacities,
+            world_to_cam_start,
+            world_to_cam_end,
+            projection_matrices,
+            distortion_coeffs,
+            tile_offsets,
+            tile_gaussian_ids,
+            rendered_alphas,
+            last_ids,
         ]
         if backgrounds is not None:
             to_save.append(backgrounds)
@@ -122,15 +139,26 @@ class _RasterizeFromWorldFn(torch.autograd.Function):
         settings.tile_size = ctx.tile_size
 
         result = _C.gsplat_rasterize_from_world_bwd(
-            means, quats, log_scales,
-            features, opacities,
-            world_to_cam_start, world_to_cam_end,
-            projection_matrices, distortion_coeffs,
-            ctx.rolling_shutter_type, ctx.camera_model, settings,
-            tile_offsets, tile_gaussian_ids,
-            rendered_alphas, last_ids,
-            d_loss_d_rendered_features, d_loss_d_rendered_alphas,
-            backgrounds, masks,
+            means,
+            quats,
+            log_scales,
+            features,
+            opacities,
+            world_to_cam_start,
+            world_to_cam_end,
+            projection_matrices,
+            distortion_coeffs,
+            ctx.rolling_shutter_type,
+            ctx.camera_model,
+            settings,
+            tile_offsets,
+            tile_gaussian_ids,
+            rendered_alphas,
+            last_ids,
+            d_loss_d_rendered_features,
+            d_loss_d_rendered_alphas,
+            backgrounds,
+            masks,
         )
         d_means = result[0]
         d_quats = result[1]
@@ -143,10 +171,22 @@ class _RasterizeFromWorldFn(torch.autograd.Function):
         #   rolling_shutter_type, camera_model, settings,
         #   tile_offsets, tile_gaussian_ids, backgrounds, masks
         return (
-            d_means, d_quats, d_log_scales, d_features, d_opacities,
-            None, None, None, None,
-            None, None, None,
-            None, None, None, None,
+            d_means,
+            d_quats,
+            d_log_scales,
+            d_features,
+            d_opacities,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
         )
 
 
@@ -192,8 +232,17 @@ def rasterize_from_world(
         Tuple of (rendered_images ``[C, H, W, D]``, alphas ``[C, H, W, 1]``).
     """
     return _C.gsplat_rasterize_from_world(
-        means, quats, log_scales, projected_state,
-        world_to_camera_matrices, projection_matrices, distortion_coeffs,
-        camera_model, image_width, image_height, tile_size,
-        backgrounds, masks,
+        means,
+        quats,
+        log_scales,
+        projected_state,
+        world_to_camera_matrices,
+        projection_matrices,
+        distortion_coeffs,
+        camera_model,
+        image_width,
+        image_height,
+        tile_size,
+        backgrounds,
+        masks,
     )

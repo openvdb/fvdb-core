@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
-#include <fvdb/detail/viewer/GaussianSplat3dView.h>
 #include <fvdb/detail/viewer/CameraView.h>
+#include <fvdb/detail/viewer/GaussianSplat3dView.h>
 #include <fvdb/detail/viewer/Viewer.h>
 
 #include <c10/util/Exception.h>

@@ -22,34 +22,49 @@ class _RasterizeDenseFn(torch.autograd.Function):
     @staticmethod
     def forward(
         ctx,
-        means2d: torch.Tensor,           # [C, N, 2]
-        conics: torch.Tensor,            # [C, N, 3]
-        colors: torch.Tensor,            # [C, N, D]
-        opacities: torch.Tensor,         # [N]
+        means2d: torch.Tensor,  # [C, N, 2]
+        conics: torch.Tensor,  # [C, N, 3]
+        colors: torch.Tensor,  # [C, N, D]
+        opacities: torch.Tensor,  # [N]
         image_width: int,
         image_height: int,
         image_origin_w: int,
         image_origin_h: int,
         tile_size: int,
-        tile_offsets: torch.Tensor,       # [C, tile_height, tile_width]
+        tile_offsets: torch.Tensor,  # [C, tile_height, tile_width]
         tile_gaussian_ids: torch.Tensor,  # [n_isects]
         absgrad: bool,
         backgrounds: Optional[torch.Tensor],  # [C, D] or None
-        masks: Optional[torch.Tensor],        # [C, tileH, tileW] or None
+        masks: Optional[torch.Tensor],  # [C, tileH, tileW] or None
     ):
         result = _C.gsplat_rasterize_fwd(
-            means2d, conics, colors, opacities,
-            image_width, image_height, image_origin_w, image_origin_h,
-            tile_size, tile_offsets, tile_gaussian_ids,
-            backgrounds, masks,
+            means2d,
+            conics,
+            colors,
+            opacities,
+            image_width,
+            image_height,
+            image_origin_w,
+            image_origin_h,
+            tile_size,
+            tile_offsets,
+            tile_gaussian_ids,
+            backgrounds,
+            masks,
         )
         rendered_colors = result[0]
         rendered_alphas = result[1]
         last_ids = result[2]
 
         to_save = [
-            means2d, conics, colors, opacities,
-            tile_offsets, tile_gaussian_ids, rendered_alphas, last_ids,
+            means2d,
+            conics,
+            colors,
+            opacities,
+            tile_offsets,
+            tile_gaussian_ids,
+            rendered_alphas,
+            last_ids,
         ]
         if backgrounds is not None:
             to_save.append(backgrounds)
@@ -100,15 +115,25 @@ class _RasterizeDenseFn(torch.autograd.Function):
             opt_idx += 1
 
         result = _C.gsplat_rasterize_bwd(
-            means2d, conics, colors, opacities,
-            ctx.image_width, ctx.image_height,
-            ctx.image_origin_w, ctx.image_origin_h,
+            means2d,
+            conics,
+            colors,
+            opacities,
+            ctx.image_width,
+            ctx.image_height,
+            ctx.image_origin_w,
+            ctx.image_origin_h,
             ctx.tile_size,
-            tile_offsets, tile_gaussian_ids,
-            rendered_alphas, last_ids,
-            d_loss_d_rendered_colors, d_loss_d_rendered_alphas,
-            ctx.absgrad, -1,
-            backgrounds, masks,
+            tile_offsets,
+            tile_gaussian_ids,
+            rendered_alphas,
+            last_ids,
+            d_loss_d_rendered_colors,
+            d_loss_d_rendered_alphas,
+            ctx.absgrad,
+            -1,
+            backgrounds,
+            masks,
         )
         # result: (dMean2dAbs, dMeans2d, dConics, dColors, dOpacities)
         d_means2d = result[1]
@@ -121,10 +146,20 @@ class _RasterizeDenseFn(torch.autograd.Function):
         #   tile_size, tile_offsets, tile_gaussian_ids, absgrad,
         #   backgrounds, masks
         return (
-            d_means2d, d_conics, d_colors, d_opacities,
-            None, None, None, None,
-            None, None, None, None,
-            None, None,
+            d_means2d,
+            d_conics,
+            d_colors,
+            d_opacities,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
         )
 
 
@@ -156,6 +191,12 @@ def rasterize_from_projected(
         Tuple of (rendered_images ``[C, H, W, D]``, alphas ``[C, H, W, 1]``).
     """
     return _C.gsplat_render_crop_from_projected(
-        projected_gaussians, tile_size, crop_width, crop_height,
-        crop_origin_w, crop_origin_h, backgrounds, masks,
+        projected_gaussians,
+        tile_size,
+        crop_width,
+        crop_height,
+        crop_origin_w,
+        crop_origin_h,
+        backgrounds,
+        masks,
     )

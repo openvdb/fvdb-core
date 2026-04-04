@@ -328,12 +328,8 @@ saveGaussianPly(const std::string &filename,
     using namespace tinyply;
 
     const fvdb::JaggedTensor validMask = FVDB_DISPATCH_KERNEL(means.device(), [&]() {
-        return detail::ops::dispatchGaussianNanInfMask<DeviceTag>(means,
-                                                                  quats,
-                                                                  logScales,
-                                                                  logitOpacities,
-                                                                  sh0,
-                                                                  shN);
+        return detail::ops::dispatchGaussianNanInfMask<DeviceTag>(
+            means, quats, logScales, logitOpacities, sh0, shN);
     });
 
     std::filebuf fb;
@@ -348,12 +344,9 @@ saveGaussianPly(const std::string &filename,
         means.index({validMask.jdata(), torch::indexing::Ellipsis}).cpu().contiguous();
     const torch::Tensor quatsCPU =
         quats.index({validMask.jdata(), torch::indexing::Ellipsis}).cpu().contiguous();
-    const torch::Tensor scalesCPU = logScales
-                                        .index({validMask.jdata(), torch::indexing::Ellipsis})
-                                        .cpu()
-                                        .contiguous();
-    const torch::Tensor opacitiesCPU =
-        logitOpacities.index({validMask.jdata()}).cpu().contiguous();
+    const torch::Tensor scalesCPU =
+        logScales.index({validMask.jdata(), torch::indexing::Ellipsis}).cpu().contiguous();
+    const torch::Tensor opacitiesCPU = logitOpacities.index({validMask.jdata()}).cpu().contiguous();
 
     // [N, D]
     const torch::Tensor shCoeffs0CPU =
@@ -361,8 +354,7 @@ saveGaussianPly(const std::string &filename,
     // [N, K-1, D]
     const torch::Tensor shCoeffsNCPU = [&]() {
         if (shN.numel() <= 0) {
-            return torch::zeros({meansCPU.size(0), 0},
-                                shN.options().device(torch::kCPU));
+            return torch::zeros({meansCPU.size(0), 0}, shN.options().device(torch::kCPU));
         } else {
             // ShN has shape [N, K-1, D], meaning the spherical harmonic coefficients are ordered
             // by basis, then channel. i.e. RGBRGB...

@@ -45,15 +45,37 @@ def render_images(
         Tuple of (images ``[C, H, W, D]``, alphas ``[C, H, W, 1]``).
     """
     state = project_gaussians_for_camera(
-        means, quats, log_scales, logit_opacities, sh0, shN,
-        world_to_camera_matrices, projection_matrices,
-        image_width, image_height, near_plane, far_plane,
-        sh_degree_to_use, tile_size, radius_clip, eps_2d, antialias,
-        render_mode="rgb", camera_model=camera_model,
-        projection_method=projection_method, distortion_coeffs=distortion_coeffs,
+        means,
+        quats,
+        log_scales,
+        logit_opacities,
+        sh0,
+        shN,
+        world_to_camera_matrices,
+        projection_matrices,
+        image_width,
+        image_height,
+        near_plane,
+        far_plane,
+        sh_degree_to_use,
+        tile_size,
+        radius_clip,
+        eps_2d,
+        antialias,
+        render_mode="rgb",
+        camera_model=camera_model,
+        projection_method=projection_method,
+        distortion_coeffs=distortion_coeffs,
     )
     return rasterize_from_projected(
-        state, tile_size, image_width, image_height, 0, 0, backgrounds, masks,
+        state,
+        tile_size,
+        image_width,
+        image_height,
+        0,
+        0,
+        backgrounds,
+        masks,
     )
 
 
@@ -86,16 +108,37 @@ def render_depths(
         Tuple of (depths ``[C, H, W, 1]``, alphas ``[C, H, W, 1]``).
     """
     state = project_gaussians_for_camera(
-        means, quats, log_scales, logit_opacities, sh0, shN,
-        world_to_camera_matrices, projection_matrices,
-        image_width, image_height, near_plane, far_plane,
-        sh_degree_to_use=-1, tile_size=tile_size, radius_clip=radius_clip,
-        eps_2d=eps_2d, antialias=antialias, render_mode="depth",
-        camera_model=camera_model, projection_method=projection_method,
+        means,
+        quats,
+        log_scales,
+        logit_opacities,
+        sh0,
+        shN,
+        world_to_camera_matrices,
+        projection_matrices,
+        image_width,
+        image_height,
+        near_plane,
+        far_plane,
+        sh_degree_to_use=-1,
+        tile_size=tile_size,
+        radius_clip=radius_clip,
+        eps_2d=eps_2d,
+        antialias=antialias,
+        render_mode="depth",
+        camera_model=camera_model,
+        projection_method=projection_method,
         distortion_coeffs=distortion_coeffs,
     )
     return rasterize_from_projected(
-        state, tile_size, image_width, image_height, 0, 0, backgrounds, masks,
+        state,
+        tile_size,
+        image_width,
+        image_height,
+        0,
+        0,
+        backgrounds,
+        masks,
     )
 
 
@@ -129,15 +172,37 @@ def render_images_and_depths(
         Tuple of (images_and_depths ``[C, H, W, D+1]``, alphas ``[C, H, W, 1]``).
     """
     state = project_gaussians_for_camera(
-        means, quats, log_scales, logit_opacities, sh0, shN,
-        world_to_camera_matrices, projection_matrices,
-        image_width, image_height, near_plane, far_plane,
-        sh_degree_to_use, tile_size, radius_clip, eps_2d, antialias,
-        render_mode="rgbd", camera_model=camera_model,
-        projection_method=projection_method, distortion_coeffs=distortion_coeffs,
+        means,
+        quats,
+        log_scales,
+        logit_opacities,
+        sh0,
+        shN,
+        world_to_camera_matrices,
+        projection_matrices,
+        image_width,
+        image_height,
+        near_plane,
+        far_plane,
+        sh_degree_to_use,
+        tile_size,
+        radius_clip,
+        eps_2d,
+        antialias,
+        render_mode="rgbd",
+        camera_model=camera_model,
+        projection_method=projection_method,
+        distortion_coeffs=distortion_coeffs,
     )
     return rasterize_from_projected(
-        state, tile_size, image_width, image_height, 0, 0, backgrounds, masks,
+        state,
+        tile_size,
+        image_width,
+        image_height,
+        0,
+        0,
+        backgrounds,
+        masks,
     )
 
 
@@ -172,18 +237,47 @@ def render_images_from_world(
     """
     C = world_to_camera_matrices.size(0)
     state = project_gaussians_for_camera(
-        means, quats, log_scales, logit_opacities, sh0, shN,
-        world_to_camera_matrices, projection_matrices,
-        image_width, image_height, near_plane, far_plane,
-        sh_degree_to_use, tile_size, radius_clip, eps_2d, antialias,
-        render_mode="rgb", camera_model=camera_model,
-        projection_method=projection_method, distortion_coeffs=distortion_coeffs,
+        means,
+        quats,
+        log_scales,
+        logit_opacities,
+        sh0,
+        shN,
+        world_to_camera_matrices,
+        projection_matrices,
+        image_width,
+        image_height,
+        near_plane,
+        far_plane,
+        sh_degree_to_use,
+        tile_size,
+        radius_clip,
+        eps_2d,
+        antialias,
+        render_mode="rgb",
+        camera_model=camera_model,
+        projection_method=projection_method,
+        distortion_coeffs=distortion_coeffs,
     )
-    dc = distortion_coeffs if distortion_coeffs is not None else torch.empty(C, 0, device=means.device, dtype=means.dtype)
+    dc = (
+        distortion_coeffs
+        if distortion_coeffs is not None
+        else torch.empty(C, 0, device=means.device, dtype=means.dtype)
+    )
     return rasterize_from_world(
-        means, quats, log_scales, state, world_to_camera_matrices,
-        projection_matrices, dc, camera_model, image_width, image_height,
-        tile_size, backgrounds, masks,
+        means,
+        quats,
+        log_scales,
+        state,
+        world_to_camera_matrices,
+        projection_matrices,
+        dc,
+        camera_model,
+        image_width,
+        image_height,
+        tile_size,
+        backgrounds,
+        masks,
     )
 
 
@@ -217,19 +311,47 @@ def render_depths_from_world(
     """
     C = world_to_camera_matrices.size(0)
     state = project_gaussians_for_camera(
-        means, quats, log_scales, logit_opacities, sh0, shN,
-        world_to_camera_matrices, projection_matrices,
-        image_width, image_height, near_plane, far_plane,
-        sh_degree_to_use=-1, tile_size=tile_size, radius_clip=radius_clip,
-        eps_2d=eps_2d, antialias=antialias, render_mode="depth",
-        camera_model=camera_model, projection_method=projection_method,
+        means,
+        quats,
+        log_scales,
+        logit_opacities,
+        sh0,
+        shN,
+        world_to_camera_matrices,
+        projection_matrices,
+        image_width,
+        image_height,
+        near_plane,
+        far_plane,
+        sh_degree_to_use=-1,
+        tile_size=tile_size,
+        radius_clip=radius_clip,
+        eps_2d=eps_2d,
+        antialias=antialias,
+        render_mode="depth",
+        camera_model=camera_model,
+        projection_method=projection_method,
         distortion_coeffs=distortion_coeffs,
     )
-    dc = distortion_coeffs if distortion_coeffs is not None else torch.empty(C, 0, device=means.device, dtype=means.dtype)
+    dc = (
+        distortion_coeffs
+        if distortion_coeffs is not None
+        else torch.empty(C, 0, device=means.device, dtype=means.dtype)
+    )
     return rasterize_from_world(
-        means, quats, log_scales, state, world_to_camera_matrices,
-        projection_matrices, dc, camera_model, image_width, image_height,
-        tile_size, backgrounds, masks,
+        means,
+        quats,
+        log_scales,
+        state,
+        world_to_camera_matrices,
+        projection_matrices,
+        dc,
+        camera_model,
+        image_width,
+        image_height,
+        tile_size,
+        backgrounds,
+        masks,
     )
 
 
@@ -264,16 +386,45 @@ def render_images_and_depths_from_world(
     """
     C = world_to_camera_matrices.size(0)
     state = project_gaussians_for_camera(
-        means, quats, log_scales, logit_opacities, sh0, shN,
-        world_to_camera_matrices, projection_matrices,
-        image_width, image_height, near_plane, far_plane,
-        sh_degree_to_use, tile_size, radius_clip, eps_2d, antialias,
-        render_mode="rgbd", camera_model=camera_model,
-        projection_method=projection_method, distortion_coeffs=distortion_coeffs,
+        means,
+        quats,
+        log_scales,
+        logit_opacities,
+        sh0,
+        shN,
+        world_to_camera_matrices,
+        projection_matrices,
+        image_width,
+        image_height,
+        near_plane,
+        far_plane,
+        sh_degree_to_use,
+        tile_size,
+        radius_clip,
+        eps_2d,
+        antialias,
+        render_mode="rgbd",
+        camera_model=camera_model,
+        projection_method=projection_method,
+        distortion_coeffs=distortion_coeffs,
     )
-    dc = distortion_coeffs if distortion_coeffs is not None else torch.empty(C, 0, device=means.device, dtype=means.dtype)
+    dc = (
+        distortion_coeffs
+        if distortion_coeffs is not None
+        else torch.empty(C, 0, device=means.device, dtype=means.dtype)
+    )
     return rasterize_from_world(
-        means, quats, log_scales, state, world_to_camera_matrices,
-        projection_matrices, dc, camera_model, image_width, image_height,
-        tile_size, backgrounds, masks,
+        means,
+        quats,
+        log_scales,
+        state,
+        world_to_camera_matrices,
+        projection_matrices,
+        dc,
+        camera_model,
+        image_width,
+        image_height,
+        tile_size,
+        backgrounds,
+        masks,
     )

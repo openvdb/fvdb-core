@@ -83,20 +83,19 @@ bind_viewer(py::module &m) {
              py::arg("device_id"),
              py::arg("verbose"),
              "Create a new Viewer instance")
-        .def(
-            "add_gaussian_splat_3d_view",
-            &fvdb::detail::viewer::Viewer::addGaussianSplat3dView,
-            py::arg("scene_name"),
-            py::arg("name"),
-            py::arg("means"),
-            py::arg("quats"),
-            py::arg("log_scales"),
-            py::arg("logit_opacities"),
-            py::arg("sh0"),
-            py::arg("shN"),
-            py::return_value_policy::reference_internal, // preserve reference; tie lifetime to
-                                                         // parent
-            "Register a Gaussian splat 3D view with the viewer (accepts raw tensors)")
+        .def("add_gaussian_splat_3d_view",
+             &fvdb::detail::viewer::Viewer::addGaussianSplat3dView,
+             py::arg("scene_name"),
+             py::arg("name"),
+             py::arg("means"),
+             py::arg("quats"),
+             py::arg("log_scales"),
+             py::arg("logit_opacities"),
+             py::arg("sh0"),
+             py::arg("shN"),
+             py::return_value_policy::reference_internal, // preserve reference; tie lifetime to
+                                                          // parent
+             "Register a Gaussian splat 3D view with the viewer (accepts raw tensors)")
         .def("has_gaussian_splat_3d_view",
              &fvdb::detail::viewer::Viewer::hasGaussianSplat3dView,
              py::arg("name"),
