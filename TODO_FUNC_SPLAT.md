@@ -1,4 +1,4 @@
-# Functional Gaussian Splatting API - Progress Tracker
+# Functional Gaussian Splatting API - Progress Tracker -- COMPLETE
 
 ## CRITICAL: Build Environment
 
