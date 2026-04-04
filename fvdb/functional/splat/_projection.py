@@ -4,6 +4,7 @@
 """Functional API for Gaussian projection (analytic and camera-dispatched)."""
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, cast
 
 import torch
@@ -473,4 +474,116 @@ def project_gaussians_for_camera(
         camera_model,
         projection_method,
         distortion_coeffs,
+    )
+
+
+# ---------------------------------------------------------------------------
+#  Decomposed projection: raw geometric projection as a composable stage
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class RawProjection:
+    """Result of raw geometric projection of 3D Gaussians onto 2D image planes.
+
+    Contains the low-level projection outputs before opacity computation,
+    SH evaluation, or tile intersection. This is the first stage in the
+    decomposed rendering pipeline.
+
+    Attributes:
+        radii: ``[C, N]`` int32 projected radii (<=0 means culled).
+        means2d: ``[C, N, 2]`` Projected 2D means.
+        depths: ``[C, N]`` Depths along camera z-axis.
+        conics: ``[C, N, 3]`` Upper-triangle of inverse 2D covariance.
+        compensations: ``[C, N]`` Antialiasing compensation factors, or ``None``
+            when antialiasing is disabled.
+    """
+
+    radii: torch.Tensor
+    means2d: torch.Tensor
+    depths: torch.Tensor
+    conics: torch.Tensor
+    compensations: torch.Tensor | None
+
+
+def project_to_2d(
+    means: torch.Tensor,
+    quats: torch.Tensor,
+    log_scales: torch.Tensor,
+    world_to_camera_matrices: torch.Tensor,
+    projection_matrices: torch.Tensor,
+    image_width: int,
+    image_height: int,
+    eps_2d: float,
+    near: float,
+    far: float,
+    radius_clip: float,
+    antialias: bool,
+    camera_model: _C.CameraModel,
+    accum_grad_norms: torch.Tensor | None = None,
+    accum_step_counts: torch.Tensor | None = None,
+    accum_max_radii: torch.Tensor | None = None,
+) -> RawProjection:
+    """Raw geometric projection of 3D Gaussians onto 2D image planes.
+
+    This is a composable pipeline stage: it performs only the geometric
+    projection (no opacity computation, SH evaluation, or tile intersection).
+    Differentiable via Python autograd.
+
+    Args:
+        means: ``[N, 3]`` Gaussian means.
+        quats: ``[N, 4]`` Quaternion rotations.
+        log_scales: ``[N, 3]`` Log scale factors.
+        world_to_camera_matrices: ``[C, 4, 4]`` World-to-camera transforms.
+        projection_matrices: ``[C, 3, 3]`` Projection/intrinsic matrices.
+        image_width: Output image width in pixels.
+        image_height: Output image height in pixels.
+        eps_2d: Epsilon for 2D projection numerical stability.
+        near: Near clipping plane distance.
+        far: Far clipping plane distance.
+        radius_clip: Minimum projected radius for culling.
+        antialias: Whether to compute antialiasing compensations.
+        camera_model: Camera distortion model.
+        accum_grad_norms: ``[N]`` Accumulator for gradient norms (mutated in backward).
+        accum_step_counts: ``[N]`` Accumulator for step counts (mutated in backward).
+        accum_max_radii: ``[N]`` Accumulator for max radii (mutated in backward).
+
+    Returns:
+        A :class:`RawProjection` containing radii, means2d, depths, conics,
+        and compensations.
+    """
+    ortho = camera_model == _C.CameraModel.ORTHOGRAPHIC
+    proj_result = cast(
+        tuple[torch.Tensor, ...],
+        _ProjectGaussiansFn.apply(
+            means,
+            quats,
+            log_scales,
+            world_to_camera_matrices,
+            projection_matrices,
+            image_width,
+            image_height,
+            eps_2d,
+            near,
+            far,
+            radius_clip,
+            antialias,
+            ortho,
+            accum_grad_norms,
+            accum_step_counts,
+            accum_max_radii,
+        ),
+    )
+    radii: torch.Tensor = proj_result[0]
+    means2d: torch.Tensor = proj_result[1]
+    depths: torch.Tensor = proj_result[2]
+    conics: torch.Tensor = proj_result[3]
+    compensations: torch.Tensor | None = proj_result[4] if antialias else None
+
+    return RawProjection(
+        radii=radii,
+        means2d=means2d,
+        depths=depths,
+        conics=conics,
+        compensations=compensations,
     )

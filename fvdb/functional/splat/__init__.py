@@ -13,13 +13,21 @@ GaussianSplat3d scenes are always single.
 
 # Projection
 from ._projection import (
+    RawProjection,
     project_gaussians,
     project_gaussians_for_camera,
+    project_to_2d,
+)
+
+# Opacities
+from ._opacities import (
+    compute_opacities,
 )
 
 # SH evaluation
 from ._sh import (
     evaluate_spherical_harmonics,
+    prepare_render_features,
 )
 
 # Rasterization
@@ -55,15 +63,23 @@ from ._queries import (
 
 # Helpers
 from ._tile_intersection import (
+    TileIntersection,
     build_render_settings,
+    intersect_tiles,
 )
 
 __all__ = [
-    # Projection
+    # Projection (monolith convenience)
     "project_gaussians",
     "project_gaussians_for_camera",
+    # Projection (decomposed stage)
+    "RawProjection",
+    "project_to_2d",
+    # Opacities (decomposed stage)
+    "compute_opacities",
     # SH evaluation
     "evaluate_spherical_harmonics",
+    "prepare_render_features",
     # Rasterization
     "rasterize_from_projected",
     "rasterize_from_world",
@@ -80,6 +96,9 @@ __all__ = [
     "render_contributing_gaussian_ids",
     "sparse_render_num_contributing_gaussians",
     "sparse_render_contributing_gaussian_ids",
+    # Tile intersection (decomposed stage)
+    "TileIntersection",
+    "intersect_tiles",
     # Helpers
     "build_render_settings",
 ]

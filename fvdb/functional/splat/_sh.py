@@ -108,3 +108,51 @@ def evaluate_spherical_harmonics(
         camera_pos = cam_to_world[:, :3, 3]
         view_dirs = means[None, :, :] - camera_pos[:, None, :]
     return cast(torch.Tensor, _EvalSHFn.apply(actual_sh_degree, C, view_dirs, sh0, shN, per_gaussian_projected_radii))
+
+
+def prepare_render_features(
+    means: torch.Tensor,
+    sh0: torch.Tensor,
+    shN: torch.Tensor,
+    world_to_camera_matrices: torch.Tensor,
+    radii: torch.Tensor,
+    depths: torch.Tensor,
+    sh_degree_to_use: int,
+    render_mode: str,
+) -> torch.Tensor:
+    """Prepare per-Gaussian render features based on the render mode.
+
+    For ``"rgb"``: evaluates spherical harmonics to produce view-dependent colors.
+    For ``"depth"``: returns depths as a single-channel feature.
+    For ``"rgbd"``: concatenates SH colors with depths.
+
+    This is a composable pipeline stage, meant to be called after
+    :func:`~fvdb.functional.splat.project_to_2d`.
+
+    Args:
+        means: ``[N, 3]`` Gaussian means (for computing view directions).
+        sh0: ``[N, 1, D]`` Degree-0 SH coefficients.
+        shN: ``[N, K-1, D]`` Higher-degree SH coefficients.
+        world_to_camera_matrices: ``[C, 4, 4]`` World-to-camera transforms.
+        radii: ``[C, N]`` int32 projected radii from projection stage.
+        depths: ``[C, N]`` Depths from projection stage.
+        sh_degree_to_use: SH degree to use (-1 for all available).
+        render_mode: One of ``"rgb"``, ``"depth"``, ``"rgbd"``.
+
+    Returns:
+        ``[C, N, D]`` Render features.
+    """
+    if render_mode == "depth":
+        return depths.unsqueeze(-1)
+
+    features = evaluate_spherical_harmonics(
+        means,
+        sh0,
+        shN,
+        sh_degree_to_use,
+        world_to_camera_matrices,
+        radii,
+    )
+    if render_mode == "rgbd":
+        features = torch.cat([features, depths.unsqueeze(-1)], -1)
+    return features

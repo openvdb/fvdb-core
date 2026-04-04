@@ -13,11 +13,12 @@ from fvdb.enums import CameraModel, ProjectionMethod
 from . import _fvdb_cpp as _C
 from ._fvdb_cpp import JaggedTensor as JaggedTensorCpp
 from ._fvdb_cpp import ProjectedGaussianSplats as ProjectedGaussianSplatsCpp
-from .functional.splat._projection import _ProjectGaussiansFn
+from .functional.splat._opacities import compute_opacities
+from .functional.splat._projection import project_to_2d
 from .functional.splat._rasterize import _RasterizeDenseFn
 from .functional.splat._rasterize_sparse import _RasterizeSparseFn
-from .functional.splat._sh import _EvalSHFn
-from .functional.splat._tile_intersection import build_render_settings
+from .functional.splat._sh import prepare_render_features
+from .functional.splat._tile_intersection import build_render_settings, intersect_tiles
 from .grid import Grid
 from .grid_batch import GridBatch
 from .jagged_tensor import JaggedTensor
@@ -1711,13 +1712,11 @@ class GaussianSplat3d:
         settings: _C.RenderSettings,
         camera_model: _C.CameraModel,
     ) -> _PyProjectedImpl:
-        """Decomposed projection pipeline using Python autograd Functions.
+        """Decomposed projection pipeline using functional stages.
 
-        Returns a tuple of raw tensors needed for rasterization:
-            (means2d, conics, features, opacities, radii, depths,
-             tile_offsets, tile_ids, settings)
+        Composes project_to_2d → compute_opacities → prepare_render_features
+        → intersect_tiles into a single projected state.
         """
-        ortho = camera_model == _C.CameraModel.ORTHOGRAPHIC
         C = world_to_camera_matrices.size(0)
         N = self._means.size(0)
 
@@ -1731,75 +1730,65 @@ class GaussianSplat3d:
             if self._accum_max_2d_radii is None:
                 self._accum_max_2d_radii = torch.zeros(N, device=self._means.device, dtype=torch.int32)
 
-        # 1. Projection with fresh-zeros accumulator pattern
-        proj_result = cast(
-            tuple[torch.Tensor, ...],
-            _ProjectGaussiansFn.apply(
-                self._means,
-                self._quats,
-                self._log_scales,
-                world_to_camera_matrices,
-                projection_matrices,
-                settings.image_width,
-                settings.image_height,
-                settings.eps_2d,
-                settings.near_plane,
-                settings.far_plane,
-                settings.radius_clip,
-                settings.antialias,
-                ortho,
-                self._accum_grad_norms,
-                self._accum_step_counts,
-                self._accum_max_2d_radii,
-            ),
+        # Map C++ RenderMode enum to string for functional API
+        mode_map = {_C.RenderMode.RGB: "rgb", _C.RenderMode.DEPTH: "depth", _C.RenderMode.RGBD: "rgbd"}
+        render_mode_str = mode_map[settings.render_mode]
+
+        # Stage 1: Raw geometric projection
+        raw = project_to_2d(
+            self._means,
+            self._quats,
+            self._log_scales,
+            world_to_camera_matrices,
+            projection_matrices,
+            settings.image_width,
+            settings.image_height,
+            settings.eps_2d,
+            settings.near_plane,
+            settings.far_plane,
+            settings.radius_clip,
+            settings.antialias,
+            camera_model,
+            self._accum_grad_norms,
+            self._accum_step_counts,
+            self._accum_max_2d_radii,
         )
-        radii = proj_result[0]
-        means2d = proj_result[1]
-        depths = proj_result[2]
-        conics = proj_result[3]
-        compensations: torch.Tensor | None = proj_result[4] if settings.antialias else None
 
-        # 2. Per-gaussian opacity [C, N]
-        opacities = torch.sigmoid(self._logit_opacities).repeat(C, 1)
-        if compensations is not None:
-            opacities = opacities * compensations
+        # Stage 2: Opacity computation
+        opacities = compute_opacities(self._logit_opacities, C, raw.compensations)
 
-        # 3. Render quantity (SH features or depths)
-        render_mode = settings.render_mode
-        if render_mode == _C.RenderMode.DEPTH:
-            features = depths.unsqueeze(-1)
-        else:
-            # SH evaluation
-            K = self._shN.size(1) + 1
-            actual_sh_degree = settings.sh_degree_to_use if settings.sh_degree_to_use >= 0 else int(math.sqrt(K)) - 1
-            if actual_sh_degree == 0:
-                # Degree 0: no view directions needed. Pass zero-sized view_dirs
-                # and the actual shN (shape [N, 0, D]) to the dispatch.
-                view_dirs = torch.zeros(C, N, 3, device=self._means.device, dtype=self._means.dtype)
-            else:
-                cam_to_world = torch.linalg.inv(world_to_camera_matrices)
-                camera_pos = cam_to_world[:, :3, 3]
-                view_dirs = self._means[None, :, :] - camera_pos[:, None, :]
-            features = cast(torch.Tensor, _EvalSHFn.apply(actual_sh_degree, C, view_dirs, self._sh0, self._shN, radii))
-            if render_mode == _C.RenderMode.RGBD:
-                features = torch.cat([features, depths.unsqueeze(-1)], -1)
+        # Stage 3: Render features (SH or depth)
+        features = prepare_render_features(
+            self._means,
+            self._sh0,
+            self._shN,
+            world_to_camera_matrices,
+            raw.radii,
+            raw.depths,
+            settings.sh_degree_to_use,
+            render_mode_str,
+        )
 
-        # 4. Tile intersection (non-differentiable)
-        num_tiles_w = math.ceil(settings.image_width / settings.tile_size)
-        num_tiles_h = math.ceil(settings.image_height / settings.tile_size)
-        tile_offsets, tile_ids = _C.gsplat_tile_intersection(
-            means2d, radii, depths, C, settings.tile_size, num_tiles_h, num_tiles_w
+        # Stage 4: Tile intersection
+        tiles = intersect_tiles(
+            raw.means2d,
+            raw.radii,
+            raw.depths,
+            C,
+            settings.tile_size,
+            settings.image_width,
+            settings.image_height,
         )
 
         return _PyProjectedImpl(
-            means2d=means2d,
-            conics=conics,
+            means2d=raw.means2d,
+            conics=raw.conics,
             render_quantities=features,
-            depths=depths,
+            depths=raw.depths,
             opacities=opacities,
-            radii=radii,
-            tile_offsets=tile_offsets,
-            tile_gaussian_ids=tile_ids,
+            radii=raw.radii,
+            tile_offsets=tiles.tile_offsets,
+            tile_gaussian_ids=tiles.tile_gaussian_ids,
             settings=settings,
             camera_model=camera_model,
         )

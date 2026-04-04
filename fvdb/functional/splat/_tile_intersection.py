@@ -1,8 +1,13 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 #
-"""Helpers for constructing RenderSettings from Python."""
+"""Helpers for tile intersection and RenderSettings construction."""
 from __future__ import annotations
+
+import math
+from dataclasses import dataclass
+
+import torch
 
 from ... import _fvdb_cpp as _C
 
@@ -51,3 +56,53 @@ def build_render_settings(
     settings.render_mode = mode_map[render_mode.lower()]
 
     return settings
+
+
+@dataclass(frozen=True)
+class TileIntersection:
+    """Result of tile-based Gaussian culling.
+
+    Identifies which Gaussians overlap which screen-space tiles, producing
+    sorted lists for the tiled rasterizer.
+
+    Attributes:
+        tile_offsets: Per-tile start offsets into ``tile_gaussian_ids``.
+        tile_gaussian_ids: Sorted Gaussian indices per tile.
+    """
+
+    tile_offsets: torch.Tensor
+    tile_gaussian_ids: torch.Tensor
+
+
+def intersect_tiles(
+    means2d: torch.Tensor,
+    radii: torch.Tensor,
+    depths: torch.Tensor,
+    num_cameras: int,
+    tile_size: int,
+    image_width: int,
+    image_height: int,
+) -> TileIntersection:
+    """Compute tile-Gaussian intersections for tiled rasterization.
+
+    This is a composable pipeline stage (non-differentiable), meant to be
+    called after :func:`~fvdb.functional.splat.project_to_2d`.
+
+    Args:
+        means2d: ``[C, N, 2]`` Projected 2D means.
+        radii: ``[C, N]`` int32 projected radii.
+        depths: ``[C, N]`` Depths along camera z-axis.
+        num_cameras: Number of cameras ``C``.
+        tile_size: Tile size in pixels.
+        image_width: Image width in pixels.
+        image_height: Image height in pixels.
+
+    Returns:
+        A :class:`TileIntersection` with tile offsets and sorted Gaussian IDs.
+    """
+    num_tiles_w = math.ceil(image_width / tile_size)
+    num_tiles_h = math.ceil(image_height / tile_size)
+    tile_offsets, tile_gaussian_ids = _C.gsplat_tile_intersection(
+        means2d, radii, depths, num_cameras, tile_size, num_tiles_h, num_tiles_w
+    )
+    return TileIntersection(tile_offsets=tile_offsets, tile_gaussian_ids=tile_gaussian_ids)
