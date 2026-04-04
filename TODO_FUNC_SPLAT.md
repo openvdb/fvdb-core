@@ -120,6 +120,6 @@ then Python explicitly accumulates deltas into persistent state. See `_ProjectGa
 - [x] Update `fvdb/__init__.py` re-exports
 - [x] Update `_fvdb_cpp.pyi` type stubs (removed stale C++ GaussianSplat3d class, added RenderSettings, RenderMode, SparseProjectedGaussianSplats, ~30 gsplat_* function stubs, updated Viewer signature)
 - [x] Add `docs/api/functional_splat.rst` documentation
-- [x] Rename `near`/`far` to `near_plane`/`far_plane` in GaussianSplat3d for consistency with functional API
+- [x] Enforce `near`/`far` param naming from GaussianSplat3d into functional API and pybind dispatch
 - [x] Run `black` and `clang-format` on all changed files
 - [x] All 135 tests pass

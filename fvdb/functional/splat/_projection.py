@@ -40,8 +40,8 @@ class _ProjectGaussiansFn(torch.autograd.Function):
         image_width: int,
         image_height: int,
         eps2d: float,
-        near_plane: float,
-        far_plane: float,
+        near: float,
+        far: float,
         min_radius_2d: float,
         calc_compensations: bool,
         ortho: bool,
@@ -59,8 +59,8 @@ class _ProjectGaussiansFn(torch.autograd.Function):
             image_width,
             image_height,
             eps2d,
-            near_plane,
-            far_plane,
+            near,
+            far,
             min_radius_2d,
             calc_compensations,
             ortho,
@@ -203,8 +203,8 @@ class _ProjectGaussiansJaggedFn(torch.autograd.Function):
         image_width: int,
         image_height: int,
         eps2d: float,
-        near_plane: float,
-        far_plane: float,
+        near: float,
+        far: float,
         min_radius_2d: float,
         ortho: bool,
     ):
@@ -219,8 +219,8 @@ class _ProjectGaussiansJaggedFn(torch.autograd.Function):
             image_width,
             image_height,
             eps2d,
-            near_plane,
-            far_plane,
+            near,
+            far,
             min_radius_2d,
             ortho,
         )
@@ -309,8 +309,8 @@ def project_gaussians(
     projection_matrices: torch.Tensor,
     image_width: int,
     image_height: int,
-    near_plane: float = 0.01,
-    far_plane: float = 1e10,
+    near: float = 0.01,
+    far: float = 1e10,
     sh_degree_to_use: int = -1,
     tile_size: int = 16,
     radius_clip: float = 0.0,
@@ -335,8 +335,8 @@ def project_gaussians(
         projection_matrices: ``[C, 3, 3]`` Projection/intrinsic matrices.
         image_width: Output image width in pixels.
         image_height: Output image height in pixels.
-        near_plane: Near clipping plane.
-        far_plane: Far clipping plane.
+        near: Near clipping plane.
+        far: Far clipping plane.
         sh_degree_to_use: SH degree (-1 for all).
         tile_size: Tile size for tiled rasterization.
         radius_clip: Minimum projected radius.
@@ -352,8 +352,8 @@ def project_gaussians(
     settings = build_render_settings(
         image_width=image_width,
         image_height=image_height,
-        near_plane=near_plane,
-        far_plane=far_plane,
+        near=near,
+        far=far,
         tile_size=tile_size,
         radius_clip=radius_clip,
         eps_2d=eps_2d,
@@ -386,8 +386,8 @@ def project_gaussians_for_camera(
     projection_matrices: torch.Tensor,
     image_width: int,
     image_height: int,
-    near_plane: float = 0.01,
-    far_plane: float = 1e10,
+    near: float = 0.01,
+    far: float = 1e10,
     sh_degree_to_use: int = -1,
     tile_size: int = 16,
     radius_clip: float = 0.0,
@@ -417,8 +417,8 @@ def project_gaussians_for_camera(
         projection_matrices: ``[C, 3, 3]`` Projection/intrinsic matrices.
         image_width: Output image width in pixels.
         image_height: Output image height in pixels.
-        near_plane: Near clipping plane.
-        far_plane: Far clipping plane.
+        near: Near clipping plane.
+        far: Far clipping plane.
         sh_degree_to_use: SH degree (-1 for all).
         tile_size: Tile size for tiled rasterization.
         radius_clip: Minimum projected radius.
@@ -436,8 +436,8 @@ def project_gaussians_for_camera(
     settings = build_render_settings(
         image_width=image_width,
         image_height=image_height,
-        near_plane=near_plane,
-        far_plane=far_plane,
+        near=near,
+        far=far,
         tile_size=tile_size,
         radius_clip=radius_clip,
         eps_2d=eps_2d,

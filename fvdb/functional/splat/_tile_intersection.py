@@ -10,8 +10,8 @@ from ... import _fvdb_cpp as _C
 def build_render_settings(
     image_width: int,
     image_height: int,
-    near_plane: float = 0.01,
-    far_plane: float = 1e10,
+    near: float = 0.01,
+    far: float = 1e10,
     tile_size: int = 16,
     radius_clip: float = 0.0,
     eps_2d: float = 0.3,
@@ -24,8 +24,8 @@ def build_render_settings(
     Args:
         image_width: Width of the output image in pixels.
         image_height: Height of the output image in pixels.
-        near_plane: Near clipping plane distance.
-        far_plane: Far clipping plane distance.
+        near: Near clipping plane distance.
+        far: Far clipping plane distance.
         tile_size: Tile size for tiled rasterization.
         radius_clip: Minimum projected radius; Gaussians below this are culled.
         eps_2d: Epsilon for 2D projection numerical stability.
@@ -39,8 +39,8 @@ def build_render_settings(
     settings = _C.RenderSettings()
     settings.image_width = image_width
     settings.image_height = image_height
-    settings.near_plane = near_plane
-    settings.far_plane = far_plane
+    settings.near_plane = near
+    settings.far_plane = far
     settings.tile_size = tile_size
     settings.radius_clip = radius_clip
     settings.eps_2d = eps_2d

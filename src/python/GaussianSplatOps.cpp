@@ -690,8 +690,8 @@ bind_gaussian_splat_ops(py::module &m) {
         py::arg("image_width"),
         py::arg("image_height"),
         py::arg("eps2d"),
-        py::arg("near_plane"),
-        py::arg("far_plane"),
+        py::arg("near"),
+        py::arg("far"),
         py::arg("min_radius_2d"),
         py::arg("calc_compensations"),
         py::arg("ortho"));
@@ -1231,8 +1231,8 @@ bind_gaussian_splat_ops(py::module &m) {
         py::arg("image_width"),
         py::arg("image_height"),
         py::arg("eps2d"),
-        py::arg("near_plane"),
-        py::arg("far_plane"),
+        py::arg("near"),
+        py::arg("far"),
         py::arg("min_radius_2d"),
         py::arg("ortho"));
 

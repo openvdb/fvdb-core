@@ -240,8 +240,8 @@ def sparse_render(
     projection_matrices: torch.Tensor,
     image_width: int,
     image_height: int,
-    near_plane: float = 0.01,
-    far_plane: float = 1e10,
+    near: float = 0.01,
+    far: float = 1e10,
     sh_degree_to_use: int = -1,
     tile_size: int = 16,
     radius_clip: float = 0.0,
@@ -274,8 +274,8 @@ def sparse_render(
         projection_matrices: ``[C, 3, 3]`` Projection matrices.
         image_width: Full image width (for tile computation).
         image_height: Full image height (for tile computation).
-        near_plane: Near clipping plane.
-        far_plane: Far clipping plane.
+        near: Near clipping plane.
+        far: Far clipping plane.
         sh_degree_to_use: SH degree (-1 for all).
         tile_size: Tile size for tiled rasterization.
         radius_clip: Minimum projected radius.
@@ -294,8 +294,8 @@ def sparse_render(
     settings = build_render_settings(
         image_width=image_width,
         image_height=image_height,
-        near_plane=near_plane,
-        far_plane=far_plane,
+        near=near,
+        far=far,
         tile_size=tile_size,
         radius_clip=radius_clip,
         eps_2d=eps_2d,

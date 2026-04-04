@@ -70,8 +70,8 @@ def _apply_pixel_mask(
 def _build_settings(
     image_width: int,
     image_height: int,
-    near_plane: float,
-    far_plane: float,
+    near: float,
+    far: float,
     sh_degree_to_use: int = -1,
     tile_size: int = 16,
     radius_clip: float = 0.0,
@@ -83,8 +83,8 @@ def _build_settings(
     return build_render_settings(
         image_width=image_width,
         image_height=image_height,
-        near_plane=near_plane,
-        far_plane=far_plane,
+        near=near,
+        far=far,
         tile_size=tile_size,
         radius_clip=radius_clip,
         eps_2d=eps_2d,
@@ -1936,8 +1936,8 @@ class GaussianSplat3d:
         projection_matrices: torch.Tensor,
         image_width: int,
         image_height: int,
-        near_plane: float,
-        far_plane: float,
+        near: float,
+        far: float,
         camera_model: CameraModel = CameraModel.PINHOLE,
         projection_method: ProjectionMethod = ProjectionMethod.AUTO,
         distortion_coeffs: torch.Tensor | None = None,
@@ -1973,8 +1973,8 @@ class GaussianSplat3d:
                 projection_matrices, # tensor of shape [C, 3, 3]
                 image_width, # width of the C images
                 image_height, # height of the C images
-                near_plane, # near clipping plane
-                far_plane) # far clipping plane
+                near, # near clipping plane
+                far) # far clipping plane
 
             # Now render a crop of size 100x100 starting at (10, 10) from the projected Gaussians
             # in each image plane.
@@ -1998,8 +1998,8 @@ class GaussianSplat3d:
                 Each matrix projects points in camera space into homogeneous pixel coordinates.
             image_width (int): The width of the images to be rendered. Note that all images must have the same width.
             image_height (int): The height of the images to be rendered. Note that all images must have the same height.
-            near_plane (float): The near clipping plane distance for the projection.
-            far_plane (float): The far clipping plane distance for the projection.
+            near (float): The near clipping plane distance for the projection.
+            far (float): The far clipping plane distance for the projection.
             camera_model (CameraModel): Semantic camera model for projection. Default is
                 :attr:`fvdb.CameraModel.PINHOLE`.
             projection_method (ProjectionMethod): Projection implementation selector. Default is
@@ -2022,8 +2022,8 @@ class GaussianSplat3d:
         settings = _build_settings(
             image_width,
             image_height,
-            near_plane,
-            far_plane,
+            near,
+            far,
             sh_degree_to_use=-1,
             tile_size=16,
             radius_clip=min_radius_2d,
@@ -2047,8 +2047,8 @@ class GaussianSplat3d:
         projection_matrices: torch.Tensor,
         image_width: int,
         image_height: int,
-        near_plane: float,
-        far_plane: float,
+        near: float,
+        far: float,
         camera_model: CameraModel = CameraModel.PINHOLE,
         projection_method: ProjectionMethod = ProjectionMethod.AUTO,
         distortion_coeffs: torch.Tensor | None = None,
@@ -2085,8 +2085,8 @@ class GaussianSplat3d:
                 projection_matrices, # tensor of shape [C, 3, 3]
                 image_width, # width of the C images
                 image_height, # height of the C images
-                near_plane, # near clipping plane
-                far_plane) # far clipping plane
+                near, # near clipping plane
+                far) # far clipping plane
 
             # Now render a crop of size 100x100 starting at (10, 10) from the projected Gaussians
             # in each image plane.
@@ -2107,8 +2107,8 @@ class GaussianSplat3d:
                 Each matrix projects points in camera space into homogeneous pixel coordinates.
             image_width (int): The width of the images to be rendered. Note that all images must have the same width.
             image_height (int): The height of the images to be rendered. Note that all images must have the same height.
-            near_plane (float): The near clipping plane distance for the projection.
-            far_plane (float): The far clipping plane distance for the projection.
+            near (float): The near clipping plane distance for the projection.
+            far (float): The far clipping plane distance for the projection.
             camera_model (CameraModel): Semantic camera model for projection. Default is
                 :attr:`fvdb.CameraModel.PINHOLE`.
             projection_method (ProjectionMethod): Projection implementation selector. Default is
@@ -2134,8 +2134,8 @@ class GaussianSplat3d:
         settings = _build_settings(
             image_width,
             image_height,
-            near_plane,
-            far_plane,
+            near,
+            far,
             sh_degree_to_use=sh_degree_to_use,
             tile_size=16,
             radius_clip=min_radius_2d,
@@ -2159,8 +2159,8 @@ class GaussianSplat3d:
         projection_matrices: torch.Tensor,
         image_width: int,
         image_height: int,
-        near_plane: float,
-        far_plane: float,
+        near: float,
+        far: float,
         camera_model: CameraModel = CameraModel.PINHOLE,
         projection_method: ProjectionMethod = ProjectionMethod.AUTO,
         distortion_coeffs: torch.Tensor | None = None,
@@ -2198,8 +2198,8 @@ class GaussianSplat3d:
                 projection_matrices, # tensor of shape [C, 3, 3]
                 image_width, # width of the C images
                 image_height, # height of the C images
-                near_plane, # near clipping plane
-                far_plane) # far clipping plane
+                near, # near clipping plane
+                far) # far clipping plane
 
             # Now render a crop of size 100x100 starting at (10, 10) from the projected Gaussians
             # in each image plane.
@@ -2225,8 +2225,8 @@ class GaussianSplat3d:
                 Each matrix projects points in camera space into homogeneous pixel coordinates.
             image_width (int): The width of the images to be rendered. Note that all images must have the same width.
             image_height (int): The height of the images to be rendered. Note that all images must have the same height.
-            near_plane (float): The near clipping plane distance for the projection.
-            far_plane (float): The far clipping plane distance for the projection.
+            near (float): The near clipping plane distance for the projection.
+            far (float): The far clipping plane distance for the projection.
             camera_model (CameraModel): Semantic camera model for projection. Default is
                 :attr:`fvdb.CameraModel.PINHOLE`.
             projection_method (ProjectionMethod): Projection implementation selector. Default is
@@ -2252,8 +2252,8 @@ class GaussianSplat3d:
         settings = _build_settings(
             image_width,
             image_height,
-            near_plane,
-            far_plane,
+            near,
+            far,
             sh_degree_to_use=sh_degree_to_use,
             tile_size=16,
             radius_clip=min_radius_2d,
@@ -2311,8 +2311,8 @@ class GaussianSplat3d:
                 projection_matrices, # tensor of shape [C, 3, 3]
                 image_width, # width of the C images
                 image_height, # height of the C images
-                near_plane, # near clipping plane
-                far_plane) # far clipping plane
+                near, # near clipping plane
+                far) # far clipping plane
 
             # Now render a crop of size 100x100 starting at (10, 10) from the projected Gaussians
             # in each image plane.
@@ -2395,8 +2395,8 @@ class GaussianSplat3d:
         projection_matrices: torch.Tensor,
         image_width: int,
         image_height: int,
-        near_plane: float,
-        far_plane: float,
+        near: float,
+        far: float,
         camera_model: CameraModel = CameraModel.PINHOLE,
         projection_method: ProjectionMethod = ProjectionMethod.AUTO,
         distortion_coeffs: torch.Tensor | None = None,
@@ -2428,8 +2428,8 @@ class GaussianSplat3d:
                 projection_matrices, # tensor of shape [C, 3, 3]
                 image_width, # width of the depth maps
                 image_height, # height of the depth maps
-                near_plane, # near clipping plane
-                far_plane) # far clipping plane
+                near, # near clipping plane
+                far) # far clipping plane
 
             true_depths = depth_images / alpha_images  # Get true depth values by dividing by alpha
 
@@ -2441,8 +2441,8 @@ class GaussianSplat3d:
                 Each matrix projects points in camera space into homogeneous pixel coordinates.
             image_width (int): The width of the depth maps to be rendered. Note these are the same for all depth maps being rendered.
             image_height (int): The height of the depth maps to be rendered. Note these are the same for all depth maps being rendered.
-            near_plane (float): The near clipping plane distance for the projection.
-            far_plane (float): The far clipping plane distance for the projection.
+            near (float): The near clipping plane distance for the projection.
+            far (float): The far clipping plane distance for the projection.
             camera_model (CameraModel): Semantic camera model for projection. Default is
                 :attr:`fvdb.CameraModel.PINHOLE`.
             projection_method (ProjectionMethod): Projection implementation selector. Default is
@@ -2476,8 +2476,8 @@ class GaussianSplat3d:
         settings = _build_settings(
             image_width,
             image_height,
-            near_plane,
-            far_plane,
+            near,
+            far,
             sh_degree_to_use=-1,
             tile_size=tile_size,
             radius_clip=min_radius_2d,
@@ -2522,8 +2522,8 @@ class GaussianSplat3d:
         projection_matrices: torch.Tensor,
         image_width: int,
         image_height: int,
-        near_plane: float,
-        far_plane: float,
+        near: float,
+        far: float,
         camera_model: CameraModel = CameraModel.PINHOLE,
         projection_method: ProjectionMethod = ProjectionMethod.AUTO,
         distortion_coeffs: torch.Tensor | None = None,
@@ -2553,8 +2553,8 @@ class GaussianSplat3d:
                 projection_matrices, # tensor of shape [C, 3, 3]
                 image_width, # width of the images
                 image_height, # height of the images
-                near_plane, # near clipping plane
-                far_plane) # far clipping plane
+                near, # near clipping plane
+                far) # far clipping plane
 
             true_depths = depth_values / alpha_values  # Get true depth values by dividing by alpha
 
@@ -2568,8 +2568,8 @@ class GaussianSplat3d:
                 Each matrix projects points in camera space into homogeneous pixel coordinates.
             image_width (int): The width of the images to be rendered. Note these are the same for all images being rendered.
             image_height (int): The height of the images to be rendered. Note these are the same for all images being rendered.
-            near_plane (float): The near clipping plane distance for the projection.
-            far_plane (float): The far clipping plane distance for the projection.
+            near (float): The near clipping plane distance for the projection.
+            far (float): The far clipping plane distance for the projection.
             camera_model (CameraModel): Semantic camera model for projection. Default is
                 :attr:`fvdb.CameraModel.PINHOLE`.
             projection_method (ProjectionMethod): Projection implementation selector. Default is
@@ -2609,8 +2609,8 @@ class GaussianSplat3d:
         settings = _build_settings(
             image_width,
             image_height,
-            near_plane,
-            far_plane,
+            near,
+            far,
             sh_degree_to_use=-1,
             tile_size=tile_size,
             radius_clip=min_radius_2d,
@@ -2641,8 +2641,8 @@ class GaussianSplat3d:
         projection_matrices: torch.Tensor,
         image_width: int,
         image_height: int,
-        near_plane: float,
-        far_plane: float,
+        near: float,
+        far: float,
         camera_model: CameraModel = CameraModel.PINHOLE,
         projection_method: ProjectionMethod = ProjectionMethod.AUTO,
         distortion_coeffs: torch.Tensor | None = None,
@@ -2675,8 +2675,8 @@ class GaussianSplat3d:
                 projection_matrices, # tensor of shape [C, 3, 3]
                 image_width, # width of the images
                 image_height, # height of the images
-                near_plane, # near clipping plane
-                far_plane) # far clipping plane
+                near, # near clipping plane
+                far) # far clipping plane
 
         Args:
             world_to_camera_matrices (torch.Tensor): Tensor of shape ``(C, 4, 4)`` representing the
@@ -2686,8 +2686,8 @@ class GaussianSplat3d:
                 Each matrix projects points in camera space into homogeneous pixel coordinates.
             image_width (int): The width of the images to be rendered. Note these are the same for all images being rendered.
             image_height (int): The height of the images to be rendered. Note these are the same for all images being rendered.
-            near_plane (float): The near clipping plane distance for the projection.
-            far_plane (float): The far clipping plane distance for the projection.
+            near (float): The near clipping plane distance for the projection.
+            far (float): The far clipping plane distance for the projection.
             camera_model (CameraModel): Semantic camera model for projection. Default is
                 :attr:`fvdb.CameraModel.PINHOLE`.
             projection_method (ProjectionMethod): Projection implementation selector. Default is
@@ -2724,8 +2724,8 @@ class GaussianSplat3d:
         settings = _build_settings(
             image_width,
             image_height,
-            near_plane,
-            far_plane,
+            near,
+            far,
             sh_degree_to_use=sh_degree_to_use,
             tile_size=tile_size,
             radius_clip=min_radius_2d,
@@ -2769,8 +2769,8 @@ class GaussianSplat3d:
         projection_matrices: torch.Tensor,
         image_width: int,
         image_height: int,
-        near_plane: float,
-        far_plane: float,
+        near: float,
+        far: float,
         camera_model: CameraModel = CameraModel.PINHOLE,
         projection_method: ProjectionMethod = ProjectionMethod.AUTO,
         distortion_coeffs: torch.Tensor | None = None,
@@ -2816,8 +2816,8 @@ class GaussianSplat3d:
                 projection_matrices,       # [C,3,3]
                 image_width=640,
                 image_height=480,
-                near_plane=0.01,
-                far_plane=1e10,
+                near=0.01,
+                far=1e10,
                 camera_model=fvdb.CameraModel.OPENCV_RATIONAL_8,
                 distortion_coeffs=dist_coeffs,  # [C,12]
                 backgrounds=bg,                 # [C,D]
@@ -2829,8 +2829,8 @@ class GaussianSplat3d:
             projection_matrices (torch.Tensor): Tensor of shape ``(C, 3, 3)``.
             image_width (int): Output image width ``W``.
             image_height (int): Output image height ``H``.
-            near_plane (float): Near clipping plane.
-            far_plane (float): Far clipping plane.
+            near (float): Near clipping plane.
+            far (float): Far clipping plane.
             camera_model (CameraModel): Semantic camera model used for ray generation.
             projection_method (ProjectionMethod): Projection implementation selector. Default is
                 :attr:`fvdb.ProjectionMethod.AUTO`.
@@ -2863,8 +2863,8 @@ class GaussianSplat3d:
         settings = _build_settings(
             image_width,
             image_height,
-            near_plane,
-            far_plane,
+            near,
+            far,
             sh_degree_to_use=sh_degree_to_use,
             tile_size=tile_size,
             radius_clip=min_radius_2d,
@@ -2913,8 +2913,8 @@ class GaussianSplat3d:
         projection_matrices: torch.Tensor,
         image_width: int,
         image_height: int,
-        near_plane: float,
-        far_plane: float,
+        near: float,
+        far: float,
         camera_model: CameraModel = CameraModel.PINHOLE,
         projection_method: ProjectionMethod = ProjectionMethod.AUTO,
         distortion_coeffs: torch.Tensor | None = None,
@@ -2937,8 +2937,8 @@ class GaussianSplat3d:
         settings = _build_settings(
             image_width,
             image_height,
-            near_plane,
-            far_plane,
+            near,
+            far,
             sh_degree_to_use=-1,
             tile_size=tile_size,
             radius_clip=min_radius_2d,
@@ -2988,8 +2988,8 @@ class GaussianSplat3d:
         projection_matrices: torch.Tensor,
         image_width: int,
         image_height: int,
-        near_plane: float,
-        far_plane: float,
+        near: float,
+        far: float,
         camera_model: CameraModel = CameraModel.PINHOLE,
         projection_method: ProjectionMethod = ProjectionMethod.AUTO,
         distortion_coeffs: torch.Tensor | None = None,
@@ -3020,8 +3020,8 @@ class GaussianSplat3d:
                 projection_matrices, # tensor of shape [C, 3, 3]
                 image_width, # width of the images
                 image_height, # height of the images
-                near_plane, # near clipping plane
-                far_plane) # far clipping plane
+                near, # near clipping plane
+                far) # far clipping plane
 
         Args:
             pixels_to_render (torch.Tensor | JaggedTensor): A tensor of shape ``(C, P, 2)`` or a :class:`~fvdb.JaggedTensor` where ``C`` is the number of camera views,
@@ -3033,8 +3033,8 @@ class GaussianSplat3d:
                 Each matrix projects points in camera space into homogeneous pixel coordinates.
             image_width (int): The width of the images to be rendered. Note these are the same for all images being rendered.
             image_height (int): The height of the images to be rendered. Note these are the same for all images being rendered.
-            near_plane (float): The near clipping plane distance for the projection.
-            far_plane (float): The far clipping plane distance for the projection.
+            near (float): The near clipping plane distance for the projection.
+            far (float): The far clipping plane distance for the projection.
             camera_model (CameraModel): Semantic camera model for projection. Default is
                 :attr:`fvdb.CameraModel.PINHOLE`.
             projection_method (ProjectionMethod): Projection implementation selector. Default is
@@ -3079,8 +3079,8 @@ class GaussianSplat3d:
         settings = _build_settings(
             image_width,
             image_height,
-            near_plane,
-            far_plane,
+            near,
+            far,
             sh_degree_to_use=sh_degree_to_use,
             tile_size=tile_size,
             radius_clip=min_radius_2d,
@@ -3112,8 +3112,8 @@ class GaussianSplat3d:
         projection_matrices: torch.Tensor,
         image_width: int,
         image_height: int,
-        near_plane: float,
-        far_plane: float,
+        near: float,
+        far: float,
         camera_model: CameraModel = CameraModel.PINHOLE,
         projection_method: ProjectionMethod = ProjectionMethod.AUTO,
         distortion_coeffs: torch.Tensor | None = None,
@@ -3143,8 +3143,8 @@ class GaussianSplat3d:
                 projection_matrices, # tensor of shape [C, 3, 3]
                 image_width, # width of the images
                 image_height, # height of the images
-                near_plane, # near clipping plane
-                far_plane) # far clipping plane
+                near, # near clipping plane
+                far) # far clipping plane
 
         Args:
             pixels_to_render (torch.Tensor | JaggedTensor): A tensor of shape ``(C, P, 2)`` or a :class:`~fvdb.JaggedTensor` where ``C`` is the number of camera views,
@@ -3156,8 +3156,8 @@ class GaussianSplat3d:
                 Each matrix projects points in camera space into homogeneous pixel coordinates.
             image_width (int): The width of the images to be rendered. Note these are the same for all images being rendered.
             image_height (int): The height of the images to be rendered. Note these are the same for all images being rendered.
-            near_plane (float): The near clipping plane distance for the projection.
-            far_plane (float): The far clipping plane distance for the projection.
+            near (float): The near clipping plane distance for the projection.
+            far (float): The far clipping plane distance for the projection.
             camera_model (CameraModel): Semantic camera model for projection. Default is
                 :attr:`fvdb.CameraModel.PINHOLE`.
             projection_method (ProjectionMethod): Projection implementation selector. Default is
@@ -3204,8 +3204,8 @@ class GaussianSplat3d:
         settings = _build_settings(
             image_width,
             image_height,
-            near_plane,
-            far_plane,
+            near,
+            far,
             sh_degree_to_use=sh_degree_to_use,
             tile_size=tile_size,
             radius_clip=min_radius_2d,
@@ -3236,8 +3236,8 @@ class GaussianSplat3d:
         projection_matrices: torch.Tensor,
         image_width: int,
         image_height: int,
-        near_plane: float,
-        far_plane: float,
+        near: float,
+        far: float,
         camera_model: CameraModel = CameraModel.PINHOLE,
         projection_method: ProjectionMethod = ProjectionMethod.AUTO,
         distortion_coeffs: torch.Tensor | None = None,
@@ -3270,8 +3270,8 @@ class GaussianSplat3d:
                 projection_matrices, # tensor of shape [C, 3, 3]
                 image_width, # width of the images
                 image_height, # height of the images
-                near_plane, # near clipping plane
-                far_plane) # far clipping plane
+                near, # near clipping plane
+                far) # far clipping plane
 
             images = images[..., :-1]  # Extract image channels
 
@@ -3285,8 +3285,8 @@ class GaussianSplat3d:
                 Each matrix projects points in camera space into homogeneous pixel coordinates.
             image_width (int): The width of the images to be rendered. Note these are the same for all images being rendered.
             image_height (int): The height of the images to be rendered. Note these are the same for all images being rendered.
-            near_plane (float): The near clipping plane distance for the projection.
-            far_plane (float): The far clipping plane distance for the projection.
+            near (float): The near clipping plane distance for the projection.
+            far (float): The far clipping plane distance for the projection.
             camera_model (CameraModel): Semantic camera model for projection. Default is
                 :attr:`fvdb.CameraModel.PINHOLE`.
             projection_method (ProjectionMethod): Projection implementation selector. Default is
@@ -3322,8 +3322,8 @@ class GaussianSplat3d:
         settings = _build_settings(
             image_width,
             image_height,
-            near_plane,
-            far_plane,
+            near,
+            far,
             sh_degree_to_use=sh_degree_to_use,
             tile_size=tile_size,
             radius_clip=min_radius_2d,
@@ -3367,8 +3367,8 @@ class GaussianSplat3d:
         projection_matrices: torch.Tensor,
         image_width: int,
         image_height: int,
-        near_plane: float,
-        far_plane: float,
+        near: float,
+        far: float,
         camera_model: CameraModel = CameraModel.PINHOLE,
         projection_method: ProjectionMethod = ProjectionMethod.AUTO,
         distortion_coeffs: torch.Tensor | None = None,
@@ -3392,8 +3392,8 @@ class GaussianSplat3d:
         settings = _build_settings(
             image_width,
             image_height,
-            near_plane,
-            far_plane,
+            near,
+            far,
             sh_degree_to_use=sh_degree_to_use,
             tile_size=tile_size,
             radius_clip=min_radius_2d,
@@ -3442,8 +3442,8 @@ class GaussianSplat3d:
         projection_matrices: torch.Tensor,
         image_width: int,
         image_height: int,
-        near_plane: float,
-        far_plane: float,
+        near: float,
+        far: float,
         camera_model: CameraModel = CameraModel.PINHOLE,
         projection_method: ProjectionMethod = ProjectionMethod.AUTO,
         distortion_coeffs: torch.Tensor | None = None,
@@ -3473,8 +3473,8 @@ class GaussianSplat3d:
                 projection_matrices, # tensor of shape [C, 3, 3]
                 image_width, # width of the images
                 image_height, # height of the images
-                near_plane, # near clipping plane
-                far_plane) # far clipping plane
+                near, # near clipping plane
+                far) # far clipping plane
 
             num_gaussians_cij = num_gaussians[c, i, j, 0]  # Number of contributing Gaussians at pixel (i, j) in camera c
 
@@ -3486,8 +3486,8 @@ class GaussianSplat3d:
                 Each matrix projects points in camera space into homogeneous pixel coordinates.
             image_width (int): The width of the images to be rendered. Note these are the same for all images being rendered.
             image_height (int): The height of the images to be rendered. Note these are the same for all images being rendered.
-            near_plane (float): The near clipping plane distance for the projection.
-            far_plane (float): The far clipping plane distance for the projection.
+            near (float): The near clipping plane distance for the projection.
+            far (float): The far clipping plane distance for the projection.
             camera_model (CameraModel): Semantic camera model for projection. Default is
                 :attr:`fvdb.CameraModel.PINHOLE`.
             projection_method (ProjectionMethod): Projection implementation selector. Default is
@@ -3513,7 +3513,7 @@ class GaussianSplat3d:
                 and 0 means the pixel is fully transparent, and 1 means the pixel is fully opaque.
         """
         settings = _build_settings(
-            image_width, image_height, near_plane, far_plane, 0, tile_size, min_radius_2d, eps_2d, antialias, "depth"
+            image_width, image_height, near, far, 0, tile_size, min_radius_2d, eps_2d, antialias, "depth"
         )
         state = self._project_with_accum(
             world_to_camera_matrices,
@@ -3533,8 +3533,8 @@ class GaussianSplat3d:
         projection_matrices: torch.Tensor,
         image_width: int,
         image_height: int,
-        near_plane: float,
-        far_plane: float,
+        near: float,
+        far: float,
         camera_model: CameraModel = CameraModel.PINHOLE,
         projection_method: ProjectionMethod = ProjectionMethod.AUTO,
         distortion_coeffs: torch.Tensor | None = None,
@@ -3552,8 +3552,8 @@ class GaussianSplat3d:
         projection_matrices: torch.Tensor,
         image_width: int,
         image_height: int,
-        near_plane: float,
-        far_plane: float,
+        near: float,
+        far: float,
         camera_model: CameraModel = CameraModel.PINHOLE,
         projection_method: ProjectionMethod = ProjectionMethod.AUTO,
         distortion_coeffs: torch.Tensor | None = None,
@@ -3570,8 +3570,8 @@ class GaussianSplat3d:
         projection_matrices: torch.Tensor,
         image_width: int,
         image_height: int,
-        near_plane: float,
-        far_plane: float,
+        near: float,
+        far: float,
         camera_model: CameraModel = CameraModel.PINHOLE,
         projection_method: ProjectionMethod = ProjectionMethod.AUTO,
         distortion_coeffs: torch.Tensor | None = None,
@@ -3599,8 +3599,8 @@ class GaussianSplat3d:
                 Each matrix projects points in camera space into homogeneous pixel coordinates.
             image_width (int): The width of the images to be rendered. Note these are the same for all images being rendered.
             image_height (int): The height of the images to be rendered. Note these are the same for all images being rendered.
-            near_plane (float): The near clipping plane distance for the projection.
-            far_plane (float): The far clipping plane distance for the projection.
+            near (float): The near clipping plane distance for the projection.
+            far (float): The far clipping plane distance for the projection.
             camera_model (CameraModel): Semantic camera model for projection. Default is
                 :attr:`fvdb.CameraModel.PINHOLE`.
             projection_method (ProjectionMethod): Projection implementation selector. Default is
@@ -3628,7 +3628,7 @@ class GaussianSplat3d:
                 and 0 means the pixel is fully transparent, and 1 means the pixel is fully opaque.
         """
         settings = _build_settings(
-            image_width, image_height, near_plane, far_plane, 0, tile_size, min_radius_2d, eps_2d, antialias, "depth"
+            image_width, image_height, near, far, 0, tile_size, min_radius_2d, eps_2d, antialias, "depth"
         )
 
         if isinstance(pixels_to_render, torch.Tensor):
@@ -3674,8 +3674,8 @@ class GaussianSplat3d:
         projection_matrices: torch.Tensor,
         image_width: int,
         image_height: int,
-        near_plane: float,
-        far_plane: float,
+        near: float,
+        far: float,
         camera_model: CameraModel = CameraModel.PINHOLE,
         projection_method: ProjectionMethod = ProjectionMethod.AUTO,
         distortion_coeffs: torch.Tensor | None = None,
@@ -3696,8 +3696,8 @@ class GaussianSplat3d:
                 Each matrix projects points in camera space into homogeneous pixel coordinates.
             image_width (int): The width of the images to be rendered. Note these are the same for all images being rendered.
             image_height (int): The height of the images to be rendered. Note these are the same for all images being rendered.
-            near_plane (float): The near clipping plane distance for the projection.
-            far_plane (float): The far clipping plane distance for the projection.
+            near (float): The near clipping plane distance for the projection.
+            far (float): The far clipping plane distance for the projection.
             camera_model (CameraModel): Semantic camera model for projection. Default is
                 :attr:`fvdb.CameraModel.PINHOLE`.
             projection_method (ProjectionMethod): Projection implementation selector. Default is
@@ -3723,7 +3723,7 @@ class GaussianSplat3d:
                 sum to 1 for each pixel if that pixel is opaque (alpha=1).
         """
         settings = _build_settings(
-            image_width, image_height, near_plane, far_plane, 0, tile_size, min_radius_2d, eps_2d, antialias, "depth"
+            image_width, image_height, near, far, 0, tile_size, min_radius_2d, eps_2d, antialias, "depth"
         )
         settings.num_depth_samples = top_k_contributors
 
@@ -3755,8 +3755,8 @@ class GaussianSplat3d:
         projection_matrices: torch.Tensor,
         image_width: int,
         image_height: int,
-        near_plane: float,
-        far_plane: float,
+        near: float,
+        far: float,
         camera_model: CameraModel = CameraModel.PINHOLE,
         projection_method: ProjectionMethod = ProjectionMethod.AUTO,
         distortion_coeffs: torch.Tensor | None = None,
@@ -3775,8 +3775,8 @@ class GaussianSplat3d:
         projection_matrices: torch.Tensor,
         image_width: int,
         image_height: int,
-        near_plane: float,
-        far_plane: float,
+        near: float,
+        far: float,
         camera_model: CameraModel = CameraModel.PINHOLE,
         projection_method: ProjectionMethod = ProjectionMethod.AUTO,
         distortion_coeffs: torch.Tensor | None = None,
@@ -3794,8 +3794,8 @@ class GaussianSplat3d:
         projection_matrices: torch.Tensor,
         image_width: int,
         image_height: int,
-        near_plane: float,
-        far_plane: float,
+        near: float,
+        far: float,
         camera_model: CameraModel = CameraModel.PINHOLE,
         projection_method: ProjectionMethod = ProjectionMethod.AUTO,
         distortion_coeffs: torch.Tensor | None = None,
@@ -3823,8 +3823,8 @@ class GaussianSplat3d:
                 Each matrix projects points in camera space into homogeneous pixel coordinates.
             image_width (int): The width of the images to be rendered. Note these are the same for all images being rendered.
             image_height (int): The height of the images to be rendered. Note these are the same for all images being rendered.
-            near_plane (float): The near clipping plane distance for the projection.
-            far_plane (float): The far clipping plane distance for the projection.
+            near (float): The near clipping plane distance for the projection.
+            far (float): The far clipping plane distance for the projection.
             camera_model (CameraModel): Semantic camera model for projection. Default is
                 :attr:`fvdb.CameraModel.PINHOLE`.
             projection_method (ProjectionMethod): Projection implementation selector. Default is
@@ -3849,7 +3849,7 @@ class GaussianSplat3d:
                 containing the weights of the contributing Gaussians of each rendered pixel for each camera. The weights are in row-major order and sum to 1 for each pixel if that pixel is opaque (alpha=1).
         """
         settings = _build_settings(
-            image_width, image_height, near_plane, far_plane, 0, tile_size, min_radius_2d, eps_2d, antialias, "depth"
+            image_width, image_height, near, far, 0, tile_size, min_radius_2d, eps_2d, antialias, "depth"
         )
         settings.num_depth_samples = top_k_contributors
 

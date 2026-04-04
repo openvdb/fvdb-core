@@ -4355,8 +4355,8 @@ class TestGaussianCameraApi(unittest.TestCase):
             projection_matrices=projection_matrices,
             image_width=self.width,
             image_height=self.height,
-            near_plane=self.near_plane,
-            far_plane=self.far_plane,
+            near=self.near_plane,
+            far=self.far_plane,
             camera_model=camera_model,
             projection_method=ProjectionMethod.AUTO,
             distortion_coeffs=distortion_coeffs,
@@ -4717,8 +4717,8 @@ class TestGaussianCameraApi(unittest.TestCase):
                 projection_matrices=render_args["projection_matrices"][cam_idx : cam_idx + 1].contiguous(),
                 image_width=self.width,
                 image_height=self.height,
-                near_plane=self.near_plane,
-                far_plane=self.far_plane,
+                near=self.near_plane,
+                far=self.far_plane,
                 camera_model=CameraModel.OPENCV_RADTAN_5,
                 projection_method=ProjectionMethod.AUTO,
                 distortion_coeffs=render_args["distortion_coeffs"][cam_idx : cam_idx + 1].contiguous(),
@@ -4821,7 +4821,7 @@ class TestProjectionGradsMultiCamera(unittest.TestCase):
         means, quats, log_scales, logit_opacities, sh0, shN, _sh_coeffs, viewmats, Ks = self._make_test_data()
 
         gs3d = self._build_gs3d(means, quats, log_scales, logit_opacities, sh0, shN)
-        images, _ = gs3d.render_images(viewmats, Ks, self.W, self.H, near_plane=0.01, far_plane=1e10)
+        images, _ = gs3d.render_images(viewmats, Ks, self.W, self.H, near=0.01, far=1e10)
         images.sum().backward()
 
         multi_cam_grads = {name: getattr(gs3d, name).grad.clone() for name in self.DENSE_PARAMS}
@@ -4829,9 +4829,7 @@ class TestProjectionGradsMultiCamera(unittest.TestCase):
         accumulated_grads = {name: torch.zeros_like(multi_cam_grads[name]) for name in self.DENSE_PARAMS}
         for i in range(self.C):
             gs3d_i = self._build_gs3d(means, quats, log_scales, logit_opacities, sh0, shN)
-            imgs_i, _ = gs3d_i.render_images(
-                viewmats[i : i + 1], Ks[i : i + 1], self.W, self.H, near_plane=0.01, far_plane=1e10
-            )
+            imgs_i, _ = gs3d_i.render_images(viewmats[i : i + 1], Ks[i : i + 1], self.W, self.H, near=0.01, far=1e10)
             imgs_i.sum().backward()
             for name in self.DENSE_PARAMS:
                 accumulated_grads[name] += getattr(gs3d_i, name).grad
