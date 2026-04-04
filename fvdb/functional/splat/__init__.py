@@ -2,13 +2,34 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 """
-``fvdb.functional.splat`` -- Pure-functional API for Gaussian splatting operations.
+``fvdb.functional.splat`` -- Pure-functional Gaussian splatting pipeline.
 
-All functions accept raw tensors (means, quats, log_scales, etc.) rather than
-a GaussianSplat3d object, enabling use without the OO wrapper.
+This module decomposes Gaussian splatting rendering into individually callable,
+composable stages.  Each stage is a pure function: it takes tensors in, returns
+tensors (or a frozen dataclass) out, and has no hidden state or side effects.
 
-Unlike the grid functional API, there is no batch/single split since
-GaussianSplat3d scenes are always single.
+**Design philosophy.**  The object-oriented :class:`~fvdb.GaussianSplat3d` class
+orchestrates projection, SH evaluation, opacity computation, tile intersection,
+and rasterization internally, managing mutable accumulator state along the way.
+This module extracts that same logic into five independent stages so that:
+
+- Custom pipelines can insert logic between stages (e.g. custom opacity
+  schedules, per-Gaussian masking, or alternative feature representations).
+- Training loops can be built from raw tensors and a standard
+  ``torch.optim`` optimizer, with no wrapper class required.
+- Each stage is independently testable and type-checked.
+- Intermediate results have explicit, frozen types (``RawProjection``,
+  ``TileIntersection``) rather than opaque C++ objects.
+
+**Two layers.**  The module provides:
+
+1. *Decomposed stages* -- ``project_to_2d``, ``compute_opacities``,
+   ``prepare_render_features``, ``intersect_tiles``, ``rasterize_dense``.
+2. *Convenience functions* -- ``render_images``, ``render_depths``, etc.,
+   which compose the stages internally and match the
+   :class:`~fvdb.GaussianSplat3d` method signatures.
+
+Both layers are fully differentiable via Python autograd.
 """
 
 # Projection

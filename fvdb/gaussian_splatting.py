@@ -1,6 +1,31 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 #
+"""
+Object-oriented Gaussian splatting interface.
+
+This module provides :class:`GaussianSplat3d`, the primary user-facing class
+for Gaussian splatting in fVDB.  It manages parameter tensors, gradient
+accumulators, and rendering state, and delegates the actual computation to
+the pure-functional stages in :mod:`fvdb.functional.splat`.
+
+**Relationship to the functional API.**  Internally,
+:meth:`GaussianSplat3d.render_images` and the other render methods compose
+the same pipeline stages that :mod:`fvdb.functional.splat` exposes publicly
+(``project_to_2d`` -> ``compute_opacities`` -> ``prepare_render_features``
+-> ``intersect_tiles`` -> ``rasterize_dense``).  The class adds three things
+the functional API intentionally omits:
+
+1. *Mutable accumulator state* -- gradient norm tracking, max-radii tracking,
+   and step counts used by densification heuristics during training.
+2. *Lazy initialization* -- accumulators are allocated on first use.
+3. *Projection method routing* -- automatic dispatch between the differentiable
+   analytic path and the non-differentiable unscented-transform fallback for
+   OpenCV camera models.
+
+Users who need custom pipeline composition or want to avoid mutable state
+should use :mod:`fvdb.functional.splat` directly.
+"""
 import math
 import pathlib
 from typing import Any, Mapping, Sequence, TypeVar, cast, overload
