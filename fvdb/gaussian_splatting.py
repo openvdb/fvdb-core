@@ -3,7 +3,7 @@
 #
 import math
 import pathlib
-from typing import Any, Mapping, Optional, Sequence, TypeVar, Union, overload
+from typing import Any, Mapping, Sequence, TypeVar, cast, overload
 
 import torch
 import torch.nn.functional as F
@@ -136,7 +136,7 @@ class _PyProjectedImpl:
 
 # Union type for the internal projected state: either the Python impl (analytic path)
 # or the C++ ProjectedGaussianSplats (UT fallback path).
-_ProjectedState = Union[_PyProjectedImpl, ProjectedGaussianSplatsCpp]
+_ProjectedState = _PyProjectedImpl | ProjectedGaussianSplatsCpp
 
 
 class ProjectedGaussianSplats:
@@ -510,9 +510,9 @@ class GaussianSplat3d:
         self._accumulate_max_2d_radii = accumulate_max_2d_radii
 
         # Accumulator tensors -- lazily initialized by projection with_accum
-        self._accum_grad_norms: Optional[torch.Tensor] = None
-        self._accum_step_counts: Optional[torch.Tensor] = None
-        self._accum_max_2d_radii: Optional[torch.Tensor] = None
+        self._accum_grad_norms: torch.Tensor | None = None
+        self._accum_step_counts: torch.Tensor | None = None
+        self._accum_max_2d_radii: torch.Tensor | None = None
 
     @classmethod
     def from_tensors(
@@ -1732,29 +1732,32 @@ class GaussianSplat3d:
                 self._accum_max_2d_radii = torch.zeros(N, device=self._means.device, dtype=torch.int32)
 
         # 1. Projection with fresh-zeros accumulator pattern
-        proj_result: Any = _ProjectGaussiansFn.apply(
-            self._means,
-            self._quats,
-            self._log_scales,
-            world_to_camera_matrices,
-            projection_matrices,
-            settings.image_width,
-            settings.image_height,
-            settings.eps_2d,
-            settings.near_plane,
-            settings.far_plane,
-            settings.radius_clip,
-            settings.antialias,
-            ortho,
-            self._accum_grad_norms,
-            self._accum_step_counts,
-            self._accum_max_2d_radii,
+        proj_result = cast(
+            tuple[torch.Tensor, ...],
+            _ProjectGaussiansFn.apply(
+                self._means,
+                self._quats,
+                self._log_scales,
+                world_to_camera_matrices,
+                projection_matrices,
+                settings.image_width,
+                settings.image_height,
+                settings.eps_2d,
+                settings.near_plane,
+                settings.far_plane,
+                settings.radius_clip,
+                settings.antialias,
+                ortho,
+                self._accum_grad_norms,
+                self._accum_step_counts,
+                self._accum_max_2d_radii,
+            ),
         )
         radii = proj_result[0]
         means2d = proj_result[1]
         depths = proj_result[2]
         conics = proj_result[3]
-        compensations = proj_result[4] if settings.antialias else None
+        compensations: torch.Tensor | None = proj_result[4] if settings.antialias else None
 
         # 2. Per-gaussian opacity [C, N]
         opacities = torch.sigmoid(self._logit_opacities).repeat(C, 1)
@@ -1777,8 +1780,7 @@ class GaussianSplat3d:
                 cam_to_world = torch.linalg.inv(world_to_camera_matrices)
                 camera_pos = cam_to_world[:, :3, 3]
                 view_dirs = self._means[None, :, :] - camera_pos[:, None, :]
-            sh_result: Any = _EvalSHFn.apply(actual_sh_degree, C, view_dirs, self._sh0, self._shN, radii)
-            features: torch.Tensor = sh_result
+            features = cast(torch.Tensor, _EvalSHFn.apply(actual_sh_degree, C, view_dirs, self._sh0, self._shN, radii))
             if render_mode == _C.RenderMode.RGBD:
                 features = torch.cat([features, depths.unsqueeze(-1)], -1)
 
@@ -1825,21 +1827,24 @@ class GaussianSplat3d:
         ow = crop_origin_w if crop_origin_w >= 0 else 0
         oh = crop_origin_h if crop_origin_h >= 0 else 0
 
-        result: Any = _RasterizeDenseFn.apply(
-            means2d,
-            conics,
-            features,
-            opacities,
-            w,
-            h,
-            ow,
-            oh,
-            tile_size,
-            tile_offsets,
-            tile_ids,
-            False,  # absgrad
-            backgrounds,
-            masks,
+        result = cast(
+            tuple[torch.Tensor, torch.Tensor],
+            _RasterizeDenseFn.apply(
+                means2d,
+                conics,
+                features,
+                opacities,
+                w,
+                h,
+                ow,
+                oh,
+                tile_size,
+                tile_offsets,
+                tile_ids,
+                False,  # absgrad
+                backgrounds,
+                masks,
+            ),
         )
         return result
 
@@ -1905,26 +1910,29 @@ class GaussianSplat3d:
             render_pixels_jt = JaggedTensor(impl=pixels_to_render_impl)
 
         # 3. Differentiable sparse rasterization
-        sparse_rast_result: Any = _RasterizeSparseFn.apply(
-            state.means2d,  # differentiable
-            state.conics,  # differentiable
-            state.render_quantities,  # differentiable
-            state.opacities,  # differentiable
-            render_pixels_jt,  # non-diff (unique pixels)
-            settings.image_width,
-            settings.image_height,
-            0,  # image_origin_w
-            0,  # image_origin_h
-            settings.tile_size,
-            sparse_state.tile_offsets,  # sparse 1D tile offsets
-            sparse_state.tile_gaussian_ids,  # sparse tile gaussian ids
-            sparse_state.active_tiles,
-            sparse_state.tile_pixel_mask,
-            sparse_state.tile_pixel_cumsum,
-            sparse_state.pixel_map,
-            False,  # absgrad
-            backgrounds,
-            masks,
+        sparse_rast_result = cast(
+            tuple[torch.Tensor, torch.Tensor],
+            _RasterizeSparseFn.apply(
+                state.means2d,  # differentiable
+                state.conics,  # differentiable
+                state.render_quantities,  # differentiable
+                state.opacities,  # differentiable
+                render_pixels_jt,  # non-diff (unique pixels)
+                settings.image_width,
+                settings.image_height,
+                0,  # image_origin_w
+                0,  # image_origin_h
+                settings.tile_size,
+                sparse_state.tile_offsets,  # sparse 1D tile offsets
+                sparse_state.tile_gaussian_ids,  # sparse tile gaussian ids
+                sparse_state.active_tiles,
+                sparse_state.tile_pixel_mask,
+                sparse_state.tile_pixel_cumsum,
+                sparse_state.pixel_map,
+                False,  # absgrad
+                backgrounds,
+                masks,
+            ),
         )
         rendered_colors_jdata: torch.Tensor = sparse_rast_result[0]
         rendered_alphas_jdata: torch.Tensor = sparse_rast_result[1]
@@ -4066,8 +4074,8 @@ class GaussianSplat3d:
         """
 
         # Initialize to satisfy pyright; all valid paths below assign both.
-        device: Any = None
-        dtype: Any = None
+        device: torch.device | None = None
+        dtype: torch.dtype | None = None
 
         # All values passed by keyword arguments
         if len(args) == 0:

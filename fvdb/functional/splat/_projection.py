@@ -4,7 +4,7 @@
 """Functional API for Gaussian projection (analytic and camera-dispatched)."""
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, cast
 
 import torch
 
@@ -46,11 +46,11 @@ class _ProjectGaussiansFn(torch.autograd.Function):
         calc_compensations: bool,
         ortho: bool,
         # Non-differentiable accumulator refs (may be None)
-        accum_grad_norms: Optional[torch.Tensor],
-        accum_step_counts: Optional[torch.Tensor],
-        accum_max_radii: Optional[torch.Tensor],
+        accum_grad_norms: torch.Tensor | None,
+        accum_step_counts: torch.Tensor | None,
+        accum_max_radii: torch.Tensor | None,
     ):
-        result: Any = _C.gsplat_projection_fwd(
+        result = _C.gsplat_projection_fwd(
             means,
             quats,
             log_scales,
@@ -65,11 +65,11 @@ class _ProjectGaussiansFn(torch.autograd.Function):
             calc_compensations,
             ortho,
         )
-        radii = result[0]
-        means2d = result[1]
-        depths = result[2]
-        conics = result[3]
-        compensations = result[4] if calc_compensations else None
+        radii: torch.Tensor = result[0]
+        means2d: torch.Tensor = result[1]
+        depths: torch.Tensor = result[2]
+        conics: torch.Tensor = result[3]
+        compensations: torch.Tensor | None = result[4] if calc_compensations else None
 
         to_save = [means, quats, log_scales, world_to_cam, projection_matrices, radii, conics]
         if compensations is not None:
@@ -107,7 +107,7 @@ class _ProjectGaussiansFn(torch.autograd.Function):
         if grad_conics is not None:
             grad_conics = grad_conics.contiguous()
 
-        grad_compensations: Optional[torch.Tensor] = None
+        grad_compensations: torch.Tensor | None = None
         if ctx.calc_compensations and maybe_grad_comp:
             gc = maybe_grad_comp[0]
             if gc is not None:
@@ -411,7 +411,7 @@ def project_gaussians_for_camera(
     render_mode: str = "rgb",
     camera_model: _C.CameraModel = _C.CameraModel.PINHOLE,
     projection_method: _C.ProjectionMethod = _C.ProjectionMethod.AUTO,
-    distortion_coeffs: Optional[torch.Tensor] = None,
+    distortion_coeffs: torch.Tensor | None = None,
 ) -> _C.ProjectedGaussianSplats:
     """Project 3D Gaussians, dispatching between analytic and UT projection.
 

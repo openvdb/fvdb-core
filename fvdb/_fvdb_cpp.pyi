@@ -1425,10 +1425,7 @@ def gsplat_projection_fwd(
     min_radius_2d: float,
     calc_compensations: bool,
     ortho: bool,
-) -> (
-    tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
-    | tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
-): ...
+) -> tuple[torch.Tensor, ...]: ...
 def gsplat_projection_bwd(
     means: torch.Tensor,
     quats: torch.Tensor,

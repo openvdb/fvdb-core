@@ -4,7 +4,7 @@
 """Functional API for dense Gaussian rasterization."""
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 import torch
 
@@ -34,8 +34,8 @@ class _RasterizeDenseFn(torch.autograd.Function):
         tile_offsets: torch.Tensor,  # [C, tile_height, tile_width]
         tile_gaussian_ids: torch.Tensor,  # [n_isects]
         absgrad: bool,
-        backgrounds: Optional[torch.Tensor],  # [C, D] or None
-        masks: Optional[torch.Tensor],  # [C, tileH, tileW] or None
+        backgrounds: torch.Tensor | None,  # [C, D] or None
+        masks: torch.Tensor | None,  # [C, tileH, tileW] or None
     ):
         result = _C.gsplat_rasterize_fwd(
             means2d,
@@ -106,8 +106,8 @@ class _RasterizeDenseFn(torch.autograd.Function):
         rendered_alphas = saved[6]
         last_ids = saved[7]
 
-        backgrounds: Optional[torch.Tensor] = None
-        masks: Optional[torch.Tensor] = None
+        backgrounds: torch.Tensor | None = None
+        masks: torch.Tensor | None = None
         opt_idx = 8
         if ctx.has_backgrounds:
             backgrounds = saved[opt_idx]
@@ -174,8 +174,8 @@ def rasterize_from_projected(
     crop_height: int = -1,
     crop_origin_w: int = -1,
     crop_origin_h: int = -1,
-    backgrounds: Optional[torch.Tensor] = None,
-    masks: Optional[torch.Tensor] = None,
+    backgrounds: torch.Tensor | None = None,
+    masks: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Rasterize pre-projected Gaussians to produce images and alpha maps.
 

@@ -4,7 +4,6 @@
 """Composite rendering pipelines that chain projection + rasterization."""
 from __future__ import annotations
 
-from typing import Optional
 
 import torch
 
@@ -35,9 +34,9 @@ def render_images(
     antialias: bool = False,
     camera_model: _C.CameraModel = _C.CameraModel.PINHOLE,
     projection_method: _C.ProjectionMethod = _C.ProjectionMethod.AUTO,
-    distortion_coeffs: Optional[torch.Tensor] = None,
-    backgrounds: Optional[torch.Tensor] = None,
-    masks: Optional[torch.Tensor] = None,
+    distortion_coeffs: torch.Tensor | None = None,
+    backgrounds: torch.Tensor | None = None,
+    masks: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Render RGB images from Gaussian splats. Projects then rasterizes.
 
@@ -98,9 +97,9 @@ def render_depths(
     antialias: bool = False,
     camera_model: _C.CameraModel = _C.CameraModel.PINHOLE,
     projection_method: _C.ProjectionMethod = _C.ProjectionMethod.AUTO,
-    distortion_coeffs: Optional[torch.Tensor] = None,
-    backgrounds: Optional[torch.Tensor] = None,
-    masks: Optional[torch.Tensor] = None,
+    distortion_coeffs: torch.Tensor | None = None,
+    backgrounds: torch.Tensor | None = None,
+    masks: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Render depth maps from Gaussian splats. Projects then rasterizes.
 
@@ -162,9 +161,9 @@ def render_images_and_depths(
     antialias: bool = False,
     camera_model: _C.CameraModel = _C.CameraModel.PINHOLE,
     projection_method: _C.ProjectionMethod = _C.ProjectionMethod.AUTO,
-    distortion_coeffs: Optional[torch.Tensor] = None,
-    backgrounds: Optional[torch.Tensor] = None,
-    masks: Optional[torch.Tensor] = None,
+    distortion_coeffs: torch.Tensor | None = None,
+    backgrounds: torch.Tensor | None = None,
+    masks: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Render RGB+depth from Gaussian splats. Projects then rasterizes.
 
@@ -226,9 +225,9 @@ def render_images_from_world(
     antialias: bool = False,
     camera_model: _C.CameraModel = _C.CameraModel.PINHOLE,
     projection_method: _C.ProjectionMethod = _C.ProjectionMethod.AUTO,
-    distortion_coeffs: Optional[torch.Tensor] = None,
-    backgrounds: Optional[torch.Tensor] = None,
-    masks: Optional[torch.Tensor] = None,
+    distortion_coeffs: torch.Tensor | None = None,
+    backgrounds: torch.Tensor | None = None,
+    masks: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Render RGB images with world-space geometry gradients.
 
@@ -300,9 +299,9 @@ def render_depths_from_world(
     antialias: bool = False,
     camera_model: _C.CameraModel = _C.CameraModel.PINHOLE,
     projection_method: _C.ProjectionMethod = _C.ProjectionMethod.AUTO,
-    distortion_coeffs: Optional[torch.Tensor] = None,
-    backgrounds: Optional[torch.Tensor] = None,
-    masks: Optional[torch.Tensor] = None,
+    distortion_coeffs: torch.Tensor | None = None,
+    backgrounds: torch.Tensor | None = None,
+    masks: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Render depth maps with world-space geometry gradients.
 
@@ -375,9 +374,9 @@ def render_images_and_depths_from_world(
     antialias: bool = False,
     camera_model: _C.CameraModel = _C.CameraModel.PINHOLE,
     projection_method: _C.ProjectionMethod = _C.ProjectionMethod.AUTO,
-    distortion_coeffs: Optional[torch.Tensor] = None,
-    backgrounds: Optional[torch.Tensor] = None,
-    masks: Optional[torch.Tensor] = None,
+    distortion_coeffs: torch.Tensor | None = None,
+    backgrounds: torch.Tensor | None = None,
+    masks: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Render RGB+depth with world-space geometry gradients.
 

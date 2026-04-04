@@ -4,7 +4,7 @@
 """Functional API for sparse Gaussian rasterization."""
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 import torch
 
@@ -49,8 +49,8 @@ class _RasterizeSparseFn(torch.autograd.Function):
         tile_pixel_cumsum: torch.Tensor,
         pixel_map: torch.Tensor,
         absgrad: bool,
-        backgrounds: Optional[torch.Tensor],
-        masks: Optional[torch.Tensor],
+        backgrounds: torch.Tensor | None,
+        masks: torch.Tensor | None,
     ):
         # The pybind fwd takes a C++ JaggedTensor directly
         result = _C.gsplat_rasterize_sparse_fwd(
@@ -153,8 +153,8 @@ class _RasterizeSparseFn(torch.autograd.Function):
         tile_pixel_cumsum = saved[15]
         pixel_map = saved[16]
 
-        backgrounds: Optional[torch.Tensor] = None
-        masks: Optional[torch.Tensor] = None
+        backgrounds: torch.Tensor | None = None
+        masks: torch.Tensor | None = None
         opt_idx = 17
         if ctx.has_backgrounds:
             backgrounds = saved[opt_idx]
@@ -254,9 +254,9 @@ def sparse_render(
     render_mode: str = "rgb",
     camera_model: _C.CameraModel = _C.CameraModel.PINHOLE,
     projection_method: _C.ProjectionMethod = _C.ProjectionMethod.AUTO,
-    distortion_coeffs: Optional[torch.Tensor] = None,
-    backgrounds: Optional[torch.Tensor] = None,
-    masks: Optional[torch.Tensor] = None,
+    distortion_coeffs: torch.Tensor | None = None,
+    backgrounds: torch.Tensor | None = None,
+    masks: torch.Tensor | None = None,
 ) -> tuple[_C.JaggedTensor, _C.JaggedTensor]:
     """Render Gaussians at specified sparse pixel locations.
 

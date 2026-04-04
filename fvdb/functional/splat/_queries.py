@@ -4,7 +4,6 @@
 """Functional API for querying contributing Gaussians per pixel."""
 from __future__ import annotations
 
-from typing import Optional
 
 import torch
 
@@ -32,7 +31,7 @@ def render_num_contributing_gaussians(
 def render_contributing_gaussian_ids(
     projected_state: _C.ProjectedGaussianSplats,
     settings: _C.RenderSettings,
-    num_contributing_gaussians: Optional[torch.Tensor] = None,
+    num_contributing_gaussians: torch.Tensor | None = None,
 ) -> tuple[_C.JaggedTensor, _C.JaggedTensor]:
     """Get the IDs of contributing Gaussians per pixel (dense).
 
@@ -77,7 +76,7 @@ def sparse_render_contributing_gaussian_ids(
     sparse_state: _C.SparseProjectedGaussianSplats,
     pixels_to_render: JaggedTensor,
     settings: _C.RenderSettings,
-    num_contributing_gaussians: Optional[JaggedTensor] = None,
+    num_contributing_gaussians: JaggedTensor | None = None,
 ) -> tuple[_C.JaggedTensor, _C.JaggedTensor]:
     """Get the IDs of contributing Gaussians per pixel (sparse).
 

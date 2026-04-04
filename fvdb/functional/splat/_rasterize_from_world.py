@@ -4,7 +4,7 @@
 """Functional API for world-space Gaussian rasterization with geometry gradients."""
 from __future__ import annotations
 
-from typing import Any, Optional, cast
+from typing import Any, cast
 
 import torch
 
@@ -36,8 +36,8 @@ class _RasterizeFromWorldFn(torch.autograd.Function):
         settings: _C.RenderSettings,
         tile_offsets: torch.Tensor,
         tile_gaussian_ids: torch.Tensor,
-        backgrounds: Optional[torch.Tensor],  # [C, D] or None
-        masks: Optional[torch.Tensor],  # [C, tileH, tileW] or None
+        backgrounds: torch.Tensor | None,  # [C, D] or None
+        masks: torch.Tensor | None,  # [C, tileH, tileW] or None
     ):
         result = _C.gsplat_rasterize_from_world_fwd(
             means,
@@ -122,8 +122,8 @@ class _RasterizeFromWorldFn(torch.autograd.Function):
         rendered_alphas = saved[11]
         last_ids = saved[12]
 
-        backgrounds: Optional[torch.Tensor] = None
-        masks: Optional[torch.Tensor] = None
+        backgrounds: torch.Tensor | None = None
+        masks: torch.Tensor | None = None
         opt_idx = 13
         if ctx.has_backgrounds:
             backgrounds = saved[opt_idx]
@@ -206,8 +206,8 @@ def rasterize_from_world(
     image_width: int,
     image_height: int,
     tile_size: int = 16,
-    backgrounds: Optional[torch.Tensor] = None,
-    masks: Optional[torch.Tensor] = None,
+    backgrounds: torch.Tensor | None = None,
+    masks: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Rasterize Gaussians from world-space with geometry gradients.
 

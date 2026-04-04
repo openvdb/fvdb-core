@@ -4,7 +4,7 @@
 """Functional API for spherical harmonics evaluation."""
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import torch
 
@@ -107,6 +107,4 @@ def evaluate_spherical_harmonics(
         cam_to_world = torch.linalg.inv(world_to_camera_matrices)
         camera_pos = cam_to_world[:, :3, 3]
         view_dirs = means[None, :, :] - camera_pos[:, None, :]
-    result: Any = _EvalSHFn.apply(actual_sh_degree, C, view_dirs, sh0, shN, per_gaussian_projected_radii)
-    assert isinstance(result, torch.Tensor)
-    return result
+    return cast(torch.Tensor, _EvalSHFn.apply(actual_sh_degree, C, view_dirs, sh0, shN, per_gaussian_projected_radii))
