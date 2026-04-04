@@ -32,6 +32,7 @@ from ._sh import (
 
 # Rasterization
 from ._rasterize import (
+    rasterize_dense,
     rasterize_from_projected,
 )
 
@@ -80,7 +81,9 @@ __all__ = [
     # SH evaluation
     "evaluate_spherical_harmonics",
     "prepare_render_features",
-    # Rasterization
+    # Rasterization (decomposed stage)
+    "rasterize_dense",
+    # Rasterization (monolith convenience)
     "rasterize_from_projected",
     "rasterize_from_world",
     "sparse_render",

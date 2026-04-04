@@ -4,7 +4,7 @@
 """Functional API for dense Gaussian rasterization."""
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import torch
 
@@ -203,4 +203,63 @@ def rasterize_from_projected(
         crop_origin_h,
         backgrounds,
         masks,
+    )
+
+
+def rasterize_dense(
+    means2d: torch.Tensor,
+    conics: torch.Tensor,
+    features: torch.Tensor,
+    opacities: torch.Tensor,
+    tile_offsets: torch.Tensor,
+    tile_gaussian_ids: torch.Tensor,
+    image_width: int,
+    image_height: int,
+    tile_size: int = 16,
+    backgrounds: torch.Tensor | None = None,
+    masks: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Rasterize Gaussians from raw decomposed tensors.
+
+    This is the final stage of the decomposed rendering pipeline. It takes
+    the raw outputs from :func:`~fvdb.functional.splat.project_to_2d`,
+    :func:`~fvdb.functional.splat.compute_opacities`,
+    :func:`~fvdb.functional.splat.prepare_render_features`, and
+    :func:`~fvdb.functional.splat.intersect_tiles` and produces rendered
+    images. Differentiable via Python autograd.
+
+    Args:
+        means2d: ``[C, N, 2]`` Projected 2D means.
+        conics: ``[C, N, 3]`` Upper-triangle of inverse 2D covariance.
+        features: ``[C, N, D]`` Render features (from SH eval or depths).
+        opacities: ``[C, N]`` Per-camera opacities.
+        tile_offsets: Per-tile start offsets (from :func:`intersect_tiles`).
+        tile_gaussian_ids: Sorted Gaussian IDs per tile (from :func:`intersect_tiles`).
+        image_width: Output image width in pixels.
+        image_height: Output image height in pixels.
+        tile_size: Tile size for tiled rasterization.
+        backgrounds: ``[C, D]`` Optional per-camera background colors.
+        masks: ``[C, tileH, tileW]`` Optional per-tile masks.
+
+    Returns:
+        Tuple of (rendered_images ``[C, H, W, D]``, alphas ``[C, H, W, 1]``).
+    """
+    return cast(
+        tuple[torch.Tensor, torch.Tensor],
+        _RasterizeDenseFn.apply(
+            means2d,
+            conics,
+            features,
+            opacities,
+            image_width,
+            image_height,
+            0,
+            0,
+            tile_size,
+            tile_offsets,
+            tile_gaussian_ids,
+            False,  # absgrad
+            backgrounds,
+            masks,
+        ),
     )
