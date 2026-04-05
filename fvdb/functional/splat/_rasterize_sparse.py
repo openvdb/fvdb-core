@@ -9,6 +9,7 @@ from typing import Any
 import torch
 
 from ... import _fvdb_cpp as _C
+from ...enums import CameraModel, ProjectionMethod
 from ...jagged_tensor import JaggedTensor
 from ._tile_intersection import build_render_settings
 
@@ -252,19 +253,19 @@ def sparse_render(
     eps_2d: float = 0.3,
     antialias: bool = False,
     render_mode: str = "rgb",
-    camera_model: _C.CameraModel = _C.CameraModel.PINHOLE,
-    projection_method: _C.ProjectionMethod = _C.ProjectionMethod.AUTO,
+    camera_model: CameraModel = CameraModel.PINHOLE,
+    projection_method: ProjectionMethod = ProjectionMethod.AUTO,
     distortion_coeffs: torch.Tensor | None = None,
     backgrounds: torch.Tensor | None = None,
     masks: torch.Tensor | None = None,
-) -> tuple[_C.JaggedTensor, _C.JaggedTensor]:
+) -> tuple[JaggedTensor, JaggedTensor]:
     """Render Gaussians at specified sparse pixel locations.
 
     Full pipeline: projects Gaussians, rasterizes at the given pixels, and
     handles duplicate pixel deduplication/scatter-back. Pure functional
     interface with no in-place mutation.
 
-    Supports backpropagation through the C++ autograd.
+    Supports backpropagation through the Python autograd.
 
     Args:
         pixels_to_render: JaggedTensor of ``[C, num_pixels, 2]`` pixel coordinates.
@@ -318,8 +319,8 @@ def sparse_render(
         world_to_camera_matrices,
         projection_matrices,
         settings,
-        camera_model,
-        projection_method,
+        _C.CameraModel(camera_model),
+        _C.ProjectionMethod(projection_method),
         distortion_coeffs,
         backgrounds,
         masks,

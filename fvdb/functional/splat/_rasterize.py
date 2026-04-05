@@ -9,6 +9,7 @@ from typing import Any, cast
 import torch
 
 from ... import _fvdb_cpp as _C
+from ..._fvdb_cpp import ProjectedGaussianSplats as ProjectedGaussianSplatsCpp
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +169,7 @@ class _RasterizeDenseFn(torch.autograd.Function):
 
 
 def rasterize_from_projected(
-    projected_gaussians: _C.ProjectedGaussianSplats,
+    projected_gaussians: ProjectedGaussianSplatsCpp,
     tile_size: int = 16,
     crop_width: int = -1,
     crop_height: int = -1,
@@ -179,7 +180,7 @@ def rasterize_from_projected(
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Rasterize pre-projected Gaussians to produce images and alpha maps.
 
-    Supports backpropagation through the C++ autograd.
+    Supports backpropagation through the Python autograd.
 
     Args:
         projected_gaussians: Pre-projected state from :func:`project_gaussians`.

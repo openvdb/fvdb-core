@@ -72,3 +72,6 @@ scratch/
 *_benchmark.json
 *_results.json
 comparison_*.png
+
+# A staging file for PR descriptions
+_PR_STAGING.md

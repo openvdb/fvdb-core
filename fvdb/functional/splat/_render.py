@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import torch
 
-from ... import _fvdb_cpp as _C
+from ...enums import CameraModel, ProjectionMethod
 from ._projection import project_gaussians_for_camera
 from ._rasterize import rasterize_from_projected
 from ._rasterize_from_world import rasterize_from_world
@@ -32,8 +32,8 @@ def render_images(
     radius_clip: float = 0.0,
     eps_2d: float = 0.3,
     antialias: bool = False,
-    camera_model: _C.CameraModel = _C.CameraModel.PINHOLE,
-    projection_method: _C.ProjectionMethod = _C.ProjectionMethod.AUTO,
+    camera_model: CameraModel = CameraModel.PINHOLE,
+    projection_method: ProjectionMethod = ProjectionMethod.AUTO,
     distortion_coeffs: torch.Tensor | None = None,
     backgrounds: torch.Tensor | None = None,
     masks: torch.Tensor | None = None,
@@ -95,8 +95,8 @@ def render_depths(
     radius_clip: float = 0.0,
     eps_2d: float = 0.3,
     antialias: bool = False,
-    camera_model: _C.CameraModel = _C.CameraModel.PINHOLE,
-    projection_method: _C.ProjectionMethod = _C.ProjectionMethod.AUTO,
+    camera_model: CameraModel = CameraModel.PINHOLE,
+    projection_method: ProjectionMethod = ProjectionMethod.AUTO,
     distortion_coeffs: torch.Tensor | None = None,
     backgrounds: torch.Tensor | None = None,
     masks: torch.Tensor | None = None,
@@ -159,8 +159,8 @@ def render_images_and_depths(
     radius_clip: float = 0.0,
     eps_2d: float = 0.3,
     antialias: bool = False,
-    camera_model: _C.CameraModel = _C.CameraModel.PINHOLE,
-    projection_method: _C.ProjectionMethod = _C.ProjectionMethod.AUTO,
+    camera_model: CameraModel = CameraModel.PINHOLE,
+    projection_method: ProjectionMethod = ProjectionMethod.AUTO,
     distortion_coeffs: torch.Tensor | None = None,
     backgrounds: torch.Tensor | None = None,
     masks: torch.Tensor | None = None,
@@ -223,8 +223,8 @@ def render_images_from_world(
     radius_clip: float = 0.0,
     eps_2d: float = 0.3,
     antialias: bool = False,
-    camera_model: _C.CameraModel = _C.CameraModel.PINHOLE,
-    projection_method: _C.ProjectionMethod = _C.ProjectionMethod.AUTO,
+    camera_model: CameraModel = CameraModel.PINHOLE,
+    projection_method: ProjectionMethod = ProjectionMethod.AUTO,
     distortion_coeffs: torch.Tensor | None = None,
     backgrounds: torch.Tensor | None = None,
     masks: torch.Tensor | None = None,
@@ -297,8 +297,8 @@ def render_depths_from_world(
     radius_clip: float = 0.0,
     eps_2d: float = 0.3,
     antialias: bool = False,
-    camera_model: _C.CameraModel = _C.CameraModel.PINHOLE,
-    projection_method: _C.ProjectionMethod = _C.ProjectionMethod.AUTO,
+    camera_model: CameraModel = CameraModel.PINHOLE,
+    projection_method: ProjectionMethod = ProjectionMethod.AUTO,
     distortion_coeffs: torch.Tensor | None = None,
     backgrounds: torch.Tensor | None = None,
     masks: torch.Tensor | None = None,
@@ -372,8 +372,8 @@ def render_images_and_depths_from_world(
     radius_clip: float = 0.0,
     eps_2d: float = 0.3,
     antialias: bool = False,
-    camera_model: _C.CameraModel = _C.CameraModel.PINHOLE,
-    projection_method: _C.ProjectionMethod = _C.ProjectionMethod.AUTO,
+    camera_model: CameraModel = CameraModel.PINHOLE,
+    projection_method: ProjectionMethod = ProjectionMethod.AUTO,
     distortion_coeffs: torch.Tensor | None = None,
     backgrounds: torch.Tensor | None = None,
     masks: torch.Tensor | None = None,

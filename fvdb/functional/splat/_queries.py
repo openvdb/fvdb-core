@@ -9,12 +9,16 @@ import torch
 
 from ... import _fvdb_cpp as _C
 from ...jagged_tensor import JaggedTensor
+from ..._fvdb_cpp import JaggedTensor as JaggedTensorCpp
+from ..._fvdb_cpp import ProjectedGaussianSplats as ProjectedGaussianSplatsCpp
+from ..._fvdb_cpp import RenderSettings
+from ..._fvdb_cpp import SparseProjectedGaussianSplats as SparseProjectedGaussianSplatsCpp
 from ._tile_intersection import build_render_settings
 
 
 def render_num_contributing_gaussians(
-    projected_state: _C.ProjectedGaussianSplats,
-    settings: _C.RenderSettings,
+    projected_state: ProjectedGaussianSplatsCpp,
+    settings: RenderSettings,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Count the number of contributing Gaussians per pixel (dense).
 
@@ -29,10 +33,10 @@ def render_num_contributing_gaussians(
 
 
 def render_contributing_gaussian_ids(
-    projected_state: _C.ProjectedGaussianSplats,
-    settings: _C.RenderSettings,
+    projected_state: ProjectedGaussianSplatsCpp,
+    settings: RenderSettings,
     num_contributing_gaussians: torch.Tensor | None = None,
-) -> tuple[_C.JaggedTensor, _C.JaggedTensor]:
+) -> tuple[JaggedTensorCpp, JaggedTensorCpp]:
     """Get the IDs of contributing Gaussians per pixel (dense).
 
     Args:
@@ -51,10 +55,10 @@ def render_contributing_gaussian_ids(
 
 
 def sparse_render_num_contributing_gaussians(
-    sparse_state: _C.SparseProjectedGaussianSplats,
+    sparse_state: SparseProjectedGaussianSplatsCpp,
     pixels_to_render: JaggedTensor,
-    settings: _C.RenderSettings,
-) -> tuple[_C.JaggedTensor, _C.JaggedTensor]:
+    settings: RenderSettings,
+) -> tuple[JaggedTensorCpp, JaggedTensorCpp]:
     """Count the number of contributing Gaussians per pixel (sparse).
 
     Args:
@@ -73,11 +77,11 @@ def sparse_render_num_contributing_gaussians(
 
 
 def sparse_render_contributing_gaussian_ids(
-    sparse_state: _C.SparseProjectedGaussianSplats,
+    sparse_state: SparseProjectedGaussianSplatsCpp,
     pixels_to_render: JaggedTensor,
-    settings: _C.RenderSettings,
+    settings: RenderSettings,
     num_contributing_gaussians: JaggedTensor | None = None,
-) -> tuple[_C.JaggedTensor, _C.JaggedTensor]:
+) -> tuple[JaggedTensorCpp, JaggedTensorCpp]:
     """Get the IDs of contributing Gaussians per pixel (sparse).
 
     Args:

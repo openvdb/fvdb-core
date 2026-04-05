@@ -10,6 +10,7 @@ from dataclasses import dataclass
 import torch
 
 from ... import _fvdb_cpp as _C
+from ..._fvdb_cpp import RenderMode, RenderSettings
 
 
 def build_render_settings(
@@ -23,7 +24,7 @@ def build_render_settings(
     antialias: bool = False,
     sh_degree_to_use: int = -1,
     render_mode: str = "rgb",
-) -> _C.RenderSettings:
+) -> RenderSettings:
     """Build a RenderSettings object for use with functional splat ops.
 
     Args:
@@ -53,9 +54,9 @@ def build_render_settings(
     settings.sh_degree_to_use = sh_degree_to_use
 
     mode_map = {
-        "rgb": _C.RenderMode.RGB,
-        "depth": _C.RenderMode.DEPTH,
-        "rgbd": _C.RenderMode.RGBD,
+        "rgb": RenderMode.RGB,
+        "depth": RenderMode.DEPTH,
+        "rgbd": RenderMode.RGBD,
     }
     settings.render_mode = mode_map[render_mode.lower()]
 

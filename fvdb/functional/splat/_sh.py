@@ -82,7 +82,7 @@ def evaluate_spherical_harmonics(
     """Evaluate spherical harmonics for Gaussian splats.
 
     Computes view-dependent features (typically RGB colors) from SH coefficients.
-    Supports backpropagation through the C++ autograd.
+    Supports backpropagation through the Python autograd.
 
     Args:
         means: ``[N, 3]`` Gaussian means (used to compute view directions when sh_degree > 0).

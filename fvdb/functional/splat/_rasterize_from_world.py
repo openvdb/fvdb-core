@@ -4,11 +4,14 @@
 """Functional API for world-space Gaussian rasterization with geometry gradients."""
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import Any
 
 import torch
 
 from ... import _fvdb_cpp as _C
+from ...enums import CameraModel, RollingShutterType
+from ..._fvdb_cpp import ProjectedGaussianSplats as ProjectedGaussianSplatsCpp
+from ..._fvdb_cpp import RenderSettings
 
 
 # ---------------------------------------------------------------------------
@@ -31,9 +34,9 @@ class _RasterizeFromWorldFn(torch.autograd.Function):
         world_to_cam_end: torch.Tensor,  # [C, 4, 4]
         projection_matrices: torch.Tensor,  # [C, 3, 3]
         distortion_coeffs: torch.Tensor,  # [C, K]
-        rolling_shutter_type: _C.RollingShutterType,
-        camera_model: _C.CameraModel,
-        settings: _C.RenderSettings,
+        rolling_shutter_type: RollingShutterType,
+        camera_model: CameraModel,
+        settings: RenderSettings,
         tile_offsets: torch.Tensor,
         tile_gaussian_ids: torch.Tensor,
         backgrounds: torch.Tensor | None,  # [C, D] or None
@@ -49,8 +52,8 @@ class _RasterizeFromWorldFn(torch.autograd.Function):
             world_to_cam_end,
             projection_matrices,
             distortion_coeffs,
-            rolling_shutter_type,
-            camera_model,
+            _C.RollingShutterType(rolling_shutter_type),
+            _C.CameraModel(camera_model),
             settings,
             tile_offsets,
             tile_gaussian_ids,
@@ -152,8 +155,8 @@ class _RasterizeFromWorldFn(torch.autograd.Function):
             world_to_cam_end,
             projection_matrices,
             distortion_coeffs,
-            cast(_C.RollingShutterType, ctx.rolling_shutter_type),
-            cast(_C.CameraModel, ctx.camera_model),
+            _C.RollingShutterType(ctx.rolling_shutter_type),
+            _C.CameraModel(ctx.camera_model),
             settings,
             tile_offsets,
             tile_gaussian_ids,
@@ -198,11 +201,11 @@ def rasterize_from_world(
     means: torch.Tensor,
     quats: torch.Tensor,
     log_scales: torch.Tensor,
-    projected_state: _C.ProjectedGaussianSplats,
+    projected_state: ProjectedGaussianSplatsCpp,
     world_to_camera_matrices: torch.Tensor,
     projection_matrices: torch.Tensor,
     distortion_coeffs: torch.Tensor,
-    camera_model: _C.CameraModel,
+    camera_model: CameraModel,
     image_width: int,
     image_height: int,
     tile_size: int = 16,
@@ -215,7 +218,7 @@ def rasterize_from_world(
     respect to the 3D Gaussian geometry (means, quats, log_scales) during
     backpropagation, enabling world-space optimization.
 
-    Supports backpropagation through the C++ autograd.
+    Supports backpropagation through the Python autograd.
 
     Args:
         means: ``[N, 3]`` Gaussian means.
@@ -243,7 +246,7 @@ def rasterize_from_world(
         world_to_camera_matrices,
         projection_matrices,
         distortion_coeffs,
-        camera_model,
+        _C.CameraModel(camera_model),
         image_width,
         image_height,
         tile_size,

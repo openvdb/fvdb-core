@@ -10,6 +10,8 @@ from typing import Any, cast
 import torch
 
 from ... import _fvdb_cpp as _C
+from ..._fvdb_cpp import ProjectedGaussianSplats as ProjectedGaussianSplatsCpp
+from ...enums import CameraModel, ProjectionMethod
 from ._tile_intersection import build_render_settings
 
 
@@ -21,13 +23,9 @@ from ._tile_intersection import build_render_settings
 class _ProjectGaussiansFn(torch.autograd.Function):
     """Python autograd wrapper for the Gaussian projection forward/backward dispatch.
 
-    Uses the **fresh-zeros pattern** for accumulator handling: each backward call
-    creates fresh zero tensors, passes them to the kernel (which fills them with
-    per-call contributions via atomicAdd), then explicitly accumulates the deltas
-    into the persistent accumulator tensors owned by the caller.
-
-    This keeps the dispatch effectively pure per-call and makes cross-iteration
-    accumulation visible in Python.
+    Passes persistent accumulator tensors directly to the C++ backward kernel,
+    which updates them in-place via atomicAdd/atomicMax.  No temporary tensors
+    are allocated — the kernel accumulates directly into the caller-owned buffers.
     """
 
     @staticmethod
@@ -106,7 +104,7 @@ class _ProjectGaussiansFn(torch.autograd.Function):
         grad_depths = grad_outputs[2]
         grad_conics = grad_outputs[3]
         maybe_grad_comp = grad_outputs[4:]
-        # Make gradients contiguous (matching C++ autograd behavior)
+        # Make gradients contiguous (required by the CUDA backward kernel)
         if grad_radii is not None:
             grad_radii = grad_radii.contiguous()
         if grad_means2d is not None:
@@ -322,12 +320,12 @@ def project_gaussians(
     eps_2d: float = 0.3,
     antialias: bool = False,
     render_mode: str = "rgb",
-    camera_model: _C.CameraModel = _C.CameraModel.PINHOLE,
-) -> _C.ProjectedGaussianSplats:
+    camera_model: CameraModel = CameraModel.PINHOLE,
+) -> ProjectedGaussianSplatsCpp:
     """Project 3D Gaussians onto 2D image planes using analytic projection.
 
     This is a pure functional interface -- no in-place mutation. Supports
-    backpropagation through the C++ autograd.
+    backpropagation through the Python autograd.
 
     Args:
         means: ``[N, 3]`` Gaussian means.
@@ -376,7 +374,7 @@ def project_gaussians(
         world_to_camera_matrices,
         projection_matrices,
         settings,
-        camera_model,
+        _C.CameraModel(camera_model),
     )
 
 
@@ -399,17 +397,17 @@ def project_gaussians_for_camera(
     eps_2d: float = 0.3,
     antialias: bool = False,
     render_mode: str = "rgb",
-    camera_model: _C.CameraModel = _C.CameraModel.PINHOLE,
-    projection_method: _C.ProjectionMethod = _C.ProjectionMethod.AUTO,
+    camera_model: CameraModel = CameraModel.PINHOLE,
+    projection_method: ProjectionMethod = ProjectionMethod.AUTO,
     distortion_coeffs: torch.Tensor | None = None,
-) -> _C.ProjectedGaussianSplats:
+) -> ProjectedGaussianSplatsCpp:
     """Project 3D Gaussians, dispatching between analytic and UT projection.
 
     Validates camera arguments and resolves the projection method automatically
     (analytic for pinhole/orthographic, unscented transform for OpenCV distortion).
 
     This is a pure functional interface -- no in-place mutation. Supports
-    backpropagation through the C++ autograd.
+    backpropagation through the Python autograd.
 
     Args:
         means: ``[N, 3]`` Gaussian means.
@@ -460,8 +458,8 @@ def project_gaussians_for_camera(
         world_to_camera_matrices,
         projection_matrices,
         settings,
-        camera_model,
-        projection_method,
+        _C.CameraModel(camera_model),
+        _C.ProjectionMethod(projection_method),
         distortion_coeffs,
     )
 
@@ -508,7 +506,7 @@ def project_to_2d(
     far: float,
     radius_clip: float,
     antialias: bool,
-    camera_model: _C.CameraModel,
+    camera_model: CameraModel,
     accum_grad_norms: torch.Tensor | None = None,
     accum_step_counts: torch.Tensor | None = None,
     accum_max_radii: torch.Tensor | None = None,
@@ -544,7 +542,7 @@ def project_to_2d(
         A :class:`RawProjection` containing radii, means2d, depths, conics,
         and compensations.
     """
-    ortho = camera_model == _C.CameraModel.ORTHOGRAPHIC
+    ortho = camera_model == CameraModel.ORTHOGRAPHIC
     proj_result = cast(
         tuple[torch.Tensor, ...],
         _ProjectGaussiansFn.apply(

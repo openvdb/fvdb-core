@@ -264,6 +264,7 @@ def evaluate_spherical_harmonics(
 from .convolution_plan import ConvolutionPlan
 from .gaussian_splatting import GaussianSplat3d, ProjectedGaussianSplats
 from .enums import CameraModel, ProjectionMethod, RollingShutterType, ShOrderingMode
+from ._fvdb_cpp import RenderSettings
 
 # Import torch-compatible functions that work with both Tensor and JaggedTensor
 from .torch_jagged import (
@@ -327,6 +328,7 @@ __all__ = [
     "JaggedTensor",
     "GaussianSplat3d",
     "ProjectedGaussianSplats",
+    "RenderSettings",
     "CameraModel",
     "ProjectionMethod",
     "RollingShutterType",
