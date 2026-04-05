@@ -18,6 +18,7 @@ def _parse_device_string(device_string: str | torch.device) -> torch.device: ...
 # immediately above in order to avoid a circular dependency error.
 from . import nn, utils, viz
 from ._fvdb_cpp import RenderSettings, config, hilbert, morton, volume_render
+from .attention import scaled_dot_product_attention
 from .convolution_plan import ConvolutionPlan
 from .enums import CameraModel, ProjectionMethod, RollingShutterType, ShOrderingMode
 from .gaussian_splatting import GaussianSplat3d, ProjectedGaussianSplats
@@ -66,9 +67,6 @@ from .torch_jagged import (
     where,
 )
 
-def scaled_dot_product_attention(
-    query: JaggedTensor, key: JaggedTensor, value: JaggedTensor, scale: float
-) -> JaggedTensor: ...
 def gaussian_render_jagged(
     means: JaggedTensor,
     quats: JaggedTensor,

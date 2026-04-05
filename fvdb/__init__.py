@@ -6,7 +6,6 @@ from __future__ import annotations
 import ctypes
 import importlib.util as _importlib_util
 import pathlib
-from typing import Sequence
 
 import torch
 
@@ -57,6 +56,8 @@ if _spec is not None and _spec.origin is not None:
 
 # isort: off
 from ._fvdb_cpp import scaled_dot_product_attention as _scaled_dot_product_attention_cpp
+from ._fvdb_cpp import gaussian_render_jagged as _gaussian_render_jagged_cpp
+from ._fvdb_cpp import evaluate_spherical_harmonics
 from ._fvdb_cpp import (
     config,
     volume_render,
@@ -68,12 +69,8 @@ from ._fvdb_cpp import (
 from .jagged_tensor import JaggedTensor, jcat
 from .grid import Grid
 from .grid_batch import GridBatch, gcat
-
-
-def scaled_dot_product_attention(
-    query: JaggedTensor, key: JaggedTensor, value: JaggedTensor, scale: float
-) -> JaggedTensor:
-    return JaggedTensor(impl=_scaled_dot_product_attention_cpp(query._impl, key._impl, value._impl, scale))
+from .grid import Grid
+from .attention import scaled_dot_product_attention
 
 
 def gaussian_render_jagged(

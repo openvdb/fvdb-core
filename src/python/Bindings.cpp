@@ -153,29 +153,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           py::arg("packInfo"),
           py::arg("transmittanceThresh"));
 
-    // attention
-    m.def("scaled_dot_product_attention",
-          &fvdb::scaledDotProductAttention,
-          py::arg("query"),
-          py::arg("key"),
-          py::arg("value"),
-          py::arg("scale"),
-          R"_FVDB_(
-      Computes scaled dot product attention on query, key and value tensors.
-            Different SDP kernels could be chosen similar to
-            https://pytorch.org/docs/stable/generated/torch.nn.functional.scaled_dot_product_attention.html
-
-      Args:
-            query (JaggedTensor): A JaggedTensor of shape [B, -1, H, E] of the query.
-                  Here B is the batch size, H is the number of heads, E is the embedding size.
-            key (JaggedTensor): A JaggedTensor of shape [B, -1, H, E] of the key.
-            value (JaggedTensor): A JaggedTensor of shape [B, -1, H, V] of the value.
-                  Here V is the value size. Note that the key and value should have the same shape.
-            scale (float): The scale factor for the attention.
-
-      Returns:
-            out (JaggedTensor): Attention result of shape [B, -1, H, V].)_FVDB_");
-
     // Concatenate grids or jagged tensors
     m.def("jcat",
           py::overload_cast<const std::vector<c10::intrusive_ptr<fvdb::detail::GridBatchData>> &>(
