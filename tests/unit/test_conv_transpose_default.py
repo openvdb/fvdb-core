@@ -373,12 +373,7 @@ class TestConvTransposeValues(DisableTF32Mixin, unittest.TestCase):
         # Verify sparse matches dense at output locations
         tols = get_tolerances(dtype)
         dense_at_dst = dense_output[0, 0, dst_ijks[:, 0], dst_ijks[:, 1], dst_ijks[:, 2]]
-        torch.testing.assert_close(
-            sparse_output_flat,
-            dense_at_dst,
-            rtol=tols["forward"][0],
-            atol=tols["forward"][1],
-        )
+        torch.testing.assert_close(sparse_output_flat, dense_at_dst, rtol=tols["forward"][0], atol=tols["forward"][1])
 
         # Verify sum matches kernel sum
         self.assertAlmostEqual(sparse_output_flat.sum().item(), kernel_sum, places=5)
@@ -459,10 +454,7 @@ class TestConvTransposeValues(DisableTF32Mixin, unittest.TestCase):
 
         tols = get_tolerances(dtype)
         torch.testing.assert_close(
-            sparse_values_sorted,
-            dense_values_sorted,
-            rtol=tols["forward"][0],
-            atol=tols["forward"][1],
+            sparse_values_sorted, dense_values_sorted, rtol=tols["forward"][0], atol=tols["forward"][1]
         )
 
     @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
@@ -512,10 +504,7 @@ class TestConvTransposeValues(DisableTF32Mixin, unittest.TestCase):
         # They should be equal
         tols = get_tolerances(dtype)
         torch.testing.assert_close(
-            conv_t_output.jdata,
-            conv_output.jdata,
-            rtol=tols["forward"][0],
-            atol=tols["forward"][1],
+            conv_t_output.jdata, conv_output.jdata, rtol=tols["forward"][0], atol=tols["forward"][1]
         )
 
     # =========================================================================
@@ -631,12 +620,7 @@ class TestConvTransposeValues(DisableTF32Mixin, unittest.TestCase):
         assert dense_input_grad is not None, "Dense input grad is None"
 
         try:
-            torch.testing.assert_close(
-                sparse_input_grad,
-                dense_input_grad,
-                rtol=input_grad_rtol,
-                atol=input_grad_atol,
-            )
+            torch.testing.assert_close(sparse_input_grad, dense_input_grad, rtol=input_grad_rtol, atol=input_grad_atol)
         except AssertionError:
             diag = diagnose_tensor_mismatch(
                 f"Transpose input gradient (stride={stride}, dtype={dtype})",
@@ -653,10 +637,7 @@ class TestConvTransposeValues(DisableTF32Mixin, unittest.TestCase):
 
         try:
             torch.testing.assert_close(
-                sparse_kernel_grad,
-                dense_kernel_grad,
-                rtol=kernel_grad_rtol,
-                atol=kernel_grad_atol,
+                sparse_kernel_grad, dense_kernel_grad, rtol=kernel_grad_rtol, atol=kernel_grad_atol
             )
         except AssertionError:
             diag = diagnose_tensor_mismatch(
@@ -774,10 +755,7 @@ class TestConvTransposeBackward(DisableTF32Mixin, unittest.TestCase):
         tols = get_tolerances(dtype)
         dense_at_dst = dense_output[0, 0, dst_ijks[:, 0], dst_ijks[:, 1], dst_ijks[:, 2]]
         torch.testing.assert_close(
-            sparse_output.jdata.flatten(),
-            dense_at_dst,
-            rtol=tols["forward"][0],
-            atol=tols["forward"][1],
+            sparse_output.jdata.flatten(), dense_at_dst, rtol=tols["forward"][0], atol=tols["forward"][1]
         )
 
         # === Backward ===
@@ -815,10 +793,7 @@ class TestConvTransposeBackward(DisableTF32Mixin, unittest.TestCase):
         assert dense_kernel_grad is not None and sparse_kernel_grad is not None
 
         torch.testing.assert_close(
-            sparse_kernel_grad,
-            dense_kernel_grad,
-            rtol=tols["kernel_grad"][0],
-            atol=tols["kernel_grad"][1],
+            sparse_kernel_grad, dense_kernel_grad, rtol=tols["kernel_grad"][0], atol=tols["kernel_grad"][1]
         )
 
     @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
@@ -891,12 +866,7 @@ class TestConvTransposeBackward(DisableTF32Mixin, unittest.TestCase):
         # Use grid_batch.ijk.jdata (the grid's actual storage order) rather than
         # cluster_coords, because GridBatch.from_ijk may reorder voxels internally.
         src_coords = grid_batch.ijk.jdata
-        dense_input = torch.zeros(
-            (1, in_channels) + dense_shape,
-            device=device,
-            dtype=dtype,
-            requires_grad=True,
-        )
+        dense_input = torch.zeros((1, in_channels) + dense_shape, device=device, dtype=dtype, requires_grad=True)
         dense_input_data = dense_input.clone()
         for idx, coord in enumerate(src_coords):
             local_idx = tuple(coord[i].item() - dense_min[i] for i in range(3))
@@ -904,10 +874,7 @@ class TestConvTransposeBackward(DisableTF32Mixin, unittest.TestCase):
 
         with disable_tf32():
             dense_output = torch.nn.functional.conv_transpose3d(
-                input=dense_input_data,
-                weight=dense_kernel_transposed,
-                padding=kernel_half,
-                stride=1,
+                input=dense_input_data, weight=dense_kernel_transposed, padding=kernel_half, stride=1
             )
 
         # Apply gradient at output coordinates
@@ -929,10 +896,7 @@ class TestConvTransposeBackward(DisableTF32Mixin, unittest.TestCase):
 
         try:
             torch.testing.assert_close(
-                sparse_input_grad,
-                dense_input_grad,
-                rtol=tols["input_grad"][0],
-                atol=tols["input_grad"][1],
+                sparse_input_grad, dense_input_grad, rtol=tols["input_grad"][0], atol=tols["input_grad"][1]
             )
         except AssertionError:
             diag = diagnose_tensor_mismatch(
@@ -951,10 +915,7 @@ class TestConvTransposeBackward(DisableTF32Mixin, unittest.TestCase):
 
         try:
             torch.testing.assert_close(
-                sparse_kernel_grad,
-                dense_kernel_grad,
-                rtol=tols["kernel_grad"][0],
-                atol=tols["kernel_grad"][1],
+                sparse_kernel_grad, dense_kernel_grad, rtol=tols["kernel_grad"][0], atol=tols["kernel_grad"][1]
             )
         except AssertionError:
             diag = diagnose_tensor_mismatch(

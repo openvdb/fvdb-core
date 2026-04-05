@@ -38,12 +38,7 @@ class _MaxPoolFn(torch.autograd.Function):
         assert grad_output is not None
         (data,) = ctx.saved_tensors
         grad = _fvdb_cpp.max_pool_bwd(
-            ctx.coarse_grid_data,
-            ctx.fine_grid_data,
-            data,
-            grad_output,
-            ctx.factor_list,
-            ctx.stride_list,
+            ctx.coarse_grid_data, ctx.fine_grid_data, data, grad_output, ctx.factor_list, ctx.stride_list
         )
         return grad, None, None, None, None
 
@@ -64,12 +59,7 @@ class _AvgPoolFn(torch.autograd.Function):
         assert grad_output is not None
         (data,) = ctx.saved_tensors
         grad = _fvdb_cpp.avg_pool_bwd(
-            ctx.coarse_grid_data,
-            ctx.fine_grid_data,
-            data,
-            grad_output,
-            ctx.factor_list,
-            ctx.stride_list,
+            ctx.coarse_grid_data, ctx.fine_grid_data, data, grad_output, ctx.factor_list, ctx.stride_list
         )
         return grad, None, None, None, None
 
@@ -310,10 +300,7 @@ def refine_batch(
         else:
             fine_grid_data = _fvdb_cpp.upsample_grid(grid_data, factor_list)
 
-    result = cast(
-        torch.Tensor,
-        _RefineFn.apply(data.jdata, grid_data, fine_grid_data, factor_list),
-    )
+    result = cast(torch.Tensor, _RefineFn.apply(data.jdata, grid_data, fine_grid_data, factor_list))
     fine_gb = GB(data=fine_grid_data)
     return fine_gb.jagged_like(result), fine_gb
 
@@ -357,8 +344,5 @@ def refine_single(
             fine_grid_data = _fvdb_cpp.upsample_grid(grid_data, factor_list)
 
     data_jt = JaggedTensor(data)
-    result = cast(
-        torch.Tensor,
-        _RefineFn.apply(data_jt.jdata, grid_data, fine_grid_data, factor_list),
-    )
+    result = cast(torch.Tensor, _RefineFn.apply(data_jt.jdata, grid_data, fine_grid_data, factor_list))
     return result, G(data=fine_grid_data)

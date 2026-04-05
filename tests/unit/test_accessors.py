@@ -45,18 +45,10 @@ class TestAccessors(unittest.TestCase):
         grid_batch = GridBatch.from_points(JaggedTensor(zero_points), voxel_sizes=0.1, origins=0.0)
 
         sparse_data = torch.tensor([[0], [0]], dtype=torch.float16, device=device)
-        grid_batch.inject_to_dense_cminor(
-            JaggedTensor(sparse_data),
-            dense_origin,
-            (RESOLUTION, RESOLUTION, RESOLUTION),
-        )
+        grid_batch.inject_to_dense_cminor(JaggedTensor(sparse_data), dense_origin, (RESOLUTION, RESOLUTION, RESOLUTION))
 
         grid = GridBatch.from_points(JaggedTensor(zero_points), voxel_sizes=0.1, origins=0.0)
-        grid.inject_to_dense_cminor(
-            JaggedTensor(sparse_data),
-            dense_origin,
-            (RESOLUTION, RESOLUTION, RESOLUTION),
-        )
+        grid.inject_to_dense_cminor(JaggedTensor(sparse_data), dense_origin, (RESOLUTION, RESOLUTION, RESOLUTION))
 
 
 if __name__ == "__main__":

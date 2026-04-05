@@ -275,25 +275,14 @@ def round(input: JaggedTensor | Tensor) -> JaggedTensor | Tensor:
 
 @overload
 def nan_to_num(
-    input: JaggedTensor,
-    nan: float = 0.0,
-    posinf: float | None = None,
-    neginf: float | None = None,
+    input: JaggedTensor, nan: float = 0.0, posinf: float | None = None, neginf: float | None = None
 ) -> JaggedTensor: ...
 @overload
-def nan_to_num(
-    input: Tensor,
-    nan: float = 0.0,
-    posinf: float | None = None,
-    neginf: float | None = None,
-) -> Tensor: ...
+def nan_to_num(input: Tensor, nan: float = 0.0, posinf: float | None = None, neginf: float | None = None) -> Tensor: ...
 
 
 def nan_to_num(
-    input: JaggedTensor | Tensor,
-    nan: float = 0.0,
-    posinf: float | None = None,
-    neginf: float | None = None,
+    input: JaggedTensor | Tensor, nan: float = 0.0, posinf: float | None = None, neginf: float | None = None
 ) -> JaggedTensor | Tensor:
     """
     Replace NaN, positive infinity, and negative infinity values with specified numbers.
@@ -349,10 +338,7 @@ def clamp(input: JaggedTensor | Tensor, min: float | None = None, max: float | N
 
 @overload
 def add(
-    input: JaggedTensor,
-    other: JaggedTensor | Tensor | float | int,
-    *,
-    out: JaggedTensor | None = None,
+    input: JaggedTensor, other: JaggedTensor | Tensor | float | int, *, out: JaggedTensor | None = None
 ) -> JaggedTensor: ...
 @overload
 def add(input: Tensor, other: Tensor | float | int, *, out: Tensor | None = None) -> Tensor: ...
@@ -765,9 +751,7 @@ def where(condition: Tensor, input: Tensor, other: Tensor) -> Tensor: ...
 
 
 def where(
-    condition: JaggedTensor | Tensor,
-    input: JaggedTensor | Tensor,
-    other: JaggedTensor | Tensor,
+    condition: JaggedTensor | Tensor, input: JaggedTensor | Tensor, other: JaggedTensor | Tensor
 ) -> JaggedTensor | Tensor:
     """
     Select elements from input or other based on condition.
@@ -805,11 +789,7 @@ def sum(
 ) -> JaggedTensor: ...
 @overload
 def sum(
-    input: Tensor,
-    dim: int | tuple[int, ...] | None = None,
-    keepdim: bool = False,
-    *,
-    dtype: torch.dtype | None = None,
+    input: Tensor, dim: int | tuple[int, ...] | None = None, keepdim: bool = False, *, dtype: torch.dtype | None = None
 ) -> Tensor: ...
 
 
@@ -856,11 +836,7 @@ def mean(
 ) -> JaggedTensor: ...
 @overload
 def mean(
-    input: Tensor,
-    dim: int | tuple[int, ...] | None = None,
-    keepdim: bool = False,
-    *,
-    dtype: torch.dtype | None = None,
+    input: Tensor, dim: int | tuple[int, ...] | None = None, keepdim: bool = False, *, dtype: torch.dtype | None = None
 ) -> Tensor: ...
 
 
@@ -904,9 +880,7 @@ def amax(input: Tensor, dim: int | tuple[int, ...] | None = None, keepdim: bool 
 
 
 def amax(
-    input: JaggedTensor | Tensor,
-    dim: int | tuple[int, ...] | None = None,
-    keepdim: bool = False,
+    input: JaggedTensor | Tensor, dim: int | tuple[int, ...] | None = None, keepdim: bool = False
 ) -> JaggedTensor | Tensor:
     """
     Compute the maximum value of elements.
@@ -937,9 +911,7 @@ def amin(input: Tensor, dim: int | tuple[int, ...] | None = None, keepdim: bool 
 
 
 def amin(
-    input: JaggedTensor | Tensor,
-    dim: int | tuple[int, ...] | None = None,
-    keepdim: bool = False,
+    input: JaggedTensor | Tensor, dim: int | tuple[int, ...] | None = None, keepdim: bool = False
 ) -> JaggedTensor | Tensor:
     """
     Compute the minimum value of elements.
@@ -1142,25 +1114,16 @@ def norm(
 
 @overload
 def var(
-    input: JaggedTensor,
-    dim: int | tuple[int, ...] | None = None,
-    unbiased: bool = True,
-    keepdim: bool = False,
+    input: JaggedTensor, dim: int | tuple[int, ...] | None = None, unbiased: bool = True, keepdim: bool = False
 ) -> JaggedTensor: ...
 @overload
 def var(
-    input: Tensor,
-    dim: int | tuple[int, ...] | None = None,
-    unbiased: bool = True,
-    keepdim: bool = False,
+    input: Tensor, dim: int | tuple[int, ...] | None = None, unbiased: bool = True, keepdim: bool = False
 ) -> Tensor: ...
 
 
 def var(
-    input: JaggedTensor | Tensor,
-    dim: int | tuple[int, ...] | None = None,
-    unbiased: bool = True,
-    keepdim: bool = False,
+    input: JaggedTensor | Tensor, dim: int | tuple[int, ...] | None = None, unbiased: bool = True, keepdim: bool = False
 ) -> JaggedTensor | Tensor:
     """
     Compute the variance of elements.
@@ -1189,25 +1152,16 @@ def var(
 
 @overload
 def std(
-    input: JaggedTensor,
-    dim: int | tuple[int, ...] | None = None,
-    unbiased: bool = True,
-    keepdim: bool = False,
+    input: JaggedTensor, dim: int | tuple[int, ...] | None = None, unbiased: bool = True, keepdim: bool = False
 ) -> JaggedTensor: ...
 @overload
 def std(
-    input: Tensor,
-    dim: int | tuple[int, ...] | None = None,
-    unbiased: bool = True,
-    keepdim: bool = False,
+    input: Tensor, dim: int | tuple[int, ...] | None = None, unbiased: bool = True, keepdim: bool = False
 ) -> Tensor: ...
 
 
 def std(
-    input: JaggedTensor | Tensor,
-    dim: int | tuple[int, ...] | None = None,
-    unbiased: bool = True,
-    keepdim: bool = False,
+    input: JaggedTensor | Tensor, dim: int | tuple[int, ...] | None = None, unbiased: bool = True, keepdim: bool = False
 ) -> JaggedTensor | Tensor:
     """
     Compute the standard deviation of elements.

@@ -1575,10 +1575,7 @@ class Grid:
         """
         return self.to("cuda")
 
-    def to(
-        self,
-        target: str | torch.device | torch.Tensor | JaggedTensor | Grid | GridBatch,
-    ) -> Grid:
+    def to(self, target: str | torch.device | torch.Tensor | JaggedTensor | Grid | GridBatch) -> Grid:
         """Move this :class:`Grid` to the target device.
 
         Args:

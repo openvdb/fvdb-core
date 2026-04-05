@@ -144,11 +144,7 @@ def gridbatch_from_dense_axis_aligned_bounds(
         origin = bounds_min_t + 0.5 * voxel_size
 
     return gridbatch_from_dense(
-        num_grids,
-        dense_dims=dense_dims_t,
-        voxel_sizes=voxel_size,
-        origins=origin,
-        device=device,
+        num_grids, dense_dims=dense_dims_t, voxel_sizes=voxel_size, origins=origin, device=device
     )
 
 
@@ -203,10 +199,7 @@ def gridbatch_from_mesh(
 
     n = mesh_vertices.num_tensors
     grid_data = _fvdb_cpp.gridbatch_from_mesh(
-        mesh_vertices._impl,
-        mesh_faces._impl,
-        _to_vec3d_batch(voxel_sizes_t, n),
-        _to_vec3d_batch(origins_t, n),
+        mesh_vertices._impl, mesh_faces._impl, _to_vec3d_batch(voxel_sizes_t, n), _to_vec3d_batch(origins_t, n)
     )
     return _wrap_grid(grid_data)
 
@@ -303,11 +296,7 @@ def gridbatch_from_zero_voxels(
     voxel_sizes_t = to_Vec3fBatch(voxel_sizes, value_constraint=ValueConstraint.POSITIVE)
     origins_t = to_Vec3fBatch(origins)
     return _wrap_grid(
-        _fvdb_cpp.create_from_empty(
-            str(resolved_device),
-            _to_vec3d_batch(voxel_sizes_t),
-            _to_vec3d_batch(origins_t),
-        )
+        _fvdb_cpp.create_from_empty(str(resolved_device), _to_vec3d_batch(voxel_sizes_t), _to_vec3d_batch(origins_t))
     )
 
 

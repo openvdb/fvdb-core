@@ -43,10 +43,7 @@ def make_dense_grid_and_point_data(
 
 
 def make_grid_and_point_data(
-    device: DeviceIdentifier,
-    dtype: torch.dtype,
-    include_boundary_points: bool = False,
-    expand: int = 10,
+    device: DeviceIdentifier, dtype: torch.dtype, include_boundary_points: bool = False, expand: int = 10
 ) -> tuple[Grid, Grid, torch.Tensor]:
     """Create a single grid and point data for testing.
 
@@ -107,10 +104,7 @@ def make_dense_grid_batch_and_jagged_point_data(
 
 
 def make_grid_batch_and_jagged_point_data(
-    device: DeviceIdentifier,
-    dtype: torch.dtype,
-    include_boundary_points: bool = False,
-    expand: int = 10,
+    device: DeviceIdentifier, dtype: torch.dtype, include_boundary_points: bool = False, expand: int = 10
 ) -> tuple[GridBatch, GridBatch, JaggedTensor]:
     """Create a grid batch (batch size 1) and jagged point data for testing.
 

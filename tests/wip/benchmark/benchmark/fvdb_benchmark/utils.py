@@ -74,9 +74,7 @@ def create_l2_cache():
         raise NotImplementedError(f"Cache size for {device_name} is not known.")
 
     L2_CACHE_SIZE = L2_CACHE_TABLE[device_name]  # MB.
-    L2_CACHE_BUFFER = torch.empty(
-        int(L2_CACHE_SIZE * (1024**2)), dtype=torch.int8, device="cuda"
-    )
+    L2_CACHE_BUFFER = torch.empty(int(L2_CACHE_SIZE * (1024**2)), dtype=torch.int8, device="cuda")
 
 
 def flush_l2_cache():
@@ -88,17 +86,13 @@ def current_gpu_memory_usage() -> Optional[int]:
     try:
         # Run the nvidia-smi command and capture the output
         result = subprocess.run(
-            ["nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits"],
-            capture_output=True,
-            text=True,
+            ["nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits"], capture_output=True, text=True
         )
 
         # Check if the command was successful
         if result.returncode == 0:
             # Parse the output to extract memory usage
-            memory_usage = [
-                int(value.strip()) for value in result.stdout.strip().split("\n")
-            ]
+            memory_usage = [int(value.strip()) for value in result.stdout.strip().split("\n")]
 
             # Return the memory usage
             return memory_usage[0]

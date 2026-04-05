@@ -25,9 +25,7 @@ class TorchsparseMaxPool(torch.nn.Module):
         self.stride = stride
 
     def forward(self, input):
-        out_coords = spF.spdownsample(
-            input.coords, stride=2, kernel_size=2, downsample_mode="minkowski"
-        )
+        out_coords = spF.spdownsample(input.coords, stride=2, kernel_size=2, downsample_mode="minkowski")
         offsets = get_kernel_offsets(2, 1, 1, device=input.feats.device)
 
         references = spF.sphash(input.coords)
@@ -37,24 +35,15 @@ class TorchsparseMaxPool(torch.nn.Module):
         in_feature = torch.cat(
             [
                 torch.full(
-                    (1, input.feats.size(1)),
-                    fill_value=-1000.0,
-                    device=input.feats.device,
-                    dtype=input.feats.dtype,
+                    (1, input.feats.size(1)), fill_value=-1000.0, device=input.feats.device, dtype=input.feats.dtype
                 ),
                 input.feats,
             ],
             dim=0,
         )
-        out_feature = torch.max(in_feature[results + 1], dim=0)[
-            0
-        ]  # [8, N, C] -> [N, C]
+        out_feature = torch.max(in_feature[results + 1], dim=0)[0]  # [8, N, C] -> [N, C]
 
-        output = SparseTensor(
-            feats=out_feature,
-            coords=out_coords,
-            stride=tuple(input.stride[k] * 2 for k in range(3)),
-        )
+        output = SparseTensor(feats=out_feature, coords=out_coords, stride=tuple(input.stride[k] * 2 for k in range(3)))
         output._caches = input._caches
         output._caches.cmaps.setdefault(output.stride, output.coords)
 
@@ -80,12 +69,7 @@ class TorchsparseUpsampleGenerative(torch.nn.Module):
             for j in [0, 1]:
                 for k in [0, 1]:
                     out_coords.append(
-                        in_coords
-                        + torch.tensor(
-                            [[0, i, j, k]],
-                            device=in_coords.device,
-                            dtype=in_coords.dtype,
-                        )
+                        in_coords + torch.tensor([[0, i, j, k]], device=in_coords.device, dtype=in_coords.dtype)
                     )
                     out_feature.append(F)
         out_coords = torch.cat(out_coords, dim=0)
@@ -156,16 +140,7 @@ class Wrapper:
     ):
         if self.backend == "ts":
             return self.record_runtime(
-                spnn.Conv3d(
-                    in_channels,
-                    out_channels,
-                    kernel_size,
-                    stride,
-                    padding,
-                    dilation,
-                    bias,
-                    transpose,
-                ),
+                spnn.Conv3d(in_channels, out_channels, kernel_size, stride, padding, dilation, bias, transpose),
                 encode_range_name(name, "ts", {"I": in_channels, "O": out_channels}),
             )
 
@@ -173,9 +148,7 @@ class Wrapper:
             assert dilation == 1, "fvdb does not support dilation"
             assert padding == 0, "fvdb does not support padding"
             return self.record_runtime(
-                fvnn.SparseConv3d(
-                    in_channels, out_channels, kernel_size, stride, bias, transpose
-                ),
+                fvnn.SparseConv3d(in_channels, out_channels, kernel_size, stride, bias, transpose),
                 encode_range_name(name, "fvdb", {"I": in_channels, "O": out_channels}),
             )
 
@@ -185,14 +158,12 @@ class Wrapper:
     def bn(self, num_features: int, *, eps: float = 1e-5, momentum: float = 0.1):
         if self.backend == "ts":
             return self.record_runtime(
-                spnn.BatchNorm(num_features, eps, momentum),
-                encode_range_name("bn", "ts", {"F": num_features}),
+                spnn.BatchNorm(num_features, eps, momentum), encode_range_name("bn", "ts", {"F": num_features})
             )
 
         elif self.backend == "fvdb":
             return self.record_runtime(
-                fvnn.BatchNorm(num_features, eps, momentum),
-                encode_range_name("bn", "fvdb", {"F": num_features}),
+                fvnn.BatchNorm(num_features, eps, momentum), encode_range_name("bn", "fvdb", {"F": num_features})
             )
 
         else:
@@ -200,14 +171,10 @@ class Wrapper:
 
     def relu(self, inplace: bool = True):
         if self.backend == "ts":
-            return self.record_runtime(
-                spnn.ReLU(inplace), encode_range_name("relu", "ts", {})
-            )
+            return self.record_runtime(spnn.ReLU(inplace), encode_range_name("relu", "ts", {}))
 
         elif self.backend == "fvdb":
-            return self.record_runtime(
-                fvnn.ReLU(inplace), encode_range_name("relu", "fvdb", {})
-            )
+            return self.record_runtime(fvnn.ReLU(inplace), encode_range_name("relu", "fvdb", {}))
 
         else:
             raise NotImplementedError
@@ -226,14 +193,10 @@ class Wrapper:
 
     def maxpool(self, name: str, stride: int):
         if self.backend == "ts":
-            return self.record_runtime(
-                TorchsparseMaxPool(stride), encode_range_name(name, "ts", {"S": stride})
-            )
+            return self.record_runtime(TorchsparseMaxPool(stride), encode_range_name(name, "ts", {"S": stride}))
 
         elif self.backend == "fvdb":
-            return self.record_runtime(
-                fvnn.MaxPool(stride), encode_range_name(name, "fvdb", {"S": stride})
-            )
+            return self.record_runtime(fvnn.MaxPool(stride), encode_range_name(name, "fvdb", {"S": stride}))
 
         else:
             raise NotImplementedError
@@ -242,14 +205,12 @@ class Wrapper:
         if self.backend == "ts":
             assert scale_factor == 2, "Only support scale factor 2"
             return self.record_runtime(
-                TorchsparseUpsampleGenerative(),
-                encode_range_name(name, "ts", {"S": scale_factor}),
+                TorchsparseUpsampleGenerative(), encode_range_name(name, "ts", {"S": scale_factor})
             )
 
         elif self.backend == "fvdb":
             return self.record_runtime(
-                fvnn.UpsamplingNearest(scale_factor),
-                encode_range_name(name, "fvdb", {"S": scale_factor}),
+                fvnn.UpsamplingNearest(scale_factor), encode_range_name(name, "fvdb", {"S": scale_factor})
             )
 
         else:
@@ -258,15 +219,11 @@ class Wrapper:
     def upsample(self, name: str, scale_factor: int):
         if self.backend == "ts":
             assert scale_factor == 2, "Only support scale factor 2"
-            return self.record_runtime(
-                TorchsparseUpsample(),
-                encode_range_name(name, "ts", {"S": scale_factor}),
-            )
+            return self.record_runtime(TorchsparseUpsample(), encode_range_name(name, "ts", {"S": scale_factor}))
 
         elif self.backend == "fvdb":
             return self.record_runtime(
-                fvnn.UpsamplingNearest(scale_factor),
-                encode_range_name(name, "fvdb", {"S": scale_factor}),
+                fvnn.UpsamplingNearest(scale_factor), encode_range_name(name, "fvdb", {"S": scale_factor})
             )
 
         else:
@@ -294,9 +251,7 @@ class Wrapper:
         elif self.backend == "fvdb":
 
             class SequentialFVDB(nn.Sequential):
-                def forward(
-                    self, input, ref_fine_data: Optional[fvnn.VDBTensor] = None
-                ):
+                def forward(self, input, ref_fine_data: Optional[fvnn.VDBTensor] = None):
                     for module in self:
                         if module._get_name() == "UpsamplingNearest":
                             input = module(input, ref_fine_data=ref_fine_data)

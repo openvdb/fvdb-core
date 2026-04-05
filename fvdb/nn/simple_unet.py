@@ -313,13 +313,7 @@ class SimpleUNetBottleneck(nn.Module):
         momentum (float): Momentum parameter for batch normalization. Defaults to 0.1.
     """
 
-    def __init__(
-        self,
-        channels: int,
-        kernel_size: NumericMaxRank1 = 3,
-        layer_count: int = 2,
-        momentum: float = 0.1,
-    ):
+    def __init__(self, channels: int, kernel_size: NumericMaxRank1 = 3, layer_count: int = 2, momentum: float = 0.1):
         super().__init__()
 
         self.channels = channels
@@ -340,10 +334,7 @@ class SimpleUNetBottleneck(nn.Module):
 
     def forward(self, data: JaggedTensor, grid: GridBatch) -> JaggedTensor:
         plan = ConvolutionPlan.from_grid_batch(
-            kernel_size=self.block.kernel_size,
-            stride=1,
-            source_grid=grid,
-            target_grid=grid,
+            kernel_size=self.block.kernel_size, stride=1, source_grid=grid, target_grid=grid
         )
 
         return self.block(data, plan)
@@ -398,12 +389,7 @@ class SimpleUNetDownUp(nn.Module):
         coarse_channels = in_channels * channel_growth_rate
 
         self.conv_in = SimpleUNetConvBlock(
-            in_channels,
-            in_channels,
-            in_channels,
-            kernel_size,
-            block_layer_count,
-            momentum,
+            in_channels, in_channels, in_channels, kernel_size, block_layer_count, momentum
         )
         self.down = SimpleUNetDown(in_channels, coarse_channels, momentum)
 
@@ -419,22 +405,12 @@ class SimpleUNetDownUp(nn.Module):
             SimpleUNetBottleneck(coarse_channels, kernel_size, block_layer_count, momentum)
             if downup_layer_count <= 1
             else SimpleUNetDownUp(
-                coarse_channels,
-                channel_growth_rate,
-                kernel_size,
-                downup_layer_count - 1,
-                block_layer_count,
-                momentum,
+                coarse_channels, channel_growth_rate, kernel_size, downup_layer_count - 1, block_layer_count, momentum
             )
         )
         self.up = SimpleUNetUp(coarse_channels, in_channels, momentum)
         self.conv_out = SimpleUNetConvBlock(
-            in_channels,
-            in_channels,
-            in_channels,
-            kernel_size,
-            block_layer_count,
-            momentum,
+            in_channels, in_channels, in_channels, kernel_size, block_layer_count, momentum
         )
 
     def extra_repr(self) -> str:
@@ -454,10 +430,7 @@ class SimpleUNetDownUp(nn.Module):
     def forward(self, data: JaggedTensor, fine_grid: GridBatch) -> JaggedTensor:
         coarse_grid = fine_grid.coarsened_grid(coarsening_factor=2).conv_grid(kernel_size=self.kernel_size, stride=1)
         conv_plan = ConvolutionPlan.from_grid_batch(
-            kernel_size=self.kernel_size,
-            stride=1,
-            source_grid=fine_grid,
-            target_grid=fine_grid,
+            kernel_size=self.kernel_size, stride=1, source_grid=fine_grid, target_grid=fine_grid
         )
 
         skip_data = data
@@ -495,13 +468,7 @@ class SimpleUNetPad(nn.Module):
         momentum (float): Momentum parameter for batch normalization. Defaults to 0.1.
     """
 
-    def __init__(
-        self,
-        in_channels: int,
-        out_channels: int,
-        kernel_size: NumericMaxRank1 = 3,
-        momentum: float = 0.1,
-    ):
+    def __init__(self, in_channels: int, out_channels: int, kernel_size: NumericMaxRank1 = 3, momentum: float = 0.1):
         super().__init__()
 
         self.in_channels = in_channels
@@ -527,10 +494,7 @@ class SimpleUNetPad(nn.Module):
 
     def forward(self, data: JaggedTensor, grid: GridBatch, padded_grid: GridBatch) -> JaggedTensor:
         plan = ConvolutionPlan.from_grid_batch(
-            kernel_size=self.kernel_size,
-            stride=1,
-            source_grid=grid,
-            target_grid=padded_grid,
+            kernel_size=self.kernel_size, stride=1, source_grid=grid, target_grid=padded_grid
         )
         data = self.conv(data, plan)
         data = self.batch_norm(data, padded_grid)
@@ -580,10 +544,7 @@ class SimpleUNetUnpad(nn.Module):
 
     def forward(self, data: JaggedTensor, padded_grid: GridBatch, grid: GridBatch) -> JaggedTensor:
         plan = ConvolutionPlan.from_grid_batch_transposed(
-            kernel_size=self.kernel_size,
-            stride=1,
-            source_grid=padded_grid,
-            target_grid=grid,
+            kernel_size=self.kernel_size, stride=1, source_grid=padded_grid, target_grid=grid
         )
         return self.deconv(data, plan)
 
@@ -647,12 +608,7 @@ class SimpleUNet(nn.Module):
 
         self.pad = SimpleUNetPad(in_channels, base_channels, kernel_size, momentum)
         self.downup = SimpleUNetDownUp(
-            base_channels,
-            channel_growth_rate,
-            kernel_size,
-            downup_layer_count,
-            block_layer_count,
-            momentum,
+            base_channels, channel_growth_rate, kernel_size, downup_layer_count, block_layer_count, momentum
         )
         self.unpad = SimpleUNetUnpad(base_channels, out_channels, kernel_size)
 

@@ -37,12 +37,7 @@ def _scatter_reduce_ref(src, index, dim_size, reduce):
         out = torch.full((dim_size, *src.shape[1:]), float("inf"), dtype=src.dtype, device=src.device)
         out.scatter_reduce_(0, idx, src, reduce="amin", include_self=False)
     elif reduce == "amax":
-        out = torch.full(
-            (dim_size, *src.shape[1:]),
-            float("-inf"),
-            dtype=src.dtype,
-            device=src.device,
-        )
+        out = torch.full((dim_size, *src.shape[1:]), float("-inf"), dtype=src.dtype, device=src.device)
         out.scatter_reduce_(0, idx, src, reduce="amax", include_self=False)
     return out
 
@@ -604,12 +599,7 @@ class TestJaggedTensor(unittest.TestCase):
         nvox_per_grid = NVOX if from_device == "cuda" else 100
         nrand = 10_000 if from_device == "cuda" else 100
         pts_list = [
-            torch.rand(
-                nvox_per_grid + np.random.randint(nrand),
-                3,
-                device=from_device,
-                dtype=from_dtype,
-            )
+            torch.rand(nvox_per_grid + np.random.randint(nrand), 3, device=from_device, dtype=from_dtype)
             for _ in range(num_grids)
         ]
         randpts = fvdb.JaggedTensor(pts_list)
@@ -1295,111 +1285,51 @@ class TestJaggedTensor(unittest.TestCase):
 
         for i, rpi in enumerate(randpts):
             for j, _ in enumerate(rpi):
-                self.assertTrue(
-                    torch.allclose(
-                        (randpts + randpts_b)[i][j].jdata,
-                        pts_list[i][j] + pts_list_b[i][j],
-                    )
-                )
+                self.assertTrue(torch.allclose((randpts + randpts_b)[i][j].jdata, pts_list[i][j] + pts_list_b[i][j]))
                 self.assertTrue(torch.allclose((randpts + 2)[i][j].jdata, pts_list[i][j] + 2))
                 self.assertTrue(torch.allclose((randpts + 3.14)[i][j].jdata, pts_list[i][j] + 3.14))
 
-                self.assertTrue(
-                    torch.allclose(
-                        (randpts - randpts_b)[i][j].jdata,
-                        pts_list[i][j] - pts_list_b[i][j],
-                    )
-                )
+                self.assertTrue(torch.allclose((randpts - randpts_b)[i][j].jdata, pts_list[i][j] - pts_list_b[i][j]))
                 self.assertTrue(torch.allclose((randpts - 2)[i][j].jdata, pts_list[i][j] - 2))
                 self.assertTrue(torch.allclose((randpts - 3.14)[i][j].jdata, pts_list[i][j] - 3.14))
 
-                self.assertTrue(
-                    torch.allclose(
-                        (randpts * randpts_b)[i][j].jdata,
-                        pts_list[i][j] * pts_list_b[i][j],
-                    )
-                )
+                self.assertTrue(torch.allclose((randpts * randpts_b)[i][j].jdata, pts_list[i][j] * pts_list_b[i][j]))
                 self.assertTrue(torch.allclose((randpts * 2)[i][j].jdata, pts_list[i][j] * 2))
                 self.assertTrue(torch.allclose((randpts * 3.14)[i][j].jdata, pts_list[i][j] * 3.14))
 
-                self.assertTrue(
-                    torch.allclose(
-                        (randpts / randpts_b)[i][j].jdata,
-                        pts_list[i][j] / pts_list_b[i][j],
-                    )
-                )
+                self.assertTrue(torch.allclose((randpts / randpts_b)[i][j].jdata, pts_list[i][j] / pts_list_b[i][j]))
                 self.assertTrue(torch.allclose((randpts / 2)[i][j].jdata, pts_list[i][j] / 2))
                 self.assertTrue(torch.allclose((randpts / 3.14)[i][j].jdata, pts_list[i][j] / 3.14))
 
-                self.assertTrue(
-                    torch.allclose(
-                        (randpts // randpts_b)[i][j].jdata,
-                        pts_list[i][j] // pts_list_b[i][j],
-                    )
-                )
+                self.assertTrue(torch.allclose((randpts // randpts_b)[i][j].jdata, pts_list[i][j] // pts_list_b[i][j]))
                 self.assertTrue(torch.allclose((randpts // 2)[i][j].jdata, pts_list[i][j] // 2))
                 self.assertTrue(torch.allclose((randpts // 3.14)[i][j].jdata, pts_list[i][j] // 3.14))
 
-                self.assertTrue(
-                    torch.allclose(
-                        (randpts % randpts_b)[i][j].jdata,
-                        pts_list[i][j] % pts_list_b[i][j],
-                    )
-                )
+                self.assertTrue(torch.allclose((randpts % randpts_b)[i][j].jdata, pts_list[i][j] % pts_list_b[i][j]))
                 self.assertTrue(torch.allclose((randpts % 2)[i][j].jdata, pts_list[i][j] % 2))
                 self.assertTrue(torch.allclose((randpts % 3.14)[i][j].jdata, pts_list[i][j] % 3.14))
 
-                self.assertTrue(
-                    torch.allclose(
-                        (randpts > randpts_b)[i][j].jdata,
-                        pts_list[i][j] > pts_list_b[i][j],
-                    )
-                )
+                self.assertTrue(torch.allclose((randpts > randpts_b)[i][j].jdata, pts_list[i][j] > pts_list_b[i][j]))
                 self.assertTrue(torch.allclose((randpts > 2)[i][j].jdata, pts_list[i][j] > 2))
                 self.assertTrue(torch.allclose((randpts > 3.14)[i][j].jdata, pts_list[i][j] > 3.14))
 
-                self.assertTrue(
-                    torch.allclose(
-                        (randpts >= randpts_b)[i][j].jdata,
-                        pts_list[i][j] >= pts_list_b[i][j],
-                    )
-                )
+                self.assertTrue(torch.allclose((randpts >= randpts_b)[i][j].jdata, pts_list[i][j] >= pts_list_b[i][j]))
                 self.assertTrue(torch.allclose((randpts >= 2)[i][j].jdata, pts_list[i][j] >= 2))
                 self.assertTrue(torch.allclose((randpts >= 3.14)[i][j].jdata, pts_list[i][j] >= 3.14))
 
-                self.assertTrue(
-                    torch.allclose(
-                        (randpts < randpts_b)[i][j].jdata,
-                        pts_list[i][j] < pts_list_b[i][j],
-                    )
-                )
+                self.assertTrue(torch.allclose((randpts < randpts_b)[i][j].jdata, pts_list[i][j] < pts_list_b[i][j]))
                 self.assertTrue(torch.allclose((randpts < 2)[i][j].jdata, pts_list[i][j] < 2))
                 self.assertTrue(torch.allclose((randpts < 3.14)[i][j].jdata, pts_list[i][j] < 3.14))
 
-                self.assertTrue(
-                    torch.allclose(
-                        (randpts <= randpts_b)[i][j].jdata,
-                        pts_list[i][j] <= pts_list_b[i][j],
-                    )
-                )
+                self.assertTrue(torch.allclose((randpts <= randpts_b)[i][j].jdata, pts_list[i][j] <= pts_list_b[i][j]))
                 self.assertTrue(torch.allclose((randpts <= 2)[i][j].jdata, pts_list[i][j] <= 2))
                 self.assertTrue(torch.allclose((randpts <= 3.14)[i][j].jdata, pts_list[i][j] <= 3.14))
 
-                self.assertTrue(
-                    torch.allclose(
-                        (randpts == randpts_b)[i][j].jdata,
-                        pts_list[i][j] == pts_list_b[i][j],
-                    )
-                )
+                self.assertTrue(torch.allclose((randpts == randpts_b)[i][j].jdata, pts_list[i][j] == pts_list_b[i][j]))
                 self.assertTrue(torch.allclose((randpts == 2)[i][j].jdata, pts_list[i][j] == 2))
                 self.assertTrue(torch.allclose((randpts == 3.14)[i][j].jdata, pts_list[i][j] == 3.14))
 
-                self.assertTrue(
-                    torch.allclose(
-                        (randpts != randpts_b)[i][j].jdata,
-                        pts_list[i][j] != pts_list_b[i][j],
-                    )
-                )
+                self.assertTrue(torch.allclose((randpts != randpts_b)[i][j].jdata, pts_list[i][j] != pts_list_b[i][j]))
                 self.assertTrue(torch.allclose((randpts != 2)[i][j].jdata, pts_list[i][j] != 2))
                 self.assertTrue(torch.allclose((randpts != 3.14)[i][j].jdata, pts_list[i][j] != 3.14))
 
@@ -1648,15 +1578,9 @@ class TestJaggedTensor(unittest.TestCase):
                             if min_idx_ours[i][j].jdata[0][a][b] != min_idx_i[a][b]:
                                 idx_ours = min_idx_ours[i][j].jdata[0][a][b].item()
                                 idx_i = min_idx_i[a][b].item()
-                                self.assertEqual(
-                                    jt[i][j].jdata[idx_i, a, b],
-                                    data_list[i][j][idx_i, a, b],
-                                )
+                                self.assertEqual(jt[i][j].jdata[idx_i, a, b], data_list[i][j][idx_i, a, b])
                                 self.assertEqual(jt[i][j].jdata[idx_ours, a, b], data_list[i][j][idx_ours, a, b])  # type: ignore
-                                self.assertEqual(
-                                    jt[i][j].jdata[idx_i, a, b],
-                                    data_list[i][j][idx_ours, a, b],
-                                )
+                                self.assertEqual(jt[i][j].jdata[idx_i, a, b], data_list[i][j][idx_ours, a, b])
                                 self.assertEqual(jt[i][j].jdata[idx_ours, a, b], data_list[i][j][idx_i, a, b])  # type: ignore
                 else:
                     self.assertTrue(
@@ -1730,15 +1654,9 @@ class TestJaggedTensor(unittest.TestCase):
                             if max_idx_ours[i][j].jdata[0][a][b] != max_idx_i[a][b]:
                                 idx_ours = max_idx_ours[i][j].jdata[0][a][b].item()
                                 idx_i = max_idx_i[a][b].item()
-                                self.assertEqual(
-                                    jt[i][j].jdata[idx_i, a, b],
-                                    data_list[i][j][idx_i, a, b],
-                                )
+                                self.assertEqual(jt[i][j].jdata[idx_i, a, b], data_list[i][j][idx_i, a, b])
                                 self.assertEqual(jt[i][j].jdata[idx_ours, a, b], data_list[i][j][idx_ours, a, b])  # type: ignore
-                                self.assertEqual(
-                                    jt[i][j].jdata[idx_i, a, b],
-                                    data_list[i][j][idx_ours, a, b],
-                                )
+                                self.assertEqual(jt[i][j].jdata[idx_i, a, b], data_list[i][j][idx_ours, a, b])
                                 self.assertEqual(jt[i][j].jdata[idx_ours, a, b], data_list[i][j][idx_i, a, b])  # type: ignore
                 else:
                     self.assertTrue(
@@ -1890,14 +1808,7 @@ class TestJaggedTensor(unittest.TestCase):
         elif dtype == torch.float16:
             atol = 1e-3
             rtol = 1e-3
-        self.assertTrue(
-            torch.allclose(
-                out_jagged_torch_forloop.jdata,
-                out_jagged_fvdb.jdata,
-                atol=atol,
-                rtol=rtol,
-            )
-        )
+        self.assertTrue(torch.allclose(out_jagged_torch_forloop.jdata, out_jagged_fvdb.jdata, atol=atol, rtol=rtol))
         self.assertTrue(torch.all(out_jagged_torch_forloop.joffsets == out_jagged_fvdb.joffsets))
 
     def test_datatype_caster(self):
@@ -2053,47 +1964,19 @@ class TestJaggedTensor(unittest.TestCase):
     @parameterized.expand(["cuda", "cpu"])
     def test_slicing_list_of_lists_small(self, device):
         lt = [
-            [
-                torch.randn(0, 7, device=device),
-                torch.randn(2, 7, device=device),
-                torch.randn(0, 7, device=device),
-            ],
+            [torch.randn(0, 7, device=device), torch.randn(2, 7, device=device), torch.randn(0, 7, device=device)],
             [torch.randn(0, 7, device=device), torch.randn(1, 7, device=device)],
-            [
-                torch.randn(0, 7, device=device),
-                torch.randn(1, 7, device=device),
-                torch.randn(0, 7, device=device),
-            ],
-            [
-                torch.randn(0, 7, device=device),
-                torch.randn(0, 7, device=device),
-                torch.randn(0, 7, device=device),
-            ],
+            [torch.randn(0, 7, device=device), torch.randn(1, 7, device=device), torch.randn(0, 7, device=device)],
+            [torch.randn(0, 7, device=device), torch.randn(0, 7, device=device), torch.randn(0, 7, device=device)],
             [torch.randn(0, 7, device=device)],
-            [
-                torch.randn(0, 7, device=device),
-                torch.randn(0, 7, device=device),
-                torch.randn(0, 7, device=device),
-            ],
+            [torch.randn(0, 7, device=device), torch.randn(0, 7, device=device), torch.randn(0, 7, device=device)],
             [torch.randn(0, 7, device=device), torch.randn(0, 7, device=device)],
-            [
-                torch.randn(0, 7, device=device),
-                torch.randn(0, 7, device=device),
-                torch.randn(0, 7, device=device),
-            ],
+            [torch.randn(0, 7, device=device), torch.randn(0, 7, device=device), torch.randn(0, 7, device=device)],
             [torch.randn(0, 7, device=device), torch.randn(0, 7, device=device)],
             [torch.randn(0, 7, device=device), torch.randn(1, 7, device=device)],
-            [
-                torch.randn(0, 7, device=device),
-                torch.randn(0, 7, device=device),
-                torch.randn(0, 7, device=device),
-            ],
+            [torch.randn(0, 7, device=device), torch.randn(0, 7, device=device), torch.randn(0, 7, device=device)],
             [torch.randn(0, 7, device=device), torch.randn(0, 7, device=device)],
-            [
-                torch.randn(0, 7, device=device),
-                torch.randn(1, 7, device=device),
-                torch.randn(0, 7, device=device),
-            ],
+            [torch.randn(0, 7, device=device), torch.randn(1, 7, device=device), torch.randn(0, 7, device=device)],
         ]
         jt = fvdb.JaggedTensor(lt)
 
@@ -2559,10 +2442,7 @@ class TestJaggedTensor(unittest.TestCase):
         if dtype == torch.bfloat16 and device == "cpu":
             self.skipTest("PyTorch in-place division not truly in-place for bfloat16 on CPU")
         jt1 = fvdb.JaggedTensor.from_randn(
-            [[10, 20, 30], [40, 50, 60, 70], [80, 90]],
-            (3, 4),
-            device=device,
-            dtype=dtype,
+            [[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype
         )
         jt2 = jt1
         jt3 = jt1.clone()
@@ -2584,10 +2464,7 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertTrue(not torch.all(jt1.jdata == jt3.jdata).item())
 
         jt1 = fvdb.JaggedTensor.from_randn(
-            [[10, 20, 30], [40, 50, 60, 70], [80, 90]],
-            (3, 4),
-            device=device,
-            dtype=dtype,
+            [[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype
         )
         jt2 = jt1
         jt3 = jt1.clone()
@@ -2606,10 +2483,7 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertTrue(not torch.all(jt1.jdata == jt3.jdata).item())
 
         jt1 = fvdb.JaggedTensor.from_randn(
-            [[10, 20, 30], [40, 50, 60, 70], [80, 90]],
-            (3, 4),
-            device=device,
-            dtype=dtype,
+            [[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype
         )
         jt2 = jt1
         jt3 = jt1.clone()
@@ -2628,10 +2502,7 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertTrue(not torch.all(jt1.jdata == jt3.jdata).item())
 
         jt1 = fvdb.JaggedTensor.from_randn(
-            [[10, 20, 30], [40, 50, 60, 70], [80, 90]],
-            (3, 4),
-            device=device,
-            dtype=dtype,
+            [[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype
         )
         jt2 = jt1
         jt3 = jt1.clone()
@@ -2650,10 +2521,7 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertTrue(not torch.all(jt1.jdata == jt3.jdata).item())
 
         jt1 = fvdb.JaggedTensor.from_randn(
-            [[10, 20, 30], [40, 50, 60, 70], [80, 90]],
-            (3, 4),
-            device=device,
-            dtype=dtype,
+            [[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype
         )
         jt2 = jt1
         jt3 = jt1.clone()
@@ -2672,10 +2540,7 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertTrue(not torch.all(jt1.jdata == jt3.jdata).item())
 
         jt1 = fvdb.JaggedTensor.from_randn(
-            [[10, 20, 30], [40, 50, 60, 70], [80, 90]],
-            (3, 4),
-            device=device,
-            dtype=dtype,
+            [[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype
         )
         jt2 = jt1
         jt3 = jt1.clone()
@@ -2694,10 +2559,7 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertTrue(not torch.all(jt1.jdata == jt3.jdata).item())
 
         jt1 = fvdb.JaggedTensor.from_randn(
-            [[10, 20, 30], [40, 50, 60, 70], [80, 90]],
-            (3, 4),
-            device=device,
-            dtype=dtype,
+            [[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype
         )
         jt2 = jt1
         jt3 = jt1.clone()
@@ -2716,10 +2578,7 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertTrue(not torch.all(jt1.jdata == jt3.jdata).item())
 
         jt1 = fvdb.JaggedTensor.from_randn(
-            [[10, 20, 30], [40, 50, 60, 70], [80, 90]],
-            (3, 4),
-            device=device,
-            dtype=dtype,
+            [[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype
         )
         jt2 = jt1
         jt3 = jt1.clone()
@@ -2745,20 +2604,14 @@ class TestJaggedTensor(unittest.TestCase):
     @parameterized.expand(all_device_dtype_combos)
     def test_sqrt(self, device, dtype):
         jt1 = fvdb.JaggedTensor.from_randn(
-            [[10, 20, 30], [40, 50, 60, 70], [80, 90]],
-            (3, 4),
-            device=device,
-            dtype=dtype,
+            [[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype
         )
         jt1 = jt1.abs()
         jt2 = jt1.sqrt()
         self.assertTrue(torch.allclose(jt2.jdata, jt1.jdata.sqrt()))
 
         jt1 = fvdb.JaggedTensor.from_randn(
-            [[10, 20, 30], [40, 50, 60, 70], [80, 90]],
-            (3, 4),
-            device=device,
-            dtype=dtype,
+            [[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype
         )
         jt1.abs_()
         jt2 = jt1.sqrt()
@@ -2768,19 +2621,13 @@ class TestJaggedTensor(unittest.TestCase):
     @parameterized.expand(all_device_dtype_combos)
     def test_floor(self, device, dtype):
         jt1 = fvdb.JaggedTensor.from_randn(
-            [[10, 20, 30], [40, 50, 60, 70], [80, 90]],
-            (3, 4),
-            device=device,
-            dtype=dtype,
+            [[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype
         )
         jt2 = jt1.floor()
         self.assertTrue(torch.allclose(jt2.jdata, jt1.jdata.floor()))
 
         jt1 = fvdb.JaggedTensor.from_randn(
-            [[10, 20, 30], [40, 50, 60, 70], [80, 90]],
-            (3, 4),
-            device=device,
-            dtype=dtype,
+            [[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype
         )
         jt1.abs_()
         jt2 = jt1.floor()
@@ -2790,19 +2637,13 @@ class TestJaggedTensor(unittest.TestCase):
     @parameterized.expand(all_device_dtype_combos)
     def test_ceil(self, device, dtype):
         jt1 = fvdb.JaggedTensor.from_randn(
-            [[10, 20, 30], [40, 50, 60, 70], [80, 90]],
-            (3, 4),
-            device=device,
-            dtype=dtype,
+            [[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype
         )
         jt2 = jt1.ceil()
         self.assertTrue(torch.allclose(jt2.jdata, jt1.jdata.ceil()))
 
         jt1 = fvdb.JaggedTensor.from_randn(
-            [[10, 20, 30], [40, 50, 60, 70], [80, 90]],
-            (3, 4),
-            device=device,
-            dtype=dtype,
+            [[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype
         )
         jt1.abs_()
         jt2 = jt1.ceil()
@@ -2812,19 +2653,13 @@ class TestJaggedTensor(unittest.TestCase):
     @parameterized.expand(all_device_dtype_combos)
     def test_abs(self, device, dtype):
         jt1 = fvdb.JaggedTensor.from_randn(
-            [[10, 20, 30], [40, 50, 60, 70], [80, 90]],
-            (3, 4),
-            device=device,
-            dtype=dtype,
+            [[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype
         )
         jt2 = jt1.abs()
         self.assertTrue(torch.all(jt2.jdata == jt1.jdata.abs()).item())
 
         jt1 = fvdb.JaggedTensor.from_randn(
-            [[10, 20, 30], [40, 50, 60, 70], [80, 90]],
-            (3, 4),
-            device=device,
-            dtype=dtype,
+            [[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype
         )
         jt2 = jt1.abs()
         jt1.abs_()
@@ -2833,19 +2668,13 @@ class TestJaggedTensor(unittest.TestCase):
     @parameterized.expand(all_device_dtype_combos)
     def test_round(self, device, dtype):
         jt1 = fvdb.JaggedTensor.from_randn(
-            [[10, 20, 30], [40, 50, 60, 70], [80, 90]],
-            (3, 4),
-            device=device,
-            dtype=dtype,
+            [[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype
         )
         jt2 = jt1.round()
         self.assertTrue(torch.all(jt2.jdata == jt1.jdata.round()).item())
 
         jt1 = fvdb.JaggedTensor.from_randn(
-            [[10, 20, 30], [40, 50, 60, 70], [80, 90]],
-            (3, 4),
-            device=device,
-            dtype=dtype,
+            [[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype
         )
         jt2 = jt1.round()
         jt1.round_()
@@ -2854,10 +2683,7 @@ class TestJaggedTensor(unittest.TestCase):
     @parameterized.expand(all_device_dtype_combos)
     def test_jidxforjoffsets(self, device, dtype):
         jt1 = fvdb.JaggedTensor.from_randn(
-            [[10, 20, 30], [40, 50, 60, 70], [80, 90]],
-            (3, 4),
-            device=device,
-            dtype=dtype,
+            [[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype
         )
         joffsets = jt1.joffsets
         jidx = jt1.jidx
@@ -2980,10 +2806,7 @@ class TestJaggedTensor(unittest.TestCase):
         # Test the list-of-tensors constructor (single element)
         cpu_tensor = torch.randn(5, 3)
         jt = fvdb.JaggedTensor([cpu_tensor])
-        self.assertFalse(
-            jt.joffsets.is_pinned(),
-            "CPU single-element JaggedTensor offsets should not be pinned",
-        )
+        self.assertFalse(jt.joffsets.is_pinned(), "CPU single-element JaggedTensor offsets should not be pinned")
         self.assertEqual(jt.joffsets.device.type, "cpu")
         self.assertEqual(jt.jdata.shape, torch.Size([5, 3]))
         self.assertTrue(torch.equal(jt.jdata, cpu_tensor))
@@ -2991,10 +2814,7 @@ class TestJaggedTensor(unittest.TestCase):
         # Test the bare-tensor constructor (dispatches through joffsetsFromJIdx)
         cpu_tensor2 = torch.randn(10)
         jt2 = fvdb.JaggedTensor(cpu_tensor2)
-        self.assertFalse(
-            jt2.joffsets.is_pinned(),
-            "CPU bare-tensor JaggedTensor offsets should not be pinned",
-        )
+        self.assertFalse(jt2.joffsets.is_pinned(), "CPU bare-tensor JaggedTensor offsets should not be pinned")
         self.assertEqual(jt2.joffsets.device.type, "cpu")
         self.assertEqual(jt2.jdata.shape, torch.Size([10]))
         self.assertTrue(torch.equal(jt2.jdata, cpu_tensor2))

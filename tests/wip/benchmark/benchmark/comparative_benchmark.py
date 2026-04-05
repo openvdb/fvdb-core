@@ -38,16 +38,12 @@ def main(args) -> None:
     torchsparse.backends.hash_rsv_ratio = 4
     torchsparse.nn.functional.set_kmap_mode("hashmap_on_the_fly")
     conv_mode = torchsparse.nn.functional.ConvMode.mode1
-    ts_cfg = torchsparse.nn.functional.conv_config.get_default_conv_config(
-        conv_mode=conv_mode, training=False
-    )
+    ts_cfg = torchsparse.nn.functional.conv_config.get_default_conv_config(conv_mode=conv_mode, training=False)
     ts_cfg.dataflow = torchsparse.nn.functional.Dataflow.ImplicitGEMM
 
     # Determine the configuration.
     if args.config not in all_configs:
-        raise ValueError(
-            f"Config {args.config} not found, available configs are {list(all_configs.keys())}"
-        )
+        raise ValueError(f"Config {args.config} not found, available configs are {list(all_configs.keys())}")
     config = all_configs[args.config]()
 
     assert isinstance(config, BaseConfig), "Config not valid."
@@ -94,9 +90,7 @@ def main(args) -> None:
             pbar.set_description(f"{ijk_name}: voxel count {input_grid.total_voxels:,}")
 
             # Prepare inputs
-            fvdb_input = fvnn.VDBTensor(
-                input_grid, input_grid.jagged_like(input_feature)
-            )
+            fvdb_input = fvnn.VDBTensor(input_grid, input_grid.jagged_like(input_feature))
             aux_dict = config.get_aux_inputs(fvdb_input)
             baseline_input = config.to_baseline_input(fvdb_input, baseline)
 
@@ -109,12 +103,8 @@ def main(args) -> None:
                     baseline_input._caches.kmaps.clear()
                     baseline_input._caches.hashmaps.clear()
 
-            start_events = [
-                torch.cuda.Event(enable_timing=True) for _ in range(args.repeats)
-            ]
-            end_events = [
-                torch.cuda.Event(enable_timing=True) for _ in range(args.repeats)
-            ]
+            start_events = [torch.cuda.Event(enable_timing=True) for _ in range(args.repeats)]
+            end_events = [torch.cuda.Event(enable_timing=True) for _ in range(args.repeats)]
             detailed_record = defaultdict(list)
 
             for j in range(args.repeats):
@@ -126,9 +116,7 @@ def main(args) -> None:
 
                 if args.detail:
 
-                    with profile(
-                        activities=[ProfilerActivity.CPU], record_shapes=True
-                    ) as prof:
+                    with profile(activities=[ProfilerActivity.CPU], record_shapes=True) as prof:
                         with record_function(encode_range_name("main", "-", {})):
                             baseline_out = model(baseline_input, **aux_dict)
 
@@ -147,12 +135,7 @@ def main(args) -> None:
 
                 config.post_measure(baseline_input, baseline_out)
 
-            my_time = np.mean(
-                [
-                    start_events[j].elapsed_time(end_events[j])
-                    for j in range(args.repeats)
-                ]
-            )
+            my_time = np.mean([start_events[j].elapsed_time(end_events[j]) for j in range(args.repeats)])
             my_memory = current_gpu_memory_usage() - start_gpu_memory_usage
 
             baseline_gross_data.append(
@@ -162,9 +145,7 @@ def main(args) -> None:
                     # "memory": my_memory,      # We shouldn't use nvidia-smi to obtain memory usage.
                 }
             )
-            baseline_detailed_data.append(
-                {"key": ijk_name, **{k: np.mean(v) for k, v in detailed_record.items()}}
-            )
+            baseline_detailed_data.append({"key": ijk_name, **{k: np.mean(v) for k, v in detailed_record.items()}})
 
         gross_data[baseline] = pd.DataFrame(baseline_gross_data)
         gross_data[baseline].set_index("key", inplace=True)
@@ -177,10 +158,7 @@ def main(args) -> None:
 
     for col_name in gross_col_names:
         rich.print(f"------ Comparing {col_name} ------")
-        full_dataframes = pd.concat(
-            [df[col_name].rename(baseline) for baseline, df in gross_data.items()],
-            axis=1,
-        )
+        full_dataframes = pd.concat([df[col_name].rename(baseline) for baseline, df in gross_data.items()], axis=1)
         full_dataframes.loc["mean"] = full_dataframes.mean()
         rich.print(df_to_table(full_dataframes))
 
@@ -192,11 +170,7 @@ def main(args) -> None:
         for col_name in detailed_col_names:
             rich.print(f"------ Comparing {col_name} ------")
             full_dataframes = pd.concat(
-                [
-                    df[col_name].rename(baseline)
-                    for baseline, df in detailed_data.items()
-                    if col_name in df.columns
-                ],
+                [df[col_name].rename(baseline) for baseline, df in detailed_data.items() if col_name in df.columns],
                 axis=1,
             )
             full_dataframes.loc["mean"] = full_dataframes.mean()
@@ -206,16 +180,10 @@ def main(args) -> None:
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("config", type=str, help="name of the config.")
-    parser.add_argument(
-        "--no-clb", action="store_true", help="disable CUDA_LAUNCH_BLOCKING."
-    )
-    parser.add_argument(
-        "--detail", action="store_true", help="enable detailed profiling."
-    )
+    parser.add_argument("--no-clb", action="store_true", help="disable CUDA_LAUNCH_BLOCKING.")
+    parser.add_argument("--detail", action="store_true", help="enable detailed profiling.")
     parser.add_argument("--repeats", type=int, default=1, help="number of repeats.")
-    parser.add_argument(
-        "--limit", type=int, default=-1, help="limit the number of data points."
-    )
+    parser.add_argument("--limit", type=int, default=-1, help="limit the number of data points.")
     options = parser.parse_args()
 
     if not options.no_clb:

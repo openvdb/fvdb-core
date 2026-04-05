@@ -8,14 +8,7 @@ from torch.profiler import record_function
 
 
 class SparseResBlock(nn.Module):
-    def __init__(
-        self,
-        name: str,
-        in_channels: int,
-        out_channels: int,
-        kernel_size: int,
-        backend: str = "ts",
-    ):
+    def __init__(self, name: str, in_channels: int, out_channels: int, kernel_size: int, backend: str = "ts"):
 
         super().__init__()
         self.backend = backend
@@ -23,14 +16,10 @@ class SparseResBlock(nn.Module):
         self.name = name
 
         self.net = self.wrapper.sequential(
-            self.wrapper.conv3d(
-                f"{name}_conv1", in_channels, out_channels, kernel_size, stride=1
-            ),
+            self.wrapper.conv3d(f"{name}_conv1", in_channels, out_channels, kernel_size, stride=1),
             self.wrapper.bn(out_channels),
             self.wrapper.relu(True),
-            self.wrapper.conv3d(
-                f"{name}_conv2", out_channels, out_channels, kernel_size
-            ),
+            self.wrapper.conv3d(f"{name}_conv2", out_channels, out_channels, kernel_size),
             self.wrapper.bn(out_channels),
         )
 
@@ -52,9 +41,7 @@ class SparseResBlock(nn.Module):
 class MinkUNet(nn.Module):
     """Minkowski U-Net for 3D semantic segmentation."""
 
-    def __init__(
-        self, backend: str, in_channels: int = 4, cr: float = 1.0, num_classes: int = 50
-    ):
+    def __init__(self, backend: str, in_channels: int = 4, cr: float = 1.0, num_classes: int = 50):
         super().__init__()
 
         cs = [64, 64, 64, 128, 256, 256, 128, 64, 64]
@@ -80,58 +67,34 @@ class MinkUNet(nn.Module):
 
         self.stage1 = nn.Sequential(
             self.wrapper.maxpool("down2", 2),
-            SparseResBlock(
-                "block2a", cs[0], cs[1], kernel_size=3, backend=self.backend
-            ),
-            SparseResBlock(
-                "block2b", cs[1], cs[1], kernel_size=3, backend=self.backend
-            ),
+            SparseResBlock("block2a", cs[0], cs[1], kernel_size=3, backend=self.backend),
+            SparseResBlock("block2b", cs[1], cs[1], kernel_size=3, backend=self.backend),
         )
 
         self.stage2 = nn.Sequential(
             self.wrapper.maxpool("down4", 2),
-            SparseResBlock(
-                "block4a", cs[1], cs[2], kernel_size=3, backend=self.backend
-            ),
-            SparseResBlock(
-                "block4b", cs[2], cs[2], kernel_size=3, backend=self.backend
-            ),
+            SparseResBlock("block4a", cs[1], cs[2], kernel_size=3, backend=self.backend),
+            SparseResBlock("block4b", cs[2], cs[2], kernel_size=3, backend=self.backend),
         )
 
         self.stage3 = nn.Sequential(
             self.wrapper.maxpool("down8", 2),
-            SparseResBlock(
-                "block8a", cs[2], cs[3], kernel_size=3, backend=self.backend
-            ),
-            SparseResBlock(
-                "block8b", cs[3], cs[3], kernel_size=3, backend=self.backend
-            ),
+            SparseResBlock("block8a", cs[2], cs[3], kernel_size=3, backend=self.backend),
+            SparseResBlock("block8b", cs[3], cs[3], kernel_size=3, backend=self.backend),
         )
 
         self.stage4 = nn.Sequential(
             self.wrapper.maxpool("down16", 2),
-            SparseResBlock(
-                "block16a", cs[3], cs[4], kernel_size=3, backend=self.backend
-            ),
-            SparseResBlock(
-                "block16b", cs[4], cs[4], kernel_size=3, backend=self.backend
-            ),
+            SparseResBlock("block16a", cs[3], cs[4], kernel_size=3, backend=self.backend),
+            SparseResBlock("block16b", cs[4], cs[4], kernel_size=3, backend=self.backend),
         )
 
         self.up1 = nn.ModuleList(
             [
                 self.wrapper.upsample("up8", 2),
                 nn.Sequential(
-                    SparseResBlock(
-                        "block8c",
-                        cs[5] + cs[3],
-                        cs[5],
-                        kernel_size=3,
-                        backend=self.backend,
-                    ),
-                    SparseResBlock(
-                        "block8d", cs[5], cs[5], kernel_size=3, backend=self.backend
-                    ),
+                    SparseResBlock("block8c", cs[5] + cs[3], cs[5], kernel_size=3, backend=self.backend),
+                    SparseResBlock("block8d", cs[5], cs[5], kernel_size=3, backend=self.backend),
                 ),
             ]
         )
@@ -140,21 +103,11 @@ class MinkUNet(nn.Module):
             [
                 self.wrapper.sequential(
                     self.wrapper.upsample("up4", 2),
-                    self.wrapper.conv3d(
-                        "block4c", cs[5], cs[6], kernel_size=1, stride=1, bias=False
-                    ),
+                    self.wrapper.conv3d("block4c", cs[5], cs[6], kernel_size=1, stride=1, bias=False),
                 ),
                 nn.Sequential(
-                    SparseResBlock(
-                        "block4d",
-                        cs[6] + cs[2],
-                        cs[6],
-                        kernel_size=3,
-                        backend=self.backend,
-                    ),
-                    SparseResBlock(
-                        "block4e", cs[6], cs[6], kernel_size=3, backend=self.backend
-                    ),
+                    SparseResBlock("block4d", cs[6] + cs[2], cs[6], kernel_size=3, backend=self.backend),
+                    SparseResBlock("block4e", cs[6], cs[6], kernel_size=3, backend=self.backend),
                 ),
             ]
         )
@@ -163,21 +116,11 @@ class MinkUNet(nn.Module):
             [
                 self.wrapper.sequential(
                     self.wrapper.upsample("up2", 2),
-                    self.wrapper.conv3d(
-                        "block2c", cs[6], cs[7], kernel_size=1, stride=1, bias=False
-                    ),
+                    self.wrapper.conv3d("block2c", cs[6], cs[7], kernel_size=1, stride=1, bias=False),
                 ),
                 nn.Sequential(
-                    SparseResBlock(
-                        "block2d",
-                        cs[7] + cs[1],
-                        cs[7],
-                        kernel_size=3,
-                        backend=self.backend,
-                    ),
-                    SparseResBlock(
-                        "block2e", cs[7], cs[7], kernel_size=3, backend=self.backend
-                    ),
+                    SparseResBlock("block2d", cs[7] + cs[1], cs[7], kernel_size=3, backend=self.backend),
+                    SparseResBlock("block2e", cs[7], cs[7], kernel_size=3, backend=self.backend),
                 ),
             ]
         )
@@ -186,21 +129,11 @@ class MinkUNet(nn.Module):
             [
                 self.wrapper.sequential(
                     self.wrapper.upsample("up1", 2),
-                    self.wrapper.conv3d(
-                        "block1c", cs[7], cs[8], kernel_size=1, stride=1, bias=False
-                    ),
+                    self.wrapper.conv3d("block1c", cs[7], cs[8], kernel_size=1, stride=1, bias=False),
                 ),
                 nn.Sequential(
-                    SparseResBlock(
-                        "block1d",
-                        cs[8] + cs[0],
-                        cs[8],
-                        kernel_size=3,
-                        backend=self.backend,
-                    ),
-                    SparseResBlock(
-                        "block1e", cs[8], cs[8], kernel_size=3, backend=self.backend
-                    ),
+                    SparseResBlock("block1d", cs[8] + cs[0], cs[8], kernel_size=3, backend=self.backend),
+                    SparseResBlock("block1e", cs[8], cs[8], kernel_size=3, backend=self.backend),
                 ),
             ]
         )

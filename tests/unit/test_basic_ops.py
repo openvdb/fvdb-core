@@ -114,9 +114,7 @@ class TestBasicOps(unittest.TestCase):
         expected_ijk = fvdb.JaggedTensor(expected_ijk)
 
         expected_grid = fvdb.GridBatch.from_ijk(
-            expected_ijk,
-            voxel_sizes=grid_batch1.voxel_sizes,
-            origins=grid_batch1.origins,
+            expected_ijk, voxel_sizes=grid_batch1.voxel_sizes, origins=grid_batch1.origins
         )
 
         self.assertTrue(torch.equal(merged_grid_batch.ijk.jdata, expected_grid.ijk.jdata))
@@ -290,24 +288,10 @@ class TestBasicOps(unittest.TestCase):
 
     @parameterized.expand(["cpu", "cuda"])
     def test_is_same(self, device):
-        grid = GridBatch.from_dense(
-            3,
-            [16, 16, 16],
-            [0, 0, 0],
-            voxel_sizes=1.0 / 16,
-            origins=[0, 0, 0],
-            device=device,
-        )
+        grid = GridBatch.from_dense(3, [16, 16, 16], [0, 0, 0], voxel_sizes=1.0 / 16, origins=[0, 0, 0], device=device)
         self.assertTrue(grid.total_voxels == 3 * 16**3)
 
-        grid2 = GridBatch.from_dense(
-            3,
-            [16, 16, 16],
-            [0, 0, 0],
-            voxel_sizes=1.0 / 16,
-            origins=[0, 0, 0],
-            device=device,
-        )
+        grid2 = GridBatch.from_dense(3, [16, 16, 16], [0, 0, 0], voxel_sizes=1.0 / 16, origins=[0, 0, 0], device=device)
         self.assertFalse(grid.is_same(grid2))
         self.assertNotEqual(grid.address, grid2.address)
 
@@ -349,11 +333,7 @@ class TestBasicOps(unittest.TestCase):
         pred_dual_coordinates = grid.world_to_voxel(fvdb.JaggedTensor(pts)).jdata
 
         self.assertTrue(
-            torch.allclose(
-                pred_dual_coordinates,
-                target_dual_coordinates,
-                atol=dtype_to_atol(dtype),
-            ),
+            torch.allclose(pred_dual_coordinates, target_dual_coordinates, atol=dtype_to_atol(dtype)),
             f"max_diff = {torch.abs(pred_dual_coordinates - target_dual_coordinates).max()}",
         )
 
@@ -370,13 +350,7 @@ class TestBasicOps(unittest.TestCase):
         target_primal_coordinates = (pts - vox_origin) / vox_size
         pred_primal_coordinates = grid.world_to_voxel(fvdb.JaggedTensor(pts)).jdata
 
-        self.assertTrue(
-            torch.allclose(
-                target_primal_coordinates,
-                pred_primal_coordinates,
-                atol=dtype_to_atol(dtype),
-            )
-        )
+        self.assertTrue(torch.allclose(target_primal_coordinates, pred_primal_coordinates, atol=dtype_to_atol(dtype)))
 
     @parameterized.expand(all_device_dtype_combos)
     def test_world_to_dual_grad(self, device, dtype):
@@ -404,13 +378,7 @@ class TestBasicOps(unittest.TestCase):
         target_dual_coordinates = ((pts - vox_origin) / vox_size) + 0.5
         target_dual_coordinates.backward(grad_out)
 
-        self.assertTrue(
-            torch.allclose(
-                pred_dual_coordinates,
-                target_dual_coordinates,
-                atol=dtype_to_atol(dtype),
-            )
-        )
+        self.assertTrue(torch.allclose(pred_dual_coordinates, target_dual_coordinates, atol=dtype_to_atol(dtype)))
         self.assertTrue(torch.allclose(pts.grad, pred_grad, atol=dtype_to_atol(dtype)))
 
     @parameterized.expand(all_device_dtype_combos)
@@ -438,13 +406,7 @@ class TestBasicOps(unittest.TestCase):
         target_primal_coordinates = (pts - vox_origin) / vox_size
         target_primal_coordinates.backward(grad_out)
 
-        self.assertTrue(
-            torch.allclose(
-                target_primal_coordinates,
-                pred_primal_coordinates,
-                atol=dtype_to_atol(dtype),
-            )
-        )
+        self.assertTrue(torch.allclose(target_primal_coordinates, pred_primal_coordinates, atol=dtype_to_atol(dtype)))
         # diff_idxs = torch.where(~torch.isclose(pts.grad, pred_grad, atol=dtype_to_atol(dtype)))
         self.assertTrue(torch.allclose(pts.grad, pred_grad, atol=dtype_to_atol(dtype)))
 
@@ -564,31 +526,17 @@ class TestBasicOps(unittest.TestCase):
         pred_primal_coordinates = grid.world_to_voxel(fvdb.JaggedTensor(pts)).jdata
 
         self.assertTrue(
-            torch.allclose(
-                target_primal_coordinates,
-                pred_primal_coordinates,
-                atol=dtype_to_atol(dtype),
-            ),
+            torch.allclose(target_primal_coordinates, pred_primal_coordinates, atol=dtype_to_atol(dtype)),
             f"Max diff = {torch.max(torch.abs(target_primal_coordinates- pred_primal_coordinates)).item()}",
         )
 
         target_dual_coordinates = ((pts - vox_origin) / vox_size) + 0.5
         pred_dual_coordinates = grid_d.world_to_voxel(fvdb.JaggedTensor(pts)).jdata
-        self.assertTrue(
-            torch.allclose(
-                pred_dual_coordinates,
-                target_dual_coordinates,
-                atol=dtype_to_atol(dtype),
-            )
-        )
+        self.assertTrue(torch.allclose(pred_dual_coordinates, target_dual_coordinates, atol=dtype_to_atol(dtype)))
 
         pred_primal_coordinates_dd = grid_dd.world_to_voxel(fvdb.JaggedTensor(pts)).jdata
         self.assertTrue(
-            torch.allclose(
-                target_primal_coordinates,
-                pred_primal_coordinates_dd,
-                atol=dtype_to_atol(dtype),
-            )
+            torch.allclose(target_primal_coordinates, pred_primal_coordinates_dd, atol=dtype_to_atol(dtype))
         )
 
     @parameterized.expand(all_device_dtype_combos)
@@ -813,11 +761,7 @@ class TestBasicOps(unittest.TestCase):
 
         expected_ijk_set = set(
             {
-                (
-                    expected_ijk[i, 0].item(),
-                    expected_ijk[i, 1].item(),
-                    expected_ijk[i, 2].item(),
-                )
+                (expected_ijk[i, 0].item(), expected_ijk[i, 1].item(), expected_ijk[i, 2].item())
                 for i in range(expected_ijk.shape[0])
             }
         )
@@ -826,11 +770,7 @@ class TestBasicOps(unittest.TestCase):
 
         predicted_ijk_set = set(
             {
-                (
-                    predicted_ijk[i, 0].item(),
-                    predicted_ijk[i, 1].item(),
-                    predicted_ijk[i, 2].item(),
-                )
+                (predicted_ijk[i, 0].item(), predicted_ijk[i, 1].item(), predicted_ijk[i, 2].item())
                 for i in range(predicted_ijk.shape[0])
             }
         )
@@ -863,10 +803,7 @@ class TestBasicOps(unittest.TestCase):
             feats_fine, grid_fine = grid.refine(subdiv_factor, fvdb.JaggedTensor(feats), mask=fvdb.JaggedTensor(mask))
             self.assertTrue(torch.allclose(grid_fine.voxel_sizes[0], grid.voxel_sizes[0] / subvec))
             self.assertTrue(
-                torch.allclose(
-                    grid_fine.origins[0],
-                    grid.origins[0] - 0.5 * grid_fine.voxel_sizes[0] * fac_sub_one,
-                )
+                torch.allclose(grid_fine.origins[0], grid.origins[0] - 0.5 * grid_fine.voxel_sizes[0] * fac_sub_one)
             )
 
             fine_to_coarse_ijk = (grid_fine.ijk.jdata / subvec).floor()
@@ -915,10 +852,7 @@ class TestBasicOps(unittest.TestCase):
             feats_fine, grid_fine = grid.refine(subdiv_factor, fvdb.JaggedTensor(feats), mask=fvdb.JaggedTensor(mask))
             self.assertTrue(torch.allclose(grid_fine.voxel_sizes[0], grid.voxel_sizes[0] / subvec))
             self.assertTrue(
-                torch.allclose(
-                    grid_fine.origins[0],
-                    grid.origins[0] - 0.5 * grid_fine.voxel_sizes[0] * fac_sub_one,
-                )
+                torch.allclose(grid_fine.origins[0], grid.origins[0] - 0.5 * grid_fine.voxel_sizes[0] * fac_sub_one)
             )
 
             fine_to_coarse_ijk = (grid_fine.ijk.jdata / subvec).floor()
@@ -963,15 +897,13 @@ class TestBasicOps(unittest.TestCase):
                 self.assertTrue(torch.allclose(grid_coarse.voxel_sizes[0], grid.voxel_sizes[0] * pool_factor))
                 self.assertTrue(
                     torch.allclose(
-                        grid_coarse.origins[0],
-                        grid.origins[0] + 0.5 * grid.voxel_sizes[0] * (pool_factor - 1),
+                        grid_coarse.origins[0], grid.origins[0] + 0.5 * grid.voxel_sizes[0] * (pool_factor - 1)
                     )
                 )
             else:
                 self.assertTrue(
                     torch.allclose(
-                        grid_coarse.voxel_sizes[0],
-                        grid.voxel_sizes[0] * torch.tensor(pool_factor).to(device),
+                        grid_coarse.voxel_sizes[0], grid.voxel_sizes[0] * torch.tensor(pool_factor).to(device)
                     )
                 )
                 self.assertTrue(
@@ -1020,12 +952,7 @@ class TestBasicOps(unittest.TestCase):
                     assert isinstance(pf, tuple)
                     return (pf[0] + val_, pf[1] + val_, pf[2] + val_)
 
-                pools = (
-                    pool_factor,
-                    addit(pool_factor, 1),
-                    addit(pool_factor, 2),
-                    addit(pool_factor, 5),
-                )
+                pools = (pool_factor, addit(pool_factor, 1), addit(pool_factor, 2), addit(pool_factor, 5))
             for stride in pools:
                 grid_vals_coarse, grid_coarse = grid.max_pool(pool_factor, fvdb.JaggedTensor(grid_vals), stride=stride)
                 grid_vals_coarse = grid_vals_coarse.jdata
@@ -1033,15 +960,13 @@ class TestBasicOps(unittest.TestCase):
                     self.assertTrue(torch.allclose(grid_coarse.voxel_sizes[0], grid.voxel_sizes[0] * stride))
                     self.assertTrue(
                         torch.allclose(
-                            grid_coarse.origins[0],
-                            grid.origins[0] + 0.5 * grid.voxel_sizes[0] * (stride - 1),
+                            grid_coarse.origins[0], grid.origins[0] + 0.5 * grid.voxel_sizes[0] * (stride - 1)
                         )
                     )
                 else:
                     self.assertTrue(
                         torch.allclose(
-                            grid_coarse.voxel_sizes[0],
-                            grid.voxel_sizes[0] * torch.tensor(stride).to(device),
+                            grid_coarse.voxel_sizes[0], grid.voxel_sizes[0] * torch.tensor(stride).to(device)
                         )
                     )
                     self.assertTrue(
@@ -1087,15 +1012,13 @@ class TestBasicOps(unittest.TestCase):
                 self.assertTrue(torch.allclose(grid_coarse.voxel_sizes[0], grid.voxel_sizes[0] * pool_factor))
                 self.assertTrue(
                     torch.allclose(
-                        grid_coarse.origins[0],
-                        grid.origins[0] + 0.5 * grid.voxel_sizes[0] * (pool_factor - 1),
+                        grid_coarse.origins[0], grid.origins[0] + 0.5 * grid.voxel_sizes[0] * (pool_factor - 1)
                     )
                 )
             else:
                 self.assertTrue(
                     torch.allclose(
-                        grid_coarse.voxel_sizes[0],
-                        grid.voxel_sizes[0] * torch.tensor(pool_factor).to(device),
+                        grid_coarse.voxel_sizes[0], grid.voxel_sizes[0] * torch.tensor(pool_factor).to(device)
                     )
                 )
                 self.assertTrue(
@@ -1158,10 +1081,7 @@ class TestBasicOps(unittest.TestCase):
                 * grid_vals_t_coarse.shape[3]
                 * grid_vals_t_coarse.shape[0]
             )
-            self.assertEqual(
-                (grid_vals_grad_t_flat.abs() > 0).to(torch.int32).sum().item(),
-                expected_nnz,
-            )
+            self.assertEqual((grid_vals_grad_t_flat.abs() > 0).to(torch.int32).sum().item(), expected_nnz)
 
             self.assertEqual(torch.abs(grid_vals_grad_t_flat - grid_vals_grad).max().item(), 0.0)
 
@@ -1183,16 +1103,14 @@ class TestBasicOps(unittest.TestCase):
                 self.assertTrue(torch.allclose(grid_coarse.voxel_sizes[0], grid.voxel_sizes[0] * pool_factor))
                 self.assertTrue(
                     torch.allclose(
-                        grid_coarse.origins[0],
-                        grid.origins[0] + 0.5 * grid.voxel_sizes[0] * (pool_factor - 1),
+                        grid_coarse.origins[0], grid.origins[0] + 0.5 * grid.voxel_sizes[0] * (pool_factor - 1)
                     )
                 )
                 npool_vox = pool_factor**3
             else:
                 self.assertTrue(
                     torch.allclose(
-                        grid_coarse.voxel_sizes[0],
-                        grid.voxel_sizes[0] * torch.tensor(pool_factor).to(device),
+                        grid_coarse.voxel_sizes[0], grid.voxel_sizes[0] * torch.tensor(pool_factor).to(device)
                     )
                 )
                 self.assertTrue(
@@ -1234,18 +1152,12 @@ class TestBasicOps(unittest.TestCase):
 
             diff_idxs = torch.where(
                 ~torch.isclose(
-                    grid_vals_coarse,
-                    grid_vals_coarse_t_flat,
-                    atol=dtype_to_atol(dtype),
-                    rtol=dtype_to_atol(dtype),
+                    grid_vals_coarse, grid_vals_coarse_t_flat, atol=dtype_to_atol(dtype), rtol=dtype_to_atol(dtype)
                 )
             )
             self.assertTrue(
                 torch.allclose(
-                    grid_vals_coarse,
-                    grid_vals_coarse_t_flat,
-                    atol=dtype_to_atol(dtype),
-                    rtol=dtype_to_atol(dtype),
+                    grid_vals_coarse, grid_vals_coarse_t_flat, atol=dtype_to_atol(dtype), rtol=dtype_to_atol(dtype)
                 ),
                 f"({pool_factor}) Exceed at {diff_idxs}:\n{grid_vals_coarse[diff_idxs][:10]}\nvs\n{grid_vals_coarse_t_flat[diff_idxs][:10]}",
             )
@@ -1269,10 +1181,7 @@ class TestBasicOps(unittest.TestCase):
                 * grid_vals_t_coarse.shape[0]
                 * npool_vox
             )
-            self.assertLessEqual(
-                (grid_vals_grad_t_flat.abs() > 0).to(torch.int32).sum().item(),
-                expected_nnz_ub,
-            )
+            self.assertLessEqual((grid_vals_grad_t_flat.abs() > 0).to(torch.int32).sum().item(), expected_nnz_ub)
 
             self.assertTrue(torch.abs(grid_vals_grad_t_flat - grid_vals_grad).max().item() < dtype_to_atol(dtype))
 
@@ -1284,12 +1193,7 @@ class TestBasicOps(unittest.TestCase):
         grid = GridBatch.from_dense(1, [20, 20, 20], voxel_sizes=vox_size, origins=vox_origin, device=device)
         assert grid.total_voxels == 20**3
         for pool_factor in (2, 4, 5, 10):
-            for stride in (
-                pool_factor,
-                pool_factor + 1,
-                pool_factor + 2,
-                pool_factor + 5,
-            ):
+            for stride in (pool_factor, pool_factor + 1, pool_factor + 2, pool_factor + 5):
                 grid_vals = torch.rand(grid.total_voxels, 3).to(device).to(dtype) + 0.5
                 grid_vals.requires_grad = True
 
@@ -1297,10 +1201,7 @@ class TestBasicOps(unittest.TestCase):
                 grid_vals_coarse = grid_vals_coarse.jdata
                 self.assertTrue(torch.allclose(grid_coarse.voxel_sizes[0], grid.voxel_sizes[0] * stride))
                 self.assertTrue(
-                    torch.allclose(
-                        grid_coarse.origins[0],
-                        grid.origins[0] + 0.5 * grid.voxel_sizes[0] * (stride - 1),
-                    )
+                    torch.allclose(grid_coarse.origins[0], grid.origins[0] + 0.5 * grid.voxel_sizes[0] * (stride - 1))
                 )
 
                 loss = (grid_vals_coarse.pow(3) * -1.111).sum()
@@ -1356,10 +1257,7 @@ class TestBasicOps(unittest.TestCase):
                     * grid_vals_t_coarse.shape[3]
                     * grid_vals_t_coarse.shape[0]
                 )
-                self.assertEqual(
-                    (grid_vals_grad_t_flat.abs() > 0).to(torch.int32).sum().item(),
-                    expected_nnz,
-                )
+                self.assertEqual((grid_vals_grad_t_flat.abs() > 0).to(torch.int32).sum().item(), expected_nnz)
 
                 self.assertEqual(torch.abs(grid_vals_grad_t_flat - grid_vals_grad).max().item(), 0.0)
 
@@ -1385,13 +1283,7 @@ class TestBasicOps(unittest.TestCase):
 
         target_dual_coordinates = ((pts - vox_origin) / vox_size) + 0.5
         pred_dual_coordinates = grid.world_to_voxel(fvdb.JaggedTensor(pts)).jdata
-        self.assertTrue(
-            torch.allclose(
-                pred_dual_coordinates,
-                target_dual_coordinates,
-                atol=dtype_to_atol(dtype),
-            )
-        )
+        self.assertTrue(torch.allclose(pred_dual_coordinates, target_dual_coordinates, atol=dtype_to_atol(dtype)))
         self.assertEqual(grid.device.type, torch.device(device).type)
 
         to_device = torch.device("cpu")
@@ -1402,11 +1294,7 @@ class TestBasicOps(unittest.TestCase):
                 pred_dual_coordinates = grid2.world_to_voxel(fvdb.JaggedTensor(pts)).jdata
         pred_dual_coordinates = grid2.world_to_voxel(fvdb.JaggedTensor(pts.to(to_device))).jdata
         self.assertTrue(
-            torch.allclose(
-                pred_dual_coordinates,
-                target_dual_coordinates.to(to_device),
-                atol=dtype_to_atol(dtype),
-            )
+            torch.allclose(pred_dual_coordinates, target_dual_coordinates.to(to_device), atol=dtype_to_atol(dtype))
         )
         self.assertEqual(grid2.device, to_device)
 
@@ -1418,11 +1306,7 @@ class TestBasicOps(unittest.TestCase):
                 pred_dual_coordinates = grid2.world_to_voxel(fvdb.JaggedTensor(pts)).jdata
         pred_dual_coordinates = grid2.world_to_voxel(fvdb.JaggedTensor(pts.to(to_device))).jdata
         self.assertTrue(
-            torch.allclose(
-                pred_dual_coordinates,
-                target_dual_coordinates.to(to_device),
-                atol=dtype_to_atol(dtype),
-            )
+            torch.allclose(pred_dual_coordinates, target_dual_coordinates.to(to_device), atol=dtype_to_atol(dtype))
         )
         self.assertEqual(grid2.device, to_device)
 
@@ -1456,12 +1340,7 @@ class TestBasicOps(unittest.TestCase):
         grid = GridBatch.from_points(fvdb.JaggedTensor(pts), voxel_sizes=vox_size, origins=vox_origin)
         grid = grid.dilated_grid(1)
 
-        for builder in [
-            build_from_ijk,
-            build_from_pts,
-            build_from_pts_nn,
-            build_from_dense,
-        ]:
+        for builder in [build_from_ijk, build_from_pts, build_from_pts_nn, build_from_dense]:
             with self.assertRaises(ValueError):
                 grid = builder(-vox_size, [0.01] * 3)
 
@@ -1491,9 +1370,7 @@ class TestBasicOps(unittest.TestCase):
         grid = GridBatch.from_ijk(fvdb.JaggedTensor(ijk), voxel_sizes=vox_size, origins=[0.0] * 3)
 
         inv_index = grid.inject_from_ijk(
-            grid.jagged_like(ijk),
-            grid.jagged_like(torch.arange(len(ijk), device=grid.device)),
-            default_value=-1,
+            grid.jagged_like(ijk), grid.jagged_like(torch.arange(len(ijk), device=grid.device)), default_value=-1
         ).jdata
 
         target_inv_index = torch.full_like(grid.ijk.jdata[:, 0], -1)
@@ -1514,9 +1391,7 @@ class TestBasicOps(unittest.TestCase):
 
         # valid ijk indices
         rand_ijk_inv_indices = grid.inject_from_ijk(
-            rand_ijks,
-            rand_ijks.jagged_like(torch.arange(len(rand_ijks.jdata))),
-            default_value=-1,
+            rand_ijks, rand_ijks.jagged_like(torch.arange(len(rand_ijks.jdata))), default_value=-1
         )
         inv_rand_ijk = grid.ijk.jdata[rand_ijk_inv_indices.jdata != -1]
         assert len(inv_rand_ijk) == len(rand_ijks.jdata)
@@ -1705,25 +1580,12 @@ class TestBasicOps(unittest.TestCase):
         cam_d = cam_targets - cam_o
         cam_d /= torch.norm(cam_d, dim=-1, keepdim=True)
 
-        sphere_sdf, cam_o, cam_d = (
-            sphere_sdf.to(device),
-            cam_o.to(device),
-            cam_d.to(device),
-        )
-        sphere_sdf, cam_o, cam_d = (
-            sphere_sdf.to(dtype),
-            cam_o.to(dtype),
-            cam_d.to(dtype),
-        )
+        sphere_sdf, cam_o, cam_d = sphere_sdf.to(device), cam_o.to(device), cam_d.to(device)
+        sphere_sdf, cam_o, cam_d = sphere_sdf.to(dtype), cam_o.to(dtype), cam_d.to(dtype)
 
         # Build a grid with the SDF
         grid = GridBatch.from_dense(
-            1,
-            [sphere_sdf.shape[i] for i in range(3)],
-            [0] * 3,
-            voxel_sizes=1.0 / N,
-            origins=[0] * 3,
-            device=device,
+            1, [sphere_sdf.shape[i] for i in range(3)], [0] * 3, voxel_sizes=1.0 / N, origins=[0] * 3, device=device
         )
         sdf_p = grid.inject_from_dense_cminor(
             sphere_sdf.unsqueeze(-1).unsqueeze(0)
@@ -1731,9 +1593,7 @@ class TestBasicOps(unittest.TestCase):
 
         # Intersect rays with the SDF
         isect = grid.ray_implicit_intersection(
-            fvdb.JaggedTensor(cam_o),
-            fvdb.JaggedTensor(cam_d),
-            fvdb.JaggedTensor(sdf_p.squeeze()),
+            fvdb.JaggedTensor(cam_o), fvdb.JaggedTensor(cam_d), fvdb.JaggedTensor(sdf_p.squeeze())
         ).jdata
         hit_mask = isect >= 0.0
         self.assertTrue(hit_mask.sum().item() > 25)
@@ -1795,8 +1655,7 @@ class TestBasicOps(unittest.TestCase):
 
                 for bi in range(batch_size):
                     mesh_radius = torch.linalg.norm(
-                        v[bi].jdata - torch.tensor([[0.5] * 3], device=device, dtype=dtype),
-                        axis=1,
+                        v[bi].jdata - torch.tensor([[0.5] * 3], device=device, dtype=dtype), axis=1
                     )
                     vox_size = torch.norm(grid.voxel_sizes[bi])
                     self.assertTrue(torch.all(mesh_radius - sphere_rads[bi] < vox_size / 2.0 - level))
@@ -1808,14 +1667,7 @@ class TestBasicOps(unittest.TestCase):
 
     @parameterized.expand(all_device_dtype_combos + bfloat16_combos)
     def test_refine_empty_grid(self, device, dtype):
-        grid = GridBatch.from_dense(
-            1,
-            [32, 32, 32],
-            [0, 0, 0],
-            voxel_sizes=1.0 / 32,
-            origins=[0, 0, 0],
-            device=device,
-        )
+        grid = GridBatch.from_dense(1, [32, 32, 32], [0, 0, 0], voxel_sizes=1.0 / 32, origins=[0, 0, 0], device=device)
         values = torch.randn(grid.total_voxels, 17, device=device, dtype=dtype)
         values, subgrid = grid.refine(
             1,
@@ -1831,34 +1683,15 @@ class TestBasicOps(unittest.TestCase):
         grid = GridBatch.from_zero_voxels(device=device)
         self.assertTrue(torch.equal(grid.bboxes, torch.tensor([[[0, 0, 0], [0, 0, 0]]], device=device)))
         self.assertTrue(torch.equal(grid.total_bbox, torch.tensor([[0, 0, 0], [0, 0, 0]], device=device)))
-        grid = GridBatch.from_dense(
-            1,
-            [32, 32, 32],
-            [0, 0, 0],
-            voxel_sizes=1.0 / 32,
-            origins=[0, 0, 0],
-            device=device,
-        )
+        grid = GridBatch.from_dense(1, [32, 32, 32], [0, 0, 0], voxel_sizes=1.0 / 32, origins=[0, 0, 0], device=device)
         self.assertTrue(torch.equal(grid.bboxes, torch.tensor([[[0, 0, 0], [31, 31, 31]]], device=device)))
-        self.assertTrue(
-            torch.equal(
-                grid.dual_bboxes,
-                torch.tensor([[[0, 0, 0], [32, 32, 32]]], device=device),
-            )
-        )
+        self.assertTrue(torch.equal(grid.dual_bboxes, torch.tensor([[[0, 0, 0], [32, 32, 32]]], device=device)))
         self.assertTrue(torch.equal(grid.total_bbox, torch.tensor([[0, 0, 0], [31, 31, 31]], device=device)))
 
     @parameterized.expand(all_device_dtype_combos)
     def test_clip_grid(self, device, dtype):
 
-        grid = GridBatch.from_dense(
-            1,
-            [32, 32, 32],
-            [0, 0, 0],
-            voxel_sizes=1.0 / 32,
-            origins=[0, 0, 0],
-            device=device,
-        )
+        grid = GridBatch.from_dense(1, [32, 32, 32], [0, 0, 0], voxel_sizes=1.0 / 32, origins=[0, 0, 0], device=device)
         values_in = torch.randn(grid.total_voxels, 17, device=device, dtype=dtype)
         clipped_data, clipped_grid = grid.clip(fvdb.JaggedTensor(values_in), [[0, 0, 0]], [[5, 5, 5]])
         self.assertTrue(clipped_grid.num_voxels == 6**3)
@@ -1866,12 +1699,7 @@ class TestBasicOps(unittest.TestCase):
         self.assertTrue(torch.equal(clipped_data.joffsets, clipped_grid.joffsets))
 
         grid = GridBatch.from_dense(
-            1,
-            [32, 32, 32],
-            [-2, -2, -2],
-            voxel_sizes=1.0 / 32,
-            origins=[0, 0, 0],
-            device=device,
+            1, [32, 32, 32], [-2, -2, -2], voxel_sizes=1.0 / 32, origins=[0, 0, 0], device=device
         )
         values_in = torch.randn(grid.total_voxels, 17, device=device, dtype=dtype)
         clipped_data, clipped_grid = grid.clip(fvdb.JaggedTensor(values_in), [[-2, -2, -2]], [[5, 5, 5]])
@@ -1881,21 +1709,8 @@ class TestBasicOps(unittest.TestCase):
 
         # Test gradients through clip
         num_features = 17
-        grid = GridBatch.from_dense(
-            1,
-            [32, 32, 32],
-            [0, 0, 0],
-            voxel_sizes=1.0 / 32,
-            origins=[0, 0, 0],
-            device=device,
-        )
-        features = torch.randn(
-            grid.total_voxels,
-            num_features,
-            device=device,
-            dtype=dtype,
-            requires_grad=True,
-        )
+        grid = GridBatch.from_dense(1, [32, 32, 32], [0, 0, 0], voxel_sizes=1.0 / 32, origins=[0, 0, 0], device=device)
+        features = torch.randn(grid.total_voxels, num_features, device=device, dtype=dtype, requires_grad=True)
 
         clipped_features, clipped_grid = grid.clip(fvdb.JaggedTensor(features), [[0, 0, 0]], [[5, 5, 5]])
 

@@ -119,9 +119,7 @@ def _convert_to_list(seq: Sequence[int]) -> list[int]: ...
 def _convert_to_list(seq: Sequence[Sequence[int]]) -> list[list[int]]: ...
 
 
-def _convert_to_list(
-    seq: Sequence[int] | Sequence[Sequence[int]],
-) -> list[int] | list[list[int]]:
+def _convert_to_list(seq: Sequence[int] | Sequence[Sequence[int]]) -> list[int] | list[list[int]]:
     """Helper to convert Sequence types to list types for C++ binding compatibility."""
     if isinstance(seq, (list, tuple)):
         if seq and isinstance(seq[0], (list, tuple)):
@@ -250,7 +248,7 @@ class JaggedTensor:
                 if tensors and isinstance(tensors[0], (list, tuple)):
                     # Convert nested sequences to lists
                     converted: list[list[torch.Tensor]] = [
-                        (list(inner) if isinstance(inner, tuple) else cast(list[torch.Tensor], inner))
+                        list(inner) if isinstance(inner, tuple) else cast(list[torch.Tensor], inner)
                         for inner in tensors
                     ]
                     if isinstance(tensors, tuple):
@@ -646,11 +644,7 @@ class JaggedTensor:
 
     @classmethod
     def from_data_indices_and_list_ids(
-        cls,
-        data: torch.Tensor,
-        indices: torch.Tensor,
-        list_ids: torch.Tensor,
-        num_tensors: int,
+        cls, data: torch.Tensor, indices: torch.Tensor, list_ids: torch.Tensor, num_tensors: int
     ) -> "JaggedTensor":
         """
         Create a :class:`JaggedTensor` from data, per-element indices, and list IDs.

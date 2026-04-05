@@ -52,10 +52,7 @@ class TestBasicOps(unittest.TestCase):
         # o x x x x
         # x x x x x
 
-        ij = torch.tensor(
-            [[0, 0], [0, 1], [1, 0], [1, 1], [1, 2], [2, 0], [2, 2], [3, 0]],
-            device=device,
-        )
+        ij = torch.tensor([[0, 0], [0, 1], [1, 0], [1, 1], [1, 2], [2, 0], [2, 2], [3, 0]], device=device)
         ijk = torch.cat(
             [
                 torch.nn.functional.pad(ij, (0, 1), mode="constant", value=0),

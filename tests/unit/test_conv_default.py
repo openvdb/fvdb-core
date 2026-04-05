@@ -305,12 +305,7 @@ class TestConvDefault(DisableTF32Mixin, unittest.TestCase):
         # Verify sparse matches dense at output locations
         tols = get_tolerances(dtype)
         dense_at_dst = dense_output[0, 0, dst_ijks[:, 0], dst_ijks[:, 1], dst_ijks[:, 2]]
-        torch.testing.assert_close(
-            sparse_output_flat,
-            dense_at_dst,
-            rtol=tols["forward"][0],
-            atol=tols["forward"][1],
-        )
+        torch.testing.assert_close(sparse_output_flat, dense_at_dst, rtol=tols["forward"][0], atol=tols["forward"][1])
 
         # Verify sum matches kernel sum
         self.assertAlmostEqual(sparse_output_flat.sum().item(), kernel_sum, places=5)
@@ -388,10 +383,7 @@ class TestConvDefault(DisableTF32Mixin, unittest.TestCase):
 
         tols = get_tolerances(dtype)
         torch.testing.assert_close(
-            sparse_values_sorted,
-            dense_values_sorted,
-            rtol=tols["forward"][0],
-            atol=tols["forward"][1],
+            sparse_values_sorted, dense_values_sorted, rtol=tols["forward"][0], atol=tols["forward"][1]
         )
 
     # =========================================================================
@@ -449,10 +441,7 @@ class TestConvDefault(DisableTF32Mixin, unittest.TestCase):
         tols = get_tolerances(dtype)
         dense_at_dst = dense_output[0, 0, dst_ijks[:, 0], dst_ijks[:, 1], dst_ijks[:, 2]]
         torch.testing.assert_close(
-            sparse_output.jdata.flatten(),
-            dense_at_dst,
-            rtol=tols["forward"][0],
-            atol=tols["forward"][1],
+            sparse_output.jdata.flatten(), dense_at_dst, rtol=tols["forward"][0], atol=tols["forward"][1]
         )
 
         # === Backward ===
@@ -490,10 +479,7 @@ class TestConvDefault(DisableTF32Mixin, unittest.TestCase):
         assert dense_kernel_grad is not None and sparse_kernel_grad is not None
 
         torch.testing.assert_close(
-            sparse_kernel_grad,
-            dense_kernel_grad,
-            rtol=tols["kernel_grad"][0],
-            atol=tols["kernel_grad"][1],
+            sparse_kernel_grad, dense_kernel_grad, rtol=tols["kernel_grad"][0], atol=tols["kernel_grad"][1]
         )
 
     # =========================================================================
@@ -626,12 +612,7 @@ class TestConvDefault(DisableTF32Mixin, unittest.TestCase):
         dense_min = tuple((dense_min_raw[i] // stride[i]) * stride[i] for i in range(3))
         dense_shape = tuple(dense_max[i] - dense_min[i] + 1 for i in range(3))
 
-        dense_input = torch.zeros(
-            (1, in_channels) + dense_shape,
-            device=device,
-            dtype=dtype,
-            requires_grad=True,
-        )
+        dense_input = torch.zeros((1, in_channels) + dense_shape, device=device, dtype=dtype, requires_grad=True)
 
         # Scatter features into dense (need differentiable path)
         dense_input_data = dense_input.clone()
@@ -641,10 +622,7 @@ class TestConvDefault(DisableTF32Mixin, unittest.TestCase):
 
         with disable_tf32():
             dense_output2 = torch.nn.functional.conv3d(
-                input=dense_input_data,
-                weight=dense_kernel2,
-                padding=kernel_half,
-                stride=stride,
+                input=dense_input_data, weight=dense_kernel2, padding=kernel_half, stride=stride
             )
 
         # Compute output offset (dense_min is now aligned to stride)
@@ -667,12 +645,7 @@ class TestConvDefault(DisableTF32Mixin, unittest.TestCase):
         assert dense_input_grad is not None, "Dense input grad is None"
 
         try:
-            torch.testing.assert_close(
-                sparse_input_grad,
-                dense_input_grad,
-                rtol=input_grad_rtol,
-                atol=input_grad_atol,
-            )
+            torch.testing.assert_close(sparse_input_grad, dense_input_grad, rtol=input_grad_rtol, atol=input_grad_atol)
         except AssertionError:
             diag = diagnose_tensor_mismatch(
                 f"Input gradient (stride={stride}, dtype={dtype})",
@@ -689,10 +662,7 @@ class TestConvDefault(DisableTF32Mixin, unittest.TestCase):
 
         try:
             torch.testing.assert_close(
-                sparse_kernel_grad,
-                dense_kernel_grad,
-                rtol=kernel_grad_rtol,
-                atol=kernel_grad_atol,
+                sparse_kernel_grad, dense_kernel_grad, rtol=kernel_grad_rtol, atol=kernel_grad_atol
             )
         except AssertionError:
             diag = diagnose_tensor_mismatch(
@@ -771,13 +741,7 @@ class TestConvDefault(DisableTF32Mixin, unittest.TestCase):
         ["cuda"],
     ]
 
-    def _make_gradcheck_inputs(
-        self,
-        device: torch.device,
-        in_ch: int,
-        out_ch: int,
-        kernel_size: tuple[int, int, int],
-    ):
+    def _make_gradcheck_inputs(self, device: torch.device, in_ch: int, out_ch: int, kernel_size: tuple[int, int, int]):
         """Build a small sparse grid and random float64 features/weights for gradcheck."""
         cluster_coords = torch.tensor(
             [
@@ -797,14 +761,7 @@ class TestConvDefault(DisableTF32Mixin, unittest.TestCase):
         num_voxels = len(cluster_coords)
 
         features = torch.randn(num_voxels, in_ch, device=device, dtype=torch.float64, requires_grad=True)
-        weights = torch.randn(
-            out_ch,
-            in_ch,
-            *kernel_size,
-            device=device,
-            dtype=torch.float64,
-            requires_grad=True,
-        )
+        weights = torch.randn(out_ch, in_ch, *kernel_size, device=device, dtype=torch.float64, requires_grad=True)
         return grid, features, weights
 
     @parameterized.expand(GRADCHECK_DEVICE_COMBOS)
@@ -812,18 +769,12 @@ class TestConvDefault(DisableTF32Mixin, unittest.TestCase):
         """gradcheck: forward convolution, stride 1."""
         device = resolve_device(device)
         grid, features, weights = self._make_gradcheck_inputs(
-            device,
-            self.GRADCHECK_IN_CH,
-            self.GRADCHECK_OUT_CH,
-            self.GRADCHECK_KERNEL_SIZE,
+            device, self.GRADCHECK_IN_CH, self.GRADCHECK_OUT_CH, self.GRADCHECK_KERNEL_SIZE
         )
 
         dst_grid = grid.conv_grid(kernel_size=self.GRADCHECK_KERNEL_SIZE, stride=1)
         plan = ConvolutionPlan.from_grid_batch(
-            kernel_size=self.GRADCHECK_KERNEL_SIZE,
-            stride=1,
-            source_grid=grid,
-            target_grid=dst_grid,
+            kernel_size=self.GRADCHECK_KERNEL_SIZE, stride=1, source_grid=grid, target_grid=dst_grid
         )
         topo = plan._backend.topology
 
@@ -837,19 +788,13 @@ class TestConvDefault(DisableTF32Mixin, unittest.TestCase):
         """gradcheck: forward convolution, stride (2,2,2)."""
         device = resolve_device(device)
         grid, features, weights = self._make_gradcheck_inputs(
-            device,
-            self.GRADCHECK_IN_CH,
-            self.GRADCHECK_OUT_CH,
-            self.GRADCHECK_KERNEL_SIZE,
+            device, self.GRADCHECK_IN_CH, self.GRADCHECK_OUT_CH, self.GRADCHECK_KERNEL_SIZE
         )
 
         stride = (2, 2, 2)
         dst_grid = grid.conv_grid(kernel_size=self.GRADCHECK_KERNEL_SIZE, stride=stride)
         plan = ConvolutionPlan.from_grid_batch(
-            kernel_size=self.GRADCHECK_KERNEL_SIZE,
-            stride=stride,
-            source_grid=grid,
-            target_grid=dst_grid,
+            kernel_size=self.GRADCHECK_KERNEL_SIZE, stride=stride, source_grid=grid, target_grid=dst_grid
         )
         topo = plan._backend.topology
 
@@ -863,18 +808,12 @@ class TestConvDefault(DisableTF32Mixin, unittest.TestCase):
         """gradcheck: transposed convolution, stride 1."""
         device = resolve_device(device)
         grid, features, weights = self._make_gradcheck_inputs(
-            device,
-            self.GRADCHECK_IN_CH,
-            self.GRADCHECK_OUT_CH,
-            self.GRADCHECK_KERNEL_SIZE,
+            device, self.GRADCHECK_IN_CH, self.GRADCHECK_OUT_CH, self.GRADCHECK_KERNEL_SIZE
         )
 
         dst_grid = grid.conv_transpose_grid(kernel_size=self.GRADCHECK_KERNEL_SIZE, stride=1)
         plan = ConvolutionPlan.from_grid_batch_transposed(
-            kernel_size=self.GRADCHECK_KERNEL_SIZE,
-            stride=1,
-            source_grid=grid,
-            target_grid=dst_grid,
+            kernel_size=self.GRADCHECK_KERNEL_SIZE, stride=1, source_grid=grid, target_grid=dst_grid
         )
         topo = plan._backend.topology
 
@@ -888,19 +827,13 @@ class TestConvDefault(DisableTF32Mixin, unittest.TestCase):
         """gradcheck: transposed convolution, stride (2,2,2)."""
         device = resolve_device(device)
         grid, features, weights = self._make_gradcheck_inputs(
-            device,
-            self.GRADCHECK_IN_CH,
-            self.GRADCHECK_OUT_CH,
-            self.GRADCHECK_KERNEL_SIZE,
+            device, self.GRADCHECK_IN_CH, self.GRADCHECK_OUT_CH, self.GRADCHECK_KERNEL_SIZE
         )
 
         stride = (2, 2, 2)
         dst_grid = grid.conv_transpose_grid(kernel_size=self.GRADCHECK_KERNEL_SIZE, stride=stride)
         plan = ConvolutionPlan.from_grid_batch_transposed(
-            kernel_size=self.GRADCHECK_KERNEL_SIZE,
-            stride=stride,
-            source_grid=grid,
-            target_grid=dst_grid,
+            kernel_size=self.GRADCHECK_KERNEL_SIZE, stride=stride, source_grid=grid, target_grid=dst_grid
         )
         topo = plan._backend.topology
 

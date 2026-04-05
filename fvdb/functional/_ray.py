@@ -49,13 +49,7 @@ def voxels_along_rays_batch(
     """
     grid_data = grid.data
     result = _fvdb_cpp.voxels_along_rays(
-        grid_data,
-        ray_origins._impl,
-        ray_directions._impl,
-        max_voxels,
-        eps,
-        return_ijk,
-        cumulative,
+        grid_data, ray_origins._impl, ray_directions._impl, max_voxels, eps, return_ijk, cumulative
     )
     return JaggedTensor(impl=result[0]), JaggedTensor(impl=result[1])
 
@@ -228,13 +222,7 @@ def voxels_along_rays_single(
     origins_jt = JaggedTensor(ray_origins)
     directions_jt = JaggedTensor(ray_directions)
     result = _fvdb_cpp.voxels_along_rays(
-        grid_data,
-        origins_jt._impl,
-        directions_jt._impl,
-        max_voxels,
-        eps,
-        return_ijk,
-        False,
+        grid_data, origins_jt._impl, directions_jt._impl, max_voxels, eps, return_ijk, False
     )
     return JaggedTensor(impl=result[0]), JaggedTensor(impl=result[1])
 

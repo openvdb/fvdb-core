@@ -95,13 +95,7 @@ class XCubeConfig(BaseConfig):
     def _make_model(self, baseline: str) -> nn.Module:
         from fvdb_benchmark.model.xcube import XCubeVAE
 
-        return XCubeVAE(
-            in_channels=self.in_channels,
-            backend=baseline,
-            num_blocks=4,
-            f_maps=32,
-            order="cr",
-        )
+        return XCubeVAE(in_channels=self.in_channels, backend=baseline, num_blocks=4, f_maps=32, order="cr")
 
 
 class KITTISegmentationConfig(BaseConfig):
@@ -111,9 +105,7 @@ class KITTISegmentationConfig(BaseConfig):
     def _make_model(self, baseline: str) -> nn.Module:
         from fvdb_benchmark.model.minkunet import MinkUNet
 
-        return MinkUNet(
-            backend=baseline, in_channels=self.in_channels, cr=1.0, num_classes=19
-        )
+        return MinkUNet(backend=baseline, in_channels=self.in_channels, cr=1.0, num_classes=19)
 
 
 class UpDownConfig(BaseConfig):
