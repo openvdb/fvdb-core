@@ -7,6 +7,7 @@
 #include <fvdb/detail/ops/gsplat/GaussianUtils.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianWarpUtils.cuh>
 #include <fvdb/detail/utils/Nvtx.h>
+#include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/GridDim.h>
 #include <fvdb/detail/utils/cuda/Utils.cuh>
 
@@ -201,6 +202,30 @@ projectionBackwardKernel(const int32_t offset,
 }
 
 } // namespace
+
+template <torch::DeviceType>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+dispatchGaussianProjectionBackward(
+    const torch::Tensor &means,                       // [N, 3]
+    const torch::Tensor &quats,                       // [N, 4]
+    const torch::Tensor &scales,                      // [N, 3]
+    const torch::Tensor &worldToCamMatrices,          // [C, 4, 4]
+    const torch::Tensor &projectionMatrices,          // [C, 3, 3]
+    const at::optional<torch::Tensor> &compensations, // [N, 6] optional
+    const uint32_t imageWidth,
+    const uint32_t imageHeight,
+    const float eps2d,
+    const torch::Tensor &radii,                             // [C, N]
+    const torch::Tensor &conics,                            // [C, N, 3]
+    const torch::Tensor &dLossDMeans2d,                     // [C, N, 2]
+    const torch::Tensor &dLossDDepths,                      // [C, N]
+    const torch::Tensor &dLossDConics,                      // [C, N, 3]
+    const at::optional<torch::Tensor> &dLossDCompensations, // [C, N] optional
+    const bool worldToCamMatricesRequiresGrad,
+    const bool ortho,
+    at::optional<torch::Tensor> outNormalizeddLossdMeans2dNormAccum,
+    at::optional<torch::Tensor> outNormalizedMaxRadiiAccum,
+    at::optional<torch::Tensor> outGradientStepCounts);
 
 template <>
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
@@ -560,6 +585,52 @@ dispatchGaussianProjectionBackward<torch::kCPU>(
     at::optional<torch::Tensor> outNormalizedMaxRadiiAccum,
     at::optional<torch::Tensor> outGradientStepCounts) {
     TORCH_CHECK_NOT_IMPLEMENTED(false, "CPU implementation not available");
+}
+
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+gaussianProjectionBackward(
+    const torch::Tensor &means,                       // [N, 3]
+    const torch::Tensor &quats,                       // [N, 4]
+    const torch::Tensor &scales,                      // [N, 3]
+    const torch::Tensor &worldToCamMatrices,          // [C, 4, 4]
+    const torch::Tensor &projectionMatrices,          // [C, 3, 3]
+    const at::optional<torch::Tensor> &compensations, // [N, 6] optional
+    const uint32_t imageWidth,
+    const uint32_t imageHeight,
+    const float eps2d,
+    const torch::Tensor &radii,                             // [C, N]
+    const torch::Tensor &conics,                            // [C, N, 3]
+    const torch::Tensor &dLossDMeans2d,                     // [C, N, 2]
+    const torch::Tensor &dLossDDepths,                      // [C, N]
+    const torch::Tensor &dLossDConics,                      // [C, N, 3]
+    const at::optional<torch::Tensor> &dLossDCompensations, // [C, N] optional
+    const bool worldToCamMatricesRequiresGrad,
+    const bool ortho,
+    at::optional<torch::Tensor> outNormalizeddLossdMeans2dNormAccum,
+    at::optional<torch::Tensor> outNormalizedMaxRadiiAccum,
+    at::optional<torch::Tensor> outGradientStepCounts) {
+    return FVDB_DISPATCH_KERNEL(means.device(), [&]() {
+        return dispatchGaussianProjectionBackward<DeviceTag>(means,
+                                                             quats,
+                                                             scales,
+                                                             worldToCamMatrices,
+                                                             projectionMatrices,
+                                                             compensations,
+                                                             imageWidth,
+                                                             imageHeight,
+                                                             eps2d,
+                                                             radii,
+                                                             conics,
+                                                             dLossDMeans2d,
+                                                             dLossDDepths,
+                                                             dLossDConics,
+                                                             dLossDCompensations,
+                                                             worldToCamMatricesRequiresGrad,
+                                                             ortho,
+                                                             outNormalizeddLossdMeans2dNormAccum,
+                                                             outNormalizedMaxRadiiAccum,
+                                                             outGradientStepCounts);
+    });
 }
 
 } // namespace ops

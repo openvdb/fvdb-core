@@ -19,7 +19,8 @@ namespace ops {
 /// numerical stability in Gaussian Splatting algorithms, allowing invalid Gaussians to be
 /// filtered out before rendering.
 ///
-/// @tparam DeviceType Device type template parameter (torch::kCUDA or torch::kCPU)
+/// Dispatches to the appropriate device implementation (CPU, CUDA, or PrivateUse1)
+/// based on the device of the input tensors.
 ///
 /// @param[in] means 3D positions of Gaussians as a jagged tensor [C, N, 3]
 /// @param[in] quats Quaternion rotations of Gaussians as a jagged tensor [C, N, 4]
@@ -30,13 +31,12 @@ namespace ops {
 ///
 /// @return A jagged tensor mask where True indicates valid values (no NaN/Inf) and False indicates
 /// invalid values
-template <torch::DeviceType>
-fvdb::JaggedTensor dispatchGaussianNanInfMask(const fvdb::JaggedTensor &means,
-                                              const fvdb::JaggedTensor &quats,
-                                              const fvdb::JaggedTensor &logScales,
-                                              const fvdb::JaggedTensor &logitOpacities,
-                                              const fvdb::JaggedTensor &sh0,
-                                              const fvdb::JaggedTensor &shN);
+fvdb::JaggedTensor gaussianNanInfMask(const fvdb::JaggedTensor &means,
+                                      const fvdb::JaggedTensor &quats,
+                                      const fvdb::JaggedTensor &logScales,
+                                      const fvdb::JaggedTensor &logitOpacities,
+                                      const fvdb::JaggedTensor &sh0,
+                                      const fvdb::JaggedTensor &shN);
 
 } // namespace ops
 } // namespace detail

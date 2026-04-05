@@ -10,6 +10,7 @@
 #include <fvdb/detail/ops/gsplat/GaussianVectorTypes.cuh>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Nvtx.h>
+#include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/Utils.cuh>
 
 #include <nanovdb/math/Math.h>
@@ -589,6 +590,37 @@ launchRasterizeForwardKernels(
 
 } // namespace
 
+template <torch::DeviceType>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
+dispatchGaussianRasterizeForward(const torch::Tensor &means2d,
+                                 const torch::Tensor &conics,
+                                 const torch::Tensor &features,
+                                 const torch::Tensor &opacities,
+                                 const RenderWindow2D &renderWindow,
+                                 const uint32_t tileSize,
+                                 const torch::Tensor &tileOffsets,
+                                 const torch::Tensor &tileGaussianIds,
+                                 const at::optional<torch::Tensor> &backgrounds,
+                                 const at::optional<torch::Tensor> &masks);
+
+template <torch::DeviceType Device>
+std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor, fvdb::JaggedTensor>
+dispatchGaussianSparseRasterizeForward(const fvdb::JaggedTensor &pixelsToRender,
+                                       const torch::Tensor &means2d,
+                                       const torch::Tensor &conics,
+                                       const torch::Tensor &features,
+                                       const torch::Tensor &opacities,
+                                       const RenderWindow2D &renderWindow,
+                                       const uint32_t tileSize,
+                                       const torch::Tensor &tileOffsets,
+                                       const torch::Tensor &tileGaussianIds,
+                                       const torch::Tensor &activeTiles,
+                                       const torch::Tensor &tilePixelMask,
+                                       const torch::Tensor &tilePixelCumsum,
+                                       const torch::Tensor &pixelMap,
+                                       const at::optional<torch::Tensor> &backgrounds,
+                                       const at::optional<torch::Tensor> &masks);
+
 template <>
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
 dispatchGaussianRasterizeForward<torch::kCUDA>(
@@ -906,6 +938,121 @@ dispatchGaussianSparseRasterizeForward<torch::kCPU>(
     const at::optional<torch::Tensor> &backgrounds,
     const at::optional<torch::Tensor> &masks) {
     TORCH_CHECK_NOT_IMPLEMENTED(false, "CPU implementation not available");
+}
+
+std::tuple<torch::Tensor, torch::Tensor>
+renderCropFromProjected(const fvdb::ProjectedGaussianSplats &projectedGaussians,
+                        const size_t tileSize,
+                        const ssize_t cropWidth,
+                        const ssize_t cropHeight,
+                        const ssize_t cropOriginW,
+                        const ssize_t cropOriginH,
+                        const std::optional<torch::Tensor> &backgrounds,
+                        const std::optional<torch::Tensor> &masks) {
+    FVDB_FUNC_RANGE();
+    // Negative values mean use the whole image, but all values must be negative
+    if (cropWidth <= 0 || cropHeight <= 0 || cropOriginW < 0 || cropOriginH < 0) {
+        TORCH_CHECK_VALUE(cropWidth <= 0 && cropHeight <= 0 && cropOriginW <= 0 && cropOriginH <= 0,
+                          "Invalid crop dimensions");
+    } else {
+        TORCH_CHECK_VALUE(cropWidth > 0 && cropHeight > 0 && cropOriginW >= 0 && cropOriginH >= 0,
+                          "Invalid crop dimensions");
+    }
+
+    const size_t cropWidth_   = cropWidth <= 0 ? projectedGaussians.imageWidth() : cropWidth;
+    const size_t cropHeight_  = cropHeight <= 0 ? projectedGaussians.imageHeight() : cropHeight;
+    const size_t cropOriginW_ = cropOriginW < 0 ? 0 : cropOriginW;
+    const size_t cropOriginH_ = cropOriginH < 0 ? 0 : cropOriginH;
+
+    const RenderWindow2D renderWindow{static_cast<uint32_t>(cropWidth_),
+                                      static_cast<uint32_t>(cropHeight_),
+                                      static_cast<uint32_t>(cropOriginW_),
+                                      static_cast<uint32_t>(cropOriginH_)};
+    auto outputs = FVDB_DISPATCH_KERNEL(projectedGaussians.perGaussian2dMean.device(), [&]() {
+        return dispatchGaussianRasterizeForward<DeviceTag>(
+            projectedGaussians.perGaussian2dMean,
+            projectedGaussians.perGaussianConic,
+            projectedGaussians.perGaussianRenderQuantity,
+            projectedGaussians.perGaussianOpacity,
+            renderWindow,
+            tileSize,
+            projectedGaussians.tileOffsets,
+            projectedGaussians.tileGaussianIds,
+            backgrounds,
+            masks);
+    });
+    torch::Tensor renderedImage  = std::get<0>(outputs);
+    torch::Tensor renderedAlphas = std::get<1>(outputs);
+
+    return {renderedImage, renderedAlphas};
+}
+
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
+gaussianRasterizeForward(const torch::Tensor &means2d,
+                         const torch::Tensor &conics,
+                         const torch::Tensor &features,
+                         const torch::Tensor &opacities,
+                         const uint32_t imageWidth,
+                         const uint32_t imageHeight,
+                         const uint32_t imageOriginW,
+                         const uint32_t imageOriginH,
+                         const uint32_t tileSize,
+                         const torch::Tensor &tileOffsets,
+                         const torch::Tensor &tileGaussianIds,
+                         const at::optional<torch::Tensor> &backgrounds,
+                         const at::optional<torch::Tensor> &masks) {
+    const RenderWindow2D renderWindow{imageWidth, imageHeight, imageOriginW, imageOriginH};
+    return FVDB_DISPATCH_KERNEL(means2d.device(), [&]() {
+        return dispatchGaussianRasterizeForward<DeviceTag>(means2d,
+                                                           conics,
+                                                           features,
+                                                           opacities,
+                                                           renderWindow,
+                                                           tileSize,
+                                                           tileOffsets,
+                                                           tileGaussianIds,
+                                                           backgrounds,
+                                                           masks);
+    });
+}
+
+std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor, fvdb::JaggedTensor>
+gaussianSparseRasterizeForward(const fvdb::JaggedTensor &pixelsToRender,
+                               const torch::Tensor &means2d,
+                               const torch::Tensor &conics,
+                               const torch::Tensor &features,
+                               const torch::Tensor &opacities,
+                               const uint32_t imageWidth,
+                               const uint32_t imageHeight,
+                               const uint32_t imageOriginW,
+                               const uint32_t imageOriginH,
+                               const uint32_t tileSize,
+                               const torch::Tensor &tileOffsets,
+                               const torch::Tensor &tileGaussianIds,
+                               const torch::Tensor &activeTiles,
+                               const torch::Tensor &tilePixelMask,
+                               const torch::Tensor &tilePixelCumsum,
+                               const torch::Tensor &pixelMap,
+                               const at::optional<torch::Tensor> &backgrounds,
+                               const at::optional<torch::Tensor> &masks) {
+    const RenderWindow2D renderWindow{imageWidth, imageHeight, imageOriginW, imageOriginH};
+    return FVDB_DISPATCH_KERNEL(means2d.device(), [&]() {
+        return dispatchGaussianSparseRasterizeForward<DeviceTag>(pixelsToRender,
+                                                                 means2d,
+                                                                 conics,
+                                                                 features,
+                                                                 opacities,
+                                                                 renderWindow,
+                                                                 tileSize,
+                                                                 tileOffsets,
+                                                                 tileGaussianIds,
+                                                                 activeTiles,
+                                                                 tilePixelMask,
+                                                                 tilePixelCumsum,
+                                                                 pixelMap,
+                                                                 backgrounds,
+                                                                 masks);
+    });
 }
 
 } // namespace fvdb::detail::ops

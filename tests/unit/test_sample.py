@@ -829,7 +829,13 @@ class TestSample(unittest.TestCase):
 
         grid, grid_d, p = make_grid_batch_and_jagged_point_data(device, dtype, include_boundary_points=True, expand=1)
 
-        points_data = torch.randn(p.jdata.shape[0], num_channels, device=device, dtype=dtype, requires_grad=True)
+        points_data = torch.randn(
+            p.jdata.shape[0],
+            num_channels,
+            device=device,
+            dtype=dtype,
+            requires_grad=True,
+        )
 
         fv = grid.splat_trilinear(p, JaggedTensor(points_data)).jdata
         grad_out = torch.rand_like(fv)

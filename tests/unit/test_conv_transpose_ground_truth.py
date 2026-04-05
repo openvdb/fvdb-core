@@ -123,7 +123,10 @@ def _validate_impulse_conv_transpose(
             test_case.assertEqual(actual_end, end_coords)
 
     output_region = output[
-        0, start_coords[0] : end_coords[0], start_coords[1] : end_coords[1], start_coords[2] : end_coords[2]
+        0,
+        start_coords[0] : end_coords[0],
+        start_coords[1] : end_coords[1],
+        start_coords[2] : end_coords[2],
     ]
     test_case.assertEqual(output_region.shape, kernel.shape)
 
@@ -191,7 +194,9 @@ class TestConvTransposeGroundTruth(unittest.TestCase):
         # Do a transposed convolution with same padding
         with disable_tf32():
             output = torch.nn.functional.conv_transpose3d(
-                input=impulse_field, weight=kernel_with_channels, padding=tuple(k // 2 for k in self.KERNEL_SIZE)
+                input=impulse_field,
+                weight=kernel_with_channels,
+                padding=tuple(k // 2 for k in self.KERNEL_SIZE),
             )
         self.assertEqual(impulse_field.shape, output.shape)
 
@@ -405,7 +410,10 @@ class TestConvTransposeGroundTruth(unittest.TestCase):
         end_coords = tuple(int(coord[i].item()) + kernel_half[i] + 1 for i in range(3))
 
         input_grad_region = input_grad[
-            0, start_coords[0] : end_coords[0], start_coords[1] : end_coords[1], start_coords[2] : end_coords[2]
+            0,
+            start_coords[0] : end_coords[0],
+            start_coords[1] : end_coords[1],
+            start_coords[2] : end_coords[2],
         ]
 
         self.assertEqual(input_grad_region.shape, kernel.shape)
@@ -415,7 +423,10 @@ class TestConvTransposeGroundTruth(unittest.TestCase):
         flipped_kernel = torch.flip(kernel, dims=[0, 1, 2])
         tols = get_tolerances(dtype)
         torch.testing.assert_close(
-            input_grad_region, flipped_kernel, rtol=tols["input_grad"][0], atol=tols["input_grad"][1]
+            input_grad_region,
+            flipped_kernel,
+            rtol=tols["input_grad"][0],
+            atol=tols["input_grad"][1],
         )
 
     @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
@@ -463,7 +474,12 @@ class TestConvTransposeGroundTruth(unittest.TestCase):
         expected_grad[0, 0, kernel_center[0], kernel_center[1], kernel_center[2]] = 1
 
         tols = get_tolerances(dtype)
-        torch.testing.assert_close(weight_grad, expected_grad, rtol=tols["kernel_grad"][0], atol=tols["kernel_grad"][1])
+        torch.testing.assert_close(
+            weight_grad,
+            expected_grad,
+            rtol=tols["kernel_grad"][0],
+            atol=tols["kernel_grad"][1],
+        )
 
     @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
     def test_single_impulse_backward_weight_grad_offset(self, device: DeviceIdentifier, dtype: torch.dtype):
@@ -530,13 +546,24 @@ class TestConvTransposeGroundTruth(unittest.TestCase):
                 # Should have exactly one non-zero gradient
                 nonzero_mask = weight_grad[0, 0] != 0
                 nonzero_coords = torch.nonzero(nonzero_mask)
-                self.assertEqual(nonzero_coords.shape[0], 1, f"Expected 1 non-zero grad for offset {offset}")
+                self.assertEqual(
+                    nonzero_coords.shape[0],
+                    1,
+                    f"Expected 1 non-zero grad for offset {offset}",
+                )
 
                 actual_pos = tuple(nonzero_coords[0].tolist())
-                self.assertEqual(actual_pos, expected_kernel_pos, f"Wrong grad position for offset {offset}")
+                self.assertEqual(
+                    actual_pos,
+                    expected_kernel_pos,
+                    f"Wrong grad position for offset {offset}",
+                )
             else:
                 # Should have no gradient (offset out of kernel range)
-                self.assertTrue(torch.all(weight_grad == 0), f"Expected zero grad for out-of-bounds offset {offset}")
+                self.assertTrue(
+                    torch.all(weight_grad == 0),
+                    f"Expected zero grad for out-of-bounds offset {offset}",
+                )
 
     @parameterized.expand(REDUCED_DEVICE_DTYPE_COMBOS)
     def test_multiple_impulses_backward(self, device: DeviceIdentifier, dtype: torch.dtype):
@@ -565,7 +592,9 @@ class TestConvTransposeGroundTruth(unittest.TestCase):
         with disable_tf32():
             # Forward pass
             output = torch.nn.functional.conv_transpose3d(
-                input=impulse_field_with_channel, weight=kernel_with_channels, padding=padding
+                input=impulse_field_with_channel,
+                weight=kernel_with_channels,
+                padding=padding,
             )
 
             # Create output gradient with impulses at the same coords as input
@@ -593,7 +622,10 @@ class TestConvTransposeGroundTruth(unittest.TestCase):
             )
 
             grad_region = input_grad[
-                0, start_coords[0] : end_coords[0], start_coords[1] : end_coords[1], start_coords[2] : end_coords[2]
+                0,
+                start_coords[0] : end_coords[0],
+                start_coords[1] : end_coords[1],
+                start_coords[2] : end_coords[2],
             ]
 
             # Only check if the region is fully within bounds
@@ -601,7 +633,10 @@ class TestConvTransposeGroundTruth(unittest.TestCase):
             if expected_shape == self.KERNEL_SIZE:
                 tols = get_tolerances(dtype)
                 torch.testing.assert_close(
-                    grad_region, flipped_kernel, rtol=tols["input_grad"][0], atol=tols["input_grad"][1]
+                    grad_region,
+                    flipped_kernel,
+                    rtol=tols["input_grad"][0],
+                    atol=tols["input_grad"][1],
                 )
 
     # =========================================================================
@@ -657,7 +692,10 @@ class TestConvTransposeGroundTruth(unittest.TestCase):
 
             with disable_tf32():
                 output = torch.nn.functional.conv_transpose3d(
-                    input=impulse_field, weight=kernel, stride=stride, padding=kernel_half
+                    input=impulse_field,
+                    weight=kernel,
+                    stride=stride,
+                    padding=kernel_half,
                 )
 
             # Find non-zero output coordinates
@@ -725,7 +763,10 @@ class TestConvTransposeGroundTruth(unittest.TestCase):
 
                     with disable_tf32():
                         output = torch.nn.functional.conv_transpose3d(
-                            input=impulse_field, weight=kernel, stride=stride, padding=kernel_half
+                            input=impulse_field,
+                            weight=kernel,
+                            stride=stride,
+                            padding=kernel_half,
                         )
 
                     nonzero_coords = torch.nonzero(output[0, 0])
@@ -778,7 +819,10 @@ class TestConvTransposeGroundTruth(unittest.TestCase):
 
         with disable_tf32():
             output = torch.nn.functional.conv_transpose3d(
-                input=impulse_field, weight=kernel_5d, stride=stride, padding=kernel_half
+                input=impulse_field,
+                weight=kernel_5d,
+                stride=stride,
+                padding=kernel_half,
             )
 
             # Output gradient impulse at the center of the output region
@@ -813,7 +857,10 @@ class TestConvTransposeGroundTruth(unittest.TestCase):
 
         tols = get_tolerances(dtype)
         torch.testing.assert_close(
-            actual_grad_value, expected_grad_value, rtol=tols["input_grad"][0], atol=tols["input_grad"][1]
+            actual_grad_value,
+            expected_grad_value,
+            rtol=tols["input_grad"][0],
+            atol=tols["input_grad"][1],
         )
 
     @parameterized.expand(REDUCED_DEVICE_DTYPE_COMBOS)
@@ -846,7 +893,10 @@ class TestConvTransposeGroundTruth(unittest.TestCase):
 
         with disable_tf32():
             output = torch.nn.functional.conv_transpose3d(
-                input=impulse_field, weight=kernel_5d, stride=stride, padding=kernel_half
+                input=impulse_field,
+                weight=kernel_5d,
+                stride=stride,
+                padding=kernel_half,
             )
 
             # Output gradient impulse at the center of output region
@@ -868,7 +918,11 @@ class TestConvTransposeGroundTruth(unittest.TestCase):
         self.assertEqual(len(nonzero_coords), 1, "Expected exactly one non-zero weight gradient")
 
         actual_k = tuple(nonzero_coords[0].tolist())
-        self.assertEqual(actual_k, expected_k, f"Expected weight grad at {expected_k}, got {actual_k}")
+        self.assertEqual(
+            actual_k,
+            expected_k,
+            f"Expected weight grad at {expected_k}, got {actual_k}",
+        )
 
     @parameterized.expand(REDUCED_DEVICE_DTYPE_COMBOS)
     def test_strided_conv_transpose_output_size(self, device: DeviceIdentifier, dtype: torch.dtype):
@@ -887,7 +941,13 @@ class TestConvTransposeGroundTruth(unittest.TestCase):
         test_cases = [
             # (input_size, kernel_size, stride, padding, expected_output_size)
             ((10, 10, 10), (3, 3, 3), (2, 2, 2), (1, 1, 1), (19, 19, 19)),
-            ((10, 10, 10), (3, 3, 3), (1, 1, 1), (1, 1, 1), (10, 10, 10)),  # stride=1 with same padding
+            (
+                (10, 10, 10),
+                (3, 3, 3),
+                (1, 1, 1),
+                (1, 1, 1),
+                (10, 10, 10),
+            ),  # stride=1 with same padding
             ((5, 7, 9), (3, 5, 7), (2, 2, 2), (1, 2, 3), (9, 13, 17)),
             ((8, 8, 8), (5, 5, 5), (3, 3, 3), (2, 2, 2), (22, 22, 22)),
         ]
@@ -958,11 +1018,19 @@ class TestConvTransposeGroundTruth(unittest.TestCase):
             )
 
             conv_t_y = torch.nn.functional.conv_transpose3d(
-                input=y, weight=kernel_5d, stride=stride, padding=padding, output_padding=output_padding
+                input=y,
+                weight=kernel_5d,
+                stride=stride,
+                padding=padding,
+                output_padding=output_padding,
             )
 
             # Verify sizes match
-            self.assertEqual(conv_t_y.shape, x.shape, "conv_transpose output size should match x size")
+            self.assertEqual(
+                conv_t_y.shape,
+                x.shape,
+                "conv_transpose output size should match x size",
+            )
 
             # Compute <x, conv_transpose(y)>
             inner_conv_t = (x * conv_t_y).sum()

@@ -4,7 +4,7 @@
 #include "utils/Tensor.h"
 
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/ops/gsplat/GaussianSplatOps.h>
+#include <fvdb/detail/ops/gsplat/GaussianDeduplicatePixels.h>
 
 #include <gtest/gtest.h>
 

@@ -100,9 +100,8 @@ class GaussianRelocationTest : public ::testing::Test {
         auto const binomialCoeffsCPU = buildBinomialCoeffsCPU(nMax);
         auto const binomialCoeffs    = binomialCoeffsCPU.to(logScales.device());
 
-        const auto [gpuLogitOpacitiesNew, gpuLogScalesNew] =
-            fvdb::detail::ops::dispatchGaussianRelocation<torch::kCUDA>(
-                logScales, logitOpacities, ratios, binomialCoeffs, nMax, mMinOpacity);
+        const auto [gpuLogitOpacitiesNew, gpuLogScalesNew] = fvdb::detail::ops::gaussianRelocation(
+            logScales, logitOpacities, ratios, binomialCoeffs, nMax, mMinOpacity);
 
         const auto [refLogitNew, refLogScalesNew] = referenceRelocation(
             logScales.cpu(), logitOpacities.cpu(), ratios.cpu(), binomialCoeffsCPU, mMinOpacity);
@@ -160,31 +159,31 @@ TEST_F(GaussianRelocationTest, ValidatesInputs) {
     auto binomialCoeffs = binomialCoeffsCPU.to(torch::kCUDA);
 
     // binomialCoeffs on CPU
-    EXPECT_THROW(fvdb::detail::ops::dispatchGaussianRelocation<torch::kCUDA>(
+    EXPECT_THROW(fvdb::detail::ops::gaussianRelocation(
                      logScales, logitOpacities, ratios, binomialCoeffsCPU, nMax, mMinOpacity),
                  c10::Error);
 
     // binomialCoeffs wrong shape
     auto badBinomShape = binomialCoeffs.slice(/*dim=*/0, 0, nMax - 1);
-    EXPECT_THROW(fvdb::detail::ops::dispatchGaussianRelocation<torch::kCUDA>(
+    EXPECT_THROW(fvdb::detail::ops::gaussianRelocation(
                      logScales, logitOpacities, ratios, badBinomShape, nMax, mMinOpacity),
                  c10::Error);
 
     // ratios wrong dtype
     auto ratiosLong = ratios.to(torch::kInt64);
-    EXPECT_THROW(fvdb::detail::ops::dispatchGaussianRelocation<torch::kCUDA>(
+    EXPECT_THROW(fvdb::detail::ops::gaussianRelocation(
                      logScales, logitOpacities, ratiosLong, binomialCoeffs, nMax, mMinOpacity),
                  c10::Error);
 
     // opacities on CPU
     EXPECT_THROW(
-        fvdb::detail::ops::dispatchGaussianRelocation<torch::kCUDA>(
+        fvdb::detail::ops::gaussianRelocation(
             logScales.cpu(), logitOpacities.cpu(), ratios, binomialCoeffs, nMax, mMinOpacity),
         c10::Error);
 
     // scales wrong shape
     auto logScalesBad = logScales.view({2, 3, 1});
-    EXPECT_THROW(fvdb::detail::ops::dispatchGaussianRelocation<torch::kCUDA>(
+    EXPECT_THROW(fvdb::detail::ops::gaussianRelocation(
                      logScalesBad, logitOpacities, ratios, binomialCoeffs, nMax, mMinOpacity),
                  c10::Error);
 }
@@ -201,7 +200,7 @@ TEST_F(GaussianRelocationTest, CpuNotImplemented) {
     auto ratios =
         torch::tensor({1, 2}, torch::TensorOptions().device(torch::kCPU).dtype(torch::kInt32));
 
-    EXPECT_THROW(fvdb::detail::ops::dispatchGaussianRelocation<torch::kCPU>(
+    EXPECT_THROW(fvdb::detail::ops::gaussianRelocation(
                      logScales, logitOpacities, ratios, binomialCoeffsCPU, nMax, mMinOpacity),
                  c10::Error);
 }

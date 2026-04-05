@@ -1,9 +1,8 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-// Standalone structs for Gaussian projection results, extracted from GaussianSplat3d.h
-// so that GaussianSplatOps and pybind bindings can use them without depending on
-// the full GaussianSplat3d class.
+// Standalone structs for Gaussian projection results, used by the projection
+// pipeline, rasterization ops, and pybind bindings.
 //
 #ifndef FVDB_DETAIL_OPS_GSPLAT_GAUSSIANPROJECTIONTYPES_H
 #define FVDB_DETAIL_OPS_GSPLAT_GAUSSIANPROJECTIONTYPES_H

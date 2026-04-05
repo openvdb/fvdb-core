@@ -21,8 +21,6 @@ namespace ops {
 /// through the projection step in the Gaussian Splatting pipeline for scenes with variable
 /// numbers of objects and cameras per batch.
 ///
-/// @tparam DeviceType Device type template parameter (torch::kCUDA or torch::kCPU)
-///
 /// @param[in] gSizes Batch sizes for Gaussians [B]
 /// @param[in] means 3D positions of Gaussians [M, 3]
 /// @param[in] quats Quaternion rotations of Gaussians [M, 4] in format (x, y, z, w)
@@ -43,31 +41,30 @@ namespace ops {
 ///
 /// @return std::tuple containing gradients of the loss function with respect to the input
 /// parameters:
-///         - 3D means [M, 3] - ∂L/∂means
-///         - Quaternions [M, 4] - ∂L/∂quats
-///         - Scales [M, 3] - ∂L/∂scales
-///         - View matrices [BC, 4, 4] - ∂L/∂viewmats (if viewmats_requires_grad is true, otherwise
+///         - 3D means [M, 3] - dL/dmeans
+///         - Quaternions [M, 4] - dL/dquats
+///         - Scales [M, 3] - dL/dscales
+///         - View matrices [BC, 4, 4] - dL/dviewmats (if viewmats_requires_grad is true, otherwise
 /// empty tensor)
-///         - Camera intrinsics [BC, 3, 3] - ∂L/∂Ks
-template <torch::DeviceType>
+///         - Camera intrinsics [BC, 3, 3] - dL/dKs
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
-dispatchGaussianProjectionJaggedBackward(const torch::Tensor &gSizes, // [B] gaussian sizes
-                                         const torch::Tensor &means,  // [N, 3]
-                                         const torch::Tensor &quats,  // [N, 4] optional
-                                         const torch::Tensor &scales, // [N, 3] optional
-                                         const torch::Tensor &cSizes, // [B] camera sizes
-                                         const torch::Tensor &worldToCamMatrices, // [C, 4, 4]
-                                         const torch::Tensor &projectionMatrices, // [C, 3, 3]
-                                         const uint32_t imageWidth,
-                                         const uint32_t imageHeight,
-                                         const float eps2d,
-                                         const torch::Tensor &radii,         // [N]
-                                         const torch::Tensor &conics,        // [N, 3]
-                                         const torch::Tensor &dLossDMeans2d, // [N, 2]
-                                         const torch::Tensor &dLossDDepths,  // [N]
-                                         const torch::Tensor &dLossDConics,  // [N, 3]
-                                         const bool worldToCamMatricesRequiresGrad,
-                                         const bool ortho);
+gaussianProjectionJaggedBackward(const torch::Tensor &gSizes,             // [B] gaussian sizes
+                                 const torch::Tensor &means,              // [N, 3]
+                                 const torch::Tensor &quats,              // [N, 4] optional
+                                 const torch::Tensor &scales,             // [N, 3] optional
+                                 const torch::Tensor &cSizes,             // [B] camera sizes
+                                 const torch::Tensor &worldToCamMatrices, // [C, 4, 4]
+                                 const torch::Tensor &projectionMatrices, // [C, 3, 3]
+                                 const uint32_t imageWidth,
+                                 const uint32_t imageHeight,
+                                 const float eps2d,
+                                 const torch::Tensor &radii,         // [N]
+                                 const torch::Tensor &conics,        // [N, 3]
+                                 const torch::Tensor &dLossDMeans2d, // [N, 2]
+                                 const torch::Tensor &dLossDDepths,  // [N]
+                                 const torch::Tensor &dLossDConics,  // [N, 3]
+                                 const bool worldToCamMatricesRequiresGrad,
+                                 const bool ortho);
 
 } // namespace ops
 } // namespace detail

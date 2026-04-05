@@ -42,7 +42,11 @@ def marching_cubes_batch(
     """
     grid_data = grid.data
     result = _fvdb_cpp.marching_cubes(grid_data, field._impl, level)
-    return JaggedTensor(impl=result[0]), JaggedTensor(impl=result[1]), JaggedTensor(impl=result[2])
+    return (
+        JaggedTensor(impl=result[0]),
+        JaggedTensor(impl=result[1]),
+        JaggedTensor(impl=result[2]),
+    )
 
 
 def marching_cubes_single(
@@ -211,7 +215,12 @@ def integrate_tsdf_with_features_batch(
         feature_images,
         weight_images,
     )
-    return GB(data=rg), JaggedTensor(impl=rt), JaggedTensor(impl=rw), JaggedTensor(impl=rf)
+    return (
+        GB(data=rg),
+        JaggedTensor(impl=rt),
+        JaggedTensor(impl=rw),
+        JaggedTensor(impl=rf),
+    )
 
 
 def integrate_tsdf_with_features_single(

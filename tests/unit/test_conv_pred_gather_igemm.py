@@ -197,7 +197,13 @@ class TestConvPredGatherIGemm(unittest.TestCase):
         sparse_output = plan.execute(features, kernel_5d)
 
         dst_sorted_coords, dst_perm = sort_coords_by_ijk(dst_ijks)
-        dense_values = dense_output[0, :, dst_sorted_coords[:, 0], dst_sorted_coords[:, 1], dst_sorted_coords[:, 2]].T
+        dense_values = dense_output[
+            0,
+            :,
+            dst_sorted_coords[:, 0],
+            dst_sorted_coords[:, 1],
+            dst_sorted_coords[:, 2],
+        ].T
         sparse_values = sparse_output.jdata[dst_perm]
 
         torch.testing.assert_close(sparse_values, dense_values, rtol=TF32_RTOL, atol=TF32_ATOL)
@@ -254,7 +260,10 @@ class TestConvPredGatherIGemm(unittest.TestCase):
         _, perm = sort_coords_by_ijk(dst_coords)
         try:
             torch.testing.assert_close(
-                sparse_output.jdata[perm], dense_output_at_dst[perm], rtol=TF32_RTOL, atol=TF32_ATOL
+                sparse_output.jdata[perm],
+                dense_output_at_dst[perm],
+                rtol=TF32_RTOL,
+                atol=TF32_ATOL,
             )
         except AssertionError:
             diag = diagnose_tensor_mismatch(

@@ -27,8 +27,6 @@ namespace ops {
 /// too small) are set to zero, but the other output values of discarded Gaussians are uninitialized
 /// (undefined).
 ///
-/// @tparam DeviceType Device type template parameter (torch::kCUDA or torch::kCPU)
-///
 /// @param[in] means 3D positions of Gaussians [N, 3] where N is number of Gaussians
 /// @param[in] quats Quaternion rotations of Gaussians [N, 4] in format (x, y, z, w)
 /// @param[in] scales Scale factors of Gaussians [N, 3] representing extent in each dimension
@@ -49,21 +47,20 @@ namespace ops {
 ///         - Covariance matrices in conic form [C, N, 3] representing (a, b, c) in ax² + 2bxy + cy²
 ///         - Radii of 2D Gaussians [C, N]
 ///         - Compensation factors [C, N] (if calc_compensations is true, otherwise empty tensor)
-template <torch::DeviceType>
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
-dispatchGaussianProjectionForward(const torch::Tensor &means,              // [N, 3]
-                                  const torch::Tensor &quats,              // [N, 4]
-                                  const torch::Tensor &scales,             // [N, 3]
-                                  const torch::Tensor &worldToCamMatrices, // [C, 4, 4]
-                                  const torch::Tensor &projectionMatrices, // [C, 3, 3]
-                                  const int64_t imageWidth,
-                                  const int64_t imageHeight,
-                                  const float eps2d,
-                                  const float nearPlane,
-                                  const float farPlane,
-                                  const float minRadius2d,
-                                  const bool calcCompensations,
-                                  const bool ortho);
+gaussianProjectionForward(const torch::Tensor &means,              // [N, 3]
+                          const torch::Tensor &quats,              // [N, 4]
+                          const torch::Tensor &scales,             // [N, 3]
+                          const torch::Tensor &worldToCamMatrices, // [C, 4, 4]
+                          const torch::Tensor &projectionMatrices, // [C, 3, 3]
+                          const int64_t imageWidth,
+                          const int64_t imageHeight,
+                          const float eps2d,
+                          const float nearPlane,
+                          const float farPlane,
+                          const float minRadius2d,
+                          const bool calcCompensations,
+                          const bool ortho);
 
 } // namespace ops
 } // namespace detail

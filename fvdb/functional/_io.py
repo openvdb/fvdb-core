@@ -109,7 +109,12 @@ def load_nanovdb(
 
     device = resolve_device(device)
 
-    selectors = [indices is not None, index is not None, names is not None, name is not None]
+    selectors = [
+        indices is not None,
+        index is not None,
+        names is not None,
+        name is not None,
+    ]
     if sum(selectors) > 1:
         raise ValueError("Only one of indices, index, names, or name can be specified")
 

@@ -40,7 +40,11 @@ class TestBatchedRayMarchingWithMisses(unittest.TestCase):
         self.device = self.device
         self.dtype = self.dtype
         self.grid = GridBatch.from_dense(
-            num_grids=2, dense_dims=[32, 32, 32], device=self.device, voxel_sizes=[0.1, 0.1, 0.1], origins=[0, 0, 0]
+            num_grids=2,
+            dense_dims=[32, 32, 32],
+            device=self.device,
+            voxel_sizes=[0.1, 0.1, 0.1],
+            origins=[0, 0, 0],
         )
 
         ray_o = torch.tensor([[100, 0, 0]]).to(self.device).to(self.dtype)
@@ -193,7 +197,11 @@ class TestSingleGridRayMarchingWithMisses(unittest.TestCase):
         self.device = self.device
         self.dtype = self.dtype
         self.grid = GridBatch.from_dense(
-            num_grids=1, dense_dims=[32, 32, 32], device=self.device, voxel_sizes=[0.1, 0.1, 0.1], origins=[0, 0, 0]
+            num_grids=1,
+            dense_dims=[32, 32, 32],
+            device=self.device,
+            voxel_sizes=[0.1, 0.1, 0.1],
+            origins=[0, 0, 0],
         )
 
         ray_o = torch.tensor([[100, 0, 0]]).to(self.device).to(self.dtype)
@@ -344,7 +352,11 @@ class TestVolumeRender(unittest.TestCase):
         tmin = torch.zeros(ray_o.shape[0]).to(ray_o)
         tmax = torch.ones(ray_o.shape[0]).to(ray_o) * 1e10
         ray_intervals = self.grid.uniform_ray_samples(
-            JaggedTensor(ray_o), JaggedTensor(ray_d), JaggedTensor(tmin), JaggedTensor(tmax), self.step_size
+            JaggedTensor(ray_o),
+            JaggedTensor(ray_d),
+            JaggedTensor(tmin),
+            JaggedTensor(tmax),
+            self.step_size,
         )
 
         ray_t = ray_intervals.jdata.mean(1)  # Midpoint between each pair of samples
@@ -372,7 +384,11 @@ class TestVolumeRender(unittest.TestCase):
         tmin = torch.zeros(ray_o.shape[0]).to(ray_o)
         tmax = torch.ones(ray_o.shape[0]).to(ray_o) * 1e10
         ray_intervals = self.grid.uniform_ray_samples(
-            JaggedTensor(ray_o), JaggedTensor(ray_d), JaggedTensor(tmin), JaggedTensor(tmax), self.step_size
+            JaggedTensor(ray_o),
+            JaggedTensor(ray_d),
+            JaggedTensor(tmin),
+            JaggedTensor(tmax),
+            self.step_size,
         )  # [B, -1, 2]
 
         # FIXME: Francis -- The volume render API should take JaggedTensors as input
@@ -395,7 +411,12 @@ class TestVolumeRender(unittest.TestCase):
 
         # Volume render the sampled values and backprop
         rgb1, depth1, opacity, ws, tot_samples = volume_render(
-            sigma_samples.squeeze(), rgb_samples, ray_delta_t, ray_interval_midpoints, ray_joffsets, t_threshold
+            sigma_samples.squeeze(),
+            rgb_samples,
+            ray_delta_t,
+            ray_interval_midpoints,
+            ray_joffsets,
+            t_threshold,
         )
         loss = rgb1.sum() + depth1.sum()
         loss.backward()
@@ -412,7 +433,12 @@ class TestVolumeRender(unittest.TestCase):
         rgb_samples = self.grid_dual.sample_trilinear(JaggedTensor(ray_pts), JaggedTensor(grid_data_rgb)).jdata
         sigma_samples = self.grid_dual.sample_trilinear(JaggedTensor(ray_pts), JaggedTensor(grid_data_sigma)).jdata
         rgb2, depth2 = self.volume_render_pytorch(
-            sigma_samples, rgb_samples, ray_delta_t, ray_interval_midpoints, ray_joffsets, t_threshold
+            sigma_samples,
+            rgb_samples,
+            ray_delta_t,
+            ray_interval_midpoints,
+            ray_joffsets,
+            t_threshold,
         )
         loss = rgb2.sum() + depth2.sum()
         loss.backward()
@@ -535,7 +561,9 @@ class TestRayMarching(unittest.TestCase):
         data_path = get_fvdb_test_data_path()
         data = torch.load(str(data_path / "ray_marching" / "repro_bug.pth"))
         grid = GridBatch.from_ijk(
-            JaggedTensor(data["ijk"].to(device)), voxel_sizes=data["vox_size"], origins=data["vox_origin"]
+            JaggedTensor(data["ijk"].to(device)),
+            voxel_sizes=data["vox_size"],
+            origins=data["vox_origin"],
         )
         ray_o: torch.Tensor = torch.load(str(data_path / "ray_marching" / "ray_o.pth")).to(device=device, dtype=dtype)
         ray_d: torch.Tensor = torch.load(str(data_path / "ray_marching" / "ray_d.pth")).to(device=device, dtype=dtype)
@@ -625,7 +653,11 @@ class TestRayMarching(unittest.TestCase):
             out_voxels, out_times = grid.voxels_along_rays(JaggedTensor(rays_o), JaggedTensor(rays_d), 100, 1.0e-5)
 
             out_idx, out_times2 = grid.voxels_along_rays(
-                JaggedTensor(rays_o), JaggedTensor(rays_d), 100, 1.0e-5, return_ijk=False
+                JaggedTensor(rays_o),
+                JaggedTensor(rays_d),
+                100,
+                1.0e-5,
+                return_ijk=False,
             )
             out_idx2 = grid.ijk_to_index(out_voxels.jflatten(dim=1)).jreshape_as(out_idx)
             self.assertTrue(torch.all(out_idx.jdata == out_idx2.jdata))

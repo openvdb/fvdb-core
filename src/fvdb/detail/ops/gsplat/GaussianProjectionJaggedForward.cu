@@ -7,6 +7,7 @@
 #include <fvdb/detail/ops/gsplat/GaussianUtils.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianWarpUtils.cuh>
 #include <fvdb/detail/utils/Nvtx.h>
+#include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/GridDim.h>
 
 #include <ATen/cuda/Atomic.cuh>
@@ -114,6 +115,23 @@ jaggedProjectionForwardKernel(const uint32_t B,
         compensations[idx] = compensation;
     }
 }
+
+template <torch::DeviceType>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+dispatchGaussianProjectionJaggedForward(const torch::Tensor &gSizes, // [B] gaussian sizes
+                                        const torch::Tensor &means,  // [N, 3]
+                                        const torch::Tensor &quats,  // [N, 4] optional
+                                        const torch::Tensor &scales, // [N, 3] optional
+                                        const torch::Tensor &cSizes, // [B] camera sizes
+                                        const torch::Tensor &worldToCamMatrices, // [C, 4, 4]
+                                        const torch::Tensor &projectionMatrices, // [C, 3, 3]
+                                        const uint32_t imageWidth,
+                                        const uint32_t imageHeight,
+                                        const float eps2d,
+                                        const float nearPlane,
+                                        const float farPlane,
+                                        const float minRadius2d,
+                                        const bool ortho);
 
 template <>
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
@@ -255,6 +273,39 @@ dispatchGaussianProjectionJaggedForward<torch::kCPU>(
     const float minRadius2d,
     const bool ortho) {
     TORCH_CHECK_NOT_IMPLEMENTED(false, "CPU implementation not available");
+}
+
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+gaussianProjectionJaggedForward(const torch::Tensor &gSizes,             // [B] gaussian sizes
+                                const torch::Tensor &means,              // [N, 3]
+                                const torch::Tensor &quats,              // [N, 4] optional
+                                const torch::Tensor &scales,             // [N, 3] optional
+                                const torch::Tensor &cSizes,             // [B] camera sizes
+                                const torch::Tensor &worldToCamMatrices, // [C, 4, 4]
+                                const torch::Tensor &projectionMatrices, // [C, 3, 3]
+                                const uint32_t imageWidth,
+                                const uint32_t imageHeight,
+                                const float eps2d,
+                                const float nearPlane,
+                                const float farPlane,
+                                const float minRadius2d,
+                                const bool ortho) {
+    return FVDB_DISPATCH_KERNEL_DEVICE(means.device(), [&]() {
+        return dispatchGaussianProjectionJaggedForward<DeviceTag>(gSizes,
+                                                                  means,
+                                                                  quats,
+                                                                  scales,
+                                                                  cSizes,
+                                                                  worldToCamMatrices,
+                                                                  projectionMatrices,
+                                                                  imageWidth,
+                                                                  imageHeight,
+                                                                  eps2d,
+                                                                  nearPlane,
+                                                                  farPlane,
+                                                                  minRadius2d,
+                                                                  ortho);
+    });
 }
 
 } // namespace ops

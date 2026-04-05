@@ -72,12 +72,20 @@ class GaussianSplat3dView:
         # Pass raw tensors to the C++ viewer (no longer depends on C++ GaussianSplat3d class)
         gs = gaussian_splat_3d
         view = server.add_gaussian_splat_3d_view(
-            scene_name=scene_name, name=name,
-            means=gs.means, quats=gs.quats, log_scales=gs.log_scales,
-            logit_opacities=gs.logit_opacities, sh0=gs.sh0, shN=gs.shN,
+            scene_name=scene_name,
+            name=name,
+            means=gs.means,
+            quats=gs.quats,
+            log_scales=gs.log_scales,
+            logit_opacities=gs.logit_opacities,
+            sh0=gs.sh0,
+            shN=gs.shN,
         )
 
-        if sh_ordering_mode not in (ShOrderingMode.RGB_RGB_RGB, ShOrderingMode.RRR_GGG_BBB):
+        if sh_ordering_mode not in (
+            ShOrderingMode.RGB_RGB_RGB,
+            ShOrderingMode.RRR_GGG_BBB,
+        ):
             raise ValueError(f"Invalid ShOrderingMode: {sh_ordering_mode}")
 
         view.tile_size = tile_size

@@ -147,7 +147,10 @@ def sample_trilinear_batch(
 
     .. seealso:: :func:`sample_trilinear_single`
     """
-    result = cast(torch.Tensor, _SampleTrilinearFn.apply(voxel_data.jdata, grid.data, points._impl))
+    result = cast(
+        torch.Tensor,
+        _SampleTrilinearFn.apply(voxel_data.jdata, grid.data, points._impl),
+    )
     return points.jagged_like(result)
 
 
@@ -371,7 +374,10 @@ def splat_trilinear_batch(
 
     .. seealso:: :func:`splat_trilinear_single`
     """
-    result = cast(torch.Tensor, _SplatTrilinearFn.apply(points_data.jdata, grid.data, points._impl))
+    result = cast(
+        torch.Tensor,
+        _SplatTrilinearFn.apply(points_data.jdata, grid.data, points._impl),
+    )
     return JaggedTensor(impl=grid.data.jagged_like(result))
 
 

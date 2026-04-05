@@ -10,6 +10,7 @@
 #include <fvdb/detail/ops/gsplat/GaussianVectorTypes.cuh>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Nvtx.h>
+#include <fvdb/detail/utils/Utils.h>
 
 #include <c10/cuda/CUDACachingAllocator.h>
 #include <c10/cuda/CUDAGuard.h>
@@ -540,24 +541,22 @@ launchRasterizeContributingGaussianIdsForwardKernel(
         if (pixelsToRender.has_value()) {
             // Sparse mode: call sparse top-k dispatch
             std::tie(outIds, outWeights) =
-                dispatchGaussianSparseRasterizeTopContributingGaussianIds<torch::kCUDA>(
-                    means2d,
-                    conics,
-                    opacities,
-                    tileOffsets,
-                    tileGaussianIds,
-                    pixelsToRender.value(),
-                    activeTiles.value(),
-                    tilePixelMask.value(),
-                    tilePixelCumsum.value(),
-                    pixelMap.value(),
-                    settings);
+                gaussianSparseRasterizeTopContributingGaussianIds(means2d,
+                                                                  conics,
+                                                                  opacities,
+                                                                  tileOffsets,
+                                                                  tileGaussianIds,
+                                                                  pixelsToRender.value(),
+                                                                  activeTiles.value(),
+                                                                  tilePixelMask.value(),
+                                                                  tilePixelCumsum.value(),
+                                                                  pixelMap.value(),
+                                                                  settings);
         } else {
             // Dense mode: call dense top-k dispatch
             torch::Tensor denseIds, denseWeights;
-            std::tie(denseIds, denseWeights) =
-                dispatchGaussianRasterizeTopContributingGaussianIds<torch::kCUDA>(
-                    means2d, conics, opacities, tileOffsets, tileGaussianIds, settings);
+            std::tie(denseIds, denseWeights) = gaussianRasterizeTopContributingGaussianIds(
+                means2d, conics, opacities, tileOffsets, tileGaussianIds, settings);
 
             // Convert dense output [C, H, W, K] to JaggedTensor format
             const auto C = denseIds.size(0);
@@ -768,6 +767,32 @@ launchRasterizeContributingGaussianIdsForwardKernel(
 
 } // namespace
 
+template <torch::DeviceType>
+std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor> dispatchGaussianRasterizeContributingGaussianIds(
+    const torch::Tensor &means2d,
+    const torch::Tensor &conics,
+    const torch::Tensor &opacities,
+    const torch::Tensor &tile_offsets,
+    const torch::Tensor &tile_gaussian_ids,
+    const RenderSettings &settings,
+    const std::optional<torch::Tensor> &maybeNumContributingGaussians);
+
+template <torch::DeviceType>
+std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor>
+dispatchGaussianSparseRasterizeContributingGaussianIds(
+    const torch::Tensor &means2d,
+    const torch::Tensor &conics,
+    const torch::Tensor &opacities,
+    const torch::Tensor &tile_offsets,
+    const torch::Tensor &tile_gaussian_ids,
+    const fvdb::JaggedTensor &pixelsToRender,
+    const torch::Tensor &activeTiles,
+    const torch::Tensor &tilePixelMask,
+    const torch::Tensor &tilePixelCumsum,
+    const torch::Tensor &pixelMap,
+    const RenderSettings &settings,
+    const std::optional<fvdb::JaggedTensor> &maybeNumContributingGaussians);
+
 template <>
 __host__ std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor>
 dispatchGaussianRasterizeContributingGaussianIds<torch::kCUDA>(
@@ -936,6 +961,120 @@ dispatchGaussianSparseRasterizeContributingGaussianIds<torch::kCPU>(
     const RenderSettings &settings, // render settings
     const std::optional<fvdb::JaggedTensor> &maybeNumContributingGaussians) {
     TORCH_CHECK_NOT_IMPLEMENTED(false, "CPU implementation not available");
+}
+
+std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor>
+renderContributingIds(const fvdb::ProjectedGaussianSplats &state,
+                      const RenderSettings &settings,
+                      const std::optional<torch::Tensor> &maybeNumContributingGaussians) {
+    FVDB_FUNC_RANGE();
+    return FVDB_DISPATCH_KERNEL_DEVICE(state.perGaussian2dMean.device(), [&]() {
+        return dispatchGaussianRasterizeContributingGaussianIds<DeviceTag>(
+            state.perGaussian2dMean,
+            state.perGaussianConic,
+            state.perGaussianOpacity,
+            state.tileOffsets,
+            state.tileGaussianIds,
+            settings,
+            maybeNumContributingGaussians);
+    });
+}
+
+std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor>
+sparseRenderContributingIds(
+    const fvdb::SparseProjectedGaussianSplats &state,
+    const fvdb::JaggedTensor &pixelsToRender,
+    const RenderSettings &settings,
+    const std::optional<fvdb::JaggedTensor> &maybeNumContributingGaussians) {
+    FVDB_FUNC_RANGE();
+    const auto &renderPixels = state.hasDuplicates ? state.uniquePixelsToRender : pixelsToRender;
+
+    // When duplicates were removed, numContributingGaussians is in original (duplicated) space
+    // but the kernel expects it in unique-pixel space. Pick one representative per group.
+    std::optional<fvdb::JaggedTensor> kernelNumContrib = maybeNumContributingGaussians;
+    if (state.hasDuplicates && maybeNumContributingGaussians.has_value()) {
+        const auto device  = state.inverseIndices.device();
+        const auto longOpt = torch::TensorOptions().device(device).dtype(torch::kLong);
+        auto repIdx        = torch::empty({renderPixels.rsize(0)}, longOpt);
+        repIdx.scatter_(0, state.inverseIndices, torch::arange(pixelsToRender.rsize(0), longOpt));
+        auto uniqueData  = maybeNumContributingGaussians->jdata().index_select(0, repIdx);
+        kernelNumContrib = renderPixels.jagged_like(uniqueData);
+    }
+
+    auto result = FVDB_DISPATCH_KERNEL_DEVICE(state.perGaussian2dMean.device(), [&]() {
+        return dispatchGaussianSparseRasterizeContributingGaussianIds<DeviceTag>(
+            state.perGaussian2dMean,
+            state.perGaussianConic,
+            state.perGaussianOpacity,
+            state.tileOffsets,
+            state.tileGaussianIds,
+            renderPixels,
+            state.activeTiles,
+            state.tilePixelMask,
+            state.tilePixelCumsum,
+            state.pixelMap,
+            settings,
+            kernelNumContrib);
+    });
+
+    if (state.hasDuplicates) {
+        auto &[jt0, jt1] = result;
+        return {pixelsToRender.jagged_like(jt0.jdata().index_select(0, state.inverseIndices)),
+                pixelsToRender.jagged_like(jt1.jdata().index_select(0, state.inverseIndices))};
+    }
+    return result;
+}
+
+std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor>
+gaussianRasterizeContributingGaussianIds(
+    const torch::Tensor &means2d,
+    const torch::Tensor &conics,
+    const torch::Tensor &opacities,
+    const torch::Tensor &tile_offsets,
+    const torch::Tensor &tile_gaussian_ids,
+    const RenderSettings &settings,
+    const std::optional<torch::Tensor> &maybeNumContributingGaussians) {
+    return FVDB_DISPATCH_KERNEL_DEVICE(means2d.device(), [&]() {
+        return dispatchGaussianRasterizeContributingGaussianIds<DeviceTag>(
+            means2d,
+            conics,
+            opacities,
+            tile_offsets,
+            tile_gaussian_ids,
+            settings,
+            maybeNumContributingGaussians);
+    });
+}
+
+std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor>
+gaussianSparseRasterizeContributingGaussianIds(
+    const torch::Tensor &means2d,
+    const torch::Tensor &conics,
+    const torch::Tensor &opacities,
+    const torch::Tensor &tile_offsets,
+    const torch::Tensor &tile_gaussian_ids,
+    const fvdb::JaggedTensor &pixelsToRender,
+    const torch::Tensor &activeTiles,
+    const torch::Tensor &tilePixelMask,
+    const torch::Tensor &tilePixelCumsum,
+    const torch::Tensor &pixelMap,
+    const RenderSettings &settings,
+    const std::optional<fvdb::JaggedTensor> &maybeNumContributingGaussians) {
+    return FVDB_DISPATCH_KERNEL_DEVICE(means2d.device(), [&]() {
+        return dispatchGaussianSparseRasterizeContributingGaussianIds<DeviceTag>(
+            means2d,
+            conics,
+            opacities,
+            tile_offsets,
+            tile_gaussian_ids,
+            pixelsToRender,
+            activeTiles,
+            tilePixelMask,
+            tilePixelCumsum,
+            pixelMap,
+            settings,
+            maybeNumContributingGaussians);
+    });
 }
 
 } // namespace fvdb::detail::ops

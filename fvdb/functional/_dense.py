@@ -97,7 +97,15 @@ class _InjectToDenseCmajorFn(torch.autograd.Function):
 
 class _InjectFn(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, src_jdata, dst_jdata, dst_grid_data, src_grid_data, dst_jt_impl, src_jt_impl):
+    def forward(
+        ctx,
+        src_jdata,
+        dst_jdata,
+        dst_grid_data,
+        src_grid_data,
+        dst_jt_impl,
+        src_jt_impl,
+    ):
         ctx.dst_grid_data = dst_grid_data
         ctx.src_grid_data = src_grid_data
         ctx.dst_jt_impl = dst_jt_impl
@@ -336,7 +344,10 @@ def inject_to_dense_cminor_batch(
     """
     grid_data = grid.data
     origins, gs_list = _resolve_dense_params(grid_data, sparse_data, min_coord, grid_size)
-    result = cast(torch.Tensor, _InjectToDenseCminorFn.apply(sparse_data.jdata, grid_data, origins, gs_list))
+    result = cast(
+        torch.Tensor,
+        _InjectToDenseCminorFn.apply(sparse_data.jdata, grid_data, origins, gs_list),
+    )
     feature_shape = list(sparse_data.jdata.shape[1:])
     return result.view([grid_data.grid_count] + gs_list + feature_shape)
 
@@ -364,7 +375,10 @@ def inject_to_dense_cmajor_batch(
     """
     grid_data = grid.data
     origins, gs_list = _resolve_dense_params(grid_data, sparse_data, min_coord, grid_size)
-    result = cast(torch.Tensor, _InjectToDenseCmajorFn.apply(sparse_data.jdata, grid_data, origins, gs_list))
+    result = cast(
+        torch.Tensor,
+        _InjectToDenseCmajorFn.apply(sparse_data.jdata, grid_data, origins, gs_list),
+    )
     feature_shape = list(sparse_data.jdata.shape[1:])
     return result.view([grid_data.grid_count] + feature_shape + gs_list)
 
@@ -398,7 +412,10 @@ def inject_to_dense_cminor_single(
     grid_data = grid.data
     sparse_jt = JaggedTensor(sparse_data)
     origins, gs_list = _resolve_dense_params(grid_data, sparse_jt, min_coord, grid_size)
-    result = cast(torch.Tensor, _InjectToDenseCminorFn.apply(sparse_jt.jdata, grid_data, origins, gs_list))
+    result = cast(
+        torch.Tensor,
+        _InjectToDenseCminorFn.apply(sparse_jt.jdata, grid_data, origins, gs_list),
+    )
     feature_shape = list(sparse_jt.jdata.shape[1:])
     return result.view([grid_data.grid_count] + gs_list + feature_shape)
 
@@ -427,7 +444,10 @@ def inject_to_dense_cmajor_single(
     grid_data = grid.data
     sparse_jt = JaggedTensor(sparse_data)
     origins, gs_list = _resolve_dense_params(grid_data, sparse_jt, min_coord, grid_size)
-    result = cast(torch.Tensor, _InjectToDenseCmajorFn.apply(sparse_jt.jdata, grid_data, origins, gs_list))
+    result = cast(
+        torch.Tensor,
+        _InjectToDenseCmajorFn.apply(sparse_jt.jdata, grid_data, origins, gs_list),
+    )
     feature_shape = list(sparse_jt.jdata.shape[1:])
     return result.view([grid_data.grid_count] + feature_shape + gs_list)
 
@@ -481,7 +501,14 @@ def inject_batch(
         )
     dst_out = cast(
         torch.Tensor,
-        _InjectFn.apply(jt_src.jdata, jt_dst.jdata, dst_grid_data, src_grid_data, jt_dst._impl, jt_src._impl),
+        _InjectFn.apply(
+            jt_src.jdata,
+            jt_dst.jdata,
+            dst_grid_data,
+            src_grid_data,
+            jt_dst._impl,
+            jt_src._impl,
+        ),
     )
     jt_dst.jdata = dst_out
     return jt_dst
@@ -532,7 +559,14 @@ def inject_single(
     jt_dst = JaggedTensor(raw_dst)
     dst_out = cast(
         torch.Tensor,
-        _InjectFn.apply(jt_src.jdata, jt_dst.jdata, dst_grid_data, src_grid_data, jt_dst._impl, jt_src._impl),
+        _InjectFn.apply(
+            jt_src.jdata,
+            jt_dst.jdata,
+            dst_grid_data,
+            src_grid_data,
+            jt_dst._impl,
+            jt_src._impl,
+        ),
     )
     # Copy result back into the caller's tensor so in-place semantics are
     # preserved even when the caller doesn't capture the return value.
@@ -582,7 +616,12 @@ def inject_from_ijk_batch(
         dst_shape.extend(src.eshape)
         dst = JaggedTensor(
             impl=grid_data.jagged_like(
-                torch.full(dst_shape, fill_value=default_value, dtype=src.dtype, device=src.device)
+                torch.full(
+                    dst_shape,
+                    fill_value=default_value,
+                    dtype=src.dtype,
+                    device=src.device,
+                )
             )
         )
     else:

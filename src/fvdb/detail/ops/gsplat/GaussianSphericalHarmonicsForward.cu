@@ -4,6 +4,7 @@
 #include <fvdb/detail/ops/gsplat/GaussianSphericalHarmonicsForward.h>
 #include <fvdb/detail/ops/gsplat/GaussianVectorTypes.cuh>
 #include <fvdb/detail/utils/Nvtx.h>
+#include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/GridDim.h>
 #include <fvdb/detail/utils/cuda/Utils.cuh>
 
@@ -198,6 +199,15 @@ computeShDiffuseOnly(const int64_t offset,
 }
 
 } // namespace
+
+template <torch::DeviceType>
+torch::Tensor dispatchSphericalHarmonicsForward(const int64_t shDegreeToUse,
+                                                const int64_t numCameras,
+                                                const torch::Tensor &viewDirs,  // [C, N, 3]
+                                                const torch::Tensor &sh0Coeffs, // [1, N, D]
+                                                const torch::Tensor &shNCoeffs, // [N, K-1, D]
+                                                const torch::Tensor &radii      // [C, N]
+);
 
 template <>
 torch::Tensor
@@ -420,6 +430,56 @@ dispatchSphericalHarmonicsForward<torch::kCPU>(const int64_t shDegreeToUse,
                                                const torch::Tensor &radii      // [N]
 ) {
     TORCH_CHECK(false, "CPU implementation not available");
+}
+
+torch::Tensor
+evalSphericalHarmonics(const torch::Tensor &means,
+                       const torch::Tensor &sh0,
+                       const torch::Tensor &shN,
+                       const int64_t shDegreeToUse,
+                       const torch::Tensor &worldToCameraMatrices,
+                       const torch::Tensor &perGaussianProjectedRadii) {
+    FVDB_FUNC_RANGE();
+    const auto K              = shN.size(1) + 1;               // number of SH bases
+    const auto C              = worldToCameraMatrices.size(0); // number of cameras
+    const auto actualShDegree = shDegreeToUse < 0 ? (std::sqrt(K) - 1) : shDegreeToUse;
+    if (actualShDegree == 0) {
+        return FVDB_DISPATCH_KERNEL(sh0.device(), [&]() {
+            return dispatchSphericalHarmonicsForward<DeviceTag>(actualShDegree,
+                                                                C,
+                                                                torch::Tensor(),
+                                                                sh0,
+                                                                torch::Tensor(),
+                                                                perGaussianProjectedRadii);
+        });
+    } else {
+        auto [camToWorldMatrices, info] = torch::linalg_inv_ex(worldToCameraMatrices);
+        const torch::Tensor viewDirs =
+            means.index(
+                {torch::indexing::None, torch::indexing::Slice(), torch::indexing::Slice()}) -
+            camToWorldMatrices.index({torch::indexing::Slice(),
+                                      torch::indexing::None,
+                                      torch::indexing::Slice(0, 3),
+                                      3}); // [1, N, 3] - [C, 1, 3]
+        return FVDB_DISPATCH_KERNEL(sh0.device(), [&]() {
+            return dispatchSphericalHarmonicsForward<DeviceTag>(
+                actualShDegree, C, viewDirs, sh0, shN, perGaussianProjectedRadii);
+        });
+    }
+}
+
+torch::Tensor
+sphericalHarmonicsForward(const int64_t shDegreeToUse,
+                          const int64_t numCameras,
+                          const torch::Tensor &viewDirs,  // [C, N, 3]
+                          const torch::Tensor &sh0Coeffs, // [1, N, D]
+                          const torch::Tensor &shNCoeffs, // [N, K-1, D]
+                          const torch::Tensor &radii      // [C, N]
+) {
+    return FVDB_DISPATCH_KERNEL(sh0Coeffs.device(), [&]() {
+        return dispatchSphericalHarmonicsForward<DeviceTag>(
+            shDegreeToUse, numCameras, viewDirs, sh0Coeffs, shNCoeffs, radii);
+    });
 }
 
 } // namespace ops

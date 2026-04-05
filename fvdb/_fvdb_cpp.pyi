@@ -581,7 +581,10 @@ class JaggedTensor:
     def from_data_and_offsets(arg0: torch.Tensor, arg1: torch.Tensor) -> JaggedTensor: ...
     @staticmethod
     def from_data_indices_and_list_ids(
-        data: torch.Tensor, indices: torch.Tensor, list_ids: torch.Tensor, num_tensors: int
+        data: torch.Tensor,
+        indices: torch.Tensor,
+        list_ids: torch.Tensor,
+        num_tensors: int,
     ) -> JaggedTensor: ...
     @staticmethod
     def from_data_offsets_and_list_ids(
@@ -1264,7 +1267,12 @@ def gsplat_project_gaussians_for_camera_with_accum(
     accum_grad_norms: Optional[torch.Tensor],
     accum_step_counts: Optional[torch.Tensor],
     accum_max_2d_radii: Optional[torch.Tensor],
-) -> tuple[ProjectedGaussianSplats, Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]: ...
+) -> tuple[
+    ProjectedGaussianSplats,
+    Optional[torch.Tensor],
+    Optional[torch.Tensor],
+    Optional[torch.Tensor],
+]: ...
 def gsplat_sparse_project_gaussians_analytic(
     pixels_to_render: JaggedTensor,
     means: torch.Tensor,

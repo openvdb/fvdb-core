@@ -146,7 +146,12 @@ class TestJaggedTensorTorchFunctions(unittest.TestCase):
         self.assertTrue(torch.allclose(fvdb.add(jt, jt_b).jdata, torch.add(jt.jdata, jt_b.jdata)))
         self.assertTrue(torch.allclose(fvdb.sub(jt, jt_b).jdata, torch.sub(jt.jdata, jt_b.jdata)))
         self.assertTrue(torch.allclose(fvdb.mul(jt, jt_b).jdata, torch.mul(jt.jdata, jt_b.jdata)))
-        self.assertTrue(torch.allclose(fvdb.true_divide(jt, jt_b).jdata, torch.true_divide(jt.jdata, jt_b.jdata)))
+        self.assertTrue(
+            torch.allclose(
+                fvdb.true_divide(jt, jt_b).jdata,
+                torch.true_divide(jt.jdata, jt_b.jdata),
+            )
+        )
 
     @parameterized.expand(all_device_dtype_combos)
     def test_floor_div_remainder_pow(self, device, dtype):

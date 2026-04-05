@@ -35,16 +35,15 @@ namespace ops {
 ///         - SH coefficients [N, K, 3] - ∂L/∂sh_coeffs
 ///         - Direction vectors [N, 3] - ∂L/∂dirs (if compute_v_dirs is true, otherwise empty
 ///         tensor)
-template <torch::DeviceType>
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
-dispatchSphericalHarmonicsBackward(const int64_t shDegreeToUse,
-                                   const int64_t numCameras,
-                                   const int64_t numGaussians,
-                                   const torch::Tensor &viewDirs,  // [N, 3]
-                                   const torch::Tensor &shNCoeffs, // [N, K-1, D]
-                                   const torch::Tensor &dLossDColors,
-                                   const torch::Tensor &radii,     // [N]
-                                   const bool computeDLossDViewDirs);
+sphericalHarmonicsBackward(const int64_t shDegreeToUse,
+                           const int64_t numCameras,
+                           const int64_t numGaussians,
+                           const torch::Tensor &viewDirs,  // [N, 3]
+                           const torch::Tensor &shNCoeffs, // [N, K-1, D]
+                           const torch::Tensor &dLossDColors,
+                           const torch::Tensor &radii,     // [N]
+                           const bool computeDLossDViewDirs);
 
 } // namespace ops
 } // namespace detail

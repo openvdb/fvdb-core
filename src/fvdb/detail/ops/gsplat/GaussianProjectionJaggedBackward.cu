@@ -7,6 +7,7 @@
 #include <fvdb/detail/ops/gsplat/GaussianUtils.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianWarpUtils.cuh>
 #include <fvdb/detail/utils/Nvtx.h>
+#include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/GridDim.h>
 
 #include <ATen/cuda/Atomic.cuh>
@@ -178,6 +179,26 @@ jaggedProjectionBackwardKernel(
         }
     }
 }
+
+template <torch::DeviceType>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+dispatchGaussianProjectionJaggedBackward(const torch::Tensor &gSizes, // [B] gaussian sizes
+                                         const torch::Tensor &means,  // [N, 3]
+                                         const torch::Tensor &quats,  // [N, 4] optional
+                                         const torch::Tensor &scales, // [N, 3] optional
+                                         const torch::Tensor &cSizes, // [B] camera sizes
+                                         const torch::Tensor &worldToCamMatrices, // [C, 4, 4]
+                                         const torch::Tensor &projectionMatrices, // [C, 3, 3]
+                                         const uint32_t imageWidth,
+                                         const uint32_t imageHeight,
+                                         const float eps2d,
+                                         const torch::Tensor &radii,         // [N]
+                                         const torch::Tensor &conics,        // [N, 3]
+                                         const torch::Tensor &dLossDMeans2d, // [N, 2]
+                                         const torch::Tensor &dLossDDepths,  // [N]
+                                         const torch::Tensor &dLossDConics,  // [N, 3]
+                                         const bool worldToCamMatricesRequiresGrad,
+                                         const bool ortho);
 
 template <>
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
@@ -362,6 +383,45 @@ dispatchGaussianProjectionJaggedBackward<torch::kCPU>(
     const bool worldToCamMatricesRequiresGrad,
     const bool ortho) {
     TORCH_CHECK_NOT_IMPLEMENTED(false, "CPU implementation not available");
+}
+
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+gaussianProjectionJaggedBackward(const torch::Tensor &gSizes,             // [B] gaussian sizes
+                                 const torch::Tensor &means,              // [N, 3]
+                                 const torch::Tensor &quats,              // [N, 4] optional
+                                 const torch::Tensor &scales,             // [N, 3] optional
+                                 const torch::Tensor &cSizes,             // [B] camera sizes
+                                 const torch::Tensor &worldToCamMatrices, // [C, 4, 4]
+                                 const torch::Tensor &projectionMatrices, // [C, 3, 3]
+                                 const uint32_t imageWidth,
+                                 const uint32_t imageHeight,
+                                 const float eps2d,
+                                 const torch::Tensor &radii,         // [N]
+                                 const torch::Tensor &conics,        // [N, 3]
+                                 const torch::Tensor &dLossDMeans2d, // [N, 2]
+                                 const torch::Tensor &dLossDDepths,  // [N]
+                                 const torch::Tensor &dLossDConics,  // [N, 3]
+                                 const bool worldToCamMatricesRequiresGrad,
+                                 const bool ortho) {
+    return FVDB_DISPATCH_KERNEL_DEVICE(means.device(), [&]() {
+        return dispatchGaussianProjectionJaggedBackward<DeviceTag>(gSizes,
+                                                                   means,
+                                                                   quats,
+                                                                   scales,
+                                                                   cSizes,
+                                                                   worldToCamMatrices,
+                                                                   projectionMatrices,
+                                                                   imageWidth,
+                                                                   imageHeight,
+                                                                   eps2d,
+                                                                   radii,
+                                                                   conics,
+                                                                   dLossDMeans2d,
+                                                                   dLossDDepths,
+                                                                   dLossDConics,
+                                                                   worldToCamMatricesRequiresGrad,
+                                                                   ortho);
+    });
 }
 
 } // namespace ops

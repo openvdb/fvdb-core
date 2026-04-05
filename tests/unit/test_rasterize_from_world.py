@@ -344,9 +344,27 @@ def test_gaussiansplat3d_render_images_from_world_grads_match_finite_differences
     checks: list[tuple[str, float, float]] = []
     checks.append(("means[0,0]", float(means.grad[0, 0].item()), fd_scalar("means", 0, 0)))
     checks.append(("means[0,2]", float(means.grad[0, 2].item()), fd_scalar("means", 0, 2)))
-    checks.append(("log_scales[0,0]", float(log_scales.grad[0, 0].item()), fd_scalar("log_scales", 0, 0)))
-    checks.append(("log_scales[0,2]", float(log_scales.grad[0, 2].item()), fd_scalar("log_scales", 0, 2)))
-    checks.append(("logit_opacities[0]", float(logit_opacities.grad[0].item()), fd_scalar("logit_opacities", 0)))
+    checks.append(
+        (
+            "log_scales[0,0]",
+            float(log_scales.grad[0, 0].item()),
+            fd_scalar("log_scales", 0, 0),
+        )
+    )
+    checks.append(
+        (
+            "log_scales[0,2]",
+            float(log_scales.grad[0, 2].item()),
+            fd_scalar("log_scales", 0, 2),
+        )
+    )
+    checks.append(
+        (
+            "logit_opacities[0]",
+            float(logit_opacities.grad[0].item()),
+            fd_scalar("logit_opacities", 0),
+        )
+    )
     checks.append(("sh0[0,0,0]", float(sh0.grad[0, 0, 0].item()), fd_scalar("sh0", 0, 0, 0)))
     checks.append(("sh0[0,0,2]", float(sh0.grad[0, 0, 2].item()), fd_scalar("sh0", 0, 0, 2)))
 
@@ -396,10 +414,18 @@ def test_gaussiansplat3d_render_images_from_world_grads_match_finite_differences
             q_minus = quat_mul_wxyz(dq_minus, q0).view(1, 4)
 
             lp = loss_from_params(
-                means.detach(), q_plus, log_scales.detach(), logit_opacities.detach(), sh0.detach()
+                means.detach(),
+                q_plus,
+                log_scales.detach(),
+                logit_opacities.detach(),
+                sh0.detach(),
             ).item()
             lm = loss_from_params(
-                means.detach(), q_minus, log_scales.detach(), logit_opacities.detach(), sh0.detach()
+                means.detach(),
+                q_minus,
+                log_scales.detach(),
+                logit_opacities.detach(),
+                sh0.detach(),
             ).item()
             fd_dir = (lp - lm) / (2.0 * eps)
 
@@ -979,7 +1005,10 @@ def test_gaussiansplat3d_render_depth_and_rgbd_from_world_masks_apply_background
     world_to_cam, K = _default_camera(device, dtype, cx=7.5, cy=7.5)
     masks = torch.zeros((1, 16, 16), device=device, dtype=torch.bool)
 
-    for camera_model in (fvdb.CameraModel.ORTHOGRAPHIC, fvdb.CameraModel.OPENCV_RADTAN_5):
+    for camera_model in (
+        fvdb.CameraModel.ORTHOGRAPHIC,
+        fvdb.CameraModel.OPENCV_RADTAN_5,
+    ):
         distortion_coeffs = None
         if camera_model == fvdb.CameraModel.OPENCV_RADTAN_5:
             distortion_coeffs = _opencv_distortion_coeffs(1, device, dtype)

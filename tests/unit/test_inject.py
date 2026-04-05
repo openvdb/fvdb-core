@@ -131,7 +131,10 @@ class InjectionTests(unittest.TestCase):
         )
 
         # Check that the pruned sidecar is not contiguous
-        self.assertFalse(sidecar2_pruned.jdata.is_contiguous(), "sidecar2_pruned should not be contiguous")
+        self.assertFalse(
+            sidecar2_pruned.jdata.is_contiguous(),
+            "sidecar2_pruned should not be contiguous",
+        )
 
         # Inject the pruned sidecar into the superset gridbatch
         sidecar23_non_contig: fvdb.JaggedTensor = self.build_sidecar(self.grid_batch23, torch.zeros)
@@ -144,7 +147,10 @@ class InjectionTests(unittest.TestCase):
         sidecar2_pruned_contig = sidecar2_pruned.jagged_like(sidecar2_pruned.jdata.contiguous())
 
         # Sanity check that the pruned sidecar is contiguous
-        self.assertTrue(sidecar2_pruned_contig.jdata.is_contiguous(), "sidecar2_pruned_contig should be contiguous")
+        self.assertTrue(
+            sidecar2_pruned_contig.jdata.is_contiguous(),
+            "sidecar2_pruned_contig should be contiguous",
+        )
         self.assertTrue(
             torch.equal(sidecar2_pruned.jdata, sidecar2_pruned_contig.jdata),
             "sidecar2_pruned should equal sidecar2_pruned_contig",
@@ -171,9 +177,15 @@ class InjectionTests(unittest.TestCase):
 
         # Make a contiguous copy of the pruned sidecar and ensure it is contiguous
         sidecar2_pruned_contig = sidecar2_pruned.jagged_like(sidecar2_pruned.jdata.contiguous().clone())
-        self.assertTrue(sidecar2_pruned_contig.jdata.is_contiguous(), "sidecar2_pruned_contig should be contiguous")
+        self.assertTrue(
+            sidecar2_pruned_contig.jdata.is_contiguous(),
+            "sidecar2_pruned_contig should be contiguous",
+        )
         sidecar23_pruned_contig = sidecar23_pruned.jagged_like(sidecar23_pruned.jdata.contiguous().clone())
-        self.assertTrue(sidecar23_pruned_contig.jdata.is_contiguous(), "sidecar23_pruned_contig should be contiguous")
+        self.assertTrue(
+            sidecar23_pruned_contig.jdata.is_contiguous(),
+            "sidecar23_pruned_contig should be contiguous",
+        )
 
         # Sanity checks to ensure the masks and pruned sidecars are correct
         self.assertTrue(
@@ -195,8 +207,14 @@ class InjectionTests(unittest.TestCase):
         self.assertTrue(torch.equal(sidecar23_pruned.jdata, sidecar23_pruned_contig.jdata))
 
         # Check that inputs are not contiguous
-        self.assertFalse(sidecar23_pruned.jdata.is_contiguous(), "sidecar23_pruned should not be contiguous")
-        self.assertFalse(sidecar2_pruned.jdata.is_contiguous(), "sidecar2_pruned should not be contiguous")
+        self.assertFalse(
+            sidecar23_pruned.jdata.is_contiguous(),
+            "sidecar23_pruned should not be contiguous",
+        )
+        self.assertFalse(
+            sidecar2_pruned.jdata.is_contiguous(),
+            "sidecar2_pruned should not be contiguous",
+        )
 
         # Inject the pruned sidecar into the pruned superset gridbatch (both are non contiguous)
         gridbatch23_pruned.inject_from(
@@ -224,7 +242,9 @@ class InjectionTests(unittest.TestCase):
             "sidecar2_pruned_contig and sidecar2_pruned should be equal",
         )
 
-    def test_inject_in_place_non_contiguous_subset_into_non_contiguous_superset_bakcprop(self):
+    def test_inject_in_place_non_contiguous_subset_into_non_contiguous_superset_bakcprop(
+        self,
+    ):
         # There are three grids, grid1, grid2, and grid3 with random values
 
         # Create a source and target grid sidecars
@@ -240,9 +260,15 @@ class InjectionTests(unittest.TestCase):
 
         # Make a contiguous copy of the source and target grids that we'll use later
         sidecar2_pruned_contig = sidecar2_pruned.jagged_like(sidecar2_pruned.jdata.contiguous().clone())
-        self.assertTrue(sidecar2_pruned_contig.jdata.is_contiguous(), "sidecar2_pruned_contig should be contiguous")
+        self.assertTrue(
+            sidecar2_pruned_contig.jdata.is_contiguous(),
+            "sidecar2_pruned_contig should be contiguous",
+        )
         sidecar23_pruned_contig = sidecar23_pruned.jagged_like(sidecar23_pruned.jdata.contiguous().clone())
-        self.assertTrue(sidecar23_pruned_contig.jdata.is_contiguous(), "sidecar23_pruned_contig should be contiguous")
+        self.assertTrue(
+            sidecar23_pruned_contig.jdata.is_contiguous(),
+            "sidecar23_pruned_contig should be contiguous",
+        )
 
         # Sanity checks to ensure the masks and pruned sidecars are correct
         self.assertTrue(
@@ -264,8 +290,14 @@ class InjectionTests(unittest.TestCase):
         self.assertTrue(torch.equal(sidecar23_pruned.jdata, sidecar23_pruned_contig.jdata))
 
         # Check that non-contiguous inputs are indeed not contiguous
-        self.assertFalse(sidecar23_pruned.jdata.is_contiguous(), "sidecar23_pruned should not be contiguous")
-        self.assertFalse(sidecar2_pruned.jdata.is_contiguous(), "sidecar2_pruned should not be contiguous")
+        self.assertFalse(
+            sidecar23_pruned.jdata.is_contiguous(),
+            "sidecar23_pruned should not be contiguous",
+        )
+        self.assertFalse(
+            sidecar2_pruned.jdata.is_contiguous(),
+            "sidecar2_pruned should not be contiguous",
+        )
 
         # Inject the non contiguous pruned source into the non contiguous destination
         gridbatch23_pruned.inject_from(gridbatch2_pruned, sidecar2_pruned, sidecar23_pruned)
@@ -292,8 +324,14 @@ class InjectionTests(unittest.TestCase):
         # Prune the source sidecar again and make a contiguous copy
         gridbatch2_pruned, sidecar2_pruned, mask2 = self.filter_every_n(self.grid_batch2, sidecar2_copy, 3)
         sidecar_2_pruned_contig = sidecar2_pruned.jagged_like(sidecar2_pruned.jdata.contiguous().clone())
-        self.assertTrue(sidecar_2_pruned_contig.jdata.is_contiguous(), "sidecar2_pruned_contig should be contiguous")
-        self.assertTrue(sidecar23_pruned_contig.jdata.is_contiguous(), "sidecar23_pruned_contig should be contiguous")
+        self.assertTrue(
+            sidecar_2_pruned_contig.jdata.is_contiguous(),
+            "sidecar2_pruned_contig should be contiguous",
+        )
+        self.assertTrue(
+            sidecar23_pruned_contig.jdata.is_contiguous(),
+            "sidecar23_pruned_contig should be contiguous",
+        )
 
         # Inject the contiguous pruned sidecar into the contiguous pruned superset gridbatch
         gridbatch23_pruned.inject_from(
@@ -332,7 +370,10 @@ class InjectionTests(unittest.TestCase):
 
         # Make a contiguouos copy of the pruned sidecar and ensure it is contiguous
         sidecar23_pruned_contig = sidecar23_pruned.jagged_like(sidecar23_pruned.jdata.contiguous().clone())
-        self.assertTrue(sidecar23_pruned_contig.jdata.is_contiguous(), "sidecar23_pruned_contig should be contiguous")
+        self.assertTrue(
+            sidecar23_pruned_contig.jdata.is_contiguous(),
+            "sidecar23_pruned_contig should be contiguous",
+        )
 
         # Sanity checks on the masks and pruned sidecars
         self.assertTrue(
@@ -344,7 +385,10 @@ class InjectionTests(unittest.TestCase):
             "sidecar23_pruned should equal sidecar23 with mask applied",
         )
         self.assertTrue(torch.equal(sidecar23_pruned.jdata, sidecar23_pruned_contig.jdata))
-        self.assertFalse(sidecar23_pruned.jdata.is_contiguous(), "sidecar23_pruned should not be contiguous")
+        self.assertFalse(
+            sidecar23_pruned.jdata.is_contiguous(),
+            "sidecar23_pruned should not be contiguous",
+        )
 
         # Inject from the contiguous source into the non contiguous target
         gridbatch23_pruned.inject_from(self.grid_batch2, sidecar2, sidecar23_pruned)  # sidecar2 -> sidecar23_pruned
@@ -407,10 +451,22 @@ class InjectionTests(unittest.TestCase):
             self.grid_batch23, self.grid_batch2, sidecar23_bf, sidecar2_bf
         )  # sidecar23_bf -> sidecar2_bf
 
-        self.assertTrue(torch.equal(sidecar23.jdata, sidecar23_bf.jdata), "sidecar23 and sidecar23_bf should be equal")
-        self.assertTrue(torch.equal(sidecar2.jdata, sidecar2_bf.jdata), "sidecar2 and sidecar2_bf should be equal")
-        self.assertTrue(torch.equal(sidecar1.jdata, sidecar1_bf.jdata), "sidecar1 and sidecar1_bf should be equal")
-        self.assertTrue(torch.equal(sidecar3.jdata, sidecar3_bf.jdata), "sidecar3 and sidecar3_bf should be equal")
+        self.assertTrue(
+            torch.equal(sidecar23.jdata, sidecar23_bf.jdata),
+            "sidecar23 and sidecar23_bf should be equal",
+        )
+        self.assertTrue(
+            torch.equal(sidecar2.jdata, sidecar2_bf.jdata),
+            "sidecar2 and sidecar2_bf should be equal",
+        )
+        self.assertTrue(
+            torch.equal(sidecar1.jdata, sidecar1_bf.jdata),
+            "sidecar1 and sidecar1_bf should be equal",
+        )
+        self.assertTrue(
+            torch.equal(sidecar3.jdata, sidecar3_bf.jdata),
+            "sidecar3 and sidecar3_bf should be equal",
+        )
 
     def test_inject_in_place_subset_into_superset_backprop(self):
         # There are three grids, grid1, grid2, and grid3.
@@ -451,7 +507,10 @@ class InjectionTests(unittest.TestCase):
         sidecar12_bf = InjectionTests.inject_bruteforce(self.grid_batch1, self.grid_batch12, sidecar1_bf, sidecar12_bf)
         sidecar12_bf = InjectionTests.inject_bruteforce(self.grid_batch2, self.grid_batch12, sidecar2_bf, sidecar12_bf)
 
-        self.assertTrue(torch.equal(sidecar12.jdata, sidecar12_bf.jdata), "sidecar12 and sidecar12_bf should be equal")
+        self.assertTrue(
+            torch.equal(sidecar12.jdata, sidecar12_bf.jdata),
+            "sidecar12 and sidecar12_bf should be equal",
+        )
 
         # Compute a loss on sidecar12_bf and compute gradients
         loss_bf = sidecar12_bf.jdata.sum()
@@ -463,8 +522,14 @@ class InjectionTests(unittest.TestCase):
         sidecar1_bf_grad = sidecar1_bf.jdata.grad.clone().detach()
         sidecar2_bf_grad = sidecar2_bf.jdata.grad.clone().detach()
 
-        self.assertTrue(torch.equal(sidecar1_grad, sidecar1_bf_grad), "sidecar1 gradients should be equal")
-        self.assertTrue(torch.equal(sidecar2_grad, sidecar2_bf_grad), "sidecar2 gradients should be equal")
+        self.assertTrue(
+            torch.equal(sidecar1_grad, sidecar1_bf_grad),
+            "sidecar1 gradients should be equal",
+        )
+        self.assertTrue(
+            torch.equal(sidecar2_grad, sidecar2_bf_grad),
+            "sidecar2 gradients should be equal",
+        )
 
     def test_inject_in_place_superset_into_subset_backprop(self):
         # There are three grids, grid1, grid2, and grid3 with random values
@@ -533,15 +598,29 @@ class InjectionTests(unittest.TestCase):
         sidecar1_bf_grad = sidecar1_bf.jdata.grad.clone().detach()
         sidecar3_bf_grad = sidecar3_bf.jdata.grad.clone().detach()
 
-        self.assertTrue(torch.equal(sidecar23.jdata, sidecar23_bf.jdata), "sidecar23 and sidecar23_bf should be equal")
-        self.assertTrue(torch.equal(sidecar2.jdata, sidecar2_bf.jdata), "sidecar2 and sidecar2_bf should be equal")
-        self.assertTrue(torch.equal(sidecar1.jdata, sidecar1_bf.jdata), "sidecar1 and sidecar1_bf should be equal")
-        self.assertTrue(torch.equal(sidecar3.jdata, sidecar3_bf.jdata), "sidecar3 and sidecar3_bf should be equal")
         self.assertTrue(
-            torch.equal(sidecar3_grad, sidecar3_bf_grad), "sidecar3 and sidecar3_bf should have equal gradients"
+            torch.equal(sidecar23.jdata, sidecar23_bf.jdata),
+            "sidecar23 and sidecar23_bf should be equal",
         )
         self.assertTrue(
-            torch.equal(sidecar1_grad, sidecar1_bf_grad), "sidecar1 and sidecar1_bf should have equal gradients"
+            torch.equal(sidecar2.jdata, sidecar2_bf.jdata),
+            "sidecar2 and sidecar2_bf should be equal",
+        )
+        self.assertTrue(
+            torch.equal(sidecar1.jdata, sidecar1_bf.jdata),
+            "sidecar1 and sidecar1_bf should be equal",
+        )
+        self.assertTrue(
+            torch.equal(sidecar3.jdata, sidecar3_bf.jdata),
+            "sidecar3 and sidecar3_bf should be equal",
+        )
+        self.assertTrue(
+            torch.equal(sidecar3_grad, sidecar3_bf_grad),
+            "sidecar3 and sidecar3_bf should have equal gradients",
+        )
+        self.assertTrue(
+            torch.equal(sidecar1_grad, sidecar1_bf_grad),
+            "sidecar1 and sidecar1_bf should have equal gradients",
         )
 
     def test_inject_in_place_backprop_mix_of_requires_grad_and_not(self):
@@ -596,7 +675,8 @@ class InjectionTests(unittest.TestCase):
         )
 
         self.assertTrue(
-            torch.equal(sidecar123.jdata, sidecar123_bf.jdata), "sidecar123 and sidecar123_bf should be equal"
+            torch.equal(sidecar123.jdata, sidecar123_bf.jdata),
+            "sidecar123 and sidecar123_bf should be equal",
         )
 
         # Compute a loss on sidecar123_bf and compute gradients
@@ -610,8 +690,14 @@ class InjectionTests(unittest.TestCase):
         sidecar1_bf_grad = sidecar1_bf.jdata.grad.clone().detach()
         sidecar3_bf_grad = sidecar3_bf.jdata.grad.clone().detach()
 
-        self.assertTrue(torch.equal(sidecar1_grad, sidecar1_bf_grad), "sidecar1 gradients should be equal")
-        self.assertTrue(torch.equal(sidecar3_grad, sidecar3_bf_grad), "sidecar3 gradients should be equal")
+        self.assertTrue(
+            torch.equal(sidecar1_grad, sidecar1_bf_grad),
+            "sidecar1 gradients should be equal",
+        )
+        self.assertTrue(
+            torch.equal(sidecar3_grad, sidecar3_bf_grad),
+            "sidecar3 gradients should be equal",
+        )
 
     def test_inject_in_place_backprop_dst_sidecar_leaf_fails(self):
         # There are three grids, grid1, grid2, and grid3.
@@ -688,7 +774,8 @@ class InjectionTests(unittest.TestCase):
         )
 
         self.assertTrue(
-            torch.equal(sidecar123.jdata, sidecar123_bf.jdata), "sidecar123 and sidecar123_bf should be equal"
+            torch.equal(sidecar123.jdata, sidecar123_bf.jdata),
+            "sidecar123 and sidecar123_bf should be equal",
         )
 
         # Compute a loss on sidecar123_bf and compute gradients
@@ -704,10 +791,17 @@ class InjectionTests(unittest.TestCase):
         sidecar3_bf_grad = sidecar3_bf.jdata.grad.clone().detach()
         sidecar123_base_bf_grad = sidecar123_base_bf.jdata.grad.clone().detach()
 
-        self.assertTrue(torch.equal(sidecar1_grad, sidecar1_bf_grad), "sidecar1 gradients should be equal")
-        self.assertTrue(torch.equal(sidecar3_grad, sidecar3_bf_grad), "sidecar3 gradients should be equal")
         self.assertTrue(
-            torch.equal(sidecar123_base_grad, sidecar123_base_bf_grad), "sidecar123_base gradients should be equal"
+            torch.equal(sidecar1_grad, sidecar1_bf_grad),
+            "sidecar1 gradients should be equal",
+        )
+        self.assertTrue(
+            torch.equal(sidecar3_grad, sidecar3_bf_grad),
+            "sidecar3 gradients should be equal",
+        )
+        self.assertTrue(
+            torch.equal(sidecar123_base_grad, sidecar123_base_bf_grad),
+            "sidecar123_base gradients should be equal",
         )
 
     @parameterized.expand([(torch.float32,), (torch.float16,), (torch.float64,)])
@@ -716,10 +810,14 @@ class InjectionTests(unittest.TestCase):
         random_points_b2 = torch.randn(100, 3, device=self.device, dtype=dtype)
 
         grid1 = fvdb.GridBatch.from_points(
-            fvdb.JaggedTensor([random_points_b1[:70], random_points_b2[:70]]), voxel_sizes=0.01, origins=[0, 0, 0]
+            fvdb.JaggedTensor([random_points_b1[:70], random_points_b2[:70]]),
+            voxel_sizes=0.01,
+            origins=[0, 0, 0],
         )
         grid2 = fvdb.GridBatch.from_points(
-            fvdb.JaggedTensor([random_points_b1[30:], random_points_b2[30:]]), voxel_sizes=0.01, origins=[0, 0, 0]
+            fvdb.JaggedTensor([random_points_b1[30:], random_points_b2[30:]]),
+            voxel_sizes=0.01,
+            origins=[0, 0, 0],
         )
 
         random_features_b1 = torch.randn(grid1[0].total_voxels, 32, device=self.device, dtype=dtype)

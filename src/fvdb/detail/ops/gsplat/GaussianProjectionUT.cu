@@ -9,6 +9,7 @@
 #include <fvdb/detail/ops/gsplat/GaussianUtils.cuh>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Nvtx.h>
+#include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/GridDim.h>
 
 #include <c10/core/DeviceType.h>
@@ -450,6 +451,27 @@ projectionForwardUTKernel(int64_t offset,
     }
 }
 
+template <torch::DeviceType>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+dispatchGaussianProjectionForwardUT(
+    const torch::Tensor &means,                   // [N, 3]
+    const torch::Tensor &quats,                   // [N, 4]
+    const torch::Tensor &logScales,               // [N, 3]
+    const torch::Tensor &worldToCamMatricesStart, // [C, 4, 4]
+    const torch::Tensor &worldToCamMatricesEnd,   // [C, 4, 4]
+    const torch::Tensor &projectionMatrices,      // [C, 3, 3]
+    const RollingShutterType rollingShutterType,
+    const UTParams &utParams,
+    const DistortionModel cameraModel,
+    const torch::Tensor &distortionCoeffs, // [C, 12] for OPENCV_*, or [C, 0] for PINHOLE/ORTHO
+    const int64_t imageWidth,
+    const int64_t imageHeight,
+    const float eps2d,
+    const float nearPlane,
+    const float farPlane,
+    const float minRadius2d,
+    const bool calcCompensations);
+
 /// @brief CUDA specialization for UT forward projection dispatch.
 ///
 /// Performs host-side validation and launches `projectionForwardUTKernel`.
@@ -670,6 +692,46 @@ dispatchGaussianProjectionForwardUT<torch::kPrivateUse1>(
     const bool calcCompensations) {
     TORCH_CHECK_NOT_IMPLEMENTED(false,
                                 "GaussianProjectionForwardUT not implemented for this device type");
+}
+
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+gaussianProjectionForwardUT(
+    const torch::Tensor &means,                   // [N, 3]
+    const torch::Tensor &quats,                   // [N, 4]
+    const torch::Tensor &logScales,               // [N, 3]
+    const torch::Tensor &worldToCamMatricesStart, // [C, 4, 4]
+    const torch::Tensor &worldToCamMatricesEnd,   // [C, 4, 4]
+    const torch::Tensor &projectionMatrices,      // [C, 3, 3]
+    const RollingShutterType rollingShutterType,
+    const UTParams &utParams,
+    const DistortionModel cameraModel,
+    const torch::Tensor &distortionCoeffs, // [C, 12] for OPENCV_*, or [C, 0] for PINHOLE/ORTHO
+    const int64_t imageWidth,
+    const int64_t imageHeight,
+    const float eps2d,
+    const float nearPlane,
+    const float farPlane,
+    const float minRadius2d,
+    const bool calcCompensations) {
+    return FVDB_DISPATCH_KERNEL(means.device(), [&]() {
+        return dispatchGaussianProjectionForwardUT<DeviceTag>(means,
+                                                              quats,
+                                                              logScales,
+                                                              worldToCamMatricesStart,
+                                                              worldToCamMatricesEnd,
+                                                              projectionMatrices,
+                                                              rollingShutterType,
+                                                              utParams,
+                                                              cameraModel,
+                                                              distortionCoeffs,
+                                                              imageWidth,
+                                                              imageHeight,
+                                                              eps2d,
+                                                              nearPlane,
+                                                              farPlane,
+                                                              minRadius2d,
+                                                              calcCompensations);
+    });
 }
 
 } // namespace fvdb::detail::ops

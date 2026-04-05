@@ -27,8 +27,7 @@ TEST(NanInfMaskTests, TestEmptyGaussians) {
     auto const sh0       = torch::rand({numGaussians, 1, 3}, floatOptsCUDA);
     auto const shN       = torch::rand({numGaussians, 26, 3}, floatOptsCUDA);
 
-    auto mask = fvdb::detail::ops::dispatchGaussianNanInfMask<torch::kCUDA>(
-        means, quats, scales, opacities, sh0, shN);
+    auto mask = fvdb::detail::ops::gaussianNanInfMask(means, quats, scales, opacities, sh0, shN);
 
     EXPECT_TRUE(mask.jdata().numel() == 0);
     EXPECT_TRUE(mask.jdata().is_cuda());
@@ -54,9 +53,9 @@ TEST(NanInfMaskTests, TestExceptionForInconsistentGaussians) {
         auto const sh0       = torch::rand({config[4], 1, 3}, floatOptsCUDA);
         auto const shN       = torch::rand({config[5], 26, 3}, floatOptsCUDA);
 
-        EXPECT_THROW(fvdb::detail::ops::dispatchGaussianNanInfMask<torch::kCUDA>(
-                         means, quats, scales, opacities, sh0, shN),
-                     c10::ValueError);
+        EXPECT_THROW(
+            fvdb::detail::ops::gaussianNanInfMask(means, quats, scales, opacities, sh0, shN),
+            c10::ValueError);
     }
 }
 
@@ -136,7 +135,7 @@ TEST_P(NanInfMaskTestFixture, TestNanInfMaskMeansNan) {
     auto const sh0JTData = sh0JT.jdata(); // [N, 1, 3]
     auto const shNJTData = shNJT.jdata(); // [N, 26, 3]
 
-    auto const mask = fvdb::detail::ops::dispatchGaussianNanInfMask<torch::kCUDA>(
+    auto const mask = fvdb::detail::ops::gaussianNanInfMask(
         meansJT, quatsJT, scalesJT, opacitiesJT, sh0JTData, shNJTData);
 
     EXPECT_TRUE(torch::equal(expectedMask.to(torch::kCUDA), mask.jdata()));

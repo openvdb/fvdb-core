@@ -9,6 +9,7 @@
 #include <fvdb/detail/ops/gsplat/GaussianWarpUtils.cuh>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Nvtx.h>
+#include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/Utils.cuh>
 
 #include <ATen/cuda/Atomic.cuh>
@@ -1324,6 +1325,49 @@ callRasterizeBackwardPrivateUse1(
 
 } // namespace
 
+template <torch::DeviceType>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+dispatchGaussianRasterizeBackward(const torch::Tensor &means2d,
+                                  const torch::Tensor &conics,
+                                  const torch::Tensor &features,
+                                  const torch::Tensor &opacities,
+                                  const RenderWindow2D &renderWindow,
+                                  const uint32_t tileSize,
+                                  const torch::Tensor &tileOffsets,
+                                  const torch::Tensor &tileGaussianIds,
+                                  const torch::Tensor &renderedAlphas,
+                                  const torch::Tensor &lastIds,
+                                  const torch::Tensor &dLossDRenderedFeatures,
+                                  const torch::Tensor &dLossDRenderedAlphas,
+                                  const bool absGrad,
+                                  const int64_t numSharedChannelsOverride,
+                                  const at::optional<torch::Tensor> &backgrounds,
+                                  const at::optional<torch::Tensor> &masks);
+
+template <torch::DeviceType>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+dispatchGaussianSparseRasterizeBackward(const fvdb::JaggedTensor &pixelsToRender,
+                                        const torch::Tensor &means2d,
+                                        const torch::Tensor &conics,
+                                        const torch::Tensor &features,
+                                        const torch::Tensor &opacities,
+                                        const RenderWindow2D &renderWindow,
+                                        const uint32_t tileSize,
+                                        const torch::Tensor &tileOffsets,
+                                        const torch::Tensor &tileGaussianIds,
+                                        const fvdb::JaggedTensor &renderedAlphas,
+                                        const fvdb::JaggedTensor &lastIds,
+                                        const fvdb::JaggedTensor &dLossDRenderedFeatures,
+                                        const fvdb::JaggedTensor &dLossDRenderedAlphas,
+                                        const torch::Tensor &activeTiles,
+                                        const torch::Tensor &tilePixelMask,
+                                        const torch::Tensor &tilePixelCumsum,
+                                        const torch::Tensor &pixelMap,
+                                        const bool absGrad,
+                                        const int64_t numSharedChannelsOverride,
+                                        const at::optional<torch::Tensor> &backgrounds,
+                                        const at::optional<torch::Tensor> &masks);
+
 template <>
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 dispatchGaussianRasterizeBackward<torch::kCUDA>(
@@ -1680,6 +1724,98 @@ dispatchGaussianSparseRasterizeBackward<torch::kCPU>(
     const at::optional<torch::Tensor> &backgrounds,
     const at::optional<torch::Tensor> &masks) {
     TORCH_CHECK_NOT_IMPLEMENTED(false, "CPU implementation not available");
+}
+
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+gaussianRasterizeBackward(const torch::Tensor &means2d,
+                          const torch::Tensor &conics,
+                          const torch::Tensor &features,
+                          const torch::Tensor &opacities,
+                          const uint32_t imageWidth,
+                          const uint32_t imageHeight,
+                          const uint32_t imageOriginW,
+                          const uint32_t imageOriginH,
+                          const uint32_t tileSize,
+                          const torch::Tensor &tileOffsets,
+                          const torch::Tensor &tileGaussianIds,
+                          const torch::Tensor &renderedAlphas,
+                          const torch::Tensor &lastIds,
+                          const torch::Tensor &dLossDRenderedFeatures,
+                          const torch::Tensor &dLossDRenderedAlphas,
+                          const bool absGrad,
+                          const int64_t numSharedChannelsOverride,
+                          const at::optional<torch::Tensor> &backgrounds,
+                          const at::optional<torch::Tensor> &masks) {
+    const RenderWindow2D renderWindow{imageWidth, imageHeight, imageOriginW, imageOriginH};
+    return FVDB_DISPATCH_KERNEL(means2d.device(), [&]() {
+        return dispatchGaussianRasterizeBackward<DeviceTag>(means2d,
+                                                            conics,
+                                                            features,
+                                                            opacities,
+                                                            renderWindow,
+                                                            tileSize,
+                                                            tileOffsets,
+                                                            tileGaussianIds,
+                                                            renderedAlphas,
+                                                            lastIds,
+                                                            dLossDRenderedFeatures,
+                                                            dLossDRenderedAlphas,
+                                                            absGrad,
+                                                            numSharedChannelsOverride,
+                                                            backgrounds,
+                                                            masks);
+    });
+}
+
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+gaussianSparseRasterizeBackward(const fvdb::JaggedTensor &pixelsToRender,
+                                const torch::Tensor &means2d,
+                                const torch::Tensor &conics,
+                                const torch::Tensor &features,
+                                const torch::Tensor &opacities,
+                                const uint32_t imageWidth,
+                                const uint32_t imageHeight,
+                                const uint32_t imageOriginW,
+                                const uint32_t imageOriginH,
+                                const uint32_t tileSize,
+                                const torch::Tensor &tileOffsets,
+                                const torch::Tensor &tileGaussianIds,
+                                const fvdb::JaggedTensor &renderedAlphas,
+                                const fvdb::JaggedTensor &lastIds,
+                                const fvdb::JaggedTensor &dLossDRenderedFeatures,
+                                const fvdb::JaggedTensor &dLossDRenderedAlphas,
+                                const torch::Tensor &activeTiles,
+                                const torch::Tensor &tilePixelMask,
+                                const torch::Tensor &tilePixelCumsum,
+                                const torch::Tensor &pixelMap,
+                                const bool absGrad,
+                                const int64_t numSharedChannelsOverride,
+                                const at::optional<torch::Tensor> &backgrounds,
+                                const at::optional<torch::Tensor> &masks) {
+    const RenderWindow2D renderWindow{imageWidth, imageHeight, imageOriginW, imageOriginH};
+    return FVDB_DISPATCH_KERNEL(means2d.device(), [&]() {
+        return dispatchGaussianSparseRasterizeBackward<DeviceTag>(pixelsToRender,
+                                                                  means2d,
+                                                                  conics,
+                                                                  features,
+                                                                  opacities,
+                                                                  renderWindow,
+                                                                  tileSize,
+                                                                  tileOffsets,
+                                                                  tileGaussianIds,
+                                                                  renderedAlphas,
+                                                                  lastIds,
+                                                                  dLossDRenderedFeatures,
+                                                                  dLossDRenderedAlphas,
+                                                                  activeTiles,
+                                                                  tilePixelMask,
+                                                                  tilePixelCumsum,
+                                                                  pixelMap,
+                                                                  absGrad,
+                                                                  numSharedChannelsOverride,
+                                                                  backgrounds,
+                                                                  masks);
+    });
 }
 
 } // namespace fvdb::detail::ops

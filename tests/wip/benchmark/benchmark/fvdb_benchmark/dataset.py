@@ -57,10 +57,14 @@ class CoordsDataset(Dataset):
             input_points = input_data["grid"]
         elif path.suffix == ".csv":
             input_data = np.loadtxt(path, delimiter=",").astype(int)
-            input_points = GridBatch.from_ijk(JaggedTensor(torch.from_numpy(input_data)))
+            input_points = GridBatch.from_ijk(
+                JaggedTensor(torch.from_numpy(input_data))
+            )
         elif path.suffix == ".npy":
             input_data = np.load(path).astype(int)
-            input_points = GridBatch.from_ijk(JaggedTensor(torch.from_numpy(input_data)))
+            input_points = GridBatch.from_ijk(
+                JaggedTensor(torch.from_numpy(input_data))
+            )
         else:
             raise NotImplementedError
         return input_points

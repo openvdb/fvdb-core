@@ -118,19 +118,19 @@ TEST_F(GaussianProjectionForwardTestFixture, DISABLED_GenerateOutputData) {
     {
         // Perspective projection
         const auto [radii, means2d, depths, conics, compensations] =
-            fvdb::detail::ops::dispatchGaussianProjectionForward<torch::kCUDA>(means,
-                                                                               quats,
-                                                                               torch::log(scales),
-                                                                               viewmats,
-                                                                               Ks,
-                                                                               imageWidth,
-                                                                               imageHeight,
-                                                                               0.3,
-                                                                               1e-2,
-                                                                               1e10,
-                                                                               0,
-                                                                               false,
-                                                                               false);
+            fvdb::detail::ops::gaussianProjectionForward(means,
+                                                         quats,
+                                                         torch::log(scales),
+                                                         viewmats,
+                                                         Ks,
+                                                         imageWidth,
+                                                         imageHeight,
+                                                         0.3,
+                                                         1e-2,
+                                                         1e10,
+                                                         0,
+                                                         false,
+                                                         false);
 
         std::vector<torch::Tensor> outputData = {radii, means2d, depths, conics};
 
@@ -142,19 +142,19 @@ TEST_F(GaussianProjectionForwardTestFixture, DISABLED_GenerateOutputData) {
     {
         // Orthographic projection
         const auto [radii, means2d, depths, conics, compensations] =
-            fvdb::detail::ops::dispatchGaussianProjectionForward<torch::kCUDA>(means,
-                                                                               quats,
-                                                                               torch::log(scales),
-                                                                               viewmats,
-                                                                               Ks,
-                                                                               imageWidth,
-                                                                               imageHeight,
-                                                                               0.3,
-                                                                               1e-2,
-                                                                               1e10,
-                                                                               0,
-                                                                               false,
-                                                                               true);
+            fvdb::detail::ops::gaussianProjectionForward(means,
+                                                         quats,
+                                                         torch::log(scales),
+                                                         viewmats,
+                                                         Ks,
+                                                         imageWidth,
+                                                         imageHeight,
+                                                         0.3,
+                                                         1e-2,
+                                                         1e10,
+                                                         0,
+                                                         false,
+                                                         true);
 
         std::vector<torch::Tensor> outputData = {radii, means2d, depths, conics};
 
@@ -168,19 +168,19 @@ TEST_F(GaussianProjectionForwardTestFixture, TestPerspectiveProjection) {
     loadTestData("projection_forward_inputs.pt", "projection_persp_forward_outputs.pt");
 
     const auto [radii, means2d, depths, conics, compensations] =
-        fvdb::detail::ops::dispatchGaussianProjectionForward<torch::kCUDA>(means,
-                                                                           quats,
-                                                                           torch::log(scales),
-                                                                           viewmats,
-                                                                           Ks,
-                                                                           imageWidth,
-                                                                           imageHeight,
-                                                                           0.3,
-                                                                           1e-2,
-                                                                           1e10,
-                                                                           0,
-                                                                           false,
-                                                                           false);
+        fvdb::detail::ops::gaussianProjectionForward(means,
+                                                     quats,
+                                                     torch::log(scales),
+                                                     viewmats,
+                                                     Ks,
+                                                     imageWidth,
+                                                     imageHeight,
+                                                     0.3,
+                                                     1e-2,
+                                                     1e10,
+                                                     0,
+                                                     false,
+                                                     false);
 
     // Use relaxed tolerances to account for minor numerical differences between debug and release
     // builds. The default rtol=1e-5, atol=1e-8 are too strict for operations involving exp, sqrt,
@@ -205,19 +205,19 @@ TEST_F(GaussianProjectionForwardTestFixture, TestOrthographicProjection) {
     loadTestData("projection_forward_inputs.pt", "projection_ortho_forward_outputs.pt");
 
     const auto [radii, means2d, depths, conics, compensations] =
-        fvdb::detail::ops::dispatchGaussianProjectionForward<torch::kCUDA>(means,
-                                                                           quats,
-                                                                           torch::log(scales),
-                                                                           viewmats,
-                                                                           Ks,
-                                                                           imageWidth,
-                                                                           imageHeight,
-                                                                           0.3,
-                                                                           1e-2,
-                                                                           1e10,
-                                                                           0,
-                                                                           false,
-                                                                           true);
+        fvdb::detail::ops::gaussianProjectionForward(means,
+                                                     quats,
+                                                     torch::log(scales),
+                                                     viewmats,
+                                                     Ks,
+                                                     imageWidth,
+                                                     imageHeight,
+                                                     0.3,
+                                                     1e-2,
+                                                     1e10,
+                                                     0,
+                                                     false,
+                                                     true);
 
     // other outputs are undefined where radii is zero
     auto radiiNonZeroMask = radii > 0; // [C, N]

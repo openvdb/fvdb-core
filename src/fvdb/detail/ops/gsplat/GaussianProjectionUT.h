@@ -6,7 +6,6 @@
 
 #include <fvdb/detail/ops/gsplat/GaussianCameras.cuh>
 
-#include <ATen/core/TensorBody.h>
 #include <torch/types.h>
 
 #include <tuple>
@@ -43,8 +42,6 @@ namespace ops {
 /// 5. **Cull** gaussians that are out-of-range (near/far) or too small (min radius), and write
 ///    outputs for the survivors.
 ///
-/// @tparam DeviceType Device type template parameter (torch::kCUDA or torch::kCPU)
-///
 /// @param[in] means 3D positions of Gaussians [N, 3] where N is number of Gaussians
 /// @param[in] quats Quaternion rotations of Gaussians [N, 4] in format (w, x, y, z)
 /// @param[in] logScales Log-scale factors of Gaussians [N, 3] (natural log), representing extent in
@@ -76,11 +73,11 @@ namespace ops {
 ///         - Radii of 2D Gaussians [C, N]
 ///         - 2D projected Gaussian centers [C, N, 2]
 ///         - Depths of Gaussians [C, N]
-///         - Covariance matrices in conic form [C, N, 3] representing (a, b, c) in ax² + 2bxy + cy²
+///         - Covariance matrices in conic form [C, N, 3] representing (a, b, c) in ax^2 + 2bxy +
+///         cy^2
 ///         - Compensation factors [C, N] (if calc_compensations is true, otherwise empty tensor)
-template <torch::DeviceType>
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
-dispatchGaussianProjectionForwardUT(
+gaussianProjectionForwardUT(
     const torch::Tensor &means,                   // [N, 3]
     const torch::Tensor &quats,                   // [N, 4]
     const torch::Tensor &logScales,               // [N, 3]

@@ -22,7 +22,10 @@ def _get_md5_checksum(file_path: Path):
 
 
 def make_grid_batch_from_points(
-    points: JaggedTensor, padding: int, voxel_sizes: NumericMaxRank2, origins: NumericMaxRank2
+    points: JaggedTensor,
+    padding: int,
+    voxel_sizes: NumericMaxRank2,
+    origins: NumericMaxRank2,
 ) -> GridBatch:
     logging.info("Building GridBatch from points...")
     start = timeit.default_timer()
@@ -77,7 +80,12 @@ def load_pointcloud(
 
 
 def load_mesh(
-    data_path, expected_md5, skip_every=1, mode="vn", device=torch.device("cuda"), dtype=torch.float32
+    data_path,
+    expected_md5,
+    skip_every=1,
+    mode="vn",
+    device=torch.device("cuda"),
+    dtype=torch.float32,
 ) -> List[torch.Tensor]:
     if _get_md5_checksum(data_path) != expected_md5:
         raise ValueError(f"Checksum for {data_path} is incorrect, expected {expected_md5}")

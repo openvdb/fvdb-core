@@ -6,6 +6,7 @@
 #include <fvdb/detail/ops/gsplat/GaussianUtils.cuh>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Nvtx.h>
+#include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/GridDim.h>
 #include <fvdb/detail/utils/cuda/Utils.cuh>
 
@@ -17,6 +18,16 @@ namespace fvdb::detail::ops {
 
 using fvdb::detail::deviceChunk;
 using fvdb::detail::mergeStreams;
+
+// Internal dispatch template (specializations defined below).
+template <torch::DeviceType DeviceType>
+void dispatchGaussianMCMCAddNoise(torch::Tensor &means,
+                                  const torch::Tensor &logScales,
+                                  const torch::Tensor &logitOpacities,
+                                  const torch::Tensor &quats,
+                                  const float noiseScale,
+                                  const float t,
+                                  const float k);
 
 template <typename ScalarType>
 inline __device__ ScalarType
@@ -168,6 +179,20 @@ dispatchGaussianMCMCAddNoise<torch::kCPU>(torch::Tensor &means,           // [N,
                                           const float t,
                                           const float k) {
     TORCH_CHECK_NOT_IMPLEMENTED(false, "GaussianMCMCAddNoise is not implemented for CPU");
+}
+
+void
+gaussianMCMCAddNoise(torch::Tensor &means,                // [N, 3] input/output
+                     const torch::Tensor &logScales,      // [N]
+                     const torch::Tensor &logitOpacities, // [N]
+                     const torch::Tensor &quats,          // [N, 4]
+                     const float noiseScale,
+                     const float t,
+                     const float k) {
+    FVDB_DISPATCH_KERNEL(means.device(), [&]() {
+        return dispatchGaussianMCMCAddNoise<DeviceTag>(
+            means, logScales, logitOpacities, quats, noiseScale, t, k);
+    });
 }
 
 } // namespace fvdb::detail::ops

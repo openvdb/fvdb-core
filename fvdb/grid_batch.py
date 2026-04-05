@@ -428,7 +428,10 @@ class GridBatch:
 
     @classmethod
     def from_zero_voxels(
-        cls, device: DeviceIdentifier = "cpu", voxel_sizes: NumericMaxRank2 = 1, origins: NumericMaxRank2 = 0
+        cls,
+        device: DeviceIdentifier = "cpu",
+        voxel_sizes: NumericMaxRank2 = 1,
+        origins: NumericMaxRank2 = 0,
     ) -> "GridBatch":
         """Create a grid batch with one or more grids that each have zero active voxels.
 
@@ -633,7 +636,10 @@ class GridBatch:
         return self.to("cpu")
 
     def cubes_in_grid(
-        self, cube_centers: JaggedTensor, cube_min: NumericMaxRank1 = 0, cube_max: NumericMaxRank1 = 0
+        self,
+        cube_centers: JaggedTensor,
+        cube_min: NumericMaxRank1 = 0,
+        cube_max: NumericMaxRank1 = 0,
     ) -> JaggedTensor:
         """Check if axis-aligned cubes are fully contained within active voxels of this grid batch.
 
@@ -652,7 +658,10 @@ class GridBatch:
         return functional.cubes_in_grid_batch(self, cube_centers, cube_min, cube_max)
 
     def cubes_intersect_grid(
-        self, cube_centers: JaggedTensor, cube_min: NumericMaxRank1 = 0, cube_max: NumericMaxRank1 = 0
+        self,
+        cube_centers: JaggedTensor,
+        cube_min: NumericMaxRank1 = 0,
+        cube_max: NumericMaxRank1 = 0,
     ) -> JaggedTensor:
         """Check if axis-aligned cubes intersect any active voxels in this grid batch.
 
@@ -1389,7 +1398,10 @@ class GridBatch:
 
         return functional.refined_grid_batch(self, subdiv_factor, mask)
 
-    def to(self, target: "str | torch.device | torch.Tensor | JaggedTensor | Grid | GridBatch") -> "GridBatch":
+    def to(
+        self,
+        target: "str | torch.device | torch.Tensor | JaggedTensor | Grid | GridBatch",
+    ) -> "GridBatch":
         """Move this grid batch to a target device or match the device of a target object.
 
         Args:

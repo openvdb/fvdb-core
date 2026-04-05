@@ -5,6 +5,7 @@
 #include <fvdb/detail/ops/gsplat/GaussianVectorTypes.cuh>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Nvtx.h>
+#include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/GridDim.h>
 #include <fvdb/detail/utils/cuda/Utils.cuh>
 
@@ -371,6 +372,17 @@ computeShDiffuseOnlyBackward(
 
 } // namespace
 
+template <torch::DeviceType>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
+dispatchSphericalHarmonicsBackward(const int64_t shDegreeToUse,
+                                   const int64_t numCameras,
+                                   const int64_t numGaussians,
+                                   const torch::Tensor &viewDirs,  // [N, 3]
+                                   const torch::Tensor &shNCoeffs, // [N, K-1, D]
+                                   const torch::Tensor &dLossDColors,
+                                   const torch::Tensor &radii,     // [N]
+                                   const bool computeDLossDViewDirs);
+
 template <>
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
 dispatchSphericalHarmonicsBackward<torch::kCUDA>(
@@ -696,6 +708,27 @@ dispatchSphericalHarmonicsBackward<torch::kCPU>(
     const torch::Tensor &radii,                  // [C, N]
     const bool computeDLossDViewDirs) {
     TORCH_CHECK(false, "CPU implementation not available");
+}
+
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
+sphericalHarmonicsBackward(const int64_t shDegreeToUse,
+                           const int64_t numCameras,
+                           const int64_t numGaussians,
+                           const torch::Tensor &viewDirs,  // [N, 3]
+                           const torch::Tensor &shNCoeffs, // [N, K-1, D]
+                           const torch::Tensor &dLossDColors,
+                           const torch::Tensor &radii,     // [N]
+                           const bool computeDLossDViewDirs) {
+    return FVDB_DISPATCH_KERNEL(dLossDColors.device(), [&]() {
+        return dispatchSphericalHarmonicsBackward<DeviceTag>(shDegreeToUse,
+                                                             numCameras,
+                                                             numGaussians,
+                                                             viewDirs,
+                                                             shNCoeffs,
+                                                             dLossDColors,
+                                                             radii,
+                                                             computeDLossDViewDirs);
+    });
 }
 
 } // namespace ops

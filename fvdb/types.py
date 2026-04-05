@@ -72,7 +72,12 @@ def is_Vec3i(x: Any) -> bool:
     if isinstance(x, torch.Size):
         return len(x) == 3
     if isinstance(x, (torch.Tensor, numpy.ndarray)):
-        return x.shape == (3,) and x.dtype in (torch.int32, torch.int64, numpy.int32, numpy.int64)
+        return x.shape == (3,) and x.dtype in (
+            torch.int32,
+            torch.int64,
+            numpy.int32,
+            numpy.int64,
+        )
     if isinstance(x, list):
         return len(x) == 3 and all(isinstance(i, int) for i in x)
     if isinstance(x, tuple):
@@ -108,7 +113,12 @@ def is_Vec3iOrScalar(x: Any) -> bool:
 
 def is_Vec4i(x: Any) -> bool:
     if isinstance(x, (torch.Tensor, numpy.ndarray)):
-        return x.shape == (4,) and x.dtype in (torch.int32, torch.int64, numpy.int32, numpy.int64)
+        return x.shape == (4,) and x.dtype in (
+            torch.int32,
+            torch.int64,
+            numpy.int32,
+            numpy.int64,
+        )
     if isinstance(x, list):
         return len(x) == 4 and all(isinstance(i, int) for i in x)
     if isinstance(x, tuple):
@@ -144,7 +154,14 @@ def is_Vec3dBatch(x: Any) -> bool:
         return (
             len(x.shape) >= 1
             and x.shape[-1] == 3
-            and x.dtype in (torch.float16, torch.float32, torch.float64, numpy.float32, numpy.float64)
+            and x.dtype
+            in (
+                torch.float16,
+                torch.float32,
+                torch.float64,
+                numpy.float32,
+                numpy.float64,
+            )
         )
     if isinstance(x, list):
         if len(x) == 0:
@@ -262,11 +279,15 @@ def is_NumericScalar(x: Any) -> TypeGuard[NumericScalar]:
     return is_NumericScalarNative(x) or (isinstance(x, (torch.Tensor, numpy.ndarray)) and x.ndim == 0)
 
 
-def is_SequenceOfNumericScalarNative(x: Any) -> TypeGuard[Sequence[NumericScalarNative]]:
+def is_SequenceOfNumericScalarNative(
+    x: Any,
+) -> TypeGuard[Sequence[NumericScalarNative]]:
     return isinstance(x, Sequence) and all(is_NumericScalarNative(item) for item in x)
 
 
-def is_SequenceOfSequenceOfNumericScalarNative(x: Any) -> TypeGuard[Sequence[Sequence[NumericScalarNative]]]:
+def is_SequenceOfSequenceOfNumericScalarNative(
+    x: Any,
+) -> TypeGuard[Sequence[Sequence[NumericScalarNative]]]:
     return isinstance(x, Sequence) and all(is_SequenceOfNumericScalarNative(item) for item in x)
 
 
@@ -472,7 +493,12 @@ def to_GenericTensorBroadcastableRank1(
 
     if is_NumericScalar(x):
         result = to_GenericScalar(
-            x, dtype, allowed_torch_dtypes, allowed_numpy_dtypes, dtype_category, value_constraint=ValueConstraint.NONE
+            x,
+            dtype,
+            allowed_torch_dtypes,
+            allowed_numpy_dtypes,
+            dtype_category,
+            value_constraint=ValueConstraint.NONE,
         )
         try:
             result_shape = torch.broadcast_shapes(result.shape, test_shape)
@@ -762,7 +788,9 @@ def to_GenericTensorBroadcastableRank3(
 
 
 def to_IntegerScalar(
-    x: NumericScalar, dtype: torch.dtype = torch.int64, value_constraint: ValueConstraint = ValueConstraint.NONE
+    x: NumericScalar,
+    dtype: torch.dtype = torch.int64,
+    value_constraint: ValueConstraint = ValueConstraint.NONE,
 ) -> torch.Tensor:
     """
     Converts a NumericScalar to an integer scalar tensor.
@@ -789,7 +817,9 @@ def to_IntegerScalar(
 
 
 def to_FloatingScalar(
-    x: NumericScalar, dtype: torch.dtype = torch.float32, value_constraint: ValueConstraint = ValueConstraint.NONE
+    x: NumericScalar,
+    dtype: torch.dtype = torch.float32,
+    value_constraint: ValueConstraint = ValueConstraint.NONE,
 ) -> torch.Tensor:
     """
     Converts a NumericScalar to a floating scalar tensor.
@@ -808,8 +838,22 @@ def to_FloatingScalar(
     return to_GenericScalar(
         x,
         dtype,
-        allowed_torch_dtypes=(torch.int32, torch.int64, torch.float16, torch.float32, torch.float64),
-        allowed_numpy_dtypes=(np.int32, np.int64, np.uint32, np.uint64, np.float16, np.float32, np.float64),
+        allowed_torch_dtypes=(
+            torch.int32,
+            torch.int64,
+            torch.float16,
+            torch.float32,
+            torch.float64,
+        ),
+        allowed_numpy_dtypes=(
+            np.int32,
+            np.int64,
+            np.uint32,
+            np.uint64,
+            np.float16,
+            np.float32,
+            np.float64,
+        ),
         dtype_category="int or float",
         value_constraint=value_constraint,
     )
@@ -880,8 +924,22 @@ def to_FloatingTensorBroadcastableRank1(
         x,
         test_shape,
         dtype,
-        allowed_torch_dtypes=(torch.int32, torch.int64, torch.float16, torch.float32, torch.float64),
-        allowed_numpy_dtypes=(np.int32, np.int64, np.uint32, np.uint64, np.float16, np.float32, np.float64),
+        allowed_torch_dtypes=(
+            torch.int32,
+            torch.int64,
+            torch.float16,
+            torch.float32,
+            torch.float64,
+        ),
+        allowed_numpy_dtypes=(
+            np.int32,
+            np.int64,
+            np.uint32,
+            np.uint64,
+            np.float16,
+            np.float32,
+            np.float64,
+        ),
         dtype_category="int or float",
         value_constraint=value_constraint,
         do_broadcast_to=do_broadcast_to,
@@ -988,8 +1046,22 @@ def to_FloatingTensorBroadcastableRank2(
         x,
         test_shape,
         dtype,
-        allowed_torch_dtypes=(torch.int32, torch.int64, torch.float16, torch.float32, torch.float64),
-        allowed_numpy_dtypes=(np.int32, np.int64, np.uint32, np.uint64, np.float16, np.float32, np.float64),
+        allowed_torch_dtypes=(
+            torch.int32,
+            torch.int64,
+            torch.float16,
+            torch.float32,
+            torch.float64,
+        ),
+        allowed_numpy_dtypes=(
+            np.int32,
+            np.int64,
+            np.uint32,
+            np.uint64,
+            np.float16,
+            np.float32,
+            np.float64,
+        ),
         dtype_category="int or float",
         value_constraint=value_constraint,
         do_broadcast_to=do_broadcast_to,
@@ -1024,8 +1096,22 @@ def to_FloatingTensorBroadcastableRank3(
         x,
         test_shape,
         dtype,
-        allowed_torch_dtypes=(torch.int32, torch.int64, torch.float16, torch.float32, torch.float64),
-        allowed_numpy_dtypes=(np.int32, np.int64, np.uint32, np.uint64, np.float16, np.float32, np.float64),
+        allowed_torch_dtypes=(
+            torch.int32,
+            torch.int64,
+            torch.float16,
+            torch.float32,
+            torch.float64,
+        ),
+        allowed_numpy_dtypes=(
+            np.int32,
+            np.int64,
+            np.uint32,
+            np.uint64,
+            np.float16,
+            np.float32,
+            np.float64,
+        ),
         dtype_category="int or float",
         value_constraint=value_constraint,
         do_broadcast_to=do_broadcast_to,

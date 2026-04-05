@@ -380,7 +380,12 @@ def generate_hermit_impulses_dense(
 
     vals = torch.zeros(dense_shape, device=device, dtype=dtype)
     impulse_coords = generate_chebyshev_spaced_ijk(
-        num_candidates, volume_shape, kernel_size, avoid_borders=True, dtype=torch.long, device=device
+        num_candidates,
+        volume_shape,
+        kernel_size,
+        avoid_borders=True,
+        dtype=torch.long,
+        device=device,
     )
 
     assert isinstance(impulse_coords, torch.Tensor)
@@ -630,7 +635,11 @@ def fourier_anti_symmetric_kernel(
 
 
 def has_any_symmetry_witnessed(
-    tensor: torch.Tensor, *, rtol: float = 1e-5, atol: float = 1e-6, ignore_length1_axes: bool = True
+    tensor: torch.Tensor,
+    *,
+    rtol: float = 1e-5,
+    atol: float = 1e-6,
+    ignore_length1_axes: bool = True,
 ) -> tuple[bool, dict[str, Any]]:
     r"""
     Detect whether a tensor is invariant (within tolerance) under ANY non-trivial
@@ -707,7 +716,15 @@ def has_any_symmetry_witnessed(
     R = tensor.ndim
     if R == 0:
         # Scalar: by convention it is symmetric under any transformation.
-        return (True, {"perm": (), "flip_after_permute": (), "original_shape": (), "transformed_shape": ()})
+        return (
+            True,
+            {
+                "perm": (),
+                "flip_after_permute": (),
+                "original_shape": (),
+                "transformed_shape": (),
+            },
+        )
 
     if R > 5:
         # Safety guard: exhaustive enumeration grows quickly beyond rank 5.
@@ -836,7 +853,11 @@ def has_any_symmetry_witnessed(
 
 
 def has_any_symmetry(
-    tensor: torch.Tensor, *, rtol: float = 1e-5, atol: float = 1e-6, ignore_length1_axes: bool = True
+    tensor: torch.Tensor,
+    *,
+    rtol: float = 1e-5,
+    atol: float = 1e-6,
+    ignore_length1_axes: bool = True,
 ) -> bool:
     r"""
     Detect whether a tensor is invariant (within tolerance) under ANY non-trivial

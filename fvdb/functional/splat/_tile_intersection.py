@@ -52,7 +52,11 @@ def build_render_settings(
     settings.antialias = antialias
     settings.sh_degree_to_use = sh_degree_to_use
 
-    mode_map = {"rgb": _C.RenderMode.RGB, "depth": _C.RenderMode.DEPTH, "rgbd": _C.RenderMode.RGBD}
+    mode_map = {
+        "rgb": _C.RenderMode.RGB,
+        "depth": _C.RenderMode.DEPTH,
+        "rgbd": _C.RenderMode.RGBD,
+    }
     settings.render_mode = mode_map[render_mode.lower()]
 
     return settings

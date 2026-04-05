@@ -23,39 +23,54 @@ namespace fvdb::detail::ops {
 /// - features:  [C, N, D]
 /// - opacities: [C, N]
 ///
-/// @tparam DeviceType torch::kCUDA (CPU not implemented).
-template <torch::DeviceType>
+/// @param[in] means Gaussian mean positions [N, 3]
+/// @param[in] quats Gaussian quaternion rotations [N, 4]
+/// @param[in] logScales Gaussian log-scale factors [N, 3]
+/// @param[in] features Feature/color values [C, N, D]
+/// @param[in] opacities Opacity values [C, N]
+/// @param[in] worldToCamMatricesStart World-to-camera matrices (start) [C, 4, 4]
+/// @param[in] worldToCamMatricesEnd World-to-camera matrices (end) [C, 4, 4]
+/// @param[in] projectionMatrices Camera intrinsics [C, 3, 3]
+/// @param[in] distortionCoeffs Distortion coefficients [C, K]
+/// @param[in] rollingShutterType Rolling shutter policy
+/// @param[in] cameraModel Camera/distortion model
+/// @param[in] settings Render settings (image dimensions, tile size, etc.)
+/// @param[in] tileOffsets Tile offsets [C, tileH, tileW]
+/// @param[in] tileGaussianIds Tile Gaussian IDs [n_isects]
+/// @param[in] renderedAlphas Alpha values from forward pass [C, H, W, 1]
+/// @param[in] lastIds Last Gaussian ID per pixel [C, H, W]
+/// @param[in] dLossDRenderedFeatures Gradients w.r.t. rendered features [C, H, W, D]
+/// @param[in] dLossDRenderedAlphas Gradients w.r.t. rendered alphas [C, H, W, 1]
+/// @param[in] backgrounds Optional per-camera background [C, D]
+/// @param[in] masks Optional per-tile boolean mask [C, tileH, tileW]
+///
+/// @return std::tuple containing gradients:
+///         - dL/dmeans [N, 3]
+///         - dL/dquats [N, 4]
+///         - dL/dlogScales [N, 3]
+///         - dL/dfeatures [C, N, D]
+///         - dL/dopacities [C, N]
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
-dispatchGaussianRasterizeFromWorld3DGSBackward(
-    // Gaussian parameters (world space)
-    const torch::Tensor &means,     // [N, 3]
-    const torch::Tensor &quats,     // [N, 4]
-    const torch::Tensor &logScales, // [N, 3]
-    // Per-camera quantities
-    const torch::Tensor &features,                // [C, N, D]
-    const torch::Tensor &opacities,               // [C, N]
-    const torch::Tensor &worldToCamMatricesStart, // [C, 4, 4]
-    const torch::Tensor &worldToCamMatricesEnd,   // [C, 4, 4]
-    const torch::Tensor &projectionMatrices,      // [C, 3, 3]
-    const torch::Tensor &distortionCoeffs,        // [C, K] (K=0 or 12)
-    const RollingShutterType rollingShutterType,
-    const DistortionModel cameraModel,
-    // Render settings
-    const RenderSettings &settings,
-    // Intersections
-    const torch::Tensor &tileOffsets,     // [C, tileH, tileW]
-    const torch::Tensor &tileGaussianIds, // [n_isects] values in [0, C*N)
-    // Forward outputs needed for backward
-    const torch::Tensor &renderedAlphas, // [C, H, W, 1]
-    const torch::Tensor &lastIds,        // [C, H, W]
-    // Gradients of outputs
-    const torch::Tensor &dLossDRenderedFeatures, // [C, H, W, D]
-    const torch::Tensor &dLossDRenderedAlphas,   // [C, H, W, 1]
-    // Optional background (only affects alpha gradient term)
-    const at::optional<torch::Tensor> &backgrounds = at::nullopt, // [C, D]
-    // Optional tile masks (parity with classic rasterizer)
-    const at::optional<torch::Tensor> &masks = at::nullopt // [C, tileH, tileW] bool
-);
+gaussianRasterizeFromWorldBackward(const torch::Tensor &means,
+                                   const torch::Tensor &quats,
+                                   const torch::Tensor &logScales,
+                                   const torch::Tensor &features,
+                                   const torch::Tensor &opacities,
+                                   const torch::Tensor &worldToCamMatricesStart,
+                                   const torch::Tensor &worldToCamMatricesEnd,
+                                   const torch::Tensor &projectionMatrices,
+                                   const torch::Tensor &distortionCoeffs,
+                                   RollingShutterType rollingShutterType,
+                                   DistortionModel cameraModel,
+                                   const RenderSettings &settings,
+                                   const torch::Tensor &tileOffsets,
+                                   const torch::Tensor &tileGaussianIds,
+                                   const torch::Tensor &renderedAlphas,
+                                   const torch::Tensor &lastIds,
+                                   const torch::Tensor &dLossDRenderedFeatures,
+                                   const torch::Tensor &dLossDRenderedAlphas,
+                                   const at::optional<torch::Tensor> &backgrounds = at::nullopt,
+                                   const at::optional<torch::Tensor> &masks       = at::nullopt);
 
 } // namespace fvdb::detail::ops
 

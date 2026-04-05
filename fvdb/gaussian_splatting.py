@@ -1636,26 +1636,29 @@ class GaussianSplat3d:
     ) -> ProjectedGaussianSplatsCpp:
         """Internal helper: project gaussians using _C.gsplat_project_gaussians_for_camera_with_accum
         and update accumulator state in-place."""
-        state, self._accum_grad_norms, self._accum_step_counts, self._accum_max_2d_radii = (
-            _C.gsplat_project_gaussians_for_camera_with_accum(
-                self._means,
-                self._quats,
-                self._log_scales,
-                self._logit_opacities,
-                self._sh0,
-                self._shN,
-                world_to_camera_matrices,
-                projection_matrices,
-                settings,
-                camera_model,
-                projection_method,
-                distortion_coeffs,
-                self._accumulate_mean_2d_gradients,
-                self._accumulate_max_2d_radii,
-                self._accum_grad_norms,
-                self._accum_step_counts,
-                self._accum_max_2d_radii,
-            )
+        (
+            state,
+            self._accum_grad_norms,
+            self._accum_step_counts,
+            self._accum_max_2d_radii,
+        ) = _C.gsplat_project_gaussians_for_camera_with_accum(
+            self._means,
+            self._quats,
+            self._log_scales,
+            self._logit_opacities,
+            self._sh0,
+            self._shN,
+            world_to_camera_matrices,
+            projection_matrices,
+            settings,
+            camera_model,
+            projection_method,
+            distortion_coeffs,
+            self._accumulate_mean_2d_gradients,
+            self._accumulate_max_2d_radii,
+            self._accum_grad_norms,
+            self._accum_step_counts,
+            self._accum_max_2d_radii,
         )
         return state
 
@@ -1756,7 +1759,11 @@ class GaussianSplat3d:
                 self._accum_max_2d_radii = torch.zeros(N, device=self._means.device, dtype=torch.int32)
 
         # Map C++ RenderMode enum to string for functional API
-        mode_map = {_C.RenderMode.RGB: "rgb", _C.RenderMode.DEPTH: "depth", _C.RenderMode.RGBD: "rgbd"}
+        mode_map = {
+            _C.RenderMode.RGB: "rgb",
+            _C.RenderMode.DEPTH: "depth",
+            _C.RenderMode.RGBD: "rgbd",
+        }
         render_mode_str = mode_map[settings.render_mode]
 
         # Stage 1: Raw geometric projection
@@ -3544,7 +3551,16 @@ class GaussianSplat3d:
                 and 0 means the pixel is fully transparent, and 1 means the pixel is fully opaque.
         """
         settings = _build_settings(
-            image_width, image_height, near, far, 0, tile_size, min_radius_2d, eps_2d, antialias, "depth"
+            image_width,
+            image_height,
+            near,
+            far,
+            0,
+            tile_size,
+            min_radius_2d,
+            eps_2d,
+            antialias,
+            "depth",
         )
         state = self._project_with_accum(
             world_to_camera_matrices,
@@ -3659,7 +3675,16 @@ class GaussianSplat3d:
                 and 0 means the pixel is fully transparent, and 1 means the pixel is fully opaque.
         """
         settings = _build_settings(
-            image_width, image_height, near, far, 0, tile_size, min_radius_2d, eps_2d, antialias, "depth"
+            image_width,
+            image_height,
+            near,
+            far,
+            0,
+            tile_size,
+            min_radius_2d,
+            eps_2d,
+            antialias,
+            "depth",
         )
 
         if isinstance(pixels_to_render, torch.Tensor):
@@ -3754,7 +3779,16 @@ class GaussianSplat3d:
                 sum to 1 for each pixel if that pixel is opaque (alpha=1).
         """
         settings = _build_settings(
-            image_width, image_height, near, far, 0, tile_size, min_radius_2d, eps_2d, antialias, "depth"
+            image_width,
+            image_height,
+            near,
+            far,
+            0,
+            tile_size,
+            min_radius_2d,
+            eps_2d,
+            antialias,
+            "depth",
         )
         settings.num_depth_samples = top_k_contributors
 
@@ -3880,7 +3914,16 @@ class GaussianSplat3d:
                 containing the weights of the contributing Gaussians of each rendered pixel for each camera. The weights are in row-major order and sum to 1 for each pixel if that pixel is opaque (alpha=1).
         """
         settings = _build_settings(
-            image_width, image_height, near, far, 0, tile_size, min_radius_2d, eps_2d, antialias, "depth"
+            image_width,
+            image_height,
+            near,
+            far,
+            0,
+            tile_size,
+            min_radius_2d,
+            eps_2d,
+            antialias,
+            "depth",
         )
         settings.num_depth_samples = top_k_contributors
 
@@ -4003,7 +4046,9 @@ class GaussianSplat3d:
             self._accum_max_2d_radii.zero_()
 
     def save_ply(
-        self, filename: pathlib.Path | str, metadata: Mapping[str, str | int | float | torch.Tensor] | None = None
+        self,
+        filename: pathlib.Path | str,
+        metadata: Mapping[str, str | int | float | torch.Tensor] | None = None,
     ) -> None:
         """
         Save this :class:`GaussianSplat3d` to a PLY file. and include any metadata provided.
@@ -4279,14 +4324,18 @@ class GaussianSplat3d:
         return camera_model
 
     @staticmethod
-    def _projection_method_from_cpp(projection_method: _C.ProjectionMethod) -> ProjectionMethod:
+    def _projection_method_from_cpp(
+        projection_method: _C.ProjectionMethod,
+    ) -> ProjectionMethod:
         try:
             return ProjectionMethod[projection_method.name]
         except KeyError as exc:
             raise ValueError(f"Invalid projection method: {projection_method}") from exc
 
     @staticmethod
-    def _projection_method_to_cpp(projection_method: ProjectionMethod) -> _C.ProjectionMethod:
+    def _projection_method_to_cpp(
+        projection_method: ProjectionMethod,
+    ) -> _C.ProjectionMethod:
         if isinstance(projection_method, ProjectionMethod):
             return getattr(_C.ProjectionMethod, projection_method.name)
         return projection_method

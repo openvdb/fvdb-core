@@ -217,7 +217,12 @@ class TestIO(unittest.TestCase):
             )
             grid = fvdb.GridBatch.from_ijk(grid_ijk)
             with self.assertRaises(ValueError):
-                grid.save_nanovdb("temp.nvdb", grid_ijk, compressed=True, names=["a" * 1000] * batch_size)
+                grid.save_nanovdb(
+                    "temp.nvdb",
+                    grid_ijk,
+                    compressed=True,
+                    names=["a" * 1000] * batch_size,
+                )
 
     @parameterized.expand(["cpu", "cuda"])
     def test_bad_length_raises(self, device):
@@ -294,7 +299,11 @@ class TestIO(unittest.TestCase):
             grid = fvdb.GridBatch.from_ijk(grid_ijk)
             # data = fvdb.JaggedTensor([torch.rand(grid.num_voxels[i].item()).to(device) for i in range(batch_size)])
             with tempfile.NamedTemporaryFile() as temp:
-                grid.save_nanovdb(temp.name, compressed=True, names=[f"a_{i}" for i in range(batch_size)])
+                grid.save_nanovdb(
+                    temp.name,
+                    compressed=True,
+                    names=[f"a_{i}" for i in range(batch_size)],
+                )
 
                 with self.assertRaises(IndexError):
                     fvdb.GridBatch.from_nanovdb(temp.name, device=device, names=["a_0", "b", "a_1", "a_0"])

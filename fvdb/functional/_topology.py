@@ -10,7 +10,13 @@ import torch
 
 from ..jagged_tensor import JaggedTensor
 from .. import _fvdb_cpp
-from ..types import NumericMaxRank1, NumericMaxRank2, ValueConstraint, to_Vec3i, to_Vec3iBatchBroadcastable
+from ..types import (
+    NumericMaxRank1,
+    NumericMaxRank2,
+    ValueConstraint,
+    to_Vec3i,
+    to_Vec3iBatchBroadcastable,
+)
 
 if TYPE_CHECKING:
     from ..grid_batch import GridBatch

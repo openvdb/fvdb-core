@@ -3,10 +3,12 @@
 ## Summary
 
 This PR migrates Gaussian splatting from a monolithic C++ class to a layered
-Python architecture:
+Python architecture, and decomposes the C++ op layer for compilation isolation:
 
-- **C++ free functions** (dispatch layer) -- unchanged CUDA kernels, now called
-  through standalone C++ functions instead of class methods.
+- **C++ ops** (individual `.h/.cu` pairs) -- each op exposes a non-template
+  wrapper function that handles device dispatch internally. No dispatch
+  templates leak into headers. The monolithic `GaussianSplatOps.{h,cpp}`
+  aggregation file is eliminated.
 - **Python autograd** -- 6 `torch.autograd.Function` subclasses that wrap the
   C++ forward/backward dispatch, replacing the 5 C++ autograd classes.
 - **`fvdb.functional.splat`** -- pure-functional pipeline stages that compose
@@ -19,7 +21,7 @@ The public API of `GaussianSplat3d` is **unchanged**. All 138 tests pass
 
 ## What to review and how
 
-This is a large diff (~8k lines added, ~7k removed across 54 files), but much
+This is a large diff (~8k lines added, ~7k removed across 60+ files), but much
 of it is mechanical. Here's a guide to focus review time:
 
 ### 1. Start here: the functional pipeline stages (small, new, important)
@@ -55,16 +57,41 @@ pattern.
 input count, `ctx.save_for_backward` covers all needed tensors, and
 contiguity/assert patterns are correct.
 
-### 3. Then: the C++ changes (mechanical, high confidence)
+### 3. Then: the C++ op decomposition (mechanical, high confidence)
 
-- `GaussianSplatOps.{h,cpp}` -- C++ free functions extracted from the deleted
-  `GaussianSplat3d` class methods. Same logic, now standalone.
-- `GaussianSplatOps.cpp` (pybind) -- exposes the free functions + raw
-  forward/backward dispatch to Python.
-- `GaussianProjectionTypes.h` -- `ProjectedGaussianSplats` and
-  `SparseProjectedGaussianSplats` structs, extracted from the class.
+The monolithic `GaussianSplatOps.{h,cpp}` is eliminated. Each function is
+distributed to the `.{h,cu}` file pair of the dispatch backend it corresponds
+to. Headers expose only non-template wrapper functions; dispatch templates are
+internal to `.cu` files. The pybind file contains zero logic -- just bindings.
 
-**No kernel code was modified.** The `.cu` files are untouched.
+**New file pairs** (pure CPU orchestration, no CUDA):
+- `GaussianCameraValidation.{h,cpp}` -- camera arg validation
+- `GaussianDeduplicatePixels.{h,cpp}` -- pixel deduplication for sparse render
+- `GaussianProjectionPipeline.{h,cpp}` -- projection orchestration (analytic/UT
+  dispatch, SH eval, tile intersection, sparse render)
+
+**Modified `.h/.cu` pairs** (non-template wrapper added, dispatch template
+internalized):
+- `GaussianProjectionForward` -- `gaussianProjectionForward`
+- `GaussianProjectionBackward` -- `gaussianProjectionBackward`
+- `GaussianProjectionUT` -- `gaussianProjectionForwardUT`
+- `GaussianProjectionJaggedForward` -- `gaussianProjectionJaggedForward`
+- `GaussianProjectionJaggedBackward` -- `gaussianProjectionJaggedBackward`
+- `GaussianSphericalHarmonicsForward` -- `sphericalHarmonicsForward` + `evalSphericalHarmonics`
+- `GaussianSphericalHarmonicsBackward` -- `sphericalHarmonicsBackward`
+- `GaussianTileIntersection` -- `gaussianTileIntersection` + `gaussianSparseTileIntersection`
+- `GaussianRasterizeForward` -- `gaussianRasterizeForward` + `gaussianSparseRasterizeForward` + `renderCropFromProjected`
+- `GaussianRasterizeBackward` -- `gaussianRasterizeBackward` + `gaussianSparseRasterizeBackward`
+- `GaussianRasterizeFromWorldForward` -- `gaussianRasterizeFromWorldForward` + `rasterizeFromWorld`
+- `GaussianRasterizeFromWorldBackward` -- `gaussianRasterizeFromWorldBackward`
+- `GaussianRasterizeNumContributingGaussians` -- wrappers + `renderNumContributing` + `sparseRenderNumContributing`
+- `GaussianRasterizeContributingGaussianIds` -- wrappers + `renderContributingIds` + `sparseRenderContributingIds`
+- `GaussianRasterizeTopContributingGaussianIds` -- wrappers
+- `GaussianMCMCRelocation` -- `gaussianRelocation`
+- `GaussianMCMCAddNoise` -- `gaussianMCMCAddNoise`
+- `GaussianComputeNanInfMask` -- `gaussianNanInfMask`
+
+**No kernel code was modified.** The `.cu` kernel implementations are untouched.
 
 ### 4. Then: `gaussian_splatting.py` (large, but now just orchestration)
 
@@ -78,6 +105,7 @@ method boilerplate.
 
 - `GaussianSplat3d.{h,cpp}` -- 3,200 lines deleted (the monolithic class)
 - `GaussianSplatBinding.cpp` -- 560 lines deleted (its pybind binding)
+- `GaussianSplatOps.{h,cpp}` -- 1,430 lines deleted (the aggregation layer)
 - 5 C++ autograd files -- 1,500 lines deleted
 - `GaussianSplat3dCameraApiTest.cpp` -- 514 lines deleted (covered by Python tests)
 
@@ -96,6 +124,7 @@ was accidentally dropped.
 ## Test plan
 
 - [x] All 135 existing tests pass (no regressions)
+- [x] All 36 C++ gtests pass
 - [x] `test_functional_forward_matches_oo` -- functional stages produce
       pixel-identical output to `GaussianSplat3d.render_images`
 - [x] `test_functional_backward_matches_oo` -- all 6 parameter gradients

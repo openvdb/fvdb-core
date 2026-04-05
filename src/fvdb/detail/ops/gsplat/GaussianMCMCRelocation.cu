@@ -5,6 +5,7 @@
 #include <fvdb/detail/ops/gsplat/GaussianMCMCRelocation.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Nvtx.h>
+#include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/GridDim.h>
 #include <fvdb/detail/utils/cuda/Utils.cuh>
 
@@ -19,6 +20,16 @@ namespace fvdb::detail::ops {
 
 using fvdb::detail::deviceChunk;
 using fvdb::detail::mergeStreams;
+
+// Internal dispatch template (specializations defined below).
+template <torch::DeviceType DeviceType>
+std::tuple<torch::Tensor, torch::Tensor>
+dispatchGaussianRelocation(const torch::Tensor &logScales,
+                           const torch::Tensor &logitOpacities,
+                           const torch::Tensor &ratios,
+                           const torch::Tensor &binomialCoeffs,
+                           const int nMax,
+                           float minOpacity);
 
 namespace {
 
@@ -227,6 +238,19 @@ dispatchGaussianRelocation<torch::kCPU>(const torch::Tensor &logScales,      // 
                                         float minOpacity) {
     // CPU path intentionally unsupported; keep signature for clearer error messaging in tests.
     TORCH_CHECK_NOT_IMPLEMENTED(false, "GaussianRelocation is not implemented for CPU");
+}
+
+std::tuple<torch::Tensor, torch::Tensor>
+gaussianRelocation(const torch::Tensor &logScales,      // [N, 3]
+                   const torch::Tensor &logitOpacities, // [N]
+                   const torch::Tensor &ratios,         // [N]
+                   const torch::Tensor &binomialCoeffs, // [nMax, nMax]
+                   const int nMax,
+                   float minOpacity) {
+    return FVDB_DISPATCH_KERNEL(logScales.device(), [&]() {
+        return dispatchGaussianRelocation<DeviceTag>(
+            logScales, logitOpacities, ratios, binomialCoeffs, nMax, minOpacity);
+    });
 }
 
 } // namespace fvdb::detail::ops

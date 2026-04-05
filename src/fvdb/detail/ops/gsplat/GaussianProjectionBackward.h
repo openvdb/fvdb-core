@@ -21,8 +21,6 @@ namespace ops {
 /// intrinsics. It enables backpropagation through the projection step in the Gaussian Splatting
 /// pipeline.
 ///
-/// @tparam DeviceType Device type template parameter (torch::kCUDA or torch::kCPU)
-///
 /// @param[in] means 3D positions of Gaussians [N, 3]
 /// @param[in] quats Quaternion rotations of Gaussians [N, 4] in format (x, y, z, w)
 /// @param[in] scales Scale factors of Gaussians [N, 3] representing extent in each dimension
@@ -49,14 +47,13 @@ namespace ops {
 ///
 /// @return std::tuple containing gradients of the loss function with respect to the input
 /// parameters:
-///         - 3D means [N, 3] - ∂L/∂means
-///         - Quaternions [N, 4] - ∂L/∂quats
-///         - Scales [N, 3] - ∂L/∂scales
-///         - View matrices [C, 4, 4] - ∂L/∂viewmats
-///         - Camera intrinsics [C, 3, 3] - ∂L/∂Ks
-template <torch::DeviceType>
+///         - 3D means [N, 3] - dL/dmeans
+///         - Quaternions [N, 4] - dL/dquats
+///         - Scales [N, 3] - dL/dscales
+///         - View matrices [C, 4, 4] - dL/dviewmats
+///         - Camera intrinsics [C, 3, 3] - dL/dKs
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
-dispatchGaussianProjectionBackward(
+gaussianProjectionBackward(
     const torch::Tensor &means,                       // [N, 3]
     const torch::Tensor &quats,                       // [N, 4]
     const torch::Tensor &scales,                      // [N, 3]

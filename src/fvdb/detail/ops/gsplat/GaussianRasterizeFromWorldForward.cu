@@ -5,6 +5,7 @@
 #include <fvdb/detail/ops/gsplat/GaussianRasterizeFromWorldForward.h>
 #include <fvdb/detail/ops/gsplat/GaussianRasterizeOptionalInputs.h>
 #include <fvdb/detail/utils/Nvtx.h>
+#include <fvdb/detail/utils/Utils.h>
 
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAGuard.h>
@@ -288,6 +289,25 @@ launchForward(const torch::Tensor &means,
 
 } // namespace
 
+template <torch::DeviceType>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
+dispatchGaussianRasterizeFromWorld3DGSForward(const torch::Tensor &means,
+                                              const torch::Tensor &quats,
+                                              const torch::Tensor &logScales,
+                                              const torch::Tensor &features,
+                                              const torch::Tensor &opacities,
+                                              const torch::Tensor &worldToCamMatricesStart,
+                                              const torch::Tensor &worldToCamMatricesEnd,
+                                              const torch::Tensor &projectionMatrices,
+                                              const torch::Tensor &distortionCoeffs,
+                                              RollingShutterType rollingShutterType,
+                                              DistortionModel cameraModel,
+                                              const RenderSettings &settings,
+                                              const torch::Tensor &tileOffsets,
+                                              const torch::Tensor &tileGaussianIds,
+                                              const at::optional<torch::Tensor> &backgrounds,
+                                              const at::optional<torch::Tensor> &masks);
+
 template <>
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
 dispatchGaussianRasterizeFromWorld3DGSForward<torch::kCUDA>(
@@ -483,6 +503,88 @@ dispatchGaussianRasterizeFromWorld3DGSForward<torch::kCPU>(const torch::Tensor &
                                                            const at::optional<torch::Tensor> &,
                                                            const at::optional<torch::Tensor> &) {
     TORCH_CHECK_VALUE(false, "dispatchGaussianRasterizeFromWorld3DGSForward is CUDA-only");
+}
+
+std::tuple<torch::Tensor, torch::Tensor>
+rasterizeFromWorld(const torch::Tensor &means,
+                   const torch::Tensor &quats,
+                   const torch::Tensor &logScales,
+                   const fvdb::ProjectedGaussianSplats &projectedState,
+                   const torch::Tensor &worldToCameraMatrices,
+                   const torch::Tensor &projectionMatrices,
+                   const torch::Tensor &distortionCoeffs,
+                   const DistortionModel cameraModel,
+                   const uint32_t imageWidth,
+                   const uint32_t imageHeight,
+                   const uint32_t tileSize,
+                   const std::optional<torch::Tensor> &backgrounds,
+                   const std::optional<torch::Tensor> &masks) {
+    FVDB_FUNC_RANGE();
+    RenderSettings settings;
+    settings.imageWidth   = imageWidth;
+    settings.imageHeight  = imageHeight;
+    settings.imageOriginW = 0;
+    settings.imageOriginH = 0;
+    settings.tileSize     = tileSize;
+
+    auto outputs = FVDB_DISPATCH_KERNEL_DEVICE(means.device(), [&]() {
+        return dispatchGaussianRasterizeFromWorld3DGSForward<DeviceTag>(
+            means,
+            quats,
+            logScales,
+            projectedState.perGaussianRenderQuantity,
+            projectedState.perGaussianOpacity,
+            worldToCameraMatrices,
+            worldToCameraMatrices,
+            projectionMatrices,
+            distortionCoeffs,
+            RollingShutterType::NONE,
+            cameraModel,
+            settings,
+            projectedState.tileOffsets,
+            projectedState.tileGaussianIds,
+            backgrounds,
+            masks);
+    });
+
+    return {std::get<0>(outputs), std::get<1>(outputs)};
+}
+
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
+gaussianRasterizeFromWorldForward(const torch::Tensor &means,
+                                  const torch::Tensor &quats,
+                                  const torch::Tensor &logScales,
+                                  const torch::Tensor &features,
+                                  const torch::Tensor &opacities,
+                                  const torch::Tensor &worldToCamMatricesStart,
+                                  const torch::Tensor &worldToCamMatricesEnd,
+                                  const torch::Tensor &projectionMatrices,
+                                  const torch::Tensor &distortionCoeffs,
+                                  const RollingShutterType rollingShutterType,
+                                  const DistortionModel cameraModel,
+                                  const RenderSettings &settings,
+                                  const torch::Tensor &tileOffsets,
+                                  const torch::Tensor &tileGaussianIds,
+                                  const at::optional<torch::Tensor> &backgrounds,
+                                  const at::optional<torch::Tensor> &masks) {
+    return FVDB_DISPATCH_KERNEL_DEVICE(means.device(), [&]() {
+        return dispatchGaussianRasterizeFromWorld3DGSForward<DeviceTag>(means,
+                                                                        quats,
+                                                                        logScales,
+                                                                        features,
+                                                                        opacities,
+                                                                        worldToCamMatricesStart,
+                                                                        worldToCamMatricesEnd,
+                                                                        projectionMatrices,
+                                                                        distortionCoeffs,
+                                                                        rollingShutterType,
+                                                                        cameraModel,
+                                                                        settings,
+                                                                        tileOffsets,
+                                                                        tileGaussianIds,
+                                                                        backgrounds,
+                                                                        masks);
+    });
 }
 
 } // namespace fvdb::detail::ops

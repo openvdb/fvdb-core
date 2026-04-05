@@ -27,7 +27,13 @@ all_device_dtype_combos = [
 class TestNNModules(unittest.TestCase):
 
     def _make_dense_grid(self, device, batch_size=1, shape=(10, 10, 10)):
-        return GridBatch.from_dense(batch_size, list(shape), voxel_sizes=0.1, origins=(0.0, 0.0, 0.0), device=device)
+        return GridBatch.from_dense(
+            batch_size,
+            list(shape),
+            voxel_sizes=0.1,
+            origins=(0.0, 0.0, 0.0),
+            device=device,
+        )
 
     def _make_features(self, grid, num_channels, device, dtype):
         data = torch.randn(grid.total_voxels, num_channels, device=device, dtype=dtype)
@@ -104,7 +110,10 @@ class TestNNModules(unittest.TestCase):
             self.assertGreater(pooled_data.jdata.shape[0], 0)
             self.assertEqual(pooled_data.jdata.shape[1], 4)
             self.assertGreater(coarse_grid.total_voxels, 0)
-            self.assertFalse(torch.any(torch.isinf(pooled_data.jdata)), "MaxPool output should not contain inf values")
+            self.assertFalse(
+                torch.any(torch.isinf(pooled_data.jdata)),
+                "MaxPool output should not contain inf values",
+            )
 
     @parameterized.expand(all_device_dtype_combos)
     def test_max_pool_inf_zeroing(self, device, dtype):
@@ -274,20 +283,32 @@ class TestNNModules(unittest.TestCase):
         grid = self._make_dense_grid(device, batch_size=1, shape=(8, 8, 8))
 
         for affine in (True, False):
-            data = torch.randn(grid.total_voxels, num_channels, device=device, dtype=dtype, requires_grad=True)
+            data = torch.randn(
+                grid.total_voxels,
+                num_channels,
+                device=device,
+                dtype=dtype,
+                requires_grad=True,
+            )
             features = grid.jagged_like(data)
 
-            our_gn = fvnn.GroupNorm(num_groups=num_groups, num_channels=num_channels, affine=affine, dtype=dtype).to(
-                device
-            )
+            our_gn = fvnn.GroupNorm(
+                num_groups=num_groups,
+                num_channels=num_channels,
+                affine=affine,
+                dtype=dtype,
+            ).to(device)
             our_output = our_gn(features, grid)
             our_output.jdata.sum().backward()
             self.assertIsNotNone(data.grad)
             our_grad = data.grad.clone()
 
-            torch_gn = nn.GroupNorm(num_groups=num_groups, num_channels=num_channels, affine=affine, dtype=dtype).to(
-                device
-            )
+            torch_gn = nn.GroupNorm(
+                num_groups=num_groups,
+                num_channels=num_channels,
+                affine=affine,
+                dtype=dtype,
+            ).to(device)
             if affine:
                 with torch.no_grad():
                     torch_gn.weight.copy_(our_gn.weight)
@@ -431,7 +452,10 @@ class TestNNModules(unittest.TestCase):
             fvnn.BatchNorm,
             fvnn.SyncBatchNorm,
         ):
-            self.assertTrue(issubclass(cls, nn.Module), f"{cls.__name__} should be an nn.Module subclass")
+            self.assertTrue(
+                issubclass(cls, nn.Module),
+                f"{cls.__name__} should be an nn.Module subclass",
+            )
 
 
 # =========================================================================

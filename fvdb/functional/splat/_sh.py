@@ -107,7 +107,10 @@ def evaluate_spherical_harmonics(
         cam_to_world = torch.linalg.inv(world_to_camera_matrices)
         camera_pos = cam_to_world[:, :3, 3]
         view_dirs = means[None, :, :] - camera_pos[:, None, :]
-    return cast(torch.Tensor, _EvalSHFn.apply(actual_sh_degree, C, view_dirs, sh0, shN, per_gaussian_projected_radii))
+    return cast(
+        torch.Tensor,
+        _EvalSHFn.apply(actual_sh_degree, C, view_dirs, sh0, shN, per_gaussian_projected_radii),
+    )
 
 
 def prepare_render_features(

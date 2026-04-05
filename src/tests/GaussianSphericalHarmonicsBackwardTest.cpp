@@ -90,15 +90,14 @@ struct SphericalHarmonincsBackwardTestFixture : public ::testing::TestWithParam<
             const bool setZeroRadii = false) {
         {
             auto [dLossDSh0Coeffs, dLossDShNCoeffs, dLossDViewDirs] =
-                fvdb::detail::ops::dispatchSphericalHarmonicsBackward<torch::kCUDA>(
-                    shDegreeToUse,
-                    numCameras,
-                    numGaussians,
-                    viewDirs,
-                    shNCoeffs,
-                    dLossDRenderQuantities,
-                    radii,
-                    true);
+                fvdb::detail::ops::sphericalHarmonicsBackward(shDegreeToUse,
+                                                              numCameras,
+                                                              numGaussians,
+                                                              viewDirs,
+                                                              shNCoeffs,
+                                                              dLossDRenderQuantities,
+                                                              radii,
+                                                              true);
 
             if (setZeroRadii) {
                 const auto dLdSh0Slice = dLossDSh0Coeffs.index({torch::indexing::Slice(0, -1, 2),
@@ -124,15 +123,14 @@ struct SphericalHarmonincsBackwardTestFixture : public ::testing::TestWithParam<
         // We don't return view direction gradients if you don't ask for them
         {
             auto [dLossDSh0Coeffs, dLossDShNCoeffs, dLossDViewDirs] =
-                fvdb::detail::ops::dispatchSphericalHarmonicsBackward<torch::kCUDA>(
-                    shDegreeToUse,
-                    numCameras,
-                    numGaussians,
-                    viewDirs,
-                    shNCoeffs,
-                    dLossDRenderQuantities,
-                    radii,
-                    false);
+                fvdb::detail::ops::sphericalHarmonicsBackward(shDegreeToUse,
+                                                              numCameras,
+                                                              numGaussians,
+                                                              viewDirs,
+                                                              shNCoeffs,
+                                                              dLossDRenderQuantities,
+                                                              radii,
+                                                              false);
             if (setZeroRadii) {
                 const auto dLdSh0Slice = dLossDSh0Coeffs.index({torch::indexing::Slice(0, -1, 2),
                                                                 torch::indexing::Slice(),
@@ -174,15 +172,14 @@ struct SphericalHarmonincsBackwardTestFixture : public ::testing::TestWithParam<
 
         {
             auto [dLossDSh0Coeffs, dLossDShNCoeffs, dLossDViewDirs] =
-                fvdb::detail::ops::dispatchSphericalHarmonicsBackward<torch::kCUDA>(
-                    shDegreeToUse,
-                    numCameras,
-                    numGaussians,
-                    viewDirs,
-                    shNCoeffs,
-                    dLossDRenderQuantities,
-                    radii,
-                    true);
+                fvdb::detail::ops::sphericalHarmonicsBackward(shDegreeToUse,
+                                                              numCameras,
+                                                              numGaussians,
+                                                              viewDirs,
+                                                              shNCoeffs,
+                                                              dLossDRenderQuantities,
+                                                              radii,
+                                                              true);
             EXPECT_TRUE(dLossDSh0Coeffs.sizes() == expectedSh0Sizes);
             EXPECT_FALSE(dLossDShNCoeffs.defined());
             EXPECT_FALSE(dLossDViewDirs.defined());
@@ -194,15 +191,14 @@ struct SphericalHarmonincsBackwardTestFixture : public ::testing::TestWithParam<
         {
             shNCoeffs = torch::Tensor();
             auto [dLossDSh0Coeffs, dLossDShNCoeffs, dLossDViewDirs] =
-                fvdb::detail::ops::dispatchSphericalHarmonicsBackward<torch::kCUDA>(
-                    shDegreeToUse,
-                    numCameras,
-                    numGaussians,
-                    viewDirs,
-                    shNCoeffs,
-                    dLossDRenderQuantities,
-                    radii,
-                    true);
+                fvdb::detail::ops::sphericalHarmonicsBackward(shDegreeToUse,
+                                                              numCameras,
+                                                              numGaussians,
+                                                              viewDirs,
+                                                              shNCoeffs,
+                                                              dLossDRenderQuantities,
+                                                              radii,
+                                                              true);
             EXPECT_TRUE(dLossDSh0Coeffs.sizes() == expectedSh0Sizes);
             EXPECT_FALSE(dLossDShNCoeffs.defined());
             EXPECT_FALSE(dLossDViewDirs.defined());
@@ -215,15 +211,14 @@ struct SphericalHarmonincsBackwardTestFixture : public ::testing::TestWithParam<
             shNCoeffs = torch::Tensor();
             viewDirs  = torch::Tensor();
             auto [dLossDSh0Coeffs, dLossDShNCoeffs, dLossDViewDirs] =
-                fvdb::detail::ops::dispatchSphericalHarmonicsBackward<torch::kCUDA>(
-                    shDegreeToUse,
-                    numCameras,
-                    numGaussians,
-                    viewDirs,
-                    shNCoeffs,
-                    dLossDRenderQuantities,
-                    radii,
-                    true);
+                fvdb::detail::ops::sphericalHarmonicsBackward(shDegreeToUse,
+                                                              numCameras,
+                                                              numGaussians,
+                                                              viewDirs,
+                                                              shNCoeffs,
+                                                              dLossDRenderQuantities,
+                                                              radii,
+                                                              true);
             EXPECT_TRUE(dLossDSh0Coeffs.sizes() == expectedSh0Sizes);
             EXPECT_FALSE(dLossDShNCoeffs.defined());
             EXPECT_FALSE(dLossDViewDirs.defined());
@@ -271,15 +266,14 @@ TEST_F(SphericalHarmonincsBackwardTestFixture, BenchmarkSh0) {
     for (int i = 0; i < 10; i += 1) {
         torch::cuda::synchronize();
         auto [dLossDSh0Coeffs, dLossDShNCoeffs, dLossDViewDirs] =
-            fvdb::detail::ops::dispatchSphericalHarmonicsBackward<torch::kCUDA>(
-                shDegreeToUse,
-                numCameras,
-                numGaussians,
-                viewDirs,
-                shNCoeffs,
-                dLossDRenderQuantities,
-                radii,
-                false);
+            fvdb::detail::ops::sphericalHarmonicsBackward(shDegreeToUse,
+                                                          numCameras,
+                                                          numGaussians,
+                                                          viewDirs,
+                                                          shNCoeffs,
+                                                          dLossDRenderQuantities,
+                                                          radii,
+                                                          false);
         torch::cuda::synchronize();
     }
 
@@ -289,15 +283,14 @@ TEST_F(SphericalHarmonincsBackwardTestFixture, BenchmarkSh0) {
         torch::cuda::synchronize();
         auto start = std::chrono::high_resolution_clock::now();
         auto [dLossDSh0Coeffs, dLossDShNCoeffs, dLossDViewDirs] =
-            fvdb::detail::ops::dispatchSphericalHarmonicsBackward<torch::kCUDA>(
-                shDegreeToUse,
-                numCameras,
-                numGaussians,
-                viewDirs,
-                shNCoeffs,
-                dLossDRenderQuantities,
-                radii,
-                false);
+            fvdb::detail::ops::sphericalHarmonicsBackward(shDegreeToUse,
+                                                          numCameras,
+                                                          numGaussians,
+                                                          viewDirs,
+                                                          shNCoeffs,
+                                                          dLossDRenderQuantities,
+                                                          radii,
+                                                          false);
         torch::cuda::synchronize();
         auto end      = std::chrono::high_resolution_clock::now();
         auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
@@ -324,15 +317,14 @@ TEST_F(SphericalHarmonincsBackwardTestFixture, BenchmarkSh0WithViewDirGrad) {
     for (int i = 0; i < 10; i += 1) {
         torch::cuda::synchronize();
         auto [dLossDSh0Coeffs, dLossDShNCoeffs, dLossDViewDirs] =
-            fvdb::detail::ops::dispatchSphericalHarmonicsBackward<torch::kCUDA>(
-                shDegreeToUse,
-                numCameras,
-                numGaussians,
-                viewDirs,
-                shNCoeffs,
-                dLossDRenderQuantities,
-                radii,
-                false);
+            fvdb::detail::ops::sphericalHarmonicsBackward(shDegreeToUse,
+                                                          numCameras,
+                                                          numGaussians,
+                                                          viewDirs,
+                                                          shNCoeffs,
+                                                          dLossDRenderQuantities,
+                                                          radii,
+                                                          false);
         torch::cuda::synchronize();
     }
 
@@ -342,15 +334,14 @@ TEST_F(SphericalHarmonincsBackwardTestFixture, BenchmarkSh0WithViewDirGrad) {
         torch::cuda::synchronize();
         auto start = std::chrono::high_resolution_clock::now();
         auto [dLossDSh0Coeffs, dLossDShNCoeffs, dLossDViewDirs] =
-            fvdb::detail::ops::dispatchSphericalHarmonicsBackward<torch::kCUDA>(
-                shDegreeToUse,
-                numCameras,
-                numGaussians,
-                viewDirs,
-                shNCoeffs,
-                dLossDRenderQuantities,
-                radii,
-                true);
+            fvdb::detail::ops::sphericalHarmonicsBackward(shDegreeToUse,
+                                                          numCameras,
+                                                          numGaussians,
+                                                          viewDirs,
+                                                          shNCoeffs,
+                                                          dLossDRenderQuantities,
+                                                          radii,
+                                                          true);
         torch::cuda::synchronize();
         auto end      = std::chrono::high_resolution_clock::now();
         auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
@@ -376,15 +367,14 @@ TEST_F(SphericalHarmonincsBackwardTestFixture, BenchmarkShNWithViewDirGrad) {
     for (int i = 0; i < 10; i += 1) {
         torch::cuda::synchronize();
         auto [dLossDSh0Coeffs, dLossDShNCoeffs, dLossDViewDirs] =
-            fvdb::detail::ops::dispatchSphericalHarmonicsBackward<torch::kCUDA>(
-                shDegreeToUse,
-                numCameras,
-                numGaussians,
-                viewDirs,
-                shNCoeffs,
-                dLossDRenderQuantities,
-                radii,
-                false);
+            fvdb::detail::ops::sphericalHarmonicsBackward(shDegreeToUse,
+                                                          numCameras,
+                                                          numGaussians,
+                                                          viewDirs,
+                                                          shNCoeffs,
+                                                          dLossDRenderQuantities,
+                                                          radii,
+                                                          false);
         torch::cuda::synchronize();
     }
 
@@ -394,15 +384,14 @@ TEST_F(SphericalHarmonincsBackwardTestFixture, BenchmarkShNWithViewDirGrad) {
         torch::cuda::synchronize();
         auto start = std::chrono::high_resolution_clock::now();
         auto [dLossDSh0Coeffs, dLossDShNCoeffs, dLossDViewDirs] =
-            fvdb::detail::ops::dispatchSphericalHarmonicsBackward<torch::kCUDA>(
-                shDegreeToUse,
-                numCameras,
-                numGaussians,
-                viewDirs,
-                shNCoeffs,
-                dLossDRenderQuantities,
-                radii,
-                true);
+            fvdb::detail::ops::sphericalHarmonicsBackward(shDegreeToUse,
+                                                          numCameras,
+                                                          numGaussians,
+                                                          viewDirs,
+                                                          shNCoeffs,
+                                                          dLossDRenderQuantities,
+                                                          radii,
+                                                          true);
         torch::cuda::synchronize();
         auto end      = std::chrono::high_resolution_clock::now();
         auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
@@ -428,15 +417,14 @@ TEST_F(SphericalHarmonincsBackwardTestFixture, BenchmarkShNWithoutViewDirGrad) {
     for (int i = 0; i < 10; i += 1) {
         torch::cuda::synchronize();
         auto [dLossDSh0Coeffs, dLossDShNCoeffs, dLossDViewDirs] =
-            fvdb::detail::ops::dispatchSphericalHarmonicsBackward<torch::kCUDA>(
-                shDegreeToUse,
-                numCameras,
-                numGaussians,
-                viewDirs,
-                shNCoeffs,
-                dLossDRenderQuantities,
-                radii,
-                false);
+            fvdb::detail::ops::sphericalHarmonicsBackward(shDegreeToUse,
+                                                          numCameras,
+                                                          numGaussians,
+                                                          viewDirs,
+                                                          shNCoeffs,
+                                                          dLossDRenderQuantities,
+                                                          radii,
+                                                          false);
         torch::cuda::synchronize();
     }
 
@@ -446,15 +434,14 @@ TEST_F(SphericalHarmonincsBackwardTestFixture, BenchmarkShNWithoutViewDirGrad) {
         torch::cuda::synchronize();
         auto start = std::chrono::high_resolution_clock::now();
         auto [dLossDSh0Coeffs, dLossDShNCoeffs, dLossDViewDirs] =
-            fvdb::detail::ops::dispatchSphericalHarmonicsBackward<torch::kCUDA>(
-                shDegreeToUse,
-                numCameras,
-                numGaussians,
-                viewDirs,
-                shNCoeffs,
-                dLossDRenderQuantities,
-                radii,
-                false);
+            fvdb::detail::ops::sphericalHarmonicsBackward(shDegreeToUse,
+                                                          numCameras,
+                                                          numGaussians,
+                                                          viewDirs,
+                                                          shNCoeffs,
+                                                          dLossDRenderQuantities,
+                                                          radii,
+                                                          false);
         torch::cuda::synchronize();
         auto end      = std::chrono::high_resolution_clock::now();
         auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);

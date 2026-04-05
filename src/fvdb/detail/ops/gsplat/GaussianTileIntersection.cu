@@ -5,6 +5,7 @@
 #include <fvdb/detail/ops/gsplat/GaussianTileIntersection.h>
 #include <fvdb/detail/ops/gsplat/GaussianVectorTypes.cuh>
 #include <fvdb/detail/utils/Nvtx.h>
+#include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/Utils.cuh>
 
 #include <nanovdb/util/cuda/Util.h>
@@ -1205,6 +1206,30 @@ gaussianTileIntersectionPrivateUse1Impl(
 
 } // namespace
 
+template <torch::DeviceType>
+std::tuple<torch::Tensor, torch::Tensor>
+dispatchGaussianTileIntersection(const torch::Tensor &means2d, // [C, N, 2] or [M, 2]
+                                 const torch::Tensor &radii,   // [C, N] or [M]
+                                 const torch::Tensor &depths,  // [C, N] or [M]
+                                 const at::optional<torch::Tensor> &cameraIds, // NULL or [M]
+                                 const uint32_t numCameras,
+                                 const uint32_t tileSize,
+                                 const uint32_t numTilesH,
+                                 const uint32_t numTilesW);
+
+template <torch::DeviceType>
+std::tuple<torch::Tensor, torch::Tensor>
+dispatchGaussianSparseTileIntersection(const torch::Tensor &means2d,     // [C, N, 2] or [M, 2]
+                                       const torch::Tensor &radii,       // [C, N] or [M]
+                                       const torch::Tensor &depths,      // [C, N] or [M]
+                                       const torch::Tensor &tileMask,    // [C, H, W]
+                                       const torch::Tensor &activeTiles, // [num_active_tiles]
+                                       const at::optional<torch::Tensor> &cameraIds, // NULL or [M]
+                                       const uint32_t numCameras,
+                                       const uint32_t tileSize,
+                                       const uint32_t numTilesH,
+                                       const uint32_t numTilesW);
+
 template <>
 std::tuple<torch::Tensor, torch::Tensor>
 dispatchGaussianTileIntersection<torch::kCUDA>(
@@ -1336,6 +1361,46 @@ dispatchGaussianSparseTileIntersection<torch::kCPU>(
     const uint32_t numTilesW) {
     FVDB_FUNC_RANGE();
     TORCH_CHECK(false, "CPU implementation not available for sparse tile intersection");
+}
+
+std::tuple<torch::Tensor, torch::Tensor>
+gaussianTileIntersection(const torch::Tensor &means2d,                 // [C, N, 2] or [M, 2]
+                         const torch::Tensor &radii,                   // [C, N] or [M]
+                         const torch::Tensor &depths,                  // [C, N] or [M]
+                         const at::optional<torch::Tensor> &cameraIds, // NULL or [M]
+                         const uint32_t numCameras,
+                         const uint32_t tileSize,
+                         const uint32_t numTilesH,
+                         const uint32_t numTilesW) {
+    return FVDB_DISPATCH_KERNEL(means2d.device(), [&]() {
+        return dispatchGaussianTileIntersection<DeviceTag>(
+            means2d, radii, depths, cameraIds, numCameras, tileSize, numTilesH, numTilesW);
+    });
+}
+
+std::tuple<torch::Tensor, torch::Tensor>
+gaussianSparseTileIntersection(const torch::Tensor &means2d,                 // [C, N, 2] or [M, 2]
+                               const torch::Tensor &radii,                   // [C, N] or [M]
+                               const torch::Tensor &depths,                  // [C, N] or [M]
+                               const torch::Tensor &tileMask,                // [C, H, W]
+                               const torch::Tensor &activeTiles,             // [num_active_tiles]
+                               const at::optional<torch::Tensor> &cameraIds, // NULL or [M]
+                               const uint32_t numCameras,
+                               const uint32_t tileSize,
+                               const uint32_t numTilesH,
+                               const uint32_t numTilesW) {
+    return FVDB_DISPATCH_KERNEL(means2d.device(), [&]() {
+        return dispatchGaussianSparseTileIntersection<DeviceTag>(means2d,
+                                                                 radii,
+                                                                 depths,
+                                                                 tileMask,
+                                                                 activeTiles,
+                                                                 cameraIds,
+                                                                 numCameras,
+                                                                 tileSize,
+                                                                 numTilesH,
+                                                                 numTilesW);
+    });
 }
 
 } // namespace ops

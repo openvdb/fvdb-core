@@ -149,19 +149,18 @@ TEST_F(GaussianRasterizeContributingGaussianIdsTestFixture, TestBasicInputsAndOu
 
     // First compute the number of contributing Gaussians
     const auto [numContributingGaussians, alphas] =
-        fvdb::detail::ops::dispatchGaussianRasterizeNumContributingGaussians<torch::kCUDA>(
+        fvdb::detail::ops::gaussianRasterizeNumContributingGaussians(
             means2d, conics, opacities, tileOffsets, tileGaussianIds, settings);
 
     // Then compute the IDs and weights
     const auto [outIds, outWeights] =
-        fvdb::detail::ops::dispatchGaussianRasterizeContributingGaussianIds<torch::kCUDA>(
-            means2d,
-            conics,
-            opacities,
-            tileOffsets,
-            tileGaussianIds,
-            settings,
-            numContributingGaussians);
+        fvdb::detail::ops::gaussianRasterizeContributingGaussianIds(means2d,
+                                                                    conics,
+                                                                    opacities,
+                                                                    tileOffsets,
+                                                                    tileGaussianIds,
+                                                                    settings,
+                                                                    numContributingGaussians);
 
     const int h                 = imageHeight;
     const int w                 = imageWidth;
@@ -225,19 +224,18 @@ TEST_F(GaussianRasterizeContributingGaussianIdsTestFixture, TestBasicInputsAndOu
 
     // First compute the number of contributing Gaussians for dense rendering
     const auto [numContributingGaussians, alphas] =
-        fvdb::detail::ops::dispatchGaussianRasterizeNumContributingGaussians<torch::kCUDA>(
+        fvdb::detail::ops::gaussianRasterizeNumContributingGaussians(
             means2d, conics, opacities, tileOffsets, tileGaussianIds, settings);
 
     // Then compute the IDs and weights for dense rendering
     const auto [outIds, outWeights] =
-        fvdb::detail::ops::dispatchGaussianRasterizeContributingGaussianIds<torch::kCUDA>(
-            means2d,
-            conics,
-            opacities,
-            tileOffsets,
-            tileGaussianIds,
-            settings,
-            numContributingGaussians);
+        fvdb::detail::ops::gaussianRasterizeContributingGaussianIds(means2d,
+                                                                    conics,
+                                                                    opacities,
+                                                                    tileOffsets,
+                                                                    tileGaussianIds,
+                                                                    settings,
+                                                                    numContributingGaussians);
 
     const int h = imageHeight;
     const int w = imageWidth;
@@ -252,22 +250,21 @@ TEST_F(GaussianRasterizeContributingGaussianIdsTestFixture, TestBasicInputsAndOu
 
     // Compute num contributing gaussians for sparse rendering
     const auto [numContributingGaussiansSparse, alphasSparse] =
-        fvdb::detail::ops::dispatchGaussianSparseRasterizeNumContributingGaussians<torch::kCUDA>(
-            means2d,
-            conics,
-            opacities,
-            tileOffsets,
-            tileGaussianIds,
-            pixelsToRender,
-            activeTiles,
-            tilePixelMask,
-            tilePixelCumsum,
-            pixelMap,
-            settings);
+        fvdb::detail::ops::gaussianSparseRasterizeNumContributingGaussians(means2d,
+                                                                           conics,
+                                                                           opacities,
+                                                                           tileOffsets,
+                                                                           tileGaussianIds,
+                                                                           pixelsToRender,
+                                                                           activeTiles,
+                                                                           tilePixelMask,
+                                                                           tilePixelCumsum,
+                                                                           pixelMap,
+                                                                           settings);
 
     // Run the same scene with sparse sampling of only the center pixel
     const auto [outIdsSparse, outWeightsSparse] =
-        fvdb::detail::ops::dispatchGaussianSparseRasterizeContributingGaussianIds<torch::kCUDA>(
+        fvdb::detail::ops::gaussianSparseRasterizeContributingGaussianIds(
             means2d,
             conics,
             opacities,
@@ -349,7 +346,7 @@ TEST_F(GaussianRasterizeContributingGaussianIdsTestFixture, CPUThrows) {
     settings.imageHeight = imageHeight;
     settings.tileSize    = tileSize;
 
-    EXPECT_THROW(fvdb::detail::ops::dispatchGaussianRasterizeNumContributingGaussians<torch::kCPU>(
+    EXPECT_THROW(fvdb::detail::ops::gaussianRasterizeNumContributingGaussians(
                      means2d, conics, opacities, tileOffsets, tileGaussianIds, settings),
                  c10::NotImplementedError);
 }

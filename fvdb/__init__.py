@@ -130,9 +130,20 @@ def gaussian_render_jagged(
 
     # ---- Step 2: Jagged projection (differentiable via Python autograd) ----
     radii, means2d, depths, conics = _ProjectGaussiansJaggedFn.apply(
-        g_sizes, means.jdata, quats.jdata, scales.jdata, c_sizes,
-        viewmats.jdata, Ks.jdata, image_width, image_height, eps2d,
-        near_plane, far_plane, radius_clip, ortho,
+        g_sizes,
+        means.jdata,
+        quats.jdata,
+        scales.jdata,
+        c_sizes,
+        viewmats.jdata,
+        Ks.jdata,
+        image_width,
+        image_height,
+        eps2d,
+        near_plane,
+        far_plane,
+        radius_clip,
+        ortho,
     )
 
     # ---- Step 3: Gather opacities for the expanded layout ----
@@ -161,7 +172,8 @@ def gaussian_render_jagged(
     if actual_sh_degree == 0:
         sh0 = sh_coeffs_batched[0].unsqueeze(0)  # [1, nnz, D]
         features = _EvalSHFn.apply(
-            actual_sh_degree, 1,
+            actual_sh_degree,
+            1,
             torch.zeros(1, nnz, 3, device=device, dtype=dtype),
             sh0.permute(1, 0, 2),  # [nnz, 1, D]
             torch.empty(nnz, 0, D, device=device, dtype=dtype),
@@ -173,7 +185,8 @@ def gaussian_render_jagged(
         cam_to_world = torch.linalg.inv(viewmats.jdata)  # [ccz, 4, 4]
         dirs = means.jdata[gaussian_ids] - cam_to_world[camera_ids, :3, 3]  # [nnz, 3]
         features = _EvalSHFn.apply(
-            actual_sh_degree, 1,
+            actual_sh_degree,
+            1,
             dirs.unsqueeze(0),  # [1, nnz, 3]
             sh0.permute(1, 0, 2),  # [nnz, 1, D]
             shN.permute(1, 0, 2),  # [nnz, K-1, D]
@@ -188,7 +201,13 @@ def gaussian_render_jagged(
     num_tiles_w = math.ceil(image_width / tile_size)
     num_tiles_h = math.ceil(image_height / tile_size)
     tile_offsets, tile_gaussian_ids = _C.gsplat_tile_intersection(
-        means2d, radii, depths, ccz, tile_size, num_tiles_h, num_tiles_w,
+        means2d,
+        radii,
+        depths,
+        ccz,
+        tile_size,
+        num_tiles_h,
+        num_tiles_w,
         camera_ids=camera_ids,
     )
 
@@ -198,9 +217,20 @@ def gaussian_render_jagged(
 
     # ---- Step 6: Rasterize (differentiable via Python autograd) ----
     images, alphas = _RasterizeDenseFn.apply(
-        means2d, conics, features, opacities_batched.contiguous(),
-        image_width, image_height, 0, 0, tile_size,
-        tile_offsets, tile_gaussian_ids, False, backgrounds, masks,
+        means2d,
+        conics,
+        features,
+        opacities_batched.contiguous(),
+        image_width,
+        image_height,
+        0,
+        0,
+        tile_size,
+        tile_offsets,
+        tile_gaussian_ids,
+        False,
+        backgrounds,
+        masks,
     )
 
     return images, alphas, debug_info
@@ -222,10 +252,12 @@ def evaluate_spherical_harmonics(
             raise ValueError("view_directions must be provided when sh_degree > 0")
         if shN is None:
             raise ValueError("shN must be provided when sh_degree > 0")
-    view_dirs = view_directions if view_directions is not None else torch.zeros(
-        num_cameras, sh0.size(0), 3, device=sh0.device, dtype=sh0.dtype)
-    shN_val = shN if shN is not None else torch.empty(
-        sh0.size(0), 0, sh0.size(2), device=sh0.device, dtype=sh0.dtype)
+    view_dirs = (
+        view_directions
+        if view_directions is not None
+        else torch.zeros(num_cameras, sh0.size(0), 3, device=sh0.device, dtype=sh0.dtype)
+    )
+    shN_val = shN if shN is not None else torch.empty(sh0.size(0), 0, sh0.size(2), device=sh0.device, dtype=sh0.dtype)
     return _EvalSHFn.apply(sh_degree, num_cameras, view_dirs, sh0, shN_val, radii)
 
 

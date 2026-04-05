@@ -4,6 +4,7 @@
 #include <fvdb/detail/ops/gsplat/GaussianComputeNanInfMask.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Nvtx.h>
+#include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/GridDim.h>
 #include <fvdb/detail/utils/cuda/Utils.cuh>
 
@@ -12,6 +13,15 @@
 namespace fvdb {
 namespace detail {
 namespace ops {
+
+// Internal dispatch template (specializations defined below).
+template <torch::DeviceType>
+fvdb::JaggedTensor dispatchGaussianNanInfMask(const fvdb::JaggedTensor &means,
+                                              const fvdb::JaggedTensor &quats,
+                                              const fvdb::JaggedTensor &logScales,
+                                              const fvdb::JaggedTensor &logitOpacities,
+                                              const fvdb::JaggedTensor &sh0,
+                                              const fvdb::JaggedTensor &shN);
 
 template <typename T>
 __global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
@@ -213,6 +223,19 @@ dispatchGaussianNanInfMask<torch::kCPU>(const fvdb::JaggedTensor &means,
                                         const fvdb::JaggedTensor &sh0,
                                         const fvdb::JaggedTensor &shN) {
     TORCH_CHECK_NOT_IMPLEMENTED(false, "dispatchGaussianNanInfMask not implemented on the CPU");
+}
+
+fvdb::JaggedTensor
+gaussianNanInfMask(const fvdb::JaggedTensor &means,
+                   const fvdb::JaggedTensor &quats,
+                   const fvdb::JaggedTensor &logScales,
+                   const fvdb::JaggedTensor &logitOpacities,
+                   const fvdb::JaggedTensor &sh0,
+                   const fvdb::JaggedTensor &shN) {
+    return FVDB_DISPATCH_KERNEL(means.device(), [&]() {
+        return dispatchGaussianNanInfMask<DeviceTag>(
+            means, quats, logScales, logitOpacities, sh0, shN);
+    });
 }
 
 } // namespace ops

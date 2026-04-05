@@ -30,14 +30,35 @@ namespace ops {
 /// control
 ///
 /// @return Features/colors [N, D] computed from the spherical harmonics evaluation
-template <torch::DeviceType>
-torch::Tensor dispatchSphericalHarmonicsForward(const int64_t shDegreeToUse,
-                                                const int64_t numCameras,
-                                                const torch::Tensor &viewDirs,  // [C, N, 3]
-                                                const torch::Tensor &sh0Coeffs, // [1, N, D]
-                                                const torch::Tensor &shNCoeffs, // [N, K-1, D]
-                                                const torch::Tensor &radii      // [C, N]
+torch::Tensor sphericalHarmonicsForward(const int64_t shDegreeToUse,
+                                        const int64_t numCameras,
+                                        const torch::Tensor &viewDirs,  // [C, N, 3]
+                                        const torch::Tensor &sh0Coeffs, // [1, N, D]
+                                        const torch::Tensor &shNCoeffs, // [N, K-1, D]
+                                        const torch::Tensor &radii      // [C, N]
 );
+
+/// @brief Evaluate spherical harmonics to compute view-dependent features/colors.
+///
+/// Computes per-camera, per-Gaussian features using spherical harmonics (SH) representation.
+/// Internally derives view directions from the camera matrices and Gaussian means, then dispatches
+/// to the SH forward kernel. When @p shDegreeToUse is 0, view directions are not needed.
+/// The output features are not limited to RGB colors; they can have any number of channels.
+///
+/// @param[in] means              Gaussian mean positions [N, 3]
+/// @param[in] sh0                Degree-0 SH coefficients [N, 1, D] where D is number of channels
+/// @param[in] shN                Higher-degree SH coefficients [N, K-1, D] where
+///                               K = (shDegreeToUse+1)²
+/// @param[in] shDegreeToUse      SH degree to use (0-3 typically, -1 to use all available degrees)
+/// @param[in] worldToCameraMatrices Camera extrinsics [C, 4, 4]
+/// @param[in] perGaussianProjectedRadii Projected radii [C, N] for view-dependent level-of-detail
+/// @return Evaluated SH features [C, N, D]
+torch::Tensor evalSphericalHarmonics(const torch::Tensor &means,
+                                     const torch::Tensor &sh0,
+                                     const torch::Tensor &shN,
+                                     int64_t shDegreeToUse,
+                                     const torch::Tensor &worldToCameraMatrices,
+                                     const torch::Tensor &perGaussianProjectedRadii);
 
 } // namespace ops
 } // namespace detail

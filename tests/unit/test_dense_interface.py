@@ -67,7 +67,10 @@ class TestDenseInterfaceBatch(unittest.TestCase):
         for _ in range(10):
             dense_origin = torch.tensor(
                 [
-                    np.random.randint(low=int(ijk.min(0).values[i].item()), high=int(ijk.max(0).values[i].item()))
+                    np.random.randint(
+                        low=int(ijk.min(0).values[i].item()),
+                        high=int(ijk.max(0).values[i].item()),
+                    )
                     for i in range(3)
                 ],
                 dtype=torch.long,
@@ -77,11 +80,16 @@ class TestDenseInterfaceBatch(unittest.TestCase):
             ijk_offset = ijk - dense_origin.unsqueeze(0)
             max_bound = torch.tensor(random_grid.shape[:3], device=device, dtype=torch.long)
             keep_mask = torch.logical_and(
-                torch.all(ijk_offset >= 0, dim=-1), torch.all(ijk_offset < max_bound.unsqueeze(0), dim=-1)
+                torch.all(ijk_offset >= 0, dim=-1),
+                torch.all(ijk_offset < max_bound.unsqueeze(0), dim=-1),
             )
 
             grid_index = grid.ijk_to_index(JaggedTensor(ijk)).jdata[keep_mask]
-            i, j, k = ijk_offset[keep_mask, 0], ijk_offset[keep_mask, 1], ijk_offset[keep_mask, 2]
+            i, j, k = (
+                ijk_offset[keep_mask, 0],
+                ijk_offset[keep_mask, 1],
+                ijk_offset[keep_mask, 2],
+            )
             offset = i * dense_size[2] * dense_size[1] + j * dense_size[2] + k
 
             feat_shape = [c for c in random_grid.shape[3:]]
@@ -106,7 +114,10 @@ class TestDenseInterfaceBatch(unittest.TestCase):
         for _ in range(10):
             dense_origin = torch.tensor(
                 [
-                    np.random.randint(low=int(ijk.min(0).values[i].item()), high=int(ijk.max(0).values[i].item()))
+                    np.random.randint(
+                        low=int(ijk.min(0).values[i].item()),
+                        high=int(ijk.max(0).values[i].item()),
+                    )
                     for i in range(3)
                 ],
                 dtype=torch.long,
@@ -116,11 +127,16 @@ class TestDenseInterfaceBatch(unittest.TestCase):
             ijk_offset = ijk - dense_origin.unsqueeze(0)
             max_bound = torch.tensor(random_grid.shape[:3], device=device, dtype=torch.long)
             keep_mask = torch.logical_and(
-                torch.all(ijk_offset >= 0, dim=-1), torch.all(ijk_offset < max_bound.unsqueeze(0), dim=1)
+                torch.all(ijk_offset >= 0, dim=-1),
+                torch.all(ijk_offset < max_bound.unsqueeze(0), dim=1),
             )
 
             grid_index = grid.ijk_to_index(JaggedTensor(ijk)).jdata[keep_mask]
-            i, j, k = ijk_offset[keep_mask, 0], ijk_offset[keep_mask, 1], ijk_offset[keep_mask, 2]
+            i, j, k = (
+                ijk_offset[keep_mask, 0],
+                ijk_offset[keep_mask, 1],
+                ijk_offset[keep_mask, 2],
+            )
             offset = i * random_grid.shape[2] * random_grid.shape[1] + j * random_grid.shape[2] + k
 
             feat_shape = [c for c in random_grid.shape[3:]]
@@ -149,7 +165,10 @@ class TestDenseInterfaceBatch(unittest.TestCase):
         for _ in range(10):
             dense_origin = torch.tensor(
                 [
-                    np.random.randint(low=int(ijk.min(0).values[i].item()), high=int(ijk.max(0).values[i].item()))
+                    np.random.randint(
+                        low=int(ijk.min(0).values[i].item()),
+                        high=int(ijk.max(0).values[i].item()),
+                    )
                     for i in range(3)
                 ],
                 dtype=torch.long,
@@ -159,11 +178,16 @@ class TestDenseInterfaceBatch(unittest.TestCase):
             ijk_offset = ijk - dense_origin.unsqueeze(0)
             max_bound = torch.tensor(random_grid.shape[:3], device=device, dtype=torch.long)
             keep_mask = torch.logical_and(
-                torch.all(ijk_offset >= 0, dim=-1), torch.all(ijk_offset < max_bound.unsqueeze(0), dim=1)
+                torch.all(ijk_offset >= 0, dim=-1),
+                torch.all(ijk_offset < max_bound.unsqueeze(0), dim=1),
             )
 
             grid_index = grid.ijk_to_index(JaggedTensor(ijk)).jdata[keep_mask]
-            i, j, k = ijk_offset[keep_mask, 0], ijk_offset[keep_mask, 1], ijk_offset[keep_mask, 2]
+            i, j, k = (
+                ijk_offset[keep_mask, 0],
+                ijk_offset[keep_mask, 1],
+                ijk_offset[keep_mask, 2],
+            )
             offset = i * random_grid_copy.shape[2] * random_grid_copy.shape[1] + j * random_grid_copy.shape[2] + k
 
             feat_shape = [c for c in random_grid_copy.shape[3:]]
@@ -203,19 +227,29 @@ class TestDenseInterfaceBatch(unittest.TestCase):
         for _ in range(10):
             crop_min = torch.tensor(
                 [
-                    np.random.randint(low=int(min_crop_coord[i].item()), high=int(max_crop_coord[i].item()))
+                    np.random.randint(
+                        low=int(min_crop_coord[i].item()),
+                        high=int(max_crop_coord[i].item()),
+                    )
                     for i in range(3)
                 ],
                 device=device,
             )
             crop_size = torch.tensor(
-                [np.random.randint(low=1, high=int(max_crop_size[i].item())) for i in range(3)], device=device
+                [np.random.randint(low=1, high=int(max_crop_size[i].item())) for i in range(3)],
+                device=device,
             )
 
-            target_crop = torch.zeros(*crop_size.cpu().numpy(), sparse_data.shape[-1], dtype=dtype, device=device)
+            target_crop = torch.zeros(
+                *crop_size.cpu().numpy(),
+                sparse_data.shape[-1],
+                dtype=dtype,
+                device=device,
+            )
             ijk_offset = ijk - crop_min.unsqueeze(0)
             keep_mask = torch.logical_and(
-                torch.all(ijk_offset >= 0, dim=-1), torch.all(ijk_offset < crop_size.unsqueeze(0), dim=1)
+                torch.all(ijk_offset >= 0, dim=-1),
+                torch.all(ijk_offset < crop_size.unsqueeze(0), dim=1),
             )
             write_ijk = ijk_offset[keep_mask].contiguous()
             idx = write_ijk[:, 0] * crop_size[1] * crop_size[2] + write_ijk[:, 1] * crop_size[2] + write_ijk[:, 2]
@@ -245,19 +279,29 @@ class TestDenseInterfaceBatch(unittest.TestCase):
         for _ in range(10):
             crop_min = torch.tensor(
                 [
-                    np.random.randint(low=int(min_crop_coord[i].item()), high=int(max_crop_coord[i].item()))
+                    np.random.randint(
+                        low=int(min_crop_coord[i].item()),
+                        high=int(max_crop_coord[i].item()),
+                    )
                     for i in range(3)
                 ],
                 device=device,
             )
             crop_size = torch.tensor(
-                [np.random.randint(low=1, high=int(max_crop_size[i].item())) for i in range(3)], device=device
+                [np.random.randint(low=1, high=int(max_crop_size[i].item())) for i in range(3)],
+                device=device,
             )
 
-            target_crop = torch.zeros(*crop_size.cpu().numpy(), *sparse_data.shape[1:], dtype=dtype, device=device)
+            target_crop = torch.zeros(
+                *crop_size.cpu().numpy(),
+                *sparse_data.shape[1:],
+                dtype=dtype,
+                device=device,
+            )
             ijk_offset = ijk - crop_min.unsqueeze(0)
             keep_mask = torch.logical_and(
-                torch.all(ijk_offset >= 0, dim=-1), torch.all(ijk_offset < crop_size.unsqueeze(0), dim=1)
+                torch.all(ijk_offset >= 0, dim=-1),
+                torch.all(ijk_offset < crop_size.unsqueeze(0), dim=1),
             )
             write_ijk = ijk_offset[keep_mask].contiguous()
             idx = write_ijk[:, 0] * crop_size[1] * crop_size[2] + write_ijk[:, 1] * crop_size[2] + write_ijk[:, 2]
@@ -290,19 +334,29 @@ class TestDenseInterfaceBatch(unittest.TestCase):
         for _ in range(10):
             crop_min = torch.tensor(
                 [
-                    np.random.randint(low=int(min_crop_coord[i].item()), high=int(max_crop_coord[i].item()))
+                    np.random.randint(
+                        low=int(min_crop_coord[i].item()),
+                        high=int(max_crop_coord[i].item()),
+                    )
                     for i in range(3)
                 ],
                 device=device,
             )
             crop_size = torch.tensor(
-                [np.random.randint(low=1, high=int(max_crop_size[i].item())) for i in range(3)], device=device
+                [np.random.randint(low=1, high=int(max_crop_size[i].item())) for i in range(3)],
+                device=device,
             )
 
-            target_crop = torch.zeros(*crop_size.cpu().numpy(), *sparse_data.shape[1:], dtype=dtype, device=device)
+            target_crop = torch.zeros(
+                *crop_size.cpu().numpy(),
+                *sparse_data.shape[1:],
+                dtype=dtype,
+                device=device,
+            )
             ijk_offset = ijk - crop_min.unsqueeze(0)
             keep_mask = torch.logical_and(
-                torch.all(ijk_offset >= 0, dim=-1), torch.all(ijk_offset < crop_size.unsqueeze(0), dim=1)
+                torch.all(ijk_offset >= 0, dim=-1),
+                torch.all(ijk_offset < crop_size.unsqueeze(0), dim=1),
             )
             write_ijk = ijk_offset[keep_mask].contiguous()
             idx = write_ijk[:, 0] * crop_size[1] * crop_size[2] + write_ijk[:, 1] * crop_size[2] + write_ijk[:, 2]
@@ -509,7 +563,10 @@ class TestDenseInterfaceSingle(unittest.TestCase):
         for _ in range(10):
             dense_origin = torch.tensor(
                 [
-                    np.random.randint(low=int(ijk.min(0).values[i].item()), high=int(ijk.max(0).values[i].item()))
+                    np.random.randint(
+                        low=int(ijk.min(0).values[i].item()),
+                        high=int(ijk.max(0).values[i].item()),
+                    )
                     for i in range(3)
                 ],
                 dtype=torch.long,
@@ -519,11 +576,16 @@ class TestDenseInterfaceSingle(unittest.TestCase):
             ijk_offset = ijk - dense_origin.unsqueeze(0)
             max_bound = torch.tensor(random_grid.shape[:3], device=device, dtype=torch.long)
             keep_mask = torch.logical_and(
-                torch.all(ijk_offset >= 0, dim=-1), torch.all(ijk_offset < max_bound.unsqueeze(0), dim=-1)
+                torch.all(ijk_offset >= 0, dim=-1),
+                torch.all(ijk_offset < max_bound.unsqueeze(0), dim=-1),
             )
 
             grid_index = grid.ijk_to_index(JaggedTensor(ijk)).jdata[keep_mask]
-            i, j, k = ijk_offset[keep_mask, 0], ijk_offset[keep_mask, 1], ijk_offset[keep_mask, 2]
+            i, j, k = (
+                ijk_offset[keep_mask, 0],
+                ijk_offset[keep_mask, 1],
+                ijk_offset[keep_mask, 2],
+            )
             offset = i * dense_size[2] * dense_size[1] + j * dense_size[2] + k
 
             feat_shape = [c for c in random_grid.shape[3:]]
@@ -548,7 +610,10 @@ class TestDenseInterfaceSingle(unittest.TestCase):
         for _ in range(10):
             dense_origin = torch.tensor(
                 [
-                    np.random.randint(low=int(ijk.min(0).values[i].item()), high=int(ijk.max(0).values[i].item()))
+                    np.random.randint(
+                        low=int(ijk.min(0).values[i].item()),
+                        high=int(ijk.max(0).values[i].item()),
+                    )
                     for i in range(3)
                 ],
                 dtype=torch.long,
@@ -558,11 +623,16 @@ class TestDenseInterfaceSingle(unittest.TestCase):
             ijk_offset = ijk - dense_origin.unsqueeze(0)
             max_bound = torch.tensor(random_grid.shape[:3], device=device, dtype=torch.long)
             keep_mask = torch.logical_and(
-                torch.all(ijk_offset >= 0, dim=-1), torch.all(ijk_offset < max_bound.unsqueeze(0), dim=1)
+                torch.all(ijk_offset >= 0, dim=-1),
+                torch.all(ijk_offset < max_bound.unsqueeze(0), dim=1),
             )
 
             grid_index = grid.ijk_to_index(JaggedTensor(ijk)).jdata[keep_mask]
-            i, j, k = ijk_offset[keep_mask, 0], ijk_offset[keep_mask, 1], ijk_offset[keep_mask, 2]
+            i, j, k = (
+                ijk_offset[keep_mask, 0],
+                ijk_offset[keep_mask, 1],
+                ijk_offset[keep_mask, 2],
+            )
             offset = i * random_grid.shape[2] * random_grid.shape[1] + j * random_grid.shape[2] + k
 
             feat_shape = [c for c in random_grid.shape[3:]]
@@ -591,7 +661,10 @@ class TestDenseInterfaceSingle(unittest.TestCase):
         for _ in range(10):
             dense_origin = torch.tensor(
                 [
-                    np.random.randint(low=int(ijk.min(0).values[i].item()), high=int(ijk.max(0).values[i].item()))
+                    np.random.randint(
+                        low=int(ijk.min(0).values[i].item()),
+                        high=int(ijk.max(0).values[i].item()),
+                    )
                     for i in range(3)
                 ],
                 dtype=torch.long,
@@ -601,11 +674,16 @@ class TestDenseInterfaceSingle(unittest.TestCase):
             ijk_offset = ijk - dense_origin.unsqueeze(0)
             max_bound = torch.tensor(random_grid.shape[:3], device=device, dtype=torch.long)
             keep_mask = torch.logical_and(
-                torch.all(ijk_offset >= 0, dim=-1), torch.all(ijk_offset < max_bound.unsqueeze(0), dim=1)
+                torch.all(ijk_offset >= 0, dim=-1),
+                torch.all(ijk_offset < max_bound.unsqueeze(0), dim=1),
             )
 
             grid_index = grid.ijk_to_index(JaggedTensor(ijk)).jdata[keep_mask]
-            i, j, k = ijk_offset[keep_mask, 0], ijk_offset[keep_mask, 1], ijk_offset[keep_mask, 2]
+            i, j, k = (
+                ijk_offset[keep_mask, 0],
+                ijk_offset[keep_mask, 1],
+                ijk_offset[keep_mask, 2],
+            )
             offset = i * random_grid_copy.shape[2] * random_grid_copy.shape[1] + j * random_grid_copy.shape[2] + k
 
             feat_shape = [c for c in random_grid_copy.shape[3:]]
@@ -645,19 +723,29 @@ class TestDenseInterfaceSingle(unittest.TestCase):
         for _ in range(10):
             crop_min = torch.tensor(
                 [
-                    np.random.randint(low=int(min_crop_coord[i].item()), high=int(max_crop_coord[i].item()))
+                    np.random.randint(
+                        low=int(min_crop_coord[i].item()),
+                        high=int(max_crop_coord[i].item()),
+                    )
                     for i in range(3)
                 ],
                 device=device,
             )
             crop_size = torch.tensor(
-                [np.random.randint(low=1, high=int(max_crop_size[i].item())) for i in range(3)], device=device
+                [np.random.randint(low=1, high=int(max_crop_size[i].item())) for i in range(3)],
+                device=device,
             )
 
-            target_crop = torch.zeros(*crop_size.cpu().numpy(), sparse_data.shape[-1], dtype=dtype, device=device)
+            target_crop = torch.zeros(
+                *crop_size.cpu().numpy(),
+                sparse_data.shape[-1],
+                dtype=dtype,
+                device=device,
+            )
             ijk_offset = ijk - crop_min.unsqueeze(0)
             keep_mask = torch.logical_and(
-                torch.all(ijk_offset >= 0, dim=-1), torch.all(ijk_offset < crop_size.unsqueeze(0), dim=1)
+                torch.all(ijk_offset >= 0, dim=-1),
+                torch.all(ijk_offset < crop_size.unsqueeze(0), dim=1),
             )
             write_ijk = ijk_offset[keep_mask].contiguous()
             idx = write_ijk[:, 0] * crop_size[1] * crop_size[2] + write_ijk[:, 1] * crop_size[2] + write_ijk[:, 2]
@@ -687,19 +775,29 @@ class TestDenseInterfaceSingle(unittest.TestCase):
         for _ in range(10):
             crop_min = torch.tensor(
                 [
-                    np.random.randint(low=int(min_crop_coord[i].item()), high=int(max_crop_coord[i].item()))
+                    np.random.randint(
+                        low=int(min_crop_coord[i].item()),
+                        high=int(max_crop_coord[i].item()),
+                    )
                     for i in range(3)
                 ],
                 device=device,
             )
             crop_size = torch.tensor(
-                [np.random.randint(low=1, high=int(max_crop_size[i].item())) for i in range(3)], device=device
+                [np.random.randint(low=1, high=int(max_crop_size[i].item())) for i in range(3)],
+                device=device,
             )
 
-            target_crop = torch.zeros(*crop_size.cpu().numpy(), *sparse_data.shape[1:], dtype=dtype, device=device)
+            target_crop = torch.zeros(
+                *crop_size.cpu().numpy(),
+                *sparse_data.shape[1:],
+                dtype=dtype,
+                device=device,
+            )
             ijk_offset = ijk - crop_min.unsqueeze(0)
             keep_mask = torch.logical_and(
-                torch.all(ijk_offset >= 0, dim=-1), torch.all(ijk_offset < crop_size.unsqueeze(0), dim=1)
+                torch.all(ijk_offset >= 0, dim=-1),
+                torch.all(ijk_offset < crop_size.unsqueeze(0), dim=1),
             )
             write_ijk = ijk_offset[keep_mask].contiguous()
             idx = write_ijk[:, 0] * crop_size[1] * crop_size[2] + write_ijk[:, 1] * crop_size[2] + write_ijk[:, 2]
@@ -732,19 +830,29 @@ class TestDenseInterfaceSingle(unittest.TestCase):
         for _ in range(10):
             crop_min = torch.tensor(
                 [
-                    np.random.randint(low=int(min_crop_coord[i].item()), high=int(max_crop_coord[i].item()))
+                    np.random.randint(
+                        low=int(min_crop_coord[i].item()),
+                        high=int(max_crop_coord[i].item()),
+                    )
                     for i in range(3)
                 ],
                 device=device,
             )
             crop_size = torch.tensor(
-                [np.random.randint(low=1, high=int(max_crop_size[i].item())) for i in range(3)], device=device
+                [np.random.randint(low=1, high=int(max_crop_size[i].item())) for i in range(3)],
+                device=device,
             )
 
-            target_crop = torch.zeros(*crop_size.cpu().numpy(), *sparse_data.shape[1:], dtype=dtype, device=device)
+            target_crop = torch.zeros(
+                *crop_size.cpu().numpy(),
+                *sparse_data.shape[1:],
+                dtype=dtype,
+                device=device,
+            )
             ijk_offset = ijk - crop_min.unsqueeze(0)
             keep_mask = torch.logical_and(
-                torch.all(ijk_offset >= 0, dim=-1), torch.all(ijk_offset < crop_size.unsqueeze(0), dim=1)
+                torch.all(ijk_offset >= 0, dim=-1),
+                torch.all(ijk_offset < crop_size.unsqueeze(0), dim=1),
             )
             write_ijk = ijk_offset[keep_mask].contiguous()
             idx = write_ijk[:, 0] * crop_size[1] * crop_size[2] + write_ijk[:, 1] * crop_size[2] + write_ijk[:, 2]

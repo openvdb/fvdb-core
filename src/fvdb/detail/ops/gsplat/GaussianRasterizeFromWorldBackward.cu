@@ -6,6 +6,7 @@
 #include <fvdb/detail/ops/gsplat/GaussianRasterizeOptionalInputs.h>
 #include <fvdb/detail/ops/gsplat/GaussianWarpUtils.cuh>
 #include <fvdb/detail/utils/Nvtx.h>
+#include <fvdb/detail/utils/Utils.h>
 
 #include <ATen/cuda/Atomic.cuh>
 #include <ATen/cuda/CUDAContext.h>
@@ -458,6 +459,29 @@ launchBackward(const torch::Tensor &means,
 
 } // namespace
 
+template <torch::DeviceType>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+dispatchGaussianRasterizeFromWorld3DGSBackward(const torch::Tensor &means,
+                                               const torch::Tensor &quats,
+                                               const torch::Tensor &logScales,
+                                               const torch::Tensor &features,
+                                               const torch::Tensor &opacities,
+                                               const torch::Tensor &worldToCamMatricesStart,
+                                               const torch::Tensor &worldToCamMatricesEnd,
+                                               const torch::Tensor &projectionMatrices,
+                                               const torch::Tensor &distortionCoeffs,
+                                               RollingShutterType rollingShutterType,
+                                               DistortionModel cameraModel,
+                                               const RenderSettings &settings,
+                                               const torch::Tensor &tileOffsets,
+                                               const torch::Tensor &tileGaussianIds,
+                                               const torch::Tensor &renderedAlphas,
+                                               const torch::Tensor &lastIds,
+                                               const torch::Tensor &dLossDRenderedFeatures,
+                                               const torch::Tensor &dLossDRenderedAlphas,
+                                               const at::optional<torch::Tensor> &backgrounds,
+                                               const at::optional<torch::Tensor> &masks);
+
 template <>
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 dispatchGaussianRasterizeFromWorld3DGSBackward<torch::kCUDA>(
@@ -636,6 +660,51 @@ dispatchGaussianRasterizeFromWorld3DGSBackward<torch::kCPU>(const torch::Tensor 
                                                             const at::optional<torch::Tensor> &,
                                                             const at::optional<torch::Tensor> &) {
     TORCH_CHECK_VALUE(false, "dispatchGaussianRasterizeFromWorld3DGSBackward is CUDA-only");
+}
+
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+gaussianRasterizeFromWorldBackward(const torch::Tensor &means,
+                                   const torch::Tensor &quats,
+                                   const torch::Tensor &logScales,
+                                   const torch::Tensor &features,
+                                   const torch::Tensor &opacities,
+                                   const torch::Tensor &worldToCamMatricesStart,
+                                   const torch::Tensor &worldToCamMatricesEnd,
+                                   const torch::Tensor &projectionMatrices,
+                                   const torch::Tensor &distortionCoeffs,
+                                   const RollingShutterType rollingShutterType,
+                                   const DistortionModel cameraModel,
+                                   const RenderSettings &settings,
+                                   const torch::Tensor &tileOffsets,
+                                   const torch::Tensor &tileGaussianIds,
+                                   const torch::Tensor &renderedAlphas,
+                                   const torch::Tensor &lastIds,
+                                   const torch::Tensor &dLossDRenderedFeatures,
+                                   const torch::Tensor &dLossDRenderedAlphas,
+                                   const at::optional<torch::Tensor> &backgrounds,
+                                   const at::optional<torch::Tensor> &masks) {
+    return FVDB_DISPATCH_KERNEL_DEVICE(means.device(), [&]() {
+        return dispatchGaussianRasterizeFromWorld3DGSBackward<DeviceTag>(means,
+                                                                         quats,
+                                                                         logScales,
+                                                                         features,
+                                                                         opacities,
+                                                                         worldToCamMatricesStart,
+                                                                         worldToCamMatricesEnd,
+                                                                         projectionMatrices,
+                                                                         distortionCoeffs,
+                                                                         rollingShutterType,
+                                                                         cameraModel,
+                                                                         settings,
+                                                                         tileOffsets,
+                                                                         tileGaussianIds,
+                                                                         renderedAlphas,
+                                                                         lastIds,
+                                                                         dLossDRenderedFeatures,
+                                                                         dLossDRenderedAlphas,
+                                                                         backgrounds,
+                                                                         masks);
+    });
 }
 
 } // namespace fvdb::detail::ops

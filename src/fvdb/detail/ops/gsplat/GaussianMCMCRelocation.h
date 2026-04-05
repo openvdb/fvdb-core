@@ -15,6 +15,9 @@ namespace ops {
 
 /// @brief Relocate Gaussians by adjusting opacity and scale based on replication ratio.
 ///
+/// Dispatches to the appropriate device implementation (CPU, CUDA, or PrivateUse1)
+/// based on the device of the input tensors.
+///
 /// @param logScales Input log scales [N, 3]
 /// @param logitOpacities Input logit opacities [N]
 /// @param ratios Replication ratios per Gaussian [N] (int32)
@@ -22,14 +25,13 @@ namespace ops {
 /// @param nMax Maximum replication ratio (size of binomial table)
 /// @param minOpacity Minimum opacity
 /// @return tuple of (opacitiesNew [N], scalesNew [N, 3])
-template <torch::DeviceType DeviceType>
 std::tuple<torch::Tensor, torch::Tensor>
-dispatchGaussianRelocation(const torch::Tensor &logScales,      // [N, 3]
-                           const torch::Tensor &logitOpacities, // [N]
-                           const torch::Tensor &ratios,         // [N]
-                           const torch::Tensor &binomialCoeffs, // [nMax, nMax]
-                           const int nMax,
-                           float minOpacity);
+gaussianRelocation(const torch::Tensor &logScales,      // [N, 3]
+                   const torch::Tensor &logitOpacities, // [N]
+                   const torch::Tensor &ratios,         // [N]
+                   const torch::Tensor &binomialCoeffs, // [nMax, nMax]
+                   const int nMax,
+                   float minOpacity);
 
 } // namespace ops
 } // namespace detail

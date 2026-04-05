@@ -395,7 +395,12 @@ class TestTypesRedux(unittest.TestCase):
             self.assertEqual(result.item(), 1)
 
         # Test that floating point inputs fail
-        invalid_inputs = [1.0, np.float32(1.0), np.array(1.0), torch.tensor(1.0, device=device)]
+        invalid_inputs = [
+            1.0,
+            np.float32(1.0),
+            np.array(1.0),
+            torch.tensor(1.0, device=device),
+        ]
         for inp in invalid_inputs:
             with self.assertRaises(Exception):
                 result = to_IntegerScalar(inp)
@@ -665,14 +670,20 @@ class TestTypesRedux(unittest.TestCase):
             to_Vec3iBatch([[1, 2, 3], [0, 5, 6]], value_constraint=ValueConstraint.POSITIVE)
 
         with self.assertRaises(ValueError):
-            to_Vec3fBatch([[1.0, 2.0, 3.0], [4.0, 0.0, 6.0]], value_constraint=ValueConstraint.POSITIVE)
+            to_Vec3fBatch(
+                [[1.0, 2.0, 3.0], [4.0, 0.0, 6.0]],
+                value_constraint=ValueConstraint.POSITIVE,
+            )
 
         # Test batch with negative values - should fail
         with self.assertRaises(ValueError):
             to_Vec3iBatch([[1, 2, 3], [-1, 5, 6]], value_constraint=ValueConstraint.POSITIVE)
 
         with self.assertRaises(ValueError):
-            to_Vec3fBatch([[1.0, 2.0, 3.0], [4.0, -1.0, 6.0]], value_constraint=ValueConstraint.POSITIVE)
+            to_Vec3fBatch(
+                [[1.0, 2.0, 3.0], [4.0, -1.0, 6.0]],
+                value_constraint=ValueConstraint.POSITIVE,
+            )
 
         # Test mixed positive and non-positive values - should fail
         with self.assertRaises(ValueError):
@@ -711,7 +722,11 @@ class TestTypesRedux(unittest.TestCase):
         result = to_Vec3i([1, 2, 3], dtype=torch.int32, value_constraint=ValueConstraint.POSITIVE)
         self.assertEqual(result.dtype, torch.int32)
 
-        result = to_Vec3f([1.0, 2.0, 3.0], dtype=torch.float64, value_constraint=ValueConstraint.POSITIVE)
+        result = to_Vec3f(
+            [1.0, 2.0, 3.0],
+            dtype=torch.float64,
+            value_constraint=ValueConstraint.POSITIVE,
+        )
         self.assertEqual(result.dtype, torch.float64)
 
         # Test device specification
@@ -725,7 +740,11 @@ class TestTypesRedux(unittest.TestCase):
         result = to_Vec3iBatch([[1, 2, 3]], dtype=torch.int32, value_constraint=ValueConstraint.POSITIVE)
         self.assertEqual(result.dtype, torch.int32)
 
-        result = to_Vec3fBatch([[1.0, 2.0, 3.0]], dtype=torch.float64, value_constraint=ValueConstraint.POSITIVE)
+        result = to_Vec3fBatch(
+            [[1.0, 2.0, 3.0]],
+            dtype=torch.float64,
+            value_constraint=ValueConstraint.POSITIVE,
+        )
         self.assertEqual(result.dtype, torch.float64)
 
     # ========== NonNegative Vec3 Conversion Tests ==========
@@ -803,7 +822,10 @@ class TestTypesRedux(unittest.TestCase):
 
         # Test negative values (should fail)
         with self.assertRaises(ValueError):
-            to_Vec3fBatch([[1.0, 2.0, 3.0], [4.0, -1.0, 6.0]], value_constraint=ValueConstraint.NON_NEGATIVE)
+            to_Vec3fBatch(
+                [[1.0, 2.0, 3.0], [4.0, -1.0, 6.0]],
+                value_constraint=ValueConstraint.NON_NEGATIVE,
+            )
 
     def test_nonnegative_vs_positive_comparison(self):
         """Test key differences between NonNegative and Positive variants"""

@@ -86,7 +86,8 @@ def create_uniform_grid_points_at_depth(h, w, depth, intrinsics, cam_to_world_xf
 
     # Convert to homogeneous coordinates for transformation
     camera_points_homo = torch.cat(
-        [camera_points_3d, torch.ones(camera_points_3d.shape[0], 1, device=device)], dim=1
+        [camera_points_3d, torch.ones(camera_points_3d.shape[0], 1, device=device)],
+        dim=1,
     )  # Shape: (h*w, 4)
 
     # Transform from camera space to world space using cam_to_world_xform

@@ -6,9 +6,6 @@
 // Ops headers
 #include <fvdb/detail/ops/gsplat/GaussianComputeNanInfMask.h>
 
-// Utils headers
-#include <fvdb/detail/utils/Utils.h>
-
 #include <c10/core/ScalarType.h>
 #include <c10/util/flat_hash_map.h>
 #include <torch/csrc/api/include/torch/types.h>
@@ -327,10 +324,8 @@ saveGaussianPly(const std::string &filename,
                 std::optional<std::unordered_map<std::string, PlyMetadataTypes>> trainingMetadata) {
     using namespace tinyply;
 
-    const fvdb::JaggedTensor validMask = FVDB_DISPATCH_KERNEL(means.device(), [&]() {
-        return detail::ops::dispatchGaussianNanInfMask<DeviceTag>(
-            means, quats, logScales, logitOpacities, sh0, shN);
-    });
+    const fvdb::JaggedTensor validMask =
+        detail::ops::gaussianNanInfMask(means, quats, logScales, logitOpacities, sh0, shN);
 
     std::filebuf fb;
     fb.open(filename, std::ios::out | std::ios::binary);

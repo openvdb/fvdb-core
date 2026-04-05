@@ -150,7 +150,7 @@ TEST_F(GaussianRasterizeTopContributorsTestFixture, TestBasicInputsAndOutputs) {
     settings.numDepthSamples = numDepthSamples;
 
     const auto [outIds, outWeights] =
-        fvdb::detail::ops::dispatchGaussianRasterizeTopContributingGaussianIds<torch::kCUDA>(
+        fvdb::detail::ops::gaussianRasterizeTopContributingGaussianIds(
             means2d, conics, opacities, tileOffsets, tileGaussianIds, settings);
 
     const int h                 = imageHeight;
@@ -212,7 +212,7 @@ TEST_F(GaussianRasterizeTopContributorsTestFixture, TestBasicInputsAndOutputsSpa
     settings.numDepthSamples = numDepthSamples;
 
     const auto [outIds, outWeights] =
-        fvdb::detail::ops::dispatchGaussianRasterizeTopContributingGaussianIds<torch::kCUDA>(
+        fvdb::detail::ops::gaussianRasterizeTopContributingGaussianIds(
             means2d, conics, opacities, tileOffsets, tileGaussianIds, settings);
 
     const int h = imageHeight;
@@ -226,18 +226,17 @@ TEST_F(GaussianRasterizeTopContributorsTestFixture, TestBasicInputsAndOutputsSpa
 
     // Run the same scene with sparse sampling of only the center pixel
     const auto [outIdsSparse, outWeightsSparse] =
-        fvdb::detail::ops::dispatchGaussianSparseRasterizeTopContributingGaussianIds<torch::kCUDA>(
-            means2d,
-            conics,
-            opacities,
-            tileOffsets,
-            tileGaussianIds,
-            pixelsToRender,
-            activeTiles,
-            tilePixelMask,
-            tilePixelCumsum,
-            pixelMap,
-            settings);
+        fvdb::detail::ops::gaussianSparseRasterizeTopContributingGaussianIds(means2d,
+                                                                             conics,
+                                                                             opacities,
+                                                                             tileOffsets,
+                                                                             tileGaussianIds,
+                                                                             pixelsToRender,
+                                                                             activeTiles,
+                                                                             tilePixelMask,
+                                                                             tilePixelCumsum,
+                                                                             pixelMap,
+                                                                             settings);
 
     const int numGaussianLayers = 5;
 
@@ -294,8 +293,7 @@ TEST_F(GaussianRasterizeTopContributorsTestFixture, CPUThrows) {
     settings.tileSize        = tileSize;
     settings.numDepthSamples = numDepthSamples;
 
-    EXPECT_THROW(
-        fvdb::detail::ops::dispatchGaussianRasterizeTopContributingGaussianIds<torch::kCPU>(
-            means2d, conics, opacities, tileOffsets, tileGaussianIds, settings),
-        c10::NotImplementedError);
+    EXPECT_THROW(fvdb::detail::ops::gaussianRasterizeTopContributingGaussianIds(
+                     means2d, conics, opacities, tileOffsets, tileGaussianIds, settings),
+                 c10::NotImplementedError);
 }

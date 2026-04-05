@@ -72,7 +72,15 @@ class _ProjectGaussiansFn(torch.autograd.Function):
         conics: torch.Tensor = result[3]
         compensations: torch.Tensor | None = result[4] if calc_compensations else None
 
-        to_save = [means, quats, log_scales, world_to_cam, projection_matrices, radii, conics]
+        to_save = [
+            means,
+            quats,
+            log_scales,
+            world_to_cam,
+            projection_matrices,
+            radii,
+            conics,
+        ]
         if compensations is not None:
             to_save.append(compensations)
         ctx.save_for_backward(*to_save)

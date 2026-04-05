@@ -331,7 +331,13 @@ class ConvolutionPlan:
             raise ValueError("Target grid must be provided for transposed convolution, except for dense backend.")
 
         backend = cls._build_backend(
-            source_grid, target_grid, kernel_size, stride, channel_pairs, expert_config, transposed=True
+            source_grid,
+            target_grid,
+            kernel_size,
+            stride,
+            channel_pairs,
+            expert_config,
+            transposed=True,
         )
         return cls(source_grid, target_grid, kernel_size, stride, channel_pairs, True, backend)
 
@@ -384,7 +390,15 @@ class ConvolutionPlan:
             _DEFAULT_CONFIG,
             transposed=transposed,
         )
-        return cls(source_grid, target_grid, plan._kernel_size, plan._stride, channel_pairs, transposed, backend)
+        return cls(
+            source_grid,
+            target_grid,
+            plan._kernel_size,
+            plan._stride,
+            channel_pairs,
+            transposed,
+            backend,
+        )
 
     # ============================================================
     #                 Validation
@@ -622,11 +636,17 @@ class ConvolutionPlan:
         if backend_name in ("gather_scatter", "default"):
             if transposed:
                 topo = _fvdb_cpp.gs_build_transpose_topology(
-                    _get_grid_data(source_grid), _get_grid_data(target_grid), kernel_size, stride
+                    _get_grid_data(source_grid),
+                    _get_grid_data(target_grid),
+                    kernel_size,
+                    stride,
                 )
             else:
                 topo = _fvdb_cpp.gs_build_topology(
-                    _get_grid_data(source_grid), _get_grid_data(target_grid), kernel_size, stride
+                    _get_grid_data(source_grid),
+                    _get_grid_data(target_grid),
+                    kernel_size,
+                    stride,
                 )
             return _GatherScatterBackend(topology=topo)
 
@@ -644,7 +664,10 @@ class ConvolutionPlan:
                 if cin % 32 != 0 or cout % 32 != 0:
                     raise ValueError(f"PredGatherIGemm requires channel counts divisible by 32, got ({cin}, {cout}).")
             gs_topo = _fvdb_cpp.gs_build_topology(
-                _get_grid_data(source_grid), _get_grid_data(target_grid), kernel_size, stride
+                _get_grid_data(source_grid),
+                _get_grid_data(target_grid),
+                kernel_size,
+                stride,
             )
             return _PredGatherIGemmBackend(gs_topology=gs_topo, kernel_size=int(ks_vals[0]), stride=int(st_vals[0]))
 
