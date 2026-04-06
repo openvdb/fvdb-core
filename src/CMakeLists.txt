@@ -63,6 +63,7 @@ set(FVDB_CPP_FILES
     fvdb/detail/io/LoadNanovdb.cpp
     fvdb/detail/io/SaveNanoVDB.cpp
     fvdb/detail/ops/gsplat/GaussianUtils.cpp
+    fvdb/detail/ops/jagged/JaggedReductions.cpp
     fvdb/detail/TorchDeviceBuffer.cpp
     fvdb/detail/viewer/GaussianSplat3dView.cpp
     fvdb/detail/viewer/Viewer.cpp
