@@ -1,7 +1,7 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 #include <fvdb/detail/ops/SerializeEncode.h>
 #include <fvdb/detail/utils/HilbertCode.h>
 #include <fvdb/detail/utils/MortonCode.h>
@@ -61,7 +61,7 @@ struct Processor : public BasePerActiveVoxelProcessor<DeviceTag,
 } // End anonymous namespace
 
 JaggedTensor
-serializeEncode(GridBatchImpl const &gridBatch,
+serializeEncode(GridBatchData const &gridBatch,
                 SpaceFillingCurveType order_type,
                 nanovdb::Coord const &offset) {
     return FVDB_DISPATCH_KERNEL(gridBatch.device(), [&]() {

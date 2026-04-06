@@ -229,7 +229,7 @@ meshingCubeCallback(int32_t batchIdx,
 
 template <torch::DeviceType DeviceTag>
 std::vector<JaggedTensor>
-MarchingCubes(const GridBatchImpl &batchHdl, const torch::Tensor &sdf, double level) {
+MarchingCubes(const GridBatchData &batchHdl, const torch::Tensor &sdf, double level) {
     batchHdl.checkDevice(sdf);
     TORCH_CHECK_TYPE(sdf.is_floating_point(), "field must have a floating point type");
     TORCH_CHECK(sdf.dim() == 1,
@@ -388,7 +388,7 @@ MarchingCubes(const GridBatchImpl &batchHdl, const torch::Tensor &sdf, double le
 } // anonymous namespace
 
 std::vector<JaggedTensor>
-marchingCubes(const GridBatchImpl &batchHdl, const JaggedTensor &field, double level) {
+marchingCubes(const GridBatchData &batchHdl, const JaggedTensor &field, double level) {
     TORCH_CHECK_VALUE(
         field.ldim() == 1,
         "Expected field to have 1 list dimension, i.e. be a single list of coordinate values, but got",

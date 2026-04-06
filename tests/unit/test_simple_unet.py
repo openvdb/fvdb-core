@@ -131,7 +131,7 @@ class TestSimpleUNet(unittest.TestCase):
         coords_a = _make_dense_block_coords(extent=16, offset=0, device=device)
         coords_b = _make_dense_block_coords(extent=12, offset=4, device=device)
         ijks = JaggedTensor([coords_a, coords_b])
-        grid = GridBatch.from_ijk(ijks, device=device)
+        grid = GridBatch.from_ijk(ijks)
 
         num_voxels = grid.total_voxels
         features = JaggedTensor(torch.randn(num_voxels, self.IN_CHANNELS, device=device, dtype=dtype))

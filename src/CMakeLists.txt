@@ -44,20 +44,11 @@ execute_process(
 # Source files
 set(FVDB_CPP_FILES
     fvdb/Config.cpp
-    fvdb/detail/autograd/AvgPoolGrid.cpp
     fvdb/detail/autograd/EvaluateSphericalHarmonics.cpp
-    fvdb/detail/autograd/Inject.cpp
     fvdb/detail/autograd/GaussianProjection.cpp
     fvdb/detail/autograd/GaussianRasterize.cpp
     fvdb/detail/autograd/GaussianRasterizeFromWorld.cpp
     fvdb/detail/autograd/GaussianRasterizeSparse.cpp
-    fvdb/detail/autograd/MaxPoolGrid.cpp
-    fvdb/detail/autograd/ReadFromDense.cpp
-    fvdb/detail/autograd/ReadIntoDense.cpp
-    fvdb/detail/autograd/SampleGrid.cpp
-    fvdb/detail/autograd/SplatIntoGrid.cpp
-    fvdb/detail/autograd/TransformPoints.cpp
-    fvdb/detail/autograd/UpsampleGrid.cpp
     fvdb/detail/autograd/VolumeRender.cpp
     fvdb/detail/io/GaussianPlyIO.cpp
     fvdb/detail/io/LoadNanovdb.cpp
@@ -69,13 +60,13 @@ set(FVDB_CPP_FILES
     fvdb/detail/viewer/Viewer.cpp
     fvdb/FVDB.cpp
     fvdb/GaussianSplat3d.cpp
-    fvdb/GridBatch.cpp
     fvdb/JaggedTensor.cpp
 )
 
 set(FVDB_CU_FILES
-    fvdb/detail/GridBatchImpl.cu
-    fvdb/detail/ops/ActiveGridGoords.cu
+    fvdb/detail/GridBatchData.cu
+    fvdb/detail/GridBatchDataFactory.cu
+    fvdb/detail/ops/ActiveGridCoords.cu
     fvdb/detail/ops/ActiveVoxelsInBoundsMask.cu
     fvdb/detail/ops/BuildCoarseGridFromFine.cu
     fvdb/detail/ops/BuildDenseGrid.cu
@@ -90,13 +81,19 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/BuildMergedGrids.cu
     fvdb/detail/ops/BuildPaddedGrid.cu
     fvdb/detail/ops/BuildPrunedGrid.cu
+    fvdb/detail/ops/ClipGrid.cu
+    fvdb/detail/ops/CloneGrid.cu
+    fvdb/detail/ops/ConcatenateGrids.cu
+    fvdb/detail/ops/IndexGrid.cu
+    fvdb/detail/ops/MakeContiguous.cu
+    fvdb/detail/ops/SerializeGrid.cu
     fvdb/detail/ops/CoarseIjkForFineGrid.cu
     fvdb/detail/ops/convolution/GatherScatterDefault.cu
     fvdb/detail/ops/convolution/PredGatherIGemm.cu
     fvdb/detail/ops/CoordsInGrid.cu
     fvdb/detail/ops/CubesInGrid.cu
-    fvdb/detail/ops/DownsampleGridAvgPool.cu
-    fvdb/detail/ops/DownsampleGridMaxPool.cu
+    fvdb/detail/ops/AvgPool.cu
+    fvdb/detail/ops/MaxPool.cu
     fvdb/detail/ops/GridEdgeNetwork.cu
     fvdb/detail/ops/gsplat/FusedSSIM.cu
     fvdb/detail/ops/gsplat/GaussianComputeNanInfMask.cu
@@ -135,23 +132,23 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/PointsInGrid.cu
     fvdb/detail/ops/PopulateGridMetadata.cu
     fvdb/detail/ops/RayImplicitIntersection.cu
-    fvdb/detail/ops/ReadFromDense.cu
-    fvdb/detail/ops/ReadIntoDense.cu
-    fvdb/detail/ops/SampleGridBezier.cu
-    fvdb/detail/ops/SampleGridBezierWithGrad.cu
-    fvdb/detail/ops/SampleGridBezierWithGradBackward.cu
-    fvdb/detail/ops/SampleGridTrilinear.cu
-    fvdb/detail/ops/SampleGridTrilinearWithGrad.cu
-    fvdb/detail/ops/SampleGridTrilinearWithGradBackward.cu
+    fvdb/detail/ops/InjectFromDense.cu
+    fvdb/detail/ops/InjectToDense.cu
+    fvdb/detail/ops/SampleBezier.cu
+    fvdb/detail/ops/SampleBezierWithGrad.cu
+    fvdb/detail/ops/SampleBezierWithGradBackward.cu
+    fvdb/detail/ops/SampleTrilinear.cu
+    fvdb/detail/ops/SampleTrilinearWithGrad.cu
+    fvdb/detail/ops/SampleTrilinearWithGradBackward.cu
     fvdb/detail/ops/SampleRaysUniform.cu
     fvdb/detail/ops/SegmentsAlongRays.cu
     fvdb/detail/ops/SerializeEncode.cu
-    fvdb/detail/ops/SplatIntoGridBezier.cu
-    fvdb/detail/ops/SplatIntoGridTrilinear.cu
-    fvdb/detail/ops/TransformPointToGrid.cu
-    fvdb/detail/ops/UpsampleGridNearest.cu
+    fvdb/detail/ops/SplatBezier.cu
+    fvdb/detail/ops/SplatTrilinear.cu
+    fvdb/detail/ops/VoxelToWorld.cu
+    fvdb/detail/ops/Refine.cu
     fvdb/detail/ops/VolumeRender.cu
-    fvdb/detail/ops/VoxelNeighborhood.cu
+    fvdb/detail/ops/NeighborIndexes.cu
     fvdb/detail/ops/VoxelsAlongRays.cu
     fvdb/detail/utils/cuda/ForEachCUDA.cu
 )

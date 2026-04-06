@@ -6,7 +6,7 @@
 
 #include <fvdb/Config.h>
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/cuda/GridDim.h>
 #include <fvdb/detail/utils/cuda/Utils.cuh>
@@ -23,7 +23,7 @@ template <typename Func, typename... Args>
 __global__ void
 forEachLeafPrivateUse1Kernel(int64_t leafChannelCount,
                              int64_t leafChannelOffset,
-                             fvdb::detail::GridBatchImpl::Accessor grid,
+                             fvdb::detail::GridBatchData::Accessor grid,
                              const int32_t channelsPerLeaf,
                              Func func,
                              Args... args) {
@@ -45,7 +45,7 @@ template <typename Func, typename... Args>
 __global__ void
 forEachVoxelPrivateUse1Kernel(int64_t leafVoxelChannelCount,
                               int64_t leafVoxelChannelOffset,
-                              fvdb::detail::GridBatchImpl::Accessor grid,
+                              fvdb::detail::GridBatchData::Accessor grid,
                               int64_t channelsPerVoxel,
                               Func func,
                               Args... args) {
@@ -112,7 +112,7 @@ forEachTensorElementChannelPrivateUse1Kernel(int64_t numel,
 template <typename Func, typename... Args>
 void
 forEachLeafPrivateUse1(int64_t numChannels,
-                       const fvdb::detail::GridBatchImpl &batchHdl,
+                       const fvdb::detail::GridBatchData &batchHdl,
                        Func func,
                        Args... args) {
     TORCH_CHECK(batchHdl.device().is_privateuseone(), "Grid batch must be on a PrivateUse1 device");
@@ -155,7 +155,7 @@ forEachLeafPrivateUse1(int64_t numChannels,
 template <typename Func, typename... Args>
 void
 forEachVoxelPrivateUse1(int64_t numChannels,
-                        const fvdb::detail::GridBatchImpl &batchHdl,
+                        const fvdb::detail::GridBatchData &batchHdl,
                         Func func,
                         Args... args) {
     TORCH_CHECK(batchHdl.device().is_privateuseone(), "Grid batch must be on a PrivateUse1 device");

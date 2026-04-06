@@ -274,7 +274,7 @@ generateRaySamplesCallback(int32_t bidx,
 
 template <torch::DeviceType DeviceTag>
 JaggedTensor
-UniformRaySamples(const GridBatchImpl &batchHdl,
+UniformRaySamples(const GridBatchData &batchHdl,
                   const JaggedTensor &rayOrigins,
                   const JaggedTensor &rayDirections,
                   const JaggedTensor &tMin,
@@ -488,7 +488,7 @@ UniformRaySamples(const GridBatchImpl &batchHdl,
 } // anonymous namespace
 
 JaggedTensor
-uniformRaySamples(const GridBatchImpl &batchHdl,
+uniformRaySamples(const GridBatchData &batchHdl,
                   const JaggedTensor &rayO,
                   const JaggedTensor &rayD,
                   const JaggedTensor &tMin,

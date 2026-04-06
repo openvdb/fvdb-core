@@ -4,7 +4,7 @@
 #ifndef FVDB_DETAIL_OPS_JIDXFORGRID_H
 #define FVDB_DETAIL_OPS_JIDXFORGRID_H
 
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 
 #include <torch/types.h>
 
@@ -12,7 +12,7 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-torch::Tensor jIdxForGrid(const GridBatchImpl &batchHdl);
+torch::Tensor jIdxForGrid(const GridBatchData &batchHdl);
 
 } // namespace ops
 } // namespace detail

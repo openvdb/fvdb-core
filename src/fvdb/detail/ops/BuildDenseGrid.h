@@ -4,7 +4,7 @@
 #ifndef FVDB_DETAIL_OPS_BUILDDENSEGRID_H
 #define FVDB_DETAIL_OPS_BUILDDENSEGRID_H
 
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 
 #include <torch/types.h>
 
@@ -16,7 +16,7 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-c10::intrusive_ptr<GridBatchImpl>
+c10::intrusive_ptr<GridBatchData>
 createNanoGridFromDense(int64_t batchSize,
                         nanovdb::Coord origin,
                         nanovdb::Coord size,

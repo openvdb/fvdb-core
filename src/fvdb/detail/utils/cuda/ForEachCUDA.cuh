@@ -6,7 +6,7 @@
 
 #include <fvdb/Config.h>
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/cuda/GridDim.h>
 
@@ -20,7 +20,7 @@ namespace _private {
 
 template <typename Func, typename... Args>
 __global__ void
-forEachLeafCUDAKernel(fvdb::detail::GridBatchImpl::Accessor grid,
+forEachLeafCUDAKernel(fvdb::detail::GridBatchData::Accessor grid,
                       const bool returnIfOutOfRange,
                       const int32_t channelsPerLeaf,
                       Func func,
@@ -46,7 +46,7 @@ forEachLeafCUDAKernel(fvdb::detail::GridBatchImpl::Accessor grid,
 
 template <typename Func, typename... Args>
 __global__ void
-forEachLeafSingleGridCUDAKernel(fvdb::detail::GridBatchImpl::Accessor batchAccessor,
+forEachLeafSingleGridCUDAKernel(fvdb::detail::GridBatchData::Accessor batchAccessor,
                                 const bool returnIfOutOfRange,
                                 const int32_t channelsPerLeaf,
                                 const int32_t bidx,
@@ -70,12 +70,12 @@ forEachLeafSingleGridCUDAKernel(fvdb::detail::GridBatchImpl::Accessor batchAcces
     func(gpuGrid, leafIdx, channelIdx, args...);
 }
 
-__global__ void voxelMetaIndexCUDAKernel(fvdb::detail::GridBatchImpl::Accessor gridAccessor,
+__global__ void voxelMetaIndexCUDAKernel(fvdb::detail::GridBatchData::Accessor gridAccessor,
                                          TorchRAcc64<int64_t, 2> metaIndex);
 
 template <typename Func, typename... Args>
 __global__ void
-forEachVoxelWithMetaCUDAKernel(fvdb::detail::GridBatchImpl::Accessor grid,
+forEachVoxelWithMetaCUDAKernel(fvdb::detail::GridBatchData::Accessor grid,
                                TorchRAcc64<int64_t, 2> metaIndex,
                                const bool returnIfOutOfRange,
                                const int64_t channelsPerVoxel,
@@ -104,7 +104,7 @@ forEachVoxelWithMetaCUDAKernel(fvdb::detail::GridBatchImpl::Accessor grid,
 
 template <typename Func, typename... Args>
 __global__ void
-forEachVoxelCUDAKernel(fvdb::detail::GridBatchImpl::Accessor grid,
+forEachVoxelCUDAKernel(fvdb::detail::GridBatchData::Accessor grid,
                        const bool returnIfOutOfRange,
                        const int64_t channelsPerVoxel,
                        Func func,
@@ -186,7 +186,7 @@ forEachTensorElementChannelCUDAKernel(TorchRAcc64<ScalarT, NDIMS> tensorAcc,
 /// @brief Run the given function on each leaf in the grid batch in parallel on the GPU.
 ///        The callback has the form:
 ///            void(int32_t bidx, int32_t lidx, int32_t cidx,
-///            fvdb::detail::GridBatchImpl::Accessor batchAcc, Args...)
+///            fvdb::detail::GridBatchData::Accessor batchAcc, Args...)
 ///        Where:
 ///            - bidx is the batch index of the current leaf
 ///            - lidx is the index of the leaf within the bidx^th grid in the batch
@@ -194,7 +194,7 @@ forEachTensorElementChannelCUDAKernel(TorchRAcc64<ScalarT, NDIMS> tensorAcc,
 /// @tparam Func The type of the callback function to run on each leaf. It must be a callable of the
 /// form
 ///         void(int32_t, int32_t, int32_t,
-///         fvdb::detail::GridBatchImpl::Accessor, Args...)
+///         fvdb::detail::GridBatchData::Accessor, Args...)
 /// @tparam Args... The types of any extra arguments to pass to the callback function
 ///
 /// @param stream Which cuda stream to run the kernel on
@@ -211,7 +211,7 @@ forEachLeafCUDA(const at::cuda::CUDAStream &stream,
                 const bool returnIfOutOfRange,
                 const int64_t numThreads,
                 const int64_t numChannels,
-                const fvdb::detail::GridBatchImpl &batchHdl,
+                const fvdb::detail::GridBatchData &batchHdl,
                 Func func,
                 Args... args) {
     TORCH_CHECK(batchHdl.device().is_cuda(), "Grid batch must be on a CUDA device");
@@ -240,7 +240,7 @@ template <typename Func, typename... Args>
 void
 forEachLeafCUDA(const int64_t numThreads,
                 const int64_t numChannels,
-                const fvdb::detail::GridBatchImpl &batchHdl,
+                const fvdb::detail::GridBatchData &batchHdl,
                 Func func,
                 Args... args) {
     TORCH_CHECK(batchHdl.device().is_cuda(), "Grid batch must be on a CUDA device");
@@ -280,7 +280,7 @@ forEachLeafInOneGridCUDA(const at::cuda::CUDAStream &stream,
                          const int64_t numThreads,
                          const int64_t numChannels,
                          const int64_t batchIdx,
-                         const fvdb::detail::GridBatchImpl &batchHdl,
+                         const fvdb::detail::GridBatchData &batchHdl,
                          Func func,
                          Args... args) {
     TORCH_CHECK(batchHdl.device().is_cuda(), "Grid batch must be on a CUDA device");
@@ -312,7 +312,7 @@ void
 forEachLeafInOneGridCUDA(const int64_t numThreads,
                          const int64_t numChannels,
                          const int64_t batchIdx,
-                         const fvdb::detail::GridBatchImpl &batchHdl,
+                         const fvdb::detail::GridBatchData &batchHdl,
                          Func func,
                          Args... args) {
     TORCH_CHECK(batchHdl.device().is_cuda(), "Grid batch must be on a CUDA device");
@@ -325,7 +325,7 @@ forEachLeafInOneGridCUDA(const int64_t numThreads,
 /// @brief Run the given function on each voxel in the grid batch in parallel on the GPU.
 ///        The callback has the form:
 ///            void(int32_t bidx, int32_t lidx, int32_t vidx, int32_t cidx,
-///            fvdb::detail::GridBatchImpl::Accessor batchAcc, Args...)
+///            fvdb::detail::GridBatchData::Accessor batchAcc, Args...)
 ///         Where:
 ///             - bidx is the batch index of the current voxel
 ///             - lidx is the index of the leaf containing the voxelwithin the bidx^th grid in the
@@ -338,7 +338,7 @@ forEachLeafInOneGridCUDA(const int64_t numThreads,
 /// @tparam Func The type of the callback function to run on each voxel. It must be a callable of
 /// the form
 ///         void(int32_t, int32_t, int32_t, int32_t,
-///         fvdb::detail::GridBatchImpl::Accessor, Args...)
+///         fvdb::detail::GridBatchData::Accessor, Args...)
 /// @tparam Args... The types of any extra arguments to pass to the callback function
 ///
 /// @param stream Which cuda stream to run the kernel on
@@ -358,7 +358,7 @@ forEachVoxelCUDA(const at::cuda::CUDAStream &stream,
                  const bool returnIfOutOfRange,
                  const int64_t numThreads,
                  const int64_t numChannels,
-                 const fvdb::detail::GridBatchImpl &batchHdl,
+                 const fvdb::detail::GridBatchData &batchHdl,
                  Func func,
                  Args... args) {
     TORCH_CHECK(batchHdl.device().is_cuda(), "Grid batch must be on a CUDA device");
@@ -424,7 +424,7 @@ template <typename Func, typename... Args>
 void
 forEachVoxelCUDA(const int64_t numThreads,
                  const int64_t numChannels,
-                 const fvdb::detail::GridBatchImpl &batchHdl,
+                 const fvdb::detail::GridBatchData &batchHdl,
                  Func func,
                  Args... args) {
     TORCH_CHECK(batchHdl.device().is_cuda(), "Grid batch must be on a CUDA device");

@@ -32,7 +32,7 @@ voxelsAlongRaysCallback(int32_t bidx,
                         TensorAccessor<fvdb::JLIdxType, 2> outJLIdx,             // [B*M, 2]
                         TensorAccessor<int32_t, 2> outVoxels,                    // [B*M*S, 3]
                         TensorAccessor<ScalarType, 2> outTimes,                  // [B*M*S, 2]
-                        GridBatchImpl::Accessor batchAccessor,
+                        GridBatchData::Accessor batchAccessor,
                         int64_t maxVox,
                         ScalarType eps,
                         bool cumulative) {
@@ -168,7 +168,7 @@ countVoxelsAlongRaysCallback(int32_t bidx,
 
 template <torch::DeviceType DeviceTag>
 std::vector<JaggedTensor>
-VoxelsAlongRays(const GridBatchImpl &batchHdl,
+VoxelsAlongRays(const GridBatchData &batchHdl,
                 const JaggedTensor &rayOrigins,
                 const JaggedTensor &rayDirections,
                 int64_t maxVox,
@@ -376,7 +376,7 @@ VoxelsAlongRays(const GridBatchImpl &batchHdl,
 } // anonymous namespace
 
 std::vector<JaggedTensor>
-voxelsAlongRays(const GridBatchImpl &batchHdl,
+voxelsAlongRays(const GridBatchData &batchHdl,
                 const JaggedTensor &rayOrigins,
                 const JaggedTensor &rayDirections,
                 int64_t maxVox,

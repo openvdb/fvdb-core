@@ -5,7 +5,6 @@
 #define FVDB_DETAIL_VIEWER_VIEWER_H
 
 #include <fvdb/GaussianSplat3d.h>
-#include <fvdb/GridBatch.h>
 #include <fvdb/detail/viewer/CameraView.h>
 #include <fvdb/detail/viewer/GaussianSplat3dView.h>
 
@@ -138,9 +137,8 @@ class Viewer {
     float cameraFar(const std::string &scene_name);
     void setCameraFar(const std::string &scene_name, float far);
 
-    void setCameraProjectionType(const std::string &scene_name,
-                                 GaussianSplat3d::ProjectionType mode);
-    GaussianSplat3d::ProjectionType cameraProjectionType(const std::string &scene_name);
+    void setCameraModel(const std::string &scene_name, GaussianSplat3d::CameraModel model);
+    GaussianSplat3d::CameraModel cameraModel(const std::string &scene_name);
 
     std::string
     ipAddress() const {

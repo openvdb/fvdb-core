@@ -60,6 +60,15 @@ assert_tag_exists() {
     fi
 }
 
+assert_no_branch() {
+    local desc="$1" branch="$2"
+    if git show-ref --verify --quiet "refs/heads/$branch"; then
+        fail "$desc (branch '$branch' unexpectedly exists)"
+    else
+        pass "$desc"
+    fi
+}
+
 get_version() {
     grep '^version = ' pyproject.toml | sed 's/^version = "\(.*\)"/\1/'
 }
@@ -335,6 +344,142 @@ if "$FINISH_RELEASE" 0.4.0 --no-push --no-pr 2>&1; then
 else
     pass "rejects duplicate tag"
 fi
+
+# --- hotfix release tests -----------------------------------------------------
+
+# Clean up adopt/v0.4 to simulate post-merge state
+git checkout main >/dev/null 2>&1
+git branch -D adopt/v0.4 >/dev/null 2>&1 || true
+
+echo ""
+echo "============================================="
+echo " Test: start-release.sh 0.4.1 --dry-run (hotfix)"
+echo "============================================="
+
+HDRY_OUTPUT="$("$START_RELEASE" 0.4.1 --dry-run 2>&1)"
+assert_contains "hotfix dry-run mentions previous tag" "$HDRY_OUTPUT" "v0.4.0"
+assert_contains "hotfix dry-run mentions release branch" "$HDRY_OUTPUT" "release/v0.4"
+assert_contains "hotfix dry-run mentions hotfix version" "$HDRY_OUTPUT" "0.4.1"
+
+VERSION_AFTER_HDRY="$(get_version)"
+assert_eq "version unchanged after hotfix dry-run" "0.5.0.dev0" "$VERSION_AFTER_HDRY"
+
+echo ""
+echo "============================================="
+echo " Test: start-release.sh rejects hotfix when branch diverged"
+echo "============================================="
+
+SAVED_RELEASE="$(git rev-parse release/v0.4)"
+
+git checkout release/v0.4 >/dev/null 2>&1
+echo "diverge" > temp.txt
+git add temp.txt
+git commit -s -m "Diverging commit" >/dev/null 2>&1
+git checkout main >/dev/null 2>&1
+
+if "$START_RELEASE" 0.4.1 --no-push --no-pr 2>&1; then
+    fail "should reject hotfix when branch diverged from tag"
+else
+    pass "rejects hotfix when branch diverged from tag"
+fi
+
+git branch -f release/v0.4 "$SAVED_RELEASE"
+
+echo ""
+echo "============================================="
+echo " Test: start-release.sh rejects hotfix when previous tag missing"
+echo "============================================="
+
+if "$START_RELEASE" 0.3.2 --no-push --no-pr 2>&1; then
+    fail "should reject hotfix when previous tag (v0.3.1) is missing"
+else
+    pass "rejects hotfix when previous tag is missing"
+fi
+
+echo ""
+echo "============================================="
+echo " Test: start-release.sh 0.4.1 --no-push --no-pr (hotfix)"
+echo "============================================="
+
+HSTART_OUTPUT="$("$START_RELEASE" 0.4.1 --no-push --no-pr 2>&1)"
+
+assert_contains "hotfix output mentions cherry-pick" "$HSTART_OUTPUT" "Cherry-pick"
+assert_contains "hotfix output mentions finish-release" "$HSTART_OUTPUT" "finish-release.sh 0.4.1"
+
+CURRENT_AFTER_HSTART="$(git rev-parse --abbrev-ref HEAD)"
+assert_eq "on release branch after hotfix start" "release/v0.4" "$CURRENT_AFTER_HSTART"
+
+HOTFIX_VERSION="$(get_version)"
+assert_eq "release branch version is 0.4.1" "0.4.1" "$HOTFIX_VERSION"
+
+HOTFIX_DOC="$(grep '^fvdb_core_stable_version = ' docs/conf.py | sed 's/^fvdb_core_stable_version = "\(.*\)"/\1/')"
+assert_eq "hotfix docs/conf.py updated to 0.4.1" "0.4.1" "$HOTFIX_DOC"
+
+HOTFIX_LOG="$(git log -1 --format='%B')"
+assert_contains "hotfix commit has DCO sign-off" "$HOTFIX_LOG" "Signed-off-by:"
+assert_contains "hotfix commit mentions hotfix" "$HOTFIX_LOG" "hotfix"
+
+git checkout main >/dev/null 2>&1
+MAIN_AFTER_HSTART="$(get_version)"
+assert_eq "main still at 0.5.0.dev0 after hotfix start" "0.5.0.dev0" "$MAIN_AFTER_HSTART"
+
+echo ""
+echo "============================================="
+echo " Test: finish-release.sh 0.4.1 --no-push --no-pr (hotfix)"
+echo "============================================="
+
+# Simulate cherry-pick on the release branch
+git checkout release/v0.4 >/dev/null 2>&1
+echo "bugfix" > fix.txt
+git add fix.txt
+git commit -s -m "Fix critical bug" >/dev/null 2>&1
+git checkout main >/dev/null 2>&1
+
+"$FINISH_RELEASE" 0.4.1 --no-push --no-pr 2>&1
+
+assert_tag_exists "tag v0.4.1 exists" "v0.4.1"
+
+TAG_COMMIT_041="$(git rev-parse 'v0.4.1^{commit}')"
+RELEASE_HEAD_041="$(git rev-parse release/v0.4)"
+assert_eq "hotfix tag points to release branch HEAD" "$RELEASE_HEAD_041" "$TAG_COMMIT_041"
+
+CURRENT_AFTER_HFINISH="$(git rev-parse --abbrev-ref HEAD)"
+assert_eq "on main after hotfix finish" "main" "$CURRENT_AFTER_HFINISH"
+
+assert_no_branch "no adopt branch for hotfix" "adopt/v0.4.1"
+
+git checkout release/v0.4 >/dev/null 2>&1
+RELEASE_VERSION_AFTER_HOTFIX="$(get_version)"
+assert_eq "release branch still at 0.4.1 after hotfix finish" "0.4.1" "$RELEASE_VERSION_AFTER_HOTFIX"
+git checkout main >/dev/null 2>&1
+
+echo ""
+echo "============================================="
+echo " Test: finish-release.sh rejects duplicate hotfix tag"
+echo "============================================="
+
+if "$FINISH_RELEASE" 0.4.1 --no-push --no-pr 2>&1; then
+    fail "should reject when hotfix tag already exists"
+else
+    pass "rejects duplicate hotfix tag"
+fi
+
+echo ""
+echo "============================================="
+echo " Test: successive hotfix (start-release.sh 0.4.2)"
+echo "============================================="
+
+HSTART2_OUTPUT="$("$START_RELEASE" 0.4.2 --no-push --no-pr 2>&1)"
+
+assert_contains "second hotfix mentions previous tag v0.4.1" "$HSTART2_OUTPUT" "v0.4.1"
+
+CURRENT_AFTER_HSTART2="$(git rev-parse --abbrev-ref HEAD)"
+assert_eq "on release branch after second hotfix start" "release/v0.4" "$CURRENT_AFTER_HSTART2"
+
+HOTFIX2_VERSION="$(get_version)"
+assert_eq "release branch version is 0.4.2" "0.4.2" "$HOTFIX2_VERSION"
+
+git checkout main >/dev/null 2>&1
 
 # --- summary ------------------------------------------------------------------
 echo ""

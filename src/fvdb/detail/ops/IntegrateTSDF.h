@@ -5,7 +5,7 @@
 #define FVDB_DETAIL_OPS_INTEGRATETSDF_H
 
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 
 #include <torch/types.h>
 
@@ -16,8 +16,8 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-std::tuple<c10::intrusive_ptr<GridBatchImpl>, JaggedTensor, JaggedTensor>
-integrateTSDF(const c10::intrusive_ptr<GridBatchImpl> grid,
+std::tuple<c10::intrusive_ptr<GridBatchData>, JaggedTensor, JaggedTensor>
+integrateTSDF(const c10::intrusive_ptr<GridBatchData> grid,
               const double truncationMargin,
               const torch::Tensor &projectionMatrices,
               const torch::Tensor &camToWorldMatrices,
@@ -26,8 +26,8 @@ integrateTSDF(const c10::intrusive_ptr<GridBatchImpl> grid,
               const torch::Tensor &depthImages,
               const std::optional<torch::Tensor> &weightImages);
 
-std::tuple<c10::intrusive_ptr<GridBatchImpl>, JaggedTensor, JaggedTensor, JaggedTensor>
-integrateTSDFWithFeatures(const c10::intrusive_ptr<GridBatchImpl> grid,
+std::tuple<c10::intrusive_ptr<GridBatchData>, JaggedTensor, JaggedTensor, JaggedTensor>
+integrateTSDFWithFeatures(const c10::intrusive_ptr<GridBatchData> grid,
                           const double truncationMargin,
                           const torch::Tensor &projectionMatrices,
                           const torch::Tensor &camToWorldMatrices,

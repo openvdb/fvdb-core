@@ -1920,16 +1920,42 @@ class TestJaggedTensor(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             jt.jmax(dim=0)
 
-    @parameterized.expand([(torch.float16,), (torch.bfloat16,), (torch.float32,), (torch.float64,)])
-    def test_sdpa(self, dtype):
+    @parameterized.expand(
+        [
+            # Flash Attention - only supports float16/bfloat16
+            (torch.float16, torch.nn.attention.SDPBackend.FLASH_ATTENTION),
+            (torch.bfloat16, torch.nn.attention.SDPBackend.FLASH_ATTENTION),
+            # Efficient Attention - only supports float16/bfloat16/float32
+            (torch.float16, torch.nn.attention.SDPBackend.EFFICIENT_ATTENTION),
+            (torch.bfloat16, torch.nn.attention.SDPBackend.EFFICIENT_ATTENTION),
+            (torch.float32, torch.nn.attention.SDPBackend.EFFICIENT_ATTENTION),
+            # Math - supports all dtypes
+            (torch.float16, torch.nn.attention.SDPBackend.MATH),
+            (torch.bfloat16, torch.nn.attention.SDPBackend.MATH),
+            (torch.float32, torch.nn.attention.SDPBackend.MATH),
+            (torch.float64, torch.nn.attention.SDPBackend.MATH),
+        ]
+    )
+    def test_sdpa(self, dtype, backend):
         torch.random.manual_seed(0)
 
-        # Get dimensions: query (B*Sq, H, D), key (B*Skv, H, D), value (B*Skv, H, T)
+        # Dimension key:
+        #   N = batch size (1 when processing individual jagged elements)
+        #   L = query sequence length (varies per batch element)
+        #   S = key/value sequence length (varies per batch element)
+        #   H = number of attention heads
+        #   E = embedding dimension for queries and keys
+        #   V = value dimension (may differ from E except for Flash Attention)
+        # Dimensions:
+        #   query = L_i, H, E
+        #   key   = S_i, H, E
+        #   value = S_i, H, V
         num_heads = 4
         seqlen_q = [10, 20, 30]
         seqlen_kv = [15, 25, 35]
         dim_qk = 64
-        dim_v = 128
+        # Flash Attention requires q, k, v to all have the same last dimension
+        dim_v = dim_qk if backend == torch.nn.attention.SDPBackend.FLASH_ATTENTION else 128
         scale = 0.5
         device = "cuda"
 
@@ -1944,25 +1970,25 @@ class TestJaggedTensor(unittest.TestCase):
         self.check_lshape(k_jagged, k_list)
         self.check_lshape(v_jagged, v_list)
 
-        # Torch -- For-loop approach
+        # Torch -- For-loop approach (always use MATH for reference to ensure consistency)
         out_jagged_torch_forloop_list = []
         for b in range(batch_size):
-            # From LHE to NHLE / SHV to NHSV
-            q = q_jagged[b].jdata.unsqueeze(0).permute(0, 2, 1, 3)
-            k = k_jagged[b].jdata.unsqueeze(0).permute(0, 2, 1, 3)
-            v = v_jagged[b].jdata.unsqueeze(0).permute(0, 2, 1, 3)
+            # (L_i, H, E) -> (1, H, L_i, E) for SDPA's expected (N, H, L_i, E) layout
+            q = q_jagged[b].jdata.transpose(0, 1).unsqueeze(0)
+            k = k_jagged[b].jdata.transpose(0, 1).unsqueeze(0)
+            v = v_jagged[b].jdata.transpose(0, 1).unsqueeze(0)
 
             with torch.nn.attention.sdpa_kernel([torch.nn.attention.SDPBackend.MATH]):
                 out = torch.nn.functional.scaled_dot_product_attention(q, k, v, scale=scale)
 
-            # From NHLV to LHV
-            out = out.permute(0, 2, 1, 3).squeeze(0)
+            # (1, H, L_i, V) -> (L_i, H, V)
+            out = out.squeeze(0).transpose(0, 1)
             out_jagged_torch_forloop_list.append(out)
         out_jagged_torch_forloop = fvdb.JaggedTensor(out_jagged_torch_forloop_list)
         self.check_lshape(out_jagged_torch_forloop, out_jagged_torch_forloop_list)
 
-        # fVDB
-        with torch.nn.attention.sdpa_kernel([torch.nn.attention.SDPBackend.MATH]):
+        # fVDB - test with the specified backend
+        with torch.nn.attention.sdpa_kernel([backend]):
             out_jagged_fvdb = fvdb.scaled_dot_product_attention(q_jagged, k_jagged, v_jagged, scale=scale)
             self.check_lshape(out_jagged_fvdb, out_jagged_torch_forloop_list)
 
