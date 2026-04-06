@@ -49,12 +49,12 @@ set(FVDB_CPP_FILES
     fvdb/detail/autograd/GaussianRasterize.cpp
     fvdb/detail/autograd/GaussianRasterizeFromWorld.cpp
     fvdb/detail/autograd/GaussianRasterizeSparse.cpp
-    fvdb/detail/autograd/JaggedReduce.cpp
     fvdb/detail/autograd/VolumeRender.cpp
     fvdb/detail/io/GaussianPlyIO.cpp
     fvdb/detail/io/LoadNanovdb.cpp
     fvdb/detail/io/SaveNanoVDB.cpp
     fvdb/detail/ops/gsplat/GaussianUtils.cpp
+    fvdb/detail/ops/jagged/JaggedReductions.cpp
     fvdb/detail/TorchDeviceBuffer.cpp
     fvdb/detail/viewer/GaussianSplat3dView.cpp
     fvdb/detail/viewer/Viewer.cpp
@@ -120,7 +120,6 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/IjkToInvIndex.cu
     fvdb/detail/ops/Inject.cu
     fvdb/detail/ops/IntegrateTSDF.cu
-    fvdb/detail/ops/jagged/JaggedReduce.cu
     fvdb/detail/ops/jagged/JaggedSort.cu
     fvdb/detail/ops/JaggedTensorIndex.cu
     fvdb/detail/ops/JCat0.cu

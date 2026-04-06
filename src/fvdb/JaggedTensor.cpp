@@ -3,13 +3,13 @@
 //
 #include <fvdb/Config.h>
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/autograd/JaggedReduce.h>
 
 // Ops headers
 #include <fvdb/detail/ops/JCat0.h>
 #include <fvdb/detail/ops/JIdxForJOffsets.h>
 #include <fvdb/detail/ops/JOffsetsFromJIdx.h>
 #include <fvdb/detail/ops/JaggedTensorIndex.h>
+#include <fvdb/detail/ops/jagged/JaggedReductions.h>
 #include <fvdb/detail/ops/jagged/JaggedSort.h>
 
 #include <optional>
@@ -671,83 +671,12 @@ JaggedTensor::jflatten(const int64_t dim) const {
 
 JaggedTensor
 JaggedTensor::jsum(int64_t dim, bool keepdim) const {
-    const int64_t jdim = mData.dim();
-
-    // ...
-
-    TORCH_CHECK_INDEX(dim >= -(jdim - 1) && dim < jdim,
-                      "dim must be between ",
-                      -(jdim - 1),
-                      " and ",
-                      jdim - 1,
-                      " inclusive");
-    if (dim < 0) {
-        dim += jdim;
-    }
-
-    if (dim == 0) {
-        torch::Tensor retData;
-        if (mBatchIdx.size(0) == 0) {
-            retData = mData.sum(0).unsqueeze(0);
-        } else {
-            retData =
-                detail::autograd::JaggedSum::apply(jdata(), jidx(), joffsets(), num_tensors())[0];
-        }
-        const torch::Tensor retOffsets = torch::arange(
-            0,
-            retData.size(0) + 1,
-            torch::TensorOptions().dtype(JOffsetsScalarType).device(retData.device()));
-        const torch::Tensor retJidx = jidx_from_joffsets(retOffsets, retData.size(0));
-
-        return JaggedTensor::from_jdata_joffsets_jidx_and_lidx_unsafe(
-            retData, retOffsets, retJidx, mListIdx, mNumOuterLists);
-    } else {
-        return jagged_like(mData.sum(dim, keepdim));
-    }
+    return detail::ops::jaggedSum(*this, dim, keepdim);
 }
 
 std::vector<JaggedTensor>
 JaggedTensor::jmin(int64_t dim, bool keepdim) const {
-    const int64_t jdim = mData.dim();
-    TORCH_CHECK_INDEX(dim >= -(jdim - 1) && dim <= jdim,
-                      "dim must be between ",
-                      -(jdim - 1),
-                      " and ",
-                      jdim - 1,
-                      " inclusive");
-    if (dim < 0) {
-        dim += jdim;
-    }
-
-    if (dim == 0) {
-        torch::Tensor minVals, minIndices;
-        if (mBatchIdx.size(0) == 0) {
-            auto minTuple = mData.min(0);
-            minVals       = std::get<0>(minTuple).unsqueeze(0);
-            minIndices    = std::get<1>(minTuple).unsqueeze(0);
-        } else {
-            auto minTuple =
-                detail::autograd::JaggedMin::apply(jdata(), jidx(), joffsets(), num_tensors());
-            minVals    = minTuple[0];
-            minIndices = minTuple[1];
-        }
-
-        const torch::Tensor retOffsets = torch::arange(
-            0,
-            minVals.size(0) + 1,
-            torch::TensorOptions().dtype(JOffsetsScalarType).device(minVals.device()));
-        const torch::Tensor retJidx = jidx_from_joffsets(retOffsets, minVals.size(0));
-
-        JaggedTensor retVals = JaggedTensor::from_jdata_joffsets_jidx_and_lidx_unsafe(
-            minVals, retOffsets, retJidx, mListIdx, mNumOuterLists);
-        JaggedTensor retIdxs = retVals.jagged_like(minIndices);
-        return {retVals, retIdxs};
-    } else {
-        auto minTuple            = mData.min(dim, keepdim);
-        torch::Tensor minVals    = std::get<0>(minTuple);
-        torch::Tensor minIndices = std::get<1>(minTuple);
-        return {jagged_like(minVals), jagged_like(minIndices)};
-    }
+    return detail::ops::jaggedMin(*this, dim, keepdim);
 }
 
 JaggedTensor
@@ -761,45 +690,7 @@ JaggedTensor::jsqueeze(std::optional<int64_t> dim) const {
 
 std::vector<JaggedTensor>
 JaggedTensor::jmax(int64_t dim, bool keepdim) const {
-    const int64_t jdim = mData.dim();
-    TORCH_CHECK_INDEX(dim >= -(jdim - 1) && dim <= jdim,
-                      "dim must be between ",
-                      -(jdim - 1),
-                      " and ",
-                      jdim - 1,
-                      " inclusive");
-    if (dim < 0) {
-        dim += jdim;
-    }
-
-    if (dim == 0) {
-        torch::Tensor maxVals, maxIndices;
-        if (mBatchIdx.size(0) == 0) {
-            auto maxTuple = mData.max(0);
-            maxVals       = std::get<0>(maxTuple).unsqueeze(0);
-            maxIndices    = std::get<1>(maxTuple).unsqueeze(0);
-        } else {
-            auto maxTuple =
-                detail::autograd::JaggedMax::apply(jdata(), jidx(), joffsets(), num_tensors());
-            maxVals    = maxTuple[0];
-            maxIndices = maxTuple[1];
-        }
-
-        const torch::Tensor retOffsets = torch::arange(
-            0,
-            maxVals.size(0) + 1,
-            torch::TensorOptions().dtype(JOffsetsScalarType).device(maxVals.device()));
-        const torch::Tensor retJidx = jidx_from_joffsets(retOffsets, maxVals.size(0));
-        JaggedTensor retVals        = JaggedTensor::from_jdata_joffsets_jidx_and_lidx_unsafe(
-            maxVals, retOffsets, retJidx, mListIdx, mNumOuterLists);
-        JaggedTensor retIdxs = retVals.jagged_like(maxIndices);
-        return {retVals, retIdxs};
-    } else {
-        auto maxTuple            = mData.max(dim, keepdim);
-        torch::Tensor maxVals    = std::get<0>(maxTuple);
-        torch::Tensor maxIndices = std::get<1>(maxTuple);
-        return {jagged_like(maxVals), jagged_like(maxIndices)};
-    }
+    return detail::ops::jaggedMax(*this, dim, keepdim);
 }
 
 JaggedTensor
