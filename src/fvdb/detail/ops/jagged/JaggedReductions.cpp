@@ -169,28 +169,27 @@ jaggedMin(const JaggedTensor &jt, int64_t dim, bool keepdim) {
             minVals       = std::get<0>(minTuple).unsqueeze(0);
             minIndices    = std::get<1>(minTuple).unsqueeze(0);
         } else {
-            torch::Tensor idx = broadcastIdxToMatchData(batchIdx, data);
-            auto outShape     = data.sizes().vec();
-            outShape[0]       = jt.num_tensors();
+            torch::Tensor batchIdxLong = batchIdx.to(torch::kLong);
+            torch::Tensor idx          = broadcastIdxToMatchData(batchIdxLong, data);
+            auto outShape              = data.sizes().vec();
+            outShape[0]                = jt.num_tensors();
+            auto longOpts = torch::TensorOptions().dtype(torch::kLong).device(data.device());
+
+            torch::Tensor localPos =
+                broadcastIdxToMatchData(torch::arange(data.size(0), longOpts) -
+                                            offsets.index({batchIdxLong}).to(torch::kLong),
+                                        data);
 
             minVals = torch::full(outShape, minIdentity(data.scalar_type()), data.options());
             minVals.scatter_reduce_(0, idx, data, "amin", /*include_self=*/false);
             torch::Tensor emptyMask = emptyGroupMask(offsets, jt.num_tensors(), minVals.dim());
             minVals                 = torch::where(emptyMask, torch::zeros_like(minVals), minVals);
 
-            torch::Tensor gatheredMin = minVals.detach().index({batchIdx.to(torch::kLong)});
-            torch::Tensor matches     = (data.detach() == gatheredMin);
-            torch::Tensor globalPos   = torch::arange(
-                data.size(0), torch::TensorOptions().dtype(torch::kLong).device(data.device()));
-            torch::Tensor baseOff  = offsets.index({batchIdx.to(torch::kLong)}).to(torch::kLong);
-            torch::Tensor localPos = broadcastIdxToMatchData(globalPos - baseOff, data);
             torch::Tensor maskedPos =
-                torch::where(matches, localPos, torch::full_like(localPos, -1));
-
-            minIndices =
-                torch::full(outShape,
-                            (int64_t)-1,
-                            torch::TensorOptions().dtype(torch::kLong).device(data.device()));
+                torch::where(data.detach() == minVals.detach().index({batchIdxLong}),
+                             localPos,
+                             torch::full_like(localPos, -1));
+            minIndices = torch::full(outShape, (int64_t)-1, longOpts);
             minIndices.scatter_reduce_(0, idx, maskedPos, "amax", /*include_self=*/false);
         }
 
@@ -239,28 +238,27 @@ jaggedMax(const JaggedTensor &jt, int64_t dim, bool keepdim) {
             maxVals       = std::get<0>(maxTuple).unsqueeze(0);
             maxIndices    = std::get<1>(maxTuple).unsqueeze(0);
         } else {
-            torch::Tensor idx = broadcastIdxToMatchData(batchIdx, data);
-            auto outShape     = data.sizes().vec();
-            outShape[0]       = jt.num_tensors();
+            torch::Tensor batchIdxLong = batchIdx.to(torch::kLong);
+            torch::Tensor idx          = broadcastIdxToMatchData(batchIdxLong, data);
+            auto outShape              = data.sizes().vec();
+            outShape[0]                = jt.num_tensors();
+            auto longOpts = torch::TensorOptions().dtype(torch::kLong).device(data.device());
+
+            torch::Tensor localPos =
+                broadcastIdxToMatchData(torch::arange(data.size(0), longOpts) -
+                                            offsets.index({batchIdxLong}).to(torch::kLong),
+                                        data);
 
             maxVals = torch::full(outShape, maxIdentity(data.scalar_type()), data.options());
             maxVals.scatter_reduce_(0, idx, data, "amax", /*include_self=*/false);
             torch::Tensor emptyMask = emptyGroupMask(offsets, jt.num_tensors(), maxVals.dim());
             maxVals                 = torch::where(emptyMask, torch::zeros_like(maxVals), maxVals);
 
-            torch::Tensor gatheredMax = maxVals.detach().index({batchIdx.to(torch::kLong)});
-            torch::Tensor matches     = (data.detach() == gatheredMax);
-            torch::Tensor globalPos   = torch::arange(
-                data.size(0), torch::TensorOptions().dtype(torch::kLong).device(data.device()));
-            torch::Tensor baseOff  = offsets.index({batchIdx.to(torch::kLong)}).to(torch::kLong);
-            torch::Tensor localPos = broadcastIdxToMatchData(globalPos - baseOff, data);
             torch::Tensor maskedPos =
-                torch::where(matches, localPos, torch::full_like(localPos, -1));
-
-            maxIndices =
-                torch::full(outShape,
-                            (int64_t)-1,
-                            torch::TensorOptions().dtype(torch::kLong).device(data.device()));
+                torch::where(data.detach() == maxVals.detach().index({batchIdxLong}),
+                             localPos,
+                             torch::full_like(localPos, -1));
+            maxIndices = torch::full(outShape, (int64_t)-1, longOpts);
             maxIndices.scatter_reduce_(0, idx, maskedPos, "amax", /*include_self=*/false);
         }
 
