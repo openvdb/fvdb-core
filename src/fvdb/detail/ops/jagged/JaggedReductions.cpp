@@ -105,7 +105,6 @@ JaggedTensor
 jaggedSum(const JaggedTensor &jt, int64_t dim, bool keepdim) {
     const torch::Tensor &data     = jt.jdata();
     const torch::Tensor &batchIdx = jt.jidx();
-    const torch::Tensor &offsets  = jt.joffsets();
     const torch::Tensor &listIdx  = jt.jlidx();
     const int64_t jdim            = data.dim();
 
