@@ -126,6 +126,10 @@ fvdbToNanovdbGridWithValues(const GridBatchData &gridBatchData,
     auto ijkAccessor   = ijkValues.jdata().accessor<int, 2>();
     auto jdataAccessor = jdataCpu.accessor<InScalarType, 2>();
 
+    auto ijkOffsetsAcc  = ijkValues.joffsets().accessor<JOffsetsType, 1>();
+    auto dataOffsetsCpu = data.joffsets().cpu();
+    auto dataOffsetsAcc = dataOffsetsCpu.accessor<JOffsetsType, 1>();
+
     // Populate a vector of host buffers for each grid in the batch
     std::vector<HostGridHandle> buffers(gridBatchData.batchSize());
     for (int64_t bi = 0; bi < gridBatchData.batchSize(); bi += 1) {
@@ -152,11 +156,10 @@ fvdbToNanovdbGridWithValues(const GridBatchData &gridBatchData,
 
         auto proxyGridAccessor = proxyGrid->getWriteAccessor();
 
-        const int start         = ijkValues.joffsets()[bi].item<int>();
-        const int end           = ijkValues.joffsets()[bi + 1].item<int>();
+        const int start         = static_cast<int>(ijkOffsetsAcc[bi]);
+        const int end           = static_cast<int>(ijkOffsetsAcc[bi + 1]);
         const int64_t numVoxels = end - start;
-        const int64_t numData =
-            data.joffsets()[bi + 1].item<int>() - data.joffsets()[bi].item<int>();
+        const int64_t numData   = dataOffsetsAcc[bi + 1] - dataOffsetsAcc[bi];
         TORCH_CHECK_VALUE(
             numData == gridBatchData.numVoxelsAt(bi),
             "Invalid number of voxels in jagged tensor at index " + std::to_string(bi) +

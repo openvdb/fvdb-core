@@ -159,8 +159,9 @@ struct twopass_topology_op {
         if (K > 0) {
             offsets_dev.slice(0, 1, K + 1).copy_(torch::cumsum(counts.to(torch::kInt64), 0));
         }
-        int64_t total_pairs = (K > 0) ? offsets_dev[K].item<int64_t>() : 0;
         auto offsets_host   = offsets_dev.cpu();
+        auto offsets_acc    = offsets_host.accessor<int64_t, 1>();
+        int64_t total_pairs = (K > 0) ? offsets_acc[K] : 0;
 
         if (total_pairs == 0) {
             return GatherScatterDefaultTopology{

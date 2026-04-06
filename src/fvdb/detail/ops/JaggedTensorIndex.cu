@@ -259,8 +259,10 @@ jaggedTensorIndexSliceCuda(const JaggedTensor &jt, int64_t start, int64_t end, i
     // Single list case with step size 1 (ldim = 1)
     if (jt.ldim() == 1 && step == 1) {
         TORCH_CHECK(jt.ldim() == 1, "bad list indexes. this should never happen");
-        const JOffsetsType startIdx = jt.joffsets()[start].item<JOffsetsType>();
-        const JOffsetsType endIdx   = jt.joffsets()[end].item<JOffsetsType>();
+        auto offsets_slice          = jt.joffsets().narrow(0, start, end - start + 1).cpu();
+        auto offsets_acc            = offsets_slice.accessor<JOffsetsType, 1>();
+        const JOffsetsType startIdx = offsets_acc[0];
+        const JOffsetsType endIdx   = offsets_acc[end - start];
         const torch::Tensor retLidx = jt.jlidx().numel() == 0
                                           ? jt.jlidx()
                                           : jt.jlidx().index({torch::indexing::Slice(start, end)});
@@ -520,8 +522,12 @@ jaggedTensorIndexIntOneList(const JaggedTensor &jt, int64_t idxVal) {
     torch::Tensor jlidx    = jt.jlidx();
 
     TORCH_CHECK(jt.ldim() == 1, "bad list indexes. this should never happen");
-    const JOffsetsType startIdx = joffsets[idxVal].item<JOffsetsType>();
-    const JOffsetsType endIdx   = joffsets[idxVal + 1].item<JOffsetsType>();
+    auto two_offsets = joffsets.narrow(0, idxVal, 2);
+    if (!two_offsets.is_cpu())
+        two_offsets = two_offsets.cpu();
+    auto two_acc                = two_offsets.accessor<JOffsetsType, 1>();
+    const JOffsetsType startIdx = two_acc[0];
+    const JOffsetsType endIdx   = two_acc[1];
     const torch::Tensor retJoffsets =
         torch::tensor({JOffsetsType(0), endIdx - startIdx},
                       torch::TensorOptions().dtype(JOffsetsScalarType).device(jdata.device()));
@@ -575,10 +581,11 @@ jaggedTensorIndexIntCuda(const JaggedTensor &jt, int64_t idxVal) {
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 
     offsetsAndRange                       = offsetsAndRange.cpu();
-    const JOffsetsType elementStartOffset = offsetsAndRange[0].item<JOffsetsType>();
-    const JOffsetsType elementEndOffset   = offsetsAndRange[1].item<JOffsetsType>();
-    const JOffsetsType startIdx           = offsetsAndRange[2].item<JOffsetsType>();
-    const JOffsetsType endIdx             = offsetsAndRange[3].item<JOffsetsType>();
+    auto oar_acc                          = offsetsAndRange.accessor<JOffsetsType, 1>();
+    const JOffsetsType elementStartOffset = oar_acc[0];
+    const JOffsetsType elementEndOffset   = oar_acc[1];
+    const JOffsetsType startIdx           = oar_acc[2];
+    const JOffsetsType endIdx             = oar_acc[3];
     torch::Tensor retOffsets =
         joffsets.index({torch::indexing::Slice(startIdx, endIdx + 1)}) - elementStartOffset;
     const torch::Tensor retData =
