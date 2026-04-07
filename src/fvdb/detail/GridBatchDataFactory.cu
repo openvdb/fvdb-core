@@ -112,7 +112,8 @@ computeBatchOffsets(GridBatchData::GridMetadata *hostMeta,
     torch::Tensor offsets = torch::empty(
         {batchSize + 1}, torch::TensorOptions().dtype(fvdb::JOffsetsScalarType).device(device));
     if (device.is_cuda()) {
-        computeBatchOffsetsFromMetadata<<<1, 1>>>(
+        cudaStream_t stream = c10::cuda::getCurrentCUDAStream(device.index()).stream();
+        computeBatchOffsetsFromMetadata<<<1, 1, 0, stream>>>(
             batchSize,
             deviceMeta,
             offsets.packed_accessor64<fvdb::JOffsetsType, 1, torch::RestrictPtrTraits>());
