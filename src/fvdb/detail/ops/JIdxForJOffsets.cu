@@ -89,6 +89,9 @@ jIdxForJOffsetsPrivateUse1(torch::Tensor joffsets, int64_t numElements) {
     }
     torch::Tensor retJIdx = torch::empty({numElements}, options);
 
+    auto joffsets_cpu = joffsets.cpu();
+    auto joffsets_acc = joffsets_cpu.accessor<fvdb::JOffsetsType, 1>();
+
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         cudaStream_t stream = c10::cuda::getCurrentCUDAStream(deviceId).stream();
@@ -99,8 +102,8 @@ jIdxForJOffsetsPrivateUse1(torch::Tensor joffsets, int64_t numElements) {
         size_t deviceJOffsetsEnd = deviceJOffsetsStart + deviceJOffsetsCount;
 
         for (auto i = deviceJOffsetsStart; i < deviceJOffsetsEnd; ++i) {
-            auto start = joffsets[i].item<fvdb::JOffsetsType>();
-            auto end   = joffsets[i + 1].item<fvdb::JOffsetsType>();
+            auto start = joffsets_acc[i];
+            auto end   = joffsets_acc[i + 1];
             if (start < end) {
                 const int numBlocks = GET_BLOCKS(end - start, DEFAULT_BLOCK_DIM);
                 jIdxFill<DEFAULT_BLOCK_DIM><<<numBlocks, DEFAULT_BLOCK_DIM, 0, stream>>>(
@@ -130,9 +133,9 @@ jIdxForJOffsetsCPU(torch::Tensor joffsets, int64_t numElements) {
     }
     std::vector<torch::Tensor> batchIdxs;
     batchIdxs.reserve(joffsets.size(0));
+    auto joffsets_acc = joffsets.accessor<fvdb::JOffsetsType, 1>();
     for (int i = 0; i < joffsets.size(0) - 1; i += 1) {
-        auto count =
-            joffsets[i + 1].item<fvdb::JOffsetsType>() - joffsets[i].item<fvdb::JOffsetsType>();
+        auto count = joffsets_acc[i + 1] - joffsets_acc[i];
         batchIdxs.push_back(torch::full({count}, i, options));
     }
     return torch::cat(batchIdxs, 0);
