@@ -9,7 +9,7 @@ from typing import Any, cast
 import torch
 
 from ... import _fvdb_cpp as _C
-from ..._fvdb_cpp import ProjectedGaussianSplats as ProjectedGaussianSplatsCpp
+from ._projected_gaussians import ProjectedGaussians
 
 
 # ---------------------------------------------------------------------------
@@ -169,7 +169,7 @@ class _RasterizeDenseFn(torch.autograd.Function):
 
 
 def rasterize_from_projected(
-    projected_gaussians: ProjectedGaussianSplatsCpp,
+    projected_gaussians: ProjectedGaussians,
     tile_size: int = 16,
     crop_width: int = -1,
     crop_height: int = -1,
@@ -195,8 +195,16 @@ def rasterize_from_projected(
     Returns:
         Tuple of (rendered_images ``[C, H, W, D]``, alphas ``[C, H, W, 1]``).
     """
+    p = projected_gaussians
     return _C.gsplat_render_crop_from_projected(
-        projected_gaussians,
+        p.means2d,
+        p.conics,
+        p.render_quantities,
+        p.opacities,
+        p.tile_offsets,
+        p.tile_gaussian_ids,
+        p.image_width,
+        p.image_height,
         tile_size,
         crop_width,
         crop_height,

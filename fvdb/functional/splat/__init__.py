@@ -32,6 +32,12 @@ This module extracts that same logic into five independent stages so that:
 Both layers are fully differentiable via Python autograd.
 """
 
+# Projection result types
+from ._projected_gaussians import (
+    ProjectedGaussians,
+    SparseProjectedGaussians,
+)
+
 # Projection
 from ._projection import (
     RawProjection,
@@ -91,6 +97,9 @@ from ._tile_intersection import (
 )
 
 __all__ = [
+    # Projection result types
+    "ProjectedGaussians",
+    "SparseProjectedGaussians",
     # Projection (monolith convenience)
     "project_gaussians",
     "project_gaussians_for_camera",

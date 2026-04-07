@@ -10,9 +10,45 @@ from typing import Any, cast
 import torch
 
 from ... import _fvdb_cpp as _C
-from ..._fvdb_cpp import ProjectedGaussianSplats as ProjectedGaussianSplatsCpp
 from ...enums import CameraModel, ProjectionMethod
-from ._tile_intersection import build_render_settings
+from ._projected_gaussians import ProjectedGaussians
+from ._tile_intersection import RenderSettings, build_render_settings
+
+
+# ---------------------------------------------------------------------------
+#  Internal helper
+# ---------------------------------------------------------------------------
+
+
+def _assemble_projected_gaussians(
+    tensors: tuple[torch.Tensor, ...],
+    settings: RenderSettings,
+    camera_model: CameraModel,
+    projection_method: ProjectionMethod,
+) -> ProjectedGaussians:
+    """Assemble a :class:`ProjectedGaussians` from the 8-tensor tuple returned
+    by the C++ binding lambdas and the settings object known at the call site."""
+    means2d, conics, rq, depths, opacities, radii, tile_offsets, tile_ids = tensors
+    return ProjectedGaussians(
+        means2d=means2d,
+        conics=conics,
+        render_quantities=rq,
+        depths=depths,
+        opacities=opacities,
+        radii=radii,
+        tile_offsets=tile_offsets,
+        tile_gaussian_ids=tile_ids,
+        image_width=int(settings.image_width),
+        image_height=int(settings.image_height),
+        near_plane=float(settings.near_plane),
+        far_plane=float(settings.far_plane),
+        eps_2d=float(settings.eps_2d),
+        antialias=bool(settings.antialias),
+        sh_degree_to_use=int(settings.sh_degree_to_use),
+        min_radius_2d=float(settings.radius_clip),
+        camera_model=camera_model,
+        projection_method=projection_method,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -321,7 +357,7 @@ def project_gaussians(
     antialias: bool = False,
     render_mode: str = "rgb",
     camera_model: CameraModel = CameraModel.PINHOLE,
-) -> ProjectedGaussianSplatsCpp:
+) -> ProjectedGaussians:
     """Project 3D Gaussians onto 2D image planes using analytic projection.
 
     This is a pure functional interface -- no in-place mutation. Supports
@@ -349,7 +385,7 @@ def project_gaussians(
         camera_model: Camera distortion model.
 
     Returns:
-        A :class:`ProjectedGaussianSplats` containing 2D projections, tile
+        A :class:`ProjectedGaussians` containing 2D projections, tile
         intersection data, and evaluated render quantities.
     """
     settings = build_render_settings(
@@ -364,7 +400,7 @@ def project_gaussians(
         sh_degree_to_use=sh_degree_to_use,
         render_mode=render_mode,
     )
-    return _C.gsplat_project_gaussians_analytic(
+    tensors = _C.gsplat_project_gaussians_analytic(
         means,
         quats,
         log_scales,
@@ -376,6 +412,7 @@ def project_gaussians(
         settings,
         _C.CameraModel(camera_model),
     )
+    return _assemble_projected_gaussians(tensors, settings, camera_model, ProjectionMethod.ANALYTIC)
 
 
 def project_gaussians_for_camera(
@@ -400,7 +437,7 @@ def project_gaussians_for_camera(
     camera_model: CameraModel = CameraModel.PINHOLE,
     projection_method: ProjectionMethod = ProjectionMethod.AUTO,
     distortion_coeffs: torch.Tensor | None = None,
-) -> ProjectedGaussianSplatsCpp:
+) -> ProjectedGaussians:
     """Project 3D Gaussians, dispatching between analytic and UT projection.
 
     Validates camera arguments and resolves the projection method automatically
@@ -433,7 +470,7 @@ def project_gaussians_for_camera(
         distortion_coeffs: ``[C, 12]`` Optional OpenCV distortion coefficients.
 
     Returns:
-        A :class:`ProjectedGaussianSplats` containing 2D projections, tile
+        A :class:`ProjectedGaussians` containing 2D projections, tile
         intersection data, and evaluated render quantities.
     """
     settings = build_render_settings(
@@ -448,7 +485,7 @@ def project_gaussians_for_camera(
         sh_degree_to_use=sh_degree_to_use,
         render_mode=render_mode,
     )
-    return _C.gsplat_project_gaussians_for_camera(
+    tensors = _C.gsplat_project_gaussians_for_camera(
         means,
         quats,
         log_scales,
@@ -462,6 +499,7 @@ def project_gaussians_for_camera(
         _C.ProjectionMethod(projection_method),
         distortion_coeffs,
     )
+    return _assemble_projected_gaussians(tensors, settings, camera_model, projection_method)
 
 
 # ---------------------------------------------------------------------------

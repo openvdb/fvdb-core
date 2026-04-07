@@ -837,54 +837,10 @@ class RenderSettings:
     render_mode: RenderMode
     def __init__(self) -> None: ...
 
-class ProjectedGaussianSplats:
-    def __init__(self, *args, **kwargs) -> None: ...
-    @property
-    def antialias(self) -> bool: ...
-    @property
-    def conics(self) -> torch.Tensor: ...
-    @property
-    def depths(self) -> torch.Tensor: ...
-    @property
-    def eps_2d(self) -> float: ...
-    @property
-    def far_plane(self) -> float: ...
-    @property
-    def image_height(self) -> int: ...
-    @property
-    def image_width(self) -> int: ...
-    @property
-    def means2d(self) -> torch.Tensor: ...
-    @property
-    def min_radius_2d(self) -> float: ...
-    @property
-    def near_plane(self) -> float: ...
-    @property
-    def opacities(self) -> torch.Tensor: ...
-    @property
-    def camera_model(self) -> CameraModel: ...
-    @property
-    def projection_method(self) -> ProjectionMethod: ...
-    @property
-    def radii(self) -> torch.Tensor: ...
-    @property
-    def render_quantities(self) -> torch.Tensor: ...
-    @property
-    def sh_degree_to_use(self) -> int: ...
-    @property
-    def tile_gaussian_ids(self) -> torch.Tensor: ...
-    @property
-    def tile_offsets(self) -> torch.Tensor: ...
-
-class SparseProjectedGaussianSplats(ProjectedGaussianSplats):
-    active_tiles: torch.Tensor
-    active_tile_mask: torch.Tensor
-    tile_pixel_mask: torch.Tensor
-    tile_pixel_cumsum: torch.Tensor
-    pixel_map: torch.Tensor
-    inverse_indices: torch.Tensor
-    has_duplicates: bool
-    unique_pixels_to_render: JaggedTensor
+# ProjectedGaussianSplats and SparseProjectedGaussianSplats are no longer
+# exposed as C++ pybind11 types.  All projection functions now return plain
+# tuples of tensors; see fvdb.functional.splat.ProjectedGaussians and
+# fvdb.functional.splat.SparseProjectedGaussians for the Python types.
 
 class GaussianSplat3dView:
     @property
@@ -1215,7 +1171,7 @@ def gsplat_project_gaussians_analytic(
     projection_matrices: torch.Tensor,
     settings: RenderSettings,
     camera_model: CameraModel,
-) -> ProjectedGaussianSplats: ...
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]: ...
 def gsplat_project_gaussians_ut(
     means: torch.Tensor,
     quats: torch.Tensor,
@@ -1228,7 +1184,7 @@ def gsplat_project_gaussians_ut(
     distortion_coeffs: torch.Tensor,
     settings: RenderSettings,
     camera_model: CameraModel,
-) -> ProjectedGaussianSplats: ...
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]: ...
 def gsplat_project_gaussians_for_camera(
     means: torch.Tensor,
     quats: torch.Tensor,
@@ -1242,7 +1198,7 @@ def gsplat_project_gaussians_for_camera(
     camera_model: CameraModel,
     projection_method: ProjectionMethod,
     distortion_coeffs: Optional[torch.Tensor],
-) -> ProjectedGaussianSplats: ...
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]: ...
 def gsplat_project_gaussians_for_camera_with_accum(
     means: torch.Tensor,
     quats: torch.Tensor,
@@ -1262,10 +1218,9 @@ def gsplat_project_gaussians_for_camera_with_accum(
     accum_step_counts: Optional[torch.Tensor],
     accum_max_2d_radii: Optional[torch.Tensor],
 ) -> tuple[
-    ProjectedGaussianSplats,
-    Optional[torch.Tensor],
-    Optional[torch.Tensor],
-    Optional[torch.Tensor],
+    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor,
+    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor,
+    Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor],
 ]: ...
 def gsplat_sparse_project_gaussians_analytic(
     pixels_to_render: JaggedTensor,
@@ -1279,7 +1234,12 @@ def gsplat_sparse_project_gaussians_analytic(
     projection_matrices: torch.Tensor,
     settings: RenderSettings,
     camera_model: CameraModel,
-) -> SparseProjectedGaussianSplats: ...
+) -> tuple[
+    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor,
+    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor,
+    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor,
+    torch.Tensor, torch.Tensor, JaggedTensor, bool,
+]: ...
 def gsplat_sparse_project_gaussians_ut(
     pixels_to_render: JaggedTensor,
     means: torch.Tensor,
@@ -1293,7 +1253,12 @@ def gsplat_sparse_project_gaussians_ut(
     distortion_coeffs: torch.Tensor,
     settings: RenderSettings,
     camera_model: CameraModel,
-) -> SparseProjectedGaussianSplats: ...
+) -> tuple[
+    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor,
+    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor,
+    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor,
+    torch.Tensor, torch.Tensor, JaggedTensor, bool,
+]: ...
 def gsplat_sparse_project_gaussians_for_camera(
     pixels_to_render: JaggedTensor,
     means: torch.Tensor,
@@ -1308,9 +1273,21 @@ def gsplat_sparse_project_gaussians_for_camera(
     camera_model: CameraModel,
     projection_method: ProjectionMethod,
     distortion_coeffs: Optional[torch.Tensor],
-) -> SparseProjectedGaussianSplats: ...
+) -> tuple[
+    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor,
+    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor,
+    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor,
+    torch.Tensor, torch.Tensor, JaggedTensor, bool,
+]: ...
 def gsplat_render_crop_from_projected(
-    projected_gaussians: ProjectedGaussianSplats,
+    means2d: torch.Tensor,
+    conics: torch.Tensor,
+    render_quantities: torch.Tensor,
+    opacities: torch.Tensor,
+    tile_offsets: torch.Tensor,
+    tile_gaussian_ids: torch.Tensor,
+    image_width: int,
+    image_height: int,
     tile_size: int,
     crop_width: int,
     crop_height: int,
@@ -1323,7 +1300,10 @@ def gsplat_rasterize_from_world(
     means: torch.Tensor,
     quats: torch.Tensor,
     log_scales: torch.Tensor,
-    projected_state: ProjectedGaussianSplats,
+    render_quantities: torch.Tensor,
+    opacities: torch.Tensor,
+    tile_offsets: torch.Tensor,
+    tile_gaussian_ids: torch.Tensor,
     world_to_camera_matrices: torch.Tensor,
     projection_matrices: torch.Tensor,
     distortion_coeffs: torch.Tensor,
@@ -1352,21 +1332,53 @@ def gsplat_sparse_render(
     masks: Optional[torch.Tensor],
 ) -> tuple[JaggedTensor, JaggedTensor]: ...
 def gsplat_render_num_contributing(
-    state: ProjectedGaussianSplats,
+    means2d: torch.Tensor,
+    conics: torch.Tensor,
+    opacities: torch.Tensor,
+    tile_offsets: torch.Tensor,
+    tile_gaussian_ids: torch.Tensor,
     settings: RenderSettings,
 ) -> tuple[torch.Tensor, torch.Tensor]: ...
 def gsplat_sparse_render_num_contributing(
-    state: SparseProjectedGaussianSplats,
+    means2d: torch.Tensor,
+    conics: torch.Tensor,
+    opacities: torch.Tensor,
+    tile_offsets: torch.Tensor,
+    tile_gaussian_ids: torch.Tensor,
+    active_tiles: torch.Tensor,
+    active_tile_mask: torch.Tensor,
+    tile_pixel_mask: torch.Tensor,
+    tile_pixel_cumsum: torch.Tensor,
+    pixel_map: torch.Tensor,
+    inverse_indices: torch.Tensor,
+    unique_pixels_to_render: JaggedTensor,
+    has_duplicates: bool,
     pixels_to_render: JaggedTensor,
     settings: RenderSettings,
 ) -> tuple[JaggedTensor, JaggedTensor]: ...
 def gsplat_render_contributing_ids(
-    state: ProjectedGaussianSplats,
+    means2d: torch.Tensor,
+    conics: torch.Tensor,
+    opacities: torch.Tensor,
+    tile_offsets: torch.Tensor,
+    tile_gaussian_ids: torch.Tensor,
     settings: RenderSettings,
     num_contributing_gaussians: Optional[torch.Tensor],
 ) -> tuple[JaggedTensor, JaggedTensor]: ...
 def gsplat_sparse_render_contributing_ids(
-    state: SparseProjectedGaussianSplats,
+    means2d: torch.Tensor,
+    conics: torch.Tensor,
+    opacities: torch.Tensor,
+    tile_offsets: torch.Tensor,
+    tile_gaussian_ids: torch.Tensor,
+    active_tiles: torch.Tensor,
+    active_tile_mask: torch.Tensor,
+    tile_pixel_mask: torch.Tensor,
+    tile_pixel_cumsum: torch.Tensor,
+    pixel_map: torch.Tensor,
+    inverse_indices: torch.Tensor,
+    unique_pixels_to_render: JaggedTensor,
+    has_duplicates: bool,
     pixels_to_render: JaggedTensor,
     settings: RenderSettings,
     num_contributing_gaussians: Optional[JaggedTensor],

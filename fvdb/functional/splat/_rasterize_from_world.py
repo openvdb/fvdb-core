@@ -10,8 +10,8 @@ import torch
 
 from ... import _fvdb_cpp as _C
 from ...enums import CameraModel, RollingShutterType
-from ..._fvdb_cpp import ProjectedGaussianSplats as ProjectedGaussianSplatsCpp
 from ..._fvdb_cpp import RenderSettings
+from ._projected_gaussians import ProjectedGaussians
 
 
 # ---------------------------------------------------------------------------
@@ -201,7 +201,7 @@ def rasterize_from_world(
     means: torch.Tensor,
     quats: torch.Tensor,
     log_scales: torch.Tensor,
-    projected_state: ProjectedGaussianSplatsCpp,
+    projected_state: ProjectedGaussians,
     world_to_camera_matrices: torch.Tensor,
     projection_matrices: torch.Tensor,
     distortion_coeffs: torch.Tensor,
@@ -238,11 +238,15 @@ def rasterize_from_world(
     Returns:
         Tuple of (rendered_images ``[C, H, W, D]``, alphas ``[C, H, W, 1]``).
     """
+    p = projected_state
     return _C.gsplat_rasterize_from_world(
         means,
         quats,
         log_scales,
-        projected_state,
+        p.render_quantities,
+        p.opacities,
+        p.tile_offsets,
+        p.tile_gaussian_ids,
         world_to_camera_matrices,
         projection_matrices,
         distortion_coeffs,

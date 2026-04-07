@@ -100,39 +100,6 @@ bind_gaussian_splat_ops(py::module &m) {
         .value("RGBD", RenderSettings::RenderMode::RGBD)
         .export_values();
 
-    py::class_<fvdb::ProjectedGaussianSplats>(m, "ProjectedGaussianSplats")
-        .def_property_readonly("means2d", &fvdb::ProjectedGaussianSplats::means2d)
-        .def_property_readonly("conics", &fvdb::ProjectedGaussianSplats::conics)
-        .def_property_readonly("render_quantities",
-                               &fvdb::ProjectedGaussianSplats::renderQuantities)
-        .def_property_readonly("depths", &fvdb::ProjectedGaussianSplats::depths)
-        .def_property_readonly("opacities", &fvdb::ProjectedGaussianSplats::opacities)
-        .def_property_readonly("radii", &fvdb::ProjectedGaussianSplats::radii)
-        .def_property_readonly("tile_offsets", &fvdb::ProjectedGaussianSplats::offsets)
-        .def_property_readonly("tile_gaussian_ids", &fvdb::ProjectedGaussianSplats::gaussianIds)
-        .def_property_readonly("image_width", &fvdb::ProjectedGaussianSplats::imageWidth)
-        .def_property_readonly("image_height", &fvdb::ProjectedGaussianSplats::imageHeight)
-        .def_property_readonly("near_plane", &fvdb::ProjectedGaussianSplats::nearPlane)
-        .def_property_readonly("far_plane", &fvdb::ProjectedGaussianSplats::farPlane)
-        .def_property_readonly("camera_model", &fvdb::ProjectedGaussianSplats::cameraModel)
-        .def_property_readonly("projection_method",
-                               &fvdb::ProjectedGaussianSplats::projectionMethod)
-        .def_property_readonly("sh_degree_to_use", &fvdb::ProjectedGaussianSplats::shDegreeToUse)
-        .def_property_readonly("min_radius_2d", &fvdb::ProjectedGaussianSplats::minRadius2d)
-        .def_property_readonly("eps_2d", &fvdb::ProjectedGaussianSplats::eps2d)
-        .def_property_readonly("antialias", &fvdb::ProjectedGaussianSplats::antialias);
-
-    py::class_<fvdb::SparseProjectedGaussianSplats, fvdb::ProjectedGaussianSplats>(
-        m, "SparseProjectedGaussianSplats")
-        .def_readonly("active_tiles", &fvdb::SparseProjectedGaussianSplats::activeTiles)
-        .def_readonly("active_tile_mask", &fvdb::SparseProjectedGaussianSplats::activeTileMask)
-        .def_readonly("tile_pixel_mask", &fvdb::SparseProjectedGaussianSplats::tilePixelMask)
-        .def_readonly("tile_pixel_cumsum", &fvdb::SparseProjectedGaussianSplats::tilePixelCumsum)
-        .def_readonly("pixel_map", &fvdb::SparseProjectedGaussianSplats::pixelMap)
-        .def_readonly("inverse_indices", &fvdb::SparseProjectedGaussianSplats::inverseIndices)
-        .def_readonly("has_duplicates", &fvdb::SparseProjectedGaussianSplats::hasDuplicates)
-        .def_readonly("unique_pixels_to_render",
-                      &fvdb::SparseProjectedGaussianSplats::uniquePixelsToRender);
 
     // -----------------------------------------------------------------------
     // Validation & utility
@@ -175,23 +142,31 @@ bind_gaussian_splat_ops(py::module &m) {
            const torch::Tensor &worldToCameraMatrices,
            const torch::Tensor &projectionMatrices,
            const RenderSettings &settings,
-           DistortionModel cameraModel) {
+           const DistortionModel cameraModel) {
             std::optional<torch::Tensor> gn, sc, mr;
-            return ops::projectGaussiansAnalytic(means,
-                                                 quats,
-                                                 logScales,
-                                                 logitOpacities,
-                                                 sh0,
-                                                 shN,
-                                                 worldToCameraMatrices,
-                                                 projectionMatrices,
-                                                 settings,
-                                                 cameraModel,
-                                                 false,
-                                                 false,
-                                                 gn,
-                                                 sc,
-                                                 mr);
+            auto s = ops::projectGaussiansAnalytic(means,
+                                                   quats,
+                                                   logScales,
+                                                   logitOpacities,
+                                                   sh0,
+                                                   shN,
+                                                   worldToCameraMatrices,
+                                                   projectionMatrices,
+                                                   settings,
+                                                   cameraModel,
+                                                   false,
+                                                   false,
+                                                   gn,
+                                                   sc,
+                                                   mr);
+            return std::make_tuple(s.perGaussian2dMean,
+                                   s.perGaussianConic,
+                                   s.perGaussianRenderQuantity,
+                                   s.perGaussianDepth,
+                                   s.perGaussianOpacity,
+                                   s.perGaussianRadius,
+                                   s.tileOffsets,
+                                   s.tileGaussianIds);
         },
         py::arg("means"),
         py::arg("quats"),
@@ -204,19 +179,50 @@ bind_gaussian_splat_ops(py::module &m) {
         py::arg("settings"),
         py::arg("camera_model"));
 
-    m.def("gsplat_project_gaussians_ut",
-          &ops::projectGaussiansUT,
-          py::arg("means"),
-          py::arg("quats"),
-          py::arg("log_scales"),
-          py::arg("logit_opacities"),
-          py::arg("sh0"),
-          py::arg("shN"),
-          py::arg("world_to_camera_matrices"),
-          py::arg("projection_matrices"),
-          py::arg("distortion_coeffs"),
-          py::arg("settings"),
-          py::arg("camera_model"));
+    m.def(
+        "gsplat_project_gaussians_ut",
+        [](const torch::Tensor &means,
+           const torch::Tensor &quats,
+           const torch::Tensor &logScales,
+           const torch::Tensor &logitOpacities,
+           const torch::Tensor &sh0,
+           const torch::Tensor &shN,
+           const torch::Tensor &worldToCameraMatrices,
+           const torch::Tensor &projectionMatrices,
+           const torch::Tensor &distortionCoeffs,
+           const RenderSettings &settings,
+           const DistortionModel cameraModel) {
+            auto s = ops::projectGaussiansUT(means,
+                                             quats,
+                                             logScales,
+                                             logitOpacities,
+                                             sh0,
+                                             shN,
+                                             worldToCameraMatrices,
+                                             projectionMatrices,
+                                             distortionCoeffs,
+                                             settings,
+                                             cameraModel);
+            return std::make_tuple(s.perGaussian2dMean,
+                                   s.perGaussianConic,
+                                   s.perGaussianRenderQuantity,
+                                   s.perGaussianDepth,
+                                   s.perGaussianOpacity,
+                                   s.perGaussianRadius,
+                                   s.tileOffsets,
+                                   s.tileGaussianIds);
+        },
+        py::arg("means"),
+        py::arg("quats"),
+        py::arg("log_scales"),
+        py::arg("logit_opacities"),
+        py::arg("sh0"),
+        py::arg("shN"),
+        py::arg("world_to_camera_matrices"),
+        py::arg("projection_matrices"),
+        py::arg("distortion_coeffs"),
+        py::arg("settings"),
+        py::arg("camera_model"));
 
     m.def(
         "gsplat_project_gaussians_for_camera",
@@ -229,27 +235,35 @@ bind_gaussian_splat_ops(py::module &m) {
            const torch::Tensor &worldToCameraMatrices,
            const torch::Tensor &projectionMatrices,
            const RenderSettings &settings,
-           DistortionModel cameraModel,
-           ProjectionMethod projectionMethod,
+           const DistortionModel cameraModel,
+           const ProjectionMethod projectionMethod,
            const std::optional<torch::Tensor> &distortionCoeffs) {
             std::optional<torch::Tensor> gn, sc, mr;
-            return ops::projectGaussiansForCamera(means,
-                                                  quats,
-                                                  logScales,
-                                                  logitOpacities,
-                                                  sh0,
-                                                  shN,
-                                                  worldToCameraMatrices,
-                                                  projectionMatrices,
-                                                  settings,
-                                                  cameraModel,
-                                                  projectionMethod,
-                                                  distortionCoeffs,
-                                                  false,
-                                                  false,
-                                                  gn,
-                                                  sc,
-                                                  mr);
+            auto s = ops::projectGaussiansForCamera(means,
+                                                    quats,
+                                                    logScales,
+                                                    logitOpacities,
+                                                    sh0,
+                                                    shN,
+                                                    worldToCameraMatrices,
+                                                    projectionMatrices,
+                                                    settings,
+                                                    cameraModel,
+                                                    projectionMethod,
+                                                    distortionCoeffs,
+                                                    false,
+                                                    false,
+                                                    gn,
+                                                    sc,
+                                                    mr);
+            return std::make_tuple(s.perGaussian2dMean,
+                                   s.perGaussianConic,
+                                   s.perGaussianRenderQuantity,
+                                   s.perGaussianDepth,
+                                   s.perGaussianOpacity,
+                                   s.perGaussianRadius,
+                                   s.tileOffsets,
+                                   s.tileGaussianIds);
         },
         py::arg("means"),
         py::arg("quats"),
@@ -282,11 +296,11 @@ bind_gaussian_splat_ops(py::module &m) {
            const torch::Tensor &worldToCameraMatrices,
            const torch::Tensor &projectionMatrices,
            const RenderSettings &settings,
-           DistortionModel cameraModel,
-           ProjectionMethod projectionMethod,
+           const DistortionModel cameraModel,
+           const ProjectionMethod projectionMethod,
            const std::optional<torch::Tensor> &distortionCoeffs,
-           bool accumulateMean2dGradients,
-           bool accumulateMax2dRadii,
+           const bool accumulateMean2dGradients,
+           const bool accumulateMax2dRadii,
            std::optional<torch::Tensor> accumGradNorms,
            std::optional<torch::Tensor> accumStepCounts,
            std::optional<torch::Tensor> accumMax2dRadii) {
@@ -309,8 +323,18 @@ bind_gaussian_splat_ops(py::module &m) {
                                                          accumGradNorms,
                                                          accumStepCounts,
                                                          accumMax2dRadii);
-            // Return the projected state plus the (possibly newly allocated) accumulators
-            return std::make_tuple(result, accumGradNorms, accumStepCounts, accumMax2dRadii);
+            // Return the 8 projection tensors plus the (possibly newly allocated) accumulators
+            return std::make_tuple(result.perGaussian2dMean,
+                                   result.perGaussianConic,
+                                   result.perGaussianRenderQuantity,
+                                   result.perGaussianDepth,
+                                   result.perGaussianOpacity,
+                                   result.perGaussianRadius,
+                                   result.tileOffsets,
+                                   result.tileGaussianIds,
+                                   accumGradNorms,
+                                   accumStepCounts,
+                                   accumMax2dRadii);
         },
         py::arg("means"),
         py::arg("quats"),
@@ -346,24 +370,40 @@ bind_gaussian_splat_ops(py::module &m) {
            const torch::Tensor &worldToCameraMatrices,
            const torch::Tensor &projectionMatrices,
            const RenderSettings &settings,
-           DistortionModel cameraModel) {
+           const DistortionModel cameraModel) {
             std::optional<torch::Tensor> gn, sc, mr;
-            return ops::sparseProjectGaussiansAnalytic(pixelsToRender,
-                                                       means,
-                                                       quats,
-                                                       logScales,
-                                                       logitOpacities,
-                                                       sh0,
-                                                       shN,
-                                                       worldToCameraMatrices,
-                                                       projectionMatrices,
-                                                       settings,
-                                                       cameraModel,
-                                                       false,
-                                                       false,
-                                                       gn,
-                                                       sc,
-                                                       mr);
+            auto s = ops::sparseProjectGaussiansAnalytic(pixelsToRender,
+                                                         means,
+                                                         quats,
+                                                         logScales,
+                                                         logitOpacities,
+                                                         sh0,
+                                                         shN,
+                                                         worldToCameraMatrices,
+                                                         projectionMatrices,
+                                                         settings,
+                                                         cameraModel,
+                                                         false,
+                                                         false,
+                                                         gn,
+                                                         sc,
+                                                         mr);
+            return std::make_tuple(s.perGaussian2dMean,
+                                   s.perGaussianConic,
+                                   s.perGaussianRenderQuantity,
+                                   s.perGaussianDepth,
+                                   s.perGaussianOpacity,
+                                   s.perGaussianRadius,
+                                   s.tileOffsets,
+                                   s.tileGaussianIds,
+                                   s.activeTiles,
+                                   s.activeTileMask,
+                                   s.tilePixelMask,
+                                   s.tilePixelCumsum,
+                                   s.pixelMap,
+                                   s.inverseIndices,
+                                   s.uniquePixelsToRender,
+                                   s.hasDuplicates);
         },
         py::arg("pixels_to_render"),
         py::arg("means"),
@@ -377,20 +417,61 @@ bind_gaussian_splat_ops(py::module &m) {
         py::arg("settings"),
         py::arg("camera_model"));
 
-    m.def("gsplat_sparse_project_gaussians_ut",
-          &ops::sparseProjectGaussiansUT,
-          py::arg("pixels_to_render"),
-          py::arg("means"),
-          py::arg("quats"),
-          py::arg("log_scales"),
-          py::arg("logit_opacities"),
-          py::arg("sh0"),
-          py::arg("shN"),
-          py::arg("world_to_camera_matrices"),
-          py::arg("projection_matrices"),
-          py::arg("distortion_coeffs"),
-          py::arg("settings"),
-          py::arg("camera_model"));
+    m.def(
+        "gsplat_sparse_project_gaussians_ut",
+        [](const fvdb::JaggedTensor &pixelsToRender,
+           const torch::Tensor &means,
+           const torch::Tensor &quats,
+           const torch::Tensor &logScales,
+           const torch::Tensor &logitOpacities,
+           const torch::Tensor &sh0,
+           const torch::Tensor &shN,
+           const torch::Tensor &worldToCameraMatrices,
+           const torch::Tensor &projectionMatrices,
+           const torch::Tensor &distortionCoeffs,
+           const RenderSettings &settings,
+           const DistortionModel cameraModel) {
+            auto s = ops::sparseProjectGaussiansUT(pixelsToRender,
+                                                   means,
+                                                   quats,
+                                                   logScales,
+                                                   logitOpacities,
+                                                   sh0,
+                                                   shN,
+                                                   worldToCameraMatrices,
+                                                   projectionMatrices,
+                                                   distortionCoeffs,
+                                                   settings,
+                                                   cameraModel);
+            return std::make_tuple(s.perGaussian2dMean,
+                                   s.perGaussianConic,
+                                   s.perGaussianRenderQuantity,
+                                   s.perGaussianDepth,
+                                   s.perGaussianOpacity,
+                                   s.perGaussianRadius,
+                                   s.tileOffsets,
+                                   s.tileGaussianIds,
+                                   s.activeTiles,
+                                   s.activeTileMask,
+                                   s.tilePixelMask,
+                                   s.tilePixelCumsum,
+                                   s.pixelMap,
+                                   s.inverseIndices,
+                                   s.uniquePixelsToRender,
+                                   s.hasDuplicates);
+        },
+        py::arg("pixels_to_render"),
+        py::arg("means"),
+        py::arg("quats"),
+        py::arg("log_scales"),
+        py::arg("logit_opacities"),
+        py::arg("sh0"),
+        py::arg("shN"),
+        py::arg("world_to_camera_matrices"),
+        py::arg("projection_matrices"),
+        py::arg("distortion_coeffs"),
+        py::arg("settings"),
+        py::arg("camera_model"));
 
     m.def(
         "gsplat_sparse_project_gaussians_for_camera",
@@ -404,28 +485,44 @@ bind_gaussian_splat_ops(py::module &m) {
            const torch::Tensor &worldToCameraMatrices,
            const torch::Tensor &projectionMatrices,
            const RenderSettings &settings,
-           DistortionModel cameraModel,
-           ProjectionMethod projectionMethod,
+           const DistortionModel cameraModel,
+           const ProjectionMethod projectionMethod,
            const std::optional<torch::Tensor> &distortionCoeffs) {
             std::optional<torch::Tensor> gn, sc, mr;
-            return ops::sparseProjectGaussiansForCamera(pixelsToRender,
-                                                        means,
-                                                        quats,
-                                                        logScales,
-                                                        logitOpacities,
-                                                        sh0,
-                                                        shN,
-                                                        worldToCameraMatrices,
-                                                        projectionMatrices,
-                                                        settings,
-                                                        cameraModel,
-                                                        projectionMethod,
-                                                        distortionCoeffs,
-                                                        false,
-                                                        false,
-                                                        gn,
-                                                        sc,
-                                                        mr);
+            auto s = ops::sparseProjectGaussiansForCamera(pixelsToRender,
+                                                          means,
+                                                          quats,
+                                                          logScales,
+                                                          logitOpacities,
+                                                          sh0,
+                                                          shN,
+                                                          worldToCameraMatrices,
+                                                          projectionMatrices,
+                                                          settings,
+                                                          cameraModel,
+                                                          projectionMethod,
+                                                          distortionCoeffs,
+                                                          false,
+                                                          false,
+                                                          gn,
+                                                          sc,
+                                                          mr);
+            return std::make_tuple(s.perGaussian2dMean,
+                                   s.perGaussianConic,
+                                   s.perGaussianRenderQuantity,
+                                   s.perGaussianDepth,
+                                   s.perGaussianOpacity,
+                                   s.perGaussianRadius,
+                                   s.tileOffsets,
+                                   s.tileGaussianIds,
+                                   s.activeTiles,
+                                   s.activeTileMask,
+                                   s.tilePixelMask,
+                                   s.tilePixelCumsum,
+                                   s.pixelMap,
+                                   s.inverseIndices,
+                                   s.uniquePixelsToRender,
+                                   s.hasDuplicates);
         },
         py::arg("pixels_to_render"),
         py::arg("means"),
@@ -445,16 +542,50 @@ bind_gaussian_splat_ops(py::module &m) {
     // Dense rasterization
     // -----------------------------------------------------------------------
 
-    m.def("gsplat_render_crop_from_projected",
-          &ops::renderCropFromProjected,
-          py::arg("projected_gaussians"),
-          py::arg("tile_size"),
-          py::arg("crop_width"),
-          py::arg("crop_height"),
-          py::arg("crop_origin_w"),
-          py::arg("crop_origin_h"),
-          py::arg("backgrounds"),
-          py::arg("masks"));
+    m.def(
+        "gsplat_render_crop_from_projected",
+        [](const torch::Tensor &means2d,
+           const torch::Tensor &conics,
+           const torch::Tensor &renderQuantities,
+           const torch::Tensor &opacities,
+           const torch::Tensor &tileOffsets,
+           const torch::Tensor &tileGaussianIds,
+           int64_t imageWidth,
+           int64_t imageHeight,
+           int64_t tileSize,
+           int64_t cropWidth,
+           int64_t cropHeight,
+           int64_t cropOriginW,
+           int64_t cropOriginH,
+           const std::optional<torch::Tensor> &backgrounds,
+           const std::optional<torch::Tensor> &masks) {
+            fvdb::ProjectedGaussianSplats s;
+            s.perGaussian2dMean          = means2d;
+            s.perGaussianConic           = conics;
+            s.perGaussianRenderQuantity  = renderQuantities;
+            s.perGaussianOpacity         = opacities;
+            s.tileOffsets                = tileOffsets;
+            s.tileGaussianIds            = tileGaussianIds;
+            s.mRenderSettings.imageWidth  = imageWidth;
+            s.mRenderSettings.imageHeight = imageHeight;
+            return ops::renderCropFromProjected(
+                s, tileSize, cropWidth, cropHeight, cropOriginW, cropOriginH, backgrounds, masks);
+        },
+        py::arg("means2d"),
+        py::arg("conics"),
+        py::arg("render_quantities"),
+        py::arg("opacities"),
+        py::arg("tile_offsets"),
+        py::arg("tile_gaussian_ids"),
+        py::arg("image_width"),
+        py::arg("image_height"),
+        py::arg("tile_size"),
+        py::arg("crop_width"),
+        py::arg("crop_height"),
+        py::arg("crop_origin_w"),
+        py::arg("crop_origin_h"),
+        py::arg("backgrounds"),
+        py::arg("masks"));
 
     // -----------------------------------------------------------------------
     // Sparse rendering (no accumulator exposure -- pure functional)
@@ -472,8 +603,8 @@ bind_gaussian_splat_ops(py::module &m) {
            const torch::Tensor &worldToCameraMatrices,
            const torch::Tensor &projectionMatrices,
            const RenderSettings &settings,
-           DistortionModel cameraModel,
-           ProjectionMethod projectionMethod,
+           const DistortionModel cameraModel,
+           const ProjectionMethod projectionMethod,
            const std::optional<torch::Tensor> &distortionCoeffs,
            const std::optional<torch::Tensor> &backgrounds,
            const std::optional<torch::Tensor> &masks) {
@@ -519,49 +650,215 @@ bind_gaussian_splat_ops(py::module &m) {
     // From-world rasterization
     // -----------------------------------------------------------------------
 
-    m.def("gsplat_rasterize_from_world",
-          &ops::rasterizeFromWorld,
-          py::arg("means"),
-          py::arg("quats"),
-          py::arg("log_scales"),
-          py::arg("projected_state"),
-          py::arg("world_to_camera_matrices"),
-          py::arg("projection_matrices"),
-          py::arg("distortion_coeffs"),
-          py::arg("camera_model"),
-          py::arg("image_width"),
-          py::arg("image_height"),
-          py::arg("tile_size"),
-          py::arg("backgrounds"),
-          py::arg("masks"));
+    m.def(
+        "gsplat_rasterize_from_world",
+        [](const torch::Tensor &means,
+           const torch::Tensor &quats,
+           const torch::Tensor &logScales,
+           const torch::Tensor &renderQuantities,
+           const torch::Tensor &opacities,
+           const torch::Tensor &tileOffsets,
+           const torch::Tensor &tileGaussianIds,
+           const torch::Tensor &worldToCameraMatrices,
+           const torch::Tensor &projectionMatrices,
+           const torch::Tensor &distortionCoeffs,
+           const DistortionModel cameraModel,
+           const int64_t imageWidth,
+           const int64_t imageHeight,
+           const int64_t tileSize,
+           const std::optional<torch::Tensor> &backgrounds,
+           const std::optional<torch::Tensor> &masks) {
+            fvdb::ProjectedGaussianSplats s;
+            s.perGaussianRenderQuantity   = renderQuantities;
+            s.perGaussianOpacity          = opacities;
+            s.tileOffsets                 = tileOffsets;
+            s.tileGaussianIds             = tileGaussianIds;
+            s.mRenderSettings.imageWidth  = imageWidth;
+            s.mRenderSettings.imageHeight = imageHeight;
+            s.mRenderSettings.tileSize    = tileSize;
+            s.mCameraModel                = cameraModel;
+            return ops::rasterizeFromWorld(means,
+                                           quats,
+                                           logScales,
+                                           s,
+                                           worldToCameraMatrices,
+                                           projectionMatrices,
+                                           distortionCoeffs,
+                                           cameraModel,
+                                           imageWidth,
+                                           imageHeight,
+                                           tileSize,
+                                           backgrounds,
+                                           masks);
+        },
+        py::arg("means"),
+        py::arg("quats"),
+        py::arg("log_scales"),
+        py::arg("render_quantities"),
+        py::arg("opacities"),
+        py::arg("tile_offsets"),
+        py::arg("tile_gaussian_ids"),
+        py::arg("world_to_camera_matrices"),
+        py::arg("projection_matrices"),
+        py::arg("distortion_coeffs"),
+        py::arg("camera_model"),
+        py::arg("image_width"),
+        py::arg("image_height"),
+        py::arg("tile_size"),
+        py::arg("backgrounds"),
+        py::arg("masks"));
 
     // -----------------------------------------------------------------------
     // Query operations
     // -----------------------------------------------------------------------
 
-    m.def("gsplat_render_num_contributing",
-          &ops::renderNumContributing,
-          py::arg("state"),
-          py::arg("settings"));
+    m.def(
+        "gsplat_render_num_contributing",
+        [](const torch::Tensor &means2d,
+           const torch::Tensor &conics,
+           const torch::Tensor &opacities,
+           const torch::Tensor &tileOffsets,
+           const torch::Tensor &tileGaussianIds,
+           const RenderSettings &settings) {
+            fvdb::ProjectedGaussianSplats s;
+            s.perGaussian2dMean = means2d;
+            s.perGaussianConic  = conics;
+            s.perGaussianOpacity = opacities;
+            s.tileOffsets        = tileOffsets;
+            s.tileGaussianIds    = tileGaussianIds;
+            return ops::renderNumContributing(s, settings);
+        },
+        py::arg("means2d"),
+        py::arg("conics"),
+        py::arg("opacities"),
+        py::arg("tile_offsets"),
+        py::arg("tile_gaussian_ids"),
+        py::arg("settings"));
 
-    m.def("gsplat_sparse_render_num_contributing",
-          &ops::sparseRenderNumContributing,
-          py::arg("state"),
-          py::arg("pixels_to_render"),
-          py::arg("settings"));
+    m.def(
+        "gsplat_sparse_render_num_contributing",
+        [](const torch::Tensor &means2d,
+           const torch::Tensor &conics,
+           const torch::Tensor &opacities,
+           const torch::Tensor &tileOffsets,
+           const torch::Tensor &tileGaussianIds,
+           const torch::Tensor &activeTiles,
+           const torch::Tensor &activeTileMask,
+           const torch::Tensor &tilePixelMask,
+           const torch::Tensor &tilePixelCumsum,
+           const torch::Tensor &pixelMap,
+           const torch::Tensor &inverseIndices,
+           const fvdb::JaggedTensor &uniquePixelsToRender,
+           const bool hasDuplicates,
+           const fvdb::JaggedTensor &pixelsToRender,
+           const RenderSettings &settings) {
+            fvdb::SparseProjectedGaussianSplats ss;
+            ss.perGaussian2dMean      = means2d;
+            ss.perGaussianConic       = conics;
+            ss.perGaussianOpacity     = opacities;
+            ss.tileOffsets            = tileOffsets;
+            ss.tileGaussianIds        = tileGaussianIds;
+            ss.activeTiles            = activeTiles;
+            ss.activeTileMask         = activeTileMask;
+            ss.tilePixelMask          = tilePixelMask;
+            ss.tilePixelCumsum        = tilePixelCumsum;
+            ss.pixelMap               = pixelMap;
+            ss.inverseIndices         = inverseIndices;
+            ss.uniquePixelsToRender   = uniquePixelsToRender;
+            ss.hasDuplicates          = hasDuplicates;
+            return ops::sparseRenderNumContributing(ss, pixelsToRender, settings);
+        },
+        py::arg("means2d"),
+        py::arg("conics"),
+        py::arg("opacities"),
+        py::arg("tile_offsets"),
+        py::arg("tile_gaussian_ids"),
+        py::arg("active_tiles"),
+        py::arg("active_tile_mask"),
+        py::arg("tile_pixel_mask"),
+        py::arg("tile_pixel_cumsum"),
+        py::arg("pixel_map"),
+        py::arg("inverse_indices"),
+        py::arg("unique_pixels_to_render"),
+        py::arg("has_duplicates"),
+        py::arg("pixels_to_render"),
+        py::arg("settings"));
 
-    m.def("gsplat_render_contributing_ids",
-          &ops::renderContributingIds,
-          py::arg("state"),
-          py::arg("settings"),
-          py::arg("num_contributing_gaussians"));
+    m.def(
+        "gsplat_render_contributing_ids",
+        [](const torch::Tensor &means2d,
+           const torch::Tensor &conics,
+           const torch::Tensor &opacities,
+           const torch::Tensor &tileOffsets,
+           const torch::Tensor &tileGaussianIds,
+           const RenderSettings &settings,
+           const std::optional<torch::Tensor> &numContributingGaussians) {
+            fvdb::ProjectedGaussianSplats s;
+            s.perGaussian2dMean  = means2d;
+            s.perGaussianConic   = conics;
+            s.perGaussianOpacity = opacities;
+            s.tileOffsets        = tileOffsets;
+            s.tileGaussianIds    = tileGaussianIds;
+            return ops::renderContributingIds(s, settings, numContributingGaussians);
+        },
+        py::arg("means2d"),
+        py::arg("conics"),
+        py::arg("opacities"),
+        py::arg("tile_offsets"),
+        py::arg("tile_gaussian_ids"),
+        py::arg("settings"),
+        py::arg("num_contributing_gaussians"));
 
-    m.def("gsplat_sparse_render_contributing_ids",
-          &ops::sparseRenderContributingIds,
-          py::arg("state"),
-          py::arg("pixels_to_render"),
-          py::arg("settings"),
-          py::arg("num_contributing_gaussians"));
+    m.def(
+        "gsplat_sparse_render_contributing_ids",
+        [](const torch::Tensor &means2d,
+           const torch::Tensor &conics,
+           const torch::Tensor &opacities,
+           const torch::Tensor &tileOffsets,
+           const torch::Tensor &tileGaussianIds,
+           const torch::Tensor &activeTiles,
+           const torch::Tensor &activeTileMask,
+           const torch::Tensor &tilePixelMask,
+           const torch::Tensor &tilePixelCumsum,
+           const torch::Tensor &pixelMap,
+           const torch::Tensor &inverseIndices,
+           const fvdb::JaggedTensor &uniquePixelsToRender,
+           const bool hasDuplicates,
+           const fvdb::JaggedTensor &pixelsToRender,
+           const RenderSettings &settings,
+           const std::optional<fvdb::JaggedTensor> &numContributingGaussians) {
+            fvdb::SparseProjectedGaussianSplats ss;
+            ss.perGaussian2dMean    = means2d;
+            ss.perGaussianConic     = conics;
+            ss.perGaussianOpacity   = opacities;
+            ss.tileOffsets          = tileOffsets;
+            ss.tileGaussianIds      = tileGaussianIds;
+            ss.activeTiles          = activeTiles;
+            ss.activeTileMask       = activeTileMask;
+            ss.tilePixelMask        = tilePixelMask;
+            ss.tilePixelCumsum      = tilePixelCumsum;
+            ss.pixelMap             = pixelMap;
+            ss.inverseIndices       = inverseIndices;
+            ss.uniquePixelsToRender = uniquePixelsToRender;
+            ss.hasDuplicates        = hasDuplicates;
+            return ops::sparseRenderContributingIds(ss, pixelsToRender, settings, numContributingGaussians);
+        },
+        py::arg("means2d"),
+        py::arg("conics"),
+        py::arg("opacities"),
+        py::arg("tile_offsets"),
+        py::arg("tile_gaussian_ids"),
+        py::arg("active_tiles"),
+        py::arg("active_tile_mask"),
+        py::arg("tile_pixel_mask"),
+        py::arg("tile_pixel_cumsum"),
+        py::arg("pixel_map"),
+        py::arg("inverse_indices"),
+        py::arg("unique_pixels_to_render"),
+        py::arg("has_duplicates"),
+        py::arg("pixels_to_render"),
+        py::arg("settings"),
+        py::arg("num_contributing_gaussians"));
 
     // -----------------------------------------------------------------------
     // MCMC operations (thin dispatch wrappers)
@@ -573,8 +870,8 @@ bind_gaussian_splat_ops(py::module &m) {
            const torch::Tensor &logitOpacities,
            const torch::Tensor &ratios,
            const torch::Tensor &binomialCoeffs,
-           int nMax,
-           float minOpacity) {
+           const int nMax,
+           const float minOpacity) {
             return ops::gaussianRelocation(
                 logScales, logitOpacities, ratios, binomialCoeffs, nMax, minOpacity);
         },
@@ -591,9 +888,9 @@ bind_gaussian_splat_ops(py::module &m) {
            const torch::Tensor &logScales,
            const torch::Tensor &logitOpacities,
            const torch::Tensor &quats,
-           float noiseScale,
-           float t,
-           float k) {
+           const float noiseScale,
+           const float t,
+           const float k) {
             ops::gaussianMCMCAddNoise(means, logScales, logitOpacities, quats, noiseScale, t, k);
         },
         py::arg("means"),
@@ -655,14 +952,14 @@ bind_gaussian_splat_ops(py::module &m) {
            const torch::Tensor &scales,
            const torch::Tensor &worldToCamMatrices,
            const torch::Tensor &projectionMatrices,
-           int64_t imageWidth,
-           int64_t imageHeight,
-           float eps2d,
-           float nearPlane,
-           float farPlane,
-           float minRadius2d,
-           bool calcCompensations,
-           bool ortho) {
+           const int64_t imageWidth,
+           const int64_t imageHeight,
+           const float eps2d,
+           const float nearPlane,
+           const float farPlane,
+           const float minRadius2d,
+           const bool calcCompensations,
+           const bool ortho) {
             return ops::gaussianProjectionForward(means,
                                                   quats,
                                                   scales,
@@ -700,17 +997,17 @@ bind_gaussian_splat_ops(py::module &m) {
            const torch::Tensor &worldToCamMatrices,
            const torch::Tensor &projectionMatrices,
            const at::optional<torch::Tensor> &compensations,
-           uint32_t imageWidth,
-           uint32_t imageHeight,
-           float eps2d,
+           const uint32_t imageWidth,
+           const uint32_t imageHeight,
+           const float eps2d,
            const torch::Tensor &radii,
            const torch::Tensor &conics,
            const torch::Tensor &dLossDMeans2d,
            const torch::Tensor &dLossDDepths,
            const torch::Tensor &dLossDConics,
            const at::optional<torch::Tensor> &dLossDCompensations,
-           bool worldToCamMatricesRequiresGrad,
-           bool ortho,
+           const bool worldToCamMatricesRequiresGrad,
+           const bool ortho,
            at::optional<torch::Tensor> outNormalizeddLossdMeans2dNormAccum,
            at::optional<torch::Tensor> outNormalizedMaxRadiiAccum,
            at::optional<torch::Tensor> outGradientStepCounts) {
@@ -759,8 +1056,8 @@ bind_gaussian_splat_ops(py::module &m) {
     // 3. gsplat_sh_eval_fwd
     m.def(
         "gsplat_sh_eval_fwd",
-        [](int64_t shDegreeToUse,
-           int64_t numCameras,
+        [](const int64_t shDegreeToUse,
+           const int64_t numCameras,
            const torch::Tensor &viewDirs,
            const torch::Tensor &sh0Coeffs,
            const torch::Tensor &shNCoeffs,
@@ -778,14 +1075,14 @@ bind_gaussian_splat_ops(py::module &m) {
     // 4. gsplat_sh_eval_bwd
     m.def(
         "gsplat_sh_eval_bwd",
-        [](int64_t shDegreeToUse,
-           int64_t numCameras,
-           int64_t numGaussians,
+        [](const int64_t shDegreeToUse,
+           const int64_t numCameras,
+           const int64_t numGaussians,
            const torch::Tensor &viewDirs,
            const torch::Tensor &shNCoeffs,
            const torch::Tensor &dLossDColors,
            const torch::Tensor &radii,
-           bool computeDLossDViewDirs) {
+           const bool computeDLossDViewDirs) {
             return ops::sphericalHarmonicsBackward(shDegreeToUse,
                                                    numCameras,
                                                    numGaussians,
@@ -811,11 +1108,11 @@ bind_gaussian_splat_ops(py::module &m) {
            const torch::Tensor &conics,
            const torch::Tensor &features,
            const torch::Tensor &opacities,
-           uint32_t imageWidth,
-           uint32_t imageHeight,
-           uint32_t imageOriginW,
-           uint32_t imageOriginH,
-           uint32_t tileSize,
+           const uint32_t imageWidth,
+           const uint32_t imageHeight,
+           const uint32_t imageOriginW,
+           const uint32_t imageOriginH,
+           const uint32_t tileSize,
            const torch::Tensor &tileOffsets,
            const torch::Tensor &tileGaussianIds,
            const at::optional<torch::Tensor> &backgrounds,
@@ -855,19 +1152,19 @@ bind_gaussian_splat_ops(py::module &m) {
            const torch::Tensor &conics,
            const torch::Tensor &features,
            const torch::Tensor &opacities,
-           uint32_t imageWidth,
-           uint32_t imageHeight,
-           uint32_t imageOriginW,
-           uint32_t imageOriginH,
-           uint32_t tileSize,
+           const uint32_t imageWidth,
+           const uint32_t imageHeight,
+           const uint32_t imageOriginW,
+           const uint32_t imageOriginH,
+           const uint32_t tileSize,
            const torch::Tensor &tileOffsets,
            const torch::Tensor &tileGaussianIds,
            const torch::Tensor &renderedAlphas,
            const torch::Tensor &lastIds,
            const torch::Tensor &dLossDRenderedFeatures,
            const torch::Tensor &dLossDRenderedAlphas,
-           bool absGrad,
-           int64_t numSharedChannelsOverride,
+           const bool absGrad,
+           const int64_t numSharedChannelsOverride,
            const at::optional<torch::Tensor> &backgrounds,
            const at::optional<torch::Tensor> &masks) {
             return ops::gaussianRasterizeBackward(means2d,
@@ -918,11 +1215,11 @@ bind_gaussian_splat_ops(py::module &m) {
            const torch::Tensor &conics,
            const torch::Tensor &features,
            const torch::Tensor &opacities,
-           uint32_t imageWidth,
-           uint32_t imageHeight,
-           uint32_t imageOriginW,
-           uint32_t imageOriginH,
-           uint32_t tileSize,
+           const uint32_t imageWidth,
+           const uint32_t imageHeight,
+           const uint32_t imageOriginW,
+           const uint32_t imageOriginH,
+           const uint32_t tileSize,
            const torch::Tensor &tileOffsets,
            const torch::Tensor &tileGaussianIds,
            const torch::Tensor &activeTiles,
@@ -977,11 +1274,11 @@ bind_gaussian_splat_ops(py::module &m) {
            const torch::Tensor &conics,
            const torch::Tensor &features,
            const torch::Tensor &opacities,
-           uint32_t imageWidth,
-           uint32_t imageHeight,
-           uint32_t imageOriginW,
-           uint32_t imageOriginH,
-           uint32_t tileSize,
+           const uint32_t imageWidth,
+           const uint32_t imageHeight,
+           const uint32_t imageOriginW,
+           const uint32_t imageOriginH,
+           const uint32_t tileSize,
            const torch::Tensor &tileOffsets,
            const torch::Tensor &tileGaussianIds,
            const fvdb::JaggedTensor &renderedAlphas,
@@ -992,8 +1289,8 @@ bind_gaussian_splat_ops(py::module &m) {
            const torch::Tensor &tilePixelMask,
            const torch::Tensor &tilePixelCumsum,
            const torch::Tensor &pixelMap,
-           bool absGrad,
-           int64_t numSharedChannelsOverride,
+           const bool absGrad,
+           const int64_t numSharedChannelsOverride,
            const at::optional<torch::Tensor> &backgrounds,
            const at::optional<torch::Tensor> &masks) {
             return ops::gaussianSparseRasterizeBackward(pixelsToRender,
@@ -1058,8 +1355,8 @@ bind_gaussian_splat_ops(py::module &m) {
            const torch::Tensor &worldToCamMatricesEnd,
            const torch::Tensor &projectionMatrices,
            const torch::Tensor &distortionCoeffs,
-           RollingShutterType rollingShutterType,
-           DistortionModel cameraModel,
+           const RollingShutterType rollingShutterType,
+           const DistortionModel cameraModel,
            const RenderSettings &settings,
            const torch::Tensor &tileOffsets,
            const torch::Tensor &tileGaussianIds,
@@ -1111,8 +1408,8 @@ bind_gaussian_splat_ops(py::module &m) {
            const torch::Tensor &worldToCamMatricesEnd,
            const torch::Tensor &projectionMatrices,
            const torch::Tensor &distortionCoeffs,
-           RollingShutterType rollingShutterType,
-           DistortionModel cameraModel,
+           const RollingShutterType rollingShutterType,
+           const DistortionModel cameraModel,
            const RenderSettings &settings,
            const torch::Tensor &tileOffsets,
            const torch::Tensor &tileGaussianIds,
@@ -1174,13 +1471,13 @@ bind_gaussian_splat_ops(py::module &m) {
            const torch::Tensor &cSizes,
            const torch::Tensor &worldToCamMatrices,
            const torch::Tensor &projectionMatrices,
-           uint32_t imageWidth,
-           uint32_t imageHeight,
-           float eps2d,
-           float nearPlane,
-           float farPlane,
-           float minRadius2d,
-           bool ortho) {
+           const uint32_t imageWidth,
+           const uint32_t imageHeight,
+           const float eps2d,
+           const float nearPlane,
+           const float farPlane,
+           const float minRadius2d,
+           const bool ortho) {
             return ops::gaussianProjectionJaggedForward(gSizes,
                                                         means,
                                                         quats,
@@ -1221,16 +1518,16 @@ bind_gaussian_splat_ops(py::module &m) {
            const torch::Tensor &cSizes,
            const torch::Tensor &worldToCamMatrices,
            const torch::Tensor &projectionMatrices,
-           uint32_t imageWidth,
-           uint32_t imageHeight,
-           float eps2d,
+           const uint32_t imageWidth,
+           const uint32_t imageHeight,
+           const float eps2d,
            const torch::Tensor &radii,
            const torch::Tensor &conics,
            const torch::Tensor &dLossDMeans2d,
            const torch::Tensor &dLossDDepths,
            const torch::Tensor &dLossDConics,
-           bool worldToCamMatricesRequiresGrad,
-           bool ortho) {
+           const bool worldToCamMatricesRequiresGrad,
+           const bool ortho) {
             return ops::gaussianProjectionJaggedBackward(gSizes,
                                                          means,
                                                          quats,
@@ -1274,10 +1571,10 @@ bind_gaussian_splat_ops(py::module &m) {
         [](const torch::Tensor &means2d,
            const torch::Tensor &radii,
            const torch::Tensor &depths,
-           uint32_t numCameras,
-           uint32_t tileSize,
-           uint32_t numTilesH,
-           uint32_t numTilesW,
+           const uint32_t numCameras,
+           const uint32_t tileSize,
+           const uint32_t numTilesH,
+           const uint32_t numTilesW,
            const at::optional<torch::Tensor> &cameraIds) {
             return ops::gaussianTileIntersection(
                 means2d, radii, depths, cameraIds, numCameras, tileSize, numTilesH, numTilesW);
@@ -1297,8 +1594,8 @@ bind_gaussian_splat_ops(py::module &m) {
 
     m.def(
         "evaluate_spherical_harmonics",
-        [](int64_t shDegree,
-           int64_t numCameras,
+        [](const int64_t shDegree,
+           const int64_t numCameras,
            const torch::Tensor &sh0,
            const torch::Tensor &radii,
            const std::optional<torch::Tensor> &shN,

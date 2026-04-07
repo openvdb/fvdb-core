@@ -259,7 +259,8 @@ def evaluate_spherical_harmonics(
 
 
 from .convolution_plan import ConvolutionPlan
-from .gaussian_splatting import GaussianSplat3d, ProjectedGaussianSplats
+from .gaussian_splatting import GaussianSplat3d
+from .functional.splat._projected_gaussians import ProjectedGaussians, SparseProjectedGaussians
 from .enums import CameraModel, ProjectionMethod, RollingShutterType, ShOrderingMode
 from ._fvdb_cpp import RenderSettings
 
@@ -324,7 +325,8 @@ __all__ = [
     "GridBatch",
     "JaggedTensor",
     "GaussianSplat3d",
-    "ProjectedGaussianSplats",
+    "ProjectedGaussians",
+    "SparseProjectedGaussians",
     "RenderSettings",
     "CameraModel",
     "ProjectionMethod",
