@@ -75,7 +75,7 @@ The `GridBatch` knows:
 The `GridBatch` does **not** know anything about what features are stored — that's entirely up to you.
 
 **Why separate topology from data?**
-- You can apply different operations (splatting normals, splatting colors, splatting SDF values) to the same grid without rebuilding the hash structure.
+- You can apply different operations (splatting normals, splatting colors, splatting SDF values) to the same grid without rebuilding the sparse voxel structure.
 - Multiple grids in a batch can have *different numbers of voxels* — the jagged layout handles this.
 - Convolution kernel maps (which pre-compute which voxels are neighbors) can be cached and reused across forward passes.
 
