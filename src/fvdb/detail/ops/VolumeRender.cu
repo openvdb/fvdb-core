@@ -68,7 +68,8 @@ volumeRenderFwdCallback(const TensorAccessor<scalar_t, 1> sigmas,
 
 template <torch::DeviceType device,
           typename scalar_t,
-          template <typename T, int32_t D> typename TensorAccessor>
+          template <typename T, int32_t D>
+          typename TensorAccessor>
 __hostdev__ void
 volumeRenderBwdCallback(const TensorAccessor<scalar_t, 1> dLdOpacity,     // [B*R]
                         const TensorAccessor<scalar_t, 1> dLdDepth,       // [B*R]

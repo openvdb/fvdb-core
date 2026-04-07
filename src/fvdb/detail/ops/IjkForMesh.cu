@@ -66,7 +66,8 @@ countVoxelsPerTriToCheck(int32_t bidx,
 
 template <typename ScalarF,
           typename ScalarI,
-          template <typename T, int32_t D> typename TensorAccessor>
+          template <typename T, int32_t D>
+          typename TensorAccessor>
 __global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
 generateSurfaceSamples(const VoxelCoordTransform *transforms,
                        const JaggedRAcc64<ScalarF, 2> vertices,
