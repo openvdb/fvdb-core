@@ -191,6 +191,7 @@ jaggedTensorIndexJaggedTensorImpl(const JaggedTensor &jt, const JaggedTensor &jt
                 selidx.index({torch::indexing::Slice(start, end)}).add_(add);
             }
         } else {
+            cudaStream_t stream = c10::cuda::getCurrentCUDAStream(jt.device().index()).stream();
             torch::Tensor selidxAdd =
                 torch::empty({jtIndices.jdata().size(0)}, jtIndices.jdata().options());
 
@@ -202,11 +203,13 @@ jaggedTensorIndexJaggedTensorImpl(const JaggedTensor &jt, const JaggedTensor &jt
                     const int64_t numBlocks =
                         GET_BLOCKS(jtIndices.jdata().size(0), DEFAULT_BLOCK_DIM);
                     TORCH_INTERNAL_ASSERT(numBlocks < MAX_BLOCKS, "Too many blocks");
-                    calculateIndexShiftForEachElement<scalar_t><<<numBlocks, DEFAULT_BLOCK_DIM>>>(
-                        jt.joffsets()
-                            .packed_accessor64<JOffsetsType, 1, torch::RestrictPtrTraits>(),
-                        jtIndices.jidx().packed_accessor64<JIdxType, 1, torch::RestrictPtrTraits>(),
-                        selidxAdd.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>());
+                    calculateIndexShiftForEachElement<scalar_t>
+                        <<<numBlocks, DEFAULT_BLOCK_DIM, 0, stream>>>(
+                            jt.joffsets()
+                                .packed_accessor64<JOffsetsType, 1, torch::RestrictPtrTraits>(),
+                            jtIndices.jidx()
+                                .packed_accessor64<JIdxType, 1, torch::RestrictPtrTraits>(),
+                            selidxAdd.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>());
                     C10_CUDA_KERNEL_LAUNCH_CHECK();
                 }),
                 AT_EXPAND(AT_INTEGRAL_TYPES));
@@ -290,31 +293,33 @@ jaggedTensorIndexSliceCuda(const JaggedTensor &jt, int64_t start, int64_t end, i
         outJOffsets.packed_accessor64<JOffsetsType, 1, torch::RestrictPtrTraits>();
     auto outJLIdxAcc = outJLIdx.packed_accessor64<JLIdxType, 2, torch::RestrictPtrTraits>();
 
+    cudaStream_t stream = c10::cuda::getCurrentCUDAStream(jt.device().index()).stream();
+
     auto callKernel = [=]() {
         const int64_t MAX_BLOCKS    = 4194302; // floor((2^32 - 1) / 1024)
         const int64_t numBlocksData = GET_BLOCKS(jt.jdata().size(0), DEFAULT_BLOCK_DIM);
         TORCH_INTERNAL_ASSERT(numBlocksData < MAX_BLOCKS, "Too many blocks");
-        makeDataSliceMask<<<numBlocksData, DEFAULT_BLOCK_DIM>>>(start,
-                                                                end,
-                                                                step,
-                                                                jidxAcc,
-                                                                jlidxAcc,
-                                                                dataMaskAcc,
-                                                                jt.ldim() == 1,
-                                                                jt.num_tensors() == 1);
+        makeDataSliceMask<<<numBlocksData, DEFAULT_BLOCK_DIM, 0, stream>>>(start,
+                                                                           end,
+                                                                           step,
+                                                                           jidxAcc,
+                                                                           jlidxAcc,
+                                                                           dataMaskAcc,
+                                                                           jt.ldim() == 1,
+                                                                           jt.num_tensors() == 1);
         C10_CUDA_KERNEL_LAUNCH_CHECK();
 
         const int numBlocksOffsets = GET_BLOCKS(jt.joffsets().size(0) - 1, DEFAULT_BLOCK_DIM);
         TORCH_INTERNAL_ASSERT(numBlocksOffsets < MAX_BLOCKS, "Too many blocks");
-        makeOffsetsSliceMask<<<numBlocksOffsets, DEFAULT_BLOCK_DIM>>>(start,
-                                                                      end,
-                                                                      step,
-                                                                      joffsetsAcc,
-                                                                      jlidxAcc,
-                                                                      offsetsMaskAcc,
-                                                                      outJOffsetsAcc,
-                                                                      outJLIdxAcc,
-                                                                      jt.ldim() == 1);
+        makeOffsetsSliceMask<<<numBlocksOffsets, DEFAULT_BLOCK_DIM, 0, stream>>>(start,
+                                                                                 end,
+                                                                                 step,
+                                                                                 joffsetsAcc,
+                                                                                 jlidxAcc,
+                                                                                 offsetsMaskAcc,
+                                                                                 outJOffsetsAcc,
+                                                                                 outJLIdxAcc,
+                                                                                 jt.ldim() == 1);
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     };
     callKernel();
@@ -567,10 +572,11 @@ jaggedTensorIndexIntCuda(const JaggedTensor &jt, int64_t idxVal) {
     auto offsetsAndRangeAcc =
         offsetsAndRange.packed_accessor64<JOffsetsType, 1, torch::RestrictPtrTraits>();
 
+    cudaStream_t stream      = c10::cuda::getCurrentCUDAStream(jt.device().index()).stream();
     const int64_t MAX_BLOCKS = 4194302; // floor((2^32 - 1) / 1024)
     const int64_t numBlocks  = GET_BLOCKS(joffsets.size(0), DEFAULT_BLOCK_DIM);
     TORCH_INTERNAL_ASSERT(numBlocks < MAX_BLOCKS, "Too many blocks");
-    getJOffsetsIndexMask<<<numBlocks, DEFAULT_BLOCK_DIM>>>(
+    getJOffsetsIndexMask<<<numBlocks, DEFAULT_BLOCK_DIM, 0, stream>>>(
         idxVal, inJLidxAcc, inJOffsetsAcc, offsetsAndRangeAcc);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 

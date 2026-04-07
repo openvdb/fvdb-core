@@ -134,6 +134,8 @@ dispatchPopulateGridMetadata<torch::kCUDA>(
     GridBatchData::GridBatchMetadata *outBatchMetadataHost,
     GridBatchData::GridBatchMetadata *outBatchMetadataDevice) {
     c10::cuda::CUDAGuard deviceGuard(gridHdl.buffer().device());
+    cudaStream_t stream =
+        c10::cuda::getCurrentCUDAStream(gridHdl.buffer().device().index()).stream();
 
     // Copy sizes and origins to device buffers
     RAIIRawDeviceBuffer<nanovdb::Vec3d> deviceVoxSizes(voxelSizes.size(),
@@ -153,7 +155,7 @@ dispatchPopulateGridMetadata<torch::kCUDA>(
     // Read metadata into device buffers
     TORCH_CHECK(gridHdl.deviceData() != nullptr, "GridHandle is empty");
     const nanovdb::OnIndexGrid *grids = (nanovdb::OnIndexGrid *)gridHdl.deviceData();
-    populateGridMetadataCUDA<TorchRAcc64><<<1, NUM_THREADS>>>(
+    populateGridMetadataCUDA<TorchRAcc64><<<1, NUM_THREADS, 0, stream>>>(
         gridHdl.gridCount(),
         grids,
         (const nanovdb::Vec3d *)deviceVoxSizesPtr,

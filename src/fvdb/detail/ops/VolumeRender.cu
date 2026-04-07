@@ -68,8 +68,7 @@ volumeRenderFwdCallback(const TensorAccessor<scalar_t, 1> sigmas,
 
 template <torch::DeviceType device,
           typename scalar_t,
-          template <typename T, int32_t D>
-          typename TensorAccessor>
+          template <typename T, int32_t D> typename TensorAccessor>
 __hostdev__ void
 volumeRenderBwdCallback(const TensorAccessor<scalar_t, 1> dLdOpacity,     // [B*R]
                         const TensorAccessor<scalar_t, 1> dLdDepth,       // [B*R]
@@ -356,6 +355,7 @@ dispatchVolumeRender<torch::kCUDA>(
                 "All tensors must be on the same device");
 
     c10::cuda::CUDAGuard deviceGuard(sigmas.device());
+    cudaStream_t stream = c10::cuda::getCurrentCUDAStream(sigmas.device().index()).stream();
 
     // auto opacity = torch::zeros({numRays}, sigmas.options());
     // auto depth = torch::zeros({numRays}, sigmas.options());
@@ -371,7 +371,7 @@ dispatchVolumeRender<torch::kCUDA>(
         sigmas.scalar_type(),
         "volumeRender",
         AT_WRAP([&] {
-            volumeRender<scalar_t><<<NUM_BLOCKS, DEFAULT_BLOCK_DIM>>>(
+            volumeRender<scalar_t><<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
                 sigmas.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>(),
                 rgbs.packed_accessor64<scalar_t, 2, torch::RestrictPtrTraits>(),
                 deltas.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>(),
@@ -431,6 +431,7 @@ dispatchVolumeRenderBackward<torch::kCUDA>(const torch::Tensor dLdOpacity,
                 "All tensors must be on the same device");
 
     c10::cuda::CUDAGuard deviceGuard(dLdOpacity.device());
+    cudaStream_t stream = c10::cuda::getCurrentCUDAStream(dLdOpacity.device().index()).stream();
 
     const int64_t N       = sigmas.size(0);
     const int64_t numRays = jOffsets.size(0) - 1;
@@ -446,7 +447,7 @@ dispatchVolumeRenderBackward<torch::kCUDA>(const torch::Tensor dLdOpacity,
         sigmas.scalar_type(),
         "volumeRenderBackward",
         AT_WRAP([&] {
-            volumeRenderBackward<scalar_t><<<NUM_BLOCKS, DEFAULT_BLOCK_DIM>>>(
+            volumeRenderBackward<scalar_t><<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
                 dLdOpacity.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>(),
                 dLdDepth.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>(),
                 // dLdDepthSq.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>(),

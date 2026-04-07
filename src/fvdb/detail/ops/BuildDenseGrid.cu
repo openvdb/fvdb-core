@@ -95,6 +95,7 @@ dispatchCreateNanoGridFromDense<torch::kCUDA>(int64_t batchSize,
     checkInputs(device, batchSize, size, ijkMin, mask);
 
     c10::cuda::CUDAGuard deviceGuard(device);
+    cudaStream_t stream = c10::cuda::getCurrentCUDAStream(device.index()).stream();
 
     const int64_t gridVolume = static_cast<int64_t>(size[0]) * size[1] * size[2];
 
@@ -104,7 +105,7 @@ dispatchCreateNanoGridFromDense<torch::kCUDA>(int64_t batchSize,
     torch::Tensor ijkData           = torch::empty({gridVolume, 3}, opts);
 
     if (NUM_BLOCKS > 0) {
-        ijkForDense<<<NUM_BLOCKS, DEFAULT_BLOCK_DIM>>>(
+        ijkForDense<<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
             0u, ijkMin, size, ijkData.packed_accessor64<int32_t, 2, torch::RestrictPtrTraits>());
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     }
@@ -173,7 +174,7 @@ dispatchCreateNanoGridFromDense<torch::kPrivateUse1>(int64_t batchSize,
         constexpr int64_t kNumThreads = DEFAULT_BLOCK_DIM;
         const int64_t deviceNumBlocks = GET_BLOCKS(deviceVolume, kNumThreads);
         if (deviceNumBlocks > 0) {
-            ijkForDense<<<deviceNumBlocks, kNumThreads>>>(
+            ijkForDense<<<deviceNumBlocks, kNumThreads, 0, stream>>>(
                 deviceOffset,
                 ijkMin,
                 size,

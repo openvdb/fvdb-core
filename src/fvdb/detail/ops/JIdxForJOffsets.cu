@@ -59,8 +59,9 @@ jIdxForJOffsetsCUDA(torch::Tensor joffsets, int64_t numElements) {
     }
     torch::Tensor retJIdx = torch::empty({numElements}, options);
 
+    cudaStream_t stream  = c10::cuda::getCurrentCUDAStream(joffsets.device().index()).stream();
     const int NUM_BLOCKS = GET_BLOCKS(numElements, DEFAULT_BLOCK_DIM);
-    jIdxForJOffsets<DEFAULT_BLOCK_DIM><<<NUM_BLOCKS, DEFAULT_BLOCK_DIM>>>(
+    jIdxForJOffsets<DEFAULT_BLOCK_DIM><<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
         joffsets.packed_accessor64<fvdb::JOffsetsType, 1, torch::RestrictPtrTraits>(),
         retJIdx.packed_accessor64<fvdb::JIdxType, 1, torch::RestrictPtrTraits>());
     C10_CUDA_KERNEL_LAUNCH_CHECK();
