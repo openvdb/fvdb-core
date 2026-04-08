@@ -109,7 +109,7 @@ The most important idiom in fVDB: creating a feature tensor that matches a grid'
 
 A `GridBatch` knows how its voxels are distributed across the batch — which rows belong to grid 0, which to grid 1, etc. `jagged_like` takes a flat `torch.Tensor` of shape `[total_voxels, C]` and wraps it into a `JaggedTensor` using the grid's own `jidx`/`joffsets`. The result is a feature tensor whose batch structure exactly mirrors the grid.
 
-```python
+```python continuation
 # grid has 3 grids with 500, 700, 400 voxels (total_voxels = 1600)
 flat_feat = torch.randn(grid.total_voxels, 8, device='cuda')  # shape [1600, 8]
 features  = grid.jagged_like(flat_feat)
@@ -185,7 +185,7 @@ jt      = fvdb.JaggedTensor.from_data_and_offsets(data, offsets)
 
 ### Accessing and Indexing
 
-```python
+```python continuation
 jt = fvdb.JaggedTensor([torch.randn(100, 3), torch.randn(150, 3), torch.randn(120, 3)])
 
 # Integer index → JaggedTensor with one element
@@ -206,7 +206,7 @@ tensors = jt.unbind()      # List[Tensor], len=3
 
 `JaggedTensor` implements `__torch_function__`, so many torch ops work directly. However, use the `fvdb.*` type-safe wrappers when you care about type annotations:
 
-```python
+```python continuation
 jt = fvdb.JaggedTensor([torch.randn(100, 3), torch.randn(150, 3)])
 
 # These work (via __torch_function__)
@@ -225,7 +225,7 @@ jt_cat = fvdb.jcat([jt_a, jt_b], dim=1)  # shape: [250, 24] jdata
 
 ### Common Pitfall: Operating on `.jdata` directly
 
-```python
+```python notest
 # WRONG: this modifies the underlying storage — be careful about aliasing
 jt.jdata *= 2.0
 
@@ -280,31 +280,33 @@ grid_padded = fvdb.GridBatch.from_nearest_voxels_to_points(points, voxel_sizes=0
 
 ### From Explicit IJK Coordinates
 
-```python
+```python continuation
 # If you already have integer grid coordinates
 coords = fvdb.JaggedTensor([torch.randint(-50, 50, (200, 3)).long().cuda()])
-grid   = fvdb.GridBatch.from_ijk(coords, voxel_sizes=0.05, origins=[0.0]*3)
+grid_ijk = fvdb.GridBatch.from_ijk(coords, voxel_sizes=0.05, origins=[0.0]*3)
 ```
 
 ### From Triangle Meshes
 
-```python
+```python continuation
 # Voxelizes the surface of the mesh (triangle soup — no watertightness needed)
-mesh_v = fvdb.JaggedTensor([v1.float().cuda(), v2.float().cuda()])
-mesh_f = fvdb.JaggedTensor([f1.long().cuda(),  f2.long().cuda()])
-grid   = fvdb.GridBatch.from_mesh(mesh_v, mesh_f, voxel_sizes=0.025)
+from fvdb.utils.examples import load_car_1_mesh
+v_mesh, f_mesh = load_car_1_mesh(mode="vf")
+mesh_v = fvdb.JaggedTensor([v_mesh.float().cuda()])
+mesh_f = fvdb.JaggedTensor([f_mesh.long().cuda()])
+grid_mesh = fvdb.GridBatch.from_mesh(mesh_v, mesh_f, voxel_sizes=0.025)
 ```
 
 ### From Dense
 
-```python
+```python continuation
 # Dense box of size W×H×D in (i,j,k); all voxels active — useful for testing or dense baselines
-grid = fvdb.GridBatch.from_dense(num_grids=2, dense_dims=[32, 32, 32], device='cuda')
+grid_dense = fvdb.GridBatch.from_dense(num_grids=2, dense_dims=[32, 32, 32], device='cuda')
 ```
 
 ### Coordinate Transforms
 
-```python
+```python continuation
 grid = fvdb.GridBatch.from_points(points, voxel_sizes=0.1)
 
 # World → ijk (voxel index space, floating-point)
@@ -341,11 +343,10 @@ flat_idx   = grid.ijk_to_index(grid.ijk, cumulative=True)      # cumulative acro
 
 Trilinear or Bézier interpolation of per-voxel features at arbitrary world-space query points. Differentiable w.r.t. features.
 
-```python
-import fvdb, torch
-
-# Assume: grid is a GridBatch, vox_feat is a JaggedTensor of per-voxel features
-# query_pts is a JaggedTensor of world-space points to sample at
+```python continuation
+# Set up per-voxel features and query points
+vox_feat = grid.jagged_like(torch.randn(grid.total_voxels, 3, device='cuda'))
+query_pts = points  # reuse the points used to build the grid
 
 sampled = grid.sample_trilinear(query_pts, vox_feat)
 # sampled: JaggedTensor, same shape as query_pts (except last dim = feature dim)
@@ -358,8 +359,9 @@ sampled = grid.sample_bezier(query_pts, vox_feat)
 
 The adjoint of sampling: scatter point features onto voxels. Also differentiable.
 
-```python
+```python continuation
 # points: JaggedTensor of xyz, point_feat: JaggedTensor of features per point
+point_feat = fvdb.JaggedTensor([torch.randn(5000, 3).cuda(), torch.randn(8000, 3).cuda()])
 vox_feat = grid.splat_trilinear(points, point_feat)
 # vox_feat: JaggedTensor matching grid.ijk batch structure; vox_feat.jdata has shape [grid.total_voxels, C]
 ```
@@ -368,35 +370,35 @@ vox_feat = grid.splat_trilinear(points, point_feat)
 
 ### Spatial Queries
 
-```python
+```python continuation
 # Boolean mask: which points fall inside an active voxel of the grid?
 mask = grid.points_in_grid(query_pts)   # JaggedTensor of bool
 
 # Boolean mask: which integer ijk coordinates are active voxels?
-mask = grid.coords_in_grid(ijk_coords)  # JaggedTensor of bool
+mask = grid.coords_in_grid(grid.ijk)    # JaggedTensor of bool
 
 # IJK → per-grid index; -1 for misses (use cumulative=True for batch-global)
-idx = grid.ijk_to_index(ijk_coords)
+idx = grid.ijk_to_index(grid.ijk)
 
 # Inverse: flat index ordering → ijk ordering (for permuting features)
-inv_idx = grid.ijk_to_inv_index(shuffled_ijk)
-# property: grid.ijk == shuffled_ijk[inv_idx]
+inv_idx = grid.ijk_to_inv_index(grid.ijk)
 ```
 
 ### Dual Grid (for SDF fitting)
 
-```python
+```python continuation
 # The dual grid has voxels at the corners of the primal voxels
 # Useful for trilinear interpolation of signed distance fields
 dual = grid.dual_grid()
 
 # Classic SDF overfitting loop:
-features = dual.jagged_like(torch.zeros(dual.total_voxels, 1, device='cuda'))
-features.requires_grad_(True)
-optimizer = torch.optim.Adam([features.jdata], lr=1e-2)
+dual_feat = dual.jagged_like(torch.zeros(dual.total_voxels, 1, device='cuda'))
+dual_feat.requires_grad_(True)
+optimizer = torch.optim.Adam([dual_feat.jdata], lr=1e-2)
 
-for _ in range(iters):
-    sdf_pred = dual.sample_trilinear(query_pts, features)
+sdf_gt = torch.zeros(query_pts.jdata.shape[0], 1, device='cuda')  # dummy target for demo
+for _ in range(3):
+    sdf_pred = dual.sample_trilinear(query_pts, dual_feat)
     loss = torch.nn.functional.mse_loss(sdf_pred.jdata, sdf_gt)
     loss.backward()
     optimizer.step()
@@ -432,7 +434,9 @@ import fvdb.nn as fvnn
 from fvdb import ConvolutionPlan
 import torch
 
+points = fvdb.JaggedTensor([torch.randn(5000, 3).cuda(), torch.randn(8000, 3).cuda()])
 grid = fvdb.GridBatch.from_points(points, voxel_sizes=0.02)
+fine_grid = grid  # alias used later for stride-2 examples
 feat = grid.jagged_like(torch.randn(grid.total_voxels, 32, device='cuda'))
 # feat is a JaggedTensor — no wrapper needed
 ```
@@ -441,9 +445,7 @@ feat = grid.jagged_like(torch.randn(grid.total_voxels, 32, device='cuda'))
 
 A `ConvolutionPlan` pre-computes the kernel map (the neighbor lookup structure) for a given grid and kernel configuration. `SparseConv3d` and `SparseConvTranspose3d` both require a plan rather than a raw grid.
 
-```python
-from fvdb import ConvolutionPlan
-
+```python continuation
 # Same-topology stride=1: pass target_grid=source_grid so the output topology
 # matches the input exactly (no dilation).
 plan_same = ConvolutionPlan.from_grid_batch(
@@ -472,31 +474,26 @@ plan_up = ConvolutionPlan.from_grid_batch_transposed(
 
 Key properties on a built plan:
 
-```python
-plan.source_grid_batch   # GridBatch — input topology
-plan.target_grid_batch   # GridBatch — output topology
+```python continuation
+plan_same.source_grid_batch   # GridBatch — input topology
+plan_same.target_grid_batch   # GridBatch — output topology
 ```
 
 Kernel maps are expensive to compute — build each plan once and reuse it across forward passes.
 
 ### SparseConv3d and SparseConvTranspose3d
 
-```python
+```python continuation
 # stride=1 same-topology conv
-conv = fvnn.SparseConv3d(in_channels=32, out_channels=64, kernel_size=3, stride=1)
-plan = ConvolutionPlan.from_grid_batch(3, 1, source_grid=grid, target_grid=grid)
-feat_out = conv(feat, plan)   # JaggedTensor, same grid topology as input
+conv = fvnn.SparseConv3d(in_channels=32, out_channels=64, kernel_size=3, stride=1).cuda()
+feat_out = conv(feat, plan_same)   # JaggedTensor, same grid topology as input
 
 # stride=2 downsampling conv
-down = fvnn.SparseConv3d(32, 64, kernel_size=2, stride=2)
-plan_down = ConvolutionPlan.from_grid_batch(2, 2, source_grid=fine_grid, target_grid=None)
-feat_coarse = down(feat_fine, plan_down)   # JaggedTensor on coarser grid
-coarse_grid = plan_down.target_grid_batch
+down = fvnn.SparseConv3d(32, 64, kernel_size=2, stride=2).cuda()
+feat_coarse = down(feat, plan_down)   # JaggedTensor on coarser grid
 
 # Transposed conv — separate class, not a flag on SparseConv3d
-up = fvnn.SparseConvTranspose3d(64, 32, kernel_size=2, stride=2)
-plan_up = ConvolutionPlan.from_grid_batch_transposed(2, 2,
-    source_grid=coarse_grid, target_grid=fine_grid)
+up = fvnn.SparseConvTranspose3d(64, 32, kernel_size=2, stride=2).cuda()
 feat_fine_out = up(feat_coarse, plan_up)   # JaggedTensor on fine_grid
 ```
 
@@ -504,20 +501,30 @@ feat_fine_out = up(feat_coarse, plan_up)   # JaggedTensor on fine_grid
 
 `BatchNorm` and `GroupNorm` take `(data: JaggedTensor, grid: GridBatch)`:
 
-```python
-bn   = fvnn.BatchNorm(64)
-gn   = fvnn.GroupNorm(num_groups=8, num_channels=64)
+```python continuation
+bn   = fvnn.BatchNorm(64).cuda()
+gn   = fvnn.GroupNorm(num_groups=8, num_channels=64).cuda()
 relu = torch.nn.ReLU(inplace=True)   # fvdb.nn has no ReLU — use torch.nn directly
 
 # conv → bn → relu
-feat_out = relu(bn(conv(feat, plan), grid))
+feat_out = relu(bn(conv(feat, plan_same), grid))
 ```
 
 ### U-Net Pattern with Explicit Plans and Grids
 
 Because plans are separate objects, the U-Net pattern becomes explicit about what topology is being targeted at each stage:
 
-```python
+```python continuation
+# --- U-Net layer setup ---
+grid0 = grid
+f0 = grid0.jagged_like(torch.randn(grid0.total_voxels, 32, device='cuda'))
+enc0 = fvnn.SparseConv3d(32, 32, kernel_size=3, stride=1).cuda()
+bn0  = fvnn.BatchNorm(32).cuda()
+enc1 = fvnn.SparseConv3d(32, 64, kernel_size=2, stride=2).cuda()
+bn1  = fvnn.BatchNorm(64).cuda()
+dec0 = fvnn.SparseConvTranspose3d(64, 32, kernel_size=2, stride=2).cuda()
+bn2  = fvnn.BatchNorm(32).cuda()
+
 # --- Encoder ---
 plan_e0 = ConvolutionPlan.from_grid_batch(3, 1, source_grid=grid0, target_grid=grid0)
 f1 = relu(bn0(enc0(f0, plan_e0), grid0))          # same topology, grid0
@@ -536,7 +543,7 @@ f3 = fvdb.jcat([f3, f1], dim=1)                  # skip connection (feature dim)
 
 ### A Minimal Sparse Encoder Block
 
-```python
+```python continuation
 class SparseBlock(torch.nn.Module):
     def __init__(self, in_ch, out_ch):
         super().__init__()
@@ -553,12 +560,12 @@ class SparseBlock(torch.nn.Module):
 
 You can bypass `SparseConv3d` entirely and drive the kernel map directly:
 
-```python
+```python continuation
 # Weights: shape [out_ch, in_ch, kx, ky, kz]
 weights = torch.randn(64, 32, 3, 3, 3, device=grid.device)
 
 # Execute (differentiable w.r.t. feat and weights)
-out_feat = plan.execute(feat, weights)
+out_feat = plan_same.execute(feat, weights)
 ```
 
 ### Quiz 5
@@ -588,9 +595,7 @@ Sparse 3D networks need multi-scale representations, just like 2D CNNs. In fVDB,
 
 ### Explicit Coarsening and Refinement
 
-```python
-import fvdb
-
+```python continuation
 # Coarsen by factor 2 (merge 2×2×2 blocks into one voxel)
 grid_coarse = grid.coarsened_grid(2)   # voxel_sizes × 2, fewer voxels
 
@@ -603,7 +608,7 @@ grid_fine   = grid.refined_grid(2)  # voxel_sizes / 2, up to 8× more voxels
 
 ### Dilation
 
-```python
+```python continuation
 # Expand the grid: add all voxels within Chebyshev distance `d`
 grid_dilated = grid.dilated_grid(1)   # adds all 26-neighbors of each active voxel (3×3×3 neighborhood)
 ```
@@ -612,7 +617,7 @@ grid_dilated = grid.dilated_grid(1)   # adds all 26-neighbors of each active vox
 
 ### Voxel Neighborhood Queries
 
-```python
+```python continuation
 # Get the N-ring neighborhood of voxels (extent=1 for 26-connected 1-ring)
 neighbors = grid.neighbor_indexes(grid.ijk, extent=1)
 # neighbors: JaggedTensor of neighbor flat indices (-1 for inactive neighbors)
@@ -729,8 +734,13 @@ This directly mirrors real surface reconstruction networks: input is noisy or pa
 
 **Data:** Same loading and sampling as Stage 1, but splat point normals onto the grid as input features (3 channels). Target is the same splatted normals. Re-sample points every iteration.
 
-```python
-features = grid.splat_trilinear(points_JT, normals_JT)  # [total_voxels, 3]
+```python continuation
+# Capstone data setup
+points_JT = fvdb.JaggedTensor([torch.randn(5000, 3).cuda()])
+normals_JT = fvdb.JaggedTensor([torch.randn(5000, 3).cuda()])
+cap_grid = fvdb.GridBatch.from_points(points_JT, voxel_sizes=0.05)
+
+features = cap_grid.splat_trilinear(points_JT, normals_JT)  # [total_voxels, 3]
 target   = features  # autoencoder: reconstruct the input
 ```
 
@@ -741,7 +751,8 @@ target   = features  # autoencoder: reconstruct the input
 **Loss:** `torch.nn.functional.mse_loss(pred.jdata, target.jdata)`
 
 **Evaluation:** Cosine similarity between predicted and target normals:
-```python
+```python continuation
+pred = features  # for testing: pred = target gives perfect cosine similarity
 pred_n = torch.nn.functional.normalize(pred.jdata, dim=-1)
 tgt_n  = torch.nn.functional.normalize(target.jdata, dim=-1)
 cos_sim = (pred_n * tgt_n).sum(dim=-1).mean().item()
