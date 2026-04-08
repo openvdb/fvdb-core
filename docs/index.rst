@@ -94,6 +94,20 @@ algorithms for 3D reconstruction from sensor data.
 
 .. toctree::
    :maxdepth: 1
+   :caption: Tutorials
+
+   tutorials/basic_concepts
+   tutorials/jagged_tensor
+   tutorials/building_grids
+   tutorials/basic_grid_ops
+   tutorials/basic_convolution
+   tutorials/simple_unet
+   tutorials/io
+   tutorials/ray_tracing
+   tutorials/single_grid
+
+.. toctree::
+   :maxdepth: 1
    :caption: Documentation
 
    api/jagged_tensor
