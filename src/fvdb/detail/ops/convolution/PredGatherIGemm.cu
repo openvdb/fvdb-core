@@ -21,6 +21,7 @@
 
 #include <nanovdb/NanoVDB.h>
 
+#include <c10/cuda/CUDAGuard.h>
 #include <c10/cuda/CUDAStream.h>
 #include <torch/types.h>
 
@@ -1013,6 +1014,8 @@ struct pred_gather_igemm_op {
         constexpr int kout_denom = static_cast<int>(dispatch::tag_get<conv_kout_denom>(tg));
         using GeomT              = Geometry<ks, ks, ks, st, st, st, kout_denom>;
         using ConvOp             = SparseFpropSm80<GeomT>;
+
+        const c10::cuda::CUDAGuard device_guard(features.device());
 
         const int64_t C = features.size(1);
         const int64_t K = weights.size(0);

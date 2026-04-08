@@ -66,8 +66,7 @@ countVoxelsPerTriToCheck(int32_t bidx,
 
 template <typename ScalarF,
           typename ScalarI,
-          template <typename T, int32_t D>
-          typename TensorAccessor>
+          template <typename T, int32_t D> typename TensorAccessor>
 __global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
 generateSurfaceSamples(const VoxelCoordTransform *transforms,
                        const JaggedRAcc64<ScalarF, 2> vertices,
@@ -192,6 +191,8 @@ dispatchIJKForMesh<torch::kCUDA>(const JaggedTensor &meshVertices,
     TORCH_CHECK(meshVertices.device().has_index(), "GridBatchData must have a valid index");
     TORCH_CHECK(meshFaces.device().is_cuda(), "GridBatchData must be on CUDA device");
     TORCH_CHECK(meshFaces.device().has_index(), "GridBatchData must have a valid index");
+
+    const c10::cuda::CUDAGuard device_guard(meshFaces.device());
 
     RAIIRawDeviceBuffer<VoxelCoordTransform> transformsDVec(transforms.size(),
                                                             meshVertices.device());

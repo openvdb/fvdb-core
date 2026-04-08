@@ -246,6 +246,8 @@ jaggedTensorIndexJaggedTensorImpl(const JaggedTensor &jt, const JaggedTensor &jt
 //      (inclusive) is selected
 JaggedTensor
 jaggedTensorIndexSliceCuda(const JaggedTensor &jt, int64_t start, int64_t end, int64_t step) {
+    const c10::cuda::CUDAGuard device_guard(jt.device());
+
     // Convert indexes to positive values in the range [0, num_outer_lists]
     if (start < 0) {
         start += jt.num_outer_lists();
@@ -547,6 +549,8 @@ jaggedTensorIndexIntOneList(const JaggedTensor &jt, int64_t idxVal) {
 //      jt[2] -> JaggedTensor([...]) where the 3rd list is selected
 JaggedTensor
 jaggedTensorIndexIntCuda(const JaggedTensor &jt, int64_t idxVal) {
+    const c10::cuda::CUDAGuard device_guard(jt.device());
+
     if (idxVal < 0) {
         idxVal += jt.num_outer_lists();
     }
