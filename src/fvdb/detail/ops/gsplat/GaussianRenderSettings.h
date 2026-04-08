@@ -34,16 +34,16 @@ struct RenderWindow2D {
 
 struct RenderSettings {
     enum class RenderMode {
-        RGB   = 0,
-        DEPTH = 1,
-        RGBD  = 2,
+        FEATURES           = 0,
+        DEPTH              = 1,
+        FEATURES_AND_DEPTH = 2,
     };
 
     std::uint32_t imageWidth;
     std::uint32_t imageHeight;
     std::uint32_t imageOriginW = 0;
     std::uint32_t imageOriginH = 0;
-    RenderMode renderMode      = RenderMode::RGB;
+    RenderMode renderMode      = RenderMode::FEATURES;
     float nearPlane            = 0.01;
     float farPlane             = 1e10;
     std::uint32_t tileSize     = 16;

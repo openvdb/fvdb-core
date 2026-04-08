@@ -9,46 +9,8 @@ from typing import Any, cast
 
 import torch
 
-from ... import _fvdb_cpp as _C
-from ...enums import CameraModel, ProjectionMethod
-from ._projected_gaussians import ProjectedGaussians
-from ._tile_intersection import RenderSettings, build_render_settings
-
-
-# ---------------------------------------------------------------------------
-#  Internal helper
-# ---------------------------------------------------------------------------
-
-
-def _assemble_projected_gaussians(
-    tensors: tuple[torch.Tensor, ...],
-    settings: RenderSettings,
-    camera_model: CameraModel,
-    projection_method: ProjectionMethod,
-) -> ProjectedGaussians:
-    """Assemble a :class:`ProjectedGaussians` from the 8-tensor tuple returned
-    by the C++ binding lambdas and the settings object known at the call site."""
-    means2d, conics, rq, depths, opacities, radii, tile_offsets, tile_ids = tensors
-    return ProjectedGaussians(
-        means2d=means2d,
-        conics=conics,
-        render_quantities=rq,
-        depths=depths,
-        opacities=opacities,
-        radii=radii,
-        tile_offsets=tile_offsets,
-        tile_gaussian_ids=tile_ids,
-        image_width=int(settings.image_width),
-        image_height=int(settings.image_height),
-        near_plane=float(settings.near_plane),
-        far_plane=float(settings.far_plane),
-        eps_2d=float(settings.eps_2d),
-        antialias=bool(settings.antialias),
-        sh_degree_to_use=int(settings.sh_degree_to_use),
-        min_radius_2d=float(settings.radius_clip),
-        camera_model=camera_model,
-        projection_method=projection_method,
-    )
+from .. import _fvdb_cpp as _C
+from ..enums import CameraModel, ProjectionMethod
 
 
 # ---------------------------------------------------------------------------
@@ -57,12 +19,7 @@ def _assemble_projected_gaussians(
 
 
 class _ProjectGaussiansFn(torch.autograd.Function):
-    """Python autograd wrapper for the Gaussian projection forward/backward dispatch.
-
-    Passes persistent accumulator tensors directly to the C++ backward kernel,
-    which updates them in-place via atomicAdd/atomicMax.  No temporary tensors
-    are allocated — the kernel accumulates directly into the caller-owned buffers.
-    """
+    """Python autograd wrapper for the Gaussian projection forward/backward dispatch."""
 
     @staticmethod
     def forward(
@@ -80,12 +37,11 @@ class _ProjectGaussiansFn(torch.autograd.Function):
         min_radius_2d: float,
         calc_compensations: bool,
         ortho: bool,
-        # Non-differentiable accumulator refs (may be None)
-        accum_grad_norms: torch.Tensor | None,
-        accum_step_counts: torch.Tensor | None,
-        accum_max_radii: torch.Tensor | None,
+        accum_grad_norms: torch.Tensor | None = None,
+        accum_step_counts: torch.Tensor | None = None,
+        accum_max_radii: torch.Tensor | None = None,
     ):
-        result = _C.gsplat_projection_fwd(
+        result = _C.project_gaussians_analytic_fwd(
             means,
             quats,
             log_scales,
@@ -124,7 +80,6 @@ class _ProjectGaussiansFn(torch.autograd.Function):
         ctx.eps2d = eps2d
         ctx.calc_compensations = calc_compensations
         ctx.ortho = ortho
-        # Save accumulator refs (non-differentiable, not part of grad graph)
         ctx.accum_grad_norms = accum_grad_norms
         ctx.accum_step_counts = accum_step_counts
         ctx.accum_max_radii = accum_max_radii
@@ -172,7 +127,7 @@ class _ProjectGaussiansFn(torch.autograd.Function):
         assert grad_means2d is not None
         assert grad_depths is not None
         assert grad_conics is not None
-        d_means, _, d_quats, d_scales, d_w2c = _C.gsplat_projection_bwd(
+        d_means, _, d_quats, d_scales, d_w2c = _C.project_gaussians_analytic_bwd(
             means,
             quats,
             log_scales,
@@ -240,7 +195,7 @@ class _ProjectGaussiansJaggedFn(torch.autograd.Function):
         min_radius_2d: float,
         ortho: bool,
     ):
-        result = _C.gsplat_projection_jagged_fwd(
+        result = _C.project_gaussians_analytic_jagged_fwd(
             g_sizes,
             means,
             quats,
@@ -297,7 +252,7 @@ class _ProjectGaussiansJaggedFn(torch.autograd.Function):
         assert grad_means2d is not None
         assert grad_depths is not None
         assert grad_conics is not None
-        d_means, _, d_quats, d_scales, d_w2c = _C.gsplat_projection_jagged_bwd(
+        d_means, _, d_quats, d_scales, d_w2c = _C.project_gaussians_analytic_jagged_bwd(
             g_sizes,
             means,
             quats,
@@ -337,183 +292,26 @@ class _ProjectGaussiansJaggedFn(torch.autograd.Function):
         )
 
 
-def project_gaussians(
-    means: torch.Tensor,
-    quats: torch.Tensor,
-    log_scales: torch.Tensor,
-    logit_opacities: torch.Tensor,
-    sh0: torch.Tensor,
-    shN: torch.Tensor,
-    world_to_camera_matrices: torch.Tensor,
-    projection_matrices: torch.Tensor,
-    image_width: int,
-    image_height: int,
-    near: float = 0.01,
-    far: float = 1e10,
-    sh_degree_to_use: int = -1,
-    tile_size: int = 16,
-    radius_clip: float = 0.0,
-    eps_2d: float = 0.3,
-    antialias: bool = False,
-    render_mode: str = "rgb",
-    camera_model: CameraModel = CameraModel.PINHOLE,
-) -> ProjectedGaussians:
-    """Project 3D Gaussians onto 2D image planes using analytic projection.
-
-    This is a pure functional interface -- no in-place mutation. Supports
-    backpropagation through the Python autograd.
-
-    Args:
-        means: ``[N, 3]`` Gaussian means.
-        quats: ``[N, 4]`` Quaternion rotations.
-        log_scales: ``[N, 3]`` Log scale factors.
-        logit_opacities: ``[N]`` Logit opacities.
-        sh0: ``[N, 1, D]`` Degree-0 SH coefficients.
-        shN: ``[N, K-1, D]`` Higher-degree SH coefficients.
-        world_to_camera_matrices: ``[C, 4, 4]`` World-to-camera transforms.
-        projection_matrices: ``[C, 3, 3]`` Projection/intrinsic matrices.
-        image_width: Output image width in pixels.
-        image_height: Output image height in pixels.
-        near: Near clipping plane.
-        far: Far clipping plane.
-        sh_degree_to_use: SH degree (-1 for all).
-        tile_size: Tile size for tiled rasterization.
-        radius_clip: Minimum projected radius.
-        eps_2d: Epsilon for numerical stability.
-        antialias: Whether to apply antialiasing.
-        render_mode: One of ``"rgb"``, ``"depth"``, ``"rgbd"``.
-        camera_model: Camera distortion model.
-
-    Returns:
-        A :class:`ProjectedGaussians` containing 2D projections, tile
-        intersection data, and evaluated render quantities.
-    """
-    settings = build_render_settings(
-        image_width=image_width,
-        image_height=image_height,
-        near=near,
-        far=far,
-        tile_size=tile_size,
-        radius_clip=radius_clip,
-        eps_2d=eps_2d,
-        antialias=antialias,
-        sh_degree_to_use=sh_degree_to_use,
-        render_mode=render_mode,
-    )
-    tensors = _C.gsplat_project_gaussians_analytic(
-        means,
-        quats,
-        log_scales,
-        logit_opacities,
-        sh0,
-        shN,
-        world_to_camera_matrices,
-        projection_matrices,
-        settings,
-        _C.CameraModel(camera_model),
-    )
-    return _assemble_projected_gaussians(tensors, settings, camera_model, ProjectionMethod.ANALYTIC)
-
-
-def project_gaussians_for_camera(
-    means: torch.Tensor,
-    quats: torch.Tensor,
-    log_scales: torch.Tensor,
-    logit_opacities: torch.Tensor,
-    sh0: torch.Tensor,
-    shN: torch.Tensor,
-    world_to_camera_matrices: torch.Tensor,
-    projection_matrices: torch.Tensor,
-    image_width: int,
-    image_height: int,
-    near: float = 0.01,
-    far: float = 1e10,
-    sh_degree_to_use: int = -1,
-    tile_size: int = 16,
-    radius_clip: float = 0.0,
-    eps_2d: float = 0.3,
-    antialias: bool = False,
-    render_mode: str = "rgb",
-    camera_model: CameraModel = CameraModel.PINHOLE,
-    projection_method: ProjectionMethod = ProjectionMethod.AUTO,
-    distortion_coeffs: torch.Tensor | None = None,
-) -> ProjectedGaussians:
-    """Project 3D Gaussians, dispatching between analytic and UT projection.
-
-    Validates camera arguments and resolves the projection method automatically
-    (analytic for pinhole/orthographic, unscented transform for OpenCV distortion).
-
-    This is a pure functional interface -- no in-place mutation. Supports
-    backpropagation through the Python autograd.
-
-    Args:
-        means: ``[N, 3]`` Gaussian means.
-        quats: ``[N, 4]`` Quaternion rotations.
-        log_scales: ``[N, 3]`` Log scale factors.
-        logit_opacities: ``[N]`` Logit opacities.
-        sh0: ``[N, 1, D]`` Degree-0 SH coefficients.
-        shN: ``[N, K-1, D]`` Higher-degree SH coefficients.
-        world_to_camera_matrices: ``[C, 4, 4]`` World-to-camera transforms.
-        projection_matrices: ``[C, 3, 3]`` Projection/intrinsic matrices.
-        image_width: Output image width in pixels.
-        image_height: Output image height in pixels.
-        near: Near clipping plane.
-        far: Far clipping plane.
-        sh_degree_to_use: SH degree (-1 for all).
-        tile_size: Tile size for tiled rasterization.
-        radius_clip: Minimum projected radius.
-        eps_2d: Epsilon for numerical stability.
-        antialias: Whether to apply antialiasing.
-        render_mode: One of ``"rgb"``, ``"depth"``, ``"rgbd"``.
-        camera_model: Camera distortion model.
-        projection_method: Projection method (AUTO, ANALYTIC, or UNSCENTED).
-        distortion_coeffs: ``[C, 12]`` Optional OpenCV distortion coefficients.
-
-    Returns:
-        A :class:`ProjectedGaussians` containing 2D projections, tile
-        intersection data, and evaluated render quantities.
-    """
-    settings = build_render_settings(
-        image_width=image_width,
-        image_height=image_height,
-        near=near,
-        far=far,
-        tile_size=tile_size,
-        radius_clip=radius_clip,
-        eps_2d=eps_2d,
-        antialias=antialias,
-        sh_degree_to_use=sh_degree_to_use,
-        render_mode=render_mode,
-    )
-    tensors = _C.gsplat_project_gaussians_for_camera(
-        means,
-        quats,
-        log_scales,
-        logit_opacities,
-        sh0,
-        shN,
-        world_to_camera_matrices,
-        projection_matrices,
-        settings,
-        _C.CameraModel(camera_model),
-        _C.ProjectionMethod(projection_method),
-        distortion_coeffs,
-    )
-    return _assemble_projected_gaussians(tensors, settings, camera_model, projection_method)
-
-
-# ---------------------------------------------------------------------------
-#  Decomposed projection: raw geometric projection as a composable stage
-# ---------------------------------------------------------------------------
+def _resolve_projection_method(
+    camera_model: CameraModel,
+    projection_method: ProjectionMethod,
+) -> ProjectionMethod:
+    """Resolve AUTO -> ANALYTIC or UNSCENTED based on camera model."""
+    if projection_method != ProjectionMethod.AUTO:
+        return projection_method
+    if camera_model in (CameraModel.PINHOLE, CameraModel.ORTHOGRAPHIC):
+        return ProjectionMethod.ANALYTIC
+    return ProjectionMethod.UNSCENTED
 
 
 @dataclass(frozen=True)
-class RawProjection:
-    """Result of raw geometric projection of 3D Gaussians onto 2D image planes.
+class ProjectedGaussians:
+    """Result of geometric projection of 3D Gaussians onto 2D image planes.
 
-    Contains the low-level projection outputs before opacity computation,
-    SH evaluation, or tile intersection. This is the first stage in the
-    decomposed rendering pipeline.
+    This is the output of Stage 1 (``project_gaussians``) and serves as input
+    to all subsequent pipeline stages.  Contains only the raw geometric
+    projection outputs -- no opacity computation, SH evaluation, or tile
+    intersection data.
 
     Attributes:
         radii: ``[C, N]`` int32 projected radii (<=0 means culled).
@@ -522,6 +320,8 @@ class RawProjection:
         conics: ``[C, N, 3]`` Upper-triangle of inverse 2D covariance.
         compensations: ``[C, N]`` Antialiasing compensation factors, or ``None``
             when antialiasing is disabled.
+        image_width: Image width in pixels (carried forward to tile intersection).
+        image_height: Image height in pixels (carried forward to tile intersection).
     """
 
     radii: torch.Tensor
@@ -529,9 +329,11 @@ class RawProjection:
     depths: torch.Tensor
     conics: torch.Tensor
     compensations: torch.Tensor | None
+    image_width: int
+    image_height: int
 
 
-def project_to_2d(
+def project_gaussians(
     means: torch.Tensor,
     quats: torch.Tensor,
     log_scales: torch.Tensor,
@@ -539,21 +341,26 @@ def project_to_2d(
     projection_matrices: torch.Tensor,
     image_width: int,
     image_height: int,
-    eps_2d: float,
-    near: float,
-    far: float,
-    radius_clip: float,
-    antialias: bool,
-    camera_model: CameraModel,
+    eps_2d: float = 0.3,
+    near: float = 0.01,
+    far: float = 1e10,
+    radius_clip: float = 0.0,
+    antialias: bool = False,
+    camera_model: CameraModel = CameraModel.PINHOLE,
+    projection_method: ProjectionMethod = ProjectionMethod.AUTO,
+    distortion_coeffs: torch.Tensor | None = None,
     accum_grad_norms: torch.Tensor | None = None,
     accum_step_counts: torch.Tensor | None = None,
     accum_max_radii: torch.Tensor | None = None,
-) -> RawProjection:
-    """Raw geometric projection of 3D Gaussians onto 2D image planes.
+) -> ProjectedGaussians:
+    """Geometric projection of 3D Gaussians onto 2D image planes (Stage 1).
 
-    This is a composable pipeline stage: it performs only the geometric
-    projection (no opacity computation, SH evaluation, or tile intersection).
-    Differentiable via Python autograd.
+    Dispatches between analytic projection (differentiable) and unscented
+    transform projection (forward-only) based on ``projection_method``.
+
+    Accumulator tensors (``accum_grad_norms``, ``accum_step_counts``,
+    ``accum_max_radii``) are only used with analytic projection; they are
+    ignored for UT projection.
 
     Args:
         means: ``[N, 3]`` Gaussian means.
@@ -569,26 +376,66 @@ def project_to_2d(
         radius_clip: Minimum projected radius for culling.
         antialias: Whether to compute antialiasing compensations.
         camera_model: Camera distortion model.
-        accum_grad_norms: ``[N]`` Persistent accumulator for gradient norms.
-            Mutated in-place during the backward pass via CUDA ``atomicAdd``.
-        accum_step_counts: ``[N]`` Persistent accumulator for gradient step counts.
-            Mutated in-place during the backward pass via CUDA ``atomicAdd``.
-        accum_max_radii: ``[N]`` Persistent accumulator for max projected radii.
-            Mutated in-place during the backward pass via CUDA ``atomicMax``.
+        projection_method: ``AUTO`` resolves to ``ANALYTIC`` for pinhole/ortho,
+            ``UNSCENTED`` for distortion-based camera models.
+        distortion_coeffs: ``[C, 12]`` Optional OpenCV distortion coefficients
+            (required for UT projection with distortion-based cameras).
+        accum_grad_norms: ``[N]`` Persistent accumulator for gradient norms
+            (analytic only; mutated in-place during backward).
+        accum_step_counts: ``[N]`` Persistent accumulator for gradient step
+            counts (analytic only; mutated in-place during backward).
+        accum_max_radii: ``[N]`` Persistent accumulator for max projected radii
+            (analytic only; mutated in-place during backward).
 
     Returns:
-        A :class:`RawProjection` containing radii, means2d, depths, conics,
-        and compensations.
+        A :class:`ProjectedGaussians` containing radii, means2d, depths, conics,
+        compensations, image_width, and image_height.
     """
-    ortho = camera_model == CameraModel.ORTHOGRAPHIC
-    proj_result = cast(
-        tuple[torch.Tensor, ...],
-        _ProjectGaussiansFn.apply(
+    resolved = _resolve_projection_method(camera_model, projection_method)
+
+    if resolved == ProjectionMethod.ANALYTIC:
+        ortho = camera_model == CameraModel.ORTHOGRAPHIC
+        proj_result = cast(
+            tuple[torch.Tensor, ...],
+            _ProjectGaussiansFn.apply(
+                means,
+                quats,
+                log_scales,
+                world_to_camera_matrices,
+                projection_matrices,
+                image_width,
+                image_height,
+                eps_2d,
+                near,
+                far,
+                radius_clip,
+                antialias,
+                ortho,
+                accum_grad_norms,
+                accum_step_counts,
+                accum_max_radii,
+            ),
+        )
+        radii = proj_result[0]
+        means2d = proj_result[1]
+        depths = proj_result[2]
+        conics = proj_result[3]
+        compensations: torch.Tensor | None = proj_result[4] if antialias else None
+    else:
+        C = world_to_camera_matrices.size(0)
+        dc = (
+            distortion_coeffs
+            if distortion_coeffs is not None
+            else torch.empty(C, 0, device=means.device, dtype=means.dtype)
+        )
+        radii, means2d, depths, conics, compensations_raw = _C.project_gaussians_ut_fwd(
             means,
             quats,
             log_scales,
             world_to_camera_matrices,
             projection_matrices,
+            dc,
+            _C.CameraModel(camera_model),
             image_width,
             image_height,
             eps_2d,
@@ -596,22 +443,15 @@ def project_to_2d(
             far,
             radius_clip,
             antialias,
-            ortho,
-            accum_grad_norms,
-            accum_step_counts,
-            accum_max_radii,
-        ),
-    )
-    radii: torch.Tensor = proj_result[0]
-    means2d: torch.Tensor = proj_result[1]
-    depths: torch.Tensor = proj_result[2]
-    conics: torch.Tensor = proj_result[3]
-    compensations: torch.Tensor | None = proj_result[4] if antialias else None
+        )
+        compensations = compensations_raw if antialias else None
 
-    return RawProjection(
+    return ProjectedGaussians(
         radii=radii,
         means2d=means2d,
         depths=depths,
         conics=conics,
         compensations=compensations,
+        image_width=image_width,
+        image_height=image_height,
     )

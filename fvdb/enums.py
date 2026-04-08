@@ -122,3 +122,30 @@ class ProjectionMethod(IntEnum):
     """
     Use the unscented projection path.
     """
+
+
+class GaussianRenderMode(IntEnum):
+    """
+    Rendering mode for Gaussian splatting rasterization.
+
+    Controls which quantities are produced by the rasterization stage:
+
+    - ``FEATURES``: Rasterize only the per-Gaussian features (e.g. SH-evaluated colours).
+    - ``DEPTH``: Rasterize only depth.
+    - ``FEATURES_AND_DEPTH``: Rasterize features concatenated with depth.
+    """
+
+    FEATURES = 0
+    """
+    Rasterize only per-Gaussian features (e.g. evaluated spherical-harmonic colours).
+    """
+
+    DEPTH = 1
+    """
+    Rasterize only per-Gaussian depth.
+    """
+
+    FEATURES_AND_DEPTH = 2
+    """
+    Rasterize features concatenated with a depth channel.
+    """

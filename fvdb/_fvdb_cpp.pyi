@@ -817,9 +817,9 @@ class JaggedTensor:
     def __iter__(self) -> typing.Iterator[JaggedTensor]: ...
 
 class RenderMode(Enum):
-    RGB = ...
+    FEATURES = ...
     DEPTH = ...
-    RGBD = ...
+    FEATURES_AND_DEPTH = ...
 
 class RenderSettings:
     image_width: int
@@ -839,8 +839,8 @@ class RenderSettings:
 
 # ProjectedGaussianSplats and SparseProjectedGaussianSplats are no longer
 # exposed as C++ pybind11 types.  All projection functions now return plain
-# tuples of tensors; see fvdb.functional.splat.ProjectedGaussians and
-# fvdb.functional.splat.SparseProjectedGaussians for the Python types.
+# tuples of tensors; see fvdb.ProjectedGaussians, fvdb.GaussianTileIntersection,
+# and fvdb.SparseGaussianTileIntersection for the Python types.
 
 class GaussianSplat3dView:
     @property
@@ -1144,142 +1144,7 @@ class ProjectionMethod(Enum):
 
 # ---- Gaussian Splat Operations ----
 
-def gsplat_check_state(
-    means: torch.Tensor,
-    quats: torch.Tensor,
-    log_scales: torch.Tensor,
-    logit_opacities: torch.Tensor,
-    sh0: torch.Tensor,
-    shN: torch.Tensor,
-) -> None: ...
-def gsplat_eval_sh(
-    means: torch.Tensor,
-    sh0: torch.Tensor,
-    shN: torch.Tensor,
-    sh_degree_to_use: int,
-    world_to_camera_matrices: torch.Tensor,
-    per_gaussian_projected_radii: torch.Tensor,
-) -> torch.Tensor: ...
-def gsplat_project_gaussians_analytic(
-    means: torch.Tensor,
-    quats: torch.Tensor,
-    log_scales: torch.Tensor,
-    logit_opacities: torch.Tensor,
-    sh0: torch.Tensor,
-    shN: torch.Tensor,
-    world_to_camera_matrices: torch.Tensor,
-    projection_matrices: torch.Tensor,
-    settings: RenderSettings,
-    camera_model: CameraModel,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]: ...
-def gsplat_project_gaussians_ut(
-    means: torch.Tensor,
-    quats: torch.Tensor,
-    log_scales: torch.Tensor,
-    logit_opacities: torch.Tensor,
-    sh0: torch.Tensor,
-    shN: torch.Tensor,
-    world_to_camera_matrices: torch.Tensor,
-    projection_matrices: torch.Tensor,
-    distortion_coeffs: torch.Tensor,
-    settings: RenderSettings,
-    camera_model: CameraModel,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]: ...
-def gsplat_project_gaussians_for_camera(
-    means: torch.Tensor,
-    quats: torch.Tensor,
-    log_scales: torch.Tensor,
-    logit_opacities: torch.Tensor,
-    sh0: torch.Tensor,
-    shN: torch.Tensor,
-    world_to_camera_matrices: torch.Tensor,
-    projection_matrices: torch.Tensor,
-    settings: RenderSettings,
-    camera_model: CameraModel,
-    projection_method: ProjectionMethod,
-    distortion_coeffs: Optional[torch.Tensor],
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]: ...
-def gsplat_project_gaussians_for_camera_with_accum(
-    means: torch.Tensor,
-    quats: torch.Tensor,
-    log_scales: torch.Tensor,
-    logit_opacities: torch.Tensor,
-    sh0: torch.Tensor,
-    shN: torch.Tensor,
-    world_to_camera_matrices: torch.Tensor,
-    projection_matrices: torch.Tensor,
-    settings: RenderSettings,
-    camera_model: CameraModel,
-    projection_method: ProjectionMethod,
-    distortion_coeffs: Optional[torch.Tensor],
-    accumulate_mean_2d_gradients: bool,
-    accumulate_max_2d_radii: bool,
-    accum_grad_norms: Optional[torch.Tensor],
-    accum_step_counts: Optional[torch.Tensor],
-    accum_max_2d_radii: Optional[torch.Tensor],
-) -> tuple[
-    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor,
-    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor,
-    Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor],
-]: ...
-def gsplat_sparse_project_gaussians_analytic(
-    pixels_to_render: JaggedTensor,
-    means: torch.Tensor,
-    quats: torch.Tensor,
-    log_scales: torch.Tensor,
-    logit_opacities: torch.Tensor,
-    sh0: torch.Tensor,
-    shN: torch.Tensor,
-    world_to_camera_matrices: torch.Tensor,
-    projection_matrices: torch.Tensor,
-    settings: RenderSettings,
-    camera_model: CameraModel,
-) -> tuple[
-    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor,
-    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor,
-    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor,
-    torch.Tensor, torch.Tensor, JaggedTensor, bool,
-]: ...
-def gsplat_sparse_project_gaussians_ut(
-    pixels_to_render: JaggedTensor,
-    means: torch.Tensor,
-    quats: torch.Tensor,
-    log_scales: torch.Tensor,
-    logit_opacities: torch.Tensor,
-    sh0: torch.Tensor,
-    shN: torch.Tensor,
-    world_to_camera_matrices: torch.Tensor,
-    projection_matrices: torch.Tensor,
-    distortion_coeffs: torch.Tensor,
-    settings: RenderSettings,
-    camera_model: CameraModel,
-) -> tuple[
-    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor,
-    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor,
-    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor,
-    torch.Tensor, torch.Tensor, JaggedTensor, bool,
-]: ...
-def gsplat_sparse_project_gaussians_for_camera(
-    pixels_to_render: JaggedTensor,
-    means: torch.Tensor,
-    quats: torch.Tensor,
-    log_scales: torch.Tensor,
-    logit_opacities: torch.Tensor,
-    sh0: torch.Tensor,
-    shN: torch.Tensor,
-    world_to_camera_matrices: torch.Tensor,
-    projection_matrices: torch.Tensor,
-    settings: RenderSettings,
-    camera_model: CameraModel,
-    projection_method: ProjectionMethod,
-    distortion_coeffs: Optional[torch.Tensor],
-) -> tuple[
-    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor,
-    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor,
-    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor,
-    torch.Tensor, torch.Tensor, JaggedTensor, bool,
-]: ...
-def gsplat_render_crop_from_projected(
+def render_crop_from_projected_gaussians(
     means2d: torch.Tensor,
     conics: torch.Tensor,
     render_quantities: torch.Tensor,
@@ -1296,42 +1161,7 @@ def gsplat_render_crop_from_projected(
     backgrounds: Optional[torch.Tensor],
     masks: Optional[torch.Tensor],
 ) -> tuple[torch.Tensor, torch.Tensor]: ...
-def gsplat_rasterize_from_world(
-    means: torch.Tensor,
-    quats: torch.Tensor,
-    log_scales: torch.Tensor,
-    render_quantities: torch.Tensor,
-    opacities: torch.Tensor,
-    tile_offsets: torch.Tensor,
-    tile_gaussian_ids: torch.Tensor,
-    world_to_camera_matrices: torch.Tensor,
-    projection_matrices: torch.Tensor,
-    distortion_coeffs: torch.Tensor,
-    camera_model: CameraModel,
-    image_width: int,
-    image_height: int,
-    tile_size: int,
-    backgrounds: Optional[torch.Tensor],
-    masks: Optional[torch.Tensor],
-) -> tuple[torch.Tensor, torch.Tensor]: ...
-def gsplat_sparse_render(
-    pixels_to_render: JaggedTensor,
-    means: torch.Tensor,
-    quats: torch.Tensor,
-    log_scales: torch.Tensor,
-    logit_opacities: torch.Tensor,
-    sh0: torch.Tensor,
-    shN: torch.Tensor,
-    world_to_camera_matrices: torch.Tensor,
-    projection_matrices: torch.Tensor,
-    settings: RenderSettings,
-    camera_model: CameraModel,
-    projection_method: ProjectionMethod,
-    distortion_coeffs: Optional[torch.Tensor],
-    backgrounds: Optional[torch.Tensor],
-    masks: Optional[torch.Tensor],
-) -> tuple[JaggedTensor, JaggedTensor]: ...
-def gsplat_render_num_contributing(
+def count_contributing_gaussians(
     means2d: torch.Tensor,
     conics: torch.Tensor,
     opacities: torch.Tensor,
@@ -1339,7 +1169,7 @@ def gsplat_render_num_contributing(
     tile_gaussian_ids: torch.Tensor,
     settings: RenderSettings,
 ) -> tuple[torch.Tensor, torch.Tensor]: ...
-def gsplat_sparse_render_num_contributing(
+def count_contributing_gaussians_sparse(
     means2d: torch.Tensor,
     conics: torch.Tensor,
     opacities: torch.Tensor,
@@ -1356,7 +1186,7 @@ def gsplat_sparse_render_num_contributing(
     pixels_to_render: JaggedTensor,
     settings: RenderSettings,
 ) -> tuple[JaggedTensor, JaggedTensor]: ...
-def gsplat_render_contributing_ids(
+def identify_contributing_gaussians(
     means2d: torch.Tensor,
     conics: torch.Tensor,
     opacities: torch.Tensor,
@@ -1365,7 +1195,7 @@ def gsplat_render_contributing_ids(
     settings: RenderSettings,
     num_contributing_gaussians: Optional[torch.Tensor],
 ) -> tuple[JaggedTensor, JaggedTensor]: ...
-def gsplat_sparse_render_contributing_ids(
+def identify_contributing_gaussians_sparse(
     means2d: torch.Tensor,
     conics: torch.Tensor,
     opacities: torch.Tensor,
@@ -1383,7 +1213,7 @@ def gsplat_sparse_render_contributing_ids(
     settings: RenderSettings,
     num_contributing_gaussians: Optional[JaggedTensor],
 ) -> tuple[JaggedTensor, JaggedTensor]: ...
-def gsplat_relocate_gaussians(
+def relocate_gaussians(
     log_scales: torch.Tensor,
     logit_opacities: torch.Tensor,
     ratios: torch.Tensor,
@@ -1391,7 +1221,7 @@ def gsplat_relocate_gaussians(
     n_max: int,
     min_opacity: float,
 ) -> tuple[torch.Tensor, torch.Tensor]: ...
-def gsplat_add_noise_to_means(
+def add_noise_to_gaussian_means(
     means: torch.Tensor,
     log_scales: torch.Tensor,
     logit_opacities: torch.Tensor,
@@ -1400,7 +1230,7 @@ def gsplat_add_noise_to_means(
     t: float,
     k: float,
 ) -> None: ...
-def gsplat_save_ply(
+def save_gaussians_ply(
     means: torch.Tensor,
     quats: torch.Tensor,
     log_scales: torch.Tensor,
@@ -1410,7 +1240,7 @@ def gsplat_save_ply(
     filename: str,
     metadata: Optional[dict[str, str | int | float | torch.Tensor]],
 ) -> None: ...
-def gsplat_load_ply(
+def load_gaussians_ply(
     filename: str,
     device: torch.device = ...,
 ) -> tuple[
@@ -1425,7 +1255,7 @@ def gsplat_load_ply(
 
 # ---- Raw forward/backward dispatch (for Python autograd) ----
 
-def gsplat_projection_fwd(
+def project_gaussians_analytic_fwd(
     means: torch.Tensor,
     quats: torch.Tensor,
     scales: torch.Tensor,
@@ -1440,7 +1270,7 @@ def gsplat_projection_fwd(
     calc_compensations: bool,
     ortho: bool,
 ) -> tuple[torch.Tensor, ...]: ...
-def gsplat_projection_bwd(
+def project_gaussians_analytic_bwd(
     means: torch.Tensor,
     quats: torch.Tensor,
     scales: torch.Tensor,
@@ -1462,7 +1292,23 @@ def gsplat_projection_bwd(
     out_normalized_max_radii_accum: Optional[torch.Tensor] = ...,
     out_gradient_step_counts: Optional[torch.Tensor] = ...,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]: ...
-def gsplat_sh_eval_fwd(
+def project_gaussians_ut_fwd(
+    means: torch.Tensor,
+    quats: torch.Tensor,
+    log_scales: torch.Tensor,
+    world_to_cam_matrices: torch.Tensor,
+    projection_matrices: torch.Tensor,
+    distortion_coeffs: torch.Tensor,
+    camera_model: CameraModel,
+    image_width: int,
+    image_height: int,
+    eps2d: float,
+    near: float,
+    far: float,
+    min_radius_2d: float,
+    calc_compensations: bool,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]: ...
+def eval_gaussian_sh_fwd(
     sh_degree_to_use: int,
     num_cameras: int,
     view_dirs: torch.Tensor,
@@ -1470,7 +1316,7 @@ def gsplat_sh_eval_fwd(
     sh_n_coeffs: torch.Tensor,
     radii: torch.Tensor,
 ) -> torch.Tensor: ...
-def gsplat_sh_eval_bwd(
+def eval_gaussian_sh_bwd(
     sh_degree_to_use: int,
     num_cameras: int,
     num_gaussians: int,
@@ -1480,7 +1326,7 @@ def gsplat_sh_eval_bwd(
     radii: torch.Tensor,
     compute_d_loss_d_view_dirs: bool,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]: ...
-def gsplat_rasterize_fwd(
+def rasterize_screen_space_gaussians_fwd(
     means2d: torch.Tensor,
     conics: torch.Tensor,
     features: torch.Tensor,
@@ -1495,7 +1341,7 @@ def gsplat_rasterize_fwd(
     backgrounds: Optional[torch.Tensor],
     masks: Optional[torch.Tensor],
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]: ...
-def gsplat_rasterize_bwd(
+def rasterize_screen_space_gaussians_bwd(
     means2d: torch.Tensor,
     conics: torch.Tensor,
     features: torch.Tensor,
@@ -1516,7 +1362,7 @@ def gsplat_rasterize_bwd(
     backgrounds: Optional[torch.Tensor] = ...,
     masks: Optional[torch.Tensor] = ...,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]: ...
-def gsplat_rasterize_sparse_fwd(
+def rasterize_screen_space_gaussians_sparse_fwd(
     pixels_to_render: JaggedTensor,
     means2d: torch.Tensor,
     conics: torch.Tensor,
@@ -1536,7 +1382,7 @@ def gsplat_rasterize_sparse_fwd(
     backgrounds: Optional[torch.Tensor],
     masks: Optional[torch.Tensor],
 ) -> tuple[JaggedTensor, JaggedTensor, JaggedTensor]: ...
-def gsplat_rasterize_sparse_bwd(
+def rasterize_screen_space_gaussians_sparse_bwd(
     pixels_to_render: JaggedTensor,
     means2d: torch.Tensor,
     conics: torch.Tensor,
@@ -1562,7 +1408,7 @@ def gsplat_rasterize_sparse_bwd(
     backgrounds: Optional[torch.Tensor] = ...,
     masks: Optional[torch.Tensor] = ...,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]: ...
-def gsplat_rasterize_from_world_fwd(
+def rasterize_world_space_gaussians_fwd(
     means: torch.Tensor,
     quats: torch.Tensor,
     log_scales: torch.Tensor,
@@ -1580,7 +1426,7 @@ def gsplat_rasterize_from_world_fwd(
     backgrounds: Optional[torch.Tensor],
     masks: Optional[torch.Tensor],
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]: ...
-def gsplat_rasterize_from_world_bwd(
+def rasterize_world_space_gaussians_bwd(
     means: torch.Tensor,
     quats: torch.Tensor,
     log_scales: torch.Tensor,
@@ -1602,7 +1448,7 @@ def gsplat_rasterize_from_world_bwd(
     backgrounds: Optional[torch.Tensor],
     masks: Optional[torch.Tensor],
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]: ...
-def gsplat_projection_jagged_fwd(
+def project_gaussians_analytic_jagged_fwd(
     g_sizes: torch.Tensor,
     means: torch.Tensor,
     quats: torch.Tensor,
@@ -1618,7 +1464,7 @@ def gsplat_projection_jagged_fwd(
     min_radius_2d: float,
     ortho: bool,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]: ...
-def gsplat_projection_jagged_bwd(
+def project_gaussians_analytic_jagged_bwd(
     g_sizes: torch.Tensor,
     means: torch.Tensor,
     quats: torch.Tensor,
@@ -1637,7 +1483,10 @@ def gsplat_projection_jagged_bwd(
     world_to_cam_matrices_requires_grad: bool,
     ortho: bool,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]: ...
-def gsplat_tile_intersection(
+
+# ---- Tile intersection (non-differentiable) ----
+
+def intersect_gaussian_tiles(
     means2d: torch.Tensor,
     radii: torch.Tensor,
     depths: torch.Tensor,
@@ -1647,12 +1496,21 @@ def gsplat_tile_intersection(
     num_tiles_w: int,
     camera_ids: Optional[torch.Tensor] = ...,
 ) -> tuple[torch.Tensor, torch.Tensor]: ...
-def evaluate_spherical_harmonics(
-    sh_degree: int,
+def intersect_gaussian_tiles_sparse(
+    means2d: torch.Tensor,
+    radii: torch.Tensor,
+    depths: torch.Tensor,
+    tile_mask: torch.Tensor,
+    active_tiles: torch.Tensor,
     num_cameras: int,
-    sh0: torch.Tensor,
-    shN: torch.Tensor,
-    per_gaussian_projected_radii: torch.Tensor,
-    world_to_camera_matrices: torch.Tensor,
-    means: torch.Tensor,
-) -> torch.Tensor: ...
+    tile_size: int,
+    num_tiles_h: int,
+    num_tiles_w: int,
+    camera_ids: Optional[torch.Tensor] = ...,
+) -> tuple[torch.Tensor, torch.Tensor]: ...
+def build_sparse_gaussian_tile_layout(
+    tile_side_length: int,
+    num_tiles_w: int,
+    num_tiles_h: int,
+    pixels_to_render: JaggedTensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]: ...

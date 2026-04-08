@@ -172,12 +172,43 @@ from ._constructors import (
 # I/O
 from ._io import load_nanovdb, load_nanovdb_single, save_nanovdb, save_nanovdb_single
 
-# Gaussian splatting (submodule)
-from . import splat  # noqa: F401 -- exposed as fvdb.functional.splat
+# Gaussian splatting types
+from ._gaussian_projection import ProjectedGaussians
+from ._gaussian_tile_intersection import GaussianTileIntersection, SparseGaussianTileIntersection
+
+# Gaussian splatting pipeline
+from ._gaussian_projection import project_gaussians
+from ._gaussian_spherical_harmonics import evaluate_gaussian_sh
+from ._gaussian_tile_intersection import intersect_gaussian_tiles, intersect_gaussian_tiles_sparse
+from ._gaussian_rasterization import rasterize_screen_space_gaussians, rasterize_world_space_gaussians
+from ._gaussian_rasterization_sparse import rasterize_screen_space_gaussians_sparse
+
+# Gaussian splatting analysis
+from ._gaussian_analysis import (
+    count_contributing_gaussians,
+    count_contributing_gaussians_sparse,
+    identify_contributing_gaussians,
+    identify_contributing_gaussians_sparse,
+)
 
 __all__ = [
-    # Gaussian splatting submodule
-    "splat",
+    # Gaussian splatting types
+    "ProjectedGaussians",
+    "GaussianTileIntersection",
+    "SparseGaussianTileIntersection",
+    # Gaussian splatting pipeline
+    "project_gaussians",
+    "evaluate_gaussian_sh",
+    "intersect_gaussian_tiles",
+    "intersect_gaussian_tiles_sparse",
+    "rasterize_screen_space_gaussians",
+    "rasterize_world_space_gaussians",
+    "rasterize_screen_space_gaussians_sparse",
+    # Gaussian splatting analysis
+    "count_contributing_gaussians",
+    "identify_contributing_gaussians",
+    "count_contributing_gaussians_sparse",
+    "identify_contributing_gaussians_sparse",
     # Interpolation (batch)
     "sample_trilinear_batch",
     "sample_trilinear_with_grad_batch",

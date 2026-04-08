@@ -57,7 +57,6 @@ if _spec is not None and _spec.origin is not None:
 # isort: off
 from ._fvdb_cpp import scaled_dot_product_attention as _scaled_dot_product_attention_cpp
 from ._fvdb_cpp import gaussian_render_jagged as _gaussian_render_jagged_cpp
-from ._fvdb_cpp import evaluate_spherical_harmonics
 from ._fvdb_cpp import (
     config,
     volume_render,
@@ -99,9 +98,9 @@ def gaussian_render_jagged(
     import math
 
     from . import _fvdb_cpp as _C
-    from .functional.splat._projection import _ProjectGaussiansJaggedFn
-    from .functional.splat._rasterize import _RasterizeDenseFn
-    from .functional.splat._sh import _EvalSHFn
+    from .functional._gaussian_projection import _ProjectGaussiansJaggedFn
+    from .functional._gaussian_rasterization import _RasterizeScreenSpaceGaussiansFn
+    from .functional._gaussian_spherical_harmonics import _EvaluateGaussianSHFn
 
     ccz = viewmats.jdata.shape[0]  # total number of cameras
     device = means.jdata.device
@@ -168,7 +167,7 @@ def gaussian_render_jagged(
 
     if actual_sh_degree == 0:
         sh0 = sh_coeffs_batched[0].unsqueeze(0)  # [1, nnz, D]
-        features = _EvalSHFn.apply(
+        features = _EvaluateGaussianSHFn.apply(
             actual_sh_degree,
             1,
             torch.zeros(1, nnz, 3, device=device, dtype=dtype),
@@ -181,7 +180,7 @@ def gaussian_render_jagged(
         shN = sh_coeffs_batched[1:]  # [K-1, nnz, D]
         cam_to_world = torch.linalg.inv(viewmats.jdata)  # [ccz, 4, 4]
         dirs = means.jdata[gaussian_ids] - cam_to_world[camera_ids, :3, 3]  # [nnz, 3]
-        features = _EvalSHFn.apply(
+        features = _EvaluateGaussianSHFn.apply(
             actual_sh_degree,
             1,
             dirs.unsqueeze(0),  # [1, nnz, 3]
@@ -197,7 +196,7 @@ def gaussian_render_jagged(
     # ---- Step 5: Tile intersection (non-differentiable) ----
     num_tiles_w = math.ceil(image_width / tile_size)
     num_tiles_h = math.ceil(image_height / tile_size)
-    tile_offsets, tile_gaussian_ids = _C.gsplat_tile_intersection(
+    tile_offsets, tile_gaussian_ids = _C.intersect_gaussian_tiles(
         means2d,
         radii,
         depths,
@@ -213,7 +212,7 @@ def gaussian_render_jagged(
         debug_info["tile_gaussian_ids"] = tile_gaussian_ids
 
     # ---- Step 6: Rasterize (differentiable via Python autograd) ----
-    images, alphas = _RasterizeDenseFn.apply(
+    images, alphas = _RasterizeScreenSpaceGaussiansFn.apply(
         means2d,
         conics,
         features,
@@ -242,7 +241,7 @@ def evaluate_spherical_harmonics(
     view_directions: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Evaluate spherical harmonics (differentiable via Python autograd)."""
-    from .functional.splat._sh import _EvalSHFn
+    from .functional._gaussian_spherical_harmonics import _EvaluateGaussianSHFn
 
     if sh_degree > 0:
         if view_directions is None:
@@ -255,13 +254,14 @@ def evaluate_spherical_harmonics(
         else torch.zeros(num_cameras, sh0.size(0), 3, device=sh0.device, dtype=sh0.dtype)
     )
     shN_val = shN if shN is not None else torch.empty(sh0.size(0), 0, sh0.size(2), device=sh0.device, dtype=sh0.dtype)
-    return _EvalSHFn.apply(sh_degree, num_cameras, view_dirs, sh0, shN_val, radii)
+    return _EvaluateGaussianSHFn.apply(sh_degree, num_cameras, view_dirs, sh0, shN_val, radii)
 
 
 from .convolution_plan import ConvolutionPlan
 from .gaussian_splatting import GaussianSplat3d
-from .functional.splat._projected_gaussians import ProjectedGaussians, SparseProjectedGaussians
-from .enums import CameraModel, ProjectionMethod, RollingShutterType, ShOrderingMode
+from .functional._gaussian_projection import ProjectedGaussians
+from .functional._gaussian_tile_intersection import GaussianTileIntersection, SparseGaussianTileIntersection
+from .enums import CameraModel, GaussianRenderMode, ProjectionMethod, RollingShutterType, ShOrderingMode
 from ._fvdb_cpp import RenderSettings
 
 # Import torch-compatible functions that work with both Tensor and JaggedTensor
@@ -326,9 +326,11 @@ __all__ = [
     "JaggedTensor",
     "GaussianSplat3d",
     "ProjectedGaussians",
-    "SparseProjectedGaussians",
+    "GaussianTileIntersection",
+    "SparseGaussianTileIntersection",
     "RenderSettings",
     "CameraModel",
+    "GaussianRenderMode",
     "ProjectionMethod",
     "RollingShutterType",
     "ShOrderingMode",

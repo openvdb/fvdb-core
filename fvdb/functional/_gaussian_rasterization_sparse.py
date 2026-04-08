@@ -1,17 +1,21 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 #
-"""Functional API for sparse Gaussian rasterization."""
+"""Functional API for sparse Gaussian rasterization (Stage 4)."""
 from __future__ import annotations
 
-from typing import Any
+import math
+from typing import TYPE_CHECKING, Any, cast
 
 import torch
 
-from ... import _fvdb_cpp as _C
-from ...enums import CameraModel, ProjectionMethod
-from ...jagged_tensor import JaggedTensor
-from ._tile_intersection import build_render_settings
+from .. import _fvdb_cpp as _C
+from ..enums import CameraModel, ProjectionMethod
+from ..jagged_tensor import JaggedTensor
+
+if TYPE_CHECKING:
+    from ._gaussian_projection import ProjectedGaussians
+    from ._gaussian_tile_intersection import SparseGaussianTileIntersection
 
 
 # ---------------------------------------------------------------------------
@@ -19,7 +23,7 @@ from ._tile_intersection import build_render_settings
 # ---------------------------------------------------------------------------
 
 
-class _RasterizeSparseFn(torch.autograd.Function):
+class _RasterizeScreenSpaceGaussiansSparseFn(torch.autograd.Function):
     """Python autograd wrapper for the sparse Gaussian rasterization forward/backward dispatch.
 
     The complexity here is that the rasterize kernels operate on JaggedTensors,
@@ -53,8 +57,7 @@ class _RasterizeSparseFn(torch.autograd.Function):
         backgrounds: torch.Tensor | None,
         masks: torch.Tensor | None,
     ):
-        # The pybind fwd takes a C++ JaggedTensor directly
-        result = _C.gsplat_rasterize_sparse_fwd(
+        result = _C.rasterize_screen_space_gaussians_sparse_fwd(
             pixels_to_render._impl,
             means2d,
             conics,
@@ -74,12 +77,10 @@ class _RasterizeSparseFn(torch.autograd.Function):
             backgrounds,
             masks,
         )
-        # result is a tuple of 3 C++ JaggedTensors: (renderedColors, renderedAlphas, lastIds)
         rendered_colors_jt = JaggedTensor(impl=result[0])
         rendered_alphas_jt = JaggedTensor(impl=result[1])
         last_ids_jt = JaggedTensor(impl=result[2])
 
-        # Extract JaggedTensor metadata for saving
         joffsets = pixels_to_render.joffsets
         jidx = pixels_to_render.jidx
         jlidx = pixels_to_render.jlidx
@@ -123,7 +124,6 @@ class _RasterizeSparseFn(torch.autograd.Function):
         ctx.absgrad = absgrad
         ctx.num_outer_lists = len(pixels_to_render)
 
-        # Return the jdata tensors (plain tensors) for autograd tracking
         return rendered_colors_jt.jdata, rendered_alphas_jt.jdata
 
     @staticmethod
@@ -164,7 +164,6 @@ class _RasterizeSparseFn(torch.autograd.Function):
             masks = saved[opt_idx]
             opt_idx += 1
 
-        # Reconstruct JaggedTensors from saved components
         pixels_jt = JaggedTensor(impl=_C.JaggedTensor.from_data_offsets_and_list_ids(pixels_jdata, joffsets, jlidx))
         rendered_alphas_jt = pixels_jt.jagged_like(rendered_alphas_jdata)
         last_ids_jt = pixels_jt.jagged_like(last_ids_jdata)
@@ -173,7 +172,7 @@ class _RasterizeSparseFn(torch.autograd.Function):
         d_loss_d_rendered_features_jt = pixels_jt.jagged_like(d_loss_d_rendered_features_jdata)
         d_loss_d_rendered_alphas_jt = pixels_jt.jagged_like(d_loss_d_rendered_alphas_jdata)
 
-        result = _C.gsplat_rasterize_sparse_bwd(
+        result = _C.rasterize_screen_space_gaussians_sparse_bwd(
             pixels_jt._impl,
             means2d,
             conics,
@@ -199,7 +198,6 @@ class _RasterizeSparseFn(torch.autograd.Function):
             backgrounds,
             masks,
         )
-        # result: (dMean2dAbs, dMeans2d, dConics, dColors, dOpacities)
         d_means2d = result[1]
         d_conics = result[2]
         d_colors = result[3]
@@ -233,95 +231,71 @@ class _RasterizeSparseFn(torch.autograd.Function):
         )
 
 
-def sparse_render(
-    pixels_to_render: JaggedTensor,
-    means: torch.Tensor,
-    quats: torch.Tensor,
-    log_scales: torch.Tensor,
+# ---------------------------------------------------------------------------
+#  Public API
+# ---------------------------------------------------------------------------
+
+
+def rasterize_screen_space_gaussians_sparse(
+    projected: ProjectedGaussians,
+    features: torch.Tensor,
     logit_opacities: torch.Tensor,
-    sh0: torch.Tensor,
-    shN: torch.Tensor,
-    world_to_camera_matrices: torch.Tensor,
-    projection_matrices: torch.Tensor,
-    image_width: int,
-    image_height: int,
-    near: float = 0.01,
-    far: float = 1e10,
-    sh_degree_to_use: int = -1,
-    tile_size: int = 16,
-    radius_clip: float = 0.0,
-    eps_2d: float = 0.3,
-    antialias: bool = False,
-    render_mode: str = "rgb",
-    camera_model: CameraModel = CameraModel.PINHOLE,
-    projection_method: ProjectionMethod = ProjectionMethod.AUTO,
-    distortion_coeffs: torch.Tensor | None = None,
+    sparse_tiles: SparseGaussianTileIntersection,
     backgrounds: torch.Tensor | None = None,
     masks: torch.Tensor | None = None,
 ) -> tuple[JaggedTensor, JaggedTensor]:
-    """Render Gaussians at specified sparse pixel locations.
+    """Rasterize screen-space Gaussians at sparse pixel locations (Stage 4).
 
-    Full pipeline: projects Gaussians, rasterizes at the given pixels, and
-    handles duplicate pixel deduplication/scatter-back. Pure functional
-    interface with no in-place mutation.
+    Computes opacities internally from ``logit_opacities``.  Returns results
+    for the deduplicated pixel set only -- the caller is responsible for
+    scatter-back using ``sparse_tiles.inverse_indices`` when duplicates exist.
 
-    Supports backpropagation through the Python autograd.
+    Differentiable via Python autograd.
 
     Args:
-        pixels_to_render: JaggedTensor of ``[C, num_pixels, 2]`` pixel coordinates.
-        means: ``[N, 3]`` Gaussian means.
-        quats: ``[N, 4]`` Quaternion rotations.
-        log_scales: ``[N, 3]`` Log scale factors.
-        logit_opacities: ``[N]`` Logit opacities.
-        sh0: ``[N, 1, D]`` Degree-0 SH coefficients.
-        shN: ``[N, K-1, D]`` Higher-degree SH coefficients.
-        world_to_camera_matrices: ``[C, 4, 4]`` World-to-camera transforms.
-        projection_matrices: ``[C, 3, 3]`` Projection matrices.
-        image_width: Full image width (for tile computation).
-        image_height: Full image height (for tile computation).
-        near: Near clipping plane.
-        far: Far clipping plane.
-        sh_degree_to_use: SH degree (-1 for all).
-        tile_size: Tile size for tiled rasterization.
-        radius_clip: Minimum projected radius.
-        eps_2d: Epsilon for numerical stability.
-        antialias: Whether to apply antialiasing.
-        render_mode: One of ``"rgb"``, ``"depth"``, ``"rgbd"``.
-        camera_model: Camera distortion model.
-        projection_method: Projection method (AUTO, ANALYTIC, or UNSCENTED).
-        distortion_coeffs: ``[C, 12]`` Optional distortion coefficients.
+        projected: :class:`ProjectedGaussians` from Stage 1.
+        features: ``[C, N, D]`` Render features from Stage 2.
+        logit_opacities: ``[N]`` Pre-sigmoid opacities.
+        sparse_tiles: :class:`SparseGaussianTileIntersection` from Stage 3.
         backgrounds: ``[C, D]`` Optional per-camera backgrounds.
         masks: ``[C, tileH, tileW]`` Optional per-tile masks.
 
     Returns:
-        Tuple of (rendered_features, rendered_alphas) as JaggedTensors.
+        Tuple of (rendered_features, rendered_alphas) as :class:`JaggedTensor`
+        for the **unique** pixel set.
     """
-    settings = build_render_settings(
-        image_width=image_width,
-        image_height=image_height,
-        near=near,
-        far=far,
-        tile_size=tile_size,
-        radius_clip=radius_clip,
-        eps_2d=eps_2d,
-        antialias=antialias,
-        sh_degree_to_use=sh_degree_to_use,
-        render_mode=render_mode,
+    from ._gaussian_rasterization import _compute_opacities
+
+    opacities = _compute_opacities(logit_opacities, projected)
+
+    rendered_jdata, rendered_alphas_jdata = cast(
+        tuple[torch.Tensor, torch.Tensor],
+        _RasterizeScreenSpaceGaussiansSparseFn.apply(
+            projected.means2d,
+            projected.conics,
+            features,
+            opacities,
+            sparse_tiles.unique_pixels,
+            sparse_tiles.image_width,
+            sparse_tiles.image_height,
+            0,
+            0,
+            sparse_tiles.tile_size,
+            sparse_tiles.tile_offsets,
+            sparse_tiles.tile_gaussian_ids,
+            sparse_tiles.active_tiles,
+            sparse_tiles.tile_pixel_mask,
+            sparse_tiles.tile_pixel_cumsum,
+            sparse_tiles.pixel_map,
+            False,  # absgrad
+            backgrounds,
+            masks,
+        ),
     )
-    return _C.gsplat_sparse_render(
-        pixels_to_render._impl,
-        means,
-        quats,
-        log_scales,
-        logit_opacities,
-        sh0,
-        shN,
-        world_to_camera_matrices,
-        projection_matrices,
-        settings,
-        _C.CameraModel(camera_model),
-        _C.ProjectionMethod(projection_method),
-        distortion_coeffs,
-        backgrounds,
-        masks,
-    )
+
+    rendered_jt = sparse_tiles.unique_pixels.jagged_like(rendered_jdata)
+    rendered_alphas_jt = sparse_tiles.unique_pixels.jagged_like(rendered_alphas_jdata)
+
+    return rendered_jt, rendered_alphas_jt
+
+

@@ -31,10 +31,11 @@ computeRenderQuantity(const torch::Tensor &means,
     using RenderMode = RenderSettings::RenderMode;
     if (settings.renderMode == RenderMode::DEPTH) {
         return perGaussianDepth.unsqueeze(-1); // [C, N, 1]
-    } else if (settings.renderMode == RenderMode::RGB || settings.renderMode == RenderMode::RGBD) {
+    } else if (settings.renderMode == RenderMode::FEATURES ||
+               settings.renderMode == RenderMode::FEATURES_AND_DEPTH) {
         auto renderQuantity = evalSphericalHarmonics(
             means, sh0, shN, settings.shDegreeToUse, worldToCameraMatrices, perGaussianRadius);
-        if (settings.renderMode == RenderMode::RGBD) {
+        if (settings.renderMode == RenderMode::FEATURES_AND_DEPTH) {
             renderQuantity =
                 torch::cat({renderQuantity, perGaussianDepth.unsqueeze(-1)}, -1); // [C, N, D + 1]
         }

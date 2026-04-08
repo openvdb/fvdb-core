@@ -1,14 +1,19 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 #
-"""Functional API for spherical harmonics evaluation."""
+"""Functional API for spherical harmonics evaluation (Stage 2)."""
 from __future__ import annotations
 
-from typing import Any, cast
+import math
+from typing import TYPE_CHECKING, Any, cast
 
 import torch
 
-from ... import _fvdb_cpp as _C
+from .. import _fvdb_cpp as _C
+from ..enums import GaussianRenderMode
+
+if TYPE_CHECKING:
+    from ._gaussian_projection import ProjectedGaussians
 
 
 # ---------------------------------------------------------------------------
@@ -16,7 +21,7 @@ from ... import _fvdb_cpp as _C
 # ---------------------------------------------------------------------------
 
 
-class _EvalSHFn(torch.autograd.Function):
+class _EvaluateGaussianSHFn(torch.autograd.Function):
     """Python autograd wrapper for the SH evaluation forward/backward dispatch."""
 
     @staticmethod
@@ -29,7 +34,7 @@ class _EvalSHFn(torch.autograd.Function):
         shN_coeffs: torch.Tensor,  # [N, K-1, D] or empty
         radii: torch.Tensor,  # [C, N]
     ) -> torch.Tensor:
-        render_quantities = _C.gsplat_sh_eval_fwd(
+        render_quantities = _C.eval_gaussian_sh_fwd(
             sh_degree_to_use,
             num_cameras,
             view_dirs,
@@ -56,7 +61,7 @@ class _EvalSHFn(torch.autograd.Function):
         assert d_loss_d_colors is not None
         compute_d_loss_d_view_dirs = view_dirs.numel() > 0 and view_dirs.requires_grad
 
-        d_sh0, d_shN, d_view_dirs = _C.gsplat_sh_eval_bwd(
+        d_sh0, d_shN, d_view_dirs = _C.eval_gaussian_sh_bwd(
             ctx.sh_degree_to_use,
             ctx.num_cameras,
             ctx.num_gaussians,
@@ -71,91 +76,70 @@ class _EvalSHFn(torch.autograd.Function):
         return (None, None, d_view_dirs, d_sh0, d_shN, None)
 
 
-def evaluate_spherical_harmonics(
+# ---------------------------------------------------------------------------
+#  Public API
+# ---------------------------------------------------------------------------
+
+
+def evaluate_gaussian_sh(
     means: torch.Tensor,
     sh0: torch.Tensor,
     shN: torch.Tensor,
-    sh_degree_to_use: int,
     world_to_camera_matrices: torch.Tensor,
-    per_gaussian_projected_radii: torch.Tensor,
+    projected: ProjectedGaussians,
+    sh_degree_to_use: int = -1,
+    render_mode: GaussianRenderMode = GaussianRenderMode.FEATURES,
 ) -> torch.Tensor:
-    """Evaluate spherical harmonics for Gaussian splats.
+    """Evaluate per-Gaussian render features from SH coefficients (Stage 2).
 
-    Computes view-dependent features (typically RGB colors) from SH coefficients.
-    Supports backpropagation through the Python autograd.
+    Computes view-dependent features based on ``render_mode``:
+
+    - ``FEATURES``: evaluates spherical harmonics to produce view-dependent
+      colours (or any per-Gaussian feature encoded as SH coefficients).
+    - ``DEPTH``: returns depths as a single-channel feature (no SH evaluation).
+    - ``FEATURES_AND_DEPTH``: concatenates SH-evaluated features with depths.
+
+    Differentiable via Python autograd.
 
     Args:
-        means: ``[N, 3]`` Gaussian means (used to compute view directions when sh_degree > 0).
+        means: ``[N, 3]`` Gaussian means (used to compute view directions when
+            the SH degree is > 0).
         sh0: ``[N, 1, D]`` Degree-0 SH coefficients.
         shN: ``[N, K-1, D]`` Higher-degree SH coefficients.
-        sh_degree_to_use: SH degree to use (-1 for all available).
         world_to_camera_matrices: ``[C, 4, 4]`` World-to-camera transforms.
-        per_gaussian_projected_radii: ``[C, N]`` Projected radii (int32). Points with
-            radii <= 0 output zeros (used to skip invisible Gaussians).
+        projected: :class:`ProjectedGaussians` from Stage 1 (provides
+            ``radii`` and ``depths``).
+        sh_degree_to_use: SH degree to use (-1 for all available).
+        render_mode: Which quantities to produce.
 
     Returns:
-        ``[C, N, D]`` Evaluated SH features.
+        ``[C, N, D]`` Render features (``D`` depends on render mode).
     """
-    import math
+    radii = projected.radii
+    depths = projected.depths
+
+    if render_mode == GaussianRenderMode.DEPTH:
+        return depths.unsqueeze(-1)
 
     K = shN.size(1) + 1
     C = world_to_camera_matrices.size(0)
     actual_sh_degree = sh_degree_to_use if sh_degree_to_use >= 0 else int(math.sqrt(K)) - 1
+
     if actual_sh_degree == 0:
         view_dirs = torch.zeros(C, means.size(0), 3, device=means.device, dtype=means.dtype)
     else:
         cam_to_world = torch.linalg.inv(world_to_camera_matrices)
         camera_pos = cam_to_world[:, :3, 3]
         view_dirs = means[None, :, :] - camera_pos[:, None, :]
-    return cast(
+
+    features = cast(
         torch.Tensor,
-        _EvalSHFn.apply(actual_sh_degree, C, view_dirs, sh0, shN, per_gaussian_projected_radii),
+        _EvaluateGaussianSHFn.apply(actual_sh_degree, C, view_dirs, sh0, shN, radii),
     )
 
-
-def prepare_render_features(
-    means: torch.Tensor,
-    sh0: torch.Tensor,
-    shN: torch.Tensor,
-    world_to_camera_matrices: torch.Tensor,
-    radii: torch.Tensor,
-    depths: torch.Tensor,
-    sh_degree_to_use: int,
-    render_mode: str,
-) -> torch.Tensor:
-    """Prepare per-Gaussian render features based on the render mode.
-
-    For ``"rgb"``: evaluates spherical harmonics to produce view-dependent colors.
-    For ``"depth"``: returns depths as a single-channel feature.
-    For ``"rgbd"``: concatenates SH colors with depths.
-
-    This is a composable pipeline stage, meant to be called after
-    :func:`~fvdb.functional.splat.project_to_2d`.
-
-    Args:
-        means: ``[N, 3]`` Gaussian means (for computing view directions).
-        sh0: ``[N, 1, D]`` Degree-0 SH coefficients.
-        shN: ``[N, K-1, D]`` Higher-degree SH coefficients.
-        world_to_camera_matrices: ``[C, 4, 4]`` World-to-camera transforms.
-        radii: ``[C, N]`` int32 projected radii from projection stage.
-        depths: ``[C, N]`` Depths from projection stage.
-        sh_degree_to_use: SH degree to use (-1 for all available).
-        render_mode: One of ``"rgb"``, ``"depth"``, ``"rgbd"``.
-
-    Returns:
-        ``[C, N, D]`` Render features.
-    """
-    if render_mode == "depth":
-        return depths.unsqueeze(-1)
-
-    features = evaluate_spherical_harmonics(
-        means,
-        sh0,
-        shN,
-        sh_degree_to_use,
-        world_to_camera_matrices,
-        radii,
-    )
-    if render_mode == "rgbd":
+    if render_mode == GaussianRenderMode.FEATURES_AND_DEPTH:
         features = torch.cat([features, depths.unsqueeze(-1)], -1)
+
     return features
+
+

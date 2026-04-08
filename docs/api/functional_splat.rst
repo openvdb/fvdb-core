@@ -1,25 +1,26 @@
 Functional Gaussian Splatting API
 =================================
 
-.. module:: fvdb.functional.splat
+.. module:: fvdb.functional
 
-The :mod:`fvdb.functional.splat` module provides a pure-function interface for
-Gaussian splatting rendering.  Every operation is a standalone function that
-takes raw tensors as input, following the same design philosophy as
-:mod:`fvdb.functional` for sparse-grid operations.
+The Gaussian splatting functions in :mod:`fvdb.functional` provide a
+pure-function interface for Gaussian splatting rendering.  Every operation is a
+standalone function that takes raw tensors as input, following the same design
+philosophy as the rest of :mod:`fvdb.functional` for sparse-grid operations.
 
-The API is organized into two layers:
+The API is organized as a **4-stage composable pipeline**:
 
-- **Decomposed pipeline stages** -- individual pure functions that can be
-  composed into custom rendering pipelines.  Each stage takes raw tensors
-  and returns either a frozen dataclass or a tensor.
-- **Convenience functions** -- higher-level functions that compose the stages
-  internally, matching the methods on :class:`~fvdb.GaussianSplat3d`.
+1. ``project_gaussians`` -- geometric projection (Stage 1)
+2. ``evaluate_gaussian_sh`` -- SH / feature evaluation (Stage 2)
+3. ``intersect_gaussian_tiles`` / ``intersect_gaussian_tiles_sparse`` -- tile intersection (Stage 3)
+4. ``rasterize_screen_space_gaussians`` / ``rasterize_world_space_gaussians``
+   / ``rasterize_screen_space_gaussians_sparse`` -- rasterization (Stage 4)
+
+All stages are fully differentiable via Python autograd (except tile intersection).
 
 .. tip::
 
-   For standard rendering, the convenience functions (``render_images``,
-   ``render_depths``, etc.) or the methods on :class:`~fvdb.GaussianSplat3d`
+   For standard rendering, the methods on :class:`~fvdb.GaussianSplat3d`
    are the simplest entry points.
 
    The decomposed stages are for users who need fine-grained control over the
@@ -28,39 +29,13 @@ The API is organized into two layers:
    :class:`~fvdb.GaussianSplat3d` wrapper.
 
 
-Decomposed Pipeline Stages
----------------------------
-
-The full differentiable render pipeline decomposes into five stages.
-Each is a pure function with no side effects:
-
-.. code-block:: text
-
-   means, quats, log_scales        logit_opacities    means, sh0, shN
-         │                               │                   │
-         ▼                               ▼                   ▼
-   ┌─────────────┐              ┌────────────────┐   ┌─────────────────┐
-   │project_to_2d│              │compute_opacities│  │prepare_features │
-   └──────┬──────┘              └───────┬────────┘   └───────┬─────────┘
-          │ RawProjection               │ [C,N]              │ [C,N,D]
-          │                             │                    │
-          ├─────────────┐               │                    │
-          ▼             ▼               ▼                    ▼
-   ┌──────────────┐  ┌──────────────────────────────────────────┐
-   │intersect_tiles│ │          rasterize_dense                  │
-   └──────┬───────┘  └───────────────────┬──────────────────────┘
-          │ TileIntersection             │
-          │                              ▼
-          └─────────────────────► (images, alphas)
-
-
 **Example: building a custom render pipeline**
 
 .. code-block:: python
 
    import torch
-   import fvdb.functional.splat as splat
-   from fvdb._fvdb_cpp import CameraModel
+   import fvdb.functional as F
+   from fvdb.enums import CameraModel, GaussianRenderMode
 
    # Raw tensors (no GaussianSplat3d needed)
    means = ...        # [N, 3]
@@ -73,36 +48,24 @@ Each is a pure function with no side effects:
    K = ...            # [C, 3, 3]
 
    # Stage 1: Geometric projection
-   raw = splat.project_to_2d(
+   projected = F.project_gaussians(
        means, quats, log_scales, world_to_cam, K,
        image_width=640, image_height=480,
-       eps_2d=0.3, near=0.01, far=1e10,
-       radius_clip=0.0, antialias=False,
-       camera_model=CameraModel.PINHOLE,
    )
 
-   # Stage 2: Opacities
-   C = world_to_cam.size(0)
-   opacities = splat.compute_opacities(logit_opacities, C, raw.compensations)
-
-   # Stage 3: View-dependent features (SH evaluation)
-   features = splat.prepare_render_features(
-       means, sh0, shN, world_to_cam,
-       raw.radii, raw.depths,
-       sh_degree_to_use=3, render_mode="rgb",
+   # Stage 2: View-dependent features (SH evaluation)
+   features = F.evaluate_gaussian_sh(
+       means, sh0, shN, world_to_cam, projected,
+       sh_degree_to_use=3,
+       render_mode=GaussianRenderMode.FEATURES,
    )
 
-   # Stage 4: Tile intersection
-   tiles = splat.intersect_tiles(
-       raw.means2d, raw.radii, raw.depths, C,
-       tile_size=16, image_width=640, image_height=480,
-   )
+   # Stage 3: Tile intersection
+   tiles = F.intersect_gaussian_tiles(projected)
 
-   # Stage 5: Rasterize
-   images, alphas = splat.rasterize_dense(
-       raw.means2d, raw.conics, features, opacities,
-       tiles.tile_offsets, tiles.tile_gaussian_ids,
-       image_width=640, image_height=480,
+   # Stage 4: Rasterize
+   images, alphas = F.rasterize_screen_space_gaussians(
+       projected, features, logit_opacities, tiles,
    )
 
    # Compute loss and backpropagate -- gradients flow through all stages
@@ -110,95 +73,56 @@ Each is a pure function with no side effects:
    loss.backward()
 
 
+Types
+------
+
+.. autoclass:: ProjectedGaussians
+   :members:
+
+.. autoclass:: GaussianTileIntersection
+   :members:
+
+.. autoclass:: SparseGaussianTileIntersection
+   :members:
+
+
 Stage 1: Projection
-^^^^^^^^^^^^^^^^^^^^
-
-.. autoclass:: RawProjection
-   :members:
-
-.. autofunction:: project_to_2d
-
-
-Stage 2: Opacities
-^^^^^^^^^^^^^^^^^^^
-
-.. autofunction:: compute_opacities
-
-
-Stage 3: Render Features
-^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-.. autofunction:: prepare_render_features
-
-
-Stage 4: Tile Intersection
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-.. autoclass:: TileIntersection
-   :members:
-
-.. autofunction:: intersect_tiles
-
-
-Stage 5: Rasterization
-^^^^^^^^^^^^^^^^^^^^^^^^
-
-.. autofunction:: rasterize_dense
-
-
-Convenience Functions
----------------------
-
-These higher-level functions compose the decomposed stages internally.
-They match the interface of the corresponding methods on
-:class:`~fvdb.GaussianSplat3d`.
-
-
-Monolith Projection
-^^^^^^^^^^^^^^^^^^^^
-
-These project, evaluate SH, compute opacities, and intersect tiles in a
-single call, returning a :class:`~fvdb.ProjectedGaussianSplats` object.
+^^^^^^^^^^^^^^^^^^^^^
 
 .. autofunction:: project_gaussians
-.. autofunction:: project_gaussians_for_camera
 
 
-Spherical Harmonics
-^^^^^^^^^^^^^^^^^^^^
+Stage 2: SH / Feature Evaluation
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-.. autofunction:: evaluate_spherical_harmonics
-
-
-Monolith Rasterization
-^^^^^^^^^^^^^^^^^^^^^^^
-
-.. autofunction:: rasterize_from_projected
-.. autofunction:: rasterize_from_world
-.. autofunction:: sparse_render
+.. autofunction:: evaluate_gaussian_sh
 
 
-Composite Rendering Pipelines
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Stage 3: Tile Intersection
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-.. autofunction:: render_images
-.. autofunction:: render_depths
-.. autofunction:: render_images_and_depths
-.. autofunction:: render_images_from_world
-.. autofunction:: render_depths_from_world
-.. autofunction:: render_images_and_depths_from_world
+.. autofunction:: intersect_gaussian_tiles
+
+.. autofunction:: intersect_gaussian_tiles_sparse
 
 
-Query Operations
------------------
+Stage 4: Rasterization
+^^^^^^^^^^^^^^^^^^^^^^^^
 
-.. autofunction:: render_num_contributing_gaussians
-.. autofunction:: render_contributing_gaussian_ids
-.. autofunction:: sparse_render_num_contributing_gaussians
-.. autofunction:: sparse_render_contributing_gaussian_ids
+.. autofunction:: rasterize_screen_space_gaussians
+
+.. autofunction:: rasterize_world_space_gaussians
+
+.. autofunction:: rasterize_screen_space_gaussians_sparse
 
 
-Helpers
---------
+Analysis
+---------
 
-.. autofunction:: build_render_settings
+.. autofunction:: count_contributing_gaussians
+
+.. autofunction:: identify_contributing_gaussians
+
+.. autofunction:: count_contributing_gaussians_sparse
+
+.. autofunction:: identify_contributing_gaussians_sparse
