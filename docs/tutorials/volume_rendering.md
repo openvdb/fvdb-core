@@ -574,7 +574,7 @@ def main():
 
                 ps.register_curve_network("rays", ray_v, ray_e, radius=0.00002)
                 vox_ijk = primal_grid.ijk.jdata
-                vox_ctrs = primal_grid.grid_to_world(vox_ijk.to(dtype)).jdata
+                vox_ctrs = primal_grid.voxel_to_world(vox_ijk.to(dtype)).jdata
                 vox_density, vox_color = evaluate_density_and_color(dual_grid, sh_features, o_features,
                                                                     torch.ones_like(vox_ctrs), vox_ctrs)
 

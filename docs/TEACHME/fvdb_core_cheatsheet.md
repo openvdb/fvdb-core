@@ -1,6 +1,6 @@
 # fVDB API Cheat Sheet
 
-Quick reference for the core fVDB APIs. For full signatures see `fvdb/grid_batch.py`; for narrative explanations see `docs/wip/`.
+Quick reference for the core fVDB APIs. For full signatures see `fvdb/grid_batch.py`; for narrative explanations see `docs/tutorials/`.
 
 ---
 

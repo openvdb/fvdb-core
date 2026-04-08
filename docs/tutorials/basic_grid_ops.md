@@ -22,7 +22,7 @@ mesh_f_jagged = fvdb.JaggedTensor([f1, f2]).int()
 grid = fvdb.GridBatch.from_mesh(mesh_v_jagged, mesh_f_jagged, voxel_sizes=0.1)
 
 # Generate some sample points by adding random gaussian noise to the center of each voxel
-world_space_centers = grid.grid_to_world(grid.ijk.float())
+world_space_centers = grid.voxel_to_world(grid.ijk.float())
 # 5 samples per voxel for the first grid and 7 samples per voxel for the second
 sample_pts = fvdb.JaggedTensor([
     torch.cat([world_space_centers[0].jdata] * 5),
@@ -642,12 +642,12 @@ grid = fvdb.GridBatch.from_points(pts,
 
 When `voxel_sizes` and `origins` are not defined, it is assumed all grids have a unit scale voxel_size and an origin at `[0.0, 0.0, 0.0]`.
 
-We can use `GridBatch`'s `grid_to_world` function to convert between `ijk` index coordinates and their corresponding world-space `xyz` coordinates.  In this example, let's obtain the world-space position that would lie at the index-space `[1, 1, 1]` point of each grid:
+We can use `GridBatch`'s `voxel_to_world` function to convert between `ijk` index coordinates and their corresponding world-space `xyz` coordinates.  In this example, let's obtain the world-space position that would lie at the index-space `[1, 1, 1]` point of each grid:
 
 ```python continuation
 # Convert ijk coordinates to world coordinates
 ijk = fvdb.JaggedTensor([torch.ones(1,3, dtype=torch.float) for _ in range(batch_size)])
-world_coords = grid.grid_to_world(ijk)
+world_coords = grid.voxel_to_world(ijk)
 for i in range(grid.grid_count):
     print(f"World-space point that lies at index [1,1,1] for Grid {i} is positioned at {world_coords.jdata[world_coords.jidx==i].tolist()}")
 ```
@@ -658,12 +658,12 @@ World-space point that lies at index [1,1,1] for Grid 2 is positioned at [[0.140
 World-space point that lies at index [1,1,1] for Grid 3 is positioned at [[0.25, -0.15000000596046448, 0.25]]
 ```
 
-We can also do the inverse operation and convert world-space `xyz` coordinates to their corresponding `ijk` index-space coordinates using `world_to_grid`.  In this example, let's find the `ijk` index coordinates of the voxel which would contain the world-space point located at `[1.0, 1.0, 1.0]` for each grid in our `GridBatch`:
+We can also do the inverse operation and convert world-space `xyz` coordinates to their corresponding `ijk` index-space coordinates using `world_to_voxel`.  In this example, let's find the `ijk` index coordinates of the voxel which would contain the world-space point located at `[1.0, 1.0, 1.0]` for each grid in our `GridBatch`:
 
 ```python continuation
 # Convert world coordinates to ijk coordinates
 xyz = fvdb.JaggedTensor([torch.ones(1,3, dtype=torch.float) for _ in range(batch_size)])
-ijk_coords = grid.world_to_grid(xyz)
+ijk_coords = grid.world_to_voxel(xyz)
 for i in range(grid.grid_count):
     print(f"Index-space voxel that contains the point [1.0, 1.0, 1.0] for Grid {i} {ijk_coords.jdata[ijk_coords.jidx==i].int().tolist()}")
 ```
@@ -674,11 +674,11 @@ Index-space voxel that contains the point [1.0, 1.0, 1.0] for Grid 2 [[22, 22, 2
 Index-space voxel that contains the point [1.0, 1.0, 1.0] for Grid 3 [[16, 24, 16]]
 ```
 
-While `grid_to_world` and `world_to_grid` are convenient functions for these purposes, the row-major transformation matrices used for these calculations can be obtained directly from a `GridBatch` for use in your own logic:
+While `voxel_to_world` and `world_to_voxel` are convenient functions for these purposes, the row-major transformation matrices used for these calculations can be obtained directly from a `GridBatch` for use in your own logic:
 
 ```python continuation
-print(f"Grid to world matrices:\n{grid.grid_to_world_matrices}")
-print(f"World to grid matrices:\n{grid.world_to_grid_matrices}")
+print(f"Grid to world matrices:\n{grid.voxel_to_world_matrices}")
+print(f"World to grid matrices:\n{grid.world_to_voxel_matrices}")
 ```
 ```bash
 Grid to world matrices:
