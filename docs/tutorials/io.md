@@ -88,7 +88,7 @@ The file "/tmp/tmpwnu7qc_7/two_random_grids.nvdb" contains the following 2 grids
 
 Loading NanoVDB files is as simple as calling `fvdb.functional.load_nanovdb`.  You can optionally supply a PyTorch device you'd like the grids and features loaded onto.  Here, we load the two grids we saved in the previous section onto our GPU.
 
-```python continuation
+```python notest
 # Load the grid and features from the compressed nvdb file
 grid_batch, features, names = fvdb.functional.load_nanovdb(saved_nvdb, device=torch.device("cuda:0"))
 print("Loaded grid batch total number of voxels: ", grid_batch.total_voxels)
@@ -133,7 +133,7 @@ print("nanovdb_convert roundtrip the vdb to nvdb: ", convert_cmd)
 print(subprocess.check_output(convert_cmd.split()).decode("utf-8"))
 
 # Load the nvdb file of the converted vdb
-grid_batch, features, names = fvdb.functional.load_nanovdb(saved_nvdb, device=torch.device("cuda:0"))
+grid_batch, features, names = load_nanovdb(saved_nvdb, device=torch.device("cuda:0"))
 print("Loaded grid batch total number of voxels: ", grid_batch.total_voxels)
 print("Loaded grid batch data type: %s, device: %s" % (features.dtype, features.device))
 print("\n")

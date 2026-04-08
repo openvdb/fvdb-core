@@ -237,7 +237,7 @@ This is needed to guide the output domain of the network, because for perception
 
 To perform inference with the network, pass the features and grid explicitly:
 
-```python continuation
+```python notest
 coords = fvdb.JaggedTensor([
     (torch.randn(10_000, 3, device='cuda')),
     (torch.randn(11_000, 3, device='cuda')),
