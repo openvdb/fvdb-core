@@ -599,7 +599,7 @@ def main():
                 camera_origins = np.stack(camera_origins)[:, :3]
                 ps.register_point_cloud("camera origins", camera_origins)
 
-                v, e = primal_grid.viz_edge_network
+                v, e = fvdb.viz.gridbatch_edge_network(primal_grid)
                 v, e = v.jdata, e.jdata
                 ps.register_curve_network("grid", v.cpu(), e.cpu(), radius=0.0001)
                 pc = ps.register_point_cloud("vox centers", vox_ctrs.cpu(),

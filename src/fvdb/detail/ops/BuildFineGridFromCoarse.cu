@@ -1,11 +1,13 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
+#include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/BuildFineGridFromCoarse.h>
 #include <fvdb/detail/ops/BuildGridFromIjk.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Utils.h>
+#include <fvdb/detail/utils/VoxelSizeUtils.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 #include <fvdb/detail/utils/cuda/ForEachPrivateUse1.cuh>
 #include <fvdb/detail/utils/cuda/GridDim.h>
@@ -24,13 +26,13 @@
 namespace fvdb::detail::ops {
 
 template <torch::DeviceType>
-JaggedTensor dispatchFineIJKForCoarseGrid(const GridBatchImpl &batchHdl,
+JaggedTensor dispatchFineIJKForCoarseGrid(const GridBatchData &batchHdl,
                                           nanovdb::Coord upsamplingFactor,
                                           const std::optional<JaggedTensor> &maybeMask);
 
 template <torch::DeviceType>
 nanovdb::GridHandle<TorchDeviceBuffer>
-dispatchBuildFineGridFromCoarse(const GridBatchImpl &coarseBatchHdl,
+dispatchBuildFineGridFromCoarse(const GridBatchData &coarseBatchHdl,
                                 const nanovdb::Coord subdivisionFactor,
                                 const std::optional<JaggedTensor> &subdivMask);
 
@@ -78,7 +80,7 @@ fineIjkForCoarseGridVoxelCallback(int32_t bidx,
                                   int32_t lidx,
                                   int32_t vidx,
                                   int32_t cidx,
-                                  const GridBatchImpl::Accessor batchAcc,
+                                  const GridBatchData::Accessor batchAcc,
                                   nanovdb::Coord upsamplingFactor,
                                   TorchRAcc64<int32_t, 2> outIJKData,
                                   TorchRAcc64<fvdb::JIdxType, 1> outIJKBIdx) {
@@ -103,7 +105,7 @@ fineIjkForCoarseGridVoxelCallback(int32_t bidx,
                                   int32_t lidx,
                                   int32_t vidx,
                                   int32_t cidx,
-                                  const GridBatchImpl::Accessor batchAcc,
+                                  const GridBatchData::Accessor batchAcc,
                                   nanovdb::Coord upsamplingFactor,
                                   TorchRAcc64<int32_t, 2> outIJKData,
                                   TorchRAcc64<fvdb::JIdxType, 1> outIJKBIdx,
@@ -129,11 +131,13 @@ fineIjkForCoarseGridVoxelCallback(int32_t bidx,
 
 template <>
 JaggedTensor
-dispatchFineIJKForCoarseGrid<torch::kCUDA>(const GridBatchImpl &batchHdl,
+dispatchFineIJKForCoarseGrid<torch::kCUDA>(const GridBatchData &batchHdl,
                                            nanovdb::Coord upsamplingFactor,
                                            const std::optional<JaggedTensor> &mask) {
-    TORCH_CHECK(batchHdl.device().is_cuda(), "GridBatchImpl must be on CUDA device");
-    TORCH_CHECK(batchHdl.device().has_index(), "GridBatchImpl must have a valid index");
+    TORCH_CHECK(batchHdl.device().is_cuda(), "GridBatchData must be on CUDA device");
+    TORCH_CHECK(batchHdl.device().has_index(), "GridBatchData must have a valid index");
+
+    const c10::cuda::CUDAGuard device_guard(batchHdl.device());
 
     const int64_t totalPadAmount = upsamplingFactor[0] * upsamplingFactor[1] * upsamplingFactor[2];
 
@@ -160,7 +164,7 @@ dispatchFineIJKForCoarseGrid<torch::kCUDA>(const GridBatchImpl &batchHdl,
                                  int32_t lidx,
                                  int32_t vidx,
                                  int32_t cidx,
-                                 GridBatchImpl::Accessor bacc) {
+                                 GridBatchData::Accessor bacc) {
             fineIjkForCoarseGridVoxelCallback(bidx,
                                               lidx,
                                               vidx,
@@ -223,7 +227,7 @@ dispatchFineIJKForCoarseGrid<torch::kCUDA>(const GridBatchImpl &batchHdl,
                                  int32_t lidx,
                                  int32_t vidx,
                                  int32_t cidx,
-                                 GridBatchImpl::Accessor bacc) {
+                                 GridBatchData::Accessor bacc) {
             fineIjkForCoarseGridVoxelCallback(
                 bidx, lidx, vidx, cidx, bacc, upsamplingFactor, outIJKAcc, outIJKBIdxAcc);
         };
@@ -237,11 +241,11 @@ dispatchFineIJKForCoarseGrid<torch::kCUDA>(const GridBatchImpl &batchHdl,
 
 template <>
 JaggedTensor
-dispatchFineIJKForCoarseGrid<torch::kPrivateUse1>(const GridBatchImpl &batchHdl,
+dispatchFineIJKForCoarseGrid<torch::kPrivateUse1>(const GridBatchData &batchHdl,
                                                   nanovdb::Coord upsamplingFactor,
                                                   const std::optional<JaggedTensor> &mask) {
     TORCH_CHECK(batchHdl.device().is_privateuseone(),
-                "GridBatchImpl must be on PrivateUse1 device");
+                "GridBatchData must be on PrivateUse1 device");
 
     const int64_t totalPadAmount = upsamplingFactor[0] * upsamplingFactor[1] * upsamplingFactor[2];
 
@@ -268,7 +272,7 @@ dispatchFineIJKForCoarseGrid<torch::kPrivateUse1>(const GridBatchImpl &batchHdl,
                                  int32_t lidx,
                                  int32_t vidx,
                                  int32_t cidx,
-                                 GridBatchImpl::Accessor bacc) {
+                                 GridBatchData::Accessor bacc) {
             fineIjkForCoarseGridVoxelCallback(bidx,
                                               lidx,
                                               vidx,
@@ -337,7 +341,7 @@ dispatchFineIJKForCoarseGrid<torch::kPrivateUse1>(const GridBatchImpl &batchHdl,
                                  int32_t lidx,
                                  int32_t vidx,
                                  int32_t cidx,
-                                 GridBatchImpl::Accessor bacc) {
+                                 GridBatchData::Accessor bacc) {
             fineIjkForCoarseGridVoxelCallback(
                 bidx, lidx, vidx, cidx, bacc, upsamplingFactor, outIJKAcc, outIJKBIdxAcc);
         };
@@ -351,7 +355,7 @@ dispatchFineIJKForCoarseGrid<torch::kPrivateUse1>(const GridBatchImpl &batchHdl,
 
 template <>
 nanovdb::GridHandle<TorchDeviceBuffer>
-dispatchBuildFineGridFromCoarse<torch::kCUDA>(const GridBatchImpl &coarseBatchHdl,
+dispatchBuildFineGridFromCoarse<torch::kCUDA>(const GridBatchData &coarseBatchHdl,
                                               const nanovdb::Coord subdivisionFactor,
                                               const std::optional<JaggedTensor> &subdivMask) {
     JaggedTensor coords =
@@ -362,7 +366,7 @@ dispatchBuildFineGridFromCoarse<torch::kCUDA>(const GridBatchImpl &coarseBatchHd
 template <>
 nanovdb::GridHandle<TorchDeviceBuffer>
 dispatchBuildFineGridFromCoarse<torch::kPrivateUse1>(
-    const GridBatchImpl &coarseBatchHdl,
+    const GridBatchData &coarseBatchHdl,
     const nanovdb::Coord subdivisionFactor,
     const std::optional<JaggedTensor> &subdivMask) {
     JaggedTensor coords = dispatchFineIJKForCoarseGrid<torch::kPrivateUse1>(
@@ -372,7 +376,7 @@ dispatchBuildFineGridFromCoarse<torch::kPrivateUse1>(
 
 template <>
 nanovdb::GridHandle<TorchDeviceBuffer>
-dispatchBuildFineGridFromCoarse<torch::kCPU>(const GridBatchImpl &coarseBatchHdl,
+dispatchBuildFineGridFromCoarse<torch::kCPU>(const GridBatchData &coarseBatchHdl,
                                              const nanovdb::Coord subdivisionFactor,
                                              const std::optional<JaggedTensor> &subdivMask) {
     using GridT = nanovdb::ValueOnIndex;
@@ -435,8 +439,8 @@ dispatchBuildFineGridFromCoarse<torch::kCPU>(const GridBatchImpl &coarseBatchHdl
     }
 }
 
-c10::intrusive_ptr<GridBatchImpl>
-buildFineGridFromCoarse(const GridBatchImpl &coarseBatchHdl,
+c10::intrusive_ptr<GridBatchData>
+buildFineGridFromCoarse(const GridBatchData &coarseBatchHdl,
                         const nanovdb::Coord subdivisionFactor,
                         const std::optional<JaggedTensor> &subdivMask) {
     if (subdivMask.has_value()) {
@@ -461,19 +465,23 @@ buildFineGridFromCoarse(const GridBatchImpl &coarseBatchHdl,
                               std::to_string(subdivisionFactor[1]) + ", " +
                               std::to_string(subdivisionFactor[2]) + "]");
     }
-    std::vector<nanovdb::Vec3d> voxS, voxO;
-    coarseBatchHdl.gridVoxelSizesAndOrigins(voxS, voxO);
+    std::vector<nanovdb::Vec3d> fineVoxS, fineVoxO;
+    fineVoxS.reserve(coarseBatchHdl.batchSize());
+    fineVoxO.reserve(coarseBatchHdl.batchSize());
+    for (int64_t i = 0; i < coarseBatchHdl.batchSize(); ++i) {
+        fineVoxS.push_back(fineVoxelSize(coarseBatchHdl.voxelSizeAt(i), subdivisionFactor));
+        fineVoxO.push_back(fineVoxelOrigin(
+            coarseBatchHdl.voxelSizeAt(i), coarseBatchHdl.voxelOriginAt(i), subdivisionFactor));
+    }
     auto hdl = FVDB_DISPATCH_KERNEL(coarseBatchHdl.device(), [&]() {
         return dispatchBuildFineGridFromCoarse<DeviceTag>(
             coarseBatchHdl, subdivisionFactor, subdivMask);
     });
-    auto ret = c10::make_intrusive<GridBatchImpl>(std::move(hdl), voxS, voxO);
-    ret->setFineTransformFromCoarseGrid(coarseBatchHdl, subdivisionFactor);
-    return ret;
+    return makeGridBatchData(std::move(hdl), fineVoxS, fineVoxO);
 }
 
 JaggedTensor
-fineIJKForCoarseGrid(const GridBatchImpl &batchHdl,
+fineIJKForCoarseGrid(const GridBatchData &batchHdl,
                      nanovdb::Coord upsamplingFactor,
                      const std::optional<JaggedTensor> &maybeMask) {
     if (batchHdl.device().is_cuda()) {

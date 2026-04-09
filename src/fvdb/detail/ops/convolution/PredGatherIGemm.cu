@@ -21,6 +21,7 @@
 
 #include <nanovdb/NanoVDB.h>
 
+#include <c10/cuda/CUDAGuard.h>
 #include <c10/cuda/CUDAStream.h>
 #include <torch/types.h>
 
@@ -1005,14 +1006,16 @@ struct pred_gather_igemm_op {
     op(Tag tg,
        torch::Tensor features,
        torch::Tensor weights,
-       GridBatchImpl const &feature_grid,
-       GridBatchImpl const &output_grid) {
+       GridBatchData const &feature_grid,
+       GridBatchData const &output_grid) {
         using namespace pred_gather_igemm;
         constexpr int ks         = static_cast<int>(dispatch::tag_get<conv_kernel_size>(tg));
         constexpr int st         = static_cast<int>(dispatch::tag_get<conv_stride>(tg));
         constexpr int kout_denom = static_cast<int>(dispatch::tag_get<conv_kout_denom>(tg));
         using GeomT              = Geometry<ks, ks, ks, st, st, st, kout_denom>;
         using ConvOp             = SparseFpropSm80<GeomT>;
+
+        const c10::cuda::CUDAGuard device_guard(features.device());
 
         const int64_t C = features.size(1);
         const int64_t K = weights.size(0);
@@ -1070,14 +1073,14 @@ struct pred_gather_igemm_op {
     using subspaces  = dispatch::coverage<space>;
     using dispatcher = dispatch::dispatch_table<
         space,
-        torch::Tensor(torch::Tensor, torch::Tensor, GridBatchImpl const &, GridBatchImpl const &)>;
+        torch::Tensor(torch::Tensor, torch::Tensor, GridBatchData const &, GridBatchData const &)>;
 };
 
 torch::Tensor
 predGatherIGemmSparseConv(torch::Tensor features,
                           torch::Tensor weights,
-                          GridBatchImpl const &feature_grid,
-                          GridBatchImpl const &output_grid,
+                          GridBatchData const &feature_grid,
+                          GridBatchData const &output_grid,
                           int kernel_size,
                           int stride) {
     TORCH_CHECK(features.is_cuda(), "features must be a CUDA tensor");

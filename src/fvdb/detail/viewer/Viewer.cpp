@@ -15,6 +15,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include <stdexcept>
 
 inline void
 pNanoLogPrint(pnanovdb_compute_log_level_t level, const char *format, ...) {
@@ -375,18 +376,24 @@ Viewer::setCameraFar(const std::string &scene_name, float far) {
     updateCamera(scene_name);
 }
 
-GaussianSplat3d::ProjectionType
-Viewer::cameraProjectionType(const std::string &scene_name) {
+GaussianSplat3d::CameraModel
+Viewer::cameraModel(const std::string &scene_name) {
     getCamera(scene_name);
-    return mEditor.camera.config.is_orthographic ? GaussianSplat3d::ProjectionType::ORTHOGRAPHIC
-                                                 : GaussianSplat3d::ProjectionType::PERSPECTIVE;
+    return mEditor.camera.config.is_orthographic ? GaussianSplat3d::CameraModel::ORTHOGRAPHIC
+                                                 : GaussianSplat3d::CameraModel::PINHOLE;
 }
+
 void
-Viewer::setCameraProjectionType(const std::string &scene_name,
-                                GaussianSplat3d::ProjectionType mode) {
+Viewer::setCameraModel(const std::string &scene_name, GaussianSplat3d::CameraModel model) {
     getCamera(scene_name);
-    mEditor.camera.config.is_orthographic =
-        (mode == GaussianSplat3d::ProjectionType::ORTHOGRAPHIC) ? PNANOVDB_TRUE : PNANOVDB_FALSE;
+    if (model == GaussianSplat3d::CameraModel::PINHOLE) {
+        mEditor.camera.config.is_orthographic = PNANOVDB_FALSE;
+    } else if (model == GaussianSplat3d::CameraModel::ORTHOGRAPHIC) {
+        mEditor.camera.config.is_orthographic = PNANOVDB_TRUE;
+    } else {
+        throw std::invalid_argument(
+            "Viewer currently only supports CameraModel::PINHOLE and ORTHOGRAPHIC");
+    }
 
     updateCamera(scene_name);
 }
@@ -441,18 +448,20 @@ Viewer::addCameraView(const std::string &scene_name,
     for (int i = 0; i < (int)it->second.mView.num_cameras; i++) {
         torch::Tensor c2w = cameraToWorldMatrices.index({i}).contiguous().cpu();
         torch::Tensor K   = projectionMatrices.index({i}).contiguous().cpu();
+        auto c2w_acc      = c2w.accessor<float, 2>();
+        auto K_acc        = K.accessor<float, 2>();
 
-        float px = c2w[0][3].item<float>();
-        float py = c2w[1][3].item<float>();
-        float pz = c2w[2][3].item<float>();
+        float px = c2w_acc[0][3];
+        float py = c2w_acc[1][3];
+        float pz = c2w_acc[2][3];
 
-        float zx = c2w[0][2].item<float>();
-        float zy = c2w[1][2].item<float>();
-        float zz = c2w[2][2].item<float>();
+        float zx = c2w_acc[0][2];
+        float zy = c2w_acc[1][2];
+        float zz = c2w_acc[2][2];
 
-        float ux = c2w[0][1].item<float>();
-        float uy = c2w[1][1].item<float>();
-        float uz = c2w[2][1].item<float>();
+        float ux = c2w_acc[0][1];
+        float uy = c2w_acc[1][1];
+        float uz = c2w_acc[2][1];
 
         // NanoVDB editor camera
         // - state.position: orbit center (c2w translation)
@@ -476,14 +485,15 @@ Viewer::addCameraView(const std::string &scene_name,
         it->second.mView.configs[i].far_plane  = frustumFar;
 
         // Set perspective parameters from image sizes when available
-        float fy      = K[1][1].item<float>();
+        float fy      = K_acc[1][1];
         float width   = 0.f;
         float height  = 0.f;
         bool haveDims = imageSizes.numel() != 0;
         if (haveDims) {
             torch::Tensor dims = imageSizes.index({i}).contiguous().cpu();
-            height             = dims[0].item<float>();
-            width              = dims[1].item<float>();
+            auto dims_acc      = dims.accessor<float, 1>();
+            height             = dims_acc[0];
+            width              = dims_acc[1];
         }
 
         if (haveDims && height > 0.f && fy > 0.f) {

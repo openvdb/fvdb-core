@@ -4,13 +4,13 @@
 #ifndef FVDB_DETAIL_OPS_BUILDCOARSEGRIDFROMFINE_H
 #define FVDB_DETAIL_OPS_BUILDCOARSEGRIDFROMFINE_H
 
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 
 namespace fvdb {
 namespace detail {
 namespace ops {
 
-c10::intrusive_ptr<GridBatchImpl> buildCoarseGridFromFine(const GridBatchImpl &fineGridBatch,
+c10::intrusive_ptr<GridBatchData> buildCoarseGridFromFine(const GridBatchData &fineGridBatch,
                                                           const nanovdb::Coord branchingFactor);
 
 } // namespace ops

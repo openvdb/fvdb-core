@@ -345,6 +345,12 @@ TEST_F(JaggedTensorTest, ReductionOperations) {
         EXPECT_TRUE(torch::allclose(min_values[0], tensor_a.min()));
         EXPECT_TRUE(torch::allclose(min_values[1], tensor_b.min()));
         EXPECT_TRUE(torch::allclose(min_values[2], tensor_c.min()));
+
+        // Validate argmin indices point to correct values
+        for (size_t k = 0; k < tensors.size(); ++k) {
+            auto idx = min_indices[k].squeeze().item<int64_t>();
+            EXPECT_FLOAT_EQ(tensors[k][idx].item<float>(), min_values[k].item<float>());
+        }
     }
 
     // Test jmax - returns [max_values, argmax_indices]
@@ -361,6 +367,12 @@ TEST_F(JaggedTensorTest, ReductionOperations) {
         EXPECT_TRUE(torch::allclose(max_values[0], tensor_a.max()));
         EXPECT_TRUE(torch::allclose(max_values[1], tensor_b.max()));
         EXPECT_TRUE(torch::allclose(max_values[2], tensor_c.max()));
+
+        // Validate argmax indices point to correct values
+        for (size_t k = 0; k < tensors.size(); ++k) {
+            auto idx = max_indices[k].squeeze().item<int64_t>();
+            EXPECT_FLOAT_EQ(tensors[k][idx].item<float>(), max_values[k].item<float>());
+        }
     }
 }
 

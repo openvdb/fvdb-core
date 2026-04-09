@@ -1,6 +1,7 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/TorchDeviceBuffer.h>
 #include <fvdb/detail/ops/BuildMergedGrids.h>
 #include <fvdb/detail/utils/Utils.h>
@@ -16,12 +17,12 @@
 namespace fvdb::detail::ops {
 
 template <torch::DeviceType>
-nanovdb::GridHandle<TorchDeviceBuffer> dispatchMergeGrids(const GridBatchImpl &gridBatch1,
-                                                          const GridBatchImpl &gridBatch2);
+nanovdb::GridHandle<TorchDeviceBuffer> dispatchMergeGrids(const GridBatchData &gridBatch1,
+                                                          const GridBatchData &gridBatch2);
 
 template <>
 nanovdb::GridHandle<TorchDeviceBuffer>
-dispatchMergeGrids<torch::kCUDA>(const GridBatchImpl &gridBatch1, const GridBatchImpl &gridBatch2) {
+dispatchMergeGrids<torch::kCUDA>(const GridBatchData &gridBatch1, const GridBatchData &gridBatch2) {
     c10::cuda::CUDAGuard deviceGuard(gridBatch1.device());
     TORCH_CHECK_VALUE(gridBatch1.device() == gridBatch2.device(),
                       "All arguments to MergeGrids must be on the same device");
@@ -39,11 +40,9 @@ dispatchMergeGrids<torch::kCUDA>(const GridBatchImpl &gridBatch1, const GridBatc
     // Create a grid for each batch item and store the handles
     std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> handles;
     for (int i = 0; i < gridBatch1.batchSize(); i += 1) {
-        nanovdb::OnIndexGrid *grid1 =
-            gridBatch1.nanoGridHandleMut().deviceGrid<nanovdb::ValueOnIndex>(i);
+        nanovdb::OnIndexGrid *grid1 = gridBatch1.mGridHdl->deviceGrid<nanovdb::ValueOnIndex>(i);
         TORCH_CHECK(grid1, "First Grid is null");
-        nanovdb::OnIndexGrid *grid2 =
-            gridBatch2.nanoGridHandleMut().deviceGrid<nanovdb::ValueOnIndex>(i);
+        nanovdb::OnIndexGrid *grid2 = gridBatch2.mGridHdl->deviceGrid<nanovdb::ValueOnIndex>(i);
         TORCH_CHECK(grid2, "Second Grid is null");
 
         nanovdb::tools::cuda::MergeGrids<nanovdb::ValueOnIndex> mergeOp(grid1, grid2, stream);
@@ -68,7 +67,7 @@ dispatchMergeGrids<torch::kCUDA>(const GridBatchImpl &gridBatch1, const GridBatc
 
 template <>
 nanovdb::GridHandle<TorchDeviceBuffer>
-dispatchMergeGrids<torch::kCPU>(const GridBatchImpl &gridBatch1, const GridBatchImpl &gridBatch2) {
+dispatchMergeGrids<torch::kCPU>(const GridBatchData &gridBatch1, const GridBatchData &gridBatch2) {
     using GridT     = nanovdb::ValueOnIndex;
     using IndexTree = nanovdb::NanoTree<GridT>;
     TORCH_CHECK(gridBatch1.device().is_cpu(), "All arguments to MergeGrids must be on the CPU");
@@ -116,8 +115,8 @@ dispatchMergeGrids<torch::kCPU>(const GridBatchImpl &gridBatch1, const GridBatch
     }
 }
 
-c10::intrusive_ptr<GridBatchImpl>
-mergeGrids(const GridBatchImpl &gridBatch1, const GridBatchImpl &gridBatch2) {
+c10::intrusive_ptr<GridBatchData>
+mergeGrids(const GridBatchData &gridBatch1, const GridBatchData &gridBatch2) {
     TORCH_CHECK_VALUE(gridBatch1.batchSize() == gridBatch2.batchSize(),
                       "GridBatches to merge should have same batch size");
     TORCH_CHECK_VALUE(gridBatch1.device() == gridBatch2.device(),
@@ -127,7 +126,7 @@ mergeGrids(const GridBatchImpl &gridBatch1, const GridBatchImpl &gridBatch2) {
     auto hdl = FVDB_DISPATCH_KERNEL_DEVICE(gridBatch1.device(), [&]() {
         return dispatchMergeGrids<DeviceTag>(gridBatch1, gridBatch2);
     });
-    return c10::make_intrusive<GridBatchImpl>(std::move(hdl), voxS, voxO);
+    return makeGridBatchData(std::move(hdl), voxS, voxO);
 }
 
 } // namespace fvdb::detail::ops

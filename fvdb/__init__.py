@@ -6,7 +6,6 @@ from __future__ import annotations
 import ctypes
 import importlib.util as _importlib_util
 import pathlib
-from typing import Sequence
 
 import torch
 
@@ -56,7 +55,6 @@ if _spec is not None and _spec.origin is not None:
         pass
 
 # isort: off
-from ._fvdb_cpp import scaled_dot_product_attention as _scaled_dot_product_attention_cpp
 from ._fvdb_cpp import gaussian_render_jagged as _gaussian_render_jagged_cpp
 from ._fvdb_cpp import evaluate_spherical_harmonics
 from ._fvdb_cpp import (
@@ -68,14 +66,10 @@ from ._fvdb_cpp import (
 
 # Import JaggedTensor from jagged_tensor.py
 from .jagged_tensor import JaggedTensor, jcat
+from .grid import Grid
 from .grid_batch import GridBatch, gcat
 from .grid import Grid
-
-
-def scaled_dot_product_attention(
-    query: JaggedTensor, key: JaggedTensor, value: JaggedTensor, scale: float
-) -> JaggedTensor:
-    return JaggedTensor(impl=_scaled_dot_product_attention_cpp(query._impl, key._impl, value._impl, scale))
+from .attention import scaled_dot_product_attention
 
 
 def gaussian_render_jagged(
@@ -128,7 +122,7 @@ def gaussian_render_jagged(
 
 from .convolution_plan import ConvolutionPlan
 from .gaussian_splatting import GaussianSplat3d, ProjectedGaussianSplats
-from .enums import DistortionModel, ProjectionType, RollingShutterType, ShOrderingMode
+from .enums import CameraModel, ProjectionMethod, RollingShutterType, ShOrderingMode
 
 # Import torch-compatible functions that work with both Tensor and JaggedTensor
 from .torch_jagged import (
@@ -180,21 +174,21 @@ from .torch_jagged import (
 # The following import needs to come after all classes and functions are defined
 # in order to avoid a circular dependency error.
 # Make these available without an explicit submodule import
-from . import nn, utils, version, viz
+from . import functional, nn, utils, version, viz
 from .version import __version__
 
 __version_info__ = tuple(map(int, __version__.split(".")))
 
 __all__ = [
     # Core classes
-    "GridBatch",
     "Grid",
+    "GridBatch",
     "JaggedTensor",
     "GaussianSplat3d",
     "ProjectedGaussianSplats",
-    "DistortionModel",
+    "CameraModel",
+    "ProjectionMethod",
     "RollingShutterType",
-    "ProjectionType",
     "ShOrderingMode",
     "ConvolutionPlan",
     # Concatenation of jagged tensors or grid/grid batches
@@ -251,6 +245,7 @@ __all__ = [
     # Config
     "config",
     # Submodules
+    "functional",
     "version",
     "viz",
     "nn",

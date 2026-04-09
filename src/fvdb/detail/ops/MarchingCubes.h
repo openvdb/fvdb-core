@@ -5,7 +5,7 @@
 #define FVDB_DETAIL_OPS_MARCHINGCUBES_H
 
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 
 #include <torch/types.h>
 
@@ -16,7 +16,7 @@ namespace detail {
 namespace ops {
 
 std::vector<JaggedTensor>
-marchingCubes(const GridBatchImpl &batchHdl, const JaggedTensor &field, double level);
+marchingCubes(const GridBatchData &batchHdl, const JaggedTensor &field, double level);
 
 } // namespace ops
 } // namespace detail

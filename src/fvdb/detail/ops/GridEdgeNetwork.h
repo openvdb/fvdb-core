@@ -5,7 +5,7 @@
 #define FVDB_DETAIL_OPS_GRIDEDGENETWORK_H
 
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 
 #include <vector>
 
@@ -13,7 +13,7 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-std::vector<JaggedTensor> gridEdgeNetwork(const GridBatchImpl &gridHdl,
+std::vector<JaggedTensor> gridEdgeNetwork(const GridBatchData &gridHdl,
                                           bool returnVoxelCoordinates);
 
 } // namespace ops

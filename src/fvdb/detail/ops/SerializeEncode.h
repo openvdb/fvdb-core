@@ -6,7 +6,7 @@
 
 #include <fvdb/JaggedTensor.h>
 #include <fvdb/Types.h>
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 
 namespace fvdb {
 namespace detail {
@@ -17,7 +17,7 @@ namespace ops {
 /// @param order_type The type of space-filling curve to use for encoding
 /// @param offset Offset to apply to voxel coordinates before encoding
 /// @return A JaggedTensor of shape [B, -1, 1] of space-filling curve codes for active voxels
-JaggedTensor serializeEncode(GridBatchImpl const &gridBatch,
+JaggedTensor serializeEncode(GridBatchData const &gridBatch,
                              SpaceFillingCurveType order_type,
                              nanovdb::Coord const &offset);
 

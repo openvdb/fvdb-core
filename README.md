@@ -23,6 +23,8 @@ spatial intelligence research and applications.
 
 After [installing *f*VDB](#installing-fvdb), we recommend starting with our [documentation](https://fvdb.ai/).
 
+You can also try our [TEACHME](docs/TEACHME) interactive lessons, designed to be used with an LLM coding agent (Claude Code, Cursor, or similar) that teaches you the *f*VDB API interactively. Just prompt: `Read docs/TEACHME and teach me how to use fvdb-core.`
+
 Beyond the [documentation](https://fvdb.ai/), the walk-through [notebooks](notebooks) in this repository
 can provide an illustrated introduction to the main concepts in *f*VDB.
 

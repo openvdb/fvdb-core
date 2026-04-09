@@ -5,13 +5,13 @@
 #define FVDB_DETAIL_OPS_COARSEIJKFORFINEGRID_H
 
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 
 namespace fvdb {
 namespace detail {
 namespace ops {
 
-JaggedTensor coarseIJKForFineGrid(const GridBatchImpl &batchHdl, nanovdb::Coord coarseningFactor);
+JaggedTensor coarseIJKForFineGrid(const GridBatchData &batchHdl, nanovdb::Coord coarseningFactor);
 
 } // namespace ops
 } // namespace detail

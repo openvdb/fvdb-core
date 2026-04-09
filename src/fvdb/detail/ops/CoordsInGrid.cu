@@ -35,7 +35,7 @@ coordsInGridCallback(int32_t bidx,
 
 template <torch::DeviceType DeviceTag>
 JaggedTensor
-CoordsInGrid(const GridBatchImpl &batchHdl, const JaggedTensor &ijk) {
+CoordsInGrid(const GridBatchData &batchHdl, const JaggedTensor &ijk) {
     batchHdl.checkNonEmptyGrid();
     batchHdl.checkDevice(ijk);
     TORCH_CHECK_TYPE(!ijk.is_floating_point(), "ijk must have an integeral type");
@@ -81,7 +81,7 @@ CoordsInGrid(const GridBatchImpl &batchHdl, const JaggedTensor &ijk) {
 }
 
 JaggedTensor
-coordsInGrid(const GridBatchImpl &batchHdl, const JaggedTensor &coords) {
+coordsInGrid(const GridBatchData &batchHdl, const JaggedTensor &coords) {
     TORCH_CHECK_VALUE(
         coords.ldim() == 1,
         "Expected ijk to have 1 list dimension, i.e. be a single list of coordinate values, but got",

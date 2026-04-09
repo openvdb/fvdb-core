@@ -10,8 +10,8 @@ set(NANOVDB_EDITOR_BUILD_TYPE "Release" CACHE STRING "Build type for nanovdb_edi
 
 # fVDB pins NanoVDB Editor headers to an exact source commit via CPM
 # Note: only change this when the interfaces have changed
-set(NANOVDB_EDITOR_TAG 73f066b8387eb53a718eba1ef1f7b91738df6ba8)
-set(NANOVDB_EDITOR_VERSION 0.0.24)   # version at this commit
+set(NANOVDB_EDITOR_TAG c2eeb18b2e381e8e7cf0979b84ef3551620d7f74)
+set(NANOVDB_EDITOR_VERSION 0.0.25)   # version at this commit
 
 CPMAddPackage(
     NAME nanovdb_editor

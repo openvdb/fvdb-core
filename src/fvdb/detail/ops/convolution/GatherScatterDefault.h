@@ -21,7 +21,7 @@
 #ifndef FVDB_DETAIL_OPS_CONVOLUTION_GATHERSCATTERDEFAULT_H
 #define FVDB_DETAIL_OPS_CONVOLUTION_GATHERSCATTERDEFAULT_H
 
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 
 #include <nanovdb/NanoVDB.h>
 
@@ -83,8 +83,8 @@ struct GatherScatterDefaultTopology {
 /// @param stride        Convolution stride [s0, s1, s2].
 /// @return Topology with direction=Forward.
 GatherScatterDefaultTopology
-gatherScatterDefaultSparseConvTopology(GridBatchImpl const &feature_grid,
-                                       GridBatchImpl const &output_grid,
+gatherScatterDefaultSparseConvTopology(GridBatchData const &feature_grid,
+                                       GridBatchData const &output_grid,
                                        nanovdb::Coord kernel_size,
                                        nanovdb::Coord stride);
 
@@ -95,8 +95,8 @@ gatherScatterDefaultSparseConvTopology(GridBatchImpl const &feature_grid,
 /// @param stride        Convolution stride [s0, s1, s2].
 /// @return Topology with direction=Transposed.
 GatherScatterDefaultTopology
-gatherScatterDefaultSparseConvTransposeTopology(GridBatchImpl const &feature_grid,
-                                                GridBatchImpl const &output_grid,
+gatherScatterDefaultSparseConvTransposeTopology(GridBatchData const &feature_grid,
+                                                GridBatchData const &output_grid,
                                                 nanovdb::Coord kernel_size,
                                                 nanovdb::Coord stride);
 

@@ -1,7 +1,8 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
+#include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/BuildDenseGrid.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Utils.h>
@@ -94,6 +95,7 @@ dispatchCreateNanoGridFromDense<torch::kCUDA>(int64_t batchSize,
     checkInputs(device, batchSize, size, ijkMin, mask);
 
     c10::cuda::CUDAGuard deviceGuard(device);
+    cudaStream_t stream = c10::cuda::getCurrentCUDAStream(device.index()).stream();
 
     const int64_t gridVolume = static_cast<int64_t>(size[0]) * size[1] * size[2];
 
@@ -103,7 +105,7 @@ dispatchCreateNanoGridFromDense<torch::kCUDA>(int64_t batchSize,
     torch::Tensor ijkData           = torch::empty({gridVolume, 3}, opts);
 
     if (NUM_BLOCKS > 0) {
-        ijkForDense<<<NUM_BLOCKS, DEFAULT_BLOCK_DIM>>>(
+        ijkForDense<<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
             0u, ijkMin, size, ijkData.packed_accessor64<int32_t, 2, torch::RestrictPtrTraits>());
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     }
@@ -172,7 +174,7 @@ dispatchCreateNanoGridFromDense<torch::kPrivateUse1>(int64_t batchSize,
         constexpr int64_t kNumThreads = DEFAULT_BLOCK_DIM;
         const int64_t deviceNumBlocks = GET_BLOCKS(deviceVolume, kNumThreads);
         if (deviceNumBlocks > 0) {
-            ijkForDense<<<deviceNumBlocks, kNumThreads>>>(
+            ijkForDense<<<deviceNumBlocks, kNumThreads, 0, stream>>>(
                 deviceOffset,
                 ijkMin,
                 size,
@@ -296,7 +298,7 @@ dispatchCreateNanoGridFromDense<torch::kCPU>(int64_t batchSize,
     }
 }
 
-c10::intrusive_ptr<GridBatchImpl>
+c10::intrusive_ptr<GridBatchData>
 createNanoGridFromDense(int64_t batchSize,
                         nanovdb::Coord ijkMin,
                         nanovdb::Coord size,
@@ -318,9 +320,9 @@ createNanoGridFromDense(int64_t batchSize,
     }
     TORCH_CHECK_VALUE(size[0] >= 0 && size[1] >= 0 && size[2] >= 0,
                       "denseDims must be non-negative");
-    TORCH_CHECK_VALUE(batchSize <= GridBatchImpl::MAX_GRIDS_PER_BATCH,
+    TORCH_CHECK_VALUE(batchSize <= GridBatchData::MAX_GRIDS_PER_BATCH,
                       "Cannot create a grid with more than ",
-                      GridBatchImpl::MAX_GRIDS_PER_BATCH,
+                      GridBatchData::MAX_GRIDS_PER_BATCH,
                       " grids in a batch. ",
                       "You requested ",
                       batchSize,
@@ -329,7 +331,7 @@ createNanoGridFromDense(int64_t batchSize,
         return dispatchCreateNanoGridFromDense<DeviceTag>(
             batchSize, ijkMin, size, device, maybeMask);
     });
-    return c10::make_intrusive<GridBatchImpl>(std::move(handle), voxelSizes, origins);
+    return makeGridBatchData(std::move(handle), voxelSizes, origins);
 }
 
 } // namespace ops

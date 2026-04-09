@@ -610,7 +610,7 @@ def create_grid_from_coords(
 ) -> GridBatch:
     """Create a GridBatch from coordinate tensor."""
     ijks = JaggedTensor(coords.to(device=device, dtype=torch.int32))
-    return GridBatch.from_ijk(ijks, device=device)
+    return GridBatch.from_ijk(ijks)
 
 
 def get_cluster_near_origin(device: torch.device) -> torch.Tensor:
