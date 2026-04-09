@@ -91,8 +91,7 @@ def _get_scan_dirs(config) -> list[Path]:
     if not dirs:
         source = "--doc-dirs" if user_supplied else "default doc directories"
         raise pytest.UsageError(
-            f"No documentation directories to scan from {source}: "
-            + ", ".join(str(d) for d in raw)
+            f"No documentation directories to scan from {source}: " + ", ".join(str(d) for d in raw)
         )
 
     return dirs
