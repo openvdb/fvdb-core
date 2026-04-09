@@ -6,7 +6,6 @@
 #include "fvdb/detail/viewer/GaussianSplat3dView.h"
 
 #include <fvdb/detail/io/GaussianPlyIO.h>
-#include <fvdb/detail/ops/gsplat/GaussianProjectionTypes.h>
 #include <fvdb/detail/viewer/Viewer.h>
 
 #include <c10/core/DeviceType.h>
@@ -32,7 +31,7 @@ TEST(Viewer, ViewerTest) {
                                   torch::Tensor,
                                   torch::Tensor,
                                   torch::Tensor,
-                                  std::unordered_map<std::string, fvdb::PlyMetadataTypes>>;
+                                  std::unordered_map<std::string, fvdb::detail::io::PlyMetadataTypes>>;
     std::vector<LoadResult> loadedData;
 
     for (size_t i = 0; i < std::size(ply_paths) && i < std::size(view_names); ++i) {

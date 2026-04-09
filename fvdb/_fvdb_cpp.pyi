@@ -966,29 +966,6 @@ class config:
     pedantic_error_checking: ClassVar[bool] = ...
     def __init__(self, *args, **kwargs) -> None: ...
 
-def gaussian_render_jagged(
-    means: JaggedTensor,
-    quats: JaggedTensor,
-    scales: JaggedTensor,
-    opacities: JaggedTensor,
-    sh_coeffs: JaggedTensor,
-    viewmats: JaggedTensor,
-    Ks: JaggedTensor,
-    image_width: int,
-    image_height: int,
-    near_plane: float = ...,
-    far_plane: float = ...,
-    sh_degree_to_use: int = ...,
-    tile_size: int = ...,
-    radius_clip: float = ...,
-    eps2d: float = ...,
-    antialias: bool = ...,
-    render_depth_channel: bool = ...,
-    return_debug_info: bool = ...,
-    render_depth_only: bool = ...,
-    ortho: bool = ...,
-    backgrounds: Optional[torch.Tensor] = ...,
-) -> tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]: ...
 @overload
 def jcat(grid_batches: list[GridBatchData]) -> GridBatchData: ...
 @overload
@@ -1144,23 +1121,6 @@ class ProjectionMethod(Enum):
 
 # ---- Gaussian Splat Operations ----
 
-def render_crop_from_projected_gaussians(
-    means2d: torch.Tensor,
-    conics: torch.Tensor,
-    render_quantities: torch.Tensor,
-    opacities: torch.Tensor,
-    tile_offsets: torch.Tensor,
-    tile_gaussian_ids: torch.Tensor,
-    image_width: int,
-    image_height: int,
-    tile_size: int,
-    crop_width: int,
-    crop_height: int,
-    crop_origin_w: int,
-    crop_origin_h: int,
-    backgrounds: Optional[torch.Tensor],
-    masks: Optional[torch.Tensor],
-) -> tuple[torch.Tensor, torch.Tensor]: ...
 def count_contributing_gaussians(
     means2d: torch.Tensor,
     conics: torch.Tensor,
@@ -1175,15 +1135,11 @@ def count_contributing_gaussians_sparse(
     opacities: torch.Tensor,
     tile_offsets: torch.Tensor,
     tile_gaussian_ids: torch.Tensor,
+    pixels_to_render: JaggedTensor,
     active_tiles: torch.Tensor,
-    active_tile_mask: torch.Tensor,
     tile_pixel_mask: torch.Tensor,
     tile_pixel_cumsum: torch.Tensor,
     pixel_map: torch.Tensor,
-    inverse_indices: torch.Tensor,
-    unique_pixels_to_render: JaggedTensor,
-    has_duplicates: bool,
-    pixels_to_render: JaggedTensor,
     settings: RenderSettings,
 ) -> tuple[JaggedTensor, JaggedTensor]: ...
 def identify_contributing_gaussians(
@@ -1193,7 +1149,7 @@ def identify_contributing_gaussians(
     tile_offsets: torch.Tensor,
     tile_gaussian_ids: torch.Tensor,
     settings: RenderSettings,
-    num_contributing_gaussians: Optional[torch.Tensor],
+    num_contributing_gaussians: Optional[torch.Tensor] = None,
 ) -> tuple[JaggedTensor, JaggedTensor]: ...
 def identify_contributing_gaussians_sparse(
     means2d: torch.Tensor,
@@ -1201,17 +1157,13 @@ def identify_contributing_gaussians_sparse(
     opacities: torch.Tensor,
     tile_offsets: torch.Tensor,
     tile_gaussian_ids: torch.Tensor,
+    pixels_to_render: JaggedTensor,
     active_tiles: torch.Tensor,
-    active_tile_mask: torch.Tensor,
     tile_pixel_mask: torch.Tensor,
     tile_pixel_cumsum: torch.Tensor,
     pixel_map: torch.Tensor,
-    inverse_indices: torch.Tensor,
-    unique_pixels_to_render: JaggedTensor,
-    has_duplicates: bool,
-    pixels_to_render: JaggedTensor,
     settings: RenderSettings,
-    num_contributing_gaussians: Optional[JaggedTensor],
+    num_contributing_gaussians: Optional[JaggedTensor] = None,
 ) -> tuple[JaggedTensor, JaggedTensor]: ...
 def relocate_gaussians(
     log_scales: torch.Tensor,

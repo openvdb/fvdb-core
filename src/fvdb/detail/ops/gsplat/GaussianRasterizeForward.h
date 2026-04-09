@@ -5,7 +5,6 @@
 #define FVDB_DETAIL_OPS_GSPLAT_GAUSSIANRASTERIZEFORWARD_H
 
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/ops/gsplat/GaussianProjectionTypes.h>
 #include <fvdb/detail/ops/gsplat/GaussianRenderSettings.h>
 
 #include <nanovdb/math/Math.h>
@@ -109,38 +108,6 @@ gaussianSparseRasterizeForward(const fvdb::JaggedTensor &pixelsToRender,
                                const torch::Tensor &pixelMap,
                                const at::optional<torch::Tensor> &backgrounds = at::nullopt,
                                const at::optional<torch::Tensor> &masks       = at::nullopt);
-
-/// @brief Rasterize a (possibly cropped) region from pre-projected Gaussians.
-///
-/// Rasterizes 2D Gaussians into an image using tile-based alpha-blending. Each Gaussian
-/// is represented by its 2D projected center, covariance in conic form, feature/color,
-/// and opacity (all stored in the @p projectedGaussians state). Supports optional cropping
-/// to render a sub-region of the full image.
-///
-/// @param[in] projectedGaussians Pre-projected Gaussian state containing per-Gaussian
-///            2D means [C, N, 2], conics [C, N, 3], features [C, N, D], opacities [C, N],
-///            tile offsets [C, tile_height, tile_width], and tile Gaussian IDs [n_isects]
-/// @param[in] tileSize            Size of tiles used for rasterization (pixels)
-/// @param[in] cropWidth           Width of crop region (≤0 for full image)
-/// @param[in] cropHeight          Height of crop region (≤0 for full image)
-/// @param[in] cropOriginW         Crop origin x-coordinate (<0 for full image)
-/// @param[in] cropOriginH         Crop origin y-coordinate (<0 for full image)
-/// @param[in] backgrounds         Optional per-camera background color [C, D]; transparent
-///                                pixels are blended with this (black if not provided)
-/// @param[in] masks               Optional per-tile boolean mask [C, tile_height, tile_width]
-///
-/// @return std::tuple containing:
-///         - Rendered features/colors [C, crop_height, crop_width, D]
-///         - Alpha values [C, crop_height, crop_width, 1]
-std::tuple<torch::Tensor, torch::Tensor>
-renderCropFromProjected(const fvdb::ProjectedGaussianSplats &projectedGaussians,
-                        size_t tileSize,
-                        ssize_t cropWidth,
-                        ssize_t cropHeight,
-                        ssize_t cropOriginW,
-                        ssize_t cropOriginH,
-                        const std::optional<torch::Tensor> &backgrounds,
-                        const std::optional<torch::Tensor> &masks);
 
 } // namespace ops
 } // namespace detail

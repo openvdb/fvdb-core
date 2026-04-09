@@ -4,19 +4,18 @@
 #ifndef FVDB_DETAIL_IO_GAUSSIANPLYIO_H
 #define FVDB_DETAIL_IO_GAUSSIANPLYIO_H
 
-#include <fvdb/detail/ops/gsplat/GaussianProjectionTypes.h>
-
 #include <torch/types.h>
 
 #include <optional>
 #include <string>
 #include <tuple>
 #include <unordered_map>
+#include <variant>
 
 namespace fvdb::detail::io {
 
-/// The types of valid metadata you can save in a PLY file alongside Gaussians
-using PlyMetadataTypes = fvdb::PlyMetadataTypes;
+/// Type alias for PLY metadata values.
+using PlyMetadataTypes = std::variant<std::string, int64_t, double, torch::Tensor>;
 
 /// Magic string prepended to additional metadata properties stored in PLY files
 inline static const std::string PLY_MAGIC = "fvdb_ply_af_8198767135";

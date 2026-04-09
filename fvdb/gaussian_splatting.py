@@ -3534,16 +3534,21 @@ class GaussianSplat3d:
             settings, self._camera_model_to_cpp(camera_model),
             self._projection_method_to_cpp(projection_method), distortion_coeffs,
         )
+        render_pixels = st.unique_pixels if st.has_duplicates else st.pixels_to_render
         result_num_impl, result_alphas_impl = _C.count_contributing_gaussians_sparse(
             state.means2d, state.conics, state.opacities,
             st.tile_offsets, st.tile_gaussian_ids,
-            st.active_tiles, st.active_tile_mask,
+            render_pixels._impl,
+            st.active_tiles,
             st.tile_pixel_mask, st.tile_pixel_cumsum,
-            st.pixel_map, st.inverse_indices,
-            st.unique_pixels._impl, st.has_duplicates,
-            st.pixels_to_render._impl,
+            st.pixel_map,
             settings,
         )
+        if st.has_duplicates:
+            inv = st.inverse_indices
+            pixels_impl = st.pixels_to_render._impl
+            result_num_impl = pixels_impl.jagged_like(result_num_impl.jdata().index_select(0, inv))
+            result_alphas_impl = pixels_impl.jagged_like(result_alphas_impl.jdata().index_select(0, inv))
 
         if isinstance(pixels_to_render, torch.Tensor):
             num_contributing_gaussians_list = result_num_impl.unbind()
@@ -3782,29 +3787,55 @@ class GaussianSplat3d:
         if top_k_contributors > 0:
             num_contributing = None
         else:
+            render_pixels_ids = st.unique_pixels if st.has_duplicates else st.pixels_to_render
             num_contributing_jt, _ = _C.count_contributing_gaussians_sparse(
                 state.means2d, state.conics, state.opacities,
                 st.tile_offsets, st.tile_gaussian_ids,
-                st.active_tiles, st.active_tile_mask,
+                render_pixels_ids._impl,
+                st.active_tiles,
                 st.tile_pixel_mask, st.tile_pixel_cumsum,
-                st.pixel_map, st.inverse_indices,
-                st.unique_pixels._impl, st.has_duplicates,
-                st.pixels_to_render._impl,
+                st.pixel_map,
                 settings,
             )
+            if st.has_duplicates:
+                inv = st.inverse_indices
+                pixels_impl = st.pixels_to_render._impl
+                num_contributing_jt = pixels_impl.jagged_like(num_contributing_jt.jdata().index_select(0, inv))
             num_contributing = num_contributing_jt
+
+        render_pixels_ids2 = st.unique_pixels if st.has_duplicates else st.pixels_to_render
+
+        # Map num_contributing to unique-pixel space if needed
+        nc_arg = None
+        if num_contributing is not None:
+            if st.has_duplicates:
+                inv = st.inverse_indices
+                rep_idx = torch.empty(render_pixels_ids2._impl.rsize(0), dtype=torch.long, device=inv.device)
+                rep_idx.scatter_(
+                    0, inv,
+                    torch.arange(st.pixels_to_render._impl.rsize(0), dtype=torch.long, device=inv.device),
+                )
+                nc_arg = render_pixels_ids2._impl.jagged_like(num_contributing.jdata().index_select(0, rep_idx))
+            else:
+                nc_arg = num_contributing
 
         ids_impl, weights_impl = _C.identify_contributing_gaussians_sparse(
             state.means2d, state.conics, state.opacities,
             st.tile_offsets, st.tile_gaussian_ids,
-            st.active_tiles, st.active_tile_mask,
+            render_pixels_ids2._impl,
+            st.active_tiles,
             st.tile_pixel_mask, st.tile_pixel_cumsum,
-            st.pixel_map, st.inverse_indices,
-            st.unique_pixels._impl, st.has_duplicates,
-            st.pixels_to_render._impl,
+            st.pixel_map,
             settings,
-            num_contributing,
+            nc_arg,
         )
+
+        if st.has_duplicates:
+            inv = st.inverse_indices
+            pixels_impl = st.pixels_to_render._impl
+            ids_impl = pixels_impl.jagged_like(ids_impl.jdata().index_select(0, inv))
+            weights_impl = pixels_impl.jagged_like(weights_impl.jdata().index_select(0, inv))
+
         return JaggedTensor(impl=ids_impl), JaggedTensor(impl=weights_impl)
 
     def relocate_gaussians(

@@ -964,68 +964,6 @@ dispatchGaussianSparseRasterizeContributingGaussianIds<torch::kCPU>(
 }
 
 std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor>
-renderContributingIds(const fvdb::ProjectedGaussianSplats &state,
-                      const RenderSettings &settings,
-                      const std::optional<torch::Tensor> &maybeNumContributingGaussians) {
-    FVDB_FUNC_RANGE();
-    return FVDB_DISPATCH_KERNEL_DEVICE(state.perGaussian2dMean.device(), [&]() {
-        return dispatchGaussianRasterizeContributingGaussianIds<DeviceTag>(
-            state.perGaussian2dMean,
-            state.perGaussianConic,
-            state.perGaussianOpacity,
-            state.tileOffsets,
-            state.tileGaussianIds,
-            settings,
-            maybeNumContributingGaussians);
-    });
-}
-
-std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor>
-sparseRenderContributingIds(
-    const fvdb::SparseProjectedGaussianSplats &state,
-    const fvdb::JaggedTensor &pixelsToRender,
-    const RenderSettings &settings,
-    const std::optional<fvdb::JaggedTensor> &maybeNumContributingGaussians) {
-    FVDB_FUNC_RANGE();
-    const auto &renderPixels = state.hasDuplicates ? state.uniquePixelsToRender : pixelsToRender;
-
-    // When duplicates were removed, numContributingGaussians is in original (duplicated) space
-    // but the kernel expects it in unique-pixel space. Pick one representative per group.
-    std::optional<fvdb::JaggedTensor> kernelNumContrib = maybeNumContributingGaussians;
-    if (state.hasDuplicates && maybeNumContributingGaussians.has_value()) {
-        const auto device  = state.inverseIndices.device();
-        const auto longOpt = torch::TensorOptions().device(device).dtype(torch::kLong);
-        auto repIdx        = torch::empty({renderPixels.rsize(0)}, longOpt);
-        repIdx.scatter_(0, state.inverseIndices, torch::arange(pixelsToRender.rsize(0), longOpt));
-        auto uniqueData  = maybeNumContributingGaussians->jdata().index_select(0, repIdx);
-        kernelNumContrib = renderPixels.jagged_like(uniqueData);
-    }
-
-    auto result = FVDB_DISPATCH_KERNEL_DEVICE(state.perGaussian2dMean.device(), [&]() {
-        return dispatchGaussianSparseRasterizeContributingGaussianIds<DeviceTag>(
-            state.perGaussian2dMean,
-            state.perGaussianConic,
-            state.perGaussianOpacity,
-            state.tileOffsets,
-            state.tileGaussianIds,
-            renderPixels,
-            state.activeTiles,
-            state.tilePixelMask,
-            state.tilePixelCumsum,
-            state.pixelMap,
-            settings,
-            kernelNumContrib);
-    });
-
-    if (state.hasDuplicates) {
-        auto &[jt0, jt1] = result;
-        return {pixelsToRender.jagged_like(jt0.jdata().index_select(0, state.inverseIndices)),
-                pixelsToRender.jagged_like(jt1.jdata().index_select(0, state.inverseIndices))};
-    }
-    return result;
-}
-
-std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor>
 gaussianRasterizeContributingGaussianIds(
     const torch::Tensor &means2d,
     const torch::Tensor &conics,

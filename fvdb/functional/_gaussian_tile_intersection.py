@@ -156,8 +156,8 @@ def _find_unique_pixels(
     new_offsets = torch.zeros(num_lists + 1, dtype=torch.long, device=device)
     new_offsets[1:] = counts_per_list.cumsum(0)
 
-    new_jidx = unique_batch_idx.to(pixels_to_render.jidx.dtype) if not single_list else unique_batch_idx.int()
-    unique_impl = _C.JaggedTensor.from_data_offsets_and_list_ids(unique_jdata, new_offsets, new_jidx)
+    empty_lidx = torch.empty((0, 1), dtype=torch.int32, device=device)
+    unique_impl = _C.JaggedTensor.from_data_offsets_and_list_ids(unique_jdata, new_offsets, empty_lidx)
     unique_pixels = JaggedTensor(impl=unique_impl)
 
     return unique_pixels, inverse_indices, True

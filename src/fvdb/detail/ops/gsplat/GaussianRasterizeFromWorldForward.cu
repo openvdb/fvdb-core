@@ -505,51 +505,6 @@ dispatchGaussianRasterizeFromWorld3DGSForward<torch::kCPU>(const torch::Tensor &
     TORCH_CHECK_VALUE(false, "dispatchGaussianRasterizeFromWorld3DGSForward is CUDA-only");
 }
 
-std::tuple<torch::Tensor, torch::Tensor>
-rasterizeFromWorld(const torch::Tensor &means,
-                   const torch::Tensor &quats,
-                   const torch::Tensor &logScales,
-                   const fvdb::ProjectedGaussianSplats &projectedState,
-                   const torch::Tensor &worldToCameraMatrices,
-                   const torch::Tensor &projectionMatrices,
-                   const torch::Tensor &distortionCoeffs,
-                   const DistortionModel cameraModel,
-                   const uint32_t imageWidth,
-                   const uint32_t imageHeight,
-                   const uint32_t tileSize,
-                   const std::optional<torch::Tensor> &backgrounds,
-                   const std::optional<torch::Tensor> &masks) {
-    FVDB_FUNC_RANGE();
-    RenderSettings settings;
-    settings.imageWidth   = imageWidth;
-    settings.imageHeight  = imageHeight;
-    settings.imageOriginW = 0;
-    settings.imageOriginH = 0;
-    settings.tileSize     = tileSize;
-
-    auto outputs = FVDB_DISPATCH_KERNEL_DEVICE(means.device(), [&]() {
-        return dispatchGaussianRasterizeFromWorld3DGSForward<DeviceTag>(
-            means,
-            quats,
-            logScales,
-            projectedState.perGaussianRenderQuantity,
-            projectedState.perGaussianOpacity,
-            worldToCameraMatrices,
-            worldToCameraMatrices,
-            projectionMatrices,
-            distortionCoeffs,
-            RollingShutterType::NONE,
-            cameraModel,
-            settings,
-            projectedState.tileOffsets,
-            projectedState.tileGaussianIds,
-            backgrounds,
-            masks);
-    });
-
-    return {std::get<0>(outputs), std::get<1>(outputs)};
-}
-
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
 gaussianRasterizeFromWorldForward(const torch::Tensor &means,
                                   const torch::Tensor &quats,

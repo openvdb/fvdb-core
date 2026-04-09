@@ -503,50 +503,6 @@ dispatchGaussianSparseRasterizeNumContributingGaussians<torch::kCPU>(
 }
 
 std::tuple<torch::Tensor, torch::Tensor>
-renderNumContributing(const fvdb::ProjectedGaussianSplats &state, const RenderSettings &settings) {
-    FVDB_FUNC_RANGE();
-    return FVDB_DISPATCH_KERNEL_DEVICE(state.perGaussian2dMean.device(), [&]() {
-        return dispatchGaussianRasterizeNumContributingGaussians<DeviceTag>(
-            state.perGaussian2dMean,
-            state.perGaussianConic,
-            state.perGaussianOpacity,
-            state.tileOffsets,
-            state.tileGaussianIds,
-            settings);
-    });
-}
-
-std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor>
-sparseRenderNumContributing(const fvdb::SparseProjectedGaussianSplats &state,
-                            const fvdb::JaggedTensor &pixelsToRender,
-                            const RenderSettings &settings) {
-    FVDB_FUNC_RANGE();
-    const auto &renderPixels = state.hasDuplicates ? state.uniquePixelsToRender : pixelsToRender;
-
-    auto result = FVDB_DISPATCH_KERNEL_DEVICE(state.perGaussian2dMean.device(), [&]() {
-        return dispatchGaussianSparseRasterizeNumContributingGaussians<DeviceTag>(
-            state.perGaussian2dMean,
-            state.perGaussianConic,
-            state.perGaussianOpacity,
-            state.tileOffsets,
-            state.tileGaussianIds,
-            renderPixels,
-            state.activeTiles,
-            state.tilePixelMask,
-            state.tilePixelCumsum,
-            state.pixelMap,
-            settings);
-    });
-
-    if (state.hasDuplicates) {
-        auto &[jt0, jt1] = result;
-        return {pixelsToRender.jagged_like(jt0.jdata().index_select(0, state.inverseIndices)),
-                pixelsToRender.jagged_like(jt1.jdata().index_select(0, state.inverseIndices))};
-    }
-    return result;
-}
-
-std::tuple<torch::Tensor, torch::Tensor>
 gaussianRasterizeNumContributingGaussians(const torch::Tensor &means2d,
                                           const torch::Tensor &conics,
                                           const torch::Tensor &opacities,

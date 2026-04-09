@@ -296,10 +296,17 @@ def _resolve_projection_method(
     camera_model: CameraModel,
     projection_method: ProjectionMethod,
 ) -> ProjectionMethod:
-    """Resolve AUTO -> ANALYTIC or UNSCENTED based on camera model."""
-    if projection_method != ProjectionMethod.AUTO:
-        return projection_method
-    if camera_model in (CameraModel.PINHOLE, CameraModel.ORTHOGRAPHIC):
+    """Resolve AUTO -> ANALYTIC or UNSCENTED based on camera model.
+
+    Accepts both the Python ``CameraModel`` enum and the C++ pybind enum
+    (``_fvdb_cpp.CameraModel``), normalising via ``int()`` to avoid
+    cross-type comparison pitfalls.
+    """
+    pm_int = int(projection_method)
+    if pm_int != int(ProjectionMethod.AUTO):
+        return ProjectionMethod(pm_int)
+    cm_int = int(camera_model)
+    if cm_int in (int(CameraModel.PINHOLE), int(CameraModel.ORTHOGRAPHIC)):
         return ProjectionMethod.ANALYTIC
     return ProjectionMethod.UNSCENTED
 
@@ -394,7 +401,7 @@ def project_gaussians(
     resolved = _resolve_projection_method(camera_model, projection_method)
 
     if resolved == ProjectionMethod.ANALYTIC:
-        ortho = camera_model == CameraModel.ORTHOGRAPHIC
+        ortho = int(camera_model) == int(CameraModel.ORTHOGRAPHIC)
         proj_result = cast(
             tuple[torch.Tensor, ...],
             _ProjectGaussiansFn.apply(

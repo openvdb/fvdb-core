@@ -134,23 +134,31 @@ def count_contributing_gaussians_sparse(
 
     opacities = _compute_opacities(logit_opacities, projected)
     settings = _build_settings_for_query_sparse(sparse_tiles)
-    return _C.count_contributing_gaussians_sparse(
+
+    render_pixels = sparse_tiles.unique_pixels if sparse_tiles.has_duplicates else sparse_tiles.pixels_to_render
+    result = _C.count_contributing_gaussians_sparse(
         projected.means2d,
         projected.conics,
         opacities,
         sparse_tiles.tile_offsets,
         sparse_tiles.tile_gaussian_ids,
+        render_pixels._impl,
         sparse_tiles.active_tiles,
-        sparse_tiles.active_tile_mask,
         sparse_tiles.tile_pixel_mask,
         sparse_tiles.tile_pixel_cumsum,
         sparse_tiles.pixel_map,
-        sparse_tiles.inverse_indices,
-        sparse_tiles.unique_pixels._impl,
-        sparse_tiles.has_duplicates,
-        sparse_tiles.pixels_to_render._impl,
         settings,
     )
+
+    if sparse_tiles.has_duplicates:
+        inv = sparse_tiles.inverse_indices
+        jt0, jt1 = result
+        pixels_impl = sparse_tiles.pixels_to_render._impl
+        return (
+            pixels_impl.jagged_like(jt0.jdata().index_select(0, inv)),
+            pixels_impl.jagged_like(jt1.jdata().index_select(0, inv)),
+        )
+    return result
 
 
 def identify_contributing_gaussians_sparse(
@@ -177,22 +185,46 @@ def identify_contributing_gaussians_sparse(
 
     opacities = _compute_opacities(logit_opacities, projected)
     settings = _build_settings_for_query_sparse(sparse_tiles)
-    jt_arg = num_contributing._impl if num_contributing is not None else None
-    return _C.identify_contributing_gaussians_sparse(
+
+    render_pixels = sparse_tiles.unique_pixels if sparse_tiles.has_duplicates else sparse_tiles.pixels_to_render
+
+    # When dedup happened, num_contributing is in original (duplicated) space but the
+    # kernel expects unique-pixel space.  Pick one representative per group.
+    jt_arg: JaggedTensorCpp | None = None
+    if num_contributing is not None:
+        nc_impl = num_contributing._impl if isinstance(num_contributing, JaggedTensor) else num_contributing
+        if sparse_tiles.has_duplicates:
+            inv = sparse_tiles.inverse_indices
+            rep_idx = torch.empty(render_pixels._impl.rsize(0), dtype=torch.long, device=inv.device)
+            rep_idx.scatter_(
+                0, inv, torch.arange(sparse_tiles.pixels_to_render._impl.rsize(0), dtype=torch.long, device=inv.device)
+            )
+            unique_data = nc_impl.jdata().index_select(0, rep_idx)
+            jt_arg = render_pixels._impl.jagged_like(unique_data)
+        else:
+            jt_arg = nc_impl
+
+    result = _C.identify_contributing_gaussians_sparse(
         projected.means2d,
         projected.conics,
         opacities,
         sparse_tiles.tile_offsets,
         sparse_tiles.tile_gaussian_ids,
+        render_pixels._impl,
         sparse_tiles.active_tiles,
-        sparse_tiles.active_tile_mask,
         sparse_tiles.tile_pixel_mask,
         sparse_tiles.tile_pixel_cumsum,
         sparse_tiles.pixel_map,
-        sparse_tiles.inverse_indices,
-        sparse_tiles.unique_pixels._impl,
-        sparse_tiles.has_duplicates,
-        sparse_tiles.pixels_to_render._impl,
         settings,
         jt_arg,
     )
+
+    if sparse_tiles.has_duplicates:
+        inv = sparse_tiles.inverse_indices
+        jt0, jt1 = result
+        pixels_impl = sparse_tiles.pixels_to_render._impl
+        return (
+            pixels_impl.jagged_like(jt0.jdata().index_select(0, inv)),
+            pixels_impl.jagged_like(jt1.jdata().index_select(0, inv)),
+        )
+    return result

@@ -9,27 +9,21 @@
 // The C++ projection backward kernel mutates three accumulator tensors in-place
 // (gradient norms, max 2D radii, step counts) via atomicAdd. These support
 // Gaussian densification (split/clone/prune decisions during training).
-// The C++ projection pipeline functions accept these as mutable
-// std::optional<torch::Tensor>& refs. Here, we wrap those functions in lambdas
-// that pass accumulateMean2dGradients=false and accumulateMax2dRadii=false,
-// hiding the mutability and presenting a strictly functional interface to Python.
-// The Python GaussianSplat3d class owns these accumulators and passes them
-// through to the C++ backward dispatch.
+// The backward binding (project_gaussians_analytic_bwd) accepts these as
+// optional tensors. The Python GaussianSplat3d class owns the accumulators
+// and passes them through to the C++ backward dispatch.
 
 #include <pybind11/stl.h>
 
 #include <fvdb/detail/io/GaussianPlyIO.h>
-#include <fvdb/detail/ops/gsplat/GaussianCameraValidation.h>
 #include <fvdb/detail/ops/gsplat/GaussianMCMCAddNoise.h>
 #include <fvdb/detail/ops/gsplat/GaussianMCMCRelocation.h>
 #include <fvdb/detail/ops/gsplat/GaussianProjectionBackward.h>
 #include <fvdb/detail/ops/gsplat/GaussianProjectionForward.h>
 #include <fvdb/detail/ops/gsplat/GaussianProjectionJaggedBackward.h>
 #include <fvdb/detail/ops/gsplat/GaussianProjectionJaggedForward.h>
-#include <fvdb/detail/ops/gsplat/GaussianProjectionPipeline.h>
 #include <fvdb/detail/ops/gsplat/GaussianProjectionUT.h>
 #include <fvdb/detail/ops/gsplat/GaussianSplatSparse.h>
-#include <fvdb/detail/ops/gsplat/GaussianProjectionTypes.h>
 #include <fvdb/detail/ops/gsplat/GaussianRasterizeBackward.h>
 #include <fvdb/detail/ops/gsplat/GaussianRasterizeContributingGaussianIds.h>
 #include <fvdb/detail/ops/gsplat/GaussianRasterizeForward.h>
@@ -47,7 +41,6 @@ bind_gaussian_splat_ops(py::module &m) {
     namespace ops            = fvdb::detail::ops;
     using RenderSettings     = fvdb::detail::ops::RenderSettings;
     using DistortionModel    = fvdb::detail::ops::DistortionModel;
-    using ProjectionMethod   = fvdb::detail::ops::ProjectionMethod;
     using RollingShutterType = fvdb::detail::ops::RollingShutterType;
 
     // -----------------------------------------------------------------------
@@ -108,77 +101,12 @@ bind_gaussian_splat_ops(py::module &m) {
     // -----------------------------------------------------------------------
 
     // -----------------------------------------------------------------------
-    // Dense rasterization
-    // -----------------------------------------------------------------------
-
-    m.def(
-        "render_crop_from_projected_gaussians",
-        [](const torch::Tensor &means2d,
-           const torch::Tensor &conics,
-           const torch::Tensor &renderQuantities,
-           const torch::Tensor &opacities,
-           const torch::Tensor &tileOffsets,
-           const torch::Tensor &tileGaussianIds,
-           int64_t imageWidth,
-           int64_t imageHeight,
-           int64_t tileSize,
-           int64_t cropWidth,
-           int64_t cropHeight,
-           int64_t cropOriginW,
-           int64_t cropOriginH,
-           const std::optional<torch::Tensor> &backgrounds,
-           const std::optional<torch::Tensor> &masks) {
-            fvdb::ProjectedGaussianSplats s;
-            s.perGaussian2dMean          = means2d;
-            s.perGaussianConic           = conics;
-            s.perGaussianRenderQuantity  = renderQuantities;
-            s.perGaussianOpacity         = opacities;
-            s.tileOffsets                = tileOffsets;
-            s.tileGaussianIds            = tileGaussianIds;
-            s.mRenderSettings.imageWidth  = imageWidth;
-            s.mRenderSettings.imageHeight = imageHeight;
-            return ops::renderCropFromProjected(
-                s, tileSize, cropWidth, cropHeight, cropOriginW, cropOriginH, backgrounds, masks);
-        },
-        py::arg("means2d"),
-        py::arg("conics"),
-        py::arg("render_quantities"),
-        py::arg("opacities"),
-        py::arg("tile_offsets"),
-        py::arg("tile_gaussian_ids"),
-        py::arg("image_width"),
-        py::arg("image_height"),
-        py::arg("tile_size"),
-        py::arg("crop_width"),
-        py::arg("crop_height"),
-        py::arg("crop_origin_w"),
-        py::arg("crop_origin_h"),
-        py::arg("backgrounds"),
-        py::arg("masks"));
-
-    // (gsplat_sparse_render and gsplat_rasterize_from_world deleted —
-    //  replaced by composing kernel-level bindings in Python)
-
-    // -----------------------------------------------------------------------
-    // Query operations
+    // Analysis operations (call raw tensor dispatch functions directly)
     // -----------------------------------------------------------------------
 
     m.def(
         "count_contributing_gaussians",
-        [](const torch::Tensor &means2d,
-           const torch::Tensor &conics,
-           const torch::Tensor &opacities,
-           const torch::Tensor &tileOffsets,
-           const torch::Tensor &tileGaussianIds,
-           const RenderSettings &settings) {
-            fvdb::ProjectedGaussianSplats s;
-            s.perGaussian2dMean = means2d;
-            s.perGaussianConic  = conics;
-            s.perGaussianOpacity = opacities;
-            s.tileOffsets        = tileOffsets;
-            s.tileGaussianIds    = tileGaussianIds;
-            return ops::renderNumContributing(s, settings);
-        },
+        &ops::gaussianRasterizeNumContributingGaussians,
         py::arg("means2d"),
         py::arg("conics"),
         py::arg("opacities"),
@@ -188,128 +116,45 @@ bind_gaussian_splat_ops(py::module &m) {
 
     m.def(
         "count_contributing_gaussians_sparse",
-        [](const torch::Tensor &means2d,
-           const torch::Tensor &conics,
-           const torch::Tensor &opacities,
-           const torch::Tensor &tileOffsets,
-           const torch::Tensor &tileGaussianIds,
-           const torch::Tensor &activeTiles,
-           const torch::Tensor &activeTileMask,
-           const torch::Tensor &tilePixelMask,
-           const torch::Tensor &tilePixelCumsum,
-           const torch::Tensor &pixelMap,
-           const torch::Tensor &inverseIndices,
-           const fvdb::JaggedTensor &uniquePixelsToRender,
-           const bool hasDuplicates,
-           const fvdb::JaggedTensor &pixelsToRender,
-           const RenderSettings &settings) {
-            fvdb::SparseProjectedGaussianSplats ss;
-            ss.perGaussian2dMean      = means2d;
-            ss.perGaussianConic       = conics;
-            ss.perGaussianOpacity     = opacities;
-            ss.tileOffsets            = tileOffsets;
-            ss.tileGaussianIds        = tileGaussianIds;
-            ss.activeTiles            = activeTiles;
-            ss.activeTileMask         = activeTileMask;
-            ss.tilePixelMask          = tilePixelMask;
-            ss.tilePixelCumsum        = tilePixelCumsum;
-            ss.pixelMap               = pixelMap;
-            ss.inverseIndices         = inverseIndices;
-            ss.uniquePixelsToRender   = uniquePixelsToRender;
-            ss.hasDuplicates          = hasDuplicates;
-            return ops::sparseRenderNumContributing(ss, pixelsToRender, settings);
-        },
+        &ops::gaussianSparseRasterizeNumContributingGaussians,
         py::arg("means2d"),
         py::arg("conics"),
         py::arg("opacities"),
         py::arg("tile_offsets"),
         py::arg("tile_gaussian_ids"),
+        py::arg("pixels_to_render"),
         py::arg("active_tiles"),
-        py::arg("active_tile_mask"),
         py::arg("tile_pixel_mask"),
         py::arg("tile_pixel_cumsum"),
         py::arg("pixel_map"),
-        py::arg("inverse_indices"),
-        py::arg("unique_pixels_to_render"),
-        py::arg("has_duplicates"),
-        py::arg("pixels_to_render"),
         py::arg("settings"));
 
     m.def(
         "identify_contributing_gaussians",
-        [](const torch::Tensor &means2d,
-           const torch::Tensor &conics,
-           const torch::Tensor &opacities,
-           const torch::Tensor &tileOffsets,
-           const torch::Tensor &tileGaussianIds,
-           const RenderSettings &settings,
-           const std::optional<torch::Tensor> &numContributingGaussians) {
-            fvdb::ProjectedGaussianSplats s;
-            s.perGaussian2dMean  = means2d;
-            s.perGaussianConic   = conics;
-            s.perGaussianOpacity = opacities;
-            s.tileOffsets        = tileOffsets;
-            s.tileGaussianIds    = tileGaussianIds;
-            return ops::renderContributingIds(s, settings, numContributingGaussians);
-        },
+        &ops::gaussianRasterizeContributingGaussianIds,
         py::arg("means2d"),
         py::arg("conics"),
         py::arg("opacities"),
         py::arg("tile_offsets"),
         py::arg("tile_gaussian_ids"),
         py::arg("settings"),
-        py::arg("num_contributing_gaussians"));
+        py::arg("num_contributing_gaussians") = py::none());
 
     m.def(
         "identify_contributing_gaussians_sparse",
-        [](const torch::Tensor &means2d,
-           const torch::Tensor &conics,
-           const torch::Tensor &opacities,
-           const torch::Tensor &tileOffsets,
-           const torch::Tensor &tileGaussianIds,
-           const torch::Tensor &activeTiles,
-           const torch::Tensor &activeTileMask,
-           const torch::Tensor &tilePixelMask,
-           const torch::Tensor &tilePixelCumsum,
-           const torch::Tensor &pixelMap,
-           const torch::Tensor &inverseIndices,
-           const fvdb::JaggedTensor &uniquePixelsToRender,
-           const bool hasDuplicates,
-           const fvdb::JaggedTensor &pixelsToRender,
-           const RenderSettings &settings,
-           const std::optional<fvdb::JaggedTensor> &numContributingGaussians) {
-            fvdb::SparseProjectedGaussianSplats ss;
-            ss.perGaussian2dMean    = means2d;
-            ss.perGaussianConic     = conics;
-            ss.perGaussianOpacity   = opacities;
-            ss.tileOffsets          = tileOffsets;
-            ss.tileGaussianIds      = tileGaussianIds;
-            ss.activeTiles          = activeTiles;
-            ss.activeTileMask       = activeTileMask;
-            ss.tilePixelMask        = tilePixelMask;
-            ss.tilePixelCumsum      = tilePixelCumsum;
-            ss.pixelMap             = pixelMap;
-            ss.inverseIndices       = inverseIndices;
-            ss.uniquePixelsToRender = uniquePixelsToRender;
-            ss.hasDuplicates        = hasDuplicates;
-            return ops::sparseRenderContributingIds(ss, pixelsToRender, settings, numContributingGaussians);
-        },
+        &ops::gaussianSparseRasterizeContributingGaussianIds,
         py::arg("means2d"),
         py::arg("conics"),
         py::arg("opacities"),
         py::arg("tile_offsets"),
         py::arg("tile_gaussian_ids"),
+        py::arg("pixels_to_render"),
         py::arg("active_tiles"),
-        py::arg("active_tile_mask"),
         py::arg("tile_pixel_mask"),
         py::arg("tile_pixel_cumsum"),
         py::arg("pixel_map"),
-        py::arg("inverse_indices"),
-        py::arg("unique_pixels_to_render"),
-        py::arg("has_duplicates"),
-        py::arg("pixels_to_render"),
         py::arg("settings"),
-        py::arg("num_contributing_gaussians"));
+        py::arg("num_contributing_gaussians") = py::none());
 
     // -----------------------------------------------------------------------
     // MCMC operations (thin dispatch wrappers)
@@ -365,7 +210,7 @@ bind_gaussian_splat_ops(py::module &m) {
            const torch::Tensor &sh0,
            const torch::Tensor &shN,
            const std::string &filename,
-           std::optional<std::unordered_map<std::string, fvdb::PlyMetadataTypes>> metadata) {
+           std::optional<std::unordered_map<std::string, fvdb::detail::io::PlyMetadataTypes>> metadata) {
             fvdb::detail::io::saveGaussianPly(
                 filename, means, quats, logScales, logitOpacities, sh0, shN, metadata);
         },
@@ -387,7 +232,7 @@ bind_gaussian_splat_ops(py::module &m) {
                           torch::Tensor,
                           torch::Tensor,
                           torch::Tensor,
-                          std::unordered_map<std::string, fvdb::PlyMetadataTypes>> {
+                          std::unordered_map<std::string, fvdb::detail::io::PlyMetadataTypes>> {
             return fvdb::detail::io::loadGaussianPly(filename, device);
         },
         py::arg("filename"),

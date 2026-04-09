@@ -14,8 +14,7 @@ from fvdb.utils.tests import get_fvdb_test_data_path
 
 import fvdb.functional as F
 from fvdb import GaussianSplat3d
-from fvdb._fvdb_cpp import CameraModel
-from fvdb.enums import GaussianRenderMode
+from fvdb.enums import CameraModel, GaussianRenderMode
 
 
 def rgb_to_sh(rgb: torch.Tensor) -> torch.Tensor:

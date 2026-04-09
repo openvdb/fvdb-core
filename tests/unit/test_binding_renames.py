@@ -13,7 +13,6 @@ class TestBindingRenames(unittest.TestCase):
 
     EXPECTED_BINDINGS = [
         # Utility
-        "render_crop_from_projected_gaussians",
         "relocate_gaussians",
         "add_noise_to_gaussian_means",
         "save_gaussians_ply",
@@ -66,6 +65,7 @@ class TestBindingRenames(unittest.TestCase):
         "gsplat_sh_eval_fwd",
         "gsplat_sh_eval_bwd",
         "gsplat_render_crop_from_projected",
+        "render_crop_from_projected_gaussians",
         "gsplat_render_num_contributing",
         "gsplat_render_contributing_ids",
         "gsplat_sparse_render_num_contributing",

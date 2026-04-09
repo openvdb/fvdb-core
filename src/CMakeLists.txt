@@ -49,9 +49,6 @@ set(FVDB_CPP_FILES
     fvdb/detail/io/GaussianPlyIO.cpp
     fvdb/detail/io/LoadNanovdb.cpp
     fvdb/detail/io/SaveNanoVDB.cpp
-    fvdb/detail/ops/gsplat/GaussianCameraValidation.cpp
-    fvdb/detail/ops/gsplat/GaussianDeduplicatePixels.cpp
-    fvdb/detail/ops/gsplat/GaussianProjectionPipeline.cpp
     fvdb/detail/ops/gsplat/GaussianUtils.cpp
     fvdb/detail/TorchDeviceBuffer.cpp
     fvdb/detail/viewer/GaussianSplat3dView.cpp
