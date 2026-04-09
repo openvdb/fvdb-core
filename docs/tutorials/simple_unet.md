@@ -50,7 +50,7 @@ class BasicBlock(torch.nn.Module):
         out = self.norm2(self.conv2(out, plan), grid)
 
         if self.downsample is not None:
-          residual = self.downsample(data, grid)
+            residual = self.downsample(data, grid)
 
         out = fvdb.relu(out + residual)
 

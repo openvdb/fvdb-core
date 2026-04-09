@@ -63,13 +63,38 @@ _SKIP_EXACT = {"fvdb.*", "fvdb.viz.*Splat*", "GridBatch.from_*"}
 
 
 def _get_scan_dirs(config) -> list[Path]:
-    """Resolve --doc-dirs option to absolute Paths."""
-    raw = config.getoption("doc_dirs") or _DEFAULT_DOC_DIRS
+    """Resolve --doc-dirs option to absolute Paths.
+
+    Raises pytest.UsageError if user-supplied dirs don't exist or if
+    no valid directories remain (prevents silent no-op test runs).
+    """
+    raw = config.getoption("doc_dirs")
+    user_supplied = bool(raw)
+    raw = raw or _DEFAULT_DOC_DIRS
+
     dirs = []
+    missing = []
     for d in raw:
         p = Path(d) if Path(d).is_absolute() else _ROOT / d
         if p.is_dir():
             dirs.append(p)
+        else:
+            missing.append(f"{d} -> {p}")
+
+    if user_supplied and missing:
+        raise pytest.UsageError(
+            "Invalid --doc-dirs value(s): "
+            + ", ".join(missing)
+            + ". Each --doc-dirs path must exist and be a directory."
+        )
+
+    if not dirs:
+        source = "--doc-dirs" if user_supplied else "default doc directories"
+        raise pytest.UsageError(
+            f"No documentation directories to scan from {source}: "
+            + ", ".join(str(d) for d in raw)
+        )
+
     return dirs
 
 

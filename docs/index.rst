@@ -104,6 +104,7 @@ algorithms for 3D reconstruction from sensor data.
    tutorials/simple_unet
    tutorials/io
    tutorials/ray_tracing
+   tutorials/volume_rendering
    tutorials/single_grid
 
 .. toctree::

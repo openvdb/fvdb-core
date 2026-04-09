@@ -133,7 +133,7 @@ print("nanovdb_convert roundtrip the vdb to nvdb: ", convert_cmd)
 print(subprocess.check_output(convert_cmd.split()).decode("utf-8"))
 
 # Load the nvdb file of the converted vdb
-grid_batch, features, names = load_nanovdb(saved_nvdb, device=torch.device("cuda:0"))
+grid_batch, features, names = fvdb.functional.load_nanovdb(saved_nvdb, device=torch.device("cuda:0"))
 print("Loaded grid batch total number of voxels: ", grid_batch.total_voxels)
 print("Loaded grid batch data type: %s, device: %s" % (features.dtype, features.device))
 print("\n")
