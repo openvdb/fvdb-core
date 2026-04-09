@@ -278,7 +278,7 @@ launchForward(const torch::Tensor &means,
     sharedMem += (alignof(SharedGaussian<NUM_CHANNELS>) - 1) +
                  blockSize * sizeof(SharedGaussian<NUM_CHANNELS>);
 
-    auto stream = at::cuda::getDefaultCUDAStream();
+    auto stream = at::cuda::getCurrentCUDAStream(means.device().index());
     rasterizeGaussiansFromWorld<NUM_CHANNELS, Camera>
         <<<gridDim, blockDim, sharedMem, stream>>>(args);
 
@@ -308,6 +308,8 @@ dispatchGaussianRasterizeFromWorld3DGSForward<torch::kCUDA>(
     const at::optional<torch::Tensor> &backgrounds,
     const at::optional<torch::Tensor> &masks) {
     FVDB_FUNC_RANGE();
+
+    const at::cuda::OptionalCUDAGuard device_guard(device_of(means));
 
     const uint32_t imageWidth   = settings.imageWidth;
     const uint32_t imageHeight  = settings.imageHeight;

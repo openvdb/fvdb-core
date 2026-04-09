@@ -137,6 +137,8 @@ dispatchFineIJKForCoarseGrid<torch::kCUDA>(const GridBatchData &batchHdl,
     TORCH_CHECK(batchHdl.device().is_cuda(), "GridBatchData must be on CUDA device");
     TORCH_CHECK(batchHdl.device().has_index(), "GridBatchData must have a valid index");
 
+    const c10::cuda::CUDAGuard device_guard(batchHdl.device());
+
     const int64_t totalPadAmount = upsamplingFactor[0] * upsamplingFactor[1] * upsamplingFactor[2];
 
     const auto optsData = torch::TensorOptions().dtype(torch::kInt32).device(batchHdl.device());
