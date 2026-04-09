@@ -18,8 +18,8 @@ from typing import TYPE_CHECKING, Any, cast
 import torch
 
 from .. import _fvdb_cpp as _C
-from ..enums import CameraModel, RollingShutterType
 from .._fvdb_cpp import RenderSettings
+from ..enums import CameraModel, RollingShutterType
 
 if TYPE_CHECKING:
     from ._gaussian_projection import ProjectedGaussians
@@ -276,22 +276,17 @@ def rasterize_screen_space_gaussians(
     """
     opacities = _compute_opacities(logit_opacities, projected)
 
-    if crop is not None:
-        ox, oy, w, h = _validate_crop(crop, tiles.image_width, tiles.image_height)
-    else:
-        ox, oy, w, h = 0, 0, tiles.image_width, tiles.image_height
-
-    return cast(
+    result, alphas = cast(
         tuple[torch.Tensor, torch.Tensor],
         _RasterizeScreenSpaceGaussiansFn.apply(
             projected.means2d,
             projected.conics,
             features,
             opacities,
-            w,
-            h,
-            ox,
-            oy,
+            tiles.image_width,
+            tiles.image_height,
+            0,
+            0,
             tiles.tile_size,
             tiles.tile_offsets,
             tiles.tile_gaussian_ids,
@@ -300,6 +295,13 @@ def rasterize_screen_space_gaussians(
             masks,
         ),
     )
+
+    if crop is not None:
+        ox, oy, w, h = _validate_crop(crop, tiles.image_width, tiles.image_height)
+        result = result[:, oy : oy + h, ox : ox + w, :]
+        alphas = alphas[:, oy : oy + h, ox : ox + w, :]
+
+    return result, alphas
 
 
 # ===========================================================================
@@ -494,6 +496,7 @@ def rasterize_world_space_gaussians(
     tiles: GaussianTileIntersection,
     backgrounds: torch.Tensor | None = None,
     masks: torch.Tensor | None = None,
+    crop: tuple[int, int, int, int] | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Rasterize Gaussians from world-space with geometry gradients (Stage 4).
 
@@ -521,9 +524,15 @@ def rasterize_world_space_gaussians(
         tiles: :class:`GaussianTileIntersection` from Stage 3.
         backgrounds: ``[C, D]`` Optional per-camera backgrounds.
         masks: ``[C, tileH, tileW]`` Optional per-tile masks.
+        crop: Optional ``(origin_x, origin_y, width, height)`` tuple defining a
+            sub-region of the projected image to rasterize.  When ``None``
+            (the default), the full image is rendered.  The crop region is
+            clamped to the projected image bounds.
 
     Returns:
-        Tuple of (rendered_images ``[C, H, W, D]``, alphas ``[C, H, W, 1]``).
+        Tuple of (rendered_images ``[C, H, W, D]``, alphas ``[C, H, W, 1]``)
+        where H and W are the crop dimensions (or the full image dimensions
+        when ``crop`` is ``None``).
     """
     opacities = _compute_opacities(logit_opacities, projected)
 
@@ -532,7 +541,7 @@ def rasterize_world_space_gaussians(
     settings.image_height = tiles.image_height
     settings.tile_size = tiles.tile_size
 
-    return cast(
+    result, alphas = cast(
         tuple[torch.Tensor, torch.Tensor],
         _RasterizeWorldSpaceGaussiansFn.apply(
             means,
@@ -553,3 +562,10 @@ def rasterize_world_space_gaussians(
             masks,
         ),
     )
+
+    if crop is not None:
+        ox, oy, w, h = _validate_crop(crop, tiles.image_width, tiles.image_height)
+        result = result[:, oy : oy + h, ox : ox + w, :]
+        alphas = alphas[:, oy : oy + h, ox : ox + w, :]
+
+    return result, alphas

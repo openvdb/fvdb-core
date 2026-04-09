@@ -249,5 +249,251 @@ class TestFunctionalSplatTraining(unittest.TestCase):
         )
 
 
+class TestFunctionalCrop(unittest.TestCase):
+    """Validate that the crop parameter produces correct sub-regions and raises on invalid inputs."""
+
+    def setUp(self):
+        torch.random.manual_seed(0)
+        np.random.seed(0)
+        self.device = "cuda:0"
+
+        data_path = get_fvdb_test_data_path() / "gsplat" / "test_garden_cropped.npz"
+        data = np.load(data_path)
+
+        self.means = torch.from_numpy(data["means3d"]).float().to(self.device)
+        self.quats = torch.from_numpy(data["quats"]).float().to(self.device)
+        self.log_scales = torch.log(torch.from_numpy(data["scales"]).float().to(self.device))
+        self.logit_opacities = torch.logit(torch.from_numpy(data["opacities"]).float().to(self.device))
+        colors = torch.from_numpy(data["colors"]).float().to(self.device)
+
+        sh_coeffs = torch.zeros((self.means.shape[0], 16, 3), device=self.device)
+        sh_coeffs[:, 0, :] = rgb_to_sh(colors)
+        self.sh0 = sh_coeffs[:, 0, :].unsqueeze(1).clone()
+        self.shN = sh_coeffs[:, 1:, :].clone()
+
+        self.world_to_cam = torch.from_numpy(data["viewmats"]).float().to(self.device)[0:1].contiguous()
+        self.projection_matrices = torch.from_numpy(data["Ks"]).float().to(self.device)[0:1].contiguous()
+        self.W = data["width"].item()
+        self.H = data["height"].item()
+
+        self.projected = F.project_gaussians(
+            self.means, self.quats, self.log_scales,
+            self.world_to_cam, self.projection_matrices,
+            self.W, self.H,
+            eps_2d=0.3, near=0.01, far=1e10, radius_clip=0.0,
+            antialias=False, camera_model=CameraModel.PINHOLE,
+        )
+        self.features = F.evaluate_gaussian_sh(
+            self.means, self.sh0, self.shN, self.world_to_cam, self.projected,
+            sh_degree_to_use=3, render_mode=GaussianRenderMode.FEATURES,
+        )
+        self.tiles = F.intersect_gaussian_tiles(self.projected, tile_size=16)
+
+    def test_crop_none_matches_full_image(self):
+        """crop=None should be identical to not passing crop."""
+        full, full_a = F.rasterize_screen_space_gaussians(
+            self.projected, self.features, self.logit_opacities, self.tiles,
+        )
+        crop_none, crop_none_a = F.rasterize_screen_space_gaussians(
+            self.projected, self.features, self.logit_opacities, self.tiles, crop=None,
+        )
+        torch.testing.assert_close(full, crop_none)
+        torch.testing.assert_close(full_a, crop_none_a)
+
+    def test_crop_full_image_matches_no_crop(self):
+        """crop=(0, 0, W, H) should match no-crop rendering."""
+        full, full_a = F.rasterize_screen_space_gaussians(
+            self.projected, self.features, self.logit_opacities, self.tiles,
+        )
+        cropped, cropped_a = F.rasterize_screen_space_gaussians(
+            self.projected, self.features, self.logit_opacities, self.tiles,
+            crop=(0, 0, self.W, self.H),
+        )
+        self.assertEqual(cropped.shape, full.shape)
+        torch.testing.assert_close(full, cropped)
+        torch.testing.assert_close(full_a, cropped_a)
+
+    def test_crop_sub_region_shape_and_content(self):
+        """A sub-region crop should have the right shape and match the corresponding slice of the full render."""
+        full, _ = F.rasterize_screen_space_gaussians(
+            self.projected, self.features, self.logit_opacities, self.tiles,
+        )
+        ox, oy, cw, ch = 16, 16, 64, 48
+        cropped, _ = F.rasterize_screen_space_gaussians(
+            self.projected, self.features, self.logit_opacities, self.tiles,
+            crop=(ox, oy, cw, ch),
+        )
+        self.assertEqual(cropped.shape[1], ch)
+        self.assertEqual(cropped.shape[2], cw)
+        expected = full[:, oy:oy + ch, ox:ox + cw, :]
+        torch.testing.assert_close(cropped, expected, atol=1e-5, rtol=1e-5)
+
+    def test_crop_is_differentiable(self):
+        """Gradients should flow through the crop path."""
+        logit_ops = self.logit_opacities.detach().clone().requires_grad_(True)
+        cropped, _ = F.rasterize_screen_space_gaussians(
+            self.projected, self.features, logit_ops, self.tiles,
+            crop=(0, 0, 64, 48),
+        )
+        cropped.sum().backward()
+        self.assertIsNotNone(logit_ops.grad)
+        self.assertTrue(logit_ops.grad.abs().sum() > 0)
+
+    def test_crop_clamps_to_image_bounds(self):
+        """A crop extending beyond the image should be clamped, not error."""
+        cropped, _ = F.rasterize_screen_space_gaussians(
+            self.projected, self.features, self.logit_opacities, self.tiles,
+            crop=(self.W - 32, self.H - 24, 128, 128),
+        )
+        self.assertEqual(cropped.shape[2], 32)
+        self.assertEqual(cropped.shape[1], 24)
+
+    def test_crop_rejects_negative_origin(self):
+        with self.assertRaises(ValueError, msg="negative origin_x"):
+            F.rasterize_screen_space_gaussians(
+                self.projected, self.features, self.logit_opacities, self.tiles,
+                crop=(-1, 0, 64, 48),
+            )
+
+    def test_crop_rejects_zero_size(self):
+        with self.assertRaises(ValueError, msg="zero width"):
+            F.rasterize_screen_space_gaussians(
+                self.projected, self.features, self.logit_opacities, self.tiles,
+                crop=(0, 0, 0, 48),
+            )
+
+    def test_crop_rejects_no_overlap(self):
+        with self.assertRaises(ValueError, msg="origin beyond image"):
+            F.rasterize_screen_space_gaussians(
+                self.projected, self.features, self.logit_opacities, self.tiles,
+                crop=(self.W + 10, 0, 64, 48),
+            )
+
+    def test_count_contributing_crop_matches_full(self):
+        """count_contributing_gaussians with crop=(0,0,W,H) matches no-crop."""
+        full_num, full_w = F.count_contributing_gaussians(
+            self.projected, self.logit_opacities, self.tiles,
+        )
+        cropped_num, cropped_w = F.count_contributing_gaussians(
+            self.projected, self.logit_opacities, self.tiles,
+            crop=(0, 0, self.W, self.H),
+        )
+        torch.testing.assert_close(full_num, cropped_num)
+        torch.testing.assert_close(full_w, cropped_w)
+
+    def test_count_contributing_crop_sub_region(self):
+        """count_contributing_gaussians with a sub-region crop matches the slice of the full result."""
+        full_num, _ = F.count_contributing_gaussians(
+            self.projected, self.logit_opacities, self.tiles,
+        )
+        ox, oy, cw, ch = 16, 16, 64, 48
+        cropped_num, _ = F.count_contributing_gaussians(
+            self.projected, self.logit_opacities, self.tiles,
+            crop=(ox, oy, cw, ch),
+        )
+        self.assertEqual(cropped_num.shape[1], ch)
+        self.assertEqual(cropped_num.shape[2], cw)
+        expected = full_num[:, oy:oy + ch, ox:ox + cw]
+        torch.testing.assert_close(cropped_num, expected)
+
+    def test_world_space_crop_full_matches_no_crop(self):
+        """rasterize_world_space_gaussians with crop=(0,0,W,H) matches no-crop."""
+        distortion_coeffs = torch.empty(
+            self.world_to_cam.shape[0], 0, device=self.device, dtype=torch.float32,
+        )
+        full, full_a = F.rasterize_world_space_gaussians(
+            self.means, self.quats, self.log_scales,
+            self.projected, self.features, self.logit_opacities,
+            self.world_to_cam, self.projection_matrices,
+            distortion_coeffs, CameraModel.PINHOLE, self.tiles,
+        )
+        cropped, cropped_a = F.rasterize_world_space_gaussians(
+            self.means, self.quats, self.log_scales,
+            self.projected, self.features, self.logit_opacities,
+            self.world_to_cam, self.projection_matrices,
+            distortion_coeffs, CameraModel.PINHOLE, self.tiles,
+            crop=(0, 0, self.W, self.H),
+        )
+        torch.testing.assert_close(full, cropped)
+        torch.testing.assert_close(full_a, cropped_a)
+
+    def test_world_space_crop_sub_region(self):
+        """rasterize_world_space_gaussians with a sub-region crop matches the slice of the full result."""
+        distortion_coeffs = torch.empty(
+            self.world_to_cam.shape[0], 0, device=self.device, dtype=torch.float32,
+        )
+        full, _ = F.rasterize_world_space_gaussians(
+            self.means, self.quats, self.log_scales,
+            self.projected, self.features, self.logit_opacities,
+            self.world_to_cam, self.projection_matrices,
+            distortion_coeffs, CameraModel.PINHOLE, self.tiles,
+        )
+        ox, oy, cw, ch = 16, 16, 64, 48
+        cropped, _ = F.rasterize_world_space_gaussians(
+            self.means, self.quats, self.log_scales,
+            self.projected, self.features, self.logit_opacities,
+            self.world_to_cam, self.projection_matrices,
+            distortion_coeffs, CameraModel.PINHOLE, self.tiles,
+            crop=(ox, oy, cw, ch),
+        )
+        self.assertEqual(cropped.shape[1], ch)
+        self.assertEqual(cropped.shape[2], cw)
+        expected = full[:, oy:oy + ch, ox:ox + cw, :]
+        torch.testing.assert_close(cropped, expected, atol=1e-5, rtol=1e-5)
+
+    def test_identify_crop_full_matches_no_crop(self):
+        """identify_contributing_gaussians with crop=(0,0,W,H) matches no-crop."""
+        full_ids, full_w = F.identify_contributing_gaussians(
+            self.projected, self.logit_opacities, self.tiles, top_k_contributors=5,
+        )
+        cropped_ids, cropped_w = F.identify_contributing_gaussians(
+            self.projected, self.logit_opacities, self.tiles, top_k_contributors=5,
+            crop=(0, 0, self.W, self.H),
+        )
+        torch.testing.assert_close(full_ids.jdata, cropped_ids.jdata)
+        torch.testing.assert_close(full_w.jdata, cropped_w.jdata)
+        torch.testing.assert_close(full_ids.joffsets, cropped_ids.joffsets)
+
+    def test_identify_crop_sub_region(self):
+        """identify_contributing_gaussians with a sub-region crop selects the correct pixels."""
+        full_ids, full_w = F.identify_contributing_gaussians(
+            self.projected, self.logit_opacities, self.tiles, top_k_contributors=5,
+        )
+        ox, oy, cw, ch = 16, 16, 64, 48
+        cropped_ids, cropped_w = F.identify_contributing_gaussians(
+            self.projected, self.logit_opacities, self.tiles, top_k_contributors=5,
+            crop=(ox, oy, cw, ch),
+        )
+
+        C = len(full_ids)
+        self.assertEqual(len(cropped_ids), C)
+
+        for c in range(C):
+            full_cam = full_ids[c]
+            crop_cam = cropped_ids[c]
+            self.assertEqual(len(crop_cam), cw * ch)
+
+            for dy in range(ch):
+                for dx in range(cw):
+                    crop_pixel_idx = dy * cw + dx
+                    full_pixel_idx = (oy + dy) * self.W + (ox + dx)
+                    crop_pixel_data = crop_cam[crop_pixel_idx].jdata
+                    full_pixel_data = full_cam[full_pixel_idx].jdata
+                    torch.testing.assert_close(crop_pixel_data, full_pixel_data)
+
+    def test_identify_crop_rejects_invalid(self):
+        """identify_contributing_gaussians raises on invalid crop inputs."""
+        with self.assertRaises(ValueError):
+            F.identify_contributing_gaussians(
+                self.projected, self.logit_opacities, self.tiles,
+                top_k_contributors=5, crop=(-1, 0, 64, 48),
+            )
+        with self.assertRaises(ValueError):
+            F.identify_contributing_gaussians(
+                self.projected, self.logit_opacities, self.tiles,
+                top_k_contributors=5, crop=(0, 0, 0, 48),
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
