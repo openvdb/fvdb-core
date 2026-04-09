@@ -19,6 +19,17 @@ Every `fvdb.nn` layer takes explicit `(data: JaggedTensor, plan_or_grid)` argume
 We could then build a basic block as follows:
 
 ```python continuation
+class Downsample1x1(torch.nn.Module):
+    """1x1 conv + BN for channel projection in residual connections."""
+    def __init__(self, in_ch, out_ch):
+        super().__init__()
+        self.conv = fvnn.SparseConv3d(in_ch, out_ch, kernel_size=1, stride=1)
+        self.bn = fvnn.BatchNorm(out_ch)
+
+    def forward(self, data: JaggedTensor, grid: GridBatch) -> JaggedTensor:
+        plan = ConvolutionPlan.from_grid_batch(1, 1, source_grid=grid, target_grid=grid)
+        return self.bn(self.conv(data, plan), grid)
+
 class BasicBlock(torch.nn.Module):
     expansion = 1
 
@@ -39,7 +50,7 @@ class BasicBlock(torch.nn.Module):
         out = self.norm2(self.conv2(out, plan), grid)
 
         if self.downsample is not None:
-          residual = self.downsample(data, plan, grid)
+          residual = self.downsample(data, grid)
 
         out = fvdb.relu(out + residual)
 
@@ -88,7 +99,7 @@ class BasicBlock(torch.nn.Module):
 All the network layers are fully compatible with `torch.nn`. The key difference is that `fvdb.nn` layers take explicit `(JaggedTensor, ConvolutionPlan)` or `(JaggedTensor, GridBatch)` arguments instead of wrapping them in a carrier object.
 A full network definition could then be built as:
 
-```python notest
+```python continuation
 class FVDBUNetBase(torch.nn.Module):
     LAYERS = (2, 2, 2, 2, 2, 2, 2, 2)
     CHANNELS = (32, 64, 128, 256, 256, 128, 96, 96)
@@ -151,9 +162,7 @@ class FVDBUNetBase(torch.nn.Module):
     def _make_layer(self, block, planes, blocks):
         downsample = None
         if self.inplanes != planes * block.expansion:
-            downsample_conv = fvnn.SparseConv3d(self.inplanes, planes * block.expansion, kernel_size=1, stride=1)
-            downsample_bn = fvnn.BatchNorm(planes * block.expansion)
-            downsample = lambda data, plan, grid: downsample_bn(downsample_conv(data, plan), grid)
+            downsample = Downsample1x1(self.inplanes, planes * block.expansion)
         layers = []
         layers.append(BasicBlock(self.inplanes, planes, downsample=downsample))
         self.inplanes = planes * block.expansion
@@ -237,7 +246,7 @@ This is needed to guide the output domain of the network, because for perception
 
 To perform inference with the network, pass the features and grid explicitly:
 
-```python notest
+```python continuation
 coords = fvdb.JaggedTensor([
     (torch.randn(10_000, 3, device='cuda')),
     (torch.randn(11_000, 3, device='cuda')),

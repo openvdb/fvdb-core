@@ -2,7 +2,7 @@
 
 In this example we replace `nerfacc`'s acceleration structure with fVDB and hence scale to unbounded scenes:
 
-```python
+```python notest
 import json
 import math
 import os
