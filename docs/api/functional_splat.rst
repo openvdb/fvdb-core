@@ -126,3 +126,11 @@ Analysis
 .. autofunction:: count_contributing_gaussians_sparse
 
 .. autofunction:: identify_contributing_gaussians_sparse
+
+
+Metrics
+--------
+
+.. autofunction:: psnr
+
+.. autofunction:: ssim

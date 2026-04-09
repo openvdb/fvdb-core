@@ -199,6 +199,9 @@ from ._gaussian_analysis import (
 # Gaussian MCMC
 from ._gaussian_mcmc import relocate_gaussians, add_noise_to_gaussian_means
 
+# Metrics
+from ._metrics import psnr, ssim
+
 __all__ = [
     # Gaussian splatting types
     "ProjectedGaussians",
@@ -357,4 +360,7 @@ __all__ = [
     # Gaussian MCMC
     "relocate_gaussians",
     "add_noise_to_gaussian_means",
+    # Metrics
+    "psnr",
+    "ssim",
 ]

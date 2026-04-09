@@ -5,7 +5,7 @@ import math
 
 import pytest
 import torch
-from fvdb.utils.metrics import psnr, ssim
+from fvdb.functional import psnr, ssim
 
 
 @pytest.mark.parametrize("padding", ["same", "valid"])  # fused-ssim supports these paddings

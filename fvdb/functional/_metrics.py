@@ -24,21 +24,29 @@
 
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
-#
 
+"""Image-quality metrics: PSNR and SSIM."""
 
-from typing import NamedTuple
+from __future__ import annotations
+
+import math
+from typing import Literal
 
 import torch
 
-import fvdb
+import fvdb  # noqa: F401  -- loads the custom C++ ops used by torch.ops.fvdb below
 
-allowed_padding = ["same", "valid"]
+_ALLOWED_PADDING = ("same", "valid")
 
 
-class FusedSSIMMap(torch.autograd.Function):
+# ---------------------------------------------------------------------------
+#  SSIM (fused CUDA implementation)
+# ---------------------------------------------------------------------------
+
+
+class _FusedSSIMFn(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, C1, C2, img1, img2, padding="same", train=True):
+    def forward(ctx, C1, C2, img1, img2, padding="same", train=True):  # type: ignore[override]
         (
             ssim_map,
             dm_dmu1,
@@ -57,7 +65,7 @@ class FusedSSIMMap(torch.autograd.Function):
         return ssim_map
 
     @staticmethod
-    def backward(ctx, opt_grad):
+    def backward(ctx, opt_grad):  # type: ignore[override]
         img1, img2, dm_dmu1, dm_dsigma1_sq, dm_dsigma12 = ctx.saved_tensors
         C1, C2, padding = ctx.C1, ctx.C2, ctx.padding
         dL_dmap = opt_grad
@@ -70,18 +78,15 @@ class FusedSSIMMap(torch.autograd.Function):
         return None, None, grad, None, None, None
 
 
-def fused_ssim(img1, img2, padding="same", train=True):
+def _fused_ssim(img1: torch.Tensor, img2: torch.Tensor, padding: str = "same", train: bool = True) -> torch.Tensor:
     C1 = 0.01**2
     C2 = 0.03**2
 
-    assert padding in allowed_padding
+    assert padding in _ALLOWED_PADDING
 
     img1 = img1.contiguous()
-    map = FusedSSIMMap.apply(C1, C2, img1, img2, padding, train)
-    return map.mean()  # type: ignore
-
-
-from typing import Literal
+    ssim_map = _FusedSSIMFn.apply(C1, C2, img1, img2, padding, train)
+    return ssim_map.mean()  # type: ignore[union-attr]
 
 
 def ssim(
@@ -102,4 +107,53 @@ def ssim(
     Returns:
         ssim (torch.Tensor): The average SSIM between each image over the batch.
     """
-    return fused_ssim(img1, img2, padding, train)
+    return _fused_ssim(img1, img2, padding, train)
+
+
+# ---------------------------------------------------------------------------
+#  PSNR
+# ---------------------------------------------------------------------------
+
+
+def psnr(
+    noisy_images: torch.Tensor,
+    ground_truth_images: torch.Tensor,
+    max_value: float = 1.0,
+    reduction: Literal["none", "mean", "sum"] = "mean",
+) -> torch.Tensor:
+    """
+    Compute the Peak-Signal-to-Noise-Ratio (PSNR) ratio between two batches of images.
+
+    Args:
+        noisy_images (torch.Tensor): A batch of noisy images of shape ``(B, C, H, W)``
+        ground_truth_images (torch.Tensor): A batch of ground truth images of shape ``(B, C, H, W)``
+        max_value (float): The maximum possible value images computed with this loss can have.
+            Default is 1.0.
+        reduction (Literal["none", "mean", "sum"]): How to reduce over the batch dimension. ``"sum"``
+            and ``"mean"`` will add-up and average the losses across the batch respectively. ``"none"`` will
+            return each loss as a separate entry in the tensor. Default is ``"mean"``.
+
+    Returns:
+        psnr (torch.Tensor): The PSNR between the two images. If reduction is not "none", the result
+            will be reduced over the batch dimension (*i.e.*  will be a single scalar), otherwise it will
+            be a tensor of shape ``(B,)``.
+    """
+    if max_value <= 0:
+        raise ValueError("max_value must be a positive number")
+
+    if reduction not in ("none", "mean", "sum"):
+        raise ValueError("reduction must be one of ('none', 'mean', 'sum')")
+
+    if (noisy_images.shape != ground_truth_images.shape) or (noisy_images.dim() != 4):
+        raise ValueError("Input images must have the same shape and be 4-dimensional with shape (B, C, H, W)")
+
+    mse = torch.mean((noisy_images - ground_truth_images) ** 2, dim=(1, 2, 3))  # [B]
+
+    psnr_val = 10.0 * (2.0 * math.log10(max_value) - torch.log10(mse))
+    if reduction == "none":
+        return psnr_val
+    elif reduction == "mean":
+        return torch.mean(psnr_val)
+    elif reduction == "sum":
+        return torch.sum(psnr_val)
+    raise ValueError("reduction must be one of ('none', 'mean', 'sum')")
