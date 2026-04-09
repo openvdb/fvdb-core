@@ -41,6 +41,12 @@ def _build_settings_for_query_sparse(sparse_tiles: SparseGaussianTileIntersectio
     return settings
 
 
+def _wrap_jagged_pair(
+    a: JaggedTensorCpp, b: JaggedTensorCpp
+) -> tuple[JaggedTensor, JaggedTensor]:
+    return JaggedTensor(impl=a), JaggedTensor(impl=b)
+
+
 # ---------------------------------------------------------------------------
 #  Public API
 # ---------------------------------------------------------------------------
@@ -82,7 +88,8 @@ def identify_contributing_gaussians(
     logit_opacities: torch.Tensor,
     tiles: GaussianTileIntersection,
     num_contributing: torch.Tensor | None = None,
-) -> tuple[JaggedTensorCpp, JaggedTensorCpp]:
+    top_k_contributors: int = 0,
+) -> tuple[JaggedTensor, JaggedTensor]:
     """Get the IDs of contributing Gaussians per pixel (dense).
 
     Non-differentiable analysis function.
@@ -93,15 +100,22 @@ def identify_contributing_gaussians(
         tiles: :class:`GaussianTileIntersection` from Stage 3.
         num_contributing: Optional pre-computed count tensor (from
             :func:`count_contributing_gaussians`).
+        top_k_contributors: If > 0, return only the top-k most opaque
+            contributors per pixel.
 
     Returns:
-        Tuple of (gaussian_ids, weights) as JaggedTensors.
+        Tuple of (gaussian_ids, weights) as :class:`~fvdb.JaggedTensor`.
     """
     from ._gaussian_rasterization import _compute_opacities
 
     opacities = _compute_opacities(logit_opacities, projected)
     settings = _build_settings_for_query(tiles)
-    return _C.identify_contributing_gaussians(
+    settings.num_depth_samples = top_k_contributors
+
+    if top_k_contributors <= 0 and num_contributing is None:
+        num_contributing, _ = count_contributing_gaussians(projected, logit_opacities, tiles)
+
+    ids_impl, weights_impl = _C.identify_contributing_gaussians(
         projected.means2d,
         projected.conics,
         opacities,
@@ -110,13 +124,14 @@ def identify_contributing_gaussians(
         settings,
         num_contributing,
     )
+    return _wrap_jagged_pair(ids_impl, weights_impl)
 
 
 def count_contributing_gaussians_sparse(
     projected: ProjectedGaussians,
     logit_opacities: torch.Tensor,
     sparse_tiles: SparseGaussianTileIntersection,
-) -> tuple[JaggedTensorCpp, JaggedTensorCpp]:
+) -> tuple[JaggedTensor, JaggedTensor]:
     """Count the number of contributing Gaussians per pixel (sparse).
 
     Non-differentiable analysis function.  Gets ``pixels_to_render`` from
@@ -128,7 +143,7 @@ def count_contributing_gaussians_sparse(
         sparse_tiles: :class:`SparseGaussianTileIntersection` from Stage 3.
 
     Returns:
-        Tuple of (num_contributing, weights) as JaggedTensors.
+        Tuple of (num_contributing, weights) as :class:`~fvdb.JaggedTensor`.
     """
     from ._gaussian_rasterization import _compute_opacities
 
@@ -136,7 +151,7 @@ def count_contributing_gaussians_sparse(
     settings = _build_settings_for_query_sparse(sparse_tiles)
 
     render_pixels = sparse_tiles.unique_pixels if sparse_tiles.has_duplicates else sparse_tiles.pixels_to_render
-    result = _C.count_contributing_gaussians_sparse(
+    jt0_impl, jt1_impl = _C.count_contributing_gaussians_sparse(
         projected.means2d,
         projected.conics,
         opacities,
@@ -152,13 +167,10 @@ def count_contributing_gaussians_sparse(
 
     if sparse_tiles.has_duplicates:
         inv = sparse_tiles.inverse_indices
-        jt0, jt1 = result
         pixels_impl = sparse_tiles.pixels_to_render._impl
-        return (
-            pixels_impl.jagged_like(jt0.jdata().index_select(0, inv)),
-            pixels_impl.jagged_like(jt1.jdata().index_select(0, inv)),
-        )
-    return result
+        jt0_impl = pixels_impl.jagged_like(jt0_impl.jdata.index_select(0, inv))
+        jt1_impl = pixels_impl.jagged_like(jt1_impl.jdata.index_select(0, inv))
+    return _wrap_jagged_pair(jt0_impl, jt1_impl)
 
 
 def identify_contributing_gaussians_sparse(
@@ -166,7 +178,7 @@ def identify_contributing_gaussians_sparse(
     logit_opacities: torch.Tensor,
     sparse_tiles: SparseGaussianTileIntersection,
     num_contributing: JaggedTensor | None = None,
-) -> tuple[JaggedTensorCpp, JaggedTensorCpp]:
+) -> tuple[JaggedTensor, JaggedTensor]:
     """Get the IDs of contributing Gaussians per pixel (sparse).
 
     Non-differentiable analysis function.  Gets ``pixels_to_render`` from
@@ -176,10 +188,10 @@ def identify_contributing_gaussians_sparse(
         projected: :class:`ProjectedGaussians` from Stage 1.
         logit_opacities: ``[N]`` Pre-sigmoid opacities.
         sparse_tiles: :class:`SparseGaussianTileIntersection` from Stage 3.
-        num_contributing: Optional pre-computed count JaggedTensor.
+        num_contributing: Optional pre-computed count :class:`~fvdb.JaggedTensor`.
 
     Returns:
-        Tuple of (gaussian_ids, weights) as JaggedTensors.
+        Tuple of (gaussian_ids, weights) as :class:`~fvdb.JaggedTensor`.
     """
     from ._gaussian_rasterization import _compute_opacities
 
@@ -188,23 +200,31 @@ def identify_contributing_gaussians_sparse(
 
     render_pixels = sparse_tiles.unique_pixels if sparse_tiles.has_duplicates else sparse_tiles.pixels_to_render
 
-    # When dedup happened, num_contributing is in original (duplicated) space but the
-    # kernel expects unique-pixel space.  Pick one representative per group.
-    jt_arg: JaggedTensorCpp | None = None
-    if num_contributing is not None:
-        nc_impl = num_contributing._impl if isinstance(num_contributing, JaggedTensor) else num_contributing
+    # Resolve num_contributing into unique-pixel space for the kernel
+    jt_arg: JaggedTensorCpp
+    if num_contributing is None:
+        jt_arg, _ = _C.count_contributing_gaussians_sparse(
+            projected.means2d, projected.conics, opacities,
+            sparse_tiles.tile_offsets, sparse_tiles.tile_gaussian_ids,
+            render_pixels._impl,
+            sparse_tiles.active_tiles,
+            sparse_tiles.tile_pixel_mask, sparse_tiles.tile_pixel_cumsum,
+            sparse_tiles.pixel_map, settings,
+        )
+    else:
+        nc_impl: JaggedTensorCpp = num_contributing._impl if isinstance(num_contributing, JaggedTensor) else num_contributing  # type: ignore[assignment]
         if sparse_tiles.has_duplicates:
             inv = sparse_tiles.inverse_indices
             rep_idx = torch.empty(render_pixels._impl.rsize(0), dtype=torch.long, device=inv.device)
             rep_idx.scatter_(
                 0, inv, torch.arange(sparse_tiles.pixels_to_render._impl.rsize(0), dtype=torch.long, device=inv.device)
             )
-            unique_data = nc_impl.jdata().index_select(0, rep_idx)
+            unique_data = nc_impl.jdata.index_select(0, rep_idx)
             jt_arg = render_pixels._impl.jagged_like(unique_data)
         else:
             jt_arg = nc_impl
 
-    result = _C.identify_contributing_gaussians_sparse(
+    ids_impl, weights_impl = _C.identify_contributing_gaussians_sparse(
         projected.means2d,
         projected.conics,
         opacities,
@@ -221,10 +241,7 @@ def identify_contributing_gaussians_sparse(
 
     if sparse_tiles.has_duplicates:
         inv = sparse_tiles.inverse_indices
-        jt0, jt1 = result
         pixels_impl = sparse_tiles.pixels_to_render._impl
-        return (
-            pixels_impl.jagged_like(jt0.jdata().index_select(0, inv)),
-            pixels_impl.jagged_like(jt1.jdata().index_select(0, inv)),
-        )
-    return result
+        ids_impl = pixels_impl.jagged_like(ids_impl.jdata.index_select(0, inv))
+        weights_impl = pixels_impl.jagged_like(weights_impl.jdata.index_select(0, inv))
+    return _wrap_jagged_pair(ids_impl, weights_impl)

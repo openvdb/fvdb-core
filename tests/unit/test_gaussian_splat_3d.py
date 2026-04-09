@@ -27,6 +27,7 @@ from fvdb import (
     evaluate_spherical_harmonics,
     gaussian_render_jagged,
 )
+from fvdb.enums import GaussianRenderMode
 
 
 def compare_images(pixels_or_path_a, pixels_or_path_b):
@@ -1469,7 +1470,7 @@ class TestGaussianRender(BaseGaussianTestCase):
         super().setUp()
 
     def test_gaussian_projection(self):
-        proj_res = self.gs3d.project_gaussians_for_images_and_depths(
+        proj_res = self.gs3d.project_gaussians(
             self.cam_to_world_mats,
             self.projection_mats,
             self.width,
@@ -1479,8 +1480,8 @@ class TestGaussianRender(BaseGaussianTestCase):
         )
         radii = proj_res.radii
         means2d = proj_res.means2d
-        depths = proj_res.render_quantities[..., -1]
-        conics = proj_res.inv_covar_2d
+        depths = proj_res.depths
+        conics = proj_res.conics
 
         if self.save_regression_data:
             torch.save(radii, "regression_radii.pt")
@@ -1499,8 +1500,8 @@ class TestGaussianRender(BaseGaussianTestCase):
         torch.testing.assert_close(depths[radii > 0], test_depths[radii > 0])
         torch.testing.assert_close(conics[radii > 0], test_conics[radii > 0], atol=1e-5, rtol=1e-4)
 
-    def test_projection_camera_metadata(self):
-        projected = self.gs3d.project_gaussians_for_images(
+    def test_projection_returns_valid_projected_gaussians(self):
+        projected = self.gs3d.project_gaussians(
             self.cam_to_world_mats[:1],
             self.projection_mats[:1],
             self.width,
@@ -1511,8 +1512,12 @@ class TestGaussianRender(BaseGaussianTestCase):
             projection_method=ProjectionMethod.AUTO,
         )
 
-        self.assertEqual(projected.camera_model, CameraModel.PINHOLE)
-        self.assertEqual(projected.projection_method, ProjectionMethod.ANALYTIC)
+        self.assertEqual(projected.image_width, self.width)
+        self.assertEqual(projected.image_height, self.height)
+        self.assertEqual(projected.means2d.shape[0], 1)
+        self.assertIsNotNone(projected.conics)
+        self.assertIsNotNone(projected.depths)
+        self.assertIsNotNone(projected.radii)
 
     def test_from_world_depth_and_rgbd_render(self):
         cam_mats = self.cam_to_world_mats[:1]
@@ -3136,7 +3141,7 @@ class TestGaussianRenderBackgrounds(BaseGaussianTestCase):
         num_channels = 3
 
         # Project gaussians
-        projected = self.gs3d.project_gaussians_for_images(
+        projected = self.gs3d.project_gaussians(
             cam_mats,
             proj_mats,
             self.width,
@@ -3149,10 +3154,14 @@ class TestGaussianRenderBackgrounds(BaseGaussianTestCase):
         backgrounds = torch.full((num_cameras, num_channels), 0.7, device=self.device, dtype=torch.float32)
 
         # Render without background
-        colors_no_bg, alphas_no_bg = self.gs3d.render_from_projected_gaussians(projected)
+        colors_no_bg, alphas_no_bg = self.gs3d.render_from_projected_gaussians(
+            projected, cam_mats, render_mode=GaussianRenderMode.FEATURES
+        )
 
         # Render with background
-        colors_with_bg, alphas_with_bg = self.gs3d.render_from_projected_gaussians(projected, backgrounds=backgrounds)
+        colors_with_bg, alphas_with_bg = self.gs3d.render_from_projected_gaussians(
+            projected, cam_mats, render_mode=GaussianRenderMode.FEATURES, backgrounds=backgrounds
+        )
 
         # Alphas should be identical
         self.assertTrue(torch.allclose(alphas_no_bg, alphas_with_bg))
@@ -3887,18 +3896,24 @@ class TestGaussianRenderMasks(BaseGaussianTestCase):
         D = 3
         bg = torch.tensor([[0.7, 0.7, 0.7]], device=self.device, dtype=torch.float32)
 
-        projected = self.gs3d.project_gaussians_for_images(
+        projected = self.gs3d.project_gaussians(
             cam, proj, self.width, self.height, self.near_plane, self.far_plane
         )
-        ref, ref_a = self.gs3d.render_from_projected_gaussians(projected, backgrounds=bg)
+        ref, ref_a = self.gs3d.render_from_projected_gaussians(
+            projected, cam, render_mode=GaussianRenderMode.FEATURES, backgrounds=bg
+        )
         out, out_a = self.gs3d.render_from_projected_gaussians(
-            projected, backgrounds=bg, masks=self._all_ones_pixel_mask(C)
+            projected, cam, render_mode=GaussianRenderMode.FEATURES, backgrounds=bg, masks=self._all_ones_pixel_mask(C)
         )
         self.assertTrue(torch.allclose(ref, out, atol=1e-5))
         self.assertTrue(torch.allclose(ref_a, out_a, atol=1e-5))
 
         out_z, out_z_a = self.gs3d.render_from_projected_gaussians(
-            projected, backgrounds=bg, masks=self._all_zeros_pixel_mask(C)
+            projected,
+            cam,
+            render_mode=GaussianRenderMode.FEATURES,
+            backgrounds=bg,
+            masks=self._all_zeros_pixel_mask(C),
         )
         expected = bg.view(C, 1, 1, D).expand(C, self.height, self.width, D)
         self.assertTrue(torch.equal(out_z_a, torch.zeros_like(out_z_a)))
@@ -4781,9 +4796,8 @@ class TestGaussianCameraApi(unittest.TestCase):
             with self.subTest(camera_model=camera_model, requested_method=requested_method):
                 render_args = self._render_args(camera_model)
                 project_args = self._with_overrides(render_args, projection_method=requested_method)
-                projected = self.gs3d.project_gaussians_for_images(
+                projected = self.gs3d.project_gaussians(
                     **project_args,
-                    sh_degree_to_use=0,
                 )
                 self.assertEqual(projected.camera_model, camera_model)
                 self.assertEqual(projected.projection_method, expected_method)
@@ -4793,18 +4807,16 @@ class TestGaussianCameraApi(unittest.TestCase):
         opencv_args = self._render_args(CameraModel.OPENCV_RADTAN_5)
 
         with self.assertRaisesRegex(RuntimeError, "distortionCoeffs must be provided"):
-            self.gs3d.project_gaussians_for_images(
+            self.gs3d.project_gaussians(
                 **self._with_overrides(opencv_args, distortion_coeffs=None),
-                sh_degree_to_use=0,
             )
 
         with self.assertRaisesRegex(RuntimeError, "distortionCoeffs must have shape"):
-            self.gs3d.project_gaussians_for_images(
+            self.gs3d.project_gaussians(
                 **self._with_overrides(
                     opencv_args,
                     distortion_coeffs=opencv_args["distortion_coeffs"][:, :5].contiguous(),
                 ),
-                sh_degree_to_use=0,
             )
 
         with self.assertRaisesRegex(RuntimeError, "ProjectionMethod::UNSCENTED or AUTO"):
@@ -4814,12 +4826,11 @@ class TestGaussianCameraApi(unittest.TestCase):
             )
 
         with self.assertRaisesRegex(RuntimeError, "projectionMatrices must be contiguous"):
-            self.gs3d.project_gaussians_for_images(
+            self.gs3d.project_gaussians(
                 **self._with_overrides(
                     pinhole_args,
                     projection_matrices=pinhole_args["projection_matrices"].transpose(1, 2),
                 ),
-                sh_degree_to_use=0,
             )
 
     def test_pinhole_and_orthographic_ignore_distortion_coeffs_tensor(self):
@@ -4850,10 +4861,10 @@ class TestGaussianCameraApi(unittest.TestCase):
                 render_args = self._render_args(camera_model)
                 ignored_args = self._with_overrides(render_args, distortion_coeffs=ignored_distortion)
 
-                projected_default = parity_gs3d.project_gaussians_for_images(**render_args, sh_degree_to_use=0)
-                projected_ignored = parity_gs3d.project_gaussians_for_images(**ignored_args, sh_degree_to_use=0)
+                projected_default = parity_gs3d.project_gaussians(**render_args)
+                projected_ignored = parity_gs3d.project_gaussians(**ignored_args)
                 torch.testing.assert_close(projected_default.means2d, projected_ignored.means2d)
-                torch.testing.assert_close(projected_default.inv_covar_2d, projected_ignored.inv_covar_2d)
+                torch.testing.assert_close(projected_default.conics, projected_ignored.conics)
 
                 images_default, alpha_default = parity_gs3d.render_images(**render_args, sh_degree_to_use=0)
                 images_ignored, alpha_ignored = parity_gs3d.render_images(**ignored_args, sh_degree_to_use=0)
@@ -4913,28 +4924,33 @@ class TestGaussianCameraApi(unittest.TestCase):
                 parity_gs3d = self._make_tiny_parity_splat()
                 render_args = self._render_args(camera_model)
 
-                projected_images = parity_gs3d.project_gaussians_for_images(**render_args, sh_degree_to_use=0)
+                projected_images = parity_gs3d.project_gaussians(**render_args)
                 images_from_projection, alpha_from_projection = parity_gs3d.render_from_projected_gaussians(
-                    projected_images
+                    projected_images,
+                    render_args["world_to_camera_matrices"],
+                    render_mode=GaussianRenderMode.FEATURES,
+                    sh_degree_to_use=0,
                 )
                 images_from_dense, alpha_from_dense = parity_gs3d.render_images(**render_args, sh_degree_to_use=0)
                 images_from_world, alpha_from_world = parity_gs3d.render_images_from_world(
                     **render_args, sh_degree_to_use=0
                 )
 
-                projected_depths = parity_gs3d.project_gaussians_for_depths(**render_args)
+                projected_depths = parity_gs3d.project_gaussians(**render_args)
                 depths_from_projection, depth_alpha_from_projection = parity_gs3d.render_from_projected_gaussians(
-                    projected_depths
+                    projected_depths,
+                    render_args["world_to_camera_matrices"],
+                    render_mode=GaussianRenderMode.DEPTH,
                 )
                 depths_from_dense, depth_alpha_from_dense = parity_gs3d.render_depths(**render_args)
                 depths_from_world, depth_alpha_from_world = parity_gs3d.render_depths_from_world(**render_args)
 
-                projected_rgbd = parity_gs3d.project_gaussians_for_images_and_depths(
-                    **render_args,
-                    sh_degree_to_use=0,
-                )
+                projected_rgbd = parity_gs3d.project_gaussians(**render_args)
                 rgbd_from_projection, rgbd_alpha_from_projection = parity_gs3d.render_from_projected_gaussians(
-                    projected_rgbd
+                    projected_rgbd,
+                    render_args["world_to_camera_matrices"],
+                    render_mode=GaussianRenderMode.FEATURES_AND_DEPTH,
+                    sh_degree_to_use=0,
                 )
                 rgbd_from_dense, rgbd_alpha_from_dense = parity_gs3d.render_images_and_depths(
                     **render_args,
@@ -4982,12 +4998,12 @@ class TestGaussianCameraApi(unittest.TestCase):
                 parity_gs3d = self._make_structural_comparison_splat()
                 render_args = self._render_args(camera_model)
 
-                projected_rgbd = parity_gs3d.project_gaussians_for_images_and_depths(
-                    **render_args,
-                    sh_degree_to_use=0,
-                )
+                projected_rgbd = parity_gs3d.project_gaussians(**render_args)
                 rgbd_from_projection, alpha_from_projection = parity_gs3d.render_from_projected_gaussians(
-                    projected_rgbd
+                    projected_rgbd,
+                    render_args["world_to_camera_matrices"],
+                    render_mode=GaussianRenderMode.FEATURES_AND_DEPTH,
+                    sh_degree_to_use=0,
                 )
                 rgbd_from_world, alpha_from_world = parity_gs3d.render_images_and_depths_from_world(
                     **render_args,

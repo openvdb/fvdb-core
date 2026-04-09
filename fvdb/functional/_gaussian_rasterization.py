@@ -33,11 +33,59 @@ if TYPE_CHECKING:
 
 def _compute_opacities(logit_opacities: torch.Tensor, projected: ProjectedGaussians) -> torch.Tensor:
     """``[N]`` logit_opacities -> ``[C, N]`` opacities with optional compensation."""
+    return compute_gaussian_opacities(logit_opacities, projected)
+
+
+def compute_gaussian_opacities(logit_opacities: torch.Tensor, projected: ProjectedGaussians) -> torch.Tensor:
+    """Convert logit opacities to per-camera opacities with optional compensation.
+
+    Args:
+        logit_opacities: ``[N]`` pre-sigmoid opacity logits.
+        projected: :class:`ProjectedGaussians` from Stage 1.
+
+    Returns:
+        ``[C, N]`` opacities (sigmoid-activated, optionally compensated).
+    """
     C = projected.means2d.shape[0]
     opacities = torch.sigmoid(logit_opacities).unsqueeze(0).expand(C, -1)
     if projected.compensations is not None:
         opacities = opacities * projected.compensations
     return opacities
+
+
+# ---------------------------------------------------------------------------
+#  Crop validation
+# ---------------------------------------------------------------------------
+
+
+def _validate_crop(
+    crop: tuple[int, int, int, int],
+    image_width: int,
+    image_height: int,
+) -> tuple[int, int, int, int]:
+    """Validate and clamp a ``(origin_x, origin_y, width, height)`` crop rect.
+
+    Returns the clamped ``(origin_x, origin_y, width, height)`` that lies
+    within ``[0, image_width) x [0, image_height)``.
+
+    Raises:
+        ValueError: If any component is negative or if the clamped region
+            has zero area.
+    """
+    ox, oy, w, h = crop
+    if ox < 0 or oy < 0:
+        raise ValueError(f"Crop origin must be non-negative, got ({ox}, {oy})")
+    if w <= 0 or h <= 0:
+        raise ValueError(f"Crop size must be positive, got ({w}, {h})")
+    # Clamp so the crop doesn't extend beyond the projected image.
+    w = min(w, image_width - ox)
+    h = min(h, image_height - oy)
+    if w <= 0 or h <= 0:
+        raise ValueError(
+            f"Crop region (origin=({ox}, {oy}), size=({crop[2]}, {crop[3]})) "
+            f"has no overlap with the {image_width}x{image_height} image"
+        )
+    return ox, oy, w, h
 
 
 # ===========================================================================
@@ -199,6 +247,7 @@ def rasterize_screen_space_gaussians(
     tiles: GaussianTileIntersection,
     backgrounds: torch.Tensor | None = None,
     masks: torch.Tensor | None = None,
+    crop: tuple[int, int, int, int] | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Rasterize screen-space Gaussians to produce images and alpha maps (Stage 4).
 
@@ -214,11 +263,24 @@ def rasterize_screen_space_gaussians(
         tiles: :class:`GaussianTileIntersection` from Stage 3.
         backgrounds: ``[C, D]`` Optional per-camera background colours.
         masks: ``[C, tileH, tileW]`` Optional per-tile masks.
+        crop: Optional ``(origin_x, origin_y, width, height)`` tuple defining a
+            sub-region of the projected image to rasterize.  When ``None``
+            (the default), the full image is rendered.  The crop region is
+            clamped to the projected image bounds so it is safe to specify a
+            region that partially or fully extends beyond the image.
 
     Returns:
-        Tuple of (rendered_images ``[C, H, W, D]``, alphas ``[C, H, W, 1]``).
+        Tuple of (rendered_images ``[C, H, W, D]``, alphas ``[C, H, W, 1]``)
+        where H and W are the crop dimensions (or the full image dimensions
+        when ``crop`` is ``None``).
     """
     opacities = _compute_opacities(logit_opacities, projected)
+
+    if crop is not None:
+        ox, oy, w, h = _validate_crop(crop, tiles.image_width, tiles.image_height)
+    else:
+        ox, oy, w, h = 0, 0, tiles.image_width, tiles.image_height
+
     return cast(
         tuple[torch.Tensor, torch.Tensor],
         _RasterizeScreenSpaceGaussiansFn.apply(
@@ -226,10 +288,10 @@ def rasterize_screen_space_gaussians(
             projected.conics,
             features,
             opacities,
-            tiles.image_width,
-            tiles.image_height,
-            0,
-            0,
+            w,
+            h,
+            ox,
+            oy,
             tiles.tile_size,
             tiles.tile_offsets,
             tiles.tile_gaussian_ids,

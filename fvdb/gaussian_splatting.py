@@ -32,17 +32,11 @@ from typing import Any, Mapping, Sequence, TypeVar, cast, overload
 
 import torch
 import torch.nn.functional as F
+from fvdb.enums import CameraModel, GaussianRenderMode, ProjectionMethod
 
-from fvdb.enums import CameraModel, ProjectionMethod
-
-from . import _fvdb_cpp as _C
+from . import functional as GF
 from ._fvdb_cpp import JaggedTensor as JaggedTensorCpp
-from .functional._gaussian_projection import project_gaussians as _project_gaussians_stage1
-from .functional._gaussian_tile_intersection import SparseGaussianTileIntersection
-from .functional._gaussian_rasterization import _RasterizeScreenSpaceGaussiansFn
-from .functional._gaussian_rasterization_sparse import _RasterizeScreenSpaceGaussiansSparseFn
-from .functional._gaussian_rasterization import _RasterizeWorldSpaceGaussiansFn
-from .functional._gaussian_spherical_harmonics import _EvaluateGaussianSHFn
+from .functional import ProjectedGaussians
 from .grid import Grid
 from .grid_batch import GridBatch
 from .jagged_tensor import JaggedTensor
@@ -52,164 +46,12 @@ JaggedTensorOrTensorT = TypeVar("JaggedTensorOrTensorT", JaggedTensor, torch.Ten
 
 
 # ---------------------------------------------------------------------------
-#  Private bundled projection type (internal to GaussianSplat3d)
+#  Private helpers
 # ---------------------------------------------------------------------------
-
-from dataclasses import dataclass
-
-
-@dataclass(frozen=True)
-class _BundledProjection:
-    """Internal bundled projection result used by GaussianSplat3d.
-
-    Packages Stage-1 geometric projection, SH-evaluated features, computed
-    opacities, and tile intersection data into a single object that the
-    class's render methods unpack.  Not part of the public API.
-    """
-
-    means2d: torch.Tensor
-    conics: torch.Tensor
-    render_quantities: torch.Tensor
-    depths: torch.Tensor
-    opacities: torch.Tensor
-    radii: torch.Tensor
-    tile_offsets: torch.Tensor
-    tile_gaussian_ids: torch.Tensor
-    image_width: int
-    image_height: int
-    near_plane: float
-    far_plane: float
-    eps_2d: float
-    antialias: bool
-    sh_degree_to_use: int
-    min_radius_2d: float
-    camera_model: CameraModel
-    projection_method: ProjectionMethod
-
-
-# Public type alias (will be redesigned when GaussianSplat3d is reworked)
-ProjectedGaussians = _BundledProjection
-SparseProjectedGaussians = _BundledProjection  # sparse fields unused in new code path
-
-
-# ---------------------------------------------------------------------------
-#  Private helpers for composing the pipeline inside GaussianSplat3d
-# ---------------------------------------------------------------------------
-
-
-def _compute_opacities_for_cameras(
-    logit_opacities: torch.Tensor,
-    num_cameras: int,
-    compensations: torch.Tensor | None = None,
-) -> torch.Tensor:
-    """``[N]`` logit opacities -> ``[C, N]`` per-camera opacities."""
-    opacities = torch.sigmoid(logit_opacities).repeat(num_cameras, 1)
-    if compensations is not None:
-        opacities = opacities * compensations
-    return opacities
-
-
-def _evaluate_render_features(
-    means: torch.Tensor,
-    sh0: torch.Tensor,
-    shN: torch.Tensor,
-    world_to_camera_matrices: torch.Tensor,
-    radii: torch.Tensor,
-    depths: torch.Tensor,
-    sh_degree_to_use: int,
-    render_mode: str,
-) -> torch.Tensor:
-    """Evaluate SH-based render features for ``render_mode`` in {"rgb", "depth", "rgbd"}."""
-    if render_mode == "depth":
-        return depths.unsqueeze(-1)
-
-    K = shN.size(1) + 1
-    C = world_to_camera_matrices.size(0)
-    actual_sh_degree = sh_degree_to_use if sh_degree_to_use >= 0 else int(math.sqrt(K)) - 1
-    if actual_sh_degree == 0:
-        view_dirs = torch.zeros(C, means.size(0), 3, device=means.device, dtype=means.dtype)
-    else:
-        cam_to_world = torch.linalg.inv(world_to_camera_matrices)
-        camera_pos = cam_to_world[:, :3, 3]
-        view_dirs = means[None, :, :] - camera_pos[:, None, :]
-
-    features = cast(
-        torch.Tensor,
-        _EvaluateGaussianSHFn.apply(actual_sh_degree, C, view_dirs, sh0, shN, radii),
-    )
-    if render_mode == "rgbd":
-        features = torch.cat([features, depths.unsqueeze(-1)], -1)
-    return features
-
-
-def _intersect_tiles_local(
-    means2d: torch.Tensor,
-    radii: torch.Tensor,
-    depths: torch.Tensor,
-    num_cameras: int,
-    tile_size: int,
-    image_width: int,
-    image_height: int,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Non-differentiable tile intersection, returns (tile_offsets, tile_gaussian_ids)."""
-    num_tiles_w = math.ceil(image_width / tile_size)
-    num_tiles_h = math.ceil(image_height / tile_size)
-    return _C.intersect_gaussian_tiles(means2d, radii, depths, num_cameras, tile_size, num_tiles_h, num_tiles_w)
-
-
-def _rasterize_from_world_internal(
-    means: torch.Tensor,
-    quats: torch.Tensor,
-    log_scales: torch.Tensor,
-    state: _BundledProjection,
-    world_to_camera_matrices: torch.Tensor,
-    projection_matrices: torch.Tensor,
-    distortion_coeffs: torch.Tensor,
-    camera_model: CameraModel,
-    image_width: int,
-    image_height: int,
-    tile_size: int = 16,
-    backgrounds: torch.Tensor | None = None,
-    masks: torch.Tensor | None = None,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """World-space rasterization using the bundled projection state."""
-    from .enums import RollingShutterType
-
-    settings = _C.RenderSettings()
-    settings.image_width = image_width
-    settings.image_height = image_height
-    settings.tile_size = tile_size
-
-    return cast(
-        tuple[torch.Tensor, torch.Tensor],
-        _RasterizeWorldSpaceGaussiansFn.apply(
-            means,
-            quats,
-            log_scales,
-            state.render_quantities,
-            state.opacities,
-            world_to_camera_matrices,
-            world_to_camera_matrices,
-            projection_matrices,
-            distortion_coeffs,
-            RollingShutterType.NONE,
-            camera_model,
-            settings,
-            state.tile_offsets,
-            state.tile_gaussian_ids,
-            backgrounds,
-            masks,
-        ),
-    )
 
 
 def _pixel_mask_to_tile_mask(pixel_mask: torch.Tensor, tile_size: int) -> torch.Tensor:
-    """Convert a per-pixel boolean mask ``[C, H, W]`` to a per-tile boolean mask ``[C, tileH, tileW]``.
-
-    A tile is ``True`` (render) if **any** pixel in that tile is ``True``.
-    Uses ``max_pool2d`` with ``ceil_mode=True`` so that partial edge tiles are
-    handled correctly when ``H`` or ``W`` is not divisible by ``tile_size``.
-    """
+    """``[C, H, W]`` per-pixel boolean mask -> ``[C, tileH, tileW]`` per-tile mask."""
     return (
         F.max_pool2d(
             pixel_mask.unsqueeze(1).float(),
@@ -228,55 +70,15 @@ def _apply_pixel_mask(
     pixel_mask: torch.Tensor,
     backgrounds: torch.Tensor | None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Apply a per-pixel boolean mask ``[C, H, W]`` to rendered features and alphas.
-
-    Masked-out pixels (``False``) are filled with the background colour (or zero)
-    and their alpha is set to zero. The operation is differentiable: gradients
-    flow through unmasked pixels and are zero for masked pixels.
-    """
-    mask_float = pixel_mask.unsqueeze(-1).float()  # [C, H, W, 1]
+    """Apply a per-pixel boolean mask to rendered features/alphas (differentiable)."""
+    mask_float = pixel_mask.unsqueeze(-1).float()
     if backgrounds is not None:
-        bg = backgrounds[:, None, None, :]  # [C, 1, 1, D]
+        bg = backgrounds[:, None, None, :]
     else:
         bg = torch.zeros(1, 1, 1, features.shape[-1], device=features.device, dtype=features.dtype)
     features = features * mask_float + bg * (1.0 - mask_float)
     alphas = alphas * mask_float
     return features, alphas
-
-
-def _build_settings(
-    image_width: int,
-    image_height: int,
-    near: float,
-    far: float,
-    sh_degree_to_use: int = -1,
-    tile_size: int = 16,
-    radius_clip: float = 0.0,
-    eps_2d: float = 0.3,
-    antialias: bool = False,
-    render_mode: str = "rgb",
-) -> _C.RenderSettings:
-    """Build a RenderSettings from Python arguments."""
-    settings = _C.RenderSettings()
-    settings.image_width = image_width
-    settings.image_height = image_height
-    settings.near_plane = near
-    settings.far_plane = far
-    settings.tile_size = tile_size
-    settings.radius_clip = radius_clip
-    settings.eps_2d = eps_2d
-    settings.antialias = antialias
-    settings.sh_degree_to_use = sh_degree_to_use
-    mode_map = {
-        "rgb": _C.RenderMode.FEATURES,
-        "features": _C.RenderMode.FEATURES,
-        "depth": _C.RenderMode.DEPTH,
-        "rgbd": _C.RenderMode.FEATURES_AND_DEPTH,
-        "features_and_depth": _C.RenderMode.FEATURES_AND_DEPTH,
-    }
-    settings.render_mode = mode_map[render_mode.lower()]
-    return settings
-
 
 
 class GaussianSplat3d:
@@ -535,7 +337,7 @@ class GaussianSplat3d:
         if isinstance(filename, pathlib.Path):
             filename = str(filename)
 
-        means, quats, log_scales, logit_opacities, sh0, shN, metadata = _C.load_gaussians_ply(filename, device)
+        means, quats, log_scales, logit_opacities, sh0, shN, metadata = GF.load_gaussian_ply(filename, device)
 
         result = cls.__new__(cls)
         result._means = means
@@ -1536,117 +1338,9 @@ class GaussianSplat3d:
         """
         return self._accum_grad_norms
 
-    @staticmethod
-    def _uses_opencv_distortion(camera_model: _C.CameraModel) -> bool:
-        return camera_model in (
-            _C.CameraModel.OPENCV_RADTAN_5,
-            _C.CameraModel.OPENCV_RATIONAL_8,
-            _C.CameraModel.OPENCV_RADTAN_THIN_PRISM_9,
-            _C.CameraModel.OPENCV_THIN_PRISM_12,
-        )
-
-    def _project_validated(
-        self,
-        world_to_camera_matrices: torch.Tensor,
-        projection_matrices: torch.Tensor,
-        settings: _C.RenderSettings,
-        camera_model: _C.CameraModel,
-        projection_method: _C.ProjectionMethod,
-        distortion_coeffs: torch.Tensor | None,
-    ) -> ProjectedGaussians:
-        """Validate camera args, resolve projection method, and project.
-
-        Uses the Python decomposed pipeline for ANALYTIC projection.
-        Falls back to the C++ pipeline for UNSCENTED (non-differentiable).
-        """
-        # Validate camera args (mirrors C++ validateCameraProjectionArgs)
-        C = world_to_camera_matrices.size(0)
-        if C == 0:
-            raise RuntimeError("At least one camera must be provided (got 0)")
-        if list(world_to_camera_matrices.shape) != [C, 4, 4]:
-            raise RuntimeError("worldToCameraMatrices must have shape (C, 4, 4)")
-        if list(projection_matrices.shape) != [C, 3, 3]:
-            raise RuntimeError("projectionMatrices must have shape (C, 3, 3)")
-        if not world_to_camera_matrices.is_contiguous():
-            raise RuntimeError("worldToCameraMatrices must be contiguous")
-        if not projection_matrices.is_contiguous():
-            raise RuntimeError("projectionMatrices must be contiguous")
-        if distortion_coeffs is not None:
-            if list(distortion_coeffs.shape) != [C, 12]:
-                raise RuntimeError("distortionCoeffs must have shape (C, 12)")
-            if not distortion_coeffs.is_contiguous():
-                raise RuntimeError("distortionCoeffs must be contiguous")
-
-        uses_opencv = self._uses_opencv_distortion(camera_model)
-        # Resolve AUTO → ANALYTIC or UNSCENTED
-        resolved = projection_method
-        if resolved == _C.ProjectionMethod.AUTO:
-            resolved = _C.ProjectionMethod.UNSCENTED if uses_opencv else _C.ProjectionMethod.ANALYTIC
-
-        if uses_opencv:
-            if distortion_coeffs is None:
-                raise RuntimeError("distortionCoeffs must be provided for OpenCV camera models")
-            if resolved != _C.ProjectionMethod.UNSCENTED:
-                raise RuntimeError("OpenCV camera models require ProjectionMethod::UNSCENTED or AUTO")
-
-        if resolved == _C.ProjectionMethod.ANALYTIC:
-            return self._project_analytic(
-                world_to_camera_matrices,
-                projection_matrices,
-                settings,
-                camera_model,
-            )
-        else:
-            mode_map = {
-                _C.RenderMode.FEATURES: "rgb",
-                _C.RenderMode.DEPTH: "depth",
-                _C.RenderMode.FEATURES_AND_DEPTH: "rgbd",
-            }
-            render_mode_str = mode_map[settings.render_mode]
-
-            raw = _project_gaussians_stage1(
-                self._means, self._quats, self._log_scales,
-                world_to_camera_matrices, projection_matrices,
-                settings.image_width, settings.image_height,
-                eps_2d=settings.eps_2d, near=settings.near_plane, far=settings.far_plane,
-                radius_clip=settings.radius_clip, antialias=settings.antialias,
-                camera_model=CameraModel(int(camera_model)),
-                projection_method=ProjectionMethod(int(projection_method)),
-                distortion_coeffs=distortion_coeffs,
-            )
-            C = world_to_camera_matrices.size(0)
-            opacities = _compute_opacities_for_cameras(self._logit_opacities, C, raw.compensations)
-            features = _evaluate_render_features(
-                self._means, self._sh0, self._shN, world_to_camera_matrices,
-                raw.radii, raw.depths, settings.sh_degree_to_use, render_mode_str,
-            )
-            tile_offsets, tile_gaussian_ids = _intersect_tiles_local(
-                raw.means2d, raw.radii, raw.depths, C,
-                settings.tile_size, settings.image_width, settings.image_height,
-            )
-            return _BundledProjection(
-                means2d=raw.means2d, conics=raw.conics, render_quantities=features,
-                depths=raw.depths, opacities=opacities, radii=raw.radii,
-                tile_offsets=tile_offsets, tile_gaussian_ids=tile_gaussian_ids,
-                image_width=settings.image_width, image_height=settings.image_height,
-                near_plane=settings.near_plane, far_plane=settings.far_plane,
-                eps_2d=settings.eps_2d, antialias=settings.antialias,
-                sh_degree_to_use=settings.sh_degree_to_use, min_radius_2d=settings.radius_clip,
-                camera_model=CameraModel(int(camera_model)),
-                projection_method=ProjectionMethod(int(projection_method)),
-            )
-
-    def _project_analytic(
-        self,
-        world_to_camera_matrices: torch.Tensor,
-        projection_matrices: torch.Tensor,
-        settings: _C.RenderSettings,
-        camera_model: _C.CameraModel,
-    ) -> ProjectedGaussians:
-        """Decomposed projection pipeline using functional stages."""
-        C = world_to_camera_matrices.size(0)
+    def _init_accumulators(self) -> None:
+        """Lazily initialize gradient/radii accumulators if enabled."""
         N = self._means.size(0)
-
         if self._accumulate_mean_2d_gradients:
             if self._accum_grad_norms is None:
                 self._accum_grad_norms = torch.zeros(N, device=self._means.device, dtype=self._means.dtype)
@@ -1656,401 +1350,61 @@ class GaussianSplat3d:
             if self._accum_max_2d_radii is None:
                 self._accum_max_2d_radii = torch.zeros(N, device=self._means.device, dtype=torch.int32)
 
-        mode_map = {
-            _C.RenderMode.FEATURES: "rgb",
-            _C.RenderMode.DEPTH: "depth",
-            _C.RenderMode.FEATURES_AND_DEPTH: "rgbd",
-        }
-        render_mode_str = mode_map[settings.render_mode]
+    def _project_and_eval_sh(
+        self,
+        world_to_camera_matrices: torch.Tensor,
+        projection_matrices: torch.Tensor,
+        image_width: int,
+        image_height: int,
+        near: float,
+        far: float,
+        render_mode: GaussianRenderMode,
+        camera_model: CameraModel = CameraModel.PINHOLE,
+        projection_method: ProjectionMethod = ProjectionMethod.AUTO,
+        distortion_coeffs: torch.Tensor | None = None,
+        sh_degree_to_use: int = -1,
+        eps_2d: float = 0.3,
+        radius_clip: float = 0.0,
+        antialias: bool = False,
+    ) -> tuple[ProjectedGaussians, torch.Tensor]:
+        """Project gaussians and evaluate SH features (Stages 1-2).
 
-        raw = _project_gaussians_stage1(
-            self._means, self._quats, self._log_scales,
-            world_to_camera_matrices, projection_matrices,
-            settings.image_width, settings.image_height,
-            eps_2d=settings.eps_2d, near=settings.near_plane, far=settings.far_plane,
-            radius_clip=settings.radius_clip, antialias=settings.antialias,
-            camera_model=CameraModel(int(camera_model)),
+        Returns ``(projected, features)``.
+        """
+        self._init_accumulators()
+
+        projected = GF.project_gaussians(
+            self._means,
+            self._quats,
+            self._log_scales,
+            world_to_camera_matrices,
+            projection_matrices,
+            image_width,
+            image_height,
+            eps_2d=eps_2d,
+            near=near,
+            far=far,
+            radius_clip=radius_clip,
+            antialias=antialias,
+            camera_model=camera_model,
+            projection_method=projection_method,
+            distortion_coeffs=distortion_coeffs,
             accum_grad_norms=self._accum_grad_norms,
             accum_step_counts=self._accum_step_counts,
             accum_max_radii=self._accum_max_2d_radii,
         )
-
-        opacities = _compute_opacities_for_cameras(self._logit_opacities, C, raw.compensations)
-        features = _evaluate_render_features(
-            self._means, self._sh0, self._shN, world_to_camera_matrices,
-            raw.radii, raw.depths, settings.sh_degree_to_use, render_mode_str,
-        )
-        tile_offsets, tile_gaussian_ids = _intersect_tiles_local(
-            raw.means2d, raw.radii, raw.depths, C,
-            settings.tile_size, settings.image_width, settings.image_height,
-        )
-
-        return _BundledProjection(
-            means2d=raw.means2d, conics=raw.conics, render_quantities=features,
-            depths=raw.depths, opacities=opacities, radii=raw.radii,
-            tile_offsets=tile_offsets, tile_gaussian_ids=tile_gaussian_ids,
-            image_width=settings.image_width, image_height=settings.image_height,
-            near_plane=settings.near_plane, far_plane=settings.far_plane,
-            eps_2d=settings.eps_2d, antialias=settings.antialias,
-            sh_degree_to_use=settings.sh_degree_to_use, min_radius_2d=settings.radius_clip,
-            camera_model=CameraModel(int(camera_model)), projection_method=ProjectionMethod.ANALYTIC,
-        )
-
-    def _rasterize_decomposed(
-        self,
-        means2d: torch.Tensor,
-        conics: torch.Tensor,
-        features: torch.Tensor,
-        opacities: torch.Tensor,
-        tile_offsets: torch.Tensor,
-        tile_ids: torch.Tensor,
-        settings: ProjectedGaussians,
-        tile_size: int,
-        crop_width: int,
-        crop_height: int,
-        crop_origin_w: int,
-        crop_origin_h: int,
-        backgrounds: torch.Tensor | None,
-        masks: torch.Tensor | None,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Rasterize using Python autograd."""
-        w = crop_width if crop_width > 0 else settings.image_width
-        h = crop_height if crop_height > 0 else settings.image_height
-        ow = crop_origin_w if crop_origin_w >= 0 else 0
-        oh = crop_origin_h if crop_origin_h >= 0 else 0
-
-        result = cast(
-            tuple[torch.Tensor, torch.Tensor],
-            _RasterizeScreenSpaceGaussiansFn.apply(
-                means2d,
-                conics,
-                features,
-                opacities,
-                w,
-                h,
-                ow,
-                oh,
-                tile_size,
-                tile_offsets,
-                tile_ids,
-                False,  # absgrad
-                backgrounds,
-                masks,
-            ),
-        )
-        return result
-
-    def _compute_sparse_projection_data(
-        self,
-        pixels_jt: JaggedTensor,
-        world_to_camera_matrices: torch.Tensor,
-        projection_matrices: torch.Tensor,
-        settings: _C.RenderSettings,
-        camera_model_cpp: _C.CameraModel,
-        projection_method_cpp: _C.ProjectionMethod,
-        distortion_coeffs: torch.Tensor | None,
-    ) -> tuple[_BundledProjection, SparseGaussianTileIntersection]:
-        """Compute projection + sparse tile intersection (with pixel dedup).
-
-        Returns ``(state, sparse_tiles)`` where *state* is the internal
-        bundled projection and *sparse_tiles* bundles the deduplicated pixel
-        info and sparse tile layout produced by
-        :func:`~fvdb.functional.intersect_gaussian_tiles_sparse`.
-        """
-        from .functional._gaussian_tile_intersection import intersect_gaussian_tiles_sparse
-
-        state = self._project_validated(
-            world_to_camera_matrices, projection_matrices, settings,
-            camera_model_cpp, projection_method_cpp, distortion_coeffs,
-        )
-
-        sparse_tiles = intersect_gaussian_tiles_sparse(
-            pixels_jt, state, tile_size=settings.tile_size,  # type: ignore[arg-type]
-        )
-
-        return state, sparse_tiles
-
-    def _sparse_render_decomposed(
-        self,
-        pixels_to_render_impl: JaggedTensorCpp,
-        world_to_camera_matrices: torch.Tensor,
-        projection_matrices: torch.Tensor,
-        settings: _C.RenderSettings,
-        camera_model_cpp: _C.CameraModel,
-        projection_method_cpp: _C.ProjectionMethod,
-        distortion_coeffs: torch.Tensor | None,
-        backgrounds: torch.Tensor | None,
-        masks: torch.Tensor | None,
-    ) -> tuple[JaggedTensorCpp, JaggedTensorCpp]:
-        """Decomposed sparse render using Python autograd for differentiability.
-
-        Returns C++ JaggedTensors (features, alphas) with the same jagged
-        structure as *pixels_to_render_impl*.
-        """
-        pixels_jt_input = JaggedTensor(impl=pixels_to_render_impl)
-        state, st = self._compute_sparse_projection_data(
-            pixels_jt_input, world_to_camera_matrices, projection_matrices,
-            settings, camera_model_cpp, projection_method_cpp, distortion_coeffs,
-        )
-
-        sparse_rast_result = cast(
-            tuple[torch.Tensor, torch.Tensor],
-            _RasterizeScreenSpaceGaussiansSparseFn.apply(
-                state.means2d,
-                state.conics,
-                state.render_quantities,
-                state.opacities,
-                st.unique_pixels,
-                st.image_width,
-                st.image_height,
-                0,  # image_origin_w
-                0,  # image_origin_h
-                st.tile_size,
-                st.tile_offsets,
-                st.tile_gaussian_ids,
-                st.active_tiles,
-                st.tile_pixel_mask,
-                st.tile_pixel_cumsum,
-                st.pixel_map,
-                False,  # absgrad
-                backgrounds,
-                masks,
-            ),
-        )
-        rendered_colors_jdata: torch.Tensor = sparse_rast_result[0]
-        rendered_alphas_jdata: torch.Tensor = sparse_rast_result[1]
-
-        pixels_jt = JaggedTensor(impl=pixels_to_render_impl)
-        if st.has_duplicates:
-            rendered_colors_jdata = rendered_colors_jdata.index_select(0, st.inverse_indices)
-            rendered_alphas_jdata = rendered_alphas_jdata.index_select(0, st.inverse_indices)
-
-        ret_features = pixels_jt.jagged_like(rendered_colors_jdata)
-        ret_alphas = pixels_jt.jagged_like(rendered_alphas_jdata)
-        return ret_features._impl, ret_alphas._impl
-
-    def project_gaussians_for_depths(
-        self,
-        world_to_camera_matrices: torch.Tensor,
-        projection_matrices: torch.Tensor,
-        image_width: int,
-        image_height: int,
-        near: float,
-        far: float,
-        camera_model: CameraModel = CameraModel.PINHOLE,
-        projection_method: ProjectionMethod = ProjectionMethod.AUTO,
-        distortion_coeffs: torch.Tensor | None = None,
-        min_radius_2d: float = 0.0,
-        eps_2d: float = 0.3,
-        antialias: bool = False,
-    ) -> ProjectedGaussians:
-        """
-        Projects this :class:`GaussianSplat3d` onto one or more image planes for rendering depth images in those planes.
-        You can render depth images from the projected Gaussians by calling :meth:`render_projected_gaussians`.
-
-        .. note::
-
-            The reason to have a separate projection and rendering step is to enable rendering crops of an image without
-            having to project the Gaussians again.
-
-
-        .. note::
-
-            All images being rendered must have the same width and height.
-
-
-        .. seealso::
-
-            :class:`fvdb.ProjectedGaussians` for the projected Gaussians representation.
-
-        .. code-block:: python
-
-            # Assume gaussian_splat_3d is an instance of GaussianSplat3d
-            # Project the Gaussians for rendering depth images onto C image planes
-            projected_gaussians = gaussian_splat_3d.project_gaussians_for_depths(
-                world_to_camera_matrices, # tensor of shape [C, 4, 4]
-                projection_matrices, # tensor of shape [C, 3, 3]
-                image_width, # width of the C images
-                image_height, # height of the C images
-                near, # near clipping plane
-                far) # far clipping plane
-
-            # Now render a crop of size 100x100 starting at (10, 10) from the projected Gaussians
-            # in each image plane.
-            # Returns a tensor of shape [C, 100, 100, 1] containing the depth images,
-            # and a tensor of shape [C, 100, 100, 1] containing the final alpha (opacity) values
-            # of each pixel.
-            cropped_depth_images_1, cropped_alphas = gaussian_splat_3d.render_from_projected_gaussians(
-                projected_gaussians,
-                crop_width=100,
-                crop_height=100,
-                crop_origin_w=10,
-                crop_origin_h=10)
-
-            # To get the depth images, divide the last channel by the alpha values
-            true_depths_1 = cropped_images_1[..., -1:] / cropped_alphas
-
-        Args:
-            world_to_camera_matrices (torch.Tensor): Tensor of shape ``(C, 4, 4)`` representing the world-to-camera transformation matrices for ``C`` cameras.
-                Each matrix transforms points from world coordinates to camera coordinates.
-            projection_matrices (torch.Tensor): Tensor of shape ``(C, 3, 3)`` representing the projection matrices for ``C`` cameras.
-                Each matrix projects points in camera space into homogeneous pixel coordinates.
-            image_width (int): The width of the images to be rendered. Note that all images must have the same width.
-            image_height (int): The height of the images to be rendered. Note that all images must have the same height.
-            near (float): The near clipping plane distance for the projection.
-            far (float): The far clipping plane distance for the projection.
-            camera_model (CameraModel): Semantic camera model for projection. Default is
-                :attr:`fvdb.CameraModel.PINHOLE`.
-            projection_method (ProjectionMethod): Projection implementation selector. Default is
-                :attr:`fvdb.ProjectionMethod.AUTO`.
-            distortion_coeffs (torch.Tensor | None): Distortion coefficients with shape ``(C, 12)``.
-                Required for :class:`CameraModel.OPENCV_*` camera models. For
-                :class:`CameraModel.PINHOLE` and :class:`CameraModel.ORTHOGRAPHIC`, pass
-                ``None`` or a ``(C, 12)`` tensor, which is ignored. To represent no
-                distortion with an OpenCV camera model, pass a zero-filled tensor.
-            min_radius_2d (float): The minimum radius (in pixels) below which Gaussians are ignored during rendering.
-            eps_2d (float): A value used to pad Gaussians when projecting them onto the image plane, to avoid very projected Gaussians which create artifacts and
-                numerical issues.
-            antialias (bool): If ``True``, applies opacity correction to the projected Gaussians when using ``eps_2d > 0.0``.
-
-        Returns:
-            projected_gaussians (ProjectedGaussians): An instance of ProjectedGaussians containing the projected Gaussians.
-                This object contains the projected 2D representations of the Gaussians, which can be used for rendering depth images or further processing.
-
-        """
-        settings = _build_settings(
-            image_width,
-            image_height,
-            near,
-            far,
-            sh_degree_to_use=-1,
-            tile_size=16,
-            radius_clip=min_radius_2d,
-            eps_2d=eps_2d,
-            antialias=antialias,
-            render_mode="depth",
-        )
-        return self._project_validated(
+        features = GF.evaluate_gaussian_sh(
+            self._means,
+            self._sh0,
+            self._shN,
             world_to_camera_matrices,
-            projection_matrices,
-            settings,
-            self._camera_model_to_cpp(camera_model),
-            self._projection_method_to_cpp(projection_method),
-            distortion_coeffs,
-        )
-
-    def project_gaussians_for_images(
-        self,
-        world_to_camera_matrices: torch.Tensor,
-        projection_matrices: torch.Tensor,
-        image_width: int,
-        image_height: int,
-        near: float,
-        far: float,
-        camera_model: CameraModel = CameraModel.PINHOLE,
-        projection_method: ProjectionMethod = ProjectionMethod.AUTO,
-        distortion_coeffs: torch.Tensor | None = None,
-        sh_degree_to_use: int = -1,
-        min_radius_2d: float = 0.0,
-        eps_2d: float = 0.3,
-        antialias: bool = False,
-    ) -> ProjectedGaussians:
-        """
-        Projects this :class:`GaussianSplat3d` onto one or more image planes for rendering multi-channel (see :attr:`num_channels`) images in those planes.
-        You can render images from the projected Gaussians by calling :meth:`render_projected_gaussians`.
-
-        .. note::
-
-            The reason to have a separate projection and rendering step is to enable rendering crops of an image without
-            having to project the Gaussians again.
-
-
-        .. note::
-
-            All images being rendered must have the same width and height.
-
-
-        .. seealso::
-
-            :class:`fvdb.ProjectedGaussians` for the projected Gaussians representation.
-
-        .. code-block:: python
-
-            # Assume gaussian_splat_3d is an instance of GaussianSplat3d
-            # Project the Gaussians for rendering images onto C image planes
-            projected_gaussians = gaussian_splat_3d.project_gaussians_for_images(
-                world_to_camera_matrices, # tensor of shape [C, 4, 4]
-                projection_matrices, # tensor of shape [C, 3, 3]
-                image_width, # width of the C images
-                image_height, # height of the C images
-                near, # near clipping plane
-                far) # far clipping plane
-
-            # Now render a crop of size 100x100 starting at (10, 10) from the projected Gaussians
-            # in each image plane.
-            # Returns a tensor of shape [C, 100, 100, D] containing the images (where D is num_channels),
-            # and a tensor of shape [C, 100, 100, 1] containing the final alpha (opacity) values
-            # of each pixel.
-            cropped_images_1, cropped_alphas = gaussian_splat_3d.render_from_projected_gaussians(
-                projected_gaussians,
-                crop_width=100,
-                crop_height=100,
-                crop_origin_w=10,
-                crop_origin_h=10)
-
-        Args:
-            world_to_camera_matrices (torch.Tensor): Tensor of shape ``(C, 4, 4)`` representing the world-to-camera transformation matrices for ``C`` cameras.
-                Each matrix transforms points from world coordinates to camera coordinates.
-            projection_matrices (torch.Tensor): Tensor of shape ``(C, 3, 3)`` representing the projection matrices for ``C`` cameras.
-                Each matrix projects points in camera space into homogeneous pixel coordinates.
-            image_width (int): The width of the images to be rendered. Note that all images must have the same width.
-            image_height (int): The height of the images to be rendered. Note that all images must have the same height.
-            near (float): The near clipping plane distance for the projection.
-            far (float): The far clipping plane distance for the projection.
-            camera_model (CameraModel): Semantic camera model for projection. Default is
-                :attr:`fvdb.CameraModel.PINHOLE`.
-            projection_method (ProjectionMethod): Projection implementation selector. Default is
-                :attr:`fvdb.ProjectionMethod.AUTO`.
-            distortion_coeffs (torch.Tensor | None): Distortion coefficients with shape ``(C, 12)``.
-                Required for :class:`CameraModel.OPENCV_*` camera models. For
-                :class:`CameraModel.PINHOLE` and :class:`CameraModel.ORTHOGRAPHIC`, pass
-                ``None`` or a ``(C, 12)`` tensor, which is ignored. To represent no
-                distortion with an OpenCV camera model, pass a zero-filled tensor.
-            sh_degree_to_use (int): The degree of spherical harmonics to use for rendering. -1 means use all available SH bases.
-                0 means use only the first SH base (constant color). Note that you can't use more SH bases than available in the GaussianSplat3d instance.
-                Default is -1.
-            min_radius_2d (float): The minimum radius (in pixels) below which Gaussians are ignored during rendering.
-            eps_2d (float): A value used to pad Gaussians when projecting them onto the image plane, to avoid very projected Gaussians which create artifacts and
-                numerical issues.
-            antialias (bool): If ``True``, applies opacity correction to the projected Gaussians when using ``eps_2d > 0.0``.
-
-        Returns:
-            projected_gaussians (ProjectedGaussians): An instance of ProjectedGaussians containing the projected Gaussians.
-                This object contains the projected 2D representations of the Gaussians, which can be used for rendering images or further processing.
-
-        """
-        settings = _build_settings(
-            image_width,
-            image_height,
-            near,
-            far,
+            projected,
             sh_degree_to_use=sh_degree_to_use,
-            tile_size=16,
-            radius_clip=min_radius_2d,
-            eps_2d=eps_2d,
-            antialias=antialias,
-            render_mode="rgb",
+            render_mode=render_mode,
         )
-        return self._project_validated(
-            world_to_camera_matrices,
-            projection_matrices,
-            settings,
-            self._camera_model_to_cpp(camera_model),
-            self._projection_method_to_cpp(projection_method),
-            distortion_coeffs,
-        )
+        return projected, features
 
-    def project_gaussians_for_images_and_depths(
+    def project_gaussians(
         self,
         world_to_camera_matrices: torch.Tensor,
         projection_matrices: torch.Tensor,
@@ -2061,229 +1415,162 @@ class GaussianSplat3d:
         camera_model: CameraModel = CameraModel.PINHOLE,
         projection_method: ProjectionMethod = ProjectionMethod.AUTO,
         distortion_coeffs: torch.Tensor | None = None,
-        sh_degree_to_use: int = -1,
         min_radius_2d: float = 0.0,
         eps_2d: float = 0.3,
         antialias: bool = False,
     ) -> ProjectedGaussians:
         """
-        Projects this :class:`GaussianSplat3d` onto one or more image planes for rendering multi-channel (see :attr:`num_channels`) images with depths
-        in the last channel.
-        You can render images+depths from the projected Gaussians by calling :meth:`render_projected_gaussians`.
+        Projects this :class:`GaussianSplat3d` onto one or more image planes.
 
-        .. note::
-
-            The reason to have a separate projection and rendering step is to enable rendering crops of an image without
-            having to project the Gaussians again.
-
+        Returns a :class:`ProjectedGaussians` containing the 2D screen-space
+        projections.  You can then render from this projection using
+        :meth:`render_from_projected_gaussians`, which is useful for rendering
+        multiple crops without re-projecting.
 
         .. note::
 
             All images being rendered must have the same width and height.
-
-
-        .. seealso::
-
-            :class:`fvdb.ProjectedGaussians` for the projected Gaussians representation.
-
-        .. code-block:: python
-
-            # Assume gaussian_splat_3d is an instance of GaussianSplat3d
-            # Project the Gaussians for rendering images onto C image planes
-            projected_gaussians = gaussian_splat_3d.project_gaussians_for_images_and_depths(
-                world_to_camera_matrices, # tensor of shape [C, 4, 4]
-                projection_matrices, # tensor of shape [C, 3, 3]
-                image_width, # width of the C images
-                image_height, # height of the C images
-                near, # near clipping plane
-                far) # far clipping plane
-
-            # Now render a crop of size 100x100 starting at (10, 10) from the projected Gaussians
-            # in each image plane.
-            # Returns a tensor of shape [C, 100, 100, D] containing the images (where D is num_channels + 1 for depth),
-            # and a tensor of shape [C, 100, 100, 1] containing the final alpha (opacity) values
-            # of each pixel.
-            cropped_images_1, cropped_alphas = gaussian_splat_3d.render_from_projected_gaussians(
-                projected_gaussians,
-                crop_width=100,
-                crop_height=100,
-                crop_origin_w=10,
-                crop_origin_h=10)
-
-            cropped_images = cropped_images_1[..., :-1]  # Extract image channels
-
-            # Divide by alpha to get the final true depth values
-            cropped_depths = cropped_images_1[..., -1:] / cropped_alphas  # Extract depth channel
-
-        Args:
-            world_to_camera_matrices (torch.Tensor): Tensor of shape ``(C, 4, 4)`` representing the world-to-camera transformation matrices for ``C`` cameras.
-                Each matrix transforms points from world coordinates to camera coordinates.
-            projection_matrices (torch.Tensor): Tensor of shape ``(C, 3, 3)`` representing the projection matrices for ``C`` cameras.
-                Each matrix projects points in camera space into homogeneous pixel coordinates.
-            image_width (int): The width of the images to be rendered. Note that all images must have the same width.
-            image_height (int): The height of the images to be rendered. Note that all images must have the same height.
-            near (float): The near clipping plane distance for the projection.
-            far (float): The far clipping plane distance for the projection.
-            camera_model (CameraModel): Semantic camera model for projection. Default is
-                :attr:`fvdb.CameraModel.PINHOLE`.
-            projection_method (ProjectionMethod): Projection implementation selector. Default is
-                :attr:`fvdb.ProjectionMethod.AUTO`.
-            distortion_coeffs (torch.Tensor | None): Distortion coefficients with shape ``(C, 12)``.
-                Required for :class:`CameraModel.OPENCV_*` camera models. For
-                :class:`CameraModel.PINHOLE` and :class:`CameraModel.ORTHOGRAPHIC`, pass
-                ``None`` or a ``(C, 12)`` tensor, which is ignored. To represent no
-                distortion with an OpenCV camera model, pass a zero-filled tensor.
-            sh_degree_to_use (int): The degree of spherical harmonics to use for rendering. -1 means use all available SH bases.
-                0 means use only the first SH base (constant color). Note that you can't use more SH bases than available in the GaussianSplat3d instance.
-                Default is -1.
-            min_radius_2d (float): The minimum radius (in pixels) below which Gaussians are ignored during rendering.
-            eps_2d (float): A value used to pad Gaussians when projecting them onto the image plane, to avoid very projected Gaussians which create artifacts and
-                numerical issues.
-            antialias (bool): If ``True``, applies opacity correction to the projected Gaussians when using ``eps_2d > 0.0``.
-
-        Returns:
-            projected_gaussians (ProjectedGaussians): An instance of ProjectedGaussians containing the projected Gaussians.
-                This object contains the projected 2D representations of the Gaussians, which can be used for rendering images or further processing.
-
-        """
-        settings = _build_settings(
-            image_width,
-            image_height,
-            near,
-            far,
-            sh_degree_to_use=sh_degree_to_use,
-            tile_size=16,
-            radius_clip=min_radius_2d,
-            eps_2d=eps_2d,
-            antialias=antialias,
-            render_mode="rgbd",
-        )
-        return self._project_validated(
-            world_to_camera_matrices,
-            projection_matrices,
-            settings,
-            self._camera_model_to_cpp(camera_model),
-            self._projection_method_to_cpp(projection_method),
-            distortion_coeffs,
-        )
-
-    def render_from_projected_gaussians(
-        self,
-        projected_gaussians: ProjectedGaussians,
-        crop_width: int = -1,
-        crop_height: int = -1,
-        crop_origin_w: int = -1,
-        crop_origin_h: int = -1,
-        tile_size: int = 16,
-        backgrounds: torch.Tensor | None = None,
-        masks: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-        Render a set of images from Gaussian splats that have already been projected onto image planes
-        (See for example :meth:`project_gaussians_for_images`).
-        This method is useful when you want to render images from pre-computed projected Gaussians,
-        for example, when rendering crops of images without having to re-project the Gaussians.
-
-        .. note::
-
-            If you want to render the full image, pass negative values for ``crop_width``, ``crop_height``,
-            ``crop_origin_w``, and ``crop_origin_h`` (default behavior). To render full images,
-            all these values must be negative or this method will raise an error.
-
-        .. note::
-
-            If your crop goes beyond the image boundaries, the resulting image will be clipped to
-            be within the image boundaries.
-
 
         Example:
 
         .. code-block:: python
 
-            # Assume gaussian_splat_3d is an instance of GaussianSplat3d
-            # Project the Gaussians for rendering images onto C image planes
-            projected_gaussians = gaussian_splat_3d.project_gaussians_for_images_and_depths(
-                world_to_camera_matrices, # tensor of shape [C, 4, 4]
-                projection_matrices, # tensor of shape [C, 3, 3]
-                image_width, # width of the C images
-                image_height, # height of the C images
-                near, # near clipping plane
-                far) # far clipping plane
+            projected = splat.project_gaussians(
+                world_to_camera_matrices,  # [C, 4, 4]
+                projection_matrices,       # [C, 3, 3]
+                image_width, image_height,
+                near, far)
 
-            # Now render a crop of size 100x100 starting at (10, 10) from the projected Gaussians
-            # in each image plane.
-            # Returns a tensor of shape [C, 100, 100, D] containing the images (where D is num_channels + 1 for depth),
-            # and a tensor of shape [C, 100, 100, 1] containing the final alpha (opacity) values
-            # of each pixel.
-            cropped_images_1, cropped_alphas = gaussian_splat_3d.render_from_projected_gaussians(
-                projected_gaussians,
-                crop_width=100,
-                crop_height=100,
-                crop_origin_w=10,
-                crop_origin_h=10)
-
-            cropped_images = cropped_images_1[..., :-1]  # Extract image channels
-
-            # Divide by alpha to get the final true depth values
-            cropped_depths = cropped_images_1[..., -1:] / cropped_alphas  # Extract depth channel
-
+            crop1, alpha1 = splat.render_from_projected_gaussians(
+                projected, world_to_camera_matrices,
+                render_mode=GaussianRenderMode.FEATURES,
+                crop_width=100, crop_height=100,
+                crop_origin_w=0, crop_origin_h=0)
 
         Args:
-            projected_gaussians (ProjectedGaussians): An instance of :class:`fvdb.ProjectedGaussians`
-                containing the projected Gaussians after spherical harmonic evaluation. This object should have been created by calling
-                :meth:`project_gaussians_for_images`, :meth:`project_gaussians_for_depths`,
-                :meth:`project_gaussians_for_images_and_depths`, etc.
-            crop_width (int): The width of the crop to render. If -1, the full image width is used.
-                Default is -1.
-            crop_height (int): The height of the crop to render. If -1, the full image height is used.
-                Default is -1.
-            crop_origin_w (int): The x-coordinate of the top-left corner of the crop. If -1, the crop starts at (0, 0).
-                Default is -1.
-            crop_origin_h (int): The y-coordinate of the top-left corner of the crop. If -1, the crop starts at (0, 0).
-                Default is -1.
-            tile_size (int): The size of the tiles to use for rendering. Default is 16.
-                This parameter controls the size of the tiles used for rendering the images.
-                You shouldn't set this parameter unless you really know what you are doing.
-            backgrounds (torch.Tensor | None): Optional background colors of shape ``(C, D)``.
-                If ``None``, background is treated as 0.
-            masks (torch.Tensor | None): Optional per-pixel boolean mask of shape ``(C, cropH, cropW)``
-                (in crop coordinate space, matching the output dimensions).
-                ``True`` means render, ``False`` means skip (filled with background).
-
+            world_to_camera_matrices (torch.Tensor): ``(C, 4, 4)`` world-to-camera transforms.
+            projection_matrices (torch.Tensor): ``(C, 3, 3)`` projection matrices.
+            image_width (int): Width of the target images.
+            image_height (int): Height of the target images.
+            near (float): Near clipping plane.
+            far (float): Far clipping plane.
+            camera_model (CameraModel): Camera model. Default :attr:`CameraModel.PINHOLE`.
+            projection_method (ProjectionMethod): Projection selector. Default :attr:`ProjectionMethod.AUTO`.
+            distortion_coeffs (torch.Tensor | None): ``(C, 12)`` distortion coefficients.
+                Required for ``OPENCV_*`` camera models.
+            min_radius_2d (float): Minimum 2D radius in pixels (smaller Gaussians are culled).
+            eps_2d (float): Padding applied to projected Gaussians.
+            antialias (bool): Apply opacity correction when ``eps_2d > 0``.
 
         Returns:
-            rendered_images (torch.Tensor): A tensor of shape ``(C, H, W, D)`` where ``C`` is the number of image planes,
-                ``H`` is the height of the rendered images, ``W`` is the width of the rendered images, and ``D`` is the
-                number of channels (e.g., RGB, RGBD, etc.).
-            alpha_images (torch.Tensor): A tensor of shape ``(C, H, W, 1)`` where ``C`` is the number of cameras,
-                ``H`` is the height of the images, and ``W`` is the width of the images.
-                Each element represents the alpha value (opacity) at a pixel such that 0 <= alpha < 1,
-                and 0 means the pixel is fully transparent, and 1 means the pixel is fully opaque.
+            :class:`ProjectedGaussians` with the screen-space projection.
         """
+        self._init_accumulators()
+        return GF.project_gaussians(
+            self._means,
+            self._quats,
+            self._log_scales,
+            world_to_camera_matrices,
+            projection_matrices,
+            image_width,
+            image_height,
+            eps_2d=eps_2d,
+            near=near,
+            far=far,
+            radius_clip=min_radius_2d,
+            antialias=antialias,
+            camera_model=camera_model,
+            projection_method=projection_method,
+            distortion_coeffs=distortion_coeffs,
+            accum_grad_norms=self._accum_grad_norms,
+            accum_step_counts=self._accum_step_counts,
+            accum_max_radii=self._accum_max_2d_radii,
+        )
+
+    def render_from_projected_gaussians(
+        self,
+        projected_gaussians: ProjectedGaussians,
+        world_to_camera_matrices: torch.Tensor,
+        render_mode: GaussianRenderMode = GaussianRenderMode.FEATURES,
+        sh_degree_to_use: int = -1,
+        tile_size: int = 16,
+        crop_width: int = -1,
+        crop_height: int = -1,
+        crop_origin_w: int = -1,
+        crop_origin_h: int = -1,
+        backgrounds: torch.Tensor | None = None,
+        masks: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Render images from pre-projected Gaussians.
+
+        This avoids the expensive projection step when rendering multiple crops
+        of the same scene. SH evaluation, tile intersection, and rasterization
+        are performed inside this call.
+
+        Example:
+
+        .. code-block:: python
+
+            projected = splat.project_gaussians(w2c, K, W, H, near, far)
+
+            crop, alpha = splat.render_from_projected_gaussians(
+                projected, w2c,
+                render_mode=GaussianRenderMode.FEATURES,
+                crop_width=100, crop_height=100,
+                crop_origin_w=10, crop_origin_h=10)
+
+        Args:
+            projected_gaussians (ProjectedGaussians): Projection from :meth:`project_gaussians`.
+            world_to_camera_matrices (torch.Tensor): ``(C, 4, 4)`` world-to-camera transforms
+                (needed for view-dependent SH evaluation).
+            render_mode (GaussianRenderMode): What to render. Default ``FEATURES``.
+            sh_degree_to_use (int): SH degree to use (``-1`` = all available).
+            tile_size (int): Tile size for rasterization.
+            crop_width (int): Crop width (``-1`` for full image).
+            crop_height (int): Crop height (``-1`` for full image).
+            crop_origin_w (int): Crop x-origin (``-1`` for 0).
+            crop_origin_h (int): Crop y-origin (``-1`` for 0).
+            backgrounds (torch.Tensor | None): ``(C, D)`` background colors.
+            masks (torch.Tensor | None): ``(C, cropH, cropW)`` per-pixel boolean mask.
+
+        Returns:
+            Tuple of ``(rendered_images, alpha_images)``.
+        """
+        features = GF.evaluate_gaussian_sh(
+            self._means,
+            self._sh0,
+            self._shN,
+            world_to_camera_matrices,
+            projected_gaussians,
+            sh_degree_to_use=sh_degree_to_use,
+            render_mode=render_mode,
+        )
+        tiles = GF.intersect_gaussian_tiles(projected_gaussians, tile_size=tile_size)
         tile_masks = _pixel_mask_to_tile_mask(masks, tile_size) if masks is not None else None
 
-        p = projected_gaussians
-        features, alphas = self._rasterize_decomposed(
-            p.means2d,
-            p.conics,
-            p.render_quantities,
-            p.opacities,
-            p.tile_offsets,
-            p.tile_gaussian_ids,
-            p,
-            tile_size,
-            crop_width,
-            crop_height,
-            crop_origin_w,
-            crop_origin_h,
+        is_crop = crop_width > 0 or crop_height > 0 or crop_origin_w >= 0 or crop_origin_h >= 0
+        crop_rect: tuple[int, int, int, int] | None = None
+        if is_crop:
+            crop_rect = (
+                crop_origin_w if crop_origin_w >= 0 else 0,
+                crop_origin_h if crop_origin_h >= 0 else 0,
+                crop_width if crop_width > 0 else projected_gaussians.image_width,
+                crop_height if crop_height > 0 else projected_gaussians.image_height,
+            )
+        result, alphas = GF.rasterize_screen_space_gaussians(
+            projected_gaussians,
+            features,
+            self._logit_opacities,
+            tiles,
             backgrounds,
             tile_masks,
+            crop=crop_rect,
         )
 
         if masks is not None:
-            features, alphas = _apply_pixel_mask(features, alphas, masks, backgrounds)
-
-        return features, alphas
+            result, alphas = _apply_pixel_mask(result, alphas, masks, backgrounds)
+        return result, alphas
 
     def render_depths(
         self,
@@ -2367,49 +1654,35 @@ class GaussianSplat3d:
                 Each element represents the alpha value (opacity) at a pixel such that ``0 <= alpha < 1``,
                 and 0 means the pixel is fully transparent, and 1 means the pixel is fully opaque.
         """
-        tile_masks = _pixel_mask_to_tile_mask(masks, tile_size) if masks is not None else None
-
-        settings = _build_settings(
+        projected, render_features = self._project_and_eval_sh(
+            world_to_camera_matrices,
+            projection_matrices,
             image_width,
             image_height,
             near,
             far,
-            sh_degree_to_use=-1,
-            tile_size=tile_size,
-            radius_clip=min_radius_2d,
-            eps_2d=eps_2d,
-            antialias=antialias,
-            render_mode="depth",
-        )
-        state = self._project_validated(
-            world_to_camera_matrices,
-            projection_matrices,
-            settings,
-            self._camera_model_to_cpp(camera_model),
-            self._projection_method_to_cpp(projection_method),
+            GaussianRenderMode.DEPTH,
+            camera_model,
+            projection_method,
             distortion_coeffs,
+            -1,
+            eps_2d,
+            min_radius_2d,
+            antialias,
         )
-        features, alphas = self._rasterize_decomposed(
-            state.means2d,
-            state.conics,
-            state.render_quantities,
-            state.opacities,
-            state.tile_offsets,
-            state.tile_gaussian_ids,
-            state,
-            tile_size,
-            image_width,
-            image_height,
-            0,
-            0,
+        tiles = GF.intersect_gaussian_tiles(projected, tile_size=tile_size)
+        tile_masks = _pixel_mask_to_tile_mask(masks, tile_size) if masks is not None else None
+        result, alphas = GF.rasterize_screen_space_gaussians(
+            projected,
+            render_features,
+            self._logit_opacities,
+            tiles,
             backgrounds,
             tile_masks,
         )
-
         if masks is not None:
-            features, alphas = _apply_pixel_mask(features, alphas, masks, backgrounds)
-
-        return features, alphas
+            result, alphas = _apply_pixel_mask(result, alphas, masks, backgrounds)
+        return result, alphas
 
     def sparse_render_depths(
         self,
@@ -2502,34 +1775,44 @@ class GaussianSplat3d:
         else:
             raise TypeError("pixels_to_render must be either a torch.Tensor or a fvdb.JaggedTensor")
 
-        settings = _build_settings(
+        projected, render_features = self._project_and_eval_sh(
+            world_to_camera_matrices,
+            projection_matrices,
             image_width,
             image_height,
             near,
             far,
-            sh_degree_to_use=-1,
-            tile_size=tile_size,
-            radius_clip=min_radius_2d,
-            eps_2d=eps_2d,
-            antialias=antialias,
-            render_mode="depth",
-        )
-        ret_depths, ret_alphas = self._sparse_render_decomposed(
-            pixels_to_render_impl,
-            world_to_camera_matrices,
-            projection_matrices,
-            settings,
-            self._camera_model_to_cpp(camera_model),
-            self._projection_method_to_cpp(projection_method),
+            GaussianRenderMode.DEPTH,
+            camera_model,
+            projection_method,
             distortion_coeffs,
+            -1,
+            eps_2d,
+            min_radius_2d,
+            antialias,
+        )
+        pixels_jt = JaggedTensor(impl=pixels_to_render_impl)
+        sparse_tiles = GF.intersect_gaussian_tiles_sparse(pixels_jt, projected, tile_size=tile_size)
+        rendered_jt, rendered_alphas_jt = GF.rasterize_screen_space_gaussians_sparse(
+            projected,
+            render_features,
+            self._logit_opacities,
+            sparse_tiles,
             backgrounds,
             masks,
         )
+        rendered_colors = rendered_jt.jdata
+        rendered_alphas = rendered_alphas_jt.jdata
+        if sparse_tiles.has_duplicates:
+            rendered_colors = rendered_colors.index_select(0, sparse_tiles.inverse_indices)
+            rendered_alphas = rendered_alphas.index_select(0, sparse_tiles.inverse_indices)
+        ret_features = pixels_jt.jagged_like(rendered_colors)
+        ret_alphas = pixels_jt.jagged_like(rendered_alphas)
 
         if isinstance(pixels_to_render, torch.Tensor):
-            return ret_depths.jdata, ret_alphas.jdata
+            return ret_features._impl.jdata, ret_alphas._impl.jdata
         else:
-            return JaggedTensor(impl=ret_depths), JaggedTensor(impl=ret_alphas)
+            return ret_features, ret_alphas
 
     def render_images(
         self,
@@ -2615,49 +1898,35 @@ class GaussianSplat3d:
                 Each element represents the alpha value (opacity) at a pixel such that ``0 <= alpha < 1``,
                 and 0 means the pixel is fully transparent, and 1 means the pixel is fully opaque.
         """
-        tile_masks = _pixel_mask_to_tile_mask(masks, tile_size) if masks is not None else None
-
-        settings = _build_settings(
+        projected, render_features = self._project_and_eval_sh(
+            world_to_camera_matrices,
+            projection_matrices,
             image_width,
             image_height,
             near,
             far,
-            sh_degree_to_use=sh_degree_to_use,
-            tile_size=tile_size,
-            radius_clip=min_radius_2d,
-            eps_2d=eps_2d,
-            antialias=antialias,
-            render_mode="rgb",
-        )
-        state = self._project_validated(
-            world_to_camera_matrices,
-            projection_matrices,
-            settings,
-            self._camera_model_to_cpp(camera_model),
-            self._projection_method_to_cpp(projection_method),
+            GaussianRenderMode.FEATURES,
+            camera_model,
+            projection_method,
             distortion_coeffs,
+            sh_degree_to_use,
+            eps_2d,
+            min_radius_2d,
+            antialias,
         )
-        features, alphas = self._rasterize_decomposed(
-            state.means2d,
-            state.conics,
-            state.render_quantities,
-            state.opacities,
-            state.tile_offsets,
-            state.tile_gaussian_ids,
-            state,
-            tile_size,
-            image_width,
-            image_height,
-            0,
-            0,
+        tiles = GF.intersect_gaussian_tiles(projected, tile_size=tile_size)
+        tile_masks = _pixel_mask_to_tile_mask(masks, tile_size) if masks is not None else None
+        result, alphas = GF.rasterize_screen_space_gaussians(
+            projected,
+            render_features,
+            self._logit_opacities,
+            tiles,
             backgrounds,
             tile_masks,
         )
-
         if masks is not None:
-            features, alphas = _apply_pixel_mask(features, alphas, masks, backgrounds)
-
-        return features, alphas
+            result, alphas = _apply_pixel_mask(result, alphas, masks, backgrounds)
+        return result, alphas
 
     def render_images_from_world(
         self,
@@ -2753,46 +2022,48 @@ class GaussianSplat3d:
             images (torch.Tensor): Rendered images of shape ``(C, H, W, D)``.
             alpha_images (torch.Tensor): Alpha images of shape ``(C, H, W, 1)``.
         """
-        tile_masks = _pixel_mask_to_tile_mask(masks, tile_size) if masks is not None else None
-        cpp_camera_model = self._camera_model_to_cpp(camera_model)
-
-        settings = _build_settings(
+        projected, render_features = self._project_and_eval_sh(
+            world_to_camera_matrices,
+            projection_matrices,
             image_width,
             image_height,
             near,
             far,
-            sh_degree_to_use=sh_degree_to_use,
-            tile_size=tile_size,
-            radius_clip=min_radius_2d,
-            eps_2d=eps_2d,
-            antialias=antialias,
-            render_mode="rgb",
-        )
-        state = self._project_validated(
-            world_to_camera_matrices,
-            projection_matrices,
-            settings,
-            cpp_camera_model,
-            self._projection_method_to_cpp(projection_method),
+            GaussianRenderMode.FEATURES,
+            camera_model,
+            projection_method,
             distortion_coeffs,
+            sh_degree_to_use,
+            eps_2d,
+            min_radius_2d,
+            antialias,
         )
+        tiles = GF.intersect_gaussian_tiles(projected, tile_size=tile_size)
+        tile_masks = _pixel_mask_to_tile_mask(masks, tile_size) if masks is not None else None
         C = world_to_camera_matrices.size(0)
         dc = (
             distortion_coeffs
             if distortion_coeffs is not None
             else torch.empty(C, 0, device=self._means.device, dtype=self._means.dtype)
         )
-        features, alphas = _rasterize_from_world_internal(
-            self._means, self._quats, self._log_scales, state,
-            world_to_camera_matrices, projection_matrices, dc,
-            CameraModel(int(cpp_camera_model)),
-            image_width, image_height, tile_size, backgrounds, tile_masks,
+        result, alphas = GF.rasterize_world_space_gaussians(
+            self._means,
+            self._quats,
+            self._log_scales,
+            projected,
+            render_features,
+            self._logit_opacities,
+            world_to_camera_matrices,
+            projection_matrices,
+            dc,
+            camera_model,
+            tiles,
+            backgrounds,
+            tile_masks,
         )
-
         if masks is not None:
-            features, alphas = _apply_pixel_mask(features, alphas, masks, backgrounds)
-
-        return features, alphas
+            result, alphas = _apply_pixel_mask(result, alphas, masks, backgrounds)
+        return result, alphas
 
     def render_depths_from_world(
         self,
@@ -2818,46 +2089,48 @@ class GaussianSplat3d:
         This mirrors :meth:`render_images_from_world`, but renders depth-only outputs with the
         same camera-model and projection-method dispatch.
         """
-        tile_masks = _pixel_mask_to_tile_mask(masks, tile_size) if masks is not None else None
-        cpp_camera_model = self._camera_model_to_cpp(camera_model)
-
-        settings = _build_settings(
+        projected, render_features = self._project_and_eval_sh(
+            world_to_camera_matrices,
+            projection_matrices,
             image_width,
             image_height,
             near,
             far,
-            sh_degree_to_use=-1,
-            tile_size=tile_size,
-            radius_clip=min_radius_2d,
-            eps_2d=eps_2d,
-            antialias=antialias,
-            render_mode="depth",
-        )
-        state = self._project_validated(
-            world_to_camera_matrices,
-            projection_matrices,
-            settings,
-            cpp_camera_model,
-            self._projection_method_to_cpp(projection_method),
+            GaussianRenderMode.DEPTH,
+            camera_model,
+            projection_method,
             distortion_coeffs,
+            -1,
+            eps_2d,
+            min_radius_2d,
+            antialias,
         )
+        tiles = GF.intersect_gaussian_tiles(projected, tile_size=tile_size)
+        tile_masks = _pixel_mask_to_tile_mask(masks, tile_size) if masks is not None else None
         C = world_to_camera_matrices.size(0)
         dc = (
             distortion_coeffs
             if distortion_coeffs is not None
             else torch.empty(C, 0, device=self._means.device, dtype=self._means.dtype)
         )
-        features, alphas = _rasterize_from_world_internal(
-            self._means, self._quats, self._log_scales, state,
-            world_to_camera_matrices, projection_matrices, dc,
-            CameraModel(int(cpp_camera_model)),
-            image_width, image_height, tile_size, backgrounds, tile_masks,
+        result, alphas = GF.rasterize_world_space_gaussians(
+            self._means,
+            self._quats,
+            self._log_scales,
+            projected,
+            render_features,
+            self._logit_opacities,
+            world_to_camera_matrices,
+            projection_matrices,
+            dc,
+            camera_model,
+            tiles,
+            backgrounds,
+            tile_masks,
         )
-
         if masks is not None:
-            features, alphas = _apply_pixel_mask(features, alphas, masks, backgrounds)
-
-        return features, alphas
+            result, alphas = _apply_pixel_mask(result, alphas, masks, backgrounds)
+        return result, alphas
 
     def sparse_render_images(
         self,
@@ -2954,34 +2227,44 @@ class GaussianSplat3d:
         else:
             raise TypeError("pixels_to_render must be either a torch.Tensor or a fvdb.JaggedTensor")
 
-        settings = _build_settings(
+        projected, render_features = self._project_and_eval_sh(
+            world_to_camera_matrices,
+            projection_matrices,
             image_width,
             image_height,
             near,
             far,
-            sh_degree_to_use=sh_degree_to_use,
-            tile_size=tile_size,
-            radius_clip=min_radius_2d,
-            eps_2d=eps_2d,
-            antialias=antialias,
-            render_mode="rgb",
-        )
-        ret_features, ret_alphas = self._sparse_render_decomposed(
-            pixels_to_render_impl,
-            world_to_camera_matrices,
-            projection_matrices,
-            settings,
-            self._camera_model_to_cpp(camera_model),
-            self._projection_method_to_cpp(projection_method),
+            GaussianRenderMode.FEATURES,
+            camera_model,
+            projection_method,
             distortion_coeffs,
+            sh_degree_to_use,
+            eps_2d,
+            min_radius_2d,
+            antialias,
+        )
+        pixels_jt = JaggedTensor(impl=pixels_to_render_impl)
+        sparse_tiles = GF.intersect_gaussian_tiles_sparse(pixels_jt, projected, tile_size=tile_size)
+        rendered_jt, rendered_alphas_jt = GF.rasterize_screen_space_gaussians_sparse(
+            projected,
+            render_features,
+            self._logit_opacities,
+            sparse_tiles,
             backgrounds,
             masks,
         )
+        rendered_colors = rendered_jt.jdata
+        rendered_alphas = rendered_alphas_jt.jdata
+        if sparse_tiles.has_duplicates:
+            rendered_colors = rendered_colors.index_select(0, sparse_tiles.inverse_indices)
+            rendered_alphas = rendered_alphas.index_select(0, sparse_tiles.inverse_indices)
+        ret_features = pixels_jt.jagged_like(rendered_colors)
+        ret_alphas = pixels_jt.jagged_like(rendered_alphas)
 
         if isinstance(pixels_to_render, torch.Tensor):
-            return ret_features.jdata, ret_alphas.jdata
+            return ret_features._impl.jdata, ret_alphas._impl.jdata
         else:
-            return JaggedTensor(impl=ret_features), JaggedTensor(impl=ret_alphas)
+            return ret_features, ret_alphas
 
     def sparse_render_images_and_depths(
         self,
@@ -3079,34 +2362,44 @@ class GaussianSplat3d:
         else:
             raise TypeError("pixels_to_render must be either a torch.Tensor or a fvdb.JaggedTensor")
 
-        settings = _build_settings(
+        projected, render_features = self._project_and_eval_sh(
+            world_to_camera_matrices,
+            projection_matrices,
             image_width,
             image_height,
             near,
             far,
-            sh_degree_to_use=sh_degree_to_use,
-            tile_size=tile_size,
-            radius_clip=min_radius_2d,
-            eps_2d=eps_2d,
-            antialias=antialias,
-            render_mode="rgbd",
-        )
-        ret_features, ret_alphas = self._sparse_render_decomposed(
-            pixels_to_render_impl,
-            world_to_camera_matrices,
-            projection_matrices,
-            settings,
-            self._camera_model_to_cpp(camera_model),
-            self._projection_method_to_cpp(projection_method),
+            GaussianRenderMode.FEATURES_AND_DEPTH,
+            camera_model,
+            projection_method,
             distortion_coeffs,
+            sh_degree_to_use,
+            eps_2d,
+            min_radius_2d,
+            antialias,
+        )
+        pixels_jt = JaggedTensor(impl=pixels_to_render_impl)
+        sparse_tiles = GF.intersect_gaussian_tiles_sparse(pixels_jt, projected, tile_size=tile_size)
+        rendered_jt, rendered_alphas_jt = GF.rasterize_screen_space_gaussians_sparse(
+            projected,
+            render_features,
+            self._logit_opacities,
+            sparse_tiles,
             backgrounds,
             masks,
         )
+        rendered_colors = rendered_jt.jdata
+        rendered_alphas = rendered_alphas_jt.jdata
+        if sparse_tiles.has_duplicates:
+            rendered_colors = rendered_colors.index_select(0, sparse_tiles.inverse_indices)
+            rendered_alphas = rendered_alphas.index_select(0, sparse_tiles.inverse_indices)
+        ret_features = pixels_jt.jagged_like(rendered_colors)
+        ret_alphas = pixels_jt.jagged_like(rendered_alphas)
 
         if isinstance(pixels_to_render, torch.Tensor):
-            return ret_features.jdata, ret_alphas.jdata
+            return ret_features._impl.jdata, ret_alphas._impl.jdata
         else:
-            return JaggedTensor(impl=ret_features), JaggedTensor(impl=ret_alphas)
+            return ret_features, ret_alphas
 
     def render_images_and_depths(
         self,
@@ -3195,49 +2488,35 @@ class GaussianSplat3d:
                 Each element represents the alpha value (opacity) at a pixel such that ``0 <= alpha < 1``,
                 and 0 means the pixel is fully transparent, and 1 means the pixel is fully opaque.
         """
-        tile_masks = _pixel_mask_to_tile_mask(masks, tile_size) if masks is not None else None
-
-        settings = _build_settings(
+        projected, render_features = self._project_and_eval_sh(
+            world_to_camera_matrices,
+            projection_matrices,
             image_width,
             image_height,
             near,
             far,
-            sh_degree_to_use=sh_degree_to_use,
-            tile_size=tile_size,
-            radius_clip=min_radius_2d,
-            eps_2d=eps_2d,
-            antialias=antialias,
-            render_mode="rgbd",
-        )
-        state = self._project_validated(
-            world_to_camera_matrices,
-            projection_matrices,
-            settings,
-            self._camera_model_to_cpp(camera_model),
-            self._projection_method_to_cpp(projection_method),
+            GaussianRenderMode.FEATURES_AND_DEPTH,
+            camera_model,
+            projection_method,
             distortion_coeffs,
+            sh_degree_to_use,
+            eps_2d,
+            min_radius_2d,
+            antialias,
         )
-        features, alphas = self._rasterize_decomposed(
-            state.means2d,
-            state.conics,
-            state.render_quantities,
-            state.opacities,
-            state.tile_offsets,
-            state.tile_gaussian_ids,
-            state,
-            tile_size,
-            image_width,
-            image_height,
-            0,
-            0,
+        tiles = GF.intersect_gaussian_tiles(projected, tile_size=tile_size)
+        tile_masks = _pixel_mask_to_tile_mask(masks, tile_size) if masks is not None else None
+        result, alphas = GF.rasterize_screen_space_gaussians(
+            projected,
+            render_features,
+            self._logit_opacities,
+            tiles,
             backgrounds,
             tile_masks,
         )
-
         if masks is not None:
-            features, alphas = _apply_pixel_mask(features, alphas, masks, backgrounds)
-
-        return features, alphas
+            result, alphas = _apply_pixel_mask(result, alphas, masks, backgrounds)
+        return result, alphas
 
     def render_images_and_depths_from_world(
         self,
@@ -3264,46 +2543,48 @@ class GaussianSplat3d:
         This mirrors :meth:`render_images_from_world`, but returns image channels with depth in the
         final channel while using the same camera-model and projection-method dispatch.
         """
-        tile_masks = _pixel_mask_to_tile_mask(masks, tile_size) if masks is not None else None
-        cpp_camera_model = self._camera_model_to_cpp(camera_model)
-
-        settings = _build_settings(
+        projected, render_features = self._project_and_eval_sh(
+            world_to_camera_matrices,
+            projection_matrices,
             image_width,
             image_height,
             near,
             far,
-            sh_degree_to_use=sh_degree_to_use,
-            tile_size=tile_size,
-            radius_clip=min_radius_2d,
-            eps_2d=eps_2d,
-            antialias=antialias,
-            render_mode="rgbd",
-        )
-        state = self._project_validated(
-            world_to_camera_matrices,
-            projection_matrices,
-            settings,
-            cpp_camera_model,
-            self._projection_method_to_cpp(projection_method),
+            GaussianRenderMode.FEATURES_AND_DEPTH,
+            camera_model,
+            projection_method,
             distortion_coeffs,
+            sh_degree_to_use,
+            eps_2d,
+            min_radius_2d,
+            antialias,
         )
+        tiles = GF.intersect_gaussian_tiles(projected, tile_size=tile_size)
+        tile_masks = _pixel_mask_to_tile_mask(masks, tile_size) if masks is not None else None
         C = world_to_camera_matrices.size(0)
         dc = (
             distortion_coeffs
             if distortion_coeffs is not None
             else torch.empty(C, 0, device=self._means.device, dtype=self._means.dtype)
         )
-        features, alphas = _rasterize_from_world_internal(
-            self._means, self._quats, self._log_scales, state,
-            world_to_camera_matrices, projection_matrices, dc,
-            CameraModel(int(cpp_camera_model)),
-            image_width, image_height, tile_size, backgrounds, tile_masks,
+        result, alphas = GF.rasterize_world_space_gaussians(
+            self._means,
+            self._quats,
+            self._log_scales,
+            projected,
+            render_features,
+            self._logit_opacities,
+            world_to_camera_matrices,
+            projection_matrices,
+            dc,
+            camera_model,
+            tiles,
+            backgrounds,
+            tile_masks,
         )
-
         if masks is not None:
-            features, alphas = _apply_pixel_mask(features, alphas, masks, backgrounds)
-
-        return features, alphas
+            result, alphas = _apply_pixel_mask(result, alphas, masks, backgrounds)
+        return result, alphas
 
     def render_num_contributing_gaussians(
         self,
@@ -3381,31 +2662,24 @@ class GaussianSplat3d:
                 Each element represents the alpha value (opacity) at a pixel such that ``0 <= alpha < 1``,
                 and 0 means the pixel is fully transparent, and 1 means the pixel is fully opaque.
         """
-        settings = _build_settings(
+        projected, _ = self._project_and_eval_sh(
+            world_to_camera_matrices,
+            projection_matrices,
             image_width,
             image_height,
             near,
             far,
-            0,
-            tile_size,
-            min_radius_2d,
-            eps_2d,
-            antialias,
-            "depth",
-        )
-        state = self._project_validated(
-            world_to_camera_matrices,
-            projection_matrices,
-            settings,
-            self._camera_model_to_cpp(camera_model),
-            self._projection_method_to_cpp(projection_method),
+            GaussianRenderMode.DEPTH,
+            camera_model,
+            projection_method,
             distortion_coeffs,
+            -1,
+            eps_2d,
+            min_radius_2d,
+            antialias,
         )
-        return _C.count_contributing_gaussians(
-            state.means2d, state.conics, state.opacities,
-            state.tile_offsets, state.tile_gaussian_ids,
-            settings,
-        )
+        tiles = GF.intersect_gaussian_tiles(projected, tile_size=tile_size)
+        return GF.count_contributing_gaussians(projected, self._logit_opacities, tiles)
 
     @overload
     def sparse_render_num_contributing_gaussians(
@@ -3509,19 +2783,6 @@ class GaussianSplat3d:
                 Each element represents the alpha value (opacity) at that pixel such that ``0 <= alpha < 1``,
                 and 0 means the pixel is fully transparent, and 1 means the pixel is fully opaque.
         """
-        settings = _build_settings(
-            image_width,
-            image_height,
-            near,
-            far,
-            0,
-            tile_size,
-            min_radius_2d,
-            eps_2d,
-            antialias,
-            "depth",
-        )
-
         if isinstance(pixels_to_render, torch.Tensor):
             C, R, _ = pixels_to_render.shape
             tensors = [pixels_to_render[i] for i in range(C)]
@@ -3529,35 +2790,39 @@ class GaussianSplat3d:
         else:
             pixels_to_render_jagged = pixels_to_render
 
-        state, st = self._compute_sparse_projection_data(
-            pixels_to_render_jagged, world_to_camera_matrices, projection_matrices,
-            settings, self._camera_model_to_cpp(camera_model),
-            self._projection_method_to_cpp(projection_method), distortion_coeffs,
+        projected, _ = self._project_and_eval_sh(
+            world_to_camera_matrices,
+            projection_matrices,
+            image_width,
+            image_height,
+            near,
+            far,
+            GaussianRenderMode.DEPTH,
+            camera_model,
+            projection_method,
+            distortion_coeffs,
+            -1,
+            eps_2d,
+            min_radius_2d,
+            antialias,
         )
-        render_pixels = st.unique_pixels if st.has_duplicates else st.pixels_to_render
-        result_num_impl, result_alphas_impl = _C.count_contributing_gaussians_sparse(
-            state.means2d, state.conics, state.opacities,
-            st.tile_offsets, st.tile_gaussian_ids,
-            render_pixels._impl,
-            st.active_tiles,
-            st.tile_pixel_mask, st.tile_pixel_cumsum,
-            st.pixel_map,
-            settings,
+        sparse_tiles = GF.intersect_gaussian_tiles_sparse(
+            pixels_to_render_jagged,
+            projected,
+            tile_size=tile_size,
         )
-        if st.has_duplicates:
-            inv = st.inverse_indices
-            pixels_impl = st.pixels_to_render._impl
-            result_num_impl = pixels_impl.jagged_like(result_num_impl.jdata().index_select(0, inv))
-            result_alphas_impl = pixels_impl.jagged_like(result_alphas_impl.jdata().index_select(0, inv))
+        result_num, result_alphas = GF.count_contributing_gaussians_sparse(
+            projected,
+            self._logit_opacities,
+            sparse_tiles,
+        )
 
         if isinstance(pixels_to_render, torch.Tensor):
-            num_contributing_gaussians_list = result_num_impl.unbind()
-            alphas_list = result_alphas_impl.unbind()
-            dense_num_contributing_gaussians = torch.stack(num_contributing_gaussians_list, dim=0)  # type: ignore # Shape: (C, R)
-            dense_alphas = torch.stack(alphas_list, dim=0)  # type: ignore # Shape: (C, R)
-            return dense_num_contributing_gaussians, dense_alphas
+            num_list = cast(list[torch.Tensor], result_num.unbind())
+            alphas_list = cast(list[torch.Tensor], result_alphas.unbind())
+            return torch.stack(num_list, dim=0), torch.stack(alphas_list, dim=0)
         else:
-            return JaggedTensor(impl=result_num_impl), JaggedTensor(impl=result_alphas_impl)
+            return result_num, result_alphas
 
     def render_contributing_gaussian_ids(
         self,
@@ -3613,48 +2878,29 @@ class GaussianSplat3d:
                 jagged tensor containing the weights of the contributing Gaussians of each rendered pixel for each camera. The weights are in row-major order and
                 sum to 1 for each pixel if that pixel is opaque (alpha=1).
         """
-        settings = _build_settings(
+        projected, _ = self._project_and_eval_sh(
+            world_to_camera_matrices,
+            projection_matrices,
             image_width,
             image_height,
             near,
             far,
-            0,
-            tile_size,
-            min_radius_2d,
-            eps_2d,
-            antialias,
-            "depth",
-        )
-        settings.num_depth_samples = top_k_contributors
-
-        state = self._project_validated(
-            world_to_camera_matrices,
-            projection_matrices,
-            settings,
-            self._camera_model_to_cpp(camera_model),
-            self._projection_method_to_cpp(projection_method),
+            GaussianRenderMode.DEPTH,
+            camera_model,
+            projection_method,
             distortion_coeffs,
+            -1,
+            eps_2d,
+            min_radius_2d,
+            antialias,
         )
-
-        if top_k_contributors > 0:
-            # Top-k path: numDepthSamples is set on settings, pass None for num_contributing
-            num_contributing = None
-        else:
-            # Standard path: compute actual num contributing, pass it to the ids kernel
-            num_contributing_images, _ = _C.count_contributing_gaussians(
-                state.means2d, state.conics, state.opacities,
-                state.tile_offsets, state.tile_gaussian_ids,
-                settings,
-            )
-            num_contributing = num_contributing_images
-
-        ids_impl, weights_impl = _C.identify_contributing_gaussians(
-            state.means2d, state.conics, state.opacities,
-            state.tile_offsets, state.tile_gaussian_ids,
-            settings,
-            num_contributing,
+        tiles = GF.intersect_gaussian_tiles(projected, tile_size=tile_size)
+        return GF.identify_contributing_gaussians(
+            projected,
+            self._logit_opacities,
+            tiles,
+            top_k_contributors=top_k_contributors,
         )
-        return JaggedTensor(impl=ids_impl), JaggedTensor(impl=weights_impl)
 
     @overload
     def sparse_render_contributing_gaussian_ids(
@@ -3757,20 +3003,6 @@ class GaussianSplat3d:
             weights (fvdb.JaggedTensor): A ``[[C1P1 + C1P2 + ... C1PN1, 1], ... [CNP1 + CNP2 + ... CNPNN, 1]]`` jagged tensor
                 containing the weights of the contributing Gaussians of each rendered pixel for each camera. The weights are in row-major order and sum to 1 for each pixel if that pixel is opaque (alpha=1).
         """
-        settings = _build_settings(
-            image_width,
-            image_height,
-            near,
-            far,
-            0,
-            tile_size,
-            min_radius_2d,
-            eps_2d,
-            antialias,
-            "depth",
-        )
-        settings.num_depth_samples = top_k_contributors
-
         if isinstance(pixels_to_render, torch.Tensor):
             C, R, _ = pixels_to_render.shape
             tensors = [pixels_to_render[i] for i in range(C)]
@@ -3778,65 +3010,32 @@ class GaussianSplat3d:
         else:
             pixels_jt = pixels_to_render
 
-        state, st = self._compute_sparse_projection_data(
-            pixels_jt, world_to_camera_matrices, projection_matrices,
-            settings, self._camera_model_to_cpp(camera_model),
-            self._projection_method_to_cpp(projection_method), distortion_coeffs,
+        projected, _ = self._project_and_eval_sh(
+            world_to_camera_matrices,
+            projection_matrices,
+            image_width,
+            image_height,
+            near,
+            far,
+            GaussianRenderMode.DEPTH,
+            camera_model,
+            projection_method,
+            distortion_coeffs,
+            -1,
+            eps_2d,
+            min_radius_2d,
+            antialias,
         )
-
-        if top_k_contributors > 0:
-            num_contributing = None
-        else:
-            render_pixels_ids = st.unique_pixels if st.has_duplicates else st.pixels_to_render
-            num_contributing_jt, _ = _C.count_contributing_gaussians_sparse(
-                state.means2d, state.conics, state.opacities,
-                st.tile_offsets, st.tile_gaussian_ids,
-                render_pixels_ids._impl,
-                st.active_tiles,
-                st.tile_pixel_mask, st.tile_pixel_cumsum,
-                st.pixel_map,
-                settings,
-            )
-            if st.has_duplicates:
-                inv = st.inverse_indices
-                pixels_impl = st.pixels_to_render._impl
-                num_contributing_jt = pixels_impl.jagged_like(num_contributing_jt.jdata().index_select(0, inv))
-            num_contributing = num_contributing_jt
-
-        render_pixels_ids2 = st.unique_pixels if st.has_duplicates else st.pixels_to_render
-
-        # Map num_contributing to unique-pixel space if needed
-        nc_arg = None
-        if num_contributing is not None:
-            if st.has_duplicates:
-                inv = st.inverse_indices
-                rep_idx = torch.empty(render_pixels_ids2._impl.rsize(0), dtype=torch.long, device=inv.device)
-                rep_idx.scatter_(
-                    0, inv,
-                    torch.arange(st.pixels_to_render._impl.rsize(0), dtype=torch.long, device=inv.device),
-                )
-                nc_arg = render_pixels_ids2._impl.jagged_like(num_contributing.jdata().index_select(0, rep_idx))
-            else:
-                nc_arg = num_contributing
-
-        ids_impl, weights_impl = _C.identify_contributing_gaussians_sparse(
-            state.means2d, state.conics, state.opacities,
-            st.tile_offsets, st.tile_gaussian_ids,
-            render_pixels_ids2._impl,
-            st.active_tiles,
-            st.tile_pixel_mask, st.tile_pixel_cumsum,
-            st.pixel_map,
-            settings,
-            nc_arg,
+        sparse_tiles = GF.intersect_gaussian_tiles_sparse(
+            pixels_jt,
+            projected,
+            tile_size=tile_size,
         )
-
-        if st.has_duplicates:
-            inv = st.inverse_indices
-            pixels_impl = st.pixels_to_render._impl
-            ids_impl = pixels_impl.jagged_like(ids_impl.jdata().index_select(0, inv))
-            weights_impl = pixels_impl.jagged_like(weights_impl.jdata().index_select(0, inv))
-
-        return JaggedTensor(impl=ids_impl), JaggedTensor(impl=weights_impl)
+        return GF.identify_contributing_gaussians_sparse(
+            projected,
+            self._logit_opacities,
+            sparse_tiles,
+        )
 
     def relocate_gaussians(
         self,
@@ -3860,7 +3059,7 @@ class GaussianSplat3d:
         Returns:
             tuple[torch.Tensor, torch.Tensor]: Tuple of (logit_opacities_new [N], log_scales_new [N, 3]).
         """
-        return _C.relocate_gaussians(
+        return GF.relocate_gaussians(
             log_scales,
             logit_opacities,
             ratios,
@@ -3878,8 +3077,7 @@ class GaussianSplat3d:
             t (float): Parameter t for noise scaling. Defaults to 0.005.
             k (float): Parameter k for noise scaling. Defaults to 100.0.
         """
-        # The C++ kernel mutates means in-place
-        _C.add_noise_to_gaussian_means(
+        GF.add_noise_to_gaussian_means(
             self._means,
             self._log_scales,
             self._logit_opacities,
@@ -3928,7 +3126,7 @@ class GaussianSplat3d:
         """
         if isinstance(filename, pathlib.Path):
             filename = str(filename)
-        _C.save_gaussians_ply(
+        GF.save_gaussian_ply(
             self._means,
             self._quats,
             self._log_scales,
@@ -3936,7 +3134,7 @@ class GaussianSplat3d:
             self._sh0,
             self._shN,
             filename,
-            dict(metadata) if metadata is not None else None,
+            dict(metadata) if metadata is not None else metadata,
         )
 
     @overload
@@ -4177,33 +3375,3 @@ class GaussianSplat3d:
         if self._accum_max_2d_radii is not None:
             sd["accumulated_max_2d_radii"] = self._accum_max_2d_radii
         return sd
-
-    @staticmethod
-    def _camera_model_from_cpp(camera_model: _C.CameraModel) -> CameraModel:
-        try:
-            return CameraModel[camera_model.name]
-        except KeyError as exc:
-            raise ValueError(f"Invalid camera model: {camera_model}") from exc
-
-    @staticmethod
-    def _camera_model_to_cpp(camera_model: CameraModel) -> _C.CameraModel:
-        if isinstance(camera_model, CameraModel):
-            return getattr(_C.CameraModel, camera_model.name)
-        return camera_model
-
-    @staticmethod
-    def _projection_method_from_cpp(
-        projection_method: _C.ProjectionMethod,
-    ) -> ProjectionMethod:
-        try:
-            return ProjectionMethod[projection_method.name]
-        except KeyError as exc:
-            raise ValueError(f"Invalid projection method: {projection_method}") from exc
-
-    @staticmethod
-    def _projection_method_to_cpp(
-        projection_method: ProjectionMethod,
-    ) -> _C.ProjectionMethod:
-        if isinstance(projection_method, ProjectionMethod):
-            return getattr(_C.ProjectionMethod, projection_method.name)
-        return projection_method

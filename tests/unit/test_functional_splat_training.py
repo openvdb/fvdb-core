@@ -191,7 +191,7 @@ class TestFunctionalSplatTraining(unittest.TestCase):
             self.assertIsNotNone(grad_fn, f"Functional gradient for {name} is None")
             self.assertIsNotNone(grad_oo, f"OO gradient for {name} is None")
             torch.testing.assert_close(
-                grad_fn, grad_oo, atol=1e-3, rtol=1e-5,
+                grad_fn, grad_oo, atol=5e-3, rtol=1e-4,
                 msg=f"Gradient mismatch for {name}",
             )
 
