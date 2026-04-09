@@ -2,15 +2,25 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 """
-Validate that API references in TEACHME markdown files match the actual fvdb API.
+Validate that API references in markdown doc files match the actual fvdb API.
 
-Checks inline backtick references in prose (outside fenced code blocks).
-Catches renamed/removed classes, methods, properties, and functions.
+Checks:
+1. Inline backtick references in prose (outside fenced code blocks).
+2. fvdb API calls inside ``notest`` code blocks (to prevent rot).
 
 Classes and their attributes are auto-discovered by introspecting the fvdb
 module — no hardcoded maps to maintain.
 
-Run: pytest tests/test_teachme_api_refs.py -v
+Usage::
+
+    # Scan default dirs (docs/TEACHME, docs/tutorials)
+    pytest tests/test_teachme_api_refs.py -v
+
+    # Scan specific dirs
+    pytest tests/test_teachme_api_refs.py --doc-dirs docs/tutorials -v
+
+    # Scan multiple dirs
+    pytest tests/test_teachme_api_refs.py --doc-dirs docs/TEACHME --doc-dirs docs/tutorials -v
 """
 
 import inspect
@@ -22,7 +32,8 @@ import pytest
 import fvdb
 import fvdb.nn
 
-TEACHME_DIR = Path(__file__).parent.parent / "docs" / "TEACHME"
+_ROOT = Path(__file__).parent.parent
+_DEFAULT_DOC_DIRS = ["docs/TEACHME", "docs/tutorials"]
 
 # ---------------------------------------------------------------------------
 # Auto-discover fvdb's API surface
@@ -51,6 +62,20 @@ _SKIP_PREFIXES = ("torch.", "optimizer.", "pcu.", "np.", "loss.")
 _SKIP_EXACT = {"fvdb.*", "fvdb.viz.*Splat*", "GridBatch.from_*"}
 
 
+def _get_scan_dirs(config) -> list[Path]:
+    """Resolve --doc-dirs option to absolute Paths."""
+    raw = config.getoption("doc_dirs") or _DEFAULT_DOC_DIRS
+    dirs = []
+    for d in raw:
+        p = Path(d) if Path(d).is_absolute() else _ROOT / d
+        if p.is_dir():
+            dirs.append(p)
+    return dirs
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 def _strip_call_parens(ref: str) -> str:
     """Remove trailing call syntax: 'foo.bar(x, y)' -> 'foo.bar'."""
     match = re.match(r"^([\w.]+)", ref)
@@ -128,6 +153,9 @@ def _resolve(clean: str) -> tuple[bool, str]:
     return True, "not_api"
 
 
+# ---------------------------------------------------------------------------
+# Extractors
+# ---------------------------------------------------------------------------
 def _extract_inline_refs(text: str) -> list[tuple[int, str]]:
     """Extract inline backtick code from markdown, excluding fenced blocks."""
     results = []
@@ -143,30 +171,105 @@ def _extract_inline_refs(text: str) -> list[tuple[int, str]]:
     return results
 
 
-def _gather_params() -> list[tuple[str, int, str]]:
-    """Collect all testable API references from TEACHME markdown files."""
+def _extract_notest_api_refs(text: str) -> list[tuple[int, str]]:
+    """Extract fvdb API references from notest code blocks.
+
+    Catches:
+    - fvdb.X.Y and fvnn.X.Y module-path references
+    - instance.method_name(...) where method_name is a known fvdb class attribute
+    """
+    results = []
+    in_notest = False
+    seen = set()  # deduplicate per-file
+    for lineno, line in enumerate(text.splitlines(), 1):
+        stripped = line.strip()
+        if stripped.startswith("```python notest"):
+            in_notest = True
+            continue
+        if stripped.startswith("```") and in_notest:
+            in_notest = False
+            continue
+        if not in_notest:
+            continue
+        # Match fvdb.X.Y or fvnn.X.Y dotted references in code
+        for match in re.finditer(r"\b(fvdb\.[\w.]+|fvnn\.[\w.]+)", line):
+            ref = match.group(1).rstrip(".")
+            if ref and not _is_skip(ref, ref) and ref not in seen:
+                results.append((lineno, ref))
+                seen.add(ref)
+        # Match instance.method(...) where method is a known fvdb attribute
+        for match in re.finditer(r"\b\w+\.([\w]+)\s*[\(=]", line):
+            attr = match.group(1)
+            if attr in _ALL_ATTRS and attr not in seen:
+                full = match.group(0).split(".")[0] + "." + attr
+                results.append((lineno, full))
+                seen.add(attr)
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Gatherers (take scan_dirs as argument)
+# ---------------------------------------------------------------------------
+def _gather_inline_params(scan_dirs: list[Path]) -> list[tuple[str, int, str]]:
+    """Collect all testable inline API references from markdown files."""
     params = []
-    for md_file in sorted(TEACHME_DIR.glob("*.md")):
-        text = md_file.read_text()
-        for lineno, ref in _extract_inline_refs(text):
-            clean = _strip_call_parens(ref.strip())
-            if _is_skip(ref, clean):
-                continue
-            if _looks_like_api_ref(clean):
-                params.append((md_file.name, lineno, ref))
+    for scan_dir in scan_dirs:
+        for md_file in sorted(scan_dir.glob("*.md")):
+            text = md_file.read_text()
+            for lineno, ref in _extract_inline_refs(text):
+                clean = _strip_call_parens(ref.strip())
+                if _is_skip(ref, clean):
+                    continue
+                if _looks_like_api_ref(clean):
+                    params.append((md_file.name, lineno, ref))
     return params
 
 
-_PARAMS = _gather_params()
+def _gather_notest_params(scan_dirs: list[Path]) -> list[tuple[str, int, str]]:
+    """Collect fvdb API references from notest code blocks."""
+    params = []
+    for scan_dir in scan_dirs:
+        for md_file in sorted(scan_dir.glob("*.md")):
+            text = md_file.read_text()
+            for lineno, ref in _extract_notest_api_refs(text):
+                clean = _strip_call_parens(ref.strip())
+                if _looks_like_api_ref(clean):
+                    params.append((md_file.name, lineno, ref))
+    return params
 
 
-@pytest.mark.parametrize(
-    "filename,lineno,ref",
-    _PARAMS,
-    ids=[f"{p[0]}:{p[1]}:{p[2][:50]}" for p in _PARAMS],
-)
+# ---------------------------------------------------------------------------
+# Tests — parametrized at collection time via pytest_generate_tests
+# ---------------------------------------------------------------------------
+def pytest_generate_tests(metafunc):
+    scan_dirs = _get_scan_dirs(metafunc.config)
+
+    if metafunc.function is test_api_ref:
+        params = _gather_inline_params(scan_dirs)
+        metafunc.parametrize(
+            "filename,lineno,ref",
+            params,
+            ids=[f"{p[0]}:{p[1]}:{p[2][:50]}" for p in params],
+        )
+
+    elif metafunc.function is test_notest_api_ref:
+        params = _gather_notest_params(scan_dirs)
+        metafunc.parametrize(
+            "filename,lineno,ref",
+            params,
+            ids=[f"{p[0]}:{p[1]}:{p[2][:50]}" for p in params],
+        )
+
+
 def test_api_ref(filename: str, lineno: int, ref: str):
-    """Each inline API reference in TEACHME docs should resolve against the fvdb API."""
+    """Each inline API reference in prose should resolve against the fvdb API."""
     clean = _strip_call_parens(ref.strip())
     valid, reason = _resolve(clean)
     assert valid, f"{filename}:{lineno}: {reason}  (ref: `{ref}`)"
+
+
+def test_notest_api_ref(filename: str, lineno: int, ref: str):
+    """API references in notest code blocks should still resolve (prevents rot)."""
+    clean = _strip_call_parens(ref.strip())
+    valid, reason = _resolve(clean)
+    assert valid, f"{filename}:{lineno} (notest block): {reason}  (ref: `{ref}`)"
