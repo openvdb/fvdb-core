@@ -157,6 +157,8 @@ jobs:
       - name: Build fvdb
         run: |
           source .venv/bin/activate
+          NANOVDB_EDITOR_SPEC=$(python .github/scripts/get_viewer_dependency.py)
+          pip install "$NANOVDB_EDITOR_SPEC"
           ./build.sh wheel verbose gtests benchmarks --cuda-arch-list '${{ needs.versions.outputs.cuda-arch-pr }}'
 
       - name: Upload wheel
@@ -316,17 +318,6 @@ jobs:
           uv venv
           uv pip install --no-cache-dir -r env/build_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu128
 
-      - name: Download package with nanovdb_editor
-        uses: actions/download-artifact@v8
-        with:
-            name: fvdb-test-package
-            path: ./dist
-
-      - name: Install nanovdb_editor
-        run: |
-            source .venv/bin/activate
-            pip install ./dist/nanovdb_editor*.whl
-
       - name: Download gtests
         uses: actions/download-artifact@v8
         with:
@@ -435,6 +426,8 @@ jobs:
       - name: Run tests
         run: |
           source .venv/bin/activate
+          NANOVDB_EDITOR_SPEC=$(python .github/scripts/get_viewer_dependency.py)
+          pip install "$NANOVDB_EDITOR_SPEC"
           cd tests;
           pytest -v unit
 
