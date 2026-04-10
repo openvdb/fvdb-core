@@ -10,6 +10,7 @@
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/GridDim.h>
+#include <fvdb/detail/utils/cuda/OpType.cuh>
 
 #include <nanovdb/math/Math.h>
 
@@ -92,17 +93,7 @@ unprojectDepthmapKernel(int64_t imageWidth,
     }
 }
 
-template <typename T> struct OpType {
-    using type = T;
-};
-
-template <> struct OpType<c10::Half> {
-    using type = float;
-};
-
-template <> struct OpType<nv_half> {
-    using type = float;
-};
+using fvdb::detail::OpType;
 
 template <typename ScalarDataType, typename FeatureScalarDataType = ScalarDataType>
 __global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void

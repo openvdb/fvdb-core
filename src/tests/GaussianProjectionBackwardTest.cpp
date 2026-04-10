@@ -3,9 +3,9 @@
 
 #include "utils/Tensor.h"
 
-#include <fvdb/detail/ops/gsplat/GaussianCameras.cuh>
-#include <fvdb/detail/ops/gsplat/GaussianProjectionBackward.h>
-#include <fvdb/detail/ops/gsplat/GaussianProjectionForward.h>
+#include <fvdb/detail/ops/ProjectGaussiansAnalyticBackward.h>
+#include <fvdb/detail/ops/ProjectGaussiansAnalyticForward.h>
+#include <fvdb/detail/utils/gaussian/GaussianCameras.cuh>
 
 #include <torch/script.h>
 #include <torch/types.h>
@@ -173,19 +173,19 @@ TEST_F(GaussianProjectionBackwardTestFixture, DISABLED_GenerateOutputData) {
     {
         // Perspective projection
         const auto [radii_proj, means2d_proj, depths_proj, conics_proj, compensations_proj] =
-            fvdb::detail::ops::dispatchGaussianProjectionForward<torch::kCUDA>(means,
-                                                                               quats,
-                                                                               scales,
-                                                                               viewmats,
-                                                                               Ks,
-                                                                               imageWidth,
-                                                                               imageHeight,
-                                                                               0.3,
-                                                                               1e-2,
-                                                                               1e10,
-                                                                               0,
-                                                                               false,
-                                                                               false);
+            fvdb::detail::ops::project_gaussians_analytic_fwd(means,
+                                                              quats,
+                                                              scales,
+                                                              viewmats,
+                                                              Ks,
+                                                              imageWidth,
+                                                              imageHeight,
+                                                              0.3,
+                                                              1e-2,
+                                                              1e10,
+                                                              0,
+                                                              false,
+                                                              false);
 
         const auto C = radii_proj.size(0);
         const auto N = radii_proj.size(1);
@@ -209,32 +209,31 @@ TEST_F(GaussianProjectionBackwardTestFixture, DISABLED_GenerateOutputData) {
         auto outGradientStepCounts      = torch::zeros({N}, options.dtype(torch::kInt32));
 
         const auto [dLossDMeans, dLossDCovars, dLossDQuats, dLossDScales, dLossDCamToWorlds] =
-            fvdb::detail::ops::dispatchGaussianProjectionBackward<torch::kCUDA>(
-                means,
-                quats,
-                torch::log(scales),
-                viewmats,
-                Ks,
-                compensations_proj,
-                imageWidth,
-                imageHeight,
-                eps2d,
-                radii_proj,
-                conics_proj,
-                dLossDMeans2d,
-                dLossDDepths,
-                dLossDConics,
-                dLossDCompensations,
-                true,
-                false,
-                outNormalizeddLossdMeans2dNormAccum,
-                outNormalizedMaxRadiiAccum,
-                outGradientStepCounts);
+            fvdb::detail::ops::project_gaussians_analytic_bwd(means,
+                                                              quats,
+                                                              torch::log(scales),
+                                                              viewmats,
+                                                              Ks,
+                                                              compensations_proj,
+                                                              imageWidth,
+                                                              imageHeight,
+                                                              eps2d,
+                                                              radii_proj,
+                                                              conics_proj,
+                                                              dLossDMeans2d,
+                                                              dLossDDepths,
+                                                              dLossDConics,
+                                                              dLossDCompensations,
+                                                              true,
+                                                              false,
+                                                              outNormalizeddLossdMeans2dNormAccum,
+                                                              outNormalizedMaxRadiiAccum,
+                                                              outGradientStepCounts);
 
         std::vector<torch::Tensor> outputData = {
             dLossDMeans,
             // dLossDCovars, Currently dLossDCovars is not output, not exposed, see
-            // dispatchGaussianProjectionBackward
+            // project_gaussians_analytic_bwd
             dLossDQuats,
             dLossDScales,
             dLossDCamToWorlds,
@@ -249,19 +248,19 @@ TEST_F(GaussianProjectionBackwardTestFixture, DISABLED_GenerateOutputData) {
     {
         // Orthographic projection
         const auto [radii_proj, means2d_proj, depths_proj, conics_proj, compensations_proj] =
-            fvdb::detail::ops::dispatchGaussianProjectionForward<torch::kCUDA>(means,
-                                                                               quats,
-                                                                               scales,
-                                                                               viewmats,
-                                                                               Ks,
-                                                                               imageWidth,
-                                                                               imageHeight,
-                                                                               0.3,
-                                                                               1e-2,
-                                                                               1e10,
-                                                                               0,
-                                                                               false,
-                                                                               true);
+            fvdb::detail::ops::project_gaussians_analytic_fwd(means,
+                                                              quats,
+                                                              scales,
+                                                              viewmats,
+                                                              Ks,
+                                                              imageWidth,
+                                                              imageHeight,
+                                                              0.3,
+                                                              1e-2,
+                                                              1e10,
+                                                              0,
+                                                              false,
+                                                              true);
 
         const auto C = radii_proj.size(0);
         const auto N = radii_proj.size(1);
@@ -285,32 +284,31 @@ TEST_F(GaussianProjectionBackwardTestFixture, DISABLED_GenerateOutputData) {
         auto outGradientStepCounts      = torch::zeros({N}, options.dtype(torch::kInt32));
 
         const auto [dLossDMeans, dLossDCovars, dLossDQuats, dLossDScales, dLossDCamToWorlds] =
-            fvdb::detail::ops::dispatchGaussianProjectionBackward<torch::kCUDA>(
-                means,
-                quats,
-                torch::log(scales),
-                viewmats,
-                Ks,
-                compensations_proj,
-                imageWidth,
-                imageHeight,
-                eps2d,
-                radii_proj,
-                conics_proj,
-                dLossDMeans2d,
-                dLossDDepths,
-                dLossDConics,
-                dLossDCompensations,
-                true,
-                true,
-                outNormalizeddLossdMeans2dNormAccum,
-                outNormalizedMaxRadiiAccum,
-                outGradientStepCounts);
+            fvdb::detail::ops::project_gaussians_analytic_bwd(means,
+                                                              quats,
+                                                              torch::log(scales),
+                                                              viewmats,
+                                                              Ks,
+                                                              compensations_proj,
+                                                              imageWidth,
+                                                              imageHeight,
+                                                              eps2d,
+                                                              radii_proj,
+                                                              conics_proj,
+                                                              dLossDMeans2d,
+                                                              dLossDDepths,
+                                                              dLossDConics,
+                                                              dLossDCompensations,
+                                                              true,
+                                                              true,
+                                                              outNormalizeddLossdMeans2dNormAccum,
+                                                              outNormalizedMaxRadiiAccum,
+                                                              outGradientStepCounts);
 
         std::vector<torch::Tensor> outputData = {
             dLossDMeans,
             // dLossDCovars, Currently dLossDCovars is not output, not exposed, see
-            // dispatchGaussianProjectionBackward
+            // project_gaussians_analytic_bwd
             dLossDQuats,
             dLossDScales,
             dLossDCamToWorlds,
@@ -342,27 +340,26 @@ TEST_F(GaussianProjectionBackwardTestFixture, TestPerspectiveProjection) {
     auto outGradientStepCounts               = torch::zeros({N}, options.dtype(torch::kInt32));
 
     const auto [dLossDMeans, dLossDCovars, dLossDQuats, dLossDScales, dLossDCamToWorlds] =
-        fvdb::detail::ops::dispatchGaussianProjectionBackward<torch::kCUDA>(
-            means,
-            quats,
-            torch::log(scales),
-            viewmats,
-            Ks,
-            compensations,
-            imageWidth,
-            imageHeight,
-            eps2d,
-            radii,
-            conics,
-            dLossDMeans2d,
-            dLossDDepths,
-            dLossDConics,
-            dLossDCompensations,
-            true,
-            false,
-            outNormalizeddLossdMeans2dNormAccum,
-            outNormalizedMaxRadiiAccum,
-            outGradientStepCounts);
+        fvdb::detail::ops::project_gaussians_analytic_bwd(means,
+                                                          quats,
+                                                          torch::log(scales),
+                                                          viewmats,
+                                                          Ks,
+                                                          compensations,
+                                                          imageWidth,
+                                                          imageHeight,
+                                                          eps2d,
+                                                          radii,
+                                                          conics,
+                                                          dLossDMeans2d,
+                                                          dLossDDepths,
+                                                          dLossDConics,
+                                                          dLossDCompensations,
+                                                          true,
+                                                          false,
+                                                          outNormalizeddLossdMeans2dNormAccum,
+                                                          outNormalizedMaxRadiiAccum,
+                                                          outGradientStepCounts);
 
     auto [rtol, atol] = tolerances();
 #if 0
@@ -420,27 +417,26 @@ TEST_F(GaussianProjectionBackwardTestFixture, TestOrthographicProjection) {
     auto outGradientStepCounts               = torch::zeros({N}, options.dtype(torch::kInt32));
 
     const auto [dLossDMeans, dLossDCovars, dLossDQuats, dLossDScales, dLossDCamToWorlds] =
-        fvdb::detail::ops::dispatchGaussianProjectionBackward<torch::kCUDA>(
-            means,
-            quats,
-            torch::log(scales),
-            viewmats,
-            Ks,
-            compensations,
-            imageWidth,
-            imageHeight,
-            eps2d,
-            radii,
-            conics,
-            dLossDMeans2d,
-            dLossDDepths,
-            dLossDConics,
-            dLossDCompensations,
-            true,
-            true,
-            outNormalizeddLossdMeans2dNormAccum,
-            outNormalizedMaxRadiiAccum,
-            outGradientStepCounts);
+        fvdb::detail::ops::project_gaussians_analytic_bwd(means,
+                                                          quats,
+                                                          torch::log(scales),
+                                                          viewmats,
+                                                          Ks,
+                                                          compensations,
+                                                          imageWidth,
+                                                          imageHeight,
+                                                          eps2d,
+                                                          radii,
+                                                          conics,
+                                                          dLossDMeans2d,
+                                                          dLossDDepths,
+                                                          dLossDConics,
+                                                          dLossDCompensations,
+                                                          true,
+                                                          true,
+                                                          outNormalizeddLossdMeans2dNormAccum,
+                                                          outNormalizedMaxRadiiAccum,
+                                                          outGradientStepCounts);
 
     auto tol2 = tolerances();
 #if 0

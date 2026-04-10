@@ -96,399 +96,6 @@ def pred_gather_igemm_conv(
     stride: int,
 ) -> torch.Tensor: ...
 
-class GaussianSplat3d:
-    log_scales: torch.Tensor
-    logit_opacities: torch.Tensor
-    means: torch.Tensor
-    quats: torch.Tensor
-    requires_grad: bool
-    sh0: torch.Tensor
-    shN: torch.Tensor
-    def __init__(
-        self,
-        means: torch.Tensor,
-        quats: torch.Tensor,
-        log_scales: torch.Tensor,
-        logit_opacities: torch.Tensor,
-        sh0: torch.Tensor,
-        shN: torch.Tensor,
-        accumulate_mean_2d_gradients: bool = ...,
-        accumulate_max_2d_radii: bool = ...,
-        detach: bool = ...,
-    ) -> None: ...
-    @property
-    def device(self) -> torch.device: ...
-    @property
-    def dtype(self) -> torch.dtype: ...
-    @staticmethod
-    def cat(
-        splats: "list[GaussianSplat3d]",
-        accumulate_mean_2d_gradients: bool = False,
-        accumulate_max_2d_radii: bool = False,
-        detach: bool = False,
-    ) -> "GaussianSplat3d": ...
-    def to(self, device: torch.device, dtype: torch.dtype) -> "GaussianSplat3d": ...
-    def detach(self) -> "GaussianSplat3d": ...
-    def detach_in_place(self) -> None: ...
-    def index_select(self, indices: torch.Tensor) -> "GaussianSplat3d": ...
-    def mask_select(self, mask: torch.Tensor) -> "GaussianSplat3d": ...
-    def slice_select(self, begin: int, end: int, step: int) -> "GaussianSplat3d": ...
-    def index_set(self, indices: torch.Tensor, value: "GaussianSplat3d") -> None: ...
-    def mask_set(self, mask: torch.Tensor, value: "GaussianSplat3d") -> None: ...
-    def slice_set(self, begin: int, end: int, step: int, value: "GaussianSplat3d") -> None: ...
-    @property
-    def sh_degree(self) -> int: ...
-    @property
-    def accumulate_mean_2d_gradients(self) -> bool: ...
-    @accumulate_mean_2d_gradients.setter
-    def accumulate_mean_2d_gradients(self, value: bool) -> None: ...
-    @property
-    def accumulate_max_2d_radii(self) -> bool: ...
-    @accumulate_max_2d_radii.setter
-    def accumulate_max_2d_radii(self, value: bool) -> None: ...
-    @staticmethod
-    def from_state_dict(state_dict: dict[str, torch.Tensor]) -> GaussianSplat3d: ...
-    def load_state_dict(self, state_dict: dict[str, torch.Tensor]) -> None: ...
-    def project_gaussians_for_depths(
-        self,
-        world_to_camera_matrices: torch.Tensor,
-        projection_matrices: torch.Tensor,
-        image_width: int,
-        image_height: int,
-        near: float,
-        far: float,
-        camera_model: "CameraModel" = ...,
-        projection_method: "ProjectionMethod" = ...,
-        distortion_coeffs: Optional[torch.Tensor] = ...,
-        min_radius_2d: float = ...,
-        eps_2d: float = ...,
-        antialias: bool = ...,
-    ) -> ProjectedGaussianSplats: ...
-    def project_gaussians_for_images(
-        self,
-        world_to_camera_matrices: torch.Tensor,
-        projection_matrices: torch.Tensor,
-        image_width: int,
-        image_height: int,
-        near: float,
-        far: float,
-        camera_model: "CameraModel" = ...,
-        projection_method: "ProjectionMethod" = ...,
-        distortion_coeffs: Optional[torch.Tensor] = ...,
-        sh_degree_to_use: int = ...,
-        min_radius_2d: float = ...,
-        eps_2d: float = ...,
-        antialias: bool = ...,
-    ) -> ProjectedGaussianSplats: ...
-    def project_gaussians_for_images_and_depths(
-        self,
-        world_to_camera_matrices: torch.Tensor,
-        projection_matrices: torch.Tensor,
-        image_width: int,
-        image_height: int,
-        near: float,
-        far: float,
-        camera_model: "CameraModel" = ...,
-        projection_method: "ProjectionMethod" = ...,
-        distortion_coeffs: Optional[torch.Tensor] = ...,
-        sh_degree_to_use: int = ...,
-        min_radius_2d: float = ...,
-        eps_2d: float = ...,
-        antialias: bool = ...,
-    ) -> ProjectedGaussianSplats: ...
-    def render_depths(
-        self,
-        world_to_camera_matrices: torch.Tensor,
-        projection_matrices: torch.Tensor,
-        image_width: int,
-        image_height: int,
-        near: float,
-        far: float,
-        camera_model: "CameraModel" = ...,
-        projection_method: "ProjectionMethod" = ...,
-        distortion_coeffs: Optional[torch.Tensor] = ...,
-        tile_size: int = ...,
-        min_radius_2d: float = ...,
-        eps_2d: float = ...,
-        antialias: bool = ...,
-        backgrounds: Optional[torch.Tensor] = ...,
-        masks: Optional[torch.Tensor] = ...,
-    ) -> tuple[torch.Tensor, torch.Tensor]: ...
-    def render_depths_from_world(
-        self,
-        world_to_camera_matrices: torch.Tensor,
-        projection_matrices: torch.Tensor,
-        image_width: int,
-        image_height: int,
-        near: float,
-        far: float,
-        camera_model: "CameraModel" = ...,
-        projection_method: "ProjectionMethod" = ...,
-        distortion_coeffs: Optional[torch.Tensor] = ...,
-        tile_size: int = ...,
-        min_radius_2d: float = ...,
-        eps_2d: float = ...,
-        antialias: bool = ...,
-        backgrounds: Optional[torch.Tensor] = ...,
-        masks: Optional[torch.Tensor] = ...,
-    ) -> tuple[torch.Tensor, torch.Tensor]: ...
-    def sparse_render_depths(
-        self,
-        pixels_to_render: JaggedTensor,
-        world_to_camera_matrices: torch.Tensor,
-        projection_matrices: torch.Tensor,
-        image_width: int,
-        image_height: int,
-        near: float,
-        far: float,
-        camera_model: "CameraModel" = ...,
-        projection_method: "ProjectionMethod" = ...,
-        distortion_coeffs: Optional[torch.Tensor] = ...,
-        tile_size: int = ...,
-        min_radius_2d: float = ...,
-        eps_2d: float = ...,
-        antialias: bool = ...,
-        backgrounds: Optional[torch.Tensor] = ...,
-        masks: Optional[torch.Tensor] = ...,
-    ) -> tuple[JaggedTensor, JaggedTensor]: ...
-    def render_from_projected_gaussians(
-        self,
-        projected_gaussians: ProjectedGaussianSplats,
-        crop_width: int = ...,
-        crop_height: int = ...,
-        crop_origin_w: int = ...,
-        crop_origin_h: int = ...,
-        tile_size: int = ...,
-        backgrounds: Optional[torch.Tensor] = ...,
-        masks: Optional[torch.Tensor] = ...,
-    ) -> tuple[torch.Tensor, torch.Tensor]: ...
-    def render_images(
-        self,
-        world_to_camera_matrices: torch.Tensor,
-        projection_matrices: torch.Tensor,
-        image_width: int,
-        image_height: int,
-        near: float,
-        far: float,
-        camera_model: "CameraModel" = ...,
-        projection_method: "ProjectionMethod" = ...,
-        distortion_coeffs: Optional[torch.Tensor] = ...,
-        sh_degree_to_use: int = ...,
-        tile_size: int = ...,
-        min_radius_2d: float = ...,
-        eps_2d: float = ...,
-        antialias: bool = ...,
-        backgrounds: Optional[torch.Tensor] = ...,
-        masks: Optional[torch.Tensor] = ...,
-    ) -> tuple[torch.Tensor, torch.Tensor]: ...
-    def render_images_from_world(
-        self,
-        world_to_camera_matrices: torch.Tensor,
-        projection_matrices: torch.Tensor,
-        image_width: int,
-        image_height: int,
-        near: float,
-        far: float,
-        camera_model: "CameraModel" = ...,
-        projection_method: "ProjectionMethod" = ...,
-        distortion_coeffs: Optional[torch.Tensor] = ...,
-        sh_degree_to_use: int = ...,
-        tile_size: int = ...,
-        min_radius_2d: float = ...,
-        eps_2d: float = ...,
-        antialias: bool = ...,
-        backgrounds: Optional[torch.Tensor] = ...,
-        masks: Optional[torch.Tensor] = ...,
-    ) -> tuple[torch.Tensor, torch.Tensor]: ...
-    def sparse_render_images(
-        self,
-        pixels_to_render: JaggedTensor,
-        world_to_camera_matrices: torch.Tensor,
-        projection_matrices: torch.Tensor,
-        image_width: int,
-        image_height: int,
-        near: float,
-        far: float,
-        camera_model: "CameraModel" = ...,
-        projection_method: "ProjectionMethod" = ...,
-        distortion_coeffs: Optional[torch.Tensor] = ...,
-        sh_degree_to_use: int = ...,
-        tile_size: int = ...,
-        min_radius_2d: float = ...,
-        eps_2d: float = ...,
-        antialias: bool = ...,
-        backgrounds: Optional[torch.Tensor] = ...,
-        masks: Optional[torch.Tensor] = ...,
-    ) -> tuple[JaggedTensor, JaggedTensor]: ...
-    def render_images_and_depths(
-        self,
-        world_to_camera_matrices: torch.Tensor,
-        projection_matrices: torch.Tensor,
-        image_width: int,
-        image_height: int,
-        near: float,
-        far: float,
-        camera_model: "CameraModel" = ...,
-        projection_method: "ProjectionMethod" = ...,
-        distortion_coeffs: Optional[torch.Tensor] = ...,
-        sh_degree_to_use: int = ...,
-        tile_size: int = ...,
-        min_radius_2d: float = ...,
-        eps_2d: float = ...,
-        antialias: bool = ...,
-        backgrounds: Optional[torch.Tensor] = ...,
-        masks: Optional[torch.Tensor] = ...,
-    ) -> tuple[torch.Tensor, torch.Tensor]: ...
-    def render_images_and_depths_from_world(
-        self,
-        world_to_camera_matrices: torch.Tensor,
-        projection_matrices: torch.Tensor,
-        image_width: int,
-        image_height: int,
-        near: float,
-        far: float,
-        camera_model: "CameraModel" = ...,
-        projection_method: "ProjectionMethod" = ...,
-        distortion_coeffs: Optional[torch.Tensor] = ...,
-        sh_degree_to_use: int = ...,
-        tile_size: int = ...,
-        min_radius_2d: float = ...,
-        eps_2d: float = ...,
-        antialias: bool = ...,
-        backgrounds: Optional[torch.Tensor] = ...,
-        masks: Optional[torch.Tensor] = ...,
-    ) -> tuple[torch.Tensor, torch.Tensor]: ...
-    def sparse_render_images_and_depths(
-        self,
-        pixels_to_render: JaggedTensor,
-        world_to_camera_matrices: torch.Tensor,
-        projection_matrices: torch.Tensor,
-        image_width: int,
-        image_height: int,
-        near: float,
-        far: float,
-        camera_model: "CameraModel" = ...,
-        projection_method: "ProjectionMethod" = ...,
-        distortion_coeffs: Optional[torch.Tensor] = ...,
-        sh_degree_to_use: int = ...,
-        tile_size: int = ...,
-        min_radius_2d: float = ...,
-        eps_2d: float = ...,
-        antialias: bool = ...,
-        backgrounds: Optional[torch.Tensor] = ...,
-        masks: Optional[torch.Tensor] = ...,
-    ) -> tuple[JaggedTensor, JaggedTensor]: ...
-    def render_num_contributing_gaussians(
-        self,
-        world_to_camera_matrices: torch.Tensor,
-        projection_matrices: torch.Tensor,
-        image_width: int,
-        image_height: int,
-        near: float,
-        far: float,
-        camera_model: "CameraModel" = ...,
-        projection_method: "ProjectionMethod" = ...,
-        distortion_coeffs: Optional[torch.Tensor] = ...,
-        tile_size: int = ...,
-        min_radius_2d: float = ...,
-        eps_2d: float = ...,
-        antialias: bool = ...,
-    ) -> tuple[torch.Tensor, torch.Tensor]: ...
-    def sparse_render_num_contributing_gaussians(
-        self,
-        pixels_to_render: JaggedTensor,
-        world_to_camera_matrices: torch.Tensor,
-        projection_matrices: torch.Tensor,
-        image_width: int,
-        image_height: int,
-        near: float,
-        far: float,
-        camera_model: "CameraModel" = ...,
-        projection_method: "ProjectionMethod" = ...,
-        distortion_coeffs: Optional[torch.Tensor] = ...,
-        tile_size: int = ...,
-        min_radius_2d: float = ...,
-        eps_2d: float = ...,
-        antialias: bool = ...,
-    ) -> tuple[JaggedTensor, JaggedTensor]: ...
-    def render_contributing_gaussian_ids(
-        self,
-        world_to_camera_matrices: torch.Tensor,
-        projection_matrices: torch.Tensor,
-        image_width: int,
-        image_height: int,
-        near: float,
-        far: float,
-        camera_model: "CameraModel" = ...,
-        projection_method: "ProjectionMethod" = ...,
-        distortion_coeffs: Optional[torch.Tensor] = ...,
-        tile_size: int = ...,
-        min_radius_2d: float = ...,
-        eps_2d: float = ...,
-        antialias: bool = ...,
-        top_k_contributors: int = ...,
-    ) -> tuple[JaggedTensor, JaggedTensor]: ...
-    def sparse_render_contributing_gaussian_ids(
-        self,
-        pixels_to_render: JaggedTensor,
-        world_to_camera_matrices: torch.Tensor,
-        projection_matrices: torch.Tensor,
-        image_width: int,
-        image_height: int,
-        near: float,
-        far: float,
-        camera_model: "CameraModel" = ...,
-        projection_method: "ProjectionMethod" = ...,
-        distortion_coeffs: Optional[torch.Tensor] = ...,
-        tile_size: int = ...,
-        min_radius_2d: float = ...,
-        eps_2d: float = ...,
-        antialias: bool = ...,
-        top_k_contributors: int = ...,
-    ) -> tuple[JaggedTensor, JaggedTensor]: ...
-    def relocate_gaussians(
-        self,
-        log_scales: torch.Tensor,
-        logit_opacities: torch.Tensor,
-        ratios: torch.Tensor,
-        binomial_coeffs: torch.Tensor,
-        n_max: int,
-        min_opacity: float,
-    ) -> tuple[torch.Tensor, torch.Tensor]: ...
-    def add_noise_to_means(self, noise_scale: float, t: float = ..., k: float = ...) -> None: ...
-    def reset_accumulated_gradient_state(self) -> None: ...
-    def save_ply(self, filename: str, metadata: dict[str, str | int | float | torch.Tensor] | None) -> None: ...
-    @staticmethod
-    def from_ply(
-        filename: str, device: torch.device = ...
-    ) -> tuple[GaussianSplat3d, dict[str, str | int | float | torch.Tensor]]: ...
-    def set_state(
-        self,
-        means: torch.Tensor,
-        quats: torch.Tensor,
-        log_scales: torch.Tensor,
-        logit_opacities: torch.Tensor,
-        sh0: torch.Tensor,
-        shN: torch.Tensor,
-    ) -> None: ...
-    def state_dict(self) -> dict[str, torch.Tensor]: ...
-    @property
-    def accumulated_gradient_step_counts(self) -> torch.Tensor: ...
-    @property
-    def accumulated_max_2d_radii(self) -> torch.Tensor: ...
-    @property
-    def accumulated_mean_2d_gradient_norms(self) -> torch.Tensor: ...
-    @property
-    def num_channels(self) -> int: ...
-    @property
-    def num_gaussians(self) -> int: ...
-    @property
-    def num_sh_bases(self) -> int: ...
-    @property
-    def opacities(self) -> torch.Tensor: ...
-    @property
-    def scales(self) -> torch.Tensor: ...
-
 class GridBatchData:
     MAX_GRIDS_PER_BATCH: ClassVar[int] = ...
 
@@ -974,7 +581,10 @@ class JaggedTensor:
     def from_data_and_offsets(arg0: torch.Tensor, arg1: torch.Tensor) -> JaggedTensor: ...
     @staticmethod
     def from_data_indices_and_list_ids(
-        data: torch.Tensor, indices: torch.Tensor, list_ids: torch.Tensor, num_tensors: int
+        data: torch.Tensor,
+        indices: torch.Tensor,
+        list_ids: torch.Tensor,
+        num_tensors: int,
     ) -> JaggedTensor: ...
     @staticmethod
     def from_data_offsets_and_list_ids(
@@ -1206,44 +816,10 @@ class JaggedTensor:
     def rshape(self) -> tuple[int, ...]: ...
     def __iter__(self) -> typing.Iterator[JaggedTensor]: ...
 
-class ProjectedGaussianSplats:
-    def __init__(self, *args, **kwargs) -> None: ...
-    @property
-    def antialias(self) -> bool: ...
-    @property
-    def conics(self) -> torch.Tensor: ...
-    @property
-    def depths(self) -> torch.Tensor: ...
-    @property
-    def eps_2d(self) -> float: ...
-    @property
-    def far_plane(self) -> float: ...
-    @property
-    def image_height(self) -> int: ...
-    @property
-    def image_width(self) -> int: ...
-    @property
-    def means2d(self) -> torch.Tensor: ...
-    @property
-    def min_radius_2d(self) -> float: ...
-    @property
-    def near_plane(self) -> float: ...
-    @property
-    def opacities(self) -> torch.Tensor: ...
-    @property
-    def camera_model(self) -> CameraModel: ...
-    @property
-    def projection_method(self) -> ProjectionMethod: ...
-    @property
-    def radii(self) -> torch.Tensor: ...
-    @property
-    def render_quantities(self) -> torch.Tensor: ...
-    @property
-    def sh_degree_to_use(self) -> int: ...
-    @property
-    def tile_gaussian_ids(self) -> torch.Tensor: ...
-    @property
-    def tile_offsets(self) -> torch.Tensor: ...
+# ProjectedGaussianSplats and SparseProjectedGaussianSplats are no longer
+# exposed as C++ pybind11 types.  All projection functions now return plain
+# tuples of tensors; see fvdb.ProjectedGaussians, fvdb.GaussianTileIntersection,
+# and fvdb.SparseGaussianTileIntersection for the Python types.
 
 class GaussianSplat3dView:
     @property
@@ -1310,7 +886,15 @@ class Viewer:
     def remove_scene(self, scene_name: str) -> None: ...
     def remove_view(self, scene_name: str, name: str) -> None: ...
     def add_gaussian_splat_3d_view(
-        self, scene_name: str, name: str, gaussian_splat_3d: GaussianSplat3d
+        self,
+        scene_name: str,
+        name: str,
+        means: torch.Tensor,
+        quats: torch.Tensor,
+        log_scales: torch.Tensor,
+        logit_opacities: torch.Tensor,
+        sh0: torch.Tensor,
+        shN: torch.Tensor,
     ) -> GaussianSplat3dView: ...
     def has_gaussian_splat_3d_view(self, name: str) -> bool: ...
     def get_gaussian_splat_3d_view(self, name: str) -> GaussianSplat3dView: ...
@@ -1361,37 +945,6 @@ class config:
     pedantic_error_checking: ClassVar[bool] = ...
     def __init__(self, *args, **kwargs) -> None: ...
 
-def gaussian_render_jagged(
-    means: JaggedTensor,
-    quats: JaggedTensor,
-    scales: JaggedTensor,
-    opacities: JaggedTensor,
-    sh_coeffs: JaggedTensor,
-    viewmats: JaggedTensor,
-    Ks: JaggedTensor,
-    image_width: int,
-    image_height: int,
-    near_plane: float = ...,
-    far_plane: float = ...,
-    sh_degree_to_use: int = ...,
-    tile_size: int = ...,
-    radius_clip: float = ...,
-    eps2d: float = ...,
-    antialias: bool = ...,
-    render_depth_channel: bool = ...,
-    return_debug_info: bool = ...,
-    render_depth_only: bool = ...,
-    ortho: bool = ...,
-    backgrounds: Optional[torch.Tensor] = ...,
-) -> tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]: ...
-def evaluate_spherical_harmonics(
-    sh_degree: int,
-    num_cameras: int,
-    sh0: torch.Tensor,
-    radii: torch.Tensor,
-    shN: Optional[torch.Tensor] = ...,
-    view_directions: Optional[torch.Tensor] = ...,
-) -> torch.Tensor: ...
 @overload
 def jcat(grid_batches: list[GridBatchData]) -> GridBatchData: ...
 @overload
@@ -1544,3 +1097,377 @@ class ProjectionMethod(Enum):
     AUTO = ...
     ANALYTIC = ...
     UNSCENTED = ...
+
+# ---- Gaussian Splat Operations ----
+
+def count_contributing_gaussians(
+    means2d: torch.Tensor,
+    conics: torch.Tensor,
+    opacities: torch.Tensor,
+    tile_offsets: torch.Tensor,
+    tile_gaussian_ids: torch.Tensor,
+    image_width: int,
+    image_height: int,
+    image_origin_w: int,
+    image_origin_h: int,
+    tile_size: int,
+) -> tuple[torch.Tensor, torch.Tensor]: ...
+def count_contributing_gaussians_sparse(
+    means2d: torch.Tensor,
+    conics: torch.Tensor,
+    opacities: torch.Tensor,
+    tile_offsets: torch.Tensor,
+    tile_gaussian_ids: torch.Tensor,
+    pixels_to_render: JaggedTensor,
+    active_tiles: torch.Tensor,
+    tile_pixel_mask: torch.Tensor,
+    tile_pixel_cumsum: torch.Tensor,
+    pixel_map: torch.Tensor,
+    image_width: int,
+    image_height: int,
+    image_origin_w: int,
+    image_origin_h: int,
+    tile_size: int,
+) -> tuple[JaggedTensor, JaggedTensor]: ...
+def identify_contributing_gaussians(
+    means2d: torch.Tensor,
+    conics: torch.Tensor,
+    opacities: torch.Tensor,
+    tile_offsets: torch.Tensor,
+    tile_gaussian_ids: torch.Tensor,
+    image_width: int,
+    image_height: int,
+    image_origin_w: int,
+    image_origin_h: int,
+    tile_size: int,
+    num_depth_samples: int,
+    num_contributing_gaussians: Optional[torch.Tensor] = None,
+) -> tuple[JaggedTensor, JaggedTensor]: ...
+def identify_contributing_gaussians_sparse(
+    means2d: torch.Tensor,
+    conics: torch.Tensor,
+    opacities: torch.Tensor,
+    tile_offsets: torch.Tensor,
+    tile_gaussian_ids: torch.Tensor,
+    pixels_to_render: JaggedTensor,
+    active_tiles: torch.Tensor,
+    tile_pixel_mask: torch.Tensor,
+    tile_pixel_cumsum: torch.Tensor,
+    pixel_map: torch.Tensor,
+    image_width: int,
+    image_height: int,
+    image_origin_w: int,
+    image_origin_h: int,
+    tile_size: int,
+    num_depth_samples: int,
+    num_contributing_gaussians: Optional[JaggedTensor] = None,
+) -> tuple[JaggedTensor, JaggedTensor]: ...
+def relocate_gaussians(
+    log_scales: torch.Tensor,
+    logit_opacities: torch.Tensor,
+    ratios: torch.Tensor,
+    binomial_coeffs: torch.Tensor,
+    n_max: int,
+    min_opacity: float,
+) -> tuple[torch.Tensor, torch.Tensor]: ...
+def add_noise_to_gaussian_means(
+    means: torch.Tensor,
+    log_scales: torch.Tensor,
+    logit_opacities: torch.Tensor,
+    quats: torch.Tensor,
+    noise_scale: float,
+    t: float,
+    k: float,
+) -> None: ...
+def save_gaussians_ply(
+    means: torch.Tensor,
+    quats: torch.Tensor,
+    log_scales: torch.Tensor,
+    logit_opacities: torch.Tensor,
+    sh0: torch.Tensor,
+    shN: torch.Tensor,
+    filename: str,
+    metadata: Optional[dict[str, str | int | float | torch.Tensor]],
+) -> None: ...
+def load_gaussians_ply(
+    filename: str,
+    device: torch.device = ...,
+) -> tuple[
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    dict[str, str | int | float | torch.Tensor],
+]: ...
+
+# ---- Raw forward/backward dispatch (for Python autograd) ----
+
+def project_gaussians_analytic_fwd(
+    means: torch.Tensor,
+    quats: torch.Tensor,
+    scales: torch.Tensor,
+    world_to_cam_matrices: torch.Tensor,
+    projection_matrices: torch.Tensor,
+    image_width: int,
+    image_height: int,
+    eps2d: float,
+    near: float,
+    far: float,
+    min_radius_2d: float,
+    calc_compensations: bool,
+    ortho: bool,
+) -> tuple[torch.Tensor, ...]: ...
+def project_gaussians_analytic_bwd(
+    means: torch.Tensor,
+    quats: torch.Tensor,
+    scales: torch.Tensor,
+    world_to_cam_matrices: torch.Tensor,
+    projection_matrices: torch.Tensor,
+    compensations: Optional[torch.Tensor],
+    image_width: int,
+    image_height: int,
+    eps2d: float,
+    radii: torch.Tensor,
+    conics: torch.Tensor,
+    d_loss_d_means2d: torch.Tensor,
+    d_loss_d_depths: torch.Tensor,
+    d_loss_d_conics: torch.Tensor,
+    d_loss_d_compensations: Optional[torch.Tensor],
+    world_to_cam_matrices_requires_grad: bool,
+    ortho: bool,
+    out_normalized_d_loss_d_means2d_norm_accum: Optional[torch.Tensor] = ...,
+    out_normalized_max_radii_accum: Optional[torch.Tensor] = ...,
+    out_gradient_step_counts: Optional[torch.Tensor] = ...,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]: ...
+def project_gaussians_ut_fwd(
+    means: torch.Tensor,
+    quats: torch.Tensor,
+    log_scales: torch.Tensor,
+    world_to_cam_matrices: torch.Tensor,
+    projection_matrices: torch.Tensor,
+    distortion_coeffs: torch.Tensor,
+    camera_model: CameraModel,
+    image_width: int,
+    image_height: int,
+    eps2d: float,
+    near: float,
+    far: float,
+    min_radius_2d: float,
+    calc_compensations: bool,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]: ...
+def eval_gaussian_sh_fwd(
+    sh_degree_to_use: int,
+    num_cameras: int,
+    view_dirs: torch.Tensor,
+    sh0_coeffs: torch.Tensor,
+    sh_n_coeffs: torch.Tensor,
+    radii: torch.Tensor,
+) -> torch.Tensor: ...
+def eval_gaussian_sh_bwd(
+    sh_degree_to_use: int,
+    num_cameras: int,
+    num_gaussians: int,
+    view_dirs: torch.Tensor,
+    sh_n_coeffs: torch.Tensor,
+    d_loss_d_colors: torch.Tensor,
+    radii: torch.Tensor,
+    compute_d_loss_d_view_dirs: bool,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]: ...
+def rasterize_screen_space_gaussians_fwd(
+    means2d: torch.Tensor,
+    conics: torch.Tensor,
+    features: torch.Tensor,
+    opacities: torch.Tensor,
+    image_width: int,
+    image_height: int,
+    image_origin_w: int,
+    image_origin_h: int,
+    tile_size: int,
+    tile_offsets: torch.Tensor,
+    tile_gaussian_ids: torch.Tensor,
+    backgrounds: Optional[torch.Tensor],
+    masks: Optional[torch.Tensor],
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]: ...
+def rasterize_screen_space_gaussians_bwd(
+    means2d: torch.Tensor,
+    conics: torch.Tensor,
+    features: torch.Tensor,
+    opacities: torch.Tensor,
+    image_width: int,
+    image_height: int,
+    image_origin_w: int,
+    image_origin_h: int,
+    tile_size: int,
+    tile_offsets: torch.Tensor,
+    tile_gaussian_ids: torch.Tensor,
+    rendered_alphas: torch.Tensor,
+    last_ids: torch.Tensor,
+    d_loss_d_rendered_features: torch.Tensor,
+    d_loss_d_rendered_alphas: torch.Tensor,
+    abs_grad: bool,
+    num_shared_channels_override: int = ...,
+    backgrounds: Optional[torch.Tensor] = ...,
+    masks: Optional[torch.Tensor] = ...,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]: ...
+def rasterize_screen_space_gaussians_sparse_fwd(
+    pixels_to_render: JaggedTensor,
+    means2d: torch.Tensor,
+    conics: torch.Tensor,
+    features: torch.Tensor,
+    opacities: torch.Tensor,
+    image_width: int,
+    image_height: int,
+    image_origin_w: int,
+    image_origin_h: int,
+    tile_size: int,
+    tile_offsets: torch.Tensor,
+    tile_gaussian_ids: torch.Tensor,
+    active_tiles: torch.Tensor,
+    tile_pixel_mask: torch.Tensor,
+    tile_pixel_cumsum: torch.Tensor,
+    pixel_map: torch.Tensor,
+    backgrounds: Optional[torch.Tensor],
+    masks: Optional[torch.Tensor],
+) -> tuple[JaggedTensor, JaggedTensor, JaggedTensor]: ...
+def rasterize_screen_space_gaussians_sparse_bwd(
+    pixels_to_render: JaggedTensor,
+    means2d: torch.Tensor,
+    conics: torch.Tensor,
+    features: torch.Tensor,
+    opacities: torch.Tensor,
+    image_width: int,
+    image_height: int,
+    image_origin_w: int,
+    image_origin_h: int,
+    tile_size: int,
+    tile_offsets: torch.Tensor,
+    tile_gaussian_ids: torch.Tensor,
+    rendered_alphas: JaggedTensor,
+    last_ids: JaggedTensor,
+    d_loss_d_rendered_features: JaggedTensor,
+    d_loss_d_rendered_alphas: JaggedTensor,
+    active_tiles: torch.Tensor,
+    tile_pixel_mask: torch.Tensor,
+    tile_pixel_cumsum: torch.Tensor,
+    pixel_map: torch.Tensor,
+    abs_grad: bool,
+    num_shared_channels_override: int = ...,
+    backgrounds: Optional[torch.Tensor] = ...,
+    masks: Optional[torch.Tensor] = ...,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]: ...
+def rasterize_world_space_gaussians_fwd(
+    means: torch.Tensor,
+    quats: torch.Tensor,
+    log_scales: torch.Tensor,
+    features: torch.Tensor,
+    opacities: torch.Tensor,
+    world_to_cam_matrices_start: torch.Tensor,
+    world_to_cam_matrices_end: torch.Tensor,
+    projection_matrices: torch.Tensor,
+    distortion_coeffs: torch.Tensor,
+    rolling_shutter_type: RollingShutterType,
+    camera_model: CameraModel,
+    image_width: int,
+    image_height: int,
+    image_origin_w: int,
+    image_origin_h: int,
+    tile_size: int,
+    tile_offsets: torch.Tensor,
+    tile_gaussian_ids: torch.Tensor,
+    backgrounds: Optional[torch.Tensor],
+    masks: Optional[torch.Tensor],
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]: ...
+def rasterize_world_space_gaussians_bwd(
+    means: torch.Tensor,
+    quats: torch.Tensor,
+    log_scales: torch.Tensor,
+    features: torch.Tensor,
+    opacities: torch.Tensor,
+    world_to_cam_matrices_start: torch.Tensor,
+    world_to_cam_matrices_end: torch.Tensor,
+    projection_matrices: torch.Tensor,
+    distortion_coeffs: torch.Tensor,
+    rolling_shutter_type: RollingShutterType,
+    camera_model: CameraModel,
+    image_width: int,
+    image_height: int,
+    image_origin_w: int,
+    image_origin_h: int,
+    tile_size: int,
+    tile_offsets: torch.Tensor,
+    tile_gaussian_ids: torch.Tensor,
+    rendered_alphas: torch.Tensor,
+    last_ids: torch.Tensor,
+    d_loss_d_rendered_features: torch.Tensor,
+    d_loss_d_rendered_alphas: torch.Tensor,
+    backgrounds: Optional[torch.Tensor],
+    masks: Optional[torch.Tensor],
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]: ...
+def project_gaussians_analytic_jagged_fwd(
+    g_sizes: torch.Tensor,
+    means: torch.Tensor,
+    quats: torch.Tensor,
+    scales: torch.Tensor,
+    c_sizes: torch.Tensor,
+    world_to_cam_matrices: torch.Tensor,
+    projection_matrices: torch.Tensor,
+    image_width: int,
+    image_height: int,
+    eps2d: float,
+    near: float,
+    far: float,
+    min_radius_2d: float,
+    ortho: bool,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]: ...
+def project_gaussians_analytic_jagged_bwd(
+    g_sizes: torch.Tensor,
+    means: torch.Tensor,
+    quats: torch.Tensor,
+    scales: torch.Tensor,
+    c_sizes: torch.Tensor,
+    world_to_cam_matrices: torch.Tensor,
+    projection_matrices: torch.Tensor,
+    image_width: int,
+    image_height: int,
+    eps2d: float,
+    radii: torch.Tensor,
+    conics: torch.Tensor,
+    d_loss_d_means2d: torch.Tensor,
+    d_loss_d_depths: torch.Tensor,
+    d_loss_d_conics: torch.Tensor,
+    world_to_cam_matrices_requires_grad: bool,
+    ortho: bool,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]: ...
+
+# ---- Tile intersection (non-differentiable) ----
+
+def intersect_gaussian_tiles(
+    means2d: torch.Tensor,
+    radii: torch.Tensor,
+    depths: torch.Tensor,
+    num_cameras: int,
+    tile_size: int,
+    num_tiles_h: int,
+    num_tiles_w: int,
+    camera_ids: Optional[torch.Tensor] = ...,
+) -> tuple[torch.Tensor, torch.Tensor]: ...
+def intersect_gaussian_tiles_sparse(
+    means2d: torch.Tensor,
+    radii: torch.Tensor,
+    depths: torch.Tensor,
+    tile_mask: torch.Tensor,
+    active_tiles: torch.Tensor,
+    num_cameras: int,
+    tile_size: int,
+    num_tiles_h: int,
+    num_tiles_w: int,
+    camera_ids: Optional[torch.Tensor] = ...,
+) -> tuple[torch.Tensor, torch.Tensor]: ...
+def build_sparse_gaussian_tile_layout(
+    tile_side_length: int,
+    num_tiles_w: int,
+    num_tiles_h: int,
+    pixels_to_render: JaggedTensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]: ...

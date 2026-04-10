@@ -27,6 +27,7 @@ from fvdb import (
     evaluate_spherical_harmonics,
     gaussian_render_jagged,
 )
+from fvdb.enums import GaussianRenderMode
 
 
 def compare_images(pixels_or_path_a, pixels_or_path_b):
@@ -180,6 +181,8 @@ class TestGaussianSplatCat(BaseGaussianTestCase):
             else:
                 self.assertEqual(self.gs3d1.accumulated_max_2d_radii, None)
 
+            assert self.gs3d1.accumulated_gradient_step_counts is not None
+            assert self.gs3d1.accumulated_mean_2d_gradient_norms is not None
             self.assertTrue(self.gs3d1.accumulated_gradient_step_counts.shape == (self.gs3d1.num_gaussians,))
             self.assertTrue(self.gs3d1.accumulated_mean_2d_gradient_norms.shape == (self.gs3d1.num_gaussians,))
 
@@ -188,9 +191,17 @@ class TestGaussianSplatCat(BaseGaussianTestCase):
         self.assertTrue(gs3d_cat.num_gaussians == len(gs3d_list) * self.gs3d.num_gaussians)
         self.assertTrue(torch.equal(gs3d_cat.means, torch.cat([gs.means for gs in gs3d_list], dim=0)))
         self.assertTrue(torch.equal(gs3d_cat.quats, torch.cat([gs.quats for gs in gs3d_list], dim=0)))
-        self.assertTrue(torch.equal(gs3d_cat.log_scales, torch.cat([gs.log_scales for gs in gs3d_list], dim=0)))
         self.assertTrue(
-            torch.equal(gs3d_cat.logit_opacities, torch.cat([gs.logit_opacities for gs in gs3d_list], dim=0))
+            torch.equal(
+                gs3d_cat.log_scales,
+                torch.cat([gs.log_scales for gs in gs3d_list], dim=0),
+            )
+        )
+        self.assertTrue(
+            torch.equal(
+                gs3d_cat.logit_opacities,
+                torch.cat([gs.logit_opacities for gs in gs3d_list], dim=0),
+            )
         )
         self.assertTrue(torch.equal(gs3d_cat.sh0, torch.cat([gs.sh0 for gs in gs3d_list], dim=0)))
         self.assertTrue(torch.equal(gs3d_cat.shN, torch.cat([gs.shN for gs in gs3d_list], dim=0)))
@@ -198,6 +209,7 @@ class TestGaussianSplatCat(BaseGaussianTestCase):
         self.assertEqual(gs3d_cat.accumulate_mean_2d_gradients, acc_m2dgrad)
 
         if gs3d_cat.accumulate_max_2d_radii:
+            assert gs3d_cat.accumulated_max_2d_radii is not None
             self.assertTrue(gs3d_cat.accumulated_max_2d_radii.shape == (gs3d_cat.num_gaussians,))
             self.assertTrue(gs3d_cat.accumulated_max_2d_radii.dtype == torch.int32)
             self.assertTrue(gs3d_cat.accumulated_max_2d_radii.device == self.device)
@@ -205,6 +217,8 @@ class TestGaussianSplatCat(BaseGaussianTestCase):
             self.assertEqual(gs3d_cat.accumulated_max_2d_radii, None)
 
         if gs3d_cat.accumulate_max_2d_radii:
+            assert gs3d_cat.accumulated_gradient_step_counts is not None
+            assert gs3d_cat.accumulated_mean_2d_gradient_norms is not None
             self.assertTrue(gs3d_cat.accumulated_gradient_step_counts.shape == (gs3d_cat.num_gaussians,))
             self.assertTrue(gs3d_cat.accumulated_gradient_step_counts.dtype == torch.int32)
             self.assertTrue(gs3d_cat.accumulated_gradient_step_counts.device == self.device)
@@ -218,22 +232,32 @@ class TestGaussianSplatCat(BaseGaussianTestCase):
 
     def test_cat_basic(self):
         gs3d_cat = GaussianSplat3d.cat(
-            [self.gs3d1, self.gs3d2, self.gs3d3], accumulate_max_2d_radii=False, accumulate_mean_2d_gradients=False
+            [self.gs3d1, self.gs3d2, self.gs3d3],
+            accumulate_max_2d_radii=False,
+            accumulate_mean_2d_gradients=False,
         )
         self.check_grad()
         self.check_basic(gs3d_cat, [self.gs3d1, self.gs3d2, self.gs3d3], False, False)
 
     def test_cat_track_state_no_backward_on_two_and_three(self):
         gs3d_cat = GaussianSplat3d.cat(
-            [self.gs3d1, self.gs3d2, self.gs3d3], accumulate_max_2d_radii=True, accumulate_mean_2d_gradients=True
+            [self.gs3d1, self.gs3d2, self.gs3d3],
+            accumulate_max_2d_radii=True,
+            accumulate_mean_2d_gradients=True,
         )
 
         self.check_grad()
         self.check_basic(gs3d_cat, [self.gs3d1, self.gs3d2, self.gs3d3], True, True)
 
+        assert gs3d_cat.accumulated_gradient_step_counts is not None
+        assert gs3d_cat.accumulated_mean_2d_gradient_norms is not None
+        assert gs3d_cat.accumulated_max_2d_radii is not None
         self.assertTrue(gs3d_cat.accumulated_gradient_step_counts.shape, (gs3d_cat.num_gaussians,))
         self.assertTrue(gs3d_cat.accumulated_mean_2d_gradient_norms.shape, (gs3d_cat.num_gaussians,))
         if self.run_backward:
+            assert self.gs3d1.accumulated_gradient_step_counts is not None
+            assert self.gs3d1.accumulated_mean_2d_gradient_norms is not None
+            assert self.gs3d1.accumulated_max_2d_radii is not None
             step_counts = torch.cat(
                 [
                     self.gs3d1.accumulated_gradient_step_counts,
@@ -267,14 +291,20 @@ class TestGaussianSplatCat(BaseGaussianTestCase):
         self.assertTrue(torch.equal(gs3d_cat.accumulated_max_2d_radii, max_radii))
 
     def test_cat_track_state_all_backward(self):
-        gs3d1_d, gs3d2_d, gs3d3_d = self.gs3d1.detach(), self.gs3d2.detach(), self.gs3d3.detach()
+        gs3d1_d, gs3d2_d, gs3d3_d = (
+            self.gs3d1.detach(),
+            self.gs3d2.detach(),
+            self.gs3d3.detach(),
+        )
         if self.run_backward:
             self.run_backward_on_gs3d(gs3d1_d)
             self.run_backward_on_gs3d(gs3d2_d)
             self.run_backward_on_gs3d(gs3d3_d)
 
         gs3d_cat = GaussianSplat3d.cat(
-            [gs3d1_d, gs3d2_d, gs3d3_d], accumulate_max_2d_radii=True, accumulate_mean_2d_gradients=True
+            [gs3d1_d, gs3d2_d, gs3d3_d],
+            accumulate_max_2d_radii=True,
+            accumulate_mean_2d_gradients=True,
         )
 
         self.check_grad()
@@ -283,10 +313,22 @@ class TestGaussianSplatCat(BaseGaussianTestCase):
         self.assertTrue(gs3d_cat.accumulate_max_2d_radii)
         self.assertTrue(gs3d_cat.accumulate_mean_2d_gradients)
 
+        assert gs3d_cat.accumulated_gradient_step_counts is not None
+        assert gs3d_cat.accumulated_mean_2d_gradient_norms is not None
+        assert gs3d_cat.accumulated_max_2d_radii is not None
         self.assertTrue(gs3d_cat.accumulated_gradient_step_counts.shape, (gs3d_cat.num_gaussians,))
         self.assertTrue(gs3d_cat.accumulated_mean_2d_gradient_norms.shape, (gs3d_cat.num_gaussians,))
 
         if self.run_backward:
+            assert gs3d1_d.accumulated_gradient_step_counts is not None
+            assert gs3d2_d.accumulated_gradient_step_counts is not None
+            assert gs3d3_d.accumulated_gradient_step_counts is not None
+            assert gs3d1_d.accumulated_mean_2d_gradient_norms is not None
+            assert gs3d2_d.accumulated_mean_2d_gradient_norms is not None
+            assert gs3d3_d.accumulated_mean_2d_gradient_norms is not None
+            assert gs3d1_d.accumulated_max_2d_radii is not None
+            assert gs3d2_d.accumulated_max_2d_radii is not None
+            assert gs3d3_d.accumulated_max_2d_radii is not None
             step_counts = torch.cat(
                 [
                     gs3d1_d.accumulated_gradient_step_counts,
@@ -364,6 +406,7 @@ class TestGaussianSplatTo(BaseGaussianTestCase):
         self.assertTrue(gs3d.dtype == dtype)
         if gs3d.accumulated_gradient_step_counts is not None:
             assert self.run_backward, "accumulated_gradient_step_counts should only be set when run_backward is True"
+            assert self.gs3d.accumulated_gradient_step_counts is not None
             self.assertTrue(
                 gs3d.accumulated_gradient_step_counts.shape == self.gs3d.accumulated_gradient_step_counts.shape
             )
@@ -374,6 +417,7 @@ class TestGaussianSplatTo(BaseGaussianTestCase):
             self.assertEqual(self.gs3d.accumulated_gradient_step_counts, None)
         if gs3d.accumulated_mean_2d_gradient_norms is not None:
             assert self.run_backward, "accumulated_mean_2d_gradient_norms should only be set when run_backward is True"
+            assert self.gs3d.accumulated_mean_2d_gradient_norms is not None
             self.assertTrue(
                 gs3d.accumulated_mean_2d_gradient_norms.shape == self.gs3d.accumulated_mean_2d_gradient_norms.shape
             )
@@ -385,6 +429,7 @@ class TestGaussianSplatTo(BaseGaussianTestCase):
 
         if gs3d.accumulated_max_2d_radii is not None:
             assert self.run_backward, "accumulated_max_2d_radii should only be set when run_backward is True"
+            assert self.gs3d.accumulated_max_2d_radii is not None
             self.assertTrue(gs3d.accumulated_max_2d_radii.shape == self.gs3d.accumulated_max_2d_radii.shape)
             self.assertTrue(gs3d.accumulated_max_2d_radii.device == device)
             self.assertTrue(gs3d.accumulated_max_2d_radii.dtype == torch.int32)
@@ -571,6 +616,10 @@ class TestGaussianSplatIndexSet(BaseGaussianTestCase):
         # Check that both the source and destination Gaussian Splat get their accumulate
         # gradient state correctly set
         if src_acc_m2d_grads and dst_track_m2d_grads:
+            assert src.accumulated_gradient_step_counts is not None
+            assert dst.accumulated_gradient_step_counts is not None
+            assert src.accumulated_mean_2d_gradient_norms is not None
+            assert dst.accumulated_mean_2d_gradient_norms is not None
             assertfun(
                 torch.equal(
                     src.accumulated_gradient_step_counts,
@@ -584,6 +633,8 @@ class TestGaussianSplatIndexSet(BaseGaussianTestCase):
                 )
             )
             if track_max_2d_radii:
+                assert src.accumulated_max_2d_radii is not None
+                assert dst.accumulated_max_2d_radii is not None
                 assertfun(
                     torch.equal(
                         src.accumulated_max_2d_radii,
@@ -591,6 +642,8 @@ class TestGaussianSplatIndexSet(BaseGaussianTestCase):
                     )
                 )
         elif dst_track_m2d_grads and not src_acc_m2d_grads:
+            assert dst.accumulated_gradient_step_counts is not None
+            assert dst.accumulated_mean_2d_gradient_norms is not None
             assertfun(
                 torch.equal(
                     torch.zeros(src.num_gaussians).to(dst.accumulated_gradient_step_counts),
@@ -604,6 +657,7 @@ class TestGaussianSplatIndexSet(BaseGaussianTestCase):
                 )
             )
             if track_max_2d_radii:
+                assert dst.accumulated_max_2d_radii is not None
                 assertfun(
                     torch.equal(
                         torch.zeros(src.num_gaussians).to(dst.accumulated_max_2d_radii),
@@ -615,12 +669,22 @@ class TestGaussianSplatIndexSet(BaseGaussianTestCase):
             self.assertEqual(dst.accumulated_mean_2d_gradient_norms, None)
             self.assertEqual(dst.accumulated_gradient_step_counts, None)
             # Check that the destination Gaussian Splat has the same gradient shapes as before
+            assert src.accumulated_gradient_step_counts is not None
+            assert src.accumulated_mean_2d_gradient_norms is not None
             self.assertTrue(src.accumulated_gradient_step_counts.shape == (src.num_gaussians,))
             self.assertTrue(src.accumulated_mean_2d_gradient_norms.shape == (src.num_gaussians,))
             if track_max_2d_radii:
+                assert src.accumulated_max_2d_radii is not None
                 self.assertTrue(src.accumulated_max_2d_radii.shape == (src.num_gaussians,))
 
-    def _run_test(self, indices, src_requires_grad, dst_requires_grad, track_max_2d_radii, slicefun=None):
+    def _run_test(
+        self,
+        indices,
+        src_requires_grad,
+        dst_requires_grad,
+        track_max_2d_radii,
+        slicefun=None,
+    ):
         # Create the source and destination Gaussian Splats
         src, dst = self.make_src_and_dst(
             indices,
@@ -828,6 +892,10 @@ class TestGaussianSplatIndex(BaseGaussianTestCase):
 
         if accumulate_mean_2d_gradients:
             # Ensure the gradients and accumulated gradient state match at every other Gaussian
+            assert selected.accumulated_gradient_step_counts is not None
+            assert dst.accumulated_gradient_step_counts is not None
+            assert selected.accumulated_mean_2d_gradient_norms is not None
+            assert dst.accumulated_mean_2d_gradient_norms is not None
             self.assertTrue(
                 torch.equal(
                     selected.accumulated_gradient_step_counts,
@@ -841,6 +909,8 @@ class TestGaussianSplatIndex(BaseGaussianTestCase):
                 )
             )
         if accumulate_max_2d_radii:
+            assert selected.accumulated_max_2d_radii is not None
+            assert dst.accumulated_max_2d_radii is not None
             self.assertTrue(
                 torch.equal(
                     selected.accumulated_max_2d_radii,
@@ -849,7 +919,10 @@ class TestGaussianSplatIndex(BaseGaussianTestCase):
             )
 
     def _make_gs3d(
-        self, accumulate_mean_2d_gradients: bool, accumulate_max_2d_radii: bool, empty_shN: bool
+        self,
+        accumulate_mean_2d_gradients: bool,
+        accumulate_max_2d_radii: bool,
+        empty_shN: bool,
     ) -> GaussianSplat3d:
         # Create a GaussianSplat3d instance with gradients that matches self.gs3d
         shN = torch.empty((self.gs3d.num_gaussians, 0, 3), device=self.device) if empty_shN else self.gs3d.shN
@@ -880,9 +953,12 @@ class TestGaussianSplatIndex(BaseGaussianTestCase):
 
             # Check that we tracked accumulated gradient state properly
             if accumulate_mean_2d_gradients:
+                assert gs3d.accumulated_gradient_step_counts is not None
+                assert gs3d.accumulated_mean_2d_gradient_norms is not None
                 self.assertTrue(gs3d.accumulated_gradient_step_counts.shape == (gs3d.num_gaussians,))
                 self.assertTrue(gs3d.accumulated_mean_2d_gradient_norms.shape == (gs3d.num_gaussians,))
             if accumulate_max_2d_radii:
+                assert gs3d.accumulated_max_2d_radii is not None
                 self.assertTrue(gs3d.accumulated_max_2d_radii.shape == (gs3d.num_gaussians,))
         return gs3d
 
@@ -1292,13 +1368,21 @@ class TestLoadAndSavePly(BaseGaussianTestCase):
         assert isinstance(training_info["camera_to_world_matrices"], torch.Tensor)
         assert isinstance(training_info["projection_types"], torch.Tensor)
         assert isinstance(training_info["projection_parameters"], torch.Tensor)
-        self.assertTrue(torch.allclose(training_info["normalization_transform"], normalization_tx.to(self.device)))
+        self.assertTrue(
+            torch.allclose(
+                training_info["normalization_transform"],
+                normalization_tx.to(self.device),
+            )
+        )
         self.assertTrue(torch.allclose(training_info["camera_to_world_matrices"], cam_to_worlds.to(self.device)))
         self.assertTrue(torch.equal(training_info["projection_types"], cam_types.to(self.device)))
         self.assertTrue(torch.allclose(training_info["projection_parameters"], proj_params.to(self.device)))
         self.assertEqual(training_info["float_param"], 0.121243243523524650345740953)
         self.assertEqual(training_info["int_param"], 8198767135)
-        self.assertEqual(training_info["string_parameter"], "The Quick brown fox jumps over the lazy dog")
+        self.assertEqual(
+            training_info["string_parameter"],
+            "The Quick brown fox jumps over the lazy dog",
+        )
 
     def test_save_ply_only_string_keys(self):
         tf = tempfile.NamedTemporaryFile(delete=True, suffix=".ply")
@@ -1368,7 +1452,12 @@ class TestLoadAndSavePly(BaseGaussianTestCase):
         assert isinstance(training_info["projection_types"], torch.Tensor)
         assert isinstance(training_info["projection_parameters"], torch.Tensor)
         self.assertTrue(torch.allclose(training_info["normalization_tx"], normalization_tx.to(self.device)))
-        self.assertTrue(torch.allclose(training_info["camera_to_world_matrices123"], cam_to_worlds.to(self.device)))
+        self.assertTrue(
+            torch.allclose(
+                training_info["camera_to_world_matrices123"],
+                cam_to_worlds.to(self.device),
+            )
+        )
         self.assertTrue(torch.equal(training_info["projection_types"], cam_types.to(self.device)))
         self.assertTrue(torch.allclose(training_info["projection_parameters"], proj_params.to(self.device)))
         self.assertEqual(training_info["version_string"], "my version")
@@ -1381,7 +1470,7 @@ class TestGaussianRender(BaseGaussianTestCase):
         super().setUp()
 
     def test_gaussian_projection(self):
-        proj_res = self.gs3d.project_gaussians_for_images_and_depths(
+        proj_res = self.gs3d.project_gaussians(
             self.cam_to_world_mats,
             self.projection_mats,
             self.width,
@@ -1391,8 +1480,8 @@ class TestGaussianRender(BaseGaussianTestCase):
         )
         radii = proj_res.radii
         means2d = proj_res.means2d
-        depths = proj_res.render_quantities[..., -1]
-        conics = proj_res.inv_covar_2d
+        depths = proj_res.depths
+        conics = proj_res.conics
 
         if self.save_regression_data:
             torch.save(radii, "regression_radii.pt")
@@ -1411,8 +1500,8 @@ class TestGaussianRender(BaseGaussianTestCase):
         torch.testing.assert_close(depths[radii > 0], test_depths[radii > 0])
         torch.testing.assert_close(conics[radii > 0], test_conics[radii > 0], atol=1e-5, rtol=1e-4)
 
-    def test_projection_camera_metadata(self):
-        projected = self.gs3d.project_gaussians_for_images(
+    def test_projection_returns_valid_projected_gaussians(self):
+        projected = self.gs3d.project_gaussians(
             self.cam_to_world_mats[:1],
             self.projection_mats[:1],
             self.width,
@@ -1423,8 +1512,12 @@ class TestGaussianRender(BaseGaussianTestCase):
             projection_method=ProjectionMethod.AUTO,
         )
 
-        self.assertEqual(projected.camera_model, CameraModel.PINHOLE)
-        self.assertEqual(projected.projection_method, ProjectionMethod.ANALYTIC)
+        self.assertEqual(projected.image_width, self.width)
+        self.assertEqual(projected.image_height, self.height)
+        self.assertEqual(projected.means2d.shape[0], 1)
+        self.assertIsNotNone(projected.conics)
+        self.assertIsNotNone(projected.depths)
+        self.assertIsNotNone(projected.radii)
 
     def test_from_world_depth_and_rgbd_render(self):
         cam_mats = self.cam_to_world_mats[:1]
@@ -1610,7 +1703,12 @@ class TestGaussianContributingGaussianIdsRender(BaseGaussianTestCase):
         # For image size 1024x512, principal point should be around (512, 256)
         focal_length = 18.0  # Reasonable focal length for this image size
         intrinsics = torch.tensor(
-            [[focal_length, 0.0, w / 2.0], [0.0, focal_length, h / 2.0], [0.0, 0.0, 1.0]], device=self.device
+            [
+                [focal_length, 0.0, w / 2.0],
+                [0.0, focal_length, h / 2.0],
+                [0.0, 0.0, 1.0],
+            ],
+            device=self.device,
         )
 
         means3d = torch.cat(
@@ -1623,7 +1721,11 @@ class TestGaussianContributingGaussianIdsRender(BaseGaussianTestCase):
 
         opacities = torch.cat(
             [
-                torch.full((means3d.shape[0] // num_gaussian_layers,), 0.4, device=means3d.device)
+                torch.full(
+                    (means3d.shape[0] // num_gaussian_layers,),
+                    0.4,
+                    device=means3d.device,
+                )
                 for _ in range(num_gaussian_layers)
             ],
             dim=0,
@@ -1727,7 +1829,8 @@ class TestGaussianContributingGaussianIdsRender(BaseGaussianTestCase):
         # test the center pixel should have the correct number of contributing gaussians
         self.assertTrue(
             torch.equal(
-                sparse_num_contributing_gaussians.unbind()[0][0], num_contributing_gaussians[0][h // 2 - 1][w // 2 - 1]
+                sparse_num_contributing_gaussians.unbind()[0][0],
+                num_contributing_gaussians[0][h // 2 - 1][w // 2 - 1],
             )
         )
 
@@ -1782,7 +1885,12 @@ class TestGaussianContributingGaussianIdsRender(BaseGaussianTestCase):
         # For image size 1024x512, principal point should be around (512, 256)
         focal_length = 18.0  # Reasonable focal length for this image size
         intrinsics = torch.tensor(
-            [[focal_length, 0.0, w / 2.0], [0.0, focal_length, h / 2.0], [0.0, 0.0, 1.0]], device=self.device
+            [
+                [focal_length, 0.0, w / 2.0],
+                [0.0, focal_length, h / 2.0],
+                [0.0, 0.0, 1.0],
+            ],
+            device=self.device,
         )
 
         means3d = torch.cat(
@@ -1797,7 +1905,11 @@ class TestGaussianContributingGaussianIdsRender(BaseGaussianTestCase):
 
         opacities = torch.cat(
             [
-                torch.full((means3d.shape[0] // num_gaussian_layers,), 0.4, device=means3d.device)
+                torch.full(
+                    (means3d.shape[0] // num_gaussian_layers,),
+                    0.4,
+                    device=means3d.device,
+                )
                 for _ in range(num_gaussian_layers)
             ],
             dim=0,
@@ -1832,14 +1944,18 @@ class TestGaussianContributingGaussianIdsRender(BaseGaussianTestCase):
         alphas_centers = alphas[0][::2, ::2]
 
         expected_num_gaussians_centers = torch.full(
-            (num_gaussians_centers.shape[0], num_gaussians_centers.shape[1]), num_gaussian_layers, device=self.device
+            (num_gaussians_centers.shape[0], num_gaussians_centers.shape[1]),
+            num_gaussian_layers,
+            device=self.device,
         )
         self.assertTrue(torch.equal(num_gaussians_centers, expected_num_gaussians_centers))
 
         # pixels directly under the centers of the gaussians should have the correct alpha
         expected_alpha = self.calculate_expected_alpha(opacities[0].item(), num_gaussian_layers)
         expected_alphas_centers = torch.full(
-            (alphas_centers.shape[0], alphas_centers.shape[1]), expected_alpha, device=self.device
+            (alphas_centers.shape[0], alphas_centers.shape[1]),
+            expected_alpha,
+            device=self.device,
         )
         self.assertTrue(torch.allclose(alphas_centers, expected_alphas_centers, atol=1e-5, rtol=1e-8))
 
@@ -1954,8 +2070,14 @@ class TestGaussianContributingGaussianIdsRender(BaseGaussianTestCase):
             10000.0,
         )
 
-        for pixels, test_num_contributing_gaussians, reference_num_contributing_gaussians in zip(
-            pixels_to_render.unbind(), sparse_num_contributing_gaussians.unbind(), num_contributing_gaussians
+        for (
+            pixels,
+            test_num_contributing_gaussians,
+            reference_num_contributing_gaussians,
+        ) in zip(
+            pixels_to_render.unbind(),
+            sparse_num_contributing_gaussians.unbind(),
+            num_contributing_gaussians,
         ):
             assert isinstance(pixels, torch.Tensor)
             assert isinstance(test_num_contributing_gaussians, torch.Tensor)
@@ -1963,7 +2085,12 @@ class TestGaussianContributingGaussianIdsRender(BaseGaussianTestCase):
             x_coords = pixels[:, 1]  # [num_pixels_to_render]
             # Index reference_num_contributing_gaussians using the coordinates
             selected_reference_num_contributing_gaussians = reference_num_contributing_gaussians[y_coords, x_coords]
-            self.assertTrue(torch.equal(test_num_contributing_gaussians, selected_reference_num_contributing_gaussians))
+            self.assertTrue(
+                torch.equal(
+                    test_num_contributing_gaussians,
+                    selected_reference_num_contributing_gaussians,
+                )
+            )
 
         for pixels, sparse_alphas, reference_alphas in zip(pixels_to_render.unbind(), sparse_alphas.unbind(), alphas):
             assert isinstance(pixels, torch.Tensor)
@@ -1986,8 +2113,18 @@ class TestGaussianContributingGaussianIdsRender(BaseGaussianTestCase):
         )
 
         # Compare sparse results with dense results
-        for pixels, sparse_camera_ids, sparse_camera_weights, reference_camera_ids, reference_camera_weights in zip(
-            pixels_to_render.unbind(), sparse_ids.unbind(), sparse_weights.unbind(), ids.unbind(), weights.unbind()
+        for (
+            pixels,
+            sparse_camera_ids,
+            sparse_camera_weights,
+            reference_camera_ids,
+            reference_camera_weights,
+        ) in zip(
+            pixels_to_render.unbind(),
+            sparse_ids.unbind(),
+            sparse_weights.unbind(),
+            ids.unbind(),
+            weights.unbind(),
         ):
             assert isinstance(pixels, torch.Tensor)
 
@@ -2051,15 +2188,23 @@ class TestGaussianContributingGaussianIdsRender(BaseGaussianTestCase):
             prev_num_contributing_gaussians = num_contributing_gaussians
 
         if self.save_regression_data:
-            torch.save(num_contributing_gaussians, self.data_path / "regression_num_contributing_gaussians.pt")
-            torch.save(alphas, self.data_path / "regression_num_contributing_gaussians_alphas.pt")
+            torch.save(
+                num_contributing_gaussians,
+                self.data_path / "regression_num_contributing_gaussians.pt",
+            )
+            torch.save(
+                alphas,
+                self.data_path / "regression_num_contributing_gaussians_alphas.pt",
+            )
 
         # load the regression data
         num_contributing_gaussians_regression = torch.load(
-            self.data_path / "regression_num_contributing_gaussians.pt", weights_only=True
+            self.data_path / "regression_num_contributing_gaussians.pt",
+            weights_only=True,
         )
         alphas_regression = torch.load(
-            self.data_path / "regression_num_contributing_gaussians_alphas.pt", weights_only=True
+            self.data_path / "regression_num_contributing_gaussians_alphas.pt",
+            weights_only=True,
         )
 
         self.assertTrue(torch.equal(num_contributing_gaussians, num_contributing_gaussians_regression))
@@ -2080,9 +2225,13 @@ class TestGaussianContributingGaussianIdsRender(BaseGaussianTestCase):
             torch.save(weights, self.data_path / "regression_contributing_gaussian_weights.pt")
 
         # load the regression data
-        ids_regression = torch.load(self.data_path / "regression_contributing_gaussian_ids.pt", weights_only=False)
+        ids_regression = torch.load(
+            self.data_path / "regression_contributing_gaussian_ids.pt",
+            weights_only=False,
+        )
         weights_regression = torch.load(
-            self.data_path / "regression_contributing_gaussian_weights.pt", weights_only=False
+            self.data_path / "regression_contributing_gaussian_weights.pt",
+            weights_only=False,
         )
 
         self.assertTrue(ids == ids_regression)
@@ -2129,19 +2278,32 @@ class TestGaussianContributingGaussianIdsRender(BaseGaussianTestCase):
                     10000.0,
                 )
             )
-            self.assertTrue(torch.equal(num_contributing_gaussians.jdata, prev_num_contributing_gaussians.jdata))
+            self.assertTrue(
+                torch.equal(
+                    num_contributing_gaussians.jdata,
+                    prev_num_contributing_gaussians.jdata,
+                )
+            )
             prev_num_contributing_gaussians = num_contributing_gaussians
 
         # load the regression data
         num_contributing_gaussians_regression = torch.load(
-            self.data_path / "regression_num_contributing_gaussians.pt", weights_only=True
+            self.data_path / "regression_num_contributing_gaussians.pt",
+            weights_only=True,
         )
         alphas_regression = torch.load(
-            self.data_path / "regression_num_contributing_gaussians_alphas.pt", weights_only=True
+            self.data_path / "regression_num_contributing_gaussians_alphas.pt",
+            weights_only=True,
         )
 
-        for pixels, sparse_num_contributing_gaussians, reference_num_contributing_gaussians in zip(
-            pixels_to_render.unbind(), num_contributing_gaussians.unbind(), num_contributing_gaussians_regression
+        for (
+            pixels,
+            sparse_num_contributing_gaussians,
+            reference_num_contributing_gaussians,
+        ) in zip(
+            pixels_to_render.unbind(),
+            num_contributing_gaussians.unbind(),
+            num_contributing_gaussians_regression,
         ):
             assert isinstance(pixels, torch.Tensor)
             assert isinstance(sparse_num_contributing_gaussians, torch.Tensor)
@@ -2150,11 +2312,16 @@ class TestGaussianContributingGaussianIdsRender(BaseGaussianTestCase):
             # Index reference_num_contributing_gaussians using the coordinates
             selected_reference_num_contributing_gaussians = reference_num_contributing_gaussians[y_coords, x_coords]
             self.assertTrue(
-                torch.equal(sparse_num_contributing_gaussians, selected_reference_num_contributing_gaussians)
+                torch.equal(
+                    sparse_num_contributing_gaussians,
+                    selected_reference_num_contributing_gaussians,
+                )
             )
 
         for pixels, sparse_alphas, reference_alphas in zip(
-            pixels_to_render.unbind(), num_contributing_gaussians_alphas.unbind(), alphas_regression
+            pixels_to_render.unbind(),
+            num_contributing_gaussians_alphas.unbind(),
+            alphas_regression,
         ):
             assert isinstance(pixels, torch.Tensor)
             assert isinstance(sparse_alphas, torch.Tensor)
@@ -2176,9 +2343,13 @@ class TestGaussianContributingGaussianIdsRender(BaseGaussianTestCase):
         )
 
         # load the regression data
-        ids_regression = torch.load(self.data_path / "regression_contributing_gaussian_ids.pt", weights_only=False)
+        ids_regression = torch.load(
+            self.data_path / "regression_contributing_gaussian_ids.pt",
+            weights_only=False,
+        )
         weights_regression = torch.load(
-            self.data_path / "regression_contributing_gaussian_weights.pt", weights_only=False
+            self.data_path / "regression_contributing_gaussian_weights.pt",
+            weights_only=False,
         )
 
         for pixels, image_sparse_ids, image_reference_ids in zip(pixels_to_render.unbind(), sparse_ids, ids_regression):
@@ -2243,14 +2414,22 @@ class TestGaussianContributingGaussianIdsRender(BaseGaussianTestCase):
 
         # load the regression data
         num_contributing_gaussians_regression = torch.load(
-            self.data_path / "regression_num_contributing_gaussians.pt", weights_only=True
+            self.data_path / "regression_num_contributing_gaussians.pt",
+            weights_only=True,
         )
         alphas_regression = torch.load(
-            self.data_path / "regression_num_contributing_gaussians_alphas.pt", weights_only=True
+            self.data_path / "regression_num_contributing_gaussians_alphas.pt",
+            weights_only=True,
         )
 
-        for pixels, sparse_num_contributing_gaussians, reference_num_contributing_gaussians in zip(
-            pixels_to_render.unbind(), sparse_num_contributing_gaussians.unbind(), num_contributing_gaussians_regression
+        for (
+            pixels,
+            sparse_num_contributing_gaussians,
+            reference_num_contributing_gaussians,
+        ) in zip(
+            pixels_to_render.unbind(),
+            sparse_num_contributing_gaussians.unbind(),
+            num_contributing_gaussians_regression,
         ):
             assert isinstance(pixels, torch.Tensor)
             assert isinstance(sparse_num_contributing_gaussians, torch.Tensor)
@@ -2259,7 +2438,10 @@ class TestGaussianContributingGaussianIdsRender(BaseGaussianTestCase):
             # Index reference_num_contributing_gaussians using the coordinates
             selected_reference_num_contributing_gaussians = reference_num_contributing_gaussians[y_coords, x_coords]
             self.assertTrue(
-                torch.equal(sparse_num_contributing_gaussians, selected_reference_num_contributing_gaussians)
+                torch.equal(
+                    sparse_num_contributing_gaussians,
+                    selected_reference_num_contributing_gaussians,
+                )
             )
 
         for pixels, sparse_alphas, reference_alphas in zip(
@@ -2285,9 +2467,13 @@ class TestGaussianContributingGaussianIdsRender(BaseGaussianTestCase):
         )
 
         # load the regression data
-        ids_regression = torch.load(self.data_path / "regression_contributing_gaussian_ids.pt", weights_only=False)
+        ids_regression = torch.load(
+            self.data_path / "regression_contributing_gaussian_ids.pt",
+            weights_only=False,
+        )
         weights_regression = torch.load(
-            self.data_path / "regression_contributing_gaussian_weights.pt", weights_only=False
+            self.data_path / "regression_contributing_gaussian_weights.pt",
+            weights_only=False,
         )
 
         for pixels, image_sparse_ids, image_reference_ids in zip(pixels_to_render, sparse_ids, ids_regression):
@@ -2436,7 +2622,12 @@ class TestGaussianRenderSparse(BaseGaussianTestCase):
             "Sparse log scales grad does not match dense log scales grad at specified pixels",
         )
         self.assertTrue(
-            torch.allclose(sparse_logit_opacities_grad, dense_logit_opacities_grad, atol=1e-4, rtol=1e-8),
+            torch.allclose(
+                sparse_logit_opacities_grad,
+                dense_logit_opacities_grad,
+                atol=1e-4,
+                rtol=1e-8,
+            ),
             "Sparse logit opacities grad does not match dense logit opacities grad at specified pixels",
         )
 
@@ -2556,7 +2747,12 @@ class TestGaussianRenderSparse(BaseGaussianTestCase):
             "Sparse log scales grad does not match dense log scales grad at specified pixels",
         )
         self.assertTrue(
-            torch.allclose(sparse_logit_opacities_grad, dense_logit_opacities_grad, atol=1e-4, rtol=1e-8),
+            torch.allclose(
+                sparse_logit_opacities_grad,
+                dense_logit_opacities_grad,
+                atol=1e-4,
+                rtol=1e-8,
+            ),
             "Sparse logit opacities grad does not match dense logit opacities grad at specified pixels",
         )
         self.assertTrue(
@@ -2684,7 +2880,12 @@ class TestGaussianRenderSparse(BaseGaussianTestCase):
             "Sparse log scales grad does not match dense log scales grad at specified pixels",
         )
         self.assertTrue(
-            torch.allclose(sparse_logit_opacities_grad, dense_logit_opacities_grad, atol=1e-4, rtol=1e-8),
+            torch.allclose(
+                sparse_logit_opacities_grad,
+                dense_logit_opacities_grad,
+                atol=1e-4,
+                rtol=1e-8,
+            ),
             "Sparse logit opacities grad does not match dense logit opacities grad at specified pixels",
         )
         self.assertTrue(
@@ -2764,12 +2965,23 @@ class TestGaussianRenderBackgrounds(BaseGaussianTestCase):
 
         # Render without background
         colors_no_bg, alphas_no_bg = self.gs3d.render_images(
-            cam_mats, proj_mats, self.width, self.height, self.near_plane, self.far_plane
+            cam_mats,
+            proj_mats,
+            self.width,
+            self.height,
+            self.near_plane,
+            self.far_plane,
         )
 
         # Render with different backgrounds
         colors_with_bg, alphas_with_bg = self.gs3d.render_images(
-            cam_mats, proj_mats, self.width, self.height, self.near_plane, self.far_plane, backgrounds=backgrounds
+            cam_mats,
+            proj_mats,
+            self.width,
+            self.height,
+            self.near_plane,
+            self.far_plane,
+            backgrounds=backgrounds,
         )
 
         # Alphas should be identical
@@ -2869,7 +3081,13 @@ class TestGaussianRenderBackgrounds(BaseGaussianTestCase):
 
         # Render with background and compute loss
         colors, alphas = self.gs3d.render_images(
-            cam_mats, proj_mats, self.width, self.height, self.near_plane, self.far_plane, backgrounds=backgrounds
+            cam_mats,
+            proj_mats,
+            self.width,
+            self.height,
+            self.near_plane,
+            self.far_plane,
+            backgrounds=backgrounds,
         )
 
         loss = colors.sum()
@@ -2923,18 +3141,27 @@ class TestGaussianRenderBackgrounds(BaseGaussianTestCase):
         num_channels = 3
 
         # Project gaussians
-        projected = self.gs3d.project_gaussians_for_images(
-            cam_mats, proj_mats, self.width, self.height, self.near_plane, self.far_plane
+        projected = self.gs3d.project_gaussians(
+            cam_mats,
+            proj_mats,
+            self.width,
+            self.height,
+            self.near_plane,
+            self.far_plane,
         )
 
         # Create backgrounds
         backgrounds = torch.full((num_cameras, num_channels), 0.7, device=self.device, dtype=torch.float32)
 
         # Render without background
-        colors_no_bg, alphas_no_bg = self.gs3d.render_from_projected_gaussians(projected)
+        colors_no_bg, alphas_no_bg = self.gs3d.render_from_projected_gaussians(
+            projected, cam_mats, render_mode=GaussianRenderMode.FEATURES
+        )
 
         # Render with background
-        colors_with_bg, alphas_with_bg = self.gs3d.render_from_projected_gaussians(projected, backgrounds=backgrounds)
+        colors_with_bg, alphas_with_bg = self.gs3d.render_from_projected_gaussians(
+            projected, cam_mats, render_mode=GaussianRenderMode.FEATURES, backgrounds=backgrounds
+        )
 
         # Alphas should be identical
         self.assertTrue(torch.allclose(alphas_no_bg, alphas_with_bg))
@@ -3483,6 +3710,124 @@ class TestEvaluateSphericalHarmonics(unittest.TestCase):
         self.assertFalse(torch.isnan(result).any())
         self.assertFalse(torch.isinf(result).any())
 
+    def test_unnormalized_matches_normalized(self):
+        """Regression: kernel normalizes internally, so scaled view_dirs must give identical results."""
+        N = 50
+        D = 3
+        C = 2
+
+        torch.manual_seed(123)
+        sh0 = torch.randn(N, 1, D, device=self.device)
+        shN = torch.randn(N, 15, D, device=self.device)
+        radii = torch.ones(C, N, dtype=torch.int32, device=self.device)
+
+        view_dirs = torch.randn(C, N, 3, device=self.device)
+        view_dirs_normalized = torch.nn.functional.normalize(view_dirs, dim=-1)
+        view_dirs_scaled = view_dirs * 100.0
+
+        result_norm = evaluate_spherical_harmonics(
+            sh_degree=3, num_cameras=C, sh0=sh0, radii=radii, shN=shN, view_directions=view_dirs_normalized
+        )
+        result_unnorm = evaluate_spherical_harmonics(
+            sh_degree=3, num_cameras=C, sh0=sh0, radii=radii, shN=shN, view_directions=view_dirs
+        )
+        result_scaled = evaluate_spherical_harmonics(
+            sh_degree=3, num_cameras=C, sh0=sh0, radii=radii, shN=shN, view_directions=view_dirs_scaled
+        )
+
+        self.assertTrue(torch.allclose(result_norm, result_unnorm, atol=1e-5))
+        self.assertTrue(torch.allclose(result_norm, result_scaled, atol=1e-5))
+
+    def test_functional_evaluate_gaussian_sh_matches_standalone(self):
+        """Regression: evaluate_gaussian_sh (functional API) produces correct view-dependent SH."""
+        from fvdb.functional import evaluate_gaussian_sh
+        from fvdb.functional._gaussian_projection import ProjectedGaussians
+        from fvdb.enums import CameraModel, ProjectionMethod
+
+        N = 30
+        D = 3
+        C = 2
+
+        torch.manual_seed(42)
+        means = torch.randn(N, 3, device=self.device)
+        sh0 = torch.randn(N, 1, D, device=self.device, requires_grad=True)
+        shN = torch.randn(N, 8, D, device=self.device, requires_grad=True)
+
+        w2c = torch.eye(4, device=self.device).unsqueeze(0).expand(C, -1, -1).contiguous()
+        w2c = w2c.clone()
+        w2c[0, 0, 3] = 1.0
+        w2c[1, 1, 3] = -1.0
+
+        radii = torch.ones(C, N, dtype=torch.int32, device=self.device)
+        depths = torch.ones(C, N, device=self.device)
+
+        projected = ProjectedGaussians(
+            means2d=torch.zeros(C, N, 2, device=self.device),
+            conics=torch.zeros(C, N, 3, device=self.device),
+            compensations=torch.zeros(C, N, device=self.device),
+            radii=radii,
+            depths=depths,
+            image_width=64,
+            image_height=64,
+            camera_model=CameraModel.PINHOLE,
+            projection_method=ProjectionMethod.ANALYTIC,
+        )
+
+        result = evaluate_gaussian_sh(means, sh0, shN, w2c, projected, sh_degree_to_use=2)
+
+        self.assertEqual(result.shape, (C, N, D))
+        self.assertFalse(torch.isnan(result).any())
+        self.assertFalse(torch.allclose(result[0], result[1], atol=1e-3))
+
+        loss = result.sum()
+        loss.backward()
+        self.assertIsNotNone(sh0.grad)
+        self.assertIsNotNone(shN.grad)
+        self.assertTrue(torch.any(sh0.grad != 0))
+        self.assertTrue(torch.any(shN.grad != 0))
+
+    def test_functional_evaluate_gaussian_sh_degree0_empty_view_dirs(self):
+        """Regression: degree-0 path passes an empty tensor for view_dirs (no allocation)."""
+        from fvdb.functional import evaluate_gaussian_sh
+        from fvdb.functional._gaussian_projection import ProjectedGaussians
+        from fvdb.enums import CameraModel, ProjectionMethod
+
+        N = 20
+        D = 3
+        C = 2
+
+        torch.manual_seed(99)
+        means = torch.randn(N, 3, device=self.device)
+        sh0 = torch.randn(N, 1, D, device=self.device, requires_grad=True)
+        shN = torch.randn(N, 8, D, device=self.device)
+
+        w2c = torch.eye(4, device=self.device).unsqueeze(0).expand(C, -1, -1).contiguous()
+        radii = torch.ones(C, N, dtype=torch.int32, device=self.device)
+        depths = torch.ones(C, N, device=self.device)
+
+        projected = ProjectedGaussians(
+            means2d=torch.zeros(C, N, 2, device=self.device),
+            conics=torch.zeros(C, N, 3, device=self.device),
+            compensations=torch.zeros(C, N, device=self.device),
+            radii=radii,
+            depths=depths,
+            image_width=64,
+            image_height=64,
+            camera_model=CameraModel.PINHOLE,
+            projection_method=ProjectionMethod.ANALYTIC,
+        )
+
+        result = evaluate_gaussian_sh(means, sh0, shN, w2c, projected, sh_degree_to_use=0)
+
+        self.assertEqual(result.shape, (C, N, D))
+        self.assertFalse(torch.isnan(result).any())
+        self.assertTrue(torch.allclose(result[0], result[1], atol=1e-6))
+
+        loss = result.sum()
+        loss.backward()
+        self.assertIsNotNone(sh0.grad)
+        self.assertTrue(torch.any(sh0.grad != 0))
+
 
 @unittest.skipIf(not torch.cuda.is_available(), "CUDA not available")
 class TestGaussianRenderMasks(BaseGaussianTestCase):
@@ -3504,10 +3849,18 @@ class TestGaussianRenderMasks(BaseGaussianTestCase):
         return torch.zeros((C, self.height, self.width), device=self.device, dtype=torch.bool)
 
     def _all_ones_tile_mask(self, C):
-        return torch.ones((C, self.num_tiles_h, self.num_tiles_w), device=self.device, dtype=torch.bool)
+        return torch.ones(
+            (C, self.num_tiles_h, self.num_tiles_w),
+            device=self.device,
+            dtype=torch.bool,
+        )
 
     def _all_zeros_tile_mask(self, C):
-        return torch.zeros((C, self.num_tiles_h, self.num_tiles_w), device=self.device, dtype=torch.bool)
+        return torch.zeros(
+            (C, self.num_tiles_h, self.num_tiles_w),
+            device=self.device,
+            dtype=torch.bool,
+        )
 
     # -- Dense: render_images ------------------------------------------------
 
@@ -3517,7 +3870,13 @@ class TestGaussianRenderMasks(BaseGaussianTestCase):
         proj = self.projection_mats[:C]
 
         ref, ref_a = self.gs3d.render_images(
-            cam, proj, self.width, self.height, self.near_plane, self.far_plane, tile_size=self.tile_size
+            cam,
+            proj,
+            self.width,
+            self.height,
+            self.near_plane,
+            self.far_plane,
+            tile_size=self.tile_size,
         )
         out, out_a = self.gs3d.render_images(
             cam,
@@ -3574,6 +3933,7 @@ class TestGaussianRenderMasks(BaseGaussianTestCase):
         loss = out.sum() + out_a.sum()
         loss.backward()
         self.assertIsNotNone(self.gs3d.means.grad)
+        assert self.gs3d.means.grad is not None
         self.assertGreater(torch.abs(self.gs3d.means.grad).sum().item(), 0)
 
     def test_render_images_all_zeros_mask_zero_grads(self):
@@ -3596,6 +3956,7 @@ class TestGaussianRenderMasks(BaseGaussianTestCase):
         loss = out.sum() + out_a.sum()
         loss.backward()
         self.assertIsNotNone(self.gs3d.means.grad)
+        assert self.gs3d.means.grad is not None
         self.assertTrue(torch.equal(self.gs3d.means.grad, torch.zeros_like(self.gs3d.means.grad)))
 
     # -- Dense: render_depths ------------------------------------------------
@@ -3653,18 +4014,22 @@ class TestGaussianRenderMasks(BaseGaussianTestCase):
         D = 3
         bg = torch.tensor([[0.7, 0.7, 0.7]], device=self.device, dtype=torch.float32)
 
-        projected = self.gs3d.project_gaussians_for_images(
-            cam, proj, self.width, self.height, self.near_plane, self.far_plane
+        projected = self.gs3d.project_gaussians(cam, proj, self.width, self.height, self.near_plane, self.far_plane)
+        ref, ref_a = self.gs3d.render_from_projected_gaussians(
+            projected, cam, render_mode=GaussianRenderMode.FEATURES, backgrounds=bg
         )
-        ref, ref_a = self.gs3d.render_from_projected_gaussians(projected, backgrounds=bg)
         out, out_a = self.gs3d.render_from_projected_gaussians(
-            projected, backgrounds=bg, masks=self._all_ones_pixel_mask(C)
+            projected, cam, render_mode=GaussianRenderMode.FEATURES, backgrounds=bg, masks=self._all_ones_pixel_mask(C)
         )
         self.assertTrue(torch.allclose(ref, out, atol=1e-5))
         self.assertTrue(torch.allclose(ref_a, out_a, atol=1e-5))
 
         out_z, out_z_a = self.gs3d.render_from_projected_gaussians(
-            projected, backgrounds=bg, masks=self._all_zeros_pixel_mask(C)
+            projected,
+            cam,
+            render_mode=GaussianRenderMode.FEATURES,
+            backgrounds=bg,
+            masks=self._all_zeros_pixel_mask(C),
         )
         expected = bg.view(C, 1, 1, D).expand(C, self.height, self.width, D)
         self.assertTrue(torch.equal(out_z_a, torch.zeros_like(out_z_a)))
@@ -3733,6 +4098,7 @@ class TestGaussianRenderMasks(BaseGaussianTestCase):
         loss = out.jdata.sum() + out_a.jdata.sum()
         loss.backward()
         self.assertIsNotNone(self.gs3d.means.grad)
+        assert self.gs3d.means.grad is not None
         self.assertGreater(torch.abs(self.gs3d.means.grad).sum().item(), 0)
 
     # -- Sparse: sparse_render_depths ----------------------------------------
@@ -4000,6 +4366,9 @@ class TestGaussianRenderSparseDuplicatePixels(BaseGaussianTestCase):
         l1.backward()
 
         assert self.gs3d.means.grad is not None
+        assert self.gs3d.quats.grad is not None
+        assert self.gs3d.log_scales.grad is not None
+        assert self.gs3d.logit_opacities.grad is not None
         sparse_means_grad = self.gs3d.means.grad.clone()
         sparse_quats_grad = self.gs3d.quats.grad.clone()
         sparse_log_scales_grad = self.gs3d.log_scales.grad.clone()
@@ -4026,6 +4395,10 @@ class TestGaussianRenderSparseDuplicatePixels(BaseGaussianTestCase):
         l2 = torch.mean(dense_depth_pixels) + dense_alphas_pixels.sum()
         l2.backward()
 
+        assert self.gs3d.means.grad is not None
+        assert self.gs3d.quats.grad is not None
+        assert self.gs3d.log_scales.grad is not None
+        assert self.gs3d.logit_opacities.grad is not None
         dense_means_grad = self.gs3d.means.grad.clone()
         dense_quats_grad = self.gs3d.quats.grad.clone()
         dense_log_scales_grad = self.gs3d.log_scales.grad.clone()
@@ -4044,7 +4417,12 @@ class TestGaussianRenderSparseDuplicatePixels(BaseGaussianTestCase):
             "Sparse log_scales grad with duplicates does not match dense",
         )
         self.assertTrue(
-            torch.allclose(sparse_logit_opacities_grad, dense_logit_opacities_grad, atol=1e-4, rtol=1e-8),
+            torch.allclose(
+                sparse_logit_opacities_grad,
+                dense_logit_opacities_grad,
+                atol=1e-4,
+                rtol=1e-8,
+            ),
             "Sparse logit_opacities grad with duplicates does not match dense",
         )
 
@@ -4099,7 +4477,10 @@ class TestGaussianRenderSparseDuplicatePixels(BaseGaussianTestCase):
             mask = inverse == i
             id_vals = ids.jdata[mask]
             weight_vals = weights.jdata[mask]
-            self.assertTrue(torch.all(id_vals == id_vals[0:1]), "Duplicate pixels have different contributing IDs")
+            self.assertTrue(
+                torch.all(id_vals == id_vals[0:1]),
+                "Duplicate pixels have different contributing IDs",
+            )
             self.assertTrue(
                 torch.allclose(weight_vals, weight_vals[0:1], atol=1e-6, rtol=1e-8),
                 "Duplicate pixels have different contributing weights",
@@ -4169,13 +4550,29 @@ class TestGaussianCameraApi(unittest.TestCase):
         self.device = "cuda:0"
         self.dtype = torch.float32
 
-        means = torch.tensor([[0.18, -0.12, 2.8], [-0.08, 0.10, 3.4]], device=self.device, dtype=self.dtype)
-        quats = torch.tensor([[1.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]], device=self.device, dtype=self.dtype)
+        means = torch.tensor(
+            [[0.18, -0.12, 2.8], [-0.08, 0.10, 3.4]],
+            device=self.device,
+            dtype=self.dtype,
+        )
+        quats = torch.tensor(
+            [[1.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]],
+            device=self.device,
+            dtype=self.dtype,
+        )
         log_scales = torch.log(
-            torch.tensor([[0.06, 0.05, 0.04], [0.05, 0.07, 0.06]], device=self.device, dtype=self.dtype)
+            torch.tensor(
+                [[0.06, 0.05, 0.04], [0.05, 0.07, 0.06]],
+                device=self.device,
+                dtype=self.dtype,
+            )
         )
         logit_opacities = torch.tensor([2.2, 1.8], device=self.device, dtype=self.dtype)
-        sh0 = torch.tensor([[[0.7, 0.1, -0.2]], [[-0.3, 0.5, 0.4]]], device=self.device, dtype=self.dtype)
+        sh0 = torch.tensor(
+            [[[0.7, 0.1, -0.2]], [[-0.3, 0.5, 0.4]]],
+            device=self.device,
+            dtype=self.dtype,
+        )
         shN = torch.empty((2, 0, 3), device=self.device, dtype=self.dtype)
 
         self.gs3d = GaussianSplat3d.from_tensors(
@@ -4310,7 +4707,10 @@ class TestGaussianCameraApi(unittest.TestCase):
                 dtype=self.dtype,
             )
         )
-        logit_opacities = torch.tensor([2.1, 1.8, 1.6, 2.0, 1.7, 1.9, 1.5, 2.2, 1.8, 1.7, 1.6, 1.9], device=self.device)
+        logit_opacities = torch.tensor(
+            [2.1, 1.8, 1.6, 2.0, 1.7, 1.9, 1.5, 2.2, 1.8, 1.7, 1.6, 1.9],
+            device=self.device,
+        )
         sh0 = torch.tensor(
             [
                 [[0.70, -0.05, -0.20]],
@@ -4402,7 +4802,10 @@ class TestGaussianCameraApi(unittest.TestCase):
         pooled_a = nnf.avg_pool2d(rgb_a.permute(2, 0, 1).unsqueeze(0), kernel_size=5, stride=1, padding=2)
         pooled_b = nnf.avg_pool2d(rgb_b.permute(2, 0, 1).unsqueeze(0), kernel_size=5, stride=1, padding=2)
         pooled_mask = nnf.avg_pool2d(
-            union_mask.to(dtype=rgb_a.dtype).unsqueeze(0).unsqueeze(0), kernel_size=5, stride=1, padding=2
+            union_mask.to(dtype=rgb_a.dtype).unsqueeze(0).unsqueeze(0),
+            kernel_size=5,
+            stride=1,
+            padding=2,
         )[0, 0]
         if not bool((pooled_mask > 1.0e-3).any()):
             return 0.0
@@ -4442,7 +4845,11 @@ class TestGaussianCameraApi(unittest.TestCase):
         world_depth_mass = world_rgbd[0, ..., -1].sum()
         projected_depth_mean = projected_depth_mass / torch.clamp(projected_alpha_2d.sum(), min=1.0e-8)
         world_depth_mean = world_depth_mass / torch.clamp(world_alpha_2d.sum(), min=1.0e-8)
-        depth_scale = max(abs(float(projected_depth_mean.item())), abs(float(world_depth_mean.item())), 1.0e-8)
+        depth_scale = max(
+            abs(float(projected_depth_mean.item())),
+            abs(float(world_depth_mean.item())),
+            1.0e-8,
+        )
 
         return {
             "support_iou": float(
@@ -4464,22 +4871,49 @@ class TestGaussianCameraApi(unittest.TestCase):
     def test_projection_method_resolution_and_metadata(self):
         cases = [
             (CameraModel.PINHOLE, ProjectionMethod.AUTO, ProjectionMethod.ANALYTIC),
-            (CameraModel.ORTHOGRAPHIC, ProjectionMethod.AUTO, ProjectionMethod.ANALYTIC),
-            (CameraModel.PINHOLE, ProjectionMethod.UNSCENTED, ProjectionMethod.UNSCENTED),
-            (CameraModel.ORTHOGRAPHIC, ProjectionMethod.UNSCENTED, ProjectionMethod.UNSCENTED),
-            (CameraModel.OPENCV_RADTAN_5, ProjectionMethod.AUTO, ProjectionMethod.UNSCENTED),
-            (CameraModel.OPENCV_RATIONAL_8, ProjectionMethod.AUTO, ProjectionMethod.UNSCENTED),
-            (CameraModel.OPENCV_RADTAN_THIN_PRISM_9, ProjectionMethod.AUTO, ProjectionMethod.UNSCENTED),
-            (CameraModel.OPENCV_THIN_PRISM_12, ProjectionMethod.AUTO, ProjectionMethod.UNSCENTED),
+            (
+                CameraModel.ORTHOGRAPHIC,
+                ProjectionMethod.AUTO,
+                ProjectionMethod.ANALYTIC,
+            ),
+            (
+                CameraModel.PINHOLE,
+                ProjectionMethod.UNSCENTED,
+                ProjectionMethod.UNSCENTED,
+            ),
+            (
+                CameraModel.ORTHOGRAPHIC,
+                ProjectionMethod.UNSCENTED,
+                ProjectionMethod.UNSCENTED,
+            ),
+            (
+                CameraModel.OPENCV_RADTAN_5,
+                ProjectionMethod.AUTO,
+                ProjectionMethod.UNSCENTED,
+            ),
+            (
+                CameraModel.OPENCV_RATIONAL_8,
+                ProjectionMethod.AUTO,
+                ProjectionMethod.UNSCENTED,
+            ),
+            (
+                CameraModel.OPENCV_RADTAN_THIN_PRISM_9,
+                ProjectionMethod.AUTO,
+                ProjectionMethod.UNSCENTED,
+            ),
+            (
+                CameraModel.OPENCV_THIN_PRISM_12,
+                ProjectionMethod.AUTO,
+                ProjectionMethod.UNSCENTED,
+            ),
         ]
 
         for camera_model, requested_method, expected_method in cases:
             with self.subTest(camera_model=camera_model, requested_method=requested_method):
                 render_args = self._render_args(camera_model)
                 project_args = self._with_overrides(render_args, projection_method=requested_method)
-                projected = self.gs3d.project_gaussians_for_images(
+                projected = self.gs3d.project_gaussians(
                     **project_args,
-                    sh_degree_to_use=0,
                 )
                 self.assertEqual(projected.camera_model, camera_model)
                 self.assertEqual(projected.projection_method, expected_method)
@@ -4489,17 +4923,16 @@ class TestGaussianCameraApi(unittest.TestCase):
         opencv_args = self._render_args(CameraModel.OPENCV_RADTAN_5)
 
         with self.assertRaisesRegex(RuntimeError, "distortionCoeffs must be provided"):
-            self.gs3d.project_gaussians_for_images(
+            self.gs3d.project_gaussians(
                 **self._with_overrides(opencv_args, distortion_coeffs=None),
-                sh_degree_to_use=0,
             )
 
         with self.assertRaisesRegex(RuntimeError, "distortionCoeffs must have shape"):
-            self.gs3d.project_gaussians_for_images(
+            self.gs3d.project_gaussians(
                 **self._with_overrides(
-                    opencv_args, distortion_coeffs=opencv_args["distortion_coeffs"][:, :5].contiguous()
+                    opencv_args,
+                    distortion_coeffs=opencv_args["distortion_coeffs"][:, :5].contiguous(),
                 ),
-                sh_degree_to_use=0,
             )
 
         with self.assertRaisesRegex(RuntimeError, "ProjectionMethod::UNSCENTED or AUTO"):
@@ -4509,17 +4942,31 @@ class TestGaussianCameraApi(unittest.TestCase):
             )
 
         with self.assertRaisesRegex(RuntimeError, "projectionMatrices must be contiguous"):
-            self.gs3d.project_gaussians_for_images(
+            self.gs3d.project_gaussians(
                 **self._with_overrides(
                     pinhole_args,
                     projection_matrices=pinhole_args["projection_matrices"].transpose(1, 2),
                 ),
-                sh_degree_to_use=0,
             )
 
     def test_pinhole_and_orthographic_ignore_distortion_coeffs_tensor(self):
         ignored_distortion = torch.tensor(
-            [[0.12, -0.03, 0.01, 0.0, 0.0, 0.0, 0.02, -0.015, 0.004, -0.003, 0.002, -0.001]],
+            [
+                [
+                    0.12,
+                    -0.03,
+                    0.01,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.02,
+                    -0.015,
+                    0.004,
+                    -0.003,
+                    0.002,
+                    -0.001,
+                ]
+            ],
             device=self.device,
             dtype=self.dtype,
         )
@@ -4530,10 +4977,10 @@ class TestGaussianCameraApi(unittest.TestCase):
                 render_args = self._render_args(camera_model)
                 ignored_args = self._with_overrides(render_args, distortion_coeffs=ignored_distortion)
 
-                projected_default = parity_gs3d.project_gaussians_for_images(**render_args, sh_degree_to_use=0)
-                projected_ignored = parity_gs3d.project_gaussians_for_images(**ignored_args, sh_degree_to_use=0)
+                projected_default = parity_gs3d.project_gaussians(**render_args)
+                projected_ignored = parity_gs3d.project_gaussians(**ignored_args)
                 torch.testing.assert_close(projected_default.means2d, projected_ignored.means2d)
-                torch.testing.assert_close(projected_default.inv_covar_2d, projected_ignored.inv_covar_2d)
+                torch.testing.assert_close(projected_default.conics, projected_ignored.conics)
 
                 images_default, alpha_default = parity_gs3d.render_images(**render_args, sh_degree_to_use=0)
                 images_ignored, alpha_ignored = parity_gs3d.render_images(**ignored_args, sh_degree_to_use=0)
@@ -4584,33 +5031,42 @@ class TestGaussianCameraApi(unittest.TestCase):
                 torch.testing.assert_close(world_rgbd_alpha_default, world_rgbd_alpha_ignored)
 
     def test_projected_render_matches_from_world_for_stable_scene(self):
-        for camera_model in (CameraModel.PINHOLE, CameraModel.ORTHOGRAPHIC, CameraModel.OPENCV_RADTAN_5):
+        for camera_model in (
+            CameraModel.PINHOLE,
+            CameraModel.ORTHOGRAPHIC,
+            CameraModel.OPENCV_RADTAN_5,
+        ):
             with self.subTest(camera_model=camera_model):
                 parity_gs3d = self._make_tiny_parity_splat()
                 render_args = self._render_args(camera_model)
 
-                projected_images = parity_gs3d.project_gaussians_for_images(**render_args, sh_degree_to_use=0)
+                projected_images = parity_gs3d.project_gaussians(**render_args)
                 images_from_projection, alpha_from_projection = parity_gs3d.render_from_projected_gaussians(
-                    projected_images
+                    projected_images,
+                    render_args["world_to_camera_matrices"],
+                    render_mode=GaussianRenderMode.FEATURES,
+                    sh_degree_to_use=0,
                 )
                 images_from_dense, alpha_from_dense = parity_gs3d.render_images(**render_args, sh_degree_to_use=0)
                 images_from_world, alpha_from_world = parity_gs3d.render_images_from_world(
                     **render_args, sh_degree_to_use=0
                 )
 
-                projected_depths = parity_gs3d.project_gaussians_for_depths(**render_args)
+                projected_depths = parity_gs3d.project_gaussians(**render_args)
                 depths_from_projection, depth_alpha_from_projection = parity_gs3d.render_from_projected_gaussians(
-                    projected_depths
+                    projected_depths,
+                    render_args["world_to_camera_matrices"],
+                    render_mode=GaussianRenderMode.DEPTH,
                 )
                 depths_from_dense, depth_alpha_from_dense = parity_gs3d.render_depths(**render_args)
                 depths_from_world, depth_alpha_from_world = parity_gs3d.render_depths_from_world(**render_args)
 
-                projected_rgbd = parity_gs3d.project_gaussians_for_images_and_depths(
-                    **render_args,
-                    sh_degree_to_use=0,
-                )
+                projected_rgbd = parity_gs3d.project_gaussians(**render_args)
                 rgbd_from_projection, rgbd_alpha_from_projection = parity_gs3d.render_from_projected_gaussians(
-                    projected_rgbd
+                    projected_rgbd,
+                    render_args["world_to_camera_matrices"],
+                    render_mode=GaussianRenderMode.FEATURES_AND_DEPTH,
+                    sh_degree_to_use=0,
                 )
                 rgbd_from_dense, rgbd_alpha_from_dense = parity_gs3d.render_images_and_depths(
                     **render_args,
@@ -4624,9 +5080,19 @@ class TestGaussianCameraApi(unittest.TestCase):
                 torch.testing.assert_close(images_from_projection, images_from_dense, atol=1e-6, rtol=1e-6)
                 torch.testing.assert_close(alpha_from_projection, alpha_from_dense, atol=1e-6, rtol=1e-6)
                 torch.testing.assert_close(depths_from_projection, depths_from_dense, atol=1e-6, rtol=1e-6)
-                torch.testing.assert_close(depth_alpha_from_projection, depth_alpha_from_dense, atol=1e-6, rtol=1e-6)
+                torch.testing.assert_close(
+                    depth_alpha_from_projection,
+                    depth_alpha_from_dense,
+                    atol=1e-6,
+                    rtol=1e-6,
+                )
                 torch.testing.assert_close(rgbd_from_projection, rgbd_from_dense, atol=1e-6, rtol=1e-6)
-                torch.testing.assert_close(rgbd_alpha_from_projection, rgbd_alpha_from_dense, atol=1e-6, rtol=1e-6)
+                torch.testing.assert_close(
+                    rgbd_alpha_from_projection,
+                    rgbd_alpha_from_dense,
+                    atol=1e-6,
+                    rtol=1e-6,
+                )
 
                 torch.testing.assert_close(alpha_from_world, depth_alpha_from_world, atol=1e-5, rtol=1e-5)
                 torch.testing.assert_close(alpha_from_world, rgbd_alpha_from_world, atol=1e-5, rtol=1e-5)
@@ -4639,17 +5105,21 @@ class TestGaussianCameraApi(unittest.TestCase):
     def test_structural_projected_render_matches_from_world_for_medium_scene(self):
         # The two rasterization paths diverge too much for stable pixelwise parity on richer scenes,
         # so this test checks that they preserve the same overall support, location, depth, and appearance.
-        for camera_model in (CameraModel.PINHOLE, CameraModel.ORTHOGRAPHIC, CameraModel.OPENCV_RADTAN_5):
+        for camera_model in (
+            CameraModel.PINHOLE,
+            CameraModel.ORTHOGRAPHIC,
+            CameraModel.OPENCV_RADTAN_5,
+        ):
             with self.subTest(camera_model=camera_model):
                 parity_gs3d = self._make_structural_comparison_splat()
                 render_args = self._render_args(camera_model)
 
-                projected_rgbd = parity_gs3d.project_gaussians_for_images_and_depths(
-                    **render_args,
-                    sh_degree_to_use=0,
-                )
+                projected_rgbd = parity_gs3d.project_gaussians(**render_args)
                 rgbd_from_projection, alpha_from_projection = parity_gs3d.render_from_projected_gaussians(
-                    projected_rgbd
+                    projected_rgbd,
+                    render_args["world_to_camera_matrices"],
+                    render_mode=GaussianRenderMode.FEATURES_AND_DEPTH,
+                    sh_degree_to_use=0,
                 )
                 rgbd_from_world, alpha_from_world = parity_gs3d.render_images_and_depths_from_world(
                     **render_args,
@@ -4674,7 +5144,12 @@ class TestGaussianCameraApi(unittest.TestCase):
         pixels = self._all_pixels(C=2)
 
         sparse_cases = [
-            ("images", self.gs3d.render_images, self.gs3d.sparse_render_images, {"sh_degree_to_use": 0}),
+            (
+                "images",
+                self.gs3d.render_images,
+                self.gs3d.sparse_render_images,
+                {"sh_degree_to_use": 0},
+            ),
             ("depths", self.gs3d.render_depths, self.gs3d.sparse_render_depths, {}),
             (
                 "rgbd",
@@ -4684,7 +5159,11 @@ class TestGaussianCameraApi(unittest.TestCase):
             ),
         ]
 
-        for camera_model in (CameraModel.PINHOLE, CameraModel.ORTHOGRAPHIC, CameraModel.OPENCV_RADTAN_5):
+        for camera_model in (
+            CameraModel.PINHOLE,
+            CameraModel.ORTHOGRAPHIC,
+            CameraModel.OPENCV_RADTAN_5,
+        ):
             render_args = self._render_args(camera_model, C=2)
             for name, dense_fn, sparse_fn, extra_kwargs in sparse_cases:
                 with self.subTest(camera_model=camera_model, render_mode=name):
@@ -4697,7 +5176,9 @@ class TestGaussianCameraApi(unittest.TestCase):
                     self._assert_sparse_matches_dense(dense_values, sparse_values, pixels)
                     self._assert_sparse_matches_dense(dense_alphas, sparse_alphas, pixels)
 
-    def test_batched_opencv_render_uses_per_camera_intrinsics_distortion_backgrounds_and_masks(self):
+    def test_batched_opencv_render_uses_per_camera_intrinsics_distortion_backgrounds_and_masks(
+        self,
+    ):
         C = 2
         render_args = self._render_args(CameraModel.OPENCV_RADTAN_5, C=C)
         backgrounds = torch.tensor([[0.1, -0.2, 0.3], [-0.4, 0.2, 0.1]], device=self.device, dtype=self.dtype)
@@ -4726,8 +5207,18 @@ class TestGaussianCameraApi(unittest.TestCase):
                 backgrounds=backgrounds[cam_idx : cam_idx + 1].contiguous(),
                 masks=masks[cam_idx : cam_idx + 1].contiguous(),
             )
-            torch.testing.assert_close(batched_features[cam_idx : cam_idx + 1], single_features, atol=1e-5, rtol=1e-5)
-            torch.testing.assert_close(batched_alphas[cam_idx : cam_idx + 1], single_alphas, atol=1e-5, rtol=1e-5)
+            torch.testing.assert_close(
+                batched_features[cam_idx : cam_idx + 1],
+                single_features,
+                atol=1e-5,
+                rtol=1e-5,
+            )
+            torch.testing.assert_close(
+                batched_alphas[cam_idx : cam_idx + 1],
+                single_alphas,
+                atol=1e-5,
+                rtol=1e-5,
+            )
 
 
 class TestProjectionGradsMultiCamera(unittest.TestCase):
@@ -4802,7 +5293,17 @@ class TestProjectionGradsMultiCamera(unittest.TestCase):
         K = torch.tensor([[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]], device=device)
         Ks = K.unsqueeze(0).expand(self.C, -1, -1).contiguous()
 
-        return means, quats, log_scales, logit_opacities, sh0, shN, sh_coeffs, viewmats, Ks
+        return (
+            means,
+            quats,
+            log_scales,
+            logit_opacities,
+            sh0,
+            shN,
+            sh_coeffs,
+            viewmats,
+            Ks,
+        )
 
     def _build_gs3d(self, means, quats, log_scales, logit_opacities, sh0, shN):
         gs3d = GaussianSplat3d.from_tensors(
@@ -4818,7 +5319,17 @@ class TestProjectionGradsMultiCamera(unittest.TestCase):
 
     def test_dense_projection_grads_multicamera(self):
         """Dense path: GaussianProjectionBackward.cu -- all parameter gradients."""
-        means, quats, log_scales, logit_opacities, sh0, shN, _sh_coeffs, viewmats, Ks = self._make_test_data()
+        (
+            means,
+            quats,
+            log_scales,
+            logit_opacities,
+            sh0,
+            shN,
+            _sh_coeffs,
+            viewmats,
+            Ks,
+        ) = self._make_test_data()
 
         gs3d = self._build_gs3d(means, quats, log_scales, logit_opacities, sh0, shN)
         images, _ = gs3d.render_images(viewmats, Ks, self.W, self.H, near=0.01, far=1e10)
@@ -4849,7 +5360,17 @@ class TestProjectionGradsMultiCamera(unittest.TestCase):
 
     def test_jagged_projection_grads_multicamera(self):
         """Jagged path: GaussianProjectionJaggedBackward.cu -- all parameter gradients."""
-        means, quats, log_scales, logit_opacities, _sh0, _shN, sh_coeffs, viewmats, Ks = self._make_test_data()
+        (
+            means,
+            quats,
+            log_scales,
+            logit_opacities,
+            _sh0,
+            _shN,
+            sh_coeffs,
+            viewmats,
+            Ks,
+        ) = self._make_test_data()
 
         scales = torch.exp(log_scales)
         opacities = torch.sigmoid(logit_opacities)

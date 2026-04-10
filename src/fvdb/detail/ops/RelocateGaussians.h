@@ -1,0 +1,40 @@
+// Copyright Contributors to the OpenVDB Project
+// SPDX-License-Identifier: Apache-2.0
+//
+
+#ifndef FVDB_DETAIL_OPS_RELOCATEGAUSSIANS_H
+#define FVDB_DETAIL_OPS_RELOCATEGAUSSIANS_H
+
+#include <torch/types.h>
+
+#include <tuple>
+
+namespace fvdb {
+namespace detail {
+namespace ops {
+
+/// @brief Relocate Gaussians by adjusting opacity and scale based on replication ratio.
+///
+/// Dispatches to the appropriate device implementation (CPU, CUDA, or PrivateUse1)
+/// based on the device of the input tensors.
+///
+/// @param logScales Input log scales [N, 3]
+/// @param logitOpacities Input logit opacities [N]
+/// @param ratios Replication ratios per Gaussian [N] (int32)
+/// @param binomialCoeffs Binomial coefficients table [nMax, nMax]
+/// @param nMax Maximum replication ratio (size of binomial table)
+/// @param minOpacity Minimum opacity
+/// @return tuple of (opacitiesNew [N], scalesNew [N, 3])
+std::tuple<torch::Tensor, torch::Tensor>
+relocate_gaussians(const torch::Tensor &logScales,      // [N, 3]
+                   const torch::Tensor &logitOpacities, // [N]
+                   const torch::Tensor &ratios,         // [N]
+                   const torch::Tensor &binomialCoeffs, // [nMax, nMax]
+                   const int nMax,
+                   float minOpacity);
+
+} // namespace ops
+} // namespace detail
+} // namespace fvdb
+
+#endif // FVDB_DETAIL_OPS_GSPLAT_GAUSSIANRELOCATION_H

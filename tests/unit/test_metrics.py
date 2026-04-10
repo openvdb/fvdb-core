@@ -5,7 +5,7 @@ import math
 
 import pytest
 import torch
-from fvdb.utils.metrics import psnr, ssim
+from fvdb.functional import psnr, ssim
 
 
 @pytest.mark.parametrize("padding", ["same", "valid"])  # fused-ssim supports these paddings
@@ -99,3 +99,22 @@ def test_psnr_input_validation():
     c = torch.zeros((1, 8, 8))
     with pytest.raises(ValueError):
         _ = psnr(c, c)
+
+
+def test_ssim_padding_validation():
+    """Invalid padding values must raise ValueError (not silently pass via assert)."""
+    img = torch.rand(1, 1, 32, 32, device="cuda", dtype=torch.float32)
+    with pytest.raises(ValueError, match="padding"):
+        ssim(img, img, padding="reflect")
+    with pytest.raises(ValueError, match="padding"):
+        ssim(img, img, padding="")
+
+
+def test_metrics_import_from_functional():
+    """Ensure metrics can be imported from fvdb.functional without circular import issues."""
+    import importlib
+
+    mod = importlib.import_module("fvdb.functional._metrics")
+    assert hasattr(mod, "ssim")
+    assert hasattr(mod, "psnr")
+    assert not hasattr(mod, "fvdb"), "Should not import top-level fvdb package directly"

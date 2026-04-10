@@ -5,7 +5,7 @@
 #include "utils/TestUtilities.h"
 #include "utils/TileBitMask.h"
 
-#include <fvdb/detail/ops/gsplat/GaussianSplatSparse.h>
+#include <fvdb/detail/ops/BuildSparseGaussianTileLayout.h>
 
 #include <thrust/sort.h>
 
@@ -16,7 +16,7 @@
 using fvdb::test::tensorOpts;
 using fvdb::test::TileBitMask;
 
-// Helper function to calculate the expected tensors for computeSparseInfo:
+// Helper function to calculate the expected tensors for build_sparse_gaussian_tile_layout:
 // 1. activeTiles: A 1D tensor of tile ids that have at least one active pixel
 // 2. tileBitMasks: A 2D tensor of tile bitmasks of shape {numActiveTiles, numWordsPerTile}
 // 3. pixelsPerTile: A 1D tensor of the inclusive cumulative sum of the number of active pixels in
@@ -196,7 +196,7 @@ template <typename CoordType> struct ComputeSparseInfo : public ::testing::Test 
         auto uvs = uvsCPU.to(torch::kCUDA);
 
         auto [activeTiles, activeTileMask, tileBitMasks, tilePixelOffsets, pixelMap] =
-            fvdb::detail::ops::computeSparseInfo(
+            fvdb::detail::ops::build_sparse_gaussian_tile_layout(
                 this->mTileSize, this->mNumTilesPerAxis, this->mNumTilesPerAxis, uvs);
 
         auto [expectedActiveTiles,
@@ -235,13 +235,14 @@ TYPED_TEST_SUITE(BadTypeTest, BadCoordTypes);
 
 TYPED_TEST(BadTypeTest, GPUThrows) {
     auto const emptyPixels = fvdb::JaggedTensor{torch::empty({0, 0}, tensorOpts<TypeParam>())};
-    EXPECT_THROW(fvdb::detail::ops::computeSparseInfo(16, 4, 4, emptyPixels), c10::TypeError);
+    EXPECT_THROW(fvdb::detail::ops::build_sparse_gaussian_tile_layout(16, 4, 4, emptyPixels),
+                 c10::TypeError);
 }
 
 TEST(BadTypeTest, CPUThrows) {
     auto const emptyPixels =
         fvdb::JaggedTensor{torch::empty({0, 0}, tensorOpts<std::int32_t>(torch::kCPU))};
-    EXPECT_THROW(fvdb::detail::ops::computeSparseInfo(16, 4, 4, emptyPixels),
+    EXPECT_THROW(fvdb::detail::ops::build_sparse_gaussian_tile_layout(16, 4, 4, emptyPixels),
                  c10::NotImplementedError);
 }
 
@@ -251,7 +252,7 @@ TYPED_TEST(ComputeSparseInfo, Empty) {
 
     auto const emptyPixels = fvdb::JaggedTensor(torch::empty({0, 0}, opts));
     auto [activeTiles, activeTileMask, tileBitMask, tilePixelOffsets, pixelMap] =
-        fvdb::detail::ops::computeSparseInfo(this->mTileSize, 4, 4, emptyPixels);
+        fvdb::detail::ops::build_sparse_gaussian_tile_layout(this->mTileSize, 4, 4, emptyPixels);
 
     EXPECT_TRUE(
         torch::equal(activeTiles, torch::empty({0}, tensorOpts<std::int32_t>(torch::kCUDA))));
@@ -353,7 +354,7 @@ TYPED_TEST(ComputeSparseInfo, SinglePixel) {
     auto uniqueUVs = fvdb::JaggedTensor(std::vector<torch::Tensor>{uvsCPU}).to(torch::kCUDA);
 
     auto [activeTiles, activeTileMask, tileBitMasks, tilePixelOffsets, pixelMap] =
-        fvdb::detail::ops::computeSparseInfo(
+        fvdb::detail::ops::build_sparse_gaussian_tile_layout(
             this->mTileSize, this->mNumTilesPerAxis, this->mNumTilesPerAxis, uniqueUVs);
 
     EXPECT_EQ(activeTiles.size(0), 1);
@@ -370,7 +371,7 @@ TYPED_TEST(ComputeSparseInfo, TwoPixelsSameTile) {
     auto uvs    = fvdb::JaggedTensor(std::vector<torch::Tensor>{uvsCPU}).to(torch::kCUDA);
 
     auto [activeTiles, activeTileMask, tileBitMasks, tilePixelOffsets, pixelMap] =
-        fvdb::detail::ops::computeSparseInfo(
+        fvdb::detail::ops::build_sparse_gaussian_tile_layout(
             this->mTileSize, this->mNumTilesPerAxis, this->mNumTilesPerAxis, uvs);
 
     EXPECT_EQ(activeTiles.size(0), 1);
@@ -384,7 +385,7 @@ TYPED_TEST(ComputeSparseInfo, MultiImageMultiTile) {
     auto uniqueUVs    = uniqueUVsCPU.to(torch::kCUDA);
 
     auto [activeTiles, activeTileMask, tileBitMasks, tilePixelOffsets, pixelMap] =
-        fvdb::detail::ops::computeSparseInfo(
+        fvdb::detail::ops::build_sparse_gaussian_tile_layout(
             this->mTileSize, this->mNumTilesPerAxis, this->mNumTilesPerAxis, uniqueUVs);
 
     auto [expectedActiveTiles,

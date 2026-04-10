@@ -1,7 +1,10 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 
-#include <fvdb/detail/ops/gsplat/GaussianUtils.cuh>
+#include <fvdb/detail/utils/cuda/BinSearch.cuh>
+#include <fvdb/detail/utils/cuda/math/AffineTransform.cuh>
+#include <fvdb/detail/utils/cuda/math/Rotation.cuh>
+#include <fvdb/detail/utils/gaussian/GaussianMath.cuh>
 
 #include <gtest/gtest.h>
 

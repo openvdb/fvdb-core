@@ -1,14 +1,15 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 #
-"""Functional API for loading and saving grid batches in NanoVDB format."""
+"""Functional API for loading and saving grid batches in NanoVDB format, and Gaussian PLY I/O."""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, overload
 
 import torch
 
-from .. import _fvdb_cpp
+from .. import _fvdb_cpp as _C
 from ..jagged_tensor import JaggedTensor
 from ..types import DeviceIdentifier, resolve_device
 
@@ -235,6 +236,7 @@ def save_nanovdb_single(
     .. seealso:: :func:`save_nanovdb`
     """
     import torch
+
     from .._fvdb_cpp import save as _save
 
     grid_data = grid.data
@@ -246,3 +248,67 @@ def save_nanovdb_single(
         _save(path, grid_data, data_impl, name, compressed, verbose)
     else:
         _save(path, grid_data, data_impl, [], compressed, verbose)
+
+
+# ---------------------------------------------------------------------------
+#  Gaussian PLY I/O
+# ---------------------------------------------------------------------------
+
+
+def load_gaussian_ply(
+    filename: str,
+    device: DeviceIdentifier = "cpu",
+) -> tuple[
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    dict[str, str | int | float | torch.Tensor],
+]:
+    """Load a Gaussian splat model from a PLY file.
+
+    Args:
+        filename: Path to the ``.ply`` file.
+        device: Device to load tensors onto. Defaults to ``"cpu"``.
+
+    Returns:
+        Tuple of (means, quats, log_scales, logit_opacities, sh0, shN, metadata).
+    """
+    device = resolve_device(device)
+    return _C.load_gaussians_ply(filename, device)
+
+
+def save_gaussian_ply(
+    means: torch.Tensor,
+    quats: torch.Tensor,
+    log_scales: torch.Tensor,
+    logit_opacities: torch.Tensor,
+    sh0: torch.Tensor,
+    shN: torch.Tensor,
+    filename: str,
+    metadata: dict[str, str | int | float | torch.Tensor] | None = None,
+) -> None:
+    """Save a Gaussian splat model to a PLY file.
+
+    Args:
+        means: ``[N, 3]`` Gaussian centres.
+        quats: ``[N, 4]`` quaternion rotations.
+        log_scales: ``[N, 3]`` log-scale parameters.
+        logit_opacities: ``[N]`` pre-sigmoid opacity logits.
+        sh0: ``[N, 1, 3]`` zero-order SH coefficients.
+        shN: ``[N, K, 3]`` higher-order SH coefficients.
+        filename: Output file path.
+        metadata: Optional dict of scalar/tensor metadata to embed in the PLY.
+    """
+    _C.save_gaussians_ply(
+        means,
+        quats,
+        log_scales,
+        logit_opacities,
+        sh0,
+        shN,
+        filename,
+        dict(metadata) if metadata is not None else None,
+    )
