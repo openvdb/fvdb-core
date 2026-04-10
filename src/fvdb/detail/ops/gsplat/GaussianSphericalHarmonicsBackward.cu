@@ -57,11 +57,9 @@ evalShFunctionVJP(const int64_t degree,                     // degree of SH to b
     const T z     = dir.z * inorm;
     T vX = 0.f, vY = 0.f, vZ = 0.f;
 
-    gpuAtomicAdd(&dLossDShCoeffs[gi][1][c],
-                 T(-0.48860251190292) * y * dLossDRenderQuantitiesLocal);
+    gpuAtomicAdd(&dLossDShCoeffs[gi][1][c], T(-0.48860251190292) * y * dLossDRenderQuantitiesLocal);
     gpuAtomicAdd(&dLossDShCoeffs[gi][2][c], T(0.48860251190292) * z * dLossDRenderQuantitiesLocal);
-    gpuAtomicAdd(&dLossDShCoeffs[gi][3][c],
-                 T(-0.48860251190292) * x * dLossDRenderQuantitiesLocal);
+    gpuAtomicAdd(&dLossDShCoeffs[gi][3][c], T(-0.48860251190292) * x * dLossDRenderQuantitiesLocal);
 
     if (dLossDViewDir != nullptr) {
         vX += T(-0.48860251190292) * shCoeffs[gi][3][c] * dLossDRenderQuantitiesLocal;
@@ -108,15 +106,15 @@ evalShFunctionVJP(const int64_t degree,                     // degree of SH to b
         pSH4_x   = T(0.5462742152960395) * fS1_x;
         pSH4_y   = T(0.5462742152960395) * fS1_y;
 
-        vX +=
-            dLossDRenderQuantitiesLocal *
-            (pSH4_x * shCoeffs[gi][4][c] + pSH8_x * shCoeffs[gi][8][c] + pSH7_x * shCoeffs[gi][7][c]);
-        vY +=
-            dLossDRenderQuantitiesLocal *
-            (pSH4_y * shCoeffs[gi][4][c] + pSH8_y * shCoeffs[gi][8][c] + pSH5_y * shCoeffs[gi][5][c]);
-        vZ +=
-            dLossDRenderQuantitiesLocal *
-            (pSH6_z * shCoeffs[gi][6][c] + pSH7_z * shCoeffs[gi][7][c] + pSH5_z * shCoeffs[gi][5][c]);
+        vX += dLossDRenderQuantitiesLocal *
+              (pSH4_x * shCoeffs[gi][4][c] + pSH8_x * shCoeffs[gi][8][c] +
+               pSH7_x * shCoeffs[gi][7][c]);
+        vY += dLossDRenderQuantitiesLocal *
+              (pSH4_y * shCoeffs[gi][4][c] + pSH8_y * shCoeffs[gi][8][c] +
+               pSH5_y * shCoeffs[gi][5][c]);
+        vZ += dLossDRenderQuantitiesLocal *
+              (pSH6_z * shCoeffs[gi][6][c] + pSH7_z * shCoeffs[gi][7][c] +
+               pSH5_z * shCoeffs[gi][5][c]);
     }
 
     if (degree < 3) {

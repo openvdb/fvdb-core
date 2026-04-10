@@ -54,7 +54,7 @@ EvaluateSphericalHarmonics::backward(EvaluateSphericalHarmonics::AutogradContext
     // Only compute viewDirs gradients if viewDirs is defined and requires grad
     const bool computeDLossDViewDirs = viewDirs.defined() && viewDirs.requires_grad();
 
-    auto variables           = FVDB_DISPATCH_KERNEL(dLossDColors.device(), [&]() {
+    auto variables          = FVDB_DISPATCH_KERNEL(dLossDColors.device(), [&]() {
         return ops::dispatchSphericalHarmonicsBackward<DeviceTag>(shDegreeToUse,
                                                                   numCameras,
                                                                   numGaussians,

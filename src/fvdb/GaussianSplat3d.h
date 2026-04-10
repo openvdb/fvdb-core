@@ -202,8 +202,7 @@ class GaussianSplat3d {
         bool detach) {
         TORCH_CHECK_VALUE(!splats.empty(), "Cannot concatenate an empty vector of splats");
 
-        std::vector<torch::Tensor> meansVec, quatsVec, logScalesVec, logitOpacitiesVec,
-            shCoeffsVec;
+        std::vector<torch::Tensor> meansVec, quatsVec, logScalesVec, logitOpacitiesVec, shCoeffsVec;
 
         std::vector<torch::Tensor> accStepCountsVec, accMax2dRadiiVec, accNorm2dMeansGradientsVec;
 

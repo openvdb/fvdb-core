@@ -349,21 +349,21 @@ saveGaussianPly(const std::string &filename,
 
     // Extract sh0 [N, D] and shN [N, D*(K-1)] from the combined shCoeffs [N, K, D]
     const auto shCoeffsCPU =
-        gaussians.shCoeffs().index({validMask.jdata(), torch::indexing::Slice(), torch::indexing::Ellipsis}).cpu().contiguous();
+        gaussians.shCoeffs()
+            .index({validMask.jdata(), torch::indexing::Slice(), torch::indexing::Ellipsis})
+            .cpu()
+            .contiguous();
     // [N, D] - the DC term
     const torch::Tensor shCoeffs0CPU = shCoeffsCPU.select(1, 0).contiguous();
     // [N, D*(K-1)] - higher order terms, permuted for PLY format
     const torch::Tensor shCoeffsNCPU = [&]() {
         if (shCoeffsCPU.size(1) <= 1) {
-            return torch::zeros({meansCPU.size(0), 0},
-                                shCoeffsCPU.options());
+            return torch::zeros({meansCPU.size(0), 0}, shCoeffsCPU.options());
         } else {
             // shCoeffs[:, 1:, :] has shape [N, K-1, D], ordered by basis then channel (RGBRGB...)
             // Gaussian PLYs expect channel then basis (RR...GG...BB...)
             // So we permute to [N, D, K-1] and reshape to [N, D*(K-1)]
-            return shCoeffsCPU.slice(1, 1)
-                .permute({0, 2, 1})
-                .reshape({meansCPU.size(0), -1});
+            return shCoeffsCPU.slice(1, 1).permute({0, 2, 1}).reshape({meansCPU.size(0), -1});
         }
     }();
 

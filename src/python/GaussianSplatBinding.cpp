@@ -99,7 +99,8 @@ bind_gaussian_splat3d(py::module &m) {
         .def_property("logit_opacities",
                       &fvdb::GaussianSplat3d::logitOpacities,
                       &fvdb::GaussianSplat3d::setLogitOpacities)
-        .def_property("sh_coeffs", &fvdb::GaussianSplat3d::shCoeffs, &fvdb::GaussianSplat3d::setShCoeffs)
+        .def_property(
+            "sh_coeffs", &fvdb::GaussianSplat3d::shCoeffs, &fvdb::GaussianSplat3d::setShCoeffs)
         .def_property_readonly("num_gaussians", &fvdb::GaussianSplat3d::numGaussians)
         .def_property_readonly("num_sh_bases", &fvdb::GaussianSplat3d::numShBases)
         .def_property_readonly("num_channels", &fvdb::GaussianSplat3d::numChannels)

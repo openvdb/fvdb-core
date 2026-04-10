@@ -133,17 +133,16 @@ evalShFunction(const int64_t degree,                      // degree of SH to be 
 // of C cameras, each with N gaussians, and K SH coefficients per gaussian.
 template <typename T>
 __global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
-computeSh(
-    const int64_t offset,
-    const int64_t count,
-    const int64_t C,
-    const int64_t N,
-    const int64_t D,
-    const int64_t shDegreeToUse,
-    const torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits> viewDirs, // [C, N, 3]
-    const torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits> shCoeffs, // [N, K, D]
-    const int *__restrict__ radii,                                                // [C, N]
-    T *__restrict__ outRenderQuantities                                           // [C, N, D]
+computeSh(const int64_t offset,
+          const int64_t count,
+          const int64_t C,
+          const int64_t N,
+          const int64_t D,
+          const int64_t shDegreeToUse,
+          const torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits> viewDirs, // [C, N, 3]
+          const torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits> shCoeffs, // [N, K, D]
+          const int *__restrict__ radii,                                                // [C, N]
+          T *__restrict__ outRenderQuantities                                           // [C, N, D]
 ) {
     // parallelize over C * N * D
     auto idx = blockIdx.x * blockDim.x + threadIdx.x; // cidx * N * D + gidx * D + kidx
@@ -162,7 +161,7 @@ computeSh(
         const bool hasViewDirs = viewDirs.size(0) > 0;
         const vec3t dir        = hasViewDirs ? *reinterpret_cast<vec3t *>(viewDirs[cid][gid].data())
                                              : vec3t{0.f, 0.f, 0.f};
-        result = evalShFunction(shDegreeToUse, cid, gid, c, dir, shCoeffs);
+        result                 = evalShFunction(shDegreeToUse, cid, gid, c, dir, shCoeffs);
     }
     outRenderQuantities[(cid * N + gid) * D + c] = result;
 }
@@ -285,12 +284,11 @@ dispatchSphericalHarmonicsForward<torch::kCUDA>(const int64_t shDegreeToUse,
 
 template <>
 torch::Tensor
-dispatchSphericalHarmonicsForward<torch::kPrivateUse1>(
-    const int64_t shDegreeToUse,
-    const int64_t numCameras,
-    const torch::Tensor &viewDirs, // [C, N, 3]
-    const torch::Tensor &shCoeffs, // [N, K, D]
-    const torch::Tensor &radii     // [C, N]
+dispatchSphericalHarmonicsForward<torch::kPrivateUse1>(const int64_t shDegreeToUse,
+                                                       const int64_t numCameras,
+                                                       const torch::Tensor &viewDirs, // [C, N, 3]
+                                                       const torch::Tensor &shCoeffs, // [N, K, D]
+                                                       const torch::Tensor &radii     // [C, N]
 ) {
     FVDB_FUNC_RANGE();
 

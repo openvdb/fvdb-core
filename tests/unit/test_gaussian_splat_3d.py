@@ -833,9 +833,7 @@ class TestGaussianSplatIndex(BaseGaussianTestCase):
                 )
             )
 
-    def _make_gs3d(
-        self, accumulate_mean_2d_gradients: bool, accumulate_max_2d_radii: bool
-    ) -> GaussianSplat3d:
+    def _make_gs3d(self, accumulate_mean_2d_gradients: bool, accumulate_max_2d_radii: bool) -> GaussianSplat3d:
         # Create a GaussianSplat3d instance with gradients that matches self.gs3d
         sh_coeffs = self.gs3d.sh_coeffs
         gs3d = GaussianSplat3d.from_tensors(

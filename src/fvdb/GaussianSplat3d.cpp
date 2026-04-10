@@ -95,12 +95,15 @@ GaussianSplat3d::evalSphericalHarmonicsImpl(const int64_t shDegreeToUse,
                                             const torch::Tensor &worldToCameraMatrices,
                                             const torch::Tensor &perGaussianProjectedRadii) const {
     FVDB_FUNC_RANGE();
-    const auto K              = mShCoeffs.size(1);              // number of SH bases
-    const auto C              = worldToCameraMatrices.size(0);  // number of cameras
+    const auto K              = mShCoeffs.size(1);             // number of SH bases
+    const auto C              = worldToCameraMatrices.size(0); // number of cameras
     const auto actualShDegree = shDegreeToUse < 0 ? (std::sqrt(K) - 1) : shDegreeToUse;
     if (actualShDegree == 0) {
-        return detail::autograd::EvaluateSphericalHarmonics::apply(
-            actualShDegree, C, torch::nullopt, mShCoeffs.slice(1, 0, 1), perGaussianProjectedRadii)[0];
+        return detail::autograd::EvaluateSphericalHarmonics::apply(actualShDegree,
+                                                                   C,
+                                                                   torch::nullopt,
+                                                                   mShCoeffs.slice(1, 0, 1),
+                                                                   perGaussianProjectedRadii)[0];
     } else {
         // FIXME (Francis): Do this in the kernel instead of materializing a large
         //                  tensor here. It's a bit annoying because we'll have to update
@@ -144,7 +147,8 @@ GaussianSplat3d::checkState(const torch::Tensor &means,
                       "All tensors must be on the same device");
     TORCH_CHECK_VALUE(means.device() == logitOpacities.device(),
                       "All tensors must be on the same device");
-    TORCH_CHECK_VALUE(means.device() == shCoeffs.device(), "All tensors must be on the same device");
+    TORCH_CHECK_VALUE(means.device() == shCoeffs.device(),
+                      "All tensors must be on the same device");
 
     TORCH_CHECK_VALUE(torch::isFloatingType(means.scalar_type()),
                       "All tensors must be of floating point type");
@@ -2111,7 +2115,7 @@ GaussianSplat3d::sliceSet(const int64_t begin,
     mQuats.index({slice})          = other.mQuats;
     mLogScales.index({slice})      = other.mLogScales;
     mLogitOpacities.index({slice}) = other.mLogitOpacities;
-    mShCoeffs.index({slice})        = other.mShCoeffs;
+    mShCoeffs.index({slice})       = other.mShCoeffs;
 
     if (mAccumulated2dRadiiForGrad.numel() > 0) {
         if (other.mAccumulated2dRadiiForGrad.numel() > 0) {
@@ -2301,28 +2305,25 @@ gaussianRenderJagged(const JaggedTensor &means,     // [N1 + N2 + ..., 3]
         const torch::Tensor shCoeffs =
             sh_coeffs.jdata().index({gaussian_ids, Slice(), Slice()}); // [nnz, K, D]
 
-        const int K              = shCoeffs.size(1); // number of SH bases
+        const int K              = shCoeffs.size(1);                   // number of SH bases
         const int actualShDegree = sh_degree_to_use < 0 ? (std::sqrt(K) - 1) : sh_degree_to_use;
         TORCH_CHECK(K >= (actualShDegree + 1) * (actualShDegree + 1),
                     "K must be at least (shDegreeToUse + 1)^2");
 
         if (actualShDegree == 0) {
-            renderQuantities =
-                detail::autograd::EvaluateSphericalHarmonics::apply(actualShDegree,
-                                                                    1,
-                                                                    torch::nullopt,
-                                                                    shCoeffs.index({Slice(), Slice(0, 1), Slice()}),
-                                                                    radii.unsqueeze(0))[0];
+            renderQuantities = detail::autograd::EvaluateSphericalHarmonics::apply(
+                actualShDegree,
+                1,
+                torch::nullopt,
+                shCoeffs.index({Slice(), Slice(0, 1), Slice()}),
+                radii.unsqueeze(0))[0];
         } else {
             auto [camtoworlds, info] = torch::linalg_inv_ex(viewmats.jdata()); // [ccz, 4, 4]
             const torch::Tensor dirs = means.jdata().index({gaussian_ids, Slice()}) -
                                        camtoworlds.index({camera_ids, Slice(None, 3), 3});
             renderQuantities =
-                detail::autograd::EvaluateSphericalHarmonics::apply(actualShDegree,
-                                                                    1,
-                                                                    dirs.unsqueeze(0),
-                                                                    shCoeffs,
-                                                                    radii.unsqueeze(0))[0]
+                detail::autograd::EvaluateSphericalHarmonics::apply(
+                    actualShDegree, 1, dirs.unsqueeze(0), shCoeffs, radii.unsqueeze(0))[0]
                     .squeeze(0);
         }
 
