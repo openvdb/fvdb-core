@@ -4,7 +4,8 @@
 from enum import Enum
 from typing import Any
 
-from .._fvdb_cpp import GaussianSplat3d as GaussianSplat3dCpp
+import torch
+
 from .._fvdb_cpp import GaussianSplat3dView as GaussianSplat3dViewCpp
 from ._viewer_server import _get_viewer_server_cpp
 
@@ -34,7 +35,12 @@ class GaussianSplat3dView:
         self,
         scene_name: str,
         name: str,
-        gaussian_splat_3d: GaussianSplat3dCpp,
+        means: torch.Tensor,
+        quats: torch.Tensor,
+        log_scales: torch.Tensor,
+        logit_opacities: torch.Tensor,
+        sh0: torch.Tensor,
+        shN: torch.Tensor,
         tile_size: int = 16,
         min_radius_2d: float = 0.0,
         eps_2d: float = 0.3,
@@ -53,7 +59,12 @@ class GaussianSplat3dView:
         Args:
             scene_name (str): The name of the scene the view belongs to.
             name (str): The name of the GaussianSplat3dView.
-            gaussian_splat_3d (GaussianSplat3d): The Gaussian splat 3D scene to add.
+            means (torch.Tensor): Gaussian means tensor of shape (N, 3).
+            quats (torch.Tensor): Gaussian quaternions tensor of shape (N, 4).
+            log_scales (torch.Tensor): Gaussian log-scales tensor of shape (N, 3).
+            logit_opacities (torch.Tensor): Gaussian logit-opacities tensor of shape (N,).
+            sh0 (torch.Tensor): Zeroth-order SH coefficients tensor of shape (N, 1, D).
+            shN (torch.Tensor): Higher-order SH coefficients tensor of shape (N, K-1, D).
             tile_size (int): The tile size to use for rendering. Default is 16.
             min_radius_2d (float): The minimum radius in pixels to use when rendering splats. Default is 0.0.
             eps_2d (float): The epsilon value to use when rendering splats. Default is 0.3.
@@ -69,7 +80,16 @@ class GaussianSplat3dView:
         self._scene_name = scene_name
         self._name = name
         server = _get_viewer_server_cpp()
-        view = server.add_gaussian_splat_3d_view(scene_name=scene_name, name=name, gaussian_splat_3d=gaussian_splat_3d)
+        view = server.add_gaussian_splat_3d_view(
+            scene_name=scene_name,
+            name=name,
+            means=means,
+            quats=quats,
+            log_scales=log_scales,
+            logit_opacities=logit_opacities,
+            sh0=sh0,
+            shN=shN,
+        )
 
         if sh_ordering_mode not in (ShOrderingMode.RGB_RGB_RGB, ShOrderingMode.RRR_GGG_BBB):
             raise ValueError(f"Invalid ShOrderingMode: {sh_ordering_mode}")

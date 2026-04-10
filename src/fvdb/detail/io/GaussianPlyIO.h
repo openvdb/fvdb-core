@@ -4,7 +4,13 @@
 #ifndef FVDB_DETAIL_IO_GAUSSIANPLYIO_H
 #define FVDB_DETAIL_IO_GAUSSIANPLYIO_H
 
-#include <fvdb/GaussianSplat3d.h>
+#include <c10/core/Device.h>
+#include <torch/types.h>
+
+#include <optional>
+#include <string>
+#include <unordered_map>
+#include <variant>
 
 namespace fvdb::detail::io {
 
@@ -19,24 +25,39 @@ inline static const size_t MAX_PLY_KEY_LENGTH = 256;
 
 inline static const std::string PLY_VERSION_STRING = "fvdb_ply 1.0.0";
 
-/// @brief Load a PLY file's means, quats, scales, opacities, and SH coefficients as the state
-/// of this GaussianSplat3d object
+/// @brief Load a PLY file's means, quats, scales, opacities, and SH coefficients.
 /// @param filename Filename of the PLY file
 /// @param device Device to transfer the loaded tensors to
-/// @return The loaded GaussianSplat3d class, and a dictionary of metadata (can be empty if no
-//  metadata was saved in the PLY file). The metadata keys are strings and the values are either
-//  strings, int64s, doubles, or tensors.
-std::tuple<GaussianSplat3d, std::unordered_map<std::string, PlyMetadataTypes>>
+/// @return A tuple of (means, quats, logScales, logitOpacities, sh0, shN, metadata).
+///  The metadata dictionary can be empty if no metadata was saved in the PLY file.
+///  Its keys are strings and values are either strings, int64s, doubles, or tensors.
+std::tuple<torch::Tensor,
+           torch::Tensor,
+           torch::Tensor,
+           torch::Tensor,
+           torch::Tensor,
+           torch::Tensor,
+           std::unordered_map<std::string, PlyMetadataTypes>>
 loadGaussianPly(const std::string &filename, torch::Device device = torch::kCPU);
 
-/// @brief Save this scene and optional training metadata to a PLY file with the given filename
+/// @brief Save Gaussian tensors and optional training metadata to a PLY file.
 /// @param filename The path to save the PLY file to
-/// @param gaussians The GaussianSplat3d object containing the Gaussians to saved.
+/// @param means Gaussian means tensor of shape (N, 3)
+/// @param quats Gaussian quaternions tensor of shape (N, 4)
+/// @param logScales Gaussian log-scales tensor of shape (N, 3)
+/// @param logitOpacities Gaussian logit-opacities tensor of shape (N,)
+/// @param sh0 Zeroth-order SH coefficients tensor of shape (N, 1, D)
+/// @param shN Higher-order SH coefficients tensor of shape (N, K-1, D)
 /// @param metadata An optional dictionary of training metadata to include in the PLY file. The
 /// keys are strings and the values are either strings, int64s, doubles, or tensors
 void saveGaussianPly(
     const std::string &filename,
-    const GaussianSplat3d &gaussians,
+    const torch::Tensor &means,
+    const torch::Tensor &quats,
+    const torch::Tensor &logScales,
+    const torch::Tensor &logitOpacities,
+    const torch::Tensor &sh0,
+    const torch::Tensor &shN,
     std::optional<std::unordered_map<std::string, PlyMetadataTypes>> metadata = std::nullopt);
 
 } // namespace fvdb::detail::io
