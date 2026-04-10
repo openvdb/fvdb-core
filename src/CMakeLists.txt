@@ -44,11 +44,6 @@ execute_process(
 # Source files
 set(FVDB_CPP_FILES
     fvdb/Config.cpp
-    fvdb/detail/autograd/EvaluateSphericalHarmonics.cpp
-    fvdb/detail/autograd/GaussianProjection.cpp
-    fvdb/detail/autograd/GaussianRasterize.cpp
-    fvdb/detail/autograd/GaussianRasterizeFromWorld.cpp
-    fvdb/detail/autograd/GaussianRasterizeSparse.cpp
     fvdb/detail/autograd/VolumeRender.cpp
     fvdb/detail/io/GaussianPlyIO.cpp
     fvdb/detail/io/LoadNanovdb.cpp
@@ -59,7 +54,6 @@ set(FVDB_CPP_FILES
     fvdb/detail/viewer/GaussianSplat3dView.cpp
     fvdb/detail/viewer/Viewer.cpp
     fvdb/FVDB.cpp
-    fvdb/GaussianSplat3d.cpp
     fvdb/JaggedTensor.cpp
 )
 
