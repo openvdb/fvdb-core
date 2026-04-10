@@ -20,23 +20,19 @@ namespace ops {
 /// @param[in] shDegreeToUse Degree of spherical harmonics to use (0-3 typically, higher degrees
 /// provide more detail)
 /// @param[in] numCameras Number of cameras used for rendering
-/// @param[in] viewDirs Direction vectors [N, 3] (packed) or [C, N, 3] (unpacked) normalized to unit
-/// length, representing view directions
-/// @param[in] sh0Coeffs Spherical harmonic coefficients [N, 1, D] (packed) or
-/// [1, N, D] (unpacked), where D is the number of feature channels
-/// @param[in] shNCoeffs Higher order spherical harmonic coefficients [N, K-1, D] (packed) or
-/// [K-1, N, D] (unpacked), where K depends on sh_degree_to_use (K=(sh_degree_to_use+1)²)
-/// @param[in] radii radii [N] (packed) or [C, N] (unpacked) for view-dependent level-of-detail
-/// control
+/// @param[in] viewDirs Direction vectors [C, N, 3] normalized to unit length, representing view
+/// directions
+/// @param[in] shCoeffs Spherical harmonic coefficients [N, K, D] where K=(sh_degree_to_use+1)²
+/// and D is the number of feature channels. Index 0 along dim 1 is the DC (degree-0) term.
+/// @param[in] radii radii [C, N] for view-dependent level-of-detail control
 ///
-/// @return Features/colors [N, D] computed from the spherical harmonics evaluation
+/// @return Features/colors [C, N, D] computed from the spherical harmonics evaluation
 template <torch::DeviceType>
 torch::Tensor dispatchSphericalHarmonicsForward(const int64_t shDegreeToUse,
                                                 const int64_t numCameras,
-                                                const torch::Tensor &viewDirs,  // [C, N, 3]
-                                                const torch::Tensor &sh0Coeffs, // [1, N, D]
-                                                const torch::Tensor &shNCoeffs, // [N, K-1, D]
-                                                const torch::Tensor &radii      // [C, N]
+                                                const torch::Tensor &viewDirs, // [C, N, 3]
+                                                const torch::Tensor &shCoeffs, // [N, K, D]
+                                                const torch::Tensor &radii     // [C, N]
 );
 
 } // namespace ops

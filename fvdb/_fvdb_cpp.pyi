@@ -102,16 +102,14 @@ class GaussianSplat3d:
     means: torch.Tensor
     quats: torch.Tensor
     requires_grad: bool
-    sh0: torch.Tensor
-    shN: torch.Tensor
+    sh_coeffs: torch.Tensor
     def __init__(
         self,
         means: torch.Tensor,
         quats: torch.Tensor,
         log_scales: torch.Tensor,
         logit_opacities: torch.Tensor,
-        sh0: torch.Tensor,
-        shN: torch.Tensor,
+        sh_coeffs: torch.Tensor,
         accumulate_mean_2d_gradients: bool = ...,
         accumulate_max_2d_radii: bool = ...,
         detach: bool = ...,
@@ -468,8 +466,7 @@ class GaussianSplat3d:
         quats: torch.Tensor,
         log_scales: torch.Tensor,
         logit_opacities: torch.Tensor,
-        sh0: torch.Tensor,
-        shN: torch.Tensor,
+        sh_coeffs: torch.Tensor,
     ) -> None: ...
     def state_dict(self) -> dict[str, torch.Tensor]: ...
     @property
@@ -1387,9 +1384,8 @@ def gaussian_render_jagged(
 def evaluate_spherical_harmonics(
     sh_degree: int,
     num_cameras: int,
-    sh0: torch.Tensor,
+    sh_coeffs: torch.Tensor,
     radii: torch.Tensor,
-    shN: Optional[torch.Tensor] = ...,
     view_directions: Optional[torch.Tensor] = ...,
 ) -> torch.Tensor: ...
 @overload

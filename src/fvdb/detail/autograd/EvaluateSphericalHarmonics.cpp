@@ -17,22 +17,20 @@ EvaluateSphericalHarmonics::forward(
     const ssize_t shDegreeToUse,
     const size_t numCameras,
     const std::optional<EvaluateSphericalHarmonics::Variable>
-        viewDirections,                                                   // [C, N, 3] (optional)
-    const EvaluateSphericalHarmonics::Variable &sh0Coeffs,                // [N, 1, D]
-    const std::optional<EvaluateSphericalHarmonics::Variable> &shNCoeffs, // [N, K-1, D]
-    const EvaluateSphericalHarmonics::Variable &radii                     // [C, N]
+        viewDirections,                                   // [C, N, 3] (optional)
+    const EvaluateSphericalHarmonics::Variable &shCoeffs, // [N, K, D]
+    const EvaluateSphericalHarmonics::Variable &radii     // [C, N]
 ) {
     FVDB_FUNC_RANGE_WITH_NAME("EvaluateSphericalHarmonics::forward");
     const Variable viewDirectionsValue = viewDirections.value_or(torch::Tensor());
-    const Variable shNCoeffsValue      = shNCoeffs.value_or(torch::Tensor());
-    const Variable renderQuantities    = FVDB_DISPATCH_KERNEL(sh0Coeffs.device(), [&]() {
+    const Variable renderQuantities    = FVDB_DISPATCH_KERNEL(shCoeffs.device(), [&]() {
         return ops::dispatchSphericalHarmonicsForward<DeviceTag>(
-            shDegreeToUse, numCameras, viewDirectionsValue, sh0Coeffs, shNCoeffsValue, radii);
+            shDegreeToUse, numCameras, viewDirectionsValue, shCoeffs, radii);
     });
-    ctx->save_for_backward({viewDirectionsValue, shNCoeffsValue, radii});
+    ctx->save_for_backward({viewDirectionsValue, shCoeffs, radii});
     ctx->saved_data["shDegreeToUse"] = static_cast<int64_t>(shDegreeToUse);
     ctx->saved_data["numCameras"]    = static_cast<int64_t>(numCameras);
-    ctx->saved_data["numGaussians"]  = static_cast<int64_t>(sh0Coeffs.size(0));
+    ctx->saved_data["numGaussians"]  = static_cast<int64_t>(shCoeffs.size(0));
     return {renderQuantities};
 }
 
@@ -47,7 +45,7 @@ EvaluateSphericalHarmonics::backward(EvaluateSphericalHarmonics::AutogradContext
 
     VariableList saved = ctx->get_saved_variables();
     Variable viewDirs  = saved.at(0);
-    Variable shNCoeffs = saved.at(1);
+    Variable shCoeffs  = saved.at(1);
     Variable radii     = saved.at(2);
 
     const int shDegreeToUse = static_cast<int>(ctx->saved_data["shDegreeToUse"].toInt());
@@ -61,16 +59,15 @@ EvaluateSphericalHarmonics::backward(EvaluateSphericalHarmonics::AutogradContext
                                                                   numCameras,
                                                                   numGaussians,
                                                                   viewDirs,
-                                                                  shNCoeffs,
+                                                                  shCoeffs,
                                                                   dLossDColors,
                                                                   radii,
                                                                   computeDLossDViewDirs);
     });
-    Variable dLossDSh0Coeffs = std::get<0>(variables);
-    Variable dLossDShNCoeffs = std::get<1>(variables);
-    Variable dLossDViewDirs  = std::get<2>(variables);
+    Variable dLossDShCoeffs = std::get<0>(variables);
+    Variable dLossDViewDirs = std::get<1>(variables);
 
-    return {Variable(), Variable(), dLossDViewDirs, dLossDSh0Coeffs, dLossDShNCoeffs, Variable()};
+    return {Variable(), Variable(), dLossDViewDirs, dLossDShCoeffs, Variable()};
 }
 
 } // namespace autograd

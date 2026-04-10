@@ -93,9 +93,8 @@ def gaussian_render_jagged(
 def evaluate_spherical_harmonics(
     sh_degree: int,
     num_cameras: int,
-    sh0: torch.Tensor,
+    sh_coeffs: torch.Tensor,
     radii: torch.Tensor,
-    shN: torch.Tensor | None = None,
     view_directions: torch.Tensor | None = None,
 ) -> torch.Tensor: ...
 

@@ -77,16 +77,12 @@ class BaseGaussianTestCase(unittest.TestCase):
         self.sh_degree = 3
         sh_coeffs = torch.zeros((means.shape[0], (self.sh_degree + 1) ** 2, 3), device=self.device)
         sh_coeffs[:, 0, :] = rgb_to_sh(colors)
-        sh_0 = sh_coeffs[:, 0, :].unsqueeze(1).clone()
-        sh_n = sh_coeffs[:, 1:, :].clone()
-
         self.gs3d = GaussianSplat3d.from_tensors(
             means=means,
             quats=quats,
             log_scales=torch.log(scales),
             logit_opacities=torch.logit(opacities),
-            sh0=sh_0,
-            shN=sh_n,
+            sh_coeffs=sh_coeffs,
         )
         self.gs3d.requires_grad = True
 
@@ -97,8 +93,7 @@ class BaseGaussianTestCase(unittest.TestCase):
             quats=quats,
             log_scales=torch.log(scales),
             logit_opacities=torch.logit(opacities),
-            sh0=sh_0,
-            shN=sh_n,
+            sh_coeffs=sh_coeffs,
         ).detach()
         self.nan_gs3d.requires_grad = True
 
@@ -119,8 +114,7 @@ class TestGaussianSplatCat(BaseGaussianTestCase):
             quats=self.gs3d.quats.clone(),
             log_scales=self.gs3d.log_scales.clone(),
             logit_opacities=self.gs3d.logit_opacities.clone(),
-            sh0=self.gs3d.sh0.clone(),
-            shN=self.gs3d.shN.clone(),
+            sh_coeffs=self.gs3d.sh_coeffs.clone(),
             accumulate_max_2d_radii=self.gs3d.accumulate_max_2d_radii,
             accumulate_mean_2d_gradients=self.gs3d.accumulate_mean_2d_gradients,
             detach=True,  # Detach to avoid gradients from the original Gaussian Splat
@@ -130,8 +124,7 @@ class TestGaussianSplatCat(BaseGaussianTestCase):
             quats=self.gs3d.quats.clone() + 0.01,
             log_scales=self.gs3d.log_scales.clone() + 0.01,
             logit_opacities=self.gs3d.logit_opacities.clone() + 0.01,
-            sh0=self.gs3d.sh0.clone() + 0.01,
-            shN=self.gs3d.shN.clone() + 0.01,
+            sh_coeffs=self.gs3d.sh_coeffs.clone() + 0.01,
             accumulate_max_2d_radii=self.gs3d.accumulate_max_2d_radii,
             accumulate_mean_2d_gradients=self.gs3d.accumulate_mean_2d_gradients,
         )
@@ -140,8 +133,7 @@ class TestGaussianSplatCat(BaseGaussianTestCase):
             quats=self.gs3d.quats.clone() + 0.02,
             log_scales=self.gs3d.log_scales.clone() + 0.02,
             logit_opacities=self.gs3d.logit_opacities.clone() + 0.02,
-            sh0=self.gs3d.sh0.clone() + 0.02,
-            shN=self.gs3d.shN.clone() + 0.02,
+            sh_coeffs=self.gs3d.sh_coeffs.clone() + 0.02,
             accumulate_max_2d_radii=self.gs3d.accumulate_max_2d_radii,
             accumulate_mean_2d_gradients=self.gs3d.accumulate_mean_2d_gradients,
         )
@@ -171,8 +163,7 @@ class TestGaussianSplatCat(BaseGaussianTestCase):
             self.assertTrue(self.gs3d1.quats.grad is not None)
             self.assertTrue(self.gs3d1.log_scales.grad is not None)
             self.assertTrue(self.gs3d1.logit_opacities.grad is not None)
-            self.assertTrue(self.gs3d1.sh0.grad is not None)
-            self.assertTrue(self.gs3d1.shN.grad is not None)
+            self.assertTrue(self.gs3d1.sh_coeffs.grad is not None)
             self.assertTrue(self.gs3d1.accumulated_gradient_step_counts is not None)
             self.assertTrue(self.gs3d1.accumulated_mean_2d_gradient_norms is not None)
             if self.gs3d1.accumulate_max_2d_radii:
@@ -192,8 +183,7 @@ class TestGaussianSplatCat(BaseGaussianTestCase):
         self.assertTrue(
             torch.equal(gs3d_cat.logit_opacities, torch.cat([gs.logit_opacities for gs in gs3d_list], dim=0))
         )
-        self.assertTrue(torch.equal(gs3d_cat.sh0, torch.cat([gs.sh0 for gs in gs3d_list], dim=0)))
-        self.assertTrue(torch.equal(gs3d_cat.shN, torch.cat([gs.shN for gs in gs3d_list], dim=0)))
+        self.assertTrue(torch.equal(gs3d_cat.sh_coeffs, torch.cat([gs.sh_coeffs for gs in gs3d_list], dim=0)))
         self.assertEqual(gs3d_cat.accumulate_max_2d_radii, acc2d_rad)
         self.assertEqual(gs3d_cat.accumulate_mean_2d_gradients, acc_m2dgrad)
 
@@ -501,8 +491,7 @@ class TestGaussianSplatIndexSet(BaseGaussianTestCase):
             quats=self.gs3d.quats,
             log_scales=self.gs3d.log_scales,
             logit_opacities=self.gs3d.logit_opacities,
-            sh0=self.gs3d.sh0,
-            shN=self.gs3d.shN,
+            sh_coeffs=self.gs3d.sh_coeffs,
             accumulate_max_2d_radii=acc_max_2d_radii,
             accumulate_mean_2d_gradients=dst_acc_grad_mean_2d,
         ).detach()
@@ -516,8 +505,7 @@ class TestGaussianSplatIndexSet(BaseGaussianTestCase):
             quats=torch.randn(num_src_gs, 4, device=self.device),
             log_scales=torch.randn(num_src_gs, 3, device=self.device),
             logit_opacities=torch.randn(num_src_gs, device=self.device),
-            sh0=torch.randn(num_src_gs, 1, 3, device=self.device),
-            shN=torch.randn(num_src_gs, 15, 3, device=self.device),
+            sh_coeffs=torch.randn(num_src_gs, 16, 3, device=self.device),
             accumulate_mean_2d_gradients=src_acc_grad_mean_2d,
             accumulate_max_2d_radii=acc_max_2d_radii,
         )
@@ -565,8 +553,7 @@ class TestGaussianSplatIndexSet(BaseGaussianTestCase):
         assertfun(torch.equal(src.quats, selfun(dst.quats)))
         assertfun(torch.equal(src.log_scales, selfun(dst.log_scales)))
         assertfun(torch.equal(src.logit_opacities, selfun(dst.logit_opacities)))
-        assertfun(torch.equal(src.sh0, selfun(dst.sh0)))
-        assertfun(torch.equal(src.shN, selfun(dst.shN)))
+        assertfun(torch.equal(src.sh_coeffs, selfun(dst.sh_coeffs)))
 
         # Check that both the source and destination Gaussian Splat get their accumulate
         # gradient state correctly set
@@ -814,8 +801,7 @@ class TestGaussianSplatIndex(BaseGaussianTestCase):
         self.assertTrue(torch.equal(selected.quats, dst.quats[indices_or_mask]))
         self.assertTrue(torch.equal(selected.log_scales, dst.log_scales[indices_or_mask]))
         self.assertTrue(torch.equal(selected.logit_opacities, dst.logit_opacities[indices_or_mask]))
-        self.assertTrue(torch.equal(selected.sh0, dst.sh0[indices_or_mask]))
-        self.assertTrue(torch.equal(selected.shN, dst.shN[indices_or_mask]))
+        self.assertTrue(torch.equal(selected.sh_coeffs, dst.sh_coeffs[indices_or_mask]))
 
         # Ensure the selected Gaussian Splat is empty
         self.assertEqual(selected.num_gaussians, num_gs)
@@ -823,8 +809,7 @@ class TestGaussianSplatIndex(BaseGaussianTestCase):
         self.assertTrue(selected.quats.shape == (num_gs, 4))
         self.assertTrue(selected.log_scales.shape == (num_gs, 3))
         self.assertTrue(selected.logit_opacities.shape == (num_gs,))
-        self.assertTrue(selected.sh0.shape == (num_gs, 1, 3))
-        self.assertTrue(selected.shN.shape == (num_gs, dst.shN.shape[1], 3))
+        self.assertTrue(selected.sh_coeffs.shape == (num_gs, dst.sh_coeffs.shape[1], 3))
 
         if accumulate_mean_2d_gradients:
             # Ensure the gradients and accumulated gradient state match at every other Gaussian
@@ -849,17 +834,16 @@ class TestGaussianSplatIndex(BaseGaussianTestCase):
             )
 
     def _make_gs3d(
-        self, accumulate_mean_2d_gradients: bool, accumulate_max_2d_radii: bool, empty_shN: bool
+        self, accumulate_mean_2d_gradients: bool, accumulate_max_2d_radii: bool
     ) -> GaussianSplat3d:
         # Create a GaussianSplat3d instance with gradients that matches self.gs3d
-        shN = torch.empty((self.gs3d.num_gaussians, 0, 3), device=self.device) if empty_shN else self.gs3d.shN
+        sh_coeffs = self.gs3d.sh_coeffs
         gs3d = GaussianSplat3d.from_tensors(
             means=self.gs3d.means,
             quats=self.gs3d.quats,
             log_scales=self.gs3d.log_scales,
             logit_opacities=self.gs3d.logit_opacities,
-            sh0=self.gs3d.sh0,
-            shN=shN,
+            sh_coeffs=sh_coeffs,
             accumulate_mean_2d_gradients=accumulate_mean_2d_gradients,
             accumulate_max_2d_radii=accumulate_max_2d_radii,
         )
@@ -888,23 +872,18 @@ class TestGaussianSplatIndex(BaseGaussianTestCase):
 
     @parameterized.expand(
         [
-            [True, True, True],
-            [True, True, False],
-            [True, False, True],
-            [True, False, False],
-            [False, True, True],
-            [False, True, False],
-            [False, False, True],
-            [False, False, False],
+            [True, True],
+            [True, False],
+            [False, True],
+            [False, False],
         ]
     )
-    def test_gaussian_mask_selection(self, accumulate_mean_2d_gradients, track_max_2d_radii, empty_shN):
+    def test_gaussian_mask_selection(self, accumulate_mean_2d_gradients, track_max_2d_radii):
 
         # Create a mask that selects every other Gaussian and use it to select from the Gaussian Splat
         gs3d = self._make_gs3d(
             accumulate_mean_2d_gradients=accumulate_mean_2d_gradients,
             accumulate_max_2d_radii=track_max_2d_radii,
-            empty_shN=empty_shN,
         )
         every_other_mask = torch.zeros(gs3d.num_gaussians, dtype=torch.bool, device=self.device)
         every_other_mask[::2] = True
@@ -922,7 +901,6 @@ class TestGaussianSplatIndex(BaseGaussianTestCase):
         gs3d = self._make_gs3d(
             accumulate_mean_2d_gradients=accumulate_mean_2d_gradients,
             accumulate_max_2d_radii=track_max_2d_radii,
-            empty_shN=empty_shN,
         )
         half_mask = torch.zeros(gs3d.num_gaussians, dtype=torch.bool, device=self.device)
         half_mask[: gs3d.num_gaussians // 2] = True
@@ -940,7 +918,6 @@ class TestGaussianSplatIndex(BaseGaussianTestCase):
         gs3d = self._make_gs3d(
             accumulate_mean_2d_gradients=accumulate_mean_2d_gradients,
             accumulate_max_2d_radii=track_max_2d_radii,
-            empty_shN=empty_shN,
         )
         empty_mask = torch.zeros(gs3d.num_gaussians, dtype=torch.bool, device=self.device)
         gs3d_empty = gs3d[empty_mask]
@@ -955,23 +932,18 @@ class TestGaussianSplatIndex(BaseGaussianTestCase):
 
     @parameterized.expand(
         [
-            [True, True, True],
-            [True, True, False],
-            [True, False, True],
-            [True, False, False],
-            [False, True, True],
-            [False, True, False],
-            [False, False, True],
-            [False, False, False],
+            [True, True],
+            [True, False],
+            [False, True],
+            [False, False],
         ]
     )
-    def test_gaussian_index_selection(self, accumulate_mean_2d_gradients, track_max_2d_radii, empty_shN):
+    def test_gaussian_index_selection(self, accumulate_mean_2d_gradients, track_max_2d_radii):
 
         # Create indices that select every other Gaussian and use it to select from the Gaussian Splat
         gs3d = self._make_gs3d(
             accumulate_mean_2d_gradients=accumulate_mean_2d_gradients,
             accumulate_max_2d_radii=track_max_2d_radii,
-            empty_shN=empty_shN,
         )
         every_other_idx = torch.arange(0, gs3d.num_gaussians, 2, device=self.device, dtype=torch.long)
         gs3d_every_other = gs3d[every_other_idx]
@@ -988,7 +960,6 @@ class TestGaussianSplatIndex(BaseGaussianTestCase):
         gs3d = self._make_gs3d(
             accumulate_mean_2d_gradients=accumulate_mean_2d_gradients,
             accumulate_max_2d_radii=track_max_2d_radii,
-            empty_shN=empty_shN,
         )
         half_idx = torch.arange(gs3d.num_gaussians, device=self.device, dtype=torch.long)[: gs3d.num_gaussians // 2]
         gs3d_half = gs3d[half_idx]
@@ -1005,7 +976,6 @@ class TestGaussianSplatIndex(BaseGaussianTestCase):
         gs3d = self._make_gs3d(
             accumulate_mean_2d_gradients=accumulate_mean_2d_gradients,
             accumulate_max_2d_radii=track_max_2d_radii,
-            empty_shN=empty_shN,
         )
         pmt_idx = torch.randperm(gs3d.num_gaussians, device=self.device)
         gs3d_pmt = gs3d[pmt_idx]
@@ -1022,7 +992,6 @@ class TestGaussianSplatIndex(BaseGaussianTestCase):
         gs3d = self._make_gs3d(
             accumulate_mean_2d_gradients=accumulate_mean_2d_gradients,
             accumulate_max_2d_radii=track_max_2d_radii,
-            empty_shN=empty_shN,
         )
         half_idx = torch.arange(gs3d.num_gaussians, device=self.device, dtype=torch.long)[: gs3d.num_gaussians // 2]
         dup_idx = torch.cat([half_idx, half_idx, half_idx], dim=0)
@@ -1038,17 +1007,13 @@ class TestGaussianSplatIndex(BaseGaussianTestCase):
 
     @parameterized.expand(
         [
-            [True, True, True],
-            [True, True, False],
-            [True, False, True],
-            [True, False, False],
-            [False, True, True],
-            [False, True, False],
-            [False, False, True],
-            [False, False, False],
+            [True, True],
+            [True, False],
+            [False, True],
+            [False, False],
         ]
     )
-    def test_gaussian_slice_selection(self, accumulate_mean_2d_gradients, track_max_2d_radii, empty_shN):
+    def test_gaussian_slice_selection(self, accumulate_mean_2d_gradients, track_max_2d_radii):
 
         def check_is_view(selected, gtidx):
             if not accumulate_mean_2d_gradients and not track_max_2d_radii:
@@ -1065,7 +1030,6 @@ class TestGaussianSplatIndex(BaseGaussianTestCase):
         gs3d = self._make_gs3d(
             accumulate_mean_2d_gradients=accumulate_mean_2d_gradients,
             accumulate_max_2d_radii=track_max_2d_radii,
-            empty_shN=empty_shN,
         )
         gt_idx = torch.arange(0, gs3d.num_gaussians, 2, device=self.device, dtype=torch.long)
         gs_sel = gs3d[::2]
@@ -1083,7 +1047,6 @@ class TestGaussianSplatIndex(BaseGaussianTestCase):
         gs3d = self._make_gs3d(
             accumulate_mean_2d_gradients=accumulate_mean_2d_gradients,
             accumulate_max_2d_radii=track_max_2d_radii,
-            empty_shN=empty_shN,
         )
         gt_idx = torch.arange(0, gs3d.num_gaussians // 2, 2, device=self.device, dtype=torch.long)
         gs_sel = gs3d[: gs3d.num_gaussians // 2 : 2]
@@ -1101,7 +1064,6 @@ class TestGaussianSplatIndex(BaseGaussianTestCase):
         gs3d = self._make_gs3d(
             accumulate_mean_2d_gradients=accumulate_mean_2d_gradients,
             accumulate_max_2d_radii=track_max_2d_radii,
-            empty_shN=empty_shN,
         )
         gt_idx = torch.arange(10, gs3d.num_gaussians // 2, 2, device=self.device, dtype=torch.long)
         gs_sel = gs3d[10 : gs3d.num_gaussians // 2 : 2]
@@ -1119,7 +1081,6 @@ class TestGaussianSplatIndex(BaseGaussianTestCase):
         gs3d = self._make_gs3d(
             accumulate_mean_2d_gradients=accumulate_mean_2d_gradients,
             accumulate_max_2d_radii=track_max_2d_radii,
-            empty_shN=empty_shN,
         )
         gt_idx = torch.arange(gs3d.num_gaussians, device=self.device, dtype=torch.long)[:-7]
         gs_sel = gs3d[:-7]
@@ -1140,14 +1101,13 @@ class TestLoadAndSavePly(BaseGaussianTestCase):
 
     def test_load_ply_with_no_shN(self):
         tf = tempfile.NamedTemporaryFile(delete=True, suffix=".ply")
-        shN_empty = torch.empty((self.gs3d.num_gaussians, 0, 3), device=self.device)
+        sh_coeffs_sh0_only = self.gs3d.sh_coeffs[:, :1, :]
         gs3d_no_shN = GaussianSplat3d.from_tensors(
             means=self.gs3d.means,
             quats=self.gs3d.quats,
             log_scales=self.gs3d.log_scales,
             logit_opacities=self.gs3d.logit_opacities,
-            sh0=self.gs3d.sh0,
-            shN=shN_empty,
+            sh_coeffs=sh_coeffs_sh0_only,
         )
         gs3d_no_shN.save_ply(tf.name)
 
@@ -1157,8 +1117,8 @@ class TestLoadAndSavePly(BaseGaussianTestCase):
         self.assertTrue(torch.allclose(gs3d_loaded.quats, gs3d_no_shN.quats))
         self.assertTrue(torch.allclose(gs3d_loaded.log_scales, gs3d_no_shN.log_scales))
         self.assertTrue(torch.allclose(gs3d_loaded.logit_opacities, gs3d_no_shN.logit_opacities))
-        self.assertTrue(torch.allclose(gs3d_loaded.sh0, gs3d_no_shN.sh0))
-        self.assertTrue(gs3d_loaded.shN.shape == (gs3d_no_shN.num_gaussians, 0, 3))
+        self.assertTrue(torch.allclose(gs3d_loaded.sh_coeffs[:, :1, :], gs3d_no_shN.sh_coeffs[:, :1, :]))
+        self.assertTrue(gs3d_loaded.sh_coeffs.shape[1] == 1)
 
     def test_save_ply_handles_nan(self):
         tf = tempfile.NamedTemporaryFile(delete=True, suffix=".ply")
@@ -1198,10 +1158,10 @@ class TestLoadAndSavePly(BaseGaussianTestCase):
         sh0_loaded = (
             torch.from_numpy(np.stack([attribs[f"f_dc_{i}"] for i in range(3)], axis=1)).to(self.device).unsqueeze(1)
         )
-        self.assertTrue(torch.allclose(sh0_loaded, gs3d_without_nan.sh0))
+        self.assertTrue(torch.allclose(sh0_loaded, gs3d_without_nan.sh_coeffs[:, :1, :]))
         shN_loaded = torch.from_numpy(np.stack([attribs[f"f_rest_{i}"] for i in range(45)], axis=1)).to(self.device)
         shN_loaded = shN_loaded.view(gs3d_without_nan.num_gaussians, 15, 3)
-        self.assertTrue(torch.allclose(shN_loaded, gs3d_without_nan.shN))
+        self.assertTrue(torch.allclose(shN_loaded, gs3d_without_nan.sh_coeffs[:, 1:, :]))
 
     def test_save_ply(self):
         tf = tempfile.NamedTemporaryFile(delete=True, suffix=".ply")
@@ -1237,11 +1197,11 @@ class TestLoadAndSavePly(BaseGaussianTestCase):
         sh0_loaded = (
             torch.from_numpy(np.stack([attribs[f"f_dc_{i}"] for i in range(3)], axis=1)).to(self.device).unsqueeze(1)
         )
-        self.assertTrue(torch.allclose(sh0_loaded, self.gs3d.sh0))
+        self.assertTrue(torch.allclose(sh0_loaded, self.gs3d.sh_coeffs[:, :1, :]))
 
         shN_loaded = torch.from_numpy(np.stack([attribs[f"f_rest_{i}"] for i in range(45)], axis=1)).to(self.device)
         shN_loaded = shN_loaded.view(self.gs3d.num_gaussians, 15, 3)
-        self.assertTrue(torch.allclose(shN_loaded, self.gs3d.shN))
+        self.assertTrue(torch.allclose(shN_loaded, self.gs3d.sh_coeffs[:, 1:, :]))
 
     def test_save_and_load_ply(self):
         tf = tempfile.NamedTemporaryFile(delete=True, suffix=".ply")
@@ -1254,8 +1214,7 @@ class TestLoadAndSavePly(BaseGaussianTestCase):
         self.assertTrue(torch.allclose(gs3d_loaded.quats, self.gs3d.quats))
         self.assertTrue(torch.allclose(gs3d_loaded.log_scales, self.gs3d.log_scales))
         self.assertTrue(torch.allclose(gs3d_loaded.logit_opacities, self.gs3d.logit_opacities))
-        self.assertTrue(torch.allclose(gs3d_loaded.sh0, self.gs3d.sh0))
-        self.assertTrue(torch.allclose(gs3d_loaded.shN, self.gs3d.shN))
+        self.assertTrue(torch.allclose(gs3d_loaded.sh_coeffs, self.gs3d.sh_coeffs))
 
         self.assertTrue(len(metadata) == 0)
 
@@ -1285,8 +1244,7 @@ class TestLoadAndSavePly(BaseGaussianTestCase):
         self.assertTrue(torch.allclose(gs3d_loaded.quats, self.gs3d.quats))
         self.assertTrue(torch.allclose(gs3d_loaded.log_scales, self.gs3d.log_scales))
         self.assertTrue(torch.allclose(gs3d_loaded.logit_opacities, self.gs3d.logit_opacities))
-        self.assertTrue(torch.allclose(gs3d_loaded.sh0, self.gs3d.sh0))
-        self.assertTrue(torch.allclose(gs3d_loaded.shN, self.gs3d.shN))
+        self.assertTrue(torch.allclose(gs3d_loaded.sh_coeffs, self.gs3d.sh_coeffs))
 
         assert isinstance(training_info["normalization_transform"], torch.Tensor)
         assert isinstance(training_info["camera_to_world_matrices"], torch.Tensor)
@@ -1360,8 +1318,7 @@ class TestLoadAndSavePly(BaseGaussianTestCase):
         self.assertTrue(torch.allclose(gs3d_loaded.quats, self.gs3d.quats))
         self.assertTrue(torch.allclose(gs3d_loaded.log_scales, self.gs3d.log_scales))
         self.assertTrue(torch.allclose(gs3d_loaded.logit_opacities, self.gs3d.logit_opacities))
-        self.assertTrue(torch.allclose(gs3d_loaded.sh0, self.gs3d.sh0))
-        self.assertTrue(torch.allclose(gs3d_loaded.shN, self.gs3d.shN))
+        self.assertTrue(torch.allclose(gs3d_loaded.sh_coeffs, self.gs3d.sh_coeffs))
 
         assert isinstance(training_info["normalization_tx"], torch.Tensor)
         assert isinstance(training_info["camera_to_world_matrices123"], torch.Tensor)
@@ -1519,7 +1476,7 @@ class TestGaussianRender(BaseGaussianTestCase):
         jt_scales = JaggedTensor([self.gs3d.scales, self.gs3d.scales]).to(self.device)
         jt_opacities = JaggedTensor([self.gs3d.opacities, self.gs3d.opacities]).to(self.device)
 
-        sh_coeffs = torch.cat([self.gs3d.sh0, self.gs3d.shN], dim=1)  # [N, K, 3]
+        sh_coeffs = self.gs3d.sh_coeffs  # [N, K, 3]
         jt_sh_coeffs = JaggedTensor([sh_coeffs, sh_coeffs]).to(self.device)
 
         # The first scene renders to 2 views and the second scene renders to a single view
@@ -1638,10 +1595,9 @@ class TestGaussianContributingGaussianIdsRender(BaseGaussianTestCase):
         scales = torch.full((means3d.shape[0], 3), 1e-30, device=means3d.device)
         log_scales = torch.log(scales)
 
-        sh0 = torch.randn(means3d.shape[0], 1, 3, device=means3d.device)
-        shN = torch.randn(means3d.shape[0], 1, 3, device=means3d.device)
+        sh_coeffs = torch.randn(means3d.shape[0], 2, 3, device=means3d.device)
 
-        gs3d = GaussianSplat3d.from_tensors(means3d, quats, log_scales, logit_opacities, sh0, shN)
+        gs3d = GaussianSplat3d.from_tensors(means3d, quats, log_scales, logit_opacities, sh_coeffs=sh_coeffs)
 
         # Test render num contributing gaussians
         num_contributing_gaussians, alphas = gs3d.render_num_contributing_gaussians(
@@ -1812,10 +1768,9 @@ class TestGaussianContributingGaussianIdsRender(BaseGaussianTestCase):
         scales = torch.full((means3d.shape[0], 3), 1e-30, device=means3d.device)
         log_scales = torch.log(scales)
 
-        sh0 = torch.randn(means3d.shape[0], 1, 3, device=means3d.device)
-        shN = torch.randn(means3d.shape[0], 1, 3, device=means3d.device)
+        sh_coeffs = torch.randn(means3d.shape[0], 2, 3, device=means3d.device)
 
-        gs3d = GaussianSplat3d.from_tensors(means3d, quats, log_scales, logit_opacities, sh0, shN)
+        gs3d = GaussianSplat3d.from_tensors(means3d, quats, log_scales, logit_opacities, sh_coeffs=sh_coeffs)
 
         # Test render num contributing gaussians
         num_contributing_gaussians, alphas = gs3d.render_num_contributing_gaussians(
@@ -2506,20 +2461,17 @@ class TestGaussianRenderSparse(BaseGaussianTestCase):
         assert (
             self.gs3d.logit_opacities.grad is not None
         ), "Gradients not computed for logit_opacities in sparse features render"
-        assert self.gs3d.sh0.grad is not None, "Gradients not computed for sh0 in sparse features render"
-        assert self.gs3d.shN.grad is not None, "Gradients not computed for shN in sparse features render"
+        assert self.gs3d.sh_coeffs.grad is not None, "Gradients not computed for sh_coeffs in sparse features render"
         sparse_means_grad = self.gs3d.means.grad.clone()
         sparse_quats_grad = self.gs3d.quats.grad.clone()
         sparse_log_scales_grad = self.gs3d.log_scales.grad.clone()
         sparse_logit_opacities_grad = self.gs3d.logit_opacities.grad.clone()
-        sparse_sh0_grad = self.gs3d.sh0.grad.clone()
-        sparse_shN_grad = self.gs3d.shN.grad.clone()
+        sparse_sh_coeffs_grad = self.gs3d.sh_coeffs.grad.clone()
         self.gs3d.means.grad.zero_()
         self.gs3d.quats.grad.zero_()
         self.gs3d.log_scales.grad.zero_()
         self.gs3d.logit_opacities.grad.zero_()
-        self.gs3d.sh0.grad.zero_()
-        self.gs3d.shN.grad.zero_()
+        self.gs3d.sh_coeffs.grad.zero_()
 
         dense_features, dense_alphas = self.gs3d.render_images(
             self.cam_to_world_mats[0:1],
@@ -2540,8 +2492,7 @@ class TestGaussianRenderSparse(BaseGaussianTestCase):
         dense_quats_grad = self.gs3d.quats.grad.clone()
         dense_log_scales_grad = self.gs3d.log_scales.grad.clone()
         dense_logit_opacities_grad = self.gs3d.logit_opacities.grad.clone()
-        dense_sh0_grad = self.gs3d.sh0.grad.clone()
-        dense_shN_grad = self.gs3d.shN.grad.clone()
+        dense_sh_coeffs_grad = self.gs3d.sh_coeffs.grad.clone()
 
         self.assertTrue(
             torch.allclose(sparse_means_grad, dense_means_grad, atol=1e-4, rtol=1e-8),
@@ -2560,12 +2511,8 @@ class TestGaussianRenderSparse(BaseGaussianTestCase):
             "Sparse logit opacities grad does not match dense logit opacities grad at specified pixels",
         )
         self.assertTrue(
-            torch.allclose(sparse_sh0_grad, dense_sh0_grad, atol=1e-4, rtol=1e-8),
-            "Sparse sh0 grad does not match dense sh0 grad at specified pixels",
-        )
-        self.assertTrue(
-            torch.allclose(sparse_shN_grad, dense_shN_grad, atol=1e-4, rtol=1e-8),
-            "Sparse shN grad does not match dense shN grad at specified pixels",
+            torch.allclose(sparse_sh_coeffs_grad, dense_sh_coeffs_grad, atol=1e-4, rtol=1e-8),
+            "Sparse sh_coeffs grad does not match dense sh_coeffs grad at specified pixels",
         )
 
     def test_gaussian_render_sparse_features_and_depths(self):
@@ -2634,20 +2581,17 @@ class TestGaussianRenderSparse(BaseGaussianTestCase):
         assert (
             self.gs3d.logit_opacities.grad is not None
         ), "Gradients not computed for logit_opacities in sparse features render"
-        assert self.gs3d.sh0.grad is not None, "Gradients not computed for sh0 in sparse features render"
-        assert self.gs3d.shN.grad is not None, "Gradients not computed for shN in sparse features render"
+        assert self.gs3d.sh_coeffs.grad is not None, "Gradients not computed for sh_coeffs in sparse features render"
         sparse_means_grad = self.gs3d.means.grad.clone()
         sparse_quats_grad = self.gs3d.quats.grad.clone()
         sparse_log_scales_grad = self.gs3d.log_scales.grad.clone()
         sparse_logit_opacities_grad = self.gs3d.logit_opacities.grad
-        sparse_sh0_grad = self.gs3d.sh0.grad.clone()
-        sparse_shN_grad = self.gs3d.shN.grad.clone()
+        sparse_sh_coeffs_grad = self.gs3d.sh_coeffs.grad.clone()
         self.gs3d.means.grad.zero_()
         self.gs3d.quats.grad.zero_()
         self.gs3d.log_scales.grad.zero_()
         self.gs3d.logit_opacities.grad.zero_()
-        self.gs3d.sh0.grad.zero_()
-        self.gs3d.shN.grad.zero_()
+        self.gs3d.sh_coeffs.grad.zero_()
 
         dense_features, dense_alphas = self.gs3d.render_images_and_depths(
             self.cam_to_world_mats[0:1],
@@ -2668,8 +2612,7 @@ class TestGaussianRenderSparse(BaseGaussianTestCase):
         dense_quats_grad = self.gs3d.quats.grad.clone()
         dense_log_scales_grad = self.gs3d.log_scales.grad.clone()
         dense_logit_opacities_grad = self.gs3d.logit_opacities.grad.clone()
-        dense_sh0_grad = self.gs3d.sh0.grad.clone()
-        dense_shN_grad = self.gs3d.shN.grad.clone()
+        dense_sh_coeffs_grad = self.gs3d.sh_coeffs.grad.clone()
 
         self.assertTrue(
             torch.allclose(sparse_means_grad, dense_means_grad, atol=1e-4, rtol=1e-8),
@@ -2688,12 +2631,8 @@ class TestGaussianRenderSparse(BaseGaussianTestCase):
             "Sparse logit opacities grad does not match dense logit opacities grad at specified pixels",
         )
         self.assertTrue(
-            torch.allclose(sparse_sh0_grad, dense_sh0_grad, atol=1e-4, rtol=1e-8),
-            "Sparse sh0 grad does not match dense sh0 grad at specified pixels",
-        )
-        self.assertTrue(
-            torch.allclose(sparse_shN_grad, dense_shN_grad, atol=1e-4, rtol=1e-8),
-            "Sparse shN grad does not match dense shN grad at specified pixels",
+            torch.allclose(sparse_sh_coeffs_grad, dense_sh_coeffs_grad, atol=1e-4, rtol=1e-8),
+            "Sparse sh_coeffs grad does not match dense sh_coeffs grad at specified pixels",
         )
 
 
@@ -2880,7 +2819,7 @@ class TestGaussianRenderBackgrounds(BaseGaussianTestCase):
         self.assertIsNotNone(self.gs3d.quats.grad)
         self.assertIsNotNone(self.gs3d.log_scales.grad)
         self.assertIsNotNone(self.gs3d.logit_opacities.grad)
-        self.assertIsNotNone(self.gs3d.sh0.grad)
+        self.assertIsNotNone(self.gs3d.sh_coeffs.grad)
 
         # Gradients should be non-zero (at least somewhere)
         assert self.gs3d.means.grad is not None
@@ -2953,7 +2892,7 @@ class TestGaussianRenderBackgrounds(BaseGaussianTestCase):
         jt_scales = JaggedTensor([self.gs3d.scales, self.gs3d.scales]).to(self.device)
         jt_opacities = JaggedTensor([self.gs3d.opacities, self.gs3d.opacities]).to(self.device)
 
-        sh_coeffs = torch.cat([self.gs3d.sh0, self.gs3d.shN], dim=1)  # [N, K, 3]
+        sh_coeffs = self.gs3d.sh_coeffs  # [N, K, 3]
         jt_sh_coeffs = JaggedTensor([sh_coeffs, sh_coeffs]).to(self.device)
 
         # Two scenes, one camera each
@@ -3132,16 +3071,14 @@ class TestGaussianSplatMCMC(BaseGaussianTestCase):
         quats = self.gs3d.quats[idx].clone()
         log_scales = self.gs3d.log_scales[idx].clone()
         logit_opacities = self.gs3d.logit_opacities[idx].clone()
-        sh0 = self.gs3d.sh0[idx].clone()
-        shN = self.gs3d.shN[idx].clone()
+        sh_coeffs = self.gs3d.sh_coeffs[idx].clone()
 
         gs = GaussianSplat3d.from_tensors(
             means=means.clone(),
             quats=quats.clone(),
             log_scales=log_scales.clone(),
             logit_opacities=logit_opacities.clone(),
-            sh0=sh0,
-            shN=shN,
+            sh_coeffs=sh_coeffs,
         )
 
         noise_scale = 0.3
@@ -3186,13 +3123,13 @@ class TestEvaluateSphericalHarmonics(unittest.TestCase):
         D = 3  # number of channels (e.g., RGB)
         C = 2  # number of cameras
 
-        sh0 = torch.randn(N, 1, D, device=self.device)
+        sh_coeffs = torch.randn(N, 1, D, device=self.device)
         radii = torch.ones(C, N, dtype=torch.int32, device=self.device)
 
         result = evaluate_spherical_harmonics(
             sh_degree=0,
             num_cameras=C,
-            sh0=sh0,
+            sh_coeffs=sh_coeffs,
             radii=radii,
         )
 
@@ -3208,13 +3145,13 @@ class TestEvaluateSphericalHarmonics(unittest.TestCase):
         C = 1
 
         # Known sh0 values
-        sh0 = torch.ones(N, 1, D, device=self.device)
+        sh_coeffs = torch.ones(N, 1, D, device=self.device)
         radii = torch.ones(C, N, dtype=torch.int32, device=self.device)
 
         result = evaluate_spherical_harmonics(
             sh_degree=0,
             num_cameras=C,
-            sh0=sh0,
+            sh_coeffs=sh_coeffs,
             radii=radii,
         )
 
@@ -3230,8 +3167,8 @@ class TestEvaluateSphericalHarmonics(unittest.TestCase):
         D = 3
         C = 1
 
-        sh0 = torch.randn(N, 1, D, device=self.device)
-        shN = torch.randn(N, 3, D, device=self.device)  # 3 coefficients for degree 1
+        # Degree 1 has (1+1)^2 = 4 bases
+        sh_coeffs = torch.randn(N, 4, D, device=self.device)
         radii = torch.ones(C, N, dtype=torch.int32, device=self.device)
 
         # Should raise ValueError when view_directions is not provided for degree > 0
@@ -3239,9 +3176,8 @@ class TestEvaluateSphericalHarmonics(unittest.TestCase):
             evaluate_spherical_harmonics(
                 sh_degree=1,
                 num_cameras=C,
-                sh0=sh0,
+                sh_coeffs=sh_coeffs,
                 radii=radii,
-                shN=shN,
                 view_directions=None,
             )
 
@@ -3250,9 +3186,8 @@ class TestEvaluateSphericalHarmonics(unittest.TestCase):
         result = evaluate_spherical_harmonics(
             sh_degree=1,
             num_cameras=C,
-            sh0=sh0,
+            sh_coeffs=sh_coeffs,
             radii=radii,
-            shN=shN,
             view_directions=view_dirs,
         )
         self.assertEqual(result.shape, (C, N, D))
@@ -3263,18 +3198,16 @@ class TestEvaluateSphericalHarmonics(unittest.TestCase):
         D = 3
         C = 4
 
-        sh0 = torch.randn(N, 1, D, device=self.device)
-        # Degree 3 has (3+1)^2 = 16 bases, so K-1 = 15 higher order coefficients
-        shN = torch.randn(N, 15, D, device=self.device)
+        # Degree 3 has (3+1)^2 = 16 bases
+        sh_coeffs = torch.randn(N, 16, D, device=self.device)
         view_dirs = torch.randn(C, N, 3, device=self.device)
         radii = torch.ones(C, N, dtype=torch.int32, device=self.device)
 
         result = evaluate_spherical_harmonics(
             sh_degree=3,
             num_cameras=C,
-            sh0=sh0,
+            sh_coeffs=sh_coeffs,
             radii=radii,
-            shN=shN,
             view_directions=view_dirs,
         )
 
@@ -3288,7 +3221,7 @@ class TestEvaluateSphericalHarmonics(unittest.TestCase):
         D = 3
         C = 2
 
-        sh0 = torch.randn(N, 1, D, device=self.device)
+        sh_coeffs = torch.randn(N, 1, D, device=self.device)
 
         # Create radii where some are <= 0 (should output zeros)
         radii = torch.ones(C, N, dtype=torch.int32, device=self.device)
@@ -3298,7 +3231,7 @@ class TestEvaluateSphericalHarmonics(unittest.TestCase):
         result = evaluate_spherical_harmonics(
             sh_degree=0,
             num_cameras=C,
-            sh0=sh0,
+            sh_coeffs=sh_coeffs,
             radii=radii,
         )
 
@@ -3310,12 +3243,12 @@ class TestEvaluateSphericalHarmonics(unittest.TestCase):
         self.assertFalse(torch.all(result[1, :10, :] == 0))
 
     def test_gradient_flow_sh0(self):
-        """Test that gradients flow through sh0."""
+        """Test that gradients flow through sh_coeffs (degree 0)."""
         N = 10
         D = 3
         C = 1
 
-        sh0 = torch.randn(N, 1, D, device=self.device, requires_grad=True)
+        sh_coeffs = torch.randn(N, 1, D, device=self.device, requires_grad=True)
         # Note: radii must be provided for backward pass to work correctly
         # (matches GaussianSplat3d usage pattern)
         radii = torch.ones(C, N, dtype=torch.int32, device=self.device)
@@ -3323,24 +3256,24 @@ class TestEvaluateSphericalHarmonics(unittest.TestCase):
         result = evaluate_spherical_harmonics(
             sh_degree=0,
             num_cameras=C,
-            sh0=sh0,
+            sh_coeffs=sh_coeffs,
             radii=radii,
         )
 
         loss = result.sum()
         loss.backward()
 
-        self.assertIsNotNone(sh0.grad)
-        self.assertTrue(torch.any(sh0.grad != 0))
+        self.assertIsNotNone(sh_coeffs.grad)
+        self.assertTrue(torch.any(sh_coeffs.grad != 0))
 
     def test_gradient_flow_shN(self):
-        """Test that gradients flow through shN for higher degrees."""
+        """Test that gradients flow through sh_coeffs for higher degrees."""
         N = 10
         D = 3
         C = 2
 
-        sh0 = torch.randn(N, 1, D, device=self.device, requires_grad=True)
-        shN = torch.randn(N, 15, D, device=self.device, requires_grad=True)
+        # Degree 3 has (3+1)^2 = 16 bases
+        sh_coeffs = torch.randn(N, 16, D, device=self.device, requires_grad=True)
         view_dirs = torch.randn(C, N, 3, device=self.device)
         # Note: radii must be provided for backward pass to work correctly
         radii = torch.ones(C, N, dtype=torch.int32, device=self.device)
@@ -3348,19 +3281,16 @@ class TestEvaluateSphericalHarmonics(unittest.TestCase):
         result = evaluate_spherical_harmonics(
             sh_degree=3,
             num_cameras=C,
-            sh0=sh0,
+            sh_coeffs=sh_coeffs,
             radii=radii,
-            shN=shN,
             view_directions=view_dirs,
         )
 
         loss = result.sum()
         loss.backward()
 
-        self.assertIsNotNone(sh0.grad)
-        self.assertIsNotNone(shN.grad)
-        self.assertTrue(torch.any(sh0.grad != 0))
-        self.assertTrue(torch.any(shN.grad != 0))
+        self.assertIsNotNone(sh_coeffs.grad)
+        self.assertTrue(torch.any(sh_coeffs.grad != 0))
 
     def test_gradient_flow_view_directions(self):
         """Test that gradients flow through view directions."""
@@ -3368,17 +3298,15 @@ class TestEvaluateSphericalHarmonics(unittest.TestCase):
         D = 3
         C = 2
 
-        sh0 = torch.randn(N, 1, D, device=self.device)
-        shN = torch.randn(N, 15, D, device=self.device)
+        sh_coeffs = torch.randn(N, 16, D, device=self.device)
         view_dirs = torch.randn(C, N, 3, device=self.device, requires_grad=True)
         radii = torch.ones(C, N, dtype=torch.int32, device=self.device)
 
         result = evaluate_spherical_harmonics(
             sh_degree=3,
             num_cameras=C,
-            sh0=sh0,
+            sh_coeffs=sh_coeffs,
             radii=radii,
-            shN=shN,
             view_directions=view_dirs,
         )
 
@@ -3394,17 +3322,15 @@ class TestEvaluateSphericalHarmonics(unittest.TestCase):
         D = 3
         C = 4
 
-        sh0 = torch.randn(N, 1, D, device=self.device)
-        shN = torch.randn(N, 15, D, device=self.device)
+        sh_coeffs = torch.randn(N, 16, D, device=self.device)
         view_dirs = torch.randn(C, N, 3, device=self.device)
         radii = torch.ones(C, N, dtype=torch.int32, device=self.device)
 
         result = evaluate_spherical_harmonics(
             sh_degree=3,
             num_cameras=C,
-            sh0=sh0,
+            sh_coeffs=sh_coeffs,
             radii=radii,
-            shN=shN,
             view_directions=view_dirs,
         )
 
@@ -3416,17 +3342,15 @@ class TestEvaluateSphericalHarmonics(unittest.TestCase):
         D = 64  # Many channels
         C = 2
 
-        sh0 = torch.randn(N, 1, D, device=self.device)
-        shN = torch.randn(N, 15, D, device=self.device)
+        sh_coeffs = torch.randn(N, 16, D, device=self.device)
         view_dirs = torch.randn(C, N, 3, device=self.device)
         radii = torch.ones(C, N, dtype=torch.int32, device=self.device)
 
         result = evaluate_spherical_harmonics(
             sh_degree=3,
             num_cameras=C,
-            sh0=sh0,
+            sh_coeffs=sh_coeffs,
             radii=radii,
-            shN=shN,
             view_directions=view_dirs,
         )
 
@@ -3439,18 +3363,16 @@ class TestEvaluateSphericalHarmonics(unittest.TestCase):
         D = 3
         C = 2
 
-        sh0 = torch.randn(N, 1, D, device=self.device)
         K = (sh_degree + 1) ** 2
-        shN = torch.randn(N, K - 1, D, device=self.device)
+        sh_coeffs = torch.randn(N, K, D, device=self.device)
         view_dirs = torch.randn(C, N, 3, device=self.device)
         radii = torch.ones(C, N, dtype=torch.int32, device=self.device)
 
         result = evaluate_spherical_harmonics(
             sh_degree=sh_degree,
             num_cameras=C,
-            sh0=sh0,
+            sh_coeffs=sh_coeffs,
             radii=radii,
-            shN=shN,
             view_directions=view_dirs,
         )
 
@@ -3462,8 +3384,7 @@ class TestEvaluateSphericalHarmonics(unittest.TestCase):
         D = 3
         C = 1
 
-        sh0 = torch.randn(N, 1, D, device=self.device)
-        shN = torch.randn(N, 15, D, device=self.device)
+        sh_coeffs = torch.randn(N, 16, D, device=self.device)
         radii = torch.ones(C, N, dtype=torch.int32, device=self.device)
 
         # Unnormalized view directions (varying magnitudes)
@@ -3473,9 +3394,8 @@ class TestEvaluateSphericalHarmonics(unittest.TestCase):
         result = evaluate_spherical_harmonics(
             sh_degree=3,
             num_cameras=C,
-            sh0=sh0,
+            sh_coeffs=sh_coeffs,
             radii=radii,
-            shN=shN,
             view_directions=view_dirs,
         )
 
@@ -3812,7 +3732,7 @@ class TestGaussianRenderMasks(BaseGaussianTestCase):
         jt_quats = JaggedTensor([self.gs3d.quats]).to(self.device)
         jt_scales = JaggedTensor([self.gs3d.scales]).to(self.device)
         jt_opacities = JaggedTensor([self.gs3d.opacities]).to(self.device)
-        sh_coeffs = torch.cat([self.gs3d.sh0, self.gs3d.shN], dim=1)
+        sh_coeffs = self.gs3d.sh_coeffs
         jt_sh_coeffs = JaggedTensor([sh_coeffs]).to(self.device)
         jt_viewmats = JaggedTensor([self.cam_to_world_mats[0:1]]).to(self.device)
         jt_Ks = JaggedTensor([self.projection_mats[0:1]]).to(self.device)
@@ -3861,7 +3781,7 @@ class TestGaussianRenderMasks(BaseGaussianTestCase):
         jt_quats = JaggedTensor([self.gs3d.quats]).to(self.device)
         jt_scales = JaggedTensor([self.gs3d.scales]).to(self.device)
         jt_opacities = JaggedTensor([self.gs3d.opacities]).to(self.device)
-        sh_coeffs = torch.cat([self.gs3d.sh0, self.gs3d.shN], dim=1)
+        sh_coeffs = self.gs3d.sh_coeffs
         jt_sh_coeffs = JaggedTensor([sh_coeffs]).to(self.device)
         jt_viewmats = JaggedTensor([self.cam_to_world_mats[0:1]]).to(self.device)
         jt_Ks = JaggedTensor([self.projection_mats[0:1]]).to(self.device)
@@ -4175,16 +4095,14 @@ class TestGaussianCameraApi(unittest.TestCase):
             torch.tensor([[0.06, 0.05, 0.04], [0.05, 0.07, 0.06]], device=self.device, dtype=self.dtype)
         )
         logit_opacities = torch.tensor([2.2, 1.8], device=self.device, dtype=self.dtype)
-        sh0 = torch.tensor([[[0.7, 0.1, -0.2]], [[-0.3, 0.5, 0.4]]], device=self.device, dtype=self.dtype)
-        shN = torch.empty((2, 0, 3), device=self.device, dtype=self.dtype)
+        sh_coeffs = torch.tensor([[[0.7, 0.1, -0.2]], [[-0.3, 0.5, 0.4]]], device=self.device, dtype=self.dtype)
 
         self.gs3d = GaussianSplat3d.from_tensors(
             means=means,
             quats=quats,
             log_scales=log_scales,
             logit_opacities=logit_opacities,
-            sh0=sh0,
-            shN=shN,
+            sh_coeffs=sh_coeffs,
         )
 
     def _make_world_to_camera(self, C: int) -> torch.Tensor:
@@ -4241,15 +4159,13 @@ class TestGaussianCameraApi(unittest.TestCase):
         quats = torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=self.device, dtype=self.dtype)
         log_scales = torch.log(torch.tensor([[0.05, 0.05, 0.05]], device=self.device, dtype=self.dtype))
         logit_opacities = torch.tensor([2.2], device=self.device, dtype=self.dtype)
-        sh0 = torch.tensor([[[0.4, -0.1, 0.2]]], device=self.device, dtype=self.dtype)
-        shN = torch.empty((1, 0, 3), device=self.device, dtype=self.dtype)
+        sh_coeffs = torch.tensor([[[0.4, -0.1, 0.2]]], device=self.device, dtype=self.dtype)
         return GaussianSplat3d.from_tensors(
             means=means,
             quats=quats,
             log_scales=log_scales,
             logit_opacities=logit_opacities,
-            sh0=sh0,
-            shN=shN,
+            sh_coeffs=sh_coeffs,
         )
 
     def _make_structural_comparison_splat(self) -> GaussianSplat3d:
@@ -4311,7 +4227,7 @@ class TestGaussianCameraApi(unittest.TestCase):
             )
         )
         logit_opacities = torch.tensor([2.1, 1.8, 1.6, 2.0, 1.7, 1.9, 1.5, 2.2, 1.8, 1.7, 1.6, 1.9], device=self.device)
-        sh0 = torch.tensor(
+        sh_coeffs = torch.tensor(
             [
                 [[0.70, -0.05, -0.20]],
                 [[0.40, 0.15, -0.30]],
@@ -4329,14 +4245,12 @@ class TestGaussianCameraApi(unittest.TestCase):
             device=self.device,
             dtype=self.dtype,
         )
-        shN = torch.empty((means.shape[0], 0, 3), device=self.device, dtype=self.dtype)
         return GaussianSplat3d.from_tensors(
             means=means,
             quats=quats,
             log_scales=log_scales,
             logit_opacities=logit_opacities,
-            sh0=sh0,
-            shN=shN,
+            sh_coeffs=sh_coeffs,
         )
 
     def _all_pixels(self, C: int) -> JaggedTensor:
@@ -4751,7 +4665,7 @@ class TestProjectionGradsMultiCamera(unittest.TestCase):
     H = 64
     DEVICE = "cuda:0"
 
-    DENSE_PARAMS = ("means", "quats", "log_scales", "logit_opacities", "sh0", "shN")
+    DENSE_PARAMS = ("means", "quats", "log_scales", "logit_opacities", "sh_coeffs")
     JAGGED_PARAMS = ("means", "quats", "scales", "opacities", "sh_coeffs")
 
     @staticmethod
@@ -4785,8 +4699,6 @@ class TestProjectionGradsMultiCamera(unittest.TestCase):
         log_scales = torch.full((self.N, 3), -2.0, device=device) + torch.randn(self.N, 3, device=device) * 0.1
         logit_opacities = torch.full((self.N,), 2.0, device=device)
         sh_coeffs = torch.randn(self.N, self.NUM_SH_BASES, 3, device=device) * 0.1
-        sh0 = sh_coeffs[:, :1, :].clone()
-        shN = sh_coeffs[:, 1:, :].clone()
 
         viewmats = []
         target = torch.zeros(3)
@@ -4802,25 +4714,24 @@ class TestProjectionGradsMultiCamera(unittest.TestCase):
         K = torch.tensor([[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]], device=device)
         Ks = K.unsqueeze(0).expand(self.C, -1, -1).contiguous()
 
-        return means, quats, log_scales, logit_opacities, sh0, shN, sh_coeffs, viewmats, Ks
+        return means, quats, log_scales, logit_opacities, sh_coeffs, viewmats, Ks
 
-    def _build_gs3d(self, means, quats, log_scales, logit_opacities, sh0, shN):
+    def _build_gs3d(self, means, quats, log_scales, logit_opacities, sh_coeffs):
         gs3d = GaussianSplat3d.from_tensors(
             means=means.clone(),
             quats=quats.clone(),
             log_scales=log_scales.clone(),
             logit_opacities=logit_opacities.clone(),
-            sh0=sh0.clone(),
-            shN=shN.clone(),
+            sh_coeffs=sh_coeffs.clone(),
         )
         gs3d.requires_grad = True
         return gs3d
 
     def test_dense_projection_grads_multicamera(self):
         """Dense path: GaussianProjectionBackward.cu -- all parameter gradients."""
-        means, quats, log_scales, logit_opacities, sh0, shN, _sh_coeffs, viewmats, Ks = self._make_test_data()
+        means, quats, log_scales, logit_opacities, sh_coeffs, viewmats, Ks = self._make_test_data()
 
-        gs3d = self._build_gs3d(means, quats, log_scales, logit_opacities, sh0, shN)
+        gs3d = self._build_gs3d(means, quats, log_scales, logit_opacities, sh_coeffs)
         images, _ = gs3d.render_images(viewmats, Ks, self.W, self.H, near=0.01, far=1e10)
         images.sum().backward()
 
@@ -4828,7 +4739,7 @@ class TestProjectionGradsMultiCamera(unittest.TestCase):
 
         accumulated_grads = {name: torch.zeros_like(multi_cam_grads[name]) for name in self.DENSE_PARAMS}
         for i in range(self.C):
-            gs3d_i = self._build_gs3d(means, quats, log_scales, logit_opacities, sh0, shN)
+            gs3d_i = self._build_gs3d(means, quats, log_scales, logit_opacities, sh_coeffs)
             imgs_i, _ = gs3d_i.render_images(viewmats[i : i + 1], Ks[i : i + 1], self.W, self.H, near=0.01, far=1e10)
             imgs_i.sum().backward()
             for name in self.DENSE_PARAMS:
@@ -4849,7 +4760,7 @@ class TestProjectionGradsMultiCamera(unittest.TestCase):
 
     def test_jagged_projection_grads_multicamera(self):
         """Jagged path: GaussianProjectionJaggedBackward.cu -- all parameter gradients."""
-        means, quats, log_scales, logit_opacities, _sh0, _shN, sh_coeffs, viewmats, Ks = self._make_test_data()
+        means, quats, log_scales, logit_opacities, sh_coeffs, viewmats, Ks = self._make_test_data()
 
         scales = torch.exp(log_scales)
         opacities = torch.sigmoid(logit_opacities)

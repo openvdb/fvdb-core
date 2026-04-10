@@ -25,8 +25,7 @@ namespace ops {
 /// @param[in] quats Quaternion rotations of Gaussians as a jagged tensor [C, N, 4]
 /// @param[in] logScales Scale factors of Gaussians as a jagged tensor [C, N, 3]
 /// @param[in] logitOpacities Opacity values of Gaussians as a jagged tensor [N]
-/// @param[in] sh0 Constant term (degree 0) spherical harmonic coefficients as a jagged tensor
-/// @param[in] shN Higher degree spherical harmonic coefficients as a jagged tensor
+/// @param[in] shCoeffs Spherical harmonic coefficients as a jagged tensor [N, K, D]
 ///
 /// @return A jagged tensor mask where True indicates valid values (no NaN/Inf) and False indicates
 /// invalid values
@@ -35,8 +34,7 @@ fvdb::JaggedTensor dispatchGaussianNanInfMask(const fvdb::JaggedTensor &means,
                                               const fvdb::JaggedTensor &quats,
                                               const fvdb::JaggedTensor &logScales,
                                               const fvdb::JaggedTensor &logitOpacities,
-                                              const fvdb::JaggedTensor &sh0,
-                                              const fvdb::JaggedTensor &shN);
+                                              const fvdb::JaggedTensor &shCoeffs);
 
 } // namespace ops
 } // namespace detail

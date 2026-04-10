@@ -68,16 +68,14 @@ class PointCloudView:
         quats[:, 0] = 1.0  # identity rotation
         logit_opacities = torch.full((positions.shape[0],), 10.0, dtype=torch.float32)
         log_scales = torch.full((positions.shape[0], 3), -20.0, dtype=torch.float32)  # since scales are exp(log_scale)
-        sh0 = _rgb_to_sh(colors)
-        shN = torch.zeros((positions.shape[0], 0, 3), dtype=torch.float32)
+        sh_coeffs = _rgb_to_sh(colors).unsqueeze(1)  # [N, 1, 3]
 
         gs_impl = GaussianSplat3d.from_tensors(
             means=means,
             quats=quats,
             log_scales=log_scales,
             logit_opacities=logit_opacities,
-            sh0=sh0,
-            shN=shN,
+            sh_coeffs=sh_coeffs,
         )._impl
         view: GaussianSplat3dViewCpp = server.add_gaussian_splat_3d_view(
             scene_name=scene_name, name=name, gaussian_splat_3d=gs_impl

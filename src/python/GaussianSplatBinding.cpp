@@ -76,7 +76,6 @@ bind_gaussian_splat3d(py::module &m) {
                       torch::Tensor,
                       torch::Tensor,
                       torch::Tensor,
-                      torch::Tensor,
                       bool,
                       bool,
                       bool>(),
@@ -84,8 +83,7 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("quats"),
              py::arg("log_scales"),
              py::arg("logit_opacities"),
-             py::arg("sh0"),
-             py::arg("shN"),
+             py::arg("sh_coeffs"),
              py::arg("accumulate_mean_2d_gradients"),
              py::arg("accumulate_max_2d_radii"),
              py::arg("detach"))
@@ -101,8 +99,7 @@ bind_gaussian_splat3d(py::module &m) {
         .def_property("logit_opacities",
                       &fvdb::GaussianSplat3d::logitOpacities,
                       &fvdb::GaussianSplat3d::setLogitOpacities)
-        .def_property("sh0", &fvdb::GaussianSplat3d::sh0, &fvdb::GaussianSplat3d::setSh0)
-        .def_property("shN", &fvdb::GaussianSplat3d::shN, &fvdb::GaussianSplat3d::setShN)
+        .def_property("sh_coeffs", &fvdb::GaussianSplat3d::shCoeffs, &fvdb::GaussianSplat3d::setShCoeffs)
         .def_property_readonly("num_gaussians", &fvdb::GaussianSplat3d::numGaussians)
         .def_property_readonly("num_sh_bases", &fvdb::GaussianSplat3d::numShBases)
         .def_property_readonly("num_channels", &fvdb::GaussianSplat3d::numChannels)
@@ -139,8 +136,7 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("quats"),
              py::arg("log_scales"),
              py::arg("logit_opacities"),
-             py::arg("sh0"),
-             py::arg("shN"))
+             py::arg("sh_coeffs"))
         .def("save_ply", &fvdb::GaussianSplat3d::savePly, py::arg("filename"), py::arg("metadata"))
         .def_static("from_ply",
                     &fvdb::GaussianSplat3d::fromPly,
@@ -511,12 +507,11 @@ bind_gaussian_splat3d(py::module &m) {
         "evaluate_spherical_harmonics",
         [](int64_t shDegree,
            int64_t numCameras,
-           const torch::Tensor &sh0,
+           const torch::Tensor &shCoeffs,
            const torch::Tensor &radii,
-           const std::optional<torch::Tensor> &shN,
            const std::optional<torch::Tensor> &viewDirections) {
             return fvdb::detail::autograd::EvaluateSphericalHarmonics::apply(
-                shDegree, numCameras, viewDirections, sh0, shN, radii)[0];
+                shDegree, numCameras, viewDirections, shCoeffs, radii)[0];
         },
         R"doc(
 Evaluate spherical harmonics to compute view-dependent features/colors.
@@ -527,16 +522,15 @@ view directions for view-dependent appearance.
 
 Args:
     sh_degree: Degree of spherical harmonics to use (0-3 typically).
-               Degree 0 uses only sh0 (view-independent).
-               Higher degrees require view_directions and shN.
+               Degree 0 uses only the DC term (view-independent).
+               Higher degrees require view_directions.
     num_cameras: Number of camera views (C). The output will have shape [C, N, D].
-    sh0: DC term coefficients with shape [N, 1, D] where N is the number of
-         points and D is the number of feature channels.
+    sh_coeffs: SH coefficients with shape [N, K, D] where N is the number of
+               points, K = (sh_degree+1)^2 is the number of SH bases, and D is
+               the number of feature channels. Index 0 along dim 1 is the DC term.
     radii: Projected radii with shape [C, N] (int32). Points with radii <= 0
            will output zeros (used to skip invisible gaussians). Pass a tensor
            of ones to evaluate all points.
-    shN: Higher-order SH coefficients with shape [N, K-1, D] where
-         K = (sh_degree+1)^2. Required when sh_degree > 0. Pass None for degree 0.
     view_directions: Unnormalized view directions with shape [C, N, 3].
                      Required when sh_degree > 0. Pass None for degree 0.
 
@@ -545,8 +539,7 @@ Returns:
 )doc",
         py::arg("sh_degree"),
         py::arg("num_cameras"),
-        py::arg("sh0"),
+        py::arg("sh_coeffs"),
         py::arg("radii"),
-        py::arg("shN")             = std::nullopt,
         py::arg("view_directions") = std::nullopt);
 }
