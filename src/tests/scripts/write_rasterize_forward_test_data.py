@@ -38,12 +38,16 @@ height = data["height"].item()
 sh_degree = 3
 sh_coeffs = torch.zeros((means.shape[0], (sh_degree + 1) ** 2, 3), device=device)
 sh_coeffs[:, 0, :] = rgb_to_sh(colors)
+sh_0 = sh_coeffs[:, 0:1, :].clone()
+sh_n = sh_coeffs[:, 1:, :].clone()
+
 gs3d = GaussianSplat3d.from_tensors(
     means=means,
     quats=quats,
     log_scales=torch.log(scales),
     logit_opacities=torch.logit(opacities),
-    sh_coeffs=sh_coeffs,
+    sh0=sh_0,
+    shN=sh_n,
     detach=True,
 )
 

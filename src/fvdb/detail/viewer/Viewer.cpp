@@ -196,8 +196,8 @@ Viewer::addGaussianSplat3dView(const std::string &scene_name,
     torch::Tensor quats          = splats.quats();
     torch::Tensor logScales      = splats.logScales();
     torch::Tensor logitOpacities = splats.logitOpacities();
-    torch::Tensor sh0            = splats.shCoeffs().slice(1, 0, 1);
-    torch::Tensor shN            = splats.shCoeffs().slice(1, 1);
+    torch::Tensor sh0            = splats.sh0();
+    torch::Tensor shN            = splats.shN();
 
     auto makeComputeArray = [this](const torch::Tensor &tensor) -> pnanovdb_compute_array_t * {
         torch::Tensor contig = tensor.cpu().contiguous();

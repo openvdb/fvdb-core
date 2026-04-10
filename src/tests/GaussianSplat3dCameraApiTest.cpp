@@ -54,11 +54,12 @@ struct GaussianSplat3dCameraApiTest : public ::testing::Test {
         const torch::Tensor logScales =
             torch::log(torch::tensor({{0.06f, 0.05f, 0.04f}, {0.05f, 0.07f, 0.06f}}, opts));
         const torch::Tensor logitOpacities = torch::tensor({2.2f, 1.8f}, opts);
-        const torch::Tensor shCoeffs =
+        const torch::Tensor sh0 =
             torch::tensor({{{0.7f, 0.1f, -0.2f}}, {{-0.3f, 0.5f, 0.4f}}}, opts);
+        const torch::Tensor shN = torch::empty({2, 0, 3}, opts);
 
         return fvdb::GaussianSplat3d(
-            means, quats, logScales, logitOpacities, shCoeffs, false, false, false);
+            means, quats, logScales, logitOpacities, sh0, shN, false, false, false);
     }
 
     static torch::Tensor

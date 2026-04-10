@@ -159,9 +159,10 @@ def main(output_path: str, h=512, w=1024):
     )  # torch.abs(torch.randn(means3d.shape[0], 3, device=means3d.device)) + 0.01  # Ensure positive
     log_scales = torch.log(scales)
 
-    sh_coeffs = torch.randn(means3d.shape[0], 2, 3, device=means3d.device)
+    sh0 = torch.randn(means3d.shape[0], 1, 3, device=means3d.device)
+    shN = torch.randn(means3d.shape[0], 1, 3, device=means3d.device)
 
-    gs3d = GaussianSplat3d.from_tensors(means3d, quats, log_scales, logit_opacities, sh_coeffs)
+    gs3d = GaussianSplat3d.from_tensors(means3d, quats, log_scales, logit_opacities, sh0, shN)
 
     state = gs3d.project_gaussians_for_images(
         world_to_cam_xform.unsqueeze(0).contiguous(), intrinsics.unsqueeze(0).contiguous(), w, h, 0.1, 10000.0

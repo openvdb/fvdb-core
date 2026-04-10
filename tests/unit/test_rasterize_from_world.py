@@ -13,14 +13,16 @@ def _build_gaussian_splat(
     quats: torch.Tensor,
     log_scales: torch.Tensor,
     logit_opacities: torch.Tensor,
-    sh_coeffs: torch.Tensor,
+    sh0: torch.Tensor,
+    shN: torch.Tensor,
 ):
     return fvdb.GaussianSplat3d.from_tensors(
         means=means,
         quats=quats,
         log_scales=log_scales,
         logit_opacities=logit_opacities,
-        sh_coeffs=sh_coeffs,
+        sh0=sh0,
+        shN=shN,
         accumulate_mean_2d_gradients=False,
         accumulate_max_2d_radii=False,
         detach=False,
@@ -126,7 +128,8 @@ def _render_images_from_world_masked_edge_tile_worker(queue) -> None:
         quats = torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=device, dtype=dtype, requires_grad=True)
         log_scales = torch.tensor([[-0.6, -0.9, -0.4]], device=device, dtype=dtype, requires_grad=True)
         logit_opacities = torch.tensor([2.0], device=device, dtype=dtype, requires_grad=True)
-        sh_coeffs = torch.tensor([[[0.8, -0.2, 0.3]]], device=device, dtype=dtype, requires_grad=True)
+        sh0 = torch.tensor([[[0.8, -0.2, 0.3]]], device=device, dtype=dtype, requires_grad=True)
+        shN = torch.empty((N, 0, D), device=device, dtype=dtype, requires_grad=True)
 
         gs = _build_gaussian_splat(
             fvdb,
@@ -134,7 +137,8 @@ def _render_images_from_world_masked_edge_tile_worker(queue) -> None:
             quats=quats,
             log_scales=log_scales,
             logit_opacities=logit_opacities,
-            sh_coeffs=sh_coeffs,
+            sh0=sh0,
+            shN=shN,
         )
 
         world_to_cam, K = _default_camera(device, dtype, cx=8.0, cy=8.0)
@@ -186,7 +190,8 @@ def test_gaussiansplat3d_render_images_from_world_grads_nonzero():
     log_scales = torch.tensor([[-0.6, -0.9, -0.4]], device=device, dtype=torch.float32, requires_grad=True)
     logit_opacities = torch.tensor([2.0], device=device, dtype=torch.float32, requires_grad=True)
 
-    sh_coeffs = torch.randn((N, 1, D), device=device, dtype=torch.float32, requires_grad=True)
+    sh0 = torch.randn((N, 1, D), device=device, dtype=torch.float32, requires_grad=True)
+    shN = torch.empty((N, 0, D), device=device, dtype=torch.float32, requires_grad=True)
 
     gs = _build_gaussian_splat(
         fvdb,
@@ -194,7 +199,8 @@ def test_gaussiansplat3d_render_images_from_world_grads_nonzero():
         quats=quats,
         log_scales=log_scales,
         logit_opacities=logit_opacities,
-        sh_coeffs=sh_coeffs,
+        sh0=sh0,
+        shN=shN,
     )
 
     image_width = 16
@@ -218,7 +224,7 @@ def test_gaussiansplat3d_render_images_from_world_grads_nonzero():
     _assert_nonzero_finite_grad(quats)
     _assert_nonzero_finite_grad(log_scales)
     _assert_nonzero_finite_grad(logit_opacities)
-    _assert_nonzero_finite_grad(sh_coeffs)
+    _assert_nonzero_finite_grad(sh0)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
@@ -240,12 +246,14 @@ def test_gaussiansplat3d_render_images_from_world_grads_match_finite_differences
 
     world_to_cam, K = _default_camera(device, dtype, cx=7.5, cy=7.5)
 
+    shN = torch.empty((N, 0, D), device=device, dtype=dtype)
+
     def loss_from_params(
         means_t: torch.Tensor,
         quats_t: torch.Tensor,
         log_scales_t: torch.Tensor,
         logit_opacities_t: torch.Tensor,
-        sh_coeffs_t: torch.Tensor,
+        sh0_t: torch.Tensor,
     ) -> torch.Tensor:
         gs = _build_gaussian_splat(
             fvdb,
@@ -253,7 +261,8 @@ def test_gaussiansplat3d_render_images_from_world_grads_match_finite_differences
             quats=quats_t,
             log_scales=log_scales_t,
             logit_opacities=logit_opacities_t,
-            sh_coeffs=sh_coeffs_t,
+            sh0=sh0_t,
+            shN=shN,
         )
 
         rendered, alphas = _render_from_world(
@@ -275,17 +284,17 @@ def test_gaussiansplat3d_render_images_from_world_grads_match_finite_differences
     quats = torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=device, dtype=dtype, requires_grad=True)
     log_scales = torch.tensor([[-0.6, -0.9, -0.4]], device=device, dtype=dtype, requires_grad=True)
     logit_opacities = torch.tensor([2.0], device=device, dtype=dtype, requires_grad=True)
-    sh_coeffs = torch.tensor([[[0.8, -0.2, 0.3]]], device=device, dtype=dtype, requires_grad=True)  # [N,1,D]
+    sh0 = torch.tensor([[[0.8, -0.2, 0.3]]], device=device, dtype=dtype, requires_grad=True)  # [N,1,D]
 
     # Autograd gradients.
-    loss = loss_from_params(means, quats, log_scales, logit_opacities, sh_coeffs)
+    loss = loss_from_params(means, quats, log_scales, logit_opacities, sh0)
     loss.backward()
 
     assert means.grad is not None
     assert quats.grad is not None
     assert log_scales.grad is not None
     assert logit_opacities.grad is not None
-    assert sh_coeffs.grad is not None
+    assert sh0.grad is not None
 
     # Centered finite differences for a small subset of scalars.
     eps = 1.0e-3
@@ -302,8 +311,8 @@ def test_gaussiansplat3d_render_images_from_world_grads_match_finite_differences
             log_scales_m = log_scales.detach().clone()
             logit_p = logit_opacities.detach().clone()
             logit_m = logit_opacities.detach().clone()
-            sh_coeffs_p = sh_coeffs.detach().clone()
-            sh_coeffs_m = sh_coeffs.detach().clone()
+            sh0_p = sh0.detach().clone()
+            sh0_m = sh0.detach().clone()
 
             if param_name == "means":
                 assert i1 is not None
@@ -321,15 +330,15 @@ def test_gaussiansplat3d_render_images_from_world_grads_match_finite_differences
                 assert i1 is None
                 logit_p[i0] += eps
                 logit_m[i0] -= eps
-            elif param_name == "sh_coeffs":
+            elif param_name == "sh0":
                 assert i1 is not None and i2 is not None
-                sh_coeffs_p[i0, i1, i2] += eps
-                sh_coeffs_m[i0, i1, i2] -= eps
+                sh0_p[i0, i1, i2] += eps
+                sh0_m[i0, i1, i2] -= eps
             else:
                 raise AssertionError(f"Unknown param_name: {param_name}")
 
-            lp = loss_from_params(means_p, quats_p, log_scales_p, logit_p, sh_coeffs_p).item()
-            lm = loss_from_params(means_m, quats_m, log_scales_m, logit_m, sh_coeffs_m).item()
+            lp = loss_from_params(means_p, quats_p, log_scales_p, logit_p, sh0_p).item()
+            lm = loss_from_params(means_m, quats_m, log_scales_m, logit_m, sh0_m).item()
             return (lp - lm) / (2.0 * eps)
 
     checks: list[tuple[str, float, float]] = []
@@ -338,8 +347,8 @@ def test_gaussiansplat3d_render_images_from_world_grads_match_finite_differences
     checks.append(("log_scales[0,0]", float(log_scales.grad[0, 0].item()), fd_scalar("log_scales", 0, 0)))
     checks.append(("log_scales[0,2]", float(log_scales.grad[0, 2].item()), fd_scalar("log_scales", 0, 2)))
     checks.append(("logit_opacities[0]", float(logit_opacities.grad[0].item()), fd_scalar("logit_opacities", 0)))
-    checks.append(("sh_coeffs[0,0,0]", float(sh_coeffs.grad[0, 0, 0].item()), fd_scalar("sh_coeffs", 0, 0, 0)))
-    checks.append(("sh_coeffs[0,0,2]", float(sh_coeffs.grad[0, 0, 2].item()), fd_scalar("sh_coeffs", 0, 0, 2)))
+    checks.append(("sh0[0,0,0]", float(sh0.grad[0, 0, 0].item()), fd_scalar("sh0", 0, 0, 0)))
+    checks.append(("sh0[0,0,2]", float(sh0.grad[0, 0, 2].item()), fd_scalar("sh0", 0, 0, 2)))
 
     for name, grad_autograd, grad_fd in checks:
         assert torch.isfinite(torch.tensor(grad_autograd))
@@ -387,10 +396,10 @@ def test_gaussiansplat3d_render_images_from_world_grads_match_finite_differences
             q_minus = quat_mul_wxyz(dq_minus, q0).view(1, 4)
 
             lp = loss_from_params(
-                means.detach(), q_plus, log_scales.detach(), logit_opacities.detach(), sh_coeffs.detach()
+                means.detach(), q_plus, log_scales.detach(), logit_opacities.detach(), sh0.detach()
             ).item()
             lm = loss_from_params(
-                means.detach(), q_minus, log_scales.detach(), logit_opacities.detach(), sh_coeffs.detach()
+                means.detach(), q_minus, log_scales.detach(), logit_opacities.detach(), sh0.detach()
             ).item()
             fd_dir = (lp - lm) / (2.0 * eps)
 
@@ -422,8 +431,9 @@ def test_gaussiansplat3d_render_images_from_world_grads_nonzero_with_shN():
     log_scales = torch.tensor([[-0.6, -0.9, -0.4]], device=device, dtype=torch.float32, requires_grad=True)
     logit_opacities = torch.tensor([2.0], device=device, dtype=torch.float32, requires_grad=True)
 
-    # Degree 1 uses 4 SH bases total: 1 (DC) + 3 (degree-1).
-    sh_coeffs = torch.randn((N, 4, D), device=device, dtype=torch.float32, requires_grad=True)
+    # Degree 1 uses 4 SH bases total; sh0 is [N,1,D] and shN holds the remaining K-1=3 bases.
+    sh0 = torch.randn((N, 1, D), device=device, dtype=torch.float32, requires_grad=True)
+    shN = torch.randn((N, 3, D), device=device, dtype=torch.float32, requires_grad=True)
 
     gs = _build_gaussian_splat(
         fvdb,
@@ -431,7 +441,8 @@ def test_gaussiansplat3d_render_images_from_world_grads_nonzero_with_shN():
         quats=quats,
         log_scales=log_scales,
         logit_opacities=logit_opacities,
-        sh_coeffs=sh_coeffs,
+        sh0=sh0,
+        shN=shN,
     )
 
     image_width = 16
@@ -455,7 +466,8 @@ def test_gaussiansplat3d_render_images_from_world_grads_nonzero_with_shN():
     _assert_nonzero_finite_grad(quats)
     _assert_nonzero_finite_grad(log_scales)
     _assert_nonzero_finite_grad(logit_opacities)
-    _assert_nonzero_finite_grad(sh_coeffs)
+    _assert_nonzero_finite_grad(sh0)
+    _assert_nonzero_finite_grad(shN)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
@@ -480,21 +492,26 @@ def test_gaussiansplat3d_render_images_from_world_shN_grads_match_finite_differe
     log_scales = torch.tensor([[-0.6, -0.9, -0.4]], device=device, dtype=dtype)
     logit_opacities = torch.tensor([2.0], device=device, dtype=dtype)
 
-    # sh_coeffs combines the DC term (index 0) with the 3 degree-1 bases (indices 1..3).
-    sh_coeffs0 = torch.tensor(
-        [[[0.8, -0.2, 0.3], [0.05, -0.01, 0.02], [0.00, 0.03, -0.04], [0.01, 0.02, 0.00]]],
-        device=device,
-        dtype=dtype,
-    )  # [N, 4, D]
+    sh0 = torch.tensor([0.8, -0.2, 0.3], device=device, dtype=dtype).view(N, 1, D).contiguous()
+    shN0 = (
+        torch.tensor(
+            [[0.05, -0.01, 0.02], [0.00, 0.03, -0.04], [0.01, 0.02, 0.00]],
+            device=device,
+            dtype=dtype,
+        )
+        .view(N, 3, D)
+        .contiguous()
+    )
 
-    def loss_from_sh_coeffs(sh_coeffs_t: torch.Tensor) -> torch.Tensor:
+    def loss_from_shN(shN_t: torch.Tensor) -> torch.Tensor:
         gs = _build_gaussian_splat(
             fvdb,
             means=means,
             quats=quats,
             log_scales=log_scales,
             logit_opacities=logit_opacities,
-            sh_coeffs=sh_coeffs_t,
+            sh0=sh0,
+            shN=shN_t,
         )
 
         rendered, alphas = _render_from_world(
@@ -509,29 +526,28 @@ def test_gaussiansplat3d_render_images_from_world_shN_grads_match_finite_differe
 
         return (rendered * rendered).sum() + 0.5 * alphas.sum()
 
-    sh_coeffs = sh_coeffs0.detach().clone().requires_grad_(True)
-    loss = loss_from_sh_coeffs(sh_coeffs)
+    shN = shN0.detach().clone().requires_grad_(True)
+    loss = loss_from_shN(shN)
     loss.backward()
-    assert sh_coeffs.grad is not None
+    assert shN.grad is not None
 
     eps = 1.0e-3
     rtol = 2.5e-2
     atol = 2.5e-2
 
-    def fd_sh_coeffs(i1: int, i2: int) -> float:
+    def fd_shN(i1: int, i2: int) -> float:
         with torch.no_grad():
-            sh_coeffs_p = sh_coeffs0.detach().clone()
-            sh_coeffs_m = sh_coeffs0.detach().clone()
-            sh_coeffs_p[0, i1, i2] += eps
-            sh_coeffs_m[0, i1, i2] -= eps
-            lp = loss_from_sh_coeffs(sh_coeffs_p).item()
-            lm = loss_from_sh_coeffs(sh_coeffs_m).item()
+            shN_p = shN0.detach().clone()
+            shN_m = shN0.detach().clone()
+            shN_p[0, i1, i2] += eps
+            shN_m[0, i1, i2] -= eps
+            lp = loss_from_shN(shN_p).item()
+            lm = loss_from_shN(shN_m).item()
             return (lp - lm) / (2.0 * eps)
 
-    # Indices 1..3 correspond to the non-DC SH bases (old shN indices 0..2).
     checks = [
-        ("sh_coeffs[0,1,0]", float(sh_coeffs.grad[0, 1, 0].item()), fd_sh_coeffs(1, 0)),
-        ("sh_coeffs[0,3,1]", float(sh_coeffs.grad[0, 3, 1].item()), fd_sh_coeffs(3, 1)),
+        ("shN[0,0,0]", float(shN.grad[0, 0, 0].item()), fd_shN(0, 0)),
+        ("shN[0,2,1]", float(shN.grad[0, 2, 1].item()), fd_shN(2, 1)),
     ]
 
     for name, grad_autograd, grad_fd in checks:
@@ -570,7 +586,8 @@ def test_gaussiansplat3d_render_images_from_world_backward_with_backgrounds_and_
     )
     log_scales = torch.tensor([[-0.6, -0.9, -0.4]], device=device, dtype=dtype, requires_grad=True)
     logit_opacities = torch.tensor([2.0], device=device, dtype=dtype, requires_grad=True)
-    sh_coeffs = torch.randn((N, 1, D), device=device, dtype=dtype, requires_grad=True)
+    sh0 = torch.randn((N, 1, D), device=device, dtype=dtype, requires_grad=True)
+    shN = torch.empty((N, 0, D), device=device, dtype=dtype, requires_grad=True)
 
     gs = _build_gaussian_splat(
         fvdb,
@@ -578,7 +595,8 @@ def test_gaussiansplat3d_render_images_from_world_backward_with_backgrounds_and_
         quats=quats,
         log_scales=log_scales,
         logit_opacities=logit_opacities,
-        sh_coeffs=sh_coeffs,
+        sh0=sh0,
+        shN=shN,
     )
 
     world_to_cam, K = _default_camera(device, dtype, cx=7.5, cy=7.5)
@@ -606,7 +624,7 @@ def test_gaussiansplat3d_render_images_from_world_backward_with_backgrounds_and_
     _assert_nonzero_finite_grad(quats)
     _assert_nonzero_finite_grad(log_scales)
     _assert_nonzero_finite_grad(logit_opacities)
-    _assert_nonzero_finite_grad(sh_coeffs)
+    _assert_nonzero_finite_grad(sh0)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
@@ -625,7 +643,8 @@ def test_gaussiansplat3d_render_images_from_world_masks_write_background_and_zer
     quats = torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=device, dtype=dtype, requires_grad=True)
     log_scales = torch.tensor([[-0.6, -0.9, -0.4]], device=device, dtype=dtype, requires_grad=True)
     logit_opacities = torch.tensor([2.0], device=device, dtype=dtype, requires_grad=True)
-    sh_coeffs = torch.randn((N, 1, D), device=device, dtype=dtype, requires_grad=True)
+    sh0 = torch.randn((N, 1, D), device=device, dtype=dtype, requires_grad=True)
+    shN = torch.empty((N, 0, D), device=device, dtype=dtype, requires_grad=True)
 
     gs = _build_gaussian_splat(
         fvdb,
@@ -633,7 +652,8 @@ def test_gaussiansplat3d_render_images_from_world_masks_write_background_and_zer
         quats=quats,
         log_scales=log_scales,
         logit_opacities=logit_opacities,
-        sh_coeffs=sh_coeffs,
+        sh0=sh0,
+        shN=shN,
     )
 
     world_to_cam, K = _default_camera(device, dtype, cx=7.5, cy=7.5)
@@ -723,7 +743,8 @@ def test_gaussiansplat3d_render_images_from_world_backgrounds_used_when_no_inter
     quats = torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=device, dtype=dtype)
     log_scales = torch.tensor([[-0.6, -0.9, -0.4]], device=device, dtype=dtype)
     logit_opacities = torch.tensor([2.0], device=device, dtype=dtype)
-    sh_coeffs = torch.randn((N, 1, D), device=device, dtype=dtype)
+    sh0 = torch.randn((N, 1, D), device=device, dtype=dtype)
+    shN = torch.empty((N, 0, D), device=device, dtype=dtype)
 
     gs = _build_gaussian_splat(
         fvdb,
@@ -731,7 +752,8 @@ def test_gaussiansplat3d_render_images_from_world_backgrounds_used_when_no_inter
         quats=quats,
         log_scales=log_scales,
         logit_opacities=logit_opacities,
-        sh_coeffs=sh_coeffs,
+        sh0=sh0,
+        shN=shN,
     )
 
     world_to_cam, K = _default_camera(device, dtype, cx=7.5, cy=7.5)
@@ -765,7 +787,8 @@ def test_gaussiansplat3d_render_images_from_world_orthographic_grads_nonzero():
     quats = torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=device, dtype=dtype, requires_grad=True)
     log_scales = torch.tensor([[-0.5, -0.7, -0.5]], device=device, dtype=dtype, requires_grad=True)
     logit_opacities = torch.tensor([2.0], device=device, dtype=dtype, requires_grad=True)
-    sh_coeffs = torch.tensor([[[0.6, -0.2, 0.3]]], device=device, dtype=dtype, requires_grad=True)
+    sh0 = torch.tensor([[[0.6, -0.2, 0.3]]], device=device, dtype=dtype, requires_grad=True)
+    shN = torch.empty((1, 0, 3), device=device, dtype=dtype, requires_grad=True)
 
     gs = _build_gaussian_splat(
         fvdb,
@@ -773,7 +796,8 @@ def test_gaussiansplat3d_render_images_from_world_orthographic_grads_nonzero():
         quats=quats,
         log_scales=log_scales,
         logit_opacities=logit_opacities,
-        sh_coeffs=sh_coeffs,
+        sh0=sh0,
+        shN=shN,
     )
 
     world_to_cam, K = _default_camera(device, dtype, cx=7.5, cy=7.5)
@@ -809,7 +833,8 @@ def test_gaussiansplat3d_render_images_from_world_opencv_distortion_grads_nonzer
     quats = torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=device, dtype=dtype, requires_grad=True)
     log_scales = torch.tensor([[-0.45, -0.6, -0.45]], device=device, dtype=dtype, requires_grad=True)
     logit_opacities = torch.tensor([2.0], device=device, dtype=dtype, requires_grad=True)
-    sh_coeffs = torch.tensor([[[0.5, 0.2, -0.1]]], device=device, dtype=dtype, requires_grad=True)
+    sh0 = torch.tensor([[[0.5, 0.2, -0.1]]], device=device, dtype=dtype, requires_grad=True)
+    shN = torch.empty((1, 0, 3), device=device, dtype=dtype, requires_grad=True)
 
     gs = _build_gaussian_splat(
         fvdb,
@@ -817,7 +842,8 @@ def test_gaussiansplat3d_render_images_from_world_opencv_distortion_grads_nonzer
         quats=quats,
         log_scales=log_scales,
         logit_opacities=logit_opacities,
-        sh_coeffs=sh_coeffs,
+        sh0=sh0,
+        shN=shN,
     )
 
     world_to_cam, K = _default_camera(device, dtype, cx=7.5, cy=7.5)
@@ -857,7 +883,8 @@ def test_gaussiansplat3d_render_depths_and_rgbd_from_world_match_for_camera_mode
     quats = torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=device, dtype=dtype)
     log_scales = torch.tensor([[-0.55, -0.7, -0.55]], device=device, dtype=dtype)
     logit_opacities = torch.tensor([2.0], device=device, dtype=dtype)
-    sh_coeffs = torch.tensor([[[0.7, -0.2, 0.1]]], device=device, dtype=dtype)
+    sh0 = torch.tensor([[[0.7, -0.2, 0.1]]], device=device, dtype=dtype)
+    shN = torch.empty((1, 0, 3), device=device, dtype=dtype)
 
     gs = _build_gaussian_splat(
         fvdb,
@@ -865,7 +892,8 @@ def test_gaussiansplat3d_render_depths_and_rgbd_from_world_match_for_camera_mode
         quats=quats,
         log_scales=log_scales,
         logit_opacities=logit_opacities,
-        sh_coeffs=sh_coeffs,
+        sh0=sh0,
+        shN=shN,
     )
 
     for camera_model in (
@@ -935,7 +963,8 @@ def test_gaussiansplat3d_render_depth_and_rgbd_from_world_masks_apply_background
     quats = torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=device, dtype=dtype)
     log_scales = torch.tensor([[-0.55, -0.65, -0.5]], device=device, dtype=dtype)
     logit_opacities = torch.tensor([2.0], device=device, dtype=dtype)
-    sh_coeffs = torch.tensor([[[0.3, 0.4, -0.2]]], device=device, dtype=dtype)
+    sh0 = torch.tensor([[[0.3, 0.4, -0.2]]], device=device, dtype=dtype)
+    shN = torch.empty((1, 0, 3), device=device, dtype=dtype)
 
     gs = _build_gaussian_splat(
         fvdb,
@@ -943,7 +972,8 @@ def test_gaussiansplat3d_render_depth_and_rgbd_from_world_masks_apply_background
         quats=quats,
         log_scales=log_scales,
         logit_opacities=logit_opacities,
-        sh_coeffs=sh_coeffs,
+        sh0=sh0,
+        shN=shN,
     )
 
     world_to_cam, K = _default_camera(device, dtype, cx=7.5, cy=7.5)

@@ -98,10 +98,11 @@ TEST(Viewer, ViewerTest) {
     torch::Tensor quats          = torch::rand({N, 4}, device);
     torch::Tensor logScales      = torch::rand({N, 3}, device);
     torch::Tensor logitOpacities = torch::rand({N}, device);
-    torch::Tensor shCoeffs       = torch::rand({N, 16, 3}, device);
+    torch::Tensor sh0            = torch::rand({N, 1, 3}, device);
+    torch::Tensor shN            = torch::rand({N, 15, 3}, device);
 
     fvdb::GaussianSplat3d splats(
-        means, quats, logScales, logitOpacities, shCoeffs, false, false, false);
+        means, quats, logScales, logitOpacities, sh0, shN, false, false, false);
 
     fvdb::detail::viewer::GaussianSplat3dView &view =
         viewer.addGaussianSplat3d("test_view", splats);

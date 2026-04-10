@@ -95,15 +95,12 @@ GaussianSplat3d::evalSphericalHarmonicsImpl(const int64_t shDegreeToUse,
                                             const torch::Tensor &worldToCameraMatrices,
                                             const torch::Tensor &perGaussianProjectedRadii) const {
     FVDB_FUNC_RANGE();
-    const auto K              = mShCoeffs.size(1);             // number of SH bases
+    const auto K              = mShN.size(1) + 1;              // number of SH bases
     const auto C              = worldToCameraMatrices.size(0); // number of cameras
     const auto actualShDegree = shDegreeToUse < 0 ? (std::sqrt(K) - 1) : shDegreeToUse;
     if (actualShDegree == 0) {
-        return detail::autograd::EvaluateSphericalHarmonics::apply(actualShDegree,
-                                                                   C,
-                                                                   torch::nullopt,
-                                                                   mShCoeffs.slice(1, 0, 1),
-                                                                   perGaussianProjectedRadii)[0];
+        return detail::autograd::EvaluateSphericalHarmonics::apply(
+            actualShDegree, C, std::nullopt, mSh0, perGaussianProjectedRadii)[0];
     } else {
         // FIXME (Francis): Do this in the kernel instead of materializing a large
         //                  tensor here. It's a bit annoying because we'll have to update
@@ -120,7 +117,7 @@ GaussianSplat3d::evalSphericalHarmonicsImpl(const int64_t shDegreeToUse,
                                       torch::indexing::Slice(0, 3),
                                       3}); // [1, N, 3] - [C, 1, 3]
         return detail::autograd::EvaluateSphericalHarmonics::apply(
-            actualShDegree, C, viewDirs, mShCoeffs, perGaussianProjectedRadii)[0];
+            actualShDegree, C, viewDirs, torch::cat({mSh0, mShN}, 1), perGaussianProjectedRadii)[0];
     }
 }
 
@@ -129,7 +126,8 @@ GaussianSplat3d::checkState(const torch::Tensor &means,
                             const torch::Tensor &quats,
                             const torch::Tensor &logScales,
                             const torch::Tensor &logitOpacities,
-                            const torch::Tensor &shCoeffs) {
+                            const torch::Tensor &sh0,
+                            const torch::Tensor &shN) {
     const int64_t N = means.size(0); // number of gaussians
 
     TORCH_CHECK_VALUE(means.sizes() == torch::IntArrayRef({N, 3}), "means must have shape (N, 3)");
@@ -138,17 +136,19 @@ GaussianSplat3d::checkState(const torch::Tensor &means,
                       "scales must have shape (N, 3)");
     TORCH_CHECK_VALUE(logitOpacities.sizes() == torch::IntArrayRef({N}),
                       "opacities must have shape (N)");
-    TORCH_CHECK_VALUE(shCoeffs.size(0) == N, "sh_coeffs must have shape (N, K, D)");
-    TORCH_CHECK_VALUE(shCoeffs.dim() == 3, "sh_coeffs must have shape (N, K, D)");
-    TORCH_CHECK_VALUE(shCoeffs.size(1) >= 1, "sh_coeffs must have at least 1 SH basis (K >= 1)");
+    TORCH_CHECK_VALUE(sh0.size(0) == N, "sh0 must have shape (N, 1, D)");
+    TORCH_CHECK_VALUE(sh0.size(1) == 1, "sh0 must have shape (N, 1, D)");
+    TORCH_CHECK_VALUE(sh0.dim() == 3, "sh0 must have shape (N, 1, D)");
+    TORCH_CHECK_VALUE(shN.size(0) == N, "shN must have shape (N, K-1, D)");
+    TORCH_CHECK_VALUE(shN.dim() == 3, "shN must have shape (N, K-1, D)");
 
     TORCH_CHECK_VALUE(means.device() == quats.device(), "All tensors must be on the same device");
     TORCH_CHECK_VALUE(means.device() == logScales.device(),
                       "All tensors must be on the same device");
     TORCH_CHECK_VALUE(means.device() == logitOpacities.device(),
                       "All tensors must be on the same device");
-    TORCH_CHECK_VALUE(means.device() == shCoeffs.device(),
-                      "All tensors must be on the same device");
+    TORCH_CHECK_VALUE(means.device() == sh0.device(), "All tensors must be on the same device");
+    TORCH_CHECK_VALUE(means.device() == shN.device(), "All tensors must be on the same device");
 
     TORCH_CHECK_VALUE(torch::isFloatingType(means.scalar_type()),
                       "All tensors must be of floating point type");
@@ -158,7 +158,9 @@ GaussianSplat3d::checkState(const torch::Tensor &means,
                       "All tensors must be of the same type");
     TORCH_CHECK_VALUE(means.scalar_type() == logitOpacities.scalar_type(),
                       "All tensors must be of the same type");
-    TORCH_CHECK_VALUE(means.scalar_type() == shCoeffs.scalar_type(),
+    TORCH_CHECK_VALUE(means.scalar_type() == sh0.scalar_type(),
+                      "All tensors must be of the same type");
+    TORCH_CHECK_VALUE(means.scalar_type() == shN.scalar_type(),
                       "All tensors must be of the same type");
 }
 
@@ -166,21 +168,28 @@ GaussianSplat3d::GaussianSplat3d(const torch::Tensor &means,
                                  const torch::Tensor &quats,
                                  const torch::Tensor &logScales,
                                  const torch::Tensor &logitOpacities,
-                                 const torch::Tensor &shCoeffs,
+                                 const torch::Tensor &sh0,
+                                 const torch::Tensor &shN,
                                  const bool accumulateMeans2dGradients,
                                  const bool accumulateMax2dRadii,
                                  const bool copyAndDetach)
     : mMeans(means), mQuats(quats), mLogScales(logScales), mLogitOpacities(logitOpacities),
-      mShCoeffs(shCoeffs), mAccumulateMean2dGradients(accumulateMeans2dGradients),
+      mSh0(sh0), mShN(shN), mAccumulateMean2dGradients(accumulateMeans2dGradients),
       mAccumulateMax2dRadii(accumulateMax2dRadii) {
+    const int64_t N = means.size(0); // number of gaussians
+    if (mSh0.dim() == 2) {
+        TORCH_CHECK(mSh0.size(0) == N, "sh0 must have shape (N, 1, D) or (N, D)");
+        mSh0 = mSh0.unsqueeze(1);
+    }
     if (copyAndDetach) {
         mMeans          = means.detach();
         mQuats          = quats.detach();
         mLogScales      = logScales.detach();
         mLogitOpacities = logitOpacities.detach();
-        mShCoeffs       = shCoeffs.detach();
+        mSh0            = sh0.detach();
+        mShN            = shN.detach();
     }
-    checkState(mMeans, mQuats, mLogScales, mLogitOpacities, mShCoeffs);
+    checkState(mMeans, mQuats, mLogScales, mLogitOpacities, mSh0, mShN);
 }
 
 void
@@ -188,15 +197,17 @@ GaussianSplat3d::setState(const torch::Tensor &means,
                           const torch::Tensor &quats,
                           const torch::Tensor &logScales,
                           const torch::Tensor &logitOpacities,
-                          const torch::Tensor &shCoeffs) {
-    checkState(means, quats, logScales, logitOpacities, shCoeffs);
+                          const torch::Tensor &sh0,
+                          const torch::Tensor &shN) {
+    checkState(means, quats, logScales, logitOpacities, sh0, shN);
     resetAccumulatedGradientState();
 
     mMeans          = means;
     mQuats          = quats;
     mLogScales      = logScales;
     mLogitOpacities = logitOpacities;
-    mShCoeffs       = shCoeffs;
+    mSh0            = sh0;
+    mShN            = shN;
 }
 
 std::unordered_map<std::string, torch::Tensor>
@@ -205,7 +216,8 @@ GaussianSplat3d::stateDict() const {
                                                               {"quats", mQuats},
                                                               {"log_scales", mLogScales},
                                                               {"logit_opacities", mLogitOpacities},
-                                                              {"sh_coeffs", mShCoeffs}};
+                                                              {"sh0", mSh0},
+                                                              {"shN", mShN}};
 
     const auto boolOpts = torch::TensorOptions().dtype(torch::kBool);
     ret["accumulate_means_2d_gradients"] =
@@ -233,7 +245,8 @@ GaussianSplat3d::loadStateDict(const std::unordered_map<std::string, torch::Tens
     TORCH_CHECK_VALUE(stateDict.count("log_scales") == 1, "Missing key 'log_scales' in state dict");
     TORCH_CHECK_VALUE(stateDict.count("logit_opacities") == 1,
                       "Missing key 'logit_opacities' in state dict");
-    TORCH_CHECK_VALUE(stateDict.count("sh_coeffs") == 1, "Missing key 'sh_coeffs' in state dict");
+    TORCH_CHECK_VALUE(stateDict.count("sh0") == 1, "Missing key 'sh0' in state dict");
+    TORCH_CHECK_VALUE(stateDict.count("shN") == 1, "Missing key 'shN' in state dict");
 
     TORCH_CHECK_VALUE(stateDict.count("accumulate_means_2d_gradients") == 1,
                       "Missing key 'accumulate_means_2d_gradients' in state dict");
@@ -245,11 +258,12 @@ GaussianSplat3d::loadStateDict(const std::unordered_map<std::string, torch::Tens
     const torch::Tensor quats          = stateDict.at("quats");
     const torch::Tensor logScales      = stateDict.at("log_scales");
     const torch::Tensor logitOpacities = stateDict.at("logit_opacities");
-    const torch::Tensor shCoeffs       = stateDict.at("sh_coeffs");
+    const torch::Tensor sh0            = stateDict.at("sh0");
+    const torch::Tensor shN            = stateDict.at("shN");
 
     const int64_t N = means.size(0); // number of gaussians
 
-    checkState(means, quats, logScales, logitOpacities, shCoeffs);
+    checkState(means, quats, logScales, logitOpacities, sh0, shN);
 
     const bool accumulateMeans2dGrad =
         stateDict.at("accumulate_means_2d_gradients").item().toBool();
@@ -312,7 +326,8 @@ GaussianSplat3d::loadStateDict(const std::unordered_map<std::string, torch::Tens
     mQuats          = quats;
     mLogScales      = logScales;
     mLogitOpacities = logitOpacities;
-    mShCoeffs       = shCoeffs;
+    mSh0            = sh0;
+    mShN            = shN;
 
     mAccumulateMean2dGradients = accumulateMeans2dGrad;
     mAccumulateMax2dRadii      = accumulateMax2dRadii;
@@ -1984,7 +1999,8 @@ GaussianSplat3d::tensorIndexGetImpl(const torch::Tensor &indices) const {
                                mQuats.index({indices}),
                                mLogScales.index({indices}),
                                mLogitOpacities.index({indices}),
-                               mShCoeffs.index({indices}),
+                               mSh0.index({indices}),
+                               mShN.index({indices}),
                                mAccumulateMean2dGradients,
                                mAccumulateMax2dRadii,
                                false);
@@ -2012,7 +2028,8 @@ GaussianSplat3d::sliceSelect(const int64_t begin, const int64_t stop, const int6
                                mQuats.index({slice}),
                                mLogScales.index({slice}),
                                mLogitOpacities.index({slice}),
-                               mShCoeffs.index({slice}),
+                               mSh0.index({slice}),
+                               mShN.index({slice}),
                                mAccumulateMean2dGradients,
                                mAccumulateMax2dRadii,
                                false);
@@ -2062,7 +2079,8 @@ GaussianSplat3d::tensorIndexSetImpl(const torch::Tensor &indices, const Gaussian
     mQuats          = mQuats.index_put({indices}, other.mQuats);
     mLogScales      = mLogScales.index_put({indices}, other.mLogScales);
     mLogitOpacities = mLogitOpacities.index_put({indices}, other.mLogitOpacities);
-    mShCoeffs       = mShCoeffs.index_put({indices}, other.mShCoeffs);
+    mSh0            = mSh0.index_put({indices}, other.mSh0);
+    mShN            = mShN.index_put({indices}, other.mShN);
 
     if (mAccumulated2dRadiiForGrad.numel() > 0) {
         if (other.mAccumulated2dRadiiForGrad.numel() > 0) {
@@ -2115,7 +2133,8 @@ GaussianSplat3d::sliceSet(const int64_t begin,
     mQuats.index({slice})          = other.mQuats;
     mLogScales.index({slice})      = other.mLogScales;
     mLogitOpacities.index({slice}) = other.mLogitOpacities;
-    mShCoeffs.index({slice})       = other.mShCoeffs;
+    mSh0.index({slice})            = other.mSh0;
+    mShN.index({slice})            = other.mShN;
 
     if (mAccumulated2dRadiiForGrad.numel() > 0) {
         if (other.mAccumulated2dRadiiForGrad.numel() > 0) {
@@ -2301,30 +2320,34 @@ gaussianRenderJagged(const JaggedTensor &means,     // [N1 + N2 + ..., 3]
         renderQuantities = depths.index({gaussian_ids}).unsqueeze(-1); // [nnz, 1]
     } else {
         // Render quantities from SH coefficients [differentiable]
-        // sh_coeffs.jdata() is [N, K, D], index by gaussian_ids to get [nnz, K, D]
-        const torch::Tensor shCoeffs =
-            sh_coeffs.jdata().index({gaussian_ids, Slice(), Slice()}); // [nnz, K, D]
+        const torch::Tensor sh_coeffs_batched = sh_coeffs.jdata().permute({1, 0, 2}).index(
+            {Slice(), gaussian_ids, Slice()});                // [K, nnz, 3]
 
-        const int K              = shCoeffs.size(1);                   // number of SH bases
+        const int K              = sh_coeffs_batched.size(0); // number of SH bases
         const int actualShDegree = sh_degree_to_use < 0 ? (std::sqrt(K) - 1) : sh_degree_to_use;
         TORCH_CHECK(K >= (actualShDegree + 1) * (actualShDegree + 1),
                     "K must be at least (shDegreeToUse + 1)^2");
 
         if (actualShDegree == 0) {
+            const auto sh0 =
+                sh_coeffs_batched.index({0, Slice(), Slice()}).unsqueeze(0); // [1, nnz, 3]
             renderQuantities = detail::autograd::EvaluateSphericalHarmonics::apply(
-                actualShDegree,
-                1,
-                torch::nullopt,
-                shCoeffs.index({Slice(), Slice(0, 1), Slice()}),
-                radii.unsqueeze(0))[0];
+                actualShDegree, 1, std::nullopt, sh0.permute({1, 0, 2}), radii.unsqueeze(0))[0];
         } else {
+            const auto sh0 =
+                sh_coeffs_batched.index({0, Slice(), Slice()}).unsqueeze(0);   // [1, nnz, 3]
+            const auto shN =
+                sh_coeffs_batched.index({Slice(1, None), Slice(), Slice()});   // [K-1, nnz, 3]
             auto [camtoworlds, info] = torch::linalg_inv_ex(viewmats.jdata()); // [ccz, 4, 4]
             const torch::Tensor dirs = means.jdata().index({gaussian_ids, Slice()}) -
                                        camtoworlds.index({camera_ids, Slice(None, 3), 3});
-            renderQuantities =
-                detail::autograd::EvaluateSphericalHarmonics::apply(
-                    actualShDegree, 1, dirs.unsqueeze(0), shCoeffs, radii.unsqueeze(0))[0]
-                    .squeeze(0);
+            renderQuantities = detail::autograd::EvaluateSphericalHarmonics::apply(
+                                   actualShDegree,
+                                   1,
+                                   dirs.unsqueeze(0),
+                                   torch::cat({sh0.permute({1, 0, 2}), shN.permute({1, 0, 2})}, 1),
+                                   radii.unsqueeze(0))[0]
+                                   .squeeze(0);
         }
 
         if (render_depth_channel) {

@@ -39,7 +39,8 @@ class GaussianSplat3d {
                     const torch::Tensor &quats,
                     const torch::Tensor &logScales,
                     const torch::Tensor &logitOpacities,
-                    const torch::Tensor &shCoeffs,
+                    const torch::Tensor &sh0,
+                    const torch::Tensor &shN,
                     const bool accumulateMean2dGradients,
                     const bool accumulateMax2dRadii,
                     const bool detach);
@@ -202,7 +203,8 @@ class GaussianSplat3d {
         bool detach) {
         TORCH_CHECK_VALUE(!splats.empty(), "Cannot concatenate an empty vector of splats");
 
-        std::vector<torch::Tensor> meansVec, quatsVec, logScalesVec, logitOpacitiesVec, shCoeffsVec;
+        std::vector<torch::Tensor> meansVec, quatsVec, logScalesVec, logitOpacitiesVec, sh0Vec,
+            shNVec;
 
         std::vector<torch::Tensor> accStepCountsVec, accMax2dRadiiVec, accNorm2dMeansGradientsVec;
 
@@ -217,7 +219,8 @@ class GaussianSplat3d {
             quatsVec.push_back(splat.mQuats);
             logScalesVec.push_back(splat.mLogScales);
             logitOpacitiesVec.push_back(splat.mLogitOpacities);
-            shCoeffsVec.push_back(splat.mShCoeffs);
+            sh0Vec.push_back(splat.mSh0);
+            shNVec.push_back(splat.mShN);
 
             const auto N = splat.numGaussians();
             if (accumulateMean2dGradients) {
@@ -266,13 +269,15 @@ class GaussianSplat3d {
         torch::Tensor quatsCat          = torch::cat(quatsVec, 0);
         torch::Tensor logScalesCat      = torch::cat(logScalesVec, 0);
         torch::Tensor logitOpacitiesCat = torch::cat(logitOpacitiesVec, 0);
-        torch::Tensor shCoeffsCat       = torch::cat(shCoeffsVec, 0);
+        torch::Tensor sh0Cat            = torch::cat(sh0Vec, 0);
+        torch::Tensor shNCat            = torch::cat(shNVec, 0);
 
         auto ret = GaussianSplat3d(meansCat,
                                    quatsCat,
                                    logScalesCat,
                                    logitOpacitiesCat,
-                                   shCoeffsCat,
+                                   sh0Cat,
+                                   shNCat,
                                    accumulateMean2dGradients,
                                    accumulateMax2dRadii,
                                    detach);
@@ -311,8 +316,10 @@ class GaussianSplat3d {
         TORCH_CHECK(
             mMeans.device() == mLogitOpacities.device(),
             "All tensors must be on the same device. Means and logit opacities must match.");
-        TORCH_CHECK(mMeans.device() == mShCoeffs.device(),
-                    "All tensors must be on the same device. Means and SH coeffs must match.");
+        TORCH_CHECK(mMeans.device() == mSh0.device(),
+                    "All tensors must be on the same device. Means and SH0 must match.");
+        TORCH_CHECK(mMeans.device() == mShN.device(),
+                    "All tensors must be on the same device. Means and SHN must match.");
         return mMeans.device();
     }
 
@@ -327,8 +334,10 @@ class GaussianSplat3d {
                     "All tensors must be of the same type. Means and log scales must match.");
         TORCH_CHECK(mMeans.scalar_type() == mLogitOpacities.scalar_type(),
                     "All tensors must be of the same type. Means and logit opacities must match.");
-        TORCH_CHECK(mMeans.scalar_type() == mShCoeffs.scalar_type(),
-                    "All tensors must be of the same type. Means and SH coeffs must match.");
+        TORCH_CHECK(mMeans.scalar_type() == mSh0.scalar_type(),
+                    "All tensors must be of the same type. Means and SH0 must match.");
+        TORCH_CHECK(mMeans.scalar_type() == mShN.scalar_type(),
+                    "All tensors must be of the same type. Means and SHN must match.");
         return mMeans.scalar_type();
     }
 
@@ -364,13 +373,20 @@ class GaussianSplat3d {
         return mLogitOpacities;
     }
 
-    /// @brief Return all SH coefficients (DC + higher order) of the Gaussians in this scene
-    /// @return An [N, K, D]-shaped tensor representing all SH coefficients of the
-    ///         Gaussians in this scene, where K = (shDegree+1)^2. Index 0 along dim 1 is
-    ///         the DC (degree-0) term.
+    /// @brief Return the diffuse SH coefficients of the Gaussians in this scene
+    /// @return An [N, 1, D]-shaped tensor representing the diffuse SH coefficients of the
+    /// Gaussians in this scene.
     torch::Tensor
-    shCoeffs() const {
-        return mShCoeffs;
+    sh0() const {
+        return mSh0;
+    }
+
+    /// @brief Return the directionally-dependent SH coefficients of the Gaussians in this scene
+    /// @return A [N, K-1, D]-shaped tensor representing the directionally-dependent SH
+    ///         coefficients of the Gaussians in this scene.
+    torch::Tensor
+    shN() const {
+        return mShN;
     }
 
     /// @brief Return the scales of the Gaussians in this scene.
@@ -393,7 +409,7 @@ class GaussianSplat3d {
     shDegree() const {
         // The SH degree is determined by the number of SH coefficients in shN.
         // If shN is empty, we return -1 to indicate that no SH coefficients are used.
-        const auto K        = mShCoeffs.size(1); // number of SH bases
+        const auto K        = mShN.size(1) + 1; // number of SH bases
         const auto shDegree = static_cast<int64_t>(std::sqrt(K) - 1);
         return shDegree;
     }
@@ -408,7 +424,8 @@ class GaussianSplat3d {
                                mQuats.detach(),
                                mLogScales.detach(),
                                mLogitOpacities.detach(),
-                               mShCoeffs.detach(),
+                               mSh0.detach(),
+                               mShN.detach(),
                                mAccumulateMean2dGradients,
                                mAccumulateMax2dRadii,
                                false);
@@ -430,7 +447,8 @@ class GaussianSplat3d {
                 mQuats.to(device, dtype),
                 mLogScales.to(device, dtype),
                 mLogitOpacities.to(device, dtype),
-                mShCoeffs.to(device, dtype),
+                mSh0.to(device, dtype),
+                mShN.to(device, dtype),
                 mAccumulateMean2dGradients,
                 mAccumulateMax2dRadii,
                 false // Detach is false since we are copying the data (not detaching it)
@@ -458,7 +476,8 @@ class GaussianSplat3d {
         mQuats.detach_();
         mLogScales.detach_();
         mLogitOpacities.detach_();
-        mShCoeffs.detach_();
+        mSh0.detach_();
+        mShN.detach_();
     }
 
     /// @brief Set the log of the opacities of the Gaussians in this scene.
@@ -509,15 +528,28 @@ class GaussianSplat3d {
         mMeans = means;
     }
 
-    /// @brief Set the SH coefficients of the Gaussians in this scene.
-    /// @param shCoeffs An [N, K, D]-shaped tensor representing the SH coefficients.
+    /// @brief Set the diffuse SH coefficients of the Gaussians in this scene.
+    /// @param sh0 An [N, 1, D]-shaped tensor representing the diffuse SH coefficients of the
+    ///            Gaussians in this scene.
     void
-    setShCoeffs(const torch::Tensor &shCoeffs) {
-        TORCH_CHECK_VALUE(shCoeffs.sizes() == mShCoeffs.sizes(),
-                          "sh_coeffs must have the same shape as the current sh_coeffs");
-        TORCH_CHECK_VALUE(shCoeffs.device() == mShCoeffs.device(),
-                          "sh_coeffs must be on the same device as the current sh_coeffs");
-        mShCoeffs = shCoeffs;
+    setSh0(const torch::Tensor &sh0) {
+        TORCH_CHECK_VALUE(sh0.sizes() == mSh0.sizes(),
+                          "sh0 must have the same shape as the current sh0");
+        TORCH_CHECK_VALUE(sh0.device() == mSh0.device(),
+                          "sh0 must be on the same device as the current sh0");
+        mSh0 = sh0;
+    }
+
+    /// @brief Set the directionally-dependent SH coefficients of the Gaussians in this scene.
+    /// @param shN A [N, K-1, D]-shaped tensor representing the directionally-dependent SH
+    ///            coefficients of the Gaussians in this scene.
+    void
+    setShN(const torch::Tensor &shN) {
+        TORCH_CHECK_VALUE(shN.sizes() == mShN.sizes(),
+                          "shN must have the same shape as the current shN");
+        TORCH_CHECK_VALUE(shN.device() == mShN.device(),
+                          "shN must be on the same device as the current shN");
+        mShN = shN;
     }
 
     /// @brief Return whether to track the maximum 2D radii of each Gaussian over backward passes
@@ -581,7 +613,7 @@ class GaussianSplat3d {
     bool
     requiresGrad() const {
         return mMeans.requires_grad() && mQuats.requires_grad() && mLogScales.requires_grad() &&
-               mLogitOpacities.requires_grad() && mShCoeffs.requires_grad();
+               mLogitOpacities.requires_grad() && mSh0.requires_grad() && mShN.requires_grad();
     }
 
     /// @brief Set requires_grad on all tensors managed by this object.
@@ -615,15 +647,21 @@ class GaussianSplat3d {
             "Call .detach() on this object or create a new GaussianSplat3d object with leaf tensors.");
 
         TORCH_CHECK_VALUE(
-            mShCoeffs.is_leaf(),
-            "Cannot set requires_grad of sh_coeffs which is a non-leaf tensor. "
+            mSh0.is_leaf(),
+            "Cannot set requires_grad of sh0 which is a non-leaf tensor. "
+            "Call .detach() on this object or create a new GaussianSplat3d object with leaf tensors.");
+
+        TORCH_CHECK_VALUE(
+            mShN.is_leaf(),
+            "Cannot set requires_grad of shN which is a non-leaf tensor. "
             "Call .detach() on this object or create a new GaussianSplat3d object with leaf tensors.");
 
         mMeans.requires_grad_(requiresGrad);
         mQuats.requires_grad_(requiresGrad);
         mLogScales.requires_grad_(requiresGrad);
         mLogitOpacities.requires_grad_(requiresGrad);
-        mShCoeffs.requires_grad_(requiresGrad);
+        mSh0.requires_grad_(requiresGrad);
+        mShN.requires_grad_(requiresGrad);
     }
 
     /// @brief Set the data of the GaussianSplat3d object from the given tensors.
@@ -634,13 +672,16 @@ class GaussianSplat3d {
     ///                  Gaussians in this scene.
     /// @param logitOpacities An [N]-shaped tensor representing the logit of the opacities of the
     ///                     Gaussians in this scene.
-    /// @param shCoeffs An [N, K, D]-shaped tensor representing the SH coefficients of the
-    ///                 Gaussians in this scene.
+    /// @param sh0 An [N, 1, D]-shaped tensor representing the diffuse SH coefficients of the
+    ///            Gaussians in this scene.
+    /// @param shN A [N, K-1, D]-shaped tensor representing the directionally-dependent SH
+    ///            coefficients of the Gaussians in this scene.
     void setState(const torch::Tensor &means,
                   const torch::Tensor &quats,
                   const torch::Tensor &logScales,
                   const torch::Tensor &logitOpacities,
-                  const torch::Tensor &shCoeffs);
+                  const torch::Tensor &sh0,
+                  const torch::Tensor &shN);
 
     /// @brief Return the number of Gaussians in the scene.
     /// @return The number of Gaussians in the scene.
@@ -653,14 +694,14 @@ class GaussianSplat3d {
     /// @return The number of SH bases used in the scene.
     int64_t
     numShBases() const {
-        return mShCoeffs.size(1);
+        return mShN.size(1) + 1;
     }
 
     /// @brief Return the number of channels used in the scene (e.g. 3 for RGB colors).
     /// @return The number of channels used in the scene.
     int64_t
     numChannels() const {
-        return mShCoeffs.size(2);
+        return mShN.size(2);
     }
 
     /// @brief Return the accumulated gradient norms of projected Gaussians in this
@@ -1384,7 +1425,8 @@ class GaussianSplat3d {
     torch::Tensor mQuats;          // [N, 4]
     torch::Tensor mLogScales;      // [N, 3]
     torch::Tensor mLogitOpacities; // [N]
-    torch::Tensor mShCoeffs;       // [N, K, D]
+    torch::Tensor mSh0;            // [N, 1, D]
+    torch::Tensor mShN;            // [N, K-1, D]
 
     // Used for subdivision during optimization
     torch::Tensor mAccumulatedNormalized2dMeansGradientNormsForGrad; // [N]
@@ -1397,7 +1439,8 @@ class GaussianSplat3d {
                            const torch::Tensor &quats,
                            const torch::Tensor &logScales,
                            const torch::Tensor &logitOpacities,
-                           const torch::Tensor &shCoeffs);
+                           const torch::Tensor &sh0,
+                           const torch::Tensor &shN);
 
     ProjectedGaussianSplats projectGaussiansImpl(const torch::Tensor &worldToCameraMatrices,
                                                  const torch::Tensor &projectionMatrices,

@@ -404,7 +404,8 @@ class GaussianSplat3d:
         quats: torch.Tensor,
         log_scales: torch.Tensor,
         logit_opacities: torch.Tensor,
-        sh_coeffs: torch.Tensor,
+        sh0: torch.Tensor,
+        shN: torch.Tensor,
         accumulate_mean_2d_gradients: bool = False,
         accumulate_max_2d_radii: bool = False,
         detach: bool = False,
@@ -432,10 +433,11 @@ class GaussianSplat3d:
             quats (torch.Tensor): Tensor of shape ``(N, 4)`` representing the quaternions (orientations) of the gaussians, where ``N`` is the number of gaussians.
             log_scales (torch.Tensor): Tensor of shape ``(N, 3)`` representing the log scales of the gaussians, where ``N`` is the number of gaussians.
             logit_opacities (torch.Tensor): Tensor of shape ``(N,)`` representing the logit opacities of the gaussians, where ``N`` is the number of gaussians.
-            sh_coeffs (torch.Tensor): Tensor of shape ``(N, K, D)`` representing the SH coefficients
-                where ``K`` is the number of spherical harmonic bases (see :attr:`num_sh_bases`),
-                and ``D`` is the number of channels (see :attr:`num_channels`). Index 0 along dim 1
-                is the DC (degree-0) term.
+            sh0 (torch.Tensor): Tensor of shape ``(N, 1, D)`` representing the diffuse SH coefficients
+                where ``D`` is the number of channels (see :attr:`num_channels`).
+            shN (torch.Tensor): Tensor of shape ``(N, K-1, D)`` representing the directionally
+                varying SH coefficients where ``D`` is the number of channels (see :attr:`num_channels`),
+                and ``K`` is the number of spherical harmonic bases (see :attr:`num_sh_bases`).
             accumulate_mean_2d_gradients (bool, optional): If ``True``, tracks the average norm of the
                 gradient of projected means for each Gaussian during the backward pass of projection.
                 This is useful for some optimization techniques, such as the one in the `original paper <https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/>`_.
@@ -453,7 +455,8 @@ class GaussianSplat3d:
                 quats=quats,
                 log_scales=log_scales,
                 logit_opacities=logit_opacities,
-                sh_coeffs=sh_coeffs,
+                sh0=sh0,
+                shN=shN,
                 accumulate_mean_2d_gradients=accumulate_mean_2d_gradients,
                 accumulate_max_2d_radii=accumulate_max_2d_radii,
                 detach=detach,
@@ -713,9 +716,11 @@ class GaussianSplat3d:
         - ``'quats'``: Tensor of shape ``(N, 4)`` representing the quaternions of the Gaussians.
         - ``'log_scales'``: Tensor of shape ``(N, 3)`` representing the log scales of the Gaussians.
         - ``'logit_opacities'``: Tensor of shape ``(N,)`` representing the logit opacities of the Gaussians.
-        - ``'sh_coeffs'``: Tensor of shape ``(N, K, D)`` representing the SH coefficients
-          where ``K`` is the number of spherical harmonic bases (see :attr:`num_sh_bases`),
-          and ``D`` is the number of channels (see :attr:`num_channels`).
+        - ``'sh0'``: Tensor of shape ``(N, 1, D)`` representing the diffuse SH coefficients
+          where ``D`` is the number of channels (see :attr:`num_channels`).
+        - ``'shN'``: Tensor of shape ``(N, K-1, D)`` representing the directionally varying SH
+          coefficients where ``D`` is the number of channels (see :attr:`num_channels`), and ``K``
+          is the number of spherical harmonic bases (see :attr:`num_sh_bases`).
         - ``'accumulate_max_2d_radii'``: bool Tensor with a single element indicating
           whether to track the maximum 2D radii for gradients.
         - ``'accumulate_mean_2d_gradients'``: bool Tensor with a single element indicating whether
@@ -1001,7 +1006,8 @@ class GaussianSplat3d:
             assert gsplat3d.covariances.requires_grad  # Now the covariances will require gradients
             assert gsplat3d.logit_opacities.requires_grad  # Now the logit opacities will require gradients
             assert gsplat3d.log_scales.requires_grad  # Now the log scales will require gradients
-            assert gsplat3d.sh_coeffs.requires_grad  # Now the SH coefficients will require gradients
+            assert gsplat3d.sh0.requires_grad  # Now the SH coefficients will require gradients
+            assert gsplat3d.shN.requires_grad  # Now the SH coefficients will require gradients
 
         Returns:
             requires_grad (bool): ``True`` if gradients are required, ``False`` otherwise.
@@ -1025,7 +1031,8 @@ class GaussianSplat3d:
             assert gsplat3d.covariances.requires_grad  # Now the covariances will require gradients
             assert gsplat3d.logit_opacities.requires_grad  # Now the logit opacities will require gradients
             assert gsplat3d.log_scales.requires_grad  # Now the log scales will require gradients
-            assert gsplat3d.sh_coeffs.requires_grad  # Now the SH coefficients will require gradients
+            assert gsplat3d.sh0.requires_grad  # Now the SH coefficients will require gradients
+            assert gsplat3d.shN.requires_grad  # Now the SH coefficients will require gradients
 
         Returns:
             requires_grad (bool): ``True`` if gradients are required, ``False`` otherwise.
@@ -1033,26 +1040,58 @@ class GaussianSplat3d:
         self._impl.requires_grad = cast_check(value, bool, "requires_grad")
 
     @property
-    def sh_coeffs(self) -> torch.Tensor:
+    def sh0(self) -> torch.Tensor:
         """
-        Returns all spherical harmonics coefficients (DC + higher order) of the Gaussians.
+        Returns the diffuse spherical harmonics coefficients of the Gaussians in this :class:`GaussianSplat3d`.
+        These coefficients are used to represent the diffuse color/feature of each Gaussian.
 
         Returns:
-            torch.Tensor: A tensor of shape ``(N, K, D)`` where ``N`` is the number
-                of Gaussians, ``K`` is the number of SH bases, and ``D`` is the number of channels.
+            sh0 (torch.Tensor): A tensor of shape ``(N, 1, D)`` where ``N`` is the number
+                of Gaussians (see :attr:`num_gaussians`), and ``D`` is the number of channels (see :attr:`num_channels`).
+                Each row represents the diffuse SH coefficients for a Gaussian.
         """
-        return self._impl.sh_coeffs
+        return self._impl.sh0
 
-    @sh_coeffs.setter
-    def sh_coeffs(self, value: torch.Tensor) -> None:
+    @sh0.setter
+    def sh0(self, value: torch.Tensor) -> None:
         """
-        Sets all spherical harmonics coefficients (DC + higher order) of the Gaussians.
+        Sets the diffuse spherical harmonics coefficients of the Gaussians in this :class:`GaussianSplat3d`.
+        These coefficients are used to represent the diffuse color/feature of each Gaussian.
 
         Args:
-            value (torch.Tensor): A tensor of shape ``(N, K, D)`` where ``N`` is the number
-                of Gaussians, ``K`` is the number of SH bases, and ``D`` is the number of channels.
+            value (torch.Tensor): A tensor of shape ``(N, 1, D)`` where ``N`` is the number
+                of Gaussians (see :attr:`num_gaussians`), and ``D`` is the number of channels (see :attr:`num_channels`).
+                Each row represents the diffuse SH coefficients for a Gaussian.
         """
-        self._impl.sh_coeffs = cast_check(value, torch.Tensor, "sh_coeffs")
+        self._impl.sh0 = cast_check(value, torch.Tensor, "sh0")
+
+    @property
+    def shN(self) -> torch.Tensor:
+        """
+        Returns the directionally varying spherical harmonics coefficients of the Gaussians in the scene.
+        These coefficients are used to represent a direction dependent color/feature of each Gaussian.
+
+        Returns:
+            torch.Tensor: A tensor of shape (N, K-1, D) where N is the number
+                of Gaussians (see `num_gaussians`), D is the number of channels (see `num_channels`),
+                and K is the number of spherical harmonic bases (see `num_sh_bases`).
+                Each row represents the directionally varying SH coefficients for a Gaussian.
+        """
+        return self._impl.shN
+
+    @shN.setter
+    def shN(self, value: torch.Tensor) -> None:
+        """
+        Sets the directionally varying spherical harmonics coefficients of the Gaussians in this :class:`GaussianSplat3d`.
+        These coefficients are used to represent a direction dependent color/feature of each Gaussian.
+
+        Args:
+            value (torch.Tensor): A tensor of shape ``(N, K-1, D)`` where ``N`` is the number
+                of Gaussians (see :attr:`num_gaussians`), ``D`` is the number of channels (see :attr:`num_channels`),
+                and ``K`` is the number of spherical harmonic bases (see :attr:`num_sh_bases`).
+                Each row represents the directionally varying SH coefficients for a Gaussian.
+        """
+        self._impl.shN = cast_check(value, torch.Tensor, "shN")
 
     @property
     def opacities(self) -> torch.Tensor:
@@ -3260,7 +3299,8 @@ class GaussianSplat3d:
         quats: torch.Tensor,
         log_scales: torch.Tensor,
         logit_opacities: torch.Tensor,
-        sh_coeffs: torch.Tensor,
+        sh0: torch.Tensor,
+        shN: torch.Tensor,
     ) -> None:
         """
         Set the underlying tensors managed by this :class:`GaussianSplat3d` instance.
@@ -3277,16 +3317,20 @@ class GaussianSplat3d:
                 ``N`` is the number of Gaussians (see :attr:`num_gaussians`).
             logit_opacities (torch.Tensor): Tensor of shape ``(N,)`` representing the logit opacities of the Gaussians.
                 ``N`` is the number of Gaussians (see :attr:`num_gaussians`).
-            sh_coeffs (torch.Tensor): Tensor of shape ``(N, K, D)`` representing the SH coefficients
-                where ``K`` is the number of spherical harmonic bases (see :attr:`num_sh_bases`),
-                and ``D`` is the number of channels (see :attr:`num_channels`).
+            sh0 (torch.Tensor): Tensor of shape ``(N, 1, D)`` representing the diffuse SH coefficients
+                where ``N`` is the number of Gaussians (see :attr:`num_gaussians`), and ``D`` is the number of channels (see :attr:`num_channels`).
+            shN (torch.Tensor): Tensor of shape ``(N, K-1, D)`` representing the directionally
+                varying SH coefficients where ``N`` is the number of Gaussians (see :attr:`num_gaussians`),
+                ``D`` is the number of channels (see :attr:`num_channels`),
+                and ``K`` is the number of spherical harmonic bases (see :attr:`num_sh_bases`).
         """
         self._impl.set_state(
             means=means,
             quats=quats,
             log_scales=log_scales,
             logit_opacities=logit_opacities,
-            sh_coeffs=sh_coeffs,
+            sh0=sh0,
+            shN=shN,
         )
 
     def state_dict(self) -> dict[str, torch.Tensor]:
@@ -3300,9 +3344,11 @@ class GaussianSplat3d:
         - ``'quats'``: Tensor of shape ``(N, 4)`` representing the quaternions of the Gaussians.
         - ``'log_scales'``: Tensor of shape ``(N, 3)`` representing the log scales of the Gaussians.
         - ``'logit_opacities'``: Tensor of shape ``(N,)`` representing the logit opacities of the Gaussians.
-        - ``'sh_coeffs'``: Tensor of shape ``(N, K, D)`` representing the SH coefficients
-          where ``K`` is the number of spherical harmonic bases (see :attr:`num_sh_bases`),
-          and ``D`` is the number of channels (see :attr:`num_channels`).
+        - ``'sh0'``: Tensor of shape ``(N, 1, D)`` representing the diffuse SH coefficients
+          where ``D`` is the number of channels (see :attr:`num_channels`).
+        - ``'shN'``: Tensor of shape ``(N, K-1, D)`` representing the directionally varying SH
+          coefficients where ``D`` is the number of channels (see :attr:`num_channels`), and ``K``
+          is the number of spherical harmonic bases (see :attr:`num_sh_bases`).
         - ``'accumulate_max_2d_radii'``: bool Tensor with a single element indicating
           whether to track the maximum 2D radii for gradients.
         - ``'accumulate_mean_2d_gradients'``: bool Tensor with a single element indicating whether
