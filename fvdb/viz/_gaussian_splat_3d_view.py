@@ -4,8 +4,8 @@
 from enum import Enum
 from typing import Any
 
-from .._fvdb_cpp import GaussianSplat3d as GaussianSplat3dCpp
 from .._fvdb_cpp import GaussianSplat3dView as GaussianSplat3dViewCpp
+import torch
 from ._viewer_server import _get_viewer_server_cpp
 
 
@@ -34,7 +34,7 @@ class GaussianSplat3dView:
         self,
         scene_name: str,
         name: str,
-        gaussian_splat_3d: GaussianSplat3dCpp,
+        gaussian_splat_3d,  # GaussianSplat3d (Python class)
         tile_size: int = 16,
         min_radius_2d: float = 0.0,
         eps_2d: float = 0.3,
@@ -69,9 +69,23 @@ class GaussianSplat3dView:
         self._scene_name = scene_name
         self._name = name
         server = _get_viewer_server_cpp()
-        view = server.add_gaussian_splat_3d_view(scene_name=scene_name, name=name, gaussian_splat_3d=gaussian_splat_3d)
+        # Pass raw tensors to the C++ viewer (no longer depends on C++ GaussianSplat3d class)
+        gs = gaussian_splat_3d
+        view = server.add_gaussian_splat_3d_view(
+            scene_name=scene_name,
+            name=name,
+            means=gs.means,
+            quats=gs.quats,
+            log_scales=gs.log_scales,
+            logit_opacities=gs.logit_opacities,
+            sh0=gs.sh0,
+            shN=gs.shN,
+        )
 
-        if sh_ordering_mode not in (ShOrderingMode.RGB_RGB_RGB, ShOrderingMode.RRR_GGG_BBB):
+        if sh_ordering_mode not in (
+            ShOrderingMode.RGB_RGB_RGB,
+            ShOrderingMode.RRR_GGG_BBB,
+        ):
             raise ValueError(f"Invalid ShOrderingMode: {sh_ordering_mode}")
 
         view.tile_size = tile_size

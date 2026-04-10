@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
-#include <fvdb/detail/ops/gsplat/FusedSSIM.h>
+#include <fvdb/detail/ops/FusedSSIM.h>
 
 #include <torch/library.h>
 

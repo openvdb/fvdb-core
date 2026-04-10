@@ -1,7 +1,7 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 
-#include <fvdb/detail/ops/gsplat/GaussianCameras.cuh>
+#include <fvdb/detail/utils/gaussian/GaussianCameras.cuh>
 
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAException.h>
@@ -327,8 +327,7 @@ TEST(GaussianCamerasTest, PerspectiveEncapsulatedProjectionAndVJPMatchReferenceP
     auto meansWorld     = makeMeansWorld(N);
     auto covarsWorld6   = makeCovarsWorld6(N);
 
-    auto camera = PerspectiveCamera<float>(
-        projection, worldToCam, static_cast<int32_t>(C), 640, 480, 0.01f, 1.0e8f);
+    auto camera = PerspectiveCamera<float>(projection, worldToCam, 640, 480, 0.01f, 1.0e8f);
     runForwardAndVjpParityChecks(camera, C, N, meansWorld, covarsWorld6);
 }
 
@@ -340,8 +339,7 @@ TEST(GaussianCamerasTest, OrthographicEncapsulatedProjectionAndVJPMatchReference
     auto meansWorld     = makeMeansWorld(N);
     auto covarsWorld6   = makeCovarsWorld6(N);
 
-    auto camera = OrthographicCamera<float>(
-        projection, worldToCam, static_cast<int32_t>(C), 640, 480, -1.0e8f, 1.0e8f);
+    auto camera = OrthographicCamera<float>(projection, worldToCam, 640, 480, -1.0e8f, 1.0e8f);
     runForwardAndVjpParityChecks(camera, C, N, meansWorld, covarsWorld6);
 }
 

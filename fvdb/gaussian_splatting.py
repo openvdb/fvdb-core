@@ -1,18 +1,43 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 #
+"""
+Object-oriented Gaussian splatting interface.
+
+This module provides :class:`GaussianSplat3d`, the primary user-facing class
+for Gaussian splatting in fVDB.  It manages parameter tensors, gradient
+accumulators, and rendering state, and delegates the actual computation to
+the pure-functional stages in :mod:`fvdb.functional`.
+
+**Relationship to the functional API.**  Internally,
+:meth:`GaussianSplat3d.render_images` and the other render methods compose
+the same pipeline stages that :mod:`fvdb.functional` exposes publicly
+(``project_gaussians`` -> ``evaluate_gaussian_sh`` ->
+``intersect_gaussian_tiles`` -> ``rasterize_screen_space_gaussians``).
+The class adds three things the functional API intentionally omits:
+
+1. *Mutable accumulator state* -- gradient norm tracking, max-radii tracking,
+   and step counts used by densification heuristics during training.
+2. *Lazy initialization* -- accumulators are allocated on first use.
+3. *Projection method routing* -- automatic dispatch between the differentiable
+   analytic path and the non-differentiable unscented-transform fallback for
+   OpenCV camera models.
+
+Users who need custom pipeline composition or want to avoid mutable state
+should use :mod:`fvdb.functional` directly.
+"""
+
+import math
 import pathlib
-from typing import Any, Mapping, Sequence, TypeVar, overload
+from typing import Any, Mapping, Sequence, TypeVar, cast, overload
 
 import torch
 import torch.nn.functional as F
+from fvdb.enums import CameraModel, GaussianRenderMode, ProjectionMethod
 
-from fvdb.enums import CameraModel, ProjectionMethod
-
-from . import _fvdb_cpp as _C
-from ._fvdb_cpp import GaussianSplat3d as GaussianSplat3dCpp
+from . import functional as GF
 from ._fvdb_cpp import JaggedTensor as JaggedTensorCpp
-from ._fvdb_cpp import ProjectedGaussianSplats as ProjectedGaussianSplatsCpp
+from .functional import ProjectedGaussians
 from .grid import Grid
 from .grid_batch import GridBatch
 from .jagged_tensor import JaggedTensor
@@ -21,13 +46,13 @@ from .types import DeviceIdentifier, cast_check, resolve_device
 JaggedTensorOrTensorT = TypeVar("JaggedTensorOrTensorT", JaggedTensor, torch.Tensor)
 
 
-def _pixel_mask_to_tile_mask(pixel_mask: torch.Tensor, tile_size: int) -> torch.Tensor:
-    """Convert a per-pixel boolean mask ``[C, H, W]`` to a per-tile boolean mask ``[C, tileH, tileW]``.
+# ---------------------------------------------------------------------------
+#  Private helpers
+# ---------------------------------------------------------------------------
 
-    A tile is ``True`` (render) if **any** pixel in that tile is ``True``.
-    Uses ``max_pool2d`` with ``ceil_mode=True`` so that partial edge tiles are
-    handled correctly when ``H`` or ``W`` is not divisible by ``tile_size``.
-    """
+
+def _pixel_mask_to_tile_mask(pixel_mask: torch.Tensor, tile_size: int) -> torch.Tensor:
+    """``[C, H, W]`` per-pixel boolean mask -> ``[C, tileH, tileW]`` per-tile mask."""
     return (
         F.max_pool2d(
             pixel_mask.unsqueeze(1).float(),
@@ -46,255 +71,15 @@ def _apply_pixel_mask(
     pixel_mask: torch.Tensor,
     backgrounds: torch.Tensor | None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Apply a per-pixel boolean mask ``[C, H, W]`` to rendered features and alphas.
-
-    Masked-out pixels (``False``) are filled with the background colour (or zero)
-    and their alpha is set to zero. The operation is differentiable: gradients
-    flow through unmasked pixels and are zero for masked pixels.
-    """
-    mask_float = pixel_mask.unsqueeze(-1).float()  # [C, H, W, 1]
+    """Apply a per-pixel boolean mask to rendered features/alphas (differentiable)."""
+    mask_float = pixel_mask.unsqueeze(-1).float()
     if backgrounds is not None:
-        bg = backgrounds[:, None, None, :]  # [C, 1, 1, D]
+        bg = backgrounds[:, None, None, :]
     else:
         bg = torch.zeros(1, 1, 1, features.shape[-1], device=features.device, dtype=features.dtype)
     features = features * mask_float + bg * (1.0 - mask_float)
     alphas = alphas * mask_float
     return features, alphas
-
-
-class ProjectedGaussianSplats:
-    """
-    A class representing a set of Gaussian splats projected onto a batch of 2D image planes.
-
-    A :class:`ProjectedGaussianSplats` instance contains the 2D projections of 3D Gaussian splats, which can be used to render
-    images onto the image planes. Instances of this class are created by calling the :meth:`GaussianSplat3d.project_gaussians_for_images`,
-    :meth:`GaussianSplat3d.project_gaussians_for_images_and_depths`, etc. methods.
-
-    .. note::
-
-        The reason to have a separate class for projected Gaussian splats is to be able to run projection once, and then render
-        the splats multiple times (e.g. rendering crops) without re-projecting them each time. This can save significant computation time.
-    """
-
-    __PRIVATE__ = object()
-
-    def __init__(self, impl: ProjectedGaussianSplatsCpp, _private: Any = None) -> None:
-        """
-        Private constructor. Use :meth:`GaussianSplat3d.project_gaussians_for_images` or similar methods to create instances.
-
-        Args:
-            impl (ProjectedGaussianSplatsCpp): The underlying C++ implementation.
-            _private (Any): A private object to prevent direct construction. Must be :attr:`ProjectedGaussianSplats.__PRIVATE__`.
-        """
-        if _private is not self.__PRIVATE__:
-            raise ValueError(
-                "ProjectedGaussianSplats constructor is private. Use GaussianSplat3d.project_gaussians_for_images or similar methods instead."
-            )
-        self._impl = impl
-
-    @property
-    def antialias(self) -> bool:
-        """
-        Return whether antialiasing was enabled during the projection of the Gaussian splats.
-
-        Returns:
-            antialias (bool): ``True`` if antialiasing was enabled during projection, ``False`` otherwise.
-        """
-        return self._impl.antialias
-
-    @property
-    def inv_covar_2d(self) -> torch.Tensor:
-        """
-        The inverse of the 2D covariance matrices of the Gaussians projected into each image plane. These define the
-        spatial extent of ellipses for each splatted Gaussian. Note that
-        since covariance matrices are symmetric, we pack them into a tensor of shape ``(num_projected_gaussians, 3)``
-        where each covariance matrix is represented as ``(Cxx, Cxy, Cyy)``.
-
-        Returns:
-            inv_covar_2d (torch.Tensor): A tensor of shape ``(C, N, D)`` representing the packed inverse 2D covariance matrices,
-                where ``C`` is the number of image planes, ``N`` is the number of projected Gaussians, and ``D`` is number of feature channels for each
-                Gaussian (see :attr:`GaussianSplat3d.num_channels`).
-        """
-        return self._impl.conics
-
-    @property
-    def depths(self) -> torch.Tensor:
-        """
-        Return the depth of each projected Gaussian in each image plane. The depth is defined as the
-        distance from the camera to the mean of the Gaussian along the camera's viewing direction.
-
-        Returns:
-            depths (torch.Tensor): A tensor of shape ``(C, N)`` representing the depth of each projected Gaussian, where
-                ``C`` is the number of image planes, and ``N`` is the number of projected Gaussians.
-        """
-        return self._impl.depths
-
-    @property
-    def eps_2d(self) -> float:
-        """
-        Return the epsilon value used during the projection of the Gaussian splats to avoid
-        numerical issues. This value is used to clamp very small radii during projection.
-
-        Returns:
-            eps_2d (float): The epsilon value used during projection.
-        """
-        return self._impl.eps_2d
-
-    @property
-    def far_plane(self) -> float:
-        """
-        Return the far plane distance used during the projection of the Gaussian splats.
-
-        Returns:
-            far_plane (float): The far plane distance.
-        """
-        return self._impl.far_plane
-
-    @property
-    def image_height(self) -> int:
-        """
-        Return the height of the image planes used during the projection of the Gaussian splats.
-
-        Returns:
-            image_height (int): The height of the image planes.
-        """
-        return self._impl.image_height
-
-    @property
-    def image_width(self) -> int:
-        """
-        Return the width of the image planes used during the projection of the Gaussian splats.
-
-        Returns:
-            image_width (int): The width of the image planes.
-        """
-        return self._impl.image_width
-
-    @property
-    def means2d(self) -> torch.Tensor:
-        """
-        Return the 2D projected means (in pixel units) of the Gaussians in each image plane.
-
-        Returns:
-            means2d (torch.Tensor): A tensor of shape ``(C, N, 2)`` representing the 2D projected means,
-                where ``C`` is the number of image planes, ``N`` is the number of projected Gaussians,
-                and the last dimension contains the (x, y) coordinates of the means in pixel space.
-        """
-        return self._impl.means2d
-
-    @property
-    def min_radius_2d(self) -> float:
-        """
-        Return the minimum radius (in pixels) used to clip Gaussians during projection. Gaussians
-        whose radius projected to less than this value are ignored to avoid numerical issues.
-
-        Returns:
-            min_radius_2d (float): The minimum radius used during projection.
-        """
-        return self._impl.min_radius_2d
-
-    @property
-    def near_plane(self) -> float:
-        """
-        Return the near plane distance used during the projection of the Gaussian splats.
-
-        Returns:
-            near_plane (float): The near plane distance.
-        """
-        return self._impl.near_plane
-
-    @property
-    def opacities(self) -> torch.Tensor:
-        """
-        Return the opacities of each projected Gaussian in each image plane.
-
-        Returns:
-            opacities (torch.Tensor): A tensor of shape ``(C, N)`` representing the opacity of each projected Gaussian, where
-                ``C`` is the number of image planes, and ``N`` is the number of projected Gaussians.
-        """
-        return self._impl.opacities
-
-    @property
-    def camera_model(self) -> CameraModel:
-        """
-        Return the camera model used during projection.
-
-        Returns:
-            camera_model (CameraModel): The camera model used during projection.
-        """
-        return GaussianSplat3d._camera_model_from_cpp(self._impl.camera_model)
-
-    @property
-    def projection_method(self) -> ProjectionMethod:
-        """
-        Return the resolved projection method used during projection.
-
-        Returns:
-            projection_method (ProjectionMethod): The resolved projection method.
-        """
-        return GaussianSplat3d._projection_method_from_cpp(self._impl.projection_method)
-
-    @property
-    def radii(self) -> torch.Tensor:
-        """
-        Return the 2D radii (in pixels) of each projected Gaussian in each image plane. The radius of a Gaussian is the maximum extent
-        of the Gaussian along any direction in the image plane.
-
-        Returns:
-            radii (torch.Tensor): A tensor of shape ``(C, N)`` representing the 2D radius of each projected Gaussian, where
-                ``C`` is the number of image planes, and ``N`` is the number of projected Gaussians.
-        """
-        return self._impl.radii
-
-    @property
-    def render_quantities(self) -> torch.Tensor:
-        """
-        Return the render quantities of each projected Gaussian in each image plane. The render quantities
-        are used for shading and lighting calculations during rendering.
-
-        Returns:
-            render_quantities (torch.Tensor): A tensor of shape ``(C, N, D)`` representing the render quantities of each projected Gaussian,
-                where ``C`` is the number of image planes, ``N`` is the number of projected Gaussians, and ``D`` is the number of feature
-                channels for each Gaussian (see :attr:`GaussianSplat3d.num_channels`).
-        """
-        return self._impl.render_quantities
-
-    @property
-    def sh_degree_to_use(self) -> int:
-        """
-        Return the spherical harmonic degree used during the projection of the Gaussian splats.
-
-        .. note::
-
-            This indicates up to which degree the spherical harmonics coefficients were projected
-            for each Gaussian. For example, if this value is ``0``, only the diffuse (degree 0) coefficients
-            were projected. If this value is ``2``, coefficients up to degree 2 were projected.
-
-        Returns:
-            sh_degree_to_use (int): The spherical harmonic degree used during projection.
-        """
-        return self._impl.sh_degree_to_use
-
-    @property
-    def tile_gaussian_ids(self) -> torch.Tensor:
-        """
-        Return a tensor containing the ID of each tile/gaussian intersection.
-
-        Returns:
-            tile_gaussian_ids (torch.Tensor): A tensor of shape ``(M,)`` containing the IDs of the Gaussians.
-        """
-        return self._impl.tile_gaussian_ids
-
-    @property
-    def tile_offsets(self) -> torch.Tensor:
-        """
-        Return the starting offset of the set of intersections for each tile into :attr:`tile_gaussian_ids`.
-
-        Returns:
-            tile_offsets (torch.Tensor): A tensor of shape ``(C, TH, TW,)`` where ``C`` is the number of image planes,
-                ``TH`` is the number of tiles in the height dimension, and ``TW`` is the number of tiles in the width dimension.
-        """
-        return self._impl.tile_offsets
 
 
 class GaussianSplat3d:
@@ -374,15 +159,55 @@ class GaussianSplat3d:
 
     __PRIVATE__ = object()
 
+    @staticmethod
+    def _check_gaussian_state(
+        means: torch.Tensor,
+        quats: torch.Tensor,
+        log_scales: torch.Tensor,
+        logit_opacities: torch.Tensor,
+        sh0: torch.Tensor,
+        shN: torch.Tensor,
+    ) -> None:
+        """Validate tensor shapes, devices, and dtypes for Gaussian splat state."""
+        N = means.size(0)
+        if list(means.shape) != [N, 3]:
+            raise ValueError("means must have shape (N, 3)")
+        if list(quats.shape) != [N, 4]:
+            raise ValueError("quats must have shape (N, 4)")
+        if list(log_scales.shape) != [N, 3]:
+            raise ValueError("scales must have shape (N, 3)")
+        if list(logit_opacities.shape) != [N]:
+            raise ValueError("opacities must have shape (N)")
+        if sh0.size(0) != N or sh0.size(1) != 1 or sh0.dim() != 3:
+            raise ValueError("sh0 must have shape (N, 1, D)")
+        if shN.size(0) != N or shN.dim() != 3:
+            raise ValueError("shN must have shape (N, K-1, D)")
+
+        device = means.device
+        if not all(t.device == device for t in (quats, log_scales, logit_opacities, sh0, shN)):
+            raise ValueError("All tensors must be on the same device")
+        if not means.is_floating_point():
+            raise ValueError("All tensors must be of floating point type")
+        dtype = means.dtype
+        if not all(t.dtype == dtype for t in (quats, log_scales, logit_opacities, sh0, shN)):
+            raise ValueError("All tensors must be of the same type")
+
     def __init__(
         self,
-        impl: GaussianSplat3dCpp,
+        means: torch.Tensor,
+        quats: torch.Tensor,
+        log_scales: torch.Tensor,
+        logit_opacities: torch.Tensor,
+        sh0: torch.Tensor,
+        shN: torch.Tensor,
+        accumulate_mean_2d_gradients: bool = False,
+        accumulate_max_2d_radii: bool = False,
+        detach: bool = False,
         _private: Any = None,
     ) -> None:
         """
-        Initializes the :class:`GaussianSplat3d` with an existing C++ implementation.
-        This constructor is used to wrap an existing instance of :class:`GaussianSplat3dCpp`.
-        It is only called internally within this class and should not be used directly.
+        Initializes the :class:`GaussianSplat3d` with raw tensors.
+        This constructor is used internally. You should not call it directly.
 
         .. note::
 
@@ -391,11 +216,43 @@ class GaussianSplat3d:
             :class:`GaussianSplat3d`.
 
         Args:
-            impl (GaussianSplat3dCpp): An instance of the C++ implementation.
+            means (torch.Tensor): Tensor of shape ``(N, 3)`` representing the means.
+            quats (torch.Tensor): Tensor of shape ``(N, 4)`` representing the quaternions.
+            log_scales (torch.Tensor): Tensor of shape ``(N, 3)`` representing the log scales.
+            logit_opacities (torch.Tensor): Tensor of shape ``(N,)`` representing the logit opacities.
+            sh0 (torch.Tensor): Tensor of shape ``(N, 1, D)`` representing the diffuse SH coefficients.
+            shN (torch.Tensor): Tensor of shape ``(N, K-1, D)`` representing the higher-degree SH coefficients.
+            accumulate_mean_2d_gradients (bool): If ``True``, track gradient norms.
+            accumulate_max_2d_radii (bool): If ``True``, track max 2D radii.
+            detach (bool): If ``True``, detach tensors from the computation graph.
+            _private (Any): A private object to prevent direct construction.
         """
         if _private is not self.__PRIVATE__:
             raise ValueError("GaussianSplat3d constructor is private. Use from_tensors or from_ply instead.")
-        self._impl = impl
+
+        self._check_gaussian_state(means, quats, log_scales, logit_opacities, sh0, shN)
+
+        if detach:
+            means = means.detach()
+            quats = quats.detach()
+            log_scales = log_scales.detach()
+            logit_opacities = logit_opacities.detach()
+            sh0 = sh0.detach()
+            shN = shN.detach()
+
+        self._means = means
+        self._quats = quats
+        self._log_scales = log_scales
+        self._logit_opacities = logit_opacities
+        self._sh0 = sh0
+        self._shN = shN
+        self._accumulate_mean_2d_gradients = accumulate_mean_2d_gradients
+        self._accumulate_max_2d_radii = accumulate_max_2d_radii
+
+        # Accumulator tensors -- lazily initialized by projection with_accum
+        self._accum_grad_norms: torch.Tensor | None = None
+        self._accum_step_counts: torch.Tensor | None = None
+        self._accum_max_2d_radii: torch.Tensor | None = None
 
     @classmethod
     def from_tensors(
@@ -448,19 +305,16 @@ class GaussianSplat3d:
             detach (bool, optional): If ``True``, creates copies of the input tensors and detaches them
                 from the computation graph. Defaults to ``False``.
         """
-
         return GaussianSplat3d(
-            GaussianSplat3dCpp(
-                means=means,
-                quats=quats,
-                log_scales=log_scales,
-                logit_opacities=logit_opacities,
-                sh0=sh0,
-                shN=shN,
-                accumulate_mean_2d_gradients=accumulate_mean_2d_gradients,
-                accumulate_max_2d_radii=accumulate_max_2d_radii,
-                detach=detach,
-            ),
+            means=means,
+            quats=quats,
+            log_scales=log_scales,
+            logit_opacities=logit_opacities,
+            sh0=sh0,
+            shN=shN,
+            accumulate_mean_2d_gradients=accumulate_mean_2d_gradients,
+            accumulate_max_2d_radii=accumulate_max_2d_radii,
+            detach=detach,
             _private=cls.__PRIVATE__,
         )
 
@@ -484,9 +338,22 @@ class GaussianSplat3d:
         if isinstance(filename, pathlib.Path):
             filename = str(filename)
 
-        gs_impl, metadata = GaussianSplat3dCpp.from_ply(filename=filename, device=device)
+        means, quats, log_scales, logit_opacities, sh0, shN, metadata = GF.load_gaussian_ply(filename, device)
 
-        return cls(impl=gs_impl, _private=cls.__PRIVATE__), metadata
+        result = cls.__new__(cls)
+        result._means = means
+        result._quats = quats
+        result._log_scales = log_scales
+        result._logit_opacities = logit_opacities
+        result._sh0 = sh0
+        result._shN = shN
+        result._accumulate_mean_2d_gradients = False
+        result._accumulate_max_2d_radii = False
+        result._accum_grad_norms = None
+        result._accum_step_counts = None
+        result._accum_max_2d_radii = None
+
+        return result, metadata
 
     @overload
     def __getitem__(self, index: slice) -> "GaussianSplat3d": ...
@@ -528,14 +395,7 @@ class GaussianSplat3d:
 
         """
         if isinstance(index, slice):
-            return GaussianSplat3d(
-                impl=self._impl.slice_select(
-                    index.start if index.start is not None else 0,
-                    index.stop if index.stop is not None else self.num_gaussians,
-                    index.step if index.step is not None else 1,
-                ),
-                _private=self.__PRIVATE__,
-            )
+            return self._index_with_slice(index)
         elif isinstance(index, torch.Tensor):
             if index.dim() != 1:
                 raise ValueError("Expected 'index' to be a 1D tensor.")
@@ -546,13 +406,45 @@ class GaussianSplat3d:
                         f"Expected 'index_or_mask' to have the same length as the number of Gaussians ({self.num_gaussians}), "
                         f"but got {len(index)}."
                     )
-                return GaussianSplat3d(impl=self._impl.mask_select(index), _private=self.__PRIVATE__)
+                return self._index_with_tensor(index)
             elif index.dtype == torch.int64 or index.dtype == torch.int32:
-                return GaussianSplat3d(impl=self._impl.index_select(index), _private=self.__PRIVATE__)
+                return self._index_with_tensor(index)
             else:
                 raise ValueError("Expected 'index' to be a boolean or integer (int32 or int64) tensor.")
         else:
             raise TypeError("Expected 'index' to be a slice or a torch.Tensor.")
+
+    def _index_with_tensor(self, index: torch.Tensor) -> "GaussianSplat3d":
+        """Internal helper: select Gaussians by boolean mask or integer index tensor."""
+        result = GaussianSplat3d.__new__(GaussianSplat3d)
+        result._means = self._means[index]
+        result._quats = self._quats[index]
+        result._log_scales = self._log_scales[index]
+        result._logit_opacities = self._logit_opacities[index]
+        result._sh0 = self._sh0[index]
+        result._shN = self._shN[index]
+        result._accumulate_mean_2d_gradients = self._accumulate_mean_2d_gradients
+        result._accumulate_max_2d_radii = self._accumulate_max_2d_radii
+        result._accum_grad_norms = self._accum_grad_norms[index] if self._accum_grad_norms is not None else None
+        result._accum_step_counts = self._accum_step_counts[index] if self._accum_step_counts is not None else None
+        result._accum_max_2d_radii = self._accum_max_2d_radii[index] if self._accum_max_2d_radii is not None else None
+        return result
+
+    def _index_with_slice(self, s: slice) -> "GaussianSplat3d":
+        """Internal helper: select Gaussians by slice."""
+        result = GaussianSplat3d.__new__(GaussianSplat3d)
+        result._means = self._means[s]
+        result._quats = self._quats[s]
+        result._log_scales = self._log_scales[s]
+        result._logit_opacities = self._logit_opacities[s]
+        result._sh0 = self._sh0[s]
+        result._shN = self._shN[s]
+        result._accumulate_mean_2d_gradients = self._accumulate_mean_2d_gradients
+        result._accumulate_max_2d_radii = self._accumulate_max_2d_radii
+        result._accum_grad_norms = self._accum_grad_norms[s] if self._accum_grad_norms is not None else None
+        result._accum_step_counts = self._accum_step_counts[s] if self._accum_step_counts is not None else None
+        result._accum_max_2d_radii = self._accum_max_2d_radii[s] if self._accum_max_2d_radii is not None else None
+        return result
 
     @overload
     def __setitem__(self, index: slice, value: "GaussianSplat3d") -> None: ...
@@ -601,12 +493,7 @@ class GaussianSplat3d:
                 Must have the same number of Gaussians as the selected indices or mask.
         """
         if isinstance(index, slice):
-            self._impl.slice_set(
-                index.start if index.start is not None else 0,
-                index.stop if index.stop is not None else self.num_gaussians,
-                index.step if index.step is not None else 1,
-                value._impl,
-            )
+            self._set_with_slice(index, value)
             return
         elif isinstance(index, torch.Tensor):
 
@@ -619,13 +506,69 @@ class GaussianSplat3d:
                         f"Expected 'index' to have the same length as the number of Gaussians ({self.num_gaussians}), "
                         f"but got {len(index)}."
                     )
-                self._impl.mask_set(index, value._impl)
+                self._set_with_tensor(index, value)
             elif index.dtype == torch.int64 or index.dtype == torch.int32:
-                self._impl.index_set(index, value._impl)
+                self._set_with_tensor(index, value)
             else:
                 raise ValueError("Expected 'index' to be a boolean or integer (int32 or int64) tensor.")
         else:
             raise TypeError("Expected 'index' to be a slice or a torch.Tensor")
+
+    def _set_with_tensor(self, index: torch.Tensor, value: "GaussianSplat3d") -> None:
+        """Internal helper: set Gaussians by boolean mask or integer index tensor."""
+        # Use index_put (out-of-place) to avoid in-place errors on leaf tensors with requires_grad
+        self._means = self._means.index_put((index,), value._means)
+        self._quats = self._quats.index_put((index,), value._quats)
+        self._log_scales = self._log_scales.index_put((index,), value._log_scales)
+        self._logit_opacities = self._logit_opacities.index_put((index,), value._logit_opacities)
+        self._sh0 = self._sh0.index_put((index,), value._sh0)
+        self._shN = self._shN.index_put((index,), value._shN)
+        if self._accum_grad_norms is not None:
+            if value._accum_grad_norms is not None:
+                self._accum_grad_norms[index] = value._accum_grad_norms
+            else:
+                self._accum_grad_norms[index] = 0.0
+        if self._accum_step_counts is not None:
+            if value._accum_step_counts is not None:
+                self._accum_step_counts[index] = value._accum_step_counts
+            else:
+                self._accum_step_counts[index] = 0.0
+        if self._accum_max_2d_radii is not None:
+            if value._accum_max_2d_radii is not None:
+                self._accum_max_2d_radii[index] = value._accum_max_2d_radii
+            else:
+                self._accum_max_2d_radii[index] = 0.0
+
+    def _set_with_slice(self, s: slice, value: "GaussianSplat3d") -> None:
+        """Internal helper: set Gaussians by slice."""
+        # Use clone + slice assign to avoid in-place errors on leaf tensors with requires_grad
+        self._means = self._means.clone()
+        self._means[s] = value._means
+        self._quats = self._quats.clone()
+        self._quats[s] = value._quats
+        self._log_scales = self._log_scales.clone()
+        self._log_scales[s] = value._log_scales
+        self._logit_opacities = self._logit_opacities.clone()
+        self._logit_opacities[s] = value._logit_opacities
+        self._sh0 = self._sh0.clone()
+        self._sh0[s] = value._sh0
+        self._shN = self._shN.clone()
+        self._shN[s] = value._shN
+        if self._accum_grad_norms is not None:
+            if value._accum_grad_norms is not None:
+                self._accum_grad_norms[s] = value._accum_grad_norms
+            else:
+                self._accum_grad_norms[s] = 0.0
+        if self._accum_step_counts is not None:
+            if value._accum_step_counts is not None:
+                self._accum_step_counts[s] = value._accum_step_counts
+            else:
+                self._accum_step_counts[s] = 0.0
+        if self._accum_max_2d_radii is not None:
+            if value._accum_max_2d_radii is not None:
+                self._accum_max_2d_radii[s] = value._accum_max_2d_radii
+            else:
+                self._accum_max_2d_radii[s] = 0.0
 
     def detach(self) -> "GaussianSplat3d":
         """
@@ -636,7 +579,19 @@ class GaussianSplat3d:
             gaussian_splat (GaussianSplat3d): A new :class:`GaussianSplat3d` instance whose
                 tensors are detached.
         """
-        return GaussianSplat3d(impl=self._impl.detach(), _private=self.__PRIVATE__)
+        result = GaussianSplat3d.__new__(GaussianSplat3d)
+        result._means = self._means.detach()
+        result._quats = self._quats.detach()
+        result._log_scales = self._log_scales.detach()
+        result._logit_opacities = self._logit_opacities.detach()
+        result._sh0 = self._sh0.detach()
+        result._shN = self._shN.detach()
+        result._accumulate_mean_2d_gradients = self._accumulate_mean_2d_gradients
+        result._accumulate_max_2d_radii = self._accumulate_max_2d_radii
+        result._accum_grad_norms = self._accum_grad_norms.detach() if self._accum_grad_norms is not None else None
+        result._accum_step_counts = self._accum_step_counts.detach() if self._accum_step_counts is not None else None
+        result._accum_max_2d_radii = self._accum_max_2d_radii.detach() if self._accum_max_2d_radii is not None else None
+        return result
 
     def detach_(self) -> None:
         """
@@ -648,7 +603,18 @@ class GaussianSplat3d:
             This method modifies the current instance and does not return a new instance.
 
         """
-        self._impl.detach_in_place()
+        self._means = self._means.detach()
+        self._quats = self._quats.detach()
+        self._log_scales = self._log_scales.detach()
+        self._logit_opacities = self._logit_opacities.detach()
+        self._sh0 = self._sh0.detach()
+        self._shN = self._shN.detach()
+        if self._accum_grad_norms is not None:
+            self._accum_grad_norms = self._accum_grad_norms.detach()
+        if self._accum_step_counts is not None:
+            self._accum_step_counts = self._accum_step_counts.detach()
+        if self._accum_max_2d_radii is not None:
+            self._accum_max_2d_radii = self._accum_max_2d_radii.detach()
 
     @staticmethod
     def cat(
@@ -697,11 +663,75 @@ class GaussianSplat3d:
         Returns:
             GaussianSplat3d: A new instance of GaussianSplat3d containing the concatenated Gaussians.
         """
-        splat_list = [splat._impl for splat in splats]
-        return GaussianSplat3d(
-            impl=GaussianSplat3dCpp.cat(splat_list, accumulate_mean_2d_gradients, accumulate_max_2d_radii, detach),
-            _private=GaussianSplat3d.__PRIVATE__,
-        )
+        result = GaussianSplat3d.__new__(GaussianSplat3d)
+
+        means_list = [s._means for s in splats]
+        quats_list = [s._quats for s in splats]
+        log_scales_list = [s._log_scales for s in splats]
+        logit_opacities_list = [s._logit_opacities for s in splats]
+        sh0_list = [s._sh0 for s in splats]
+        shN_list = [s._shN for s in splats]
+
+        result._means = torch.cat(means_list, dim=0)
+        result._quats = torch.cat(quats_list, dim=0)
+        result._log_scales = torch.cat(log_scales_list, dim=0)
+        result._logit_opacities = torch.cat(logit_opacities_list, dim=0)
+        result._sh0 = torch.cat(sh0_list, dim=0)
+        result._shN = torch.cat(shN_list, dim=0)
+
+        if detach:
+            result._means = result._means.detach()
+            result._quats = result._quats.detach()
+            result._log_scales = result._log_scales.detach()
+            result._logit_opacities = result._logit_opacities.detach()
+            result._sh0 = result._sh0.detach()
+            result._shN = result._shN.detach()
+
+        result._accumulate_mean_2d_gradients = accumulate_mean_2d_gradients
+        result._accumulate_max_2d_radii = accumulate_max_2d_radii
+
+        # Handle accumulator concatenation
+        if accumulate_mean_2d_gradients:
+            grad_norms_list = []
+            step_counts_list = []
+            for s in splats:
+                n = s.num_gaussians
+                dev = s._means.device
+                dtype = s._means.dtype
+                if s._accum_grad_norms is not None:
+                    grad_norms_list.append(s._accum_grad_norms)
+                else:
+                    grad_norms_list.append(torch.zeros(n, device=dev, dtype=dtype))
+                if s._accum_step_counts is not None:
+                    step_counts_list.append(s._accum_step_counts)
+                else:
+                    step_counts_list.append(torch.zeros(n, device=dev, dtype=torch.int32))
+            result._accum_grad_norms = torch.cat(grad_norms_list, dim=0)
+            result._accum_step_counts = torch.cat(step_counts_list, dim=0)
+            if detach:
+                result._accum_grad_norms = result._accum_grad_norms.detach()
+                result._accum_step_counts = result._accum_step_counts.detach()
+        else:
+            result._accum_grad_norms = None
+            result._accum_step_counts = None
+
+        if accumulate_max_2d_radii:
+            max_radii_list = []
+            for s in splats:
+                n = s.num_gaussians
+                dev = s._means.device
+                dtype = s._means.dtype
+                if s._accum_max_2d_radii is not None:
+                    max_radii_list.append(s._accum_max_2d_radii)
+                else:
+                    max_radii_list.append(torch.zeros(n, device=dev, dtype=torch.int32))
+            result._accum_max_2d_radii = torch.cat(max_radii_list, dim=0)
+            if detach:
+                result._accum_max_2d_radii = result._accum_max_2d_radii.detach()
+        else:
+            result._accum_max_2d_radii = None
+
+        return result
 
     @classmethod
     def from_state_dict(cls, state_dict: dict[str, torch.Tensor]) -> "GaussianSplat3d":
@@ -741,7 +771,21 @@ class GaussianSplat3d:
         Returns:
             gaussian_splat (GaussianSplat3d): An instance of :class:`GaussianSplat3d` initialized with the provided state dictionary.
         """
-        return cls(impl=GaussianSplat3dCpp.from_state_dict(state_dict), _private=cls.__PRIVATE__)
+        result = cls.__new__(cls)
+        result._means = state_dict["means"]
+        result._quats = state_dict["quats"]
+        result._log_scales = state_dict["log_scales"]
+        result._logit_opacities = state_dict["logit_opacities"]
+        result._sh0 = state_dict["sh0"]
+        result._shN = state_dict["shN"]
+        result._accumulate_mean_2d_gradients = bool(state_dict["accumulate_mean_2d_gradients"].item())
+        result._accumulate_max_2d_radii = bool(state_dict["accumulate_max_2d_radii"].item())
+
+        result._accum_grad_norms = state_dict.get("accumulated_mean_2d_gradient_norms", None)
+        result._accum_step_counts = state_dict.get("accumulated_gradient_step_counts", None)
+        result._accum_max_2d_radii = state_dict.get("accumulated_max_2d_radii", None)
+
+        return result
 
     @property
     def device(self) -> torch.device:
@@ -751,7 +795,7 @@ class GaussianSplat3d:
         Returns:
             device (torch.device): The device of this :class:`GaussianSplat3d` instance.
         """
-        return self._impl.device
+        return self._means.device
 
     @property
     def dtype(self) -> torch.dtype:
@@ -762,7 +806,7 @@ class GaussianSplat3d:
         Returns:
             torch.dtype: The data type of the tensors managed by this :class:`GaussianSplat3d` instance.
         """
-        return self._impl.dtype
+        return self._means.dtype
 
     @property
     def sh_degree(self) -> int:
@@ -779,7 +823,8 @@ class GaussianSplat3d:
         Returns:
             sh_degree (int): The degree of the spherical harmonics.
         """
-        return self._impl.sh_degree
+        num_bases = self._shN.size(1) + 1
+        return int(math.isqrt(num_bases)) - 1
 
     @property
     def num_channels(self) -> int:
@@ -790,7 +835,7 @@ class GaussianSplat3d:
         Returns:
             num_channels (int): The number of channels.
         """
-        return self._impl.num_channels
+        return self._shN.size(2)
 
     @property
     def num_gaussians(self) -> int:
@@ -801,7 +846,7 @@ class GaussianSplat3d:
         Returns:
             num_gaussians (int): The number of Gaussians.
         """
-        return self._impl.num_gaussians
+        return self._means.size(0)
 
     @property
     def num_sh_bases(self) -> int:
@@ -816,7 +861,7 @@ class GaussianSplat3d:
         Returns:
             num_sh_bases (int): The number of spherical harmonics bases.
         """
-        return self._impl.num_sh_bases
+        return self._shN.size(1) + 1
 
     @property
     def log_scales(self) -> torch.Tensor:
@@ -842,7 +887,7 @@ class GaussianSplat3d:
             log_scales (torch.Tensor): A tensor of shape ``(N, 3)`` where ``N`` is the number
                 of Gaussians (see :attr:`num_gaussians`). Each row represents the log of the scale of a Gaussian in 3D space.
         """
-        return self._impl.log_scales
+        return self._log_scales
 
     @log_scales.setter
     def log_scales(self, value: torch.Tensor) -> None:
@@ -870,7 +915,7 @@ class GaussianSplat3d:
                 scale of a Gaussian in 3D space.
 
         """
-        self._impl.log_scales = cast_check(value, torch.Tensor, "log_scales")
+        self._log_scales = cast_check(value, torch.Tensor, "log_scales")
 
     @property
     def logit_opacities(self) -> torch.Tensor:
@@ -887,7 +932,7 @@ class GaussianSplat3d:
             logit_opacities (torch.Tensor): A tensor of shape ``(N,)`` where ``N`` is the number
                 of Gaussians (see :attr:`num_gaussians`). Each row represents the logit of the opacity of a Gaussian in 3D space.
         """
-        return self._impl.logit_opacities
+        return self._logit_opacities
 
     @logit_opacities.setter
     def logit_opacities(self, value: torch.Tensor) -> None:
@@ -904,7 +949,7 @@ class GaussianSplat3d:
             value (torch.Tensor): A tensor of shape ``(N,)`` where ``N`` is the number
                 of Gaussians (see :attr:`num_gaussians`). Each row represents the logit of the opacity of a Gaussian in 3D space.
         """
-        self._impl.logit_opacities = cast_check(value, torch.Tensor, "logit_opacities")
+        self._logit_opacities = cast_check(value, torch.Tensor, "logit_opacities")
 
     @property
     def means(self) -> torch.Tensor:
@@ -926,7 +971,7 @@ class GaussianSplat3d:
             torch.Tensor: A tensor of shape (N, 3) where N is the number
                 of Gaussians (see `num_gaussians`). Each row represents the mean of a Gaussian in 3D space.
         """
-        return self._impl.means
+        return self._means
 
     @means.setter
     def means(self, value: torch.Tensor) -> None:
@@ -947,7 +992,7 @@ class GaussianSplat3d:
             value (torch.Tensor): A tensor of shape ``(N, 3)`` where ``N`` is the number
                 of Gaussians (see :attr:`num_gaussians`). Each row represents the mean of a Gaussian in 3D space.
         """
-        self._impl.means = cast_check(value, torch.Tensor, "means")
+        self._means = cast_check(value, torch.Tensor, "means")
 
     @property
     def quats(self) -> torch.Tensor:
@@ -967,7 +1012,7 @@ class GaussianSplat3d:
             quats (torch.Tensor): A tensor of shape ``(N, 4)`` where ``N`` is the number
                 of Gaussians (see :attr:`num_gaussians`). Each row represents the unit quaternion of a Gaussian in 3D space.
         """
-        return self._impl.quats
+        return self._quats
 
     @quats.setter
     def quats(self, value: torch.Tensor) -> None:
@@ -987,7 +1032,7 @@ class GaussianSplat3d:
             value (torch.Tensor): A tensor of shape ``(N, 4)`` where ``N`` is the number
                 of Gaussians (see :attr:`num_gaussians`). Each row represents the unit quaternion of a Gaussian in 3D space.
         """
-        self._impl.quats = cast_check(value, torch.Tensor, "quats")
+        self._quats = cast_check(value, torch.Tensor, "quats")
 
     @property
     def requires_grad(self) -> bool:
@@ -1012,7 +1057,14 @@ class GaussianSplat3d:
         Returns:
             requires_grad (bool): ``True`` if gradients are required, ``False`` otherwise.
         """
-        return self._impl.requires_grad
+        return (
+            self._means.requires_grad
+            and self._quats.requires_grad
+            and self._log_scales.requires_grad
+            and self._logit_opacities.requires_grad
+            and self._sh0.requires_grad
+            and self._shN.requires_grad
+        )
 
     @requires_grad.setter
     def requires_grad(self, value: bool) -> None:
@@ -1037,7 +1089,13 @@ class GaussianSplat3d:
         Returns:
             requires_grad (bool): ``True`` if gradients are required, ``False`` otherwise.
         """
-        self._impl.requires_grad = cast_check(value, bool, "requires_grad")
+        value = cast_check(value, bool, "requires_grad")
+        self._means.requires_grad_(value)
+        self._quats.requires_grad_(value)
+        self._log_scales.requires_grad_(value)
+        self._logit_opacities.requires_grad_(value)
+        self._sh0.requires_grad_(value)
+        self._shN.requires_grad_(value)
 
     @property
     def sh0(self) -> torch.Tensor:
@@ -1050,7 +1108,7 @@ class GaussianSplat3d:
                 of Gaussians (see :attr:`num_gaussians`), and ``D`` is the number of channels (see :attr:`num_channels`).
                 Each row represents the diffuse SH coefficients for a Gaussian.
         """
-        return self._impl.sh0
+        return self._sh0
 
     @sh0.setter
     def sh0(self, value: torch.Tensor) -> None:
@@ -1063,7 +1121,7 @@ class GaussianSplat3d:
                 of Gaussians (see :attr:`num_gaussians`), and ``D`` is the number of channels (see :attr:`num_channels`).
                 Each row represents the diffuse SH coefficients for a Gaussian.
         """
-        self._impl.sh0 = cast_check(value, torch.Tensor, "sh0")
+        self._sh0 = cast_check(value, torch.Tensor, "sh0")
 
     @property
     def shN(self) -> torch.Tensor:
@@ -1077,7 +1135,7 @@ class GaussianSplat3d:
                 and K is the number of spherical harmonic bases (see `num_sh_bases`).
                 Each row represents the directionally varying SH coefficients for a Gaussian.
         """
-        return self._impl.shN
+        return self._shN
 
     @shN.setter
     def shN(self, value: torch.Tensor) -> None:
@@ -1091,7 +1149,7 @@ class GaussianSplat3d:
                 and ``K`` is the number of spherical harmonic bases (see :attr:`num_sh_bases`).
                 Each row represents the directionally varying SH coefficients for a Gaussian.
         """
-        self._impl.shN = cast_check(value, torch.Tensor, "shN")
+        self._shN = cast_check(value, torch.Tensor, "shN")
 
     @property
     def opacities(self) -> torch.Tensor:
@@ -1108,7 +1166,7 @@ class GaussianSplat3d:
             opacities (torch.Tensor): A tensor of shape ``(N,)`` where ``N`` is the number of Gaussians (see :attr:`num_gaussians`).
                 Each element represents the opacity of a Gaussian.
         """
-        return self._impl.opacities
+        return torch.sigmoid(self._logit_opacities)
 
     @property
     def scales(self) -> torch.Tensor:
@@ -1134,10 +1192,10 @@ class GaussianSplat3d:
             scales (torch.Tensor): A tensor of shape ``(N, 3)`` where ``N`` is the number
                 of Gaussians. Each row represents the scale of a Gaussian in 3D space.
         """
-        return self._impl.scales
+        return torch.exp(self._log_scales)
 
     @property
-    def accumulated_gradient_step_counts(self) -> torch.Tensor:
+    def accumulated_gradient_step_counts(self) -> torch.Tensor | None:
         """
         Returns the accumulated gradient step counts for each Gaussian.
 
@@ -1155,10 +1213,10 @@ class GaussianSplat3d:
             step_counts (torch.Tensor): A tensor of shape ``(N,)`` where ``N`` is the number of Gaussians (see :attr:`num_gaussians`).
                 Each element represents the accumulated gradient step count for a Gaussian.
         """
-        return self._impl.accumulated_gradient_step_counts
+        return self._accum_step_counts
 
     @property
-    def accumulated_max_2d_radii(self) -> torch.Tensor:
+    def accumulated_max_2d_radii(self) -> torch.Tensor | None:
         """
         Returns the maximum 2D projected radius (in pixels) for each Gaussian across all calls to `render_*` functions.
         This is used by certain optimization techniques to ensure that the Gaussians do not become too large or too small during the optimization process.
@@ -1177,7 +1235,7 @@ class GaussianSplat3d:
                 Each element represents the maximum 2D radius for a Gaussian across all optimization iterations.
 
         """
-        return self._impl.accumulated_max_2d_radii
+        return self._accum_max_2d_radii
 
     @property
     def accumulate_max_2d_radii(self) -> bool:
@@ -1193,7 +1251,7 @@ class GaussianSplat3d:
         Returns:
             accumulate_max_radii (bool): ``True`` if the maximum 2D radii are being tracked across rendering calls, ``False`` otherwise.
         """
-        return self._impl.accumulate_max_2d_radii
+        return self._accumulate_max_2d_radii
 
     @accumulate_max_2d_radii.setter
     def accumulate_max_2d_radii(self, value) -> None:
@@ -1208,7 +1266,7 @@ class GaussianSplat3d:
         Args:
             value (bool): ``True`` if the maximum 2D radii are being tracked across rendering calls, ``False`` otherwise.
         """
-        self._impl.accumulate_max_2d_radii = cast_check(value, bool, "accumulate_max_2d_radii")
+        self._accumulate_max_2d_radii = cast_check(value, bool, "accumulate_max_2d_radii")
 
     @property
     def accumulate_mean_2d_gradients(self) -> bool:
@@ -1231,7 +1289,7 @@ class GaussianSplat3d:
         Returns:
             accumulate_mean_2d_grads (bool): ``True`` if the average norm of the gradient of projected means is being tracked, ``False`` otherwise.
         """
-        return self._impl.accumulate_mean_2d_gradients
+        return self._accumulate_mean_2d_gradients
 
     @accumulate_mean_2d_gradients.setter
     def accumulate_mean_2d_gradients(self, value: bool) -> None:
@@ -1254,10 +1312,10 @@ class GaussianSplat3d:
         Args:
             value (bool): ``True`` if the average norm of the gradient of projected means is being tracked, ``False`` otherwise.
         """
-        self._impl.accumulate_mean_2d_gradients = cast_check(value, bool, "accumulate_mean_2d_gradients")
+        self._accumulate_mean_2d_gradients = cast_check(value, bool, "accumulate_mean_2d_gradients")
 
     @property
-    def accumulated_mean_2d_gradient_norms(self) -> torch.Tensor:
+    def accumulated_mean_2d_gradient_norms(self) -> torch.Tensor | None:
         """
         Returns the average norm of the gradient of projected (2D) means for each Gaussian across every backward pass.
         This is used by certain optimization techniques to split/prune/duplicate Gaussians.
@@ -1279,9 +1337,21 @@ class GaussianSplat3d:
                 Each element represents the average norm of the gradient of projected means for a Gaussian across all optimization iterations.
                 The norm is computed in 2D space, i.e., the projected means.
         """
-        return self._impl.accumulated_mean_2d_gradient_norms
+        return self._accum_grad_norms
 
-    def project_gaussians_for_depths(
+    def _init_accumulators(self) -> None:
+        """Lazily initialize gradient/radii accumulators if enabled."""
+        N = self._means.size(0)
+        if self._accumulate_mean_2d_gradients:
+            if self._accum_grad_norms is None:
+                self._accum_grad_norms = torch.zeros(N, device=self._means.device, dtype=self._means.dtype)
+            if self._accum_step_counts is None:
+                self._accum_step_counts = torch.zeros(N, device=self._means.device, dtype=torch.int32)
+        if self._accumulate_max_2d_radii:
+            if self._accum_max_2d_radii is None:
+                self._accum_max_2d_radii = torch.zeros(N, device=self._means.device, dtype=torch.int32)
+
+    def _project_and_eval_sh(
         self,
         world_to_camera_matrices: torch.Tensor,
         projection_matrices: torch.Tensor,
@@ -1289,215 +1359,53 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        camera_model: CameraModel = CameraModel.PINHOLE,
-        projection_method: ProjectionMethod = ProjectionMethod.AUTO,
-        distortion_coeffs: torch.Tensor | None = None,
-        min_radius_2d: float = 0.0,
-        eps_2d: float = 0.3,
-        antialias: bool = False,
-    ) -> ProjectedGaussianSplats:
-        """
-        Projects this :class:`GaussianSplat3d` onto one or more image planes for rendering depth images in those planes.
-        You can render depth images from the projected Gaussians by calling :meth:`render_projected_gaussians`.
-
-        .. note::
-
-            The reason to have a separate projection and rendering step is to enable rendering crops of an image without
-            having to project the Gaussians again.
-
-
-        .. note::
-
-            All images being rendered must have the same width and height.
-
-
-        .. seealso::
-
-            :class:`fvdb.ProjectedGaussianSplats` for the projected Gaussians representation.
-
-        .. code-block:: python
-
-            # Assume gaussian_splat_3d is an instance of GaussianSplat3d
-            # Project the Gaussians for rendering depth images onto C image planes
-            projected_gaussians = gaussian_splat_3d.project_gaussians_for_depths(
-                world_to_camera_matrices, # tensor of shape [C, 4, 4]
-                projection_matrices, # tensor of shape [C, 3, 3]
-                image_width, # width of the C images
-                image_height, # height of the C images
-                near, # near clipping plane
-                far) # far clipping plane
-
-            # Now render a crop of size 100x100 starting at (10, 10) from the projected Gaussians
-            # in each image plane.
-            # Returns a tensor of shape [C, 100, 100, 1] containing the depth images,
-            # and a tensor of shape [C, 100, 100, 1] containing the final alpha (opacity) values
-            # of each pixel.
-            cropped_depth_images_1, cropped_alphas = gaussian_splat_3d.render_from_projected_gaussians(
-                projected_gaussians,
-                crop_width=100,
-                crop_height=100,
-                crop_origin_w=10,
-                crop_origin_h=10)
-
-            # To get the depth images, divide the last channel by the alpha values
-            true_depths_1 = cropped_images_1[..., -1:] / cropped_alphas
-
-        Args:
-            world_to_camera_matrices (torch.Tensor): Tensor of shape ``(C, 4, 4)`` representing the world-to-camera transformation matrices for ``C`` cameras.
-                Each matrix transforms points from world coordinates to camera coordinates.
-            projection_matrices (torch.Tensor): Tensor of shape ``(C, 3, 3)`` representing the projection matrices for ``C`` cameras.
-                Each matrix projects points in camera space into homogeneous pixel coordinates.
-            image_width (int): The width of the images to be rendered. Note that all images must have the same width.
-            image_height (int): The height of the images to be rendered. Note that all images must have the same height.
-            near (float): The near clipping plane distance for the projection.
-            far (float): The far clipping plane distance for the projection.
-            camera_model (CameraModel): Semantic camera model for projection. Default is
-                :attr:`fvdb.CameraModel.PINHOLE`.
-            projection_method (ProjectionMethod): Projection implementation selector. Default is
-                :attr:`fvdb.ProjectionMethod.AUTO`.
-            distortion_coeffs (torch.Tensor | None): Distortion coefficients with shape ``(C, 12)``.
-                Required for :class:`CameraModel.OPENCV_*` camera models. For
-                :class:`CameraModel.PINHOLE` and :class:`CameraModel.ORTHOGRAPHIC`, pass
-                ``None`` or a ``(C, 12)`` tensor, which is ignored. To represent no
-                distortion with an OpenCV camera model, pass a zero-filled tensor.
-            min_radius_2d (float): The minimum radius (in pixels) below which Gaussians are ignored during rendering.
-            eps_2d (float): A value used to pad Gaussians when projecting them onto the image plane, to avoid very projected Gaussians which create artifacts and
-                numerical issues.
-            antialias (bool): If ``True``, applies opacity correction to the projected Gaussians when using ``eps_2d > 0.0``.
-
-        Returns:
-            projected_gaussians (ProjectedGaussianSplats): An instance of ProjectedGaussianSplats containing the projected Gaussians.
-                This object contains the projected 2D representations of the Gaussians, which can be used for rendering depth images or further processing.
-
-        """
-        return ProjectedGaussianSplats(
-            self._impl.project_gaussians_for_depths(
-                world_to_camera_matrices=world_to_camera_matrices,
-                projection_matrices=projection_matrices,
-                image_width=image_width,
-                image_height=image_height,
-                near=near,
-                far=far,
-                camera_model=self._camera_model_to_cpp(camera_model),
-                projection_method=self._projection_method_to_cpp(projection_method),
-                distortion_coeffs=distortion_coeffs,
-                min_radius_2d=min_radius_2d,
-                eps_2d=eps_2d,
-                antialias=antialias,
-            ),
-            _private=ProjectedGaussianSplats.__PRIVATE__,
-        )
-
-    def project_gaussians_for_images(
-        self,
-        world_to_camera_matrices: torch.Tensor,
-        projection_matrices: torch.Tensor,
-        image_width: int,
-        image_height: int,
-        near: float,
-        far: float,
+        render_mode: GaussianRenderMode,
         camera_model: CameraModel = CameraModel.PINHOLE,
         projection_method: ProjectionMethod = ProjectionMethod.AUTO,
         distortion_coeffs: torch.Tensor | None = None,
         sh_degree_to_use: int = -1,
-        min_radius_2d: float = 0.0,
         eps_2d: float = 0.3,
+        radius_clip: float = 0.0,
         antialias: bool = False,
-    ) -> ProjectedGaussianSplats:
+    ) -> tuple[ProjectedGaussians, torch.Tensor]:
+        """Project gaussians and evaluate SH features (Stages 1-2).
+
+        Returns ``(projected, features)``.
         """
-        Projects this :class:`GaussianSplat3d` onto one or more image planes for rendering multi-channel (see :attr:`num_channels`) images in those planes.
-        You can render images from the projected Gaussians by calling :meth:`render_projected_gaussians`.
+        self._init_accumulators()
 
-        .. note::
-
-            The reason to have a separate projection and rendering step is to enable rendering crops of an image without
-            having to project the Gaussians again.
-
-
-        .. note::
-
-            All images being rendered must have the same width and height.
-
-
-        .. seealso::
-
-            :class:`fvdb.ProjectedGaussianSplats` for the projected Gaussians representation.
-
-        .. code-block:: python
-
-            # Assume gaussian_splat_3d is an instance of GaussianSplat3d
-            # Project the Gaussians for rendering images onto C image planes
-            projected_gaussians = gaussian_splat_3d.project_gaussians_for_images(
-                world_to_camera_matrices, # tensor of shape [C, 4, 4]
-                projection_matrices, # tensor of shape [C, 3, 3]
-                image_width, # width of the C images
-                image_height, # height of the C images
-                near, # near clipping plane
-                far) # far clipping plane
-
-            # Now render a crop of size 100x100 starting at (10, 10) from the projected Gaussians
-            # in each image plane.
-            # Returns a tensor of shape [C, 100, 100, D] containing the images (where D is num_channels),
-            # and a tensor of shape [C, 100, 100, 1] containing the final alpha (opacity) values
-            # of each pixel.
-            cropped_images_1, cropped_alphas = gaussian_splat_3d.render_from_projected_gaussians(
-                projected_gaussians,
-                crop_width=100,
-                crop_height=100,
-                crop_origin_w=10,
-                crop_origin_h=10)
-
-        Args:
-            world_to_camera_matrices (torch.Tensor): Tensor of shape ``(C, 4, 4)`` representing the world-to-camera transformation matrices for ``C`` cameras.
-                Each matrix transforms points from world coordinates to camera coordinates.
-            projection_matrices (torch.Tensor): Tensor of shape ``(C, 3, 3)`` representing the projection matrices for ``C`` cameras.
-                Each matrix projects points in camera space into homogeneous pixel coordinates.
-            image_width (int): The width of the images to be rendered. Note that all images must have the same width.
-            image_height (int): The height of the images to be rendered. Note that all images must have the same height.
-            near (float): The near clipping plane distance for the projection.
-            far (float): The far clipping plane distance for the projection.
-            camera_model (CameraModel): Semantic camera model for projection. Default is
-                :attr:`fvdb.CameraModel.PINHOLE`.
-            projection_method (ProjectionMethod): Projection implementation selector. Default is
-                :attr:`fvdb.ProjectionMethod.AUTO`.
-            distortion_coeffs (torch.Tensor | None): Distortion coefficients with shape ``(C, 12)``.
-                Required for :class:`CameraModel.OPENCV_*` camera models. For
-                :class:`CameraModel.PINHOLE` and :class:`CameraModel.ORTHOGRAPHIC`, pass
-                ``None`` or a ``(C, 12)`` tensor, which is ignored. To represent no
-                distortion with an OpenCV camera model, pass a zero-filled tensor.
-            sh_degree_to_use (int): The degree of spherical harmonics to use for rendering. -1 means use all available SH bases.
-                0 means use only the first SH base (constant color). Note that you can't use more SH bases than available in the GaussianSplat3d instance.
-                Default is -1.
-            min_radius_2d (float): The minimum radius (in pixels) below which Gaussians are ignored during rendering.
-            eps_2d (float): A value used to pad Gaussians when projecting them onto the image plane, to avoid very projected Gaussians which create artifacts and
-                numerical issues.
-            antialias (bool): If ``True``, applies opacity correction to the projected Gaussians when using ``eps_2d > 0.0``.
-
-        Returns:
-            projected_gaussians (ProjectedGaussianSplats): An instance of ProjectedGaussianSplats containing the projected Gaussians.
-                This object contains the projected 2D representations of the Gaussians, which can be used for rendering images or further processing.
-
-        """
-        return ProjectedGaussianSplats(
-            self._impl.project_gaussians_for_images(
-                world_to_camera_matrices=world_to_camera_matrices,
-                projection_matrices=projection_matrices,
-                image_width=image_width,
-                image_height=image_height,
-                near=near,
-                far=far,
-                camera_model=self._camera_model_to_cpp(camera_model),
-                projection_method=self._projection_method_to_cpp(projection_method),
-                distortion_coeffs=distortion_coeffs,
-                sh_degree_to_use=sh_degree_to_use,
-                min_radius_2d=min_radius_2d,
-                eps_2d=eps_2d,
-                antialias=antialias,
-            ),
-            _private=ProjectedGaussianSplats.__PRIVATE__,
+        projected = GF.project_gaussians(
+            self._means,
+            self._quats,
+            self._log_scales,
+            world_to_camera_matrices,
+            projection_matrices,
+            image_width,
+            image_height,
+            eps_2d=eps_2d,
+            near=near,
+            far=far,
+            radius_clip=radius_clip,
+            antialias=antialias,
+            camera_model=camera_model,
+            projection_method=projection_method,
+            distortion_coeffs=distortion_coeffs,
+            accum_grad_norms=self._accum_grad_norms,
+            accum_step_counts=self._accum_step_counts,
+            accum_max_radii=self._accum_max_2d_radii,
         )
+        features = GF.evaluate_gaussian_sh(
+            self._means,
+            self._sh0,
+            self._shN,
+            world_to_camera_matrices,
+            projected,
+            sh_degree_to_use=sh_degree_to_use,
+            render_mode=render_mode,
+        )
+        return projected, features
 
-    def project_gaussians_for_images_and_depths(
+    def project_gaussians(
         self,
         world_to_camera_matrices: torch.Tensor,
         projection_matrices: torch.Tensor,
@@ -1508,220 +1416,162 @@ class GaussianSplat3d:
         camera_model: CameraModel = CameraModel.PINHOLE,
         projection_method: ProjectionMethod = ProjectionMethod.AUTO,
         distortion_coeffs: torch.Tensor | None = None,
-        sh_degree_to_use: int = -1,
         min_radius_2d: float = 0.0,
         eps_2d: float = 0.3,
         antialias: bool = False,
-    ) -> ProjectedGaussianSplats:
+    ) -> ProjectedGaussians:
         """
-        Projects this :class:`GaussianSplat3d` onto one or more image planes for rendering multi-channel (see :attr:`num_channels`) images with depths
-        in the last channel.
-        You can render images+depths from the projected Gaussians by calling :meth:`render_projected_gaussians`.
+        Projects this :class:`GaussianSplat3d` onto one or more image planes.
 
-        .. note::
-
-            The reason to have a separate projection and rendering step is to enable rendering crops of an image without
-            having to project the Gaussians again.
-
+        Returns a :class:`ProjectedGaussians` containing the 2D screen-space
+        projections.  You can then render from this projection using
+        :meth:`render_from_projected_gaussians`, which is useful for rendering
+        multiple crops without re-projecting.
 
         .. note::
 
             All images being rendered must have the same width and height.
-
-
-        .. seealso::
-
-            :class:`fvdb.ProjectedGaussianSplats` for the projected Gaussians representation.
-
-        .. code-block:: python
-
-            # Assume gaussian_splat_3d is an instance of GaussianSplat3d
-            # Project the Gaussians for rendering images onto C image planes
-            projected_gaussians = gaussian_splat_3d.project_gaussians_for_images_and_depths(
-                world_to_camera_matrices, # tensor of shape [C, 4, 4]
-                projection_matrices, # tensor of shape [C, 3, 3]
-                image_width, # width of the C images
-                image_height, # height of the C images
-                near, # near clipping plane
-                far) # far clipping plane
-
-            # Now render a crop of size 100x100 starting at (10, 10) from the projected Gaussians
-            # in each image plane.
-            # Returns a tensor of shape [C, 100, 100, D] containing the images (where D is num_channels + 1 for depth),
-            # and a tensor of shape [C, 100, 100, 1] containing the final alpha (opacity) values
-            # of each pixel.
-            cropped_images_1, cropped_alphas = gaussian_splat_3d.render_from_projected_gaussians(
-                projected_gaussians,
-                crop_width=100,
-                crop_height=100,
-                crop_origin_w=10,
-                crop_origin_h=10)
-
-            cropped_images = cropped_images_1[..., :-1]  # Extract image channels
-
-            # Divide by alpha to get the final true depth values
-            cropped_depths = cropped_images_1[..., -1:] / cropped_alphas  # Extract depth channel
-
-        Args:
-            world_to_camera_matrices (torch.Tensor): Tensor of shape ``(C, 4, 4)`` representing the world-to-camera transformation matrices for ``C`` cameras.
-                Each matrix transforms points from world coordinates to camera coordinates.
-            projection_matrices (torch.Tensor): Tensor of shape ``(C, 3, 3)`` representing the projection matrices for ``C`` cameras.
-                Each matrix projects points in camera space into homogeneous pixel coordinates.
-            image_width (int): The width of the images to be rendered. Note that all images must have the same width.
-            image_height (int): The height of the images to be rendered. Note that all images must have the same height.
-            near (float): The near clipping plane distance for the projection.
-            far (float): The far clipping plane distance for the projection.
-            camera_model (CameraModel): Semantic camera model for projection. Default is
-                :attr:`fvdb.CameraModel.PINHOLE`.
-            projection_method (ProjectionMethod): Projection implementation selector. Default is
-                :attr:`fvdb.ProjectionMethod.AUTO`.
-            distortion_coeffs (torch.Tensor | None): Distortion coefficients with shape ``(C, 12)``.
-                Required for :class:`CameraModel.OPENCV_*` camera models. For
-                :class:`CameraModel.PINHOLE` and :class:`CameraModel.ORTHOGRAPHIC`, pass
-                ``None`` or a ``(C, 12)`` tensor, which is ignored. To represent no
-                distortion with an OpenCV camera model, pass a zero-filled tensor.
-            sh_degree_to_use (int): The degree of spherical harmonics to use for rendering. -1 means use all available SH bases.
-                0 means use only the first SH base (constant color). Note that you can't use more SH bases than available in the GaussianSplat3d instance.
-                Default is -1.
-            min_radius_2d (float): The minimum radius (in pixels) below which Gaussians are ignored during rendering.
-            eps_2d (float): A value used to pad Gaussians when projecting them onto the image plane, to avoid very projected Gaussians which create artifacts and
-                numerical issues.
-            antialias (bool): If ``True``, applies opacity correction to the projected Gaussians when using ``eps_2d > 0.0``.
-
-        Returns:
-            projected_gaussians (ProjectedGaussianSplats): An instance of ProjectedGaussianSplats containing the projected Gaussians.
-                This object contains the projected 2D representations of the Gaussians, which can be used for rendering images or further processing.
-
-        """
-        return ProjectedGaussianSplats(
-            self._impl.project_gaussians_for_images_and_depths(
-                world_to_camera_matrices=world_to_camera_matrices,
-                projection_matrices=projection_matrices,
-                image_width=image_width,
-                image_height=image_height,
-                near=near,
-                far=far,
-                camera_model=self._camera_model_to_cpp(camera_model),
-                projection_method=self._projection_method_to_cpp(projection_method),
-                distortion_coeffs=distortion_coeffs,
-                sh_degree_to_use=sh_degree_to_use,
-                min_radius_2d=min_radius_2d,
-                eps_2d=eps_2d,
-                antialias=antialias,
-            ),
-            _private=ProjectedGaussianSplats.__PRIVATE__,
-        )
-
-    def render_from_projected_gaussians(
-        self,
-        projected_gaussians: ProjectedGaussianSplats,
-        crop_width: int = -1,
-        crop_height: int = -1,
-        crop_origin_w: int = -1,
-        crop_origin_h: int = -1,
-        tile_size: int = 16,
-        backgrounds: torch.Tensor | None = None,
-        masks: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-        Render a set of images from Gaussian splats that have already been projected onto image planes
-        (See for example :meth:`project_gaussians_for_images`).
-        This method is useful when you want to render images from pre-computed projected Gaussians,
-        for example, when rendering crops of images without having to re-project the Gaussians.
-
-        .. note::
-
-            If you want to render the full image, pass negative values for ``crop_width``, ``crop_height``,
-            ``crop_origin_w``, and ``crop_origin_h`` (default behavior). To render full images,
-            all these values must be negative or this method will raise an error.
-
-        .. note::
-
-            If your crop goes beyond the image boundaries, the resulting image will be clipped to
-            be within the image boundaries.
-
 
         Example:
 
         .. code-block:: python
 
-            # Assume gaussian_splat_3d is an instance of GaussianSplat3d
-            # Project the Gaussians for rendering images onto C image planes
-            projected_gaussians = gaussian_splat_3d.project_gaussians_for_images_and_depths(
-                world_to_camera_matrices, # tensor of shape [C, 4, 4]
-                projection_matrices, # tensor of shape [C, 3, 3]
-                image_width, # width of the C images
-                image_height, # height of the C images
-                near, # near clipping plane
-                far) # far clipping plane
+            projected = splat.project_gaussians(
+                world_to_camera_matrices,  # [C, 4, 4]
+                projection_matrices,       # [C, 3, 3]
+                image_width, image_height,
+                near, far)
 
-            # Now render a crop of size 100x100 starting at (10, 10) from the projected Gaussians
-            # in each image plane.
-            # Returns a tensor of shape [C, 100, 100, D] containing the images (where D is num_channels + 1 for depth),
-            # and a tensor of shape [C, 100, 100, 1] containing the final alpha (opacity) values
-            # of each pixel.
-            cropped_images_1, cropped_alphas = gaussian_splat_3d.render_from_projected_gaussians(
-                projected_gaussians,
-                crop_width=100,
-                crop_height=100,
-                crop_origin_w=10,
-                crop_origin_h=10)
-
-            cropped_images = cropped_images_1[..., :-1]  # Extract image channels
-
-            # Divide by alpha to get the final true depth values
-            cropped_depths = cropped_images_1[..., -1:] / cropped_alphas  # Extract depth channel
-
+            crop1, alpha1 = splat.render_from_projected_gaussians(
+                projected, world_to_camera_matrices,
+                render_mode=GaussianRenderMode.FEATURES,
+                crop_width=100, crop_height=100,
+                crop_origin_w=0, crop_origin_h=0)
 
         Args:
-            projected_gaussians (ProjectedGaussianSplats): An instance of :class:`fvdb.ProjectedGaussianSplats`
-                containing the projected Gaussians after spherical harmonic evaluation. This object should have been created by calling
-                :meth:`project_gaussians_for_images`, :meth:`project_gaussians_for_depths`,
-                :meth:`project_gaussians_for_images_and_depths`, etc.
-            crop_width (int): The width of the crop to render. If -1, the full image width is used.
-                Default is -1.
-            crop_height (int): The height of the crop to render. If -1, the full image height is used.
-                Default is -1.
-            crop_origin_w (int): The x-coordinate of the top-left corner of the crop. If -1, the crop starts at (0, 0).
-                Default is -1.
-            crop_origin_h (int): The y-coordinate of the top-left corner of the crop. If -1, the crop starts at (0, 0).
-                Default is -1.
-            tile_size (int): The size of the tiles to use for rendering. Default is 16.
-                This parameter controls the size of the tiles used for rendering the images.
-                You shouldn't set this parameter unless you really know what you are doing.
-            backgrounds (torch.Tensor | None): Optional background colors of shape ``(C, D)``.
-                If ``None``, background is treated as 0.
-            masks (torch.Tensor | None): Optional per-pixel boolean mask of shape ``(C, cropH, cropW)``
-                (in crop coordinate space, matching the output dimensions).
-                ``True`` means render, ``False`` means skip (filled with background).
-
+            world_to_camera_matrices (torch.Tensor): ``(C, 4, 4)`` world-to-camera transforms.
+            projection_matrices (torch.Tensor): ``(C, 3, 3)`` projection matrices.
+            image_width (int): Width of the target images.
+            image_height (int): Height of the target images.
+            near (float): Near clipping plane.
+            far (float): Far clipping plane.
+            camera_model (CameraModel): Camera model. Default :attr:`CameraModel.PINHOLE`.
+            projection_method (ProjectionMethod): Projection selector. Default :attr:`ProjectionMethod.AUTO`.
+            distortion_coeffs (torch.Tensor | None): ``(C, 12)`` distortion coefficients.
+                Required for ``OPENCV_*`` camera models.
+            min_radius_2d (float): Minimum 2D radius in pixels (smaller Gaussians are culled).
+            eps_2d (float): Padding applied to projected Gaussians.
+            antialias (bool): Apply opacity correction when ``eps_2d > 0``.
 
         Returns:
-            rendered_images (torch.Tensor): A tensor of shape ``(C, H, W, D)`` where ``C`` is the number of image planes,
-                ``H`` is the height of the rendered images, ``W`` is the width of the rendered images, and ``D`` is the
-                number of channels (e.g., RGB, RGBD, etc.).
-            alpha_images (torch.Tensor): A tensor of shape ``(C, H, W, 1)`` where ``C`` is the number of cameras,
-                ``H`` is the height of the images, and ``W`` is the width of the images.
-                Each element represents the alpha value (opacity) at a pixel such that 0 <= alpha < 1,
-                and 0 means the pixel is fully transparent, and 1 means the pixel is fully opaque.
+            :class:`ProjectedGaussians` with the screen-space projection.
         """
+        self._init_accumulators()
+        return GF.project_gaussians(
+            self._means,
+            self._quats,
+            self._log_scales,
+            world_to_camera_matrices,
+            projection_matrices,
+            image_width,
+            image_height,
+            eps_2d=eps_2d,
+            near=near,
+            far=far,
+            radius_clip=min_radius_2d,
+            antialias=antialias,
+            camera_model=camera_model,
+            projection_method=projection_method,
+            distortion_coeffs=distortion_coeffs,
+            accum_grad_norms=self._accum_grad_norms,
+            accum_step_counts=self._accum_step_counts,
+            accum_max_radii=self._accum_max_2d_radii,
+        )
+
+    def render_from_projected_gaussians(
+        self,
+        projected_gaussians: ProjectedGaussians,
+        world_to_camera_matrices: torch.Tensor,
+        render_mode: GaussianRenderMode = GaussianRenderMode.FEATURES,
+        sh_degree_to_use: int = -1,
+        tile_size: int = 16,
+        crop_width: int = -1,
+        crop_height: int = -1,
+        crop_origin_w: int = -1,
+        crop_origin_h: int = -1,
+        backgrounds: torch.Tensor | None = None,
+        masks: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Render images from pre-projected Gaussians.
+
+        This avoids the expensive projection step when rendering multiple crops
+        of the same scene. SH evaluation, tile intersection, and rasterization
+        are performed inside this call.
+
+        Example:
+
+        .. code-block:: python
+
+            projected = splat.project_gaussians(w2c, K, W, H, near, far)
+
+            crop, alpha = splat.render_from_projected_gaussians(
+                projected, w2c,
+                render_mode=GaussianRenderMode.FEATURES,
+                crop_width=100, crop_height=100,
+                crop_origin_w=10, crop_origin_h=10)
+
+        Args:
+            projected_gaussians (ProjectedGaussians): Projection from :meth:`project_gaussians`.
+            world_to_camera_matrices (torch.Tensor): ``(C, 4, 4)`` world-to-camera transforms
+                (needed for view-dependent SH evaluation).
+            render_mode (GaussianRenderMode): What to render. Default ``FEATURES``.
+            sh_degree_to_use (int): SH degree to use (``-1`` = all available).
+            tile_size (int): Tile size for rasterization.
+            crop_width (int): Crop width (``-1`` for full image).
+            crop_height (int): Crop height (``-1`` for full image).
+            crop_origin_w (int): Crop x-origin (``-1`` for 0).
+            crop_origin_h (int): Crop y-origin (``-1`` for 0).
+            backgrounds (torch.Tensor | None): ``(C, D)`` background colors.
+            masks (torch.Tensor | None): ``(C, cropH, cropW)`` per-pixel boolean mask.
+
+        Returns:
+            Tuple of ``(rendered_images, alpha_images)``.
+        """
+        features = GF.evaluate_gaussian_sh(
+            self._means,
+            self._sh0,
+            self._shN,
+            world_to_camera_matrices,
+            projected_gaussians,
+            sh_degree_to_use=sh_degree_to_use,
+            render_mode=render_mode,
+        )
+        tiles = GF.intersect_gaussian_tiles(projected_gaussians, tile_size=tile_size)
         tile_masks = _pixel_mask_to_tile_mask(masks, tile_size) if masks is not None else None
 
-        features, alphas = self._impl.render_from_projected_gaussians(
-            projected_gaussians=projected_gaussians._impl,
-            crop_width=crop_width,
-            crop_height=crop_height,
-            crop_origin_w=crop_origin_w,
-            crop_origin_h=crop_origin_h,
-            tile_size=tile_size,
-            backgrounds=backgrounds,
-            masks=tile_masks,
+        is_crop = crop_width > 0 or crop_height > 0 or crop_origin_w >= 0 or crop_origin_h >= 0
+        crop_rect: tuple[int, int, int, int] | None = None
+        if is_crop:
+            crop_rect = (
+                crop_origin_w if crop_origin_w >= 0 else 0,
+                crop_origin_h if crop_origin_h >= 0 else 0,
+                crop_width if crop_width > 0 else projected_gaussians.image_width,
+                crop_height if crop_height > 0 else projected_gaussians.image_height,
+            )
+        result, alphas = GF.rasterize_screen_space_gaussians(
+            projected_gaussians,
+            features,
+            self._logit_opacities,
+            tiles,
+            backgrounds,
+            tile_masks,
+            crop=crop_rect,
         )
 
         if masks is not None:
-            features, alphas = _apply_pixel_mask(features, alphas, masks, backgrounds)
-
-        return features, alphas
+            result, alphas = _apply_pixel_mask(result, alphas, masks, backgrounds)
+        return result, alphas
 
     def render_depths(
         self,
@@ -1805,30 +1655,35 @@ class GaussianSplat3d:
                 Each element represents the alpha value (opacity) at a pixel such that ``0 <= alpha < 1``,
                 and 0 means the pixel is fully transparent, and 1 means the pixel is fully opaque.
         """
-        tile_masks = _pixel_mask_to_tile_mask(masks, tile_size) if masks is not None else None
-
-        features, alphas = self._impl.render_depths(
-            world_to_camera_matrices=world_to_camera_matrices,
-            projection_matrices=projection_matrices,
-            image_width=image_width,
-            image_height=image_height,
-            near=near,
-            far=far,
-            camera_model=self._camera_model_to_cpp(camera_model),
-            projection_method=self._projection_method_to_cpp(projection_method),
-            distortion_coeffs=distortion_coeffs,
-            tile_size=tile_size,
-            min_radius_2d=min_radius_2d,
-            eps_2d=eps_2d,
-            antialias=antialias,
-            backgrounds=backgrounds,
-            masks=tile_masks,
+        projected, render_features = self._project_and_eval_sh(
+            world_to_camera_matrices,
+            projection_matrices,
+            image_width,
+            image_height,
+            near,
+            far,
+            GaussianRenderMode.DEPTH,
+            camera_model,
+            projection_method,
+            distortion_coeffs,
+            -1,
+            eps_2d,
+            min_radius_2d,
+            antialias,
         )
-
+        tiles = GF.intersect_gaussian_tiles(projected, tile_size=tile_size)
+        tile_masks = _pixel_mask_to_tile_mask(masks, tile_size) if masks is not None else None
+        result, alphas = GF.rasterize_screen_space_gaussians(
+            projected,
+            render_features,
+            self._logit_opacities,
+            tiles,
+            backgrounds,
+            tile_masks,
+        )
         if masks is not None:
-            features, alphas = _apply_pixel_mask(features, alphas, masks, backgrounds)
-
-        return features, alphas
+            result, alphas = _apply_pixel_mask(result, alphas, masks, backgrounds)
+        return result, alphas
 
     def sparse_render_depths(
         self,
@@ -1921,29 +1776,44 @@ class GaussianSplat3d:
         else:
             raise TypeError("pixels_to_render must be either a torch.Tensor or a fvdb.JaggedTensor")
 
-        ret_depths, ret_alphas = self._impl.sparse_render_depths(
-            pixels_to_render=pixels_to_render_impl,
-            world_to_camera_matrices=world_to_camera_matrices,
-            projection_matrices=projection_matrices,
-            image_width=image_width,
-            image_height=image_height,
-            near=near,
-            far=far,
-            camera_model=self._camera_model_to_cpp(camera_model),
-            projection_method=self._projection_method_to_cpp(projection_method),
-            distortion_coeffs=distortion_coeffs,
-            tile_size=tile_size,
-            min_radius_2d=min_radius_2d,
-            eps_2d=eps_2d,
-            antialias=antialias,
-            backgrounds=backgrounds,
-            masks=masks,
+        projected, render_features = self._project_and_eval_sh(
+            world_to_camera_matrices,
+            projection_matrices,
+            image_width,
+            image_height,
+            near,
+            far,
+            GaussianRenderMode.DEPTH,
+            camera_model,
+            projection_method,
+            distortion_coeffs,
+            -1,
+            eps_2d,
+            min_radius_2d,
+            antialias,
         )
+        pixels_jt = JaggedTensor(impl=pixels_to_render_impl)
+        sparse_tiles = GF.intersect_gaussian_tiles_sparse(pixels_jt, projected, tile_size=tile_size)
+        rendered_jt, rendered_alphas_jt = GF.rasterize_screen_space_gaussians_sparse(
+            projected,
+            render_features,
+            self._logit_opacities,
+            sparse_tiles,
+            backgrounds,
+            masks,
+        )
+        rendered_colors = rendered_jt.jdata
+        rendered_alphas = rendered_alphas_jt.jdata
+        if sparse_tiles.has_duplicates:
+            rendered_colors = rendered_colors.index_select(0, sparse_tiles.inverse_indices)
+            rendered_alphas = rendered_alphas.index_select(0, sparse_tiles.inverse_indices)
+        ret_features = pixels_jt.jagged_like(rendered_colors)
+        ret_alphas = pixels_jt.jagged_like(rendered_alphas)
 
         if isinstance(pixels_to_render, torch.Tensor):
-            return ret_depths.jdata, ret_alphas.jdata
+            return ret_features._impl.jdata, ret_alphas._impl.jdata
         else:
-            return JaggedTensor(impl=ret_depths), JaggedTensor(impl=ret_alphas)
+            return ret_features, ret_alphas
 
     def render_images(
         self,
@@ -2029,31 +1899,35 @@ class GaussianSplat3d:
                 Each element represents the alpha value (opacity) at a pixel such that ``0 <= alpha < 1``,
                 and 0 means the pixel is fully transparent, and 1 means the pixel is fully opaque.
         """
-        tile_masks = _pixel_mask_to_tile_mask(masks, tile_size) if masks is not None else None
-
-        features, alphas = self._impl.render_images(
-            world_to_camera_matrices=world_to_camera_matrices,
-            projection_matrices=projection_matrices,
-            image_width=image_width,
-            image_height=image_height,
-            near=near,
-            far=far,
-            camera_model=self._camera_model_to_cpp(camera_model),
-            projection_method=self._projection_method_to_cpp(projection_method),
-            distortion_coeffs=distortion_coeffs,
-            sh_degree_to_use=sh_degree_to_use,
-            tile_size=tile_size,
-            min_radius_2d=min_radius_2d,
-            eps_2d=eps_2d,
-            antialias=antialias,
-            backgrounds=backgrounds,
-            masks=tile_masks,
+        projected, render_features = self._project_and_eval_sh(
+            world_to_camera_matrices,
+            projection_matrices,
+            image_width,
+            image_height,
+            near,
+            far,
+            GaussianRenderMode.FEATURES,
+            camera_model,
+            projection_method,
+            distortion_coeffs,
+            sh_degree_to_use,
+            eps_2d,
+            min_radius_2d,
+            antialias,
         )
-
+        tiles = GF.intersect_gaussian_tiles(projected, tile_size=tile_size)
+        tile_masks = _pixel_mask_to_tile_mask(masks, tile_size) if masks is not None else None
+        result, alphas = GF.rasterize_screen_space_gaussians(
+            projected,
+            render_features,
+            self._logit_opacities,
+            tiles,
+            backgrounds,
+            tile_masks,
+        )
         if masks is not None:
-            features, alphas = _apply_pixel_mask(features, alphas, masks, backgrounds)
-
-        return features, alphas
+            result, alphas = _apply_pixel_mask(result, alphas, masks, backgrounds)
+        return result, alphas
 
     def render_images_from_world(
         self,
@@ -2149,31 +2023,48 @@ class GaussianSplat3d:
             images (torch.Tensor): Rendered images of shape ``(C, H, W, D)``.
             alpha_images (torch.Tensor): Alpha images of shape ``(C, H, W, 1)``.
         """
-        tile_masks = _pixel_mask_to_tile_mask(masks, tile_size) if masks is not None else None
-
-        features, alphas = self._impl.render_images_from_world(
-            world_to_camera_matrices=world_to_camera_matrices,
-            projection_matrices=projection_matrices,
-            image_width=image_width,
-            image_height=image_height,
-            near=near,
-            far=far,
-            camera_model=self._camera_model_to_cpp(camera_model),
-            projection_method=self._projection_method_to_cpp(projection_method),
-            distortion_coeffs=distortion_coeffs,
-            sh_degree_to_use=sh_degree_to_use,
-            tile_size=tile_size,
-            min_radius_2d=min_radius_2d,
-            eps_2d=eps_2d,
-            antialias=antialias,
-            backgrounds=backgrounds,
-            masks=tile_masks,
+        projected, render_features = self._project_and_eval_sh(
+            world_to_camera_matrices,
+            projection_matrices,
+            image_width,
+            image_height,
+            near,
+            far,
+            GaussianRenderMode.FEATURES,
+            camera_model,
+            projection_method,
+            distortion_coeffs,
+            sh_degree_to_use,
+            eps_2d,
+            min_radius_2d,
+            antialias,
         )
-
+        tiles = GF.intersect_gaussian_tiles(projected, tile_size=tile_size)
+        tile_masks = _pixel_mask_to_tile_mask(masks, tile_size) if masks is not None else None
+        C = world_to_camera_matrices.size(0)
+        dc = (
+            distortion_coeffs
+            if distortion_coeffs is not None
+            else torch.empty(C, 0, device=self._means.device, dtype=self._means.dtype)
+        )
+        result, alphas = GF.rasterize_world_space_gaussians(
+            self._means,
+            self._quats,
+            self._log_scales,
+            projected,
+            render_features,
+            self._logit_opacities,
+            world_to_camera_matrices,
+            projection_matrices,
+            dc,
+            camera_model,
+            tiles,
+            backgrounds,
+            tile_masks,
+        )
         if masks is not None:
-            features, alphas = _apply_pixel_mask(features, alphas, masks, backgrounds)
-
-        return features, alphas
+            result, alphas = _apply_pixel_mask(result, alphas, masks, backgrounds)
+        return result, alphas
 
     def render_depths_from_world(
         self,
@@ -2199,30 +2090,48 @@ class GaussianSplat3d:
         This mirrors :meth:`render_images_from_world`, but renders depth-only outputs with the
         same camera-model and projection-method dispatch.
         """
-        tile_masks = _pixel_mask_to_tile_mask(masks, tile_size) if masks is not None else None
-
-        features, alphas = self._impl.render_depths_from_world(
-            world_to_camera_matrices=world_to_camera_matrices,
-            projection_matrices=projection_matrices,
-            image_width=image_width,
-            image_height=image_height,
-            near=near,
-            far=far,
-            camera_model=self._camera_model_to_cpp(camera_model),
-            projection_method=self._projection_method_to_cpp(projection_method),
-            distortion_coeffs=distortion_coeffs,
-            tile_size=tile_size,
-            min_radius_2d=min_radius_2d,
-            eps_2d=eps_2d,
-            antialias=antialias,
-            backgrounds=backgrounds,
-            masks=tile_masks,
+        projected, render_features = self._project_and_eval_sh(
+            world_to_camera_matrices,
+            projection_matrices,
+            image_width,
+            image_height,
+            near,
+            far,
+            GaussianRenderMode.DEPTH,
+            camera_model,
+            projection_method,
+            distortion_coeffs,
+            -1,
+            eps_2d,
+            min_radius_2d,
+            antialias,
         )
-
+        tiles = GF.intersect_gaussian_tiles(projected, tile_size=tile_size)
+        tile_masks = _pixel_mask_to_tile_mask(masks, tile_size) if masks is not None else None
+        C = world_to_camera_matrices.size(0)
+        dc = (
+            distortion_coeffs
+            if distortion_coeffs is not None
+            else torch.empty(C, 0, device=self._means.device, dtype=self._means.dtype)
+        )
+        result, alphas = GF.rasterize_world_space_gaussians(
+            self._means,
+            self._quats,
+            self._log_scales,
+            projected,
+            render_features,
+            self._logit_opacities,
+            world_to_camera_matrices,
+            projection_matrices,
+            dc,
+            camera_model,
+            tiles,
+            backgrounds,
+            tile_masks,
+        )
         if masks is not None:
-            features, alphas = _apply_pixel_mask(features, alphas, masks, backgrounds)
-
-        return features, alphas
+            result, alphas = _apply_pixel_mask(result, alphas, masks, backgrounds)
+        return result, alphas
 
     def sparse_render_images(
         self,
@@ -2319,30 +2228,44 @@ class GaussianSplat3d:
         else:
             raise TypeError("pixels_to_render must be either a torch.Tensor or a fvdb.JaggedTensor")
 
-        ret_features, ret_alphas = self._impl.sparse_render_images(
-            pixels_to_render=pixels_to_render_impl,
-            world_to_camera_matrices=world_to_camera_matrices,
-            projection_matrices=projection_matrices,
-            image_width=image_width,
-            image_height=image_height,
-            near=near,
-            far=far,
-            camera_model=self._camera_model_to_cpp(camera_model),
-            projection_method=self._projection_method_to_cpp(projection_method),
-            distortion_coeffs=distortion_coeffs,
-            sh_degree_to_use=sh_degree_to_use,
-            tile_size=tile_size,
-            min_radius_2d=min_radius_2d,
-            eps_2d=eps_2d,
-            antialias=antialias,
-            backgrounds=backgrounds,
-            masks=masks,
+        projected, render_features = self._project_and_eval_sh(
+            world_to_camera_matrices,
+            projection_matrices,
+            image_width,
+            image_height,
+            near,
+            far,
+            GaussianRenderMode.FEATURES,
+            camera_model,
+            projection_method,
+            distortion_coeffs,
+            sh_degree_to_use,
+            eps_2d,
+            min_radius_2d,
+            antialias,
         )
+        pixels_jt = JaggedTensor(impl=pixels_to_render_impl)
+        sparse_tiles = GF.intersect_gaussian_tiles_sparse(pixels_jt, projected, tile_size=tile_size)
+        rendered_jt, rendered_alphas_jt = GF.rasterize_screen_space_gaussians_sparse(
+            projected,
+            render_features,
+            self._logit_opacities,
+            sparse_tiles,
+            backgrounds,
+            masks,
+        )
+        rendered_colors = rendered_jt.jdata
+        rendered_alphas = rendered_alphas_jt.jdata
+        if sparse_tiles.has_duplicates:
+            rendered_colors = rendered_colors.index_select(0, sparse_tiles.inverse_indices)
+            rendered_alphas = rendered_alphas.index_select(0, sparse_tiles.inverse_indices)
+        ret_features = pixels_jt.jagged_like(rendered_colors)
+        ret_alphas = pixels_jt.jagged_like(rendered_alphas)
 
         if isinstance(pixels_to_render, torch.Tensor):
-            return ret_features.jdata, ret_alphas.jdata
+            return ret_features._impl.jdata, ret_alphas._impl.jdata
         else:
-            return JaggedTensor(impl=ret_features), JaggedTensor(impl=ret_alphas)
+            return ret_features, ret_alphas
 
     def sparse_render_images_and_depths(
         self,
@@ -2440,30 +2363,44 @@ class GaussianSplat3d:
         else:
             raise TypeError("pixels_to_render must be either a torch.Tensor or a fvdb.JaggedTensor")
 
-        ret_features, ret_alphas = self._impl.sparse_render_images_and_depths(
-            pixels_to_render=pixels_to_render_impl,
-            world_to_camera_matrices=world_to_camera_matrices,
-            projection_matrices=projection_matrices,
-            image_width=image_width,
-            image_height=image_height,
-            near=near,
-            far=far,
-            camera_model=self._camera_model_to_cpp(camera_model),
-            projection_method=self._projection_method_to_cpp(projection_method),
-            distortion_coeffs=distortion_coeffs,
-            sh_degree_to_use=sh_degree_to_use,
-            tile_size=tile_size,
-            min_radius_2d=min_radius_2d,
-            eps_2d=eps_2d,
-            antialias=antialias,
-            backgrounds=backgrounds,
-            masks=masks,
+        projected, render_features = self._project_and_eval_sh(
+            world_to_camera_matrices,
+            projection_matrices,
+            image_width,
+            image_height,
+            near,
+            far,
+            GaussianRenderMode.FEATURES_AND_DEPTH,
+            camera_model,
+            projection_method,
+            distortion_coeffs,
+            sh_degree_to_use,
+            eps_2d,
+            min_radius_2d,
+            antialias,
         )
+        pixels_jt = JaggedTensor(impl=pixels_to_render_impl)
+        sparse_tiles = GF.intersect_gaussian_tiles_sparse(pixels_jt, projected, tile_size=tile_size)
+        rendered_jt, rendered_alphas_jt = GF.rasterize_screen_space_gaussians_sparse(
+            projected,
+            render_features,
+            self._logit_opacities,
+            sparse_tiles,
+            backgrounds,
+            masks,
+        )
+        rendered_colors = rendered_jt.jdata
+        rendered_alphas = rendered_alphas_jt.jdata
+        if sparse_tiles.has_duplicates:
+            rendered_colors = rendered_colors.index_select(0, sparse_tiles.inverse_indices)
+            rendered_alphas = rendered_alphas.index_select(0, sparse_tiles.inverse_indices)
+        ret_features = pixels_jt.jagged_like(rendered_colors)
+        ret_alphas = pixels_jt.jagged_like(rendered_alphas)
 
         if isinstance(pixels_to_render, torch.Tensor):
-            return ret_features.jdata, ret_alphas.jdata
+            return ret_features._impl.jdata, ret_alphas._impl.jdata
         else:
-            return JaggedTensor(impl=ret_features), JaggedTensor(impl=ret_alphas)
+            return ret_features, ret_alphas
 
     def render_images_and_depths(
         self,
@@ -2552,31 +2489,35 @@ class GaussianSplat3d:
                 Each element represents the alpha value (opacity) at a pixel such that ``0 <= alpha < 1``,
                 and 0 means the pixel is fully transparent, and 1 means the pixel is fully opaque.
         """
-        tile_masks = _pixel_mask_to_tile_mask(masks, tile_size) if masks is not None else None
-
-        features, alphas = self._impl.render_images_and_depths(
-            world_to_camera_matrices=world_to_camera_matrices,
-            projection_matrices=projection_matrices,
-            image_width=image_width,
-            image_height=image_height,
-            near=near,
-            far=far,
-            camera_model=self._camera_model_to_cpp(camera_model),
-            projection_method=self._projection_method_to_cpp(projection_method),
-            distortion_coeffs=distortion_coeffs,
-            sh_degree_to_use=sh_degree_to_use,
-            tile_size=tile_size,
-            min_radius_2d=min_radius_2d,
-            eps_2d=eps_2d,
-            antialias=antialias,
-            backgrounds=backgrounds,
-            masks=tile_masks,
+        projected, render_features = self._project_and_eval_sh(
+            world_to_camera_matrices,
+            projection_matrices,
+            image_width,
+            image_height,
+            near,
+            far,
+            GaussianRenderMode.FEATURES_AND_DEPTH,
+            camera_model,
+            projection_method,
+            distortion_coeffs,
+            sh_degree_to_use,
+            eps_2d,
+            min_radius_2d,
+            antialias,
         )
-
+        tiles = GF.intersect_gaussian_tiles(projected, tile_size=tile_size)
+        tile_masks = _pixel_mask_to_tile_mask(masks, tile_size) if masks is not None else None
+        result, alphas = GF.rasterize_screen_space_gaussians(
+            projected,
+            render_features,
+            self._logit_opacities,
+            tiles,
+            backgrounds,
+            tile_masks,
+        )
         if masks is not None:
-            features, alphas = _apply_pixel_mask(features, alphas, masks, backgrounds)
-
-        return features, alphas
+            result, alphas = _apply_pixel_mask(result, alphas, masks, backgrounds)
+        return result, alphas
 
     def render_images_and_depths_from_world(
         self,
@@ -2603,31 +2544,48 @@ class GaussianSplat3d:
         This mirrors :meth:`render_images_from_world`, but returns image channels with depth in the
         final channel while using the same camera-model and projection-method dispatch.
         """
-        tile_masks = _pixel_mask_to_tile_mask(masks, tile_size) if masks is not None else None
-
-        features, alphas = self._impl.render_images_and_depths_from_world(
-            world_to_camera_matrices=world_to_camera_matrices,
-            projection_matrices=projection_matrices,
-            image_width=image_width,
-            image_height=image_height,
-            near=near,
-            far=far,
-            camera_model=self._camera_model_to_cpp(camera_model),
-            projection_method=self._projection_method_to_cpp(projection_method),
-            distortion_coeffs=distortion_coeffs,
-            sh_degree_to_use=sh_degree_to_use,
-            tile_size=tile_size,
-            min_radius_2d=min_radius_2d,
-            eps_2d=eps_2d,
-            antialias=antialias,
-            backgrounds=backgrounds,
-            masks=tile_masks,
+        projected, render_features = self._project_and_eval_sh(
+            world_to_camera_matrices,
+            projection_matrices,
+            image_width,
+            image_height,
+            near,
+            far,
+            GaussianRenderMode.FEATURES_AND_DEPTH,
+            camera_model,
+            projection_method,
+            distortion_coeffs,
+            sh_degree_to_use,
+            eps_2d,
+            min_radius_2d,
+            antialias,
         )
-
+        tiles = GF.intersect_gaussian_tiles(projected, tile_size=tile_size)
+        tile_masks = _pixel_mask_to_tile_mask(masks, tile_size) if masks is not None else None
+        C = world_to_camera_matrices.size(0)
+        dc = (
+            distortion_coeffs
+            if distortion_coeffs is not None
+            else torch.empty(C, 0, device=self._means.device, dtype=self._means.dtype)
+        )
+        result, alphas = GF.rasterize_world_space_gaussians(
+            self._means,
+            self._quats,
+            self._log_scales,
+            projected,
+            render_features,
+            self._logit_opacities,
+            world_to_camera_matrices,
+            projection_matrices,
+            dc,
+            camera_model,
+            tiles,
+            backgrounds,
+            tile_masks,
+        )
         if masks is not None:
-            features, alphas = _apply_pixel_mask(features, alphas, masks, backgrounds)
-
-        return features, alphas
+            result, alphas = _apply_pixel_mask(result, alphas, masks, backgrounds)
+        return result, alphas
 
     def render_num_contributing_gaussians(
         self,
@@ -2705,21 +2663,24 @@ class GaussianSplat3d:
                 Each element represents the alpha value (opacity) at a pixel such that ``0 <= alpha < 1``,
                 and 0 means the pixel is fully transparent, and 1 means the pixel is fully opaque.
         """
-        return self._impl.render_num_contributing_gaussians(
-            world_to_camera_matrices=world_to_camera_matrices,
-            projection_matrices=projection_matrices,
-            image_width=image_width,
-            image_height=image_height,
-            near=near,
-            far=far,
-            camera_model=self._camera_model_to_cpp(camera_model),
-            projection_method=self._projection_method_to_cpp(projection_method),
-            distortion_coeffs=distortion_coeffs,
-            tile_size=tile_size,
-            min_radius_2d=min_radius_2d,
-            eps_2d=eps_2d,
-            antialias=antialias,
+        projected, _ = self._project_and_eval_sh(
+            world_to_camera_matrices,
+            projection_matrices,
+            image_width,
+            image_height,
+            near,
+            far,
+            GaussianRenderMode.DEPTH,
+            camera_model,
+            projection_method,
+            distortion_coeffs,
+            -1,
+            eps_2d,
+            min_radius_2d,
+            antialias,
         )
+        tiles = GF.intersect_gaussian_tiles(projected, tile_size=tile_size)
+        return GF.count_contributing_gaussians(projected, self._logit_opacities, tiles)
 
     @overload
     def sparse_render_num_contributing_gaussians(
@@ -2827,51 +2788,42 @@ class GaussianSplat3d:
             C, R, _ = pixels_to_render.shape
             tensors = [pixels_to_render[i] for i in range(C)]
             pixels_to_render_jagged = JaggedTensor(tensors)
-
-            result_num_contributing_gaussians, result_alphas = self._impl.sparse_render_num_contributing_gaussians(
-                pixels_to_render=pixels_to_render_jagged._impl,
-                world_to_camera_matrices=world_to_camera_matrices,
-                projection_matrices=projection_matrices,
-                image_width=image_width,
-                image_height=image_height,
-                near=near,
-                far=far,
-                camera_model=self._camera_model_to_cpp(camera_model),
-                projection_method=self._projection_method_to_cpp(projection_method),
-                distortion_coeffs=distortion_coeffs,
-                tile_size=tile_size,
-                min_radius_2d=min_radius_2d,
-                eps_2d=eps_2d,
-                antialias=antialias,
-            )
-
-            num_contributing_gaussians_list = result_num_contributing_gaussians.unbind()
-            alphas_list = result_alphas.unbind()
-            dense_num_contributing_gaussians = torch.stack(num_contributing_gaussians_list, dim=0)  # type: ignore # Shape: (C, R)
-            dense_alphas = torch.stack(alphas_list, dim=0)  # type: ignore # Shape: (C, R)
-
-            return dense_num_contributing_gaussians, dense_alphas
         else:
-            # Already a JaggedTensor, call C++ implementation directly
-            result_num_contributing_gaussians_impl, result_alphas_impl = (
-                self._impl.sparse_render_num_contributing_gaussians(
-                    pixels_to_render=pixels_to_render._impl,
-                    world_to_camera_matrices=world_to_camera_matrices,
-                    projection_matrices=projection_matrices,
-                    image_width=image_width,
-                    image_height=image_height,
-                    near=near,
-                    far=far,
-                    camera_model=self._camera_model_to_cpp(camera_model),
-                    projection_method=self._projection_method_to_cpp(projection_method),
-                    distortion_coeffs=distortion_coeffs,
-                    tile_size=tile_size,
-                    min_radius_2d=min_radius_2d,
-                    eps_2d=eps_2d,
-                    antialias=antialias,
-                )
-            )
-            return JaggedTensor(impl=result_num_contributing_gaussians_impl), JaggedTensor(impl=result_alphas_impl)
+            pixels_to_render_jagged = pixels_to_render
+
+        projected, _ = self._project_and_eval_sh(
+            world_to_camera_matrices,
+            projection_matrices,
+            image_width,
+            image_height,
+            near,
+            far,
+            GaussianRenderMode.DEPTH,
+            camera_model,
+            projection_method,
+            distortion_coeffs,
+            -1,
+            eps_2d,
+            min_radius_2d,
+            antialias,
+        )
+        sparse_tiles = GF.intersect_gaussian_tiles_sparse(
+            pixels_to_render_jagged,
+            projected,
+            tile_size=tile_size,
+        )
+        result_num, result_alphas = GF.count_contributing_gaussians_sparse(
+            projected,
+            self._logit_opacities,
+            sparse_tiles,
+        )
+
+        if isinstance(pixels_to_render, torch.Tensor):
+            num_list = cast(list[torch.Tensor], result_num.unbind())
+            alphas_list = cast(list[torch.Tensor], result_alphas.unbind())
+            return torch.stack(num_list, dim=0), torch.stack(alphas_list, dim=0)
+        else:
+            return result_num, result_alphas
 
     def render_contributing_gaussian_ids(
         self,
@@ -2927,23 +2879,29 @@ class GaussianSplat3d:
                 jagged tensor containing the weights of the contributing Gaussians of each rendered pixel for each camera. The weights are in row-major order and
                 sum to 1 for each pixel if that pixel is opaque (alpha=1).
         """
-        ids, weights = self._impl.render_contributing_gaussian_ids(
-            world_to_camera_matrices=world_to_camera_matrices,
-            projection_matrices=projection_matrices,
-            image_width=image_width,
-            image_height=image_height,
-            near=near,
-            far=far,
-            camera_model=self._camera_model_to_cpp(camera_model),
-            projection_method=self._projection_method_to_cpp(projection_method),
-            distortion_coeffs=distortion_coeffs,
-            tile_size=tile_size,
-            min_radius_2d=min_radius_2d,
-            eps_2d=eps_2d,
-            antialias=antialias,
+        projected, _ = self._project_and_eval_sh(
+            world_to_camera_matrices,
+            projection_matrices,
+            image_width,
+            image_height,
+            near,
+            far,
+            GaussianRenderMode.DEPTH,
+            camera_model,
+            projection_method,
+            distortion_coeffs,
+            -1,
+            eps_2d,
+            min_radius_2d,
+            antialias,
+        )
+        tiles = GF.intersect_gaussian_tiles(projected, tile_size=tile_size)
+        return GF.identify_contributing_gaussians(
+            projected,
+            self._logit_opacities,
+            tiles,
             top_k_contributors=top_k_contributors,
         )
-        return JaggedTensor(impl=ids), JaggedTensor(impl=weights)
 
     @overload
     def sparse_render_contributing_gaussian_ids(
@@ -3049,47 +3007,36 @@ class GaussianSplat3d:
         if isinstance(pixels_to_render, torch.Tensor):
             C, R, _ = pixels_to_render.shape
             tensors = [pixels_to_render[i] for i in range(C)]
-            pixels_to_render_jagged = JaggedTensor(tensors)
-
-            result_ids, result_weights = self._impl.sparse_render_contributing_gaussian_ids(
-                pixels_to_render=pixels_to_render_jagged._impl,
-                world_to_camera_matrices=world_to_camera_matrices,
-                projection_matrices=projection_matrices,
-                image_width=image_width,
-                image_height=image_height,
-                near=near,
-                far=far,
-                camera_model=self._camera_model_to_cpp(camera_model),
-                projection_method=self._projection_method_to_cpp(projection_method),
-                distortion_coeffs=distortion_coeffs,
-                tile_size=tile_size,
-                min_radius_2d=min_radius_2d,
-                eps_2d=eps_2d,
-                antialias=antialias,
-                top_k_contributors=top_k_contributors,
-            )
-
-            return JaggedTensor(impl=result_ids), JaggedTensor(impl=result_weights)
+            pixels_jt = JaggedTensor(tensors)
         else:
-            # Already a JaggedTensor, call C++ implementation directly
-            result_ids_impl, result_weights_impl = self._impl.sparse_render_contributing_gaussian_ids(
-                pixels_to_render=pixels_to_render._impl,
-                world_to_camera_matrices=world_to_camera_matrices,
-                projection_matrices=projection_matrices,
-                image_width=image_width,
-                image_height=image_height,
-                near=near,
-                far=far,
-                camera_model=self._camera_model_to_cpp(camera_model),
-                projection_method=self._projection_method_to_cpp(projection_method),
-                distortion_coeffs=distortion_coeffs,
-                tile_size=tile_size,
-                min_radius_2d=min_radius_2d,
-                eps_2d=eps_2d,
-                antialias=antialias,
-                top_k_contributors=top_k_contributors,
-            )
-            return JaggedTensor(impl=result_ids_impl), JaggedTensor(impl=result_weights_impl)
+            pixels_jt = pixels_to_render
+
+        projected, _ = self._project_and_eval_sh(
+            world_to_camera_matrices,
+            projection_matrices,
+            image_width,
+            image_height,
+            near,
+            far,
+            GaussianRenderMode.DEPTH,
+            camera_model,
+            projection_method,
+            distortion_coeffs,
+            -1,
+            eps_2d,
+            min_radius_2d,
+            antialias,
+        )
+        sparse_tiles = GF.intersect_gaussian_tiles_sparse(
+            pixels_jt,
+            projected,
+            tile_size=tile_size,
+        )
+        return GF.identify_contributing_gaussians_sparse(
+            projected,
+            self._logit_opacities,
+            sparse_tiles,
+        )
 
     def relocate_gaussians(
         self,
@@ -3113,7 +3060,7 @@ class GaussianSplat3d:
         Returns:
             tuple[torch.Tensor, torch.Tensor]: Tuple of (logit_opacities_new [N], log_scales_new [N, 3]).
         """
-        return self._impl.relocate_gaussians(
+        return GF.relocate_gaussians(
             log_scales,
             logit_opacities,
             ratios,
@@ -3131,7 +3078,15 @@ class GaussianSplat3d:
             t (float): Parameter t for noise scaling. Defaults to 0.005.
             k (float): Parameter k for noise scaling. Defaults to 100.0.
         """
-        self._impl.add_noise_to_means(noise_scale, t, k)
+        GF.add_noise_to_gaussian_means(
+            self._means,
+            self._log_scales,
+            self._logit_opacities,
+            self._quats,
+            noise_scale,
+            t,
+            k,
+        )
 
     def reset_accumulated_gradient_state(self) -> None:
         """
@@ -3150,10 +3105,17 @@ class GaussianSplat3d:
             for the actual accumulated state being reset.
 
         """
-        self._impl.reset_accumulated_gradient_state()
+        if self._accum_grad_norms is not None:
+            self._accum_grad_norms.zero_()
+        if self._accum_step_counts is not None:
+            self._accum_step_counts.zero_()
+        if self._accum_max_2d_radii is not None:
+            self._accum_max_2d_radii.zero_()
 
     def save_ply(
-        self, filename: pathlib.Path | str, metadata: Mapping[str, str | int | float | torch.Tensor] | None = None
+        self,
+        filename: pathlib.Path | str,
+        metadata: Mapping[str, str | int | float | torch.Tensor] | None = None,
     ) -> None:
         """
         Save this :class:`GaussianSplat3d` to a PLY file. and include any metadata provided.
@@ -3165,7 +3127,16 @@ class GaussianSplat3d:
         """
         if isinstance(filename, pathlib.Path):
             filename = str(filename)
-        self._impl.save_ply(filename, metadata)  # type: ignore -- mapping to dict is fine here
+        GF.save_gaussian_ply(
+            self._means,
+            self._quats,
+            self._log_scales,
+            self._logit_opacities,
+            self._sh0,
+            self._shN,
+            filename,
+            dict(metadata) if metadata is not None else metadata,
+        )
 
     @overload
     def to(self, dtype: torch.dtype | None = None) -> "GaussianSplat3d": ...
@@ -3228,6 +3199,10 @@ class GaussianSplat3d:
            gaussian_splat_3d (GaussianSplat3d): A new instance of :class:`GaussianSplat3d` with the specified device and/or data type.
         """
 
+        # Initialize to satisfy pyright; all valid paths below assign both.
+        device: torch.device | None = None
+        dtype: torch.dtype | None = None
+
         # All values passed by keyword arguments
         if len(args) == 0:
             if len(kwargs) == 1:
@@ -3285,13 +3260,26 @@ class GaussianSplat3d:
         device = resolve_device(device, inherit_from=self)
         dtype = self.dtype if dtype is None else cast_check(dtype, torch.dtype, "dtype")
 
-        return GaussianSplat3d(
-            impl=self._impl.to(
-                device=device,
-                dtype=dtype,
-            ),
-            _private=GaussianSplat3d.__PRIVATE__,
+        result = GaussianSplat3d.__new__(GaussianSplat3d)
+        result._means = self._means.to(device=device, dtype=dtype)
+        result._quats = self._quats.to(device=device, dtype=dtype)
+        result._log_scales = self._log_scales.to(device=device, dtype=dtype)
+        result._logit_opacities = self._logit_opacities.to(device=device, dtype=dtype)
+        result._sh0 = self._sh0.to(device=device, dtype=dtype)
+        result._shN = self._shN.to(device=device, dtype=dtype)
+        result._accumulate_mean_2d_gradients = self._accumulate_mean_2d_gradients
+        result._accumulate_max_2d_radii = self._accumulate_max_2d_radii
+        # Grad norms follow the main dtype; step counts and max radii are int32 (device-only move)
+        result._accum_grad_norms = (
+            self._accum_grad_norms.to(device=device, dtype=dtype) if self._accum_grad_norms is not None else None
         )
+        result._accum_step_counts = (
+            self._accum_step_counts.to(device=device) if self._accum_step_counts is not None else None
+        )
+        result._accum_max_2d_radii = (
+            self._accum_max_2d_radii.to(device=device) if self._accum_max_2d_radii is not None else None
+        )
+        return result
 
     def set_state(
         self,
@@ -3324,14 +3312,15 @@ class GaussianSplat3d:
                 ``D`` is the number of channels (see :attr:`num_channels`),
                 and ``K`` is the number of spherical harmonic bases (see :attr:`num_sh_bases`).
         """
-        self._impl.set_state(
-            means=means,
-            quats=quats,
-            log_scales=log_scales,
-            logit_opacities=logit_opacities,
-            sh0=sh0,
-            shN=shN,
-        )
+        self._check_gaussian_state(means, quats, log_scales, logit_opacities, sh0, shN)
+        self._means = means
+        self._quats = quats
+        self._log_scales = log_scales
+        self._logit_opacities = logit_opacities
+        self._sh0 = sh0
+        self._shN = shN
+        # Reset accumulators when state changes (matches C++ behavior)
+        self.reset_accumulated_gradient_state()
 
     def state_dict(self) -> dict[str, torch.Tensor]:
         """
@@ -3370,30 +3359,20 @@ class GaussianSplat3d:
             state_dict (dict[str, torch.Tensor]): A dictionary containing the state of
                 the :class:`GaussianSplat3d` instance.
         """
-        return self._impl.state_dict()
-
-    @staticmethod
-    def _camera_model_from_cpp(camera_model: _C.CameraModel) -> CameraModel:
-        try:
-            return CameraModel[camera_model.name]
-        except KeyError as exc:
-            raise ValueError(f"Invalid camera model: {camera_model}") from exc
-
-    @staticmethod
-    def _camera_model_to_cpp(camera_model: CameraModel) -> _C.CameraModel:
-        if isinstance(camera_model, CameraModel):
-            return getattr(_C.CameraModel, camera_model.name)
-        return camera_model
-
-    @staticmethod
-    def _projection_method_from_cpp(projection_method: _C.ProjectionMethod) -> ProjectionMethod:
-        try:
-            return ProjectionMethod[projection_method.name]
-        except KeyError as exc:
-            raise ValueError(f"Invalid projection method: {projection_method}") from exc
-
-    @staticmethod
-    def _projection_method_to_cpp(projection_method: ProjectionMethod) -> _C.ProjectionMethod:
-        if isinstance(projection_method, ProjectionMethod):
-            return getattr(_C.ProjectionMethod, projection_method.name)
-        return projection_method
+        sd: dict[str, torch.Tensor] = {
+            "means": self._means,
+            "quats": self._quats,
+            "log_scales": self._log_scales,
+            "logit_opacities": self._logit_opacities,
+            "sh0": self._sh0,
+            "shN": self._shN,
+            "accumulate_mean_2d_gradients": torch.tensor(self._accumulate_mean_2d_gradients),
+            "accumulate_max_2d_radii": torch.tensor(self._accumulate_max_2d_radii),
+        }
+        if self._accum_grad_norms is not None:
+            sd["accumulated_mean_2d_gradient_norms"] = self._accum_grad_norms
+        if self._accum_step_counts is not None:
+            sd["accumulated_gradient_step_counts"] = self._accum_step_counts
+        if self._accum_max_2d_radii is not None:
+            sd["accumulated_max_2d_radii"] = self._accum_max_2d_radii
+        return sd

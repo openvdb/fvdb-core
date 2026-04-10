@@ -146,7 +146,7 @@ class Scene:
         return GaussianSplat3dView(
             scene_name=self._name,
             name=name,
-            gaussian_splat_3d=gaussian_splat_3d._impl,
+            gaussian_splat_3d=gaussian_splat_3d,
             tile_size=tile_size,
             min_radius_2d=min_radius_2d,
             eps_2d=eps_2d,

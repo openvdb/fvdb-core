@@ -8,6 +8,7 @@
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/VoxelSizeUtils.h>
+#include <fvdb/detail/utils/cuda/CopyCoords.cuh>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 #include <fvdb/detail/utils/cuda/ForEachPrivateUse1.cuh>
 #include <fvdb/detail/utils/cuda/GridDim.h>
@@ -36,44 +37,7 @@ dispatchBuildFineGridFromCoarse(const GridBatchData &coarseBatchHdl,
                                 const nanovdb::Coord subdivisionFactor,
                                 const std::optional<JaggedTensor> &subdivMask);
 
-__device__ inline void
-copyCoords(const fvdb::JIdxType bidx,
-           const int64_t base,
-           const nanovdb::Coord &ijk0,
-           const nanovdb::CoordBBox &bbox,
-           TorchRAcc64<int32_t, 2> outIJK,
-           TorchRAcc64<fvdb::JIdxType, 1> outIJKBIdx) {
-    static_assert(sizeof(nanovdb::Coord) == 3 * sizeof(int32_t));
-    nanovdb::Coord ijk;
-    int32_t count = 0;
-    for (int di = bbox.min()[0]; di <= bbox.max()[0]; di += 1) {
-        for (int dj = bbox.min()[1]; dj <= bbox.max()[1]; dj += 1) {
-            for (int dk = bbox.min()[2]; dk <= bbox.max()[2]; dk += 1) {
-                ijk                      = ijk0 + nanovdb::Coord(di, dj, dk);
-                outIJK[base + count][0]  = ijk[0];
-                outIJK[base + count][1]  = ijk[1];
-                outIJK[base + count][2]  = ijk[2];
-                outIJKBIdx[base + count] = bidx;
-                count += 1;
-            }
-        }
-    }
-}
-
-__device__ inline void
-copyCoords(const fvdb::JIdxType bidx,
-           const int64_t base,
-           const nanovdb::Coord size,
-           const nanovdb::Coord &ijk0,
-           TorchRAcc64<int32_t, 2> outIJK,
-           TorchRAcc64<fvdb::JIdxType, 1> outIJKBIdx) {
-    return copyCoords(bidx,
-                      base,
-                      ijk0,
-                      nanovdb::CoordBBox(nanovdb::Coord(0), size - nanovdb::Coord(1)),
-                      outIJK,
-                      outIJKBIdx);
-}
+using fvdb::detail::copyCoords;
 
 __device__ void
 fineIjkForCoarseGridVoxelCallback(int32_t bidx,

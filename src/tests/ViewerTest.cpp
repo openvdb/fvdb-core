@@ -24,10 +24,16 @@ TEST(Viewer, ViewerTest) {
 
     torch::Device device(torch::kCUDA);
 
-    std::vector<
-        std::tuple<fvdb::GaussianSplat3d,
-                   std::unordered_map<std::string, fvdb::GaussianSplat3d::PlyMetadataTypes>>>
-        loadedData;
+    // Each loaded entry is a tuple of (means, quats, logScales, logitOpacities, sh0, shN, metadata)
+    using LoadResult =
+        std::tuple<torch::Tensor,
+                   torch::Tensor,
+                   torch::Tensor,
+                   torch::Tensor,
+                   torch::Tensor,
+                   torch::Tensor,
+                   std::unordered_map<std::string, fvdb::detail::io::PlyMetadataTypes>>;
+    std::vector<LoadResult> loadedData;
 
     for (size_t i = 0; i < std::size(ply_paths) && i < std::size(view_names); ++i) {
         const std::string &ply_path = ply_paths[i];
@@ -45,11 +51,11 @@ TEST(Viewer, ViewerTest) {
             const std::string &ply_path  = ply_paths[i];
             const std::string &view_name = view_names[i];
 
-            auto [splats, metadata] = loadedData[i];
+            auto &[means, quats, logScales, logitOpacities, sh0, shN, metadata] = loadedData[i];
 
             printf("Adding splats from %s\n", ply_path.c_str());
-            fvdb::detail::viewer::GaussianSplat3dView &view =
-                viewer.addGaussianSplat3d(view_name, splats);
+            fvdb::detail::viewer::GaussianSplat3dView &view = viewer.addGaussianSplat3dView(
+                view_name, view_name, means, quats, logScales, logitOpacities, sh0, shN);
 
             view.setShDegreeToUse(3);
 
@@ -69,8 +75,19 @@ TEST(Viewer, ViewerTest) {
                 imageSizes = torch::empty({0}, device);
             }
 
-            fvdb::detail::viewer::CameraView &cameraView = viewer.addCameraView(
-                view_name, cameraToWorld, projectionMat, imageSizes, 0.f, 0.5f);
+            fvdb::detail::viewer::CameraView &cameraView = viewer.addCameraView(view_name,
+                                                                                view_name,
+                                                                                cameraToWorld,
+                                                                                projectionMat,
+                                                                                imageSizes,
+                                                                                0.f,
+                                                                                0.5f,
+                                                                                0.5f,
+                                                                                0.0125f,
+                                                                                2.0f,
+                                                                                1.0f,
+                                                                                {1.0f, 1.0f, 1.0f},
+                                                                                true);
 
             std::this_thread::sleep_for(std::chrono::seconds(5));
 
@@ -101,11 +118,8 @@ TEST(Viewer, ViewerTest) {
     torch::Tensor sh0            = torch::rand({N, 1, 3}, device);
     torch::Tensor shN            = torch::rand({N, 15, 3}, device);
 
-    fvdb::GaussianSplat3d splats(
-        means, quats, logScales, logitOpacities, sh0, shN, false, false, false);
-
-    fvdb::detail::viewer::GaussianSplat3dView &view =
-        viewer.addGaussianSplat3d("test_view", splats);
+    fvdb::detail::viewer::GaussianSplat3dView &view = viewer.addGaussianSplat3dView(
+        "test_scene", "test_view", means, quats, logScales, logitOpacities, sh0, shN);
 
     const float testEps2d = 0.5f;
     view.setEps2d(testEps2d);

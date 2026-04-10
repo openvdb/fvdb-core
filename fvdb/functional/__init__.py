@@ -171,8 +171,56 @@ from ._constructors import (
 
 # I/O
 from ._io import load_nanovdb, load_nanovdb_single, save_nanovdb, save_nanovdb_single
+from ._io import load_gaussian_ply, save_gaussian_ply
+
+# Gaussian splatting types
+from ._gaussian_projection import ProjectedGaussians
+from ._gaussian_tile_intersection import GaussianTileIntersection, SparseGaussianTileIntersection
+
+# Gaussian splatting pipeline
+from ._gaussian_projection import project_gaussians
+from ._gaussian_spherical_harmonics import evaluate_gaussian_sh
+from ._gaussian_tile_intersection import intersect_gaussian_tiles, intersect_gaussian_tiles_sparse
+from ._gaussian_rasterization import (
+    compute_gaussian_opacities,
+    rasterize_screen_space_gaussians,
+    rasterize_world_space_gaussians,
+)
+from ._gaussian_rasterization_sparse import rasterize_screen_space_gaussians_sparse
+
+# Gaussian splatting analysis
+from ._gaussian_analysis import (
+    count_contributing_gaussians,
+    count_contributing_gaussians_sparse,
+    identify_contributing_gaussians,
+    identify_contributing_gaussians_sparse,
+)
+
+# Gaussian MCMC
+from ._gaussian_mcmc import relocate_gaussians, add_noise_to_gaussian_means
+
+# Metrics
+from ._metrics import psnr, ssim
 
 __all__ = [
+    # Gaussian splatting types
+    "ProjectedGaussians",
+    "GaussianTileIntersection",
+    "SparseGaussianTileIntersection",
+    # Gaussian splatting pipeline
+    "project_gaussians",
+    "evaluate_gaussian_sh",
+    "intersect_gaussian_tiles",
+    "intersect_gaussian_tiles_sparse",
+    "rasterize_screen_space_gaussians",
+    "rasterize_world_space_gaussians",
+    "rasterize_screen_space_gaussians_sparse",
+    "compute_gaussian_opacities",
+    # Gaussian splatting analysis
+    "count_contributing_gaussians",
+    "identify_contributing_gaussians",
+    "count_contributing_gaussians_sparse",
+    "identify_contributing_gaussians_sparse",
     # Interpolation (batch)
     "sample_trilinear_batch",
     "sample_trilinear_with_grad_batch",
@@ -307,4 +355,12 @@ __all__ = [
     "load_nanovdb_single",
     "save_nanovdb",
     "save_nanovdb_single",
+    "load_gaussian_ply",
+    "save_gaussian_ply",
+    # Gaussian MCMC
+    "relocate_gaussians",
+    "add_noise_to_gaussian_means",
+    # Metrics
+    "psnr",
+    "ssim",
 ]

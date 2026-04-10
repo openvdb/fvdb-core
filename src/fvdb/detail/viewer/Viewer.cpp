@@ -2,9 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
-#include "fvdb/detail/viewer/GaussianSplat3dView.h"
-
 #include <fvdb/detail/viewer/CameraView.h>
+#include <fvdb/detail/viewer/GaussianSplat3dView.h>
 #include <fvdb/detail/viewer/Viewer.h>
 
 #include <c10/util/Exception.h>
@@ -181,7 +180,12 @@ Viewer::removeView(const std::string &scene_name, const std::string &name) {
 fvdb::detail::viewer::GaussianSplat3dView &
 Viewer::addGaussianSplat3dView(const std::string &scene_name,
                                const std::string &name,
-                               const GaussianSplat3d &splats) {
+                               const torch::Tensor &means,
+                               const torch::Tensor &quats,
+                               const torch::Tensor &logScales,
+                               const torch::Tensor &logitOpacities,
+                               const torch::Tensor &sh0,
+                               const torch::Tensor &shN) {
     std::shared_ptr<pnanovdb_raster_gaussian_data_t> oldData;
     auto itPrev = mSplat3dViews.find(name);
     if (itPrev != mSplat3dViews.end()) {
@@ -190,14 +194,6 @@ Viewer::addGaussianSplat3dView(const std::string &scene_name,
 
     auto [it, inserted] = mSplat3dViews.emplace(
         std::piecewise_construct, std::forward_as_tuple(name), std::forward_as_tuple(name, *this));
-
-    // Get the various tensors to pass to the viewer
-    torch::Tensor means          = splats.means();
-    torch::Tensor quats          = splats.quats();
-    torch::Tensor logScales      = splats.logScales();
-    torch::Tensor logitOpacities = splats.logitOpacities();
-    torch::Tensor sh0            = splats.sh0();
-    torch::Tensor shN            = splats.shN();
 
     auto makeComputeArray = [this](const torch::Tensor &tensor) -> pnanovdb_compute_array_t * {
         torch::Tensor contig = tensor.cpu().contiguous();
@@ -376,19 +372,19 @@ Viewer::setCameraFar(const std::string &scene_name, float far) {
     updateCamera(scene_name);
 }
 
-GaussianSplat3d::CameraModel
+fvdb::detail::ops::DistortionModel
 Viewer::cameraModel(const std::string &scene_name) {
     getCamera(scene_name);
-    return mEditor.camera.config.is_orthographic ? GaussianSplat3d::CameraModel::ORTHOGRAPHIC
-                                                 : GaussianSplat3d::CameraModel::PINHOLE;
+    return mEditor.camera.config.is_orthographic ? fvdb::detail::ops::DistortionModel::ORTHOGRAPHIC
+                                                 : fvdb::detail::ops::DistortionModel::PINHOLE;
 }
 
 void
-Viewer::setCameraModel(const std::string &scene_name, GaussianSplat3d::CameraModel model) {
+Viewer::setCameraModel(const std::string &scene_name, fvdb::detail::ops::DistortionModel model) {
     getCamera(scene_name);
-    if (model == GaussianSplat3d::CameraModel::PINHOLE) {
+    if (model == fvdb::detail::ops::DistortionModel::PINHOLE) {
         mEditor.camera.config.is_orthographic = PNANOVDB_FALSE;
-    } else if (model == GaussianSplat3d::CameraModel::ORTHOGRAPHIC) {
+    } else if (model == fvdb::detail::ops::DistortionModel::ORTHOGRAPHIC) {
         mEditor.camera.config.is_orthographic = PNANOVDB_TRUE;
     } else {
         throw std::invalid_argument(
