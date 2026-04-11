@@ -25,6 +25,7 @@ COLOR_ACTIVE_IN = "#4a90d9"    # active input voxel
 COLOR_ACTIVE_OUT = "#e07040"   # active output voxel
 COLOR_KERNEL = "#ffd54f"       # kernel highlight (semi-transparent)
 COLOR_KERNEL_EDGE = "#f9a825"  # kernel border
+COLOR_TARGET = "#e07040"       # dashed outline for target output cells
 COLOR_TEXT = "#333333"         # text / labels
 
 GRID_SIZE = 8       # input grid is 8×8
@@ -80,6 +81,60 @@ def _draw_grid(ax, grid_active, cell_size, origin, color_active, alpha=1.0,
         cy = oy - 0.4 + label_y_offset
         ax.text(cx, cy, label, ha="center", va="top",
                 fontsize=11, fontweight="bold", color=COLOR_TEXT)
+
+
+def _draw_target_outlines(ax, target_active, cell_size, origin):
+    """Draw dashed outlines on cells that will become active in the output."""
+    rows, cols = target_active.shape
+    ox, oy = origin
+    for r in range(rows):
+        for c in range(cols):
+            if not target_active[r, c]:
+                continue
+            x = ox + c * cell_size
+            y = oy + (rows - 1 - r) * cell_size
+            rect = patches.FancyBboxPatch(
+                (x, y), cell_size, cell_size,
+                boxstyle="round,pad=0.02",
+                linewidth=1.5,
+                edgecolor=COLOR_TARGET,
+                facecolor="none",
+                linestyle="--",
+                zorder=2,
+            )
+            ax.add_patch(rect)
+
+
+def _draw_legend(ax, x, y):
+    """Draw a compact legend showing input, output, and target outline meanings."""
+    s = 0.35  # swatch size
+    gap = 0.15
+    text_offset = s + 0.1
+
+    items = [
+        (COLOR_ACTIVE_IN, "solid", "Input voxel"),
+        (COLOR_ACTIVE_OUT, "solid", "Output voxel"),
+        ("none", "dashed", "Target topology"),
+    ]
+    for i, (color, style, label) in enumerate(items):
+        iy = y - i * (s + gap)
+        if style == "dashed":
+            rect = patches.FancyBboxPatch(
+                (x, iy), s, s,
+                boxstyle="round,pad=0.01",
+                linewidth=1.5, edgecolor=COLOR_TARGET,
+                facecolor="none", linestyle="--",
+            )
+        else:
+            rect = patches.FancyBboxPatch(
+                (x, iy), s, s,
+                boxstyle="round,pad=0.01",
+                linewidth=0.5, edgecolor=COLOR_GRID_LINE,
+                facecolor=color,
+            )
+        ax.add_patch(rect)
+        ax.text(x + text_offset, iy + s / 2, label,
+                va="center", fontsize=8.5, color=COLOR_TEXT)
 
 
 def _draw_kernel_highlight(ax, row, col, grid_rows, cell_size, origin):
@@ -184,7 +239,7 @@ def _build_strided_conv_animation(save_path):
     total_w = out_origin[0] + out_cols * cell_out + 0.5
     total_h = GRID_SIZE * cell_in + 1.0
     ax.set_xlim(-0.5, total_w)
-    ax.set_ylim(-1.0, total_h)
+    ax.set_ylim(-2.2, total_h)
 
     ax.set_title("Strided Sparse Convolution  (kernel 3×3, stride 2)",
                  fontsize=13, fontweight="bold", color=COLOR_TEXT, pad=12)
@@ -204,9 +259,15 @@ def _build_strided_conv_animation(save_path):
     empty_out = np.zeros_like(coarse_output)
     _draw_grid(ax, empty_out, cell_out, out_origin, COLOR_ACTIVE_OUT,
                label="Output (coarse grid)", label_y_offset=0)
+    # Dashed outlines showing where output voxels will land
+    _draw_target_outlines(ax, coarse_output, cell_out, out_origin)
+
+    # Legend (below the output grid label)
+    _draw_legend(ax, out_origin[0], out_origin[1] - 1.4)
 
     # Dynamic artists per frame
     dynamic_artists = []
+    lead_in = 3  # frames showing only dashed outlines before animation starts
 
     def _init():
         return []
@@ -217,14 +278,15 @@ def _build_strided_conv_animation(save_path):
             a.remove()
         dynamic_artists.clear()
 
-        if frame_idx < len(positions):
-            ir, ic, orow, ocol = positions[frame_idx]
+        step = frame_idx - lead_in  # negative during lead-in
+        if 0 <= step < len(positions):
+            ir, ic, orow, ocol = positions[step]
             # Kernel highlight on input
             k = _draw_kernel_highlight(ax, ir, ic, GRID_SIZE, cell_in, in_origin)
             dynamic_artists.append(k)
 
-        # Redraw activated output cells up to current frame
-        for i in range(min(frame_idx + 1, len(positions))):
+        # Redraw activated output cells up to current step
+        for i in range(max(0, min(step + 1, len(positions)))):
             _, _, orow, ocol = positions[i]
             ox = out_origin[0] + ocol * cell_out
             oy = out_origin[1] + (out_rows - 1 - orow) * cell_out
@@ -241,7 +303,7 @@ def _build_strided_conv_animation(save_path):
 
         return dynamic_artists
 
-    total_frames = len(positions) + 6  # pause on last frame
+    total_frames = lead_in + len(positions) + 6  # lead-in + animation + pause
     anim = animation.FuncAnimation(
         fig, _animate, init_func=_init,
         frames=total_frames, interval=500, blit=False,
@@ -280,7 +342,7 @@ def _build_transposed_conv_animation(save_path, coarse_output):
     total_w = fine_origin[0] + GRID_SIZE * cell_fine + 0.5
     total_h = GRID_SIZE * cell_fine + 1.0
     ax.set_xlim(-0.5, total_w)
-    ax.set_ylim(-1.0, total_h)
+    ax.set_ylim(-2.2, total_h)
 
     ax.set_title("Strided Transposed Sparse Convolution  (kernel 3×3, stride 2)",
                  fontsize=13, fontweight="bold", color=COLOR_TEXT, pad=12)
@@ -299,10 +361,16 @@ def _build_transposed_conv_animation(save_path, coarse_output):
     empty_fine = np.zeros_like(INPUT_ACTIVE)
     _draw_grid(ax, empty_fine, cell_fine, fine_origin, COLOR_ACTIVE_OUT,
                label="Output (fine grid, guided by out_grid)", label_y_offset=0)
+    # Dashed outlines showing the target output topology (out_grid)
+    _draw_target_outlines(ax, fine_output, cell_fine, fine_origin)
+
+    # Legend (below the coarse input grid label)
+    _draw_legend(ax, coarse_origin[0], coarse_origin[1] - 1.4)
 
     # Cumulative set of activated fine cells
     activated = set()
     dynamic_artists = []
+    lead_in = 3  # frames showing only dashed outlines before animation starts
 
     def _init():
         return []
@@ -312,8 +380,9 @@ def _build_transposed_conv_animation(save_path, coarse_output):
             a.remove()
         dynamic_artists.clear()
 
-        if frame_idx < len(positions):
-            cr, cc = positions[frame_idx]
+        step = frame_idx - lead_in  # negative during lead-in
+        if 0 <= step < len(positions):
+            cr, cc = positions[step]
             # Highlight current coarse cell
             cx = coarse_origin[0] + cc * cell_coarse
             cy = coarse_origin[1] + (coarse_rows - 1 - cr) * cell_coarse
@@ -355,7 +424,7 @@ def _build_transposed_conv_animation(save_path, coarse_output):
 
         return dynamic_artists
 
-    total_frames = len(positions) + 6
+    total_frames = lead_in + len(positions) + 6
     anim = animation.FuncAnimation(
         fig, _animate, init_func=_init,
         frames=total_frames, interval=500, blit=False,
