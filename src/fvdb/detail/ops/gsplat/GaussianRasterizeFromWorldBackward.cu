@@ -449,7 +449,7 @@ launchBackward(const torch::Tensor &means,
         dFeatures.packed_accessor64<float, 3, torch::RestrictPtrTraits>(),
         dOpacities.packed_accessor64<float, 2, torch::RestrictPtrTraits>()};
 
-    auto stream = at::cuda::getDefaultCUDAStream();
+    auto stream = at::cuda::getCurrentCUDAStream(means.device().index());
     rasterizeFromWorld3DGSBackwardKernel<NUM_CHANNELS, Camera>
         <<<gridDim, blockDim, sharedMem, stream>>>(kernelArgs);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
@@ -482,6 +482,8 @@ dispatchGaussianRasterizeFromWorld3DGSBackward<torch::kCUDA>(
     const at::optional<torch::Tensor> &backgrounds,
     const at::optional<torch::Tensor> &masks) {
     FVDB_FUNC_RANGE();
+
+    const at::cuda::OptionalCUDAGuard device_guard(device_of(means));
 
     const uint32_t imageWidth   = settings.imageWidth;
     const uint32_t imageHeight  = settings.imageHeight;

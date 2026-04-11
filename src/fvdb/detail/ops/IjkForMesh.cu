@@ -193,6 +193,8 @@ dispatchIJKForMesh<torch::kCUDA>(const JaggedTensor &meshVertices,
     TORCH_CHECK(meshFaces.device().is_cuda(), "GridBatchData must be on CUDA device");
     TORCH_CHECK(meshFaces.device().has_index(), "GridBatchData must have a valid index");
 
+    const c10::cuda::CUDAGuard device_guard(meshFaces.device());
+
     RAIIRawDeviceBuffer<VoxelCoordTransform> transformsDVec(transforms.size(),
                                                             meshVertices.device());
     transformsDVec.setData((VoxelCoordTransform *)transforms.data(), true /* blocking */);

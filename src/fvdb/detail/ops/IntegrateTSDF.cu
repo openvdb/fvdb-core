@@ -330,6 +330,8 @@ unprojectDepthMapToPoints(const torch::Tensor &depthImages,
                           const torch::Tensor &projectionMatrices,
                           const torch::Tensor &invProjectionMatrices,
                           const torch::Tensor &camToWorldMatrices) {
+    const c10::cuda::CUDAGuard device_guard(depthImages.device());
+
     const int64_t batchSize      = depthImages.size(0);
     const int64_t imageHeight    = depthImages.size(1);
     const int64_t imageWidth     = depthImages.size(2);
@@ -434,6 +436,8 @@ doIntegrate(const float truncationMargin,
             const JaggedTensor &tsdf,
             const JaggedTensor &weights,
             const JaggedTensor &features) {
+    const c10::cuda::CUDAGuard device_guard(tsdf.device());
+
     const int64_t batchSize      = depthImages.size(0);
     const int64_t imageHeight    = depthImages.size(1);
     const int64_t imageWidth     = depthImages.size(2);

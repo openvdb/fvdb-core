@@ -4904,5 +4904,143 @@ class TestProjectionGradsMultiCamera(unittest.TestCase):
             )
 
 
+class TestDeduplicatePixels(unittest.TestCase):
+    """Unit tests for GaussianSplat3d._deduplicate_pixels (pure-Python implementation)."""
+
+    IMAGE_WIDTH = 64
+    IMAGE_HEIGHT = 64
+
+    @staticmethod
+    def _dedup(pixels_jt, w=64, h=64):
+        return GaussianSplat3d._deduplicate_pixels(pixels_jt, w, h)
+
+    @parameterized.expand([(torch.int32,), (torch.int64,)])
+    def test_empty(self, dtype):
+        pixels = JaggedTensor(torch.empty(0, 2, dtype=dtype, device="cuda"))
+        unique, inv, has_dups = self._dedup(pixels)
+        self.assertFalse(has_dups)
+        self.assertEqual(inv.shape[0], 0)
+        self.assertEqual(unique.jdata.shape[0], 0)
+
+    @parameterized.expand([(torch.int32,), (torch.int64,)])
+    def test_single_pixel(self, dtype):
+        coords = torch.tensor([[5, 10]], dtype=dtype)
+        pixels = JaggedTensor([coords]).to("cuda")
+        unique, inv, has_dups = self._dedup(pixels)
+        self.assertFalse(has_dups)
+        self.assertEqual(unique.jdata.shape[0], 1)
+
+    @parameterized.expand([(torch.int32,), (torch.int64,)])
+    def test_all_unique(self, dtype):
+        coords = torch.tensor([[0, 0], [0, 1], [1, 0], [1, 1], [2, 3]], dtype=dtype)
+        pixels = JaggedTensor([coords]).to("cuda")
+        unique, inv, has_dups = self._dedup(pixels)
+        self.assertFalse(has_dups)
+        self.assertEqual(unique.jdata.shape[0], 5)
+        self.assertEqual(inv.shape[0], 5)
+
+    @parameterized.expand([(torch.int32,), (torch.int64,)])
+    def test_some_duplicates(self, dtype):
+        coords = torch.tensor([[0, 0], [1, 1], [0, 0], [2, 2]], dtype=dtype)
+        pixels = JaggedTensor([coords]).to("cuda")
+        unique, inv, has_dups = self._dedup(pixels)
+        self.assertTrue(has_dups)
+        self.assertEqual(unique.jdata.shape[0], 3)
+        self.assertEqual(inv.shape[0], 4)
+        inv_cpu = inv.cpu()
+        self.assertEqual(inv_cpu[0].item(), inv_cpu[2].item())
+        self.assertNotEqual(inv_cpu[1].item(), inv_cpu[3].item())
+
+    @parameterized.expand([(torch.int32,), (torch.int64,)])
+    def test_all_same_pixel(self, dtype):
+        coords = torch.tensor([[5, 5], [5, 5], [5, 5], [5, 5]], dtype=dtype)
+        pixels = JaggedTensor([coords]).to("cuda")
+        unique, inv, has_dups = self._dedup(pixels)
+        self.assertTrue(has_dups)
+        self.assertEqual(unique.jdata.shape[0], 1)
+        self.assertEqual(inv.shape[0], 4)
+        inv_cpu = inv.cpu()
+        for i in range(4):
+            self.assertEqual(inv_cpu[i].item(), 0)
+
+    @parameterized.expand([(torch.int32,), (torch.int64,)])
+    def test_multi_batch_no_duplicates(self, dtype):
+        batch0 = torch.tensor([[0, 0], [1, 1]], dtype=dtype)
+        batch1 = torch.tensor([[0, 0], [2, 2]], dtype=dtype)
+        pixels = JaggedTensor([batch0, batch1]).to("cuda")
+        unique, inv, has_dups = self._dedup(pixels)
+        self.assertFalse(has_dups)
+        self.assertEqual(unique.jdata.shape[0], 4)
+        self.assertEqual(unique.num_tensors, 2)
+
+    @parameterized.expand([(torch.int32,), (torch.int64,)])
+    def test_multi_batch_with_duplicates(self, dtype):
+        batch0 = torch.tensor([[0, 0], [1, 1], [0, 0]], dtype=dtype)
+        batch1 = torch.tensor([[0, 0], [3, 3]], dtype=dtype)
+        pixels = JaggedTensor([batch0, batch1]).to("cuda")
+        unique, inv, has_dups = self._dedup(pixels)
+        self.assertTrue(has_dups)
+        self.assertEqual(unique.num_tensors, 2)
+        self.assertEqual(unique.jdata.shape[0], 4)
+        self.assertEqual(inv.shape[0], 5)
+        inv_cpu = inv.cpu()
+        self.assertEqual(inv_cpu[0].item(), inv_cpu[2].item())
+
+    @parameterized.expand([(torch.int32,), (torch.int64,)])
+    def test_multi_batch_all_same_pixel(self, dtype):
+        batch0 = torch.tensor([[1, 1], [1, 1], [1, 1]], dtype=dtype)
+        batch1 = torch.tensor([[2, 2], [2, 2]], dtype=dtype)
+        pixels = JaggedTensor([batch0, batch1]).to("cuda")
+        unique, inv, has_dups = self._dedup(pixels)
+        self.assertTrue(has_dups)
+        self.assertEqual(unique.num_tensors, 2)
+        self.assertEqual(unique.jdata.shape[0], 2)
+        offsets = unique.joffsets.cpu()
+        self.assertEqual(offsets[0].item(), 0)
+        self.assertEqual(offsets[1].item(), 1)
+        self.assertEqual(offsets[2].item(), 2)
+        inv_cpu = inv.cpu()
+        self.assertEqual(inv_cpu[0].item(), inv_cpu[1].item())
+        self.assertEqual(inv_cpu[0].item(), inv_cpu[2].item())
+        self.assertEqual(inv_cpu[3].item(), inv_cpu[4].item())
+        self.assertNotEqual(inv_cpu[0].item(), inv_cpu[3].item())
+
+    @parameterized.expand([(torch.int32,), (torch.int64,)])
+    def test_round_trip_some_duplicates(self, dtype):
+        coords = torch.tensor([[3, 7], [1, 2], [3, 7], [5, 5], [1, 2], [9, 0]], dtype=dtype)
+        pixels = JaggedTensor([coords]).to("cuda")
+        unique, inv, has_dups = self._dedup(pixels)
+        self.assertTrue(has_dups)
+        self.assertEqual(unique.jdata.shape[0], 4)
+        reconstructed = unique.jdata[inv]
+        torch.testing.assert_close(reconstructed.cpu(), coords.to(reconstructed.dtype))
+
+    @parameterized.expand([(torch.int32,), (torch.int64,)])
+    def test_round_trip_multi_batch(self, dtype):
+        batch0 = torch.tensor([[2, 3], [4, 5], [2, 3]], dtype=dtype)
+        batch1 = torch.tensor([[6, 7], [6, 7], [8, 9]], dtype=dtype)
+        pixels = JaggedTensor([batch0, batch1]).to("cuda")
+        unique, inv, has_dups = self._dedup(pixels)
+        self.assertTrue(has_dups)
+        reconstructed = unique.jdata[inv]
+        torch.testing.assert_close(reconstructed.cpu(), pixels.jdata.cpu().to(reconstructed.dtype))
+
+    @parameterized.expand([(torch.int32,), (torch.int64,)])
+    def test_jagged_tensor_offsets(self, dtype):
+        batch0 = torch.tensor([[0, 0], [0, 0], [1, 1]], dtype=dtype)
+        batch1 = torch.tensor([[2, 2]], dtype=dtype)
+        batch2 = torch.tensor([[3, 3], [4, 4], [3, 3], [4, 4]], dtype=dtype)
+        pixels = JaggedTensor([batch0, batch1, batch2]).to("cuda")
+        unique, inv, has_dups = self._dedup(pixels)
+        self.assertTrue(has_dups)
+        self.assertEqual(unique.num_tensors, 3)
+        self.assertEqual(unique.jdata.shape[0], 5)
+        offsets = unique.joffsets.cpu()
+        self.assertEqual(offsets[0].item(), 0)
+        self.assertEqual(offsets[1].item(), 2)
+        self.assertEqual(offsets[2].item(), 3)
+        self.assertEqual(offsets[3].item(), 5)
+
+
 if __name__ == "__main__":
     unittest.main()
