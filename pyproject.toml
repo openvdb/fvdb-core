@@ -47,8 +47,11 @@ components = ["PythonModule"]
 [tool.scikit-build.wheel]
 packages = ["fvdb"]
 
-# This is so that the WIP tests are not run
+[tool.black]
+line-length = 120
+target-version = ["py311"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
-norecursedirs = ["wip", ".*", "build", "dist"]
+norecursedirs = [".*", "build", "dist"]

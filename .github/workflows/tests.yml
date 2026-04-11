@@ -405,7 +405,12 @@ jobs:
       - name: Run markdown docs tests
         run: |
             micromamba activate fvdb_test
-            pytest --markdown-docs docs --ignore-glob="**/wip/**"
+            pytest --markdown-docs docs
+
+      - name: Run API reference validation
+        run: |
+            micromamba activate fvdb_test
+            pytest tests/test_teachme_api_refs.py -v
 
       - name: Run notebook tests
         run: |

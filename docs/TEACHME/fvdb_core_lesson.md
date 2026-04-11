@@ -130,7 +130,7 @@ features  = grid.jagged_like(flat_feat)
 
 ### If You Have the Repo
 
-- Read: `docs/wip/basic_concepts.md`
+- Read: `docs/tutorials/basic_concepts.md`
 - Run: `notebooks/00_intro.ipynb` — visualizes the ijk→index mapping with diagrams
 
 ---
@@ -245,7 +245,7 @@ jt_scaled = jt * 2.0  # returns a new JaggedTensor
 
 ### If You Have the Repo
 
-- Read: `docs/wip/jagged_tensor.md`
+- Read: `docs/tutorials/jagged_tensor.md`
 - Run: `examples/jagged_tensor_type_safe_operations.py`
 - Run: `notebooks/01_api_basics.ipynb`
 
@@ -332,7 +332,7 @@ flat_idx   = grid.ijk_to_index(grid.ijk, cumulative=True)      # cumulative acro
 
 ### If You Have the Repo
 
-- Read: `docs/wip/building_grids.md`
+- Read: `docs/tutorials/building_grids.md`
 - Run: `examples/grid_building.py`
 
 ---
@@ -416,7 +416,7 @@ for _ in range(3):
 
 ### If You Have the Repo
 
-- Read: `docs/wip/basic_grid_ops.md`
+- Read: `docs/tutorials/basic_grid_ops.md`
 - Run: `examples/sample_trilinear.py`, `examples/splat_trilinear.py`
 - Run: `examples/overfit_sdf.py` — end-to-end differentiable SDF fitting on a mesh
 
@@ -579,8 +579,8 @@ out_feat = plan_same.execute(feat, weights)
 
 ### If You Have the Repo
 
-- Read: `docs/wip/basic_convolution.md`
-- Read: `docs/wip/simple_unet.md` — full ResUNet example with MinkowskiEngine comparison
+- Read: `docs/tutorials/basic_convolution.md`
+- Read: `docs/tutorials/simple_unet.md` — full ResUNet example with MinkowskiEngine comparison
 - Run: `notebooks/02_nn.ipynb`, `notebooks/03_conv.ipynb`
 
 ---

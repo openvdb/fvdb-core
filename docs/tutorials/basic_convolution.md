@@ -7,13 +7,14 @@ Convolving the features of a `GridBatch` can be accomplished with either a high-
 
 `fvdb.nn.SparseConv3d` provides a high-level `torch.nn.Module` class for convolution on `fvdb` classes that is an analogue to the use of `torch.nn.Conv3d`.  Using this module is the recommended functionality for performing convolution with `fvdb` because it not only manages functionality such as initializing the weights of the convolution and calling appropriate backend implementation functions but it also provides certain backend optimizations which will be illustrated in the [Low-level usage](#low-level-usage-with-gridbatch) section.
 
-One thing to note is `fvdb.nn.SparseConv3d` operates on a class that wraps a `GridBatch` and `JaggedTensor` together into a convenience object, `fvdb.VDBTensor`, which is used by all the `fvdb.nn` modules.
+`fvdb.nn.SparseConv3d` takes explicit `(data: JaggedTensor, plan: ConvolutionPlan)` arguments — topology and features are always passed separately.  A `ConvolutionPlan` pre-computes the kernel map (the neighbor lookup structure) for a given grid and kernel configuration.
 
 A simple example of using `fvdb.nn.SparseConv3d` is as follows:
 
 ```python
 import fvdb
 import fvdb.nn as fvdbnn
+from fvdb import ConvolutionPlan
 from fvdb.utils.examples import load_car_1_mesh
 import torch
 import numpy as np
@@ -44,13 +45,13 @@ grid = fvdb.GridBatch.from_points(points, voxel_sizes=vox_size)
 # Splat the normals into the grid with trilinear interpolation
 vox_normals = grid.splat_trilinear(points, normals)
 
-# VDBTensor is a simple wrapper of a grid and a feature tensor
-vdbtensor = fvdbnn.VDBTensor(grid, vox_normals)
+# Build a ConvolutionPlan for stride=1 same-topology convolution
+plan = ConvolutionPlan.from_grid_batch(kernel_size=3, stride=1, source_grid=grid, target_grid=grid)
 
 # fvdb.nn.SparseConv3d is a convenient torch.nn.Module implementing the fVDB convolution
-conv = fvdbnn.SparseConv3d(in_channels=3, out_channels=3, kernel_size=3, stride=1, bias=False).to(vdbtensor.device)
+conv = fvdbnn.SparseConv3d(in_channels=3, out_channels=3, kernel_size=3, stride=1, bias=False).to(grid.device)
 
-output = conv(vdbtensor)
+output = conv(vox_normals, plan)
 ```
 Let's visualize the original grid with normals visualized as colours alongside the result of these features after a convolution initialized with random weights:
 ![](../imgs/fig/simple_conv.png)
@@ -58,26 +59,29 @@ Let's visualize the original grid with normals visualized as colours alongside t
 For stride values greater than 1, the output of the convolution will be a grid with a smaller resolution than the input grid (similar in topological effect to the output of a Pooling operator).  Let's illustrate this:
 
 ```python continuation
-# We would expect for stride=2 that the output grid would have half the resolution (or twice the world-space size) of the input grid
-conv = fvdbnn.SparseConv3d(in_channels=3, out_channels=3, kernel_size=3, stride=2, bias=False).to(vdbtensor.device)
+# Stride=2: output grid has half the resolution (twice the world-space voxel size)
+plan_down = ConvolutionPlan.from_grid_batch(kernel_size=3, stride=2, source_grid=grid, target_grid=None)
+conv_down = fvdbnn.SparseConv3d(in_channels=3, out_channels=3, kernel_size=3, stride=2, bias=False).to(grid.device)
 
-output = conv(vdbtensor)
+output = conv_down(vox_normals, plan_down)
+coarse_grid = plan_down.target_grid_batch
 ```
 
 ![](../imgs/fig/stride_conv.png)
 
 
-Transposed convolution can be performed with `fvdb.nn.SparseConv3d` which can increase the resolution of the grid.  It only really makes sense to perform transposed sparse convolution with a target grid topology we wish to produce with this operation (see the [Pooling Operators](#maxmean-pooling) for an explanation).  Therefore, an `out_grid` argument must be provided in this case to specify the target grid topology:
+Transposed convolution can be performed with `fvdb.nn.SparseConvTranspose3d` (a separate class) which can increase the resolution of the grid.  It only really makes sense to perform transposed sparse convolution with a target grid topology we wish to produce with this operation (see the [Pooling Operators](#maxmean-pooling) for an explanation).  Therefore, the plan must specify a `target_grid` using `ConvolutionPlan.from_grid_batch_transposed`:
 
 ```python continuation
-# Tranposed convolution operator, stride=2
-transposed_conv = fvdbnn.SparseConv3d(in_channels=3, out_channels=3, kernel_size=3, stride=2, bias=False, transposed=True).to(vdbtensor.device)
+# Transposed convolution operator, stride=2
+transposed_conv = fvdbnn.SparseConvTranspose3d(in_channels=3, out_channels=3, kernel_size=3, stride=2, bias=False).to(grid.device)
 
-# Note the use of the `out_grid` argument to specify the target grid topology
-transposed_output = transposed_conv(output, out_grid=vdbtensor.grid)
+# Build a transposed plan: source is the coarse grid, target is the original fine grid
+plan_up = ConvolutionPlan.from_grid_batch_transposed(kernel_size=3, stride=2, source_grid=coarse_grid, target_grid=grid)
+transposed_output = transposed_conv(output, plan_up)
 ```
 
-Here we visuzlie the original grid, the grid after strided convolution and the grid after transposed convolution inverts the topological operation of the strided convolution to produce the same topology as the original grid with the features convolved by our two layers:
+Here we visualize the original grid, the grid after strided convolution and the grid after transposed convolution inverts the topological operation of the strided convolution to produce the same topology as the original grid with the features convolved by our two layers:
 
 ![](../imgs/fig/transposed_stride_conv.png)
 
