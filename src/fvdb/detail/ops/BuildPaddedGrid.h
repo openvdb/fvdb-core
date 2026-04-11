@@ -4,14 +4,14 @@
 #ifndef FVDB_DETAIL_OPS_BUILDPADDEDGRID_H
 #define FVDB_DETAIL_OPS_BUILDPADDEDGRID_H
 
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 
 namespace fvdb {
 namespace detail {
 namespace ops {
 
-c10::intrusive_ptr<GridBatchImpl>
-buildPaddedGrid(const GridBatchImpl &baseBatchHdl, int bmin, int bmax, bool excludeBorder);
+c10::intrusive_ptr<GridBatchData>
+buildPaddedGrid(const GridBatchData &baseBatchHdl, int bmin, int bmax, bool excludeBorder);
 
 } // namespace ops
 } // namespace detail

@@ -9,6 +9,7 @@ import numpy as np
 import OpenImageIO as oiio
 import point_cloud_utils as pcu
 import torch
+import torch.nn.functional as nnf
 from fvdb.utils.tests import (
     create_uniform_grid_points_at_depth,
     generate_center_frame_point_at_depth,
@@ -18,9 +19,11 @@ from fvdb.utils.tests import (
 from parameterized import parameterized, parameterized_class
 
 from fvdb import (
+    CameraModel,
     GaussianSplat3d,
     Grid,
     JaggedTensor,
+    ProjectionMethod,
     evaluate_spherical_harmonics,
     gaussian_render_jagged,
 )
@@ -449,7 +452,7 @@ class TestGaussianSplatTo(BaseGaussianTestCase):
         gs3d = self.gs3d.to(cpu_f16_tensor)
         self.check_device_and_dtype(gs3d, torch.device("cpu"), torch.float16)
 
-        grid = Grid.from_dense(1, 0, device="cuda")
+        grid = Grid.from_dense(dense_dims=1, ijk_min=0, device="cuda")
         gs3d = gs3d.to(grid)
         self.check_device_and_dtype(gs3d, torch.device(grid.device), torch.float16)
 
@@ -478,7 +481,7 @@ class TestGaussianSplatTo(BaseGaussianTestCase):
         gs3d = self.gs3d.to(other=cpu_f16_tensor)
         self.check_device_and_dtype(gs3d, torch.device("cpu"), torch.float16)
 
-        grid = Grid.from_dense(1, 0, device="cuda")
+        grid = Grid.from_dense(dense_dims=1, ijk_min=0, device="cuda")
         gs3d = gs3d.to(other=grid)
         self.check_device_and_dtype(gs3d, torch.device(grid.device), torch.float16)
 
@@ -1407,6 +1410,64 @@ class TestGaussianRender(BaseGaussianTestCase):
         torch.testing.assert_close(means2d[radii > 0], test_means2d[radii > 0])
         torch.testing.assert_close(depths[radii > 0], test_depths[radii > 0])
         torch.testing.assert_close(conics[radii > 0], test_conics[radii > 0], atol=1e-5, rtol=1e-4)
+
+    def test_projection_camera_metadata(self):
+        projected = self.gs3d.project_gaussians_for_images(
+            self.cam_to_world_mats[:1],
+            self.projection_mats[:1],
+            self.width,
+            self.height,
+            self.near_plane,
+            self.far_plane,
+            camera_model=CameraModel.PINHOLE,
+            projection_method=ProjectionMethod.AUTO,
+        )
+
+        self.assertEqual(projected.camera_model, CameraModel.PINHOLE)
+        self.assertEqual(projected.projection_method, ProjectionMethod.ANALYTIC)
+
+    def test_from_world_depth_and_rgbd_render(self):
+        cam_mats = self.cam_to_world_mats[:1]
+        proj_mats = self.projection_mats[:1]
+
+        images, image_alphas = self.gs3d.render_images_from_world(
+            cam_mats,
+            proj_mats,
+            self.width,
+            self.height,
+            self.near_plane,
+            self.far_plane,
+            camera_model=CameraModel.PINHOLE,
+            projection_method=ProjectionMethod.AUTO,
+        )
+        depths, depth_alphas = self.gs3d.render_depths_from_world(
+            cam_mats,
+            proj_mats,
+            self.width,
+            self.height,
+            self.near_plane,
+            self.far_plane,
+            camera_model=CameraModel.PINHOLE,
+            projection_method=ProjectionMethod.AUTO,
+        )
+        rgbd, rgbd_alphas = self.gs3d.render_images_and_depths_from_world(
+            cam_mats,
+            proj_mats,
+            self.width,
+            self.height,
+            self.near_plane,
+            self.far_plane,
+            camera_model=CameraModel.PINHOLE,
+            projection_method=ProjectionMethod.AUTO,
+        )
+
+        self.assertEqual(images.shape, (1, self.height, self.width, self.gs3d.num_channels))
+        self.assertEqual(depths.shape, (1, self.height, self.width, 1))
+        self.assertEqual(rgbd.shape, (1, self.height, self.width, self.gs3d.num_channels + 1))
+        torch.testing.assert_close(image_alphas, depth_alphas, atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(image_alphas, rgbd_alphas, atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(rgbd[..., :-1], images, atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(rgbd[..., -1:], depths, atol=1e-5, rtol=1e-5)
 
     def _tensors_to_pixel(self, colors, alphas):
         canvas = (
@@ -4092,6 +4153,583 @@ class TestGaussianRenderSparseDuplicatePixels(BaseGaussianTestCase):
             )
 
 
+class TestGaussianCameraApi(unittest.TestCase):
+    width = 32
+    height = 24
+    near_plane = 0.05
+    far_plane = 20.0
+    tile_size = 16
+
+    def setUp(self):
+        if not torch.cuda.is_available():
+            self.skipTest("CUDA not available")
+
+        torch.manual_seed(0)
+        np.random.seed(0)
+        self.device = "cuda:0"
+        self.dtype = torch.float32
+
+        means = torch.tensor([[0.18, -0.12, 2.8], [-0.08, 0.10, 3.4]], device=self.device, dtype=self.dtype)
+        quats = torch.tensor([[1.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]], device=self.device, dtype=self.dtype)
+        log_scales = torch.log(
+            torch.tensor([[0.06, 0.05, 0.04], [0.05, 0.07, 0.06]], device=self.device, dtype=self.dtype)
+        )
+        logit_opacities = torch.tensor([2.2, 1.8], device=self.device, dtype=self.dtype)
+        sh0 = torch.tensor([[[0.7, 0.1, -0.2]], [[-0.3, 0.5, 0.4]]], device=self.device, dtype=self.dtype)
+        shN = torch.empty((2, 0, 3), device=self.device, dtype=self.dtype)
+
+        self.gs3d = GaussianSplat3d.from_tensors(
+            means=means,
+            quats=quats,
+            log_scales=log_scales,
+            logit_opacities=logit_opacities,
+            sh0=sh0,
+            shN=shN,
+        )
+
+    def _make_world_to_camera(self, C: int) -> torch.Tensor:
+        world_to_camera = torch.eye(4, device=self.device, dtype=self.dtype).unsqueeze(0).repeat(C, 1, 1)
+        for c in range(C):
+            world_to_camera[c, 0, 3] = 0.03 * c
+            world_to_camera[c, 1, 3] = -0.02 * c
+        return world_to_camera.contiguous()
+
+    def _make_projection_matrices(self, C: int, camera_model: CameraModel) -> torch.Tensor:
+        projection = torch.zeros((C, 3, 3), device=self.device, dtype=self.dtype)
+        for c in range(C):
+            if camera_model == CameraModel.ORTHOGRAPHIC:
+                fx = 9.0 + 0.5 * c
+                fy = 8.5 + 0.5 * c
+            else:
+                fx = 18.0 + 1.5 * c
+                fy = 17.0 + 1.25 * c
+            projection[c, 0, 0] = fx
+            projection[c, 1, 1] = fy
+            projection[c, 0, 2] = (self.width - 1) / 2.0 + 0.3 * c
+            projection[c, 1, 2] = (self.height - 1) / 2.0 - 0.2 * c
+            projection[c, 2, 2] = 1.0
+        return projection.contiguous()
+
+    def _make_distortion_coeffs(self, C: int) -> torch.Tensor:
+        distortion_coeffs = torch.zeros((C, 12), device=self.device, dtype=self.dtype)
+        for c in range(C):
+            s = float(c + 1)
+            distortion_coeffs[c, 0] = 0.02 * s
+            distortion_coeffs[c, 1] = -0.004 * s
+            distortion_coeffs[c, 2] = 0.001 * s
+            distortion_coeffs[c, 6] = 0.0015 * s
+            distortion_coeffs[c, 7] = -0.0012 * s
+            distortion_coeffs[c, 8] = 0.0002 * s
+            distortion_coeffs[c, 9] = -0.0001 * s
+        return distortion_coeffs.contiguous()
+
+    def _camera_inputs(self, camera_model: CameraModel, C: int = 1):
+        world_to_camera = self._make_world_to_camera(C)
+        projection_matrices = self._make_projection_matrices(C, camera_model)
+        distortion_coeffs = None
+        if camera_model in {
+            CameraModel.OPENCV_RADTAN_5,
+            CameraModel.OPENCV_RATIONAL_8,
+            CameraModel.OPENCV_RADTAN_THIN_PRISM_9,
+            CameraModel.OPENCV_THIN_PRISM_12,
+        }:
+            distortion_coeffs = self._make_distortion_coeffs(C)
+        return world_to_camera, projection_matrices, distortion_coeffs
+
+    def _make_tiny_parity_splat(self) -> GaussianSplat3d:
+        means = torch.tensor([[0.12, -0.06, 3.2]], device=self.device, dtype=self.dtype)
+        quats = torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=self.device, dtype=self.dtype)
+        log_scales = torch.log(torch.tensor([[0.05, 0.05, 0.05]], device=self.device, dtype=self.dtype))
+        logit_opacities = torch.tensor([2.2], device=self.device, dtype=self.dtype)
+        sh0 = torch.tensor([[[0.4, -0.1, 0.2]]], device=self.device, dtype=self.dtype)
+        shN = torch.empty((1, 0, 3), device=self.device, dtype=self.dtype)
+        return GaussianSplat3d.from_tensors(
+            means=means,
+            quats=quats,
+            log_scales=log_scales,
+            logit_opacities=logit_opacities,
+            sh0=sh0,
+            shN=shN,
+        )
+
+    def _make_structural_comparison_splat(self) -> GaussianSplat3d:
+        means = torch.tensor(
+            [
+                [-0.95, -0.65, 2.3],
+                [-0.55, -0.35, 2.8],
+                [-0.15, -0.55, 3.1],
+                [0.30, -0.25, 2.6],
+                [0.78, -0.45, 3.4],
+                [-0.85, 0.10, 2.9],
+                [-0.35, 0.28, 3.6],
+                [0.12, 0.18, 2.4],
+                [0.55, 0.42, 3.2],
+                [0.92, 0.12, 2.7],
+                [-0.18, 0.72, 4.1],
+                [0.48, 0.78, 3.8],
+            ],
+            device=self.device,
+            dtype=self.dtype,
+        )
+        quats = torch.tensor(
+            [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.991, 0.0, 0.131, 0.0],
+                [0.981, 0.0, 0.0, 0.195],
+                [0.966, 0.0, 0.259, 0.0],
+                [0.953, 0.0, 0.0, 0.302],
+                [0.991, 0.131, 0.0, 0.0],
+                [0.966, 0.259, 0.0, 0.0],
+                [0.953, 0.0, 0.214, 0.214],
+                [0.924, 0.0, 0.0, 0.383],
+                [0.981, 0.195, 0.0, 0.0],
+                [0.966, 0.0, 0.259, 0.0],
+                [0.924, 0.271, 0.0, 0.271],
+            ],
+            device=self.device,
+            dtype=self.dtype,
+        )
+        quats = quats / torch.linalg.norm(quats, dim=1, keepdim=True)
+        log_scales = torch.log(
+            torch.tensor(
+                [
+                    [0.09, 0.07, 0.06],
+                    [0.08, 0.06, 0.05],
+                    [0.07, 0.08, 0.05],
+                    [0.10, 0.07, 0.06],
+                    [0.08, 0.09, 0.07],
+                    [0.07, 0.06, 0.05],
+                    [0.09, 0.08, 0.07],
+                    [0.10, 0.08, 0.06],
+                    [0.08, 0.07, 0.05],
+                    [0.07, 0.09, 0.06],
+                    [0.09, 0.08, 0.07],
+                    [0.08, 0.10, 0.06],
+                ],
+                device=self.device,
+                dtype=self.dtype,
+            )
+        )
+        logit_opacities = torch.tensor([2.1, 1.8, 1.6, 2.0, 1.7, 1.9, 1.5, 2.2, 1.8, 1.7, 1.6, 1.9], device=self.device)
+        sh0 = torch.tensor(
+            [
+                [[0.70, -0.05, -0.20]],
+                [[0.40, 0.15, -0.30]],
+                [[0.10, 0.35, -0.15]],
+                [[-0.05, 0.55, 0.00]],
+                [[-0.25, 0.40, 0.20]],
+                [[0.65, 0.05, -0.10]],
+                [[0.25, 0.30, 0.05]],
+                [[-0.10, 0.55, 0.30]],
+                [[-0.30, 0.20, 0.45]],
+                [[0.20, -0.10, 0.55]],
+                [[0.05, 0.45, 0.50]],
+                [[-0.20, 0.10, 0.65]],
+            ],
+            device=self.device,
+            dtype=self.dtype,
+        )
+        shN = torch.empty((means.shape[0], 0, 3), device=self.device, dtype=self.dtype)
+        return GaussianSplat3d.from_tensors(
+            means=means,
+            quats=quats,
+            log_scales=log_scales,
+            logit_opacities=logit_opacities,
+            sh0=sh0,
+            shN=shN,
+        )
+
+    def _all_pixels(self, C: int) -> JaggedTensor:
+        ys, xs = torch.meshgrid(
+            torch.arange(self.height, device=self.device),
+            torch.arange(self.width, device=self.device),
+            indexing="ij",
+        )
+        pixels = torch.stack((ys.reshape(-1), xs.reshape(-1)), dim=1)
+        return JaggedTensor([pixels.clone() for _ in range(C)]).to(self.device)
+
+    def _render_args(self, camera_model: CameraModel, C: int = 1) -> dict:
+        world_to_camera, projection_matrices, distortion_coeffs = self._camera_inputs(camera_model, C=C)
+        return dict(
+            world_to_camera_matrices=world_to_camera,
+            projection_matrices=projection_matrices,
+            image_width=self.width,
+            image_height=self.height,
+            near=self.near_plane,
+            far=self.far_plane,
+            camera_model=camera_model,
+            projection_method=ProjectionMethod.AUTO,
+            distortion_coeffs=distortion_coeffs,
+        )
+
+    @staticmethod
+    def _with_overrides(render_args: dict, **overrides) -> dict:
+        updated = dict(render_args)
+        updated.update(overrides)
+        return updated
+
+    def _assert_sparse_matches_dense(self, dense: torch.Tensor, sparse: JaggedTensor, pixels: JaggedTensor):
+        for cam_idx, cam_pixels in enumerate(pixels.unbind()):
+            assert isinstance(cam_pixels, torch.Tensor)
+            y_coords = cam_pixels[:, 0]
+            x_coords = cam_pixels[:, 1]
+            offset = pixels.joffsets[cam_idx].item()
+            end = pixels.joffsets[cam_idx + 1].item()
+            expected = dense[cam_idx, y_coords, x_coords]
+            actual = sparse.jdata[offset:end]
+            torch.testing.assert_close(actual, expected, atol=1e-4, rtol=1e-4)
+
+    def _support_bbox(self, support_mask: torch.Tensor) -> torch.Tensor:
+        coords = torch.nonzero(support_mask, as_tuple=False)
+        if coords.numel() == 0:
+            return torch.tensor([-1.0, -1.0, -1.0, -1.0], device=self.device, dtype=self.dtype)
+        y_min, x_min = coords.min(dim=0).values
+        y_max, x_max = coords.max(dim=0).values
+        return torch.stack((x_min, y_min, x_max, y_max)).to(device=self.device, dtype=self.dtype)
+
+    def _alpha_weighted_centroid(self, alpha: torch.Tensor) -> torch.Tensor:
+        total = torch.clamp(alpha.sum(), min=1.0e-8)
+        ys, xs = torch.meshgrid(
+            torch.arange(alpha.shape[0], device=alpha.device, dtype=alpha.dtype),
+            torch.arange(alpha.shape[1], device=alpha.device, dtype=alpha.dtype),
+            indexing="ij",
+        )
+        centroid_x = (alpha * xs).sum() / total
+        centroid_y = (alpha * ys).sum() / total
+        return torch.stack((centroid_x, centroid_y))
+
+    def _blurred_rgb_rmse(self, rgb_a: torch.Tensor, rgb_b: torch.Tensor, union_mask: torch.Tensor) -> float:
+        pooled_a = nnf.avg_pool2d(rgb_a.permute(2, 0, 1).unsqueeze(0), kernel_size=5, stride=1, padding=2)
+        pooled_b = nnf.avg_pool2d(rgb_b.permute(2, 0, 1).unsqueeze(0), kernel_size=5, stride=1, padding=2)
+        pooled_mask = nnf.avg_pool2d(
+            union_mask.to(dtype=rgb_a.dtype).unsqueeze(0).unsqueeze(0), kernel_size=5, stride=1, padding=2
+        )[0, 0]
+        if not bool((pooled_mask > 1.0e-3).any()):
+            return 0.0
+        diff = (pooled_a - pooled_b)[0].permute(1, 2, 0)
+        rmse = torch.sqrt((diff[pooled_mask > 1.0e-3] ** 2).mean())
+        return float(rmse.item())
+
+    def _blurred_alpha_rmse(self, alpha_a: torch.Tensor, alpha_b: torch.Tensor) -> float:
+        pooled_a = nnf.avg_pool2d(alpha_a.unsqueeze(0).unsqueeze(0), kernel_size=5, stride=1, padding=2)[0, 0]
+        pooled_b = nnf.avg_pool2d(alpha_b.unsqueeze(0).unsqueeze(0), kernel_size=5, stride=1, padding=2)[0, 0]
+        return float(torch.sqrt(((pooled_a - pooled_b) ** 2).mean()).item())
+
+    def _structural_comparison_metrics(
+        self,
+        projected_rgbd: torch.Tensor,
+        projected_alpha: torch.Tensor,
+        world_rgbd: torch.Tensor,
+        world_alpha: torch.Tensor,
+        support_threshold: float = 1.0e-3,
+    ) -> dict[str, float]:
+        projected_alpha_2d = projected_alpha[0, ..., 0]
+        world_alpha_2d = world_alpha[0, ..., 0]
+        projected_support = projected_alpha_2d > support_threshold
+        world_support = world_alpha_2d > support_threshold
+        union_support = projected_support | world_support
+        intersection_support = projected_support & world_support
+
+        projected_alpha_sum = float(projected_alpha_2d.sum().item())
+        world_alpha_sum = float(world_alpha_2d.sum().item())
+
+        projected_bbox = self._support_bbox(projected_support)
+        world_bbox = self._support_bbox(world_support)
+        projected_centroid = self._alpha_weighted_centroid(projected_alpha_2d)
+        world_centroid = self._alpha_weighted_centroid(world_alpha_2d)
+
+        projected_depth_mass = projected_rgbd[0, ..., -1].sum()
+        world_depth_mass = world_rgbd[0, ..., -1].sum()
+        projected_depth_mean = projected_depth_mass / torch.clamp(projected_alpha_2d.sum(), min=1.0e-8)
+        world_depth_mean = world_depth_mass / torch.clamp(world_alpha_2d.sum(), min=1.0e-8)
+        depth_scale = max(abs(float(projected_depth_mean.item())), abs(float(world_depth_mean.item())), 1.0e-8)
+
+        return {
+            "support_iou": float(
+                intersection_support.sum(dtype=self.dtype).item()
+                / max(float(union_support.sum(dtype=self.dtype).item()), 1.0)
+            ),
+            "bbox_linf_err": float((projected_bbox - world_bbox).abs().max().item()),
+            "centroid_err": float(torch.linalg.norm(projected_centroid - world_centroid).item()),
+            "blurred_alpha_rmse": self._blurred_alpha_rmse(projected_alpha_2d, world_alpha_2d),
+            "depth_mean_rel_err": abs(float(projected_depth_mean.item()) - float(world_depth_mean.item()))
+            / depth_scale,
+            "blurred_rgb_rmse": self._blurred_rgb_rmse(
+                projected_rgbd[0, ..., :-1],
+                world_rgbd[0, ..., :-1],
+                union_support,
+            ),
+        }
+
+    def test_projection_method_resolution_and_metadata(self):
+        cases = [
+            (CameraModel.PINHOLE, ProjectionMethod.AUTO, ProjectionMethod.ANALYTIC),
+            (CameraModel.ORTHOGRAPHIC, ProjectionMethod.AUTO, ProjectionMethod.ANALYTIC),
+            (CameraModel.PINHOLE, ProjectionMethod.UNSCENTED, ProjectionMethod.UNSCENTED),
+            (CameraModel.ORTHOGRAPHIC, ProjectionMethod.UNSCENTED, ProjectionMethod.UNSCENTED),
+            (CameraModel.OPENCV_RADTAN_5, ProjectionMethod.AUTO, ProjectionMethod.UNSCENTED),
+            (CameraModel.OPENCV_RATIONAL_8, ProjectionMethod.AUTO, ProjectionMethod.UNSCENTED),
+            (CameraModel.OPENCV_RADTAN_THIN_PRISM_9, ProjectionMethod.AUTO, ProjectionMethod.UNSCENTED),
+            (CameraModel.OPENCV_THIN_PRISM_12, ProjectionMethod.AUTO, ProjectionMethod.UNSCENTED),
+        ]
+
+        for camera_model, requested_method, expected_method in cases:
+            with self.subTest(camera_model=camera_model, requested_method=requested_method):
+                render_args = self._render_args(camera_model)
+                project_args = self._with_overrides(render_args, projection_method=requested_method)
+                projected = self.gs3d.project_gaussians_for_images(
+                    **project_args,
+                    sh_degree_to_use=0,
+                )
+                self.assertEqual(projected.camera_model, camera_model)
+                self.assertEqual(projected.projection_method, expected_method)
+
+    def test_camera_api_validation_errors(self):
+        pinhole_args = self._render_args(CameraModel.PINHOLE)
+        opencv_args = self._render_args(CameraModel.OPENCV_RADTAN_5)
+
+        with self.assertRaisesRegex(RuntimeError, "distortionCoeffs must be provided"):
+            self.gs3d.project_gaussians_for_images(
+                **self._with_overrides(opencv_args, distortion_coeffs=None),
+                sh_degree_to_use=0,
+            )
+
+        with self.assertRaisesRegex(RuntimeError, "distortionCoeffs must have shape"):
+            self.gs3d.project_gaussians_for_images(
+                **self._with_overrides(
+                    opencv_args, distortion_coeffs=opencv_args["distortion_coeffs"][:, :5].contiguous()
+                ),
+                sh_degree_to_use=0,
+            )
+
+        with self.assertRaisesRegex(RuntimeError, "ProjectionMethod::UNSCENTED or AUTO"):
+            self.gs3d.render_images_from_world(
+                **self._with_overrides(opencv_args, projection_method=ProjectionMethod.ANALYTIC),
+                sh_degree_to_use=0,
+            )
+
+        with self.assertRaisesRegex(RuntimeError, "projectionMatrices must be contiguous"):
+            self.gs3d.project_gaussians_for_images(
+                **self._with_overrides(
+                    pinhole_args,
+                    projection_matrices=pinhole_args["projection_matrices"].transpose(1, 2),
+                ),
+                sh_degree_to_use=0,
+            )
+
+    def test_pinhole_and_orthographic_ignore_distortion_coeffs_tensor(self):
+        ignored_distortion = torch.tensor(
+            [[0.12, -0.03, 0.01, 0.0, 0.0, 0.0, 0.02, -0.015, 0.004, -0.003, 0.002, -0.001]],
+            device=self.device,
+            dtype=self.dtype,
+        )
+
+        for camera_model in (CameraModel.PINHOLE, CameraModel.ORTHOGRAPHIC):
+            with self.subTest(camera_model=camera_model):
+                parity_gs3d = self._make_tiny_parity_splat()
+                render_args = self._render_args(camera_model)
+                ignored_args = self._with_overrides(render_args, distortion_coeffs=ignored_distortion)
+
+                projected_default = parity_gs3d.project_gaussians_for_images(**render_args, sh_degree_to_use=0)
+                projected_ignored = parity_gs3d.project_gaussians_for_images(**ignored_args, sh_degree_to_use=0)
+                torch.testing.assert_close(projected_default.means2d, projected_ignored.means2d)
+                torch.testing.assert_close(projected_default.inv_covar_2d, projected_ignored.inv_covar_2d)
+
+                images_default, alpha_default = parity_gs3d.render_images(**render_args, sh_degree_to_use=0)
+                images_ignored, alpha_ignored = parity_gs3d.render_images(**ignored_args, sh_degree_to_use=0)
+                torch.testing.assert_close(images_default, images_ignored)
+                torch.testing.assert_close(alpha_default, alpha_ignored)
+
+                depths_default, depth_alpha_default = parity_gs3d.render_depths(**render_args)
+                depths_ignored, depth_alpha_ignored = parity_gs3d.render_depths(**ignored_args)
+                torch.testing.assert_close(depths_default, depths_ignored)
+                torch.testing.assert_close(depth_alpha_default, depth_alpha_ignored)
+
+                rgbd_default, rgbd_alpha_default = parity_gs3d.render_images_and_depths(
+                    **render_args,
+                    sh_degree_to_use=0,
+                )
+                rgbd_ignored, rgbd_alpha_ignored = parity_gs3d.render_images_and_depths(
+                    **ignored_args,
+                    sh_degree_to_use=0,
+                )
+                torch.testing.assert_close(rgbd_default, rgbd_ignored)
+                torch.testing.assert_close(rgbd_alpha_default, rgbd_alpha_ignored)
+
+                world_default, world_alpha_default = parity_gs3d.render_images_from_world(
+                    **render_args,
+                    sh_degree_to_use=0,
+                )
+                world_ignored, world_alpha_ignored = parity_gs3d.render_images_from_world(
+                    **ignored_args,
+                    sh_degree_to_use=0,
+                )
+                torch.testing.assert_close(world_default, world_ignored)
+                torch.testing.assert_close(world_alpha_default, world_alpha_ignored)
+
+                world_depth_default, world_depth_alpha_default = parity_gs3d.render_depths_from_world(**render_args)
+                world_depth_ignored, world_depth_alpha_ignored = parity_gs3d.render_depths_from_world(**ignored_args)
+                torch.testing.assert_close(world_depth_default, world_depth_ignored)
+                torch.testing.assert_close(world_depth_alpha_default, world_depth_alpha_ignored)
+
+                world_rgbd_default, world_rgbd_alpha_default = parity_gs3d.render_images_and_depths_from_world(
+                    **render_args,
+                    sh_degree_to_use=0,
+                )
+                world_rgbd_ignored, world_rgbd_alpha_ignored = parity_gs3d.render_images_and_depths_from_world(
+                    **ignored_args,
+                    sh_degree_to_use=0,
+                )
+                torch.testing.assert_close(world_rgbd_default, world_rgbd_ignored)
+                torch.testing.assert_close(world_rgbd_alpha_default, world_rgbd_alpha_ignored)
+
+    def test_projected_render_matches_from_world_for_stable_scene(self):
+        for camera_model in (CameraModel.PINHOLE, CameraModel.ORTHOGRAPHIC, CameraModel.OPENCV_RADTAN_5):
+            with self.subTest(camera_model=camera_model):
+                parity_gs3d = self._make_tiny_parity_splat()
+                render_args = self._render_args(camera_model)
+
+                projected_images = parity_gs3d.project_gaussians_for_images(**render_args, sh_degree_to_use=0)
+                images_from_projection, alpha_from_projection = parity_gs3d.render_from_projected_gaussians(
+                    projected_images
+                )
+                images_from_dense, alpha_from_dense = parity_gs3d.render_images(**render_args, sh_degree_to_use=0)
+                images_from_world, alpha_from_world = parity_gs3d.render_images_from_world(
+                    **render_args, sh_degree_to_use=0
+                )
+
+                projected_depths = parity_gs3d.project_gaussians_for_depths(**render_args)
+                depths_from_projection, depth_alpha_from_projection = parity_gs3d.render_from_projected_gaussians(
+                    projected_depths
+                )
+                depths_from_dense, depth_alpha_from_dense = parity_gs3d.render_depths(**render_args)
+                depths_from_world, depth_alpha_from_world = parity_gs3d.render_depths_from_world(**render_args)
+
+                projected_rgbd = parity_gs3d.project_gaussians_for_images_and_depths(
+                    **render_args,
+                    sh_degree_to_use=0,
+                )
+                rgbd_from_projection, rgbd_alpha_from_projection = parity_gs3d.render_from_projected_gaussians(
+                    projected_rgbd
+                )
+                rgbd_from_dense, rgbd_alpha_from_dense = parity_gs3d.render_images_and_depths(
+                    **render_args,
+                    sh_degree_to_use=0,
+                )
+                rgbd_from_world, rgbd_alpha_from_world = parity_gs3d.render_images_and_depths_from_world(
+                    **render_args,
+                    sh_degree_to_use=0,
+                )
+
+                torch.testing.assert_close(images_from_projection, images_from_dense, atol=1e-6, rtol=1e-6)
+                torch.testing.assert_close(alpha_from_projection, alpha_from_dense, atol=1e-6, rtol=1e-6)
+                torch.testing.assert_close(depths_from_projection, depths_from_dense, atol=1e-6, rtol=1e-6)
+                torch.testing.assert_close(depth_alpha_from_projection, depth_alpha_from_dense, atol=1e-6, rtol=1e-6)
+                torch.testing.assert_close(rgbd_from_projection, rgbd_from_dense, atol=1e-6, rtol=1e-6)
+                torch.testing.assert_close(rgbd_alpha_from_projection, rgbd_alpha_from_dense, atol=1e-6, rtol=1e-6)
+
+                torch.testing.assert_close(alpha_from_world, depth_alpha_from_world, atol=1e-5, rtol=1e-5)
+                torch.testing.assert_close(alpha_from_world, rgbd_alpha_from_world, atol=1e-5, rtol=1e-5)
+                torch.testing.assert_close(rgbd_from_world[..., :-1], images_from_world, atol=1e-5, rtol=1e-5)
+                torch.testing.assert_close(rgbd_from_world[..., -1:], depths_from_world, atol=1e-5, rtol=1e-5)
+
+                self.assertGreater(int((alpha_from_projection > 1.0e-4).sum().item()), 0)
+                self.assertGreater(int((alpha_from_world > 1.0e-4).sum().item()), 0)
+
+    def test_structural_projected_render_matches_from_world_for_medium_scene(self):
+        # The two rasterization paths diverge too much for stable pixelwise parity on richer scenes,
+        # so this test checks that they preserve the same overall support, location, depth, and appearance.
+        for camera_model in (CameraModel.PINHOLE, CameraModel.ORTHOGRAPHIC, CameraModel.OPENCV_RADTAN_5):
+            with self.subTest(camera_model=camera_model):
+                parity_gs3d = self._make_structural_comparison_splat()
+                render_args = self._render_args(camera_model)
+
+                projected_rgbd = parity_gs3d.project_gaussians_for_images_and_depths(
+                    **render_args,
+                    sh_degree_to_use=0,
+                )
+                rgbd_from_projection, alpha_from_projection = parity_gs3d.render_from_projected_gaussians(
+                    projected_rgbd
+                )
+                rgbd_from_world, alpha_from_world = parity_gs3d.render_images_and_depths_from_world(
+                    **render_args,
+                    sh_degree_to_use=0,
+                )
+
+                metrics = self._structural_comparison_metrics(
+                    rgbd_from_projection,
+                    alpha_from_projection,
+                    rgbd_from_world,
+                    alpha_from_world,
+                )
+
+                self.assertGreater(metrics["support_iou"], 0.50)
+                self.assertLess(metrics["bbox_linf_err"], 1.1)
+                self.assertLess(metrics["centroid_err"], 0.3)
+                self.assertLess(metrics["blurred_alpha_rmse"], 0.055)
+                self.assertLess(metrics["depth_mean_rel_err"], 0.03)
+                self.assertLess(metrics["blurred_rgb_rmse"], 0.055)
+
+    def test_sparse_render_camera_args_match_dense_render(self):
+        pixels = self._all_pixels(C=2)
+
+        sparse_cases = [
+            ("images", self.gs3d.render_images, self.gs3d.sparse_render_images, {"sh_degree_to_use": 0}),
+            ("depths", self.gs3d.render_depths, self.gs3d.sparse_render_depths, {}),
+            (
+                "rgbd",
+                self.gs3d.render_images_and_depths,
+                self.gs3d.sparse_render_images_and_depths,
+                {"sh_degree_to_use": 0},
+            ),
+        ]
+
+        for camera_model in (CameraModel.PINHOLE, CameraModel.ORTHOGRAPHIC, CameraModel.OPENCV_RADTAN_5):
+            render_args = self._render_args(camera_model, C=2)
+            for name, dense_fn, sparse_fn, extra_kwargs in sparse_cases:
+                with self.subTest(camera_model=camera_model, render_mode=name):
+                    dense_values, dense_alphas = dense_fn(**render_args, **extra_kwargs)
+                    sparse_values, sparse_alphas = sparse_fn(
+                        pixels,
+                        **render_args,
+                        **extra_kwargs,
+                    )
+                    self._assert_sparse_matches_dense(dense_values, sparse_values, pixels)
+                    self._assert_sparse_matches_dense(dense_alphas, sparse_alphas, pixels)
+
+    def test_batched_opencv_render_uses_per_camera_intrinsics_distortion_backgrounds_and_masks(self):
+        C = 2
+        render_args = self._render_args(CameraModel.OPENCV_RADTAN_5, C=C)
+        backgrounds = torch.tensor([[0.1, -0.2, 0.3], [-0.4, 0.2, 0.1]], device=self.device, dtype=self.dtype)
+        masks = torch.ones((C, self.height, self.width), device=self.device, dtype=torch.bool)
+        masks[1, :, : self.width // 2] = False
+
+        batched_features, batched_alphas = self.gs3d.render_images(
+            **render_args,
+            sh_degree_to_use=0,
+            backgrounds=backgrounds,
+            masks=masks,
+        )
+
+        for cam_idx in range(C):
+            single_features, single_alphas = self.gs3d.render_images(
+                world_to_camera_matrices=render_args["world_to_camera_matrices"][cam_idx : cam_idx + 1].contiguous(),
+                projection_matrices=render_args["projection_matrices"][cam_idx : cam_idx + 1].contiguous(),
+                image_width=self.width,
+                image_height=self.height,
+                near=self.near_plane,
+                far=self.far_plane,
+                camera_model=CameraModel.OPENCV_RADTAN_5,
+                projection_method=ProjectionMethod.AUTO,
+                distortion_coeffs=render_args["distortion_coeffs"][cam_idx : cam_idx + 1].contiguous(),
+                sh_degree_to_use=0,
+                backgrounds=backgrounds[cam_idx : cam_idx + 1].contiguous(),
+                masks=masks[cam_idx : cam_idx + 1].contiguous(),
+            )
+            torch.testing.assert_close(batched_features[cam_idx : cam_idx + 1], single_features, atol=1e-5, rtol=1e-5)
+            torch.testing.assert_close(batched_alphas[cam_idx : cam_idx + 1], single_alphas, atol=1e-5, rtol=1e-5)
+
+
 class TestProjectionGradsMultiCamera(unittest.TestCase):
     """Verify that all Gaussian parameter gradients are correctly summed across
     cameras in the projection backward pass (both dense and jagged).
@@ -4264,6 +4902,144 @@ class TestProjectionGradsMultiCamera(unittest.TestCase):
                 rtol=1e-4,
                 msg=f"Jagged multi-camera {name} grad != sum of per-camera grads (warp reduction bug?)",
             )
+
+
+class TestDeduplicatePixels(unittest.TestCase):
+    """Unit tests for GaussianSplat3d._deduplicate_pixels (pure-Python implementation)."""
+
+    IMAGE_WIDTH = 64
+    IMAGE_HEIGHT = 64
+
+    @staticmethod
+    def _dedup(pixels_jt, w=64, h=64):
+        return GaussianSplat3d._deduplicate_pixels(pixels_jt, w, h)
+
+    @parameterized.expand([(torch.int32,), (torch.int64,)])
+    def test_empty(self, dtype):
+        pixels = JaggedTensor(torch.empty(0, 2, dtype=dtype, device="cuda"))
+        unique, inv, has_dups = self._dedup(pixels)
+        self.assertFalse(has_dups)
+        self.assertEqual(inv.shape[0], 0)
+        self.assertEqual(unique.jdata.shape[0], 0)
+
+    @parameterized.expand([(torch.int32,), (torch.int64,)])
+    def test_single_pixel(self, dtype):
+        coords = torch.tensor([[5, 10]], dtype=dtype)
+        pixels = JaggedTensor([coords]).to("cuda")
+        unique, inv, has_dups = self._dedup(pixels)
+        self.assertFalse(has_dups)
+        self.assertEqual(unique.jdata.shape[0], 1)
+
+    @parameterized.expand([(torch.int32,), (torch.int64,)])
+    def test_all_unique(self, dtype):
+        coords = torch.tensor([[0, 0], [0, 1], [1, 0], [1, 1], [2, 3]], dtype=dtype)
+        pixels = JaggedTensor([coords]).to("cuda")
+        unique, inv, has_dups = self._dedup(pixels)
+        self.assertFalse(has_dups)
+        self.assertEqual(unique.jdata.shape[0], 5)
+        self.assertEqual(inv.shape[0], 5)
+
+    @parameterized.expand([(torch.int32,), (torch.int64,)])
+    def test_some_duplicates(self, dtype):
+        coords = torch.tensor([[0, 0], [1, 1], [0, 0], [2, 2]], dtype=dtype)
+        pixels = JaggedTensor([coords]).to("cuda")
+        unique, inv, has_dups = self._dedup(pixels)
+        self.assertTrue(has_dups)
+        self.assertEqual(unique.jdata.shape[0], 3)
+        self.assertEqual(inv.shape[0], 4)
+        inv_cpu = inv.cpu()
+        self.assertEqual(inv_cpu[0].item(), inv_cpu[2].item())
+        self.assertNotEqual(inv_cpu[1].item(), inv_cpu[3].item())
+
+    @parameterized.expand([(torch.int32,), (torch.int64,)])
+    def test_all_same_pixel(self, dtype):
+        coords = torch.tensor([[5, 5], [5, 5], [5, 5], [5, 5]], dtype=dtype)
+        pixels = JaggedTensor([coords]).to("cuda")
+        unique, inv, has_dups = self._dedup(pixels)
+        self.assertTrue(has_dups)
+        self.assertEqual(unique.jdata.shape[0], 1)
+        self.assertEqual(inv.shape[0], 4)
+        inv_cpu = inv.cpu()
+        for i in range(4):
+            self.assertEqual(inv_cpu[i].item(), 0)
+
+    @parameterized.expand([(torch.int32,), (torch.int64,)])
+    def test_multi_batch_no_duplicates(self, dtype):
+        batch0 = torch.tensor([[0, 0], [1, 1]], dtype=dtype)
+        batch1 = torch.tensor([[0, 0], [2, 2]], dtype=dtype)
+        pixels = JaggedTensor([batch0, batch1]).to("cuda")
+        unique, inv, has_dups = self._dedup(pixels)
+        self.assertFalse(has_dups)
+        self.assertEqual(unique.jdata.shape[0], 4)
+        self.assertEqual(unique.num_tensors, 2)
+
+    @parameterized.expand([(torch.int32,), (torch.int64,)])
+    def test_multi_batch_with_duplicates(self, dtype):
+        batch0 = torch.tensor([[0, 0], [1, 1], [0, 0]], dtype=dtype)
+        batch1 = torch.tensor([[0, 0], [3, 3]], dtype=dtype)
+        pixels = JaggedTensor([batch0, batch1]).to("cuda")
+        unique, inv, has_dups = self._dedup(pixels)
+        self.assertTrue(has_dups)
+        self.assertEqual(unique.num_tensors, 2)
+        self.assertEqual(unique.jdata.shape[0], 4)
+        self.assertEqual(inv.shape[0], 5)
+        inv_cpu = inv.cpu()
+        self.assertEqual(inv_cpu[0].item(), inv_cpu[2].item())
+
+    @parameterized.expand([(torch.int32,), (torch.int64,)])
+    def test_multi_batch_all_same_pixel(self, dtype):
+        batch0 = torch.tensor([[1, 1], [1, 1], [1, 1]], dtype=dtype)
+        batch1 = torch.tensor([[2, 2], [2, 2]], dtype=dtype)
+        pixels = JaggedTensor([batch0, batch1]).to("cuda")
+        unique, inv, has_dups = self._dedup(pixels)
+        self.assertTrue(has_dups)
+        self.assertEqual(unique.num_tensors, 2)
+        self.assertEqual(unique.jdata.shape[0], 2)
+        offsets = unique.joffsets.cpu()
+        self.assertEqual(offsets[0].item(), 0)
+        self.assertEqual(offsets[1].item(), 1)
+        self.assertEqual(offsets[2].item(), 2)
+        inv_cpu = inv.cpu()
+        self.assertEqual(inv_cpu[0].item(), inv_cpu[1].item())
+        self.assertEqual(inv_cpu[0].item(), inv_cpu[2].item())
+        self.assertEqual(inv_cpu[3].item(), inv_cpu[4].item())
+        self.assertNotEqual(inv_cpu[0].item(), inv_cpu[3].item())
+
+    @parameterized.expand([(torch.int32,), (torch.int64,)])
+    def test_round_trip_some_duplicates(self, dtype):
+        coords = torch.tensor([[3, 7], [1, 2], [3, 7], [5, 5], [1, 2], [9, 0]], dtype=dtype)
+        pixels = JaggedTensor([coords]).to("cuda")
+        unique, inv, has_dups = self._dedup(pixels)
+        self.assertTrue(has_dups)
+        self.assertEqual(unique.jdata.shape[0], 4)
+        reconstructed = unique.jdata[inv]
+        torch.testing.assert_close(reconstructed.cpu(), coords.to(reconstructed.dtype))
+
+    @parameterized.expand([(torch.int32,), (torch.int64,)])
+    def test_round_trip_multi_batch(self, dtype):
+        batch0 = torch.tensor([[2, 3], [4, 5], [2, 3]], dtype=dtype)
+        batch1 = torch.tensor([[6, 7], [6, 7], [8, 9]], dtype=dtype)
+        pixels = JaggedTensor([batch0, batch1]).to("cuda")
+        unique, inv, has_dups = self._dedup(pixels)
+        self.assertTrue(has_dups)
+        reconstructed = unique.jdata[inv]
+        torch.testing.assert_close(reconstructed.cpu(), pixels.jdata.cpu().to(reconstructed.dtype))
+
+    @parameterized.expand([(torch.int32,), (torch.int64,)])
+    def test_jagged_tensor_offsets(self, dtype):
+        batch0 = torch.tensor([[0, 0], [0, 0], [1, 1]], dtype=dtype)
+        batch1 = torch.tensor([[2, 2]], dtype=dtype)
+        batch2 = torch.tensor([[3, 3], [4, 4], [3, 3], [4, 4]], dtype=dtype)
+        pixels = JaggedTensor([batch0, batch1, batch2]).to("cuda")
+        unique, inv, has_dups = self._dedup(pixels)
+        self.assertTrue(has_dups)
+        self.assertEqual(unique.num_tensors, 3)
+        self.assertEqual(unique.jdata.shape[0], 5)
+        offsets = unique.joffsets.cpu()
+        self.assertEqual(offsets[0].item(), 0)
+        self.assertEqual(offsets[1].item(), 2)
+        self.assertEqual(offsets[2].item(), 3)
+        self.assertEqual(offsets[3].item(), 5)
 
 
 if __name__ == "__main__":

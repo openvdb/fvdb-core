@@ -4,8 +4,7 @@
 #ifndef FVDB_DETAIL_VIEWER_VIEWER_H
 #define FVDB_DETAIL_VIEWER_VIEWER_H
 
-#include <fvdb/GaussianSplat3d.h>
-#include <fvdb/GridBatch.h>
+#include <fvdb/detail/ops/gsplat/GaussianCameras.cuh>
 #include <fvdb/detail/viewer/CameraView.h>
 #include <fvdb/detail/viewer/GaussianSplat3dView.h>
 
@@ -70,7 +69,12 @@ class Viewer {
 
     GaussianSplat3dView &addGaussianSplat3dView(const std::string &scene_name,
                                                 const std::string &name,
-                                                const GaussianSplat3d &splats);
+                                                const torch::Tensor &means,
+                                                const torch::Tensor &quats,
+                                                const torch::Tensor &logScales,
+                                                const torch::Tensor &logitOpacities,
+                                                const torch::Tensor &sh0,
+                                                const torch::Tensor &shN);
     CameraView &addCameraView(const std::string &scene_name,
                               const std::string &name,
                               const torch::Tensor &cameraToWorldMatrices,
@@ -129,15 +133,19 @@ class Viewer {
     float cameraOrbitRadius(const std::string &scene_name);
     void setCameraOrbitRadius(const std::string &scene_name, float radius);
 
+    float cameraFov(const std::string &scene_name);
+    void setCameraFov(const std::string &scene_name, float fov_radians);
+
     float cameraNear(const std::string &scene_name);
     void setCameraNear(const std::string &scene_name, float near);
 
     float cameraFar(const std::string &scene_name);
     void setCameraFar(const std::string &scene_name, float far);
 
-    void setCameraProjectionType(const std::string &scene_name,
-                                 GaussianSplat3d::ProjectionType mode);
-    GaussianSplat3d::ProjectionType cameraProjectionType(const std::string &scene_name);
+    using CameraModel = fvdb::detail::ops::DistortionModel;
+
+    void setCameraModel(const std::string &scene_name, CameraModel model);
+    CameraModel cameraModel(const std::string &scene_name);
 
     std::string
     ipAddress() const {

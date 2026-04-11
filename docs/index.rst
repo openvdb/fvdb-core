@@ -35,6 +35,13 @@ Features
 -   Modular neural network components for building 3D deep learning models that scale to large input sizes.
 -   Seamless integration with PyTorch for easy use in deep learning workflows.
 
+Getting Started
+---------------
+
+You can try the `TEACHME <https://github.com/openvdb/fvdb-core/tree/main/docs/TEACHME>`_ interactive lessons,
+designed to be used with an LLM coding agent (Claude Code, Cursor, or similar) that teaches you the ƒVDB API
+interactively. Just prompt: ``Read docs/TEACHME and teach me how to use fvdb-core.``
+
 The videos below show ƒVDB being used for large-scale 3D reconstruction, simulation, and interactive visualization.
 
 .. raw:: html
@@ -87,16 +94,39 @@ algorithms for 3D reconstruction from sensor data.
 
 .. toctree::
    :maxdepth: 1
+   :caption: Tutorials
+
+   tutorials/basic_concepts
+   tutorials/jagged_tensor
+   tutorials/building_grids
+   tutorials/basic_grid_ops
+   tutorials/basic_convolution
+   tutorials/simple_unet
+   tutorials/io
+   tutorials/ray_tracing
+   tutorials/volume_rendering
+   tutorials/single_grid
+
+.. toctree::
+   :maxdepth: 1
    :caption: Documentation
 
    api/jagged_tensor
    api/convolution_plan
    api/sparse_grids
+   api/functional
    api/gaussian_splatting
    api/viz
    api/enums
    api/nn
    api/utils
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Development Process
+
+   release-process
+   markdown/clangd
 
 .. raw:: html
 

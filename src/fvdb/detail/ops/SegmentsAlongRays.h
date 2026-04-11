@@ -5,7 +5,7 @@
 #define FVDB_DETAIL_OPS_SEGMENTSALONGRAYS_H
 
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 
 #include <torch/types.h>
 
@@ -13,7 +13,7 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-JaggedTensor segmentsAlongRays(const GridBatchImpl &batchHdl,
+JaggedTensor segmentsAlongRays(const GridBatchData &batchHdl,
                                const JaggedTensor &rayOrigins,
                                const JaggedTensor &rayDirections,
                                int64_t maxSegments,

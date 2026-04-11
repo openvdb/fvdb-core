@@ -57,7 +57,7 @@ def _is_editable_install() -> bool:
             return False
     # check if we're in the source directory
     module_dir = module_path.parent.parent.parent.parent
-    return (module_dir / "setup.py").is_file()
+    return (module_dir / "pyproject.toml").is_file()
 
 
 def _get_local_repo_path(repo_name: str) -> Path:
@@ -907,8 +907,8 @@ __all__ = [
     "get_fvdb_example_data_path",
     "make_dense_grid_and_point_data",
     "make_dense_grid_batch_and_jagged_point_data",
-    "make_grid_batch_and_jagged_point_data",
     "make_grid_and_point_data",
+    "make_grid_batch_and_jagged_point_data",
     "generate_random_4x4_xform",
     "create_uniform_grid_points_at_depth",
     "generate_center_frame_point_at_depth",

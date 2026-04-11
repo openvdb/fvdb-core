@@ -12,9 +12,10 @@ requires-python = ">=3.10"
 readme = "README.md"
 dependencies = [
     # Require torch; users will choose the correct CUDA build from PyTorch's index
-    "torch>=2.8,<2.11",
+    "torch>=2.8,<2.12",
     "numpy",
 ]
+optional-dependencies = {viewer = ["nanovdb-editor>=0.0.23,<0.2.0"]}
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
@@ -46,8 +47,11 @@ components = ["PythonModule"]
 [tool.scikit-build.wheel]
 packages = ["fvdb"]
 
-# This is so that the WIP tests are not run
+[tool.black]
+line-length = 120
+target-version = ["py311"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
-norecursedirs = ["wip", ".*", "build", "dist"]
+norecursedirs = [".*", "build", "dist"]

@@ -146,7 +146,12 @@ class Scene:
         return GaussianSplat3dView(
             scene_name=self._name,
             name=name,
-            gaussian_splat_3d=gaussian_splat_3d._impl,
+            means=gaussian_splat_3d.means,
+            quats=gaussian_splat_3d.quats,
+            log_scales=gaussian_splat_3d.log_scales,
+            logit_opacities=gaussian_splat_3d.logit_opacities,
+            sh0=gaussian_splat_3d.sh0,
+            shN=gaussian_splat_3d.shN,
             tile_size=tile_size,
             min_radius_2d=min_radius_2d,
             eps_2d=eps_2d,
@@ -406,6 +411,36 @@ class Scene:
             raise ValueError("Camera up direction cannot be a zero vector.")
         up_vec3f /= np.linalg.norm(up_vec3f)
         server.set_camera_up_direction(self._name, *up_vec3f)
+
+    @property
+    def camera_fov(self) -> float:
+        """
+        Return the camera's vertical field of view in radians.
+
+        This is the full angle from the top of the frame to the bottom of the frame.
+
+        Returns:
+            fov (float): Vertical field of view in radians.
+        """
+        server = _get_viewer_server_cpp()
+        return server.camera_fov(self._name)
+
+    @camera_fov.setter
+    def camera_fov(self, fov_radians: float):
+        """
+        Set the camera's vertical field of view in radians.
+
+        This is the full angle from the top of the frame to the bottom of the frame.
+
+        Args:
+            fov_radians (float): Vertical field of view in radians (must be positive and less than pi).
+        """
+        if not np.isfinite(fov_radians):
+            raise ValueError(f"FOV must be a finite value, got {fov_radians}")
+        if fov_radians <= 0.0 or fov_radians >= np.pi:
+            raise ValueError(f"FOV must be between 0 and pi radians, got {fov_radians}")
+        server = _get_viewer_server_cpp()
+        server.set_camera_fov(self._name, fov_radians)
 
     @property
     def camera_near(self) -> float:

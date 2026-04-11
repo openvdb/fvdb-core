@@ -6,9 +6,9 @@ dependencies:
   - blas=*=mkl
   - ca-certificates
   - certifi
-  - clang-format=18
-  - clang-tools=18
-  - clang=18
+  - clang-format-18
+  - clang-tools=21
+  - clang-18
   - cmake
   - cuda-command-line-tools
   - cuda-compiler
@@ -56,7 +56,6 @@ dependencies:
   - seaborn
   - scikit-build-core
   - setuptools>=68.2.2
-  - sparsehash
   - sphinx_rtd_theme
   - sphinx>=7.0.0
   - tensorboard
@@ -76,8 +75,6 @@ dependencies:
   - pip:
     - point-cloud-utils
     - pytest-markdown-docs
-    - https://fvdb-packages.s3.us-east-2.amazonaws.com/dev-whls/pt210cu130/torchsparse-2.1.0-cp312-cp312-linux_x86_64.whl
-    - https://fvdb-packages.s3.us-east-2.amazonaws.com/dev-whls/pt210cu130/torch_scatter-2.1.2-cp312-cp312-linux_x86_64.whl
     ## 3dgs tests
     - dlnr_lite
     - einops

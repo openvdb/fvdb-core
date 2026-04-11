@@ -7,7 +7,7 @@
 
 #include "TypeCasters.h"
 
-#include <fvdb/GaussianSplat3d.h>
+#include <fvdb/detail/ops/gsplat/GaussianCameras.cuh>
 #include <fvdb/detail/viewer/CameraView.h>
 #include <fvdb/detail/viewer/GaussianSplat3dView.h>
 #include <fvdb/detail/viewer/Viewer.h>
@@ -83,15 +83,18 @@ bind_viewer(py::module &m) {
              py::arg("device_id"),
              py::arg("verbose"),
              "Create a new Viewer instance")
-        .def(
-            "add_gaussian_splat_3d_view",
-            &fvdb::detail::viewer::Viewer::addGaussianSplat3dView,
-            py::arg("scene_name"),
-            py::arg("name"),
-            py::arg("gaussian_splat_3d"),
-            py::return_value_policy::reference_internal, // preserve reference; tie lifetime to
-                                                         // parent
-            "Register a Gaussian splat 3D view with the viewer (accepts Python or C++ GaussianSplat3d)")
+        .def("add_gaussian_splat_3d_view",
+             &fvdb::detail::viewer::Viewer::addGaussianSplat3dView,
+             py::arg("scene_name"),
+             py::arg("name"),
+             py::arg("means"),
+             py::arg("quats"),
+             py::arg("log_scales"),
+             py::arg("logit_opacities"),
+             py::arg("sh0"),
+             py::arg("shN"),
+             py::return_value_policy::reference_internal,
+             "Register a Gaussian splat 3D view with the viewer from individual tensors")
         .def("has_gaussian_splat_3d_view",
              &fvdb::detail::viewer::Viewer::hasGaussianSplat3dView,
              py::arg("name"),
@@ -174,6 +177,16 @@ bind_viewer(py::module &m) {
              py::arg("dz"),
              "Set the camera view direction")
 
+        .def("camera_fov",
+             &fvdb::detail::viewer::Viewer::cameraFov,
+             py::arg("scene_name"),
+             "Get the camera vertical field of view in radians")
+        .def("set_camera_fov",
+             &fvdb::detail::viewer::Viewer::setCameraFov,
+             py::arg("scene_name"),
+             py::arg("fov_radians"),
+             "Set the camera vertical field of view in radians")
+
         .def("camera_near",
              &fvdb::detail::viewer::Viewer::cameraNear,
              py::arg("scene_name"),
@@ -194,15 +207,27 @@ bind_viewer(py::module &m) {
              py::arg("far"),
              "Set the camera far clipping plane")
 
-        .def("camera_projection_type",
-             &fvdb::detail::viewer::Viewer::cameraProjectionType,
+        .def("camera_model",
+             &fvdb::detail::viewer::Viewer::cameraModel,
              py::arg("scene_name"),
-             "The camera mode (perspective or orthographic)")
-        .def("set_camera_projection_type",
-             &fvdb::detail::viewer::Viewer::setCameraProjectionType,
-             py::arg("scene_name"),
-             py::arg("mode"),
-             "Set the camera mode (perspective or orthographic)")
+             "The viewer camera model (currently pinhole or orthographic)")
+        .def(
+            "set_camera_model",
+            [](fvdb::detail::viewer::Viewer &viewer,
+               const std::string &sceneName,
+               fvdb::detail::ops::DistortionModel model) {
+                if (model != fvdb::detail::ops::DistortionModel::PINHOLE &&
+                    model != fvdb::detail::ops::DistortionModel::ORTHOGRAPHIC) {
+                    PyErr_SetString(PyExc_NotImplementedError,
+                                    "Viewer currently only supports CameraModel.PINHOLE and "
+                                    "CameraModel.ORTHOGRAPHIC");
+                    throw py::error_already_set();
+                }
+                viewer.setCameraModel(sceneName, model);
+            },
+            py::arg("scene_name"),
+            py::arg("model"),
+            "Set the viewer camera model (currently pinhole or orthographic)")
         .def("add_camera_view",
              py::overload_cast<const std::string &,
                                const std::string &,

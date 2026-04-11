@@ -14,10 +14,10 @@ jobs:
     name: Python code style (black)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: psf/black@stable
         with:
-          options: "--check --diff --verbose --target-version=py311 --line-length=120 --extend-exclude='wip/'"
+          options: "--check --diff --verbose"
           src: "./"
           version: "~= 24.0"
 
@@ -25,7 +25,7 @@ jobs:
     name: C++ code style (clang-format)
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
     - uses: DoozyX/clang-format-lint-action@v0.18.2
       with:
         source: 'src/'
@@ -37,7 +37,7 @@ jobs:
     name: Include guards
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
     - uses: swahtz/include-guards-check-action@master
       with:
         path: 'src/'
@@ -46,7 +46,7 @@ jobs:
     name: SPDX identifiers
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
     - uses: enarx/spdx@master
       with:
         licenses: |-
@@ -58,7 +58,7 @@ jobs:
     name: Trailing spaces
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
     - name: test
       run: |
           set +e
@@ -71,7 +71,7 @@ jobs:
     name: Spaces not tabs
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
     - name: test
       run: |
           set +e

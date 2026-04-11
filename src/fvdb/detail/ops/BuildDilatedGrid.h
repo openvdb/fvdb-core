@@ -4,7 +4,7 @@
 #ifndef FVDB_DETAIL_OPS_BUILDDILATEDGRID_H
 #define FVDB_DETAIL_OPS_BUILDDILATEDGRID_H
 
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 
 #include <cstdint>
 #include <vector>
@@ -13,7 +13,7 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-c10::intrusive_ptr<GridBatchImpl> dilateGrid(const GridBatchImpl &gridBatch,
+c10::intrusive_ptr<GridBatchData> dilateGrid(const GridBatchData &gridBatch,
                                              const std::vector<int64_t> &dilationAmount);
 
 } // namespace ops

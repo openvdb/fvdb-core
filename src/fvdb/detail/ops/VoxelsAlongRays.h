@@ -5,7 +5,7 @@
 #define FVDB_DETAIL_OPS_VOXELSALONGRAYS_H
 
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 
 #include <torch/types.h>
 
@@ -15,7 +15,7 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-std::vector<JaggedTensor> voxelsAlongRays(const GridBatchImpl &batchHdl,
+std::vector<JaggedTensor> voxelsAlongRays(const GridBatchData &batchHdl,
                                           const JaggedTensor &rayOrigins,
                                           const JaggedTensor &rayDirections,
                                           int64_t maxVox,

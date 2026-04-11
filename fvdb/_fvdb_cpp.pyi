@@ -16,12 +16,6 @@ from .types import (
     NumericMaxRank2,
     NumericMaxRank3,
     RShapeSpec,
-    Vec3d,
-    Vec3dBatch,
-    Vec3dBatchOrScalar,
-    Vec3dOrScalar,
-    Vec3i,
-    Vec3iBatch,
     Vec3iOrScalar,
 )
 
@@ -56,8 +50,8 @@ class GatherScatterDefaultTopology:
 
 # Forward topology + conv
 def gs_build_topology(
-    feature_grid: GridBatch,
-    output_grid: GridBatch,
+    feature_grid: GridBatchData,
+    output_grid: GridBatchData,
     kernel_size: Vec3iOrScalar,
     stride: Vec3iOrScalar,
 ) -> GatherScatterDefaultTopology: ...
@@ -75,8 +69,8 @@ def gs_conv_backward(
 
 # Transposed topology + conv
 def gs_build_transpose_topology(
-    feature_grid: GridBatch,
-    output_grid: GridBatch,
+    feature_grid: GridBatchData,
+    output_grid: GridBatchData,
     kernel_size: Vec3iOrScalar,
     stride: Vec3iOrScalar,
 ) -> GatherScatterDefaultTopology: ...
@@ -96,584 +90,589 @@ def gs_conv_transpose_backward(
 def pred_gather_igemm_conv(
     features: torch.Tensor,
     weights: torch.Tensor,
-    feature_grid: GridBatch,
-    output_grid: GridBatch,
+    feature_grid: GridBatchData,
+    output_grid: GridBatchData,
     kernel_size: int,
     stride: int,
 ) -> torch.Tensor: ...
+def rasterize_num_contributing_gaussians(
+    means2d: torch.Tensor,
+    conics: torch.Tensor,
+    opacities: torch.Tensor,
+    tile_offsets: torch.Tensor,
+    tile_gaussian_ids: torch.Tensor,
+    image_width: int,
+    image_height: int,
+    tile_size: int,
+) -> tuple[torch.Tensor, torch.Tensor]: ...
+def sparse_rasterize_num_contributing_gaussians(
+    means2d: torch.Tensor,
+    conics: torch.Tensor,
+    opacities: torch.Tensor,
+    tile_offsets: torch.Tensor,
+    tile_gaussian_ids: torch.Tensor,
+    pixels_to_render: JaggedTensor,
+    active_tiles: torch.Tensor,
+    tile_pixel_mask: torch.Tensor,
+    tile_pixel_cumsum: torch.Tensor,
+    pixel_map: torch.Tensor,
+    image_width: int,
+    image_height: int,
+    tile_size: int,
+) -> tuple[JaggedTensor, JaggedTensor]: ...
+def rasterize_contributing_gaussian_ids(
+    means2d: torch.Tensor,
+    conics: torch.Tensor,
+    opacities: torch.Tensor,
+    tile_offsets: torch.Tensor,
+    tile_gaussian_ids: torch.Tensor,
+    image_width: int,
+    image_height: int,
+    tile_size: int,
+    num_contributing_gaussians: Optional[torch.Tensor] = ...,
+    num_depth_samples: int = ...,
+) -> tuple[JaggedTensor, JaggedTensor]: ...
+def rasterize_top_contributing_gaussian_ids(
+    means2d: torch.Tensor,
+    conics: torch.Tensor,
+    opacities: torch.Tensor,
+    tile_offsets: torch.Tensor,
+    tile_gaussian_ids: torch.Tensor,
+    image_width: int,
+    image_height: int,
+    tile_size: int,
+    top_k: int,
+) -> tuple[torch.Tensor, torch.Tensor]: ...
+def sparse_rasterize_contributing_gaussian_ids(
+    means2d: torch.Tensor,
+    conics: torch.Tensor,
+    opacities: torch.Tensor,
+    tile_offsets: torch.Tensor,
+    tile_gaussian_ids: torch.Tensor,
+    pixels_to_render: JaggedTensor,
+    active_tiles: torch.Tensor,
+    tile_pixel_mask: torch.Tensor,
+    tile_pixel_cumsum: torch.Tensor,
+    pixel_map: torch.Tensor,
+    image_width: int,
+    image_height: int,
+    tile_size: int,
+    num_contributing_gaussians: Optional[JaggedTensor] = ...,
+    num_depth_samples: int = ...,
+) -> tuple[JaggedTensor, JaggedTensor]: ...
+def sparse_rasterize_top_contributing_gaussian_ids(
+    means2d: torch.Tensor,
+    conics: torch.Tensor,
+    opacities: torch.Tensor,
+    tile_offsets: torch.Tensor,
+    tile_gaussian_ids: torch.Tensor,
+    pixels_to_render: JaggedTensor,
+    active_tiles: torch.Tensor,
+    tile_pixel_mask: torch.Tensor,
+    tile_pixel_cumsum: torch.Tensor,
+    pixel_map: torch.Tensor,
+    image_width: int,
+    image_height: int,
+    tile_size: int,
+    top_k: int,
+) -> tuple[JaggedTensor, JaggedTensor]: ...
+def mcmc_relocate_gaussians(
+    log_scales: torch.Tensor,
+    logit_opacities: torch.Tensor,
+    ratios: torch.Tensor,
+    binomial_coeffs: torch.Tensor,
+    n_max: int,
+    min_opacity: float,
+) -> tuple[torch.Tensor, torch.Tensor]: ...
+def mcmc_add_noise_to_means(
+    means: torch.Tensor,
+    log_scales: torch.Tensor,
+    logit_opacities: torch.Tensor,
+    quats: torch.Tensor,
+    noise_scale: float,
+    t: float = ...,
+    k: float = ...,
+) -> None: ...
+def save_gaussian_ply(
+    filename: str,
+    means: torch.Tensor,
+    quats: torch.Tensor,
+    log_scales: torch.Tensor,
+    logit_opacities: torch.Tensor,
+    sh0: torch.Tensor,
+    shN: torch.Tensor,
+    metadata: dict[str, str | int | float | torch.Tensor] | None = ...,
+) -> None: ...
+def load_gaussian_ply(
+    filename: str,
+    device: torch.device = ...,
+) -> tuple[
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    dict[str, str | int | float | torch.Tensor],
+]: ...
 
-class GaussianSplat3d:
-    class ProjectionType(Enum):
-        PERSPECTIVE = ...
-        ORTHOGRAPHIC = ...
+class GridBatchData:
+    MAX_GRIDS_PER_BATCH: ClassVar[int] = ...
 
-    log_scales: torch.Tensor
-    logit_opacities: torch.Tensor
-    means: torch.Tensor
-    quats: torch.Tensor
-    requires_grad: bool
-    sh0: torch.Tensor
-    shN: torch.Tensor
-    def __init__(
-        self,
-        means: torch.Tensor,
-        quats: torch.Tensor,
-        log_scales: torch.Tensor,
-        logit_opacities: torch.Tensor,
-        sh0: torch.Tensor,
-        shN: torch.Tensor,
-        accumulate_mean_2d_gradients: bool = ...,
-        accumulate_max_2d_radii: bool = ...,
-        detach: bool = ...,
-    ) -> None: ...
-    @property
-    def device(self) -> torch.device: ...
-    @property
-    def dtype(self) -> torch.dtype: ...
-    @staticmethod
-    def cat(
-        splats: "list[GaussianSplat3d]",
-        accumulate_mean_2d_gradients: bool = False,
-        accumulate_max_2d_radii: bool = False,
-        detach: bool = False,
-    ) -> "GaussianSplat3d": ...
-    def to(self, device: torch.device, dtype: torch.dtype) -> "GaussianSplat3d": ...
-    def detach(self) -> "GaussianSplat3d": ...
-    def detach_in_place(self) -> None: ...
-    def index_select(self, indices: torch.Tensor) -> "GaussianSplat3d": ...
-    def mask_select(self, mask: torch.Tensor) -> "GaussianSplat3d": ...
-    def slice_select(self, begin: int, end: int, step: int) -> "GaussianSplat3d": ...
-    def index_set(self, indices: torch.Tensor, value: "GaussianSplat3d") -> None: ...
-    def mask_set(self, mask: torch.Tensor, value: "GaussianSplat3d") -> None: ...
-    def slice_set(self, begin: int, end: int, step: int, value: "GaussianSplat3d") -> None: ...
-    @property
-    def sh_degree(self) -> int: ...
-    @property
-    def accumulate_mean_2d_gradients(self) -> bool: ...
-    @accumulate_mean_2d_gradients.setter
-    def accumulate_mean_2d_gradients(self, value: bool) -> None: ...
-    @property
-    def accumulate_max_2d_radii(self) -> bool: ...
-    @accumulate_max_2d_radii.setter
-    def accumulate_max_2d_radii(self, value: bool) -> None: ...
-    @staticmethod
-    def from_state_dict(state_dict: dict[str, torch.Tensor]) -> GaussianSplat3d: ...
-    def load_state_dict(self, state_dict: dict[str, torch.Tensor]) -> None: ...
-    def project_gaussians_for_depths(
-        self,
-        world_to_camera_matrices: torch.Tensor,
-        projection_matrices: torch.Tensor,
-        image_width: int,
-        image_height: int,
-        near: float,
-        far: float,
-        projection_type: ProjectionType = ...,
-        min_radius_2d: float = ...,
-        eps_2d: float = ...,
-        antialias: bool = ...,
-    ) -> ProjectedGaussianSplats: ...
-    def project_gaussians_for_images(
-        self,
-        world_to_camera_matrices: torch.Tensor,
-        projection_matrices: torch.Tensor,
-        image_width: int,
-        image_height: int,
-        near: float,
-        far: float,
-        projection_type: ProjectionType = ...,
-        sh_degree_to_use: int = ...,
-        min_radius_2d: float = ...,
-        eps_2d: float = ...,
-        antialias: bool = ...,
-    ) -> ProjectedGaussianSplats: ...
-    def project_gaussians_for_images_and_depths(
-        self,
-        world_to_camera_matrices: torch.Tensor,
-        projection_matrices: torch.Tensor,
-        image_width: int,
-        image_height: int,
-        near: float,
-        far: float,
-        projection_type: ProjectionType = ...,
-        sh_degree_to_use: int = ...,
-        min_radius_2d: float = ...,
-        eps_2d: float = ...,
-        antialias: bool = ...,
-    ) -> ProjectedGaussianSplats: ...
-    def render_depths(
-        self,
-        world_to_camera_matrices: torch.Tensor,
-        projection_matrices: torch.Tensor,
-        image_width: int,
-        image_height: int,
-        near: float,
-        far: float,
-        projection_type: ProjectionType = ...,
-        tile_size: int = ...,
-        min_radius_2d: float = ...,
-        eps_2d: float = ...,
-        antialias: bool = ...,
-        backgrounds: Optional[torch.Tensor] = ...,
-    ) -> tuple[torch.Tensor, torch.Tensor]: ...
-    def sparse_render_depths(
-        self,
-        pixels_to_render: JaggedTensor,
-        world_to_camera_matrices: torch.Tensor,
-        projection_matrices: torch.Tensor,
-        image_width: int,
-        image_height: int,
-        near: float,
-        far: float,
-        projection_type: ProjectionType = ...,
-        tile_size: int = ...,
-        min_radius_2d: float = ...,
-        eps_2d: float = ...,
-        antialias: bool = ...,
-    ) -> tuple[JaggedTensor, JaggedTensor]: ...
-    def render_from_projected_gaussians(
-        self,
-        projected_gaussians: ProjectedGaussianSplats,
-        crop_width: int = ...,
-        crop_height: int = ...,
-        crop_origin_w: int = ...,
-        crop_origin_h: int = ...,
-        tile_size: int = ...,
-        backgrounds: Optional[torch.Tensor] = ...,
-    ) -> tuple[torch.Tensor, torch.Tensor]: ...
-    def render_images(
-        self,
-        world_to_camera_matrices: torch.Tensor,
-        projection_matrices: torch.Tensor,
-        image_width: int,
-        image_height: int,
-        near: float,
-        far: float,
-        projection_type: ProjectionType = ...,
-        sh_degree_to_use: int = ...,
-        tile_size: int = ...,
-        min_radius_2d: float = ...,
-        eps_2d: float = ...,
-        antialias: bool = ...,
-        backgrounds: Optional[torch.Tensor] = ...,
-    ) -> tuple[torch.Tensor, torch.Tensor]: ...
-    def render_images_from_world(
-        self,
-        world_to_camera_matrices: torch.Tensor,
-        projection_matrices: torch.Tensor,
-        image_width: int,
-        image_height: int,
-        near: float,
-        far: float,
-        camera_model: "DistortionModel" = ...,
-        distortion_coeffs: Optional[torch.Tensor] = ...,
-        sh_degree_to_use: int = ...,
-        tile_size: int = ...,
-        min_radius_2d: float = ...,
-        eps_2d: float = ...,
-        antialias: bool = ...,
-        backgrounds: Optional[torch.Tensor] = ...,
-        masks: Optional[torch.Tensor] = ...,
-    ) -> tuple[torch.Tensor, torch.Tensor]: ...
-    def sparse_render_images(
-        self,
-        pixels_to_render: JaggedTensor,
-        world_to_camera_matrices: torch.Tensor,
-        projection_matrices: torch.Tensor,
-        image_width: int,
-        image_height: int,
-        near: float,
-        far: float,
-        projection_type: ProjectionType = ...,
-        sh_degree_to_use: int = ...,
-        tile_size: int = ...,
-        min_radius_2d: float = ...,
-        eps_2d: float = ...,
-        antialias: bool = ...,
-    ) -> tuple[JaggedTensor, JaggedTensor]: ...
-    def render_images_and_depths(
-        self,
-        world_to_camera_matrices: torch.Tensor,
-        projection_matrices: torch.Tensor,
-        image_width: int,
-        image_height: int,
-        near: float,
-        far: float,
-        projection_type: ProjectionType = ...,
-        sh_degree_to_use: int = ...,
-        tile_size: int = ...,
-        min_radius_2d: float = ...,
-        eps_2d: float = ...,
-        antialias: bool = ...,
-        backgrounds: Optional[torch.Tensor] = ...,
-    ) -> tuple[torch.Tensor, torch.Tensor]: ...
-    def sparse_render_images_and_depths(
-        self,
-        pixels_to_render: JaggedTensor,
-        world_to_camera_matrices: torch.Tensor,
-        projection_matrices: torch.Tensor,
-        image_width: int,
-        image_height: int,
-        near: float,
-        far: float,
-        projection_type: ProjectionType = ...,
-        sh_degree_to_use: int = ...,
-        tile_size: int = ...,
-        min_radius_2d: float = ...,
-        eps_2d: float = ...,
-        antialias: bool = ...,
-    ) -> tuple[JaggedTensor, JaggedTensor]: ...
-    def render_num_contributing_gaussians(
-        self,
-        world_to_camera_matrices: torch.Tensor,
-        projection_matrices: torch.Tensor,
-        image_width: int,
-        image_height: int,
-        near: float,
-        far: float,
-        projection_type: ProjectionType = ...,
-        tile_size: int = ...,
-        min_radius_2d: float = ...,
-        eps_2d: float = ...,
-        antialias: bool = ...,
-    ) -> tuple[torch.Tensor, torch.Tensor]: ...
-    def sparse_render_num_contributing_gaussians(
-        self,
-        pixels_to_render: JaggedTensor,
-        world_to_camera_matrices: torch.Tensor,
-        projection_matrices: torch.Tensor,
-        image_width: int,
-        image_height: int,
-        near: float,
-        far: float,
-        projection_type: ProjectionType = ...,
-        tile_size: int = ...,
-        min_radius_2d: float = ...,
-        eps_2d: float = ...,
-        antialias: bool = ...,
-    ) -> tuple[JaggedTensor, JaggedTensor]: ...
-    def render_contributing_gaussian_ids(
-        self,
-        world_to_camera_matrices: torch.Tensor,
-        projection_matrices: torch.Tensor,
-        image_width: int,
-        image_height: int,
-        near: float,
-        far: float,
-        projection_type: ProjectionType = ...,
-        tile_size: int = ...,
-        min_radius_2d: float = ...,
-        eps_2d: float = ...,
-        antialias: bool = ...,
-        top_k_contributors: int = ...,
-    ) -> tuple[JaggedTensor, JaggedTensor]: ...
-    def sparse_render_contributing_gaussian_ids(
-        self,
-        pixels_to_render: JaggedTensor,
-        world_to_camera_matrices: torch.Tensor,
-        projection_matrices: torch.Tensor,
-        image_width: int,
-        image_height: int,
-        near: float,
-        far: float,
-        projection_type: ProjectionType = ...,
-        tile_size: int = ...,
-        min_radius_2d: float = ...,
-        eps_2d: float = ...,
-        antialias: bool = ...,
-        top_k_contributors: int = ...,
-    ) -> tuple[JaggedTensor, JaggedTensor]: ...
-    def relocate_gaussians(
-        self,
-        log_scales: torch.Tensor,
-        logit_opacities: torch.Tensor,
-        ratios: torch.Tensor,
-        binomial_coeffs: torch.Tensor,
-        n_max: int,
-        min_opacity: float,
-    ) -> tuple[torch.Tensor, torch.Tensor]: ...
-    def add_noise_to_means(self, noise_scale: float, t: float = ..., k: float = ...) -> None: ...
-    def reset_accumulated_gradient_state(self) -> None: ...
-    def save_ply(self, filename: str, metadata: dict[str, str | int | float | torch.Tensor] | None) -> None: ...
-    @staticmethod
-    def from_ply(
-        filename: str, device: torch.device = ...
-    ) -> tuple[GaussianSplat3d, dict[str, str | int | float | torch.Tensor]]: ...
-    def set_state(
-        self,
-        means: torch.Tensor,
-        quats: torch.Tensor,
-        log_scales: torch.Tensor,
-        logit_opacities: torch.Tensor,
-        sh0: torch.Tensor,
-        shN: torch.Tensor,
-    ) -> None: ...
-    def state_dict(self) -> dict[str, torch.Tensor]: ...
-    @property
-    def accumulated_gradient_step_counts(self) -> torch.Tensor: ...
-    @property
-    def accumulated_max_2d_radii(self) -> torch.Tensor: ...
-    @property
-    def accumulated_mean_2d_gradient_norms(self) -> torch.Tensor: ...
-    @property
-    def num_channels(self) -> int: ...
-    @property
-    def num_gaussians(self) -> int: ...
-    @property
-    def num_sh_bases(self) -> int: ...
-    @property
-    def opacities(self) -> torch.Tensor: ...
-    @property
-    def scales(self) -> torch.Tensor: ...
-
-class GridBatch:
-    max_grids_per_batch: ClassVar[int] = ...  # read-only
-    @overload
-    def __init__(self, device: torch.device = ...) -> None: ...
-    @overload
-    def __init__(self, device: str = ...) -> None: ...
-    @overload
-    def __init__(self, voxel_sizes: torch.Tensor, grid_origins: torch.Tensor, device: torch.device = ...) -> None: ...
-    def avg_pool(
-        self,
-        pool_factor: Vec3iOrScalar,
-        data: JaggedTensor,
-        stride: Vec3iOrScalar = 0,
-        coarse_grid: GridBatch | None = None,
-    ) -> tuple[JaggedTensor, GridBatch]: ...
-    def bbox_at(self, bi: int) -> torch.Tensor: ...
-    def clip(
-        self, features: JaggedTensor, ijk_min: Vec3iBatch, ijk_max: Vec3iBatch
-    ) -> tuple[JaggedTensor, GridBatch]: ...
-    def clipped_grid(self, ijk_min: Vec3iBatch, ijk_max: Vec3iBatch) -> GridBatch: ...
-    def coarsened_grid(self, coarsening_factor: Vec3iOrScalar) -> GridBatch: ...
-    def contiguous(self) -> GridBatch: ...
-    def integrate_tsdf(
-        self,
-        voxel_truncation_distance: float,
-        projection_matrices: torch.Tensor,
-        cam_to_world_matrices: torch.Tensor,
-        tsdf: JaggedTensor,
-        weights: JaggedTensor,
-        depth_images: torch.Tensor,
-        weight_images: torch.Tensor | None = None,
-    ) -> tuple[GridBatch, JaggedTensor, JaggedTensor]: ...
-    def integrate_tsdf_with_features(
-        self,
-        voxel_truncation_distance: float,
-        projection_matrices: torch.Tensor,
-        cam_to_world_matrices: torch.Tensor,
-        tsdf: JaggedTensor,
-        features: JaggedTensor,
-        weights: JaggedTensor,
-        depth_images: torch.Tensor,
-        feature_images: torch.Tensor,
-        weight_images: torch.Tensor | None = None,
-    ) -> tuple[GridBatch, JaggedTensor, JaggedTensor, JaggedTensor]: ...
-    def conv_grid(self, kernel_size: Vec3iOrScalar, stride: Vec3iOrScalar) -> GridBatch: ...
-    def conv_transpose_grid(self, kernel_size: Vec3iOrScalar, stride: Vec3iOrScalar) -> GridBatch: ...
-    def coords_in_grid(self, ijk: JaggedTensor) -> JaggedTensor: ...
-    def cpu(self) -> GridBatch: ...
-    def cubes_in_grid(
-        self, cube_centers: JaggedTensor, cube_min: Vec3dOrScalar = 0.0, cube_max: Vec3dOrScalar = 0.0
-    ) -> JaggedTensor: ...
-    def cubes_intersect_grid(
-        self, cube_centers: JaggedTensor, cube_min: Vec3dOrScalar = 0.0, cube_max: Vec3dOrScalar = 0.0
-    ) -> JaggedTensor: ...
-    def cuda(self) -> GridBatch: ...
-    def cum_voxels_at(self, arg0: int) -> int: ...
-    def dilated_grid(self, dilation: int) -> GridBatch: ...
-    def merged_grid(self, other: GridBatch) -> GridBatch: ...
-    def pruned_grid(self, mask: JaggedTensor) -> GridBatch: ...
-    def inject_to(self, dst_grid: GridBatch, src: JaggedTensor, dst: JaggedTensor) -> None: ...
-    def dual_bbox_at(self, arg0: int) -> torch.Tensor: ...
-    def dual_grid(self, exclude_border: bool = ...) -> GridBatch: ...
-    def hilbert(self, offset: torch.Tensor) -> JaggedTensor: ...
-    def hilbert_zyx(self, offset: torch.Tensor) -> JaggedTensor: ...
-    def morton(self, offset: torch.Tensor) -> JaggedTensor: ...
-    def morton_zyx(self, offset: torch.Tensor) -> JaggedTensor: ...
-    def grid_to_world(self, ijk: JaggedTensor) -> JaggedTensor: ...
-    def ijk_to_index(self, ijk: JaggedTensor, cumulative: bool = False) -> JaggedTensor: ...
-    def ijk_to_inv_index(self, ijk: JaggedTensor, cumulative: bool = False) -> JaggedTensor: ...
-    def is_contiguous(self) -> bool: ...
-    def is_same(self, other: GridBatch) -> bool: ...
-    def jagged_like(self, data: torch.Tensor) -> JaggedTensor: ...
-    def marching_cubes(self, field: JaggedTensor, level: float) -> tuple[JaggedTensor, JaggedTensor, JaggedTensor]: ...
-    def max_pool(
-        self,
-        pool_factor: Vec3iOrScalar,
-        data: JaggedTensor,
-        stride: Vec3iOrScalar,
-        coarse_grid: GridBatch | None = None,
-    ) -> tuple[JaggedTensor, GridBatch]: ...
-    def neighbor_indexes(self, ijk: JaggedTensor, extent: int, bitshift: int) -> JaggedTensor: ...
-    def num_voxels_at(self, arg0: int) -> int: ...
-    def origin_at(self, arg0: int) -> torch.Tensor: ...
-    def points_in_grid(self, points: JaggedTensor) -> JaggedTensor: ...
-    def ray_implicit_intersection(
-        self, ray_origins: JaggedTensor, ray_directions: JaggedTensor, grid_scalars: JaggedTensor, eps: float = 0.0
-    ) -> JaggedTensor: ...
-    def read_from_dense_cminor(self, dense_data: torch.Tensor, dense_origins: Vec3i | None = None) -> JaggedTensor: ...
-    def read_from_dense_cmajor(self, dense_data: torch.Tensor, dense_origins: Vec3i | None = None) -> JaggedTensor: ...
-    def sample_bezier(self, points: JaggedTensor, voxel_data: JaggedTensor) -> JaggedTensor: ...
-    def sample_bezier_with_grad(
-        self, points: JaggedTensor, voxel_data: JaggedTensor
-    ) -> tuple[JaggedTensor, JaggedTensor]: ...
-    def sample_trilinear(self, points: JaggedTensor, voxel_data: JaggedTensor) -> JaggedTensor: ...
-    def sample_trilinear_with_grad(
-        self, points: JaggedTensor, voxel_data: JaggedTensor
-    ) -> tuple[JaggedTensor, JaggedTensor]: ...
-    def segments_along_rays(
-        self, ray_origins: JaggedTensor, ray_directions: JaggedTensor, max_segments: int, eps: float = 0.0
-    ) -> JaggedTensor: ...
-    def set_from_dense_grid(
-        self,
-        num_grids: int,
-        dense_dims: Vec3i,
-        ijk_min: Vec3i = ...,
-        voxel_sizes: Vec3dBatchOrScalar = ...,
-        origins: Vec3dBatch = ...,
-        mask: torch.Tensor | None = ...,
-    ) -> None: ...
-    def set_from_ijk(
-        self,
-        ijk: JaggedTensor,
-        voxel_sizes: Vec3dBatchOrScalar = ...,
-        origins: Vec3dBatch = ...,
-    ) -> None: ...
-    def set_from_mesh(
-        self,
-        mesh_vertices: JaggedTensor,
-        mesh_faces: JaggedTensor,
-        voxel_sizes: Vec3dBatchOrScalar = ...,
-        origins: Vec3dBatch = ...,
-    ) -> None: ...
-    def set_from_nearest_voxels_to_points(
-        self, points: JaggedTensor, voxel_sizes: Vec3dBatchOrScalar = ..., origins: Vec3dBatch = ...
-    ) -> None: ...
-    def set_from_points(
-        self,
-        points: JaggedTensor,
-        voxel_sizes: Vec3dBatchOrScalar = ...,
-        origins: Vec3dBatch = ...,
-    ) -> None: ...
-    def set_global_origin(self, origin: Vec3d) -> None: ...
-    def set_global_voxel_size(self, voxel_size: Vec3dOrScalar) -> None: ...
-    def splat_bezier(self, points: JaggedTensor, points_data: JaggedTensor) -> JaggedTensor: ...
-    def splat_trilinear(self, points: JaggedTensor, points_data: JaggedTensor) -> JaggedTensor: ...
-    def refine(
-        self,
-        subdiv_factor: Vec3iOrScalar,
-        data: JaggedTensor,
-        mask: JaggedTensor | None = None,
-        fine_grid: GridBatch | None = None,
-    ) -> tuple[JaggedTensor, GridBatch]: ...
-    def refined_grid(self, subdiv_factor: Vec3iOrScalar, mask: JaggedTensor | None = ...) -> GridBatch: ...
-    @overload
-    def to(self, to_device: torch.device) -> GridBatch: ...
-    @overload
-    def to(self, to_device: str) -> GridBatch: ...
-    @overload
-    def to(self, to_tensor: torch.Tensor) -> GridBatch: ...
-    @overload
-    def to(self, to_jtensor) -> GridBatch: ...
-    @overload
-    def to(self, to_grid: GridBatch) -> GridBatch: ...
-    def uniform_ray_samples(
-        self,
-        ray_origins: JaggedTensor,
-        ray_directions: JaggedTensor,
-        t_min: JaggedTensor,
-        t_max: JaggedTensor,
-        step_size: float,
-        cone_angle: float = 0.0,
-        include_end_segments: bool = True,
-        return_midpoints: bool = False,
-        eps: float = 0.0,
-    ) -> JaggedTensor: ...
-    def voxel_size_at(self, arg0: int) -> torch.Tensor: ...
-    def voxels_along_rays(
-        self,
-        ray_origins: JaggedTensor,
-        ray_directions: JaggedTensor,
-        max_voxels: int,
-        eps: float = 0.0,
-        return_ijk: bool = True,
-        cumulative: bool = False,
-    ) -> tuple[JaggedTensor, JaggedTensor]: ...
-    def world_to_grid(self, points: JaggedTensor) -> JaggedTensor: ...
-    def write_to_dense_cminor(
-        self,
-        sparse_data: JaggedTensor,
-        min_coord: Vec3iBatch | None = ...,
-        grid_size: Vec3i | None = ...,
-    ) -> torch.Tensor: ...
-    def write_to_dense_cmajor(
-        self,
-        sparse_data: JaggedTensor,
-        min_coord: Vec3iBatch | None = ...,
-        grid_size: Vec3i | None = ...,
-    ) -> torch.Tensor: ...
-    def index_int(self, arg0: int) -> GridBatch: ...
-    def index_slice(self, arg0: slice) -> GridBatch: ...
-    @overload
-    def index_list(self, arg0: list[bool]) -> GridBatch: ...
-    @overload
-    def index_list(self, arg0: list[int]) -> GridBatch: ...
-    def index_tensor(self, arg0: torch.Tensor) -> GridBatch: ...
-    @overload
-    def __getitem__(self, arg0: int) -> GridBatch: ...
-    @overload
-    def __getitem__(self, arg0: slice) -> GridBatch: ...
-    @overload
-    def __getitem__(self, arg0: list[bool]) -> GridBatch: ...
-    @overload
-    def __getitem__(self, arg0: list[int]) -> GridBatch: ...
-    @overload
-    def __getitem__(self, arg0: torch.Tensor) -> GridBatch: ...
-    def __iter__(self) -> typing.Iterator[GridBatch]: ...
-    def __len__(self) -> int: ...
-    @property
-    def address(self) -> int: ...
-    @property
-    def bbox(self) -> torch.Tensor: ...
-    @property
-    def cum_voxels(self) -> torch.Tensor: ...
-    @property
-    def device(self) -> torch.device: ...
-    @property
-    def dual_bbox(self) -> torch.Tensor: ...
+    # Scalar properties
     @property
     def grid_count(self) -> int: ...
     @property
-    def grid_to_world_matrices(self) -> torch.Tensor: ...
+    def total_voxels(self) -> int: ...
     @property
-    def ijk(self) -> JaggedTensor: ...
-    @property
-    def jidx(self) -> torch.Tensor: ...
-    @property
-    def joffsets(self) -> torch.Tensor: ...
-    @property
-    def num_bytes(self) -> torch.Tensor: ...
-    @property
-    def num_leaf_nodes(self) -> torch.Tensor: ...
-    @property
-    def num_voxels(self) -> torch.Tensor: ...
-    @property
-    def origins(self) -> torch.Tensor: ...
-    @property
-    def total_bbox(self) -> torch.Tensor: ...
+    def total_leaves(self) -> int: ...
     @property
     def total_bytes(self) -> int: ...
     @property
-    def total_leaf_nodes(self) -> int: ...
+    def max_voxels_per_grid(self) -> int: ...
     @property
-    def total_voxels(self) -> int: ...
+    def max_leaves_per_grid(self) -> int: ...
     @property
-    def viz_edge_network(self) -> tuple[JaggedTensor, JaggedTensor]: ...
+    def device(self) -> torch.device: ...
+    @property
+    def is_empty(self) -> bool: ...
+    @property
+    def is_contiguous(self) -> bool: ...
+
+    # Tensor properties
+    @property
+    def joffsets(self) -> torch.Tensor: ...
+    @property
+    def jlidx(self) -> torch.Tensor: ...
+    @property
+    def jidx(self) -> torch.Tensor: ...
+    @property
+    def num_voxels(self) -> torch.Tensor: ...
+    @property
+    def cum_voxels(self) -> torch.Tensor: ...
+    @property
+    def num_bytes(self) -> torch.Tensor: ...
+    @property
+    def num_leaves(self) -> torch.Tensor: ...
     @property
     def voxel_sizes(self) -> torch.Tensor: ...
     @property
-    def world_to_grid_matrices(self) -> torch.Tensor: ...
+    def origins(self) -> torch.Tensor: ...
+    @property
+    def bbox(self) -> torch.Tensor: ...
+    @property
+    def dual_bbox(self) -> torch.Tensor: ...
+    @property
+    def total_bbox(self) -> torch.Tensor: ...
+    @property
+    def voxel_to_world_matrices(self) -> torch.Tensor: ...
+    @property
+    def world_to_voxel_matrices(self) -> torch.Tensor: ...
+
+    # Per-grid queries
+    def num_voxels_at(self, bi: int) -> int: ...
+    def cum_voxels_at(self, bi: int) -> int: ...
+    def num_bytes_at(self, bi: int) -> int: ...
+    def num_leaves_at(self, bi: int) -> int: ...
+    def voxel_size_at(self, bi: int) -> torch.Tensor: ...
+    def origin_at(self, bi: int) -> torch.Tensor: ...
+    def bbox_at(self, bi: int) -> torch.Tensor: ...
+    def dual_bbox_at(self, bi: int) -> torch.Tensor: ...
+    def voxel_to_world_matrix_at(self, bi: int) -> torch.Tensor: ...
+    def world_to_voxel_matrix_at(self, bi: int) -> torch.Tensor: ...
+
+    # Utility
+    def jagged_like(self, data: torch.Tensor) -> JaggedTensor: ...
+    def is_same(self, other: "GridBatchData") -> bool: ...
+
+# ---------------------------------------------------------------------------
+# Grid construction (module-level)
+# ---------------------------------------------------------------------------
+
+def create_from_points(
+    points: JaggedTensor,
+    voxel_sizes: list[list[float]],
+    origins: list[list[float]],
+) -> GridBatchData: ...
+def create_from_ijk(
+    ijk: JaggedTensor,
+    voxel_sizes: list[list[float]],
+    origins: list[list[float]],
+) -> GridBatchData: ...
+def create_from_mesh(
+    vertices: JaggedTensor,
+    faces: JaggedTensor,
+    voxel_sizes: list[list[float]],
+    origins: list[list[float]],
+) -> GridBatchData: ...
+def create_from_nearest_voxels_to_points(
+    points: JaggedTensor,
+    voxel_sizes: list[list[float]],
+    origins: list[list[float]],
+) -> GridBatchData: ...
+@overload
+def create_from_empty(
+    device: str,
+) -> GridBatchData: ...
+@overload
+def create_from_empty(
+    device: str,
+    voxel_size: list[float],
+    origin: list[float],
+) -> GridBatchData: ...
+@overload
+def create_from_empty(
+    device: str,
+    voxel_sizes: list[list[float]],
+    origins: list[list[float]],
+) -> GridBatchData: ...
+def gridbatch_from_points(
+    points: JaggedTensor,
+    voxel_sizes: list[list[float]],
+    origins: list[list[float]],
+) -> GridBatchData: ...
+def gridbatch_from_nearest_voxels_to_points(
+    points: JaggedTensor,
+    voxel_sizes: list[list[float]],
+    origins: list[list[float]],
+) -> GridBatchData: ...
+def gridbatch_from_ijk(
+    ijk: JaggedTensor,
+    voxel_sizes: list[list[float]],
+    origins: list[list[float]],
+) -> GridBatchData: ...
+def gridbatch_from_dense(
+    num_grids: int,
+    dense_dims: list[int],
+    ijk_min: list[int],
+    voxel_sizes: list[list[float]],
+    origins: list[list[float]],
+    mask: torch.Tensor | None = ...,
+    device: str = ...,
+) -> GridBatchData: ...
+def gridbatch_from_mesh(
+    vertices: JaggedTensor,
+    faces: JaggedTensor,
+    voxel_sizes: list[list[float]],
+    origins: list[list[float]],
+) -> GridBatchData: ...
+def create_dense(
+    num_grids: int,
+    device: torch.device,
+    dense_dims: list[int],
+    ijk_min: list[int],
+    voxel_sizes: list[list[float]],
+    origins: list[list[float]],
+    mask: torch.Tensor | None = ...,
+) -> GridBatchData: ...
+def deserialize_grid(serialized: torch.Tensor) -> GridBatchData: ...
+def make_contiguous(input: GridBatchData) -> GridBatchData: ...
+def concatenate_grids(elements: list[GridBatchData]) -> GridBatchData: ...
+
+# ---------------------------------------------------------------------------
+# Grid ops (module-level)
+# ---------------------------------------------------------------------------
+
+# Interpolation: forward
+def sample_trilinear(
+    grid: GridBatchData,
+    points: JaggedTensor,
+    data: torch.Tensor,
+) -> list[torch.Tensor]: ...
+def sample_bezier(
+    grid: GridBatchData,
+    points: JaggedTensor,
+    data: torch.Tensor,
+) -> list[torch.Tensor]: ...
+def splat_trilinear(
+    grid: GridBatchData,
+    points: JaggedTensor,
+    data: torch.Tensor,
+) -> torch.Tensor: ...
+def splat_bezier(
+    grid: GridBatchData,
+    points: JaggedTensor,
+    data: torch.Tensor,
+) -> torch.Tensor: ...
+
+# Interpolation: with-gradient forward
+def sample_trilinear_with_grad(
+    grid: GridBatchData,
+    points: JaggedTensor,
+    data: torch.Tensor,
+) -> list[torch.Tensor]: ...
+def sample_bezier_with_grad(
+    grid: GridBatchData,
+    points: JaggedTensor,
+    data: torch.Tensor,
+) -> list[torch.Tensor]: ...
+
+# Interpolation: with-gradient backward
+def sample_trilinear_with_grad_bwd(
+    grid: GridBatchData,
+    points: JaggedTensor,
+    data: torch.Tensor,
+    grad_out_features: torch.Tensor,
+    grad_out_grad_features: torch.Tensor,
+) -> torch.Tensor: ...
+def sample_bezier_with_grad_bwd(
+    grid: GridBatchData,
+    points: JaggedTensor,
+    grad_out_features: torch.Tensor,
+    grad_out_grad_features: torch.Tensor,
+    data: torch.Tensor,
+) -> torch.Tensor: ...
+
+# Transforms
+def voxel_to_world(
+    grid: GridBatchData,
+    points: JaggedTensor,
+    is_primal: bool,
+) -> torch.Tensor: ...
+def world_to_voxel(
+    grid: GridBatchData,
+    points: JaggedTensor,
+    is_primal: bool,
+) -> torch.Tensor: ...
+def voxel_to_world_bwd(
+    grid: GridBatchData,
+    grad_out: JaggedTensor,
+    is_primal: bool,
+) -> torch.Tensor: ...
+def world_to_voxel_bwd(
+    grid: GridBatchData,
+    grad_out: JaggedTensor,
+    is_primal: bool,
+) -> torch.Tensor: ...
+
+# Pooling
+def max_pool(
+    fine_grid: GridBatchData,
+    coarse_grid: GridBatchData,
+    data: torch.Tensor,
+    factor: list[int],
+    stride: list[int],
+) -> torch.Tensor: ...
+def max_pool_bwd(
+    coarse_grid: GridBatchData,
+    fine_grid: GridBatchData,
+    fine_data: torch.Tensor,
+    coarse_grad_out: torch.Tensor,
+    factor: list[int],
+    stride: list[int],
+) -> torch.Tensor: ...
+def avg_pool(
+    fine_grid: GridBatchData,
+    coarse_grid: GridBatchData,
+    data: torch.Tensor,
+    factor: list[int],
+    stride: list[int],
+) -> torch.Tensor: ...
+def avg_pool_bwd(
+    coarse_grid: GridBatchData,
+    fine_grid: GridBatchData,
+    fine_data: torch.Tensor,
+    coarse_grad_out: torch.Tensor,
+    factor: list[int],
+    stride: list[int],
+) -> torch.Tensor: ...
+def refine(
+    coarse_grid: GridBatchData,
+    fine_grid: GridBatchData,
+    data: torch.Tensor,
+    factor: list[int],
+) -> torch.Tensor: ...
+def refine_bwd(
+    fine_grid: GridBatchData,
+    coarse_grid: GridBatchData,
+    grad_out: torch.Tensor,
+    coarse_data: torch.Tensor,
+    factor: list[int],
+) -> torch.Tensor: ...
+
+# Dense I/O
+def inject_op(
+    dst_grid: GridBatchData,
+    src_grid: GridBatchData,
+    dst: JaggedTensor,
+    src: JaggedTensor,
+) -> None: ...
+def inject_from_dense_cminor(
+    grid: GridBatchData,
+    dense_data: torch.Tensor,
+    origins: torch.Tensor,
+) -> torch.Tensor: ...
+def inject_from_dense_cmajor(
+    grid: GridBatchData,
+    dense_data: torch.Tensor,
+    origins: torch.Tensor,
+) -> torch.Tensor: ...
+def inject_to_dense_cminor(
+    grid: GridBatchData,
+    sparse_data: torch.Tensor,
+    origins: torch.Tensor,
+    grid_size: list[int],
+) -> torch.Tensor: ...
+def inject_to_dense_cmajor(
+    grid: GridBatchData,
+    sparse_data: torch.Tensor,
+    origins: torch.Tensor,
+    grid_size: list[int],
+) -> torch.Tensor: ...
+
+# Spatial queries
+def points_in_grid(grid: GridBatchData, points: JaggedTensor) -> JaggedTensor: ...
+def coords_in_grid(grid: GridBatchData, coords: JaggedTensor) -> JaggedTensor: ...
+def cubes_in_grid(
+    grid: GridBatchData,
+    cube_centers: JaggedTensor,
+    pad_min: list[float],
+    pad_max: list[float],
+) -> JaggedTensor: ...
+def cubes_intersect_grid(
+    grid: GridBatchData,
+    cube_centers: JaggedTensor,
+    pad_min: list[float],
+    pad_max: list[float],
+) -> JaggedTensor: ...
+def ijk_to_index(grid: GridBatchData, ijk: JaggedTensor, cumulative: bool) -> JaggedTensor: ...
+def ijk_to_inv_index(grid: GridBatchData, ijk: JaggedTensor, cumulative: bool) -> JaggedTensor: ...
+def neighbor_indexes(
+    grid: GridBatchData,
+    coords: JaggedTensor,
+    extent: int,
+    shift: int,
+) -> JaggedTensor: ...
+def active_grid_coords(grid: GridBatchData) -> JaggedTensor: ...
+
+# Ray ops
+def voxels_along_rays(
+    grid: GridBatchData,
+    ray_origins: JaggedTensor,
+    ray_directions: JaggedTensor,
+    max_voxels: int,
+    eps: float,
+    return_ijk: bool,
+    cumulative: bool,
+) -> list[JaggedTensor]: ...
+def segments_along_rays(
+    grid: GridBatchData,
+    ray_origins: JaggedTensor,
+    ray_directions: JaggedTensor,
+    max_segments: int,
+    eps: float,
+) -> JaggedTensor: ...
+def uniform_ray_samples(
+    grid: GridBatchData,
+    ray_origins: JaggedTensor,
+    ray_directions: JaggedTensor,
+    t_min: JaggedTensor,
+    t_max: JaggedTensor,
+    min_step_size: float,
+    cone_angle: float,
+    include_end_segments: bool,
+    return_midpoint: bool,
+    eps: float,
+) -> JaggedTensor: ...
+def ray_implicit_intersection(
+    grid: GridBatchData,
+    ray_origins: JaggedTensor,
+    ray_directions: JaggedTensor,
+    grid_scalars: JaggedTensor,
+    eps: float,
+) -> JaggedTensor: ...
+
+# Meshing / TSDF
+def marching_cubes(
+    grid: GridBatchData,
+    field: JaggedTensor,
+    level: float,
+) -> list[JaggedTensor]: ...
+def integrate_tsdf(
+    grid: GridBatchData,
+    truncation_margin: float,
+    projection_matrices: torch.Tensor,
+    cam_to_world_matrices: torch.Tensor,
+    tsdf: JaggedTensor,
+    weights: JaggedTensor,
+    depth_images: torch.Tensor,
+    weight_images: torch.Tensor | None,
+) -> tuple[GridBatchData, JaggedTensor, JaggedTensor]: ...
+def integrate_tsdf_with_features(
+    grid: GridBatchData,
+    truncation_margin: float,
+    projection_matrices: torch.Tensor,
+    cam_to_world_matrices: torch.Tensor,
+    tsdf: JaggedTensor,
+    features: JaggedTensor,
+    weights: JaggedTensor,
+    depth_images: torch.Tensor,
+    feature_images: torch.Tensor,
+    weight_images: torch.Tensor | None,
+) -> tuple[GridBatchData, JaggedTensor, JaggedTensor, JaggedTensor]: ...
+
+# Topology / misc
+def grid_edge_network(
+    grid: GridBatchData,
+    return_voxel_coordinates: bool,
+) -> list[JaggedTensor]: ...
+def serialize_encode(
+    grid: GridBatchData,
+    order: str,
+    offset: list[int],
+) -> JaggedTensor: ...
+
+# Topology ops
+def coarsen_grid(grid: GridBatchData, coarsening_factor: list[int]) -> GridBatchData: ...
+def upsample_grid(
+    grid: GridBatchData,
+    upsample_factor: list[int],
+    mask: JaggedTensor | None = ...,
+) -> GridBatchData: ...
+def dual_grid(grid: GridBatchData, exclude_border: bool = ...) -> GridBatchData: ...
+def clip_grid(
+    grid: GridBatchData,
+    ijk_min: list[list[int]],
+    ijk_max: list[list[int]],
+) -> GridBatchData: ...
+def clip_grid_with_mask(
+    grid: GridBatchData,
+    ijk_min: list[list[int]],
+    ijk_max: list[list[int]],
+) -> tuple[GridBatchData, JaggedTensor]: ...
+def clip_grid_features_with_mask(
+    grid: GridBatchData,
+    features: JaggedTensor,
+    ijk_min: list[list[int]],
+    ijk_max: list[list[int]],
+) -> tuple[JaggedTensor, GridBatchData]: ...
+def dilate_grid(grid: GridBatchData, dilation: list[int]) -> GridBatchData: ...
+def merge_grids(grid1: GridBatchData, grid2: GridBatchData) -> GridBatchData: ...
+def prune_grid(grid: GridBatchData, mask: JaggedTensor) -> GridBatchData: ...
+def conv_grid(
+    grid: GridBatchData,
+    kernel_size: list[int],
+    stride: list[int],
+) -> GridBatchData: ...
+def conv_transpose_grid(
+    grid: GridBatchData,
+    kernel_size: list[int],
+    stride: list[int],
+) -> GridBatchData: ...
+
+# Batch ops
+def clone_grid(grid: GridBatchData, device: torch.device) -> GridBatchData: ...
+def serialize_grid(grid: GridBatchData) -> torch.Tensor: ...
+def index_grid_int(grid: GridBatchData, index: int) -> GridBatchData: ...
+def index_grid_slice(
+    grid: GridBatchData,
+    start: int,
+    stop: int,
+    step: int,
+) -> GridBatchData: ...
+def index_grid_tensor(grid: GridBatchData, indices: torch.Tensor) -> GridBatchData: ...
+def index_grid_int64_list(grid: GridBatchData, indices: list[int]) -> GridBatchData: ...
+def index_grid_bool_list(grid: GridBatchData, indices: list[bool]) -> GridBatchData: ...
 
 class JaggedTensor:
     jdata: torch.Tensor
@@ -934,43 +933,6 @@ class JaggedTensor:
     def rshape(self) -> tuple[int, ...]: ...
     def __iter__(self) -> typing.Iterator[JaggedTensor]: ...
 
-class ProjectedGaussianSplats:
-    def __init__(self, *args, **kwargs) -> None: ...
-    @property
-    def antialias(self) -> bool: ...
-    @property
-    def conics(self) -> torch.Tensor: ...
-    @property
-    def depths(self) -> torch.Tensor: ...
-    @property
-    def eps_2d(self) -> float: ...
-    @property
-    def far_plane(self) -> float: ...
-    @property
-    def image_height(self) -> int: ...
-    @property
-    def image_width(self) -> int: ...
-    @property
-    def means2d(self) -> torch.Tensor: ...
-    @property
-    def min_radius_2d(self) -> float: ...
-    @property
-    def near_plane(self) -> float: ...
-    @property
-    def opacities(self) -> torch.Tensor: ...
-    @property
-    def projection_type(self) -> GaussianSplat3d.ProjectionType: ...
-    @property
-    def radii(self) -> torch.Tensor: ...
-    @property
-    def render_quantities(self) -> torch.Tensor: ...
-    @property
-    def sh_degree_to_use(self) -> int: ...
-    @property
-    def tile_gaussian_ids(self) -> torch.Tensor: ...
-    @property
-    def tile_offsets(self) -> torch.Tensor: ...
-
 class GaussianSplat3dView:
     @property
     def tile_size(self) -> int: ...
@@ -1036,7 +998,15 @@ class Viewer:
     def remove_scene(self, scene_name: str) -> None: ...
     def remove_view(self, scene_name: str, name: str) -> None: ...
     def add_gaussian_splat_3d_view(
-        self, scene_name: str, name: str, gaussian_splat_3d: GaussianSplat3d
+        self,
+        scene_name: str,
+        name: str,
+        means: torch.Tensor,
+        quats: torch.Tensor,
+        log_scales: torch.Tensor,
+        logit_opacities: torch.Tensor,
+        sh0: torch.Tensor,
+        shN: torch.Tensor,
     ) -> GaussianSplat3dView: ...
     def has_gaussian_splat_3d_view(self, name: str) -> bool: ...
     def get_gaussian_splat_3d_view(self, name: str) -> GaussianSplat3dView: ...
@@ -1052,8 +1022,8 @@ class Viewer:
     def set_camera_near(self, scene_name: str, near: float) -> None: ...
     def camera_far(self, scene_name: str) -> float: ...
     def set_camera_far(self, scene_name: str, far: float) -> None: ...
-    def camera_projection_type(self, scene_name: str) -> str: ...
-    def set_camera_projection_type(self, scene_name: str, projection_type: GaussianSplat3d.ProjectionType) -> None: ...
+    def camera_model(self, scene_name: str) -> CameraModel: ...
+    def set_camera_model(self, scene_name: str, model: CameraModel) -> None: ...
     def add_camera_view(
         self,
         scene_name: str,
@@ -1087,39 +1057,8 @@ class config:
     pedantic_error_checking: ClassVar[bool] = ...
     def __init__(self, *args, **kwargs) -> None: ...
 
-def gaussian_render_jagged(
-    means: JaggedTensor,
-    quats: JaggedTensor,
-    scales: JaggedTensor,
-    opacities: JaggedTensor,
-    sh_coeffs: JaggedTensor,
-    viewmats: JaggedTensor,
-    Ks: JaggedTensor,
-    image_width: int,
-    image_height: int,
-    near_plane: float = ...,
-    far_plane: float = ...,
-    sh_degree_to_use: int = ...,
-    tile_size: int = ...,
-    radius_clip: float = ...,
-    eps2d: float = ...,
-    antialias: bool = ...,
-    render_depth_channel: bool = ...,
-    return_debug_info: bool = ...,
-    render_depth_only: bool = ...,
-    ortho: bool = ...,
-    backgrounds: Optional[torch.Tensor] = ...,
-) -> tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]: ...
-def evaluate_spherical_harmonics(
-    sh_degree: int,
-    num_cameras: int,
-    sh0: torch.Tensor,
-    radii: torch.Tensor,
-    shN: Optional[torch.Tensor] = ...,
-    view_directions: Optional[torch.Tensor] = ...,
-) -> torch.Tensor: ...
 @overload
-def jcat(grid_batches: list[GridBatch]) -> GridBatch: ...
+def jcat(grid_batches: list[GridBatchData]) -> GridBatchData: ...
 @overload
 def jcat(jagged_tensors: list[JaggedTensor | torch.Tensor], dim: int | None = ...) -> JaggedTensor: ...
 def jempty(
@@ -1168,64 +1107,66 @@ def load(
     indices: list[int],
     device: torch.device = ...,
     verbose: bool = ...,
-) -> tuple[GridBatch, JaggedTensor, list[str]]: ...
+) -> tuple[GridBatchData, JaggedTensor, list[str]]: ...
 @overload
 def load(
     path: str,
     indices: list[int],
     device: str = ...,
     verbose: bool = ...,
-) -> tuple[GridBatch, JaggedTensor, list[str]]: ...
+) -> tuple[GridBatchData, JaggedTensor, list[str]]: ...
 @overload
 def load(
     path: str,
     index: int,
     device: torch.device = ...,
     verbose: bool = ...,
-) -> tuple[GridBatch, JaggedTensor, list[str]]: ...
+) -> tuple[GridBatchData, JaggedTensor, list[str]]: ...
 @overload
 def load(
     path: str,
     index: int,
     device: str = ...,
     verbose: bool = ...,
-) -> tuple[GridBatch, JaggedTensor, list[str]]: ...
+) -> tuple[GridBatchData, JaggedTensor, list[str]]: ...
 @overload
 def load(
     path: str,
     names: list[str],
     device: torch.device = ...,
     verbose: bool = ...,
-) -> tuple[GridBatch, JaggedTensor, list[str]]: ...
+) -> tuple[GridBatchData, JaggedTensor, list[str]]: ...
 @overload
 def load(
     path: str,
     names: list[str],
     device: str = ...,
     verbose: bool = ...,
-) -> tuple[GridBatch, JaggedTensor, list[str]]: ...
+) -> tuple[GridBatchData, JaggedTensor, list[str]]: ...
 @overload
 def load(
     path: str,
     name: str,
     device: torch.device = ...,
     verbose: bool = ...,
-) -> tuple[GridBatch, JaggedTensor, list[str]]: ...
+) -> tuple[GridBatchData, JaggedTensor, list[str]]: ...
 @overload
 def load(
     path: str,
     name: str,
     device: str = ...,
     verbose: bool = ...,
-) -> tuple[GridBatch, JaggedTensor, list[str]]: ...
+) -> tuple[GridBatchData, JaggedTensor, list[str]]: ...
 @overload
-def load(path: str, device: torch.device = ..., verbose: bool = ...) -> tuple[GridBatch, JaggedTensor, list[str]]: ...
+def load(
+    path: str, device: torch.device = ..., verbose: bool = ...
+) -> tuple[GridBatchData, JaggedTensor, list[str]]: ...
 @overload
-def load(path: str, device: str = ..., verbose: bool = ...) -> tuple[GridBatch, JaggedTensor, list[str]]: ...
+def load(path: str, device: str = ..., verbose: bool = ...) -> tuple[GridBatchData, JaggedTensor, list[str]]: ...
 @overload
 def save(
     path: str,
-    grid_batch: GridBatch,
+    grid_batch: GridBatchData,
     data: JaggedTensor | None = ...,
     names: list[str] = ...,
     compressed: bool = ...,
@@ -1234,7 +1175,7 @@ def save(
 @overload
 def save(
     path: str,
-    grid_batch: GridBatch,
+    grid_batch: GridBatchData,
     data: JaggedTensor | None = ...,
     name: str = ...,
     compressed: bool = ...,
@@ -1242,12 +1183,6 @@ def save(
 ) -> None: ...
 def morton(ijk: torch.Tensor) -> torch.Tensor: ...
 def hilbert(ijk: torch.Tensor) -> torch.Tensor: ...
-def scaled_dot_product_attention(
-    query: JaggedTensor | torch.Tensor,
-    key: JaggedTensor | torch.Tensor,
-    value: JaggedTensor | torch.Tensor,
-    scale: float,
-) -> JaggedTensor: ...
 def volume_render(
     sigmas: torch.Tensor,
     rgbs: torch.Tensor,
@@ -1262,10 +1197,15 @@ class RollingShutterType(Enum):
     VERTICAL = ...
     HORIZONTAL = ...
 
-class DistortionModel(Enum):
+class CameraModel(Enum):
     PINHOLE = ...
     OPENCV_RADTAN_5 = ...
     OPENCV_RATIONAL_8 = ...
     OPENCV_RADTAN_THIN_PRISM_9 = ...
     OPENCV_THIN_PRISM_12 = ...
     ORTHOGRAPHIC = ...
+
+class ProjectionMethod(Enum):
+    AUTO = ...
+    ANALYTIC = ...
+    UNSCENTED = ...

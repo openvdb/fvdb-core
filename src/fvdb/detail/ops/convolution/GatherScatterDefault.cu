@@ -48,8 +48,8 @@ optsOn(torch::Device device) {
 }
 
 static void
-checkTopologyPreconditions(GridBatchImpl const &feature_grid,
-                           GridBatchImpl const &output_grid,
+checkTopologyPreconditions(GridBatchData const &feature_grid,
+                           GridBatchData const &output_grid,
                            nanovdb::Coord kernel_size,
                            nanovdb::Coord stride) {
     TORCH_CHECK(feature_grid.device() == output_grid.device(),
@@ -91,8 +91,8 @@ struct twopass_topology_op {
         requires with_type<Tag, torch::DeviceType>
     static GatherScatterDefaultTopology
     op(Tag tg,
-       GridBatchImpl const &feature_grid,
-       GridBatchImpl const &output_grid,
+       GridBatchData const &feature_grid,
+       GridBatchData const &output_grid,
        nanovdb::Coord kernel_size,
        nanovdb::Coord stride,
        ConvDirection direction) {
@@ -125,7 +125,7 @@ struct twopass_topology_op {
                             JIdxType batch_idx,
                             nanovdb::Coord ijk,
                             int64_t /*voxel_idx*/,
-                            GridBatchImpl::Accessor /*output_acc*/) {
+                            GridBatchData::Accessor /*output_acc*/) {
                 auto const *feat_grid = feature_acc.grid(batch_idx);
                 auto feat_tree_acc    = feat_grid->getAccessor();
 
@@ -159,8 +159,9 @@ struct twopass_topology_op {
         if (K > 0) {
             offsets_dev.slice(0, 1, K + 1).copy_(torch::cumsum(counts.to(torch::kInt64), 0));
         }
-        int64_t total_pairs = (K > 0) ? offsets_dev[K].item<int64_t>() : 0;
         auto offsets_host   = offsets_dev.cpu();
+        auto offsets_acc    = offsets_host.accessor<int64_t, 1>();
+        int64_t total_pairs = (K > 0) ? offsets_acc[K] : 0;
 
         if (total_pairs == 0) {
             return GatherScatterDefaultTopology{
@@ -194,7 +195,7 @@ struct twopass_topology_op {
                             JIdxType batch_idx,
                             nanovdb::Coord ijk,
                             int64_t voxel_idx,
-                            GridBatchImpl::Accessor /*output_acc*/) {
+                            GridBatchData::Accessor /*output_acc*/) {
                 auto const *feat_grid   = feature_acc.grid(batch_idx);
                 auto feat_tree_acc      = feat_grid->getAccessor();
                 int64_t const feat_base = feature_acc.voxelOffset(batch_idx);
@@ -247,16 +248,16 @@ struct twopass_topology_op {
     using space      = axes<torch_full_device_axis>;
     using subspaces  = coverage<space>;
     using dispatcher = dispatch_table<space,
-                                      GatherScatterDefaultTopology(GridBatchImpl const &,
-                                                                   GridBatchImpl const &,
+                                      GatherScatterDefaultTopology(GridBatchData const &,
+                                                                   GridBatchData const &,
                                                                    nanovdb::Coord,
                                                                    nanovdb::Coord,
                                                                    ConvDirection)>;
 };
 
 static GatherScatterDefaultTopology
-buildTopologyTwoPass(GridBatchImpl const &feature_grid,
-                     GridBatchImpl const &output_grid,
+buildTopologyTwoPass(GridBatchData const &feature_grid,
+                     GridBatchData const &output_grid,
                      nanovdb::Coord kernel_size,
                      nanovdb::Coord stride,
                      ConvDirection direction) {
@@ -275,8 +276,8 @@ buildTopologyTwoPass(GridBatchImpl const &feature_grid,
 // =============================================================================
 
 GatherScatterDefaultTopology
-gatherScatterDefaultSparseConvTopology(GridBatchImpl const &feature_grid,
-                                       GridBatchImpl const &output_grid,
+gatherScatterDefaultSparseConvTopology(GridBatchData const &feature_grid,
+                                       GridBatchData const &output_grid,
                                        nanovdb::Coord kernel_size,
                                        nanovdb::Coord stride) {
     return buildTopologyTwoPass(
@@ -284,8 +285,8 @@ gatherScatterDefaultSparseConvTopology(GridBatchImpl const &feature_grid,
 }
 
 GatherScatterDefaultTopology
-gatherScatterDefaultSparseConvTransposeTopology(GridBatchImpl const &feature_grid,
-                                                GridBatchImpl const &output_grid,
+gatherScatterDefaultSparseConvTransposeTopology(GridBatchData const &feature_grid,
+                                                GridBatchData const &output_grid,
                                                 nanovdb::Coord kernel_size,
                                                 nanovdb::Coord stride) {
     return buildTopologyTwoPass(

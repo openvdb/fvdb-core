@@ -5,7 +5,7 @@
 #define FVDB_DETAIL_OPS_BUILDGRIDFROMMESH_H
 
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 
 #include <vector>
 
@@ -13,7 +13,7 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-c10::intrusive_ptr<GridBatchImpl> buildGridFromMesh(const JaggedTensor &meshVertices,
+c10::intrusive_ptr<GridBatchData> buildGridFromMesh(const JaggedTensor &meshVertices,
                                                     const JaggedTensor &meshFaces,
                                                     const std::vector<nanovdb::Vec3d> &voxelSizes,
                                                     const std::vector<nanovdb::Vec3d> &origins);

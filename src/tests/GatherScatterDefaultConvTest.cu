@@ -52,7 +52,10 @@
 // exercises non-cubic and varied kernel dimensions.
 //
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
+#include <fvdb/detail/GridBatchDataFactory.h>
+#include <fvdb/detail/ops/BuildGridForConv.h>
+#include <fvdb/detail/ops/BuildGridFromIjk.h>
 #include <fvdb/detail/ops/convolution/GatherScatterDefault.h>
 
 #include <torch/types.h>
@@ -134,16 +137,16 @@ makeDevice(torch::DeviceType dev) {
     return (dev == torch::kCUDA) ? torch::Device(torch::kCUDA, 0) : torch::Device(torch::kCPU);
 }
 
-static c10::intrusive_ptr<GridBatchImpl>
+static c10::intrusive_ptr<GridBatchData>
 makeGrid(torch::Tensor ijk_2d, torch::Device device) {
     auto ijk_dev = ijk_2d.to(device);
     JaggedTensor jt(ijk_dev);
     std::vector<nanovdb::Vec3d> voxel_sizes = {{1.0, 1.0, 1.0}};
     std::vector<nanovdb::Vec3d> origins     = {{0.0, 0.0, 0.0}};
-    return GridBatchImpl::createFromIjk(jt, voxel_sizes, origins);
+    return ops::createNanoGridFromIJK(jt, voxel_sizes, origins);
 }
 
-static c10::intrusive_ptr<GridBatchImpl>
+static c10::intrusive_ptr<GridBatchData>
 makeDenseTestGrid(int dim, torch::Device device) {
     std::vector<int32_t> flat;
     flat.reserve(dim * dim * dim * 3);
@@ -159,7 +162,7 @@ makeDenseTestGrid(int dim, torch::Device device) {
     return makeGrid(ijk, device);
 }
 
-static c10::intrusive_ptr<GridBatchImpl>
+static c10::intrusive_ptr<GridBatchData>
 makeStridedTestGrid(torch::Device device) {
     std::vector<std::vector<int32_t>> coords;
     for (int i = 4; i < 7; ++i)
@@ -366,7 +369,7 @@ TEST_P(GatherScatterDefaultForwardTest, DifferentGrids) {
 
     nanovdb::Coord kernel_size(3, 3, 3);
     nanovdb::Coord stride(1, 1, 1);
-    auto dst_grid = src_grid->convolutionOutput(kernel_size, stride);
+    auto dst_grid = ops::buildGridForConv(*src_grid, kernel_size, stride);
 
     auto topo =
         ops::gatherScatterDefaultSparseConvTopology(*src_grid, *dst_grid, kernel_size, stride);
@@ -503,7 +506,7 @@ TEST_P(GatherScatterDefaultStridedTest, StridedForward) {
     nanovdb::Coord kernel_size(3, 3, 3);
     nanovdb::Coord stride(2, 2, 2);
 
-    auto dst_grid = src_grid->convolutionOutput(kernel_size, stride);
+    auto dst_grid = ops::buildGridForConv(*src_grid, kernel_size, stride);
 
     auto topo =
         ops::gatherScatterDefaultSparseConvTopology(*src_grid, *dst_grid, kernel_size, stride);
@@ -531,7 +534,7 @@ TEST_P(GatherScatterDefaultStridedTest, StridedBackward) {
     nanovdb::Coord kernel_size(3, 3, 3);
     nanovdb::Coord stride(2, 2, 2);
 
-    auto dst_grid = src_grid->convolutionOutput(kernel_size, stride);
+    auto dst_grid = ops::buildGridForConv(*src_grid, kernel_size, stride);
 
     auto topo =
         ops::gatherScatterDefaultSparseConvTopology(*src_grid, *dst_grid, kernel_size, stride);
@@ -620,7 +623,7 @@ TEST_P(GatherScatterDefaultKernelSizeTest, ForwardAndBackward) {
 // Helper: multi-batch grid (2 dense cubes as separate batch entries)
 // =============================================================================
 
-static c10::intrusive_ptr<GridBatchImpl>
+static c10::intrusive_ptr<GridBatchData>
 makeMultiBatchGrid(int dim0, int dim1, torch::Device device) {
     auto makeDenseIjk = [](int dim) {
         std::vector<int32_t> flat;
@@ -641,7 +644,7 @@ makeMultiBatchGrid(int dim0, int dim1, torch::Device device) {
     JaggedTensor jt({ijk0, ijk1});
     std::vector<nanovdb::Vec3d> voxel_sizes = {{1.0, 1.0, 1.0}, {1.0, 1.0, 1.0}};
     std::vector<nanovdb::Vec3d> origins     = {{0.0, 0.0, 0.0}, {0.0, 0.0, 0.0}};
-    return GridBatchImpl::createFromIjk(jt, voxel_sizes, origins);
+    return ops::createNanoGridFromIJK(jt, voxel_sizes, origins);
 }
 
 // =============================================================================
@@ -815,7 +818,7 @@ TEST(GatherScatterDefaultTopology, EmptyGrid) {
         skipIfCudaUnavailable(dev_type);
         auto device = makeDevice(dev_type);
 
-        auto grid = GridBatchImpl::createFromEmpty(device, {1.0, 1.0, 1.0}, {0.0, 0.0, 0.0});
+        auto grid = makeEmptyGridBatchData(device, {1.0, 1.0, 1.0}, {0.0, 0.0, 0.0});
 
         nanovdb::Coord kernel_size(3, 3, 3);
         nanovdb::Coord stride(1, 1, 1);
@@ -905,7 +908,7 @@ TEST(GatherScatterDefaultValue, StridedConv) {
         auto src_grid = makeStridedTestGrid(device);
         nanovdb::Coord kernel_size(3, 3, 3);
         nanovdb::Coord stride(2, 2, 2);
-        auto dst_grid = src_grid->convolutionOutput(kernel_size, stride);
+        auto dst_grid = ops::buildGridForConv(*src_grid, kernel_size, stride);
 
         auto topo =
             ops::gatherScatterDefaultSparseConvTopology(*src_grid, *dst_grid, kernel_size, stride);
@@ -936,7 +939,7 @@ TEST(GatherScatterDefaultValue, SingleVoxel) {
         auto src_grid = makeGrid(ijk, device);
         nanovdb::Coord kernel_size(3, 3, 3);
         nanovdb::Coord stride(1, 1, 1);
-        auto dst_grid = src_grid->convolutionOutput(kernel_size, stride);
+        auto dst_grid = ops::buildGridForConv(*src_grid, kernel_size, stride);
 
         auto topo =
             ops::gatherScatterDefaultSparseConvTopology(*src_grid, *dst_grid, kernel_size, stride);
@@ -1029,7 +1032,7 @@ TEST(GatherScatterDefaultAdjoint, ForwardAdjointStrided) {
         auto src_grid = makeStridedTestGrid(device);
         nanovdb::Coord kernel_size(3, 3, 3);
         nanovdb::Coord stride(2, 2, 2);
-        auto dst_grid = src_grid->convolutionOutput(kernel_size, stride);
+        auto dst_grid = ops::buildGridForConv(*src_grid, kernel_size, stride);
         auto topo =
             ops::gatherScatterDefaultSparseConvTopology(*src_grid, *dst_grid, kernel_size, stride);
 
@@ -1085,7 +1088,7 @@ TEST(GatherScatterDefaultAdjoint, StridedTransposeAdjoint) {
         auto src_grid = makeStridedTestGrid(device);
         nanovdb::Coord kernel_size(3, 3, 3);
         nanovdb::Coord stride(2, 2, 2);
-        auto fwd_dst = src_grid->convolutionOutput(kernel_size, stride);
+        auto fwd_dst = ops::buildGridForConv(*src_grid, kernel_size, stride);
 
         auto topo = ops::gatherScatterDefaultSparseConvTransposeTopology(
             *fwd_dst, *src_grid, kernel_size, stride);
@@ -1261,7 +1264,7 @@ TEST_P(GatherScatterDefaultStridedTransposeTest, StridedTransposeForward) {
     auto src_grid = makeStridedTestGrid(device);
     nanovdb::Coord kernel_size(3, 3, 3);
     nanovdb::Coord stride(2, 2, 2);
-    auto fwd_dst = src_grid->convolutionOutput(kernel_size, stride);
+    auto fwd_dst = ops::buildGridForConv(*src_grid, kernel_size, stride);
 
     auto topo = ops::gatherScatterDefaultSparseConvTransposeTopology(
         *fwd_dst, *src_grid, kernel_size, stride);
@@ -1288,7 +1291,7 @@ TEST_P(GatherScatterDefaultStridedTransposeTest, StridedTransposeBackward) {
     auto src_grid = makeStridedTestGrid(device);
     nanovdb::Coord kernel_size(3, 3, 3);
     nanovdb::Coord stride(2, 2, 2);
-    auto fwd_dst = src_grid->convolutionOutput(kernel_size, stride);
+    auto fwd_dst = ops::buildGridForConv(*src_grid, kernel_size, stride);
 
     auto topo = ops::gatherScatterDefaultSparseConvTransposeTopology(
         *fwd_dst, *src_grid, kernel_size, stride);
@@ -1322,7 +1325,7 @@ TEST(GatherScatterDefaultAsymmetricStride, ForwardBackwardAdjoint) {
         auto src_grid = makeDenseTestGrid(6, device);
         nanovdb::Coord kernel_size(3, 3, 3);
         nanovdb::Coord stride(1, 2, 3);
-        auto dst_grid = src_grid->convolutionOutput(kernel_size, stride);
+        auto dst_grid = ops::buildGridForConv(*src_grid, kernel_size, stride);
 
         auto topo =
             ops::gatherScatterDefaultSparseConvTopology(*src_grid, *dst_grid, kernel_size, stride);

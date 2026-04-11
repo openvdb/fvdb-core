@@ -3,14 +3,14 @@
 //
 // ForEachActiveVoxel.cuh — Device-unified active-voxel iteration.
 //
-// Iterates over every active voxel in a GridBatchImpl, calling a callback
+// Iterates over every active voxel in a GridBatchData, calling a callback
 // for each one.  Device dispatch (CPU thread pool / CUDA grid-stride kernel /
 // PrivateUse1 multi-GPU) is handled internally via dispatch::for_each.
 //
 // Callback signature:
 //
 //     void(Tag tg, JIdxType batchIdx, nanovdb::Coord ijk,
-//          int64_t voxel_index, GridBatchImpl::Accessor acc)
+//          int64_t voxel_index, GridBatchData::Accessor acc)
 //
 // The Tag is forwarded so that callbacks can use concept-constrained
 // overloads for device-specific specialization when needed.
@@ -25,7 +25,7 @@
 #include "dispatch/torch/for_each.h"
 #include "dispatch/with_value.h"
 
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 #include <fvdb/detail/dispatch/GridAccessor.h>
 
 #include <nanovdb/NanoVDB.h>
@@ -40,7 +40,7 @@ namespace dispatch {
 ///
 /// @tparam Tag   A dispatch::tag carrying at least a torch::DeviceType.
 /// @tparam Func  Callable with signature
-///               void(Tag, JIdxType batchIdx, nanovdb::Coord, int64_t, GridBatchImpl::Accessor).
+///               void(Tag, JIdxType batchIdx, nanovdb::Coord, int64_t, GridBatchData::Accessor).
 ///
 /// @param tg    Tag instance (forwarded to both dispatch::for_each and the callback).
 /// @param grid  The grid batch to iterate over.
@@ -48,7 +48,7 @@ namespace dispatch {
 template <typename Tag, typename Func>
     requires ::dispatch::with_type<Tag, torch::DeviceType>
 void
-forEachActiveVoxel(Tag tg, GridBatchImpl const &grid, Func func) {
+forEachActiveVoxel(Tag tg, GridBatchData const &grid, Func func) {
     constexpr int64_t VOXELS_PER_LEAF =
         static_cast<int64_t>(nanovdb::OnIndexTree::LeafNodeType::NUM_VALUES);
 

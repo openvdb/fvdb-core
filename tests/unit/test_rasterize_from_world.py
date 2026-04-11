@@ -57,17 +57,25 @@ def _render_from_world(
     tile_size: int = 16,
     backgrounds: torch.Tensor | None = None,
     masks: torch.Tensor | None = None,
+    render_method: str = "render_images_from_world",
+    camera_model=None,
+    projection_method=None,
+    distortion_coeffs: torch.Tensor | None = None,
 ):
-    return gs.render_images_from_world(
+    if camera_model is None:
+        camera_model = fvdb.CameraModel.PINHOLE
+    if projection_method is None:
+        projection_method = fvdb.ProjectionMethod.AUTO
+    render_kwargs = dict(
         world_to_camera_matrices=world_to_cam,
         projection_matrices=K,
         image_width=image_width,
         image_height=image_height,
         near=0.01,
         far=1e10,
-        camera_model=fvdb.DistortionModel.PINHOLE,
-        distortion_coeffs=None,
-        sh_degree_to_use=sh_degree_to_use,
+        camera_model=camera_model,
+        projection_method=projection_method,
+        distortion_coeffs=distortion_coeffs,
         tile_size=tile_size,
         min_radius_2d=0.0,
         eps_2d=0.3,
@@ -75,12 +83,27 @@ def _render_from_world(
         backgrounds=backgrounds,
         masks=masks,
     )
+    if render_method != "render_depths_from_world":
+        render_kwargs["sh_degree_to_use"] = sh_degree_to_use
+    return getattr(gs, render_method)(**render_kwargs)
 
 
 def _assert_nonzero_finite_grad(tensor: torch.Tensor) -> None:
     assert tensor.grad is not None
     assert torch.isfinite(tensor.grad).all()
     assert tensor.grad.abs().sum().item() > 0.0
+
+
+def _opencv_distortion_coeffs(C: int, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
+    distortion_coeffs = torch.zeros((C, 12), device=device, dtype=dtype)
+    for c in range(C):
+        scale = float(c + 1)
+        distortion_coeffs[c, 0] = 0.02 * scale
+        distortion_coeffs[c, 1] = -0.004 * scale
+        distortion_coeffs[c, 2] = 0.001 * scale
+        distortion_coeffs[c, 6] = 0.0015 * scale
+        distortion_coeffs[c, 7] = -0.0012 * scale
+    return distortion_coeffs
 
 
 def _render_images_from_world_masked_edge_tile_worker(queue) -> None:
@@ -751,3 +774,253 @@ def test_gaussiansplat3d_render_images_from_world_backgrounds_used_when_no_inter
     expected = backgrounds.view(C, 1, 1, D).expand(C, image_height, image_width, D)
     assert torch.equal(alphas, torch.zeros_like(alphas))
     assert torch.equal(rendered, expected)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+def test_gaussiansplat3d_render_images_from_world_orthographic_grads_nonzero():
+    import fvdb
+
+    device = torch.device("cuda")
+    dtype = torch.float32
+
+    means = torch.tensor([[0.20, -0.15, 2.5]], device=device, dtype=dtype, requires_grad=True)
+    quats = torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=device, dtype=dtype, requires_grad=True)
+    log_scales = torch.tensor([[-0.5, -0.7, -0.5]], device=device, dtype=dtype, requires_grad=True)
+    logit_opacities = torch.tensor([2.0], device=device, dtype=dtype, requires_grad=True)
+    sh0 = torch.tensor([[[0.6, -0.2, 0.3]]], device=device, dtype=dtype, requires_grad=True)
+    shN = torch.empty((1, 0, 3), device=device, dtype=dtype, requires_grad=True)
+
+    gs = _build_gaussian_splat(
+        fvdb,
+        means=means,
+        quats=quats,
+        log_scales=log_scales,
+        logit_opacities=logit_opacities,
+        sh0=sh0,
+        shN=shN,
+    )
+
+    world_to_cam, K = _default_camera(device, dtype, cx=7.5, cy=7.5)
+    world_to_cam = world_to_cam.clone().requires_grad_(True)
+    K = K.clone().requires_grad_(True)
+
+    rendered, alphas = _render_from_world(
+        fvdb,
+        gs,
+        world_to_cam=world_to_cam,
+        K=K,
+        image_width=16,
+        image_height=16,
+        sh_degree_to_use=0,
+        camera_model=fvdb.CameraModel.ORTHOGRAPHIC,
+        projection_method=fvdb.ProjectionMethod.AUTO,
+    )
+
+    loss = (rendered * rendered).sum() + 0.5 * alphas.sum()
+    loss.backward()
+
+    _assert_nonzero_finite_grad(means)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+def test_gaussiansplat3d_render_images_from_world_opencv_distortion_grads_nonzero():
+    import fvdb
+
+    device = torch.device("cuda")
+    dtype = torch.float32
+
+    means = torch.tensor([[0.35, -0.22, 2.8]], device=device, dtype=dtype, requires_grad=True)
+    quats = torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=device, dtype=dtype, requires_grad=True)
+    log_scales = torch.tensor([[-0.45, -0.6, -0.45]], device=device, dtype=dtype, requires_grad=True)
+    logit_opacities = torch.tensor([2.0], device=device, dtype=dtype, requires_grad=True)
+    sh0 = torch.tensor([[[0.5, 0.2, -0.1]]], device=device, dtype=dtype, requires_grad=True)
+    shN = torch.empty((1, 0, 3), device=device, dtype=dtype, requires_grad=True)
+
+    gs = _build_gaussian_splat(
+        fvdb,
+        means=means,
+        quats=quats,
+        log_scales=log_scales,
+        logit_opacities=logit_opacities,
+        sh0=sh0,
+        shN=shN,
+    )
+
+    world_to_cam, K = _default_camera(device, dtype, cx=7.5, cy=7.5)
+    world_to_cam = world_to_cam.clone().requires_grad_(True)
+    K = K.clone().requires_grad_(True)
+    distortion_coeffs = _opencv_distortion_coeffs(1, device, dtype).clone().requires_grad_(True)
+
+    rendered, alphas = _render_from_world(
+        fvdb,
+        gs,
+        world_to_cam=world_to_cam,
+        K=K,
+        image_width=16,
+        image_height=16,
+        sh_degree_to_use=0,
+        camera_model=fvdb.CameraModel.OPENCV_RADTAN_5,
+        projection_method=fvdb.ProjectionMethod.AUTO,
+        distortion_coeffs=distortion_coeffs,
+    )
+
+    loss = (rendered * rendered).sum() + alphas.sum()
+    loss.backward()
+
+    _assert_nonzero_finite_grad(means)
+    if distortion_coeffs.grad is not None:
+        _assert_nonzero_finite_grad(distortion_coeffs)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+def test_gaussiansplat3d_render_depths_and_rgbd_from_world_match_for_camera_models():
+    import fvdb
+
+    device = torch.device("cuda")
+    dtype = torch.float32
+
+    means = torch.tensor([[0.18, -0.10, 2.6]], device=device, dtype=dtype)
+    quats = torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=device, dtype=dtype)
+    log_scales = torch.tensor([[-0.55, -0.7, -0.55]], device=device, dtype=dtype)
+    logit_opacities = torch.tensor([2.0], device=device, dtype=dtype)
+    sh0 = torch.tensor([[[0.7, -0.2, 0.1]]], device=device, dtype=dtype)
+    shN = torch.empty((1, 0, 3), device=device, dtype=dtype)
+
+    gs = _build_gaussian_splat(
+        fvdb,
+        means=means,
+        quats=quats,
+        log_scales=log_scales,
+        logit_opacities=logit_opacities,
+        sh0=sh0,
+        shN=shN,
+    )
+
+    for camera_model in (
+        fvdb.CameraModel.PINHOLE,
+        fvdb.CameraModel.ORTHOGRAPHIC,
+        fvdb.CameraModel.OPENCV_RADTAN_5,
+    ):
+        world_to_cam, K = _default_camera(device, dtype, cx=7.5, cy=7.5)
+        distortion_coeffs = None
+        if camera_model == fvdb.CameraModel.OPENCV_RADTAN_5:
+            distortion_coeffs = _opencv_distortion_coeffs(1, device, dtype)
+
+        images, image_alphas = _render_from_world(
+            fvdb,
+            gs,
+            world_to_cam=world_to_cam,
+            K=K,
+            image_width=16,
+            image_height=16,
+            sh_degree_to_use=0,
+            render_method="render_images_from_world",
+            camera_model=camera_model,
+            projection_method=fvdb.ProjectionMethod.AUTO,
+            distortion_coeffs=distortion_coeffs,
+        )
+        depths, depth_alphas = _render_from_world(
+            fvdb,
+            gs,
+            world_to_cam=world_to_cam,
+            K=K,
+            image_width=16,
+            image_height=16,
+            sh_degree_to_use=0,
+            render_method="render_depths_from_world",
+            camera_model=camera_model,
+            projection_method=fvdb.ProjectionMethod.AUTO,
+            distortion_coeffs=distortion_coeffs,
+        )
+        rgbd, rgbd_alphas = _render_from_world(
+            fvdb,
+            gs,
+            world_to_cam=world_to_cam,
+            K=K,
+            image_width=16,
+            image_height=16,
+            sh_degree_to_use=0,
+            render_method="render_images_and_depths_from_world",
+            camera_model=camera_model,
+            projection_method=fvdb.ProjectionMethod.AUTO,
+            distortion_coeffs=distortion_coeffs,
+        )
+
+        torch.testing.assert_close(image_alphas, depth_alphas, atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(image_alphas, rgbd_alphas, atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(rgbd[..., :-1], images, atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(rgbd[..., -1:], depths, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+def test_gaussiansplat3d_render_depth_and_rgbd_from_world_masks_apply_backgrounds():
+    import fvdb
+
+    device = torch.device("cuda")
+    dtype = torch.float32
+
+    means = torch.tensor([[0.10, -0.10, 2.4]], device=device, dtype=dtype)
+    quats = torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=device, dtype=dtype)
+    log_scales = torch.tensor([[-0.55, -0.65, -0.5]], device=device, dtype=dtype)
+    logit_opacities = torch.tensor([2.0], device=device, dtype=dtype)
+    sh0 = torch.tensor([[[0.3, 0.4, -0.2]]], device=device, dtype=dtype)
+    shN = torch.empty((1, 0, 3), device=device, dtype=dtype)
+
+    gs = _build_gaussian_splat(
+        fvdb,
+        means=means,
+        quats=quats,
+        log_scales=log_scales,
+        logit_opacities=logit_opacities,
+        sh0=sh0,
+        shN=shN,
+    )
+
+    world_to_cam, K = _default_camera(device, dtype, cx=7.5, cy=7.5)
+    masks = torch.zeros((1, 16, 16), device=device, dtype=torch.bool)
+
+    for camera_model in (fvdb.CameraModel.ORTHOGRAPHIC, fvdb.CameraModel.OPENCV_RADTAN_5):
+        distortion_coeffs = None
+        if camera_model == fvdb.CameraModel.OPENCV_RADTAN_5:
+            distortion_coeffs = _opencv_distortion_coeffs(1, device, dtype)
+
+        depth_background = torch.tensor([[42.0]], device=device, dtype=dtype)
+        rgbd_background = torch.tensor([[0.1, -0.2, 0.3, 42.0]], device=device, dtype=dtype)
+
+        depths, depth_alphas = _render_from_world(
+            fvdb,
+            gs,
+            world_to_cam=world_to_cam,
+            K=K,
+            image_width=16,
+            image_height=16,
+            sh_degree_to_use=0,
+            render_method="render_depths_from_world",
+            camera_model=camera_model,
+            projection_method=fvdb.ProjectionMethod.AUTO,
+            distortion_coeffs=distortion_coeffs,
+            backgrounds=depth_background,
+            masks=masks,
+        )
+        rgbd, rgbd_alphas = _render_from_world(
+            fvdb,
+            gs,
+            world_to_cam=world_to_cam,
+            K=K,
+            image_width=16,
+            image_height=16,
+            sh_degree_to_use=0,
+            render_method="render_images_and_depths_from_world",
+            camera_model=camera_model,
+            projection_method=fvdb.ProjectionMethod.AUTO,
+            distortion_coeffs=distortion_coeffs,
+            backgrounds=rgbd_background,
+            masks=masks,
+        )
+
+        expected_depths = depth_background.view(1, 1, 1, 1).expand_as(depths)
+        expected_rgbd = rgbd_background.view(1, 1, 1, 4).expand_as(rgbd)
+        assert torch.equal(depth_alphas, torch.zeros_like(depth_alphas))
+        assert torch.equal(rgbd_alphas, torch.zeros_like(rgbd_alphas))
+        assert torch.equal(depths, expected_depths)
+        assert torch.equal(rgbd, expected_rgbd)

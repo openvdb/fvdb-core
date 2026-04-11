@@ -1,0 +1,78 @@
+{
+  "cuda": {
+    "versions": {
+      "12.8": { "patch": "12.8.1" },
+      "13.0": { "patch": "13.0.2" }
+    },
+    "default": "13.0",
+    "conda_override": "13.0",
+    "arch_list_pr": "8.9+PTX",
+    "arch_list_publish": "7.5;8.0;9.0;10.0;12.0+PTX"
+  },
+  "python": {
+    "matrix": ["3.10", "3.11", "3.12", "3.13"],
+    "default": "3.12"
+  },
+  "torch": {
+    "version": "2.10",
+    "full_version": "2.10.0"
+  },
+  "gcc": {
+    "toolset": "14",
+    "conda_version": "14.3"
+  },
+  "cmake_version": "4.0.3",
+  "uv": {
+    "version": "0.7.5",
+    "action_sha": "d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86"
+  },
+  "docker_os": {
+    "rocky": "rockylinux8",
+    "ubuntu": "ubuntu22.04"
+  },
+  "aws": {
+    "role": "arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role",
+    "region": "us-east-2",
+    "cpu_ami": "ami-0e14a711dad782a70",
+    "gpu_ami": "ami-0f5c0b65fde08ae43",
+    "subnet": "subnet-03f2320d6e6e0005b",
+    "security_group": "sg-0cd08bd89d6212223"
+  },
+  "publish_matrix": {
+    "python-version": ["3.10", "3.11", "3.12", "3.13"],
+    "torch-version": ["2.10"],
+    "cuda-version": ["12.8", "13.0"],
+    "include": [
+      { "cuda-version": "12.8", "cuda-image-tag": "12.8.1" },
+      { "cuda-version": "13.0", "cuda-image-tag": "13.0.2" }
+    ]
+  },
+  "auditwheel_excludes": [
+    "libcuda.so.1",
+    "libcufile.so.1",
+    "libnvToolsExt.so.1",
+    "libcudnn.so.9",
+    "libcufft.so.11",
+    "libcurand.so.10",
+    "libcusolver.so.11",
+    "libtorch.so",
+    "libtorch_cpu.so",
+    "libtorch_cuda.so",
+    "libtorch_python.so",
+    "libc10.so",
+    "libc10_cuda.so",
+    "libmkl_core.so.2",
+    "libmkl_intel_lp64.so.2",
+    "libmkl_intel_thread.so.2",
+    "libomp.so",
+    "libprotobuf.so.31"
+  ],
+  "auditwheel_excludes_cuda_major": [
+    "libcudart.so",
+    "libnvrtc.so",
+    "libcublas.so",
+    "libcublasLt.so",
+    "libcusparse.so",
+    "libnvJitLink.so"
+  ]
+}

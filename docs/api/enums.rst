@@ -1,10 +1,10 @@
 Enums
 ======
 
-.. autoclass:: fvdb.DistortionModel
+.. autoclass:: fvdb.CameraModel
    :members:
 
-.. autoclass:: fvdb.ProjectionType
+.. autoclass:: fvdb.ProjectionMethod
    :members:
 
 .. autoclass:: fvdb.RollingShutterType

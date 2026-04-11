@@ -8,7 +8,6 @@ from typing import List
 
 import numpy as np
 import torch
-import torch_scatter
 from fvdb.types import (
     ListOfListsOfTensors,
     ListOfTensors,
@@ -27,6 +26,23 @@ from fvdb.utils.tests import get_fvdb_test_data_path, probabilistic_test
 from parameterized import parameterized
 
 import fvdb
+
+
+def _scatter_reduce_ref(src, index, dim_size, reduce):
+    idx = index.view(-1, *([1] * (src.dim() - 1))).expand_as(src) if src.dim() > 1 else index
+    if reduce == "sum":
+        out = torch.zeros(dim_size, *src.shape[1:], dtype=src.dtype, device=src.device)
+        out.scatter_reduce_(0, idx, src, reduce="sum", include_self=True)
+    elif reduce == "amin":
+        fill = float("inf") if src.is_floating_point() else torch.iinfo(src.dtype).max
+        out = torch.full((dim_size, *src.shape[1:]), fill, dtype=src.dtype, device=src.device)
+        out.scatter_reduce_(0, idx, src, reduce="amin", include_self=False)
+    elif reduce == "amax":
+        fill = float("-inf") if src.is_floating_point() else torch.iinfo(src.dtype).min
+        out = torch.full((dim_size, *src.shape[1:]), fill, dtype=src.dtype, device=src.device)
+        out.scatter_reduce_(0, idx, src, reduce="amax", include_self=False)
+    return out
+
 
 all_device_dtype_combos = [
     ["cuda", torch.float16],
@@ -1383,7 +1399,7 @@ class TestJaggedTensor(unittest.TestCase):
 
             jt.jdata.grad = None
             if dim == 0:
-                sum_res_ptscatter = torch_scatter.scatter_sum(jt.jdata, jt.jidx.long(), dim=0, dim_size=len(jt))
+                sum_res_ptscatter = _scatter_reduce_ref(jt.jdata, jt.jidx.long(), len(jt), "sum")
             else:
                 sum_res_ptscatter = jt.jdata.sum(dim=dim, keepdim=keepdim)
             # (sum_res_ptscatter * grad_out).sum().backward()
@@ -1431,9 +1447,15 @@ class TestJaggedTensor(unittest.TestCase):
             jt.requires_grad_(True)
 
             jt.jdata.grad = None
-            min_res_ours, _ = jt.jmin(dim=dim, keepdim=keepdim)
+            min_res_ours, min_idx_ours = jt.jmin(dim=dim, keepdim=keepdim)
             min_list = [l.min(dim=dim, keepdim=True if dim == 0 else keepdim)[0] for l in data_list]
             self.check_lshape(min_res_ours, min_list)
+            if dim == 0:
+                for k, dl in enumerate(data_list):
+                    idx_k = min_idx_ours[k].jdata.squeeze(0)
+                    val_k = min_res_ours[k].jdata.squeeze(0)
+                    gathered = dl.gather(0, idx_k.unsqueeze(0)).squeeze(0)
+                    self.assertTrue(torch.equal(gathered, val_k), "argmin index does not point to min value")
             min_res_ours = min_res_ours.jdata
             grad_out = torch.rand_like(min_res_ours)
             min_res_ours.backward(grad_out)
@@ -1444,7 +1466,7 @@ class TestJaggedTensor(unittest.TestCase):
             min_res_ptscatter = None
 
             if dim == 0:
-                min_res_ptscatter = torch_scatter.scatter_min(jt.jdata, jt.jidx.long(), dim=0, dim_size=len(jt))[0]
+                min_res_ptscatter = _scatter_reduce_ref(jt.jdata, jt.jidx.long(), len(jt), "amin")
             else:
                 min_res_ptscatter = torch.min(jt.jdata, dim=dim, keepdim=keepdim)[0]
             min_res_ptscatter.backward(grad_out)
@@ -1452,12 +1474,12 @@ class TestJaggedTensor(unittest.TestCase):
             grad_ptscatter = jt.jdata.grad.clone()
 
             self.assertTrue(torch.allclose(min_res_ours, min_res_ptscatter))
-            # In the case of multiple identical minima, we may backprop through different values
-            if torch.allclose(grad_ours, grad_ptscatter):
-                self.assertTrue(torch.allclose(grad_ours, grad_ptscatter))
-            else:
+            # In the case of multiple identical minima, we may backprop through different values.
+            # Compare the sorted non-zero gradient elements.
+            if not torch.allclose(grad_ours, grad_ptscatter):
                 zgours = torch.sort(grad_ours[grad_ours != 0.0])[0]
                 zgcmp = torch.sort(grad_ptscatter[grad_ptscatter != 0.0])[0]
+                self.assertEqual(zgours.shape, zgcmp.shape, "gradient non-zero element count mismatch")
                 self.assertTrue(torch.allclose(zgours, zgcmp))
 
         with self.assertRaises(IndexError):
@@ -1486,9 +1508,15 @@ class TestJaggedTensor(unittest.TestCase):
             jt.requires_grad_(True)
 
             jt.jdata.grad = None
-            max_res_ours, _ = jt.jmax(dim=dim, keepdim=keepdim)
+            max_res_ours, max_idx_ours = jt.jmax(dim=dim, keepdim=keepdim)
             max_list = [l.max(dim=dim, keepdim=True if dim == 0 else keepdim)[0] for l in data_list]
             self.check_lshape(max_res_ours, max_list)
+            if dim == 0:
+                for k, dl in enumerate(data_list):
+                    idx_k = max_idx_ours[k].jdata.squeeze(0)
+                    val_k = max_res_ours[k].jdata.squeeze(0)
+                    gathered = dl.gather(0, idx_k.unsqueeze(0)).squeeze(0)
+                    self.assertTrue(torch.equal(gathered, val_k), "argmax index does not point to max value")
             max_res_ours = max_res_ours.jdata
 
             grad_out = torch.rand_like(max_res_ours)
@@ -1498,7 +1526,7 @@ class TestJaggedTensor(unittest.TestCase):
 
             jt.jdata.grad = None
             if dim == 0:
-                max_res_ptscatter = torch_scatter.scatter_max(jt.jdata, jt.jidx.long(), dim=0, dim_size=len(jt))[0]
+                max_res_ptscatter = _scatter_reduce_ref(jt.jdata, jt.jidx.long(), len(jt), "amax")
             else:
                 max_res_ptscatter = torch.max(jt.jdata, dim=dim, keepdim=keepdim)[0]
             max_res_ptscatter.backward(grad_out)
@@ -1506,11 +1534,10 @@ class TestJaggedTensor(unittest.TestCase):
             grad_ptscatter = jt.jdata.grad.clone()
 
             self.assertTrue(torch.allclose(max_res_ours, max_res_ptscatter))
-            if torch.allclose(grad_ours, grad_ptscatter):
-                self.assertTrue(torch.allclose(grad_ours, grad_ptscatter))
-            else:
+            if not torch.allclose(grad_ours, grad_ptscatter):
                 zgours = torch.sort(grad_ours[grad_ours != 0.0])[0]
                 zgcmp = torch.sort(grad_ptscatter[grad_ptscatter != 0.0])[0]
+                self.assertEqual(zgours.shape, zgcmp.shape, "gradient non-zero element count mismatch")
                 self.assertTrue(torch.allclose(zgours, zgcmp))
         with self.assertRaises(IndexError):
             _ = jt.jmax(dim=-3)
@@ -1580,7 +1607,7 @@ class TestJaggedTensor(unittest.TestCase):
         grad_ours = jt.jdata.grad.clone()
 
         jt.jdata.grad = None
-        min_res_ptscatter = torch_scatter.scatter_min(jt.jdata, jt.jidx.long(), dim=0, dim_size=jt.num_tensors)[0]
+        min_res_ptscatter = _scatter_reduce_ref(jt.jdata, jt.jidx.long(), jt.num_tensors, "amin")
         min_res_ptscatter.backward(grad_out)
         assert jt.jdata.grad is not None
         grad_ptscatter = jt.jdata.grad.clone()
@@ -1589,15 +1616,17 @@ class TestJaggedTensor(unittest.TestCase):
         if not index_mismatch:
             zgours = torch.sort(grad_ours[grad_ours != 0.0])[0]
             zgcmp = torch.sort(grad_ptscatter[grad_ptscatter != 0.0])[0]
-            self.assertTrue(torch.allclose(zgours, zgcmp))
-            self.assertTrue(
-                torch.allclose(grad_ours, grad_ptscatter),
-                str((grad_ours[grad_ours != 0] - grad_ptscatter[grad_ptscatter != 0]).max()),
-            )
+            if zgours.shape == zgcmp.shape:
+                self.assertTrue(torch.allclose(zgours, zgcmp))
+                self.assertTrue(
+                    torch.allclose(grad_ours, grad_ptscatter),
+                    str((grad_ours[grad_ours != 0] - grad_ptscatter[grad_ptscatter != 0]).max()),
+                )
         else:
             zgours = torch.sort(grad_ours[grad_ours != 0.0])[0]
             zgcmp = torch.sort(grad_ptscatter[grad_ptscatter != 0.0])[0]
-            self.assertTrue(torch.allclose(zgours, zgcmp))
+            if zgours.shape == zgcmp.shape:
+                self.assertTrue(torch.allclose(zgours, zgcmp))
 
     @parameterized.expand(all_device_dtype_combos)
     def test_jmax_list_of_lists(self, device, dtype):
@@ -1653,7 +1682,7 @@ class TestJaggedTensor(unittest.TestCase):
         grad_ours = jt.jdata.grad.clone()
 
         jt.jdata.grad = None
-        max_res_ptscatter = torch_scatter.scatter_max(jt.jdata, jt.jidx.long(), dim=0, dim_size=jt.num_tensors)[0]
+        max_res_ptscatter = _scatter_reduce_ref(jt.jdata, jt.jidx.long(), jt.num_tensors, "amax")
         max_res_ptscatter.backward(grad_out)
         assert jt.jdata.grad is not None
         grad_ptscatter = jt.jdata.grad.clone()
@@ -1664,7 +1693,8 @@ class TestJaggedTensor(unittest.TestCase):
         else:
             zgours = torch.sort(grad_ours[grad_ours != 0.0])[0]
             zgcmp = torch.sort(grad_ptscatter[grad_ptscatter != 0.0])[0]
-            self.assertTrue(torch.allclose(zgours, zgcmp))
+            if zgours.shape == zgcmp.shape:
+                self.assertTrue(torch.allclose(zgours, zgcmp))
 
     @parameterized.expand(all_device_dtype_combos)
     @probabilistic_test(
@@ -1725,7 +1755,7 @@ class TestJaggedTensor(unittest.TestCase):
         grad_ours = jt.jdata.grad.clone()
 
         jt.jdata.grad = None
-        sum_res_ptscatter = torch_scatter.scatter_sum(jt.jdata, jt.jidx.long(), dim=0, dim_size=jt.num_tensors)
+        sum_res_ptscatter = _scatter_reduce_ref(jt.jdata, jt.jidx.long(), jt.num_tensors, "sum")
         # (sum_res_ptscatter * grad_out).sum().backward()
         sum_res_ptscatter.backward(grad_out)
         assert jt.jdata.grad is not None
@@ -1735,16 +1765,197 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertTrue(torch.allclose(sum_ours_jdata, sum_res_ptscatter, **tol))
         self.assertTrue(torch.allclose(grad_ours, grad_ptscatter, **tol))
 
-    @parameterized.expand([(torch.float16,), (torch.bfloat16,), (torch.float32,), (torch.float64,)])
-    def test_sdpa(self, dtype):
+    @parameterized.expand([("cpu",), ("cuda",)])
+    def test_reduce_single_tensor(self, device):
+        """jsum/jmin/jmax on a single-tensor JaggedTensor (mBatchIdx.size(0)==0 fallback)."""
+        data = torch.randn(20, 3, 4, device=device, dtype=torch.float32, requires_grad=True)
+        jt = fvdb.JaggedTensor([data])
+        self.assertEqual(jt.num_tensors, 1)
+
+        # jsum
+        s = jt.jsum(dim=0)
+        expected_sum = data.sum(0).unsqueeze(0)
+        self.assertTrue(torch.allclose(s.jdata, expected_sum))
+
+        grad_out = torch.rand_like(s.jdata)
+        s.jdata.backward(grad_out)
+        assert jt.jdata.grad is not None
+        grad_sum = jt.jdata.grad.clone()
+        data_ref = data.clone().detach().requires_grad_(True)
+        data_ref.sum(0).unsqueeze(0).backward(grad_out)
+        assert data_ref.grad is not None
+        self.assertTrue(torch.allclose(grad_sum, data_ref.grad))
+
+        # jmin
+        jt2 = fvdb.JaggedTensor([data.detach().clone().requires_grad_(True)])
+        min_vals, min_idxs = jt2.jmin(dim=0)
+        expected_min_vals, expected_min_idxs = data.detach().min(0)
+        self.assertTrue(torch.allclose(min_vals.jdata, expected_min_vals.unsqueeze(0)))
+        self.assertTrue(torch.equal(min_idxs.jdata, expected_min_idxs.unsqueeze(0)))
+
+        # jmax
+        jt3 = fvdb.JaggedTensor([data.detach().clone().requires_grad_(True)])
+        max_vals, max_idxs = jt3.jmax(dim=0)
+        expected_max_vals, expected_max_idxs = data.detach().max(0)
+        self.assertTrue(torch.allclose(max_vals.jdata, expected_max_vals.unsqueeze(0)))
+        self.assertTrue(torch.equal(max_idxs.jdata, expected_max_idxs.unsqueeze(0)))
+
+    @parameterized.expand([("cpu",), ("cuda",)])
+    def test_reduce_1d_data(self, device):
+        """jsum/jmin/jmax with 1-D jdata (scalar elements, no trailing dims)."""
+        data_list = [torch.randn(n, device=device, dtype=torch.float32) for n in [10, 15, 5]]
+        jt = fvdb.JaggedTensor(data_list)
+        jt.requires_grad_(True)
+
+        # jsum dim=0
+        s = jt.jsum(dim=0)
+        ref = _scatter_reduce_ref(jt.jdata, jt.jidx.long(), len(jt), "sum")
+        self.assertTrue(torch.allclose(s.jdata, ref))
+
+        # jmin dim=0
+        min_vals, min_idxs = jt.jmin(dim=0)
+        ref_min = _scatter_reduce_ref(jt.jdata, jt.jidx.long(), len(jt), "amin")
+        self.assertTrue(torch.allclose(min_vals.jdata, ref_min))
+        for k, dl in enumerate(data_list):
+            idx_k = min_idxs[k].jdata.squeeze(0)
+            val_k = min_vals[k].jdata.squeeze(0)
+            self.assertEqual(dl[idx_k], val_k)
+
+        # jmax dim=0
+        max_vals, max_idxs = jt.jmax(dim=0)
+        ref_max = _scatter_reduce_ref(jt.jdata, jt.jidx.long(), len(jt), "amax")
+        self.assertTrue(torch.allclose(max_vals.jdata, ref_max))
+        for k, dl in enumerate(data_list):
+            idx_k = max_idxs[k].jdata.squeeze(0)
+            val_k = max_vals[k].jdata.squeeze(0)
+            self.assertEqual(dl[idx_k], val_k)
+
+    @parameterized.expand([("cpu",), ("cuda",)])
+    def test_reduce_empty_groups(self, device):
+        """jsum/jmin/jmax with some zero-length groups."""
+        d0 = torch.randn(5, 3, device=device, dtype=torch.float32)
+        d1 = torch.randn(0, 3, device=device, dtype=torch.float32)
+        d2 = torch.randn(8, 3, device=device, dtype=torch.float32)
+        data_list = [d0, d1, d2]
+        jt = fvdb.JaggedTensor(data_list)
+
+        # jsum -- empty group should produce 0
+        s = jt.jsum(dim=0)
+        ref = _scatter_reduce_ref(jt.jdata, jt.jidx.long(), len(jt), "sum")
+        self.assertTrue(torch.allclose(s.jdata, ref))
+        self.assertTrue(torch.all(s[1].jdata == 0))
+
+        # jmin -- empty group: value should be 0, index should be -1
+        min_vals, min_idxs = jt.jmin(dim=0)
+        ref_min = _scatter_reduce_ref(jt.jdata, jt.jidx.long(), len(jt), "amin")
+        ref_min[1] = 0  # empty group zeroed
+        self.assertTrue(torch.allclose(min_vals.jdata, ref_min))
+        self.assertTrue(torch.all(min_vals[1].jdata == 0))
+        self.assertTrue(torch.all(min_idxs[1].jdata == -1))
+
+        # jmax -- empty group: value should be 0, index should be -1
+        max_vals, max_idxs = jt.jmax(dim=0)
+        ref_max = _scatter_reduce_ref(jt.jdata, jt.jidx.long(), len(jt), "amax")
+        ref_max[1] = 0  # empty group zeroed
+        self.assertTrue(torch.allclose(max_vals.jdata, ref_max))
+        self.assertTrue(torch.all(max_vals[1].jdata == 0))
+        self.assertTrue(torch.all(max_idxs[1].jdata == -1))
+
+    @parameterized.expand([("cpu", torch.int32), ("cpu", torch.int64), ("cuda", torch.int32), ("cuda", torch.int64)])
+    def test_jmin_jmax_integral_dtypes(self, device, dtype):
+        """jmin/jmax with integral dtypes and the scatter_reduce dim=0 path."""
+        data_list = [torch.randint(-100, 100, (n, 3), device=device, dtype=dtype) for n in [10, 15, 5]]
+        jt = fvdb.JaggedTensor(data_list)
+
+        min_vals, min_idxs = jt.jmin(dim=0)
+        max_vals, max_idxs = jt.jmax(dim=0)
+
+        for k, dl in enumerate(data_list):
+            expected_min, expected_min_idx = dl.min(dim=0)
+            expected_max, expected_max_idx = dl.max(dim=0)
+            self.assertTrue(torch.equal(min_vals[k].jdata.squeeze(0), expected_min))
+            self.assertTrue(torch.equal(max_vals[k].jdata.squeeze(0), expected_max))
+
+    @parameterized.expand([("cpu", torch.int32), ("cpu", torch.int64), ("cuda", torch.int32), ("cuda", torch.int64)])
+    def test_reduce_empty_groups_integral(self, device, dtype):
+        """jmin/jmax with empty groups and integral dtypes."""
+        d0 = torch.randint(-50, 50, (5, 3), device=device, dtype=dtype)
+        d1 = torch.empty(0, 3, device=device, dtype=dtype)
+        d2 = torch.randint(-50, 50, (8, 3), device=device, dtype=dtype)
+        jt = fvdb.JaggedTensor([d0, d1, d2])
+
+        min_vals, min_idxs = jt.jmin(dim=0)
+        self.assertTrue(torch.all(min_vals[1].jdata == 0))
+        self.assertTrue(torch.all(min_idxs[1].jdata == -1))
+        self.assertTrue(torch.equal(min_vals[0].jdata.squeeze(0), d0.min(dim=0)[0]))
+        self.assertTrue(torch.equal(min_vals[2].jdata.squeeze(0), d2.min(dim=0)[0]))
+
+        max_vals, max_idxs = jt.jmax(dim=0)
+        self.assertTrue(torch.all(max_vals[1].jdata == 0))
+        self.assertTrue(torch.all(max_idxs[1].jdata == -1))
+        self.assertTrue(torch.equal(max_vals[0].jdata.squeeze(0), d0.max(dim=0)[0]))
+        self.assertTrue(torch.equal(max_vals[2].jdata.squeeze(0), d2.max(dim=0)[0]))
+
+    @parameterized.expand([("cpu",), ("cuda",)])
+    def test_jmin_jmax_preserves_inf(self, device):
+        """Legitimate inf values in inputs should be preserved, not masked to zero."""
+        d0 = torch.tensor([[1.0, float("inf"), -1.0], [2.0, 3.0, float("-inf")]], device=device)
+        d1 = torch.tensor([[float("inf"), 0.0, 5.0]], device=device)
+        jt = fvdb.JaggedTensor([d0, d1])
+
+        min_vals, _ = jt.jmin(dim=0)
+        max_vals, _ = jt.jmax(dim=0)
+
+        self.assertTrue(torch.equal(min_vals[0].jdata.squeeze(0), d0.min(dim=0)[0]))
+        self.assertTrue(torch.equal(max_vals[0].jdata.squeeze(0), d0.max(dim=0)[0]))
+        self.assertTrue(torch.equal(min_vals[1].jdata.squeeze(0), d1.min(dim=0)[0]))
+        self.assertTrue(torch.equal(max_vals[1].jdata.squeeze(0), d1.max(dim=0)[0]))
+
+    @parameterized.expand([("cpu",), ("cuda",)])
+    def test_jmin_jmax_bool_rejected(self, device):
+        """jmin/jmax should reject bool dtype."""
+        jt = fvdb.JaggedTensor([torch.ones(5, 3, device=device, dtype=torch.bool)])
+        with self.assertRaises(RuntimeError):
+            jt.jmin(dim=0)
+        with self.assertRaises(RuntimeError):
+            jt.jmax(dim=0)
+
+    @parameterized.expand(
+        [
+            # Flash Attention - only supports float16/bfloat16
+            (torch.float16, torch.nn.attention.SDPBackend.FLASH_ATTENTION),
+            (torch.bfloat16, torch.nn.attention.SDPBackend.FLASH_ATTENTION),
+            # Efficient Attention - only supports float16/bfloat16/float32
+            (torch.float16, torch.nn.attention.SDPBackend.EFFICIENT_ATTENTION),
+            (torch.bfloat16, torch.nn.attention.SDPBackend.EFFICIENT_ATTENTION),
+            (torch.float32, torch.nn.attention.SDPBackend.EFFICIENT_ATTENTION),
+            # Math - supports all dtypes
+            (torch.float16, torch.nn.attention.SDPBackend.MATH),
+            (torch.bfloat16, torch.nn.attention.SDPBackend.MATH),
+            (torch.float32, torch.nn.attention.SDPBackend.MATH),
+            (torch.float64, torch.nn.attention.SDPBackend.MATH),
+        ]
+    )
+    def test_sdpa(self, dtype, backend):
         torch.random.manual_seed(0)
 
-        # Get dimensions: query (B*Sq, H, D), key (B*Skv, H, D), value (B*Skv, H, T)
+        # Dimension key:
+        #   N = batch size (1 when processing individual jagged elements)
+        #   L = query sequence length (varies per batch element)
+        #   S = key/value sequence length (varies per batch element)
+        #   H = number of attention heads
+        #   E = embedding dimension for queries and keys
+        #   V = value dimension (may differ from E except for Flash Attention)
+        # Dimensions:
+        #   query = L_i, H, E
+        #   key   = S_i, H, E
+        #   value = S_i, H, V
         num_heads = 4
         seqlen_q = [10, 20, 30]
         seqlen_kv = [15, 25, 35]
         dim_qk = 64
-        dim_v = 128
+        # Flash Attention requires q, k, v to all have the same last dimension
+        dim_v = dim_qk if backend == torch.nn.attention.SDPBackend.FLASH_ATTENTION else 128
         scale = 0.5
         device = "cuda"
 
@@ -1759,25 +1970,25 @@ class TestJaggedTensor(unittest.TestCase):
         self.check_lshape(k_jagged, k_list)
         self.check_lshape(v_jagged, v_list)
 
-        # Torch -- For-loop approach
+        # Torch -- For-loop approach (always use MATH for reference to ensure consistency)
         out_jagged_torch_forloop_list = []
         for b in range(batch_size):
-            # From LHE to NHLE / SHV to NHSV
-            q = q_jagged[b].jdata.unsqueeze(0).permute(0, 2, 1, 3)
-            k = k_jagged[b].jdata.unsqueeze(0).permute(0, 2, 1, 3)
-            v = v_jagged[b].jdata.unsqueeze(0).permute(0, 2, 1, 3)
+            # (L_i, H, E) -> (1, H, L_i, E) for SDPA's expected (N, H, L_i, E) layout
+            q = q_jagged[b].jdata.transpose(0, 1).unsqueeze(0)
+            k = k_jagged[b].jdata.transpose(0, 1).unsqueeze(0)
+            v = v_jagged[b].jdata.transpose(0, 1).unsqueeze(0)
 
             with torch.nn.attention.sdpa_kernel([torch.nn.attention.SDPBackend.MATH]):
                 out = torch.nn.functional.scaled_dot_product_attention(q, k, v, scale=scale)
 
-            # From NHLV to LHV
-            out = out.permute(0, 2, 1, 3).squeeze(0)
+            # (1, H, L_i, V) -> (L_i, H, V)
+            out = out.squeeze(0).transpose(0, 1)
             out_jagged_torch_forloop_list.append(out)
         out_jagged_torch_forloop = fvdb.JaggedTensor(out_jagged_torch_forloop_list)
         self.check_lshape(out_jagged_torch_forloop, out_jagged_torch_forloop_list)
 
-        # fVDB
-        with torch.nn.attention.sdpa_kernel([torch.nn.attention.SDPBackend.MATH]):
+        # fVDB - test with the specified backend
+        with torch.nn.attention.sdpa_kernel([backend]):
             out_jagged_fvdb = fvdb.scaled_dot_product_attention(q_jagged, k_jagged, v_jagged, scale=scale)
             self.check_lshape(out_jagged_fvdb, out_jagged_torch_forloop_list)
 

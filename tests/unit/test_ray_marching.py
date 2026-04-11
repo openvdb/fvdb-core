@@ -14,7 +14,7 @@ from fvdb.utils.tests import (
 from parameterized import parameterized, parameterized_class
 
 import fvdb
-from fvdb import Grid, GridBatch, JaggedTensor, volume_render
+from fvdb import GridBatch, JaggedTensor, volume_render
 
 all_device_combos = [
     ["cpu", True],
@@ -192,54 +192,64 @@ class TestSingleGridRayMarchingWithMisses(unittest.TestCase):
         # These are defined in the @parameterized_class decorator
         self.device = self.device
         self.dtype = self.dtype
-        self.grid = Grid.from_dense(
-            dense_dims=[32, 32, 32], device=self.device, voxel_size=[0.1, 0.1, 0.1], origin=[0, 0, 0]
+        self.grid = GridBatch.from_dense(
+            num_grids=1, dense_dims=[32, 32, 32], device=self.device, voxel_sizes=[0.1, 0.1, 0.1], origins=[0, 0, 0]
         )
 
         ray_o = torch.tensor([[100, 0, 0]]).to(self.device).to(self.dtype)
         ray_d_hit = torch.tensor([[-1, 0, 0]]).to(self.device).to(self.dtype)  # towards the grid
         ray_d_nohit = torch.tensor([[1, 0, 0]]).to(self.device).to(self.dtype)  # away from the grid
 
-        self.ray_o = ray_o.repeat(10, 1)  # shape [10, 3]
-        self.ray_d_interleave = torch.cat([ray_d_hit, ray_d_nohit], dim=0).repeat(5, 1)  # shape [10, 3]
-        self.ray_d_alternate = torch.cat([ray_d_hit.repeat(5, 1), ray_d_nohit.repeat(5, 1)], dim=0)  # shape [10, 3]
+        ray_o_rep = ray_o.repeat(10, 1)  # shape [10, 3]
+        ray_d_interleave = torch.cat([ray_d_hit, ray_d_nohit], dim=0).repeat(5, 1)  # shape [10, 3]
+        ray_d_alternate = torch.cat([ray_d_hit.repeat(5, 1), ray_d_nohit.repeat(5, 1)], dim=0)  # shape [10, 3]
+
+        self.ray_o = fvdb.JaggedTensor([ray_o_rep])
+        self.ray_d_interleave = fvdb.JaggedTensor([ray_d_interleave])
+        self.ray_d_alternate = fvdb.JaggedTensor([ray_d_alternate])
 
     def test_rays_intersect_voxels(self):
         did_hit = self.grid.rays_intersect_voxels(self.ray_o, self.ray_d_interleave, eps=1e-3)
         expected_hits = torch.Tensor([1, 0, 1, 0, 1, 0, 1, 0, 1, 0]).to(torch.bool).to(self.device)
-        self.assertTrue(torch.all(expected_hits == did_hit))
+        self.assertTrue(torch.all(expected_hits == did_hit.jdata))
 
         did_hit = self.grid.rays_intersect_voxels(self.ray_o, self.ray_d_alternate, eps=1e-3)
         expected_hits = torch.Tensor([1, 1, 1, 1, 1, 0, 0, 0, 0, 0]).to(torch.bool).to(self.device)
-        self.assertTrue(torch.all(expected_hits == did_hit))
+        self.assertTrue(torch.all(expected_hits == did_hit.jdata))
 
     def test_voxels_along_rays(self):
         voxels, times = self.grid.voxels_along_rays(self.ray_o, self.ray_d_interleave, 1, eps=1e-3)
         target_lshape = [1, 0, 1, 0, 1, 0, 1, 0, 1, 0]
+        sls = voxels.lshape[0]
+        vls = times.lshape[0]
         for i, expected_isect in enumerate(target_lshape):
-            self.assertEqual(voxels.lshape[i], expected_isect)
-            self.assertEqual(times.lshape[i], expected_isect)
+            self.assertEqual(sls[i], expected_isect)
+            self.assertEqual(vls[i], expected_isect)
 
         voxels, times = self.grid.voxels_along_rays(self.ray_o, self.ray_d_alternate, 1, eps=1e-3)
         target_lshape = [1, 1, 1, 1, 1, 0, 0, 0, 0, 0]
+        sls = voxels.lshape[0]
+        vls = times.lshape[0]
         for i, expected_isect in enumerate(target_lshape):
-            self.assertEqual(voxels.lshape[i], expected_isect)
-            self.assertEqual(times.lshape[i], expected_isect)
+            self.assertEqual(sls[i], expected_isect)
+            self.assertEqual(vls[i], expected_isect)
 
     def test_segments_along_rays(self):
         segments = self.grid.segments_along_rays(self.ray_o, self.ray_d_interleave, 1, eps=1e-3)
         target_lshape = [1, 0, 1, 0, 1, 0, 1, 0, 1, 0]
+        sls = segments.lshape[0]
         for i, expected_isect in enumerate(target_lshape):
-            self.assertEqual(segments.lshape[i], expected_isect)
+            self.assertEqual(sls[i], expected_isect)
 
         segments = self.grid.segments_along_rays(self.ray_o, self.ray_d_alternate, 1, eps=1e-3)
         target_lshape = [1, 1, 1, 1, 1, 0, 0, 0, 0, 0]
+        sls = segments.lshape[0]
         for i, expected_isect in enumerate(target_lshape):
-            self.assertEqual(segments.lshape[i], expected_isect)
+            self.assertEqual(sls[i], expected_isect)
 
     def test_uniform_ray_samples(self):
-        t_min = torch.zeros(self.ray_o.shape[0]).to(self.ray_o)
-        t_max = torch.ones(self.ray_o.shape[0]).to(self.ray_o) * 1e10
+        t_min = fvdb.JaggedTensor([torch.zeros(self.ray_o[0].rshape[0]).to(self.ray_o.jdata)])
+        t_max = fvdb.JaggedTensor([torch.ones(self.ray_o[0].rshape[0]).to(self.ray_o.jdata) * 1e10])
 
         samples = self.grid.uniform_ray_samples(
             self.ray_o,
@@ -253,8 +263,9 @@ class TestSingleGridRayMarchingWithMisses(unittest.TestCase):
             [8, 0, 8, 0, 8, 0, 8, 0, 8, 0] if self.dtype != torch.float16 else [7, 0, 7, 0, 7, 0, 7, 0, 7, 0]
         )
 
+        sls = samples.lshape[0]
         for i, expected_isect in enumerate(target_lshape):
-            self.assertEqual(samples.lshape[i], expected_isect)
+            self.assertEqual(sls[i], expected_isect)
 
         samples = self.grid.uniform_ray_samples(
             self.ray_o,
@@ -268,8 +279,9 @@ class TestSingleGridRayMarchingWithMisses(unittest.TestCase):
             [8, 8, 8, 8, 8, 0, 0, 0, 0, 0] if self.dtype != torch.float16 else [7, 7, 7, 7, 7, 0, 0, 0, 0, 0]
         )
 
+        sls = samples.lshape[0]
         for i, expected_isect in enumerate(target_lshape):
-            self.assertEqual(samples.lshape[i], expected_isect)
+            self.assertEqual(sls[i], expected_isect)
 
 
 @parameterized_class(("device", "dtype"), all_device_dtype_combos)
@@ -283,7 +295,7 @@ class TestVolumeRender(unittest.TestCase):
         vox_origin = torch.rand(3).to(self.device).to(self.dtype)
 
         pts = torch.rand(10000, 3).to(device=self.device, dtype=self.dtype) - 0.5
-        grid = GridBatch.from_points(JaggedTensor(pts), voxel_sizes=vox_size, origins=vox_origin, device=self.device)
+        grid = GridBatch.from_points(JaggedTensor(pts), voxel_sizes=vox_size, origins=vox_origin)
         self.grid = grid.dilated_grid(1)
         self.grid_dual = grid.dual_grid()
 
@@ -536,7 +548,7 @@ class TestRayMarching(unittest.TestCase):
     def test_segments_along_rays_always_sorted(self, device, dtype):
         for eps in [0.0, 1e-5]:
             pts = torch.rand(10000, 3).to(device=device, dtype=dtype)
-            grid = GridBatch.from_points(JaggedTensor(pts), voxel_sizes=0.0001, origins=torch.zeros(3), device=device)
+            grid = GridBatch.from_points(JaggedTensor(pts), voxel_sizes=0.0001, origins=torch.zeros(3))
             grid = grid.dilated_grid(1)
 
             rays_o = -torch.ones(100, 3).to(device).to(dtype)
@@ -560,7 +572,7 @@ class TestRayMarching(unittest.TestCase):
     def test_segments_along_rays_always_sorted_batched(self, device, dtype):
         for eps in [0.0, 1e-5]:
             pts = JaggedTensor([torch.rand(10000, 3).to(device=device, dtype=dtype)] * 2)
-            grid = GridBatch.from_points(pts, voxel_sizes=0.0001, origins=torch.zeros(3), device=device)
+            grid = GridBatch.from_points(pts, voxel_sizes=0.0001, origins=torch.zeros(3))
             grid = grid.dilated_grid(1)
 
             rays_o = -torch.ones(100, 3).to(device).to(dtype)
@@ -587,7 +599,7 @@ class TestRayMarching(unittest.TestCase):
     def test_segments_along_rays_batch_size_mismatch_throws(self, device, dtype):
         pts = torch.rand(10000, 3).to(device=device, dtype=dtype)
         # pts = fvdb.JaggedTensor([torch.rand(10000, 3).to(device=device, dtype=dtype)]*2)
-        grid = GridBatch.from_points(JaggedTensor(pts), voxel_sizes=0.0001, origins=torch.zeros(3), device=device)
+        grid = GridBatch.from_points(JaggedTensor(pts), voxel_sizes=0.0001, origins=torch.zeros(3))
         grid = grid.dilated_grid(1)
 
         rays_o = -torch.ones(100, 3).to(device).to(dtype)
@@ -603,7 +615,7 @@ class TestRayMarching(unittest.TestCase):
     def test_voxels_along_rays_always_sorted(self, device, dtype):
         for i in range(3):
             pts = torch.rand(10000, 3, device=device, dtype=dtype)
-            grid = GridBatch.from_points(JaggedTensor(pts), voxel_sizes=0.01, origins=torch.zeros(3), device=device)
+            grid = GridBatch.from_points(JaggedTensor(pts), voxel_sizes=0.01, origins=torch.zeros(3))
             grid = grid.dilated_grid(1)
 
             rays_o = -torch.ones(100, 3).to(device).to(dtype)
@@ -640,7 +652,7 @@ class TestRayMarching(unittest.TestCase):
     def test_voxels_along_rays_batch_size_mismatch_throws(self, device, dtype):
         pts = torch.rand(10000, 3, device=device, dtype=dtype)
         # pts = fvdb.JaggedTensor([torch.rand(10000, 3).to(device=device, dtype=dtype)]*2)
-        grid = GridBatch.from_points(JaggedTensor(pts), voxel_sizes=0.0001, origins=torch.zeros(3), device=device)
+        grid = GridBatch.from_points(JaggedTensor(pts), voxel_sizes=0.0001, origins=torch.zeros(3))
         grid = grid.dilated_grid(1)
 
         rays_o = -torch.ones(100, 3, device=device, dtype=dtype)

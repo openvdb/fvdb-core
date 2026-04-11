@@ -1,7 +1,7 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/GridBatchData.h>
 #include <fvdb/detail/ops/ActiveVoxelsInBoundsMask.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
@@ -22,7 +22,7 @@ __hostdev__ inline void
 activeGridVoxelInBoundsMaskCallback(int32_t batchIdx,
                                     int32_t leafIdx,
                                     int32_t voxelIdx,
-                                    GridBatchImpl::Accessor gridAccessor,
+                                    GridBatchData::Accessor gridAccessor,
                                     TorchAccessor<int32_t, 3> bboxes,
                                     TorchAccessor<bool, 1> outGridBoundsMask) {
     const nanovdb::CoordBBox maskBbox(
@@ -49,7 +49,7 @@ activeGridVoxelInBoundsMaskCallback(int32_t batchIdx,
 /// @param outGridCoords Tensor which will contain the output grid coordinates
 template <torch::DeviceType DeviceTag>
 void
-GetActiveVoxelsInBoundsMask(const GridBatchImpl &gridBatch,
+GetActiveVoxelsInBoundsMask(const GridBatchData &gridBatch,
                             torch::Tensor &batchBboxes,
                             torch::Tensor &outGridBoundsMask) {
     auto outMaskAcc = tensorAccessor<DeviceTag, bool, 1>(outGridBoundsMask);
@@ -60,7 +60,7 @@ GetActiveVoxelsInBoundsMask(const GridBatchImpl &gridBatch,
                                  int32_t leafIdx,
                                  int32_t voxelIdx,
                                  int32_t,
-                                 GridBatchImpl::Accessor gridAccessor) {
+                                 GridBatchData::Accessor gridAccessor) {
             activeGridVoxelInBoundsMaskCallback<TorchRAcc64>(
                 batchIdx, leafIdx, voxelIdx, gridAccessor, bboxAcc, outMaskAcc);
         };
@@ -70,7 +70,7 @@ GetActiveVoxelsInBoundsMask(const GridBatchImpl &gridBatch,
                       int32_t leafIdx,
                       int32_t voxelIdx,
                       int32_t,
-                      GridBatchImpl::Accessor gridAccessor) {
+                      GridBatchData::Accessor gridAccessor) {
             activeGridVoxelInBoundsMaskCallback<TorchAcc>(
                 batchIdx, leafIdx, voxelIdx, gridAccessor, bboxAcc, outMaskAcc);
         };
@@ -80,7 +80,7 @@ GetActiveVoxelsInBoundsMask(const GridBatchImpl &gridBatch,
 
 template <torch::DeviceType DeviceTag>
 JaggedTensor
-ActiveVoxelsInBoundsMask(const GridBatchImpl &batchHdl,
+ActiveVoxelsInBoundsMask(const GridBatchData &batchHdl,
                          const std::vector<nanovdb::Coord> &bboxMins,
                          const std::vector<nanovdb::Coord> &bboxMaxs) {
     batchHdl.checkNonEmptyGrid();
@@ -107,7 +107,7 @@ ActiveVoxelsInBoundsMask(const GridBatchImpl &batchHdl,
 }
 
 JaggedTensor
-activeVoxelsInBoundsMask(const GridBatchImpl &batchHdl,
+activeVoxelsInBoundsMask(const GridBatchData &batchHdl,
                          const std::vector<nanovdb::Coord> &bboxMins,
                          const std::vector<nanovdb::Coord> &bboxMaxs) {
     return FVDB_DISPATCH_KERNEL_DEVICE(batchHdl.device(), [&]() {

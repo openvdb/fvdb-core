@@ -1,0 +1,57 @@
+# Copyright Contributors to the OpenVDB Project
+# SPDX-License-Identifier: Apache-2.0
+
+name: Issue Triage
+
+on:
+  issues:
+    types: [opened, reopened]
+
+# ISSUES_PAT needs Organization > Members > Read to check fvdb-dev team
+# membership. GITHUB_TOKEN handles labeling via issues: write.
+
+permissions:
+  issues: write
+
+jobs:
+  triage:
+    if: github.repository_owner == 'openvdb'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Add triage label
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue edit "${{ github.event.issue.number }}" \
+            --repo "${{ github.repository }}" \
+            --add-label "triage"
+
+      - name: Check team membership
+        id: membership
+        env:
+          GH_TOKEN: ${{ secrets.ISSUES_PAT }}
+        run: |
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::ISSUES_PAT is not configured"
+            exit 1
+          fi
+          AUTHOR="${{ github.event.issue.user.login }}"
+          RESPONSE=$( (gh api "orgs/openvdb/teams/fvdb-dev/memberships/$AUTHOR" \
+            -i --silent 2>&1 || true) )
+          HTTP_CODE=$(printf '%s\n' "$RESPONSE" | grep -m1 '^HTTP/' | awk '{print $2}' || true)
+          case "$HTTP_CODE" in
+            200) echo "member=true"  >> "$GITHUB_OUTPUT" ;;
+            404) echo "member=false" >> "$GITHUB_OUTPUT" ;;
+            *)   printf '%s\n' "$RESPONSE" >&2
+                 echo "::error::Team membership check failed (HTTP ${HTTP_CODE:-unknown})"
+                 exit 1 ;;
+          esac
+
+      - name: Add external label
+        if: steps.membership.outputs.member == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue edit "${{ github.event.issue.number }}" \
+            --repo "${{ github.repository }}" \
+            --add-label "external"
