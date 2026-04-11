@@ -221,11 +221,86 @@ def _extract_notest_api_refs(text: str) -> list[tuple[int, str]]:
             if ref and not _is_skip(ref, ref) and ref not in seen:
                 results.append((lineno, ref))
                 seen.add(ref)
-        # Match instance.method(...) where method is a known fvdb attribute
-        for match in re.finditer(r"\b\w+\.([\w]+)\s*[\(=]", line):
-            attr = match.group(1)
-            if attr in _ALL_ATTRS and attr not in seen:
-                full = match.group(0).split(".")[0] + "." + attr
+        # Match instance.method(...) calls — capture broadly to catch renames.
+        # Skip known non-fvdb patterns (Python builtins, torch, stdlib, etc.)
+        _SKIP_METHODS = {
+            "append",
+            "extend",
+            "items",
+            "keys",
+            "values",
+            "get",
+            "set",
+            "pop",
+            "format",
+            "join",
+            "split",
+            "strip",
+            "replace",
+            "encode",
+            "decode",
+            "item",
+            "view",
+            "reshape",
+            "permute",
+            "contiguous",
+            "numpy",
+            "tolist",
+            "to",
+            "float",
+            "int",
+            "long",
+            "half",
+            "double",
+            "bool",
+            "cpu",
+            "cuda",
+            "clone",
+            "detach",
+            "requires_grad_",
+            "backward",
+            "zero_grad",
+            "step",
+            "parameters",
+            "named_parameters",
+            "state_dict",
+            "load_state_dict",
+            "train",
+            "eval",
+            "apply",
+            "unsqueeze",
+            "squeeze",
+            "clamp",
+            "clip",
+            "abs",
+            "sqrt",
+            "exp",
+            "log",
+            "sum",
+            "mean",
+            "max",
+            "min",
+            "cat",
+            "stack",
+            "no_grad",
+            "manual_seed",
+            "is_available",
+            "check_output",
+            "show",
+            "savefig",
+        }
+        for match in re.finditer(r"\b(\w+)\.([\w]+)\s*\(", line):
+            instance, attr = match.group(1), match.group(2)
+            if attr in seen or attr.startswith("_"):
+                continue
+            # Skip known non-fvdb instances and methods
+            if instance in ("os", "np", "math", "torch", "plt", "ps", "cv2", "json", "subprocess", "self", "F"):
+                continue
+            if attr in _SKIP_METHODS:
+                continue
+            # If it's a known fvdb attr OR looks like it could be one, capture it
+            if attr in _ALL_ATTRS or instance in ("grid", "grid_batch", "dual_grid", "primal_grid", "sub_grid"):
+                full = f"{instance}.{attr}"
                 results.append((lineno, full))
                 seen.add(attr)
     return results
