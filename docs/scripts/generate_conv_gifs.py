@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright Contributors to the OpenVDB Project
+# SPDX-License-Identifier: Apache-2.0
 """Generate animated GIF visualizations of strided sparse convolution
 and strided transposed sparse convolution for the fVDB tutorials.
 
@@ -19,38 +21,41 @@ import matplotlib.animation as animation
 # ---------------------------------------------------------------------------
 # Colour palette (neutral, consistent with existing docs)
 # ---------------------------------------------------------------------------
-COLOR_EMPTY = "#f0f0f0"        # inactive cell background
-COLOR_GRID_LINE = "#cccccc"    # grid lines
-COLOR_ACTIVE_IN = "#4a90d9"    # active input voxel
-COLOR_ACTIVE_OUT = "#e07040"   # active output voxel
-COLOR_KERNEL = "#ffd54f"       # kernel highlight (semi-transparent)
+COLOR_EMPTY = "#f0f0f0"  # inactive cell background
+COLOR_GRID_LINE = "#cccccc"  # grid lines
+COLOR_ACTIVE_IN = "#4a90d9"  # active input voxel
+COLOR_ACTIVE_OUT = "#e07040"  # active output voxel
+COLOR_KERNEL = "#ffd54f"  # kernel highlight (semi-transparent)
 COLOR_KERNEL_EDGE = "#f9a825"  # kernel border
-COLOR_TARGET = "#e07040"       # dashed outline for target output cells
-COLOR_TEXT = "#333333"         # text / labels
+COLOR_TARGET = "#e07040"  # dashed outline for target output cells
+COLOR_TEXT = "#333333"  # text / labels
 
-GRID_SIZE = 8       # input grid is 8×8
+GRID_SIZE = 8  # input grid is 8×8
 STRIDE = 2
 KERNEL_SIZE = 3
 
 # A hand-picked sparse activation pattern on the 8×8 input grid
-INPUT_ACTIVE = np.array([
-    [0, 0, 0, 0, 0, 0, 0, 0],
-    [0, 1, 1, 0, 0, 0, 0, 0],
-    [0, 1, 1, 1, 0, 0, 0, 0],
-    [0, 0, 1, 1, 1, 0, 0, 0],
-    [0, 0, 0, 1, 1, 1, 0, 0],
-    [0, 0, 0, 0, 1, 1, 1, 0],
-    [0, 0, 0, 0, 0, 1, 1, 0],
-    [0, 0, 0, 0, 0, 0, 0, 0],
-], dtype=bool)
+INPUT_ACTIVE = np.array(
+    [
+        [0, 0, 0, 0, 0, 0, 0, 0],
+        [0, 1, 1, 0, 0, 0, 0, 0],
+        [0, 1, 1, 1, 0, 0, 0, 0],
+        [0, 0, 1, 1, 1, 0, 0, 0],
+        [0, 0, 0, 1, 1, 1, 0, 0],
+        [0, 0, 0, 0, 1, 1, 1, 0],
+        [0, 0, 0, 0, 0, 1, 1, 0],
+        [0, 0, 0, 0, 0, 0, 0, 0],
+    ],
+    dtype=bool,
+)
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _draw_grid(ax, grid_active, cell_size, origin, color_active, alpha=1.0,
-               label=None, label_y_offset=0.0):
+
+def _draw_grid(ax, grid_active, cell_size, origin, color_active, alpha=1.0, label=None, label_y_offset=0.0):
     """Draw a 2-D sparse grid on *ax*.
 
     Parameters
@@ -68,7 +73,9 @@ def _draw_grid(ax, grid_active, cell_size, origin, color_active, alpha=1.0,
             y = oy + (rows - 1 - r) * cell_size
             color = color_active if grid_active[r, c] else COLOR_EMPTY
             rect = patches.FancyBboxPatch(
-                (x, y), cell_size, cell_size,
+                (x, y),
+                cell_size,
+                cell_size,
                 boxstyle="round,pad=0.02",
                 linewidth=0.5,
                 edgecolor=COLOR_GRID_LINE,
@@ -79,8 +86,7 @@ def _draw_grid(ax, grid_active, cell_size, origin, color_active, alpha=1.0,
     if label:
         cx = ox + cols * cell_size / 2
         cy = oy - 0.4 + label_y_offset
-        ax.text(cx, cy, label, ha="center", va="top",
-                fontsize=11, fontweight="bold", color=COLOR_TEXT)
+        ax.text(cx, cy, label, ha="center", va="top", fontsize=11, fontweight="bold", color=COLOR_TEXT)
 
 
 def _draw_target_outlines(ax, target_active, cell_size, origin):
@@ -94,7 +100,9 @@ def _draw_target_outlines(ax, target_active, cell_size, origin):
             x = ox + c * cell_size
             y = oy + (rows - 1 - r) * cell_size
             rect = patches.FancyBboxPatch(
-                (x, y), cell_size, cell_size,
+                (x, y),
+                cell_size,
+                cell_size,
                 boxstyle="round,pad=0.02",
                 linewidth=1.5,
                 edgecolor=COLOR_TARGET,
@@ -120,21 +128,27 @@ def _draw_legend(ax, x, y):
         iy = y - i * (s + gap)
         if style == "dashed":
             rect = patches.FancyBboxPatch(
-                (x, iy), s, s,
+                (x, iy),
+                s,
+                s,
                 boxstyle="round,pad=0.01",
-                linewidth=1.5, edgecolor=COLOR_TARGET,
-                facecolor="none", linestyle="--",
+                linewidth=1.5,
+                edgecolor=COLOR_TARGET,
+                facecolor="none",
+                linestyle="--",
             )
         else:
             rect = patches.FancyBboxPatch(
-                (x, iy), s, s,
+                (x, iy),
+                s,
+                s,
                 boxstyle="round,pad=0.01",
-                linewidth=0.5, edgecolor=COLOR_GRID_LINE,
+                linewidth=0.5,
+                edgecolor=COLOR_GRID_LINE,
                 facecolor=color,
             )
         ax.add_patch(rect)
-        ax.text(x + text_offset, iy + s / 2, label,
-                va="center", fontsize=8.5, color=COLOR_TEXT)
+        ax.text(x + text_offset, iy + s / 2, label, va="center", fontsize=8.5, color=COLOR_TEXT)
 
 
 def _draw_kernel_highlight(ax, row, col, grid_rows, cell_size, origin):
@@ -161,6 +175,7 @@ def _draw_kernel_highlight(ax, row, col, grid_rows, cell_size, origin):
 # Compute which output cells are active for strided conv
 # ---------------------------------------------------------------------------
 
+
 def _compute_strided_output(input_active, kernel_size, stride):
     """Return a bool array for the output grid of a strided sparse convolution.
 
@@ -175,7 +190,7 @@ def _compute_strided_output(input_active, kernel_size, stride):
         for ocol in range(out_cols):
             ir = orow * stride
             ic = ocol * stride
-            patch = input_active[ir:ir + kernel_size, ic:ic + kernel_size]
+            patch = input_active[ir : ir + kernel_size, ic : ic + kernel_size]
             if patch.any():
                 output[orow, ocol] = True
     return output
@@ -210,6 +225,7 @@ def _compute_transposed_output(coarse_active, fine_active, kernel_size, stride):
 # Animation builders
 # ---------------------------------------------------------------------------
 
+
 def _build_strided_conv_animation(save_path):
     """Build and save the strided sparse convolution GIF."""
     coarse_output = _compute_strided_output(INPUT_ACTIVE, KERNEL_SIZE, STRIDE)
@@ -220,7 +236,7 @@ def _build_strided_conv_animation(save_path):
     for orow in range(out_rows):
         for ocol in range(out_cols):
             ir, ic = orow * STRIDE, ocol * STRIDE
-            patch = INPUT_ACTIVE[ir:ir + KERNEL_SIZE, ic:ic + KERNEL_SIZE]
+            patch = INPUT_ACTIVE[ir : ir + KERNEL_SIZE, ic : ic + KERNEL_SIZE]
             if patch.any():
                 positions.append((ir, ic, orow, ocol))
 
@@ -228,8 +244,7 @@ def _build_strided_conv_animation(save_path):
     cell_out = 0.9 * STRIDE  # keep output cells visually larger
     gap = 2.5
     in_origin = (0, 0)
-    out_origin = (GRID_SIZE * cell_in + gap,
-                  (GRID_SIZE * cell_in - out_rows * cell_out) / 2)
+    out_origin = (GRID_SIZE * cell_in + gap, (GRID_SIZE * cell_in - out_rows * cell_out) / 2)
 
     fig, ax = plt.subplots(figsize=(10, 5.5))
     fig.patch.set_facecolor("white")
@@ -241,24 +256,25 @@ def _build_strided_conv_animation(save_path):
     ax.set_xlim(-0.5, total_w)
     ax.set_ylim(-2.2, total_h)
 
-    ax.set_title("Strided Sparse Convolution  (kernel 3×3, stride 2)",
-                 fontsize=13, fontweight="bold", color=COLOR_TEXT, pad=12)
+    ax.set_title(
+        "Strided Sparse Convolution  (kernel 3×3, stride 2)", fontsize=13, fontweight="bold", color=COLOR_TEXT, pad=12
+    )
 
     # Draw an arrow between the two grids
     arrow_x = GRID_SIZE * cell_in + gap / 2
     arrow_y = GRID_SIZE * cell_in / 2
-    ax.annotate("", xy=(arrow_x + 0.6, arrow_y),
-                xytext=(arrow_x - 0.6, arrow_y),
-                arrowprops=dict(arrowstyle="->,head_width=0.3,head_length=0.2",
-                                color=COLOR_TEXT, lw=2))
+    ax.annotate(
+        "",
+        xy=(arrow_x + 0.6, arrow_y),
+        xytext=(arrow_x - 0.6, arrow_y),
+        arrowprops=dict(arrowstyle="->,head_width=0.3,head_length=0.2", color=COLOR_TEXT, lw=2),
+    )
 
     # Pre-draw static grids
-    _draw_grid(ax, INPUT_ACTIVE, cell_in, in_origin, COLOR_ACTIVE_IN,
-               label="Input (fine grid)", label_y_offset=0)
+    _draw_grid(ax, INPUT_ACTIVE, cell_in, in_origin, COLOR_ACTIVE_IN, label="Input (fine grid)", label_y_offset=0)
     # Output grid starts empty (drawn dimmed); we'll overlay active cells
     empty_out = np.zeros_like(coarse_output)
-    _draw_grid(ax, empty_out, cell_out, out_origin, COLOR_ACTIVE_OUT,
-               label="Output (coarse grid)", label_y_offset=0)
+    _draw_grid(ax, empty_out, cell_out, out_origin, COLOR_ACTIVE_OUT, label="Output (coarse grid)", label_y_offset=0)
     # Dashed outlines showing where output voxels will land
     _draw_target_outlines(ax, coarse_output, cell_out, out_origin)
 
@@ -291,7 +307,9 @@ def _build_strided_conv_animation(save_path):
             ox = out_origin[0] + ocol * cell_out
             oy = out_origin[1] + (out_rows - 1 - orow) * cell_out
             rect = patches.FancyBboxPatch(
-                (ox, oy), cell_out, cell_out,
+                (ox, oy),
+                cell_out,
+                cell_out,
                 boxstyle="round,pad=0.02",
                 linewidth=0.5,
                 edgecolor=COLOR_GRID_LINE,
@@ -305,8 +323,12 @@ def _build_strided_conv_animation(save_path):
 
     total_frames = lead_in + len(positions) + 6  # lead-in + animation + pause
     anim = animation.FuncAnimation(
-        fig, _animate, init_func=_init,
-        frames=total_frames, interval=500, blit=False,
+        fig,
+        _animate,
+        init_func=_init,
+        frames=total_frames,
+        interval=500,
+        blit=False,
     )
     anim.save(save_path, writer="pillow", fps=2, dpi=120)
     plt.close(fig)
@@ -316,9 +338,7 @@ def _build_strided_conv_animation(save_path):
 
 def _build_transposed_conv_animation(save_path, coarse_output):
     """Build and save the strided transposed sparse convolution GIF."""
-    fine_output = _compute_transposed_output(
-        coarse_output, INPUT_ACTIVE, KERNEL_SIZE, STRIDE
-    )
+    fine_output = _compute_transposed_output(coarse_output, INPUT_ACTIVE, KERNEL_SIZE, STRIDE)
     coarse_rows, coarse_cols = coarse_output.shape
 
     # Enumerate kernel positions (coarse active cells)
@@ -344,23 +364,38 @@ def _build_transposed_conv_animation(save_path, coarse_output):
     ax.set_xlim(-0.5, total_w)
     ax.set_ylim(-2.2, total_h)
 
-    ax.set_title("Strided Transposed Sparse Convolution  (kernel 3×3, stride 2)",
-                 fontsize=13, fontweight="bold", color=COLOR_TEXT, pad=12)
+    ax.set_title(
+        "Strided Transposed Sparse Convolution  (kernel 3×3, stride 2)",
+        fontsize=13,
+        fontweight="bold",
+        color=COLOR_TEXT,
+        pad=12,
+    )
 
     # Arrow
     arrow_x = coarse_cols * cell_coarse + gap / 2
     arrow_y = GRID_SIZE * cell_fine / 2
-    ax.annotate("", xy=(arrow_x + 0.6, arrow_y),
-                xytext=(arrow_x - 0.6, arrow_y),
-                arrowprops=dict(arrowstyle="->,head_width=0.3,head_length=0.2",
-                                color=COLOR_TEXT, lw=2))
+    ax.annotate(
+        "",
+        xy=(arrow_x + 0.6, arrow_y),
+        xytext=(arrow_x - 0.6, arrow_y),
+        arrowprops=dict(arrowstyle="->,head_width=0.3,head_length=0.2", color=COLOR_TEXT, lw=2),
+    )
 
     # Static grids
-    _draw_grid(ax, coarse_output, cell_coarse, coarse_origin, COLOR_ACTIVE_IN,
-               label="Input (coarse grid)", label_y_offset=0)
+    _draw_grid(
+        ax, coarse_output, cell_coarse, coarse_origin, COLOR_ACTIVE_IN, label="Input (coarse grid)", label_y_offset=0
+    )
     empty_fine = np.zeros_like(INPUT_ACTIVE)
-    _draw_grid(ax, empty_fine, cell_fine, fine_origin, COLOR_ACTIVE_OUT,
-               label="Output (fine grid, guided by out_grid)", label_y_offset=0)
+    _draw_grid(
+        ax,
+        empty_fine,
+        cell_fine,
+        fine_origin,
+        COLOR_ACTIVE_OUT,
+        label="Output (fine grid, guided by out_grid)",
+        label_y_offset=0,
+    )
     # Dashed outlines showing the target output topology (out_grid)
     _draw_target_outlines(ax, fine_output, cell_fine, fine_origin)
 
@@ -387,7 +422,9 @@ def _build_transposed_conv_animation(save_path, coarse_output):
             cx = coarse_origin[0] + cc * cell_coarse
             cy = coarse_origin[1] + (coarse_rows - 1 - cr) * cell_coarse
             highlight = patches.FancyBboxPatch(
-                (cx, cy), cell_coarse, cell_coarse,
+                (cx, cy),
+                cell_coarse,
+                cell_coarse,
                 boxstyle="round,pad=0.04",
                 linewidth=2.5,
                 edgecolor=COLOR_KERNEL_EDGE,
@@ -408,11 +445,13 @@ def _build_transposed_conv_animation(save_path, coarse_output):
                             activated.add((fr, fc))
 
         # Draw all activated fine cells
-        for (fr, fc) in activated:
+        for fr, fc in activated:
             fx = fine_origin[0] + fc * cell_fine
             fy = fine_origin[1] + (GRID_SIZE - 1 - fr) * cell_fine
             rect = patches.FancyBboxPatch(
-                (fx, fy), cell_fine, cell_fine,
+                (fx, fy),
+                cell_fine,
+                cell_fine,
                 boxstyle="round,pad=0.02",
                 linewidth=0.5,
                 edgecolor=COLOR_GRID_LINE,
@@ -426,8 +465,12 @@ def _build_transposed_conv_animation(save_path, coarse_output):
 
     total_frames = lead_in + len(positions) + 6
     anim = animation.FuncAnimation(
-        fig, _animate, init_func=_init,
-        frames=total_frames, interval=500, blit=False,
+        fig,
+        _animate,
+        init_func=_init,
+        frames=total_frames,
+        interval=500,
+        blit=False,
     )
     anim.save(save_path, writer="pillow", fps=2, dpi=120)
     plt.close(fig)
@@ -437,6 +480,7 @@ def _build_transposed_conv_animation(save_path, coarse_output):
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
 
 def main():
     script_dir = os.path.dirname(os.path.abspath(__file__))
