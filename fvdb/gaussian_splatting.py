@@ -1589,7 +1589,7 @@ class GaussianSplat3d:
             sh_degree_to_use = sh_degree
 
         if sh_degree_to_use > 0:
-            cam_to_world = torch.linalg.inv(w2c)
+            cam_to_world, info = torch.linalg.inv_ex(w2c)
             view_dirs = means[None, :, :] - cam_to_world[:, None, :3, 3]
             return _EvaluateGaussianSHFn.apply(sh_degree_to_use, C, view_dirs, sh0, shN, radii)
         else:
