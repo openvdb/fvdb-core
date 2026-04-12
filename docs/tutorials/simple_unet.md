@@ -2,7 +2,7 @@
 
 In this tutorial, you will be guided on how to build a simple sparse convolutional neural network using fVDB.
 
-A popular framework for implementing Sparse U-Nets is the [MinkowskiEngine](https://nvidia.github.io/MinkowskiEngine/). The [appendix](#appendix-porting-from-minkowskiengine) below includes a step-by-step guide to porting MinkowskiEngine code to fvdb.
+A popular framework for implementing Sparse U-Nets is the [MinkowskiEngine](https://nvidia.github.io/MinkowskiEngine/). The [appendix](#appendix-porting-from-minkowskiengine) below includes a step-by-step guide to porting MinkowskiEngine code to fVDB.
 
 In our simplistic U-Net case, we want to build a Res-UNet with four layers, and each layer contains several blocks.
 First, we import basic `fvdb` libraries:
@@ -222,7 +222,6 @@ output = model(features, grid)
 ```
 
 The output will carry gradients during training, and you could train the sparse network accordingly.
-Please find a fully working example at `examples/perception_example.py`.
 
 ---
 
@@ -271,4 +270,4 @@ class BasicBlock(torch.nn.Module):
         return out
 ```
 
-The key difference is that fVDB layers take explicit `(JaggedTensor, ConvolutionPlan)` or `(JaggedTensor, GridBatch)` arguments instead of wrapping them in a carrier object, while all the network layers remain fully compatible with `torch.nn`. The same U-Net network architecture shown above is also implemented using MinkowskiEngine in the `examples/perception_example.py` file for reference.
+The key difference is that fVDB layers take explicit `(JaggedTensor, ConvolutionPlan)` or `(JaggedTensor, GridBatch)` arguments instead of wrapping them in a carrier object, while all the network layers remain fully compatible with `torch.nn`.

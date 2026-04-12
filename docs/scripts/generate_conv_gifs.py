@@ -199,7 +199,7 @@ def _compute_strided_output(input_active, kernel_size, stride):
 def _compute_transposed_output(coarse_active, fine_active, kernel_size, stride):
     """Return a bool array for the output of strided transposed sparse convolution.
 
-    In fVDB, the output topology is specified by `out_grid`. For the tutorial
+    In fVDB, the output topology is specified by `target_grid`. For the tutorial
     visualisation we use the original fine grid as the target topology, so the
     output is the intersection of what the transposed conv *could* produce and
     the fine target grid.
@@ -393,10 +393,10 @@ def _build_transposed_conv_animation(save_path, coarse_output):
         cell_fine,
         fine_origin,
         COLOR_ACTIVE_OUT,
-        label="Output (fine grid, guided by out_grid)",
+        label="Output (fine grid, guided by target_grid)",
         label_y_offset=0,
     )
-    # Dashed outlines showing the target output topology (out_grid)
+    # Dashed outlines showing the target output topology (target_grid)
     _draw_target_outlines(ax, fine_output, cell_fine, fine_origin)
 
     # Legend (below the coarse input grid label)
