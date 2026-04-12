@@ -1624,7 +1624,9 @@ class GaussianSplat3d:
         antialias: bool,
     ) -> torch.Tensor:
         """Sigmoid of logit_opacities, optionally scaled by antialias compensations."""
-        opacities = torch.sigmoid(self._logit_opacities).unsqueeze(0).expand(C, -1)
+
+        # TODO(fvdb): Avoid materializing a repeated [C,N] tensor when opacities are shared across cameras (similar to PR #451).
+        opacities = torch.sigmoid(self._logit_opacities).repeat(C, 1)
         if antialias and compensations is not None:
             opacities = opacities * compensations
         return opacities
