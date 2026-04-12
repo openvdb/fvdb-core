@@ -234,6 +234,7 @@ If you were previously using [MinkowskiEngine](https://nvidia.github.io/Minkowsk
 The fVDB `BasicBlock` defined above corresponds to the following MinkowskiEngine equivalent:
 
 ```python notest
+import torch
 import MinkowskiEngine as ME
 
 
@@ -262,7 +263,7 @@ class BasicBlock(torch.nn.Module):
         out = self.norm2(out)
 
         if self.downsample is not None:
-          residual = self.downsample(x)
+            residual = self.downsample(x)
 
         out += residual
         out = self.relu(out)
