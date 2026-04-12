@@ -1,6 +1,6 @@
 # Volume Rendering
 
-> **Note:** This tutorial uses nerfacc's volume rendering approach as a starting point. While newer techniques such as Gaussian splatting have become popular for many neural rendering tasks, volume rendering remains relevant for certain applications. The fVDB API usage demonstrated here applies broadly regardless of the rendering technique.
+> **Note:** This tutorial uses `nerfacc`'s volume rendering approach as a starting point. While newer techniques such as Gaussian splatting have become popular for many neural rendering tasks, volume rendering remains relevant for certain applications. The fVDB API usage demonstrated here applies broadly regardless of the rendering technique.
 
 In this example we replace `nerfacc`'s acceleration structure with fVDB and hence scale to unbounded scenes:
 

@@ -69,7 +69,7 @@ coarse_grid = plan_down.target_grid_batch
 
 ![](../imgs/fig/stride_conv.png)
 
-The following animations illustrate how strided sparse convolution and its transpose work. In strided convolution, a kernel slides across the fine input grid at stride-2 steps, producing a coarser output grid. In strided transposed convolution, the process is reversed — a coarse grid is upsampled back to a finer resolution:
+The following animations illustrate how strided sparse convolution and its transpose work. In strided convolution, a kernel slides across the fine input grid with stride=2, producing a coarser output grid. In strided transposed convolution, the process is reversed — a coarse grid is upsampled back to a finer resolution:
 
 ![Strided sparse convolution animation](../imgs/fig/strided_sparse_conv.gif)
 
