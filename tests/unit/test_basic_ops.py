@@ -1677,17 +1677,25 @@ class TestBasicOps(unittest.TestCase):
 
         origin = torch.tensor([-N * voxel_size / 2, -N * voxel_size / 2, 1.0], device=device, dtype=dtype)
         grid = GridBatch.from_dense(
-            1, [N, N, N], [0, 0, 0],
-            voxel_sizes=voxel_size, origins=origin.tolist(), device=device,
+            1,
+            [N, N, N],
+            [0, 0, 0],
+            voxel_sizes=voxel_size,
+            origins=origin.tolist(),
+            device=device,
         )
 
         cam_to_world = torch.eye(4, device=device, dtype=dtype).unsqueeze(0)
         img_h, img_w = 100, 100
-        proj = torch.tensor([
-            [100.0, 0,     50.0],
-            [0,     100.0, 50.0],
-            [0,     0,     1   ],
-        ], device=device, dtype=dtype).unsqueeze(0)
+        proj = torch.tensor(
+            [
+                [100.0, 0, 50.0],
+                [0, 100.0, 50.0],
+                [0, 0, 1],
+            ],
+            device=device,
+            dtype=dtype,
+        ).unsqueeze(0)
 
         depth_img1 = torch.full((1, img_h, img_w), depth1, device=device, dtype=dtype)
         depth_img2 = torch.full((1, img_h, img_w), depth2, device=device, dtype=dtype)
@@ -1696,17 +1704,33 @@ class TestBasicOps(unittest.TestCase):
         weights_init = fvdb.JaggedTensor(torch.zeros(grid.total_voxels, device=device, dtype=dtype))
 
         grid1, tsdf1, w1 = grid.integrate_tsdf(
-            trunc_dist, proj, cam_to_world,
-            tsdf_init, weights_init, depth_img1,
+            trunc_dist,
+            proj,
+            cam_to_world,
+            tsdf_init,
+            weights_init,
+            depth_img1,
             weight_images=None,
         )
 
         weight_img = torch.full((1, img_h, img_w), pw, device=device, dtype=dtype)
         grid2_w, tsdf2_w, w2_w = grid1.integrate_tsdf(
-            trunc_dist, proj, cam_to_world, tsdf1, w1, depth_img2, weight_images=weight_img,
+            trunc_dist,
+            proj,
+            cam_to_world,
+            tsdf1,
+            w1,
+            depth_img2,
+            weight_images=weight_img,
         )
         grid2_u, tsdf2_u, w2_u = grid1.integrate_tsdf(
-            trunc_dist, proj, cam_to_world, tsdf1, w1, depth_img2, weight_images=None,
+            trunc_dist,
+            proj,
+            cam_to_world,
+            tsdf1,
+            w1,
+            depth_img2,
+            weight_images=None,
         )
 
         atol = dtype_to_atol(dtype)
@@ -1720,7 +1744,8 @@ class TestBasicOps(unittest.TestCase):
         torch.testing.assert_close(
             w2_w.jdata.flatten()[m] - w2_u.jdata.flatten()[m],
             torch.full_like(w2_w.jdata.flatten()[m], pw - 1.0),
-            atol=atol, rtol=0,
+            atol=atol,
+            rtol=0,
         )
 
         # Sample TSDF at known points and verify against the weighted-average formula:
@@ -1746,7 +1771,6 @@ class TestBasicOps(unittest.TestCase):
         tsdf2_u_2d = fvdb.JaggedTensor(tsdf2_u.jdata.unsqueeze(-1))
         sampled_u = grid2_u.sample_trilinear(pts, tsdf2_u_2d).jdata.flatten()
         torch.testing.assert_close(sampled_u, expected_tsdf_u, atol=atol, rtol=0)
-
 
     @parameterized.expand(all_device_dtype_combos + bfloat16_combos)
     def test_refine_empty_grid(self, device, dtype):
