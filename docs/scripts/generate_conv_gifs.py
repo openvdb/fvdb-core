@@ -14,6 +14,9 @@ Outputs:
 
 import os
 import numpy as np
+import matplotlib
+
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import matplotlib.animation as animation
@@ -40,8 +43,8 @@ INPUT_ACTIVE = np.array(
         [0, 0, 0, 0, 0, 0, 0, 0],
         [0, 1, 1, 0, 0, 0, 0, 0],
         [0, 1, 1, 1, 0, 0, 0, 0],
-        [0, 0, 1, 1, 1, 0, 0, 0],
-        [0, 0, 0, 1, 1, 1, 0, 0],
+        [0, 0, 1, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 1, 0, 0],
         [0, 0, 0, 0, 1, 1, 1, 0],
         [0, 0, 0, 0, 0, 1, 1, 0],
         [0, 0, 0, 0, 0, 0, 0, 0],
@@ -197,12 +200,13 @@ def _compute_strided_output(input_active, kernel_size, stride):
 
 
 def _compute_transposed_output(coarse_active, fine_active, kernel_size, stride):
-    """Return a bool array for the output of strided transposed sparse convolution.
+    """Return a bool mask of target voxels that receive any contribution.
 
-    In fVDB, the output topology is specified by `target_grid`. For the tutorial
-    visualisation we use the original fine grid as the target topology, so the
-    output is the intersection of what the transposed conv *could* produce and
-    the fine target grid.
+    In fVDB, the output topology of a strided transposed convolution is the
+    full `target_grid` — voxels with no contributing source neighbors simply
+    receive zero.  For the tutorial visualisation we compute which target
+    voxels actually receive a contribution, so the animation can show them
+    filling in as each coarse input cell is processed.
     """
     coarse_rows, coarse_cols = coarse_active.shape
     fine_rows, fine_cols = fine_active.shape
@@ -396,8 +400,8 @@ def _build_transposed_conv_animation(save_path, coarse_output):
         label="Output (fine grid, guided by target_grid)",
         label_y_offset=0,
     )
-    # Dashed outlines showing the target output topology (target_grid)
-    _draw_target_outlines(ax, fine_output, cell_fine, fine_origin)
+    # Dashed outlines showing the full target_grid topology
+    _draw_target_outlines(ax, INPUT_ACTIVE, cell_fine, fine_origin)
 
     # Legend (below the coarse input grid label)
     _draw_legend(ax, coarse_origin[0], coarse_origin[1] - 1.4)
