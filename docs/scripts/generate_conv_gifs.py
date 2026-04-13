@@ -305,6 +305,23 @@ def _build_strided_conv_animation(save_path):
             k = _draw_kernel_highlight(ax, ir, ic, GRID_SIZE, cell_in, in_origin)
             dynamic_artists.append(k)
 
+            # Corresponding highlight on the output cell
+            ox_h = out_origin[0] + ocol * cell_out
+            oy_h = out_origin[1] + (out_rows - 1 - orow) * cell_out
+            out_highlight = patches.FancyBboxPatch(
+                (ox_h, oy_h),
+                cell_out,
+                cell_out,
+                boxstyle="round,pad=0.04",
+                linewidth=2.5,
+                edgecolor=COLOR_KERNEL_EDGE,
+                facecolor=COLOR_KERNEL,
+                alpha=0.45,
+                zorder=5,
+            )
+            ax.add_patch(out_highlight)
+            dynamic_artists.append(out_highlight)
+
         # Redraw activated output cells up to current step
         for i in range(max(0, min(step + 1, len(positions)))):
             _, _, orow, ocol = positions[i]
@@ -438,6 +455,23 @@ def _build_transposed_conv_animation(save_path, coarse_output):
             )
             ax.add_patch(highlight)
             dynamic_artists.append(highlight)
+
+            # Highlight the corresponding kernel footprint on the output side
+            fx_h = fine_origin[0] + cc * STRIDE * cell_fine
+            fy_h = fine_origin[1] + (GRID_SIZE - 1 - (cr * STRIDE + KERNEL_SIZE - 1)) * cell_fine
+            out_highlight = patches.FancyBboxPatch(
+                (fx_h, fy_h),
+                KERNEL_SIZE * cell_fine,
+                KERNEL_SIZE * cell_fine,
+                boxstyle="round,pad=0.04",
+                linewidth=2.5,
+                edgecolor=COLOR_KERNEL_EDGE,
+                facecolor=COLOR_KERNEL,
+                alpha=0.35,
+                zorder=4,
+            )
+            ax.add_patch(out_highlight)
+            dynamic_artists.append(out_highlight)
 
             # Mark fine cells produced by this coarse cell
             for kr in range(KERNEL_SIZE):
