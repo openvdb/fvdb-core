@@ -333,20 +333,9 @@ dispatchGaussianRasterizeFromWorld3DGSForward<torch::kCUDA>(
     TORCH_CHECK_VALUE(features.size(1) == N, "features must have shape [C,N,D] matching N");
     TORCH_CHECK_VALUE(opacities.is_cuda(), "opacities must be CUDA");
 
-    // Opacities may be provided either per-camera ([C,N]) or shared across cameras ([N]).
-    // TODO(fvdb): Avoid materializing a repeated [C,N] tensor when opacities are shared across
-    // cameras. We should be able to pass a view (or otherwise avoid the repeat) similar to the
-    // approach used in PR #451 for other rasterization paths.
-    torch::Tensor opacitiesBatched = opacities;
-    if (opacitiesBatched.dim() == 1) {
-        TORCH_CHECK_VALUE(opacitiesBatched.size(0) == N,
-                          "opacities must have shape [N] or [C,N] matching N");
-        opacitiesBatched = opacitiesBatched.unsqueeze(0).repeat({C, 1});
-    }
-    TORCH_CHECK_VALUE(opacitiesBatched.dim() == 2, "opacities must have shape [C,N]");
-    TORCH_CHECK_VALUE(opacitiesBatched.size(0) == C && opacitiesBatched.size(1) == N,
+    TORCH_CHECK_VALUE(opacities.dim() == 2, "opacities must have shape [C,N]");
+    TORCH_CHECK_VALUE(opacities.size(0) == C && opacities.size(1) == N,
                       "opacities must have shape [C,N] matching features and N");
-    opacitiesBatched = opacitiesBatched.contiguous();
 
     TORCH_CHECK_VALUE(worldToCamMatricesStart.sizes() == torch::IntArrayRef({C, 4, 4}),
                       "worldToCamMatricesStart must have shape [C,4,4]");
@@ -368,22 +357,22 @@ dispatchGaussianRasterizeFromWorld3DGSForward<torch::kCUDA>(
 
     const uint32_t channels = (uint32_t)features.size(2);
 
-#define CALL_FWD_WITH_OP(NCH, OP_TYPE, OP_VAL)               \
-    case NCH:                                                \
-        return launchForward<NCH, OP_TYPE>(means,            \
-                                           quats,            \
-                                           logScales,        \
-                                           features,         \
-                                           opacitiesBatched, \
-                                           OP_VAL,           \
-                                           imageWidth,       \
-                                           imageHeight,      \
-                                           imageOriginW,     \
-                                           imageOriginH,     \
-                                           tileSize,         \
-                                           tileOffsets,      \
-                                           tileGaussianIds,  \
-                                           backgrounds,      \
+#define CALL_FWD_WITH_OP(NCH, OP_TYPE, OP_VAL)              \
+    case NCH:                                               \
+        return launchForward<NCH, OP_TYPE>(means,           \
+                                           quats,           \
+                                           logScales,       \
+                                           features,        \
+                                           opacities,       \
+                                           OP_VAL,          \
+                                           imageWidth,      \
+                                           imageHeight,     \
+                                           imageOriginW,    \
+                                           imageOriginH,    \
+                                           tileSize,        \
+                                           tileOffsets,     \
+                                           tileGaussianIds, \
+                                           backgrounds,     \
                                            masks);
 
     if (cameraModel == DistortionModel::ORTHOGRAPHIC) {
