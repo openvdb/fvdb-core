@@ -12,6 +12,8 @@ The following is a compatibility matrix of the versions of software compatible w
 +--------------+------------------+-----------------+-----------------+----------------+------------------------------------------+
 | fVDB Version | Operating System | PyTorch Version | Python Version  | CUDA Version   | Vulkan Version (only for visualization)  |
 +--------------+------------------+-----------------+-----------------+----------------+------------------------------------------+
+| 0.5          | Linux Only       | 2.11.0          | 3.10 - 3.14     | 12.8, 13.0     | 1.3.275.0                                |
++--------------+------------------+-----------------+-----------------+----------------+------------------------------------------+
 | 0.4          | Linux Only       | 2.10.0          | 3.10 - 3.13     | 12.8, 13.0     | 1.3.275.0                                |
 +--------------+------------------+-----------------+-----------------+----------------+------------------------------------------+
 | 0.3          | Linux Only       | 2.8.0           | 3.10 - 3.13     | 12.8           | 1.3.275.0                                |
@@ -35,19 +37,19 @@ To get started, run the appropriate pip install command for your Pytorch/CUDA ve
 the correct version of ``fvdb-core`` if it is not already installed.
 
 
-PyTorch 2.10.0 + CUDA 13.0
+PyTorch 2.11.0 + CUDA 13.0
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. parsed-literal::
 
-    pip install fvdb-core==\ |fvdb_core_version_pt210_cu130| --extra-index-url="https://d36m13axqqhiit.cloudfront.net/simple" torch==\ |torch_full_version| --extra-index-url https://download.pytorch.org/whl/|cu130_tag|
+    pip install fvdb-core==\ |fvdb_core_version_pt211_cu130| --extra-index-url="https://d36m13axqqhiit.cloudfront.net/simple" torch==\ |torch_full_version| --extra-index-url https://download.pytorch.org/whl/|cu130_tag|
 
-PyTorch 2.10.0 + CUDA 12.8
+PyTorch 2.11.0 + CUDA 12.8
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. parsed-literal::
 
-    pip install fvdb-core==\ |fvdb_core_version_pt210_cu128| --extra-index-url="https://d36m13axqqhiit.cloudfront.net/simple" torch==\ |torch_full_version| --extra-index-url https://download.pytorch.org/whl/|cu128_tag|
+    pip install fvdb-core==\ |fvdb_core_version_pt211_cu128| --extra-index-url="https://d36m13axqqhiit.cloudfront.net/simple" torch==\ |torch_full_version| --extra-index-url https://download.pytorch.org/whl/|cu128_tag|
 
 .. note::
    Visualization and viewer features additionally require the ``nanovdb_editor`` Python package. Install it using the optional 'viewer' dependencies, by adding ``[viewer]`` to the ``fvdb-core`` package name, for example: ``pip install fvdb-core[viewer]==…``.
@@ -58,16 +60,16 @@ Installation from nightly builds
 
 Nightly wheels are built from the latest ``main`` branch and published daily.
 The nightly version includes a date stamp and PyTorch/CUDA build identifiers
-(e.g. ``0.0.0.dev20260318+pt210.cu130``).
+(e.g. ``0.0.0.dev20260318+pt211.cu130``).
 
-PyTorch 2.10.0 + CUDA 13.0
+PyTorch 2.11.0 + CUDA 13.0
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. parsed-literal::
 
     pip install fvdb-core==0.0.0.dev20260318+pt\ |torch_short|\ .\ |cu130_tag| --extra-index-url="https://d36m13axqqhiit.cloudfront.net/simple-nightly" torch==\ |torch_full_version| --extra-index-url https://download.pytorch.org/whl/|cu130_tag|
 
-PyTorch 2.10.0 + CUDA 12.8
+PyTorch 2.11.0 + CUDA 12.8
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. parsed-literal::

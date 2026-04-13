@@ -51,7 +51,7 @@ dependencies:
   - pyrender
   - pytest-benchmark
   - python=3.12
-  - pytorch-gpu=2.10.0
+  - pytorch-gpu=2.11.0
   - rich
   - seaborn
   - scikit-build-core
