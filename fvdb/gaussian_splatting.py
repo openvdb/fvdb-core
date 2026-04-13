@@ -1625,7 +1625,10 @@ class GaussianSplat3d:
     ) -> torch.Tensor:
         """Sigmoid of logit_opacities, optionally scaled by antialias compensations."""
 
-        # TODO(fvdb): Avoid materializing a repeated [C,N] tensor when opacities are shared across cameras (similar to PR #451).
+        # Ideally, we would like to avoid materializing the repeated [C,N] tensor when opacities
+        # are shared across cameras by replacing the repeat call with .unsqueeze(0).expand(C, -1).
+        # However, a non-contiguous opacities tensor is not currently supported in world space
+        # rasterization and mGPU image space rasterization.
         opacities = torch.sigmoid(self._logit_opacities).repeat(C, 1)
         if antialias and compensations is not None:
             opacities = opacities * compensations
