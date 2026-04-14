@@ -20,7 +20,7 @@ The following is a compatibility matrix of the versions of software compatible w
 Driver and Hardware Requirements
 -----------------------------------
 
-The following table specifies the minimum NVIDIA driver versions and GPU architectures needed to run fVDB-Reality-Capture:
+The following table specifies the minimum NVIDIA driver versions and GPU architectures needed to run fVDB:
 
 +------------------+----------------+------------------+---------------------+
 | Operating System | Driver Version | GPU Architecture | Compute Capability  |
@@ -28,10 +28,17 @@ The following table specifies the minimum NVIDIA driver versions and GPU archite
 | Linux Only       | 550.0 or later | Ampere or later  | 8.0 or greater      |
 +------------------+----------------+------------------+---------------------+
 
+Installation from conda-forge
+------------------------------
+To install ``fvdb-core`` in a conda environment, run the following command to install the latest released version of ``fvdb-core`` from `conda-forge <https://anaconda.org/conda-forge/fvdb-core>`_:
+
+.. code-block:: bash
+
+    conda install --channel conda-forge fvdb-core
 
 Installation from pre-built wheels
 -------------------------------------
-To get started, run the appropriate pip install command for your Pytorch/CUDA versions. These commands will install
+To install ``fvdb-core`` using pip, run the appropriate pip install command for your Pytorch/CUDA versions. These commands will install
 the correct version of ``fvdb-core`` if it is not already installed.
 
 
