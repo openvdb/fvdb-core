@@ -449,7 +449,7 @@ launchBackward(const torch::Tensor &means,
         dFeatures.packed_accessor64<float, 3, torch::RestrictPtrTraits>(),
         dOpacities.packed_accessor64<float, 2, torch::RestrictPtrTraits>()};
 
-    auto stream = at::cuda::getDefaultCUDAStream();
+    auto stream = at::cuda::getCurrentCUDAStream(means.device().index());
     rasterizeFromWorld3DGSBackwardKernel<NUM_CHANNELS, Camera>
         <<<gridDim, blockDim, sharedMem, stream>>>(kernelArgs);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
@@ -483,6 +483,8 @@ dispatchGaussianRasterizeFromWorld3DGSBackward<torch::kCUDA>(
     const at::optional<torch::Tensor> &masks) {
     FVDB_FUNC_RANGE();
 
+    const at::cuda::OptionalCUDAGuard device_guard(device_of(means));
+
     const uint32_t imageWidth   = settings.imageWidth;
     const uint32_t imageHeight  = settings.imageHeight;
     const uint32_t imageOriginW = settings.imageOriginW;
@@ -498,16 +500,9 @@ dispatchGaussianRasterizeFromWorld3DGSBackward<torch::kCUDA>(
     const int64_t C = features.size(0);
     const int64_t N = means.size(0);
 
-    // Opacities may be provided either per-camera ([C,N]) or shared across cameras ([N]).
-    // TODO(fvdb): Avoid materializing a repeated [C,N] tensor when opacities are shared across
-    // cameras (similar to PR #451).
-    torch::Tensor opacitiesBatched = opacities;
-    if (opacitiesBatched.dim() == 1) {
-        TORCH_CHECK_VALUE(opacitiesBatched.size(0) == N,
-                          "opacities must have shape [N] or [C,N] matching N");
-        opacitiesBatched = opacitiesBatched.unsqueeze(0).repeat({C, 1});
-    }
-    opacitiesBatched = opacitiesBatched.contiguous();
+    TORCH_CHECK_VALUE(opacities.dim() == 2, "opacities must have shape [C,N]");
+    TORCH_CHECK_VALUE(opacities.size(0) == C && opacities.size(1) == N,
+                      "opacities must have shape [C,N] matching features and N");
 
     const uint32_t channels = (uint32_t)features.size(2);
 
@@ -517,7 +512,7 @@ dispatchGaussianRasterizeFromWorld3DGSBackward<torch::kCUDA>(
                                             quats,                  \
                                             logScales,              \
                                             features,               \
-                                            opacitiesBatched,       \
+                                            opacities,              \
                                             OP_VAL,                 \
                                             imageWidth,             \
                                             imageHeight,            \

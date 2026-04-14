@@ -125,7 +125,7 @@ parsePlyMetadataComments(tinyply::PlyFile &plyf) {
                 plyf.request_properties_from_element(key, {"value"});
             TORCH_CHECK(tensorData != nullptr,
                         "Failed to read tensor metadata '" + key +
-                            "'. Make sure it was written with fvdb::GaussianSplat3d::savePly");
+                            "'. Make sure it was written with fvdb::detail::io::saveGaussianPly");
             retTensorMetadata[key] = std::make_tuple(tensorData, tensorShape);
         } else {
             continue; // Not a metadata comment
@@ -180,7 +180,13 @@ plyMetadataComment(const std::string &key, const PlyMetadataTypes &value) {
     }
 }
 
-std::tuple<GaussianSplat3d, std::unordered_map<std::string, PlyMetadataTypes>>
+std::tuple<torch::Tensor,
+           torch::Tensor,
+           torch::Tensor,
+           torch::Tensor,
+           torch::Tensor,
+           torch::Tensor,
+           std::unordered_map<std::string, PlyMetadataTypes>>
 loadGaussianPly(const std::string &filename, torch::Device device) {
     using namespace tinyply;
 
@@ -301,31 +307,29 @@ loadGaussianPly(const std::string &filename, torch::Device device) {
         retMetadata[key] = tensor;
     }
 
-    return std::make_tuple(GaussianSplat3d(means.to(device),
-                                           quats.to(device),
-                                           logScales.to(device),
-                                           logitOpacities.to(device),
-                                           sh0Coeffs.to(device),
-                                           shNCoeffs.to(device),
-                                           false,
-                                           false,
-                                           false),
+    return std::make_tuple(means.to(device),
+                           quats.to(device),
+                           logScales.to(device),
+                           logitOpacities.to(device),
+                           sh0Coeffs.to(device),
+                           shNCoeffs.to(device),
                            retMetadata);
 }
 
 void
 saveGaussianPly(const std::string &filename,
-                const GaussianSplat3d &gaussians,
+                const torch::Tensor &means,
+                const torch::Tensor &quats,
+                const torch::Tensor &logScales,
+                const torch::Tensor &logitOpacities,
+                const torch::Tensor &sh0,
+                const torch::Tensor &shN,
                 std::optional<std::unordered_map<std::string, PlyMetadataTypes>> trainingMetadata) {
     using namespace tinyply;
 
-    const fvdb::JaggedTensor validMask = FVDB_DISPATCH_KERNEL(gaussians.means().device(), [&]() {
-        return detail::ops::dispatchGaussianNanInfMask<DeviceTag>(gaussians.means(),
-                                                                  gaussians.quats(),
-                                                                  gaussians.logScales(),
-                                                                  gaussians.logitOpacities(),
-                                                                  gaussians.sh0(),
-                                                                  gaussians.shN());
+    const fvdb::JaggedTensor validMask = FVDB_DISPATCH_KERNEL(means.device(), [&]() {
+        return detail::ops::dispatchGaussianNanInfMask<DeviceTag>(
+            means, quats, logScales, logitOpacities, sh0, shN);
     });
 
     std::filebuf fb;
@@ -337,31 +341,25 @@ saveGaussianPly(const std::string &filename,
     PlyFile plyf;
 
     const torch::Tensor meansCPU =
-        gaussians.means().index({validMask.jdata(), torch::indexing::Ellipsis}).cpu().contiguous();
+        means.index({validMask.jdata(), torch::indexing::Ellipsis}).cpu().contiguous();
     const torch::Tensor quatsCPU =
-        gaussians.quats().index({validMask.jdata(), torch::indexing::Ellipsis}).cpu().contiguous();
-    const torch::Tensor scalesCPU = gaussians.logScales()
-                                        .index({validMask.jdata(), torch::indexing::Ellipsis})
-                                        .cpu()
-                                        .contiguous();
-    const torch::Tensor opacitiesCPU =
-        gaussians.logitOpacities().index({validMask.jdata()}).cpu().contiguous();
+        quats.index({validMask.jdata(), torch::indexing::Ellipsis}).cpu().contiguous();
+    const torch::Tensor scalesCPU =
+        logScales.index({validMask.jdata(), torch::indexing::Ellipsis}).cpu().contiguous();
+    const torch::Tensor opacitiesCPU = logitOpacities.index({validMask.jdata()}).cpu().contiguous();
 
     // [N, D]
     const torch::Tensor shCoeffs0CPU =
-        gaussians.sh0().index({validMask.jdata(), 0, torch::indexing::Ellipsis}).cpu().contiguous();
-    // [N, K-1, D]
+        sh0.index({validMask.jdata(), 0, torch::indexing::Ellipsis}).cpu().contiguous();
+    // shN has shape [N, K-1, D], meaning SH coefficients are ordered by basis then
+    // channel (i.e. RGBRGB...).  Gaussian PLY files expect coefficients ordered by
+    // channel then basis (i.e. RR...GG...BB...), so we permute to [N, D, K-1] and
+    // then reshape to [N, D*(K-1)].
     const torch::Tensor shCoeffsNCPU = [&]() {
-        if (gaussians.shN().numel() <= 0) {
-            return torch::zeros({meansCPU.size(0), 0},
-                                gaussians.shN().options().device(torch::kCPU));
+        if (shN.numel() <= 0) {
+            return torch::zeros({meansCPU.size(0), 0}, shN.options().device(torch::kCPU));
         } else {
-            // ShN has shape [N, K-1, D], meaning the spherical harmonic coefficients are ordered
-            // by basis, then channel. i.e. RGBRGB...
-            // Gaussian PLYs expect the coefficients to be ordered by channel, then basis. i.e.
-            // RR...GG...BB... So we permute the axes to [N, D, K-1] and then reshape to [N,
-            // D*(K-1)]
-            return gaussians.shN()
+            return shN
                 .index({validMask.jdata(), torch::indexing::Slice(), torch::indexing::Ellipsis})
                 .cpu()
                 .contiguous()

@@ -7,9 +7,9 @@ dependencies:
   - boto3
   - ca-certificates
   - certifi
-  - clang=18
-  - clang-format=18
-  - clang-tools=18
+  - clang-format-18
+  - clang-tools=21
+  - clang-18
   - cmake
   - cuda-command-line-tools
   - cuda-compiler

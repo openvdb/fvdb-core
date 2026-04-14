@@ -57,6 +57,9 @@ jIdxForJOffsetsCUDA(torch::Tensor joffsets, int64_t numElements) {
     if (!numElements) {
         return torch::zeros({0}, options);
     }
+
+    const c10::cuda::CUDAGuard device_guard(joffsets.device());
+
     torch::Tensor retJIdx = torch::empty({numElements}, options);
 
     cudaStream_t stream  = c10::cuda::getCurrentCUDAStream(joffsets.device().index()).stream();

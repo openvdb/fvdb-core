@@ -48,18 +48,18 @@ fVDB provides factory functions similar to PyTorch's tensor creation functions:
 
 ```python continuation
 # Create jagged tensor filled with random values
-jt_rand = fvdb.jrand(lsizes=[100, 150, 120], rsizes=[3])
+jt_rand = fvdb.JaggedTensor.from_rand(lsizes=[100, 150, 120], rsizes=[3])
 # lsizes: list of sizes for each tensor in the batch
 # rsizes: shape of the regular (non-jagged) dimensions
 
 # Create jagged tensor filled with zeros
-jt_zeros = fvdb.jzeros(lsizes=[100, 150, 120], rsizes=[3], device="cuda")
+jt_zeros = fvdb.JaggedTensor.from_zeros(lsizes=[100, 150, 120], rsizes=[3], device="cuda")
 
 # Create jagged tensor filled with ones
-jt_ones = fvdb.jones(lsizes=[100, 150, 120], rsizes=[3])
+jt_ones = fvdb.JaggedTensor.from_ones(lsizes=[100, 150, 120], rsizes=[3])
 
 # Create jagged tensor filled with normal random values
-jt_randn = fvdb.jrandn(lsizes=[100, 150, 120], rsizes=[3])
+jt_randn = fvdb.JaggedTensor.from_randn(lsizes=[100, 150, 120], rsizes=[3])
 ```
 
 ### From Flat Data and Indices
@@ -405,7 +405,7 @@ print(f"Batched {jt_points.num_tensors} point clouds")
 print(f"Total points: {jt_points.jdata.shape[0]}")
 
 # Generate per-point features (simulating a neural network output)
-features = fvdb.jrandn(lsizes=jt_points.lshape, rsizes=[64], device="cuda")
+features = fvdb.JaggedTensor.from_randn(lsizes=jt_points.lshape, rsizes=[64], device="cuda")
 
 # Apply a series of transformations
 # Step 1: Apply ReLU activation
