@@ -72,12 +72,17 @@ jobs:
         shell: bash -el {0}
     steps:
       - name: Install system dependencies
-        run: dnf install -y git procps-ng findutils
+        run: dnf install -y git jq procps-ng findutils
 
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0 # Fetch all history for all branches
           ref: ${{ github.event.inputs.branch }}
+
+      - name: Mark workspace as safe for git
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global --add safe.directory "$(pwd)"
 
       - name: Fetch PR branch
         if: github.event_name == 'pull_request_target'
@@ -85,8 +90,6 @@ jobs:
           cd $GITHUB_WORKSPACE
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          git config --global --add safe.directory "$(pwd)"
           git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_branch
 
       - name: Merge PR branch into base
@@ -119,17 +122,94 @@ jobs:
           pip install -e .
           popd
 
-      - name: Build docs
+      - name: Build dev docs (current branch, full CUDA)
         run: |
           micromamba activate fvdb
           command -v sphinx-build
-          sphinx-build docs/ -E -a _docs_build
-          sphinx-build fvdb-reality-capture/docs -E -a _docs_build/reality-capture
+          sphinx-build docs/ -E -a _docs_build/dev/
+          sphinx-build fvdb-reality-capture/docs -E -a _docs_build/reality-capture/
 
+      - name: Build versioned docs
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          micromamba activate fvdb
+          set -euo pipefail
+
+          CONFIG="docs/versions-config.json"
+          if [ ! -f "$CONFIG" ]; then
+            echo "No versions-config.json found, skipping versioned builds"
+            exit 0
+          fi
+
+          REPO="${GITHUB_REPOSITORY:-openvdb/fvdb-core}"
+
+          for row in $(jq -c '.versions[]' "$CONFIG"); do
+            name=$(echo "$row" | jq -r '.name')
+            tag=$(echo "$row" | jq -r '.tag')
+            archive=$(echo "$row" | jq -r '.archive // empty')
+
+            echo "==> Processing version ${name} (tag=${tag})"
+
+            if [ -n "$archive" ]; then
+              echo "    Downloading archived docs: ${archive} from release ${tag}"
+              ASSET_URL=$(curl -sSL \
+                -H "Authorization: token ${GITHUB_TOKEN}" \
+                -H "Accept: application/vnd.github.v3+json" \
+                "https://api.github.com/repos/${REPO}/releases/tags/${tag}" \
+                | jq -r --arg name "$archive" '.assets[] | select(.name == $name) | .url')
+
+              if [ -z "$ASSET_URL" ] || [ "$ASSET_URL" = "null" ]; then
+                echo "    WARNING: Archive ${archive} not found in release ${tag}, falling back to backfill"
+                ./devtools/build-versioned-docs.sh "$tag" "_docs_build/${name}"
+              else
+                curl -sSL \
+                  -H "Authorization: token ${GITHUB_TOKEN}" \
+                  -H "Accept: application/octet-stream" \
+                  "$ASSET_URL" -o "/tmp/${archive}"
+                mkdir -p "_docs_build/${name}"
+                tar xzf "/tmp/${archive}" -C "_docs_build/${name}/"
+                rm -f "/tmp/${archive}"
+              fi
+            else
+              echo "    Backfill building from tag ${tag} with autodoc mocking"
+              ./devtools/build-versioned-docs.sh "$tag" "_docs_build/${name}"
+            fi
+          done
+
+      - name: Assemble versioned site
+        run: |
+          set -euo pipefail
+          CONFIG="docs/versions-config.json"
+
+          STABLE=$(jq -r '.stable' "$CONFIG")
+          echo "==> Creating stable alias pointing to ${STABLE}"
+          cp -r "_docs_build/${STABLE}/" _docs_build/stable/
+
+          echo "==> Generating versions.json"
+          jq '[
+            {name: ("stable (" + .stable + ")"), url: "/fvdb-core/stable/"},
+            (.versions[] | {name: .name, url: ("/fvdb-core/" + .name + "/")}),
+            {name: "dev", url: "/fvdb-core/dev/"}
+          ]' "$CONFIG" > _docs_build/versions.json
+
+          echo "==> Creating root redirect"
+          printf '%s\n' \
+            '<!DOCTYPE html>' \
+            '<html><head>' \
+            '<meta http-equiv="refresh" content="0;url=stable/">' \
+            '<link rel="canonical" href="/fvdb-core/stable/">' \
+            '</head><body><a href="stable/">Redirecting to stable docs...</a></body></html>' \
+            > _docs_build/index.html
+
+          touch _docs_build/.nojekyll
+
+          echo "==> Final site structure:"
+          ls -la _docs_build/
 
       - name: Upload static files as artifact
         id: deployment
-        uses: actions/upload-pages-artifact@v3 # or specific "vX.X.X" version tag for this action
+        uses: actions/upload-pages-artifact@v3
         with:
           path: _docs_build/
 

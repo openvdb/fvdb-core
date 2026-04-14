@@ -1,0 +1,142 @@
+# Copyright Contributors to the OpenVDB Project
+# SPDX-License-Identifier: Apache-2.0
+
+name: Archive Release Docs
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to archive docs for (e.g. v0.5.0)"
+        required: true
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  versions:
+    uses: ./.github/workflows/load-versions.yml
+    with:
+      ref: ${{ github.event.release.tag_name || inputs.tag }}
+
+  start-build-runner:
+    name: Start CPU-only EC2 runner for docs archive
+    needs: versions
+    runs-on: ubuntu-latest
+    outputs:
+      label: ${{ steps.start-build-runner.outputs.label }}
+      ec2-instance-id: ${{ steps.start-build-runner.outputs.ec2-instance-id }}
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ needs.versions.outputs.aws-role }}
+          aws-region: ${{ needs.versions.outputs.aws-region }}
+      - name: Start EC2 runner
+        id: start-build-runner
+        uses: machulav/ec2-github-runner@v2
+        with:
+          mode: start
+          github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
+          ec2-image-id: ${{ needs.versions.outputs.aws-cpu-ami }}
+          ec2-instance-type: m6a.8xlarge
+          subnet-id: ${{ needs.versions.outputs.aws-subnet }}
+          security-group-id: ${{ needs.versions.outputs.aws-security-group }}
+
+  archive-docs:
+    name: Build and archive release docs
+    needs: [start-build-runner, versions]
+    runs-on: ${{ needs.start-build-runner.outputs.label }}
+    container:
+      image: rockylinux/rockylinux:8
+      env:
+        PYTHONPATH: ""
+        CPM_SOURCE_CACHE: "/__w/cpm_cache"
+        CONDA_OVERRIDE_CUDA: ${{ needs.versions.outputs.cuda-conda-override }}
+      options: --rm
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - name: Install system dependencies
+        run: |
+          dnf install -y git procps-ng findutils
+          dnf install -y 'dnf-command(config-manager)'
+          dnf config-manager --add-repo https://cli.github.com/packages/rpm/gh-cli.repo
+          dnf install -y gh
+
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+
+      - name: Set up fvdb Conda env
+        uses: mamba-org/setup-micromamba@v2
+        env:
+          CONDA_OVERRIDE_CUDA: ${{ needs.versions.outputs.cuda-conda-override }}
+        with:
+          post-cleanup: 'all'
+          environment-name: fvdb
+          environment-file: env/dev_environment.yml
+
+      - name: Build fvdb
+        run: |
+          echo "Building fvdb"
+          micromamba activate fvdb
+          ./build.sh install verbose --cuda-arch-list '${{ needs.versions.outputs.cuda-arch-pr }}' -e
+
+      - name: Build docs
+        run: |
+          micromamba activate fvdb
+          command -v sphinx-build
+          sphinx-build docs/ -E -a _docs_html/
+
+      - name: Create archive
+        id: archive
+        run: |
+          TAG="${{ github.event.release.tag_name || inputs.tag }}"
+          MINOR=$(echo "${TAG#v}" | cut -d. -f1-2)
+          ARCHIVE_NAME="docs-${MINOR}.tar.gz"
+          tar czf "${ARCHIVE_NAME}" -C _docs_html/ .
+          echo "archive_name=${ARCHIVE_NAME}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Created archive: ${ARCHIVE_NAME}"
+          ls -lh "${ARCHIVE_NAME}"
+
+      - name: Upload to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
+        run: |
+          TAG="${{ steps.archive.outputs.tag }}"
+          ARCHIVE="${{ steps.archive.outputs.archive_name }}"
+          echo "Uploading ${ARCHIVE} to release ${TAG}"
+          gh release upload "${TAG}" "${ARCHIVE}" --clobber
+
+  stop-build-runner:
+    name: Stop CPU-only EC2 runner for docs archive
+    needs:
+      - start-build-runner
+      - archive-docs
+      - versions
+    runs-on: ubuntu-latest
+    if: ${{ always() }}
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ needs.versions.outputs.aws-role }}
+          aws-region: ${{ needs.versions.outputs.aws-region }}
+      - name: Stop EC2 runner
+        uses: machulav/ec2-github-runner@v2
+        with:
+          mode: stop
+          github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
+          label: ${{ needs.start-build-runner.outputs.label }}
+          ec2-instance-id: ${{ needs.start-build-runner.outputs.ec2-instance-id }}

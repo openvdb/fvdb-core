@@ -136,18 +136,23 @@ This will:
 5. Push `adopt/v0.4`
 6. Close the draft release PR
 7. Open a new PR from `adopt/v0.4` into `main`
-8. Create a GitHub Release (triggers the publish workflow)
+8. Create a GitHub Release (triggers the publish workflow and the
+   `archive-docs.yml` workflow, which builds and uploads a docs HTML
+   archive as a release asset)
 9. Trigger the `sync-doc-version.yml` workflow to create a PR updating
-   `docs/conf.py` to the new release version
+   `docs/conf.py` and `docs/versions-config.json` to the new release version
 
 After the script finishes, **merge the adopt PR** once CI passes. Use a
 merge commit (not squash) to preserve the release branch history on `main`.
 The `release/v0.4` branch is left untouched at version `0.4.0`, available
 as the base for future hotfix releases.
 
-Then **merge the doc version sync PR**. Documentation is rebuilt
+Then **merge the doc version sync PR**. This PR updates both
+`fvdb_core_stable_version` in `docs/conf.py` and the version entry and
+`stable` pointer in `docs/versions-config.json`. Documentation is rebuilt
 automatically when anything under `docs/` changes on `main` (via a push
-trigger on `docs.yml`). To rebuild docs manually as a fallback:
+trigger on `docs.yml`), deploying versioned docs for all configured
+releases. To rebuild docs manually as a fallback:
 
 ```bash
 gh workflow run docs.yml --ref main
@@ -186,11 +191,14 @@ already be on `main` (the commits for the hotfix should have been cherry-picked 
    ```bash
    ./devtools/finish-release.sh 0.4.1
    ```
-   This tags `v0.4.1`, creates a GitHub Release, and triggers the
-   `sync-doc-version.yml` workflow to update `docs/conf.py`.
+   This tags `v0.4.1`, creates a GitHub Release (which also triggers
+   `archive-docs.yml` to archive the docs), and triggers the
+   `sync-doc-version.yml` workflow to update `docs/conf.py` and
+   `docs/versions-config.json`.
 
 5. **Merge the doc version sync PR** once CI passes. Documentation is
-   rebuilt automatically when the PR merges.
+   rebuilt automatically when the PR merges, deploying versioned docs
+   for all configured releases.
 
 ## GitHub Branch Protection
 
@@ -212,6 +220,8 @@ During code freeze, additionally:
 | `devtools/start-release.sh` | Create release branch (or prepare hotfix), bump versions, open PR |
 | `devtools/finish-release.sh` | Tag release, create adopt branch + PR (minor only), create GitHub Release |
 | `devtools/test-release-scripts.sh` | End-to-end tests for the release scripts (including hotfix) |
+| `devtools/update-doc-versions.sh` | Update `docs/conf.py` and `docs/versions-config.json` for a given version |
+| `devtools/build-versioned-docs.sh` | Build docs from an old tag using autodoc mocking (no CUDA required) |
 
 All scripts support `--help`, `--dry-run`, and `--remote <name>` flags.
 
@@ -294,8 +304,9 @@ is:
    separate hotfix branches.
 
 4. **Merge the doc version sync PRs** created by `sync-doc-version.yml`.
-   Documentation is rebuilt automatically when `docs/conf.py` changes on
-   `main`.
+   These update both `docs/conf.py` and `docs/versions-config.json`.
+   Documentation is rebuilt automatically when anything under `docs/`
+   changes on `main`, deploying versioned docs including the new release.
 
 `finish-release.sh` checks that the latest `publish.yml` run on the release
 branch succeeded before proceeding. If the workflow failed or hasn't run, it
@@ -307,19 +318,50 @@ Both workflows also support manual triggering via `workflow_dispatch` with
 options to select the publish target (`s3`, `testpypi`, `none`) and whether
 to run GPU validation.
 
-## Automated Doc Version Sync
+## Versioned Documentation
 
-The `sync-doc-version.yml` workflow keeps the stable version shown in
-documentation (`fvdb_core_stable_version` in `docs/conf.py`) in sync with
-the latest GitHub Release. It runs:
+Documentation is deployed to GitHub Pages with separate versioned paths
+(e.g. `/stable/`, `/0.4/`, `/0.3/`, `/dev/`). The version list and stable
+alias are driven by `docs/versions-config.json`.
+
+### How Versioned Docs Are Built
+
+The `docs.yml` workflow assembles a multi-version site on each run:
+
+1. **Dev docs** are built from `main` with full CUDA (into `_docs_build/dev/`)
+2. **Release versions** are obtained from `docs/versions-config.json`:
+   - If an `"archive"` field is present, the pre-built HTML tarball is
+     downloaded from the corresponding GitHub Release asset
+   - Otherwise, docs are built from the release tag using
+     `devtools/build-versioned-docs.sh` with autodoc mocking (no CUDA)
+3. The **stable** alias is a copy of the version marked as `stable` in the config
+4. A **version switcher** dropdown and `versions.json` are included for navigation
+
+### Doc Archiving on Release
+
+The `archive-docs.yml` workflow runs automatically when a GitHub Release is
+published. It builds docs with full CUDA on EC2, creates a
+`docs-{MINOR}.tar.gz` archive, and uploads it as a release asset. This
+archive is used by `docs.yml` for future deployments, avoiding the need to
+rebuild old versions.
+
+The workflow can also be triggered manually via `workflow_dispatch` to
+retroactively archive docs for older releases.
+
+### Automated Doc Version Sync
+
+The `sync-doc-version.yml` workflow keeps documentation version references
+in sync with the latest GitHub Release. It runs:
 
 - **Nightly** (cron schedule) as a safety net
 - **On demand** via `workflow_dispatch`, triggered automatically by
   `finish-release.sh` after creating a GitHub Release
 
 When the doc version is out of date, the workflow creates (or updates) a PR
-on the `auto/sync-doc-version` branch using `devtools/update-doc-versions.sh`.
+on the `auto/sync-doc-version` branch using `devtools/update-doc-versions.sh`,
+which updates both `fvdb_core_stable_version` in `docs/conf.py` and the
+version entry and stable pointer in `docs/versions-config.json`.
 
 The `docs.yml` workflow has a push trigger filtered to `docs/**` on `main`,
 so merging the sync PR (or any doc change) automatically rebuilds and deploys
-the documentation to GitHub Pages.
+the versioned documentation to GitHub Pages.

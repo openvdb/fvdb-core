@@ -75,6 +75,45 @@ else
     warn "docs/conf.py not found at $CONF_PY"
 fi
 
+# --- update docs/versions-config.json -----------------------------------------
+VERSIONS_CONFIG="$REPO_ROOT/docs/versions-config.json"
+MINOR="${VERSION%.*}"
+TAG="v${VERSION}"
+ARCHIVE="docs-${MINOR}.tar.gz"
+
+if [[ -f "$VERSIONS_CONFIG" ]]; then
+    if ! command -v jq &>/dev/null; then
+        warn "jq not found; skipping versions-config.json update"
+    else
+        log "Updating docs/versions-config.json: version=${MINOR}, tag=${TAG}, stable=${MINOR}"
+        if ! $DRY_RUN; then
+            UPDATED=$(jq \
+                --arg name "$MINOR" \
+                --arg tag "$TAG" \
+                --arg archive "$ARCHIVE" \
+                '
+                # Update or add the version entry for this minor
+                .versions |= (
+                    if any(.name == $name) then
+                        map(if .name == $name then {name: $name, tag: $tag, archive: $archive} else . end)
+                    else
+                        [{name: $name, tag: $tag, archive: $archive}] + .
+                    end
+                )
+                # Update stable pointer
+                | .stable = $name
+                ' "$VERSIONS_CONFIG")
+            echo "$UPDATED" > "$VERSIONS_CONFIG"
+
+            if ! jq empty "$VERSIONS_CONFIG" 2>/dev/null; then
+                warn "docs/versions-config.json may have invalid JSON after update"
+            fi
+        fi
+    fi
+else
+    log "No docs/versions-config.json found (skipping)"
+fi
+
 # --- update fvdb-core dependency floor in pyproject.toml ----------------------
 PYPROJECT="$REPO_ROOT/pyproject.toml"
 

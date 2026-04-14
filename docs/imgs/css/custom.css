@@ -1,3 +1,24 @@
 .wy-side-nav-search {
     background-color: #76b900;
 }
+
+.version-switcher {
+    padding: 6px 12px 10px;
+    text-align: center;
+}
+
+.version-switcher select {
+    width: 100%;
+    padding: 4px 8px;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.15);
+    color: #fff;
+    font-size: 0.9em;
+    cursor: pointer;
+}
+
+.version-switcher select option {
+    background: #343131;
+    color: #fff;
+}

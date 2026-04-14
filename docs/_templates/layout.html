@@ -1,0 +1,36 @@
+{# Copyright Contributors to the OpenVDB Project #}
+{# SPDX-License-Identifier: Apache-2.0 #}
+{% extends "!layout.html" %}
+
+{% block sidebartitle %}
+{{ super() }}
+<div class="version-switcher">
+  <select id="version-select" aria-label="Documentation version" onchange="if(this.value) window.location.href=this.value">
+    <option value="">Version...</option>
+  </select>
+</div>
+<script>
+(function() {
+  var defined_base = '/fvdb-core';
+  var base = document.querySelector('meta[name="docs-base-url"]');
+  if (base) defined_base = base.getAttribute('content').replace(/\/$/, '');
+  var jsonUrl = defined_base + '/versions.json';
+  fetch(jsonUrl)
+    .then(function(r) { return r.json(); })
+    .then(function(versions) {
+      var sel = document.getElementById('version-select');
+      if (!sel) return;
+      sel.innerHTML = '';
+      var path = window.location.pathname;
+      versions.forEach(function(v) {
+        var opt = document.createElement('option');
+        opt.value = v.url;
+        opt.textContent = v.name;
+        if (path.startsWith(v.url)) opt.selected = true;
+        sel.appendChild(opt);
+      });
+    })
+    .catch(function() {});
+})();
+</script>
+{% endblock %}

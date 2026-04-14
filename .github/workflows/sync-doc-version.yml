@@ -63,8 +63,11 @@ jobs:
           branch: auto/sync-doc-version
           title: "Update doc stable version to ${{ steps.release.outputs.version }}"
           body: |
-            Automated PR to update `fvdb_core_stable_version` in `docs/conf.py`
-            to match the latest GitHub Release (`v${{ steps.release.outputs.version }}`).
+            Automated PR to update documentation version references to match
+            the latest GitHub Release (`v${{ steps.release.outputs.version }}`):
+
+            - `fvdb_core_stable_version` in `docs/conf.py`
+            - Version entry and `stable` pointer in `docs/versions-config.json`
 
             When merged, a docs rebuild will be triggered automatically.
           labels: automation
