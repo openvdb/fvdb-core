@@ -7,9 +7,9 @@ dependencies:
   - boto3
   - ca-certificates
   - certifi
+  - clang=18
   - clang-format=18
   - clang-tools=18
-  - clang=18
   - cmake
   - cuda-command-line-tools
   - cuda-compiler
@@ -22,8 +22,8 @@ dependencies:
   - git
   - gitpython
   - gxx_linux-64=14.3
-  - ipython
   - ipykernel
+  - ipython
   - jupyterlab
   - libclang
   - libcublas-dev
@@ -48,20 +48,20 @@ dependencies:
   - pkg-config
   - polyscope
   - psutil
-  - pybind11
   - py-opencv>=4.10[build=headless*]
+  - pybind11
   - pyrender
   - pytest-benchmark
   - python=3.12
   - pytorch-gpu=2.10.0
   - rich
   - sam2
-  - seaborn
   - scikit-build-core
   - scikit-image
+  - seaborn
   - setuptools>=68.2.2
-  - sphinx_rtd_theme
   - sphinx>=7.0.0
+  - sphinx_rtd_theme
   - tensorboard
   - tqdm
   - zlib
