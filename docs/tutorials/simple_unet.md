@@ -223,6 +223,8 @@ output = model(features, grid)
 
 The output will carry gradients during training, and you could train the sparse network accordingly.
 
+You can find an interactive example for training a sparse convolutional UNet in the [Convolution Lesson jupyter notebook](../../notebooks/03_conv.ipynb) available in the `fvdb-core` repository.
+
 ---
 
 ## Appendix: Porting from MinkowskiEngine

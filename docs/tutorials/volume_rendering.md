@@ -464,8 +464,7 @@ def main():
 
     # Create a sparse grid used to support features and do ray queries
     print("Building grid...")
-    primal_grid = GridBatch(device=device)
-    primal_grid.set_from_dense_grid(1, [resolution]*3, [-resolution//2]*3, voxel_sizes=vox_size, origins=vox_origin)
+    primal_grid = GridBatch.from_dense(1, [resolution]*3, [-resolution//2]*3, voxel_sizes=vox_size, origins=vox_origin, device=device)
     dual_grid = primal_grid # primal_grid.dual_grid()
 
     print("Done bulding the grid!")
