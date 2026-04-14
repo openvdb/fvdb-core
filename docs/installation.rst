@@ -20,7 +20,7 @@ The following is a compatibility matrix of the versions of software compatible w
 Driver and Hardware Requirements
 -----------------------------------
 
-The following table specifies the minimum NVIDIA driver versions and GPU architectures needed to run fVDB-Reality-Capture:
+The following table specifies the minimum NVIDIA driver versions and GPU architectures needed to run fVDB:
 
 +------------------+----------------+------------------+---------------------+
 | Operating System | Driver Version | GPU Architecture | Compute Capability  |
