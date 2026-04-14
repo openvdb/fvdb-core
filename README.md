@@ -87,7 +87,7 @@ conda activate fvdb
 ##### Other available environments
 * `fvdb_build`: Use `env/build_environment.yml` for a minimum set of dependencies needed just to build/package *f*VDB (note this environment won't have all the runtime dependencies needed to `import fvdb`).
 * `fvdb_test`: Use `env/test_environment.yml` for a runtime environment which has only the packages required to run the unit tests after building ƒVDB. This is the environment used by the CI pipeline to run the tests after building ƒVDB in the `fvdb_build` environment.
-* `fvdb_learn`: Use `env/learn_environment.yml` for additional runtime requirements and packages needed to run the [notebooks](notebooks) or [examples](examples) and view their visualizations.
+* `fvdb_learn`: Use `env/learn_environment.yml` to build an environment with the latest released/stable version of `fvdb-core` along with additional runtime packages needed to run the [notebooks](notebooks) or [examples](examples) and view their visualizations.  This environment cannot be used to build *f*VDB from source.
 
 ---
 
