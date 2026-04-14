@@ -1,7 +1,8 @@
 # A Simple Convolutional U-Net
 
 In this tutorial, you will be guided on how to build a simple sparse convolutional neural network using fVDB.
-If you were using MinkowskiEngine to tackle sparse 3D data previously, we will also guide you step-by-step to help you smoothly transfer from it and enjoy speed-ups and memory-savings.
+
+A popular framework for implementing Sparse U-Nets is the [MinkowskiEngine](https://nvidia.github.io/MinkowskiEngine/). The [appendix](#appendix-porting-from-minkowskiengine) below includes a step-by-step guide to porting MinkowskiEngine code to fVDB.
 
 In our simplistic U-Net case, we want to build a Res-UNet with four layers, and each layer contains several blocks.
 First, we import basic `fvdb` libraries:
@@ -14,7 +15,7 @@ import torch
 ```
 
 Here `fvdb.nn` is a namespace similar to `torch.nn`, containing a broad definition of different neural layers.
-Every `fvdb.nn` layer takes explicit `(data: JaggedTensor, plan_or_grid)` arguments — topology and features are always passed separately.  A `ConvolutionPlan` pre-computes the kernel map for a given grid and kernel configuration, and is passed alongside the data to convolution layers.
+Every `fvdb.nn` layer takes explicit `(data: JaggedTensor, plan_or_grid)` arguments — topology and features are always passed separately.  A `ConvolutionPlan` precomputes the necessary acceleration structures for a given grid and kernel configuration, and is passed alongside the data to convolution layers.
 
 We could then build a basic block as follows:
 
@@ -53,45 +54,6 @@ class BasicBlock(torch.nn.Module):
             residual = self.downsample(data, grid)
 
         out = fvdb.relu(out + residual)
-
-        return out
-```
-
-This defines a similar block as `MinkowskiEngine`:
-
-```python notest
-import MinkowskiEngine as ME
-
-
-class BasicBlock(torch.nn.Module):
-    expansion = 1
-
-    def __init__(self, in_channels: int, out_channels: int, downsample=None, bn_momentum: float = 0.1):
-        super().__init__()
-        self.conv1 = ME.MinkowskiConvolution(
-            in_channels, out_channels, kernel_size=3, stride=1, dilation=1, dimension=3)
-        self.norm1 = ME.MinkowskiBatchNorm(out_channels, momentum=bn_momentum)
-        self.conv2 = ME.MinkowskiConvolution(
-            out_channels, out_channels, kernel_size=3, stride=1, dilation=1, dimension=3)
-        self.norm2 = ME.MinkowskiBatchNorm(out_channels, momentum=bn_momentum)
-        self.relu = ME.MinkowskiReLU(inplace=True)
-        self.downsample = downsample
-
-    def forward(self, x):
-        residual = x
-
-        out = self.conv1(x)
-        out = self.norm1(out)
-        out = self.relu(out)
-
-        out = self.conv2(out)
-        out = self.norm2(out)
-
-        if self.downsample is not None:
-          residual = self.downsample(x)
-
-        out += residual
-        out = self.relu(out)
 
         return out
 ```
@@ -238,7 +200,7 @@ class FVDBUNetBase(torch.nn.Module):
         return self.final(out, plan_final)
 ```
 
-Please note that here, when we apply transposed convolution layers, we build a `ConvolutionPlan` using `from_grid_batch_transposed` with the encoder-side grid as the `target_grid`.
+Please note that here, when we apply strided transposed convolution layers, we build a `ConvolutionPlan` using `from_grid_batch_transposed` with the encoder-side grid as the `target_grid`.
 This is needed to guide the output domain of the network, because for perception networks, the output grid topology should align with the input topology.
 `ConvolutionPlan`s should be built once and reused across forward passes for efficiency.
 
@@ -260,4 +222,55 @@ output = model(features, grid)
 ```
 
 The output will carry gradients during training, and you could train the sparse network accordingly.
-Please find a fully working example at `examples/perception_example.py`. The same network is implemented using `MinkowskiEngine` for reference.
+
+You can find an interactive example for training a sparse convolutional UNet in the [Convolution Lesson jupyter notebook](../../notebooks/03_conv.ipynb) available in the `fvdb-core` repository.
+
+---
+
+## Appendix: Porting from MinkowskiEngine
+
+If you were previously using [MinkowskiEngine](https://nvidia.github.io/MinkowskiEngine/) to tackle sparse 3D data, this section provides a step-by-step comparison to help you smoothly transfer your code to fVDB and enjoy speed-ups and memory savings.
+
+### BasicBlock comparison
+
+The fVDB `BasicBlock` defined above corresponds to the following MinkowskiEngine equivalent:
+
+```python notest
+import torch
+import MinkowskiEngine as ME
+
+
+class BasicBlock(torch.nn.Module):
+    expansion = 1
+
+    def __init__(self, in_channels: int, out_channels: int, downsample=None, bn_momentum: float = 0.1):
+        super().__init__()
+        self.conv1 = ME.MinkowskiConvolution(
+            in_channels, out_channels, kernel_size=3, stride=1, dilation=1, dimension=3)
+        self.norm1 = ME.MinkowskiBatchNorm(out_channels, momentum=bn_momentum)
+        self.conv2 = ME.MinkowskiConvolution(
+            out_channels, out_channels, kernel_size=3, stride=1, dilation=1, dimension=3)
+        self.norm2 = ME.MinkowskiBatchNorm(out_channels, momentum=bn_momentum)
+        self.relu = ME.MinkowskiReLU(inplace=True)
+        self.downsample = downsample
+
+    def forward(self, x):
+        residual = x
+
+        out = self.conv1(x)
+        out = self.norm1(out)
+        out = self.relu(out)
+
+        out = self.conv2(out)
+        out = self.norm2(out)
+
+        if self.downsample is not None:
+            residual = self.downsample(x)
+
+        out += residual
+        out = self.relu(out)
+
+        return out
+```
+
+The key difference is that fVDB layers take explicit `(JaggedTensor, ConvolutionPlan)` or `(JaggedTensor, GridBatch)` arguments instead of wrapping them in a carrier object, while all the network layers remain fully compatible with `torch.nn`.

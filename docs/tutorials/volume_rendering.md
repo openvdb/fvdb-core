@@ -1,5 +1,7 @@
 # Volume Rendering
 
+> **Note:** This tutorial uses `nerfacc`'s volume rendering approach as a starting point. While newer techniques such as Gaussian splatting have become popular for many neural rendering tasks, volume rendering remains relevant for certain applications. The fVDB API usage demonstrated here applies broadly regardless of the rendering technique.
+
 In this example we replace `nerfacc`'s acceleration structure with fVDB and hence scale to unbounded scenes:
 
 ```python notest
@@ -462,8 +464,7 @@ def main():
 
     # Create a sparse grid used to support features and do ray queries
     print("Building grid...")
-    primal_grid = GridBatch(device=device)
-    primal_grid.set_from_dense_grid(1, [resolution]*3, [-resolution//2]*3, voxel_sizes=vox_size, origins=vox_origin)
+    primal_grid = GridBatch.from_dense(1, [resolution]*3, [-resolution//2]*3, voxel_sizes=vox_size, origins=vox_origin, device=device)
     dual_grid = primal_grid # primal_grid.dual_grid()
 
     print("Done bulding the grid!")
