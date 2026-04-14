@@ -304,8 +304,8 @@ integrateTSDFKernel(const ScalarDataType truncationMargin,
             }
             const ScalarType newWeight =
                 oldWeight + pixelWeight; // ScalarType(1) + oldWeight * pixelWeight;
-            const ScalarType newTsdf        = (oldWeight * oldTsdf + tsdf) / newWeight;
-            outTsdfAcc[unionWriteOffset]    = ScalarDataType(newTsdf);
+            const ScalarType newTsdf     = (oldWeight * oldTsdf + pixelWeight * tsdf) / newWeight;
+            outTsdfAcc[unionWriteOffset] = ScalarDataType(newTsdf);
             outWeightsAcc[unionWriteOffset] = ScalarDataType(newWeight);
             if (hasFeatures) {
                 for (auto i = 0; i < outFeaturesAcc.size(1); ++i) {
@@ -315,7 +315,7 @@ integrateTSDFKernel(const ScalarDataType truncationMargin,
                         voxelInBaseGrid ? ScalarType(featuresAcc.data()[baseGridOffset][i])
                                         : ScalarType(0);
                     outFeaturesAcc[unionWriteOffset][i] = FeatureScalarDataType(
-                        (oldWeight * oldFeatureI + pixelFeatureI) / newWeight);
+                        (oldWeight * oldFeatureI + pixelWeight * pixelFeatureI) / newWeight);
                 }
             }
         } else {

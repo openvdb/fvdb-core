@@ -1665,6 +1665,113 @@ class TestBasicOps(unittest.TestCase):
                 # ps.register_surface_mesh("marching_cubes", v.cpu()[0].jdata.numpy(), f.cpu()[0].jdata.numpy())
                 # ps.show()
 
+    @expand_tests(list(itertools.product(["cuda"], [torch.float32, torch.float64])))
+    def test_integrate_tsdf_pixel_weight_blending(self, device, dtype):
+        """Verify that per-pixel weights are applied to *new* samples during TSDF integration."""
+        N = 8
+        voxel_size = 0.1
+        trunc_dist = 0.4
+        depth1 = 1.2
+        depth2 = 1.0
+        pw = 3.0
+
+        origin = torch.tensor([-N * voxel_size / 2, -N * voxel_size / 2, 1.0], device=device, dtype=dtype)
+        grid = GridBatch.from_dense(
+            1,
+            [N, N, N],
+            [0, 0, 0],
+            voxel_sizes=voxel_size,
+            origins=origin.tolist(),
+            device=device,
+        )
+
+        cam_to_world = torch.eye(4, device=device, dtype=dtype).unsqueeze(0)
+        img_h, img_w = 100, 100
+        proj = torch.tensor(
+            [
+                [100.0, 0, 50.0],
+                [0, 100.0, 50.0],
+                [0, 0, 1],
+            ],
+            device=device,
+            dtype=dtype,
+        ).unsqueeze(0)
+
+        depth_img1 = torch.full((1, img_h, img_w), depth1, device=device, dtype=dtype)
+        depth_img2 = torch.full((1, img_h, img_w), depth2, device=device, dtype=dtype)
+
+        tsdf_init = fvdb.JaggedTensor(torch.zeros(grid.total_voxels, device=device, dtype=dtype))
+        weights_init = fvdb.JaggedTensor(torch.zeros(grid.total_voxels, device=device, dtype=dtype))
+
+        grid1, tsdf1, w1 = grid.integrate_tsdf(
+            trunc_dist,
+            proj,
+            cam_to_world,
+            tsdf_init,
+            weights_init,
+            depth_img1,
+            weight_images=None,
+        )
+
+        weight_img = torch.full((1, img_h, img_w), pw, device=device, dtype=dtype)
+        grid2_w, tsdf2_w, w2_w = grid1.integrate_tsdf(
+            trunc_dist,
+            proj,
+            cam_to_world,
+            tsdf1,
+            w1,
+            depth_img2,
+            weight_images=weight_img,
+        )
+        grid2_u, tsdf2_u, w2_u = grid1.integrate_tsdf(
+            trunc_dist,
+            proj,
+            cam_to_world,
+            tsdf1,
+            w1,
+            depth_img2,
+            weight_images=None,
+        )
+
+        atol = dtype_to_atol(dtype)
+
+        self.assertEqual(grid2_w.total_voxels, grid2_u.total_voxels)
+
+        m = w2_w.jdata.flatten() != w2_u.jdata.flatten()
+        self.assertTrue(m.any(), "Some voxels should have been updated")
+
+        # Weights must accumulate pw (not 1): w2_w - w2_u == pw - 1
+        torch.testing.assert_close(
+            w2_w.jdata.flatten()[m] - w2_u.jdata.flatten()[m],
+            torch.full_like(w2_w.jdata.flatten()[m], pw - 1.0),
+            atol=atol,
+            rtol=0,
+        )
+
+        # Sample TSDF at known points and verify against the weighted-average formula:
+        #   expected = (1 * s1 + pw * s2) / (1 + pw),  where s = clamp((depth - z) / trunc, max=1)
+        query_world = torch.tensor(
+            [[0.0, 0.0, 1.0], [0.0, 0.0, 1.1], [0.0, 0.0, 1.2]],
+            device=device,
+            dtype=dtype,
+        )
+        query_z = query_world[:, 2]
+
+        s1 = torch.clamp((depth1 - query_z) / trunc_dist, max=1.0)
+        s2 = torch.clamp((depth2 - query_z) / trunc_dist, max=1.0)
+        expected_tsdf = (1.0 * s1 + pw * s2) / (1.0 + pw)
+
+        pts = fvdb.JaggedTensor(query_world)
+        tsdf2_w_2d = fvdb.JaggedTensor(tsdf2_w.jdata.unsqueeze(-1))
+        sampled = grid2_w.sample_trilinear(pts, tsdf2_w_2d).jdata.flatten()
+        torch.testing.assert_close(sampled, expected_tsdf, atol=atol, rtol=0)
+
+        # Same check for the uniform run (implicit weight_images=1)
+        expected_tsdf_u = (1.0 * s1 + 1.0 * s2) / (1.0 + 1.0)
+        tsdf2_u_2d = fvdb.JaggedTensor(tsdf2_u.jdata.unsqueeze(-1))
+        sampled_u = grid2_u.sample_trilinear(pts, tsdf2_u_2d).jdata.flatten()
+        torch.testing.assert_close(sampled_u, expected_tsdf_u, atol=atol, rtol=0)
+
     @parameterized.expand(all_device_dtype_combos + bfloat16_combos)
     def test_refine_empty_grid(self, device, dtype):
         grid = GridBatch.from_dense(1, [32, 32, 32], [0, 0, 0], voxel_sizes=1.0 / 32, origins=[0, 0, 0], device=device)
