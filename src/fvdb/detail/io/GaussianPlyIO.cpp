@@ -351,7 +351,10 @@ saveGaussianPly(const std::string &filename,
     // [N, D]
     const torch::Tensor shCoeffs0CPU =
         sh0.index({validMask.jdata(), 0, torch::indexing::Ellipsis}).cpu().contiguous();
-    // [N, K-1, D]
+    // shN has shape [N, K-1, D], meaning SH coefficients are ordered by basis then
+    // channel (i.e. RGBRGB...).  Gaussian PLY files expect coefficients ordered by
+    // channel then basis (i.e. RR...GG...BB...), so we permute to [N, D, K-1] and
+    // then reshape to [N, D*(K-1)].
     const torch::Tensor shCoeffsNCPU = [&]() {
         if (shN.numel() <= 0) {
             return torch::zeros({meansCPU.size(0), 0}, shN.options().device(torch::kCPU));

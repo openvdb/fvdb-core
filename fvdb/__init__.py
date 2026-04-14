@@ -79,6 +79,7 @@ from ._gaussian_autograd import (
 )
 
 
+# TODO: Make a batched class to encapsulate this jagged rendering pipeline.
 def gaussian_render_jagged(
     means: JaggedTensor,  # [N1 + N2 + ..., 3]
     quats: JaggedTensor,  # [N1 + N2 + ..., 4]
@@ -139,6 +140,13 @@ def gaussian_render_jagged(
     ccz = viewmats.jdata.size(0)  # total cameras across all batches
 
     # --- Build cross-batch index arrays ---
+    # TODO: This indexing logic is convoluted but there is no better way without
+    # custom CUDA kernels.  Given Gaussians with shape [sum(N_i), ...] and cameras
+    # with shape [sum(C_i), ...], we compute the cross-product of each batch's
+    # Gaussians with that batch's cameras, producing a flat tensor of shape
+    # [sum(C_i * N_i), ...].  We need to track two index arrays:
+    #   camera_ids:   shape [sum(C_i * N_i)], values in [0, sum(C_i))
+    #   gaussian_ids: shape [sum(C_i * N_i)], values in [0, sum(N_i))
     # g_sizes: [N1, N2, ...], c_sizes: [C1, C2, ...]
     g_sizes = means.joffsets[1:] - means.joffsets[:-1]
     c_sizes = Ks.joffsets[1:] - Ks.joffsets[:-1]
@@ -209,7 +217,12 @@ def gaussian_render_jagged(
     else:
         sh0 = sh_coeffs_batched[0, :, :].unsqueeze(0)  # [1, nnz, D]
         shN = sh_coeffs_batched[1:, :, :]  # [K-1, nnz, D]
+        # FIXME (Francis): Compute view directions in the kernel instead of
+        # materializing a large tensor here.  Doing so would require updating
+        # the current backward pass as well.
         camtoworlds = torch.linalg.inv(viewmats.jdata)  # [ccz, 4, 4]
+        # NOTE: dirs are not normalized here; the SH evaluation kernel normalizes
+        # them internally.
         dirs = means.jdata[gaussian_ids] - camtoworlds[camera_ids, :3, 3]
         render_quantities = _EvaluateGaussianSHFn.apply(
             actual_sh_degree,

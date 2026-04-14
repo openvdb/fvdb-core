@@ -7,7 +7,6 @@ from typing import Any, Mapping, Sequence, TypeVar, cast, overload
 
 import torch
 import torch.nn.functional as F
-
 from fvdb.enums import CameraModel, ProjectionMethod
 
 from . import _fvdb_cpp as _C
@@ -1589,7 +1588,12 @@ class GaussianSplat3d:
             sh_degree_to_use = sh_degree
 
         if sh_degree_to_use > 0:
+            # FIXME (Francis): Compute view directions in the kernel instead of
+            # materializing a large [C, N, 3] tensor here.  Doing so would require
+            # updating the current backward pass as well.
             cam_to_world, info = torch.linalg.inv_ex(w2c)
+            # NOTE: view_dirs are not normalized here; the SH evaluation kernel
+            # normalizes them internally.
             view_dirs = means[None, :, :] - cam_to_world[:, None, :3, 3]
             return _EvaluateGaussianSHFn.apply(sh_degree_to_use, C, view_dirs, sh0, shN, radii)
         else:
@@ -3922,6 +3926,13 @@ class GaussianSplat3d:
                 jagged tensor containing the weights of the contributing Gaussians of each rendered pixel for each camera. The weights are in row-major order and
                 sum to 1 for each pixel if that pixel is opaque (alpha=1).
         """
+        # TODO: Projection currently always evaluates SH, but this method only needs
+        # geometric projection (2D means, conics, opacities) -- the SH color values are
+        # unused.  Ideally rendering should be more generic: accept an arbitrary feature
+        # tensor (e.g. integer IDs, raw features) without requiring SH evaluation.  That
+        # would also let us avoid the wasted SH computation here and support additional
+        # shading models in the future.  For now we just render "deep IDs" as a fixed
+        # function.  (Ported from the C++ renderContributingGaussianIdsImpl TODO.)
         with torch.no_grad():
             radii, means2d, depths, conics, compensations = self._do_projection(
                 world_to_camera_matrices,
