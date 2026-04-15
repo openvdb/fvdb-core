@@ -1497,30 +1497,6 @@ class GaussianSplat3d:
             if distortion_coeffs is None:
                 raise RuntimeError("distortionCoeffs must be provided for OpenCV camera models")
 
-        if self._use_ut(camera_model, projection_method):
-            if distortion_coeffs is None:
-                distortion_coeffs = torch.empty(C, 0, device=means.device, dtype=means.dtype)
-            result = _C.project_gaussians_ut_fwd(
-                means,
-                quats,
-                log_scales,
-                w2c,
-                K,
-                distortion_coeffs,
-                self._camera_model_to_cpp(camera_model),
-                W,
-                H,
-                eps2d,
-                near,
-                far,
-                min_radius,
-                antialias,
-            )
-            radii, means2d, depths, conics, compensations = result
-            if not antialias:
-                compensations = None
-            return radii, means2d, depths, conics, compensations
-
         N = means.size(0)
         accum_grad_norms: torch.Tensor | None = None
         accum_step_counts: torch.Tensor | None = None
@@ -1545,6 +1521,30 @@ class GaussianSplat3d:
                 mr = torch.zeros(N, device=means.device, dtype=torch.int32)
                 self._accumulated_max_2d_radii = mr
             accum_max_radii = mr
+
+        if self._use_ut(camera_model, projection_method):
+            if distortion_coeffs is None:
+                distortion_coeffs = torch.empty(C, 0, device=means.device, dtype=means.dtype)
+            result = _C.project_gaussians_ut_fwd(
+                means,
+                quats,
+                log_scales,
+                w2c,
+                K,
+                distortion_coeffs,
+                self._camera_model_to_cpp(camera_model),
+                W,
+                H,
+                eps2d,
+                near,
+                far,
+                min_radius,
+                antialias,
+            )
+            radii, means2d, depths, conics, compensations = result
+            if not antialias:
+                compensations = None
+            return radii, means2d, depths, conics, compensations
 
         result = _ProjectGaussiansFn.apply(
             means,
