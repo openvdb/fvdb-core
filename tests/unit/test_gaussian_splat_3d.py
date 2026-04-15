@@ -4517,6 +4517,70 @@ class TestGaussianCameraApi(unittest.TestCase):
                 sh_degree_to_use=0,
             )
 
+    def test_ut_projection_initializes_gradient_accumulation(self):
+        """UT projection path must initialize gradient accumulation state when enabled.
+
+        When accumulate_mean_2d_gradients is True, the ANALYTIC projection path lazily
+        initializes _accumulated_gradient_step_counts and _accumulated_mean_2d_gradient_norms.
+        The UNSCENTED (UT) path must do the same, otherwise downstream consumers (e.g.,
+        refinement in fvdb-reality-capture) crash on None tensors.
+
+        See: https://github.com/openvdb/fvdb-reality-capture/issues/279
+        """
+        self.gs3d.accumulate_mean_2d_gradients = True
+
+        # Reset state so tensors are None
+        self.gs3d.set_state(
+            means=self.gs3d.means,
+            quats=self.gs3d.quats,
+            log_scales=self.gs3d.log_scales,
+            logit_opacities=self.gs3d.logit_opacities,
+            sh0=self.gs3d.sh0,
+            shN=self.gs3d.shN,
+        )
+        self.assertIsNone(self.gs3d.accumulated_gradient_step_counts)
+        self.assertIsNone(self.gs3d.accumulated_mean_2d_gradient_norms)
+
+        # ANALYTIC path initializes gradient accumulation state
+        pinhole_args = self._render_args(CameraModel.PINHOLE)
+        self.gs3d.project_gaussians_for_images(
+            **self._with_overrides(pinhole_args, projection_method=ProjectionMethod.ANALYTIC),
+            sh_degree_to_use=0,
+        )
+        self.assertIsNotNone(
+            self.gs3d.accumulated_gradient_step_counts,
+            "ANALYTIC projection should initialize gradient accumulation state",
+        )
+        self.assertIsNotNone(
+            self.gs3d.accumulated_mean_2d_gradient_norms,
+            "ANALYTIC projection should initialize gradient accumulation state",
+        )
+
+        # Reset state again
+        self.gs3d.set_state(
+            means=self.gs3d.means,
+            quats=self.gs3d.quats,
+            log_scales=self.gs3d.log_scales,
+            logit_opacities=self.gs3d.logit_opacities,
+            sh0=self.gs3d.sh0,
+            shN=self.gs3d.shN,
+        )
+        self.assertIsNone(self.gs3d.accumulated_gradient_step_counts)
+
+        # UNSCENTED path must also initialize gradient accumulation state
+        self.gs3d.project_gaussians_for_images(
+            **self._with_overrides(pinhole_args, projection_method=ProjectionMethod.UNSCENTED),
+            sh_degree_to_use=0,
+        )
+        self.assertIsNotNone(
+            self.gs3d.accumulated_gradient_step_counts,
+            "UNSCENTED projection should initialize gradient accumulation state",
+        )
+        self.assertIsNotNone(
+            self.gs3d.accumulated_mean_2d_gradient_norms,
+            "UNSCENTED projection should initialize gradient accumulation state",
+        )
+
     def test_pinhole_and_orthographic_ignore_distortion_coeffs_tensor(self):
         ignored_distortion = torch.tensor(
             [[0.12, -0.03, 0.01, 0.0, 0.0, 0.0, 0.02, -0.015, 0.004, -0.003, 0.002, -0.001]],
