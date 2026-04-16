@@ -1,0 +1,49 @@
+# Copyright Contributors to the OpenVDB Project
+# SPDX-License-Identifier: Apache-2.0
+#
+# Deploy a redirect page to GitHub Pages pointing visitors to Read the Docs.
+name: GitHub Pages Redirect
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create redirect page
+        env:
+          RTD_URL: https://fvdb-core.readthedocs.io/en/stable/
+        run: |
+          mkdir -p _site
+          printf '%s\n' \
+            '<!DOCTYPE html>' \
+            '<html><head>' \
+            "<meta http-equiv=\"refresh\" content=\"0;url=${RTD_URL}\">" \
+            "<link rel=\"canonical\" href=\"${RTD_URL}\">" \
+            "<script>window.location.replace(\"${RTD_URL}\");</script>" \
+            '</head><body>' \
+            "<p>Redirecting to <a href=\"${RTD_URL}\">${RTD_URL}</a></p>" \
+            '</body></html>' > _site/index.html
+          touch _site/.nojekyll
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site/
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
