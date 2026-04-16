@@ -10,12 +10,7 @@ build:
   jobs:
     pre_build:
       # Generate fvdb/version.py if absent (normally created by CMake).
-      - test -f fvdb/version.py || python -c "
-          import tomllib, pathlib;
-          v = tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'];
-          pathlib.Path('fvdb/version.py').write_text(
-            f'__version__ = \"{v}\"\nfvdb = __version__\ngit = \"unknown\"\n'
-          )"
+      - test -f fvdb/version.py || python -c "import tomllib,pathlib;v=tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'];pathlib.Path('fvdb/version.py').write_text(pathlib.Path('fvdb/version.py.in').read_text().replace('@SKBUILD_PROJECT_VERSION@',v).replace('@FVDB_GIT_SHA@','unknown'))"
 
 sphinx:
   configuration: docs/conf.py
