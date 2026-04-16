@@ -4,7 +4,7 @@
 #ifndef FVDB_DETAIL_VIEWER_VIEWER_H
 #define FVDB_DETAIL_VIEWER_VIEWER_H
 
-#include <fvdb/detail/ops/gsplat/GaussianCameras.cuh>
+#include <fvdb/detail/utils/gsplat/GaussianCameras.cuh>
 #include <fvdb/detail/viewer/CameraView.h>
 #include <fvdb/detail/viewer/GaussianSplat3dView.h>
 
@@ -142,10 +142,8 @@ class Viewer {
     float cameraFar(const std::string &scene_name);
     void setCameraFar(const std::string &scene_name, float far);
 
-    using CameraModel = fvdb::detail::ops::DistortionModel;
-
-    void setCameraModel(const std::string &scene_name, CameraModel model);
-    CameraModel cameraModel(const std::string &scene_name);
+    void setCameraModel(const std::string &scene_name, fvdb::detail::ops::DistortionModel model);
+    fvdb::detail::ops::DistortionModel cameraModel(const std::string &scene_name);
 
     std::string
     ipAddress() const {

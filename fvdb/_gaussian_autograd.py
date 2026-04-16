@@ -300,12 +300,12 @@ class _EvaluateGaussianSHFn(torch.autograd.Function):
         ctx,
         sh_degree_to_use: int,
         num_cameras: int,
-        view_dirs: torch.Tensor | None,
-        sh0_coeffs: torch.Tensor,
-        shN_coeffs: torch.Tensor | None,
-        radii: torch.Tensor,
+        view_dirs: torch.Tensor,  # [C, N, 3] or empty
+        sh0_coeffs: torch.Tensor,  # [N, 1, D]
+        shN_coeffs: torch.Tensor,  # [N, K-1, D] or empty
+        radii: torch.Tensor,  # [C, N]
     ) -> torch.Tensor:
-        render_quantities = _C.eval_gaussian_sh_fwd(
+        render_quantities = _C.evaluate_spherical_harmonics_fwd(
             sh_degree_to_use,
             num_cameras,
             view_dirs,
@@ -314,17 +314,10 @@ class _EvaluateGaussianSHFn(torch.autograd.Function):
             radii,
         )
 
-        to_save = [radii]
-        if view_dirs is not None:
-            to_save.append(view_dirs)
-        if shN_coeffs is not None:
-            to_save.append(shN_coeffs)
-        ctx.save_for_backward(*to_save)
+        ctx.save_for_backward(view_dirs, shN_coeffs, radii)
         ctx.sh_degree_to_use = sh_degree_to_use
         ctx.num_cameras = num_cameras
         ctx.num_gaussians = sh0_coeffs.size(0)
-        ctx.has_view_dirs = view_dirs is not None
-        ctx.has_shN = shN_coeffs is not None
 
         return render_quantities
 
@@ -335,14 +328,11 @@ class _EvaluateGaussianSHFn(torch.autograd.Function):
             return (None, None, None, None, None, None)
         d_loss_d_colors = d_loss_d_colors.contiguous()
 
-        saved = list(ctx.saved_tensors)
-        radii = saved[0]
-        view_dirs = saved[1] if ctx.has_view_dirs else None
-        shN_coeffs = saved[-1] if ctx.has_shN else None
+        view_dirs, shN_coeffs, radii = ctx.saved_tensors
 
-        compute_d_loss_d_view_dirs = view_dirs is not None and view_dirs.requires_grad
+        compute_d_loss_d_view_dirs = view_dirs.numel() > 0 and view_dirs.requires_grad
 
-        d_sh0, d_shN, d_view_dirs = _C.eval_gaussian_sh_bwd(
+        d_sh0, d_shN, d_view_dirs = _C.evaluate_spherical_harmonics_bwd(
             ctx.sh_degree_to_use,
             ctx.num_cameras,
             ctx.num_gaussians,

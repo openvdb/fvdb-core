@@ -66,4 +66,4 @@ torch::Tensor fusedSSIMBackwardPrivateUse1(double C1,
 
 } // namespace fvdb
 
-#endif
+#endif // FVDB_DETAIL_OPS_GSPLAT_FUSEDSSIM_H

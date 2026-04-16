@@ -3,10 +3,10 @@
 
 #include "utils/Tensor.h"
 
-#include <fvdb/detail/ops/gsplat/GaussianRasterizeBackward.h>
-#include <fvdb/detail/ops/gsplat/GaussianRasterizeForward.h>
-#include <fvdb/detail/ops/gsplat/GaussianSplatSparse.h>
-#include <fvdb/detail/ops/gsplat/GaussianTileIntersection.h>
+#include <fvdb/detail/ops/gsplat/BuildSparseGaussianTileLayout.h>
+#include <fvdb/detail/ops/gsplat/IntersectGaussianTiles.h>
+#include <fvdb/detail/ops/gsplat/RasterizeScreenSpaceGaussiansBackward.h>
+#include <fvdb/detail/ops/gsplat/RasterizeScreenSpaceGaussiansForward.h>
 
 #include <nanovdb/math/Math.h>
 
@@ -167,7 +167,8 @@ class GaussianTestHelper {
         auto pixelsToRender = fvdb::JaggedTensor(sparsePixelCoords);
 
         auto [activeTiles, activeTileMask, tilePixelMask, tilePixelCumsum, pixelMap] =
-            fvdb::detail::ops::computeSparseInfo(tileSize, numTilesW, numTilesH, pixelsToRender);
+            fvdb::detail::ops::buildSparseGaussianTileLayout(
+                tileSize, numTilesW, numTilesH, pixelsToRender);
 
         return {pixelsToRender, activeTiles, tilePixelMask, tilePixelCumsum, pixelMap};
     }
@@ -179,18 +180,17 @@ class GaussianTestHelper {
                     int imageHeight,
                     int tileSize) {
         auto [colors, alphas, lastIds] =
-            fvdb::detail::ops::dispatchGaussianRasterizeForward<torch::kCUDA>(
-                gaussians.means2d,
-                gaussians.conics,
-                gaussians.colors,
-                gaussians.opacities,
-                fvdb::detail::ops::RenderWindow2D{static_cast<uint32_t>(imageWidth),
-                                                  static_cast<uint32_t>(imageHeight),
-                                                  static_cast<uint32_t>(0),
-                                                  static_cast<uint32_t>(0)},
-                tileSize,
-                tiles.tileOffsets,
-                tiles.tileGaussianIds);
+            fvdb::detail::ops::rasterizeScreenSpaceGaussiansFwd(gaussians.means2d,
+                                                                gaussians.conics,
+                                                                gaussians.colors,
+                                                                gaussians.opacities,
+                                                                static_cast<uint32_t>(imageWidth),
+                                                                static_cast<uint32_t>(imageHeight),
+                                                                static_cast<uint32_t>(0),
+                                                                static_cast<uint32_t>(0),
+                                                                tileSize,
+                                                                tiles.tileOffsets,
+                                                                tiles.tileGaussianIds);
         return {colors, alphas, lastIds};
     }
 
@@ -201,24 +201,23 @@ class GaussianTestHelper {
                      int imageWidth,
                      int imageHeight,
                      int tileSize) {
-        auto [colors, alphas, lastIds] =
-            fvdb::detail::ops::dispatchGaussianSparseRasterizeForward<torch::kCUDA>(
-                sparse.pixelsToRender,
-                gaussians.means2d,
-                gaussians.conics,
-                gaussians.colors,
-                gaussians.opacities,
-                fvdb::detail::ops::RenderWindow2D{static_cast<uint32_t>(imageWidth),
-                                                  static_cast<uint32_t>(imageHeight),
-                                                  static_cast<uint32_t>(0),
-                                                  static_cast<uint32_t>(0)},
-                tileSize,
-                tiles.tileOffsets,
-                tiles.tileGaussianIds,
-                sparse.activeTiles,
-                sparse.tilePixelMask,
-                sparse.tilePixelCumsum,
-                sparse.pixelMap);
+        auto [colors, alphas, lastIds] = fvdb::detail::ops::rasterizeScreenSpaceGaussiansSparseFwd(
+            sparse.pixelsToRender,
+            gaussians.means2d,
+            gaussians.conics,
+            gaussians.colors,
+            gaussians.opacities,
+            static_cast<uint32_t>(imageWidth),
+            static_cast<uint32_t>(imageHeight),
+            static_cast<uint32_t>(0),
+            static_cast<uint32_t>(0),
+            tileSize,
+            tiles.tileOffsets,
+            tiles.tileGaussianIds,
+            sparse.activeTiles,
+            sparse.tilePixelMask,
+            sparse.tilePixelCumsum,
+            sparse.pixelMap);
         return {colors, alphas, lastIds};
     }
 
@@ -301,24 +300,23 @@ class GaussianTestHelper {
                      int tileSize,
                      int64_t numSharedChannelsOverride = -1) {
         auto [dLossDMeans2dAbs, dLossDMeans2d, dLossDConics, dLossDColors, dLossDOpacities] =
-            fvdb::detail::ops::dispatchGaussianRasterizeBackward<torch::kCUDA>(
-                gaussians.means2d,
-                gaussians.conics,
-                gaussians.colors,
-                gaussians.opacities,
-                fvdb::detail::ops::RenderWindow2D{static_cast<uint32_t>(imageWidth),
-                                                  static_cast<uint32_t>(imageHeight),
-                                                  static_cast<uint32_t>(0),
-                                                  static_cast<uint32_t>(0)},
-                tileSize,
-                tiles.tileOffsets,
-                tiles.tileGaussianIds,
-                forwardResults.alphas,
-                forwardResults.lastIds,
-                gradColors,
-                gradAlphas,
-                false,
-                numSharedChannelsOverride);
+            fvdb::detail::ops::rasterizeScreenSpaceGaussiansBwd(gaussians.means2d,
+                                                                gaussians.conics,
+                                                                gaussians.colors,
+                                                                gaussians.opacities,
+                                                                static_cast<uint32_t>(imageWidth),
+                                                                static_cast<uint32_t>(imageHeight),
+                                                                static_cast<uint32_t>(0),
+                                                                static_cast<uint32_t>(0),
+                                                                tileSize,
+                                                                tiles.tileOffsets,
+                                                                tiles.tileGaussianIds,
+                                                                forwardResults.alphas,
+                                                                forwardResults.lastIds,
+                                                                gradColors,
+                                                                gradAlphas,
+                                                                false,
+                                                                numSharedChannelsOverride);
         return {dLossDMeans2dAbs, dLossDMeans2d, dLossDConics, dLossDColors, dLossDOpacities};
     }
 
@@ -334,16 +332,16 @@ class GaussianTestHelper {
                       int tileSize,
                       int64_t numSharedChannelsOverride = -1) {
         auto [dLossDMeans2dAbs, dLossDMeans2d, dLossDConics, dLossDColors, dLossDOpacities] =
-            fvdb::detail::ops::dispatchGaussianSparseRasterizeBackward<torch::kCUDA>(
+            fvdb::detail::ops::rasterizeScreenSpaceGaussiansSparseBwd(
                 sparse.pixelsToRender,
                 gaussians.means2d,
                 gaussians.conics,
                 gaussians.colors,
                 gaussians.opacities,
-                fvdb::detail::ops::RenderWindow2D{static_cast<uint32_t>(imageWidth),
-                                                  static_cast<uint32_t>(imageHeight),
-                                                  static_cast<uint32_t>(0),
-                                                  static_cast<uint32_t>(0)},
+                static_cast<uint32_t>(imageWidth),
+                static_cast<uint32_t>(imageHeight),
+                static_cast<uint32_t>(0),
+                static_cast<uint32_t>(0),
                 tileSize,
                 tiles.tileOffsets,
                 tiles.tileGaussianIds,
@@ -633,24 +631,24 @@ TEST_F(GaussianRasterizeTestFixture, TestChunkedChannels) {
 TEST_F(GaussianRasterizeTestFixture, CPUThrows) {
     loadTestData("rasterize_backward_inputs.pt", "rasterize_backward_outputs.pt");
     moveToDevice(torch::kCPU);
-    EXPECT_THROW(fvdb::detail::ops::dispatchGaussianRasterizeBackward<torch::kCPU>(
-                     means2d,
-                     conics,
-                     colors,
-                     opacities,
-                     fvdb::detail::ops::RenderWindow2D{static_cast<uint32_t>(imageWidth),
-                                                       static_cast<uint32_t>(imageHeight),
-                                                       static_cast<uint32_t>(imageOriginW),
-                                                       static_cast<uint32_t>(imageOriginH)},
-                     tileSize,
-                     tileOffsets,
-                     tileGaussianIds,
-                     renderedAlphas,
-                     lastGaussianIdsPerPixel,
-                     dLossDRenderedColors,
-                     dLossDRenderedAlphas,
-                     false),
-                 c10::NotImplementedError);
+    EXPECT_THROW(
+        fvdb::detail::ops::rasterizeScreenSpaceGaussiansBwd(means2d,
+                                                            conics,
+                                                            colors,
+                                                            opacities,
+                                                            static_cast<uint32_t>(imageWidth),
+                                                            static_cast<uint32_t>(imageHeight),
+                                                            static_cast<uint32_t>(imageOriginW),
+                                                            static_cast<uint32_t>(imageOriginH),
+                                                            tileSize,
+                                                            tileOffsets,
+                                                            tileGaussianIds,
+                                                            renderedAlphas,
+                                                            lastGaussianIdsPerPixel,
+                                                            dLossDRenderedColors,
+                                                            dLossDRenderedAlphas,
+                                                            false),
+        c10::NotImplementedError);
 }
 
 TEST_F(GaussianRasterizeTestFixture, TestSparseBackwardRasterization) {
@@ -663,7 +661,7 @@ TEST_F(GaussianRasterizeTestFixture, TestSparseBackwardRasterization) {
 
     // Compute sparse info for the pixels to render
     auto [activeTiles, activeTileMask, tilePixelMask, tilePixelCumsum, pixelMap] =
-        fvdb::detail::ops::computeSparseInfo(
+        fvdb::detail::ops::buildSparseGaussianTileLayout(
             tileSize, tileOffsets.size(2), tileOffsets.size(1), pixelsToRender);
 
     // Step 1: Run forward dense on the same scene to get dense rendered output
@@ -1097,34 +1095,32 @@ TEST_F(GaussianRasterizeTestFixture, TestDenseBackwardWithBackgrounds) {
 
     // Run forward pass WITH backgrounds
     auto [colorsWithBg, alphasWithBg, lastIdsWithBg] =
-        fvdb::detail::ops::dispatchGaussianRasterizeForward<torch::kCUDA>(
-            gaussians.means2d,
-            gaussians.conics,
-            gaussians.colors,
-            gaussians.opacities,
-            fvdb::detail::ops::RenderWindow2D{static_cast<uint32_t>(imageWidth),
-                                              static_cast<uint32_t>(imageHeight),
-                                              static_cast<uint32_t>(0),
-                                              static_cast<uint32_t>(0)},
-            tileSize,
-            tiles.tileOffsets,
-            tiles.tileGaussianIds,
-            backgrounds);
+        fvdb::detail::ops::rasterizeScreenSpaceGaussiansFwd(gaussians.means2d,
+                                                            gaussians.conics,
+                                                            gaussians.colors,
+                                                            gaussians.opacities,
+                                                            static_cast<uint32_t>(imageWidth),
+                                                            static_cast<uint32_t>(imageHeight),
+                                                            static_cast<uint32_t>(0),
+                                                            static_cast<uint32_t>(0),
+                                                            tileSize,
+                                                            tiles.tileOffsets,
+                                                            tiles.tileGaussianIds,
+                                                            backgrounds);
 
     // Run forward pass WITHOUT backgrounds
     auto [colorsNoBg, alphasNoBg, lastIdsNoBg] =
-        fvdb::detail::ops::dispatchGaussianRasterizeForward<torch::kCUDA>(
-            gaussians.means2d,
-            gaussians.conics,
-            gaussians.colors,
-            gaussians.opacities,
-            fvdb::detail::ops::RenderWindow2D{static_cast<uint32_t>(imageWidth),
-                                              static_cast<uint32_t>(imageHeight),
-                                              static_cast<uint32_t>(0),
-                                              static_cast<uint32_t>(0)},
-            tileSize,
-            tiles.tileOffsets,
-            tiles.tileGaussianIds);
+        fvdb::detail::ops::rasterizeScreenSpaceGaussiansFwd(gaussians.means2d,
+                                                            gaussians.conics,
+                                                            gaussians.colors,
+                                                            gaussians.opacities,
+                                                            static_cast<uint32_t>(imageWidth),
+                                                            static_cast<uint32_t>(imageHeight),
+                                                            static_cast<uint32_t>(0),
+                                                            static_cast<uint32_t>(0),
+                                                            tileSize,
+                                                            tiles.tileOffsets,
+                                                            tiles.tileGaussianIds);
 
     // Alphas and last IDs should be identical
     EXPECT_TRUE(torch::allclose(alphasWithBg, alphasNoBg));
@@ -1140,25 +1136,24 @@ TEST_F(GaussianRasterizeTestFixture, TestDenseBackwardWithBackgrounds) {
           dLossDConicsWithBg,
           dLossDColorsWithBg,
           dLossDOpacitiesWithBg] =
-        fvdb::detail::ops::dispatchGaussianRasterizeBackward<torch::kCUDA>(
-            gaussians.means2d,
-            gaussians.conics,
-            gaussians.colors,
-            gaussians.opacities,
-            fvdb::detail::ops::RenderWindow2D{static_cast<uint32_t>(imageWidth),
-                                              static_cast<uint32_t>(imageHeight),
-                                              static_cast<uint32_t>(0),
-                                              static_cast<uint32_t>(0)},
-            tileSize,
-            tiles.tileOffsets,
-            tiles.tileGaussianIds,
-            alphasWithBg,
-            lastIdsWithBg,
-            gradColors,
-            gradAlphas,
-            false,
-            -1,
-            backgrounds);
+        fvdb::detail::ops::rasterizeScreenSpaceGaussiansBwd(gaussians.means2d,
+                                                            gaussians.conics,
+                                                            gaussians.colors,
+                                                            gaussians.opacities,
+                                                            static_cast<uint32_t>(imageWidth),
+                                                            static_cast<uint32_t>(imageHeight),
+                                                            static_cast<uint32_t>(0),
+                                                            static_cast<uint32_t>(0),
+                                                            tileSize,
+                                                            tiles.tileOffsets,
+                                                            tiles.tileGaussianIds,
+                                                            alphasWithBg,
+                                                            lastIdsWithBg,
+                                                            gradColors,
+                                                            gradAlphas,
+                                                            false,
+                                                            -1,
+                                                            backgrounds);
 
     // Run backward pass WITHOUT backgrounds
     auto [dLossDMeans2dAbsNoBg,
@@ -1166,23 +1161,22 @@ TEST_F(GaussianRasterizeTestFixture, TestDenseBackwardWithBackgrounds) {
           dLossDConicsNoBg,
           dLossDColorsNoBg,
           dLossDOpacitiesNoBg] =
-        fvdb::detail::ops::dispatchGaussianRasterizeBackward<torch::kCUDA>(
-            gaussians.means2d,
-            gaussians.conics,
-            gaussians.colors,
-            gaussians.opacities,
-            fvdb::detail::ops::RenderWindow2D{static_cast<uint32_t>(imageWidth),
-                                              static_cast<uint32_t>(imageHeight),
-                                              static_cast<uint32_t>(0),
-                                              static_cast<uint32_t>(0)},
-            tileSize,
-            tiles.tileOffsets,
-            tiles.tileGaussianIds,
-            alphasNoBg,
-            lastIdsNoBg,
-            gradColors,
-            gradAlphas,
-            false);
+        fvdb::detail::ops::rasterizeScreenSpaceGaussiansBwd(gaussians.means2d,
+                                                            gaussians.conics,
+                                                            gaussians.colors,
+                                                            gaussians.opacities,
+                                                            static_cast<uint32_t>(imageWidth),
+                                                            static_cast<uint32_t>(imageHeight),
+                                                            static_cast<uint32_t>(0),
+                                                            static_cast<uint32_t>(0),
+                                                            tileSize,
+                                                            tiles.tileOffsets,
+                                                            tiles.tileGaussianIds,
+                                                            alphasNoBg,
+                                                            lastIdsNoBg,
+                                                            gradColors,
+                                                            gradAlphas,
+                                                            false);
 
     // Gradients should be DIFFERENT when backgrounds are used
     // (because transparent pixels now have background contribution)
@@ -1231,16 +1225,16 @@ TEST_F(GaussianRasterizeTestFixture, TestSparseBackwardWithBackgrounds) {
 
     // Run sparse forward pass WITH backgrounds
     auto [colorsWithBg, alphasWithBg, lastIdsWithBg] =
-        fvdb::detail::ops::dispatchGaussianSparseRasterizeForward<torch::kCUDA>(
+        fvdb::detail::ops::rasterizeScreenSpaceGaussiansSparseFwd(
             sparse.pixelsToRender,
             gaussians.means2d,
             gaussians.conics,
             gaussians.colors,
             gaussians.opacities,
-            fvdb::detail::ops::RenderWindow2D{static_cast<uint32_t>(imageWidth),
-                                              static_cast<uint32_t>(imageHeight),
-                                              static_cast<uint32_t>(0),
-                                              static_cast<uint32_t>(0)},
+            static_cast<uint32_t>(imageWidth),
+            static_cast<uint32_t>(imageHeight),
+            static_cast<uint32_t>(0),
+            static_cast<uint32_t>(0),
             tileSize,
             tiles.tileOffsets,
             tiles.tileGaussianIds,
@@ -1252,16 +1246,16 @@ TEST_F(GaussianRasterizeTestFixture, TestSparseBackwardWithBackgrounds) {
 
     // Run sparse forward pass WITHOUT backgrounds
     auto [colorsNoBg, alphasNoBg, lastIdsNoBg] =
-        fvdb::detail::ops::dispatchGaussianSparseRasterizeForward<torch::kCUDA>(
+        fvdb::detail::ops::rasterizeScreenSpaceGaussiansSparseFwd(
             sparse.pixelsToRender,
             gaussians.means2d,
             gaussians.conics,
             gaussians.colors,
             gaussians.opacities,
-            fvdb::detail::ops::RenderWindow2D{static_cast<uint32_t>(imageWidth),
-                                              static_cast<uint32_t>(imageHeight),
-                                              static_cast<uint32_t>(0),
-                                              static_cast<uint32_t>(0)},
+            static_cast<uint32_t>(imageWidth),
+            static_cast<uint32_t>(imageHeight),
+            static_cast<uint32_t>(0),
+            static_cast<uint32_t>(0),
             tileSize,
             tiles.tileOffsets,
             tiles.tileGaussianIds,
@@ -1288,16 +1282,16 @@ TEST_F(GaussianRasterizeTestFixture, TestSparseBackwardWithBackgrounds) {
           dLossDConicsWithBg,
           dLossDColorsWithBg,
           dLossDOpacitiesWithBg] =
-        fvdb::detail::ops::dispatchGaussianSparseRasterizeBackward<torch::kCUDA>(
+        fvdb::detail::ops::rasterizeScreenSpaceGaussiansSparseBwd(
             sparse.pixelsToRender,
             gaussians.means2d,
             gaussians.conics,
             gaussians.colors,
             gaussians.opacities,
-            fvdb::detail::ops::RenderWindow2D{static_cast<uint32_t>(imageWidth),
-                                              static_cast<uint32_t>(imageHeight),
-                                              static_cast<uint32_t>(0),
-                                              static_cast<uint32_t>(0)},
+            static_cast<uint32_t>(imageWidth),
+            static_cast<uint32_t>(imageHeight),
+            static_cast<uint32_t>(0),
+            static_cast<uint32_t>(0),
             tileSize,
             tiles.tileOffsets,
             tiles.tileGaussianIds,
@@ -1319,16 +1313,16 @@ TEST_F(GaussianRasterizeTestFixture, TestSparseBackwardWithBackgrounds) {
           dLossDConicsNoBg,
           dLossDColorsNoBg,
           dLossDOpacitiesNoBg] =
-        fvdb::detail::ops::dispatchGaussianSparseRasterizeBackward<torch::kCUDA>(
+        fvdb::detail::ops::rasterizeScreenSpaceGaussiansSparseBwd(
             sparse.pixelsToRender,
             gaussians.means2d,
             gaussians.conics,
             gaussians.colors,
             gaussians.opacities,
-            fvdb::detail::ops::RenderWindow2D{static_cast<uint32_t>(imageWidth),
-                                              static_cast<uint32_t>(imageHeight),
-                                              static_cast<uint32_t>(0),
-                                              static_cast<uint32_t>(0)},
+            static_cast<uint32_t>(imageWidth),
+            static_cast<uint32_t>(imageHeight),
+            static_cast<uint32_t>(0),
+            static_cast<uint32_t>(0),
             tileSize,
             tiles.tileOffsets,
             tiles.tileGaussianIds,
@@ -1400,24 +1394,23 @@ TEST_F(GaussianRasterizeTestFixture, TestPackedModeBackwardMultipleCameras) {
                 expectedDConics,
                 expectedDColors,
                 expectedDOpacities] =
-        fvdb::detail::ops::dispatchGaussianRasterizeBackward<torch::kCUDA>(
-            gaussians.means2d,
-            gaussians.conics,
-            gaussians.colors,
-            gaussians.opacities,
-            fvdb::detail::ops::RenderWindow2D{static_cast<uint32_t>(testImageWidth),
-                                              static_cast<uint32_t>(testImageHeight),
-                                              static_cast<uint32_t>(0),
-                                              static_cast<uint32_t>(0)},
-            testTileSize,
-            tiles.tileOffsets,
-            tiles.tileGaussianIds,
-            denseResults.alphas,
-            denseResults.lastIds,
-            dLossDColors,
-            dLossDAlphas,
-            false, // absGrad
-            -1);   // numSharedChannelsOverride
+        fvdb::detail::ops::rasterizeScreenSpaceGaussiansBwd(gaussians.means2d,
+                                                            gaussians.conics,
+                                                            gaussians.colors,
+                                                            gaussians.opacities,
+                                                            static_cast<uint32_t>(testImageWidth),
+                                                            static_cast<uint32_t>(testImageHeight),
+                                                            static_cast<uint32_t>(0),
+                                                            static_cast<uint32_t>(0),
+                                                            testTileSize,
+                                                            tiles.tileOffsets,
+                                                            tiles.tileGaussianIds,
+                                                            denseResults.alphas,
+                                                            denseResults.lastIds,
+                                                            dLossDColors,
+                                                            dLossDAlphas,
+                                                            false, // absGrad
+                                                            -1);   // numSharedChannelsOverride
 
     // Step 3: Reshape to packed format [nnz, D]
     // Non-packed mode: kernel converts index to [cid][gid] using division/modulo
@@ -1434,15 +1427,15 @@ TEST_F(GaussianRasterizeTestFixture, TestPackedModeBackwardMultipleCameras) {
                 outDConicsPacked,
                 outDColorsPacked,
                 outDOpacitiesPacked] =
-        fvdb::detail::ops::dispatchGaussianRasterizeBackward<torch::kCUDA>(
+        fvdb::detail::ops::rasterizeScreenSpaceGaussiansBwd(
             means2dPacked,
             conicsPacked,
             colorsPacked,
             opacitiesPacked,
-            fvdb::detail::ops::RenderWindow2D{static_cast<uint32_t>(testImageWidth),
-                                              static_cast<uint32_t>(testImageHeight),
-                                              static_cast<uint32_t>(0),
-                                              static_cast<uint32_t>(0)},
+            static_cast<uint32_t>(testImageWidth),
+            static_cast<uint32_t>(testImageHeight),
+            static_cast<uint32_t>(0),
+            static_cast<uint32_t>(0),
             testTileSize,
             tiles.tileOffsets, // Still use [C, H, W] tile offsets
             tiles.tileGaussianIds,

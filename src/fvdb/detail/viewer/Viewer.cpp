@@ -2,9 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
-#include "fvdb/detail/viewer/GaussianSplat3dView.h"
-
 #include <fvdb/detail/viewer/CameraView.h>
+#include <fvdb/detail/viewer/GaussianSplat3dView.h>
 #include <fvdb/detail/viewer/Viewer.h>
 
 #include <c10/util/Exception.h>
@@ -373,18 +372,19 @@ Viewer::setCameraFar(const std::string &scene_name, float far) {
     updateCamera(scene_name);
 }
 
-Viewer::CameraModel
+fvdb::detail::ops::DistortionModel
 Viewer::cameraModel(const std::string &scene_name) {
     getCamera(scene_name);
-    return mEditor.camera.config.is_orthographic ? CameraModel::ORTHOGRAPHIC : CameraModel::PINHOLE;
+    return mEditor.camera.config.is_orthographic ? fvdb::detail::ops::DistortionModel::ORTHOGRAPHIC
+                                                 : fvdb::detail::ops::DistortionModel::PINHOLE;
 }
 
 void
-Viewer::setCameraModel(const std::string &scene_name, CameraModel model) {
+Viewer::setCameraModel(const std::string &scene_name, fvdb::detail::ops::DistortionModel model) {
     getCamera(scene_name);
-    if (model == CameraModel::PINHOLE) {
+    if (model == fvdb::detail::ops::DistortionModel::PINHOLE) {
         mEditor.camera.config.is_orthographic = PNANOVDB_FALSE;
-    } else if (model == CameraModel::ORTHOGRAPHIC) {
+    } else if (model == fvdb::detail::ops::DistortionModel::ORTHOGRAPHIC) {
         mEditor.camera.config.is_orthographic = PNANOVDB_TRUE;
     } else {
         throw std::invalid_argument(

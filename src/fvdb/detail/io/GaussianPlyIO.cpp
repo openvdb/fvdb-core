@@ -4,10 +4,7 @@
 #include <fvdb/detail/io/GaussianPlyIO.h>
 
 // Ops headers
-#include <fvdb/detail/ops/gsplat/GaussianComputeNanInfMask.h>
-
-// Utils headers
-#include <fvdb/detail/utils/Utils.h>
+#include <fvdb/detail/ops/gsplat/ComputeGaussianNanInfMask.h>
 
 #include <c10/core/ScalarType.h>
 #include <c10/util/flat_hash_map.h>
@@ -327,10 +324,8 @@ saveGaussianPly(const std::string &filename,
                 std::optional<std::unordered_map<std::string, PlyMetadataTypes>> trainingMetadata) {
     using namespace tinyply;
 
-    const fvdb::JaggedTensor validMask = FVDB_DISPATCH_KERNEL(means.device(), [&]() {
-        return detail::ops::dispatchGaussianNanInfMask<DeviceTag>(
-            means, quats, logScales, logitOpacities, sh0, shN);
-    });
+    const fvdb::JaggedTensor validMask =
+        detail::ops::computeGaussianNanInfMask(means, quats, logScales, logitOpacities, sh0, shN);
 
     std::filebuf fb;
     fb.open(filename, std::ios::out | std::ios::binary);
@@ -359,6 +354,11 @@ saveGaussianPly(const std::string &filename,
         if (shN.numel() <= 0) {
             return torch::zeros({meansCPU.size(0), 0}, shN.options().device(torch::kCPU));
         } else {
+            // ShN has shape [N, K-1, D], meaning the spherical harmonic coefficients are ordered
+            // by basis, then channel. i.e. RGBRGB...
+            // Gaussian PLYs expect the coefficients to be ordered by channel, then basis. i.e.
+            // RR...GG...BB... So we permute the axes to [N, D, K-1] and then reshape to [N,
+            // D*(K-1)]
             return shN
                 .index({validMask.jdata(), torch::indexing::Slice(), torch::indexing::Ellipsis})
                 .cpu()

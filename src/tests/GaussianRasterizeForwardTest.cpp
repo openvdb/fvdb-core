@@ -4,9 +4,9 @@
 #include "utils/ImageUtils.h"
 #include "utils/Tensor.h"
 
-#include <fvdb/detail/ops/gsplat/GaussianRasterizeForward.h>
-#include <fvdb/detail/ops/gsplat/GaussianSplatSparse.h>
-#include <fvdb/detail/ops/gsplat/GaussianTileIntersection.h>
+#include <fvdb/detail/ops/gsplat/BuildSparseGaussianTileLayout.h>
+#include <fvdb/detail/ops/gsplat/IntersectGaussianTiles.h>
+#include <fvdb/detail/ops/gsplat/RasterizeScreenSpaceGaussiansForward.h>
 
 #include <nanovdb/math/Math.h>
 
@@ -343,25 +343,23 @@ TEST(GaussianRasterizeForwardMaskedEdgeTile, Child) {
                              torch::TensorOptions().device(torch::kCUDA).dtype(torch::kBool));
     masks[0][1][1] = false; // mask out bottom-right edge tile
 
-    auto [tileOffsets, tileGaussianIds] =
-        fvdb::detail::ops::dispatchGaussianTileIntersection<torch::kCUDA>(
-            means2d, radii, depths, at::nullopt, (uint32_t)C, tileSize, tileExtentH, tileExtentW);
+    auto [tileOffsets, tileGaussianIds] = fvdb::detail::ops::intersectGaussianTiles(
+        means2d, radii, depths, at::nullopt, (uint32_t)C, tileSize, tileExtentH, tileExtentW);
 
     auto [outFeatures, outAlphas, outLastIds] =
-        fvdb::detail::ops::dispatchGaussianRasterizeForward<torch::kCUDA>(
-            means2d,
-            conics,
-            features,
-            opacities,
-            fvdb::detail::ops::RenderWindow2D{static_cast<uint32_t>(imageWidth),
-                                              static_cast<uint32_t>(imageHeight),
-                                              static_cast<uint32_t>(0),
-                                              static_cast<uint32_t>(0)},
-            tileSize,
-            tileOffsets,
-            tileGaussianIds,
-            backgrounds,
-            masks);
+        fvdb::detail::ops::rasterizeScreenSpaceGaussiansFwd(means2d,
+                                                            conics,
+                                                            features,
+                                                            opacities,
+                                                            static_cast<uint32_t>(imageWidth),
+                                                            static_cast<uint32_t>(imageHeight),
+                                                            static_cast<uint32_t>(0),
+                                                            static_cast<uint32_t>(0),
+                                                            tileSize,
+                                                            tileOffsets,
+                                                            tileGaussianIds,
+                                                            backgrounds,
+                                                            masks);
 
     (void)outLastIds;
 
@@ -435,18 +433,17 @@ TEST_F(GaussianRasterizeForwardTestFixture, DISABLED_GenerateOutputData) {
     // Test with 3 channels
     {
         const auto [renderedColors, renderedAlphas, lastIds] =
-            fvdb::detail::ops::dispatchGaussianRasterizeForward<torch::kCUDA>(
-                means2d,
-                conics,
-                colors,
-                opacities,
-                fvdb::detail::ops::RenderWindow2D{static_cast<uint32_t>(imageWidth),
-                                                  static_cast<uint32_t>(imageHeight),
-                                                  static_cast<uint32_t>(imageOriginW),
-                                                  static_cast<uint32_t>(imageOriginH)},
-                tileSize,
-                tileOffsets,
-                tileGaussianIds);
+            fvdb::detail::ops::rasterizeScreenSpaceGaussiansFwd(means2d,
+                                                                conics,
+                                                                colors,
+                                                                opacities,
+                                                                static_cast<uint32_t>(imageWidth),
+                                                                static_cast<uint32_t>(imageHeight),
+                                                                static_cast<uint32_t>(imageOriginW),
+                                                                static_cast<uint32_t>(imageOriginH),
+                                                                tileSize,
+                                                                tileOffsets,
+                                                                tileGaussianIds);
 
         std::vector<torch::Tensor> outputData = {renderedColors, renderedAlphas, lastIds};
 
@@ -460,15 +457,15 @@ TEST_F(GaussianRasterizeForwardTestFixture, DISABLED_GenerateOutputData) {
         auto colors_64 = catChannelsToDim(colors, 64);
 
         const auto [renderedColors, renderedAlphas, lastIds] =
-            fvdb::detail::ops::dispatchGaussianRasterizeForward<torch::kCUDA>(
+            fvdb::detail::ops::rasterizeScreenSpaceGaussiansFwd(
                 means2d,
                 conics,
                 colors_64,
                 opacities,
-                fvdb::detail::ops::RenderWindow2D{static_cast<uint32_t>(imageWidth / 2),
-                                                  static_cast<uint32_t>(imageHeight / 2),
-                                                  static_cast<uint32_t>(imageOriginW),
-                                                  static_cast<uint32_t>(imageOriginH)},
+                static_cast<uint32_t>(imageWidth / 2),
+                static_cast<uint32_t>(imageHeight / 2),
+                static_cast<uint32_t>(imageOriginW),
+                static_cast<uint32_t>(imageOriginH),
                 tileSize,
                 tileOffsets,
                 tileGaussianIds);
@@ -484,18 +481,17 @@ TEST_F(GaussianRasterizeForwardTestFixture, TestBasicInputsAndOutputs) {
     loadTestData("rasterize_forward_inputs.pt", "rasterize_forward_outputs.pt");
 
     const auto [outColors, outAlphas, outLastIds] =
-        fvdb::detail::ops::dispatchGaussianRasterizeForward<torch::kCUDA>(
-            means2d,
-            conics,
-            colors,
-            opacities,
-            fvdb::detail::ops::RenderWindow2D{static_cast<uint32_t>(imageWidth),
-                                              static_cast<uint32_t>(imageHeight),
-                                              static_cast<uint32_t>(imageOriginW),
-                                              static_cast<uint32_t>(imageOriginH)},
-            tileSize,
-            tileOffsets,
-            tileGaussianIds);
+        fvdb::detail::ops::rasterizeScreenSpaceGaussiansFwd(means2d,
+                                                            conics,
+                                                            colors,
+                                                            opacities,
+                                                            static_cast<uint32_t>(imageWidth),
+                                                            static_cast<uint32_t>(imageHeight),
+                                                            static_cast<uint32_t>(imageOriginW),
+                                                            static_cast<uint32_t>(imageOriginH),
+                                                            tileSize,
+                                                            tileOffsets,
+                                                            tileGaussianIds);
 
     EXPECT_TRUE(torch::allclose(outColors, expectedRenderedColors));
     EXPECT_TRUE(torch::allclose(outAlphas, expectedRenderedAlphas));
@@ -509,18 +505,17 @@ TEST_F(GaussianRasterizeForwardTestFixture, TestConcatenatedChannels) {
     expectedRenderedColors = catChannelsToDim(expectedRenderedColors, 64);
 
     const auto [outColors, outAlphas, outLastIds] =
-        fvdb::detail::ops::dispatchGaussianRasterizeForward<torch::kCUDA>(
-            means2d,
-            conics,
-            colors,
-            opacities,
-            fvdb::detail::ops::RenderWindow2D{static_cast<uint32_t>(imageWidth),
-                                              static_cast<uint32_t>(imageHeight),
-                                              static_cast<uint32_t>(imageOriginW),
-                                              static_cast<uint32_t>(imageOriginH)},
-            tileSize,
-            tileOffsets,
-            tileGaussianIds);
+        fvdb::detail::ops::rasterizeScreenSpaceGaussiansFwd(means2d,
+                                                            conics,
+                                                            colors,
+                                                            opacities,
+                                                            static_cast<uint32_t>(imageWidth),
+                                                            static_cast<uint32_t>(imageHeight),
+                                                            static_cast<uint32_t>(imageOriginW),
+                                                            static_cast<uint32_t>(imageOriginH),
+                                                            tileSize,
+                                                            tileOffsets,
+                                                            tileGaussianIds);
 
     EXPECT_TRUE(torch::allclose(outColors, expectedRenderedColors));
     EXPECT_TRUE(torch::allclose(outAlphas, expectedRenderedAlphas));
@@ -535,18 +530,17 @@ TEST_F(GaussianRasterizeForwardTestFixture, TestMultipleCameras) {
 
     // run all 3 cameras at once
     const auto [outColorsAll, outAlphasAll, outLastIdsAll] =
-        fvdb::detail::ops::dispatchGaussianRasterizeForward<torch::kCUDA>(
-            means2d,
-            conics,
-            colors,
-            opacities,
-            fvdb::detail::ops::RenderWindow2D{static_cast<uint32_t>(imageWidth),
-                                              static_cast<uint32_t>(imageHeight),
-                                              static_cast<uint32_t>(imageOriginW),
-                                              static_cast<uint32_t>(imageOriginH)},
-            tileSize,
-            tileOffsets,
-            tileGaussianIds);
+        fvdb::detail::ops::rasterizeScreenSpaceGaussiansFwd(means2d,
+                                                            conics,
+                                                            colors,
+                                                            opacities,
+                                                            static_cast<uint32_t>(imageWidth),
+                                                            static_cast<uint32_t>(imageHeight),
+                                                            static_cast<uint32_t>(imageOriginW),
+                                                            static_cast<uint32_t>(imageOriginH),
+                                                            tileSize,
+                                                            tileOffsets,
+                                                            tileGaussianIds);
 
     // rasterize each camera individually
     std::vector<torch::Tensor> outColorsList;
@@ -576,18 +570,17 @@ TEST_F(GaussianRasterizeForwardTestFixture, TestMultipleCameras) {
 
         // Kernel receives adjusted offsets and 0-based IDs for this camera
         auto [outColors, outAlphas, outLastIds] =
-            fvdb::detail::ops::dispatchGaussianRasterizeForward<torch::kCUDA>(
-                means2d_1cam,
-                conics_1cam,
-                colors_1cam,
-                opacities_1cam,
-                fvdb::detail::ops::RenderWindow2D{static_cast<uint32_t>(imageWidth),
-                                                  static_cast<uint32_t>(imageHeight),
-                                                  static_cast<uint32_t>(imageOriginW),
-                                                  static_cast<uint32_t>(imageOriginH)},
-                tileSize,
-                tileOffsets_1cam,
-                tileGaussianIds_1cam);
+            fvdb::detail::ops::rasterizeScreenSpaceGaussiansFwd(means2d_1cam,
+                                                                conics_1cam,
+                                                                colors_1cam,
+                                                                opacities_1cam,
+                                                                static_cast<uint32_t>(imageWidth),
+                                                                static_cast<uint32_t>(imageHeight),
+                                                                static_cast<uint32_t>(imageOriginW),
+                                                                static_cast<uint32_t>(imageOriginH),
+                                                                tileSize,
+                                                                tileOffsets_1cam,
+                                                                tileGaussianIds_1cam);
 
         // add start offset back to non-background pixels
         outLastIds = outLastIds + start;
@@ -669,34 +662,32 @@ TEST_F(GaussianRasterizeForwardTestFixture, TestMultipleCamerasWithBackgrounds) 
 
     // Render without background
     const auto [outColorsNoBackground, outAlphasNoBackground, outLastIdsNoBackground] =
-        fvdb::detail::ops::dispatchGaussianRasterizeForward<torch::kCUDA>(
-            means2d,
-            conics,
-            colors,
-            opacities,
-            fvdb::detail::ops::RenderWindow2D{static_cast<uint32_t>(imageWidth),
-                                              static_cast<uint32_t>(imageHeight),
-                                              static_cast<uint32_t>(imageOriginW),
-                                              static_cast<uint32_t>(imageOriginH)},
-            tileSize,
-            tileOffsets,
-            tileGaussianIds);
+        fvdb::detail::ops::rasterizeScreenSpaceGaussiansFwd(means2d,
+                                                            conics,
+                                                            colors,
+                                                            opacities,
+                                                            static_cast<uint32_t>(imageWidth),
+                                                            static_cast<uint32_t>(imageHeight),
+                                                            static_cast<uint32_t>(imageOriginW),
+                                                            static_cast<uint32_t>(imageOriginH),
+                                                            tileSize,
+                                                            tileOffsets,
+                                                            tileGaussianIds);
 
     // Render with different background per camera
     const auto [outColorsWithBackground, outAlphasWithBackground, outLastIdsWithBackground] =
-        fvdb::detail::ops::dispatchGaussianRasterizeForward<torch::kCUDA>(
-            means2d,
-            conics,
-            colors,
-            opacities,
-            fvdb::detail::ops::RenderWindow2D{static_cast<uint32_t>(imageWidth),
-                                              static_cast<uint32_t>(imageHeight),
-                                              static_cast<uint32_t>(imageOriginW),
-                                              static_cast<uint32_t>(imageOriginH)},
-            tileSize,
-            tileOffsets,
-            tileGaussianIds,
-            backgrounds);
+        fvdb::detail::ops::rasterizeScreenSpaceGaussiansFwd(means2d,
+                                                            conics,
+                                                            colors,
+                                                            opacities,
+                                                            static_cast<uint32_t>(imageWidth),
+                                                            static_cast<uint32_t>(imageHeight),
+                                                            static_cast<uint32_t>(imageOriginW),
+                                                            static_cast<uint32_t>(imageOriginH),
+                                                            tileSize,
+                                                            tileOffsets,
+                                                            tileGaussianIds,
+                                                            backgrounds);
 
     // Alphas and last IDs should be identical regardless of background
     EXPECT_TRUE(torch::allclose(outAlphasNoBackground, outAlphasWithBackground));
@@ -729,20 +720,20 @@ TEST_F(GaussianRasterizeForwardTestFixture, TestSparseRasterization) {
     auto const pixelsToRender = generateSparsePixelCoords(numCameras, 100).cuda();
 
     auto [activeTiles, activeTileMask, tilePixelMask, tilePixelCumsum, pixelMap] =
-        fvdb::detail::ops::computeSparseInfo(
+        fvdb::detail::ops::buildSparseGaussianTileLayout(
             tileSize, tileOffsets.size(2), tileOffsets.size(1), pixelsToRender);
 
     const auto [outColorsSparse, outAlphasSparse, outLastIdsSparse] =
-        fvdb::detail::ops::dispatchGaussianSparseRasterizeForward<torch::kCUDA>(
+        fvdb::detail::ops::rasterizeScreenSpaceGaussiansSparseFwd(
             pixelsToRender,
             means2d,
             conics,
             colors,
             opacities,
-            fvdb::detail::ops::RenderWindow2D{static_cast<uint32_t>(imageWidth),
-                                              static_cast<uint32_t>(imageHeight),
-                                              static_cast<uint32_t>(imageOriginW),
-                                              static_cast<uint32_t>(imageOriginH)},
+            static_cast<uint32_t>(imageWidth),
+            static_cast<uint32_t>(imageHeight),
+            static_cast<uint32_t>(imageOriginW),
+            static_cast<uint32_t>(imageOriginH),
             tileSize,
             tileOffsets,
             tileGaussianIds,
@@ -771,20 +762,20 @@ TEST_F(GaussianRasterizeForwardTestFixture, TestSparseRasterizationConcatenatedC
     auto const pixelsToRender = generateSparsePixelCoords(numCameras, 100).cuda();
 
     auto [activeTiles, activeTileMask, tilePixelMask, tilePixelCumsum, pixelMap] =
-        fvdb::detail::ops::computeSparseInfo(
+        fvdb::detail::ops::buildSparseGaussianTileLayout(
             tileSize, tileOffsets.size(2), tileOffsets.size(1), pixelsToRender);
 
     const auto [outColorsSparse, outAlphasSparse, outLastIdsSparse] =
-        fvdb::detail::ops::dispatchGaussianSparseRasterizeForward<torch::kCUDA>(
+        fvdb::detail::ops::rasterizeScreenSpaceGaussiansSparseFwd(
             pixelsToRender,
             means2d,
             conics,
             colors,
             opacities,
-            fvdb::detail::ops::RenderWindow2D{static_cast<uint32_t>(imageWidth),
-                                              static_cast<uint32_t>(imageHeight),
-                                              static_cast<uint32_t>(imageOriginW),
-                                              static_cast<uint32_t>(imageOriginH)},
+            static_cast<uint32_t>(imageWidth),
+            static_cast<uint32_t>(imageHeight),
+            static_cast<uint32_t>(imageOriginW),
+            static_cast<uint32_t>(imageOriginH),
             tileSize,
             tileOffsets,
             tileGaussianIds,
@@ -811,35 +802,34 @@ TEST_F(GaussianRasterizeForwardTestFixture, TestSparseRasterizationMultipleCamer
     auto const pixelsToRender = generateSparsePixelCoords(numCameras, 100).cuda();
 
     auto [activeTiles, activeTileMask, tilePixelMask, tilePixelCumsum, pixelMap] =
-        fvdb::detail::ops::computeSparseInfo(
+        fvdb::detail::ops::buildSparseGaussianTileLayout(
             tileSize, tileOffsets.size(2), tileOffsets.size(1), pixelsToRender);
 
     // run all 3 cameras at once
     const auto [outColorsAll, outAlphasAll, outLastIdsAll] =
-        fvdb::detail::ops::dispatchGaussianRasterizeForward<torch::kCUDA>(
-            means2d,
-            conics,
-            colors,
-            opacities,
-            fvdb::detail::ops::RenderWindow2D{static_cast<uint32_t>(imageWidth),
-                                              static_cast<uint32_t>(imageHeight),
-                                              static_cast<uint32_t>(imageOriginW),
-                                              static_cast<uint32_t>(imageOriginH)},
-            tileSize,
-            tileOffsets,
-            tileGaussianIds);
+        fvdb::detail::ops::rasterizeScreenSpaceGaussiansFwd(means2d,
+                                                            conics,
+                                                            colors,
+                                                            opacities,
+                                                            static_cast<uint32_t>(imageWidth),
+                                                            static_cast<uint32_t>(imageHeight),
+                                                            static_cast<uint32_t>(imageOriginW),
+                                                            static_cast<uint32_t>(imageOriginH),
+                                                            tileSize,
+                                                            tileOffsets,
+                                                            tileGaussianIds);
 
     const auto [outColorsSparse, outAlphasSparse, outLastIdsSparse] =
-        fvdb::detail::ops::dispatchGaussianSparseRasterizeForward<torch::kCUDA>(
+        fvdb::detail::ops::rasterizeScreenSpaceGaussiansSparseFwd(
             pixelsToRender,
             means2d,
             conics,
             colors,
             opacities,
-            fvdb::detail::ops::RenderWindow2D{static_cast<uint32_t>(imageWidth),
-                                              static_cast<uint32_t>(imageHeight),
-                                              static_cast<uint32_t>(imageOriginW),
-                                              static_cast<uint32_t>(imageOriginH)},
+            static_cast<uint32_t>(imageWidth),
+            static_cast<uint32_t>(imageHeight),
+            static_cast<uint32_t>(imageOriginW),
+            static_cast<uint32_t>(imageOriginH),
             tileSize,
             tileOffsets,
             tileGaussianIds,
@@ -877,23 +867,23 @@ TEST_F(GaussianRasterizeForwardTestFixture, TestSparseRasterizationMultipleCamer
     auto const pixelsToRender = generateSparsePixelCoords(numCameras, 100).cuda();
 
     auto [activeTiles, activeTileMask, tilePixelMask, tilePixelCumsum, pixelMap] =
-        fvdb::detail::ops::computeSparseInfo(
+        fvdb::detail::ops::buildSparseGaussianTileLayout(
             tileSize, tileOffsets.size(2), tileOffsets.size(1), pixelsToRender);
 
     // Render sparse without background
     const auto [outColorsSparseNoBackground,
                 outAlphasSparseNoBackground,
                 outLastIdsSparseNoBackground] =
-        fvdb::detail::ops::dispatchGaussianSparseRasterizeForward<torch::kCUDA>(
+        fvdb::detail::ops::rasterizeScreenSpaceGaussiansSparseFwd(
             pixelsToRender,
             means2d,
             conics,
             colors,
             opacities,
-            fvdb::detail::ops::RenderWindow2D{static_cast<uint32_t>(imageWidth),
-                                              static_cast<uint32_t>(imageHeight),
-                                              static_cast<uint32_t>(imageOriginW),
-                                              static_cast<uint32_t>(imageOriginH)},
+            static_cast<uint32_t>(imageWidth),
+            static_cast<uint32_t>(imageHeight),
+            static_cast<uint32_t>(imageOriginW),
+            static_cast<uint32_t>(imageOriginH),
             tileSize,
             tileOffsets,
             tileGaussianIds,
@@ -906,16 +896,16 @@ TEST_F(GaussianRasterizeForwardTestFixture, TestSparseRasterizationMultipleCamer
     const auto [outColorsSparseWithBackground,
                 outAlphasSparseWithBackground,
                 outLastIdsSparseWithBackground] =
-        fvdb::detail::ops::dispatchGaussianSparseRasterizeForward<torch::kCUDA>(
+        fvdb::detail::ops::rasterizeScreenSpaceGaussiansSparseFwd(
             pixelsToRender,
             means2d,
             conics,
             colors,
             opacities,
-            fvdb::detail::ops::RenderWindow2D{static_cast<uint32_t>(imageWidth),
-                                              static_cast<uint32_t>(imageHeight),
-                                              static_cast<uint32_t>(imageOriginW),
-                                              static_cast<uint32_t>(imageOriginH)},
+            static_cast<uint32_t>(imageWidth),
+            static_cast<uint32_t>(imageHeight),
+            static_cast<uint32_t>(imageOriginW),
+            static_cast<uint32_t>(imageOriginH),
             tileSize,
             tileOffsets,
             tileGaussianIds,
@@ -976,18 +966,17 @@ TEST_F(GaussianRasterizeForwardTestFixture, TestPackedModeMultipleCameras) {
 
     // Step 1: Run non-packed rasterization to get expected results
     const auto [expectedColors, expectedAlphas, expectedLastIds] =
-        fvdb::detail::ops::dispatchGaussianRasterizeForward<torch::kCUDA>(
-            means2d,
-            conics,
-            colors,
-            opacities,
-            fvdb::detail::ops::RenderWindow2D{static_cast<uint32_t>(imageWidth),
-                                              static_cast<uint32_t>(imageHeight),
-                                              static_cast<uint32_t>(imageOriginW),
-                                              static_cast<uint32_t>(imageOriginH)},
-            tileSize,
-            tileOffsets,
-            tileGaussianIds);
+        fvdb::detail::ops::rasterizeScreenSpaceGaussiansFwd(means2d,
+                                                            conics,
+                                                            colors,
+                                                            opacities,
+                                                            static_cast<uint32_t>(imageWidth),
+                                                            static_cast<uint32_t>(imageHeight),
+                                                            static_cast<uint32_t>(imageOriginW),
+                                                            static_cast<uint32_t>(imageOriginH),
+                                                            tileSize,
+                                                            tileOffsets,
+                                                            tileGaussianIds);
 
     // Step 2: Reshape tensors to packed format [nnz, D]
     // The test data's tileGaussianIds already contains global indices (0 to C*N-1).
@@ -1000,18 +989,17 @@ TEST_F(GaussianRasterizeForwardTestFixture, TestPackedModeMultipleCameras) {
 
     // Step 3: Run packed rasterization with same tileOffsets and tileGaussianIds
     const auto [outColorsPacked, outAlphasPacked, outLastIdsPacked] =
-        fvdb::detail::ops::dispatchGaussianRasterizeForward<torch::kCUDA>(
-            means2dPacked,
-            conicsPacked,
-            colorsPacked,
-            opacitiesPacked,
-            fvdb::detail::ops::RenderWindow2D{static_cast<uint32_t>(imageWidth),
-                                              static_cast<uint32_t>(imageHeight),
-                                              static_cast<uint32_t>(imageOriginW),
-                                              static_cast<uint32_t>(imageOriginH)},
-            tileSize,
-            tileOffsets,
-            tileGaussianIds);
+        fvdb::detail::ops::rasterizeScreenSpaceGaussiansFwd(means2dPacked,
+                                                            conicsPacked,
+                                                            colorsPacked,
+                                                            opacitiesPacked,
+                                                            static_cast<uint32_t>(imageWidth),
+                                                            static_cast<uint32_t>(imageHeight),
+                                                            static_cast<uint32_t>(imageOriginW),
+                                                            static_cast<uint32_t>(imageOriginH),
+                                                            tileSize,
+                                                            tileOffsets,
+                                                            tileGaussianIds);
 
     // Step 4: Compare results
     // The output shapes should match: [C, H, W, D] for colors, [C, H, W, 1] for alphas
@@ -1048,21 +1036,21 @@ TEST_F(GaussianRasterizeForwardTestFixture, TestPackedModeSparseMultipleCameras)
 
     // Compute sparse info from pixels
     auto [activeTiles, activeTileMask, tilePixelMask, tilePixelCumsum, pixelMap] =
-        fvdb::detail::ops::computeSparseInfo(
+        fvdb::detail::ops::buildSparseGaussianTileLayout(
             tileSize, tileOffsets.size(2), tileOffsets.size(1), pixelsToRender);
 
     // Step 1: Run non-packed sparse rasterization to get expected results
     const auto [expectedColorsSparse, expectedAlphasSparse, expectedLastIdsSparse] =
-        fvdb::detail::ops::dispatchGaussianSparseRasterizeForward<torch::kCUDA>(
+        fvdb::detail::ops::rasterizeScreenSpaceGaussiansSparseFwd(
             pixelsToRender,
             means2d,
             conics,
             colors,
             opacities,
-            fvdb::detail::ops::RenderWindow2D{static_cast<uint32_t>(imageWidth),
-                                              static_cast<uint32_t>(imageHeight),
-                                              static_cast<uint32_t>(imageOriginW),
-                                              static_cast<uint32_t>(imageOriginH)},
+            static_cast<uint32_t>(imageWidth),
+            static_cast<uint32_t>(imageHeight),
+            static_cast<uint32_t>(imageOriginW),
+            static_cast<uint32_t>(imageOriginH),
             tileSize,
             tileOffsets,
             tileGaussianIds,
@@ -1082,16 +1070,16 @@ TEST_F(GaussianRasterizeForwardTestFixture, TestPackedModeSparseMultipleCameras)
 
     // Step 3: Run packed sparse rasterization with same sparse info and same gaussian IDs
     const auto [outColorsPacked, outAlphasPacked, outLastIdsPacked] =
-        fvdb::detail::ops::dispatchGaussianSparseRasterizeForward<torch::kCUDA>(
+        fvdb::detail::ops::rasterizeScreenSpaceGaussiansSparseFwd(
             pixelsToRender,
             means2dPacked,
             conicsPacked,
             colorsPacked,
             opacitiesPacked,
-            fvdb::detail::ops::RenderWindow2D{static_cast<uint32_t>(imageWidth),
-                                              static_cast<uint32_t>(imageHeight),
-                                              static_cast<uint32_t>(imageOriginW),
-                                              static_cast<uint32_t>(imageOriginH)},
+            static_cast<uint32_t>(imageWidth),
+            static_cast<uint32_t>(imageHeight),
+            static_cast<uint32_t>(imageOriginW),
+            static_cast<uint32_t>(imageOriginH),
             tileSize,
             tileOffsets,
             tileGaussianIds,
@@ -1125,17 +1113,17 @@ TEST_F(GaussianRasterizeForwardTestFixture, TestPackedModeSparseMultipleCameras)
 TEST_F(GaussianRasterizeForwardTestFixture, CPUThrows) {
     loadTestData("rasterize_forward_inputs.pt", "rasterize_forward_outputs.pt");
     moveToDevice(torch::kCPU);
-    EXPECT_THROW(fvdb::detail::ops::dispatchGaussianRasterizeForward<torch::kCPU>(
-                     means2d,
-                     conics,
-                     colors,
-                     opacities,
-                     fvdb::detail::ops::RenderWindow2D{static_cast<uint32_t>(imageWidth),
-                                                       static_cast<uint32_t>(imageHeight),
-                                                       static_cast<uint32_t>(imageOriginW),
-                                                       static_cast<uint32_t>(imageOriginH)},
-                     tileSize,
-                     tileOffsets,
-                     tileGaussianIds),
-                 c10::NotImplementedError);
+    EXPECT_THROW(
+        fvdb::detail::ops::rasterizeScreenSpaceGaussiansFwd(means2d,
+                                                            conics,
+                                                            colors,
+                                                            opacities,
+                                                            static_cast<uint32_t>(imageWidth),
+                                                            static_cast<uint32_t>(imageHeight),
+                                                            static_cast<uint32_t>(imageOriginW),
+                                                            static_cast<uint32_t>(imageOriginH),
+                                                            tileSize,
+                                                            tileOffsets,
+                                                            tileGaussianIds),
+        c10::NotImplementedError);
 }
