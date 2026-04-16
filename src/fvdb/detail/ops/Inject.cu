@@ -242,9 +242,11 @@ dispatchInject<torch::kCUDA>(const GridBatchImpl &dstGridBatch,
 
         const auto srcLeafCount = srcGridBatch.numLeavesAt(i);
         if (srcLeafCount == 0) {
-            // Nothing to inject from an empty source grid. Destination is already
-            // initialized with default_value by the Python wrapper (grid.py).
-            // Skip the kernel launch — CUDA rejects <<<0, ...>>> as invalid config.
+            // Nothing to inject from an empty source grid. In the out-of-place path,
+            // the Python wrapper (grid.py) prefills the destination with default_value;
+            // if the caller provided an explicit destination, skipping the kernel
+            // leaves that tensor unchanged. Skip the kernel launch — CUDA rejects
+            // <<<0, ...>>> as invalid config.
             continue;
         }
         const at::cuda::CUDAStream stream =
@@ -329,6 +331,11 @@ dispatchInject<torch::kPrivateUse1>(const GridBatchImpl &dstGridBatch,
 
             size_t deviceSrcLeafOffset, deviceSrcLeafCount;
             std::tie(deviceSrcLeafOffset, deviceSrcLeafCount) = deviceChunk(srcLeafCount, deviceId);
+            if (deviceSrcLeafCount == 0) {
+                // deviceChunk may yield 0 leaves on some devices when
+                // srcLeafCount < device_count(). Skip — CUDA rejects <<<0, ...>>>.
+                continue;
+            }
 
             AT_DISPATCH_V2(
                 src.scalar_type(),

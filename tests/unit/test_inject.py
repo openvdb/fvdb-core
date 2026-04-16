@@ -6,6 +6,7 @@ import unittest
 from typing import Callable
 
 import numpy as np
+import pytest
 import torch
 from parameterized import parameterized, parameterized_class
 
@@ -760,6 +761,7 @@ class InjectionTests(unittest.TestCase):
         self.assertTrue(torch.all(one_indices == frominds))
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
 def test_empty_src_grid_inject_fills_default():
     device = "cuda"
     dst_ijk = torch.tensor([[0, 0, 0], [1, 0, 0], [0, 1, 0]], dtype=torch.int32, device=device)
@@ -774,6 +776,7 @@ def test_empty_src_grid_inject_fills_default():
     assert (result == 99.0).all()
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
 def test_prune_all_then_dilate_then_inject():
     device = "cuda"
     ijk = torch.tensor([[0, 0, 0], [1, 0, 0], [0, 1, 0]], dtype=torch.int32, device=device)
