@@ -42,7 +42,7 @@ sampled_colors = grid.sample_trilinear(sample_pts, per_voxel_colors)
 
 Grid with color attributes            |  Points with sampled colors
 :------------------------------------:|:------------------------------------:
-![](../imgs/fig/sampling_1.png)       |  ![](../imgs/fig/sampling_2.png)
+![](../imgs/fig/sampling_1.webp)       |  ![](../imgs/fig/sampling_2.webp)
 
 ## Splatting point data to a grid
 
@@ -74,7 +74,7 @@ vox_colors = grid.splat_trilinear(points, colors)
 
 Input grid and points with colors                     |  Splat colors onto the grid
 :----------------------------------------------------:|:----------------------------------------------------:
-![](../imgs/fig/screenshot_000000.png.trim.png)       |  ![](../imgs/fig/screenshot_000006.png.trim.png)
+![](../imgs/fig/screenshot_000000.png.trim.webp)       |  ![](../imgs/fig/screenshot_000006.png.trim.png)
 
 ## Checking if points are in a grid
 
@@ -194,7 +194,7 @@ cubes_in_grid = grid.cubes_in_grid(pts, -cube_size / 2, cube_size / 2)
 ```
 
 We visualize the cubes which intersect a voxel in the grid (yellow cubes intersect and purple cubes do not).
-![](../imgs/fig/cubes_intersect_grid.png)
+![](../imgs/fig/cubes_intersect_grid.webp)
 
 
 And which cubes lie entirely within a voxel of the grid

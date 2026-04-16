@@ -61,7 +61,7 @@ print(points[0].jdata.shape)
 print(points[1].jdata.shape)
 ```
 
-![Minibatch of grids constructed from the input points. These input points have corresponding color attributes.](../imgs/fig/screenshot_000000.png.trim.png)
+![Minibatch of grids constructed from the input points. These input points have corresponding color attributes.](../imgs/fig/screenshot_000000.png.trim.webp)
 
 Next, we splat the colors at the points to the constructed grid, yielding per-voxel colors.
 
@@ -84,4 +84,4 @@ sample_points = fvdb.JaggedTensor([torch.rand(10_000, 3), torch.rand(11_000, 3)]
 sampled_colors = grid.sample_trilinear(sample_points, vox_colors)
 ```
 
-![Colors resampled at random locations from the grid.](../imgs/fig/screenshot_000004.png.trim.png)
+![Colors resampled at random locations from the grid.](../imgs/fig/screenshot_000004.png.trim.webp)
