@@ -549,7 +549,7 @@ subdiv_normals, subdiv_grid = grid.refine(2, vox_normals)
 
 Here we visualize the original grid on the right and the grid after subdivision by a factor of 2 on the left.
 
-![](../imgs/fig/refine.png)
+![](../imgs/fig/subdivide.png)
 
 
 In practice, in a deep neural network like a U-Net architecture, the resolution of the grid can be decreased early in the network and then the grid's features need to be concatenated with features of the grid after its resolution is increased again.  When working with traditional, dense 2D or 3D data, cropping any mismatched outputs is straightforward to be able to concatenate these features.  However, in a sparse 3D grid, this is not straightforward and it's entirely unclear how to align the features.
@@ -722,4 +722,3 @@ tensor([[[ 0.0200,  0.0000,  0.0000,  0.0000],
          [ 0.0000,  0.0000,  0.0500,  0.0000],
          [ 0.2000, -0.2000,  0.2000,  1.0000]]])
 ```
-
