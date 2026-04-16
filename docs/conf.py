@@ -14,8 +14,15 @@ import sys
 sys.path.insert(0, os.path.abspath(".."))
 
 _versions_path = os.path.join(os.path.dirname(__file__), "..", ".github", "versions.json")
-with open(_versions_path) as _f:
-    _versions = json.load(_f)
+try:
+    with open(_versions_path) as _f:
+        _versions = json.load(_f)
+except FileNotFoundError:
+    _versions = {
+        "torch": {"full_version": "unknown", "version": "0"},
+        "cuda": {"versions": {}},
+        "python": {"matrix": ["3.12"]},
+    }
 
 _torch_full = _versions["torch"]["full_version"]
 _torch_short = _versions["torch"]["version"].replace(".", "")
@@ -32,6 +39,9 @@ author = "Contributors to the OpenVDB Project"
 # Stable fvdb-core version shown in installation examples.
 # Updated automatically by devtools/update-doc-versions.sh during release.
 fvdb_core_stable_version = "0.4.2"
+
+version = fvdb_core_stable_version
+release = fvdb_core_stable_version
 
 _subs = []
 for _cv in _cuda_versions:
@@ -94,6 +104,10 @@ exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "wip", "tutorials"]
 
 autodoc_default_options = {"undoc-members": "forward, extra_repr"}
 
+# Mock the compiled C++ extension so Sphinx can introspect the Python API
+# on build hosts that lack CUDA (e.g. Read the Docs).
+autodoc_mock_imports = ["_fvdb_cpp", "fvdb._fvdb_cpp"]
+
 # -- Options for HTML output -------------------------------------------------
 
 # The theme to use for HTML and HTML Help pages.  See the documentation for
@@ -101,6 +115,14 @@ autodoc_default_options = {"undoc-members": "forward, extra_repr"}
 #
 html_theme = "sphinx_rtd_theme"
 html_theme_options = {"analytics_id": "G-60P7VJJ09C"}  # Google Analytics ID
+
+html_context = {
+    "display_github": True,
+    "github_user": "openvdb",
+    "github_repo": "fvdb-core",
+    "github_version": "main",
+    "conf_py_path": "/docs/",
+}
 
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,

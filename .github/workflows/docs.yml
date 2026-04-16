@@ -1,168 +1,49 @@
-name: fvdb-core Documentation
+# Copyright Contributors to the OpenVDB Project
+# SPDX-License-Identifier: Apache-2.0
+#
+# Deploy a redirect page to GitHub Pages pointing visitors to Read the Docs.
+name: GitHub Pages Redirect
 
 on:
-  push:
-    branches: [main]
-    paths: ['docs/**']
   workflow_dispatch:
-    inputs:
-      branch:
-        description: "Branch to build"
-        required: true
-        default: "main"
-
-# Allow subsequent pushes to the same PR or REF to cancel any previous jobs.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
 
 permissions:
-  contents: write
-  deployments: read
-  pull-requests: read
-  issues: read
-  # Need ID token write permission to use OIDC
-  id-token: write
+  contents: read
   pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
 
 jobs:
-  versions:
-    uses: ./.github/workflows/load-versions.yml
-
-  ##############################################################################
-  # BUILD FVDB
-  ##############################################################################
-  start-build-runner:
-    name: Start CPU-only EC2 runner for build
-    needs: versions
-    runs-on: ubuntu-latest
-    outputs:
-      label: ${{ steps.start-build-runner.outputs.label }}
-      ec2-instance-id: ${{ steps.start-build-runner.outputs.ec2-instance-id }}
-    steps:
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6
-        with:
-          role-to-assume: ${{ needs.versions.outputs.aws-role }}
-          aws-region: ${{ needs.versions.outputs.aws-region }}
-      - name: Start EC2 runner
-        id: start-build-runner
-        uses: machulav/ec2-github-runner@v2
-        with:
-          mode: start
-          github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
-          ec2-image-id: ${{ needs.versions.outputs.aws-cpu-ami }}
-          ec2-instance-type: m6a.8xlarge
-          subnet-id: ${{ needs.versions.outputs.aws-subnet }}
-          security-group-id: ${{ needs.versions.outputs.aws-security-group }}
-
-  fvdb-core-build-docs:
-    name: fvdb-core Build and Docs
-    needs: [start-build-runner, versions] # required to start the main job when the runner is ready
-    runs-on: ${{ needs.start-build-runner.outputs.label }} # run the job on the newly created runner
-    container:
-      image: rockylinux/rockylinux:8
-      env:
-        PYTHONPATH: ""
-        CPM_SOURCE_CACHE: "/__w/cpm_cache"
-        CONDA_OVERRIDE_CUDA: ${{ needs.versions.outputs.cuda-conda-override }}
-      options: --rm
-    defaults:
-      run:
-        shell: bash -el {0}
-    steps:
-      - name: Install system dependencies
-        run: dnf install -y git procps-ng findutils
-
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0 # Fetch all history for all branches
-          ref: ${{ github.event.inputs.branch }}
-
-      - name: Fetch PR branch
-        if: github.event_name == 'pull_request_target'
-        run: |
-          cd $GITHUB_WORKSPACE
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          git config --global --add safe.directory "$(pwd)"
-          git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_branch
-
-      - name: Merge PR branch into base
-        if: github.event_name == 'pull_request_target'
-        run: |
-          cd $GITHUB_WORKSPACE
-          git merge pr_branch
-
-      - name: Set up fvdb Conda env
-        uses: mamba-org/setup-micromamba@v2
-        env:
-          CONDA_OVERRIDE_CUDA: ${{ needs.versions.outputs.cuda-conda-override }}
-        with:
-          post-cleanup: 'all'
-          environment-name: fvdb
-          environment-file: env/dev_environment.yml
-
-      - name: Build fvdb
-        run: |
-          echo "Building fvdb"
-          micromamba activate fvdb
-          ./build.sh install verbose --cuda-arch-list '${{ needs.versions.outputs.cuda-arch-pr }}' -e
-
-      - name: Clone and build fvdb-reality-capture
-        run: |
-          echo "Cloning fvdb-reality-capture"
-          pwd
-          git clone https://github.com/openvdb/fvdb-reality-capture.git
-          pushd fvdb-reality-capture
-          pip install -e .
-          popd
-
-      - name: Build docs
-        run: |
-          micromamba activate fvdb
-          command -v sphinx-build
-          sphinx-build docs/ -E -a _docs_build
-          sphinx-build fvdb-reality-capture/docs -E -a _docs_build/reality-capture
-
-
-      - name: Upload static files as artifact
-        id: deployment
-        uses: actions/upload-pages-artifact@v3 # or specific "vX.X.X" version tag for this action
-        with:
-          path: _docs_build/
-
-  # Deployment job
-  deploy-fvdb-core-docs:
+  deploy:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
-    needs: fvdb-core-build-docs
     steps:
+      - name: Create redirect page
+        env:
+          RTD_URL: https://fvdb-core.readthedocs.io/en/stable/
+        run: |
+          mkdir -p _site
+          printf '%s\n' \
+            '<!DOCTYPE html>' \
+            '<html><head>' \
+            "<meta http-equiv=\"refresh\" content=\"0;url=${RTD_URL}\">" \
+            "<link rel=\"canonical\" href=\"${RTD_URL}\">" \
+            "<script>window.location.replace(\"${RTD_URL}\");</script>" \
+            '</head><body>' \
+            "<p>Redirecting to <a href=\"${RTD_URL}\">${RTD_URL}</a></p>" \
+            '</body></html>' > _site/index.html
+          touch _site/.nojekyll
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site/
+
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
-
-  fvdb-build-stop-runner:
-    name: Stop CPU-only EC2 runner for build
-    needs:
-      - start-build-runner # required to get output from the start-build-runner job
-      - fvdb-core-build-docs # required to wait when the main job is done
-      - versions
-    runs-on: ubuntu-latest
-    if: ${{ always() }} # required to stop the runner even if the error happened in the previous jobs
-    steps:
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6
-        with:
-          role-to-assume: ${{ needs.versions.outputs.aws-role }}
-          aws-region: ${{ needs.versions.outputs.aws-region }}
-      - name: Stop EC2 runner
-        uses: machulav/ec2-github-runner@v2
-        with:
-          mode: stop
-          github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
-          label: ${{ needs.start-build-runner.outputs.label }}
-          ec2-instance-id: ${{ needs.start-build-runner.outputs.ec2-instance-id }}

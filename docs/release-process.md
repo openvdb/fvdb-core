@@ -145,13 +145,16 @@ merge commit (not squash) to preserve the release branch history on `main`.
 The `release/v0.4` branch is left untouched at version `0.4.0`, available
 as the base for future hotfix releases.
 
-Then **merge the doc version sync PR**. Documentation is rebuilt
-automatically when anything under `docs/` changes on `main` (via a push
-trigger on `docs.yml`). To rebuild docs manually as a fallback:
+Creating the GitHub Release triggers Read the Docs to build versioned
+documentation for the new tag automatically. The `/en/stable/` alias updates
+to point to the highest semver tag. No separate documentation deployment
+step is needed.
 
-```bash
-gh workflow run docs.yml --ref main
-```
+Optionally, **merge the doc version sync PR** created by
+`sync-doc-version.yml`. This updates `fvdb_core_stable_version` in
+`docs/conf.py` on `main`, which affects install command examples shown on
+the `/en/latest/` docs build. This is not urgent since versioned docs are
+built directly from the tag.
 
 Use `--remote origin` to target a different remote.
 Use `--dry-run` to preview without making changes.
@@ -189,8 +192,9 @@ already be on `main` (the commits for the hotfix should have been cherry-picked 
    This tags `v0.4.1`, creates a GitHub Release, and triggers the
    `sync-doc-version.yml` workflow to update `docs/conf.py`.
 
-5. **Merge the doc version sync PR** once CI passes. Documentation is
-   rebuilt automatically when the PR merges.
+5. **Optionally merge the doc version sync PR** once CI passes. This
+   updates install examples on `/en/latest/` but is not required for
+   the versioned tag docs, which RTD builds automatically.
 
 ## GitHub Branch Protection
 
@@ -293,9 +297,10 @@ is:
    (PATCH > 0), reusing the same release branch rather than creating
    separate hotfix branches.
 
-4. **Merge the doc version sync PRs** created by `sync-doc-version.yml`.
-   Documentation is rebuilt automatically when `docs/conf.py` changes on
-   `main`.
+4. **Optionally merge the doc version sync PRs** created by
+   `sync-doc-version.yml`. This updates install examples on `/en/latest/`
+   but is not required since Read the Docs builds versioned docs from
+   each tag directly.
 
 `finish-release.sh` checks that the latest `publish.yml` run on the release
 branch succeeded before proceeding. If the workflow failed or hasn't run, it
@@ -307,11 +312,23 @@ Both workflows also support manual triggering via `workflow_dispatch` with
 options to select the publish target (`s3`, `testpypi`, `none`) and whether
 to run GPU validation.
 
-## Automated Doc Version Sync
+## Versioned Documentation (Read the Docs)
 
-The `sync-doc-version.yml` workflow keeps the stable version shown in
-documentation (`fvdb_core_stable_version` in `docs/conf.py`) in sync with
-the latest GitHub Release. It runs:
+Documentation is hosted on [Read the Docs](https://fvdb-core.readthedocs.io)
+with automatic version management:
+
+- **Tag builds**: When a GitHub Release is created, RTD's automation rules
+  detect the new semver tag and build versioned docs for it (e.g.
+  `/en/v0.4.2/`). The `/en/stable/` alias automatically points to the
+  highest semver tag.
+- **Latest**: The `/en/latest/` build tracks the `main` branch and is
+  rebuilt on every push.
+- **Version switcher**: RTD provides a built-in flyout menu on every page
+  for switching between versions.
+
+The `sync-doc-version.yml` workflow keeps `fvdb_core_stable_version` in
+`docs/conf.py` in sync with the latest GitHub Release. This variable drives
+install command examples shown in the documentation. The workflow runs:
 
 - **Nightly** (cron schedule) as a safety net
 - **On demand** via `workflow_dispatch`, triggered automatically by
@@ -319,7 +336,5 @@ the latest GitHub Release. It runs:
 
 When the doc version is out of date, the workflow creates (or updates) a PR
 on the `auto/sync-doc-version` branch using `devtools/update-doc-versions.sh`.
-
-The `docs.yml` workflow has a push trigger filtered to `docs/**` on `main`,
-so merging the sync PR (or any doc change) automatically rebuilds and deploys
-the documentation to GitHub Pages.
+Merging this PR triggers an RTD rebuild of `/en/latest/` to pick up the
+updated install examples.
