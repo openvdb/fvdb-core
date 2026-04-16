@@ -98,16 +98,16 @@ jobs:
       #### End of git merge
 
       - name: Set up fvdb_build Conda env
-        uses: conda-incubator/setup-miniconda@v3
+        uses: mamba-org/setup-micromamba@v3
         with:
-          miniforge-version: latest
-          conda-remove-defaults: "true"
-          activate-environment: fvdb_build
+          post-cleanup: 'all'
+          environment-name: fvdb_build
           environment-file: env/build_environment.yml
 
       - name: Build fvdb
         run: |
-          TORCH_CUDA_ARCH_LIST="${{ needs.versions.outputs.cuda-arch-publish }}" conda run --no-capture-output -n fvdb_build ./build.sh wheel verbose gtests benchmarks
+          micromamba activate fvdb_build
+          TORCH_CUDA_ARCH_LIST="${{ needs.versions.outputs.cuda-arch-publish }}" ./build.sh wheel verbose gtests benchmarks
 
       - name: Upload wheel
         uses: actions/upload-artifact@v7
@@ -214,11 +214,11 @@ jobs:
       #### End of git merge
 
       - name: Set up fvdb_test Conda env
-        uses: conda-incubator/setup-miniconda@v3
+        uses: mamba-org/setup-micromamba@v3
         with:
-          miniforge-version: latest
-          conda-remove-defaults: "true"
-          activate-environment: fvdb_test
+          cache-environment: false
+          post-cleanup: 'all'
+          environment-name: fvdb_test
           environment-file: env/test_environment.yml
 
       - name: Download package
@@ -229,7 +229,7 @@ jobs:
 
       - name: Install package
         run: |
-            conda activate fvdb_test
+            micromamba activate fvdb_test
             pip install ./dist/*.whl
 
       - name: Disable git ownership verification

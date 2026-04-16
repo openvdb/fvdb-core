@@ -121,7 +121,7 @@ jobs:
       #     git merge --no-ff $CURRENT_COMMIT --message "CI: Simulating merge of $CURRENT_COMMIT into $TARGET_BRANCH"
 
       - name: Set up fvdb_build Conda env
-        uses: mamba-org/setup-micromamba@v2
+        uses: mamba-org/setup-micromamba@v3
         with:
           post-cleanup: 'all'
           environment-name: fvdb_build
@@ -248,7 +248,7 @@ jobs:
           git merge pr_branch
 
       - name: Set up fvdb_test Conda env
-        uses: mamba-org/setup-micromamba@v2
+        uses: mamba-org/setup-micromamba@v3
         with:
           cache-environment: false
           post-cleanup: 'all'
@@ -315,7 +315,7 @@ jobs:
           git merge pr_branch
 
       - name: Set up fvdb_test Conda env
-        uses: mamba-org/setup-micromamba@v2
+        uses: mamba-org/setup-micromamba@v3
         with:
           cache-environment: false
           post-cleanup: 'all'
@@ -384,7 +384,7 @@ jobs:
           git merge pr_branch
 
       - name: Set up fvdb_test Conda env
-        uses: mamba-org/setup-micromamba@v2
+        uses: mamba-org/setup-micromamba@v3
         with:
           cache-environment: false
           post-cleanup: 'all'

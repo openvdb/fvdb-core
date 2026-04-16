@@ -17,7 +17,7 @@ jobs:
     if: github.repository == 'openvdb/fvdb-core'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Get latest release version
         id: release
@@ -55,7 +55,7 @@ jobs:
         if: >-
           steps.release.outputs.skip != 'true' &&
           steps.release.outputs.version != steps.current.outputs.version
-        uses: peter-evans/create-pull-request@v7
+        uses: peter-evans/create-pull-request@v8
         with:
           token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
           commit-message: "Update doc stable version to ${{ steps.release.outputs.version }}"

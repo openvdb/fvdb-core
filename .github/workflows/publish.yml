@@ -328,7 +328,7 @@ jobs:
           fetch-depth: 0
           ref: ${{ inputs.branch || github.ref }}
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '${{ needs.versions.outputs.python-default }}'
       - name: Add post-release to version (TestPyPI only)
@@ -650,7 +650,7 @@ jobs:
           ref: ${{ inputs.branch || github.ref }}
 
       - name: Set up fvdb_test Conda env
-        uses: mamba-org/setup-micromamba@v2
+        uses: mamba-org/setup-micromamba@v3
         with:
           cache-environment: false
           post-cleanup: 'all'
