@@ -3,7 +3,7 @@
 
 Convolving the features of a `GridBatch` can be accomplished with either a high-level `torch.nn.Module` derived class provided by `fvdb.nn` or with more low-level methods available with `GridBatch`, we will illustrate both techniques.
 
-### High-level Usage with `fvdb.nn`
+## High-level Usage with `fvdb.nn`
 
 `fvdb.nn.SparseConv3d` provides a high-level `torch.nn.Module` class for convolution on `fvdb` classes that is an analogue to the use of `torch.nn.Conv3d`.  Using this module is the recommended functionality for performing convolution with `fvdb` because it not only manages functionality such as initializing the weights of the convolution and calling appropriate backend implementation functions but it also provides certain backend optimizations which will be illustrated in the [Low-level usage](#low-level-usage-with-gridbatch) section.
 
@@ -91,9 +91,9 @@ Here we visualize the original grid, the grid after strided convolution, and the
 ![](../imgs/fig/transposed_stride_conv.png)
 
 
-### Low-level Usage with `GridBatch`
+## Low-level Usage with `GridBatch`
 
-The [high-level `fvdb.nn.SparseConv3d` class](#high-level-convolution-with-fvdbnn) wraps several pieces of `GridBatch` functionality to provide a convenient `torch.nn.Module` for convolution.  However, for a more low-level approach that accomplishes the same outcome, the `GridBatch` class itself can be the starting point for performing convolution on the grid and its features.  We will illustrate this approach for completeness, though we do recommend the use of the `fvdb.nn.SparseConv3d` Module for most use-cases.
+The [high-level `fvdb.nn.SparseConv3d` class](#high-level-usage-with-fvdbnn) wraps several pieces of `GridBatch` functionality to provide a convenient `torch.nn.Module` for convolution.  However, for a more low-level approach that accomplishes the same outcome, the `GridBatch` class itself can be the starting point for performing convolution on the grid and its features.  We will illustrate this approach for completeness, though we do recommend the use of the `fvdb.nn.SparseConv3d` Module for most use-cases.
 
 Using the `GridBatch` convolution functions directly requires a little more knowledge about what happens under the hood.  Due to the nature of a sparse grid, in order to make convolution performant, fVDB precomputes the necessary acceleration structures for a given sparse grid, kernel size, and stride.
 

@@ -3269,21 +3269,22 @@ class GaussianSplat3d:
         the last channel from this :class:`GaussianSplat3d` from ``C`` camera views at the specified pixel locations.
 
         Example:
-        .. code-block:: python
 
-            # Assume gaussian_splat_3d is an instance of GaussianSplat3d
-            # pixels_to_render is a tensor of shape [C, P, 2] containing pixel coordinates to render
-            # Render sparse images with depth from C camera views at specified pixel locations
-            # features is a tensor of shape [C, P, D + 1] where D is the number of channels
-            # alphas is a tensor of shape [C, P, 1]
-            features, alphas = gaussian_splat_3d.sparse_render_images_and_depths(
-                pixels_to_render, # tensor of shape [C, P, 2]
-                world_to_camera_matrices, # tensor of shape [C, 4, 4]
-                projection_matrices, # tensor of shape [C, 3, 3]
-                image_width, # width of the images
-                image_height, # height of the images
-                near, # near clipping plane
-                far) # far clipping plane
+            .. code-block:: python
+
+                # Assume gaussian_splat_3d is an instance of GaussianSplat3d
+                # pixels_to_render is a tensor of shape [C, P, 2] containing pixel coordinates to render
+                # Render sparse images with depth from C camera views at specified pixel locations
+                # features is a tensor of shape [C, P, D + 1] where D is the number of channels
+                # alphas is a tensor of shape [C, P, 1]
+                features, alphas = gaussian_splat_3d.sparse_render_images_and_depths(
+                    pixels_to_render, # tensor of shape [C, P, 2]
+                    world_to_camera_matrices, # tensor of shape [C, 4, 4]
+                    projection_matrices, # tensor of shape [C, 3, 3]
+                    image_width, # width of the images
+                    image_height, # height of the images
+                    near, # near clipping plane
+                    far) # far clipping plane
 
         Args:
             pixels_to_render (torch.Tensor | JaggedTensor): A tensor of shape ``(C, P, 2)`` or a :class:`~fvdb.JaggedTensor` where ``C`` is the number of camera views,

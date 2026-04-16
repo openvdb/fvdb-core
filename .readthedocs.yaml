@@ -9,13 +9,7 @@ build:
     python: "3.12"
   jobs:
     pre_build:
-      # Generate fvdb/version.py if absent (normally created by CMake).
-      - test -f fvdb/version.py || python -c "
-          import tomllib, pathlib;
-          v = tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'];
-          pathlib.Path('fvdb/version.py').write_text(
-            f'__version__ = \"{v}\"\nfvdb = __version__\ngit = \"unknown\"\n'
-          )"
+      - python devtools/generate-version-stub.py
 
 sphinx:
   configuration: docs/conf.py
