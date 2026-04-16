@@ -93,7 +93,7 @@ Here we visualize the original grid, the grid after strided convolution, and the
 
 ### Low-level Usage with `GridBatch`
 
-The [high-level `fvdb.nn.SparseConv3d` class](#high-level-convolution-with-fvdbnn) wraps several pieces of `GridBatch` functionality to provide a convenient `torch.nn.Module` for convolution.  However, for a more low-level approach that accomplishes the same outcome, the `GridBatch` class itself can be the starting point for performing convolution on the grid and its features.  We will illustrate this approach for completeness, though we do recommend the use of the `fvdb.nn.SparseConv3d` Module for most use-cases.
+The [high-level `fvdb.nn.SparseConv3d` class](#high-level-usage-with-fvdbnn) wraps several pieces of `GridBatch` functionality to provide a convenient `torch.nn.Module` for convolution.  However, for a more low-level approach that accomplishes the same outcome, the `GridBatch` class itself can be the starting point for performing convolution on the grid and its features.  We will illustrate this approach for completeness, though we do recommend the use of the `fvdb.nn.SparseConv3d` Module for most use-cases.
 
 Using the `GridBatch` convolution functions directly requires a little more knowledge about what happens under the hood.  Due to the nature of a sparse grid, in order to make convolution performant, fVDB precomputes the necessary acceleration structures for a given sparse grid, kernel size, and stride.
 

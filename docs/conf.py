@@ -89,6 +89,8 @@ myst_enable_extensions = [
     "tasklist",
 ]
 
+myst_heading_anchors = 3
+
 # Fix return-type in google-style docstrings
 napoleon_custom_sections = [("Returns", "params_style")]
 

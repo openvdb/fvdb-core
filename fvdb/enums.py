@@ -62,6 +62,7 @@ class CameraModel(IntEnum):
     Camera model for projection / ray generation.
 
     Notes:
+
     - ``PINHOLE`` and ``ORTHOGRAPHIC`` ignore distortion coefficients.
     - ``OPENCV_*`` variants use pinhole intrinsics plus OpenCV-style distortion. When distortion
       coefficients are provided, FVDB expects a packed layout:
