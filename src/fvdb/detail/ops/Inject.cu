@@ -241,6 +241,12 @@ dispatchInject<torch::kCUDA>(const GridBatchImpl &dstGridBatch,
         const torch::Tensor srcI = src.index(i).jdata();
 
         const auto srcLeafCount = srcGridBatch.numLeavesAt(i);
+        if (srcLeafCount == 0) {
+            // Nothing to inject from an empty source grid. Destination is already
+            // initialized with default_value by the Python wrapper (grid.py).
+            // Skip the kernel launch — CUDA rejects <<<0, ...>>> as invalid config.
+            continue;
+        }
         const at::cuda::CUDAStream stream =
             at::cuda::getCurrentCUDAStream(srcGridBatch.device().index());
 
@@ -310,7 +316,10 @@ dispatchInject<torch::kPrivateUse1>(const GridBatchImpl &dstGridBatch,
         torch::Tensor dstI       = dst.index(i).jdata();
         const torch::Tensor srcI = src.index(i).jdata();
 
-        const auto srcLeafCount                   = srcGridBatch.numLeavesAt(i);
+        const auto srcLeafCount = srcGridBatch.numLeavesAt(i);
+        if (srcLeafCount == 0) {
+            continue;
+        }
         const auto [srcContigStrides, srcStrides] = stridesAndContiguousStrides(srcI);
         const auto [dstContigStrides, dstStrides] = stridesAndContiguousStrides(dstI);
 
