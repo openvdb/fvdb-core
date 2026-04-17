@@ -8,14 +8,18 @@
 
 namespace fvdb::detail::ops {
 
-template <typename ScalarType> struct alignas(32) Gaussian2D { // 28 bytes
+template <typename ScalarType> struct alignas(32) Gaussian2D { // 32 bytes
     using vec2t = nanovdb::math::Vec2<ScalarType>;
     using vec3t = nanovdb::math::Vec3<ScalarType>;
 
-    int32_t id;         // 4 bytes
-    vec2t xy;           // 8 bytes
-    ScalarType opacity; // 4 bytes
-    vec3t conic;        // 12 bytes
+    // First 16 bytes: id(4) + opacity(4) + xy(8, 8-byte aligned)
+    int32_t id;         // 4 bytes  (offset 0)
+    ScalarType opacity; // 4 bytes  (offset 4)
+    vec2t xy;           // 8 bytes  (offset 8)
+
+    // Second 16 bytes: conic(12) + pad(4)
+    vec3t conic;     // 12 bytes (offset 16)
+    ScalarType _pad; // 4 bytes  (offset 28)
 
     inline __device__ vec2t
     delta(const ScalarType px, const ScalarType py) const {
