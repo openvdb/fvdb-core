@@ -6,6 +6,7 @@ import unittest
 from typing import Callable
 
 import numpy as np
+import pytest
 import torch
 from parameterized import parameterized, parameterized_class
 
@@ -758,6 +759,40 @@ class InjectionTests(unittest.TestCase):
 
         toinds, frominds = torch.where(b1_comparison)
         self.assertTrue(torch.all(one_indices == frominds))
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+def test_empty_src_grid_inject_fills_default():
+    device = "cuda"
+    dst_ijk = torch.tensor([[0, 0, 0], [1, 0, 0], [0, 1, 0]], dtype=torch.int32, device=device)
+    dst_grid = fvdb.Grid.from_ijk(dst_ijk, voxel_size=0.01, origin=0.0)
+
+    src_ijk = torch.zeros((0, 3), dtype=torch.int32, device=device)
+    src_grid = fvdb.Grid.from_ijk(src_ijk, voxel_size=0.01, origin=0.0)
+    src_data = torch.zeros((0, 1), device=device)
+
+    result = dst_grid.inject_from(src_grid=src_grid, src=src_data, default_value=99.0)
+    assert result.shape == (3, 1)
+    assert (result == 99.0).all()
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+def test_prune_all_then_dilate_then_inject():
+    device = "cuda"
+    ijk = torch.tensor([[0, 0, 0], [1, 0, 0], [0, 1, 0]], dtype=torch.int32, device=device)
+    grid = fvdb.Grid.from_ijk(ijk, voxel_size=0.01, origin=0.0)
+    data = torch.randn(grid.num_voxels, 1, device=device)
+
+    mask = torch.zeros(grid.num_voxels, dtype=torch.bool, device=device)
+    empty_grid = grid.pruned_grid(mask)
+    empty_data = data[mask]
+    assert empty_grid.num_voxels == 0
+
+    dilated = empty_grid.dilated_grid(1)
+    assert dilated.num_voxels == 0
+
+    result = dilated.inject_from(src_grid=empty_grid, src=empty_data, default_value=0.0)
+    assert result.shape == (0, 1)
 
 
 if __name__ == "__main__":
