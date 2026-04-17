@@ -7,10 +7,22 @@
 # add these directories to sys.path here. If the directory is relative to the
 # documentation root, use os.path.abspath to make it absolute, like shown here.
 
+import json
 import os
 import sys
 
 sys.path.insert(0, os.path.abspath(".."))
+
+_versions_path = os.path.join(os.path.dirname(__file__), "..", ".github", "versions.json")
+try:
+    with open(_versions_path) as _f:
+        _versions = json.load(_f)
+except FileNotFoundError:
+    _versions = {
+        "torch": {"full_version": "unknown", "version": "0"},
+        "cuda": {"versions": {}},
+        "python": {"matrix": ["3.12"]},
+    }
 
 
 # -- Project information -----------------------------------------------------
@@ -18,6 +30,12 @@ sys.path.insert(0, os.path.abspath(".."))
 project = "fVDB"
 copyright = "Contributors to the OpenVDB Project"
 author = "Contributors to the OpenVDB Project"
+
+# Stable fvdb-core version shown in installation examples.
+fvdb_core_stable_version = "0.3.0"
+
+version = fvdb_core_stable_version
+release = fvdb_core_stable_version
 
 
 # -- General configuration ---------------------------------------------------
@@ -44,6 +62,8 @@ myst_enable_extensions = [
     "tasklist",
 ]
 
+myst_heading_anchors = 3
+
 # Fix return-type in google-style docstrings
 napoleon_custom_sections = [("Returns", "params_style")]
 
@@ -59,12 +79,24 @@ exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "wip", "tutorials"]
 
 autodoc_default_options = {"undoc-members": "forward, extra_repr"}
 
+# Mock the compiled C++ extension so Sphinx can introspect the Python API
+# on build hosts that lack CUDA (e.g. Read the Docs).
+autodoc_mock_imports = ["_Cpp", "fvdb._Cpp"]
+
 # -- Options for HTML output -------------------------------------------------
 
 # The theme to use for HTML and HTML Help pages.  See the documentation for
 # a list of builtin themes.
 #
 html_theme = "sphinx_rtd_theme"
+
+html_context = {
+    "display_github": True,
+    "github_user": "openvdb",
+    "github_repo": "fvdb-core",
+    "github_version": "v0.3.0",
+    "conf_py_path": "/docs/",
+}
 
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,
