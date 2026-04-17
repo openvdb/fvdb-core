@@ -17,9 +17,9 @@ template <typename ScalarType> struct alignas(32) Gaussian2D { // 32 bytes
     ScalarType opacity; // 4 bytes  (offset 4)
     vec2t xy;           // 8 bytes  (offset 8)
 
-    // Second 16 bytes: conic(12) + pad(4)
-    vec3t conic;     // 12 bytes (offset 16)
-    ScalarType _pad; // 4 bytes  (offset 28)
+    // Second 16 bytes: conic(12) + implicit padding(4) due to the struct being declared as
+    // alignas(32)
+    vec3t conic; // 12 bytes (offset 16)
 
     inline __device__ vec2t
     delta(const ScalarType px, const ScalarType py) const {
