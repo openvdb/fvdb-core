@@ -73,9 +73,9 @@ spatial intelligence research and applications.
 ƒVDB Reality Capture
 --------------------------------
 
-In addition to the core ƒVDB library, we also provide the `ƒVDB Reality Capture <https://openvdb.github.io/fvdb-core/reality-capture/>`_ toolbox,
+In addition to the core ƒVDB library, we also provide the `ƒVDB Reality Capture <https://fvdb-reality-capture.readthedocs.io/>`_ toolbox,
 which is a collection of tools and utilities for 3D reconstruction and scene understanding using ƒVDB. Analogous to how `torchvision <https://pytorch.org/vision/stable/index.html>`_
-provides datasets, models, and transforms for computer vision tasks, `ƒVDB Reality Capture <https://openvdb.github.io/fvdb-core/reality-capture/>`_ provides datasets, models, and
+provides datasets, models, and transforms for computer vision tasks, `ƒVDB Reality Capture <https://fvdb-reality-capture.readthedocs.io/>`_ provides datasets, models, and
 algorithms for 3D reconstruction from sensor data.
 
 .. toctree::
@@ -90,7 +90,7 @@ algorithms for 3D reconstruction from sensor data.
 .. toctree::
    :caption: Applications
 
-   ƒVDB Reality Capture <https://openvdb.github.io/fvdb-core/reality-capture/>
+   ƒVDB Reality Capture <https://fvdb-reality-capture.readthedocs.io/>
 
 .. toctree::
    :maxdepth: 1
