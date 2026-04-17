@@ -13,6 +13,7 @@
 
 #include <nanovdb/math/Math.h>
 
+#include <ATen/OpMathType.h>
 #include <c10/core/ScalarType.h>
 #include <c10/cuda/CUDAGuard.h>
 #include <c10/util/Exception.h>
@@ -92,18 +93,6 @@ unprojectDepthmapKernel(int64_t imageWidth,
     }
 }
 
-template <typename T> struct OpType {
-    using type = T;
-};
-
-template <> struct OpType<c10::Half> {
-    using type = float;
-};
-
-template <> struct OpType<nv_half> {
-    using type = float;
-};
-
 template <typename ScalarDataType, typename FeatureScalarDataType = ScalarDataType>
 __global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
 integrateTSDFKernel(const ScalarDataType truncationMargin,
@@ -126,8 +115,8 @@ integrateTSDFKernel(const ScalarDataType truncationMargin,
                     fvdb::TorchRAcc64<ScalarDataType, 1> outTsdfAcc,
                     fvdb::TorchRAcc64<ScalarDataType, 1> outWeightsAcc,
                     fvdb::TorchRAcc64<FeatureScalarDataType, 2> outFeaturesAcc) {
-    using ScalarType        = OpType<ScalarDataType>::type;
-    using FeatureScalarType = OpType<FeatureScalarDataType>::type;
+    using ScalarType        = at::opmath_type<ScalarDataType>;
+    using FeatureScalarType = at::opmath_type<FeatureScalarDataType>;
 
     using GridT        = nanovdb::ValueOnIndex;
     using LeafNodeType = nanovdb::NanoGrid<GridT>::LeafNodeType;
@@ -455,7 +444,7 @@ doIntegrate(const float truncationMargin,
         tsdf.scalar_type(),
         "integrateTSDFKernel",
         AT_WRAP([&]() {
-            using shared_scalar_t              = typename OpType<scalar_t>::type;
+            using shared_scalar_t              = at::opmath_type<scalar_t>;
             using SharedMat3T                  = nanovdb::math::Mat3<shared_scalar_t>;
             using SharedMat4T                  = nanovdb::math::Mat4<shared_scalar_t>;
             constexpr uint64_t VOXELS_PER_LEAF = nanovdb::OnIndexTree::LeafNodeType::NUM_VALUES;

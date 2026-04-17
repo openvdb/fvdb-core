@@ -1525,10 +1525,11 @@ class GaussianSplat3d:
         if self._use_ut(camera_model, projection_method):
             if distortion_coeffs is None:
                 distortion_coeffs = torch.empty(C, 0, device=means.device, dtype=means.dtype)
-            result = _C.project_gaussians_ut_fwd(
+            result = _C.project_gaussians_unscented_fwd(
                 means,
                 quats,
                 log_scales,
+                w2c,
                 w2c,
                 K,
                 distortion_coeffs,
@@ -1597,7 +1598,9 @@ class GaussianSplat3d:
             view_dirs = means[None, :, :] - cam_to_world[:, None, :3, 3]
             return _EvaluateGaussianSHFn.apply(sh_degree_to_use, C, view_dirs, sh0, shN, radii)
         else:
-            return _EvaluateGaussianSHFn.apply(sh_degree_to_use, C, None, sh0, None, radii)
+            view_dirs = means.new_empty(0)
+            shN = sh0.new_empty(sh0.shape[0], 0, sh0.shape[2])
+            return _EvaluateGaussianSHFn.apply(sh_degree_to_use, C, view_dirs, sh0, shN, radii)
 
     def _make_render_features(
         self,
@@ -3700,6 +3703,8 @@ class GaussianSplat3d:
                 tile_gaussian_ids,
                 image_width,
                 image_height,
+                0,
+                0,
                 tile_size,
             )
 
@@ -3856,6 +3861,8 @@ class GaussianSplat3d:
                 pixel_map,
                 image_width,
                 image_height,
+                0,
+                0,
                 tile_size,
             )
 
@@ -3970,6 +3977,8 @@ class GaussianSplat3d:
                     tile_gaussian_ids,
                     image_width,
                     image_height,
+                    0,
+                    0,
                     tile_size,
                 )
             ids, weights = _C.rasterize_contributing_gaussian_ids(
@@ -3980,9 +3989,11 @@ class GaussianSplat3d:
                 tile_gaussian_ids,
                 image_width,
                 image_height,
+                0,
+                0,
                 tile_size,
-                ncg,
                 top_k_contributors,
+                ncg,
             )
         return JaggedTensor(impl=ids), JaggedTensor(impl=weights)
 
@@ -4139,6 +4150,8 @@ class GaussianSplat3d:
                     pixel_map,
                     image_width,
                     image_height,
+                    0,
+                    0,
                     tile_size,
                 )
             ids, weights = _C.sparse_rasterize_contributing_gaussian_ids(
@@ -4154,9 +4167,11 @@ class GaussianSplat3d:
                 pixel_map,
                 image_width,
                 image_height,
+                0,
+                0,
                 tile_size,
-                ncg_jt,
                 top_k_contributors,
+                ncg_jt,
             )
         ids_jt = JaggedTensor(impl=ids)
         weights_jt = JaggedTensor(impl=weights)

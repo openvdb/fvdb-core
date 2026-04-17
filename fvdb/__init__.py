@@ -298,8 +298,21 @@ def evaluate_spherical_harmonics(
     Returns:
         Tensor of shape [C, N, D] containing the evaluated features/colors.
     """
+    if sh0.ndim != 3:
+        raise ValueError(f"sh0 must be 3-dimensional [N, 1, D], got {sh0.ndim}D")
+    if sh0.shape[1] != 1:
+        raise ValueError(f"sh0.shape[1] must be 1, got {sh0.shape[1]}")
+    if radii.ndim != 2:
+        raise ValueError(f"radii must be 2-dimensional [C, N], got {radii.ndim}D")
+    if sh0.shape[0] != radii.shape[1]:
+        raise ValueError(f"sh0.shape[0] ({sh0.shape[0]}) must match radii.shape[1] ({radii.shape[1]})")
     if sh_degree > 0 and view_directions is None:
         raise ValueError("view_directions is required when sh_degree > 0")
+    if view_directions is None:
+        view_directions = radii.new_empty(0)
+    if shN is None:
+        N, _, D = sh0.shape
+        shN = sh0.new_empty(N, 0, D)
     return _EvaluateGaussianSHFn.apply(sh_degree, num_cameras, view_directions, sh0, shN, radii)
 
 

@@ -47,8 +47,8 @@ set(FVDB_CPP_FILES
     fvdb/detail/autograd/VolumeRender.cpp
     fvdb/detail/io/GaussianPlyIO.cpp
     fvdb/detail/io/LoadNanovdb.cpp
+    fvdb/detail/utils/cuda/Prefetch.cpp
     fvdb/detail/io/SaveNanoVDB.cpp
-    fvdb/detail/ops/gsplat/GaussianUtils.cpp
     fvdb/detail/ops/jagged/JaggedReductions.cpp
     fvdb/detail/TorchDeviceBuffer.cpp
     fvdb/detail/viewer/GaussianSplat3dView.cpp
@@ -90,25 +90,25 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/MaxPool.cu
     fvdb/detail/ops/GridEdgeNetwork.cu
     fvdb/detail/ops/gsplat/FusedSSIM.cu
-    fvdb/detail/ops/gsplat/GaussianComputeNanInfMask.cu
-    fvdb/detail/ops/gsplat/GaussianMCMCAddNoise.cu
-    fvdb/detail/ops/gsplat/GaussianMCMCRelocation.cu
-    fvdb/detail/ops/gsplat/GaussianProjectionBackward.cu
-    fvdb/detail/ops/gsplat/GaussianProjectionForward.cu
-    fvdb/detail/ops/gsplat/GaussianProjectionUT.cu
-    fvdb/detail/ops/gsplat/GaussianProjectionJaggedBackward.cu
-    fvdb/detail/ops/gsplat/GaussianProjectionJaggedForward.cu
-    fvdb/detail/ops/gsplat/GaussianRasterizeBackward.cu
-    fvdb/detail/ops/gsplat/GaussianRasterizeForward.cu
-    fvdb/detail/ops/gsplat/GaussianRasterizeFromWorldBackward.cu
-    fvdb/detail/ops/gsplat/GaussianRasterizeFromWorldForward.cu
-    fvdb/detail/ops/gsplat/GaussianRasterizeNumContributingGaussians.cu
-    fvdb/detail/ops/gsplat/GaussianRasterizeTopContributingGaussianIds.cu
-    fvdb/detail/ops/gsplat/GaussianRasterizeContributingGaussianIds.cu
-    fvdb/detail/ops/gsplat/GaussianSphericalHarmonicsBackward.cu
-    fvdb/detail/ops/gsplat/GaussianSphericalHarmonicsForward.cu
-    fvdb/detail/ops/gsplat/GaussianSplatSparse.cu
-    fvdb/detail/ops/gsplat/GaussianTileIntersection.cu
+    fvdb/detail/ops/gsplat/ComputeGaussianNanInfMask.cu
+    fvdb/detail/ops/gsplat/AddNoiseToGaussianMeans.cu
+    fvdb/detail/ops/gsplat/RelocateGaussians.cu
+    fvdb/detail/ops/gsplat/ProjectGaussiansAnalyticBackward.cu
+    fvdb/detail/ops/gsplat/ProjectGaussiansAnalyticForward.cu
+    fvdb/detail/ops/gsplat/ProjectGaussiansUnscentedForward.cu
+    fvdb/detail/ops/gsplat/ProjectGaussiansAnalyticJaggedBackward.cu
+    fvdb/detail/ops/gsplat/ProjectGaussiansAnalyticJaggedForward.cu
+    fvdb/detail/ops/gsplat/RasterizeScreenSpaceGaussiansBackward.cu
+    fvdb/detail/ops/gsplat/RasterizeScreenSpaceGaussiansForward.cu
+    fvdb/detail/ops/gsplat/RasterizeWorldSpaceGaussiansBackward.cu
+    fvdb/detail/ops/gsplat/RasterizeWorldSpaceGaussiansForward.cu
+    fvdb/detail/ops/gsplat/CountContributingGaussians.cu
+    fvdb/detail/ops/gsplat/IdentifyTopContributingGaussians.cu
+    fvdb/detail/ops/gsplat/IdentifyContributingGaussians.cu
+    fvdb/detail/ops/gsplat/EvaluateSphericalHarmonicsBackward.cu
+    fvdb/detail/ops/gsplat/EvaluateSphericalHarmonicsForward.cu
+    fvdb/detail/ops/gsplat/BuildSparseGaussianTileLayout.cu
+    fvdb/detail/ops/gsplat/IntersectGaussianTiles.cu
     fvdb/detail/ops/IjkForMesh.cu
     fvdb/detail/ops/IjkToIndex.cu
     fvdb/detail/ops/IjkToInvIndex.cu

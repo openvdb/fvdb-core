@@ -1,0 +1,648 @@
+// Copyright Contributors to the OpenVDB Project
+// SPDX-License-Identifier: Apache-2.0
+//
+#include <fvdb/detail/ops/gsplat/ProjectGaussiansAnalyticBackward.h>
+#include <fvdb/detail/utils/Nvtx.h>
+#include <fvdb/detail/utils/Utils.h>
+#include <fvdb/detail/utils/cuda/BinSearch.cuh>
+#include <fvdb/detail/utils/cuda/GridDim.h>
+#include <fvdb/detail/utils/cuda/Utils.cuh>
+#include <fvdb/detail/utils/cuda/WarpReduce.cuh>
+#include <fvdb/detail/utils/cuda/math/AffineTransform.cuh>
+#include <fvdb/detail/utils/cuda/math/Rotation.cuh>
+#include <fvdb/detail/utils/gsplat/GaussianCameras.cuh>
+#include <fvdb/detail/utils/gsplat/GaussianMath.cuh>
+
+#include <nanovdb/math/Math.h>
+
+#include <ATen/cuda/Atomic.cuh>
+#include <c10/cuda/CUDAGuard.h>
+
+#include <cooperative_groups.h>
+
+namespace fvdb {
+namespace detail {
+namespace ops {
+
+namespace {
+
+namespace cg = cooperative_groups;
+
+template <typename T, typename Camera>
+__global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
+projectionBackwardKernel(const int32_t offset,
+                         const int32_t count,
+                         // fwd inputs
+                         const uint32_t C,
+                         const uint32_t N,
+                         const T *__restrict__ means,     // [N, 3]
+                         const T *__restrict__ covars,    // [N, 6] optional
+                         const T *__restrict__ quats,     // [N, 4] optional
+                         const T *__restrict__ logScales, // [N, 3] optional
+                         Camera camera,
+                         const T eps2d,
+                         // fwd outputs
+                         const int32_t *__restrict__ radii,   // [C, N]
+                         const T *__restrict__ conics,        // [C, N, 3]
+                         const T *__restrict__ compensations, // [C, N] optional
+                         // grad outputs
+                         const T *__restrict__ dLossDMeans2d,       // [C, N, 2]
+                         const T *__restrict__ dLossDDepths,        // [C, N]
+                         const T *__restrict__ dLossDConics,        // [C, N, 3]
+                         const T *__restrict__ dLossDCompensations, // [C, N] optional
+                         // grad inputs
+                         T *__restrict__ outDLossDMeans,              // [N, 3]
+                         T *__restrict__ outDLossDCovars,             // [N, 6] optional
+                         T *__restrict__ outDLossDQuats,              // [N, 4] optional
+                         T *__restrict__ outDLossDScales,             // [N, 3] optional
+                         T *__restrict__ outDLossDWorldToCamMatrices, // [C, 4, 4] optional
+                         // gradient state outputs (all nullable)
+                         const int32_t imageWidth,
+                         const int32_t imageHeight,
+                         T *__restrict__ outDLossDMeans2dNormAccum,  // [N]
+                         int32_t *__restrict__ outMaxRadiiAccum,     // [N]
+                         int32_t *__restrict__ outGradientStepCounts // [N]
+) {
+    uint32_t cId = blockIdx.y;
+    alignas(nanovdb::math::Mat3<T>) extern __shared__ char sharedMemory[];
+    camera.loadSharedMemory(cId, sharedMemory);
+    __syncthreads();
+
+    // parallelize over N.
+    uint32_t gId = blockIdx.x * blockDim.x + threadIdx.x;
+    if (gId >= count) {
+        return;
+    }
+    gId += offset;
+    auto idx = cId * N + gId;
+    if (radii[idx] <= 0) {
+        return;
+    }
+
+    // shift pointers to the current camera and gaussian
+    means += gId * 3;
+    conics += idx * 3;
+
+    dLossDMeans2d += idx * 2;
+    dLossDDepths += idx;
+    dLossDConics += idx * 3;
+
+    // vjp: compute the inverse of the 2d covariance
+    const nanovdb::math::Mat2<T> covar2dInverse       = loadConicRowMajor3(conics);
+    const nanovdb::math::Mat2<T> dLossDCovar2dInverse = loadConicGradRowMajor3(dLossDConics);
+    nanovdb::math::Mat2<T> dLossDCovar2d =
+        inverseVectorJacobianProduct(covar2dInverse, dLossDCovar2dInverse);
+
+    if (dLossDCompensations != nullptr) {
+        // vjp: compensation term
+        const T compensation       = compensations[idx];
+        const T dLossDCompensation = dLossDCompensations[idx];
+        dLossDCovar2d += generateBlurVectorJacobianProduct(
+            eps2d, covar2dInverse, compensation, dLossDCompensation);
+    }
+
+    // Build world-space Gaussian parameters
+    nanovdb::math::Mat3<T> covar;
+    nanovdb::math::Vec4<T> quat;
+    nanovdb::math::Vec3<T> scale;
+    if (covars != nullptr) {
+        covars += gId * 6;
+        covar = loadCovarianceRowMajor6(covars);
+    } else {
+        // compute from quaternions and logScales
+        quats += gId * 4;
+        logScales += gId * 3;
+        loadQuatScaleFromLogScalesRowMajor(quats, logScales, quat, scale);
+        covar = quaternionAndScaleToCovariance<T>(quat, scale);
+    }
+    const nanovdb::math::Vec3<T> meanWorldSpace(means[0], means[1], means[2]);
+    auto [dLossDCovar, dLossDPoint, dLossDRotation, dLossDTranslation] =
+        camera.projectWorldGaussianTo2DVJP(
+            cId,
+            meanWorldSpace,
+            covar,
+            dLossDCovar2d,
+            nanovdb::math::Vec2<T>(dLossDMeans2d[0], dLossDMeans2d[1]),
+            dLossDDepths[0]);
+
+    // write out results with warp-level reduction
+    auto warp         = cg::tiled_partition<32>(cg::this_thread_block());
+    auto warp_group_g = cg::labeled_partition(warp, gId);
+    if (outDLossDMeans != nullptr) {
+        warpSum(dLossDPoint, warp_group_g);
+        if (warp_group_g.thread_rank() == 0) {
+            outDLossDMeans += gId * 3;
+#pragma unroll
+            for (uint32_t i = 0; i < 3; i++) {
+                gpuAtomicAdd(outDLossDMeans + i, dLossDPoint[i]);
+            }
+        }
+    }
+    if (outDLossDCovars != nullptr) {
+        // Output gradients w.r.t. the covariance matrix
+        warpSum(dLossDCovar, warp_group_g);
+        if (warp_group_g.thread_rank() == 0) {
+            outDLossDCovars += gId * 6;
+            gpuAtomicAdd(outDLossDCovars, dLossDCovar[0][0]);
+            gpuAtomicAdd(outDLossDCovars + 1, dLossDCovar[0][1] + dLossDCovar[1][0]);
+            gpuAtomicAdd(outDLossDCovars + 2, dLossDCovar[0][2] + dLossDCovar[2][0]);
+            gpuAtomicAdd(outDLossDCovars + 3, dLossDCovar[1][1]);
+            gpuAtomicAdd(outDLossDCovars + 4, dLossDCovar[1][2] + dLossDCovar[2][1]);
+            gpuAtomicAdd(outDLossDCovars + 5, dLossDCovar[2][2]);
+        }
+    } else {
+        // Directly output gradients w.r.t. the quaternion and log_scale
+        const nanovdb::math::Mat3<T> &rotmat = quaternionToRotationMatrix<T>(quat);
+
+        // ApplyLogScaleChainRule=true because this backward pass receives log_scales as input
+        // and must return dL/d(log_scale) gradients
+        auto [dLossDQuat, dLossDLogScale] =
+            quaternionAndScaleToCovarianceVectorJacobianProduct<T, true>(
+                quat, scale, rotmat, dLossDCovar);
+
+        warpSum(dLossDQuat, warp_group_g);
+        warpSum(dLossDLogScale, warp_group_g);
+        if (warp_group_g.thread_rank() == 0) {
+            outDLossDQuats += gId * 4;
+            outDLossDScales += gId * 3;
+            gpuAtomicAdd(outDLossDQuats, dLossDQuat[0]);
+            gpuAtomicAdd(outDLossDQuats + 1, dLossDQuat[1]);
+            gpuAtomicAdd(outDLossDQuats + 2, dLossDQuat[2]);
+            gpuAtomicAdd(outDLossDQuats + 3, dLossDQuat[3]);
+            gpuAtomicAdd(outDLossDScales, dLossDLogScale[0]);
+            gpuAtomicAdd(outDLossDScales + 1, dLossDLogScale[1]);
+            gpuAtomicAdd(outDLossDScales + 2, dLossDLogScale[2]);
+        }
+    }
+    if (outDLossDWorldToCamMatrices != nullptr) {
+        auto warp_group_c = cg::labeled_partition(warp, cId);
+        warpSum(dLossDRotation, warp_group_c);
+        warpSum(dLossDTranslation, warp_group_c);
+        if (warp_group_c.thread_rank() == 0) {
+            outDLossDWorldToCamMatrices += cId * 16;
+#pragma unroll
+            for (uint32_t i = 0; i < 3; i++) {     // rows
+#pragma unroll
+                for (uint32_t j = 0; j < 3; j++) { // cols
+                    atomicAdd_system(outDLossDWorldToCamMatrices + i * 4 + j, dLossDRotation[i][j]);
+                }
+                atomicAdd_system(outDLossDWorldToCamMatrices + i * 4 + 3, dLossDTranslation[i]);
+            }
+        }
+    }
+    // Fused gradient state computation (replaces separate computeGradientState kernel)
+    if (outDLossDMeans2dNormAccum != nullptr && outGradientStepCounts != nullptr) {
+        const T dldm2x = dLossDMeans2d[0] * (T(imageWidth) / T(2) * T(C));
+        const T dldm2y = dLossDMeans2d[1] * (T(imageHeight) / T(2) * T(C));
+        const T norm   = nanovdb::math::Sqrt(dldm2x * dldm2x + dldm2y * dldm2y);
+        gpuAtomicAdd(outDLossDMeans2dNormAccum + gId, norm);
+        gpuAtomicAdd(outGradientStepCounts + gId, 1);
+        if (outMaxRadiiAccum != nullptr) {
+            atomicMax(outMaxRadiiAccum + gId, radii[idx]);
+        }
+    }
+}
+
+} // namespace
+
+template <torch::DeviceType>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+dispatchProjectGaussiansAnalyticBwd(
+    const torch::Tensor &means,                       // [N, 3]
+    const torch::Tensor &quats,                       // [N, 4]
+    const torch::Tensor &scales,                      // [N, 3]
+    const torch::Tensor &worldToCamMatrices,          // [C, 4, 4]
+    const torch::Tensor &projectionMatrices,          // [C, 3, 3]
+    const at::optional<torch::Tensor> &compensations, // [N, 6] optional
+    const uint32_t imageWidth,
+    const uint32_t imageHeight,
+    const float eps2d,
+    const torch::Tensor &radii,                             // [C, N]
+    const torch::Tensor &conics,                            // [C, N, 3]
+    const torch::Tensor &dLossDMeans2d,                     // [C, N, 2]
+    const torch::Tensor &dLossDDepths,                      // [C, N]
+    const torch::Tensor &dLossDConics,                      // [C, N, 3]
+    const at::optional<torch::Tensor> &dLossDCompensations, // [C, N] optional
+    const bool worldToCamMatricesRequiresGrad,
+    const bool ortho,
+    at::optional<torch::Tensor> outNormalizeddLossdMeans2dNormAccum,
+    at::optional<torch::Tensor> outNormalizedMaxRadiiAccum,
+    at::optional<torch::Tensor> outGradientStepCounts);
+
+template <>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+dispatchProjectGaussiansAnalyticBwd<torch::kCUDA>(
+    // fwd inputs
+    const torch::Tensor &means,                       // [N, 3]
+    const torch::Tensor &quats,                       // [N, 4]
+    const torch::Tensor &logScales,                   // [N, 3]
+    const torch::Tensor &worldToCamMatrices,          // [C, 4, 4]
+    const torch::Tensor &projectionMatrices,          // [C, 3, 3]
+    const at::optional<torch::Tensor> &compensations, // [N, 6] optional
+    const uint32_t imageWidth,
+    const uint32_t imageHeight,
+    const float eps2d,
+    // fwd outputs
+    const torch::Tensor &radii,  // [C, N]
+    const torch::Tensor &conics, // [C, N, 3]
+    // grad outputs
+    const torch::Tensor &dLossDMeans2d,                              // [C, N, 2]
+    const torch::Tensor &dLossDDepths,                               // [C, N]
+    const torch::Tensor &dLossDConics,                               // [C, N, 3]
+    const at::optional<torch::Tensor> &dLossDCompensations,          // [C, N] optional
+    const bool worldToCamMatricesRequiresGrad,
+    const bool ortho,
+    at::optional<torch::Tensor> outNormalizeddLossdMeans2dNormAccum, // [N]
+    at::optional<torch::Tensor> outNormalizedMaxRadiiAccum,          // [N]
+    at::optional<torch::Tensor> outGradientStepCounts                // [N]
+) {
+    FVDB_FUNC_RANGE();
+    // These are supported by the underlying kernel, but they are not exposed
+    const at::optional<torch::Tensor> &covars = std::nullopt;
+    // const at::optional<torch::Tensor> &compensations = std::nullopt;
+    // const at::optional<torch::Tensor> &dLossDCompensations = std::nullopt;
+
+    const at::cuda::OptionalCUDAGuard device_guard(device_of(means));
+    TORCH_CHECK(means.is_cuda() && means.is_contiguous(), "means must be a contiguous CUDA tensor");
+    if (covars.has_value()) {
+        TORCH_CHECK(covars.value().is_cuda() && covars.value().is_contiguous(),
+                    "covars must be a contiguous CUDA tensor");
+    } else {
+        TORCH_CHECK(quats.is_cuda() && quats.is_contiguous(),
+                    "quats must be a contiguous CUDA tensor");
+        TORCH_CHECK(logScales.is_cuda() && logScales.is_contiguous(),
+                    "logScales must be a contiguous CUDA tensor");
+    }
+    TORCH_CHECK(worldToCamMatrices.is_cuda() && worldToCamMatrices.is_contiguous(),
+                "worldToCamMatrices must be a contiguous CUDA tensor");
+    TORCH_CHECK(projectionMatrices.is_cuda() && projectionMatrices.is_contiguous(),
+                "projectionMatrices must be a contiguous CUDA tensor");
+    TORCH_CHECK(radii.is_cuda() && radii.is_contiguous(), "radii must be a contiguous CUDA tensor");
+    TORCH_CHECK(conics.is_cuda() && conics.is_contiguous(),
+                "conics must be a contiguous CUDA tensor");
+    TORCH_CHECK(dLossDMeans2d.is_cuda() && dLossDMeans2d.is_contiguous(),
+                "dLossDMeans2d must be a contiguous CUDA tensor");
+    TORCH_CHECK(dLossDDepths.is_cuda() && dLossDDepths.is_contiguous(),
+                "dLossDDepths must be a contiguous CUDA tensor");
+    TORCH_CHECK(dLossDConics.is_cuda() && dLossDConics.is_contiguous(),
+                "dLossDConics must be a contiguous CUDA tensor");
+    if (compensations.has_value()) {
+        TORCH_CHECK(compensations.value().is_cuda() && compensations.value().is_contiguous(),
+                    "compensations must be a contiguous CUDA tensor");
+    }
+    if (dLossDCompensations.has_value()) {
+        TORCH_CHECK(dLossDCompensations.value().is_cuda() &&
+                        dLossDCompensations.value().is_contiguous(),
+                    "dLossDCompensations must be a contiguous CUDA tensor");
+        assert(compensations.has_value());
+    }
+
+    const uint32_t N            = means.size(0);              // number of gaussians
+    const uint32_t C            = worldToCamMatrices.size(0); // number of cameras
+    at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream(means.device().index());
+
+    torch::Tensor dLossDMeans = torch::zeros_like(means);
+    torch::Tensor dLossDCovars, dLossDQuats, dLossDScales; // optional
+    if (covars.has_value()) {
+        dLossDCovars = torch::zeros_like(covars.value());
+    } else {
+        dLossDQuats  = torch::zeros_like(quats);
+        dLossDScales = torch::zeros_like(logScales);
+    }
+    torch::Tensor dLossDWorldToCamMatrices;
+    if (worldToCamMatricesRequiresGrad) {
+        dLossDWorldToCamMatrices = torch::zeros_like(worldToCamMatrices);
+    }
+    if (C && N) {
+        const dim3 NUM_BLOCKS(GET_BLOCKS(N, DEFAULT_BLOCK_DIM), C);
+        if (ortho) {
+            const auto camera = OrthographicCamera<float>{projectionMatrices,
+                                                          worldToCamMatrices,
+                                                          static_cast<int32_t>(imageWidth),
+                                                          static_cast<int32_t>(imageHeight),
+                                                          kBackwardProjectionNearPlane,
+                                                          kBackwardProjectionFarPlane};
+            projectionBackwardKernel<float, OrthographicCamera<float>>
+                <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, camera.numSharedMemBytes(), stream>>>(
+                    0,
+                    N,
+                    C,
+                    N,
+                    means.data_ptr<float>(),
+                    covars.has_value() ? covars.value().data_ptr<float>() : nullptr,
+                    covars.has_value() ? nullptr : quats.data_ptr<float>(),
+                    covars.has_value() ? nullptr : logScales.data_ptr<float>(),
+                    camera,
+                    eps2d,
+                    radii.data_ptr<int32_t>(),
+                    conics.data_ptr<float>(),
+                    compensations.has_value() ? compensations.value().data_ptr<float>() : nullptr,
+                    dLossDMeans2d.data_ptr<float>(),
+                    dLossDDepths.data_ptr<float>(),
+                    dLossDConics.data_ptr<float>(),
+                    dLossDCompensations.has_value() ? dLossDCompensations.value().data_ptr<float>()
+                                                    : nullptr,
+                    dLossDMeans.data_ptr<float>(),
+                    covars.has_value() ? dLossDCovars.data_ptr<float>() : nullptr,
+                    covars.has_value() ? nullptr : dLossDQuats.data_ptr<float>(),
+                    covars.has_value() ? nullptr : dLossDScales.data_ptr<float>(),
+                    worldToCamMatricesRequiresGrad ? dLossDWorldToCamMatrices.data_ptr<float>()
+                                                   : nullptr,
+                    static_cast<int32_t>(imageWidth),
+                    static_cast<int32_t>(imageHeight),
+                    outNormalizeddLossdMeans2dNormAccum.has_value()
+                        ? outNormalizeddLossdMeans2dNormAccum.value().data_ptr<float>()
+                        : nullptr,
+                    outNormalizedMaxRadiiAccum.has_value()
+                        ? outNormalizedMaxRadiiAccum.value().data_ptr<int32_t>()
+                        : nullptr,
+                    outGradientStepCounts.has_value()
+                        ? outGradientStepCounts.value().data_ptr<int32_t>()
+                        : nullptr);
+        } else {
+            const auto camera = PerspectiveCamera<float>{projectionMatrices,
+                                                         worldToCamMatrices,
+                                                         static_cast<int32_t>(imageWidth),
+                                                         static_cast<int32_t>(imageHeight),
+                                                         kBackwardProjectionNearPlane,
+                                                         kBackwardProjectionFarPlane};
+            projectionBackwardKernel<float, PerspectiveCamera<float>>
+                <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, camera.numSharedMemBytes(), stream>>>(
+                    0,
+                    N,
+                    C,
+                    N,
+                    means.data_ptr<float>(),
+                    covars.has_value() ? covars.value().data_ptr<float>() : nullptr,
+                    covars.has_value() ? nullptr : quats.data_ptr<float>(),
+                    covars.has_value() ? nullptr : logScales.data_ptr<float>(),
+                    camera,
+                    eps2d,
+                    radii.data_ptr<int32_t>(),
+                    conics.data_ptr<float>(),
+                    compensations.has_value() ? compensations.value().data_ptr<float>() : nullptr,
+                    dLossDMeans2d.data_ptr<float>(),
+                    dLossDDepths.data_ptr<float>(),
+                    dLossDConics.data_ptr<float>(),
+                    dLossDCompensations.has_value() ? dLossDCompensations.value().data_ptr<float>()
+                                                    : nullptr,
+                    dLossDMeans.data_ptr<float>(),
+                    covars.has_value() ? dLossDCovars.data_ptr<float>() : nullptr,
+                    covars.has_value() ? nullptr : dLossDQuats.data_ptr<float>(),
+                    covars.has_value() ? nullptr : dLossDScales.data_ptr<float>(),
+                    worldToCamMatricesRequiresGrad ? dLossDWorldToCamMatrices.data_ptr<float>()
+                                                   : nullptr,
+                    static_cast<int32_t>(imageWidth),
+                    static_cast<int32_t>(imageHeight),
+                    outNormalizeddLossdMeans2dNormAccum.has_value()
+                        ? outNormalizeddLossdMeans2dNormAccum.value().data_ptr<float>()
+                        : nullptr,
+                    outNormalizedMaxRadiiAccum.has_value()
+                        ? outNormalizedMaxRadiiAccum.value().data_ptr<int32_t>()
+                        : nullptr,
+                    outGradientStepCounts.has_value()
+                        ? outGradientStepCounts.value().data_ptr<int32_t>()
+                        : nullptr);
+        }
+        C10_CUDA_KERNEL_LAUNCH_CHECK();
+    }
+    return std::make_tuple(
+        dLossDMeans, dLossDCovars, dLossDQuats, dLossDScales, dLossDWorldToCamMatrices);
+}
+
+template <>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+dispatchProjectGaussiansAnalyticBwd<torch::kPrivateUse1>(
+    // fwd inputs
+    const torch::Tensor &means,                       // [N, 3]
+    const torch::Tensor &quats,                       // [N, 4]
+    const torch::Tensor &logScales,                   // [N, 3]
+    const torch::Tensor &worldToCamMatrices,          // [C, 4, 4]
+    const torch::Tensor &projectionMatrices,          // [C, 3, 3]
+    const at::optional<torch::Tensor> &compensations, // [N, 6] optional
+    const uint32_t imageWidth,
+    const uint32_t imageHeight,
+    const float eps2d,
+    // fwd outputs
+    const torch::Tensor &radii,  // [C, N]
+    const torch::Tensor &conics, // [C, N, 3]
+    // grad outputs
+    const torch::Tensor &dLossDMeans2d,                     // [C, N, 2]
+    const torch::Tensor &dLossDDepths,                      // [C, N]
+    const torch::Tensor &dLossDConics,                      // [C, N, 3]
+    const at::optional<torch::Tensor> &dLossDCompensations, // [C, N] optional
+    const bool worldToCamMatricesRequiresGrad,
+    const bool ortho,
+    at::optional<torch::Tensor> outNormalizeddLossdMeans2dNormAccum,
+    at::optional<torch::Tensor> outNormalizedMaxRadiiAccum,
+    at::optional<torch::Tensor> outGradientStepCounts) {
+    FVDB_FUNC_RANGE();
+    // These are supported by the underlying kernel, but they are not exposed
+    const at::optional<torch::Tensor> &covars = std::nullopt;
+    // const at::optional<torch::Tensor> &compensations = std::nullopt;
+    // const at::optional<torch::Tensor> &dLossDCompensations = std::nullopt;
+
+    const uint32_t N = means.size(0);                      // number of gaussians
+    const uint32_t C = worldToCamMatrices.size(0);         // number of cameras
+
+    torch::Tensor dLossDMeans = torch::zeros_like(means);
+    torch::Tensor dLossDCovars, dLossDQuats, dLossDScales; // optional
+    if (covars.has_value()) {
+        dLossDCovars = torch::zeros_like(covars.value());
+    } else {
+        dLossDQuats  = torch::zeros_like(quats);
+        dLossDScales = torch::zeros_like(logScales);
+    }
+    torch::Tensor dLossDWorldToCamMatrices;
+    if (worldToCamMatricesRequiresGrad) {
+        dLossDWorldToCamMatrices = torch::zeros_like(worldToCamMatrices);
+    }
+    if (C && N) {
+        for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+            C10_CUDA_CHECK(cudaSetDevice(deviceId));
+            auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+
+            int64_t deviceProblemOffset, deviceProblemSize;
+            std::tie(deviceProblemOffset, deviceProblemSize) = deviceChunk(N, deviceId);
+            const dim3 NUM_BLOCKS(GET_BLOCKS(deviceProblemSize, DEFAULT_BLOCK_DIM), C);
+
+            if (ortho) {
+                const auto camera = OrthographicCamera<float>{projectionMatrices,
+                                                              worldToCamMatrices,
+                                                              static_cast<int32_t>(imageWidth),
+                                                              static_cast<int32_t>(imageHeight),
+                                                              kBackwardProjectionNearPlane,
+                                                              kBackwardProjectionFarPlane};
+                projectionBackwardKernel<float, OrthographicCamera<float>>
+                    <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, camera.numSharedMemBytes(), stream>>>(
+                        deviceProblemOffset,
+                        deviceProblemSize,
+                        C,
+                        N,
+                        means.data_ptr<float>(),
+                        covars.has_value() ? covars.value().data_ptr<float>() : nullptr,
+                        covars.has_value() ? nullptr : quats.data_ptr<float>(),
+                        covars.has_value() ? nullptr : logScales.data_ptr<float>(),
+                        camera,
+                        eps2d,
+                        radii.data_ptr<int32_t>(),
+                        conics.data_ptr<float>(),
+                        compensations.has_value() ? compensations.value().data_ptr<float>()
+                                                  : nullptr,
+                        dLossDMeans2d.data_ptr<float>(),
+                        dLossDDepths.data_ptr<float>(),
+                        dLossDConics.data_ptr<float>(),
+                        dLossDCompensations.has_value()
+                            ? dLossDCompensations.value().data_ptr<float>()
+                            : nullptr,
+                        dLossDMeans.data_ptr<float>(),
+                        covars.has_value() ? dLossDCovars.data_ptr<float>() : nullptr,
+                        covars.has_value() ? nullptr : dLossDQuats.data_ptr<float>(),
+                        covars.has_value() ? nullptr : dLossDScales.data_ptr<float>(),
+                        worldToCamMatricesRequiresGrad ? dLossDWorldToCamMatrices.data_ptr<float>()
+                                                       : nullptr,
+                        static_cast<int32_t>(imageWidth),
+                        static_cast<int32_t>(imageHeight),
+                        outNormalizeddLossdMeans2dNormAccum.has_value()
+                            ? outNormalizeddLossdMeans2dNormAccum.value().data_ptr<float>()
+                            : nullptr,
+                        outNormalizedMaxRadiiAccum.has_value()
+                            ? outNormalizedMaxRadiiAccum.value().data_ptr<int32_t>()
+                            : nullptr,
+                        outGradientStepCounts.has_value()
+                            ? outGradientStepCounts.value().data_ptr<int32_t>()
+                            : nullptr);
+            } else {
+                const auto camera = PerspectiveCamera<float>{projectionMatrices,
+                                                             worldToCamMatrices,
+                                                             static_cast<int32_t>(imageWidth),
+                                                             static_cast<int32_t>(imageHeight),
+                                                             kBackwardProjectionNearPlane,
+                                                             kBackwardProjectionFarPlane};
+                projectionBackwardKernel<float, PerspectiveCamera<float>>
+                    <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, camera.numSharedMemBytes(), stream>>>(
+                        deviceProblemOffset,
+                        deviceProblemSize,
+                        C,
+                        N,
+                        means.data_ptr<float>(),
+                        covars.has_value() ? covars.value().data_ptr<float>() : nullptr,
+                        covars.has_value() ? nullptr : quats.data_ptr<float>(),
+                        covars.has_value() ? nullptr : logScales.data_ptr<float>(),
+                        camera,
+                        eps2d,
+                        radii.data_ptr<int32_t>(),
+                        conics.data_ptr<float>(),
+                        compensations.has_value() ? compensations.value().data_ptr<float>()
+                                                  : nullptr,
+                        dLossDMeans2d.data_ptr<float>(),
+                        dLossDDepths.data_ptr<float>(),
+                        dLossDConics.data_ptr<float>(),
+                        dLossDCompensations.has_value()
+                            ? dLossDCompensations.value().data_ptr<float>()
+                            : nullptr,
+                        dLossDMeans.data_ptr<float>(),
+                        covars.has_value() ? dLossDCovars.data_ptr<float>() : nullptr,
+                        covars.has_value() ? nullptr : dLossDQuats.data_ptr<float>(),
+                        covars.has_value() ? nullptr : dLossDScales.data_ptr<float>(),
+                        worldToCamMatricesRequiresGrad ? dLossDWorldToCamMatrices.data_ptr<float>()
+                                                       : nullptr,
+                        static_cast<int32_t>(imageWidth),
+                        static_cast<int32_t>(imageHeight),
+                        outNormalizeddLossdMeans2dNormAccum.has_value()
+                            ? outNormalizeddLossdMeans2dNormAccum.value().data_ptr<float>()
+                            : nullptr,
+                        outNormalizedMaxRadiiAccum.has_value()
+                            ? outNormalizedMaxRadiiAccum.value().data_ptr<int32_t>()
+                            : nullptr,
+                        outGradientStepCounts.has_value()
+                            ? outGradientStepCounts.value().data_ptr<int32_t>()
+                            : nullptr);
+            }
+            C10_CUDA_KERNEL_LAUNCH_CHECK();
+        }
+
+        mergeStreams();
+    }
+    return std::make_tuple(
+        dLossDMeans, dLossDCovars, dLossDQuats, dLossDScales, dLossDWorldToCamMatrices);
+}
+
+template <>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+dispatchProjectGaussiansAnalyticBwd<torch::kCPU>(
+    // fwd inputs
+    const torch::Tensor &means,                       // [N, 3]
+    const torch::Tensor &quats,                       // [N, 4]
+    const torch::Tensor &logScales,                   // [N, 3]
+    const torch::Tensor &worldToCamMatrices,          // [C, 4, 4]
+    const torch::Tensor &projectionMatrices,          // [C, 3, 3]
+    const at::optional<torch::Tensor> &compensations, // [N, 6] optional
+    const uint32_t imageWidth,
+    const uint32_t imageHeight,
+    const float eps2d,
+    // fwd outputs
+    const torch::Tensor &radii,  // [C, N]
+    const torch::Tensor &conics, // [C, N, 3]
+    // grad outputs
+    const torch::Tensor &dLossDMeans2d,                     // [C, N, 2]
+    const torch::Tensor &dLossDDepths,                      // [C, N]
+    const torch::Tensor &dLossDConics,                      // [C, N, 3]
+    const at::optional<torch::Tensor> &dLossDCompensations, // [C, N] optional
+    const bool worldToCamMatricesRequiresGrad,
+    const bool ortho,
+    at::optional<torch::Tensor> outNormalizeddLossdMeans2dNormAccum,
+    at::optional<torch::Tensor> outNormalizedMaxRadiiAccum,
+    at::optional<torch::Tensor> outGradientStepCounts) {
+    TORCH_CHECK_NOT_IMPLEMENTED(false, "CPU implementation not available");
+}
+
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+projectGaussiansAnalyticBwd(
+    const torch::Tensor &means,                       // [N, 3]
+    const torch::Tensor &quats,                       // [N, 4]
+    const torch::Tensor &scales,                      // [N, 3]
+    const torch::Tensor &worldToCamMatrices,          // [C, 4, 4]
+    const torch::Tensor &projectionMatrices,          // [C, 3, 3]
+    const at::optional<torch::Tensor> &compensations, // [N, 6] optional
+    const uint32_t imageWidth,
+    const uint32_t imageHeight,
+    const float eps2d,
+    const torch::Tensor &radii,                             // [C, N]
+    const torch::Tensor &conics,                            // [C, N, 3]
+    const torch::Tensor &dLossDMeans2d,                     // [C, N, 2]
+    const torch::Tensor &dLossDDepths,                      // [C, N]
+    const torch::Tensor &dLossDConics,                      // [C, N, 3]
+    const at::optional<torch::Tensor> &dLossDCompensations, // [C, N] optional
+    const bool worldToCamMatricesRequiresGrad,
+    const bool ortho,
+    at::optional<torch::Tensor> outNormalizeddLossdMeans2dNormAccum,
+    at::optional<torch::Tensor> outNormalizedMaxRadiiAccum,
+    at::optional<torch::Tensor> outGradientStepCounts) {
+    return FVDB_DISPATCH_KERNEL(means.device(), [&]() {
+        return dispatchProjectGaussiansAnalyticBwd<DeviceTag>(means,
+                                                              quats,
+                                                              scales,
+                                                              worldToCamMatrices,
+                                                              projectionMatrices,
+                                                              compensations,
+                                                              imageWidth,
+                                                              imageHeight,
+                                                              eps2d,
+                                                              radii,
+                                                              conics,
+                                                              dLossDMeans2d,
+                                                              dLossDDepths,
+                                                              dLossDConics,
+                                                              dLossDCompensations,
+                                                              worldToCamMatricesRequiresGrad,
+                                                              ortho,
+                                                              outNormalizeddLossdMeans2dNormAccum,
+                                                              outNormalizedMaxRadiiAccum,
+                                                              outGradientStepCounts);
+    });
+}
+
+} // namespace ops
+} // namespace detail
+} // namespace fvdb

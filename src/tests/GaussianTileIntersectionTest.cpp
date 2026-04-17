@@ -1,8 +1,8 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 
-#include <fvdb/detail/ops/gsplat/GaussianSplatSparse.h>
-#include <fvdb/detail/ops/gsplat/GaussianTileIntersection.h>
+#include <fvdb/detail/ops/gsplat/BuildSparseGaussianTileLayout.h>
+#include <fvdb/detail/ops/gsplat/IntersectGaussianTiles.h>
 
 #include <torch/types.h>
 
@@ -216,15 +216,14 @@ class GaussianTileIntersectionTest : public ::testing::Test {
 TEST_F(GaussianTileIntersectionTest, CPUNotImplementedTest) {
     auto const [means2d, radii, depths] = createTestData();
 
-    EXPECT_THROW(fvdb::detail::ops::dispatchGaussianTileIntersection<torch::kCPU>(
-                     means2d,
-                     radii,
-                     depths,
-                     /*camera_jidx=*/at::nullopt,
-                     num_cameras,
-                     tile_size,
-                     num_tiles_h,
-                     num_tiles_w),
+    EXPECT_THROW(fvdb::detail::ops::intersectGaussianTiles(means2d.cpu(),
+                                                           radii.cpu(),
+                                                           depths.cpu(),
+                                                           /*camera_jidx=*/at::nullopt,
+                                                           num_cameras,
+                                                           tile_size,
+                                                           num_tiles_h,
+                                                           num_tiles_w),
                  c10::Error);
 }
 
@@ -237,15 +236,14 @@ TEST_F(GaussianTileIntersectionTest, ZeroLengthGaussianTest) {
     auto depths  = torch::empty({numCameras, 0}, torch::kFloat32);    // [C, N=0]
 
     auto [tile_offsets, intersection_values] =
-        fvdb::detail::ops::dispatchGaussianTileIntersection<torch::kCUDA>(
-            means2d.cuda(),
-            radii.cuda(),
-            depths.cuda(),
-            /*camera_jidx=*/at::nullopt,
-            numCameras,
-            tile_size,
-            num_tiles_h,
-            num_tiles_w);
+        fvdb::detail::ops::intersectGaussianTiles(means2d.cuda(),
+                                                  radii.cuda(),
+                                                  depths.cuda(),
+                                                  /*camera_jidx=*/at::nullopt,
+                                                  numCameras,
+                                                  tile_size,
+                                                  num_tiles_h,
+                                                  num_tiles_w);
 
     // Move results back to CPU for verification
     tile_offsets        = tile_offsets.cpu();
@@ -304,27 +302,25 @@ TEST_F(GaussianTileIntersectionTest, BadInputsFailTest) {
 
         if (isPacked) {
             const auto cameraJidx = torch::zeros(config[3], torch::kInt32);
-            EXPECT_THROW(
-                fvdb::detail::ops::dispatchGaussianTileIntersection<torch::kCUDA>(means2d.cuda(),
-                                                                                  radii.cuda(),
-                                                                                  depths.cuda(),
-                                                                                  cameraJidx.cuda(),
-                                                                                  nc,
-                                                                                  tile_size,
-                                                                                  num_tiles_h,
-                                                                                  num_tiles_w),
-                c10::ValueError);
+            EXPECT_THROW(fvdb::detail::ops::intersectGaussianTiles(means2d.cuda(),
+                                                                   radii.cuda(),
+                                                                   depths.cuda(),
+                                                                   cameraJidx.cuda(),
+                                                                   nc,
+                                                                   tile_size,
+                                                                   num_tiles_h,
+                                                                   num_tiles_w),
+                         c10::ValueError);
 
         } else {
-            EXPECT_THROW(fvdb::detail::ops::dispatchGaussianTileIntersection<torch::kCUDA>(
-                             means2d.cuda(),
-                             radii.cuda(),
-                             depths.cuda(),
-                             /*camera_jidx=*/at::nullopt,
-                             nc,
-                             tile_size,
-                             num_tiles_h,
-                             num_tiles_w),
+            EXPECT_THROW(fvdb::detail::ops::intersectGaussianTiles(means2d.cuda(),
+                                                                   radii.cuda(),
+                                                                   depths.cuda(),
+                                                                   /*camera_jidx=*/at::nullopt,
+                                                                   nc,
+                                                                   tile_size,
+                                                                   num_tiles_h,
+                                                                   num_tiles_w),
                          c10::ValueError);
         }
     }
@@ -336,15 +332,14 @@ TEST_F(GaussianTileIntersectionTest, ZeroRadiusGaussianTest) {
     radii.zero_(); // Set all radii to 0
 
     auto [tile_offsets, intersection_values] =
-        fvdb::detail::ops::dispatchGaussianTileIntersection<torch::kCUDA>(
-            means2d.cuda(),
-            radii.cuda(),
-            depths.cuda(),
-            /*camera_jidx=*/at::nullopt,
-            num_cameras,
-            tile_size,
-            num_tiles_h,
-            num_tiles_w);
+        fvdb::detail::ops::intersectGaussianTiles(means2d.cuda(),
+                                                  radii.cuda(),
+                                                  depths.cuda(),
+                                                  /*camera_jidx=*/at::nullopt,
+                                                  num_cameras,
+                                                  tile_size,
+                                                  num_tiles_h,
+                                                  num_tiles_w);
 
     // Verify that there are no intersections
     EXPECT_EQ(tile_offsets.sum().item<int32_t>(), 0);
@@ -354,15 +349,14 @@ TEST_F(GaussianTileIntersectionTest, BasicIntersectionTest) {
     auto [means2d, radii, depths] = createTestData();
 
     auto [tile_offsets, intersection_values] =
-        fvdb::detail::ops::dispatchGaussianTileIntersection<torch::kCUDA>(
-            means2d.cuda(),
-            radii.cuda(),
-            depths.cuda(),
-            /*camera_jidx=*/at::nullopt,
-            num_cameras,
-            tile_size,
-            num_tiles_h,
-            num_tiles_w);
+        fvdb::detail::ops::intersectGaussianTiles(means2d.cuda(),
+                                                  radii.cuda(),
+                                                  depths.cuda(),
+                                                  /*camera_jidx=*/at::nullopt,
+                                                  num_cameras,
+                                                  tile_size,
+                                                  num_tiles_h,
+                                                  num_tiles_w);
 
     // Move results back to CPU for verification
     tile_offsets        = tile_offsets.cpu();
@@ -388,14 +382,14 @@ TEST_F(GaussianTileIntersectionTest, PackedFormatTest) {
         torch::arange(num_cameras, torch::kInt32).repeat_interleave(num_gaussians);
 
     auto [tile_offsets, intersection_values] =
-        fvdb::detail::ops::dispatchGaussianTileIntersection<torch::kCUDA>(means2d_packed.cuda(),
-                                                                          radii_packed.cuda(),
-                                                                          depths_packed.cuda(),
-                                                                          camera_indices.cuda(),
-                                                                          num_cameras,
-                                                                          tile_size,
-                                                                          num_tiles_h,
-                                                                          num_tiles_w);
+        fvdb::detail::ops::intersectGaussianTiles(means2d_packed.cuda(),
+                                                  radii_packed.cuda(),
+                                                  depths_packed.cuda(),
+                                                  camera_indices.cuda(),
+                                                  num_cameras,
+                                                  tile_size,
+                                                  num_tiles_h,
+                                                  num_tiles_w);
 
     // Move results back to CPU for verification
     tile_offsets        = tile_offsets.cpu();
@@ -425,17 +419,16 @@ TEST_F(GaussianTileIntersectionTest, DenseViaSparseTest) {
     auto active_tiles        = tile_mask_to_active_tiles(tile_mask);
 
     auto [tile_offsets, intersection_values] =
-        fvdb::detail::ops::dispatchGaussianSparseTileIntersection<torch::kCUDA>(
-            means2d.cuda(),
-            radii.cuda(),
-            depths.cuda(),
-            tile_mask.cuda(),
-            active_tiles.cuda(),
-            /*camera_jidx=*/at::nullopt,
-            num_cameras,
-            tile_size,
-            num_tiles_h,
-            num_tiles_w);
+        fvdb::detail::ops::intersectGaussianTilesSparse(means2d.cuda(),
+                                                        radii.cuda(),
+                                                        depths.cuda(),
+                                                        tile_mask.cuda(),
+                                                        active_tiles.cuda(),
+                                                        /*camera_jidx=*/at::nullopt,
+                                                        num_cameras,
+                                                        tile_size,
+                                                        num_tiles_h,
+                                                        num_tiles_w);
 
     // Move results back to CPU for verification
     tile_offsets        = tile_offsets.cpu();
@@ -470,17 +463,16 @@ TEST_F(GaussianTileIntersectionTest, SparseIntersectionTest) {
     int32_t num_active_tiles = active_tiles.size(0);
 
     auto [tile_offsets, intersection_values] =
-        fvdb::detail::ops::dispatchGaussianSparseTileIntersection<torch::kCUDA>(
-            means2d.cuda(),
-            radii.cuda(),
-            depths.cuda(),
-            tile_mask.cuda(),
-            active_tiles.cuda(),
-            /*camera_jidx=*/at::nullopt,
-            num_cameras,
-            tile_size,
-            num_tiles_h,
-            num_tiles_w);
+        fvdb::detail::ops::intersectGaussianTilesSparse(means2d.cuda(),
+                                                        radii.cuda(),
+                                                        depths.cuda(),
+                                                        tile_mask.cuda(),
+                                                        active_tiles.cuda(),
+                                                        /*camera_jidx=*/at::nullopt,
+                                                        num_cameras,
+                                                        tile_size,
+                                                        num_tiles_h,
+                                                        num_tiles_w);
 
     // Move results back to CPU for verification
     tile_offsets        = tile_offsets.cpu();
@@ -508,17 +500,16 @@ TEST_F(GaussianTileIntersectionTest, SparseCPUNotImplementedTest) {
     auto tile_mask                      = torch::ones({1, num_tiles_h, num_tiles_w}, torch::kBool);
     auto active_tiles                   = tile_mask_to_active_tiles(tile_mask);
 
-    EXPECT_THROW(fvdb::detail::ops::dispatchGaussianSparseTileIntersection<torch::kCPU>(
-                     means2d,
-                     radii,
-                     depths,
-                     tile_mask,
-                     active_tiles,
-                     /*camera_jidx=*/at::nullopt,
-                     num_cameras,
-                     tile_size,
-                     num_tiles_h,
-                     num_tiles_w),
+    EXPECT_THROW(fvdb::detail::ops::intersectGaussianTilesSparse(means2d.cpu(),
+                                                                 radii.cpu(),
+                                                                 depths.cpu(),
+                                                                 tile_mask.cpu(),
+                                                                 active_tiles.cpu(),
+                                                                 /*camera_jidx=*/at::nullopt,
+                                                                 num_cameras,
+                                                                 tile_size,
+                                                                 num_tiles_h,
+                                                                 num_tiles_w),
                  c10::Error);
 }
 
@@ -535,17 +526,16 @@ TEST_F(GaussianTileIntersectionTest, SparseZeroLengthGaussianTest) {
     auto active_tiles        = tile_mask_to_active_tiles(tile_mask);
 
     auto [tile_offsets, intersection_values] =
-        fvdb::detail::ops::dispatchGaussianSparseTileIntersection<torch::kCUDA>(
-            means2d.cuda(),
-            radii.cuda(),
-            depths.cuda(),
-            tile_mask.cuda(),
-            active_tiles.cuda(),
-            /*camera_jidx=*/at::nullopt,
-            numCameras,
-            tile_size,
-            num_tiles_h,
-            num_tiles_w);
+        fvdb::detail::ops::intersectGaussianTilesSparse(means2d.cuda(),
+                                                        radii.cuda(),
+                                                        depths.cuda(),
+                                                        tile_mask.cuda(),
+                                                        active_tiles.cuda(),
+                                                        /*camera_jidx=*/at::nullopt,
+                                                        numCameras,
+                                                        tile_size,
+                                                        num_tiles_h,
+                                                        num_tiles_w);
 
     // Move results back to CPU for verification
     tile_offsets        = tile_offsets.cpu();
@@ -574,17 +564,16 @@ TEST_F(GaussianTileIntersectionTest, SparsePackedFormatTest) {
     auto active_tiles        = tile_mask_to_active_tiles(tile_mask);
 
     auto [tile_offsets, intersection_values] =
-        fvdb::detail::ops::dispatchGaussianSparseTileIntersection<torch::kCUDA>(
-            means2d_packed.cuda(),
-            radii_packed.cuda(),
-            depths_packed.cuda(),
-            tile_mask.cuda(),
-            active_tiles.cuda(),
-            camera_indices.cuda(),
-            num_cameras,
-            tile_size,
-            num_tiles_h,
-            num_tiles_w);
+        fvdb::detail::ops::intersectGaussianTilesSparse(means2d_packed.cuda(),
+                                                        radii_packed.cuda(),
+                                                        depths_packed.cuda(),
+                                                        tile_mask.cuda(),
+                                                        active_tiles.cuda(),
+                                                        camera_indices.cuda(),
+                                                        num_cameras,
+                                                        tile_size,
+                                                        num_tiles_h,
+                                                        num_tiles_w);
 
     // Move results back to CPU for verification
     tile_offsets        = tile_offsets.cpu();
@@ -621,17 +610,16 @@ TEST_F(GaussianTileIntersectionTest, RandomSparsePatternTest) {
     }
 #endif
     auto [tile_offsets, intersection_values] =
-        fvdb::detail::ops::dispatchGaussianSparseTileIntersection<torch::kCUDA>(
-            means2d.cuda(),
-            radii.cuda(),
-            depths.cuda(),
-            tile_mask.cuda(),
-            active_tiles.cuda(),
-            /*camera_jidx=*/at::nullopt,
-            num_cameras,
-            tile_size,
-            num_tiles_h,
-            num_tiles_w);
+        fvdb::detail::ops::intersectGaussianTilesSparse(means2d.cuda(),
+                                                        radii.cuda(),
+                                                        depths.cuda(),
+                                                        tile_mask.cuda(),
+                                                        active_tiles.cuda(),
+                                                        /*camera_jidx=*/at::nullopt,
+                                                        num_cameras,
+                                                        tile_size,
+                                                        num_tiles_h,
+                                                        num_tiles_w);
 
     // Move results back to CPU for verification
     tile_offsets        = tile_offsets.cpu();

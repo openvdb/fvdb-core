@@ -1,7 +1,7 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 
-#include <fvdb/detail/ops/gsplat/GaussianProjectionUT.h>
+#include <fvdb/detail/ops/gsplat/ProjectGaussiansUnscentedForward.h>
 
 #include <c10/util/Exception.h>
 #include <torch/cuda.h>
@@ -173,23 +173,23 @@ TEST_F(GaussianProjectionUTTestFixture, CenteredGaussian_NoDistortion_AnalyticMe
     distortionCoeffs        = distortionCoeffs.cuda();
 
     const auto [radii, means2d, depths, conics, compensations] =
-        dispatchGaussianProjectionForwardUT<torch::kCUDA>(means,
-                                                          quats,
-                                                          logScales,
-                                                          worldToCamMatricesStart,
-                                                          worldToCamMatricesEnd,
-                                                          projectionMatrices,
-                                                          RollingShutterType::NONE,
-                                                          utParams,
-                                                          cameraModel,
-                                                          distortionCoeffs,
-                                                          imageWidth,
-                                                          imageHeight,
-                                                          eps2d,
-                                                          nearPlane,
-                                                          farPlane,
-                                                          minRadius2d,
-                                                          false);
+        projectGaussiansUnscentedFwd(means,
+                                     quats,
+                                     logScales,
+                                     worldToCamMatricesStart,
+                                     worldToCamMatricesEnd,
+                                     projectionMatrices,
+                                     RollingShutterType::NONE,
+                                     utParams,
+                                     cameraModel,
+                                     distortionCoeffs,
+                                     imageWidth,
+                                     imageHeight,
+                                     eps2d,
+                                     nearPlane,
+                                     farPlane,
+                                     minRadius2d,
+                                     false);
 
     auto means2d_cpu = means2d.cpu();
     auto depths_cpu  = depths.cpu();
@@ -277,23 +277,23 @@ TEST_F(GaussianProjectionUTTestFixture, NonlinearUTCovariance_ProducesFinitePosi
     distortionCoeffs        = distortionCoeffs.cuda();
 
     const auto [radii, means2d, depths, conics, compensations] =
-        dispatchGaussianProjectionForwardUT<torch::kCUDA>(means,
-                                                          quats,
-                                                          logScales,
-                                                          worldToCamMatricesStart,
-                                                          worldToCamMatricesEnd,
-                                                          projectionMatrices,
-                                                          RollingShutterType::NONE,
-                                                          utParams,
-                                                          cameraModel,
-                                                          distortionCoeffs,
-                                                          imageWidth,
-                                                          imageHeight,
-                                                          eps2d,
-                                                          nearPlane,
-                                                          farPlane,
-                                                          minRadius2d,
-                                                          false);
+        projectGaussiansUnscentedFwd(means,
+                                     quats,
+                                     logScales,
+                                     worldToCamMatricesStart,
+                                     worldToCamMatricesEnd,
+                                     projectionMatrices,
+                                     RollingShutterType::NONE,
+                                     utParams,
+                                     cameraModel,
+                                     distortionCoeffs,
+                                     imageWidth,
+                                     imageHeight,
+                                     eps2d,
+                                     nearPlane,
+                                     farPlane,
+                                     minRadius2d,
+                                     false);
 
     auto radii_cpu   = radii.cpu();
     auto conics_cpu  = conics.cpu();
@@ -356,23 +356,23 @@ TEST_F(GaussianProjectionUTTestFixture, UTParams_InvalidAlpha_ThrowsOnHost) {
     projectionMatrices      = projectionMatrices.cuda();
     distortionCoeffs        = distortionCoeffs.cuda();
 
-    EXPECT_THROW((dispatchGaussianProjectionForwardUT<torch::kCUDA>(means,
-                                                                    quats,
-                                                                    logScales,
-                                                                    worldToCamMatricesStart,
-                                                                    worldToCamMatricesEnd,
-                                                                    projectionMatrices,
-                                                                    RollingShutterType::NONE,
-                                                                    utParams,
-                                                                    cameraModel,
-                                                                    distortionCoeffs,
-                                                                    imageWidth,
-                                                                    imageHeight,
-                                                                    eps2d,
-                                                                    nearPlane,
-                                                                    farPlane,
-                                                                    minRadius2d,
-                                                                    false)),
+    EXPECT_THROW((projectGaussiansUnscentedFwd(means,
+                                               quats,
+                                               logScales,
+                                               worldToCamMatricesStart,
+                                               worldToCamMatricesEnd,
+                                               projectionMatrices,
+                                               RollingShutterType::NONE,
+                                               utParams,
+                                               cameraModel,
+                                               distortionCoeffs,
+                                               imageWidth,
+                                               imageHeight,
+                                               eps2d,
+                                               nearPlane,
+                                               farPlane,
+                                               minRadius2d,
+                                               false)),
                  c10::Error);
 }
 
@@ -419,23 +419,23 @@ TEST_F(GaussianProjectionUTTestFixture, UTParams_InvalidKappa_ThrowsOnHost) {
     projectionMatrices      = projectionMatrices.cuda();
     distortionCoeffs        = distortionCoeffs.cuda();
 
-    EXPECT_THROW((dispatchGaussianProjectionForwardUT<torch::kCUDA>(means,
-                                                                    quats,
-                                                                    logScales,
-                                                                    worldToCamMatricesStart,
-                                                                    worldToCamMatricesEnd,
-                                                                    projectionMatrices,
-                                                                    RollingShutterType::NONE,
-                                                                    utParams,
-                                                                    cameraModel,
-                                                                    distortionCoeffs,
-                                                                    imageWidth,
-                                                                    imageHeight,
-                                                                    eps2d,
-                                                                    nearPlane,
-                                                                    farPlane,
-                                                                    minRadius2d,
-                                                                    false)),
+    EXPECT_THROW((projectGaussiansUnscentedFwd(means,
+                                               quats,
+                                               logScales,
+                                               worldToCamMatricesStart,
+                                               worldToCamMatricesEnd,
+                                               projectionMatrices,
+                                               RollingShutterType::NONE,
+                                               utParams,
+                                               cameraModel,
+                                               distortionCoeffs,
+                                               imageWidth,
+                                               imageHeight,
+                                               eps2d,
+                                               nearPlane,
+                                               farPlane,
+                                               minRadius2d,
+                                               false)),
                  c10::Error);
 }
 
@@ -484,23 +484,23 @@ TEST_F(GaussianProjectionUTTestFixture, DepthNearCameraPlane_BelowZEps_HardRejec
     distortionCoeffs        = distortionCoeffs.cuda();
 
     const auto [radii, means2d, depths, conics, compensations] =
-        dispatchGaussianProjectionForwardUT<torch::kCUDA>(means,
-                                                          quats,
-                                                          logScales,
-                                                          worldToCamMatricesStart,
-                                                          worldToCamMatricesEnd,
-                                                          projectionMatrices,
-                                                          RollingShutterType::NONE,
-                                                          utParams,
-                                                          cameraModel,
-                                                          distortionCoeffs,
-                                                          imageWidth,
-                                                          imageHeight,
-                                                          eps2d,
-                                                          nearPlane,
-                                                          farPlane,
-                                                          minRadius2d,
-                                                          false);
+        projectGaussiansUnscentedFwd(means,
+                                     quats,
+                                     logScales,
+                                     worldToCamMatricesStart,
+                                     worldToCamMatricesEnd,
+                                     projectionMatrices,
+                                     RollingShutterType::NONE,
+                                     utParams,
+                                     cameraModel,
+                                     distortionCoeffs,
+                                     imageWidth,
+                                     imageHeight,
+                                     eps2d,
+                                     nearPlane,
+                                     farPlane,
+                                     minRadius2d,
+                                     false);
 
     auto radii_cpu = radii.cpu();
     EXPECT_EQ(radii_cpu[0][0].item<int32_t>(), 0);
@@ -550,23 +550,23 @@ TEST_F(GaussianProjectionUTTestFixture, DepthNearCameraPlane_AboveZEps_Projects)
     distortionCoeffs        = distortionCoeffs.cuda();
 
     const auto [radii, means2d, depths, conics, compensations] =
-        dispatchGaussianProjectionForwardUT<torch::kCUDA>(means,
-                                                          quats,
-                                                          logScales,
-                                                          worldToCamMatricesStart,
-                                                          worldToCamMatricesEnd,
-                                                          projectionMatrices,
-                                                          RollingShutterType::NONE,
-                                                          utParams,
-                                                          cameraModel,
-                                                          distortionCoeffs,
-                                                          imageWidth,
-                                                          imageHeight,
-                                                          eps2d,
-                                                          nearPlane,
-                                                          farPlane,
-                                                          minRadius2d,
-                                                          false);
+        projectGaussiansUnscentedFwd(means,
+                                     quats,
+                                     logScales,
+                                     worldToCamMatricesStart,
+                                     worldToCamMatricesEnd,
+                                     projectionMatrices,
+                                     RollingShutterType::NONE,
+                                     utParams,
+                                     cameraModel,
+                                     distortionCoeffs,
+                                     imageWidth,
+                                     imageHeight,
+                                     eps2d,
+                                     nearPlane,
+                                     farPlane,
+                                     minRadius2d,
+                                     false);
 
     auto radii_cpu   = radii.cpu();
     auto means2d_cpu = means2d.cpu();
@@ -619,23 +619,23 @@ TEST_F(GaussianProjectionUTTestFixture, Orthographic_NoDistortion_AnalyticMeanAn
     distortionCoeffs        = distortionCoeffs.cuda();
 
     const auto [radii, means2d, depths, conics, compensations] =
-        dispatchGaussianProjectionForwardUT<torch::kCUDA>(means,
-                                                          quats,
-                                                          logScales,
-                                                          worldToCamMatricesStart,
-                                                          worldToCamMatricesEnd,
-                                                          projectionMatrices,
-                                                          RollingShutterType::NONE,
-                                                          utParams,
-                                                          cameraModel,
-                                                          distortionCoeffs,
-                                                          imageWidth,
-                                                          imageHeight,
-                                                          eps2d,
-                                                          nearPlane,
-                                                          farPlane,
-                                                          minRadius2d,
-                                                          false);
+        projectGaussiansUnscentedFwd(means,
+                                     quats,
+                                     logScales,
+                                     worldToCamMatricesStart,
+                                     worldToCamMatricesEnd,
+                                     projectionMatrices,
+                                     RollingShutterType::NONE,
+                                     utParams,
+                                     cameraModel,
+                                     distortionCoeffs,
+                                     imageWidth,
+                                     imageHeight,
+                                     eps2d,
+                                     nearPlane,
+                                     farPlane,
+                                     minRadius2d,
+                                     false);
 
     auto means2d_cpu = means2d.cpu();
     auto depths_cpu  = depths.cpu();
@@ -695,23 +695,23 @@ TEST_F(GaussianProjectionUTTestFixture, OffAxisTinyGaussian_NoDistortion_MeanMat
     distortionCoeffs        = distortionCoeffs.cuda();
 
     const auto [radii, means2d, depths, conics, compensations] =
-        dispatchGaussianProjectionForwardUT<torch::kCUDA>(means,
-                                                          quats,
-                                                          logScales,
-                                                          worldToCamMatricesStart,
-                                                          worldToCamMatricesEnd,
-                                                          projectionMatrices,
-                                                          RollingShutterType::NONE,
-                                                          utParams,
-                                                          cameraModel,
-                                                          distortionCoeffs,
-                                                          imageWidth,
-                                                          imageHeight,
-                                                          eps2d,
-                                                          nearPlane,
-                                                          farPlane,
-                                                          minRadius2d,
-                                                          false);
+        projectGaussiansUnscentedFwd(means,
+                                     quats,
+                                     logScales,
+                                     worldToCamMatricesStart,
+                                     worldToCamMatricesEnd,
+                                     projectionMatrices,
+                                     RollingShutterType::NONE,
+                                     utParams,
+                                     cameraModel,
+                                     distortionCoeffs,
+                                     imageWidth,
+                                     imageHeight,
+                                     eps2d,
+                                     nearPlane,
+                                     farPlane,
+                                     minRadius2d,
+                                     false);
 
     auto means2d_cpu       = means2d.cpu();
     const float expected_u = fx * (x / z) + cx;
@@ -790,23 +790,23 @@ TEST_F(GaussianProjectionUTTestFixture, MultiCamera_RadTanDistortion_PerCameraPa
     distortionCoeffs        = distortionCoeffs.cuda();
 
     const auto [radii, means2d, depths, conics, compensations] =
-        dispatchGaussianProjectionForwardUT<torch::kCUDA>(means,
-                                                          quats,
-                                                          logScales,
-                                                          worldToCamMatricesStart,
-                                                          worldToCamMatricesEnd,
-                                                          projectionMatrices,
-                                                          RollingShutterType::NONE,
-                                                          utParams,
-                                                          cameraModel,
-                                                          distortionCoeffs,
-                                                          imageWidth,
-                                                          imageHeight,
-                                                          eps2d,
-                                                          nearPlane,
-                                                          farPlane,
-                                                          minRadius2d,
-                                                          false);
+        projectGaussiansUnscentedFwd(means,
+                                     quats,
+                                     logScales,
+                                     worldToCamMatricesStart,
+                                     worldToCamMatricesEnd,
+                                     projectionMatrices,
+                                     RollingShutterType::NONE,
+                                     utParams,
+                                     cameraModel,
+                                     distortionCoeffs,
+                                     imageWidth,
+                                     imageHeight,
+                                     eps2d,
+                                     nearPlane,
+                                     farPlane,
+                                     minRadius2d,
+                                     false);
 
     auto radii_cpu   = radii.cpu();
     auto means2d_cpu = means2d.cpu();
@@ -879,23 +879,23 @@ TEST_F(GaussianProjectionUTTestFixture, MultiCamera_Pinhole_ZeroCoeffTensor_PerC
     distortionCoeffs        = distortionCoeffs.cuda();
 
     const auto [radii, means2d, depths, conics, compensations] =
-        dispatchGaussianProjectionForwardUT<torch::kCUDA>(means,
-                                                          quats,
-                                                          logScales,
-                                                          worldToCamMatricesStart,
-                                                          worldToCamMatricesEnd,
-                                                          projectionMatrices,
-                                                          RollingShutterType::NONE,
-                                                          utParams,
-                                                          cameraModel,
-                                                          distortionCoeffs,
-                                                          imageWidth,
-                                                          imageHeight,
-                                                          eps2d,
-                                                          nearPlane,
-                                                          farPlane,
-                                                          minRadius2d,
-                                                          false);
+        projectGaussiansUnscentedFwd(means,
+                                     quats,
+                                     logScales,
+                                     worldToCamMatricesStart,
+                                     worldToCamMatricesEnd,
+                                     projectionMatrices,
+                                     RollingShutterType::NONE,
+                                     utParams,
+                                     cameraModel,
+                                     distortionCoeffs,
+                                     imageWidth,
+                                     imageHeight,
+                                     eps2d,
+                                     nearPlane,
+                                     farPlane,
+                                     minRadius2d,
+                                     false);
 
     auto radii_cpu   = radii.cpu();
     auto means2d_cpu = means2d.cpu();
@@ -971,23 +971,23 @@ TEST_F(GaussianProjectionUTTestFixture,
     distortionCoeffs        = distortionCoeffs.cuda();
 
     const auto [radii, means2d, depths, conics, compensations] =
-        dispatchGaussianProjectionForwardUT<torch::kCUDA>(means,
-                                                          quats,
-                                                          logScales,
-                                                          worldToCamMatricesStart,
-                                                          worldToCamMatricesEnd,
-                                                          projectionMatrices,
-                                                          RollingShutterType::NONE,
-                                                          utParams,
-                                                          cameraModel,
-                                                          distortionCoeffs,
-                                                          imageWidth,
-                                                          imageHeight,
-                                                          eps2d,
-                                                          nearPlane,
-                                                          farPlane,
-                                                          minRadius2d,
-                                                          false);
+        projectGaussiansUnscentedFwd(means,
+                                     quats,
+                                     logScales,
+                                     worldToCamMatricesStart,
+                                     worldToCamMatricesEnd,
+                                     projectionMatrices,
+                                     RollingShutterType::NONE,
+                                     utParams,
+                                     cameraModel,
+                                     distortionCoeffs,
+                                     imageWidth,
+                                     imageHeight,
+                                     eps2d,
+                                     nearPlane,
+                                     farPlane,
+                                     minRadius2d,
+                                     false);
 
     auto radii_cpu   = radii.cpu();
     auto means2d_cpu = means2d.cpu();
@@ -1064,23 +1064,23 @@ TEST_F(GaussianProjectionUTTestFixture,
     distortionCoeffs        = distortionCoeffs.cuda();
 
     const auto [radii, means2d, depths, conics, compensations] =
-        dispatchGaussianProjectionForwardUT<torch::kCUDA>(means,
-                                                          quats,
-                                                          logScales,
-                                                          worldToCamMatricesStart,
-                                                          worldToCamMatricesEnd,
-                                                          projectionMatrices,
-                                                          RollingShutterType::NONE,
-                                                          utParams,
-                                                          cameraModel,
-                                                          distortionCoeffs,
-                                                          imageWidth,
-                                                          imageHeight,
-                                                          eps2d,
-                                                          nearPlane,
-                                                          farPlane,
-                                                          minRadius2d,
-                                                          false);
+        projectGaussiansUnscentedFwd(means,
+                                     quats,
+                                     logScales,
+                                     worldToCamMatricesStart,
+                                     worldToCamMatricesEnd,
+                                     projectionMatrices,
+                                     RollingShutterType::NONE,
+                                     utParams,
+                                     cameraModel,
+                                     distortionCoeffs,
+                                     imageWidth,
+                                     imageHeight,
+                                     eps2d,
+                                     nearPlane,
+                                     farPlane,
+                                     minRadius2d,
+                                     false);
 
     auto radii_cpu   = radii.cpu();
     auto means2d_cpu = means2d.cpu();
@@ -1165,23 +1165,23 @@ TEST_F(GaussianProjectionUTTestFixture,
     distortionCoeffs        = distortionCoeffs.cuda();
 
     const auto [radii, means2d, depths, conics, compensations] =
-        dispatchGaussianProjectionForwardUT<torch::kCUDA>(means,
-                                                          quats,
-                                                          logScales,
-                                                          worldToCamMatricesStart,
-                                                          worldToCamMatricesEnd,
-                                                          projectionMatrices,
-                                                          RollingShutterType::NONE,
-                                                          utParams,
-                                                          cameraModel,
-                                                          distortionCoeffs,
-                                                          imageWidth,
-                                                          imageHeight,
-                                                          eps2d,
-                                                          nearPlane,
-                                                          farPlane,
-                                                          minRadius2d,
-                                                          false);
+        projectGaussiansUnscentedFwd(means,
+                                     quats,
+                                     logScales,
+                                     worldToCamMatricesStart,
+                                     worldToCamMatricesEnd,
+                                     projectionMatrices,
+                                     RollingShutterType::NONE,
+                                     utParams,
+                                     cameraModel,
+                                     distortionCoeffs,
+                                     imageWidth,
+                                     imageHeight,
+                                     eps2d,
+                                     nearPlane,
+                                     farPlane,
+                                     minRadius2d,
+                                     false);
 
     auto radii_cpu   = radii.cpu();
     auto means2d_cpu = means2d.cpu();
@@ -1261,23 +1261,23 @@ TEST_F(GaussianProjectionUTTestFixture,
     distortionCoeffs        = distortionCoeffs.cuda();
 
     const auto [radii, means2d, depths, conics, compensations] =
-        dispatchGaussianProjectionForwardUT<torch::kCUDA>(means,
-                                                          quats,
-                                                          logScales,
-                                                          worldToCamMatricesStart,
-                                                          worldToCamMatricesEnd,
-                                                          projectionMatrices,
-                                                          RollingShutterType::NONE,
-                                                          utParams,
-                                                          cameraModel,
-                                                          distortionCoeffs,
-                                                          imageWidth,
-                                                          imageHeight,
-                                                          eps2d,
-                                                          nearPlane,
-                                                          farPlane,
-                                                          minRadius2d,
-                                                          false);
+        projectGaussiansUnscentedFwd(means,
+                                     quats,
+                                     logScales,
+                                     worldToCamMatricesStart,
+                                     worldToCamMatricesEnd,
+                                     projectionMatrices,
+                                     RollingShutterType::NONE,
+                                     utParams,
+                                     cameraModel,
+                                     distortionCoeffs,
+                                     imageWidth,
+                                     imageHeight,
+                                     eps2d,
+                                     nearPlane,
+                                     farPlane,
+                                     minRadius2d,
+                                     false);
 
     auto radii_cpu   = radii.cpu();
     auto means2d_cpu = means2d.cpu();
@@ -1329,23 +1329,23 @@ TEST_F(GaussianProjectionUTTestFixture, RadTanThinPrism_IgnoresK456EvenIfNonZero
     utParams = UTParams{};
 
     const auto [radii, means2d, depths, conics, compensations] =
-        dispatchGaussianProjectionForwardUT<torch::kCUDA>(means,
-                                                          quats,
-                                                          logScales,
-                                                          worldToCamMatricesStart,
-                                                          worldToCamMatricesEnd,
-                                                          projectionMatrices,
-                                                          RollingShutterType::NONE,
-                                                          utParams,
-                                                          cameraModel,
-                                                          distortionCoeffs,
-                                                          imageWidth,
-                                                          imageHeight,
-                                                          eps2d,
-                                                          nearPlane,
-                                                          farPlane,
-                                                          minRadius2d,
-                                                          false);
+        projectGaussiansUnscentedFwd(means,
+                                     quats,
+                                     logScales,
+                                     worldToCamMatricesStart,
+                                     worldToCamMatricesEnd,
+                                     projectionMatrices,
+                                     RollingShutterType::NONE,
+                                     utParams,
+                                     cameraModel,
+                                     distortionCoeffs,
+                                     imageWidth,
+                                     imageHeight,
+                                     eps2d,
+                                     nearPlane,
+                                     farPlane,
+                                     minRadius2d,
+                                     false);
 
     auto radii_cpu   = radii.cpu();
     auto means2d_cpu = means2d.cpu();
@@ -1413,23 +1413,23 @@ TEST_F(GaussianProjectionUTTestFixture,
     distortionCoeffs        = distortionCoeffs.cuda();
 
     const auto [radii, means2d, depths, conics, compensations] =
-        dispatchGaussianProjectionForwardUT<torch::kCUDA>(means,
-                                                          quats,
-                                                          logScales,
-                                                          worldToCamMatricesStart,
-                                                          worldToCamMatricesEnd,
-                                                          projectionMatrices,
-                                                          RollingShutterType::NONE,
-                                                          utParams,
-                                                          cameraModel,
-                                                          distortionCoeffs,
-                                                          imageWidth,
-                                                          imageHeight,
-                                                          eps2d,
-                                                          nearPlane,
-                                                          farPlane,
-                                                          minRadius2d,
-                                                          false);
+        projectGaussiansUnscentedFwd(means,
+                                     quats,
+                                     logScales,
+                                     worldToCamMatricesStart,
+                                     worldToCamMatricesEnd,
+                                     projectionMatrices,
+                                     RollingShutterType::NONE,
+                                     utParams,
+                                     cameraModel,
+                                     distortionCoeffs,
+                                     imageWidth,
+                                     imageHeight,
+                                     eps2d,
+                                     nearPlane,
+                                     farPlane,
+                                     minRadius2d,
+                                     false);
 
     // When the UT kernel discards a Gaussian, only radii are defined to be 0; other outputs are
     // undefined (may contain garbage). Only assert radii here.
@@ -1487,23 +1487,23 @@ TEST_F(GaussianProjectionUTTestFixture,
     distortionCoeffs        = distortionCoeffs.cuda();
 
     const auto [radii, means2d, depths, conics, compensations] =
-        dispatchGaussianProjectionForwardUT<torch::kCUDA>(means,
-                                                          quats,
-                                                          logScales,
-                                                          worldToCamMatricesStart,
-                                                          worldToCamMatricesEnd,
-                                                          projectionMatrices,
-                                                          RollingShutterType::NONE,
-                                                          utParams,
-                                                          cameraModel,
-                                                          distortionCoeffs,
-                                                          imageWidth,
-                                                          imageHeight,
-                                                          eps2d,
-                                                          nearPlane,
-                                                          farPlane,
-                                                          minRadius2d,
-                                                          false);
+        projectGaussiansUnscentedFwd(means,
+                                     quats,
+                                     logScales,
+                                     worldToCamMatricesStart,
+                                     worldToCamMatricesEnd,
+                                     projectionMatrices,
+                                     RollingShutterType::NONE,
+                                     utParams,
+                                     cameraModel,
+                                     distortionCoeffs,
+                                     imageWidth,
+                                     imageHeight,
+                                     eps2d,
+                                     nearPlane,
+                                     farPlane,
+                                     minRadius2d,
+                                     false);
 
     auto radii_cpu = radii.cpu();
     EXPECT_GT(radii_cpu[0][0].item<int32_t>(), 0);
@@ -1558,23 +1558,23 @@ TEST_F(GaussianProjectionUTTestFixture, RollingShutterNone_DepthUsesStartPoseNot
     distortionCoeffs        = distortionCoeffs.cuda();
 
     const auto [radii, means2d, depths, conics, compensations] =
-        dispatchGaussianProjectionForwardUT<torch::kCUDA>(means,
-                                                          quats,
-                                                          logScales,
-                                                          worldToCamMatricesStart,
-                                                          worldToCamMatricesEnd,
-                                                          projectionMatrices,
-                                                          RollingShutterType::NONE,
-                                                          utParams,
-                                                          cameraModel,
-                                                          distortionCoeffs,
-                                                          imageWidth,
-                                                          imageHeight,
-                                                          eps2d,
-                                                          nearPlane,
-                                                          farPlane,
-                                                          minRadius2d,
-                                                          false);
+        projectGaussiansUnscentedFwd(means,
+                                     quats,
+                                     logScales,
+                                     worldToCamMatricesStart,
+                                     worldToCamMatricesEnd,
+                                     projectionMatrices,
+                                     RollingShutterType::NONE,
+                                     utParams,
+                                     cameraModel,
+                                     distortionCoeffs,
+                                     imageWidth,
+                                     imageHeight,
+                                     eps2d,
+                                     nearPlane,
+                                     farPlane,
+                                     minRadius2d,
+                                     false);
 
     auto depths_cpu = depths.cpu();
     // Start pose is identity, so depth should be exactly z (not z + 0.5).
