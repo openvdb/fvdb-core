@@ -21,11 +21,11 @@ spatial intelligence research and applications.
 
 ## Learning to Use *f*VDB
 
-After [installing *f*VDB](#installing-fvdb), we recommend starting with our [documentation](https://openvdb.github.io/fvdb-core).
+After [installing *f*VDB](#installing-fvdb), we recommend starting with our [documentation](https://fvdb-core.readthedocs.io/).
 
 You can also try our [TEACHME](docs/TEACHME) interactive lessons, designed to be used with an LLM coding agent (Claude Code, Cursor, or similar) that teaches you the *f*VDB API interactively. Just prompt: `Read docs/TEACHME and teach me how to use fvdb-core.`
 
-Beyond the [documentation](https://openvdb.github.io/fvdb-core), the walk-through [notebooks](notebooks) in this repository
+Beyond the [documentation](https://fvdb-core.readthedocs.io/), the walk-through [notebooks](notebooks) in this repository
 can provide an illustrated introduction to the main concepts in *f*VDB.
 
 
@@ -35,12 +35,12 @@ The `fvdb-core` Python package can be installed either using published packages 
 from source.
 
 For the most up-to-date information on installing *f*VDB's pip packages, please see the
-[installation documentation](https://openvdb.github.io/fvdb-core/installation.html).
+[installation documentation](https://fvdb-core.readthedocs.io/latest/installation.html).
 
 
 ## Building *f*VDB from Source
 
-If the [pre-built packages](https://openvdb.github.io/fvdb-core/installation.html) do not meet your needs, you can build *f*VDB from source in this repository.
+If the [pre-built packages](https://fvdb-core.readthedocs.io/latest/installation.html) do not meet your needs, you can build *f*VDB from source in this repository.
 
 ### Environment Management
 
