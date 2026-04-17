@@ -25,7 +25,7 @@ jobs:
     steps:
       - name: Create redirect page
         env:
-          RTD_URL: https://fvdb-core.readthedocs.io/en/stable/
+          RTD_URL: https://fvdb-core.readthedocs.io/
         run: |
           mkdir -p _site
           printf '%s\n' \
