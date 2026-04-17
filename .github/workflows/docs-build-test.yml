@@ -1,0 +1,36 @@
+# Copyright Contributors to the OpenVDB Project
+# SPDX-License-Identifier: Apache-2.0
+#
+# Validate that the Sphinx documentation builds without errors or warnings,
+# replicating the Read the Docs environment (see .readthedocs.yaml).
+
+name: Documentation Build Test
+
+on:
+  pull_request:
+    branches:
+      - '**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sphinx-build:
+    name: Sphinx build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install documentation dependencies
+        run: pip install -r docs/requirements.txt
+
+      - name: Generate version stub
+        run: python devtools/generate-version-stub.py
+
+      - name: Build documentation
+        run: sphinx-build -W --keep-going -a ./docs build/sphinx
