@@ -628,6 +628,11 @@ def concatenate_grids(elements: list[GridBatchData]) -> GridBatchData: ...
 # ---------------------------------------------------------------------------
 
 # Interpolation: forward
+def sample_nearest(
+    grid: GridBatchData,
+    points: JaggedTensor,
+    data: torch.Tensor,
+) -> list[torch.Tensor]: ...
 def sample_trilinear(
     grid: GridBatchData,
     points: JaggedTensor,
