@@ -95,7 +95,14 @@ def sample_nearest_naive(pts: JaggedTensor, corner_feats: torch.Tensor, grid: Gr
     base_ijk = torch.floor(grid_pts)
     frac = grid_pts - base_ijk
 
-    offsets = torch.tensor(list(itertools.product([0, 1], [0, 1], [0, 1])), device=device, dtype=torch.long)
+    # Corner ordering must match the C++ kernel's cache-friendly zigzag
+    # (SampleNearest.cu / TrilinearStencil.h) so that tie-breaking via
+    # argmin and strict-less-than give the same result.
+    offsets = torch.tensor(
+        [[0, 0, 0], [0, 0, 1], [0, 1, 1], [0, 1, 0], [1, 0, 0], [1, 0, 1], [1, 1, 1], [1, 1, 0]],
+        device=device,
+        dtype=torch.long,
+    )
 
     all_ijk = base_ijk.unsqueeze(1).long() + offsets.unsqueeze(0)  # [N, 8, 3]
     active_mask = grid.coords_in_grid(JaggedTensor(all_ijk.reshape(-1, 3))).jdata.reshape(-1, 8)
@@ -957,6 +964,13 @@ class TestSample(unittest.TestCase):
 
     @parameterized.expand(all_device_dtype_channel_combos)
     def test_nearest_sparse_onbound_vs_brute(self, device, dtype, num_channels):
+        if dtype == torch.half:
+            atol = 1e-2
+            rtol = 1e-2
+        else:
+            atol = 1e-5
+            rtol = 1e-5
+
         grid, grid_d, p = make_grid_batch_and_jagged_point_data(device, dtype, include_boundary_points=True)
 
         for test_grid in (grid, grid_d):
@@ -977,11 +991,11 @@ class TestSample(unittest.TestCase):
             features.grad.zero_()
 
             self.assertTrue(
-                torch.allclose(fv, fp, atol=1e-5, rtol=1e-5),
+                torch.allclose(fv, fp, atol=atol, rtol=rtol),
                 f"Forward max error is {torch.max(torch.abs(fv - fp))}",
             )
             self.assertTrue(
-                torch.allclose(gv, gp, atol=1e-5, rtol=1e-5),
+                torch.allclose(gv, gp, atol=atol, rtol=rtol),
                 f"Backward max error is {torch.max(torch.abs(gv - gp))}",
             )
 
