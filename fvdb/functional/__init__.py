@@ -16,6 +16,8 @@ from ._interpolation import (
     sample_bezier_single,
     sample_bezier_with_grad_batch,
     sample_bezier_with_grad_single,
+    sample_nearest_batch,
+    sample_nearest_single,
     sample_trilinear_batch,
     sample_trilinear_single,
     sample_trilinear_with_grad_batch,
@@ -174,6 +176,7 @@ from ._io import load_nanovdb, load_nanovdb_single, save_nanovdb, save_nanovdb_s
 
 __all__ = [
     # Interpolation (batch)
+    "sample_nearest_batch",
     "sample_trilinear_batch",
     "sample_trilinear_with_grad_batch",
     "sample_bezier_batch",
@@ -181,6 +184,7 @@ __all__ = [
     "splat_trilinear_batch",
     "splat_bezier_batch",
     # Interpolation (single)
+    "sample_nearest_single",
     "sample_trilinear_single",
     "sample_trilinear_with_grad_single",
     "sample_bezier_single",
