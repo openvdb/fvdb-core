@@ -4,9 +4,9 @@
 #ifndef FVDB_DETAIL_OPS_SERIALIZEENCODE_H
 #define FVDB_DETAIL_OPS_SERIALIZEENCODE_H
 
+#include <fvdb/GridBatchData.h>
 #include <fvdb/JaggedTensor.h>
 #include <fvdb/Types.h>
-#include <fvdb/detail/GridBatchData.h>
 
 namespace fvdb {
 namespace detail {

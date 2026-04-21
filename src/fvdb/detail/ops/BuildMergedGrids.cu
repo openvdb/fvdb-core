@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/detail/GridBatchDataFactory.h>
-#include <fvdb/detail/TorchDeviceBuffer.h>
+#include <fvdb/TorchDeviceBuffer.h>
 #include <fvdb/detail/ops/BuildMergedGrids.h>
 #include <fvdb/detail/utils/Utils.h>
 

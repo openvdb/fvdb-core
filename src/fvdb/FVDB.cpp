@@ -45,20 +45,20 @@ volumeRender(const torch::Tensor &sigmas,
         sigmas, rgbs, deltaTs, ts, jOffsets, transmittanceThresh);
 }
 
-std::tuple<c10::intrusive_ptr<detail::GridBatchData>, JaggedTensor, std::vector<std::string>>
+std::tuple<c10::intrusive_ptr<GridBatchData>, JaggedTensor, std::vector<std::string>>
 from_nanovdb(nanovdb::GridHandle<nanovdb::HostBuffer> &handle) {
     return detail::io::fromNVDB(handle);
 }
 
 nanovdb::GridHandle<nanovdb::HostBuffer>
-to_nanovdb(const detail::GridBatchData &gridBatchData,
+to_nanovdb(const GridBatchData &gridBatchData,
            const std::optional<JaggedTensor> maybeData,
            const std::vector<std::string> &names) {
     return detail::io::toNVDB(gridBatchData, maybeData, names);
 }
 
-c10::intrusive_ptr<detail::GridBatchData>
-jcat(const std::vector<c10::intrusive_ptr<detail::GridBatchData>> &vec) {
+c10::intrusive_ptr<GridBatchData>
+jcat(const std::vector<c10::intrusive_ptr<GridBatchData>> &vec) {
     return detail::ops::concatenateGrids(vec);
 }
 
@@ -69,7 +69,7 @@ jcat(const std::vector<JaggedTensor> &vec, std::optional<int64_t> dim) {
 
 void
 save(const std::string &path,
-     const detail::GridBatchData &gridBatchData,
+     const GridBatchData &gridBatchData,
      const std::optional<JaggedTensor> maybeData,
      const std::vector<std::string> &names,
      bool compressed,
@@ -79,7 +79,7 @@ save(const std::string &path,
 
 void
 save(const std::string &path,
-     const detail::GridBatchData &gridBatchData,
+     const GridBatchData &gridBatchData,
      const std::optional<JaggedTensor> maybeData,
      const std::string &name,
      bool compressed,
@@ -93,7 +93,7 @@ save(const std::string &path,
     }
 }
 
-std::tuple<c10::intrusive_ptr<detail::GridBatchData>, JaggedTensor, std::vector<std::string>>
+std::tuple<c10::intrusive_ptr<GridBatchData>, JaggedTensor, std::vector<std::string>>
 load(const std::string &path,
      const std::vector<uint64_t> &indices,
      const torch::Device &device,
@@ -101,7 +101,7 @@ load(const std::string &path,
     return detail::io::loadNVDB(path, indices, device, verbose);
 }
 
-std::tuple<c10::intrusive_ptr<detail::GridBatchData>, JaggedTensor, std::vector<std::string>>
+std::tuple<c10::intrusive_ptr<GridBatchData>, JaggedTensor, std::vector<std::string>>
 load(const std::string &path,
      const std::vector<std::string> &names,
      const torch::Device &device,
@@ -109,33 +109,33 @@ load(const std::string &path,
     return detail::io::loadNVDB(path, names, device, verbose);
 }
 
-std::tuple<c10::intrusive_ptr<detail::GridBatchData>, JaggedTensor, std::vector<std::string>>
+std::tuple<c10::intrusive_ptr<GridBatchData>, JaggedTensor, std::vector<std::string>>
 load(const std::string &path, const torch::Device &device, bool verbose) {
     return detail::io::loadNVDB(path, device, verbose);
 }
 
-c10::intrusive_ptr<detail::GridBatchData>
+c10::intrusive_ptr<GridBatchData>
 gridbatch_from_points(const JaggedTensor &points,
                       const std::vector<nanovdb::Vec3d> &voxel_sizes,
                       const std::vector<nanovdb::Vec3d> &origins) {
     return detail::ops::buildGridFromPoints(points, voxel_sizes, origins);
 }
 
-c10::intrusive_ptr<detail::GridBatchData>
+c10::intrusive_ptr<GridBatchData>
 gridbatch_from_ijk(const JaggedTensor &ijk,
                    const std::vector<nanovdb::Vec3d> &voxel_sizes,
                    const std::vector<nanovdb::Vec3d> &origins) {
     return detail::ops::createNanoGridFromIJK(ijk, voxel_sizes, origins);
 }
 
-c10::intrusive_ptr<detail::GridBatchData>
+c10::intrusive_ptr<GridBatchData>
 gridbatch_from_nearest_voxels_to_points(const JaggedTensor &points,
                                         const std::vector<nanovdb::Vec3d> &voxel_sizes,
                                         const std::vector<nanovdb::Vec3d> &origins) {
     return detail::ops::buildGridFromNearestVoxelsToPoints(points, voxel_sizes, origins);
 }
 
-c10::intrusive_ptr<detail::GridBatchData>
+c10::intrusive_ptr<GridBatchData>
 gridbatch_from_dense(const int64_t numGrids,
                      const nanovdb::Coord &denseDims,
                      const nanovdb::Coord &ijkMin,
@@ -147,7 +147,7 @@ gridbatch_from_dense(const int64_t numGrids,
         numGrids, ijkMin, denseDims, device, mask, voxel_sizes, origins);
 }
 
-c10::intrusive_ptr<detail::GridBatchData>
+c10::intrusive_ptr<GridBatchData>
 gridbatch_from_mesh(const JaggedTensor &vertices,
                     const JaggedTensor &faces,
                     const std::vector<nanovdb::Vec3d> &voxel_sizes,

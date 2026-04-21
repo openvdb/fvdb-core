@@ -7,7 +7,7 @@
 #ifndef FVDB_DETAIL_OPS_BUILDGRIDFORCONVTRANSPOSE_H
 #define FVDB_DETAIL_OPS_BUILDGRIDFORCONVTRANSPOSE_H
 
-#include <fvdb/detail/GridBatchData.h>
+#include <fvdb/GridBatchData.h>
 
 namespace fvdb {
 namespace detail {

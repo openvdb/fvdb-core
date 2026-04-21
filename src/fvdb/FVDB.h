@@ -4,8 +4,8 @@
 #ifndef FVDB_FVDB_H
 #define FVDB_FVDB_H
 
+#include <fvdb/GridBatchData.h>
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/GridBatchData.h>
 
 #include <vector>
 
@@ -23,8 +23,7 @@ std::vector<torch::Tensor> volumeRender(const torch::Tensor &sigmas,
 /// @brief Concatenate a list of grid batches into a single grid batch
 /// @param vec A list of grid batches to concatenate
 /// @return A GridBatchData representing the concatenated grid batch
-c10::intrusive_ptr<detail::GridBatchData>
-jcat(const std::vector<c10::intrusive_ptr<detail::GridBatchData>> &vec);
+c10::intrusive_ptr<GridBatchData> jcat(const std::vector<c10::intrusive_ptr<GridBatchData>> &vec);
 
 /// @brief Concatenate a list of JaggedTensor into a single JaggedTensor
 /// @param vec A list of JaggedTensor to concatenate
@@ -103,7 +102,7 @@ JaggedTensor jempty(const std::vector<std::vector<int64_t>> &lsizes,
 /// 0, 0] voxel
 ///                for each grid in the batch, or one origin for all grids
 /// @return A GridBatchData containing the created grid batch
-c10::intrusive_ptr<detail::GridBatchData>
+c10::intrusive_ptr<GridBatchData>
 gridbatch_from_points(const JaggedTensor &points,
                       const std::vector<nanovdb::Vec3d> &voxel_sizes,
                       const std::vector<nanovdb::Vec3d> &origins);
@@ -116,7 +115,7 @@ gridbatch_from_points(const JaggedTensor &points,
 /// @param origins A tensor of shape [B, 3] or [3,] containing the world space coordinate of the [0,
 /// 0, 0] voxel for each grid in the batch, or one origin for all grids
 /// @return A GridBatchData containing the created grid batch
-c10::intrusive_ptr<detail::GridBatchData>
+c10::intrusive_ptr<GridBatchData>
 gridbatch_from_nearest_voxels_to_points(const JaggedTensor &points,
                                         const std::vector<nanovdb::Vec3d> &voxel_sizes,
                                         const std::vector<nanovdb::Vec3d> &origins);
@@ -130,10 +129,9 @@ gridbatch_from_nearest_voxels_to_points(const JaggedTensor &points,
 /// 0, 0] voxel
 ///                for each grid in the batch, or one origin for all grids
 /// @return A GridBatchData containing the created grid batch
-c10::intrusive_ptr<detail::GridBatchData>
-gridbatch_from_ijk(const JaggedTensor &ijk,
-                   const std::vector<nanovdb::Vec3d> &voxel_sizes,
-                   const std::vector<nanovdb::Vec3d> &origins);
+c10::intrusive_ptr<GridBatchData> gridbatch_from_ijk(const JaggedTensor &ijk,
+                                                     const std::vector<nanovdb::Vec3d> &voxel_sizes,
+                                                     const std::vector<nanovdb::Vec3d> &origins);
 
 /// @brief Return a grid batch densely from ijkMin to ijkMin + size
 /// @param numGrids The number of grids to create in the batch
@@ -149,7 +147,7 @@ gridbatch_from_ijk(const JaggedTensor &ijk,
 ///             Note that the same mask will be re-used for all the grids in the batch.
 /// @param device Which device to build the grid batch on
 /// @return A GridBatchData containing a batch of dense grids
-c10::intrusive_ptr<detail::GridBatchData>
+c10::intrusive_ptr<GridBatchData>
 gridbatch_from_dense(const int64_t numGrids,
                      const nanovdb::Coord &denseDims,
                      const nanovdb::Coord &ijkMin,
@@ -168,7 +166,7 @@ gridbatch_from_dense(const int64_t numGrids,
 /// @param origins A tensor of shape [B, 3] or [3,] containing the world space coordinate of the [0,
 /// 0, 0] voxel for each grid in the batch, or one origin for all grids
 /// @return A GridBatchData containing the created grid batch
-c10::intrusive_ptr<detail::GridBatchData>
+c10::intrusive_ptr<GridBatchData>
 gridbatch_from_mesh(const JaggedTensor &vertices,
                     const JaggedTensor &faces,
                     const std::vector<nanovdb::Vec3d> &voxel_sizes,
@@ -180,7 +178,7 @@ gridbatch_from_mesh(const JaggedTensor &vertices,
 /// containing the converted grids,
 ///         data is a JaggedTensor containing the data of the grids, and names is a list of strings
 ///         containing the name of each grid
-std::tuple<c10::intrusive_ptr<detail::GridBatchData>, JaggedTensor, std::vector<std::string>>
+std::tuple<c10::intrusive_ptr<GridBatchData>, JaggedTensor, std::vector<std::string>>
 from_nanovdb(nanovdb::GridHandle<nanovdb::HostBuffer> &handle);
 
 /// @brief Return a nanovdb grid handle created from a grid batch, optional jagged tensor of data,
@@ -194,7 +192,7 @@ from_nanovdb(nanovdb::GridHandle<nanovdb::HostBuffer> &handle);
 /// @return A nanovdb grid handle, whose type is inferred from the data, containing the converted
 /// grids
 nanovdb::GridHandle<nanovdb::HostBuffer>
-to_nanovdb(const detail::GridBatchData &gridBatchData,
+to_nanovdb(const GridBatchData &gridBatchData,
            const std::optional<JaggedTensor> maybeData = std::nullopt,
            const std::vector<std::string> &names       = {});
 
@@ -208,7 +206,7 @@ to_nanovdb(const detail::GridBatchData &gridBatchData,
 /// @param compressed Whether to compress the stored grid using Blosc (https://www.blosc.org/)
 /// @param verbose Whether to print information about the saved grids
 void save(const std::string &path,
-          const detail::GridBatchData &gridBatchData,
+          const GridBatchData &gridBatchData,
           const std::optional<JaggedTensor> maybeData = std::nullopt,
           const std::vector<std::string> &names       = {},
           bool compressed                             = false,
@@ -224,7 +222,7 @@ void save(const std::string &path,
 /// @param compressed Whether to compress the stored grid using Blosc (https://www.blosc.org/)
 /// @param verbose Whether to print information about the saved grids
 void save(const std::string &path,
-          const detail::GridBatchData &gridBatchData,
+          const GridBatchData &gridBatchData,
           const std::optional<JaggedTensor> maybeData = std::nullopt,
           const std::string &name                     = std::string(),
           bool compressed                             = false,
@@ -236,7 +234,7 @@ void save(const std::string &path,
 /// @param device Which device to load the grid batch on
 /// @param verbose If set to true, print information about the loaded grids
 /// @return A triple (gridbatch_data, data, names)
-std::tuple<c10::intrusive_ptr<detail::GridBatchData>, JaggedTensor, std::vector<std::string>>
+std::tuple<c10::intrusive_ptr<GridBatchData>, JaggedTensor, std::vector<std::string>>
 load(const std::string &path,
      const std::vector<uint64_t> &indices,
      const torch::Device &device,
@@ -247,7 +245,7 @@ load(const std::string &path,
 /// @param device Which device to load the grid batch on
 /// @param verbose If set to true, print information about the loaded grids
 /// @return A triple (gridbatch_data, data, names)
-std::tuple<c10::intrusive_ptr<detail::GridBatchData>, JaggedTensor, std::vector<std::string>>
+std::tuple<c10::intrusive_ptr<GridBatchData>, JaggedTensor, std::vector<std::string>>
 load(const std::string &path,
      const std::vector<std::string> &names,
      const torch::Device &device,
@@ -257,7 +255,7 @@ load(const std::string &path,
 /// @param device Which device to load the grid batch on
 /// @param verbose If set to true, print information about the loaded grids
 /// @return A triple (gridbatch_data, data, names)
-std::tuple<c10::intrusive_ptr<detail::GridBatchData>, JaggedTensor, std::vector<std::string>>
+std::tuple<c10::intrusive_ptr<GridBatchData>, JaggedTensor, std::vector<std::string>>
 load(const std::string &path, const torch::Device &device, bool verbose = false);
 
 /// @brief Convert a tensor of ijk coordinates to a tensor of morton codes

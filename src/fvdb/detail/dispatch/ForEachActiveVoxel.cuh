@@ -25,7 +25,7 @@
 #include "dispatch/torch/for_each.h"
 #include "dispatch/with_value.h"
 
-#include <fvdb/detail/GridBatchData.h>
+#include <fvdb/GridBatchData.h>
 #include <fvdb/detail/dispatch/GridAccessor.h>
 
 #include <nanovdb/NanoVDB.h>

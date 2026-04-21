@@ -1,12 +1,78 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#include <fvdb/detail/GridBatchData.h>
+#include <fvdb/GridBatchData.h>
 #include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/JIdxForGrid.h>
 
 namespace fvdb {
-namespace detail {
+
+// -----------------------------------------------------------------------
+// Methods that dereference mGridHdl (require complete TorchDeviceBuffer)
+// -----------------------------------------------------------------------
+
+const nanovdb::GridHandle<TorchDeviceBuffer> &
+GridBatchData::nanoGridHandle() const {
+    return *mGridHdl;
+}
+
+const c10::Device
+GridBatchData::device() const {
+    return mGridHdl->buffer().device();
+}
+
+bool
+GridBatchData::isEmpty() const {
+    return mGridHdl->buffer().isEmpty();
+}
+
+GridBatchData::Accessor
+GridBatchData::hostAccessor() const {
+    TORCH_CHECK(!isEmpty(), "Cannot access empty grid");
+    TORCH_CHECK(mGridHdl->template grid<nanovdb::ValueOnIndex>(),
+                "Failed to get host grid pointer");
+    return Accessor(mHostGridMetadata,
+                    mGridHdl->template grid<nanovdb::ValueOnIndex>(),
+                    mLeafBatchIndices.data_ptr<fvdb::JIdxType>(),
+                    mBatchMetadata.mTotalVoxels,
+                    mBatchMetadata.mTotalLeaves,
+                    mBatchMetadata.mMaxVoxels,
+                    mBatchMetadata.mMaxLeafCount,
+                    mBatchSize);
+}
+
+GridBatchData::Accessor
+GridBatchData::deviceAccessor() const {
+    TORCH_CHECK(!isEmpty(), "Cannot access empty grid");
+    TORCH_CHECK(device().is_cuda() || device().is_privateuseone(),
+                "Cannot access device accessor without a CUDA or PrivateUse1 device");
+    TORCH_CHECK(mGridHdl->template deviceGrid<nanovdb::ValueOnIndex>(),
+                "Failed to get device grid pointer");
+    return Accessor(mDeviceGridMetadata,
+                    mGridHdl->template deviceGrid<nanovdb::ValueOnIndex>(),
+                    mLeafBatchIndices.data_ptr<fvdb::JIdxType>(),
+                    mBatchMetadata.mTotalVoxels,
+                    mBatchMetadata.mTotalLeaves,
+                    mBatchMetadata.mMaxVoxels,
+                    mBatchMetadata.mMaxLeafCount,
+                    mBatchSize);
+}
+
+void
+GridBatchData::checkDevice(const torch::Tensor &t) const {
+    torch::Device hdlDevice = mGridHdl->buffer().device();
+    TORCH_CHECK(hdlDevice == t.device(),
+                "All tensors must be on the same device (" + hdlDevice.str() +
+                    ") as index grid but got " + t.device().str());
+}
+
+void
+GridBatchData::checkDevice(const JaggedTensor &t) const {
+    torch::Device hdlDevice = mGridHdl->buffer().device();
+    TORCH_CHECK(hdlDevice == t.device(),
+                "All tensors must be on the same device (" + hdlDevice.str() +
+                    ") as index grid but got " + t.device().str());
+}
 
 GridBatchData::~GridBatchData() {
     if (!mGridHdl) {
@@ -14,14 +80,14 @@ GridBatchData::~GridBatchData() {
     }
     const torch::Device dev = mGridHdl->buffer().device();
     if (dev.is_cpu() || dev.is_cuda()) {
-        freeHostGridMetadata(mHostGridMetadata);
+        fvdb::detail::freeHostGridMetadata(mHostGridMetadata);
         mHostGridMetadata = nullptr;
         if (dev.is_cuda()) {
-            freeDeviceGridMetadata(dev, mDeviceGridMetadata);
+            fvdb::detail::freeDeviceGridMetadata(dev, mDeviceGridMetadata);
             mDeviceGridMetadata = nullptr;
         }
     } else if (dev.is_privateuseone()) {
-        freeUnifiedMemoryGridMetadata(mDeviceGridMetadata);
+        fvdb::detail::freeUnifiedMemoryGridMetadata(mDeviceGridMetadata);
         mHostGridMetadata   = nullptr;
         mDeviceGridMetadata = nullptr;
     } else {
@@ -189,7 +255,7 @@ GridBatchData::totalBBoxTensor() const {
 
 const std::vector<VoxelCoordTransform>
 GridBatchData::primalTransforms() const {
-    std::vector<detail::VoxelCoordTransform> transforms;
+    std::vector<VoxelCoordTransform> transforms;
     transforms.reserve(batchSize());
     for (int64_t bi = 0; bi < batchSize(); ++bi) {
         transforms.push_back(primalTransformAt(bi));
@@ -199,7 +265,7 @@ GridBatchData::primalTransforms() const {
 
 const std::vector<VoxelCoordTransform>
 GridBatchData::dualTransforms() const {
-    std::vector<detail::VoxelCoordTransform> transforms;
+    std::vector<VoxelCoordTransform> transforms;
     transforms.reserve(batchSize());
     for (int64_t bi = 0; bi < batchSize(); ++bi) {
         transforms.push_back(dualTransformAt(bi));
@@ -263,7 +329,7 @@ GridBatchData::jaggedTensor(const torch::Tensor &data) const {
 
 torch::Tensor
 GridBatchData::jidx() const {
-    return ops::jIdxForGrid(*this);
+    return fvdb::detail::ops::jIdxForGrid(*this);
 }
 
 torch::Tensor
@@ -271,5 +337,4 @@ GridBatchData::jlidx() const {
     return mListIndices;
 }
 
-} // namespace detail
 } // namespace fvdb

@@ -16,7 +16,7 @@
 
 #include "dispatch/torch/dispatch.h"
 
-#include <fvdb/detail/GridBatchData.h>
+#include <fvdb/GridBatchData.h>
 
 namespace fvdb {
 namespace detail {

@@ -5,7 +5,7 @@
 #define FVDB_DETAIL_OPS_NEARESTIJKFORPOINTS_H
 
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/VoxelCoordTransform.h>
+#include <fvdb/VoxelCoordTransform.h>
 
 #include <vector>
 

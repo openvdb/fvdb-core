@@ -1,16 +1,15 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#ifndef FVDB_DETAIL_VOXELCOORDTRANSFORM_H
-#define FVDB_DETAIL_VOXELCOORDTRANSFORM_H
+#ifndef FVDB_VOXELCOORDTRANSFORM_H
+#define FVDB_VOXELCOORDTRANSFORM_H
 
-#include <fvdb/detail/utils/Utils.h>
+#include <fvdb/TypeTraits.h>
 
 #include <nanovdb/NanoVDB.h>
 #include <nanovdb/math/Ray.h>
 
 namespace fvdb {
-namespace detail {
 
 /// @brief A class representing the the transformation from world space (xyz) to voxel space (ijk)
 ///        its inverse, and gradient. It can be applied to points, vectors and rays. It stores the
@@ -332,7 +331,6 @@ voxelTransformForSizeAndOrigin(const nanovdb::Vec3d &voxSize,
     outDual   = VoxelCoordTransform(invW, -tx / w + half);
 }
 
-} // namespace detail
 } // namespace fvdb
 
-#endif // FVDB_DETAIL_VOXELCOORDTRANSFORM_H
+#endif // FVDB_VOXELCOORDTRANSFORM_H

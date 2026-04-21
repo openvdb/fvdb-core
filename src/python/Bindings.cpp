@@ -155,7 +155,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     // Concatenate grids or jagged tensors
     m.def("jcat",
-          py::overload_cast<const std::vector<c10::intrusive_ptr<fvdb::detail::GridBatchData>> &>(
+          py::overload_cast<const std::vector<c10::intrusive_ptr<fvdb::GridBatchData>> &>(
               &fvdb::jcat),
           py::arg("grid_batches"));
     m.def("jcat",
@@ -374,7 +374,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     m.def("save",
           py::overload_cast<const std::string &,
-                            const fvdb::detail::GridBatchData &,
+                            const fvdb::GridBatchData &,
                             const std::optional<fvdb::JaggedTensor>,
                             const std::vector<std::string> &,
                             bool,
@@ -387,7 +387,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           py::arg("verbose")    = false);
     m.def("save",
           py::overload_cast<const std::string &,
-                            const fvdb::detail::GridBatchData &,
+                            const fvdb::GridBatchData &,
                             const std::optional<fvdb::JaggedTensor>,
                             const std::string &,
                             bool,
@@ -467,8 +467,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     m.def(
         "gs_build_topology",
-        [](const fvdb::detail::GridBatchData &feature_grid,
-           const fvdb::detail::GridBatchData &output_grid,
+        [](const fvdb::GridBatchData &feature_grid,
+           const fvdb::GridBatchData &output_grid,
            const torch::Tensor &kernelSize,
            const torch::Tensor &stride) -> GSDTopo {
             return fvdb::detail::ops::gatherScatterDefaultSparseConvTopology(
@@ -509,8 +509,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     m.def(
         "gs_build_transpose_topology",
-        [](const fvdb::detail::GridBatchData &feature_grid,
-           const fvdb::detail::GridBatchData &output_grid,
+        [](const fvdb::GridBatchData &feature_grid,
+           const fvdb::GridBatchData &output_grid,
            const torch::Tensor &kernelSize,
            const torch::Tensor &stride) -> GSDTopo {
             return fvdb::detail::ops::gatherScatterDefaultSparseConvTransposeTopology(
@@ -556,8 +556,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         "pred_gather_igemm_conv",
         [](torch::Tensor features,
            torch::Tensor weights,
-           const fvdb::detail::GridBatchData &feature_grid,
-           const fvdb::detail::GridBatchData &output_grid,
+           const fvdb::GridBatchData &feature_grid,
+           const fvdb::GridBatchData &output_grid,
            int kernel_size,
            int stride) -> torch::Tensor {
             return fvdb::detail::ops::predGatherIGemmSparseConv(
@@ -574,7 +574,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
 TORCH_LIBRARY(fvdb, m) {
     m.class_<fvdb::JaggedTensor>("JaggedTensor");
-    m.class_<fvdb::detail::GridBatchData>("GridBatchData");
+    m.class_<fvdb::GridBatchData>("GridBatchData");
 
     m.def(
         "_fused_ssim(float C1, float C2, Tensor img1, Tensor img2, bool train) -> (Tensor, Tensor, Tensor, Tensor)");

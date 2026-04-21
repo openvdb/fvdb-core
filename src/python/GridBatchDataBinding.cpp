@@ -4,7 +4,7 @@
 
 #include <pybind11/stl.h>
 
-#include <fvdb/detail/GridBatchData.h>
+#include <fvdb/GridBatchData.h>
 #include <fvdb/detail/ops/CloneGrid.h>
 #include <fvdb/detail/ops/SerializeGrid.h>
 
@@ -12,7 +12,7 @@
 
 void
 bind_grid_batch_data(py::module &m) {
-    using GBI = fvdb::detail::GridBatchData;
+    using GBI = fvdb::GridBatchData;
 
     py::class_<GBI, c10::intrusive_ptr<GBI>>(m, "GridBatchData")
 

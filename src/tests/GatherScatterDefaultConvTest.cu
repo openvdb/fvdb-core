@@ -51,8 +51,8 @@
 // CPU and CUDA with float32 and float64.  A separate kernel-size test suite
 // exercises non-cubic and varied kernel dimensions.
 //
+#include <fvdb/GridBatchData.h>
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/GridBatchData.h>
 #include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/BuildGridForConv.h>
 #include <fvdb/detail/ops/BuildGridFromIjk.h>

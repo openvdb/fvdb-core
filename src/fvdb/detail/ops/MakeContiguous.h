@@ -4,7 +4,7 @@
 #ifndef FVDB_DETAIL_OPS_MAKECONTIGUOUS_H
 #define FVDB_DETAIL_OPS_MAKECONTIGUOUS_H
 
-#include <fvdb/detail/GridBatchData.h>
+#include <fvdb/GridBatchData.h>
 
 namespace fvdb {
 namespace detail {
