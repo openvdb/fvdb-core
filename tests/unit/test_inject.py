@@ -816,16 +816,12 @@ def test_gridbatch_inject_with_empty_grid_in_batch():
 
     # Batch 0: src and dst share the same ijk — every dst voxel was written
     # and the set of values matches src.
-    assert torch.equal(
-        torch.sort(result[0].jdata.flatten())[0], torch.sort(src_data[0].jdata.flatten())[0]
-    )
+    assert torch.equal(torch.sort(result[0].jdata.flatten())[0], torch.sort(src_data[0].jdata.flatten())[0])
     # Batch 1: src is empty but dst has voxels — all slots retain default_value.
     assert result[1].jdata.shape == (ijk_c.shape[0], 1)
     assert (result[1].jdata == -1.0).all()
     # Batch 2: src and dst share the same ijk — every dst voxel was written.
-    assert torch.equal(
-        torch.sort(result[2].jdata.flatten())[0], torch.sort(src_data[2].jdata.flatten())[0]
-    )
+    assert torch.equal(torch.sort(result[2].jdata.flatten())[0], torch.sort(src_data[2].jdata.flatten())[0])
 
 
 if __name__ == "__main__":
