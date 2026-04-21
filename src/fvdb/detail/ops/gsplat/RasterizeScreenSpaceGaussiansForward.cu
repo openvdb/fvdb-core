@@ -236,8 +236,10 @@ struct RasterizeForwardArgs {
                 // memory
                 __syncthreads();
 
-                // Volume render Gaussians in this batch
-                if (pixelIsActive) { // skip inactive sparse pixels
+                // Skip the per-Gaussian inner loop if every lane in this warp is
+                // already done (saturated or outside image bounds). Block-level
+                // __syncthreads_and above only fires once all 8 warps finish.
+                if (!__all_sync(0xffffffffu, done)) {
                     const uint32_t batchSize = min(blockSize, lastGaussianIdInBlock - batchStart);
                     for (uint32_t t = 0; (t < batchSize) && !done; ++t) {
                         const Gaussian2D<ScalarType> gaussian = sharedGaussians[t];
