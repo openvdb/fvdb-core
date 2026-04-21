@@ -4,7 +4,7 @@
 #ifndef FVDB_DETAIL_UTILS_SIMPLEOPHELPER_H
 #define FVDB_DETAIL_UTILS_SIMPLEOPHELPER_H
 
-#include <fvdb/detail/GridBatchData.h>
+#include <fvdb/GridBatchData.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>

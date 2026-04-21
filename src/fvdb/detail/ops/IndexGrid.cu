@@ -9,8 +9,8 @@
 namespace {
 
 template <typename Indexable>
-c10::intrusive_ptr<fvdb::detail::GridBatchData>
-indexGridInternal(const fvdb::detail::GridBatchData &grid, const Indexable &idx, int64_t size) {
+c10::intrusive_ptr<fvdb::GridBatchData>
+indexGridInternal(const fvdb::GridBatchData &grid, const Indexable &idx, int64_t size) {
     using namespace fvdb::detail;
 
     if (size == 0) {
@@ -19,8 +19,8 @@ indexGridInternal(const fvdb::detail::GridBatchData &grid, const Indexable &idx,
     TORCH_CHECK(size >= 0,
                 "Indexing with negative size is not supported (this should never happen)");
 
-    GridBatchData::GridMetadata *hostMeta   = allocateHostGridMetadata(size);
-    GridBatchData::GridMetadata *deviceMeta = nullptr;
+    fvdb::GridBatchData::GridMetadata *hostMeta   = allocateHostGridMetadata(size);
+    fvdb::GridBatchData::GridMetadata *deviceMeta = nullptr;
 
     const torch::Device device = grid.device();
     if (device.is_cuda()) {
@@ -70,7 +70,7 @@ indexGridInternal(const fvdb::detail::GridBatchData &grid, const Indexable &idx,
         count += 1;
     }
 
-    GridBatchData::GridBatchMetadata batchMeta;
+    fvdb::GridBatchData::GridBatchMetadata batchMeta;
     batchMeta.mIsContiguous = isContiguous && (count == grid.batchSize());
     batchMeta.mTotalLeaves  = cumLeaves;
     batchMeta.mTotalVoxels  = cumVoxels;
@@ -96,14 +96,14 @@ indexGridInternal(const fvdb::detail::GridBatchData &grid, const Indexable &idx,
         listIndices = grid.mListIndices;
     }
 
-    return c10::make_intrusive<GridBatchData>(grid.mGridHdl,
-                                              hostMeta,
-                                              deviceMeta,
-                                              size,
-                                              std::move(batchMeta),
-                                              std::move(leafBatchIndices),
-                                              std::move(batchOffsets),
-                                              std::move(listIndices));
+    return c10::make_intrusive<fvdb::GridBatchData>(grid.mGridHdl,
+                                                    hostMeta,
+                                                    deviceMeta,
+                                                    size,
+                                                    std::move(batchMeta),
+                                                    std::move(leafBatchIndices),
+                                                    std::move(batchOffsets),
+                                                    std::move(listIndices));
 }
 
 struct RangeAccessor {

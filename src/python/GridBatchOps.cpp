@@ -4,9 +4,9 @@
 
 #include <pybind11/stl.h>
 
+#include <fvdb/GridBatchData.h>
 #include <fvdb/JaggedTensor.h>
 #include <fvdb/Types.h>
-#include <fvdb/detail/GridBatchData.h>
 
 #include <torch/extension.h>
 
@@ -116,7 +116,7 @@ vecsToCoords(const std::vector<std::vector<int32_t>> &vecs) {
 
 void
 bind_grid_batch_ops(py::module &m) {
-    using GBI     = fvdb::detail::GridBatchData;
+    using GBI     = fvdb::GridBatchData;
     using JT      = fvdb::JaggedTensor;
     namespace ops = fvdb::detail::ops;
 

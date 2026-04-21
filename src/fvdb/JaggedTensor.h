@@ -4,10 +4,10 @@
 #ifndef FVDB_JAGGEDTENSOR_H
 #define FVDB_JAGGEDTENSOR_H
 
-#include <fvdb/detail/utils/Utils.h>
-
 #include <torch/custom_class.h>
 #include <torch/types.h>
+
+#include <dispatch/dispatch/macros.h>
 
 #include <optional>
 

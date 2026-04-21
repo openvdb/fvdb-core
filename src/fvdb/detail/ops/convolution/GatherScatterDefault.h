@@ -21,7 +21,7 @@
 #ifndef FVDB_DETAIL_OPS_CONVOLUTION_GATHERSCATTERDEFAULT_H
 #define FVDB_DETAIL_OPS_CONVOLUTION_GATHERSCATTERDEFAULT_H
 
-#include <fvdb/detail/GridBatchData.h>
+#include <fvdb/GridBatchData.h>
 
 #include <nanovdb/NanoVDB.h>
 

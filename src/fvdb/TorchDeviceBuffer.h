@@ -1,8 +1,8 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#ifndef FVDB_DETAIL_TORCHDEVICEBUFFER_H
-#define FVDB_DETAIL_TORCHDEVICEBUFFER_H
+#ifndef FVDB_TORCHDEVICEBUFFER_H
+#define FVDB_TORCHDEVICEBUFFER_H
 
 #include <nanovdb/GridHandle.h>
 #include <nanovdb/HostBuffer.h> // for BufferTraits
@@ -10,9 +10,6 @@
 #include <torch/types.h>
 
 namespace fvdb {
-namespace detail {
-
-// ----------------------------> TorchDeviceBuffer <--------------------------------------
 
 /// @brief Simple memory buffer using un-managed pinned host memory when compiled with NVCC.
 ///        Obviously this class is making explicit used of CUDA so replace it with your own memory
@@ -92,20 +89,19 @@ class TorchDeviceBuffer {
 
 }; // TorchDeviceBuffer class
 
-} // namespace detail
 } // namespace fvdb
 
 namespace nanovdb {
-template <> struct BufferTraits<fvdb::detail::TorchDeviceBuffer> {
+template <> struct BufferTraits<fvdb::TorchDeviceBuffer> {
     static const bool hasDeviceDual = true;
 };
 
 template <>
 template <>
-GridHandle<fvdb::detail::TorchDeviceBuffer>
-GridHandle<fvdb::detail::TorchDeviceBuffer>::copy<fvdb::detail::TorchDeviceBuffer>(
-    const fvdb::detail::TorchDeviceBuffer &guide) const;
+GridHandle<fvdb::TorchDeviceBuffer>
+GridHandle<fvdb::TorchDeviceBuffer>::copy<fvdb::TorchDeviceBuffer>(
+    const fvdb::TorchDeviceBuffer &guide) const;
 
 } // namespace nanovdb
 
-#endif // FVDB_DETAIL_TORCHDEVICEBUFFER_H
+#endif // FVDB_TORCHDEVICEBUFFER_H

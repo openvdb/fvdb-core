@@ -1,12 +1,12 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#ifndef FVDB_DETAIL_GRIDBATCHDATA_H
-#define FVDB_DETAIL_GRIDBATCHDATA_H
+#ifndef FVDB_GRIDBATCHDATA_H
+#define FVDB_GRIDBATCHDATA_H
 
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/TorchDeviceBuffer.h>
-#include <fvdb/detail/VoxelCoordTransform.h>
+#include <fvdb/TorchDeviceBuffer.h>
+#include <fvdb/VoxelCoordTransform.h>
 
 #include <nanovdb/GridHandle.h>
 #include <nanovdb/NanoVDB.h>
@@ -21,7 +21,6 @@
 #endif
 
 namespace fvdb {
-namespace detail {
 
 struct GridBatchData : public torch::CustomClassHolder {
     static constexpr int64_t MAX_GRIDS_PER_BATCH = 1024; // Maximum number of grids in a batch
@@ -229,37 +228,8 @@ struct GridBatchData : public torch::CustomClassHolder {
     // -----------------------------------------------------------------------
     // Accessors
     // -----------------------------------------------------------------------
-    Accessor
-    hostAccessor() const {
-        TORCH_CHECK(!isEmpty(), "Cannot access empty grid");
-        TORCH_CHECK(mGridHdl->template grid<nanovdb::ValueOnIndex>(),
-                    "Failed to get host grid pointer");
-        return Accessor(mHostGridMetadata,
-                        mGridHdl->template grid<nanovdb::ValueOnIndex>(),
-                        mLeafBatchIndices.data_ptr<fvdb::JIdxType>(),
-                        mBatchMetadata.mTotalVoxels,
-                        mBatchMetadata.mTotalLeaves,
-                        mBatchMetadata.mMaxVoxels,
-                        mBatchMetadata.mMaxLeafCount,
-                        mBatchSize);
-    }
-
-    Accessor
-    deviceAccessor() const {
-        TORCH_CHECK(!isEmpty(), "Cannot access empty grid");
-        TORCH_CHECK(device().is_cuda() || device().is_privateuseone(),
-                    "Cannot access device accessor without a CUDA or PrivateUse1 device");
-        TORCH_CHECK(mGridHdl->template deviceGrid<nanovdb::ValueOnIndex>(),
-                    "Failed to get device grid pointer");
-        return Accessor(mDeviceGridMetadata,
-                        mGridHdl->template deviceGrid<nanovdb::ValueOnIndex>(),
-                        mLeafBatchIndices.data_ptr<fvdb::JIdxType>(),
-                        mBatchMetadata.mTotalVoxels,
-                        mBatchMetadata.mTotalLeaves,
-                        mBatchMetadata.mMaxVoxels,
-                        mBatchMetadata.mMaxLeafCount,
-                        mBatchSize);
-    }
+    Accessor hostAccessor() const;
+    Accessor deviceAccessor() const;
 
     // -----------------------------------------------------------------------
     // Scalar getters
@@ -302,20 +272,9 @@ struct GridBatchData : public torch::CustomClassHolder {
         return sum;
     }
 
-    const nanovdb::GridHandle<TorchDeviceBuffer> &
-    nanoGridHandle() const {
-        return *mGridHdl;
-    }
-
-    const c10::Device
-    device() const {
-        return mGridHdl->buffer().device();
-    }
-
-    bool
-    isEmpty() const {
-        return mGridHdl->buffer().isEmpty();
-    }
+    const nanovdb::GridHandle<TorchDeviceBuffer> &nanoGridHandle() const;
+    const c10::Device device() const;
+    bool isEmpty() const;
 
     bool
     isContiguous() const {
@@ -461,21 +420,8 @@ struct GridBatchData : public torch::CustomClassHolder {
         TORCH_CHECK(!isEmpty(), "Empty grid");
     }
 
-    void
-    checkDevice(const torch::Tensor &t) const {
-        torch::Device hdlDevice = mGridHdl->buffer().device();
-        TORCH_CHECK(hdlDevice == t.device(),
-                    "All tensors must be on the same device (" + hdlDevice.str() +
-                        ") as index grid but got " + t.device().str());
-    }
-
-    void
-    checkDevice(const JaggedTensor &t) const {
-        torch::Device hdlDevice = mGridHdl->buffer().device();
-        TORCH_CHECK(hdlDevice == t.device(),
-                    "All tensors must be on the same device (" + hdlDevice.str() +
-                        ") as index grid but got " + t.device().str());
-    }
+    void checkDevice(const torch::Tensor &t) const;
+    void checkDevice(const JaggedTensor &t) const;
 
     void
     checkDevice(const std::optional<torch::Tensor> t) const {
@@ -499,7 +445,6 @@ struct GridBatchData : public torch::CustomClassHolder {
 
 using BatchGridAccessor = typename GridBatchData::Accessor;
 
-} // namespace detail
 } // namespace fvdb
 
-#endif // FVDB_DETAIL_GRIDBATCHDATA_H
+#endif // FVDB_GRIDBATCHDATA_H

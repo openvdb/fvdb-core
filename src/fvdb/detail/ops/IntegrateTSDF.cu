@@ -1,8 +1,8 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <fvdb/GridBatchData.h>
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/GridBatchData.h>
 #include <fvdb/detail/ops/BuildDilatedGrid.h>
 #include <fvdb/detail/ops/BuildGridFromPoints.h>
 #include <fvdb/detail/ops/BuildMergedGrids.h>
@@ -107,8 +107,8 @@ integrateTSDFKernel(const ScalarDataType truncationMargin,
                     const fvdb::TorchRAcc64<ScalarDataType, 3> depthImages,
                     const fvdb::TorchRAcc64<FeatureScalarDataType, 4> featureImages,
                     const fvdb::TorchRAcc64<ScalarDataType, 3> weightImages,
-                    const fvdb::detail::BatchGridAccessor baseGridAcc,
-                    const fvdb::detail::BatchGridAccessor unionGridAcc,
+                    const fvdb::BatchGridAccessor baseGridAcc,
+                    const fvdb::BatchGridAccessor unionGridAcc,
                     const fvdb::JaggedRAcc64<ScalarDataType, 1> tsdfAcc,
                     const fvdb::JaggedRAcc64<ScalarDataType, 1> weightsAcc,
                     const fvdb::JaggedRAcc64<FeatureScalarDataType, 2> featuresAcc,

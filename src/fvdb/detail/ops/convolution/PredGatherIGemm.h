@@ -16,7 +16,7 @@
 #ifndef FVDB_DETAIL_OPS_CONVOLUTION_PREDGATHERIGEMM_H
 #define FVDB_DETAIL_OPS_CONVOLUTION_PREDGATHERIGEMM_H
 
-#include <fvdb/detail/GridBatchData.h>
+#include <fvdb/GridBatchData.h>
 
 #include <torch/types.h>
 

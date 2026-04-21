@@ -1,7 +1,7 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#include <fvdb/detail/GridBatchData.h>
+#include <fvdb/GridBatchData.h>
 #include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/io/LoadNanovdb.h>
 #include <fvdb/detail/ops/CloneGrid.h>

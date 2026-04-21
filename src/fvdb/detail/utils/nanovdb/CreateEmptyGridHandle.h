@@ -3,7 +3,7 @@
 //
 #ifndef FVDB_DETAIL_UTILS_NANOVDB_CREATEEMPTYGRIDHANDLE_H
 #define FVDB_DETAIL_UTILS_NANOVDB_CREATEEMPTYGRIDHANDLE_H
-#include <fvdb/detail/TorchDeviceBuffer.h>
+#include <fvdb/TorchDeviceBuffer.h>
 
 #include <nanovdb/NanoVDB.h>
 #include <nanovdb/tools/CreateNanoGrid.h>

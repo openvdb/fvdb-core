@@ -4,7 +4,7 @@
 #ifndef FVDB_DETAIL_OPS_BUILDDILATEDGRID_H
 #define FVDB_DETAIL_OPS_BUILDDILATEDGRID_H
 
-#include <fvdb/detail/GridBatchData.h>
+#include <fvdb/GridBatchData.h>
 
 #include <cstdint>
 #include <vector>

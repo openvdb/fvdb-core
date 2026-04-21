@@ -1,7 +1,7 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#include <fvdb/detail/TorchDeviceBuffer.h>
+#include <fvdb/TorchDeviceBuffer.h>
 
 #include <nanovdb/GridHandle.h>
 #include <nanovdb/cuda/DeviceBuffer.h>
@@ -16,13 +16,11 @@ namespace nanovdb {
 // TODO: Pass in synchronous option
 template <>
 template <>
-GridHandle<fvdb::detail::TorchDeviceBuffer>
-GridHandle<fvdb::detail::TorchDeviceBuffer>::copy(
-    const fvdb::detail::TorchDeviceBuffer &guide) const {
+GridHandle<fvdb::TorchDeviceBuffer>
+GridHandle<fvdb::TorchDeviceBuffer>::copy(const fvdb::TorchDeviceBuffer &guide) const {
     if (mBuffer.isEmpty()) {
-        fvdb::detail::TorchDeviceBuffer retbuf(0, guide.device());
-        return GridHandle<fvdb::detail::TorchDeviceBuffer>(
-            std::move(retbuf)); // return an empty handle
+        fvdb::TorchDeviceBuffer retbuf(0, guide.device());
+        return GridHandle<fvdb::TorchDeviceBuffer>(std::move(retbuf)); // return an empty handle
     }
 
     const bool guideIsHost   = guide.device().is_cpu();
@@ -30,28 +28,28 @@ GridHandle<fvdb::detail::TorchDeviceBuffer>::copy(
     const bool guideIsDevice = !guideIsHost;
     const bool iAmDevice     = !iAmHost;
 
-    auto buffer = fvdb::detail::TorchDeviceBuffer::create(mBuffer.size(), &guide);
+    auto buffer = fvdb::TorchDeviceBuffer::create(mBuffer.size(), &guide);
 
     if (iAmHost && guideIsHost) {
         std::memcpy(buffer.data(),
                     mBuffer.data(),
                     mBuffer.size()); // deep copy of buffer in CPU RAM
-        return GridHandle<fvdb::detail::TorchDeviceBuffer>(std::move(buffer));
+        return GridHandle<fvdb::TorchDeviceBuffer>(std::move(buffer));
     } else if (iAmHost && guideIsDevice) {
         const at::cuda::CUDAGuard device_guard{guide.device()};
         cudaCheck(cudaMemcpy(
             buffer.deviceData(), mBuffer.data(), mBuffer.size(), cudaMemcpyHostToDevice));
-        return GridHandle<fvdb::detail::TorchDeviceBuffer>(std::move(buffer));
+        return GridHandle<fvdb::TorchDeviceBuffer>(std::move(buffer));
     } else if (iAmDevice && guideIsHost) {
         const at::cuda::CUDAGuard device_guard{mBuffer.device()};
         cudaCheck(cudaMemcpy(
             buffer.data(), mBuffer.deviceData(), mBuffer.size(), cudaMemcpyDeviceToHost));
-        return GridHandle<fvdb::detail::TorchDeviceBuffer>(std::move(buffer));
+        return GridHandle<fvdb::TorchDeviceBuffer>(std::move(buffer));
     } else if (iAmDevice && guideIsDevice) {
         const at::cuda::CUDAGuard device_guard{guide.device()};
         cudaCheck(cudaMemcpy(
             buffer.deviceData(), mBuffer.deviceData(), mBuffer.size(), cudaMemcpyDeviceToDevice));
-        return GridHandle<fvdb::detail::TorchDeviceBuffer>(std::move(buffer));
+        return GridHandle<fvdb::TorchDeviceBuffer>(std::move(buffer));
     } else {
         TORCH_CHECK(false, "All host/device combos exhausted. This should never happen.");
     }
@@ -60,7 +58,6 @@ GridHandle<fvdb::detail::TorchDeviceBuffer>::copy(
 } // namespace nanovdb
 
 namespace fvdb {
-namespace detail {
 
 TorchDeviceBuffer::TorchDeviceBuffer(uint64_t size /* = 0*/,
                                      const torch::Device &device /* = torch::kCPU*/)
@@ -221,5 +218,4 @@ TorchDeviceBuffer::create(uint64_t size, const TorchDeviceBuffer *proto, int dev
     }
 }
 
-} // namespace detail
 } // namespace fvdb

@@ -4,7 +4,7 @@
 #ifndef FVDB_DETAIL_OPS_REFINE_H
 #define FVDB_DETAIL_OPS_REFINE_H
 
-#include <fvdb/detail/GridBatchData.h>
+#include <fvdb/GridBatchData.h>
 #include <fvdb/detail/utils/Utils.h>
 
 #include <torch/types.h>

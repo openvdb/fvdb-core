@@ -4,7 +4,7 @@
 #ifndef FVDB_DETAIL_OPS_INJECTTODENSE_H
 #define FVDB_DETAIL_OPS_INJECTTODENSE_H
 
-#include <fvdb/detail/GridBatchData.h>
+#include <fvdb/GridBatchData.h>
 
 #include <torch/types.h>
 

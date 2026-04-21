@@ -4,8 +4,8 @@
 #ifndef FVDB_DETAIL_OPS_CUBESINGRID_H
 #define FVDB_DETAIL_OPS_CUBESINGRID_H
 
+#include <fvdb/GridBatchData.h>
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/GridBatchData.h>
 #include <fvdb/detail/utils/Utils.h>
 
 #include <nanovdb/NanoVDB.h>

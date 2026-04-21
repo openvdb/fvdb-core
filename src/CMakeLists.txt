@@ -50,7 +50,7 @@ set(FVDB_CPP_FILES
     fvdb/detail/utils/cuda/Prefetch.cpp
     fvdb/detail/io/SaveNanoVDB.cpp
     fvdb/detail/ops/jagged/JaggedReductions.cpp
-    fvdb/detail/TorchDeviceBuffer.cpp
+    fvdb/TorchDeviceBuffer.cpp
     fvdb/detail/viewer/GaussianSplat3dView.cpp
     fvdb/detail/viewer/Viewer.cpp
     fvdb/FVDB.cpp
@@ -58,7 +58,7 @@ set(FVDB_CPP_FILES
 )
 
 set(FVDB_CU_FILES
-    fvdb/detail/GridBatchData.cu
+    fvdb/GridBatchData.cu
     fvdb/detail/GridBatchDataFactory.cu
     fvdb/detail/ops/ActiveGridCoords.cu
     fvdb/detail/ops/ActiveVoxelsInBoundsMask.cu

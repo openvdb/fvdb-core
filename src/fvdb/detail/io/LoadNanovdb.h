@@ -4,8 +4,8 @@
 #ifndef FVDB_DETAIL_IO_LOADNANOVDB_H
 #define FVDB_DETAIL_IO_LOADNANOVDB_H
 
+#include <fvdb/GridBatchData.h>
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/GridBatchData.h>
 
 #include <tuple>
 

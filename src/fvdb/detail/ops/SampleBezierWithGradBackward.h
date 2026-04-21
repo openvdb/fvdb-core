@@ -4,8 +4,8 @@
 #ifndef FVDB_DETAIL_OPS_SAMPLEBEZIERWITHGRADBACKWARD_H
 #define FVDB_DETAIL_OPS_SAMPLEBEZIERWITHGRADBACKWARD_H
 
+#include <fvdb/GridBatchData.h>
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/GridBatchData.h>
 
 #include <torch/types.h>
 

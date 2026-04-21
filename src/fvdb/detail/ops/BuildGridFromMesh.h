@@ -4,8 +4,8 @@
 #ifndef FVDB_DETAIL_OPS_BUILDGRIDFROMMESH_H
 #define FVDB_DETAIL_OPS_BUILDGRIDFROMMESH_H
 
+#include <fvdb/GridBatchData.h>
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/GridBatchData.h>
 
 #include <vector>
 

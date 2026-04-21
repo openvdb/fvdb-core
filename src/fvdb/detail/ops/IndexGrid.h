@@ -4,7 +4,7 @@
 #ifndef FVDB_DETAIL_OPS_INDEXGRID_H
 #define FVDB_DETAIL_OPS_INDEXGRID_H
 
-#include <fvdb/detail/GridBatchData.h>
+#include <fvdb/GridBatchData.h>
 
 #include <cstdint>
 #include <vector>
