@@ -1,0 +1,22 @@
+# Copyright Contributors to the OpenVDB Project
+# SPDX-License-Identifier: Apache-2.0
+
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+# fvdb's public headers use Torch types; Torch must be found before using fvdb.
+# In most cases the consuming project will have already called find_package(Torch)
+# or used get_torch.cmake before find_package(fvdb), making this a no-op.
+find_dependency(Torch)
+
+include("${CMAKE_CURRENT_LIST_DIR}/fvdbTargets.cmake")
+
+# Propagate Torch include directories to consumers, since fvdb's public headers
+# reference torch/ATen/c10 types.
+if(TARGET fvdb::fvdb AND TORCH_INCLUDE_DIRS)
+    set_property(TARGET fvdb::fvdb APPEND PROPERTY
+        INTERFACE_INCLUDE_DIRECTORIES "${TORCH_INCLUDE_DIRS}")
+endif()
+
+check_required_components(fvdb)

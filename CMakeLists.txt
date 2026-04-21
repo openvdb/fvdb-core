@@ -107,6 +107,30 @@ install(TARGETS _fvdb_cpp fvdb
     LIBRARY DESTINATION fvdb COMPONENT PythonModule
     RUNTIME DESTINATION fvdb COMPONENT PythonModule)
 
+# Public headers for downstream C++ consumers (bundled in wheel like torch/include/)
+file(GLOB FVDB_PUBLIC_HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/src/fvdb/*.h")
+install(FILES ${FVDB_PUBLIC_HEADERS}
+    DESTINATION fvdb/include/fvdb
+    COMPONENT PythonModule)
+
+install(DIRECTORY ${nanovdb_SOURCE_DIR}/nanovdb/nanovdb/
+    DESTINATION fvdb/include/nanovdb
+    COMPONENT PythonModule
+    FILES_MATCHING PATTERN "*.h")
+
+install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/dispatch/dispatch/macros.h
+    DESTINATION fvdb/include/dispatch/dispatch
+    COMPONENT PythonModule)
+
+# CMake config for find_package(fvdb) against the wheel install
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/cmake/fvdbWheelConfig.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/fvdbConfig.cmake
+    @ONLY)
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/fvdbConfig.cmake
+    DESTINATION fvdb/share/cmake/fvdb
+    COMPONENT PythonModule)
+
 # Capture the git short SHA for embedding in version.py
 execute_process(
     COMMAND git rev-parse --short HEAD

@@ -166,11 +166,12 @@ set_target_properties(
 message(STATUS "fvdb: TORCH_INCLUDE_DIRS: ${TORCH_INCLUDE_DIRS}")
 
 target_include_directories(fvdb PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${nanovdb_SOURCE_DIR}/nanovdb
-    ${TORCH_INCLUDE_DIRS}
-    ${nvtx3_SOURCE_DIR}/include
-    ${NANOVDB_EDITOR_INCLUDE_DIR})
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+    $<BUILD_INTERFACE:${nanovdb_SOURCE_DIR}/nanovdb>
+    $<BUILD_INTERFACE:${TORCH_INCLUDE_DIRS}>
+    $<BUILD_INTERFACE:${nvtx3_SOURCE_DIR}/include>
+    $<BUILD_INTERFACE:${NANOVDB_EDITOR_INCLUDE_DIR}>
+    $<INSTALL_INTERFACE:include>)
 target_include_directories(fvdb PRIVATE
     ${TORCH_SOURCE_INCLUDE_DIRS}
     ${tinyply_SOURCE_DIR}/source)
@@ -228,15 +229,35 @@ endif()
 option(FVDB_INSTALL_DEV "Install headers and system-level lib for development" ON)
 
 if(FVDB_INSTALL_DEV)
+    include(CMakePackageConfigHelpers)
+
     install(TARGETS fvdb
         EXPORT fvdb-targets
         LIBRARY DESTINATION lib)
 
-    # Use pattern exclusion to prevent recursion
-    install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/fvdb/
-        DESTINATION include
-        FILES_MATCHING PATTERN "*.h"
-        PATTERN "*/*" EXCLUDE)
+    file(GLOB _FVDB_PUBLIC_HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/fvdb/*.h")
+    install(FILES ${_FVDB_PUBLIC_HEADERS}
+        DESTINATION include/fvdb)
+
+    install(DIRECTORY ${nanovdb_SOURCE_DIR}/nanovdb/nanovdb/
+        DESTINATION include/nanovdb
+        FILES_MATCHING PATTERN "*.h")
+
+    install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch/macros.h
+        DESTINATION include/dispatch/dispatch)
+
+    install(EXPORT fvdb-targets
+        FILE fvdbTargets.cmake
+        NAMESPACE fvdb::
+        DESTINATION lib/cmake/fvdb)
+
+    configure_package_config_file(
+        ${CMAKE_CURRENT_SOURCE_DIR}/cmake/fvdbConfig.cmake.in
+        ${CMAKE_CURRENT_BINARY_DIR}/fvdbConfig.cmake
+        INSTALL_DESTINATION lib/cmake/fvdb)
+
+    install(FILES ${CMAKE_CURRENT_BINARY_DIR}/fvdbConfig.cmake
+        DESTINATION lib/cmake/fvdb)
 endif()
 
 # Add tests subdirectory if tests are enabled
