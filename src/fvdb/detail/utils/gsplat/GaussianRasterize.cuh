@@ -311,16 +311,16 @@ template <typename ScalarType, size_t NUM_CHANNELS, bool IS_PACKED> struct Raste
         if constexpr (IS_PACKED) {
             return Gaussian2D<ScalarType>(
                 index,
-                vec2t(mMeans2d[index][0], mMeans2d[index][1]),
                 mOpacities[index],
+                vec2t(mMeans2d[index][0], mMeans2d[index][1]),
                 vec3t(mConics[index][0], mConics[index][1], mConics[index][2]));
         } else {
             auto cid = index / mNumGaussiansPerCamera;
             auto gid = index % mNumGaussiansPerCamera;
             return Gaussian2D<ScalarType>(
                 index,
-                vec2t(mMeans2d[cid][gid][0], mMeans2d[cid][gid][1]),
                 mOpacities[cid][gid],
+                vec2t(mMeans2d[cid][gid][0], mMeans2d[cid][gid][1]),
                 vec3t(mConics[cid][gid][0], mConics[cid][gid][1], mConics[cid][gid][2]));
         }
     }
