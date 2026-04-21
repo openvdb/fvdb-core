@@ -5,8 +5,6 @@ from typing import Any
 
 import torch
 
-from fvdb import GaussianSplat3d
-
 from .._fvdb_cpp import GaussianSplat3dView as GaussianSplat3dViewCpp
 from ._viewer_server import _get_viewer_server_cpp
 
@@ -71,16 +69,15 @@ class PointCloudView:
         sh0 = _rgb_to_sh(colors)
         shN = torch.zeros((positions.shape[0], 0, 3), dtype=torch.float32)
 
-        gs_impl = GaussianSplat3d.from_tensors(
+        view: GaussianSplat3dViewCpp = server.add_gaussian_splat_3d_view(
+            scene_name=scene_name,
+            name=name,
             means=means,
             quats=quats,
             log_scales=log_scales,
             logit_opacities=logit_opacities,
             sh0=sh0,
             shN=shN,
-        )._impl
-        view: GaussianSplat3dViewCpp = server.add_gaussian_splat_3d_view(
-            scene_name=scene_name, name=name, gaussian_splat_3d=gs_impl
         )
         view.tile_size = 16
         view.min_radius_2d = 0.0
