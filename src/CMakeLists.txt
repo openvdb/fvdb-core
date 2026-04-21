@@ -171,7 +171,10 @@ target_include_directories(fvdb PUBLIC
     $<BUILD_INTERFACE:${nvtx3_SOURCE_DIR}/include>
     $<BUILD_INTERFACE:${NANOVDB_EDITOR_INCLUDE_DIR}>
     $<INSTALL_INTERFACE:include>)
-target_include_directories(fvdb SYSTEM PUBLIC ${TORCH_INCLUDE_DIRS})
+foreach(_torch_inc_dir IN LISTS TORCH_INCLUDE_DIRS)
+    target_include_directories(fvdb SYSTEM PUBLIC
+        $<BUILD_INTERFACE:${_torch_inc_dir}>)
+endforeach()
 target_include_directories(fvdb PRIVATE
     ${TORCH_SOURCE_INCLUDE_DIRS}
     ${tinyply_SOURCE_DIR}/source)
