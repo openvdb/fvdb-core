@@ -795,5 +795,38 @@ def test_prune_all_then_dilate_then_inject():
     assert result.shape == (0, 1)
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+def test_gridbatch_inject_with_empty_grid_in_batch():
+    # GridBatch.inject_from must handle a batch that mixes non-empty and empty
+    # source grids. The per-batch kernel launch previously used <<<0, ...>>>
+    # for the empty entry and CUDA rejected the config.
+    device = "cuda"
+    ijk_a = torch.tensor([[0, 0, 0], [1, 0, 0], [0, 1, 0]], dtype=torch.int32, device=device)
+    ijk_empty = torch.zeros((0, 3), dtype=torch.int32, device=device)
+    ijk_c = torch.tensor([[2, 0, 0], [2, 1, 0]], dtype=torch.int32, device=device)
+
+    # Destination has voxels for every batch entry; source is empty at index 1.
+    dst_grid = fvdb.GridBatch.from_ijk(fvdb.JaggedTensor([ijk_a, ijk_c, ijk_a]))
+    src_grid = fvdb.GridBatch.from_ijk(fvdb.JaggedTensor([ijk_a, ijk_empty, ijk_a]))
+
+    src_values = torch.arange(src_grid.total_voxels, device=device, dtype=torch.float32).view(-1, 1)
+    src_data = src_grid.jagged_like(src_values)
+
+    result = dst_grid.inject_from(src_grid, src_data, default_value=-1.0)
+
+    # Batch 0: src and dst share the same ijk — every dst voxel was written
+    # and the set of values matches src.
+    assert torch.equal(
+        torch.sort(result[0].jdata.flatten())[0], torch.sort(src_data[0].jdata.flatten())[0]
+    )
+    # Batch 1: src is empty but dst has voxels — all slots retain default_value.
+    assert result[1].jdata.shape == (ijk_c.shape[0], 1)
+    assert (result[1].jdata == -1.0).all()
+    # Batch 2: src and dst share the same ijk — every dst voxel was written.
+    assert torch.equal(
+        torch.sort(result[2].jdata.flatten())[0], torch.sort(src_data[2].jdata.flatten())[0]
+    )
+
+
 if __name__ == "__main__":
     unittest.main()
