@@ -59,7 +59,8 @@ upsampleNearestVoxelCallback(int32_t batchIdx,
 
 template <typename Dtype,
           torch::DeviceType DeviceTag,
-          template <typename T, int32_t D> typename TensorAccessor>
+          template <typename T, int32_t D>
+          typename TensorAccessor>
 __hostdev__ inline void
 upsampleNearestBackwardsVoxelCallback(int32_t batchIdx,
                                       int32_t leafIdx,
