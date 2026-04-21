@@ -3,8 +3,8 @@
 //
 #include <fvdb/detail/ops/Refine.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
-#include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/ForEachCPU.h>
+#include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 #include <fvdb/detail/utils/cuda/ForEachPrivateUse1.cuh>
 
@@ -59,8 +59,7 @@ upsampleNearestVoxelCallback(int32_t batchIdx,
 
 template <typename Dtype,
           torch::DeviceType DeviceTag,
-          template <typename T, int32_t D>
-          typename TensorAccessor>
+          template <typename T, int32_t D> typename TensorAccessor>
 __hostdev__ inline void
 upsampleNearestBackwardsVoxelCallback(int32_t batchIdx,
                                       int32_t leafIdx,

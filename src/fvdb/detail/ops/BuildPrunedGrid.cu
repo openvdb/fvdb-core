@@ -3,8 +3,8 @@
 //
 #include <fvdb/GridBatchData.h>
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/TorchDeviceBuffer.h>
+#include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/BuildPrunedGrid.h>
 #include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/nanovdb/CreateEmptyGridHandle.h>

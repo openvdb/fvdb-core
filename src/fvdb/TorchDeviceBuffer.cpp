@@ -17,12 +17,10 @@ namespace nanovdb {
 template <>
 template <>
 GridHandle<fvdb::TorchDeviceBuffer>
-GridHandle<fvdb::TorchDeviceBuffer>::copy(
-    const fvdb::TorchDeviceBuffer &guide) const {
+GridHandle<fvdb::TorchDeviceBuffer>::copy(const fvdb::TorchDeviceBuffer &guide) const {
     if (mBuffer.isEmpty()) {
         fvdb::TorchDeviceBuffer retbuf(0, guide.device());
-        return GridHandle<fvdb::TorchDeviceBuffer>(
-            std::move(retbuf)); // return an empty handle
+        return GridHandle<fvdb::TorchDeviceBuffer>(std::move(retbuf)); // return an empty handle
     }
 
     const bool guideIsHost   = guide.device().is_cpu();
