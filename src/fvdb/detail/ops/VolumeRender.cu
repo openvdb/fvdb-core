@@ -98,6 +98,13 @@ volumeRenderBwdCallback(const TensorAccessor<scalar_t, 1> dLdOpacity,     // [B*
     const JOffsetsType numRaySamples  = jOffsets[rayIdx + 1] - sampleStartIdx;
     const int32_t numChannels         = rgbs.size(1);
 
+    // Empty ray: nothing to scan or accumulate. Leave out_dL_dsigmas and
+    // out_dLdRgbs at their zero-initialized values and skip the prefix scan
+    // (which would otherwise OOB-read dLdWs_times_ws[sampleStartIdx - 1]).
+    if (numRaySamples == 0) {
+        return;
+    }
+
     // front to back compositing
     JOffsetsType numSamples = 0;
     // Per-channel final integrated radiance (from fwd pass) and running partial
@@ -650,6 +657,25 @@ volumeRenderBackward(const torch::Tensor &dLdOpacity,
                      const torch::Tensor &rgb,
                      float tsmtThreshold) {
     const int64_t N = sigmas.size(0);
+
+    TORCH_CHECK(rgbs.size(1) <= MAX_VOLUME_RENDER_CHANNELS,
+                "Volume rendering backward supports at most ",
+                MAX_VOLUME_RENDER_CHANNELS,
+                " channels, but got ",
+                rgbs.size(1),
+                ".");
+    TORCH_CHECK(dLdRgb.size(1) == rgbs.size(1),
+                "dLdRgb and rgbs must have the same channel dimension, but got ",
+                dLdRgb.size(1),
+                " and ",
+                rgbs.size(1),
+                ".");
+    TORCH_CHECK(rgb.size(1) == rgbs.size(1),
+                "rgb and rgbs must have the same channel dimension, but got ",
+                rgb.size(1),
+                " and ",
+                rgbs.size(1),
+                ".");
 
     torch::Tensor dLdSigmas = torch::zeros({N}, sigmas.options());
     torch::Tensor dLdRgbs   = torch::zeros({N, rgbs.size(1)}, sigmas.options());
