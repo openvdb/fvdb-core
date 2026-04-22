@@ -81,7 +81,7 @@ jobs:
           mode: start
           github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
           ec2-image-id: ${{ needs.versions.outputs.aws-cpu-ami }}
-          ec2-instance-type: m6a.4xlarge
+          ec2-instance-type: r6a.4xlarge
           subnet-id: ${{ needs.versions.outputs.aws-subnet }}
           security-group-id: ${{ needs.versions.outputs.aws-security-group }}
           label: nightly-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
