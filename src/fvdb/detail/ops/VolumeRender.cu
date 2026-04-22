@@ -658,6 +658,20 @@ volumeRenderBackward(const torch::Tensor &dLdOpacity,
                      float tsmtThreshold) {
     const int64_t N = sigmas.size(0);
 
+    TORCH_CHECK(rgbs.dim() == 2,
+                "rgbs must be a 2D tensor of shape (N, C), but got a ",
+                rgbs.dim(),
+                "D tensor.");
+    TORCH_CHECK(dLdRgb.dim() == 2,
+                "dLdRgb must be a 2D tensor of shape (numRays, C), but got a ",
+                dLdRgb.dim(),
+                "D tensor.");
+    TORCH_CHECK(rgb.dim() == 2,
+                "rgb must be a 2D tensor of shape (numRays, C), but got a ",
+                rgb.dim(),
+                "D tensor.");
+    TORCH_CHECK(
+        rgbs.size(1) > 0, "rgbs must have at least one channel, but got ", rgbs.size(1), ".");
     TORCH_CHECK(rgbs.size(1) <= MAX_VOLUME_RENDER_CHANNELS,
                 "Volume rendering backward supports at most ",
                 MAX_VOLUME_RENDER_CHANNELS,
