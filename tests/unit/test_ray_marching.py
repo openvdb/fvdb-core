@@ -545,7 +545,9 @@ class TestVolumeRender(unittest.TestCase):
         tmid = ray_intervals_jdata.mean(1).contiguous()
         # 17 > MAX_VOLUME_RENDER_CHANNELS (16)
         rgbs_too_wide = torch.zeros(N, 17, device=self.device, dtype=self.dtype)
-        with self.assertRaises(RuntimeError):
+        with self.assertRaisesRegex(
+            RuntimeError, r"between 1 and .*channels.*17|17.*channels.*between 1 and"
+        ):
             volume_render(sigma, rgbs_too_wide, dt, tmid, ray_joffsets, 0.001)
 
     def test_volume_render_total_samples_counts_terminating_sample(self):
