@@ -160,6 +160,8 @@ def sample_nearest_batch(
     """Sample voxel data at world-space points using nearest-neighbor lookup for a grid batch.
 
     For each query point the 8 nearest voxel centers are checked and the value of the closest active one is returned.
+    When two or more active corners are equidistant, the corner encountered first in the stencil's zig-zag
+    traversal order wins (the same ordering used by ``sample_trilinear``).
     Points where none of the 8 surrounding voxel centers are active return zero.
 
     Supports backpropagation w.r.t. ``voxel_data``.
@@ -186,6 +188,8 @@ def sample_nearest_single(
     """Sample voxel data at world-space points using nearest-neighbor lookup for a single grid.
 
     For each query point the 8 nearest voxel centers are checked and the value of the closest active one is returned.
+    When two or more active corners are equidistant, the corner encountered first in the stencil's zig-zag
+    traversal order wins (the same ordering used by ``sample_trilinear``).
     Points where none of the 8 surrounding voxel centers are active return zero.
 
     Supports backpropagation w.r.t. ``voxel_data``.
