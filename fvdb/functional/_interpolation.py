@@ -4,7 +4,7 @@
 """Functional API for sparse grid interpolation: sampling and splatting."""
 from __future__ import annotations
 
-from typing import Any, TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import torch
 
@@ -121,6 +121,92 @@ class _SampleBezierWithGradFn(torch.autograd.Function):
             ctx.grid_data, ctx.pts_impl, grad_features, grad_grad_features, voxel_data
         )
         return grad_data, None, None
+
+
+class _SampleNearestFn(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, voxel_data, grid_data, pts_impl):
+        result_list = _fvdb_cpp.sample_nearest(grid_data, pts_impl, voxel_data)
+        sampled_values = result_list[0]
+        selected_indices = result_list[1]
+        ctx.save_for_backward(selected_indices)
+        ctx.voxel_shape = voxel_data.shape
+        ctx.dtype = voxel_data.dtype
+        ctx.device = voxel_data.device
+        return sampled_values
+
+    @staticmethod
+    def backward(ctx: Any, *grad_outputs: torch.Tensor | None) -> tuple[torch.Tensor | None, ...]:
+        (grad_output,) = grad_outputs
+        assert grad_output is not None
+        (selected_indices,) = ctx.saved_tensors
+        grad_voxel_data = torch.zeros(ctx.voxel_shape, dtype=ctx.dtype, device=ctx.device)
+        valid = selected_indices >= 0
+        if valid.any():
+            grad_voxel_data.index_add_(0, selected_indices[valid], grad_output[valid])
+        return grad_voxel_data, None, None
+
+
+# ---------------------------------------------------------------------------
+#  Public API -- sample_nearest
+# ---------------------------------------------------------------------------
+
+
+def sample_nearest_batch(
+    grid: GridBatch,
+    points: JaggedTensor,
+    voxel_data: JaggedTensor,
+) -> JaggedTensor:
+    """Sample voxel data at world-space points using nearest-neighbor lookup for a grid batch.
+
+    For each query point the 8 nearest voxel centers are checked and the value of the closest active one is returned.
+    When two or more active corners are equidistant, the corner encountered first in the stencil's zig-zag
+    traversal order wins (the same ordering used by ``sample_trilinear``).
+    Points where none of the 8 surrounding voxel centers are active return zero.
+
+    Supports backpropagation w.r.t. ``voxel_data``.
+
+    Args:
+        grid (GridBatch): The grid batch defining the sparse topology.
+        points (JaggedTensor): World-space query points, shape ``(B, -1, 3)``.
+        voxel_data (JaggedTensor): Per-voxel feature data.
+
+    Returns:
+        result (JaggedTensor): Sampled values at each query point.
+
+    .. seealso:: :func:`sample_nearest_single`
+    """
+    result = cast(torch.Tensor, _SampleNearestFn.apply(voxel_data.jdata, grid.data, points._impl))
+    return points.jagged_like(result)
+
+
+def sample_nearest_single(
+    grid: Grid,
+    points: torch.Tensor,
+    voxel_data: torch.Tensor,
+) -> torch.Tensor:
+    """Sample voxel data at world-space points using nearest-neighbor lookup for a single grid.
+
+    For each query point the 8 nearest voxel centers are checked and the value of the closest active one is returned.
+    When two or more active corners are equidistant, the corner encountered first in the stencil's zig-zag
+    traversal order wins (the same ordering used by ``sample_trilinear``).
+    Points where none of the 8 surrounding voxel centers are active return zero.
+
+    Supports backpropagation w.r.t. ``voxel_data``.
+
+    Args:
+        grid (Grid): The single grid defining the sparse topology.
+        points (torch.Tensor): World-space query points, shape ``(N, 3)``.
+        voxel_data (torch.Tensor): Per-voxel feature data.
+
+    Returns:
+        result (torch.Tensor): Sampled values at each query point.
+
+    .. seealso:: :func:`sample_nearest_batch`
+    """
+    pts_jt = JaggedTensor(points)
+    vd_jt = JaggedTensor(voxel_data)
+    return cast(torch.Tensor, _SampleNearestFn.apply(vd_jt.jdata, grid.data, pts_jt._impl))
 
 
 # ---------------------------------------------------------------------------

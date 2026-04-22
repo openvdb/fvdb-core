@@ -35,12 +35,7 @@ import torch
 
 from . import _fvdb_cpp, _parse_device_string
 from .jagged_tensor import JaggedTensor
-from .types import (
-    DeviceIdentifier,
-    GridBatchIndex,
-    NumericMaxRank1,
-    NumericMaxRank2,
-)
+from .types import DeviceIdentifier, GridBatchIndex, NumericMaxRank1, NumericMaxRank2
 
 if TYPE_CHECKING:
     from .grid import Grid
@@ -1242,6 +1237,27 @@ class GridBatch:
         from . import functional
 
         return functional.sample_bezier_with_grad_batch(self, points, voxel_data)
+
+    def sample_nearest(self, points: JaggedTensor, voxel_data: JaggedTensor) -> JaggedTensor:
+        """Sample voxel data at world-space points using nearest-neighbor lookup on this grid batch.
+
+        For each query point the 8 nearest voxel centers are checked and the value of the closest active one is returned.
+        Points where none of the 8 surrounding voxel centers are active return zero, matching :meth:`sample_trilinear` boundary behaviour.
+
+        Supports backpropagation w.r.t. ``voxel_data``.
+
+        Args:
+            points (JaggedTensor): World-space sample points. Shape: ``(batch_size, num_points_for_grid_b, 3)``.
+            voxel_data (JaggedTensor): Per-voxel data. Shape: ``(batch_size, total_voxels, channels*)``.
+
+        Returns:
+            sampled_data (JaggedTensor): Sampled values. Shape: ``(batch_size, num_points_for_grid_b, channels*)``.
+
+        .. seealso:: :meth:`Grid.sample_nearest`, :meth:`sample_trilinear`
+        """
+        from . import functional
+
+        return functional.sample_nearest_batch(self, points, voxel_data)
 
     def sample_trilinear(self, points: JaggedTensor, voxel_data: JaggedTensor) -> JaggedTensor:
         """Sample voxel data at world-space points using trilinear interpolation on this grid batch.

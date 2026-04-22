@@ -14,6 +14,7 @@
 #include <fvdb/detail/ops/SampleBezier.h>
 #include <fvdb/detail/ops/SampleBezierWithGrad.h>
 #include <fvdb/detail/ops/SampleBezierWithGradBackward.h>
+#include <fvdb/detail/ops/SampleNearest.h>
 #include <fvdb/detail/ops/SampleTrilinear.h>
 #include <fvdb/detail/ops/SampleTrilinearWithGrad.h>
 #include <fvdb/detail/ops/SampleTrilinearWithGradBackward.h>
@@ -123,6 +124,9 @@ bind_grid_batch_ops(py::module &m) {
     // -----------------------------------------------------------------------
     // Interpolation: forward
     // -----------------------------------------------------------------------
+
+    m.def(
+        "sample_nearest", &ops::sampleNearest, py::arg("grid"), py::arg("points"), py::arg("data"));
 
     m.def("sample_trilinear",
           &ops::sampleTrilinear,

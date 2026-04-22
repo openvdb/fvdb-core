@@ -131,6 +131,7 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/SampleBezier.cu
     fvdb/detail/ops/SampleBezierWithGrad.cu
     fvdb/detail/ops/SampleBezierWithGradBackward.cu
+    fvdb/detail/ops/SampleNearest.cu
     fvdb/detail/ops/SampleTrilinear.cu
     fvdb/detail/ops/SampleTrilinearWithGrad.cu
     fvdb/detail/ops/SampleTrilinearWithGradBackward.cu
