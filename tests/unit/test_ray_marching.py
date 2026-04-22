@@ -438,6 +438,116 @@ class TestVolumeRender(unittest.TestCase):
         # pc.add_scalar_quantity("sigma samples", sigma_samples.detach().squeeze().cpu(), enabled=True)
         # ps.show()
 
+    def test_volume_render_nchannel(self):
+        """
+        volume_render must handle an arbitrary number of channels, not just 3.
+        Run a 4-channel composite and cross-check it against two independent
+        2-channel runs on the same sample topology. Also verifies the backward
+        pass produces consistent gradients across widths.
+        """
+        if self.dtype == torch.float16:
+            self.skipTest("half precision accumulates too much error for the N-channel round trip")
+        t_threshold = 0.001
+        num_channels = 4
+
+        grid_data_rgb = (
+            torch.rand(self.grid_dual.total_voxels, num_channels).to(device=self.device, dtype=self.dtype) * 0.5
+        )
+        grid_data_sigma = torch.rand(self.grid_dual.total_voxels, 1).to(device=self.device, dtype=self.dtype) * 0.5
+        grid_data_rgb.requires_grad = True
+        grid_data_sigma.requires_grad = True
+
+        ray_o, ray_d = self.make_ray_grid((0.0, 0.0, -1.0), 8)
+        tmin = torch.zeros(ray_o.shape[0]).to(ray_o)
+        tmax = torch.ones(ray_o.shape[0]).to(ray_o) * 1e10
+        ray_intervals = self.grid.uniform_ray_samples(
+            JaggedTensor(ray_o), JaggedTensor(ray_d), JaggedTensor(tmin), JaggedTensor(tmax), self.step_size
+        )
+        ray_idx = ray_intervals.jidx.int()
+        ray_joffsets = ray_intervals.joffsets
+        ray_intervals = ray_intervals.jdata
+
+        ray_mid = ray_intervals.mean(1)
+        ray_dt = ray_intervals[:, 1] - ray_intervals[:, 0]
+        ray_pts = ray_o[ray_idx] + ray_mid[:, None] * ray_d[ray_idx]
+
+        rgb_samples_4 = self.grid_dual.sample_trilinear(JaggedTensor(ray_pts), JaggedTensor(grid_data_rgb)).jdata
+        sigma_samples = self.grid_dual.sample_trilinear(JaggedTensor(ray_pts), JaggedTensor(grid_data_sigma)).jdata
+        assert isinstance(rgb_samples_4, torch.Tensor)
+        assert isinstance(sigma_samples, torch.Tensor)
+
+        # 4-channel forward + backward
+        rgb4, depth4, opacity4, ws4, _ = volume_render(
+            sigma_samples.squeeze(), rgb_samples_4, ray_dt, ray_mid, ray_joffsets, t_threshold
+        )
+        self.assertEqual(rgb4.shape, (ray_o.shape[0], num_channels))
+        loss_4 = rgb4.sum() + depth4.sum()
+        loss_4.backward()
+        assert grid_data_rgb.grad is not None
+        assert grid_data_sigma.grad is not None
+        rgb_grad_4 = grid_data_rgb.grad.detach().clone()
+        sigma_grad_4 = grid_data_sigma.grad.detach().clone()
+        grid_data_rgb.grad.zero_()
+        grid_data_sigma.grad.zero_()
+
+        # Two 2-channel forwards + backwards on the same sample topology
+        grid_data_rgb_a = grid_data_rgb[:, 0:2].detach().clone().requires_grad_(True)
+        grid_data_rgb_b = grid_data_rgb[:, 2:4].detach().clone().requires_grad_(True)
+        rgb_samples_a = self.grid_dual.sample_trilinear(JaggedTensor(ray_pts), JaggedTensor(grid_data_rgb_a)).jdata
+        rgb_samples_b = self.grid_dual.sample_trilinear(JaggedTensor(ray_pts), JaggedTensor(grid_data_rgb_b)).jdata
+
+        rgb_a, depth_a, opacity_a, ws_a, _ = volume_render(
+            sigma_samples.squeeze(), rgb_samples_a, ray_dt, ray_mid, ray_joffsets, t_threshold
+        )
+        rgb_b, depth_b, opacity_b, ws_b, _ = volume_render(
+            sigma_samples.squeeze(), rgb_samples_b, ray_dt, ray_mid, ray_joffsets, t_threshold
+        )
+
+        rgb_cat = torch.cat([rgb_a, rgb_b], dim=1)
+        self.assertLess(torch.abs(rgb4 - rgb_cat).max().item(), 1e-4)
+        # Depth/opacity/ws must be channel-agnostic -- same across runs.
+        self.assertLess(torch.abs(depth4 - depth_a).max().item(), 1e-5)
+        self.assertLess(torch.abs(depth_a - depth_b).max().item(), 1e-5)
+        self.assertLess(torch.abs(opacity4 - opacity_a).max().item(), 1e-5)
+        self.assertLess(torch.abs(ws4 - ws_a).max().item(), 1e-5)
+
+        # Backward: loss = rgb.sum() + depth.sum(). For the 4-ch run, depth is counted once.
+        # For the split runs, each contributes a depth term, so add them but subtract one depth.sum()
+        # so the chain rule matches the 4-ch case.
+        (rgb_a.sum() + rgb_b.sum() + depth_a.sum()).backward()
+        assert grid_data_rgb_a.grad is not None
+        assert grid_data_rgb_b.grad is not None
+        assert grid_data_sigma.grad is not None
+        rgb_grad_a = grid_data_rgb_a.grad.detach().clone()
+        rgb_grad_b = grid_data_rgb_b.grad.detach().clone()
+        sigma_grad_split = grid_data_sigma.grad.detach().clone()
+
+        # Reconstructed 4-ch grad from two 2-ch grads
+        rgb_grad_split = torch.cat([rgb_grad_a, rgb_grad_b], dim=1)
+        self.assertLess(torch.abs(rgb_grad_4 - rgb_grad_split).max().item(), 1e-3)
+        self.assertLess(torch.abs(sigma_grad_4 - sigma_grad_split).max().item(), 1e-3)
+
+    def test_volume_render_rejects_too_many_channels(self):
+        """Channels above MAX_VOLUME_RENDER_CHANNELS must be rejected with a clear error."""
+        ray_o, ray_d = self.make_ray_grid((0.0, 0.0, -1.0), 4)
+        tmin = torch.zeros(ray_o.shape[0]).to(ray_o)
+        tmax = torch.ones(ray_o.shape[0]).to(ray_o) * 1e10
+        ray_intervals = self.grid.uniform_ray_samples(
+            JaggedTensor(ray_o), JaggedTensor(ray_d), JaggedTensor(tmin), JaggedTensor(tmax), self.step_size
+        )
+        ray_joffsets = ray_intervals.joffsets
+        ray_intervals_jdata = ray_intervals.jdata
+        N = ray_intervals_jdata.shape[0]
+        if N == 0:
+            self.skipTest("No samples along rays; cannot exercise channel guard")
+        sigma = torch.zeros(N, device=self.device, dtype=self.dtype)
+        dt = (ray_intervals_jdata[:, 1] - ray_intervals_jdata[:, 0]).contiguous()
+        tmid = ray_intervals_jdata.mean(1).contiguous()
+        # 17 > MAX_VOLUME_RENDER_CHANNELS (16)
+        rgbs_too_wide = torch.zeros(N, 17, device=self.device, dtype=self.dtype)
+        with self.assertRaises(RuntimeError):
+            volume_render(sigma, rgbs_too_wide, dt, tmid, ray_joffsets, 0.001)
+
 
 class TestRayMarching(unittest.TestCase):
     def setUp(self):

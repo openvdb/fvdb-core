@@ -19,6 +19,11 @@ namespace ops {
 
 namespace {
 
+// Maximum number of channels supported by the backward kernel. Bounded so we can
+// allocate on-stack scratch arrays inside the device callback without dynamic
+// allocation. Bump if a use case legitimately needs more channels.
+static constexpr int MAX_VOLUME_RENDER_CHANNELS = 16;
+
 template <typename scalar_t, template <typename T, int32_t D> typename TensorAccessor>
 __hostdev__ void
 volumeRenderFwdCallback(const TensorAccessor<scalar_t, 1> sigmas,
@@ -68,8 +73,7 @@ volumeRenderFwdCallback(const TensorAccessor<scalar_t, 1> sigmas,
 
 template <torch::DeviceType device,
           typename scalar_t,
-          template <typename T, int32_t D>
-          typename TensorAccessor>
+          template <typename T, int32_t D> typename TensorAccessor>
 __hostdev__ void
 volumeRenderBwdCallback(const TensorAccessor<scalar_t, 1> dLdOpacity,     // [B*R]
                         const TensorAccessor<scalar_t, 1> dLdDepth,       // [B*R]
@@ -91,14 +95,23 @@ volumeRenderBwdCallback(const TensorAccessor<scalar_t, 1> dLdOpacity,     // [B*
 
     const JOffsetsType sampleStartIdx = jOffsets[rayIdx];
     const JOffsetsType numRaySamples  = jOffsets[rayIdx + 1] - sampleStartIdx;
+    const int32_t numChannels         = rgbs.size(1);
 
     // front to back compositing
     JOffsetsType numSamples = 0;
-    scalar_t R = rgb[rayIdx][0], G = rgb[rayIdx][1], B = rgb[rayIdx][2];
+    // Per-channel final integrated radiance (from fwd pass) and running partial
+    // accumulator. Bounded stack storage; host checks numChannels against
+    // MAX_VOLUME_RENDER_CHANNELS before launching so overflow is impossible.
+    scalar_t finalRgb[MAX_VOLUME_RENDER_CHANNELS];
+    scalar_t partialRgb[MAX_VOLUME_RENDER_CHANNELS];
+    for (int c = 0; c < numChannels; ++c) {
+        finalRgb[c]   = rgb[rayIdx][c];
+        partialRgb[c] = static_cast<scalar_t>(0.0);
+    }
+
     scalar_t O = opacity[rayIdx], D = depth[rayIdx]; //, Dsq = depthSq[rayIdx];
-    scalar_t T = static_cast<scalar_t>(1.0), r = static_cast<scalar_t>(0.0),
-             g = static_cast<scalar_t>(0.0), b = static_cast<scalar_t>(0.0),
-             d = static_cast<scalar_t>(0.0);         //, dsq = static_cast<scalar_t>(0.0);
+    scalar_t T = static_cast<scalar_t>(1.0);
+    scalar_t d = static_cast<scalar_t>(0.0);         //, dsq = static_cast<scalar_t>(0.0);
     // compute prefix sum of dLdWs * ws
     // [a0, a1, a2, a3, ...] -> [a0, a0+a1, a0+a1+a2, a0+a1+a2+a3, ...]
     if constexpr (device == torch::kCUDA) {
@@ -120,23 +133,23 @@ volumeRenderBwdCallback(const TensorAccessor<scalar_t, 1> dLdOpacity,     // [B*
             static_cast<scalar_t>(1.0) - c10::cuda::compat::exp(-sigmas[s] * deltas[s]);
         const scalar_t w = a * T;
 
-        r += w * rgbs[s][0];
-        g += w * rgbs[s][1];
-        b += w * rgbs[s][2];
+        for (int c = 0; c < numChannels; ++c) {
+            partialRgb[c] += w * rgbs[s][c];
+        }
         d += w * ts[s]; // dsq += w*ts[s]*ts[s];
         T *= static_cast<scalar_t>(1.0) - a;
 
         // compute gradients by math...
-        out_dLdRgbs[s][0] = dLdRgb[rayIdx][0] * w;
-        out_dLdRgbs[s][1] = dLdRgb[rayIdx][1] * w;
-        out_dLdRgbs[s][2] = dLdRgb[rayIdx][2] * w;
+        scalar_t rgbGradSum = static_cast<scalar_t>(0.0);
+        for (int c = 0; c < numChannels; ++c) {
+            out_dLdRgbs[s][c] = dLdRgb[rayIdx][c] * w;
+            rgbGradSum += dLdRgb[rayIdx][c] * (rgbs[s][c] * T - (finalRgb[c] - partialRgb[c]));
+        }
 
         out_dL_dsigmas[s] =
-            deltas[s] * (dLdRgb[rayIdx][0] * (rgbs[s][0] * T - (R - r)) +
-                         dLdRgb[rayIdx][1] * (rgbs[s][1] * T - (G - g)) +
-                         dLdRgb[rayIdx][2] * (rgbs[s][2] * T - (B - b)) + // gradients from rgb
-                         dLdOpacity[rayIdx] * (1 - O) +                   // gradient from opacity
-                         dLdDepth[rayIdx] * (ts[s] * T - (D - d)) +       // gradient from depth
+            deltas[s] * (rgbGradSum +                               // gradients from rgb
+                         dLdOpacity[rayIdx] * (1 - O) +             // gradient from opacity
+                         dLdDepth[rayIdx] * (ts[s] * T - (D - d)) + // gradient from depth
                          // dLdDepthSq[rayIdx]*(ts[s]*ts[s]*T-(Dsq-dsq)) +
                          T * dLdWs[s] - (dLdWs_times_ws_sum - dLdWs_times_ws[s]) // gradient from ws
                         );
@@ -565,7 +578,13 @@ volumeRender(const torch::Tensor &sigmas,
 
     TORCH_CHECK(jOffsets.dim() == 1, "jOffsets must have shape (nRays+1,)");
     TORCH_CHECK(sigmas.dim() == 1, "sigmas must have shape (nRays*nSamplesPerRay,)");
-    TORCH_CHECK(rgbs.dim() == 2, "rgbs must have shape (nRays*nSamplesPerRay, 3)");
+    TORCH_CHECK(rgbs.dim() == 2, "rgbs must have shape (nRays*nSamplesPerRay, numChannels)");
+    TORCH_CHECK(rgbs.size(1) > 0 && rgbs.size(1) <= MAX_VOLUME_RENDER_CHANNELS,
+                "rgbs must have between 1 and ",
+                MAX_VOLUME_RENDER_CHANNELS,
+                " channels (got ",
+                rgbs.size(1),
+                ")");
     TORCH_CHECK(deltaTs.dim() == 1, "deltaTs must have shape (nRays*nSamplesPerRay,)");
     TORCH_CHECK(ts.dim() == 1, "ts must have shape (N,)");
 
@@ -592,7 +611,7 @@ volumeRender(const torch::Tensor &sigmas,
 
     torch::Tensor outOpacity = torch::zeros({numRays}, sigmas.options());
     torch::Tensor outDepth   = torch::zeros({numRays}, sigmas.options());
-    torch::Tensor outRgb     = torch::zeros({numRays, 3}, sigmas.options());
+    torch::Tensor outRgb     = torch::zeros({numRays, rgbs.size(1)}, sigmas.options());
     torch::Tensor outWs      = torch::zeros({N}, sigmas.options());
     torch::Tensor outTotalSamples =
         torch::zeros({numRays}, torch::dtype(torch::kLong).device(sigmas.device()));
@@ -632,7 +651,7 @@ volumeRenderBackward(const torch::Tensor &dLdOpacity,
     const int64_t N = sigmas.size(0);
 
     torch::Tensor dLdSigmas = torch::zeros({N}, sigmas.options());
-    torch::Tensor dLdRgbs   = torch::zeros({N, 3}, sigmas.options());
+    torch::Tensor dLdRgbs   = torch::zeros({N, rgbs.size(1)}, sigmas.options());
 
     FVDB_DISPATCH_KERNEL_DEVICE(sigmas.device(), [&]() {
         dispatchVolumeRenderBackward<DeviceTag>(dLdOpacity,
