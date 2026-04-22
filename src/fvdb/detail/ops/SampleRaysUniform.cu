@@ -78,8 +78,12 @@ countSamplesPerRayCallback(int32_t bidx,
 
         if (includeEndpointSegments) {
             // Step t0 consistently until it intersects the voxel (t0 is out of the voxel)
+            // This MUST use the same rounding (`ceil`) as the generate-path callback below so that
+            // both callbacks emit the same number of samples per ray.
+            // With cone tracing (coneAngle > 0), `_calcDt` depends on `t0`, so any rounding
+            // mismatch silently diverges the two paths and can OOB-write during sample generation.
             ScalarType distToVox = it->t0 - t0;
-            t0 += c10::cuda::compat::floor(distToVox / stepSize) * stepSize;
+            t0 += c10::cuda::compat::ceil(distToVox / stepSize) * stepSize;
             t1 = t0 + stepSize;
 
             if (t0 > it->t1) {

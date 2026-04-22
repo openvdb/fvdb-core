@@ -548,6 +548,107 @@ class TestVolumeRender(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             volume_render(sigma, rgbs_too_wide, dt, tmid, ray_joffsets, 0.001)
 
+    def test_volume_render_total_samples_counts_terminating_sample(self):
+        """Regression test for the off-by-one in ``volumeRenderFwdCallback``.
+
+        When the running transmittance ``T`` drops to or below ``tsmtThreshold`` the
+        ray terminates early. The sample that triggered the termination has already
+        been composited into ``outRGB``, ``outDepth``, ``outOpacity`` and ``outWs``,
+        so ``outTotalSamples[rayIdx]`` must include it. A previous version of the
+        kernel incremented ``numSamples`` only *after* the break check, which left
+        the reported total one short of the samples actually written.
+
+        The test constructs a deterministic per-ray sample layout with known
+        sigmas and verifies ``outTotalSamples`` equals the number of entries
+        actually written into ``outWs`` (i.e. the non-zero prefix).
+        """
+        if self.dtype == torch.float16:
+            self.skipTest("half precision is noisy near the transmittance threshold")
+
+        # sigma=20, dt=0.1 -> exp(-sigma*dt) = exp(-2) ~= 0.1353 per sample.
+        # Starting from T=1, after 3 samples T ~= 0.00247 which is below
+        # tsmtThreshold=0.01, so the loop breaks right after compositing sample 2.
+        # Expected outTotalSamples for a high-sigma ray: 3.
+        tsmt_threshold = 0.01
+
+        # Per-ray sample layouts (each ray may have a different number of slots).
+        ray_sizes = [10, 4, 0, 6]
+        sigma_per_ray = [20.0, 0.1, 0.0, 20.0]
+        # Expected tot_samples per ray after the fix:
+        #   ray 0: sigma=20 over 10 slots -> breaks after composite 3 -> tot=3
+        #   ray 1: sigma=0.1 over 4 slots -> T stays near 1, no break -> tot=4
+        #   ray 2: no slots -> tot=0
+        #   ray 3: sigma=20 over 6 slots -> breaks after composite 3 -> tot=3
+        expected_tot = [3, 4, 0, 3]
+
+        joffsets_py = [0]
+        for s in ray_sizes:
+            joffsets_py.append(joffsets_py[-1] + s)
+        joffsets = torch.tensor(joffsets_py, dtype=torch.int64, device=self.device)
+        N = int(joffsets[-1].item())
+
+        sigmas = torch.zeros(N, dtype=self.dtype, device=self.device)
+        for i, s in enumerate(ray_sizes):
+            start = joffsets_py[i]
+            sigmas[start : start + s] = sigma_per_ray[i]
+        dt = torch.full((N,), 0.1, dtype=self.dtype, device=self.device)
+        t = torch.arange(N, dtype=self.dtype, device=self.device) * 0.1
+        # Single-channel rgbs keep the comparisons simple and are enough to
+        # exercise the accumulation path.
+        rgbs = torch.ones((N, 1), dtype=self.dtype, device=self.device)
+
+        _, _, opacity, ws, tot_samples = volume_render(sigmas, rgbs, dt, t, joffsets, tsmt_threshold)
+
+        for ray_i in range(len(ray_sizes)):
+            start = joffsets_py[ray_i]
+            end = joffsets_py[ray_i + 1]
+            tot = int(tot_samples[ray_i].item())
+            ws_ray = ws[start:end]
+
+            # The reported total must be in-range and match the analytic expectation.
+            self.assertGreaterEqual(tot, 0)
+            self.assertLessEqual(tot, end - start)
+            self.assertEqual(
+                tot,
+                expected_tot[ray_i],
+                f"Ray {ray_i}: outTotalSamples={tot} but expected {expected_tot[ray_i]}",
+            )
+
+            # Every composited sample has strictly positive weight when sigma > 0
+            # and T > 0, so the reported total must match the number of non-zero
+            # entries in ws (which is zero-initialized at allocation time).
+            nz = int((ws_ray != 0).sum().item())
+            self.assertEqual(
+                tot,
+                nz,
+                f"Ray {ray_i}: outTotalSamples={tot} but ws has {nz} non-zero entries; "
+                "this indicates an off-by-one between outTotalSamples and outWs.",
+            )
+
+            # ws must be a contiguous non-zero prefix of length tot followed by
+            # untouched zeros.
+            if tot > 0:
+                self.assertTrue(
+                    torch.all(ws_ray[:tot] != 0).item(),
+                    f"Ray {ray_i}: ws[:tot] contains a zero entry",
+                )
+            if tot < end - start:
+                self.assertTrue(
+                    torch.all(ws_ray[tot:] == 0).item(),
+                    f"Ray {ray_i}: ws[tot:] contains a non-zero entry (write past tot)",
+                )
+
+            # outOpacity must equal the sum of the composited ws for the ray.
+            # This cross-checks that tot_samples and the accumulators agree.
+            self.assertTrue(
+                torch.isclose(
+                    opacity[ray_i],
+                    ws_ray.sum(),
+                    atol=1e-4 if self.dtype == torch.float32 else 1e-6,
+                ).item(),
+                f"Ray {ray_i}: outOpacity={opacity[ray_i].item()} disagrees with sum(ws)={ws_ray.sum().item()}",
+            )
+
 
 class TestRayMarching(unittest.TestCase):
     def setUp(self):
@@ -639,6 +740,136 @@ class TestRayMarching(unittest.TestCase):
         ray_idx, ray_times_inside = ray_times_inside.jidx.long(), ray_times_inside.jdata
         nsteps_outside = (ray_times_inside - tmin[ray_idx, None]) / step_size
         self.assertTrue(torch.allclose(nsteps_outside, torch.round(nsteps_outside), atol=dtype_to_atol(dtype)))
+
+    @parameterized.expand(all_device_dtype_combos)
+    def test_uniform_ray_samples_cone_tracing_count_matches_generate(self, device, dtype):
+        """Regression test for the floor/ceil mismatch in ``SampleRaysUniform.cu``.
+
+        With ``cone_angle > 0`` and ``include_end_segments=True`` the count and
+        generate callbacks must agree on how ``t0`` is snapped to the first
+        step boundary inside each HDDA segment. Historically the count path used
+        ``floor(distToVox / stepSize)`` while the generate path used ``ceil``,
+        which silently under-allocates the output buffer under cone tracing:
+        since ``stepSize`` depends on ``t0`` when ``cone_angle > 0``, the two
+        callbacks then walk different ``t0`` trajectories and disagree on the
+        number of samples they emit. The generate pass ends up writing one
+        sample past the buffer the count pass allocated, corrupting adjacent
+        rays' slots.
+
+        The test uses a ray that traverses a long 1D contiguous run of voxels
+        with an aggressive cone angle so the per-step ``stepSize`` actually
+        grows inside the segment. The sample count and per-sample boundaries
+        are compared against a Python reference that mirrors the fixed
+        (``ceil``-rounded) algorithm. A pre-fix CUDA/CPU kernel would return
+        one fewer sample than the reference and mismatched boundaries in the
+        tail of the ray.
+        """
+        if dtype == torch.float16:
+            # The half-precision specialisation of ``nanovdb::math::Delta`` is 1e-3,
+            # which reshuffles the boundary-gap decisions. That code path is
+            # orthogonal to the floor/ceil fix we want to cover here, so we
+            # only exercise float32 / float64.
+            self.skipTest("half-precision Delta rearranges the boundary-gap checks")
+
+        import math as _math
+
+        # Long, thin dense grid so the ray sees a single merged HDDA segment
+        # spanning many voxels. Voxel size 1 and origin 0 give a grid whose
+        # axis-aligned bounding box is x in [-0.5, 49.5], y, z in [-0.5, 0.5].
+        grid = GridBatch.from_dense(num_grids=1, dense_dims=[50, 1, 1], device=device)
+
+        # Ray starts outside the grid at x = -5 and travels along +x through
+        # y = z = 0, so it hits every voxel (i, 0, 0) exactly once. The ray
+        # enters the grid at t = 4.5 and exits at t = 54.5.
+        rays_o = torch.tensor([[-5.0, 0.0, 0.0]], dtype=dtype, device=device)
+        rays_d = torch.tensor([[1.0, 0.0, 0.0]], dtype=dtype, device=device)
+        nears = torch.tensor([0.0], dtype=dtype, device=device)
+        fars = torch.tensor([60.0], dtype=dtype, device=device)
+
+        # Cone=0.5 is aggressive enough that ``stepSize = t0 * cone_angle``
+        # overtakes the 1.0 floor after t0 >= 2, so the per-iteration step
+        # really does grow across the while loop. This is the regime where
+        # floor and ceil paths diverge.
+        step_size = 1.0
+        cone_angle = 0.5
+
+        intervals = grid.uniform_ray_samples(
+            JaggedTensor(rays_o),
+            JaggedTensor(rays_d),
+            JaggedTensor(nears),
+            JaggedTensor(fars),
+            step_size,
+            cone_angle=cone_angle,
+            include_end_segments=True,
+        )
+        actual = intervals.jdata.detach().cpu().double().numpy()
+
+        # Reference implementation mirroring ``countSamplesPerRayCallback`` and
+        # ``generateRaySamplesCallback`` for a single HDDA segment
+        # [t_enter, t_exit] with the post-fix ``ceil`` rounding applied in both.
+        t_enter, t_exit = 4.5, 54.5
+        # ``Delta`` for float is small enough that the exact test boundaries
+        # (0.5 and 8.9375 gap widths) are always considered gaps.
+        delta = 1e-6
+
+        def _calc_dt(t: float, cone: float, min_step: float, max_step: float = 1e10) -> float:
+            return max(min_step, min(max_step, t * cone))
+
+        t0 = 0.0
+        step = _calc_dt(t0, cone_angle, step_size)
+        expected: list[tuple[float, float]] = []
+        dist_to_vox = t_enter - t0
+        t0 += _math.ceil(dist_to_vox / step) * step
+        t1 = t0 + step
+        if t0 > t_exit:
+            expected.append((t_enter, t_exit))
+        else:
+            if t0 - t_enter > delta:
+                expected.append((t_enter, t0))
+            while t1 < t_exit:
+                expected.append((t0, t1))
+                t0 = t1
+                step = _calc_dt(t0, cone_angle, step_size)
+                t1 += step
+            if t_exit - t0 > delta:
+                expected.append((t0, t_exit))
+
+        self.assertEqual(
+            actual.shape[0],
+            len(expected),
+            f"Sample count mismatch (device={device}, dtype={dtype}): got {actual.shape[0]}, "
+            f"expected {len(expected)}. Pre-fix code used floor() in the count path and "
+            f"typically returned one fewer sample than the generate path.",
+        )
+
+        # Use a fp32-appropriate tolerance for the cumulative step arithmetic.
+        tol = 1e-3 if dtype == torch.float32 else 1e-6
+        for i, (ref_s, ref_e) in enumerate(expected):
+            self.assertAlmostEqual(
+                float(actual[i, 0]),
+                ref_s,
+                delta=tol,
+                msg=f"t_start mismatch at sample {i} (device={device}, dtype={dtype})",
+            )
+            self.assertAlmostEqual(
+                float(actual[i, 1]),
+                ref_e,
+                delta=tol,
+                msg=f"t_end mismatch at sample {i} (device={device}, dtype={dtype})",
+            )
+
+        # Sanity invariants that must hold regardless of the specific algorithm:
+        # strict monotonicity of t_start, non-degenerate intervals, and that
+        # all samples lie within the grid's HDDA-clipped [t_enter, t_exit].
+        t_starts = intervals.jdata[:, 0].double()
+        t_ends = intervals.jdata[:, 1].double()
+        self.assertTrue(torch.all(t_ends > t_starts).item(), "Found a degenerate interval (t_end <= t_start)")
+        self.assertTrue(
+            torch.all(t_starts[1:] >= t_starts[:-1]).item(),
+            "Sample starts are not monotonically non-decreasing along the ray",
+        )
+        self.assertGreaterEqual(float(t_starts.min().item()), t_enter - tol)
+        self.assertLessEqual(float(t_ends.max().item()), t_exit + tol)
 
     @parameterized.expand(all_device_dtype_combos)
     def test_segments_along_rays_bug(self, device, dtype):

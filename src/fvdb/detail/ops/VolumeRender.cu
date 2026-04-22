@@ -61,12 +61,12 @@ volumeRenderFwdCallback(const TensorAccessor<scalar_t, 1> sigmas,
         outOpacity[rayIdx] += w;
         outWs[s] = w;
         T *= static_cast<scalar_t>(1.0) - a;
+        numSamples += 1;
 
         // ray has enough opacity
         if (T <= tsmtThreshold) {
             break;
         }
-        numSamples += 1;
     }
     outTotalSamples[rayIdx] = numSamples;
 }
