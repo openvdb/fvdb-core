@@ -63,7 +63,7 @@ CoordsInGrid(const GridBatchData &batchHdl, const JaggedTensor &ijk) {
                                coordsInGridCallback<scalar_t, JaggedRAcc64, TorchRAcc64>(
                                    bidx, eidx, ijkAcc, outMaskAccessor, batchAcc);
                            };
-                           forEachJaggedElementChannelCUDA<scalar_t, 2>(1024, 1, ijk, cb);
+                           forEachJaggedElementChannelCUDA<scalar_t, 2, 1024>(1, ijk, cb);
                        } else {
                            auto cb = [=](int32_t bidx,
                                          int32_t eidx,

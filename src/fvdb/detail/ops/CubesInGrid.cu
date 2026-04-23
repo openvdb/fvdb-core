@@ -102,7 +102,7 @@ CubesInGrid(const GridBatchData &batchHdl,
                                cubesInGridCallback<scalar_t, IsTouch, JaggedRAcc64, TorchRAcc64>(
                                    bidx, eidx, ptsA, outMaskAccessor, batchAcc, dstart, dend);
                            };
-                           forEachJaggedElementChannelCUDA<scalar_t, 2>(512, 1, cubeCenters, cb);
+                           forEachJaggedElementChannelCUDA<scalar_t, 2, 512>(1, cubeCenters, cb);
                        } else {
                            auto cb = [=](int32_t bidx,
                                          int32_t eidx,

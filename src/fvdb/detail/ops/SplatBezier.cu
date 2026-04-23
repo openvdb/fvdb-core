@@ -95,7 +95,7 @@ SplatIntoGridBezier(const GridBatchData &batchHdl,
                     splatBezierCallback<DeviceTag, scalar_t, JaggedRAcc64, TorchRAcc64>(
                         bidx, eidx, cidx, ptsA, pointsDataAcc, batchAcc, outGridDataAcc);
                 };
-                forEachJaggedElementChannelCUDA<scalar_t, 2>(256, pointsData.size(1), points, cb);
+                forEachJaggedElementChannelCUDA<scalar_t, 2>(pointsData.size(1), points, cb);
             } else {
                 auto cb =
                     [=](int32_t bidx, int32_t eidx, int32_t cidx, JaggedAcc<scalar_t, 2> ptsA) {

@@ -344,10 +344,6 @@ UniformRaySamples(const GridBatchData &batchHdl,
         rayOrigins.scalar_type(),
         "UniformRaySamples",
         AT_WRAP([&]() -> JaggedTensor {
-            int64_t numThreads = 256 + 128;
-            if constexpr (nanovdb::util::is_same<scalar_t, double>::value) {
-                numThreads = 256;
-            }
             const auto optsF =
                 torch::TensorOptions().dtype(rayOrigins.dtype()).device(rayOrigins.device());
             const auto optsI32 =
@@ -385,7 +381,7 @@ UniformRaySamples(const GridBatchData &batchHdl,
                         includeEndpointSegments,
                         eps);
                 };
-                forEachJaggedElementChannelCUDA<scalar_t, 2>(numThreads, 1, rayOrigins, cb);
+                forEachJaggedElementChannelCUDA<scalar_t, 2>(1, rayOrigins, cb);
             } else {
                 auto cb = [=](int32_t bidx,
                               int32_t eidx,
@@ -452,7 +448,7 @@ UniformRaySamples(const GridBatchData &batchHdl,
                         returnMidpoint,
                         eps);
                 };
-                forEachJaggedElementChannelCUDA<scalar_t, 2>(numThreads, 1, rayOrigins, cb);
+                forEachJaggedElementChannelCUDA<scalar_t, 2>(1, rayOrigins, cb);
             } else {
                 auto cb = [=](int32_t bidx,
                               int32_t eidx,

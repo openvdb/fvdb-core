@@ -1,11 +1,13 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+
 #include <fvdb/GridBatchData.h>
 #include <fvdb/JaggedTensor.h>
 #include <fvdb/TorchDeviceBuffer.h>
 #include <fvdb/detail/ops/Inject.h>
 #include <fvdb/detail/utils/Utils.h>
+#include <fvdb/detail/utils/cuda/GridDim.h>
 #include <fvdb/detail/utils/cuda/Utils.cuh>
 #include <fvdb/detail/utils/nanovdb/ActiveVoxelIterator.h>
 
@@ -105,7 +107,7 @@ template <typename ValueType, int64_t Offset = -1> struct InjectGridPytorchFunct
     // with the source are left unchanged NOTE: If the source voxels are not a subset of the
     // destination voxels, the injection will be from the intersection of the two active voxel sets
     // into the destination This version presumes a runtime dimension parameter for input features
-    static constexpr int MaxThreadsPerBlock         = 256;
+    static constexpr int MaxThreadsPerBlock         = DEFAULT_BLOCK_DIM;
     static constexpr int MinBlocksPerMultiprocessor = 1;
 
     __device__ void

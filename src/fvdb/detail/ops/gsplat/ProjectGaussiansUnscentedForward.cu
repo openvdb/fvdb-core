@@ -438,7 +438,7 @@ template <typename ScalarType, typename Camera> struct ProjectionForwardUT {
 ///
 /// Each thread processes multiple (camera, gaussian) pairs in a grid-stride loop.
 template <typename ScalarType, typename Camera>
-__global__ __launch_bounds__(256) void
+__global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
 projectionForwardUTKernel(int64_t offset,
                           int64_t count,
                           ProjectionForwardUT<ScalarType, Camera> projectionForward) {
@@ -567,7 +567,7 @@ dispatchProjectGaussiansUnscentedFwd<torch::kCUDA>(
 
     using scalar_t = float;
 
-    const size_t NUM_BLOCKS = GET_BLOCKS(C * N, 256);
+    const size_t NUM_BLOCKS = GET_BLOCKS(C * N, DEFAULT_BLOCK_DIM);
     if (cameraModel == DistortionModel::ORTHOGRAPHIC) {
         OrthographicWithDistortionCamera<scalar_t> camera(worldToCamMatricesStart,
                                                           worldToCamMatricesEnd,
@@ -602,7 +602,8 @@ dispatchProjectGaussiansUnscentedFwd<torch::kCUDA>(
             outConics,
             outCompensations);
         projectionForwardUTKernel<scalar_t, OrthographicWithDistortionCamera<scalar_t>>
-            <<<NUM_BLOCKS, 256, SHARED_MEM_SIZE, stream>>>(0, C * N, projectionForward);
+            <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, SHARED_MEM_SIZE, stream>>>(
+                0, C * N, projectionForward);
     } else {
         PerspectiveWithDistortionCamera<scalar_t> camera(worldToCamMatricesStart,
                                                          worldToCamMatricesEnd,
@@ -640,7 +641,8 @@ dispatchProjectGaussiansUnscentedFwd<torch::kCUDA>(
             outConics,
             outCompensations);
         projectionForwardUTKernel<scalar_t, PerspectiveWithDistortionCamera<scalar_t>>
-            <<<NUM_BLOCKS, 256, SHARED_MEM_SIZE, stream>>>(0, C * N, projectionForward);
+            <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, SHARED_MEM_SIZE, stream>>>(
+                0, C * N, projectionForward);
     }
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 

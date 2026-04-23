@@ -170,7 +170,7 @@ DownsampleGridAvgPool(const GridBatchData &fineBatchHdl,
                                                                 stride,
                                                                 static_cast<scalar_t>(avgFactor));
                 };
-                forEachVoxelCUDA(384, outCoarseData.size(1), coarseBatchHdl, avgPoolPerVoxel);
+                forEachVoxelCUDA<384>(outCoarseData.size(1), coarseBatchHdl, avgPoolPerVoxel);
             } else {
                 auto avgPoolPerVoxel = [=](int32_t batchIdx,
                                            int32_t leafIdx,
@@ -252,7 +252,7 @@ DownsampleGridAvgPoolBackward(const GridBatchData &coarseBatchHdl,
                                    stride,
                                    static_cast<scalar_t>(avgFactor));
                            };
-                           forEachVoxelCUDA(384, fineData.size(1), coarseBatchHdl, cb);
+                           forEachVoxelCUDA<384>(fineData.size(1), coarseBatchHdl, cb);
                        } else {
                            auto cb = [=](int32_t batchIdx,
                                          int32_t leafIdx,

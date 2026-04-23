@@ -233,7 +233,7 @@ dispatchIJKForMesh<torch::kCUDA>(const JaggedTensor &meshVertices,
                         countVoxelsPerTriToCheck<scalar_f, scalar_i>(
                             bidx, eidx, transformDevPtr, verticesAcc, facesAcc, samplesPerTriAcc);
                     };
-                    forEachJaggedElementChannelCUDA<scalar_i, 2>(1024, 1, meshFaces, cb);
+                    forEachJaggedElementChannelCUDA<scalar_i, 2, 1024>(1, meshFaces, cb);
 
                     // Compute the cumulative sum of the number of samples per triangle so each
                     // thread can figure out which triangle it's in

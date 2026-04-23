@@ -88,7 +88,7 @@ VoxelNeighborhood(const GridBatchData &batchHdl,
                     neighborIndexesCallback<scalar_t, JaggedRAcc64, TorchRAcc64>(
                         bidx, eidx, ptsA, outIndexAcc, batchAcc, extentMin, extentMax, shift);
                 };
-                forEachJaggedElementChannelCUDA<scalar_t, 2>(256, 1, ijk, cb);
+                forEachJaggedElementChannelCUDA<scalar_t, 2>(1, ijk, cb);
             } else {
                 auto cb =
                     [=](int32_t bidx, int32_t eidx, int32_t cidx, JaggedAcc<scalar_t, 2> ptsA) {
