@@ -5,6 +5,7 @@
 #include <fvdb/detail/ops/gsplat/IntersectGaussianTiles.h>
 #include <fvdb/detail/utils/Nvtx.h>
 #include <fvdb/detail/utils/Utils.h>
+#include <fvdb/detail/utils/cuda/GridDim.h>
 #include <fvdb/detail/utils/cuda/Utils.cuh>
 
 #include <nanovdb/util/cuda/Util.h>
@@ -33,7 +34,7 @@ namespace ops {
 
 namespace {
 
-#define NUM_THREADS 256
+#define NUM_THREADS DEFAULT_BLOCK_DIM
 
 // Compute the number of 2d image tiles intersected by a set of 2D projected Gaussians.
 //

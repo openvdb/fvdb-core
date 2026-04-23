@@ -64,7 +64,7 @@ GetActiveVoxelsInBoundsMask(const GridBatchData &gridBatch,
             activeGridVoxelInBoundsMaskCallback<TorchRAcc64>(
                 batchIdx, leafIdx, voxelIdx, gridAccessor, bboxAcc, outMaskAcc);
         };
-        forEachVoxelCUDA(1024, 1, gridBatch, cb);
+        forEachVoxelCUDA<1024>(1, gridBatch, cb);
     } else {
         auto cb = [=](int32_t batchIdx,
                       int32_t leafIdx,

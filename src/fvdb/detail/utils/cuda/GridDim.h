@@ -18,7 +18,7 @@ constexpr int DEFAULT_BLOCK_DIM = 256;
 /// @param N The number of elements to parallelize over
 /// @param maxThreadsPer dBlock The maximum number of threads per block
 /// @return The number of blocks for a CUDA kernel launch
-static int
+inline int
 GET_BLOCKS(const int64_t N, const int64_t maxThreadsPerBlock) {
     if (N <= 0) {
         return 0;

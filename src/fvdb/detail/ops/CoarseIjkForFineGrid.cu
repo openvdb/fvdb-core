@@ -74,7 +74,7 @@ dispatchCoarseIJKForFineGrid<torch::kCUDA>(const GridBatchData &batchHdl,
             bidx, lidx, vidx, cidx, bacc, coarseningFactor, outIJKAcc, outIJKBIdxAcc);
     };
 
-    forEachVoxelCUDA(1024, 1, batchHdl, cb);
+    forEachVoxelCUDA<1024>(1, batchHdl, cb);
 
     return JaggedTensor::from_data_offsets_and_list_ids(
         outIJK, batchHdl.voxelOffsets(), batchHdl.jlidx());

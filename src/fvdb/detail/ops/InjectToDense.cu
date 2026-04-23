@@ -181,7 +181,7 @@ injectToDenseCminorCUDA(const GridBatchData &batchHdl,
                 injectToDenseCminorVoxelCallback<scalar_t>(
                     bidx, lidx, vidx, cidx, batchAcc, denseOriginsAcc, inGridDataAcc, outDenseAcc);
             };
-            forEachVoxelCUDA(1024, inGridData.size(1), batchHdl, callback);
+            forEachVoxelCUDA<1024>(inGridData.size(1), batchHdl, callback);
         }),
         AT_EXPAND(AT_FLOATING_TYPES),
         c10::kHalf,
@@ -262,7 +262,7 @@ injectToDenseCmajorCUDA(const GridBatchData &batchHdl,
                 injectToDenseCmajorVoxelCallback<scalar_t>(
                     bidx, lidx, vidx, cidx, batchAcc, denseOriginsAcc, inGridDataAcc, outDenseAcc);
             };
-            forEachVoxelCUDA(1024, inGridData.size(1), batchHdl, callback);
+            forEachVoxelCUDA<1024>(inGridData.size(1), batchHdl, callback);
         }),
         AT_EXPAND(AT_FLOATING_TYPES),
         c10::kHalf,
