@@ -22,8 +22,10 @@ _calcDt(ScalarType t, ScalarType coneAngle, ScalarType minStepSize, const Scalar
 }
 
 template <typename ScalarType,
-          template <typename T, int32_t D> typename JaggedAccessor,
-          template <typename T, int32_t D> typename TensorAccessor>
+          template <typename T, int32_t D>
+          typename JaggedAccessor,
+          template <typename T, int32_t D>
+          typename TensorAccessor>
 __hostdev__ void
 countSamplesPerRayCallback(int32_t bidx,
                            int32_t eidx,
@@ -127,8 +129,10 @@ countSamplesPerRayCallback(int32_t bidx,
 }
 
 template <typename ScalarType,
-          template <typename T, int32_t D> typename JaggedAccessor,
-          template <typename T, int32_t D> typename TensorAccessor>
+          template <typename T, int32_t D>
+          typename JaggedAccessor,
+          template <typename T, int32_t D>
+          typename TensorAccessor>
 __hostdev__ void
 generateRaySamplesCallback(int32_t bidx,
                            int32_t rayIdx,
@@ -377,7 +381,7 @@ UniformRaySamples(const GridBatchData &batchHdl,
                         includeEndpointSegments,
                         eps);
                 };
-                forEachJaggedElementChannelCUDA<scalar_t, 2, 384>(1, rayOrigins, cb);
+                forEachJaggedElementChannelCUDA<scalar_t, 2>(1, rayOrigins, cb);
             } else {
                 auto cb = [=](int32_t bidx,
                               int32_t eidx,
@@ -444,7 +448,7 @@ UniformRaySamples(const GridBatchData &batchHdl,
                         returnMidpoint,
                         eps);
                 };
-                forEachJaggedElementChannelCUDA<scalar_t, 2, 384>(1, rayOrigins, cb);
+                forEachJaggedElementChannelCUDA<scalar_t, 2>(1, rayOrigins, cb);
             } else {
                 auto cb = [=](int32_t bidx,
                               int32_t eidx,
