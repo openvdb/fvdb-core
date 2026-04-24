@@ -6,8 +6,11 @@
 
 #include <fvdb/GridBatchData.h>
 #include <fvdb/JaggedTensor.h>
+#include <fvdb/NanoVDBGridMetadata.h>
 
+#include <string>
 #include <tuple>
+#include <vector>
 
 namespace fvdb {
 namespace detail {
@@ -38,6 +41,11 @@ loadNVDB(const std::string &path,
 /// @brief Load a vector of grid handles
 std::tuple<c10::intrusive_ptr<GridBatchData>, JaggedTensor, std::vector<std::string>>
 loadNVDB(const std::string &path, const torch::Device &device, bool verbose);
+
+/// @brief Read per-grid metadata (name, type, voxel count, voxel size, index bbox) from a
+///        .nvdb file without loading any voxel data. Uses nanovdb::io::readGridMetaData under the
+///        hood so it only reads file headers.
+std::vector<NanoVDBGridMetadata> readNVDBMetaData(const std::string &path);
 
 } // namespace io
 } // namespace detail

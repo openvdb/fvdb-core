@@ -6,6 +6,7 @@
 
 #include <fvdb/GridBatchData.h>
 #include <fvdb/JaggedTensor.h>
+#include <fvdb/NanoVDBGridMetadata.h>
 
 #include <vector>
 
@@ -257,6 +258,13 @@ load(const std::string &path,
 /// @return A triple (gridbatch_data, data, names)
 std::tuple<c10::intrusive_ptr<GridBatchData>, JaggedTensor, std::vector<std::string>>
 load(const std::string &path, const torch::Device &device, bool verbose = false);
+
+/// @brief Read per-grid metadata (name, type, voxel count, voxel size, index bbox) from a .nvdb
+///        file without loading any voxel data. This is useful for enumerating which grids are in a
+///        file (e.g. by name or type) before deciding which ones to load.
+/// @param path The path to the .nvdb file to inspect
+/// @return A vector of NanoVDBGridMetadata, one entry per grid, in file order
+std::vector<NanoVDBGridMetadata> read_metadata(const std::string &path);
 
 /// @brief Convert a tensor of ijk coordinates to a tensor of morton codes
 /// @param ijk An int32 tensor of shape [N, 3] containing the ijk coordinates to convert

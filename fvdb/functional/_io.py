@@ -132,6 +132,47 @@ def load_nanovdb(
 # ---------------------------------------------------------------------------
 
 
+def read_nanovdb_metadata(path: str) -> list:
+    """Read per-grid metadata from a ``.nvdb`` file without loading voxel data.
+
+    This is a lightweight way to enumerate which grids are in a file (their names, value types,
+    voxel counts, etc.) before deciding which ones to load. It only reads file headers, so it is
+    much cheaper than :func:`load_nanovdb` and works on files containing a mix of grid value types
+    (e.g. a float density grid alongside a Vec3f velocity grid) where the full batch load is not
+    representable as a single :class:`JaggedTensor`.
+
+    Args:
+        path (str): Path to the ``.nvdb`` file.
+
+    Returns:
+        list[NanoVDBGridMetadata]: One entry per grid, in file order. Each entry exposes
+        ``name``, ``type`` (e.g. ``"float"``, ``"Vec3f"``, ``"OnIndex"``), ``grid_class``,
+        ``voxel_count``, ``voxel_size``, ``index_bbox_min`` and ``index_bbox_max``.
+
+    Example:
+        >>> for m in read_nanovdb_metadata("explosion.nvdb"):
+        ...     print(m.name, m.type, m.voxel_count)
+    """
+    from .._fvdb_cpp import read_metadata as _read_metadata
+
+    return _read_metadata(path)
+
+
+def grid_names_in_nanovdb(path: str) -> list[str]:
+    """Return the list of grid names stored in a ``.nvdb`` file, in file order.
+
+    This is a convenience wrapper around :func:`read_nanovdb_metadata` that returns just the names.
+
+    Args:
+        path (str): Path to the ``.nvdb`` file.
+
+    Returns:
+        list[str]: Grid names in the order they appear in the file. Names are not guaranteed to be
+        unique; NanoVDB allows duplicate grid names.
+    """
+    return [m.name for m in read_nanovdb_metadata(path)]
+
+
 def save_nanovdb(
     grid: GridBatch,
     path: str,
@@ -235,6 +276,7 @@ def save_nanovdb_single(
     .. seealso:: :func:`save_nanovdb`
     """
     import torch
+
     from .._fvdb_cpp import save as _save
 
     grid_data = grid.data

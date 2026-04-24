@@ -114,6 +114,11 @@ load(const std::string &path, const torch::Device &device, bool verbose) {
     return detail::io::loadNVDB(path, device, verbose);
 }
 
+std::vector<NanoVDBGridMetadata>
+read_metadata(const std::string &path) {
+    return detail::io::readNVDBMetaData(path);
+}
+
 c10::intrusive_ptr<GridBatchData>
 gridbatch_from_points(const JaggedTensor &points,
                       const std::vector<nanovdb::Vec3d> &voxel_sizes,
