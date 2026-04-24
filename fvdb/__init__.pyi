@@ -17,7 +17,8 @@ def _parse_device_string(device_string: str | torch.device) -> torch.device: ...
 # The following import needs to come after the GridBatch and JaggedTensor imports
 # immediately above in order to avoid a circular dependency error.
 from . import nn, utils, viz
-from ._fvdb_cpp import config, hilbert, morton, volume_render
+from ._fvdb_cpp import config, hilbert, morton
+from ._volume_render import volume_render
 from .attention import scaled_dot_product_attention
 from .convolution_plan import ConvolutionPlan
 from .enums import CameraModel, ProjectionMethod, RollingShutterType, ShOrderingMode

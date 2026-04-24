@@ -594,7 +594,11 @@ class TestVolumeRender(unittest.TestCase):
         dt = torch.full((N,), 0.1, dtype=self.dtype, device=self.device)
         t = torch.arange(N, dtype=self.dtype, device=self.device) * 0.1
         # Single-channel rgbs keep the comparisons simple and are enough to
-        # exercise the accumulation path.
+        # exercise the accumulation path. Mark sigmas as requires_grad so the
+        # Python wrapper takes the backward-aware path and actually materializes
+        # outWs / outTotalSamples (the inference fast path returns size-0
+        # placeholders for those tensors).
+        sigmas.requires_grad_(True)
         rgbs = torch.ones((N, 1), dtype=self.dtype, device=self.device)
 
         _, _, opacity, ws, tot_samples = volume_render(sigmas, rgbs, dt, t, joffsets, tsmt_threshold)
