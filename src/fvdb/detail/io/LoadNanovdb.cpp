@@ -561,8 +561,8 @@ validateTrailingShapeAndDtype(const std::vector<torch::Tensor> &data,
                 "\") has data ",
                 formatShapeAndDtype(t),
                 ". Load grids with differing value types one at a time using the name= or index= ",
-                "selectors (e.g. fvdb.load_nanovdb(path, name=...) or load_nanovdb_single), or ",
-                "select a subset of grids that share the same value type.");
+                "selectors (e.g. fvdb.functional.load_nanovdb(path, name=...)), or select a ",
+                "subset of grids that share the same value type.");
         }
     }
 }
