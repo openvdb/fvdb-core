@@ -8,13 +8,13 @@ from typing import TYPE_CHECKING, overload
 
 import torch
 
-from .. import _fvdb_cpp
 from ..jagged_tensor import JaggedTensor
 from ..types import DeviceIdentifier, resolve_device
 
 if TYPE_CHECKING:
     from ..grid import Grid
     from ..grid_batch import GridBatch
+    from ..nanovdb_grid_metadata import NanoVDBGridMetadata
 
 
 def _wrap_grid(cpp_impl):
@@ -132,7 +132,7 @@ def load_nanovdb(
 # ---------------------------------------------------------------------------
 
 
-def read_nanovdb_metadata(path: str) -> list:
+def read_nanovdb_metadata(path: str) -> list[NanoVDBGridMetadata]:
     """Read per-grid metadata from a ``.nvdb`` file without loading voxel data.
 
     This is a lightweight way to enumerate which grids are in a file (their names, value types,
@@ -245,7 +245,6 @@ def load_nanovdb_single(
 
     .. seealso:: :func:`load_nanovdb`
     """
-    import torch
 
     if name is not None:
         gb, jt_data, names_out = load_nanovdb(path, name=name, device=device, verbose=verbose)
@@ -275,8 +274,6 @@ def save_nanovdb_single(
 
     .. seealso:: :func:`save_nanovdb`
     """
-    import torch
-
     from .._fvdb_cpp import save as _save
 
     grid_data = grid.data

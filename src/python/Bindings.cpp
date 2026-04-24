@@ -378,24 +378,26 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def_readonly("grid_class", &fvdb::NanoVDBGridMetadata::gridClass)
         .def_readonly("voxel_count", &fvdb::NanoVDBGridMetadata::voxelCount)
         .def_property_readonly("voxel_size",
-                               [](const fvdb::NanoVDBGridMetadata &m) {
+                               [](const fvdb::NanoVDBGridMetadata &meta) {
                                    return std::vector<double>{
-                                       m.voxelSize[0], m.voxelSize[1], m.voxelSize[2]};
+                                       meta.voxelSize[0], meta.voxelSize[1], meta.voxelSize[2]};
                                })
         .def_property_readonly("index_bbox_min",
-                               [](const fvdb::NanoVDBGridMetadata &m) {
-                                   return std::vector<int32_t>{
-                                       m.indexBBoxMin[0], m.indexBBoxMin[1], m.indexBBoxMin[2]};
+                               [](const fvdb::NanoVDBGridMetadata &meta) {
+                                   return std::vector<int32_t>{meta.indexBBoxMin[0],
+                                                               meta.indexBBoxMin[1],
+                                                               meta.indexBBoxMin[2]};
                                })
         .def_property_readonly("index_bbox_max",
-                               [](const fvdb::NanoVDBGridMetadata &m) {
-                                   return std::vector<int32_t>{
-                                       m.indexBBoxMax[0], m.indexBBoxMax[1], m.indexBBoxMax[2]};
+                               [](const fvdb::NanoVDBGridMetadata &meta) {
+                                   return std::vector<int32_t>{meta.indexBBoxMax[0],
+                                                               meta.indexBBoxMax[1],
+                                                               meta.indexBBoxMax[2]};
                                })
-        .def("__repr__", [](const fvdb::NanoVDBGridMetadata &m) {
-            return "NanoVDBGridMetadata(name='" + m.name + "', type='" + m.type +
-                   "', grid_class='" + m.gridClass +
-                   "', voxel_count=" + std::to_string(m.voxelCount) + ")";
+        .def("__repr__", [](const fvdb::NanoVDBGridMetadata &meta) {
+            return "NanoVDBGridMetadata(name='" + meta.name + "', type='" + meta.type +
+                   "', grid_class='" + meta.gridClass +
+                   "', voxel_count=" + std::to_string(meta.voxelCount) + ")";
         });
 
     m.def("read_metadata",
