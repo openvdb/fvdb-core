@@ -23,7 +23,7 @@ all_device_dtype_combos = [
 ]
 
 all_device_dtype_channel_combos = [
-    (*combo, nc) for combo, nc in itertools.product(all_device_dtype_combos, [1, 3, 4, 5, 16])
+    (*combo, nc) for combo, nc in itertools.product(all_device_dtype_combos, [1, 2, 3, 4, 5, 16])
 ]
 
 

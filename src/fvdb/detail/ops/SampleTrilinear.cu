@@ -64,31 +64,104 @@ sampleTrilinearStencilCallback(int32_t bidx,
     }
 }
 
-// One-thread-per-point callback: resolve the 8-corner stencil once, then iterate
-// channels in float4 groups with explicit 128-bit loads/stores. GPU only.
-template <template <typename T, int32_t D> typename JaggedAccessor,
+// Maps a scalar type to its matching 2-wide CUDA vector type. Only the types we
+// actually emit a Vec2 fast path for are specialized.
+template <typename T> struct Vec2Trait;
+template <> struct Vec2Trait<float> {
+    using type = float2;
+};
+template <> struct Vec2Trait<double> {
+    using type = double2;
+};
+
+// Maps a scalar type to its matching 4-wide CUDA vector type. Only float is
+// specialized: CUDA has no native 4-wide double vector with single-instruction
+// 16-byte load semantics (double2 is the widest aligned double vector type).
+template <typename T> struct Vec4Trait;
+template <> struct Vec4Trait<float> {
+    using type = float4;
+};
+
+// One-thread-per-point callback specialized for numChannels == 2. Resolves the
+// 8-corner stencil once, then issues a single 8-byte (float2) or 16-byte
+// (double2) vector load per corner, halving per-sample transactions relative
+// to the scalar path. GPU only. Caller is responsible for alignment checks.
+template <typename ScalarType,
+          template <typename T, int32_t D>
+          typename JaggedAccessor,
           template <typename T, int32_t D>
           typename TensorAccessor>
 __device__ void
-sampleTrilinearStencilCallbackVec4(int32_t bidx,
+sampleTrilinearStencilCallbackVec2(int32_t bidx,
                                    int32_t eidx,
                                    int32_t /*cidx*/,
-                                   JaggedAccessor<float, 2> points,
-                                   TensorAccessor<float, 2> gridData,
+                                   JaggedAccessor<ScalarType, 2> points,
+                                   TensorAccessor<ScalarType, 2> gridData,
                                    BatchGridAccessor batchAccessor,
-                                   TensorAccessor<float, 2> outFeatures,
-                                   int64_t numChannels) {
+                                   TensorAccessor<ScalarType, 2> outFeatures) {
+    using Vec = typename Vec2Trait<ScalarType>::type;
+
     const auto &pointsData               = points.data();
     const nanovdb::OnIndexGrid *grid     = batchAccessor.grid(bidx);
     const VoxelCoordTransform &transform = batchAccessor.primalTransform(bidx);
     const int64_t baseOffset             = batchAccessor.voxelOffset(bidx);
     auto gridAcc                         = grid->tree().getAccessor();
 
-    const nanovdb::math::Vec3<float> xyz =
+    const nanovdb::math::Vec3<ScalarType> xyz =
         transform.apply(pointsData[eidx][0], pointsData[eidx][1], pointsData[eidx][2]);
 
     int64_t indices[8] = {};
-    float weights[8];
+    ScalarType weights[8];
+    const uint8_t activeMask = resolveTrilinearStencil(xyz, gridAcc, baseOffset, indices, weights);
+
+    if (activeMask == 0)
+        return;
+
+    Vec accum;
+    accum.x = ScalarType(0);
+    accum.y = ScalarType(0);
+#pragma unroll
+    for (int corner = 0; corner < 8; ++corner) {
+        const ScalarType wt = weights[corner];
+        const Vec val       = *reinterpret_cast<const Vec *>(&gridData[indices[corner]][0]);
+        accum.x += wt * val.x;
+        accum.y += wt * val.y;
+    }
+    *reinterpret_cast<Vec *>(&outFeatures[eidx][0]) = accum;
+}
+
+// One-thread-per-point callback specialized for numChannels % 4 == 0. Resolves
+// the 8-corner stencil once, then iterates channels in 4-wide groups with a
+// single 16-byte (float4) vector load per corner per group, quartering
+// per-sample transactions relative to the scalar path. GPU only, float only.
+// Caller is responsible for alignment checks.
+template <typename ScalarType,
+          template <typename T, int32_t D>
+          typename JaggedAccessor,
+          template <typename T, int32_t D>
+          typename TensorAccessor>
+__device__ void
+sampleTrilinearStencilCallbackVec4(int32_t bidx,
+                                   int32_t eidx,
+                                   int32_t /*cidx*/,
+                                   JaggedAccessor<ScalarType, 2> points,
+                                   TensorAccessor<ScalarType, 2> gridData,
+                                   BatchGridAccessor batchAccessor,
+                                   TensorAccessor<ScalarType, 2> outFeatures,
+                                   int64_t numChannels) {
+    using Vec = typename Vec4Trait<ScalarType>::type;
+
+    const auto &pointsData               = points.data();
+    const nanovdb::OnIndexGrid *grid     = batchAccessor.grid(bidx);
+    const VoxelCoordTransform &transform = batchAccessor.primalTransform(bidx);
+    const int64_t baseOffset             = batchAccessor.voxelOffset(bidx);
+    auto gridAcc                         = grid->tree().getAccessor();
+
+    const nanovdb::math::Vec3<ScalarType> xyz =
+        transform.apply(pointsData[eidx][0], pointsData[eidx][1], pointsData[eidx][2]);
+
+    int64_t indices[8] = {};
+    ScalarType weights[8];
     const uint8_t activeMask = resolveTrilinearStencil(xyz, gridAcc, baseOffset, indices, weights);
 
     if (activeMask == 0)
@@ -97,17 +170,21 @@ sampleTrilinearStencilCallbackVec4(int32_t bidx,
     const int64_t numGroups = numChannels / 4;
     for (int64_t g = 0; g < numGroups; ++g) {
         const int64_t cBase = g * 4;
-        float4 accum        = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+        Vec accum;
+        accum.x = ScalarType(0);
+        accum.y = ScalarType(0);
+        accum.z = ScalarType(0);
+        accum.w = ScalarType(0);
 #pragma unroll
         for (int corner = 0; corner < 8; ++corner) {
-            const float wt   = weights[corner];
-            const float4 val = *reinterpret_cast<const float4 *>(&gridData[indices[corner]][cBase]);
+            const ScalarType wt = weights[corner];
+            const Vec val       = *reinterpret_cast<const Vec *>(&gridData[indices[corner]][cBase]);
             accum.x += wt * val.x;
             accum.y += wt * val.y;
             accum.z += wt * val.z;
             accum.w += wt * val.w;
         }
-        *reinterpret_cast<float4 *>(&outFeatures[eidx][cBase]) = accum;
+        *reinterpret_cast<Vec *>(&outFeatures[eidx][cBase]) = accum;
     }
 }
 
@@ -139,37 +216,58 @@ SampleGridTrilinear(const GridBatchData &batchHdl,
             }
         };
 
+        auto scalarCb = [=]
+            __device__(int32_t bidx, int32_t eidx, int32_t cidx, JaggedRAcc64<scalar_t, 2> pts) {
+                sampleTrilinearStencilCallback<scalar_t, JaggedRAcc64, TorchRAcc64>(
+                    bidx, eidx, cidx, pts, gridDataAcc, batchAcc, outFeaturesAcc, numChannels);
+            };
+
         if constexpr (std::is_same_v<scalar_t, float>) {
-            if (numChannels >= 4 && numChannels % 4 == 0 &&
-                reinterpret_cast<uintptr_t>(gridDataReshape.data_ptr<float>()) % 16 == 0 &&
-                reinterpret_cast<uintptr_t>(outFeatures.data_ptr<float>()) % 16 == 0) {
+            const auto gridDataAddr =
+                reinterpret_cast<uintptr_t>(gridDataReshape.data_ptr<float>());
+            const auto outAddr   = reinterpret_cast<uintptr_t>(outFeatures.data_ptr<float>());
+            const bool aligned8  = (gridDataAddr % 8 == 0) && (outAddr % 8 == 0);
+            const bool aligned16 = (gridDataAddr % 16 == 0) && (outAddr % 16 == 0);
+            if (numChannels == 2 && aligned8) {
                 auto cb = [=] __device__(int32_t bidx,
                                          int32_t eidx,
                                          int32_t cidx,
                                          JaggedRAcc64<float, 2> pts) {
-                    sampleTrilinearStencilCallbackVec4<JaggedRAcc64, TorchRAcc64>(
+                    sampleTrilinearStencilCallbackVec2<float, JaggedRAcc64, TorchRAcc64>(
+                        bidx, eidx, cidx, pts, gridDataAcc, batchAcc, outFeaturesAcc);
+                };
+                dispatchForEach(cb);
+            } else if (numChannels >= 4 && numChannels % 4 == 0 && aligned16) {
+                auto cb = [=] __device__(int32_t bidx,
+                                         int32_t eidx,
+                                         int32_t cidx,
+                                         JaggedRAcc64<float, 2> pts) {
+                    sampleTrilinearStencilCallbackVec4<float, JaggedRAcc64, TorchRAcc64>(
                         bidx, eidx, cidx, pts, gridDataAcc, batchAcc, outFeaturesAcc, numChannels);
                 };
                 dispatchForEach(cb);
             } else {
+                dispatchForEach(scalarCb);
+            }
+        } else if constexpr (std::is_same_v<scalar_t, double>) {
+            const auto gridDataAddr =
+                reinterpret_cast<uintptr_t>(gridDataReshape.data_ptr<double>());
+            const auto outAddr   = reinterpret_cast<uintptr_t>(outFeatures.data_ptr<double>());
+            const bool aligned16 = (gridDataAddr % 16 == 0) && (outAddr % 16 == 0);
+            if (numChannels == 2 && aligned16) {
                 auto cb = [=] __device__(int32_t bidx,
                                          int32_t eidx,
                                          int32_t cidx,
-                                         JaggedRAcc64<float, 2> pts) {
-                    sampleTrilinearStencilCallback<float, JaggedRAcc64, TorchRAcc64>(
-                        bidx, eidx, cidx, pts, gridDataAcc, batchAcc, outFeaturesAcc, numChannels);
+                                         JaggedRAcc64<double, 2> pts) {
+                    sampleTrilinearStencilCallbackVec2<double, JaggedRAcc64, TorchRAcc64>(
+                        bidx, eidx, cidx, pts, gridDataAcc, batchAcc, outFeaturesAcc);
                 };
                 dispatchForEach(cb);
+            } else {
+                dispatchForEach(scalarCb);
             }
         } else {
-            auto cb = [=] __device__(int32_t bidx,
-                                     int32_t eidx,
-                                     int32_t cidx,
-                                     JaggedRAcc64<scalar_t, 2> pts) {
-                sampleTrilinearStencilCallback<scalar_t, JaggedRAcc64, TorchRAcc64>(
-                    bidx, eidx, cidx, pts, gridDataAcc, batchAcc, outFeaturesAcc, numChannels);
-            };
-            dispatchForEach(cb);
+            dispatchForEach(scalarCb);
         }
     } else {
         auto cb = [=](int32_t bidx, int32_t eidx, int32_t cidx, JaggedAcc<scalar_t, 2> pts) {
