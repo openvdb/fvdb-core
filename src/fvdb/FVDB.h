@@ -89,21 +89,20 @@ volumeRenderForward(const torch::Tensor &sigmas,
 ///                            match the value used in the corresponding
 ///                            forward call).
 /// @return Tuple ``(dLdSigmas, dLdRgbs)``.
-std::tuple<torch::Tensor, torch::Tensor>
-volumeRenderBackward(const torch::Tensor &dLdOpacity,
-                     const torch::Tensor &dLdDepth,
-                     const torch::Tensor &dLdRgb,
-                     const torch::Tensor &dLdWs,
-                     const torch::Tensor &sigmas,
-                     const torch::Tensor &rgbs,
-                     const torch::Tensor &ws,
-                     const torch::Tensor &deltas,
-                     const torch::Tensor &ts,
-                     const torch::Tensor &packInfo,
-                     const torch::Tensor &opacity,
-                     const torch::Tensor &depth,
-                     const torch::Tensor &rgb,
-                     double transmittanceThresh);
+std::tuple<torch::Tensor, torch::Tensor> volumeRenderBackward(const torch::Tensor &dLdOpacity,
+                                                              const torch::Tensor &dLdDepth,
+                                                              const torch::Tensor &dLdRgb,
+                                                              const torch::Tensor &dLdWs,
+                                                              const torch::Tensor &sigmas,
+                                                              const torch::Tensor &rgbs,
+                                                              const torch::Tensor &ws,
+                                                              const torch::Tensor &deltas,
+                                                              const torch::Tensor &ts,
+                                                              const torch::Tensor &packInfo,
+                                                              const torch::Tensor &opacity,
+                                                              const torch::Tensor &depth,
+                                                              const torch::Tensor &rgb,
+                                                              double transmittanceThresh);
 
 /// @brief Concatenate a list of grid batches into a single grid batch
 /// @param vec A list of grid batches to concatenate
