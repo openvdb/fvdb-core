@@ -653,6 +653,125 @@ class TestVolumeRender(unittest.TestCase):
                 f"Ray {ray_i}: outOpacity={opacity[ray_i].item()} disagrees with sum(ws)={ws_ray.sum().item()}",
             )
 
+    def test_volume_render_backward_tolerates_none_grads(self):
+        """Regression test for the None-grad fallback in ``_VolumeRenderFn.backward``.
+
+        ``torch.autograd.Function.backward`` passes ``None`` for any forward
+        output whose gradient does not flow back from the downstream loss
+        (e.g. a loss that only touches ``rgb`` yields ``None`` for
+        ``dL/ddepth``, ``dL/dopacity`` and ``dL/dws``). The C++ backward
+        kernel requires real tensors for all four grad slots, so the Python
+        wrapper must zero-fill any missing grads with a tensor that matches
+        the corresponding forward output's shape / dtype / device.
+
+        This test backpropagates a loss that references only a subset of
+        the four differentiable outputs (exercising the ``None`` fallback
+        for the unused slots) and compares the resulting parameter
+        gradients against a reference loss that couples every output to
+        the loss with a zero multiplier, forcing autograd to pass real
+        zero tensors for every slot. The two gradients must agree: any
+        divergence would indicate a shape / dtype / device mismatch or a
+        missing-grad bug in the Python wrapper.
+        """
+        if self.dtype == torch.float16:
+            self.skipTest("half precision is noisy for gradient comparisons")
+        t_threshold = 0.001
+
+        # Fixture mirrors test_volume_render so we reuse the same trilinear-sampling setup. Base
+        # params are cloned into a fresh leaf tensor on every backward pass so autograd accumulators don't
+        # bleed across cases.
+        grid_data_rgb_base = torch.rand(self.grid_dual.total_voxels, 3, device=self.device, dtype=self.dtype) * 0.5
+        grid_data_sigma_base = torch.rand(self.grid_dual.total_voxels, 1, device=self.device, dtype=self.dtype) * 0.5
+
+        ray_o, ray_d = self.make_ray_grid((0.0, 0.0, -1.0), 8)
+        tmin = torch.zeros(ray_o.shape[0]).to(ray_o)
+        tmax = torch.ones(ray_o.shape[0]).to(ray_o) * 1e10
+        ray_intervals_jagged = self.grid.uniform_ray_samples(
+            JaggedTensor(ray_o), JaggedTensor(ray_d), JaggedTensor(tmin), JaggedTensor(tmax), self.step_size
+        )
+        ray_idx = ray_intervals_jagged.jidx.int()
+        ray_joffsets = ray_intervals_jagged.joffsets
+        ray_intervals = ray_intervals_jagged.jdata
+        ray_mid = ray_intervals.mean(1)
+        ray_dt = ray_intervals[:, 1] - ray_intervals[:, 0]
+        ray_pts = ray_o[ray_idx] + ray_mid[:, None] * ray_d[ray_idx]
+
+        def run_backward(selector):
+            """Run one forward+backward with fresh leaves and return (rgb_grad, sigma_grad)."""
+            rgb_params = grid_data_rgb_base.detach().clone().requires_grad_(True)
+            sigma_params = grid_data_sigma_base.detach().clone().requires_grad_(True)
+
+            rgb_samples = self.grid_dual.sample_trilinear(JaggedTensor(ray_pts), JaggedTensor(rgb_params)).jdata
+            sigma_samples = self.grid_dual.sample_trilinear(JaggedTensor(ray_pts), JaggedTensor(sigma_params)).jdata
+            assert isinstance(sigma_samples, torch.Tensor)
+
+            rgb, depth, opacity, ws, _ = volume_render(
+                sigma_samples.squeeze(), rgb_samples, ray_dt, ray_mid, ray_joffsets, t_threshold
+            )
+            loss = selector(rgb, depth, opacity, ws)
+            loss.backward()
+            assert rgb_params.grad is not None
+            assert sigma_params.grad is not None
+            return rgb_params.grad.detach().clone(), sigma_params.grad.detach().clone()
+
+        # Each case: (name, primary-loss selector, rgb-grad-expected-nonzero).
+        # rgb grads are only non-zero when the loss actually depends on rgb;
+        # depth/opacity/ws losses are rgb-independent (they only depend on
+        # sigmas through the compositing weights), so rgb.grad stays zero.
+        cases = [
+            ("rgb_only", lambda r, d, o, w: r.sum(), True),
+            ("depth_only", lambda r, d, o, w: d.sum(), False),
+            ("opacity_only", lambda r, d, o, w: o.sum(), False),
+            ("ws_only", lambda r, d, o, w: w.sum(), False),
+            ("rgb_and_opacity", lambda r, d, o, w: r.sum() + o.sum(), True),
+            ("rgb_and_ws", lambda r, d, o, w: r.sum() + w.sum(), True),
+        ]
+
+        # Two identical kernel launches (no atomics in the backward kernel)
+        # should produce near-bitwise-identical results, so the tolerance
+        # just needs to absorb any reduction-order noise in the cloned
+        # trilinear-sample path.
+        atol = 1e-5 if self.dtype == torch.float32 else 1e-10
+
+        for name, primary, rgb_nonzero in cases:
+            with self.subTest(case=name):
+                # Reference couples every differentiable output to the loss
+                # with a zero multiplier, so autograd sends real zero
+                # tensors for every grad slot instead of None. Numerically
+                # equivalent to `primary` alone.
+                def reference(r, d, o, w, _p=primary):
+                    return _p(r, d, o, w) + 0.0 * (r.sum() + d.sum() + o.sum() + w.sum())
+
+                rgb_grad_partial, sigma_grad_partial = run_backward(primary)
+                rgb_grad_full, sigma_grad_full = run_backward(reference)
+
+                self.assertLess(
+                    (rgb_grad_partial - rgb_grad_full).abs().max().item(),
+                    atol,
+                    f"case={name}: rgb grads differ between None-fallback and explicit-zero paths",
+                )
+                self.assertLess(
+                    (sigma_grad_partial - sigma_grad_full).abs().max().item(),
+                    atol,
+                    f"case={name}: sigma grads differ between None-fallback and explicit-zero paths",
+                )
+
+                # Sanity: at least sigma must have a non-zero grad for every
+                # case (all four consumed outputs depend on sigmas via the
+                # compositing weights), otherwise we're not actually
+                # exercising the kernel.
+                self.assertGreater(
+                    sigma_grad_partial.abs().max().item(),
+                    0.0,
+                    f"case={name}: sigma grad is entirely zero; test is not exercising the backward kernel",
+                )
+                if rgb_nonzero:
+                    self.assertGreater(
+                        rgb_grad_partial.abs().max().item(),
+                        0.0,
+                        f"case={name}: loss depends on rgb but rgb grad is entirely zero",
+                    )
+
 
 class TestRayMarching(unittest.TestCase):
     def setUp(self):

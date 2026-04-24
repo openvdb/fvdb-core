@@ -59,17 +59,27 @@ class _VolumeRenderFn(torch.autograd.Function):
         return out_rgb, out_depth, out_opacity, out_ws, out_total
 
     @staticmethod
-    def backward(ctx: Any, *grad_outputs: torch.Tensor):
+    def backward(ctx: Any, *grad_outputs: torch.Tensor | None):
         """Propagate gradients through the compositing integral.
 
         Consumes ``dL/drgb``, ``dL/ddepth``, ``dL/dopacity`` and
         ``dL/dws`` from ``grad_outputs`` (the incoming gradient on
         ``total_samples`` is unused — that output is an integer counter
-        and is intentionally non-differentiable). Returns a 6-tuple of
-        gradient slots matching :meth:`forward`'s positional arguments:
-        gradients flow only into ``sigmas`` and ``rgbs``; the slots for
-        ``delta_ts``, ``ts``, ``pack_info`` and ``transmittance_thresh``
-        are ``None``.
+        and is intentionally non-differentiable).
+
+        Any of the four consumed grad outputs may be ``None`` — autograd
+        passes ``None`` for any forward output that the downstream loss
+        does not depend on (e.g. a loss on ``rgb`` alone yields ``None``
+        for ``dL/ddepth``, ``dL/dopacity`` and ``dL/dws``). The C++
+        backward kernel requires all four as real tensors, so any
+        missing grad is materialized as a zero tensor with the shape /
+        dtype / device of the corresponding saved forward output. All
+        grads are also made contiguous before being handed to C++.
+
+        Returns a 6-tuple of gradient slots matching :meth:`forward`'s
+        positional arguments: gradients flow only into ``sigmas`` and
+        ``rgbs``; the slots for ``delta_ts``, ``ts``, ``pack_info`` and
+        ``transmittance_thresh`` are ``None``.
         """
         dL_drgb, dL_ddepth, dL_dopacity, dL_dws, _dL_dtotal = grad_outputs
         (
@@ -83,6 +93,17 @@ class _VolumeRenderFn(torch.autograd.Function):
             out_rgb,
             out_ws,
         ) = ctx.saved_tensors
+
+        def _coerce(grad: torch.Tensor | None, like: torch.Tensor) -> torch.Tensor:
+            if grad is None:
+                return torch.zeros_like(like, memory_format=torch.contiguous_format)
+            return grad.contiguous()
+
+        dL_drgb = _coerce(dL_drgb, out_rgb)
+        dL_ddepth = _coerce(dL_ddepth, out_depth)
+        dL_dopacity = _coerce(dL_dopacity, out_opacity)
+        dL_dws = _coerce(dL_dws, out_ws)
+
         dL_dsigmas, dL_drgbs = _fvdb_cpp.volume_render_bwd(
             dL_dopacity,
             dL_ddepth,

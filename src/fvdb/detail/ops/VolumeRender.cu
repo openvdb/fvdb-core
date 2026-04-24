@@ -48,7 +48,11 @@ volumeRenderFwdCallback(const TensorAccessor<scalar_t, 1> sigmas,
     // Per-ray accumulators. Kept thread-local (and, for accRgb, ideally
     // register-resident) so the inner loop does not perform a global-memory
     // read-modify-write on outRGB / outDepth / outOpacity for every sample.
-    // Output tensors are zero-initialized on the host.
+    // The final accumulator values are written unconditionally once per ray,
+    // so the host allocates outRGB / outOpacity (and outDepth on the backward
+    // path) with torch::empty -- no host-side zero fill is required. outWs is
+    // the sole exception: the host zero-fills it on the backward path so the
+    // prefix scan can safely read the early-termination tail.
     scalar_t accRgb[MAX_VOLUME_RENDER_CHANNELS];
 #pragma unroll
     for (int c = 0; c < MAX_VOLUME_RENDER_CHANNELS; ++c) {
