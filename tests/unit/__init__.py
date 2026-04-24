@@ -4,4 +4,4 @@
 
 from fvdb.utils.tests import set_testing_git_tag
 
-set_testing_git_tag("46e7bd447aa276c95aacb8cf6c57aa64457e2c0e")
+set_testing_git_tag("6e6a5c33f42da6a6e09b5d31e1bc725238e5f51f")
