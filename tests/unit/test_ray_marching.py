@@ -727,11 +727,16 @@ class TestVolumeRender(unittest.TestCase):
             ("rgb_and_ws", lambda r, d, o, w: r.sum() + w.sum(), True),
         ]
 
-        # Two identical kernel launches (no atomics in the backward kernel)
-        # should produce near-bitwise-identical results, so the tolerance
-        # just needs to absorb any reduction-order noise in the cloned
-        # trilinear-sample path.
-        atol = 1e-5 if self.dtype == torch.float32 else 1e-10
+        # These gradient comparisons run through the trilinear-sampling
+        # backward path. On CUDA that path uses atomic adds, so two separate
+        # backward passes are not guaranteed to be near-bitwise-identical
+        # even when they are mathematically equivalent. Keep a strict
+        # tolerance on CPU, but relax it on CUDA to avoid flaky failures
+        # from expected nondeterministic accumulation order.
+        if self.device == "cuda":
+            atol = 5e-4 if self.dtype == torch.float32 else 1e-8
+        else:
+            atol = 1e-5 if self.dtype == torch.float32 else 1e-10
 
         for name, primary, rgb_nonzero in cases:
             with self.subTest(case=name):
