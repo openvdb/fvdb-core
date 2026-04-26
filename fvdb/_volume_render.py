@@ -147,12 +147,14 @@ def volume_render(
 
     Execution paths:
       * Training / graph-capture path. If autograd is globally enabled
-        **and** any of ``sigmas``, ``rgbs``, ``delta_ts``, ``ts`` requires
-        grad, this routes through :class:`_VolumeRenderFn` which runs the
-        kernel with ``needsBackward=True``. The backward-only outputs
-        (``depth``, ``ws``, ``total_samples``) are fully materialized and
-        saved on the autograd graph, and gradients flow into ``sigmas``
-        and ``rgbs`` (the other inputs are non-differentiable).
+        **and** ``sigmas`` or ``rgbs`` requires grad, this routes through
+        :class:`_VolumeRenderFn` which runs the kernel with
+        ``needsBackward=True``. The backward-only outputs (``depth``,
+        ``ws``, ``total_samples``) are fully materialized and saved on
+        the autograd graph, and gradients flow into ``sigmas`` and
+        ``rgbs``. ``delta_ts`` and ``ts`` are non-differentiable inputs
+        even when their ``requires_grad`` is set, so they do not on
+        their own select this path.
       * Inference fast path. Otherwise this calls the C++ forward directly
         with ``needsBackward=False``. The kernel skips the per-sample
         ``ws`` store (the dominant global-memory traffic savings) and the per-ray
@@ -174,10 +176,10 @@ def volume_render(
             Differentiable input.
         delta_ts (torch.Tensor): Per-sample step length along the ray
             (``delta_s = t_{s+1} - t_s``), floating-point tensor of shape
-            ``[N]``.
+            ``[N]``. Not differentiable.
         ts (torch.Tensor): Per-sample parametric distance along the ray
             (typically the interval midpoint) used for depth compositing,
-            floating-point tensor of shape ``[N]``.
+            floating-point tensor of shape ``[N]``. Not differentiable.
         pack_info (torch.Tensor): CSR-style per-ray offsets into the
             sample-packed tensors. ``int64`` tensor of shape ``[R + 1]``
             where ``R`` is the number of rays; ray ``r`` owns samples in
@@ -213,14 +215,16 @@ def volume_render(
 
     Note:
         Callers that need the full set of outputs under no-grad (for
-        example, a diagnostic that wants ``total_samples``) should either
-        run under :func:`torch.enable_grad` with at least one
-        differentiable input (typically ``sigmas.requires_grad_(True)``)
+        example, a diagnostic that wants ``total_samples``) should
+        either run under :func:`torch.enable_grad` with
+        ``sigmas.requires_grad_(True)`` or ``rgbs.requires_grad_(True)``,
         or call :func:`_fvdb_cpp.volume_render_fwd` directly with
-        ``needsBackward=True``.
+        ``needsBackward=True``. Setting ``requires_grad`` on
+        ``delta_ts`` or ``ts`` does not select this path because no
+        gradient is propagated into those inputs.
     """
     needs_grad = torch.is_grad_enabled() and any(
-        isinstance(t, torch.Tensor) and t.requires_grad for t in (sigmas, rgbs, delta_ts, ts)
+        isinstance(t, torch.Tensor) and t.requires_grad for t in (sigmas, rgbs)
     )
     if needs_grad:
         return cast(

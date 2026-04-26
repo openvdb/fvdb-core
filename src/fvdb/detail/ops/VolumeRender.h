@@ -46,7 +46,7 @@ volumeRender(const torch::Tensor &sigmas,
              const torch::Tensor &ts,
              const torch::Tensor &jOffsets,
              double tsmtThreshold,
-             bool needsBackward = true);
+             bool needsBackward);
 
 /// @brief Backward pass corresponding to ``volumeRender``.
 ///
