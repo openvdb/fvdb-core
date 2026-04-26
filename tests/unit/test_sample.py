@@ -424,6 +424,55 @@ class TestSample(unittest.TestCase):
         )
 
     @parameterized.expand(all_device_dtype_channel_combos)
+    def test_trilinear_sparse_misaligned_input(self, device, dtype, num_channels):
+        # Exercise the misalignment fallback in the CUDA Vec2/Vec4 fast paths.
+        # The kernel selects a wide-load specialization only when both grid_data
+        # and out_features have aligned data_ptrs (8B for float Vec2, 16B for
+        # float Vec4 / double Vec2). torch.empty/zeros always returns 256-byte-
+        # aligned storage, so we manually construct a contiguous-but-misaligned
+        # view by slicing one element off the start of a flat buffer and
+        # viewing it back to 2D. data_ptr ends up at storage_base + sizeof(dtype),
+        # which fails every alignment check the kernel makes and forces the
+        # scalar fallback regardless of channel count.
+        if dtype == torch.half:
+            atol = 1e-3
+            rtol = 1e-3
+        else:
+            atol = 1e-5
+            rtol = 1e-8
+
+        grid, grid_d, p = make_grid_batch_and_jagged_point_data(device, dtype)
+
+        def make_misaligned(num_voxels: int) -> torch.Tensor:
+            buf = torch.empty(num_voxels * num_channels + 1, device=device, dtype=dtype)
+            buf.uniform_()
+            view = buf[1:].view(num_voxels, num_channels)
+            assert view.is_contiguous()
+            # Sanity: data_ptr must not satisfy the strictest alignment the
+            # fast paths look for. element_size is 2/4/8 for half/float/double;
+            # offsetting by one element guarantees we miss 16B alignment.
+            assert view.data_ptr() % 16 != 0
+            return view.detach().requires_grad_(True)
+
+        # Primal
+        primal_features = make_misaligned(grid.total_voxels)
+        fv = grid.sample_trilinear(p, JaggedTensor(primal_features)).jdata
+        fp = sample_trilinear_naive(p, primal_features, grid)
+        self.assertTrue(
+            torch.allclose(fv, fp, atol=atol, rtol=rtol),
+            f"Primal misaligned max error is {torch.max(torch.abs(fv - fp))}",
+        )
+
+        # Dual
+        dual_features = make_misaligned(grid_d.total_voxels)
+        fv = grid_d.sample_trilinear(p, JaggedTensor(dual_features)).jdata
+        fp = sample_trilinear_naive(p, dual_features, grid_d)
+        self.assertTrue(
+            torch.allclose(fv, fp, atol=atol, rtol=rtol),
+            f"Dual misaligned max error is {torch.max(torch.abs(fv - fp))}",
+        )
+
+    @parameterized.expand(all_device_dtype_channel_combos)
     def test_trilinear_with_grad_sparse_vs_brute(self, device, dtype, num_channels):
         if dtype == torch.half:
             atol = 1e-3
