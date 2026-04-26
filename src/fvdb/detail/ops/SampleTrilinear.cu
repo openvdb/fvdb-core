@@ -117,9 +117,7 @@ sampleTrilinearStencilCallbackVec2(int32_t bidx,
     if (activeMask == 0)
         return;
 
-    Vec accum;
-    accum.x = ScalarType(0);
-    accum.y = ScalarType(0);
+    Vec accum{};
 #pragma unroll
     for (int corner = 0; corner < 8; ++corner) {
         const ScalarType wt = weights[corner];
