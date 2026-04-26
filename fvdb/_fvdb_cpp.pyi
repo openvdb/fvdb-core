@@ -1442,14 +1442,31 @@ def save(
 ) -> None: ...
 def morton(ijk: torch.Tensor) -> torch.Tensor: ...
 def hilbert(ijk: torch.Tensor) -> torch.Tensor: ...
-def volume_render(
+def volume_render_fwd(
     sigmas: torch.Tensor,
     rgbs: torch.Tensor,
     deltaTs: torch.Tensor,
     ts: torch.Tensor,
     packInfo: torch.Tensor,
     transmittanceThresh: float,
-) -> list[torch.Tensor]: ...
+    needsBackward: bool,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]: ...
+def volume_render_bwd(
+    dLdOpacity: torch.Tensor,
+    dLdDepth: torch.Tensor,
+    dLdRgb: torch.Tensor,
+    dLdWs: torch.Tensor,
+    sigmas: torch.Tensor,
+    rgbs: torch.Tensor,
+    ws: torch.Tensor,
+    deltas: torch.Tensor,
+    ts: torch.Tensor,
+    packInfo: torch.Tensor,
+    opacity: torch.Tensor,
+    depth: torch.Tensor,
+    rgb: torch.Tensor,
+    transmittanceThresh: float,
+) -> tuple[torch.Tensor, torch.Tensor]: ...
 
 class RollingShutterType(Enum):
     NONE = ...
