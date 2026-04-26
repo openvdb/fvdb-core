@@ -772,6 +772,151 @@ class TestVolumeRender(unittest.TestCase):
                         f"case={name}: loss depends on rgb but rgb grad is entirely zero",
                     )
 
+    def test_volume_render_inference_fast_path(self):
+        """The Python wrapper's inference fast path.
+
+        ``volume_render`` routes through :class:`_VolumeRenderFn` only
+        when autograd is globally enabled **and** ``sigmas`` or ``rgbs``
+        requires grad. In every other case it calls
+        ``_fvdb_cpp.volume_render_fwd`` directly with
+        ``needsBackward=False``, which:
+
+          * skips the per-sample ``ws`` allocation and the dominant
+            global-memory traffic of zero-initializing it on the host,
+          * skips the per-ray ``depth`` / ``totalSamples`` writes,
+          * returns size-0 placeholder tensors for ``depth``, ``ws``,
+            ``total_samples`` (with matching dtype / device), and
+          * leaves the ``rgb`` and ``opacity`` outputs detached from
+            the autograd graph.
+
+        This test pins that contract for all three predicate triggers
+        and cross-checks ``rgb`` / ``opacity`` against the
+        backward-aware path.
+        """
+        t_threshold = 0.001
+
+        # Self-contained synthetic fixture. Per-ray sigmas are chosen
+        # so ray 0 hits early termination (high sigma over many slots),
+        # ray 1 composites every slot (low sigma), ray 2 composites a
+        # mid-density ramp -- exercising the fast path under a mix of
+        # behaviors rather than a single uniform case.
+        ray_sizes = [10, 4, 6]
+        sigma_per_ray = [20.0, 0.1, 1.0]
+        joffsets_py = [0]
+        for s in ray_sizes:
+            joffsets_py.append(joffsets_py[-1] + s)
+        joffsets = torch.tensor(joffsets_py, dtype=torch.int64, device=self.device)
+        N = int(joffsets[-1].item())
+        R = len(ray_sizes)
+        C = 3
+
+        sigmas_data = torch.zeros(N, dtype=self.dtype, device=self.device)
+        for i, s in enumerate(ray_sizes):
+            start = joffsets_py[i]
+            sigmas_data[start : start + s] = sigma_per_ray[i]
+        rgbs_data = torch.linspace(0.1, 0.9, N * C, dtype=self.dtype, device=self.device).reshape(N, C)
+        dt = torch.full((N,), 0.1, dtype=self.dtype, device=self.device)
+        t = torch.arange(N, dtype=self.dtype, device=self.device) * 0.1
+
+        # Reference: backward-aware path with full-shape outputs.
+        sigmas_train = sigmas_data.detach().clone().requires_grad_(True)
+        rgbs_train = rgbs_data.detach().clone().requires_grad_(True)
+        rgb_ref, depth_ref, opacity_ref, ws_ref, tot_ref = volume_render(
+            sigmas_train, rgbs_train, dt, t, joffsets, t_threshold
+        )
+        # Sanity: the reference itself must populate the full outputs,
+        # otherwise our ws/depth/total_samples placeholder assertions
+        # below would be meaningless.
+        self.assertEqual(rgb_ref.shape, (R, C))
+        self.assertEqual(opacity_ref.shape, (R,))
+        self.assertEqual(depth_ref.shape, (R,))
+        self.assertEqual(ws_ref.shape, (N,))
+        self.assertEqual(tot_ref.shape, (R,))
+        self.assertIsNotNone(rgb_ref.grad_fn)
+
+        # rgb / opacity arithmetic is identical between the two paths
+        # (the kernel template only gates the backward-only stores), so
+        # the fast path must match the reference to well within fp
+        # rounding noise. Tolerances mirror the project's standard
+        # dtype_to_atol helper but tightened for fp16
+        atol = 1e-3 if self.dtype == torch.float16 else 1e-5
+
+        def assert_fast_path(case_name, rgb, depth, opacity, ws, tot):
+            # Output shapes: rgb / opacity full, the rest size-0.
+            self.assertEqual(rgb.shape, (R, C), msg=f"case={case_name}: rgb shape")
+            self.assertEqual(opacity.shape, (R,), msg=f"case={case_name}: opacity shape")
+            self.assertEqual(depth.shape, (0,), msg=f"case={case_name}: depth must be size-0 placeholder")
+            self.assertEqual(ws.shape, (0,), msg=f"case={case_name}: ws must be size-0 placeholder")
+            self.assertEqual(tot.shape, (0,), msg=f"case={case_name}: total_samples must be size-0 placeholder")
+
+            # dtype / device of every output (incl. placeholders) must
+            # match the training-path equivalents, so callers that key
+            # off dtype don't accidentally hit a different code path.
+            self.assertEqual(rgb.dtype, rgb_ref.dtype, msg=f"case={case_name}: rgb dtype")
+            self.assertEqual(opacity.dtype, opacity_ref.dtype, msg=f"case={case_name}: opacity dtype")
+            self.assertEqual(depth.dtype, depth_ref.dtype, msg=f"case={case_name}: depth dtype")
+            self.assertEqual(ws.dtype, ws_ref.dtype, msg=f"case={case_name}: ws dtype")
+            self.assertEqual(tot.dtype, tot_ref.dtype, msg=f"case={case_name}: total_samples dtype")
+            self.assertEqual(rgb.device.type, rgb_ref.device.type, msg=f"case={case_name}: rgb device")
+            self.assertEqual(opacity.device.type, opacity_ref.device.type, msg=f"case={case_name}: opacity device")
+            self.assertEqual(depth.device.type, depth_ref.device.type, msg=f"case={case_name}: depth device")
+            self.assertEqual(ws.device.type, ws_ref.device.type, msg=f"case={case_name}: ws device")
+            self.assertEqual(tot.device.type, tot_ref.device.type, msg=f"case={case_name}: total_samples device")
+
+            # The fast path bypasses _VolumeRenderFn entirely, so no
+            # output is in the autograd graph -- even if some input
+            # had requires_grad=True. This is the contract that lets
+            # callers use the fast path inside no-grad regions without
+            # accidentally pulling tensors back onto the tape.
+            self.assertFalse(rgb.requires_grad, msg=f"case={case_name}: rgb must not require grad")
+            self.assertIsNone(rgb.grad_fn, msg=f"case={case_name}: rgb must not have a grad_fn")
+            self.assertFalse(opacity.requires_grad, msg=f"case={case_name}: opacity must not require grad")
+            self.assertIsNone(opacity.grad_fn, msg=f"case={case_name}: opacity must not have a grad_fn")
+
+            # rgb / opacity must match the reference. We detach the
+            # reference because it sits on the autograd graph.
+            self.assertLess(
+                (rgb - rgb_ref.detach()).abs().max().item(),
+                atol,
+                f"case={case_name}: rgb diverges from training path",
+            )
+            self.assertLess(
+                (opacity - opacity_ref.detach()).abs().max().item(),
+                atol,
+                f"case={case_name}: opacity diverges from training path",
+            )
+
+        # Trigger 1: no input requires grad. This is the canonical
+        # pure-inference call site (e.g. a renderer that only consumes
+        # rgb / opacity).
+        with self.subTest(case="no_requires_grad"):
+            outputs = volume_render(sigmas_data, rgbs_data, dt, t, joffsets, t_threshold)
+            assert_fast_path("no_requires_grad", *outputs)
+
+        # Trigger 2: torch.no_grad() short-circuits the predicate
+        # regardless of requires_grad on any input.
+        with self.subTest(case="under_no_grad"):
+            sigmas_g = sigmas_data.detach().clone().requires_grad_(True)
+            rgbs_g = rgbs_data.detach().clone().requires_grad_(True)
+            with torch.no_grad():
+                outputs = volume_render(sigmas_g, rgbs_g, dt, t, joffsets, t_threshold)
+            assert_fast_path("under_no_grad", *outputs)
+
+        # Trigger 3: only delta_ts (or ts) requires grad. Gradients
+        # never flow into those inputs, so the predicate ignores them
+        # and we still take the fast path. This pins the predicate's
+        # tightened contract (sigmas / rgbs are the only differentiable
+        # inputs that select the training path).
+        with self.subTest(case="only_delta_ts_requires_grad"):
+            dt_g = dt.detach().clone().requires_grad_(True)
+            outputs = volume_render(sigmas_data, rgbs_data, dt_g, t, joffsets, t_threshold)
+            assert_fast_path("only_delta_ts_requires_grad", *outputs)
+
+        with self.subTest(case="only_ts_requires_grad"):
+            t_g = t.detach().clone().requires_grad_(True)
+            outputs = volume_render(sigmas_data, rgbs_data, dt, t_g, joffsets, t_threshold)
+            assert_fast_path("only_ts_requires_grad", *outputs)
+
 
 class TestRayMarching(unittest.TestCase):
     def setUp(self):
