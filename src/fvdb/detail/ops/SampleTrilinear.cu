@@ -64,23 +64,43 @@ sampleTrilinearStencilCallback(int32_t bidx,
     }
 }
 
-// Maps a scalar type to its matching 2-wide CUDA vector type. Only the types we
-// actually emit a Vec2 fast path for are specialized.
-template <typename T> struct Vec2Trait;
-template <> struct Vec2Trait<float> {
-    using type = float2;
-};
-template <> struct Vec2Trait<double> {
-    using type = double2;
+namespace {
+
+// Aligned wrapper around nanovdb::math::Vec2<T>. nanovdb's Vec2 stores a bare
+// T[2] without an alignas, so its natural alignment is alignof(T) (4B for
+// float, 8B for double). Reinterpreting a row as Vec2<T>* and dereferencing
+// would let nvcc split the access into two scalar loads. Bumping the alignment
+// to 2*sizeof(T) (8B for float, 16B for double) matches float2/double2 and is
+// the contract the runtime address checks (`aligned8`/`aligned16`) rely on to
+// guarantee a single LDG.64/LDG.128 transaction. Inheriting from Vec2 keeps
+// arithmetic operators (`+=`, `*scalar`, ...) usable without rewriting them.
+template <typename T> struct alignas(2 * sizeof(T)) AlignedVec2 : nanovdb::math::Vec2<T> {
+    using Base = nanovdb::math::Vec2<T>;
+    __hostdev__
+    AlignedVec2()
+        : Base(T(0), T(0)) {}
+    __hostdev__
+    AlignedVec2(const Base &b)
+        : Base(b) {}
 };
 
-// Maps a scalar type to its matching 4-wide CUDA vector type. Only float is
-// specialized: CUDA has no native 4-wide double vector with single-instruction
-// 16-byte load semantics (double2 is the widest aligned double vector type).
-template <typename T> struct Vec4Trait;
-template <> struct Vec4Trait<float> {
-    using type = float4;
+// Aligned wrapper around nanovdb::math::Vec4<T>. Same rationale as
+// AlignedVec2: nanovdb::math::Vec4 has alignof(T) (4B for float), but a single
+// LDG.128 needs the address (and the type) to be 16B aligned. Only
+// instantiated for float in this TU because CUDA has no native 4-wide double
+// vector with single-instruction 16-byte load semantics; doubles fall through
+// to the scalar path or the Vec2 fast path.
+template <typename T> struct alignas(4 * sizeof(T)) AlignedVec4 : nanovdb::math::Vec4<T> {
+    using Base = nanovdb::math::Vec4<T>;
+    __hostdev__
+    AlignedVec4()
+        : Base(T(0), T(0), T(0), T(0)) {}
+    __hostdev__
+    AlignedVec4(const Base &b)
+        : Base(b) {}
 };
+
+} // namespace
 
 // One-thread-per-point callback specialized for numChannels == 2. Resolves the
 // 8-corner stencil once, then issues a single 8-byte (float2) or 16-byte
@@ -99,7 +119,7 @@ sampleTrilinearStencilCallbackVec2(int32_t bidx,
                                    TensorAccessor<ScalarType, 2> gridData,
                                    BatchGridAccessor batchAccessor,
                                    TensorAccessor<ScalarType, 2> outFeatures) {
-    using Vec = typename Vec2Trait<ScalarType>::type;
+    using Vec = AlignedVec2<ScalarType>;
 
     const auto &pointsData               = points.data();
     const nanovdb::OnIndexGrid *grid     = batchAccessor.grid(bidx);
@@ -117,13 +137,11 @@ sampleTrilinearStencilCallbackVec2(int32_t bidx,
     if (activeMask == 0)
         return;
 
-    Vec accum{};
+    Vec accum;
 #pragma unroll
     for (int corner = 0; corner < 8; ++corner) {
-        const ScalarType wt = weights[corner];
-        const Vec val       = *reinterpret_cast<const Vec *>(&gridData[indices[corner]][0]);
-        accum.x += wt * val.x;
-        accum.y += wt * val.y;
+        const Vec val = *reinterpret_cast<const Vec *>(&gridData[indices[corner]][0]);
+        accum += val * weights[corner];
     }
     *reinterpret_cast<Vec *>(&outFeatures[eidx][0]) = accum;
 }
@@ -147,7 +165,7 @@ sampleTrilinearStencilCallbackVec4(int32_t bidx,
                                    BatchGridAccessor batchAccessor,
                                    TensorAccessor<ScalarType, 2> outFeatures,
                                    int64_t numChannels) {
-    using Vec = typename Vec4Trait<ScalarType>::type;
+    using Vec = AlignedVec4<ScalarType>;
 
     const auto &pointsData               = points.data();
     const nanovdb::OnIndexGrid *grid     = batchAccessor.grid(bidx);
@@ -169,18 +187,10 @@ sampleTrilinearStencilCallbackVec4(int32_t bidx,
     for (int64_t g = 0; g < numGroups; ++g) {
         const int64_t cBase = g * 4;
         Vec accum;
-        accum.x = ScalarType(0);
-        accum.y = ScalarType(0);
-        accum.z = ScalarType(0);
-        accum.w = ScalarType(0);
 #pragma unroll
         for (int corner = 0; corner < 8; ++corner) {
-            const ScalarType wt = weights[corner];
-            const Vec val       = *reinterpret_cast<const Vec *>(&gridData[indices[corner]][cBase]);
-            accum.x += wt * val.x;
-            accum.y += wt * val.y;
-            accum.z += wt * val.z;
-            accum.w += wt * val.w;
+            const Vec val = *reinterpret_cast<const Vec *>(&gridData[indices[corner]][cBase]);
+            accum += val * weights[corner];
         }
         *reinterpret_cast<Vec *>(&outFeatures[eidx][cBase]) = accum;
     }
