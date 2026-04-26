@@ -597,6 +597,15 @@ class TestLoadMixedTypeNanovdb(unittest.TestCase):
         self.assertEqual(data.jdata.size(0), 1)
         self.assertEqual(data.jdata.size(-1), trailing)
 
-
+        expected_value = next(
+            value for _, name, *_, value in _MIXED_TYPES_GRIDS if name == expected_name
+        )
+        row = data.jdata[0].cpu().tolist()
+        if trailing == 1:
+            self.assertAlmostEqual(row[0], expected_value, places=5)
+        else:
+            self.assertEqual(len(row), len(expected_value))
+            for got, want in zip(row, expected_value):
+                self.assertAlmostEqual(got, want, places=5)
 if __name__ == "__main__":
     unittest.main()
