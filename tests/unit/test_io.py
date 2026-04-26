@@ -6,13 +6,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import fvdb.functional
 import numpy as np
 import torch
 from fvdb.utils.tests import get_fvdb_test_data_path
 from parameterized import parameterized
 
 import fvdb
-import fvdb.functional
 
 standard_dtypes_and_dims = [
     (torch.float16, 1),
@@ -487,25 +487,26 @@ class TestIO(unittest.TestCase):
 _MIXED_TYPES_FIXTURE_REL = ("io", "mixed_types.nvdb")
 
 # Description of every grid in the committed ``mixed_types.nvdb`` fixture:
-# (index, name, nanovdb type string, torch dtype, trailing shape, expected voxel value).
+# (index, name, nanovdb type string, nanovdb grid_class string,
+#  torch dtype, trailing shape, expected voxel value).
 _MIXED_TYPES_GRIDS = [
-    (0, "density", "float", torch.float32, 1, 1.5),
-    (1, "pressure", "double", torch.float64, 1, 2.25),
-    (2, "label", "int32", torch.int32, 1, 7),
-    (3, "velocity", "Vec3f", torch.float32, 3, (1.0, 2.0, 3.0)),
+    (0, "density", "float", "FOG", torch.float32, 1, 1.5),
+    (1, "pressure", "double", "FOG", torch.float64, 1, 2.25),
+    (2, "label", "int32", "?", torch.int32, 1, 7),
+    (3, "velocity", "Vec3f", "?", torch.float32, 3, (1.0, 2.0, 3.0)),
 ]
 
 _MIXED_TYPES_BY_NAME_PARAMS = list(
     itertools.product(
         ["cpu", "cuda"],
-        [(name, dtype, trailing, value) for _, name, _, dtype, trailing, value in _MIXED_TYPES_GRIDS],
+        [(name, dtype, trailing, value) for _, name, _, _, dtype, trailing, value in _MIXED_TYPES_GRIDS],
     )
 )
 
 _MIXED_TYPES_BY_INDEX_PARAMS = list(
     itertools.product(
         ["cpu", "cuda"],
-        [(index, name, dtype, trailing) for index, name, _, dtype, trailing, _ in _MIXED_TYPES_GRIDS],
+        [(index, name, dtype, trailing) for index, name, _, _, dtype, trailing, _ in _MIXED_TYPES_GRIDS],
     )
 )
 
@@ -542,10 +543,18 @@ class TestLoadMixedTypeNanovdb(unittest.TestCase):
         self.assertEqual(len(meta), len(_MIXED_TYPES_GRIDS))
 
         by_name = {m.name: m for m in meta}
-        for _, name, type_str, _, _, _ in _MIXED_TYPES_GRIDS:
+        for _, name, type_str, grid_class, _, _, _ in _MIXED_TYPES_GRIDS:
             self.assertIn(name, by_name)
-            self.assertEqual(by_name[name].type, type_str, f"unexpected type for grid {name!r}")
-            self.assertEqual(by_name[name].voxel_count, 1, f"unexpected voxel_count for grid {name!r}")
+            m = by_name[name]
+            self.assertEqual(m.type, type_str, f"unexpected type for grid {name!r}")
+            self.assertEqual(m.grid_class, grid_class, f"unexpected grid_class for grid {name!r}")
+            self.assertEqual(m.voxel_count, 1, f"unexpected voxel_count for grid {name!r}")
+            # The fixture is authored as four single-voxel grids at the origin
+            # with default unit voxel size, so every grid should report the
+            # same voxel_size and a degenerate index_bbox of (0, 0, 0).
+            self.assertEqual(tuple(m.voxel_size), (1.0, 1.0, 1.0), f"unexpected voxel_size for grid {name!r}")
+            self.assertEqual(tuple(m.index_bbox_min), (0, 0, 0), f"unexpected index_bbox_min for grid {name!r}")
+            self.assertEqual(tuple(m.index_bbox_max), (0, 0, 0), f"unexpected index_bbox_max for grid {name!r}")
 
     def test_grid_names_in_nanovdb(self):
         names = fvdb.functional.grid_names_in_nanovdb(self._fixture_path())
@@ -574,6 +583,7 @@ class TestLoadMixedTypeNanovdb(unittest.TestCase):
 
         self.assertEqual(names, [name])
         self.assertEqual(data.jdata.dtype, expected_dtype)
+        self.assertEqual(data.jdata.device.type, device.split(":")[0])
         self.assertEqual(data.jdata.dim(), 2)
         self.assertEqual(data.jdata.size(0), 1)
         self.assertEqual(data.jdata.size(-1), trailing)
@@ -593,13 +603,12 @@ class TestLoadMixedTypeNanovdb(unittest.TestCase):
 
         self.assertEqual(names, [expected_name])
         self.assertEqual(data.jdata.dtype, expected_dtype)
+        self.assertEqual(data.jdata.device.type, device.split(":")[0])
         self.assertEqual(data.jdata.dim(), 2)
         self.assertEqual(data.jdata.size(0), 1)
         self.assertEqual(data.jdata.size(-1), trailing)
 
-        expected_value = next(
-            value for _, name, *_, value in _MIXED_TYPES_GRIDS if name == expected_name
-        )
+        expected_value = next(value for idx, _, _, _, _, _, value in _MIXED_TYPES_GRIDS if idx == index)
         row = data.jdata[0].cpu().tolist()
         if trailing == 1:
             self.assertAlmostEqual(row[0], expected_value, places=5)
@@ -607,5 +616,7 @@ class TestLoadMixedTypeNanovdb(unittest.TestCase):
             self.assertEqual(len(row), len(expected_value))
             for got, want in zip(row, expected_value):
                 self.assertAlmostEqual(got, want, places=5)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -589,6 +589,8 @@ fromNVDB(nanovdb::GridHandle<nanovdb::HostBuffer> &handle,
         bi += 1;
     }
 
+    validateTrailingShapeAndDtype(data, names);
+
     // Merge all the loaded grids into a single handle
     TORCH_CHECK_VALUE(grids.size() <= static_cast<size_t>(GridBatchData::MAX_GRIDS_PER_BATCH),
                       "Cannot load more than ",
@@ -596,8 +598,6 @@ fromNVDB(nanovdb::GridHandle<nanovdb::HostBuffer> &handle,
                       " grids.");
     nanovdb::GridHandle<TorchDeviceBuffer> resCpu = nanovdb::mergeGrids(grids);
     auto ret = makeGridBatchData(std::move(resCpu), voxSizes, voxOrigins);
-
-    validateTrailingShapeAndDtype(data, names);
 
     // Merge loaded data Tensors into a JaggedTensor
     JaggedTensor dataJagged(data);
@@ -636,6 +636,8 @@ fromNVDB(const std::vector<nanovdb::GridHandle<nanovdb::HostBuffer>> &handles,
         }
     }
 
+    validateTrailingShapeAndDtype(data, names);
+
     // Merge all the loaded grids into a single handle
     TORCH_CHECK_VALUE(grids.size() <= static_cast<size_t>(GridBatchData::MAX_GRIDS_PER_BATCH),
                       "Cannot load more than ",
@@ -643,8 +645,6 @@ fromNVDB(const std::vector<nanovdb::GridHandle<nanovdb::HostBuffer>> &handles,
                       " grids.");
     nanovdb::GridHandle<TorchDeviceBuffer> resCpu = nanovdb::mergeGrids(grids);
     auto ret = makeGridBatchData(std::move(resCpu), voxSizes, voxOrigins);
-
-    validateTrailingShapeAndDtype(data, names);
 
     // Merge loaded data Tensors into a JaggedTensor
     JaggedTensor dataJagged(data);
@@ -726,9 +726,9 @@ readNVDBMetaData(const std::string &path) {
 
         info.voxelCount = static_cast<int64_t>(m.voxelCount);
 
-        info.voxelSize    = {m.voxelSize[0], m.voxelSize[1], m.voxelSize[2]};
-        info.indexBBoxMin = {m.indexBBox.min()[0], m.indexBBox.min()[1], m.indexBBox.min()[2]};
-        info.indexBBoxMax = {m.indexBBox.max()[0], m.indexBBox.max()[1], m.indexBBox.max()[2]};
+        info.voxelSize    = m.voxelSize;
+        info.indexBBoxMin = m.indexBBox.min();
+        info.indexBBoxMax = m.indexBBox.max();
 
         out.push_back(std::move(info));
     }

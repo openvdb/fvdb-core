@@ -379,20 +379,20 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def_readonly("voxel_count", &fvdb::NanoVDBGridMetadata::voxelCount)
         .def_property_readonly("voxel_size",
                                [](const fvdb::NanoVDBGridMetadata &meta) {
-                                   return std::vector<double>{
-                                       meta.voxelSize[0], meta.voxelSize[1], meta.voxelSize[2]};
+                                   return std::make_tuple(
+                                       meta.voxelSize[0], meta.voxelSize[1], meta.voxelSize[2]);
                                })
         .def_property_readonly("index_bbox_min",
                                [](const fvdb::NanoVDBGridMetadata &meta) {
-                                   return std::vector<int32_t>{meta.indexBBoxMin[0],
-                                                               meta.indexBBoxMin[1],
-                                                               meta.indexBBoxMin[2]};
+                                   return std::make_tuple(meta.indexBBoxMin[0],
+                                                          meta.indexBBoxMin[1],
+                                                          meta.indexBBoxMin[2]);
                                })
         .def_property_readonly("index_bbox_max",
                                [](const fvdb::NanoVDBGridMetadata &meta) {
-                                   return std::vector<int32_t>{meta.indexBBoxMax[0],
-                                                               meta.indexBBoxMax[1],
-                                                               meta.indexBBoxMax[2]};
+                                   return std::make_tuple(meta.indexBBoxMax[0],
+                                                          meta.indexBBoxMax[1],
+                                                          meta.indexBBoxMax[2]);
                                })
         .def("__repr__", [](const fvdb::NanoVDBGridMetadata &meta) {
             return "NanoVDBGridMetadata(name='" + meta.name + "', type='" + meta.type +

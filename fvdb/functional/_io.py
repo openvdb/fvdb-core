@@ -12,9 +12,9 @@ from ..jagged_tensor import JaggedTensor
 from ..types import DeviceIdentifier, resolve_device
 
 if TYPE_CHECKING:
+    from .._fvdb_cpp import NanoVDBGridMetadata
     from ..grid import Grid
     from ..grid_batch import GridBatch
-    from .._fvdb_cpp import NanoVDBGridMetadata
 
 
 def _wrap_grid(cpp_impl):
@@ -128,7 +128,7 @@ def load_nanovdb(
 
 
 # ---------------------------------------------------------------------------
-#  Save
+#  Metadata
 # ---------------------------------------------------------------------------
 
 
@@ -146,8 +146,9 @@ def read_nanovdb_metadata(path: str) -> list[NanoVDBGridMetadata]:
 
     Returns:
         list[NanoVDBGridMetadata]: One entry per grid, in file order. Each entry exposes
-        ``name``, ``type`` (e.g. ``"float"``, ``"Vec3f"``, ``"OnIndex"``), ``grid_class``,
-        ``voxel_count``, ``voxel_size``, ``index_bbox_min`` and ``index_bbox_max``.
+        ``name``, ``type`` (e.g. ``"float"``, ``"Vec3f"``, ``"OnIndex"``), ``grid_class``
+        (e.g. ``"SDF"``, ``"FOG"``, ``"TENSOR"``, ``"?"``), ``voxel_count``, ``voxel_size``,
+        ``index_bbox_min`` and ``index_bbox_max``.
 
     Example:
         >>> for m in read_nanovdb_metadata("explosion.nvdb"):
@@ -171,6 +172,11 @@ def grid_names_in_nanovdb(path: str) -> list[str]:
         unique; NanoVDB allows duplicate grid names.
     """
     return [m.name for m in read_nanovdb_metadata(path)]
+
+
+# ---------------------------------------------------------------------------
+#  Save
+# ---------------------------------------------------------------------------
 
 
 def save_nanovdb(
