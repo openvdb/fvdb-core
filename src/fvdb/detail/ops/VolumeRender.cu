@@ -22,7 +22,7 @@ namespace {
 // Maximum number of channels supported by the backward kernel. Bounded so we can
 // allocate on-stack scratch arrays inside the device callback without dynamic
 // allocation. Bump if a use case legitimately needs more channels.
-static constexpr int MAX_VOLUME_RENDER_CHANNELS = 16;
+constexpr int MAX_VOLUME_RENDER_CHANNELS = 16;
 
 template <bool NeedsBackward,
           typename scalar_t,
