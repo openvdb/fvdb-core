@@ -14,7 +14,7 @@ from ..types import DeviceIdentifier, resolve_device
 if TYPE_CHECKING:
     from ..grid import Grid
     from ..grid_batch import GridBatch
-    from ..nanovdb_grid_metadata import NanoVDBGridMetadata
+    from .._fvdb_cpp import NanoVDBGridMetadata
 
 
 def _wrap_grid(cpp_impl):
