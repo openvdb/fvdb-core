@@ -24,6 +24,9 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_cutlass.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_nanovdb.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_blosc.cmake)
 
+# zlib is required for NANOVDB_USE_ZIP (reading ZIP-compressed .nvdb files).
+find_package(ZLIB REQUIRED)
+
 # Enable testing at this level so CTest discovers tests from all subdirectories
 enable_testing()
 
@@ -199,6 +202,7 @@ target_compile_options(fvdb PRIVATE
     "-Wno-maybe-uninitialized"
     "-fdiagnostics-color=always"
     "-DNANOVDB_USE_BLOSC"
+    "-DNANOVDB_USE_ZIP"
     "-fvisibility=default"
     "-Wall"
     "-Werror"
@@ -216,7 +220,7 @@ target_compile_options(fvdb PRIVATE
     $<$<AND:$<BOOL:${FVDB_LINEINFO}>,$<COMPILE_LANGUAGE:CUDA>>:-lineinfo>)
 
 target_link_libraries(fvdb PRIVATE
-    ${TORCH_LIBRARIES} tinyply cutlass blosc::blosc dispatch)
+    ${TORCH_LIBRARIES} tinyply cutlass blosc::blosc ZLIB::ZLIB dispatch)
 
 # Add linker flags for Debug builds to preserve symbols
 if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")

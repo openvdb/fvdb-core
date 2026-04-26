@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import fvdb.functional
 import numpy as np
 import torch
 from fvdb.utils.tests import get_fvdb_test_data_path
@@ -481,6 +482,140 @@ class TestIO(unittest.TestCase):
                     torch.all(test_grid.origins[bi] == loaded_grid.origins[bi]),
                     f"Grid {bi} origins mismatch: {test_grid.origins[bi]} vs {loaded_grid.origins[bi]}",
                 )
+
+
+_MIXED_TYPES_FIXTURE_REL = ("io", "mixed_types.nvdb")
+
+# Description of every grid in the committed ``mixed_types.nvdb`` fixture:
+# (index, name, nanovdb type string, nanovdb grid_class string,
+#  torch dtype, trailing shape, expected voxel value).
+_MIXED_TYPES_GRIDS = [
+    (0, "density", "float", "FOG", torch.float32, 1, 1.5),
+    (1, "pressure", "double", "FOG", torch.float64, 1, 2.25),
+    (2, "label", "int32", "?", torch.int32, 1, 7),
+    (3, "velocity", "Vec3f", "?", torch.float32, 3, (1.0, 2.0, 3.0)),
+]
+
+_MIXED_TYPES_BY_NAME_PARAMS = list(
+    itertools.product(
+        ["cpu", "cuda"],
+        [(name, dtype, trailing, value) for _, name, _, _, dtype, trailing, value in _MIXED_TYPES_GRIDS],
+    )
+)
+
+_MIXED_TYPES_BY_INDEX_PARAMS = list(
+    itertools.product(
+        ["cpu", "cuda"],
+        [(index, name, dtype, trailing) for index, name, _, _, dtype, trailing, _ in _MIXED_TYPES_GRIDS],
+    )
+)
+
+
+class TestLoadMixedTypeNanovdb(unittest.TestCase):
+    """Tests for reading .nvdb files that contain grids of multiple value types.
+
+    Uses the committed fixture ``unit_tests/io/mixed_types.nvdb`` from
+    fvdb-test-data, which contains four single-voxel grids of differing value
+    types:
+
+      * ``density``  - ``float``  FogVolume, value ``1.5``
+      * ``pressure`` - ``double`` FogVolume, value ``2.25``
+      * ``label``    - ``int32``  Unknown,   value ``7``
+      * ``velocity`` - ``Vec3f``  Unknown,   value ``(1.0, 2.0, 3.0)``
+
+    Together these exercise:
+
+      * ``fvdb.functional.read_nanovdb_metadata`` / ``grid_names_in_nanovdb``
+        on mixed-type content,
+      * the ``validateTrailingShapeAndDtype`` error raised from ``fromNVDB``
+        when the caller tries to load the whole file into one GridBatch,
+      * ``name=`` / ``index=`` selection for each of the four NanoVDB value
+        types, including the non-``float`` cases that need the ``gridId``
+        parameter threaded into ``loadOneGrid``.
+    """
+
+    @classmethod
+    def _fixture_path(cls) -> str:
+        return str(get_fvdb_test_data_path().joinpath(*_MIXED_TYPES_FIXTURE_REL))
+
+    def test_read_metadata_enumerates_all_grids(self):
+        meta = fvdb.functional.read_nanovdb_metadata(self._fixture_path())
+        self.assertEqual(len(meta), len(_MIXED_TYPES_GRIDS))
+
+        by_name = {m.name: m for m in meta}
+        for _, name, type_str, grid_class, _, _, _ in _MIXED_TYPES_GRIDS:
+            self.assertIn(name, by_name)
+            m = by_name[name]
+            self.assertEqual(m.type, type_str, f"unexpected type for grid {name!r}")
+            self.assertEqual(m.grid_class, grid_class, f"unexpected grid_class for grid {name!r}")
+            self.assertEqual(m.voxel_count, 1, f"unexpected voxel_count for grid {name!r}")
+            # The fixture is authored as four single-voxel grids at the origin
+            # with default unit voxel size, so every grid should report the
+            # same voxel_size and a degenerate index_bbox of (0, 0, 0).
+            self.assertEqual(tuple(m.voxel_size), (1.0, 1.0, 1.0), f"unexpected voxel_size for grid {name!r}")
+            self.assertEqual(tuple(m.index_bbox_min), (0, 0, 0), f"unexpected index_bbox_min for grid {name!r}")
+            self.assertEqual(tuple(m.index_bbox_max), (0, 0, 0), f"unexpected index_bbox_max for grid {name!r}")
+
+    def test_grid_names_in_nanovdb(self):
+        names = fvdb.functional.grid_names_in_nanovdb(self._fixture_path())
+        self.assertEqual(sorted(names), sorted(name for _, name, *_ in _MIXED_TYPES_GRIDS))
+
+    def test_load_whole_mixed_type_file_raises_actionable_error(self):
+        with self.assertRaises(ValueError) as ctx:
+            fvdb.GridBatch.from_nanovdb(self._fixture_path())
+        msg = str(ctx.exception)
+        self.assertIn("mixed value type", msg.lower())
+        # The error should mention at least one of the grid names as one of
+        # the mismatched entries.
+        self.assertTrue(
+            any(name in msg for _, name, *_ in _MIXED_TYPES_GRIDS),
+            f"Expected error to reference one of the grid names: {msg!r}",
+        )
+        self.assertTrue(
+            "name=" in msg or "index=" in msg or "load_nanovdb_single" in msg,
+            f"Expected actionable workaround hint in error message: {msg!r}",
+        )
+
+    @parameterized.expand(_MIXED_TYPES_BY_NAME_PARAMS)
+    def test_load_single_grid_by_name(self, device, grid_spec):
+        name, expected_dtype, trailing, expected_value = grid_spec
+        _, data, names = fvdb.GridBatch.from_nanovdb(self._fixture_path(), name=name, device=device)
+
+        self.assertEqual(names, [name])
+        self.assertEqual(data.jdata.dtype, expected_dtype)
+        self.assertEqual(data.jdata.device.type, device.split(":")[0])
+        self.assertEqual(data.jdata.dim(), 2)
+        self.assertEqual(data.jdata.size(0), 1)
+        self.assertEqual(data.jdata.size(-1), trailing)
+
+        row = data.jdata[0].cpu().tolist()
+        if trailing == 1:
+            self.assertAlmostEqual(row[0], expected_value, places=5)
+        else:
+            self.assertEqual(len(row), len(expected_value))
+            for got, want in zip(row, expected_value):
+                self.assertAlmostEqual(got, want, places=5)
+
+    @parameterized.expand(_MIXED_TYPES_BY_INDEX_PARAMS)
+    def test_load_single_grid_by_index(self, device, grid_spec):
+        index, expected_name, expected_dtype, trailing = grid_spec
+        _, data, names = fvdb.GridBatch.from_nanovdb(self._fixture_path(), index=index, device=device)
+
+        self.assertEqual(names, [expected_name])
+        self.assertEqual(data.jdata.dtype, expected_dtype)
+        self.assertEqual(data.jdata.device.type, device.split(":")[0])
+        self.assertEqual(data.jdata.dim(), 2)
+        self.assertEqual(data.jdata.size(0), 1)
+        self.assertEqual(data.jdata.size(-1), trailing)
+
+        expected_value = next(value for idx, _, _, _, _, _, value in _MIXED_TYPES_GRIDS if idx == index)
+        row = data.jdata[0].cpu().tolist()
+        if trailing == 1:
+            self.assertAlmostEqual(row[0], expected_value, places=5)
+        else:
+            self.assertEqual(len(row), len(expected_value))
+            for got, want in zip(row, expected_value):
+                self.assertAlmostEqual(got, want, places=5)
 
 
 if __name__ == "__main__":

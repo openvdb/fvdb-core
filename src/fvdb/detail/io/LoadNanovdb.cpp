@@ -14,6 +14,8 @@
 
 #include <torch/types.h>
 
+#include <sstream>
+
 namespace fvdb {
 namespace detail {
 namespace io {
@@ -416,9 +418,10 @@ std::tuple<nanovdb::GridHandle<TorchDeviceBuffer>,
            nanovdb::Vec3d,
            nanovdb::Vec3d>
 loadOneGrid(const nanovdb::GridHandle<nanovdb::HostBuffer> &handle, uint32_t gridId, uint32_t bi) {
-    if (handle.gridMetaData()->gridClass() == nanovdb::GridClass::TensorGrid) {
+    // A single nanovdb::GridHandle can contain multiple grids of different types
+    if (handle.gridMetaData(gridId)->gridClass() == nanovdb::GridClass::TensorGrid) {
         TORCH_CHECK(
-            handle.gridType() == nanovdb::GridType::OnIndex,
+            handle.gridType(gridId) == nanovdb::GridType::OnIndex,
             "Invalid grid type: Tensor grids which are not saved with fVDB are not yet supported.");
         const nanovdb::NanoGrid<nanovdb::ValueOnIndex> *sourceGrid =
             getGrid<nanovdb::ValueOnIndex>(handle, gridId, bi);
@@ -426,7 +429,7 @@ loadOneGrid(const nanovdb::GridHandle<nanovdb::HostBuffer> &handle, uint32_t gri
             sourceGrid);
     }
 
-    switch (handle.gridType()) {
+    switch (handle.gridType(gridId)) {
     case nanovdb::GridType::Float: {
         const nanovdb::NanoGrid<float> *sourceGrid = getGrid<float>(handle, gridId, bi);
         return nanovdbGridToFvdbGrid<float, float, nanovdb::ValueOnIndex, 1>(sourceGrid);
@@ -495,10 +498,76 @@ loadOneGrid(const nanovdb::GridHandle<nanovdb::HostBuffer> &handle, uint32_t gri
     default:
         // Unhandled cases include: Int16, UInt32, Fp4, Fp8, FpN
         char gridTypeStr[nanovdb::strlen<nanovdb::GridType>()];
-        nanovdb::toStr(gridTypeStr, handle.gridType());
+        nanovdb::toStr(gridTypeStr, handle.gridType(gridId));
         throw std::runtime_error(std::string("Grid type not supported: ") + gridTypeStr);
     }
 }
+
+namespace {
+
+/// @brief Format a tensor's shape and dtype as a human readable string, e.g. "[N, 3] (float32)".
+std::string
+formatShapeAndDtype(const torch::Tensor &t) {
+    std::ostringstream oss;
+    oss << "[";
+    for (int64_t d = 0; d < t.dim(); ++d) {
+        if (d > 0)
+            oss << ", ";
+        oss << t.size(d);
+    }
+    oss << "] (" << t.dtype() << ")";
+    return oss.str();
+}
+
+/// @brief JaggedTensor packs the per-grid data tensors along dim 0 into a single backing tensor
+/// (see JaggedTensor::JaggedTensor(const std::vector<torch::Tensor>&)). That concat requires every
+/// tensor to share dtype and all sizes beyond dim 0. Grids saved with different value types
+/// (e.g. a Float grid at [N, 1] float32 next to a Vec3f grid at [M, 3] float32) cannot be packed
+/// together. Throw an error with the specific offending grids and a workaround.
+void
+validateTrailingShapeAndDtype(const std::vector<torch::Tensor> &data,
+                              const std::vector<std::string> &names) {
+    if (data.size() <= 1) {
+        return;
+    }
+    const torch::Tensor &ref = data.front();
+    const auto nameAt        = [&](size_t i) -> std::string {
+        return i < names.size() ? names[i] : std::string("");
+    };
+    for (size_t i = 1; i < data.size(); ++i) {
+        const torch::Tensor &t = data[i];
+        bool shapeOk           = t.dim() == ref.dim();
+        if (shapeOk) {
+            for (int64_t d = 1; d < ref.dim(); ++d) {
+                if (t.size(d) != ref.size(d)) {
+                    shapeOk = false;
+                    break;
+                }
+            }
+        }
+        const bool dtypeOk = t.dtype() == ref.dtype();
+        if (!shapeOk || !dtypeOk) {
+            TORCH_CHECK_VALUE(
+                false,
+                "Cannot load grids of mixed value type into a single GridBatch/JaggedTensor. ",
+                "Grid 0 (\"",
+                nameAt(0),
+                "\") has data ",
+                formatShapeAndDtype(ref),
+                " while grid ",
+                i,
+                " (\"",
+                nameAt(i),
+                "\") has data ",
+                formatShapeAndDtype(t),
+                ". Load grids with differing value types one at a time using the name= or index= ",
+                "selectors (e.g. fvdb.functional.load_nanovdb(path, name=...)), or select a ",
+                "subset of grids that share the same value type.");
+        }
+    }
+}
+
+} // namespace
 
 std::tuple<c10::intrusive_ptr<GridBatchData>, JaggedTensor, std::vector<std::string>>
 fromNVDB(nanovdb::GridHandle<nanovdb::HostBuffer> &handle,
@@ -519,6 +588,8 @@ fromNVDB(nanovdb::GridHandle<nanovdb::HostBuffer> &handle,
 
         bi += 1;
     }
+
+    validateTrailingShapeAndDtype(data, names);
 
     // Merge all the loaded grids into a single handle
     TORCH_CHECK_VALUE(grids.size() <= static_cast<size_t>(GridBatchData::MAX_GRIDS_PER_BATCH),
@@ -564,6 +635,8 @@ fromNVDB(const std::vector<nanovdb::GridHandle<nanovdb::HostBuffer>> &handles,
             bi += 1;
         }
     }
+
+    validateTrailingShapeAndDtype(data, names);
 
     // Merge all the loaded grids into a single handle
     TORCH_CHECK_VALUE(grids.size() <= static_cast<size_t>(GridBatchData::MAX_GRIDS_PER_BATCH),
@@ -626,6 +699,40 @@ std::tuple<c10::intrusive_ptr<GridBatchData>, JaggedTensor, std::vector<std::str
 loadNVDB(const std::string &path, const torch::Device &device, bool verbose) {
     auto sourceHandles = nanovdb::io::readGrids<nanovdb::HostBuffer, std::vector>(path, verbose);
     return fromNVDB(sourceHandles, device);
+}
+
+std::vector<NanoVDBGridMetadata>
+readNVDBMetaData(const std::string &path) {
+    std::vector<nanovdb::io::FileGridMetaData> fileMeta;
+    try {
+        fileMeta = nanovdb::io::readGridMetaData(path);
+    } catch (const std::exception &e) {
+        TORCH_CHECK(false, "Failed to read nanovdb metadata from '", path, "': ", e.what());
+    }
+
+    std::vector<NanoVDBGridMetadata> out;
+    out.reserve(fileMeta.size());
+    for (const auto &m: fileMeta) {
+        NanoVDBGridMetadata info;
+        info.name = m.gridName;
+
+        char typeStr[nanovdb::strlen<nanovdb::GridType>()];
+        nanovdb::toStr(typeStr, m.gridType);
+        info.type = typeStr;
+
+        char classStr[nanovdb::strlen<nanovdb::GridClass>()];
+        nanovdb::toStr(classStr, m.gridClass);
+        info.gridClass = classStr;
+
+        info.voxelCount = static_cast<int64_t>(m.voxelCount);
+
+        info.voxelSize    = m.voxelSize;
+        info.indexBBoxMin = m.indexBBox.min();
+        info.indexBBoxMax = m.indexBBox.max();
+
+        out.push_back(std::move(info));
+    }
+    return out;
 }
 
 } // namespace io

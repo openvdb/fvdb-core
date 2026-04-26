@@ -56,6 +56,7 @@ if _spec is not None and _spec.origin is not None:
 
 # isort: off
 from ._fvdb_cpp import (
+    NanoVDBGridMetadata,
     config,
     volume_render,
     morton,
@@ -383,6 +384,7 @@ __all__ = [
     "RollingShutterType",
     "ShOrderingMode",
     "ConvolutionPlan",
+    "NanoVDBGridMetadata",
     # Concatenation of jagged tensors or grid/grid batches
     "jcat",
     "gcat",

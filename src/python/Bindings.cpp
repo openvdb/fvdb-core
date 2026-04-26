@@ -372,6 +372,39 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         py::arg("device")  = "cpu",
         py::arg("verbose") = false);
 
+    py::class_<fvdb::NanoVDBGridMetadata>(m, "NanoVDBGridMetadata")
+        .def_readonly("name", &fvdb::NanoVDBGridMetadata::name)
+        .def_readonly("type", &fvdb::NanoVDBGridMetadata::type)
+        .def_readonly("grid_class", &fvdb::NanoVDBGridMetadata::gridClass)
+        .def_readonly("voxel_count", &fvdb::NanoVDBGridMetadata::voxelCount)
+        .def_property_readonly("voxel_size",
+                               [](const fvdb::NanoVDBGridMetadata &meta) {
+                                   return std::make_tuple(
+                                       meta.voxelSize[0], meta.voxelSize[1], meta.voxelSize[2]);
+                               })
+        .def_property_readonly("index_bbox_min",
+                               [](const fvdb::NanoVDBGridMetadata &meta) {
+                                   return std::make_tuple(meta.indexBBoxMin[0],
+                                                          meta.indexBBoxMin[1],
+                                                          meta.indexBBoxMin[2]);
+                               })
+        .def_property_readonly("index_bbox_max",
+                               [](const fvdb::NanoVDBGridMetadata &meta) {
+                                   return std::make_tuple(meta.indexBBoxMax[0],
+                                                          meta.indexBBoxMax[1],
+                                                          meta.indexBBoxMax[2]);
+                               })
+        .def("__repr__", [](const fvdb::NanoVDBGridMetadata &meta) {
+            return "NanoVDBGridMetadata(name='" + meta.name + "', type='" + meta.type +
+                   "', grid_class='" + meta.gridClass +
+                   "', voxel_count=" + std::to_string(meta.voxelCount) + ")";
+        });
+
+    m.def("read_metadata",
+          &fvdb::read_metadata,
+          py::arg("path"),
+          "Read per-grid metadata from a .nvdb file without loading voxel data.");
+
     m.def("save",
           py::overload_cast<const std::string &,
                             const fvdb::GridBatchData &,
