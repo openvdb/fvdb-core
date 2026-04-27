@@ -16,6 +16,67 @@ find_package(Python3 COMPONENTS Development Interpreter)
 message(STATUS "CMAKE_BUILD_PARALLEL_LEVEL: $ENV{CMAKE_BUILD_PARALLEL_LEVEL}")
 message(STATUS "NVCC_THREADS: $ENV{NVCC_THREADS}")
 
+# ----------------------------------------------------------------------------
+# Compiler caching (ccache / sccache)
+#
+# Wraps every CXX and CUDA invocation so unchanged TUs are pulled from cache.
+# Set FVDB_DISABLE_CCACHE=ON to opt out (e.g. for CI nodes without persistent
+# cache storage). The launcher variables are CACHE entries so they propagate
+# into the src/ subproject's separate project() scope.
+#
+# Cold builds are unaffected; subsequent rebuilds and most touched-header
+# scenarios drop from minutes to seconds. ccache 4.6+ recognizes nvcc out of
+# the box.
+# ----------------------------------------------------------------------------
+option(FVDB_DISABLE_CCACHE "Disable ccache/sccache compiler caching" OFF)
+# Cache size cap applied via CCACHE_MAXSIZE in the per-invocation env so we
+# don't trample the user's global ccache.conf for other projects. One full
+# multi-arch wheel build is ~250 MB compressed; 10 GB retains roughly 15-40
+# builds depending on config, comfortably covering branch switches and a
+# day's worth of bisecting. Set to "0" (or empty) to inherit the user's
+# personal ccache.conf max_size.
+set(FVDB_CCACHE_MAXSIZE "10G" CACHE STRING
+    "Per-invocation CCACHE_MAXSIZE override (e.g. '20G'). '0' or '' = inherit user config.")
+
+if(NOT FVDB_DISABLE_CCACHE)
+    find_program(FVDB_COMPILER_CACHE NAMES ccache sccache)
+    if(FVDB_COMPILER_CACHE)
+        # PCH-aware launcher.
+        #
+        # ccache refuses direct-mode hits on TUs that include a PCH unless
+        # `time_macros` sloppiness is set (the PCH was preprocessed at build-PCH
+        # time, so __TIME__/__DATE__ would always differ from the consuming TU).
+        # `pch_defines` lets us survive minor -D flag changes that don't affect
+        # the PCH contents. We bake both into the launcher via `cmake -E env`
+        # so users get cache hits without needing a personal ccache.conf.
+        set(_FVDB_CCACHE_LAUNCHER
+            "${CMAKE_COMMAND}" "-E" "env"
+            "CCACHE_SLOPPINESS=pch_defines,time_macros")
+        if(FVDB_CCACHE_MAXSIZE AND NOT FVDB_CCACHE_MAXSIZE STREQUAL "0")
+            list(APPEND _FVDB_CCACHE_LAUNCHER
+                "CCACHE_MAXSIZE=${FVDB_CCACHE_MAXSIZE}")
+        endif()
+        list(APPEND _FVDB_CCACHE_LAUNCHER "${FVDB_COMPILER_CACHE}")
+
+        set(CMAKE_CXX_COMPILER_LAUNCHER  "${_FVDB_CCACHE_LAUNCHER}"
+            CACHE STRING "Compiler launcher for CXX (auto-detected)" FORCE)
+        set(CMAKE_CUDA_COMPILER_LAUNCHER "${_FVDB_CCACHE_LAUNCHER}"
+            CACHE STRING "Compiler launcher for CUDA (auto-detected)" FORCE)
+        if(FVDB_CCACHE_MAXSIZE AND NOT FVDB_CCACHE_MAXSIZE STREQUAL "0")
+            message(STATUS "FVDB: compiler caching enabled via ${FVDB_COMPILER_CACHE} "
+                           "(max_size=${FVDB_CCACHE_MAXSIZE}, "
+                           "sloppiness=pch_defines,time_macros)")
+        else()
+            message(STATUS "FVDB: compiler caching enabled via ${FVDB_COMPILER_CACHE} "
+                           "(max_size=user ccache.conf, "
+                           "sloppiness=pch_defines,time_macros)")
+        endif()
+    else()
+        message(STATUS "FVDB: ccache/sccache not found on PATH; "
+                       "install one to speed up incremental builds")
+    endif()
+endif()
+
 include(${CMAKE_CURRENT_SOURCE_DIR}/src/cmake/get_cpm.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/src/cmake/get_nvtx.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/src/cmake/get_torch.cmake)
@@ -91,6 +152,20 @@ target_compile_definitions(_fvdb_cpp PRIVATE
 
 # Configure the pybind11 module with PyTorch compatibility settings
 configure_torch_pybind11(_fvdb_cpp)
+
+# All bindings TUs include <torch/types.h> + pybind11. Pre-compile both so the
+# 30+ s ATen+pybind parse cost is paid once. Honors the same opt-out flag as
+# the fvdb library above.
+if(NOT FVDB_DISABLE_PCH)
+    target_precompile_headers(_fvdb_cpp PRIVATE
+        <torch/types.h>
+        <pybind11/pybind11.h>
+        <pybind11/stl.h>
+        <vector>
+        <memory>
+        <optional>
+        <string>)
+endif()
 
 # Add linker flags for Debug builds to preserve symbols
 if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")

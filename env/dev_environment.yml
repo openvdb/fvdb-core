@@ -6,6 +6,7 @@ dependencies:
   - blas=*=mkl
   - boto3
   - ca-certificates
+  - ccache
   - certifi
   - clang-18
   - clang-format-18

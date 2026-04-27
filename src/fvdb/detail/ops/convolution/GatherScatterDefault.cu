@@ -23,7 +23,7 @@
 #include <fvdb/detail/dispatch/TensorChecks.h>
 #include <fvdb/detail/ops/convolution/GatherScatterDefault.h>
 
-#include <torch/torch.h>
+#include <torch/types.h>
 
 #include <algorithm>
 #include <cmath>
