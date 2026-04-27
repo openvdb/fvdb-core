@@ -515,7 +515,7 @@ formatShapeAndDtype(const torch::Tensor &t) {
             oss << ", ";
         oss << t.size(d);
     }
-    oss << "] (" << t.dtype() << ")";
+    oss << "] (" << c10::toString(t.scalar_type()) << ")";
     return oss.str();
 }
 
