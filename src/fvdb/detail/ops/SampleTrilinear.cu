@@ -13,6 +13,8 @@
 #include <c10/cuda/CUDAException.h>
 
 #include <cstdint>
+#include <new>
+#include <type_traits>
 
 namespace fvdb {
 namespace detail {
@@ -74,6 +76,14 @@ namespace {
 // the contract the runtime address checks (`aligned8`/`aligned16`) rely on to
 // guarantee a single LDG.64/LDG.128 transaction. Inheriting from Vec2 keeps
 // arithmetic operators (`+=`, `*scalar`, ...) usable without rewriting them.
+//
+// The wrappers must remain standard-layout and trivially-copyable: the
+// load/store sites view raw tensor storage through `std::launder` of a
+// reinterpret_cast, which under C++20's implicit-lifetime-type rules is
+// well-defined for standard-layout, trivially-copyable types occupying
+// suitably-aligned storage. The alignas/sizeof contract must also match what
+// the runtime alignment checks (`aligned8`/`aligned16`) promise, so we
+// static_assert all four properties below.
 template <typename T> struct alignas(2 * sizeof(T)) AlignedVec2 : nanovdb::math::Vec2<T> {
     using Base = nanovdb::math::Vec2<T>;
     __hostdev__
@@ -83,6 +93,20 @@ template <typename T> struct alignas(2 * sizeof(T)) AlignedVec2 : nanovdb::math:
     AlignedVec2(const Base &b)
         : Base(b) {}
 };
+
+static_assert(sizeof(AlignedVec2<float>) == 8, "AlignedVec2<float> must be 8B for LDG.64");
+static_assert(alignof(AlignedVec2<float>) == 8, "AlignedVec2<float> must be 8B-aligned");
+static_assert(std::is_standard_layout_v<AlignedVec2<float>>,
+              "AlignedVec2<float> must be standard-layout for implicit-lifetime view");
+static_assert(std::is_trivially_copyable_v<AlignedVec2<float>>,
+              "AlignedVec2<float> must be trivially-copyable for implicit-lifetime view");
+
+static_assert(sizeof(AlignedVec2<double>) == 16, "AlignedVec2<double> must be 16B for LDG.128");
+static_assert(alignof(AlignedVec2<double>) == 16, "AlignedVec2<double> must be 16B-aligned");
+static_assert(std::is_standard_layout_v<AlignedVec2<double>>,
+              "AlignedVec2<double> must be standard-layout for implicit-lifetime view");
+static_assert(std::is_trivially_copyable_v<AlignedVec2<double>>,
+              "AlignedVec2<double> must be trivially-copyable for implicit-lifetime view");
 
 // Aligned wrapper around nanovdb::math::Vec4<T>. Same rationale as
 // AlignedVec2: nanovdb::math::Vec4 has alignof(T) (4B for float), but a single
@@ -99,6 +123,13 @@ template <typename T> struct alignas(4 * sizeof(T)) AlignedVec4 : nanovdb::math:
     AlignedVec4(const Base &b)
         : Base(b) {}
 };
+
+static_assert(sizeof(AlignedVec4<float>) == 16, "AlignedVec4<float> must be 16B for LDG.128");
+static_assert(alignof(AlignedVec4<float>) == 16, "AlignedVec4<float> must be 16B-aligned");
+static_assert(std::is_standard_layout_v<AlignedVec4<float>>,
+              "AlignedVec4<float> must be standard-layout for implicit-lifetime view");
+static_assert(std::is_trivially_copyable_v<AlignedVec4<float>>,
+              "AlignedVec4<float> must be trivially-copyable for implicit-lifetime view");
 
 } // namespace
 
@@ -137,13 +168,20 @@ sampleTrilinearStencilCallbackVec2(int32_t bidx,
     if (activeMask == 0)
         return;
 
+    // Vec is standard-layout + trivially-copyable (asserted above) and has
+    // alignas == sizeof matching float2/double2, so under C++20 implicit-
+    // lifetime rules the cast accesses a Vec object that lives in the tensor
+    // storage. std::launder makes the object identity explicit so the
+    // dereference is well-defined under strict-aliasing, while still letting
+    // nvcc lower it to a single ld.global.v2 (LDG.64 for float2, LDG.128 for
+    // double2). Caller is responsible for the alignment precondition.
     Vec accum;
 #pragma unroll
     for (int corner = 0; corner < 8; ++corner) {
-        const Vec val = *reinterpret_cast<const Vec *>(&gridData[indices[corner]][0]);
+        const Vec val = *std::launder(reinterpret_cast<const Vec *>(&gridData[indices[corner]][0]));
         accum += val * weights[corner];
     }
-    *reinterpret_cast<Vec *>(&outFeatures[eidx][0]) = accum;
+    *std::launder(reinterpret_cast<Vec *>(&outFeatures[eidx][0])) = accum;
 }
 
 // One-thread-per-point callback specialized for numChannels % 4 == 0. Resolves
@@ -191,13 +229,18 @@ sampleTrilinearStencilCallbackVec4(int32_t bidx,
     const int64_t numGroups = numChannels / 4;
     for (int64_t g = 0; g < numGroups; ++g) {
         const int64_t cBase = g * 4;
+        // See comment in the Vec2 callback for the std::launder rationale: it
+        // makes the implicit-lifetime view of tensor storage as a Vec
+        // strict-aliasing-clean while preserving the single ld.global.v4.f32
+        // (LDG.128) lowering that we rely on here.
         Vec accum;
 #pragma unroll
         for (int corner = 0; corner < 8; ++corner) {
-            const Vec val = *reinterpret_cast<const Vec *>(&gridData[indices[corner]][cBase]);
+            const Vec val =
+                *std::launder(reinterpret_cast<const Vec *>(&gridData[indices[corner]][cBase]));
             accum += val * weights[corner];
         }
-        *reinterpret_cast<Vec *>(&outFeatures[eidx][cBase]) = accum;
+        *std::launder(reinterpret_cast<Vec *>(&outFeatures[eidx][cBase])) = accum;
     }
 }
 
