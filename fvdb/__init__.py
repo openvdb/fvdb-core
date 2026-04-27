@@ -57,10 +57,10 @@ if _spec is not None and _spec.origin is not None:
 # isort: off
 from ._fvdb_cpp import (
     config,
-    volume_render,
     morton,
     hilbert,
 )
+from ._volume_render import volume_render
 from . import _fvdb_cpp as _C
 
 import math
