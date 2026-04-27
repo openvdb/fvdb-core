@@ -58,10 +58,10 @@ if _spec is not None and _spec.origin is not None:
 from ._fvdb_cpp import (
     NanoVDBGridMetadata,
     config,
-    volume_render,
     morton,
     hilbert,
 )
+from ._volume_render import volume_render
 from . import _fvdb_cpp as _C
 
 import math

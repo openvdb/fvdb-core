@@ -3,9 +3,6 @@
 //
 #include <fvdb/FVDB.h>
 
-// Autograd headers
-#include <fvdb/detail/autograd/VolumeRender.h>
-
 // Morton/hilbert
 #include <fvdb/detail/ops/MortonHilbertFromIjk.h>
 
@@ -21,6 +18,9 @@
 #include <fvdb/detail/ops/BuildGridFromPoints.h>
 #include <fvdb/detail/ops/ConcatenateGrids.h>
 
+// Volume render ops
+#include <fvdb/detail/ops/VolumeRender.h>
+
 #include <ATen/cuda/CUDAContext.h>
 
 namespace fvdb {
@@ -34,15 +34,47 @@ parseDeviceString(const std::string &string) {
     return device;
 }
 
-std::vector<torch::Tensor>
-volumeRender(const torch::Tensor &sigmas,
-             const torch::Tensor &rgbs,
-             const torch::Tensor &deltaTs,
-             const torch::Tensor &ts,
-             const torch::Tensor &jOffsets,
-             double transmittanceThresh) {
-    return detail::autograd::VolumeRender::apply(
-        sigmas, rgbs, deltaTs, ts, jOffsets, transmittanceThresh);
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+volumeRenderForward(const torch::Tensor &sigmas,
+                    const torch::Tensor &rgbs,
+                    const torch::Tensor &deltaTs,
+                    const torch::Tensor &ts,
+                    const torch::Tensor &packInfo,
+                    double transmittanceThresh,
+                    bool needsBackward) {
+    return detail::ops::volumeRender(
+        sigmas, rgbs, deltaTs, ts, packInfo, transmittanceThresh, needsBackward);
+}
+
+std::tuple<torch::Tensor, torch::Tensor>
+volumeRenderBackward(const torch::Tensor &dLdOpacity,
+                     const torch::Tensor &dLdDepth,
+                     const torch::Tensor &dLdRgb,
+                     const torch::Tensor &dLdWs,
+                     const torch::Tensor &sigmas,
+                     const torch::Tensor &rgbs,
+                     const torch::Tensor &ws,
+                     const torch::Tensor &deltas,
+                     const torch::Tensor &ts,
+                     const torch::Tensor &packInfo,
+                     const torch::Tensor &opacity,
+                     const torch::Tensor &depth,
+                     const torch::Tensor &rgb,
+                     double transmittanceThresh) {
+    return detail::ops::volumeRenderBackward(dLdOpacity,
+                                             dLdDepth,
+                                             dLdRgb,
+                                             dLdWs,
+                                             sigmas,
+                                             rgbs,
+                                             ws,
+                                             deltas,
+                                             ts,
+                                             packInfo,
+                                             opacity,
+                                             depth,
+                                             rgb,
+                                             static_cast<float>(transmittanceThresh));
 }
 
 std::tuple<c10::intrusive_ptr<GridBatchData>, JaggedTensor, std::vector<std::string>>

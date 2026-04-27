@@ -144,13 +144,31 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     // volume rendering
     // TODO: (@fwilliams) JaggedTensor interface
-    m.def("volume_render",
-          &fvdb::volumeRender,
+    m.def("volume_render_fwd",
+          &fvdb::volumeRenderForward,
           py::arg("sigmas"),
           py::arg("rgbs"),
           py::arg("deltaTs"),
           py::arg("ts"),
           py::arg("packInfo"),
+          py::arg("transmittanceThresh"),
+          py::arg("needsBackward"));
+
+    m.def("volume_render_bwd",
+          &fvdb::volumeRenderBackward,
+          py::arg("dLdOpacity"),
+          py::arg("dLdDepth"),
+          py::arg("dLdRgb"),
+          py::arg("dLdWs"),
+          py::arg("sigmas"),
+          py::arg("rgbs"),
+          py::arg("ws"),
+          py::arg("deltas"),
+          py::arg("ts"),
+          py::arg("packInfo"),
+          py::arg("opacity"),
+          py::arg("depth"),
+          py::arg("rgb"),
           py::arg("transmittanceThresh"));
 
     // Concatenate grids or jagged tensors
