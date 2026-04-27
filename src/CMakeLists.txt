@@ -223,9 +223,9 @@ target_link_libraries(fvdb PRIVATE
 #
 # The fvdb target is a CXX/CUDA mix; nvcc does not support PCH. We scope the
 # precompiled headers to CXX via the COMPILE_LANGUAGE generator expression so
-# only the .cpp sources benefit. The chosen headers are the universal heavy
-# hitters -- libtorch's umbrella alias header plus the two fvdb headers that
-# show up in nearly every TU.
+# only the .cpp sources benefit. The current PCH set is intentionally small:
+# torch/types.h plus a few common C++ standard library headers used across many
+# translation units.
 #
 # Disable with FVDB_DISABLE_PCH=ON for diagnostic builds where you want to see
 # precise per-TU header dependencies.
