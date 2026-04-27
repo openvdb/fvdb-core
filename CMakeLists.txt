@@ -29,18 +29,38 @@ message(STATUS "NVCC_THREADS: $ENV{NVCC_THREADS}")
 # the box.
 # ----------------------------------------------------------------------------
 option(FVDB_DISABLE_CCACHE "Disable ccache/sccache compiler caching" OFF)
-# Cache size cap applied via CCACHE_MAXSIZE in the per-invocation env so we
-# don't trample the user's global ccache.conf for other projects. One full
-# multi-arch wheel build is ~250 MB compressed; 10 GB retains roughly 15-40
-# builds depending on config, comfortably covering branch switches and a
-# day's worth of bisecting. Set to "0" (or empty) to inherit the user's
-# personal ccache.conf max_size.
+# We point ccache at a project-scoped CCACHE_DIR and apply CCACHE_MAXSIZE
+# against *that* directory, so the size cap can't evict entries belonging to
+# other projects sharing the user's global ~/.ccache. The directory is stable
+# across build trees (under XDG_CACHE_HOME / ~/.cache) so switching branches
+# or wiping `build/` still hits the cache. Set FVDB_CCACHE_DIR to "" (or "0")
+# to fall back to the user's global ccache; in that mode we also skip the
+# CCACHE_MAXSIZE override to avoid resizing a cache we don't own.
+#
+# One full multi-arch wheel build is ~250 MB compressed; 10 GB retains
+# roughly 15-40 builds, comfortably covering branch switches and a day's
+# worth of bisecting. Set FVDB_CCACHE_MAXSIZE to "0" (or "") to inherit the
+# user's personal ccache.conf max_size for the project-local dir.
+if(DEFINED ENV{XDG_CACHE_HOME} AND NOT "$ENV{XDG_CACHE_HOME}" STREQUAL "")
+    set(_FVDB_DEFAULT_CCACHE_DIR "$ENV{XDG_CACHE_HOME}/fvdb/ccache")
+elseif(DEFINED ENV{HOME} AND NOT "$ENV{HOME}" STREQUAL "")
+    set(_FVDB_DEFAULT_CCACHE_DIR "$ENV{HOME}/.cache/fvdb/ccache")
+else()
+    set(_FVDB_DEFAULT_CCACHE_DIR "")
+endif()
+set(FVDB_CCACHE_DIR "${_FVDB_DEFAULT_CCACHE_DIR}" CACHE PATH
+    "Project-scoped CCACHE_DIR. '' or '0' = use the user's global ccache (and skip MAXSIZE override).")
 set(FVDB_CCACHE_MAXSIZE "10G" CACHE STRING
     "Per-invocation CCACHE_MAXSIZE override (e.g. '20G'). '0' or '' = inherit user config.")
 
 if(NOT FVDB_DISABLE_CCACHE)
     find_program(FVDB_COMPILER_CACHE NAMES ccache sccache)
     if(FVDB_COMPILER_CACHE)
+        set(_fvdb_ccache_dir_active FALSE)
+        if(FVDB_CCACHE_DIR AND NOT FVDB_CCACHE_DIR STREQUAL "0")
+            set(_fvdb_ccache_dir_active TRUE)
+        endif()
+
         # PCH-aware launcher.
         #
         # ccache refuses direct-mode hits on TUs that include a PCH unless
@@ -52,23 +72,43 @@ if(NOT FVDB_DISABLE_CCACHE)
         set(_FVDB_CCACHE_LAUNCHER
             "${CMAKE_COMMAND}" "-E" "env"
             "CCACHE_SLOPPINESS=pch_defines,time_macros")
-        if(FVDB_CCACHE_MAXSIZE AND NOT FVDB_CCACHE_MAXSIZE STREQUAL "0")
+        if(_fvdb_ccache_dir_active)
+            file(MAKE_DIRECTORY "${FVDB_CCACHE_DIR}")
             list(APPEND _FVDB_CCACHE_LAUNCHER
-                "CCACHE_MAXSIZE=${FVDB_CCACHE_MAXSIZE}")
+                "CCACHE_DIR=${FVDB_CCACHE_DIR}")
+            # Only apply MAXSIZE when we own the cache directory; otherwise
+            # we'd be resizing the user's shared global cache.
+            if(FVDB_CCACHE_MAXSIZE AND NOT FVDB_CCACHE_MAXSIZE STREQUAL "0")
+                list(APPEND _FVDB_CCACHE_LAUNCHER
+                    "CCACHE_MAXSIZE=${FVDB_CCACHE_MAXSIZE}")
+            endif()
         endif()
         list(APPEND _FVDB_CCACHE_LAUNCHER "${FVDB_COMPILER_CACHE}")
 
-        set(CMAKE_CXX_COMPILER_LAUNCHER  "${_FVDB_CCACHE_LAUNCHER}"
-            CACHE STRING "Compiler launcher for CXX (auto-detected)" FORCE)
-        set(CMAKE_CUDA_COMPILER_LAUNCHER "${_FVDB_CCACHE_LAUNCHER}"
-            CACHE STRING "Compiler launcher for CUDA (auto-detected)" FORCE)
-        if(FVDB_CCACHE_MAXSIZE AND NOT FVDB_CCACHE_MAXSIZE STREQUAL "0")
-            message(STATUS "FVDB: compiler caching enabled via ${FVDB_COMPILER_CACHE} "
-                           "(max_size=${FVDB_CCACHE_MAXSIZE}, "
-                           "sloppiness=pch_defines,time_macros)")
+        if(NOT DEFINED CMAKE_CXX_COMPILER_LAUNCHER)
+            set(CMAKE_CXX_COMPILER_LAUNCHER "${_FVDB_CCACHE_LAUNCHER}"
+                CACHE STRING "Compiler launcher for CXX (auto-detected)")
+        endif()
+        if(NOT DEFINED CMAKE_CUDA_COMPILER_LAUNCHER)
+            set(CMAKE_CUDA_COMPILER_LAUNCHER "${_FVDB_CCACHE_LAUNCHER}"
+                CACHE STRING "Compiler launcher for CUDA (auto-detected)")
+        endif()
+
+        if(_fvdb_ccache_dir_active)
+            if(FVDB_CCACHE_MAXSIZE AND NOT FVDB_CCACHE_MAXSIZE STREQUAL "0")
+                message(STATUS "FVDB: compiler caching enabled via ${FVDB_COMPILER_CACHE} "
+                               "(dir=${FVDB_CCACHE_DIR}, "
+                               "max_size=${FVDB_CCACHE_MAXSIZE}, "
+                               "sloppiness=pch_defines,time_macros)")
+            else()
+                message(STATUS "FVDB: compiler caching enabled via ${FVDB_COMPILER_CACHE} "
+                               "(dir=${FVDB_CCACHE_DIR}, "
+                               "max_size=user ccache.conf, "
+                               "sloppiness=pch_defines,time_macros)")
+            endif()
         else()
             message(STATUS "FVDB: compiler caching enabled via ${FVDB_COMPILER_CACHE} "
-                           "(max_size=user ccache.conf, "
+                           "(dir=user global, max_size=user ccache.conf, "
                            "sloppiness=pch_defines,time_macros)")
         endif()
     else()
