@@ -571,8 +571,13 @@ class TestLoadMixedTypeNanovdb(unittest.TestCase):
             any(name in msg for _, name, *_ in _MIXED_TYPES_GRIDS),
             f"Expected error to reference one of the grid names: {msg!r}",
         )
+        # The error should describe the workaround: load grids one at a time using a
+        # name or index selector. We accept any phrasing that mentions both "name" and
+        # "index" alongside the word "selector(s)", which is the wording produced by
+        # validateTrailingShapeAndDtype in src/fvdb/detail/io/LoadNanovdb.cpp.
+        msg_lower = msg.lower()
         self.assertTrue(
-            "name=" in msg or "index=" in msg or "load_nanovdb_single" in msg,
+            "name" in msg_lower and "index" in msg_lower and "selector" in msg_lower,
             f"Expected actionable workaround hint in error message: {msg!r}",
         )
 
