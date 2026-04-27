@@ -547,10 +547,26 @@ validateTrailingShapeAndDtype(const std::vector<torch::Tensor> &data,
         }
         const bool dtypeOk = t.dtype() == ref.dtype();
         if (!shapeOk || !dtypeOk) {
+            // Identify the specific kind(s) of mismatch so the lead-in matches the
+            // detailed shape/dtype diff printed below. We always keep the phrase
+            // "mixed value type" because it is the conceptual umbrella used in the
+            // public docs and is asserted by tests/unit/test_io.py.
+            std::string mismatch;
+            if (!dtypeOk && !shapeOk) {
+                mismatch = "dtype and trailing shape";
+            } else if (!dtypeOk) {
+                mismatch = "dtype";
+            } else if (t.dim() != ref.dim()) {
+                mismatch = "rank";
+            } else {
+                mismatch = "trailing shape";
+            }
             TORCH_CHECK_VALUE(
                 false,
-                "Cannot load grids of mixed value type into a single GridBatch/JaggedTensor. ",
-                "Grid 0 (\"",
+                "Cannot load grids of mixed value type (mismatched ",
+                mismatch,
+                ") into a single GridBatch/JaggedTensor. Per-grid data tensors must share ",
+                "dtype, rank, and all sizes beyond dim 0. Grid 0 (\"",
                 nameAt(0),
                 "\") has data ",
                 formatShapeAndDtype(ref),
@@ -560,9 +576,9 @@ validateTrailingShapeAndDtype(const std::vector<torch::Tensor> &data,
                 nameAt(i),
                 "\") has data ",
                 formatShapeAndDtype(t),
-                ". Load grids with differing value types one at a time using the name= or index= ",
-                "selectors (e.g. fvdb.functional.load_nanovdb(path, name=...)), or select a ",
-                "subset of grids that share the same value type.");
+                ". Load such grids one at a time using the name= or index= selectors ",
+                "(e.g. fvdb.functional.load_nanovdb(path, name=...)), or select a subset ",
+                "of grids that share the same dtype and trailing shape.");
         }
     }
 }
