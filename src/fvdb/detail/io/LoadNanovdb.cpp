@@ -576,9 +576,8 @@ validateTrailingShapeAndDtype(const std::vector<torch::Tensor> &data,
                 nameAt(i),
                 "\") has data ",
                 formatShapeAndDtype(t),
-                ". Load such grids one at a time using the name= or index= selectors ",
-                "(e.g. fvdb.functional.load_nanovdb(path, name=...)), or select a subset ",
-                "of grids that share the same dtype and trailing shape.");
+                ". Load such grids one at a time using name or index selectors, or select ",
+                "a subset of grids that share the same dtype and trailing shape.");
         }
     }
 }
