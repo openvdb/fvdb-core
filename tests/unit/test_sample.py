@@ -447,11 +447,11 @@ class TestSample(unittest.TestCase):
             buf = torch.empty(num_voxels * num_channels + 1, device=device, dtype=dtype)
             buf.uniform_()
             view = buf[1:].view(num_voxels, num_channels)
-            assert view.is_contiguous()
+            self.assertTrue(view.is_contiguous())
             # Sanity: data_ptr must not satisfy the strictest alignment the
             # fast paths look for. element_size is 2/4/8 for half/float/double;
             # offsetting by one element guarantees we miss 16B alignment.
-            assert view.data_ptr() % 16 != 0
+            self.assertNotEqual(view.data_ptr() % 16, 0)
             return view.detach().requires_grad_(True)
 
         # Primal
