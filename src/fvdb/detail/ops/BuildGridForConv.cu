@@ -175,7 +175,7 @@ convIJKForGrid(const GridBatchData &batchHdl,
                                outIJKBIdxAcc,
                                outMaskAcc);
     };
-    forEachVoxelCUDA(256, 1, batchHdl, cb);
+    forEachVoxelCUDA(1, batchHdl, cb);
 
     outIJK     = outIJK.index({outMask});
     outIJKBIdx = outIJKBIdx.index({outMask});

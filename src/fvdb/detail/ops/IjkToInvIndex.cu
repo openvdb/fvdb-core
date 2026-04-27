@@ -68,7 +68,7 @@ IjkToInvIndex(const GridBatchData &batchHdl, const JaggedTensor &ijk, bool cumul
                                ijkToInvIndexCallback<scalar_t, JaggedRAcc64, TorchRAcc64>(
                                    bidx, eidx, batchAcc, ijkAcc, outInvIndexAcc, cumulative);
                            };
-                           forEachJaggedElementChannelCUDA<scalar_t, 2>(512, 1, ijk, cb);
+                           forEachJaggedElementChannelCUDA<scalar_t, 2, 512>(1, ijk, cb);
                        } else {
                            auto cb = [=](fvdb::JIdxType bidx,
                                          int64_t eidx,

@@ -185,8 +185,7 @@ SampleGridTrilinearWithGradBackward(const GridBatchData &batchHdl,
     if constexpr (DeviceTag == torch::kCUDA || DeviceTag == torch::kPrivateUse1) {
         auto dispatchForEach = [&](const auto &cb) {
             if constexpr (DeviceTag == torch::kCUDA) {
-                forEachJaggedElementChannelCUDA<scalar_t, 2>(
-                    DEFAULT_BLOCK_DIM, int64_t(1), points, cb);
+                forEachJaggedElementChannelCUDA<scalar_t, 2>(int64_t(1), points, cb);
             } else {
                 forEachJaggedElementChannelPrivateUse1<scalar_t, 2>(int64_t(1), points, cb);
             }

@@ -264,7 +264,7 @@ MarchingCubes(const GridBatchData &batchHdl, const torch::Tensor &sdf, double le
                                                                  static_cast<scalar_t>(level),
                                                                  nVerticesAcc);
                 };
-                forEachVoxelCUDA(128, 1, batchHdl, cb);
+                forEachVoxelCUDA<128>(1, batchHdl, cb);
             } else {
                 auto cb = [=](int32_t bidx,
                               int32_t lidx,
@@ -323,7 +323,7 @@ MarchingCubes(const GridBatchData &batchHdl, const torch::Tensor &sdf, double le
                                                                    trianglesAcc,
                                                                    vertIdsAcc);
                     };
-                    forEachVoxelCUDA(128, 1, batchHdl, cb);
+                    forEachVoxelCUDA<128>(1, batchHdl, cb);
                 } else {
                     auto cb = [=](int32_t bidx,
                                   int32_t lidx,

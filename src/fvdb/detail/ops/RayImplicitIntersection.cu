@@ -148,11 +148,6 @@ RayImplicitIntersection(const GridBatchData &batchHdl,
         rayO.scalar_type(),
         "RayImplicitIntersection",
         AT_WRAP([&]() {
-            int64_t numThreads = 256 + 128;
-            if constexpr (nanovdb::util::is_same<scalar_t, double>::value) {
-                numThreads = 256;
-            }
-
             auto batchAcc       = gridBatchAccessor<DeviceTag>(batchHdl);
             auto rayDAcc        = jaggedAccessor<DeviceTag, scalar_t, 2>(rayD);
             auto gridScalarsAcc = jaggedAccessor<DeviceTag, scalar_t, 1>(gridScalars);
@@ -166,7 +161,7 @@ RayImplicitIntersection(const GridBatchData &batchHdl,
                     rayImplicitCallback<scalar_t, JaggedRAcc64, TorchRAcc64>(
                         bidx, eidx, rOA, rayDAcc, gridScalarsAcc, batchAcc, outTimesAcc, eps);
                 };
-                forEachJaggedElementChannelCUDA<scalar_t, 2>(numThreads, 1, rayO, cb);
+                forEachJaggedElementChannelCUDA<scalar_t, 2>(1, rayO, cb);
             } else {
                 auto cb =
                     [=](int32_t bidx, int32_t eidx, int32_t cidx, JaggedAcc<scalar_t, 2> rOA) {

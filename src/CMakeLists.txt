@@ -131,6 +131,7 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/SampleBezier.cu
     fvdb/detail/ops/SampleBezierWithGrad.cu
     fvdb/detail/ops/SampleBezierWithGradBackward.cu
+    fvdb/detail/ops/SampleNearest.cu
     fvdb/detail/ops/SampleTrilinear.cu
     fvdb/detail/ops/SampleTrilinearWithGrad.cu
     fvdb/detail/ops/SampleTrilinearWithGradBackward.cu
@@ -168,10 +169,13 @@ message(STATUS "fvdb: TORCH_INCLUDE_DIRS: ${TORCH_INCLUDE_DIRS}")
 target_include_directories(fvdb PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
     $<BUILD_INTERFACE:${nanovdb_SOURCE_DIR}/nanovdb>
-    $<BUILD_INTERFACE:${TORCH_INCLUDE_DIRS}>
     $<BUILD_INTERFACE:${nvtx3_SOURCE_DIR}/include>
     $<BUILD_INTERFACE:${NANOVDB_EDITOR_INCLUDE_DIR}>
     $<INSTALL_INTERFACE:include>)
+foreach(_torch_inc_dir IN LISTS TORCH_INCLUDE_DIRS)
+    target_include_directories(fvdb SYSTEM PUBLIC
+        $<BUILD_INTERFACE:${_torch_inc_dir}>)
+endforeach()
 target_include_directories(fvdb PRIVATE
     ${TORCH_SOURCE_INCLUDE_DIRS}
     ${tinyply_SOURCE_DIR}/source)

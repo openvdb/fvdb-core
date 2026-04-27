@@ -107,7 +107,7 @@ SampleGridBezierWithGradBackward(const GridBatchData &batchHdl,
                                                                       batchAcc,
                                                                       outGridDataAcc);
                 };
-                forEachJaggedElementChannelCUDA<scalar_t, 2>(256, outGrad.size(1), points, cb);
+                forEachJaggedElementChannelCUDA<scalar_t, 2>(outGrad.size(1), points, cb);
             } else {
                 auto cb = [=](int32_t bidx,
                               int32_t eidx,

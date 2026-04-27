@@ -25,18 +25,14 @@ Class-methods for creating Grid objects from various sources:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, overload
-
 import pathlib
+from typing import TYPE_CHECKING, Any, overload
 
 import torch
 
 from ._fvdb_cpp import GridBatchData
 from .jagged_tensor import JaggedTensor
-from .types import (
-    DeviceIdentifier,
-    NumericMaxRank1,
-)
+from .types import DeviceIdentifier, NumericMaxRank1
 
 if TYPE_CHECKING:
     from .grid_batch import GridBatch
@@ -884,6 +880,28 @@ class Grid:
     # ============================================================
     #                  Sampling / Splatting
     # ============================================================
+
+    def sample_nearest(self, points: torch.Tensor, voxel_data: torch.Tensor) -> torch.Tensor:
+        """Sample voxel data at world-space points using nearest-neighbor lookup.
+
+        For each query point the 8 nearest voxel centers are checked and the value of the closest active one is returned.
+        Points where none of the 8 surrounding voxel centers are active return zero.
+
+        .. note:: Supports backpropagation w.r.t. ``voxel_data``.
+
+        Args:
+            points (torch.Tensor): World-space points of shape ``(N, 3)``.
+            voxel_data (torch.Tensor): Voxel data of shape
+                ``(num_voxels, channels*)``.
+
+        Returns:
+            sampled_data (torch.Tensor): Shape ``(N, channels*)``.
+
+        .. seealso:: :meth:`GridBatch.sample_nearest`, :meth:`sample_trilinear`
+        """
+        from . import functional
+
+        return functional.sample_nearest_single(self, points, voxel_data)
 
     def sample_trilinear(self, points: torch.Tensor, voxel_data: torch.Tensor) -> torch.Tensor:
         """Sample voxel data at world-space points using trilinear interpolation.

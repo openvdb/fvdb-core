@@ -182,7 +182,7 @@ DownsampleGridMaxPool(const GridBatchData &fineBatchHdl,
                                                                 poolingFactor,
                                                                 stride);
                 };
-                forEachVoxelCUDA(384, outCoarseData.size(1), coarseBatchHdl, maxPoolPerVoxel);
+                forEachVoxelCUDA<384>(outCoarseData.size(1), coarseBatchHdl, maxPoolPerVoxel);
             } else if constexpr (DeviceTag == torch::kPrivateUse1) {
                 auto maxPoolPerVoxel = [=] __device__(int32_t batchIdx,
                                                       int32_t leafIdx,
@@ -276,7 +276,7 @@ DownsampleGridMaxPoolBackward(const GridBatchData &coarseBatchHdl,
                                                                         poolingFactor,
                                                                         stride);
                 };
-                forEachVoxelCUDA(384, fineData.size(1), coarseBatchHdl, cb);
+                forEachVoxelCUDA<384>(fineData.size(1), coarseBatchHdl, cb);
             } else if constexpr (DeviceTag == torch::kPrivateUse1) {
                 auto cb = [=] __device__(int32_t batchIdx,
                                          int32_t leafIdx,

@@ -76,7 +76,7 @@ ijkForPoints(const JaggedTensor &jaggedPoints, const std::vector<VoxelCoordTrans
                                      JaggedRAcc64<scalar_t, 2> pacc) {
                 ijkForPointsCallback(bidx, eidx, pacc, transformDevPtr, outIJKAcc);
             };
-            forEachJaggedElementChannelCUDA<scalar_t, 2>(1024, 1, jaggedPoints, cb);
+            forEachJaggedElementChannelCUDA<scalar_t, 2, 1024>(1, jaggedPoints, cb);
         }),
         AT_EXPAND(AT_FLOATING_TYPES),
         c10::kHalf);

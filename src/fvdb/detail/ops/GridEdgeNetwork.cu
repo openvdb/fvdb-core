@@ -127,7 +127,7 @@ GridEdgeNetwork(const GridBatchData &batchHdl, bool returnVoxelCoordinates) {
                                                  outEBidxAcc,
                                                  returnVoxelCoordinates);
         };
-        forEachVoxelCUDA(1024, 1, batchHdl, cb);
+        forEachVoxelCUDA<1024>(1, batchHdl, cb);
     } else {
         auto cb = [=](int32_t batchIdx,
                       int32_t leafIdx,

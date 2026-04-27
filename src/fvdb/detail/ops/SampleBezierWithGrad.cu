@@ -105,8 +105,7 @@ SampleGridBezierWithGrad(const GridBatchData &batchHdl,
                         outFeaturesAcc,
                         outGradFeaturesAcc);
                 };
-                forEachJaggedElementChannelCUDA<scalar_t, 2>(
-                    256, gridDataReshape.size(1), points, cb);
+                forEachJaggedElementChannelCUDA<scalar_t, 2>(gridDataReshape.size(1), points, cb);
             } else {
                 auto cb = [=](int32_t bidx,
                               int32_t eidx,

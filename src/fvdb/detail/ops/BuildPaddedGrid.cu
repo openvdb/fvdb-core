@@ -222,7 +222,7 @@ paddedIJKForGrid(const GridBatchData &batchHdl, const nanovdb::CoordBBox &bbox) 
     };
 
     if constexpr (DeviceTag == torch::kCUDA) {
-        forEachVoxelCUDA(DEFAULT_BLOCK_DIM, 1, batchHdl, cb);
+        forEachVoxelCUDA(1, batchHdl, cb);
     } else if constexpr (DeviceTag == torch::kPrivateUse1) {
         forEachVoxelPrivateUse1(1, batchHdl, cb);
     }
@@ -253,7 +253,7 @@ paddedIJKForGridWithoutBorder(const GridBatchData &batchHdl, const nanovdb::Coor
         ijkForGridVoxelCallbackWithoutBorderCount(
             bidx, lidx, vidx, cidx, bacc, bbox, outCounterAcc);
     };
-    forEachVoxelCUDA(512, 1, batchHdl, cb);
+    forEachVoxelCUDA<512>(1, batchHdl, cb);
 
     torch::Tensor cumCounts    = torch::cumsum(outCounter, 0);
     int64_t numVoxels          = cumCounts[-1].item<int64_t>();
@@ -281,7 +281,7 @@ paddedIJKForGridWithoutBorder(const GridBatchData &batchHdl, const nanovdb::Coor
         ijkForGridVoxelCallbackWithoutBorder(
             bidx, lidx, vidx, cidx, bacc, bbox, packInfoBaseAcc, outIJKAcc, outIJKBIdxAcc);
     };
-    forEachVoxelCUDA(512, 1, batchHdl, cb2);
+    forEachVoxelCUDA<512>(1, batchHdl, cb2);
 
     return JaggedTensor::from_data_indices_and_list_ids(
         outIJK, outIJKBIdx, batchHdl.jlidx(), batchHdl.batchSize());

@@ -173,7 +173,7 @@ convTransposeIJKForGrid(const GridBatchData &batchHdl,
                                         outIJKAcc,
                                         outIJKBIdxAcc);
     };
-    forEachVoxelCUDA(256, 1, batchHdl, cb);
+    forEachVoxelCUDA(1, batchHdl, cb);
 
     return JaggedTensor::from_data_indices_and_list_ids(
         outIJK, outIJKBIdx, batchHdl.jlidx(), batchHdl.batchSize());

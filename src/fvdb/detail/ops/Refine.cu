@@ -159,7 +159,7 @@ UpsampleGridNearest(const GridBatchData &coarseBatchAccessor,
                                                                         outFineDataAcc,
                                                                         upsamplingFactor);
                 };
-                forEachVoxelCUDA(640, outFineData.size(1), fineBatchAccessor, callback);
+                forEachVoxelCUDA<640>(outFineData.size(1), fineBatchAccessor, callback);
             } else if constexpr (DeviceTag == torch::kPrivateUse1) {
                 auto callback = [=] __device__(int32_t batchIdx,
                                                int32_t leafIdx,
@@ -244,7 +244,7 @@ UpsampleGridNearestBackward(const GridBatchData &fineBatchAccessor,
                         outCoarseDataAcc,
                         upsamplingFactor);
                 };
-                forEachVoxelCUDA(640, outGradInReshape.size(1), fineBatchAccessor, callback);
+                forEachVoxelCUDA<640>(outGradInReshape.size(1), fineBatchAccessor, callback);
             } else if constexpr (DeviceTag == torch::kPrivateUse1) {
                 auto callback = [=] __device__(int32_t batchIdx,
                                                int32_t leafIdx,

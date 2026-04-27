@@ -94,7 +94,7 @@ dispatchNearestNeighborIJKForPoints<torch::kCUDA>(
                     bidx, eidx, pacc, transformDevPtr, outIJKAcc, outIJKBIdxAcc);
             };
 
-            forEachJaggedElementChannelCUDA<scalar_t, 2>(256, 1, jaggedPoints, cb);
+            forEachJaggedElementChannelCUDA<scalar_t, 2>(1, jaggedPoints, cb);
         }),
         AT_EXPAND(AT_FLOATING_TYPES),
         c10::kHalf);

@@ -177,7 +177,7 @@ dispatchFineIJKForCoarseGrid<torch::kCUDA>(const GridBatchData &batchHdl,
                                               maskPrefixSumAcc);
         };
 
-        forEachVoxelCUDA(DEFAULT_BLOCK_DIM, 1, batchHdl, cb);
+        forEachVoxelCUDA(1, batchHdl, cb);
 
         at::cuda::CUDAStream stream  = at::cuda::getCurrentCUDAStream(batchHdl.device().index());
         torch::Tensor outVoxelCounts = torch::zeros_like(batchHdl.voxelOffsets());
@@ -232,7 +232,7 @@ dispatchFineIJKForCoarseGrid<torch::kCUDA>(const GridBatchData &batchHdl,
                 bidx, lidx, vidx, cidx, bacc, upsamplingFactor, outIJKAcc, outIJKBIdxAcc);
         };
 
-        forEachVoxelCUDA(DEFAULT_BLOCK_DIM, 1, batchHdl, cb);
+        forEachVoxelCUDA(1, batchHdl, cb);
 
         return JaggedTensor::from_data_offsets_and_list_ids(
             outIJK, batchHdl.voxelOffsets() * totalPadAmount, batchHdl.jlidx());

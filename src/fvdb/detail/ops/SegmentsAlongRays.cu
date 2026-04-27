@@ -170,10 +170,6 @@ SegmentsAlongRays(const GridBatchData &batchHdl,
         rayOrigins.scalar_type(),
         "SegmentsAlongRays",
         AT_WRAP([&]() -> JaggedTensor {
-            int64_t numThreads = 384;
-            if constexpr (nanovdb::util::is_same<scalar_t, double>::value) {
-                numThreads = 256;
-            }
             const auto optsF =
                 torch::TensorOptions().dtype(rayOrigins.dtype()).device(rayOrigins.device());
             const auto optsI32 =
@@ -203,7 +199,7 @@ SegmentsAlongRays(const GridBatchData &batchHdl,
                         maxSegments,
                         eps);
                 };
-                forEachJaggedElementChannelCUDA<scalar_t, 2>(numThreads, 1, rayOrigins, cb1);
+                forEachJaggedElementChannelCUDA<scalar_t, 2>(1, rayOrigins, cb1);
             } else {
                 auto cb1 = [=](int32_t bidx,
                                int32_t eidx,
@@ -261,7 +257,7 @@ SegmentsAlongRays(const GridBatchData &batchHdl,
                                                                                    maxSegments,
                                                                                    eps);
                 };
-                forEachJaggedElementChannelCUDA<scalar_t, 2>(numThreads, 1, rayOrigins, cb2);
+                forEachJaggedElementChannelCUDA<scalar_t, 2>(1, rayOrigins, cb2);
             } else {
                 auto cb2 = [=](int32_t bidx,
                                int32_t eidx,

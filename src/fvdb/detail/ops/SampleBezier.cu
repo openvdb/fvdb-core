@@ -83,8 +83,7 @@ SampleGridBezier(const GridBatchData &batchHdl,
                     sampleBezierCallback<scalar_t, JaggedRAcc64, TorchRAcc64>(
                         bidx, eidx, cidx, pts, gridDataAcc, batchAcc, outFeaturesAcc);
                 };
-                forEachJaggedElementChannelCUDA<scalar_t, 2>(
-                    256, gridDataReshape.size(1), points, cb);
+                forEachJaggedElementChannelCUDA<scalar_t, 2>(gridDataReshape.size(1), points, cb);
             } else {
                 auto cb =
                     [=](int32_t bidx, int32_t eidx, int32_t cidx, JaggedAcc<scalar_t, 2> pts) {

@@ -122,7 +122,7 @@ TransformPointsToGrid(const GridBatchData &batchHdl, const JaggedTensor &points,
                 voxelToWorldCallback<scalar_t, JaggedRAcc64, TorchRAcc64>(
                     bidx, eidx, ptsA, outCoordsAcc, batchAcc, isPrimal);
             };
-        forEachJaggedElementChannelCUDA<scalar_t, 2>(512, 1, points, cb);
+        forEachJaggedElementChannelCUDA<scalar_t, 2, 512>(1, points, cb);
     } else if constexpr (DeviceTag == torch::kPrivateUse1) {
         auto cb = [=]
             __device__(int32_t bidx, int32_t eidx, int32_t cidx, JaggedRAcc64<scalar_t, 2> ptsA) {
@@ -161,7 +161,7 @@ InvTransformPointsToGrid(const GridBatchData &batchHdl, const JaggedTensor &poin
                 worldToVoxelCallback<scalar_t, JaggedRAcc64, TorchRAcc64>(
                     bidx, eidx, ptsA, outCoordsAcc, batchAcc, isPrimal);
             };
-        forEachJaggedElementChannelCUDA<scalar_t, 2>(512, 1, points, cb);
+        forEachJaggedElementChannelCUDA<scalar_t, 2, 512>(1, points, cb);
     } else if constexpr (DeviceTag == torch::kPrivateUse1) {
         auto cb = [=]
             __device__(int32_t bidx, int32_t eidx, int32_t cidx, JaggedRAcc64<scalar_t, 2> ptsA) {
@@ -195,7 +195,7 @@ TransformPointsToGridBackward(const GridBatchData &batchHdl,
                 voxelToWorldBackwardCallback<scalar_t, JaggedRAcc64, TorchRAcc64>(
                     bidx, eidx, ptsA, outGradInAcc, batchAcc, isPrimal);
             };
-        forEachJaggedElementChannelCUDA<scalar_t, 2>(512, 1, gradOut, cb);
+        forEachJaggedElementChannelCUDA<scalar_t, 2, 512>(1, gradOut, cb);
     } else if constexpr (DeviceTag == torch::kPrivateUse1) {
         auto cb = [=]
             __device__(int32_t bidx, int32_t eidx, int32_t cidx, JaggedRAcc64<scalar_t, 2> ptsA) {
@@ -229,7 +229,7 @@ InvTransformPointsToGridBackward(const GridBatchData &batchHdl,
                 worldToVoxelBackwardCallback<scalar_t, JaggedRAcc64, TorchRAcc64>(
                     bidx, eidx, ptsA, outGradInAcc, batchAcc, isPrimal);
             };
-        forEachJaggedElementChannelCUDA<scalar_t, 2>(512, 1, gradOut, cb);
+        forEachJaggedElementChannelCUDA<scalar_t, 2, 512>(1, gradOut, cb);
     } else if constexpr (DeviceTag == torch::kPrivateUse1) {
         auto cb = [=]
             __device__(int32_t bidx, int32_t eidx, int32_t cidx, JaggedRAcc64<scalar_t, 2> ptsA) {

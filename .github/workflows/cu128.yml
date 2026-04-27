@@ -1,4 +1,4 @@
-name: fVDB CUDA 12.8.1 Build and Test
+name: fVDB pip CUDA 12.8 Build and Test
 
 on:
   pull_request_target:
@@ -62,7 +62,7 @@ jobs:
   # BUILD FVDB
   ##############################################################################
   fvdb-build:
-    name: fVDB Build
+    name: fVDB Build (pip CUDA 12.8)
     needs: [start-build-runner, versions]
     runs-on: ${{ needs.start-build-runner.outputs.label }}
     container:
@@ -246,7 +246,7 @@ jobs:
   ##############################################################################
   fvdb-gtests:
     needs: [start-tests-gpu-runner, versions] # required to start the main job when the runner is ready
-    name: fVDB GTests
+    name: fVDB GTests (pip CUDA 12.8)
     runs-on: ${{ needs.start-tests-gpu-runner.outputs.label }} # run the job on the newly created runner
     container:
       image: nvidia/cuda:${{ needs.versions.outputs.cuda-128-patch }}-cudnn-runtime-${{ needs.versions.outputs.docker-os-ubuntu }}
@@ -346,7 +346,7 @@ jobs:
   ##############################################################################
   fvdb-unit-test:
     needs: [start-tests-gpu-runner, versions] # required to start the main job when the runner is ready
-    name: fVDB PyTests
+    name: fVDB Unit Tests (pip CUDA 12.8)
     runs-on: ${{ needs.start-tests-gpu-runner.outputs.label }} # run the job on the newly created runner
     container:
       image: nvidia/cuda:${{ needs.versions.outputs.cuda-128-patch }}-cudnn-devel-${{ needs.versions.outputs.docker-os-ubuntu }}
@@ -443,7 +443,7 @@ jobs:
   ##############################################################################
   fvdb-docs-test:
     needs: [start-tests-gpu-runner, versions] # required to start the main job when the runner is ready
-    name: fVDB Documentation Tests
+    name: fVDB Doc Tests (pip CUDA 12.8)
     runs-on: ${{ needs.start-tests-gpu-runner.outputs.label }} # run the job on the newly created runner
     container:
       image: nvidia/cuda:${{ needs.versions.outputs.cuda-128-patch }}-cudnn-runtime-${{ needs.versions.outputs.docker-os-ubuntu }}

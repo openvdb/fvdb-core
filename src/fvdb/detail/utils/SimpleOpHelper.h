@@ -211,19 +211,16 @@ struct BasePerActiveVoxelProcessor {
         }
     }
 
+    template <int NumThreads = 1024>
     JaggedTensor
     execute(GridBatchData const &grid_batch,
-            OutElementType const &out_element = OutElementType{},
-            int const num_threads             = 1024) const {
+            OutElementType const &out_element = OutElementType{}) const {
         auto out_tensor =
             makeOutTensorFromGridBatch<DeviceTag, OutElementType>(grid_batch, out_element);
         auto out_accessor = makeAccessor<DeviceTag, OutElementType>(out_tensor);
         if constexpr (DeviceTag == torch::kCUDA) {
-            forEachVoxelCUDA(num_threads, // num threads
-                             1,
-                             grid_batch,
-                             *static_cast<Derived const *>(this),
-                             out_accessor);
+            forEachVoxelCUDA<NumThreads>(
+                1, grid_batch, *static_cast<Derived const *>(this), out_accessor);
         } else if constexpr (DeviceTag == torch::kPrivateUse1) {
             forEachVoxelPrivateUse1(
                 1, grid_batch, *static_cast<Derived const *>(this), out_accessor);
@@ -300,21 +297,21 @@ struct BasePerElementProcessor {
         static_cast<Derived const *>(this)->perElement(element_idx, in_accessor, out_accessor);
     }
 
+    template <int NumThreads = 1024>
     torch::Tensor
     execute(torch::Tensor const &in_tensor,
-            OutElementType const &out_element = OutElementType{},
-            int const num_threads             = 1024) const {
+            OutElementType const &out_element = OutElementType{}) const {
         auto out_tensor =
             makeOutTensorFromTensor<DeviceTag, OutElementType>(in_tensor, out_element);
         auto out_accessor         = makeAccessor<DeviceTag, OutElementType>(out_tensor);
         constexpr size_t IN_NDIMS = 1 + InElementType::NDIMS;
         using IN_T                = typename InElementType::value_type;
         if constexpr (DeviceTag == torch::kCUDA) {
-            forEachTensorElementChannelCUDA<IN_T, IN_NDIMS>(num_threads,
-                                                            1, // num channels, ignored
-                                                            in_tensor,
-                                                            *static_cast<Derived const *>(this),
-                                                            out_accessor);
+            forEachTensorElementChannelCUDA<IN_T, IN_NDIMS, NumThreads>(
+                1, // num channels, ignored
+                in_tensor,
+                *static_cast<Derived const *>(this),
+                out_accessor);
         } else if constexpr (DeviceTag == torch::kPrivateUse1) {
             forEachTensorElementChannelPrivateUse1<IN_T, IN_NDIMS>(
                 1, in_tensor, *static_cast<Derived const *>(this), out_accessor);
