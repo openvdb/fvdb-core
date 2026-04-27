@@ -157,7 +157,16 @@ jobs:
         run: |
           TORCH_TAG="$(echo "${{ matrix.torch-version }}" | tr -d '.')"
           CUDA_TAG="$(echo "${{ matrix.cuda-version }}" | tr -d '.')"
-          NIGHTLY_VERSION="0.0.0.dev$(date -u '+%Y%m%d')+pt${TORCH_TAG}.cu${CUDA_TAG}"
+          # Anchor the nightly at the upcoming release recorded in pyproject.toml
+          # (e.g. 0.5.0.dev0 -> 0.5.0) so PEP 440 ordering puts nightlies between
+          # the previous final release and the next one.
+          CURRENT_VERSION=$(grep -E '^version *=' pyproject.toml | head -n1 | sed -E 's/^version *= *"([^"]+)".*/\1/')
+          BASE_VERSION=$(echo "${CURRENT_VERSION%%+*}" | sed -E 's/(\.dev[0-9]+|\.post[0-9]+|(a|b|c|rc)[0-9]+)+$//')
+          if [ -z "$BASE_VERSION" ]; then
+            echo "Failed to parse base version from pyproject.toml (got '$CURRENT_VERSION')" >&2
+            exit 1
+          fi
+          NIGHTLY_VERSION="${BASE_VERSION}.dev$(date -u '+%Y%m%d')+pt${TORCH_TAG}.cu${CUDA_TAG}"
           sed -i -E "s/^version *= *\"[^\"]+\"/version = \"${NIGHTLY_VERSION}\"/" pyproject.toml
           echo "Nightly version: $NIGHTLY_VERSION"
           grep '^version' pyproject.toml
