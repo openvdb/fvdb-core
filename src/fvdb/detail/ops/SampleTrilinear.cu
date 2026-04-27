@@ -165,6 +165,11 @@ sampleTrilinearStencilCallbackVec4(int32_t bidx,
                                    BatchGridAccessor batchAccessor,
                                    TensorAccessor<ScalarType, 2> outFeatures,
                                    int64_t numChannels) {
+    static_assert(std::is_same_v<ScalarType, float>,
+                  "sampleTrilinearStencilCallbackVec4 is float-only: CUDA's widest "
+                  "vector load is 16B (ld.global.v4.f32 / v2.f64), so a 4-wide double "
+                  "group (32B) would split into two loads per corner and defeat the "
+                  "single-transaction-per-corner specialization.");
     using Vec = AlignedVec4<ScalarType>;
 
     const auto &pointsData               = points.data();
