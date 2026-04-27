@@ -20,7 +20,7 @@ message(STATUS "NVCC_THREADS: $ENV{NVCC_THREADS}")
 # Compiler caching (ccache / sccache)
 #
 # Wraps every CXX and CUDA invocation so unchanged TUs are pulled from cache.
-# Set FVDB_DISABLE_CCACHE=ON to opt out (e.g. for CI nodes without persistent
+# Set FVDB_ENABLE_CCACHE=OFF to opt out (e.g. for CI nodes without persistent
 # cache storage). The launcher variables are CACHE entries so they propagate
 # into the src/ subproject's separate project() scope.
 #
@@ -28,7 +28,7 @@ message(STATUS "NVCC_THREADS: $ENV{NVCC_THREADS}")
 # scenarios drop from minutes to seconds. ccache 4.6+ recognizes nvcc out of
 # the box.
 # ----------------------------------------------------------------------------
-option(FVDB_DISABLE_CCACHE "Disable ccache/sccache compiler caching" OFF)
+option(FVDB_ENABLE_CCACHE "Enable ccache/sccache compiler caching" ON)
 # We point ccache at a project-scoped CCACHE_DIR and apply CCACHE_MAXSIZE
 # against *that* directory, so the size cap can't evict entries belonging to
 # other projects sharing the user's global ~/.ccache. The directory is stable
@@ -53,7 +53,7 @@ set(FVDB_CCACHE_DIR "${_FVDB_DEFAULT_CCACHE_DIR}" CACHE PATH
 set(FVDB_CCACHE_MAXSIZE "10G" CACHE STRING
     "Per-invocation CCACHE_MAXSIZE override (e.g. '20G'). '0' or '' = inherit user config.")
 
-if(NOT FVDB_DISABLE_CCACHE)
+if(FVDB_ENABLE_CCACHE)
     find_program(FVDB_COMPILER_CACHE NAMES ccache sccache)
     if(FVDB_COMPILER_CACHE)
         set(_fvdb_ccache_dir_active FALSE)
@@ -194,9 +194,9 @@ target_compile_definitions(_fvdb_cpp PRIVATE
 configure_torch_pybind11(_fvdb_cpp)
 
 # All bindings TUs include <torch/types.h> + pybind11. Pre-compile both so the
-# 30+ s ATen+pybind parse cost is paid once. Honors the same opt-out flag as
-# the fvdb library above.
-if(NOT FVDB_DISABLE_PCH)
+# 30+ s ATen+pybind parse cost is paid once. Honors the same opt-in flag as
+# the fvdb library above (FVDB_ENABLE_PCH, default ON).
+if(FVDB_ENABLE_PCH)
     target_precompile_headers(_fvdb_cpp PRIVATE
         <torch/types.h>
         <pybind11/pybind11.h>

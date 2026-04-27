@@ -227,11 +227,11 @@ target_link_libraries(fvdb PRIVATE
 # torch/types.h plus a few common C++ standard library headers used across many
 # translation units.
 #
-# Disable with FVDB_DISABLE_PCH=ON for diagnostic builds where you want to see
+# Set FVDB_ENABLE_PCH=OFF for diagnostic builds where you want to see
 # precise per-TU header dependencies.
 # ----------------------------------------------------------------------------
-option(FVDB_DISABLE_PCH "Disable precompiled headers for the fvdb target" OFF)
-if(NOT FVDB_DISABLE_PCH)
+option(FVDB_ENABLE_PCH "Enable precompiled headers for the fvdb target" ON)
+if(FVDB_ENABLE_PCH)
     target_precompile_headers(fvdb PRIVATE
         "$<$<COMPILE_LANGUAGE:CXX>:<torch/types.h>>"
         "$<$<COMPILE_LANGUAGE:CXX>:<vector>>"
