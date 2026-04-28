@@ -10,6 +10,51 @@ Every operation has two variants:
 - ``*_single`` -- operates on :class:`~fvdb.Grid` with plain ``torch.Tensor``.
 """
 
+# Grid constructors (batch)
+from ._constructors import (
+    concatenate_grids,
+    gridbatch_from_dense,
+    gridbatch_from_dense_axis_aligned_bounds,
+    gridbatch_from_ijk,
+    gridbatch_from_mesh,
+    gridbatch_from_nearest_voxels_to_points,
+    gridbatch_from_points,
+    gridbatch_from_zero_grids,
+    gridbatch_from_zero_voxels,
+)
+
+# isort: split
+
+# Grid constructors (single)
+from ._constructors import (
+    grid_from_dense,
+    grid_from_dense_axis_aligned_bounds,
+    grid_from_ijk,
+    grid_from_mesh,
+    grid_from_nearest_voxels_to_points,
+    grid_from_points,
+    grid_from_zero_voxels,
+)
+
+# Dense <-> sparse I/O and grid-to-grid injection
+from ._dense import (
+    inject_batch,
+    inject_from_dense_cmajor_batch,
+    inject_from_dense_cmajor_single,
+    inject_from_dense_cminor_batch,
+    inject_from_dense_cminor_single,
+    inject_from_ijk_batch,
+    inject_from_ijk_single,
+    inject_single,
+    inject_to_dense_cmajor_batch,
+    inject_to_dense_cmajor_single,
+    inject_to_dense_cminor_batch,
+    inject_to_dense_cminor_single,
+)
+
+# Grid indexing
+from ._indexing import index_grid_batch
+
 # Interpolation / splatting
 from ._interpolation import (
     sample_bezier_batch,
@@ -28,12 +73,24 @@ from ._interpolation import (
     splat_trilinear_single,
 )
 
-# Coordinate transforms
-from ._transforms import (
-    voxel_to_world_batch,
-    voxel_to_world_single,
-    world_to_voxel_batch,
-    world_to_voxel_single,
+# I/O
+from ._io import (
+    grid_names_in_nanovdb,
+    load_nanovdb,
+    load_nanovdb_single,
+    read_nanovdb_metadata,
+    save_nanovdb,
+    save_nanovdb_single,
+)
+
+# Meshing / TSDF
+from ._meshing import (
+    integrate_tsdf_batch,
+    integrate_tsdf_single,
+    integrate_tsdf_with_features_batch,
+    integrate_tsdf_with_features_single,
+    marching_cubes_batch,
+    marching_cubes_single,
 )
 
 # Pooling / refinement
@@ -44,22 +101,6 @@ from ._pooling import (
     max_pool_single,
     refine_batch,
     refine_single,
-)
-
-# Dense <-> sparse I/O and grid-to-grid injection
-from ._dense import (
-    inject_batch,
-    inject_from_dense_cmajor_batch,
-    inject_from_dense_cmajor_single,
-    inject_from_dense_cminor_batch,
-    inject_from_dense_cminor_single,
-    inject_from_ijk_batch,
-    inject_from_ijk_single,
-    inject_single,
-    inject_to_dense_cmajor_batch,
-    inject_to_dense_cmajor_single,
-    inject_to_dense_cminor_batch,
-    inject_to_dense_cminor_single,
 )
 
 # Spatial queries
@@ -94,16 +135,6 @@ from ._ray import (
     uniform_ray_samples_single,
     voxels_along_rays_batch,
     voxels_along_rays_single,
-)
-
-# Meshing / TSDF
-from ._meshing import (
-    integrate_tsdf_batch,
-    integrate_tsdf_single,
-    integrate_tsdf_with_features_batch,
-    integrate_tsdf_with_features_single,
-    marching_cubes_batch,
-    marching_cubes_single,
 )
 
 # Grid topology
@@ -144,35 +175,13 @@ from ._topology import (
     refined_grid_single,
 )
 
-# Grid indexing
-from ._indexing import index_grid_batch
-
-# Grid constructors (batch)
-from ._constructors import (
-    concatenate_grids,
-    gridbatch_from_dense,
-    gridbatch_from_dense_axis_aligned_bounds,
-    gridbatch_from_ijk,
-    gridbatch_from_mesh,
-    gridbatch_from_nearest_voxels_to_points,
-    gridbatch_from_points,
-    gridbatch_from_zero_grids,
-    gridbatch_from_zero_voxels,
+# Coordinate transforms
+from ._transforms import (
+    voxel_to_world_batch,
+    voxel_to_world_single,
+    world_to_voxel_batch,
+    world_to_voxel_single,
 )
-
-# Grid constructors (single)
-from ._constructors import (
-    grid_from_dense,
-    grid_from_dense_axis_aligned_bounds,
-    grid_from_ijk,
-    grid_from_mesh,
-    grid_from_nearest_voxels_to_points,
-    grid_from_points,
-    grid_from_zero_voxels,
-)
-
-# I/O
-from ._io import load_nanovdb, load_nanovdb_single, save_nanovdb, save_nanovdb_single
 
 __all__ = [
     # Interpolation (batch)
@@ -311,4 +320,6 @@ __all__ = [
     "load_nanovdb_single",
     "save_nanovdb",
     "save_nanovdb_single",
+    "read_nanovdb_metadata",
+    "grid_names_in_nanovdb",
 ]
