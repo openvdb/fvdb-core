@@ -64,22 +64,44 @@ Installation from nightly builds
 -------------------------------------
 
 Nightly wheels are built from the latest ``main`` branch and published daily.
-The nightly version includes a date stamp and PyTorch/CUDA build identifiers
-(e.g. ``0.0.0.dev20260318+pt210.cu130``).
+Each nightly version is anchored to the next upcoming release recorded in
+``pyproject.toml`` (currently |fvdb_core_nightly_base|) and carries a date
+stamp plus PyTorch/CUDA build identifiers, for example
+|fvdb_core_nightly_base|\ .dev20260428+pt\ |torch_short|\ .\ |cu130_tag|.
+
+Under PEP 440 ordering, each nightly sorts between the in-development version
+on ``main`` and the corresponding final release, so passing ``--pre`` together
+with the nightly index URL will track the latest nightly until that release
+ships, then prefer the final release once it is tagged.
+
+Latest nightly (any supported PyTorch/CUDA build)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. parsed-literal::
+
+    pip install --pre fvdb-core --extra-index-url="https://d36m13axqqhiit.cloudfront.net/simple-nightly" torch==\ |torch_full_version| --extra-index-url https://download.pytorch.org/whl/|cu130_tag|
+
+.. note::
+
+    The nightly index hosts wheels for every supported PyTorch/CUDA combination
+    in a single project listing. Without an explicit local-version pin, ``pip``
+    selects the highest local version, which today is the CUDA 13.0 build. To
+    target a different build (for example, CUDA 12.8) or pin a specific date
+    for reproducibility, use one of the explicit commands below.
 
 PyTorch 2.10.0 + CUDA 13.0
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. parsed-literal::
 
-    pip install fvdb-core==0.0.0.dev20260318+pt\ |torch_short|\ .\ |cu130_tag| --extra-index-url="https://d36m13axqqhiit.cloudfront.net/simple-nightly" torch==\ |torch_full_version| --extra-index-url https://download.pytorch.org/whl/|cu130_tag|
+    pip install fvdb-core==\ |fvdb_core_nightly_base|\ .dev20260428+pt\ |torch_short|\ .\ |cu130_tag| --extra-index-url="https://d36m13axqqhiit.cloudfront.net/simple-nightly" torch==\ |torch_full_version| --extra-index-url https://download.pytorch.org/whl/|cu130_tag|
 
 PyTorch 2.10.0 + CUDA 12.8
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. parsed-literal::
 
-    pip install fvdb-core==0.0.0.dev20260318+pt\ |torch_short|\ .\ |cu128_tag| --extra-index-url="https://d36m13axqqhiit.cloudfront.net/simple-nightly" torch==\ |torch_full_version| --extra-index-url https://download.pytorch.org/whl/|cu128_tag|
+    pip install fvdb-core==\ |fvdb_core_nightly_base|\ .dev20260428+pt\ |torch_short|\ .\ |cu128_tag| --extra-index-url="https://d36m13axqqhiit.cloudfront.net/simple-nightly" torch==\ |torch_full_version| --extra-index-url https://download.pytorch.org/whl/|cu128_tag|
 
 To list all available nightly versions:
 
@@ -89,7 +111,7 @@ To list all available nightly versions:
 
 .. note::
 
-    Replace ``20260318`` with the desired nightly date. Nightly builds are retained for 30 days.
+    Replace ``20260428`` with the desired nightly date. Nightly builds are retained for 30 days.
 
 
 Installation from source
