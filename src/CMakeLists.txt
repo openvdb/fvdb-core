@@ -217,6 +217,28 @@ target_compile_options(fvdb PRIVATE
 target_link_libraries(fvdb PRIVATE
     ${TORCH_LIBRARIES} tinyply cutlass blosc::blosc dispatch)
 
+# ----------------------------------------------------------------------------
+# Precompiled headers (host C++ only)
+#
+# The fvdb target is a CXX/CUDA mix; nvcc does not support PCH. We scope the
+# precompiled headers to CXX via the COMPILE_LANGUAGE generator expression so
+# only the .cpp sources benefit. The current PCH set is intentionally small:
+# torch/types.h plus a few common C++ standard library headers used across many
+# translation units.
+#
+# Set FVDB_ENABLE_PCH=OFF for diagnostic builds where you want to see
+# precise per-TU header dependencies.
+# ----------------------------------------------------------------------------
+option(FVDB_ENABLE_PCH "Enable precompiled headers for the fvdb target" ON)
+if(FVDB_ENABLE_PCH)
+    target_precompile_headers(fvdb PRIVATE
+        "$<$<COMPILE_LANGUAGE:CXX>:<torch/types.h>>"
+        "$<$<COMPILE_LANGUAGE:CXX>:<vector>>"
+        "$<$<COMPILE_LANGUAGE:CXX>:<memory>>"
+        "$<$<COMPILE_LANGUAGE:CXX>:<optional>>"
+        "$<$<COMPILE_LANGUAGE:CXX>:<string>>")
+endif()
+
 # Add linker flags for Debug builds to preserve symbols
 if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
     target_link_options(fvdb PRIVATE "-rdynamic")

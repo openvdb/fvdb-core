@@ -8,7 +8,8 @@
 #include <fvdb/detail/viewer/CameraView.h>
 #include <fvdb/detail/viewer/GaussianSplat3dView.h>
 
-#include <torch/torch.h>
+#include <c10/util/Exception.h>
+#include <torch/types.h>
 
 #include <nanovdb_editor/putil/Editor.h>
 
