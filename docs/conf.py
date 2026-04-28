@@ -9,6 +9,7 @@
 
 import json
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.abspath(".."))
@@ -28,6 +29,22 @@ _torch_full = _versions["torch"]["full_version"]
 _torch_short = _versions["torch"]["version"].replace(".", "")
 _cuda_versions = list(_versions["cuda"]["versions"].keys())
 _python_matrix = _versions["python"]["matrix"]
+
+# Derive the nightly base version from pyproject.toml. This must mirror the
+# BASE_VERSION computation in .github/workflows/nightly-publish.yml so that the
+# install examples below match the actual versions of the published wheels.
+_pyproject_path = os.path.join(os.path.dirname(__file__), "..", "pyproject.toml")
+try:
+    with open(_pyproject_path) as _f:
+        _pyproject_text = _f.read()
+    _version_match = re.search(r'^version\s*=\s*"([^"]+)"', _pyproject_text, re.MULTILINE)
+    _raw_pyproject_version = _version_match.group(1) if _version_match else "0.0.0"
+except FileNotFoundError:
+    _raw_pyproject_version = "0.0.0"
+
+_fvdb_core_nightly_base = (
+    re.sub(r"(\.dev\d+|\.post\d+|(a|b|c|rc)\d+)+$", "", _raw_pyproject_version.split("+", 1)[0]) or "0.0.0"
+)
 
 
 # -- Project information -----------------------------------------------------
@@ -51,6 +68,7 @@ for _cv in _cuda_versions:
     )
 _subs.append(f".. |torch_full_version| replace:: {_torch_full}")
 _subs.append(f".. |torch_short| replace:: {_torch_short}")
+_subs.append(f".. |fvdb_core_nightly_base| replace:: {_fvdb_core_nightly_base}")
 _subs.append(f".. |python_range| replace:: {_python_matrix[0]} - {_python_matrix[-1]}")
 _subs.append(f".. |cuda_versions| replace:: {', '.join(_cuda_versions)}")
 for _cv in _cuda_versions:
