@@ -551,11 +551,15 @@ jobs:
           PROJECT_PATH="/${SIMPLE_PREFIX}/${{ steps.proj.outputs.normalized }}/index.html"
           ROOT_PATH="/${SIMPLE_PREFIX}/index.html"
           echo "Invalidating distribution $DIST_ID paths: $PROJECT_PATH, $ROOT_PATH"
-          aws cloudfront create-invalidation \
+          if ! aws cloudfront create-invalidation \
             --distribution-id "$DIST_ID" \
             --paths "$PROJECT_PATH" "$ROOT_PATH" \
             --query 'Invalidation.{Id:Id,Status:Status,CreateTime:CreateTime}' \
-            --output table
+            --output table; then
+            echo "WARNING: Failed to create CloudFront invalidation for distribution $DIST_ID; skipping invalidation"
+            echo "(IAM role may need cloudfront:CreateInvalidation permission)"
+            exit 0
+          fi
 
   ##############################################################################
   # GPU VALIDATION: SMOKE TEST + UNIT TESTS
