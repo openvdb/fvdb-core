@@ -36,7 +36,8 @@
     "cpu_ami": "ami-0e14a711dad782a70",
     "gpu_ami": "ami-0f5c0b65fde08ae43",
     "subnet": "subnet-03f2320d6e6e0005b",
-    "security_group": "sg-0cd08bd89d6212223"
+    "security_group": "sg-0cd08bd89d6212223",
+    "cloudfront_distribution_domain": "d36m13axqqhiit.cloudfront.net"
   },
   "publish_matrix": {
     "python-version": ["3.10", "3.11", "3.12", "3.13"],

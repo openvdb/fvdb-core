@@ -503,7 +503,10 @@ jobs:
           cat "$INDEX_FILE"
 
           echo "Uploading index.html to S3..."
-          aws s3 cp "$INDEX_FILE" "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${{ steps.proj.outputs.normalized }}/index.html" --content-type text/html --only-show-errors
+          aws s3 cp "$INDEX_FILE" "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${{ steps.proj.outputs.normalized }}/index.html" \
+            --content-type text/html \
+            --cache-control "public, max-age=60, must-revalidate" \
+            --only-show-errors
           echo "Index uploaded successfully"
 
       - name: Generate root simple index.html
@@ -524,7 +527,35 @@ jobs:
             done;
             echo "</body></html>";
           } > "$ROOT_INDEX"
-          aws s3 cp "$ROOT_INDEX" "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/index.html" --content-type text/html --only-show-errors
+          aws s3 cp "$ROOT_INDEX" "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/index.html" \
+            --content-type text/html \
+            --cache-control "public, max-age=60, must-revalidate" \
+            --only-show-errors
+
+      - name: Invalidate CloudFront cache for index.html files
+        run: |
+          set -euo pipefail
+          DOMAIN="${{ needs.versions.outputs.aws-cloudfront-distribution-domain }}"
+          if [ -z "$DOMAIN" ] || [ "$DOMAIN" = "null" ]; then
+            echo "No CloudFront distribution domain configured (aws.cloudfront_distribution_domain in versions.json); skipping invalidation"
+            exit 0
+          fi
+          DIST_ID=$(aws cloudfront list-distributions \
+            --query "DistributionList.Items[?DomainName=='$DOMAIN'].Id | [0]" \
+            --output text 2>/dev/null || echo "")
+          if [ -z "$DIST_ID" ] || [ "$DIST_ID" = "None" ]; then
+            echo "WARNING: Could not find CloudFront distribution for domain $DOMAIN; skipping invalidation"
+            echo "(IAM role may need cloudfront:ListDistributions permission)"
+            exit 0
+          fi
+          PROJECT_PATH="/${SIMPLE_PREFIX}/${{ steps.proj.outputs.normalized }}/index.html"
+          ROOT_PATH="/${SIMPLE_PREFIX}/index.html"
+          echo "Invalidating distribution $DIST_ID paths: $PROJECT_PATH, $ROOT_PATH"
+          aws cloudfront create-invalidation \
+            --distribution-id "$DIST_ID" \
+            --paths "$PROJECT_PATH" "$ROOT_PATH" \
+            --query 'Invalidation.{Id:Id,Status:Status,CreateTime:CreateTime}' \
+            --output table
 
   ##############################################################################
   # GPU VALIDATION: SMOKE TEST + UNIT TESTS
