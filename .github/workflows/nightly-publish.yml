@@ -382,7 +382,7 @@ jobs:
             --cache-control "public, max-age=60, must-revalidate" \
             --only-show-errors
 
-      - name: Invalidate CloudFront cache for index.html files
+      - name: Invalidate CloudFront cache for simple-index paths
         run: |
           set -euo pipefail
           DOMAIN="${{ needs.versions.outputs.aws-cloudfront-distribution-domain }}"
@@ -398,12 +398,21 @@ jobs:
             echo "(IAM role may need cloudfront:ListDistributions permission)"
             exit 0
           fi
-          PROJECT_PATH="/${SIMPLE_PREFIX}/${{ steps.proj.outputs.normalized }}/index.html"
-          ROOT_PATH="/${SIMPLE_PREFIX}/index.html"
-          echo "Invalidating distribution $DIST_ID paths: $PROJECT_PATH, $ROOT_PATH"
+          NORM="${{ steps.proj.outputs.normalized }}"
+          # Invalidate both the trailing-slash directory paths (what pip and
+          # browsers actually request) and the underlying index.html object
+          # paths. CloudFront caches each request URI independently, so
+          # invalidating only one form leaves the other stale.
+          PATHS=(
+            "/${SIMPLE_PREFIX}/"
+            "/${SIMPLE_PREFIX}/index.html"
+            "/${SIMPLE_PREFIX}/${NORM}/"
+            "/${SIMPLE_PREFIX}/${NORM}/index.html"
+          )
+          echo "Invalidating distribution $DIST_ID paths: ${PATHS[*]}"
           aws cloudfront create-invalidation \
             --distribution-id "$DIST_ID" \
-            --paths "$PROJECT_PATH" "$ROOT_PATH" \
+            --paths "${PATHS[@]}" \
             --query 'Invalidation.{Id:Id,Status:Status,CreateTime:CreateTime}' \
             --output table
 
