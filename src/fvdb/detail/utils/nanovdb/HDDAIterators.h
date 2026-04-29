@@ -94,26 +94,30 @@ template <typename AccT, typename ScalarT> struct HDDASegmentIterator {
         mTimespan.t0 = mRay.t1() + static_cast<ScalarT>(5.0);
         mTimespan.t1 = mRay.t1();
         do {
-            // Coordinate of the current voxel
+            // Re-align the HDDA to the correct level if mHdda's current dim
+            // disagrees with the tree's dim at the current voxel. After
+            // HDDA::update snaps mVoxel to the new grid level we have to
+            // query isActive at the snapped voxel, so we always do the
+            // isActive lookup *after* the dim check.
             const int dim = mAcc.getDim(mHdda.voxel(), mRay);
-
-            // Set the level of HDDA
             if (mHdda.dim() != dim) {
                 mRay.setMinTime(mHdda.time());
                 mHdda.update(mRay, dim);
             }
+            const bool active = mAcc.isActive(mHdda.voxel());
 
-            const bool isActive = mAcc.isActive(mHdda.voxel());
+            // Predicated TimeSpan writes: only the `leaving` break is a real
+            // branch. The entering and leaving t0/t1 updates are expressed as
+            // selects so rays in the same warp whose `active` state differs
+            // don't diverge at the setter level.
+            const bool wasValid = mTimespan.valid();
+            const MathType t    = mHdda.time();
 
-            if (isActive) {               // We're inside an active region
-                if (!mTimespan.valid()) { // This is the first hit
-                    mTimespan.t0 = mHdda.time();
-                }
-            } else {                      // We're not in an active region
-                if (mTimespan.valid()) {  // We were just in an active region
-                    mTimespan.t1 = mHdda.time();
-                    break;
-                }
+            mTimespan.t0       = (active && !wasValid) ? t : mTimespan.t0;
+            const bool leaving = (!active && wasValid);
+            mTimespan.t1       = leaving ? t : mTimespan.t1;
+            if (leaving) {
+                break;
             }
         } while (mHdda.step());
 
@@ -195,29 +199,22 @@ template <typename AccT, typename ScalarT> struct HDDAVoxelIterator {
     __hostdev__ bool
     nextVoxel() {
         do {
-            // Adjust HDDA level
-            // This can take three passes to complete, since mVoxel gains precision each pass
-            // 4096 -> 128
-            // 128  -> 8
-            // 8    -> 1
+            // Re-align the HDDA to the correct level. mHdda's level needs up
+            // to three passes to stabilise (4096 -> 128 -> 8 -> 1) and on
+            // each pass we have to re-query getDim at the snapped voxel.
+            // Bound the loop at three iterations so a degenerate accessor
+            // can't spin forever; in practice the loop converges in <= 3
+            // passes by construction of the level hierarchy.
             int dim = mAcc.getDim(mHdda.voxel(), mRay);
-            if (mHdda.dim() != dim) {
+            for (int pass = 0; pass < 3 && mHdda.dim() != dim; ++pass) {
                 mRay.setMinTime(mHdda.time());
                 mHdda.update(mRay, dim);
-            }
-            dim = mAcc.getDim(mHdda.voxel(), mRay);
-            if (mHdda.dim() != dim) {
-                mRay.setMinTime(mHdda.time());
-                mHdda.update(mRay, dim);
-            }
-            dim = mAcc.getDim(mHdda.voxel(), mRay);
-            if (mHdda.dim() != dim) {
-                mRay.setMinTime(mHdda.time());
-                mHdda.update(mRay, dim);
+                dim = mAcc.getDim(mHdda.voxel(), mRay);
             }
 
-            // NOTE: This will return true if a tile is active
-            if (mAcc.isActive(mHdda.voxel())) { // We hit an active voxel, increment hdda and return
+            // NOTE: isActive returns true for both active voxels and active
+            // tiles; downstream callers handle that distinction via the dim.
+            if (mAcc.isActive(mHdda.voxel())) {
                 mData = {mHdda.voxel(), TimespanT(mHdda.time(), mHdda.next())};
                 mHdda.step();
                 return true;
