@@ -54,6 +54,8 @@ on:
         value: ${{ jobs.load.outputs.aws-subnet }}
       aws-security-group:
         value: ${{ jobs.load.outputs.aws-security-group }}
+      aws-cloudfront-distribution-domain:
+        value: ${{ jobs.load.outputs.aws-cloudfront-distribution-domain }}
       publish-matrix:
         value: ${{ jobs.load.outputs.publish-matrix }}
       auditwheel-excludes:
@@ -87,6 +89,7 @@ jobs:
       aws-gpu-ami: ${{ steps.parse.outputs.aws-gpu-ami }}
       aws-subnet: ${{ steps.parse.outputs.aws-subnet }}
       aws-security-group: ${{ steps.parse.outputs.aws-security-group }}
+      aws-cloudfront-distribution-domain: ${{ steps.parse.outputs.aws-cloudfront-distribution-domain }}
       publish-matrix: ${{ steps.parse.outputs.publish-matrix }}
       auditwheel-excludes: ${{ steps.parse.outputs.auditwheel-excludes }}
       auditwheel-excludes-cuda-major: ${{ steps.parse.outputs.auditwheel-excludes-cuda-major }}
@@ -123,6 +126,7 @@ jobs:
             echo "aws-gpu-ami=$(jq -r '.aws.gpu_ami' $CFG)"
             echo "aws-subnet=$(jq -r '.aws.subnet' $CFG)"
             echo "aws-security-group=$(jq -r '.aws.security_group' $CFG)"
+            echo "aws-cloudfront-distribution-domain=$(jq -r '.aws.cloudfront_distribution_domain // ""' $CFG)"
             echo "publish-matrix=$(jq -c '.publish_matrix' $CFG)"
             echo "auditwheel-excludes=$(jq -c '.auditwheel_excludes' $CFG)"
             echo "auditwheel-excludes-cuda-major=$(jq -c '.auditwheel_excludes_cuda_major' $CFG)"
