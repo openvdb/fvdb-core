@@ -15,7 +15,8 @@ dependencies = [
     "torch>=2.8,<2.12",
     "numpy",
 ]
-optional-dependencies = {viewer = ["nanovdb-editor>=0.0.23,<0.2.0"]}
+### TODO: CHANGE TO nanovdb-editor>0.1.0,<0.2.0 BEFORE MERGING THE PR, FOR TESTING ONLY ###
+optional-dependencies = {viewer = ["nanovdb-editor-dev>0.1.0,<0.2.0"]}
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",

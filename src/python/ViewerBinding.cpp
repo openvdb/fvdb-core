@@ -10,10 +10,99 @@
 #include <fvdb/detail/utils/gsplat/GaussianCameras.cuh>
 #include <fvdb/detail/viewer/CameraView.h>
 #include <fvdb/detail/viewer/GaussianSplat3dView.h>
+#include <fvdb/detail/viewer/ParamViews.h>
 #include <fvdb/detail/viewer/Viewer.h>
 
 void
 bind_viewer(py::module &m) {
+    py::class_<fvdb::detail::viewer::SliderView>(
+        m,
+        "SliderView",
+        "A handle to a slider widget in the editor's `Scene Params` window. "
+        "Read or write `value` to query or change the live UI state.")
+        .def_property_readonly(
+            "name", &fvdb::detail::viewer::SliderView::getName, "Widget field name.")
+        .def_property_readonly("scene_name",
+                               &fvdb::detail::viewer::SliderView::getSceneName,
+                               "Name of the scene this widget belongs to.")
+        .def_property_readonly(
+            "min", &fvdb::detail::viewer::SliderView::getMin, "Minimum slider value.")
+        .def_property_readonly(
+            "max", &fvdb::detail::viewer::SliderView::getMax, "Maximum slider value.")
+        .def_property_readonly(
+            "step", &fvdb::detail::viewer::SliderView::getStep, "Slider step size.")
+        .def_property("value",
+                      &fvdb::detail::viewer::SliderView::getValue,
+                      &fvdb::detail::viewer::SliderView::setValue,
+                      "Current slider value (float).");
+
+    py::class_<fvdb::detail::viewer::NumberView>(
+        m, "NumberView", "A handle to a numeric input field in the editor's `Scene Params` window.")
+        .def_property_readonly(
+            "name", &fvdb::detail::viewer::NumberView::getName, "Widget field name.")
+        .def_property_readonly("scene_name",
+                               &fvdb::detail::viewer::NumberView::getSceneName,
+                               "Name of the scene this widget belongs to.")
+        .def_property_readonly("has_min",
+                               &fvdb::detail::viewer::NumberView::hasMin,
+                               "Whether a minimum bound was supplied.")
+        .def_property_readonly("has_max",
+                               &fvdb::detail::viewer::NumberView::hasMax,
+                               "Whether a maximum bound was supplied.")
+        .def_property_readonly(
+            "min", &fvdb::detail::viewer::NumberView::getMin, "Minimum value, if set.")
+        .def_property_readonly(
+            "max", &fvdb::detail::viewer::NumberView::getMax, "Maximum value, if set.")
+        .def_property_readonly(
+            "step", &fvdb::detail::viewer::NumberView::getStep, "Drag widget step size.")
+        .def_property("value",
+                      &fvdb::detail::viewer::NumberView::getValue,
+                      &fvdb::detail::viewer::NumberView::setValue,
+                      "Current numeric value (float).");
+
+    py::class_<fvdb::detail::viewer::TextView>(
+        m,
+        "TextView",
+        "A handle to a text input field in the editor's `Scene Params` window. "
+        "The widget commits the value on every keystroke, so reads return the "
+        "current contents of the buffer.")
+        .def_property_readonly(
+            "name", &fvdb::detail::viewer::TextView::getName, "Widget field name.")
+        .def_property_readonly("scene_name",
+                               &fvdb::detail::viewer::TextView::getSceneName,
+                               "Name of the scene this widget belongs to.")
+        .def_property_readonly("max_length",
+                               &fvdb::detail::viewer::TextView::getMaxLength,
+                               "Maximum string capacity in bytes (including the NUL terminator).")
+        .def_property_readonly(
+            "commit_on_enter",
+            &fvdb::detail::viewer::TextView::getCommitOnEnter,
+            "Whether the widget was created with commit_on_enter=True. When true, "
+            "pressing Enter bumps a per-widget submit counter that callers poll via "
+            "`submit_counter` to detect commit events.")
+        .def_property_readonly(
+            "submit_counter",
+            &fvdb::detail::viewer::TextView::getSubmitCounter,
+            "Current value of the editor-side submit counter (uint32). Increments "
+            "every time the user presses Enter on the input. Always 0 when the "
+            "widget was created with commit_on_enter=False.")
+        .def_property("value",
+                      &fvdb::detail::viewer::TextView::getValue,
+                      &fvdb::detail::viewer::TextView::setValue,
+                      "Current string value.");
+
+    py::class_<fvdb::detail::viewer::CheckboxView>(
+        m, "CheckboxView", "A handle to a checkbox in the editor's `Scene Params` window.")
+        .def_property_readonly(
+            "name", &fvdb::detail::viewer::CheckboxView::getName, "Widget field name.")
+        .def_property_readonly("scene_name",
+                               &fvdb::detail::viewer::CheckboxView::getSceneName,
+                               "Name of the scene this widget belongs to.")
+        .def_property("value",
+                      &fvdb::detail::viewer::CheckboxView::getValue,
+                      &fvdb::detail::viewer::CheckboxView::setValue,
+                      "Current checkbox value (bool).");
+
     py::class_<fvdb::detail::viewer::CameraView>(
         m, "CameraView", "A view object for visualizing a camera in the editor")
         .def_property("visible",
@@ -115,6 +204,10 @@ bind_viewer(py::module &m) {
              "The port the viewer server is listening on.")
 
         .def("reset", &fvdb::detail::viewer::Viewer::reset, "Reset the viewer server state")
+
+        .def("stop",
+             &fvdb::detail::viewer::Viewer::stop,
+             "Stop the viewer server and join the editor render thread.")
 
         .def("add_scene",
              &fvdb::detail::viewer::Viewer::addScene,
@@ -279,5 +372,94 @@ bind_viewer(py::module &m) {
              "containing packed RGBA values.")
         .def("wait_for_interrupt",
              &fvdb::detail::viewer::Viewer::waitForInteerrupt,
-             "Block until the viewer is interrupted by the user (Ctrl-C or closing the window)");
+             "Block until the viewer is interrupted by the user (Ctrl-C or closing the window)")
+
+        .def("add_slider",
+             &fvdb::detail::viewer::Viewer::addSlider,
+             py::arg("scene_name"),
+             py::arg("name"),
+             py::arg("min"),
+             py::arg("max"),
+             py::arg("initial"),
+             py::arg("step"),
+             "Register a float slider widget in the editor's `Scene Params` window for the "
+             "given scene. Returns a SliderView handle whose `value` property reads or writes "
+             "the current widget value.")
+
+        .def("add_number",
+             &fvdb::detail::viewer::Viewer::addNumber,
+             py::arg("scene_name"),
+             py::arg("name"),
+             py::arg("initial"),
+             py::arg("has_min"),
+             py::arg("min"),
+             py::arg("has_max"),
+             py::arg("max"),
+             py::arg("step"),
+             "Register a float numeric drag widget in the editor's `Scene Params` window for "
+             "the given scene. Returns a NumberView handle whose `value` property reads or "
+             "writes the current widget value.")
+
+        .def("add_text",
+             &fvdb::detail::viewer::Viewer::addText,
+             py::arg("scene_name"),
+             py::arg("name"),
+             py::arg("initial"),
+             py::arg("max_length"),
+             py::arg("commit_on_enter") = false,
+             "Register a text input widget in the editor's `Scene Params` window for the "
+             "given scene. Returns a TextView handle whose `value` property reads or writes "
+             "the current string contents. By default the widget commits on every keystroke; "
+             "pass commit_on_enter=True to additionally have the editor increment a hidden "
+             "submit counter when the user presses Enter, so callers can fire `on_submit` "
+             "callbacks separate from per-keystroke `on_update` events.")
+
+        .def("add_checkbox",
+             &fvdb::detail::viewer::Viewer::addCheckbox,
+             py::arg("scene_name"),
+             py::arg("name"),
+             py::arg("initial"),
+             "Register a checkbox widget in the editor's `Scene Params` window for the given "
+             "scene. Returns a CheckboxView handle whose `value` property reads or writes "
+             "the current bool value.")
+
+        .def("has_slider",
+             &fvdb::detail::viewer::Viewer::hasSlider,
+             py::arg("name"),
+             "Check if a slider widget with the given name exists.")
+        .def("has_number",
+             &fvdb::detail::viewer::Viewer::hasNumber,
+             py::arg("name"),
+             "Check if a numeric widget with the given name exists.")
+        .def("has_text",
+             &fvdb::detail::viewer::Viewer::hasText,
+             py::arg("name"),
+             "Check if a text widget with the given name exists.")
+        .def("has_checkbox",
+             &fvdb::detail::viewer::Viewer::hasCheckbox,
+             py::arg("name"),
+             "Check if a checkbox widget with the given name exists.")
+
+        .def("get_slider",
+             &fvdb::detail::viewer::Viewer::getSlider,
+             py::arg("name"),
+             "Get a snapshot of the slider widget with the given name.")
+        .def("get_number",
+             &fvdb::detail::viewer::Viewer::getNumber,
+             py::arg("name"),
+             "Get a snapshot of the numeric widget with the given name.")
+        .def("get_text",
+             &fvdb::detail::viewer::Viewer::getText,
+             py::arg("name"),
+             "Get a snapshot of the text widget with the given name.")
+        .def("get_checkbox",
+             &fvdb::detail::viewer::Viewer::getCheckbox,
+             py::arg("name"),
+             "Get a snapshot of the checkbox widget with the given name.")
+
+        .def("scene_widget_names",
+             &fvdb::detail::viewer::Viewer::sceneWidgetNames,
+             py::arg("scene_name"),
+             "Return the names of all widgets currently registered on the given scene, in "
+             "registration order.");
 }

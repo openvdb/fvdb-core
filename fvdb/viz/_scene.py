@@ -22,6 +22,7 @@ from ._gaussian_splat_3d_view import GaussianSplat3dView
 from ._image_view import ImageView
 from ._point_cloud_view import PointCloudView
 from ._viewer_server import _get_viewer_server_cpp
+from ._widget_views import CheckboxView, NumberView, SliderView, TextView
 
 
 def get_scene(name: str = "fVDB Scene") -> "Scene":
@@ -42,16 +43,20 @@ class Scene:
     def __init__(self, name: str):
         self._name = name
         self._logger = logging.getLogger(f"{self.__class__.__module__}.{self.__class__.__name__}")
+        self._widgets: dict[str, SliderView | NumberView | TextView | CheckboxView] = {}
+
         # TODO: Register scene with name in the viewer and use the returned scene ID.
         server = _get_viewer_server_cpp()
         server.add_scene(name)
 
     def __del__(self):
         """
-        Delete the scene. This will remove the scene and its views from the viewer.
+        Delete the scene, removing it and its views from the viewer.
         """
-        server = _get_viewer_server_cpp()
-        server.remove_scene(self._name)
+        try:
+            _get_viewer_server_cpp().remove_scene(self._name)
+        except Exception:
+            pass
 
     def reset(self):
         """
@@ -60,6 +65,8 @@ class Scene:
         server = _get_viewer_server_cpp()
         server.reset()
         server.add_scene(self._name)
+
+        self._widgets.clear()
 
     @torch.no_grad()
     def add_point_cloud(
@@ -535,3 +542,187 @@ class Scene:
         server.set_camera_view_direction(self._name, *view_direction_vec3f)
         server.set_camera_orbit_radius(self._name, orbit_radius)
         server.set_camera_up_direction(self._name, *up_direction_vec3f)
+
+    def add_slider(
+        self,
+        name: str,
+        min: float,
+        max: float,
+        initial: float | None = None,
+        step: float = 0.01,
+    ) -> SliderView:
+        """
+        Add a float slider widget to this scene's `Params` window.
+
+        Args:
+            name (str): Unique field name. Used both as the widget label and
+                as the lookup key on the scene; if a widget with this name
+                already exists it is replaced.
+            min (float): Minimum slider value.
+            max (float): Maximum slider value (must be greater than ``min``).
+            initial (float | None): Initial slider value. Defaults to ``min``
+                when not provided. Clamped to ``[min, max]``.
+            step (float): Slider step size. Must be positive.
+
+        Returns:
+            SliderView: A handle whose ``value`` property reads or writes the
+            live slider value.
+        """
+        if not (max > min):
+            raise ValueError(f"Slider 'max' must be greater than 'min' (got min={min}, max={max})")
+        if step <= 0.0:
+            raise ValueError(f"Slider 'step' must be positive (got {step})")
+        if initial is None:
+            initial = min
+        initial = float(initial)
+        if initial < min:
+            initial = float(min)
+        elif initial > max:
+            initial = float(max)
+        handle = SliderView(
+            scene_name=self._name,
+            name=name,
+            min=float(min),
+            max=float(max),
+            initial=initial,
+            step=float(step),
+            _private=SliderView.__PRIVATE__,
+        )
+        self._widgets[name] = handle
+        return handle
+
+    def add_number(
+        self,
+        name: str,
+        initial: float = 0.0,
+        min: float | None = None,
+        max: float | None = None,
+        step: float = 0.01,
+    ) -> NumberView:
+        """
+        Add a numeric drag widget (no slider) to this scene's `Params` window.
+
+        Args:
+            name (str): Unique field name.
+            initial (float): Initial value.
+            min (float | None): Optional lower bound for clamping.
+            max (float | None): Optional upper bound for clamping.
+            step (float): Drag step size. Must be positive.
+
+        Returns:
+            NumberView: A handle whose ``value`` property reads or writes the
+            live numeric value.
+        """
+        if step <= 0.0:
+            raise ValueError(f"Number 'step' must be positive (got {step})")
+        if min is not None and max is not None and not (max > min):
+            raise ValueError(f"Number 'max' must be greater than 'min' (got min={min}, max={max})")
+        initial = float(initial)
+        if min is not None and initial < min:
+            initial = float(min)
+        if max is not None and initial > max:
+            initial = float(max)
+        handle = NumberView(
+            scene_name=self._name,
+            name=name,
+            initial=initial,
+            min=None if min is None else float(min),
+            max=None if max is None else float(max),
+            step=float(step),
+            _private=NumberView.__PRIVATE__,
+        )
+        self._widgets[name] = handle
+        return handle
+
+    def add_text(
+        self,
+        name: str,
+        initial: str = "",
+        max_length: int = 256,
+        commit_on_enter: bool = False,
+    ) -> TextView:
+        """
+        Add a text input field to this scene's `Scene Params` window.
+
+        The buffer commits per keystroke; ``on_update`` callbacks fire on
+        every change. Pass ``commit_on_enter=True`` to additionally enable
+        :meth:`TextView.on_submit`, which fires only when the user presses
+        Enter.
+
+        Args:
+            name: Unique field name.
+            initial: Initial string value (must fit in ``max_length - 1``
+                bytes when UTF-8 encoded; the last byte is the NUL terminator).
+            max_length: Capacity of the underlying ``char[N]`` buffer
+                including the NUL terminator. Must be at least ``2``.
+            commit_on_enter: Enable Enter-driven ``on_submit`` callbacks.
+
+        Returns:
+            TextView: A handle whose ``value`` reads or writes the live string.
+        """
+        if max_length < 2:
+            raise ValueError(f"Text 'max_length' must be at least 2 (got {max_length})")
+        if len(initial.encode("utf-8")) > max_length - 1:
+            raise ValueError(
+                f"Initial value for text widget {name!r} is longer than max_length - 1 = "
+                f"{max_length - 1} bytes (got {len(initial.encode('utf-8'))} bytes)"
+            )
+        handle = TextView(
+            scene_name=self._name,
+            name=name,
+            initial=initial,
+            max_length=int(max_length),
+            commit_on_enter=bool(commit_on_enter),
+            _private=TextView.__PRIVATE__,
+        )
+        self._widgets[name] = handle
+        return handle
+
+    def add_checkbox(
+        self,
+        name: str,
+        initial: bool = False,
+    ) -> CheckboxView:
+        """
+        Add a checkbox widget to this scene's `Scene Params` window.
+
+        Args:
+            name (str): Unique field name.
+            initial (bool): Initial checkbox state.
+
+        Returns:
+            CheckboxView: A handle whose ``value`` property reads or writes
+            the live bool value.
+        """
+        handle = CheckboxView(
+            scene_name=self._name,
+            name=name,
+            initial=bool(initial),
+            _private=CheckboxView.__PRIVATE__,
+        )
+        self._widgets[name] = handle
+        return handle
+
+    def poll_widgets(self) -> list[str]:
+        """
+        Fire any pending ``on_update`` and ``on_submit`` callbacks.
+
+        ``on_update`` fires when the widget value changed since the last
+        poll. ``on_submit`` fires when a :class:`TextView` created with
+        ``commit_on_enter=True`` observed a fresh Enter press. Returns
+        the names of the widgets that fired any callback (each name at
+        most once per call).
+        """
+        changed: list[str] = []
+        for name, handle in self._widgets.items():
+            updated = handle._fire_on_update_if_changed()
+            submitted = handle._fire_on_submit_if_changed()
+            if updated or submitted:
+                changed.append(name)
+        return changed
+
+    def get_widget(self, name: str) -> SliderView | NumberView | TextView | CheckboxView | None:
+        """
+        Look up a previously-added widget on this scene by name.
+        """
+        return self._widgets.get(name)
