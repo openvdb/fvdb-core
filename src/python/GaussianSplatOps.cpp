@@ -254,8 +254,9 @@ bind_gaussian_splat_ops(py::module &m) {
           py::arg("tile_size"),
           py::arg("tile_offsets"),
           py::arg("tile_gaussian_ids"),
-          py::arg("backgrounds"),
-          py::arg("masks"));
+          py::arg("num_shared_channels_override") = -1,
+          py::arg("backgrounds")                  = py::none(),
+          py::arg("masks")                        = py::none());
 
     m.def("rasterize_screen_space_gaussians_bwd",
           &ops::rasterizeScreenSpaceGaussiansBwd,
@@ -297,8 +298,9 @@ bind_gaussian_splat_ops(py::module &m) {
           py::arg("tile_pixel_mask"),
           py::arg("tile_pixel_cumsum"),
           py::arg("pixel_map"),
-          py::arg("backgrounds"),
-          py::arg("masks"));
+          py::arg("num_shared_channels_override") = -1,
+          py::arg("backgrounds")                  = py::none(),
+          py::arg("masks")                        = py::none());
 
     m.def("rasterize_screen_space_gaussians_sparse_bwd",
           &ops::rasterizeScreenSpaceGaussiansSparseBwd,
