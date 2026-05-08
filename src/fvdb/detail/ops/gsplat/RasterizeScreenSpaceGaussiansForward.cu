@@ -30,10 +30,7 @@ namespace fvdb::detail::ops {
 namespace {
 
 // Structure to hold arguments and methods for the rasterize forward kernel
-template <typename ScalarType,
-          uint32_t NUM_CHANNELS,
-          uint32_t NUM_SHARED_CHANNELS,
-          bool IS_PACKED>
+template <typename ScalarType, uint32_t NUM_CHANNELS, uint32_t NUM_SHARED_CHANNELS, bool IS_PACKED>
 struct RasterizeForwardArgs {
     using CommonArgs = RasterizeCommonArgs<ScalarType, NUM_CHANNELS, IS_PACKED>;
     CommonArgs commonArgs;
@@ -230,10 +227,8 @@ struct RasterizeForwardArgs {
                     // position, so gaussianIsValid will be false and features are never
                     // read in the rendering loop.
                     if (sharedGaussians[tidx].opacity >= 1.f / 255.f) {
-                        ScalarType *feature =
-                            &sharedGaussianFeatures[tidx * NUM_SHARED_CHANNELS];
-                        fetchGaussianFeatureIntoSharedMemory(
-                            g, channelStart, numChannels, feature);
+                        ScalarType *feature = &sharedGaussianFeatures[tidx * NUM_SHARED_CHANNELS];
+                        fetchGaussianFeatureIntoSharedMemory(g, channelStart, numChannels, feature);
                     }
                 }
 
@@ -302,10 +297,7 @@ struct RasterizeForwardArgs {
 
 /// @brief Rasterize Gaussians to pixels
 /// @param args The arguments for the rasterization
-template <typename ScalarType,
-          uint32_t NUM_CHANNELS,
-          uint32_t NUM_SHARED_CHANNELS,
-          bool IS_PACKED>
+template <typename ScalarType, uint32_t NUM_CHANNELS, uint32_t NUM_SHARED_CHANNELS, bool IS_PACKED>
 __global__ void
 rasterizeGaussiansForward(
     RasterizeForwardArgs<ScalarType, NUM_CHANNELS, NUM_SHARED_CHANNELS, IS_PACKED> args) {
@@ -373,10 +365,7 @@ getSharedMemRequirements(const size_t numChannels, const size_t tileSize) {
            (sizeof(Gaussian2D<ScalarType>) + numChannels * sizeof(ScalarType));
 }
 
-template <typename ScalarType,
-          uint32_t NUM_CHANNELS,
-          uint32_t NUM_SHARED_CHANNELS,
-          bool IS_PACKED>
+template <typename ScalarType, uint32_t NUM_CHANNELS, uint32_t NUM_SHARED_CHANNELS, bool IS_PACKED>
 std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor, fvdb::JaggedTensor>
 launchRasterizeForwardKernelWithTemplatedSharedChannels(
     // Gaussian parameters
@@ -472,22 +461,17 @@ launchRasterizeForwardKernelWithTemplatedSharedChannels(
     // TODO: an optimization can be done by passing the actual number of
     // channels into the kernel functions and avoid necessary global memory
     // writes. This requires moving the channel padding from python to C side.
-    if (cudaFuncSetAttribute(rasterizeGaussiansForward<ScalarType,
-                                                       NUM_CHANNELS,
-                                                       NUM_SHARED_CHANNELS,
-                                                       IS_PACKED>,
-                             cudaFuncAttributeMaxDynamicSharedMemorySize,
-                             sharedMem) != cudaSuccess) {
+    if (cudaFuncSetAttribute(
+            rasterizeGaussiansForward<ScalarType, NUM_CHANNELS, NUM_SHARED_CHANNELS, IS_PACKED>,
+            cudaFuncAttributeMaxDynamicSharedMemorySize,
+            sharedMem) != cudaSuccess) {
         AT_ERROR("Failed to set maximum shared memory size (requested ",
                  sharedMem,
                  " bytes), try lowering tile_size.");
     }
 
     rasterizeGaussiansForward<ScalarType, NUM_CHANNELS, NUM_SHARED_CHANNELS, IS_PACKED>
-        <<<args.commonArgs.getGridDim(),
-           args.commonArgs.getBlockDim(),
-           sharedMem,
-           stream>>>(args);
+        <<<args.commonArgs.getGridDim(), args.commonArgs.getBlockDim(), sharedMem, stream>>>(args);
 
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 
@@ -638,10 +622,7 @@ launchRasterizeForwardKernel(
     }
 }
 
-template <typename ScalarType,
-          uint32_t NUM_CHANNELS,
-          uint32_t NUM_SHARED_CHANNELS,
-          bool IS_PACKED>
+template <typename ScalarType, uint32_t NUM_CHANNELS, uint32_t NUM_SHARED_CHANNELS, bool IS_PACKED>
 std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor, fvdb::JaggedTensor>
 launchRasterizeForwardKernels(
     // Gaussian parameters
@@ -1072,43 +1053,43 @@ dispatchRasterizeScreenSpaceGaussiansSparseFwd<torch::kCUDA>(
     const uint32_t channels = features.size(-1);
     const bool isPacked     = means2d.dim() == 2;
 
-#define CALL_FWD_SPARSE_CUDA(N)                                                       \
-    case N: {                                                                         \
-        if (isPacked) {                                                               \
-            return launchRasterizeForwardKernel<float, N, true>(means2d,              \
-                                                                conics,               \
-                                                                features,             \
-                                                                opacities,            \
-                                                                backgrounds,          \
-                                                                masks,                \
-                                                                renderWindow,         \
-                                                                tileSize,             \
-                                                                tileOffsets,          \
-                                                                tileGaussianIds,      \
-                                                                numSharedChannelsOverride, \
-                                                                pixelsToRender,       \
-                                                                activeTiles,          \
-                                                                tilePixelMask,        \
-                                                                tilePixelCumsum,      \
-                                                                pixelMap);            \
-        } else {                                                                      \
-            return launchRasterizeForwardKernel<float, N, false>(means2d,             \
-                                                                 conics,              \
-                                                                 features,            \
-                                                                 opacities,           \
-                                                                 backgrounds,         \
-                                                                 masks,               \
-                                                                 renderWindow,        \
-                                                                 tileSize,            \
-                                                                 tileOffsets,         \
-                                                                 tileGaussianIds,     \
+#define CALL_FWD_SPARSE_CUDA(N)                                                             \
+    case N: {                                                                               \
+        if (isPacked) {                                                                     \
+            return launchRasterizeForwardKernel<float, N, true>(means2d,                    \
+                                                                conics,                     \
+                                                                features,                   \
+                                                                opacities,                  \
+                                                                backgrounds,                \
+                                                                masks,                      \
+                                                                renderWindow,               \
+                                                                tileSize,                   \
+                                                                tileOffsets,                \
+                                                                tileGaussianIds,            \
+                                                                numSharedChannelsOverride,  \
+                                                                pixelsToRender,             \
+                                                                activeTiles,                \
+                                                                tilePixelMask,              \
+                                                                tilePixelCumsum,            \
+                                                                pixelMap);                  \
+        } else {                                                                            \
+            return launchRasterizeForwardKernel<float, N, false>(means2d,                   \
+                                                                 conics,                    \
+                                                                 features,                  \
+                                                                 opacities,                 \
+                                                                 backgrounds,               \
+                                                                 masks,                     \
+                                                                 renderWindow,              \
+                                                                 tileSize,                  \
+                                                                 tileOffsets,               \
+                                                                 tileGaussianIds,           \
                                                                  numSharedChannelsOverride, \
-                                                                 pixelsToRender,      \
-                                                                 activeTiles,         \
-                                                                 tilePixelMask,       \
-                                                                 tilePixelCumsum,     \
-                                                                 pixelMap);           \
-        }                                                                             \
+                                                                 pixelsToRender,            \
+                                                                 activeTiles,               \
+                                                                 tilePixelMask,             \
+                                                                 tilePixelCumsum,           \
+                                                                 pixelMap);                 \
+        }                                                                                   \
     }
 
     // Make channels a compile time constant and do everything in register space
