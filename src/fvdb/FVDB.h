@@ -278,8 +278,8 @@ from_nanovdb(nanovdb::GridHandle<nanovdb::HostBuffer> &handle);
 /// grids
 nanovdb::GridHandle<nanovdb::HostBuffer>
 to_nanovdb(const GridBatchData &gridBatchData,
-           const std::optional<JaggedTensor> maybeData = std::nullopt,
-           const std::vector<std::string> &names       = {});
+           const std::optional<JaggedTensor> &maybeData = std::nullopt,
+           const std::vector<std::string> &names        = {});
 
 /// @brief Save a grid batch and optional jagged tensor to a .nvdb file. Will overwrite existing
 /// files.
@@ -292,10 +292,10 @@ to_nanovdb(const GridBatchData &gridBatchData,
 /// @param verbose Whether to print information about the saved grids
 void save(const std::string &path,
           const GridBatchData &gridBatchData,
-          const std::optional<JaggedTensor> maybeData = std::nullopt,
-          const std::vector<std::string> &names       = {},
-          bool compressed                             = false,
-          bool verbose                                = false);
+          const std::optional<JaggedTensor> &maybeData = std::nullopt,
+          const std::vector<std::string> &names        = {},
+          bool compressed                              = false,
+          bool verbose                                 = false);
 
 /// @brief Save a grid batch and optional jagged tensor to a .nvdb file. Will overwrite existing
 /// files.
@@ -308,10 +308,10 @@ void save(const std::string &path,
 /// @param verbose Whether to print information about the saved grids
 void save(const std::string &path,
           const GridBatchData &gridBatchData,
-          const std::optional<JaggedTensor> maybeData = std::nullopt,
-          const std::string &name                     = std::string(),
-          bool compressed                             = false,
-          bool verbose                                = false);
+          const std::optional<JaggedTensor> &maybeData = std::nullopt,
+          const std::string &name                      = std::string(),
+          bool compressed                              = false,
+          bool verbose                                 = false);
 
 /// @brief Load a grid batch from a .nvdb file.
 /// @param path The path to the .nvdb file to load
