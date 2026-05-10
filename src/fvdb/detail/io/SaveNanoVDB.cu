@@ -806,7 +806,7 @@ saveIndexGridWithBlindData(const std::string &path,
     JaggedTensor cpuData = data.cpu().contiguous();
     TORCH_CHECK(cpuData.is_contiguous(), "Jagged tensor must be contiguous");
 
-    // Hoist tensor shape info (issue #4): rdim and tail (everything past dim 0) are constant
+    // Hoist tensor shape info: rdim and tail (everything past dim 0) are constant
     // across batch entries. Per-batch dim 0 is `numVoxelsAt(bi)`.
     const int64_t rdim = cpuData.rdim();
     std::vector<int64_t> tailSizes;
