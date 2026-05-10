@@ -198,14 +198,14 @@ indexToGridHost(const nanovdb::NanoGrid<nanovdb::ValueOnIndex> *srcGrid,
     nanovdb::HostBuffer buffer(totalSize);
     uint8_t *dstPtr = static_cast<uint8_t *>(buffer.data());
 
-    DstGridT *dstGrid = reinterpret_cast<DstGridT *>(dstPtr + offGrid);
-    DstTreeT *dstTree = reinterpret_cast<DstTreeT *>(dstPtr + offTree);
-    DstRootT *dstRoot = reinterpret_cast<DstRootT *>(dstPtr + offRoot);
+    DstGridT *dstGrid             = reinterpret_cast<DstGridT *>(dstPtr + offGrid);
+    DstTreeT *dstTree             = reinterpret_cast<DstTreeT *>(dstPtr + offTree);
+    DstRootT *dstRoot             = reinterpret_cast<DstRootT *>(dstPtr + offRoot);
     DstUpperT *const dstUpperBase = reinterpret_cast<DstUpperT *>(dstPtr + offNode2);
     DstLowerT *const dstLowerBase = reinterpret_cast<DstLowerT *>(dstPtr + offNode1);
     DstLeafT *const dstLeafBase   = reinterpret_cast<DstLeafT *>(dstPtr + offNode0);
 
-    *dstGrid->data()  = *srcGrid->data();
+    *dstGrid->data()   = *srcGrid->data();
     dstGrid->mGridType = nanovdb::toGridType<DstBuildT>();
     dstGrid->mData1    = 0u;
 
@@ -230,9 +230,11 @@ indexToGridHost(const nanovdb::NanoGrid<nanovdb::ValueOnIndex> *srcGrid,
             dstRoot->mStdDevi = srcValues[srcRoot.mStdDevi];
     }
 
-    const uint32_t tileCount        = nodeCount[3];
-    const uint64_t srcRootChildBase = sizeof(SrcRootT) + tileCount * sizeof(typename SrcRootT::Tile);
-    const uint64_t dstRootChildBase = sizeof(DstRootT) + tileCount * sizeof(typename DstRootT::Tile);
+    const uint32_t tileCount = nodeCount[3];
+    const uint64_t srcRootChildBase =
+        sizeof(SrcRootT) + tileCount * sizeof(typename SrcRootT::Tile);
+    const uint64_t dstRootChildBase =
+        sizeof(DstRootT) + tileCount * sizeof(typename DstRootT::Tile);
     for (uint32_t tileID = 0; tileID < tileCount; ++tileID) {
         const auto &srcTile = *srcRoot.tile(tileID);
         auto &dstTile       = *dstRoot->tile(tileID);
@@ -240,8 +242,7 @@ indexToGridHost(const nanovdb::NanoGrid<nanovdb::ValueOnIndex> *srcGrid,
         if (srcTile.child) {
             const uint64_t childID =
                 (srcTile.child - srcRootChildBase) / sizeof(typename SrcRootT::ChildNodeType);
-            dstTile.child =
-                dstRootChildBase + childID * sizeof(typename DstRootT::ChildNodeType);
+            dstTile.child = dstRootChildBase + childID * sizeof(typename DstRootT::ChildNodeType);
             dstTile.value = srcValues[0]; // background slot
             dstTile.state = false;
         } else {
@@ -317,8 +318,7 @@ indexToGridHost(const nanovdb::NanoGrid<nanovdb::ValueOnIndex> *srcGrid,
                     const uint64_t nodeSkip = nodeCount[1] - nodeID;
                     const uint64_t srcOff   = sizeof(SrcLowerT) * nodeSkip;
                     const uint64_t dstOff   = sizeof(DstLowerT) * nodeSkip;
-                    const uint64_t childID =
-                        (srcNode->mTable[i].child - srcOff) / sizeof(SrcLeafT);
+                    const uint64_t childID = (srcNode->mTable[i].child - srcOff) / sizeof(SrcLeafT);
                     dstNode->mTable[i].child = dstOff + childID * sizeof(DstLeafT);
                 }
             } else {
@@ -484,8 +484,7 @@ fvdbToNanovdbGridWithValues(const GridBatchData &gridBatchData,
     // workloads (the GPU path otherwise pays full upload+download costs even when the input
     // never leaves the host).
     if (!gridBatchData.device().is_cuda()) {
-        return fvdbToNanovdbGridWithValuesHost<OutBuildT, TorchScalarT>(
-            gridBatchData, data, names);
+        return fvdbToNanovdbGridWithValuesHost<OutBuildT, TorchScalarT>(gridBatchData, data, names);
     }
 
     using HostGridHandle   = nanovdb::GridHandle<nanovdb::HostBuffer>;
