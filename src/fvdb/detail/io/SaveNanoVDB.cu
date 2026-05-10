@@ -614,7 +614,7 @@ fvdbToNanovdbGridWithValues(const GridBatchData &gridBatchData,
     // Second pass: patch host-side GridData (mGridSize, mMap, name) and append fvdb_jdata blind
     // data, then wrap the buffer in a HostBuffer-backed GridHandle.
     std::vector<HostGridHandle> buffers;
-    buffers.reserve(gridBatchData.batchSize()); // issue #2: reserve, don't size
+    buffers.reserve(gridBatchData.batchSize()); 
     for (int64_t bi = 0; bi < gridBatchData.batchSize(); ++bi) {
         const std::string name = names.size() > 0 ? names[bi] : "";
         std::vector<int64_t> shapeInts;
