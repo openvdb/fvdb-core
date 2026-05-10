@@ -942,9 +942,9 @@ saveIndexGridWithBlindData(const std::string &path,
 
     // Synchronize cuda stream if we just did a bunch of GPU -> CPU transfers
     if (isCuda) {
-        at::cuda::CUDAStream defaultStream =
+        at::cuda::CUDAStream stream =
             at::cuda::getCurrentCUDAStream(gridBatchData.device().index());
-        cudaStreamSynchronize(defaultStream.stream());
+        cudaStreamSynchronize(stream.stream());
     }
 
     // Write the grid to disk
