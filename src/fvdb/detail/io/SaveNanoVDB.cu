@@ -860,13 +860,13 @@ saveIndexGridWithBlindData(const std::string &path,
         const size_t sourceGridByteSize = nanoGridHdl.gridSize(bi);
         if (isCuda) {
             c10::cuda::CUDAGuard deviceGuard(gridBatchData.device());
-            at::cuda::CUDAStream defaultStream =
+            at::cuda::CUDAStream stream =
                 at::cuda::getCurrentCUDAStream(gridBatchData.device().index());
             cudaMemcpyAsync((void *)writeHead,
                             (void *)readHead,
                             sourceGridByteSize,
                             cudaMemcpyDeviceToHost,
-                            defaultStream.stream());
+                            stream.stream());
         } else {
             memcpy((void *)writeHead, (void *)readHead, sourceGridByteSize);
         }
