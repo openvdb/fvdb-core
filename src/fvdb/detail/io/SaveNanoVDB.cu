@@ -491,7 +491,7 @@ fvdbToNanovdbGridWithValues(const GridBatchData &gridBatchData,
     using DeviceGridHandle = nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer>;
     using ValueT           = typename nanovdb::BuildToValueMap<OutBuildT>::type;
 
-    // Hoist tensor shape info out of the per-batch loop (issue #4). The data tensor has shape
+    // Hoist tensor shape info out of the per-batch loop. The data tensor has shape
     // [totalVoxels, *tail]; per-batch, dim 0 is `numVoxelsAt(bi)` and the tail is identical.
     const int64_t rdim = data.rdim();
     std::vector<int64_t> tailSizes;
