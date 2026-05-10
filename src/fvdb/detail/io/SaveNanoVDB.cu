@@ -7,6 +7,7 @@
 #include <nanovdb/NanoVDB.h>
 #include <nanovdb/cuda/DeviceBuffer.h>
 #include <nanovdb/io/IO.h>
+#include <nanovdb/tools/GridChecksum.h>
 #include <nanovdb/tools/cuda/IndexToGrid.cuh>
 
 #include <c10/cuda/CUDACachingAllocator.h>
@@ -138,7 +139,325 @@ patchGridWithBlindShape(uint8_t *gridBuf,
     }
 }
 
+/// @brief Host-only port of `nanovdb::tools::cuda::indexToGrid` for a single
+/// `nanovdb::NanoGrid<nanovdb::ValueOnIndex>`.
+///
+/// Mirrors the layout and per-node operations of `IndexToGrid.cuh`: copies the grid/tree/root
+/// headers, fixes child offsets where the destination node sizes differ from the source, and
+/// fills every internal-node value slot and leaf voxel slot via `srcValues[srcIndex]`. The
+/// kernel's per-thread/per-block work becomes a sequential loop on the host, so this avoids
+/// any CUDA context, allocation, or memcpy when the source grid is already CPU-resident.
+///
+/// @tparam DstBuildT Destination NanoVDB build type (e.g. `float`, `nanovdb::Vec3f`).
+/// @param srcGrid Host pointer to the source `NanoGrid<ValueOnIndex>`.
+/// @param srcValues Host pointer to a flat array of per-voxel values, indexed by the source
+///        grid's per-voxel index. `srcValues[0]` is the background slot; `srcValues[1..N]` are
+///        the active voxel values (matches the convention used by `indexToGrid`).
+/// @return A new `GridHandle<HostBuffer>` wrapping the freshly built typed grid.
+template <typename DstBuildT>
+nanovdb::GridHandle<nanovdb::HostBuffer>
+indexToGridHost(const nanovdb::NanoGrid<nanovdb::ValueOnIndex> *srcGrid,
+                const typename nanovdb::BuildToValueMap<DstBuildT>::type *srcValues) {
+    using SrcBuildT = nanovdb::ValueOnIndex;
+
+    using DstGridT  = nanovdb::NanoGrid<DstBuildT>;
+    using DstTreeT  = nanovdb::NanoTree<DstBuildT>;
+    using DstRootT  = nanovdb::NanoRoot<DstBuildT>;
+    using DstUpperT = nanovdb::NanoUpper<DstBuildT>;
+    using DstLowerT = nanovdb::NanoLower<DstBuildT>;
+    using DstLeafT  = nanovdb::NanoLeaf<DstBuildT>;
+
+    using SrcRootT  = nanovdb::NanoRoot<SrcBuildT>;
+    using SrcUpperT = nanovdb::NanoUpper<SrcBuildT>;
+    using SrcLowerT = nanovdb::NanoLower<SrcBuildT>;
+    using SrcLeafT  = nanovdb::NanoLeaf<SrcBuildT>;
+
+    using SrcValueT = typename nanovdb::BuildToValueMap<DstBuildT>::type;
+    using DstStatsT = typename nanovdb::NanoRoot<DstBuildT>::FloatType;
+
+    static_assert(!nanovdb::BuildTraits<DstBuildT>::is_special,
+                  "indexToGridHost: destination build type must not be a special type "
+                  "(Fp16, ValueIndex, Boolean, etc.)");
+
+    const auto &srcTree         = srcGrid->tree();
+    const uint32_t nodeCount[4] = {
+        srcTree.nodeCount(0),
+        srcTree.nodeCount(1),
+        srcTree.nodeCount(2),
+        static_cast<uint32_t>(srcTree.root().tileCount()),
+    };
+
+    const uint64_t offGrid   = 0;
+    const uint64_t offTree   = DstGridT::memUsage();
+    const uint64_t offRoot   = offTree + DstTreeT::memUsage();
+    const uint64_t offNode2  = offRoot + DstRootT::memUsage(nodeCount[3]);
+    const uint64_t offNode1  = offNode2 + DstUpperT::memUsage() * nodeCount[2];
+    const uint64_t offNode0  = offNode1 + DstLowerT::memUsage() * nodeCount[1];
+    const uint64_t totalSize = offNode0 + DstLeafT::DataType::memUsage() * nodeCount[0];
+
+    nanovdb::HostBuffer buffer(totalSize);
+    uint8_t *dstPtr = static_cast<uint8_t *>(buffer.data());
+
+    DstGridT *dstGrid = reinterpret_cast<DstGridT *>(dstPtr + offGrid);
+    DstTreeT *dstTree = reinterpret_cast<DstTreeT *>(dstPtr + offTree);
+    DstRootT *dstRoot = reinterpret_cast<DstRootT *>(dstPtr + offRoot);
+    DstUpperT *const dstUpperBase = reinterpret_cast<DstUpperT *>(dstPtr + offNode2);
+    DstLowerT *const dstLowerBase = reinterpret_cast<DstLowerT *>(dstPtr + offNode1);
+    DstLeafT *const dstLeafBase   = reinterpret_cast<DstLeafT *>(dstPtr + offNode0);
+
+    *dstGrid->data()  = *srcGrid->data();
+    dstGrid->mGridType = nanovdb::toGridType<DstBuildT>();
+    dstGrid->mData1    = 0u;
+
+    *dstTree->data() = *srcTree.data();
+    dstTree->setRoot(dstRoot);
+    dstTree->setFirstNode(dstUpperBase);
+    dstTree->setFirstNode(dstLowerBase);
+    dstTree->setFirstNode(dstLeafBase);
+
+    const SrcRootT &srcRoot = srcTree.root();
+    dstRoot->mBBox          = srcRoot.mBBox;
+    dstRoot->mTableSize     = srcRoot.mTableSize;
+    dstRoot->mBackground    = srcValues[srcRoot.mBackground];
+    if (srcGrid->hasMinMax()) {
+        dstRoot->mMinimum = srcValues[srcRoot.mMinimum];
+        dstRoot->mMaximum = srcValues[srcRoot.mMaximum];
+    }
+    if constexpr (std::is_same_v<SrcValueT, DstStatsT>) {
+        if (srcGrid->hasAverage())
+            dstRoot->mAverage = srcValues[srcRoot.mAverage];
+        if (srcGrid->hasStdDeviation())
+            dstRoot->mStdDevi = srcValues[srcRoot.mStdDevi];
+    }
+
+    const uint32_t tileCount        = nodeCount[3];
+    const uint64_t srcRootChildBase = sizeof(SrcRootT) + tileCount * sizeof(typename SrcRootT::Tile);
+    const uint64_t dstRootChildBase = sizeof(DstRootT) + tileCount * sizeof(typename DstRootT::Tile);
+    for (uint32_t tileID = 0; tileID < tileCount; ++tileID) {
+        const auto &srcTile = *srcRoot.tile(tileID);
+        auto &dstTile       = *dstRoot->tile(tileID);
+        dstTile.key         = srcTile.key;
+        if (srcTile.child) {
+            const uint64_t childID =
+                (srcTile.child - srcRootChildBase) / sizeof(typename SrcRootT::ChildNodeType);
+            dstTile.child =
+                dstRootChildBase + childID * sizeof(typename DstRootT::ChildNodeType);
+            dstTile.value = srcValues[0]; // background slot
+            dstTile.state = false;
+        } else {
+            dstTile.child = 0;
+            dstTile.value = srcValues[srcTile.value];
+            dstTile.state = srcTile.state;
+        }
+    }
+
+    for (uint32_t nodeID = 0; nodeID < nodeCount[2]; ++nodeID) {
+        const SrcUpperT *srcNode = srcTree.template getFirstNode<2>() + nodeID;
+        DstUpperT *dstNode       = dstUpperBase + nodeID;
+
+        dstNode->mBBox      = srcNode->mBBox;
+        dstNode->mFlags     = srcNode->mFlags;
+        dstNode->mValueMask = srcNode->mValueMask;
+        dstNode->mChildMask = srcNode->mChildMask;
+        if (srcGrid->hasMinMax()) {
+            dstNode->mMinimum = srcValues[srcNode->mMinimum];
+            dstNode->mMaximum = srcValues[srcNode->mMaximum];
+        }
+        if constexpr (std::is_same_v<SrcValueT, DstStatsT>) {
+            if (srcGrid->hasAverage())
+                dstNode->mAverage = srcValues[srcNode->mAverage];
+            if (srcGrid->hasStdDeviation())
+                dstNode->mStdDevi = srcValues[srcNode->mStdDevi];
+        }
+        constexpr uint32_t SIZE = SrcUpperT::SIZE;
+        for (uint32_t i = 0; i < SIZE; ++i) {
+            if (srcNode->mChildMask.isOn(i)) {
+                if constexpr (sizeof(SrcUpperT) == sizeof(DstUpperT) &&
+                              sizeof(SrcLowerT) == sizeof(DstLowerT)) {
+                    dstNode->mTable[i].child = srcNode->mTable[i].child;
+                } else {
+                    const uint64_t nodeSkip = nodeCount[2] - nodeID;
+                    const uint64_t srcOff   = sizeof(SrcUpperT) * nodeSkip;
+                    const uint64_t dstOff   = sizeof(DstUpperT) * nodeSkip;
+                    const uint64_t childID =
+                        (srcNode->mTable[i].child - srcOff) / sizeof(SrcLowerT);
+                    dstNode->mTable[i].child = dstOff + childID * sizeof(DstLowerT);
+                }
+            } else {
+                dstNode->mTable[i].value = srcValues[srcNode->mTable[i].value];
+            }
+        }
+    }
+
+    for (uint32_t nodeID = 0; nodeID < nodeCount[1]; ++nodeID) {
+        const SrcLowerT *srcNode = srcTree.template getFirstNode<1>() + nodeID;
+        DstLowerT *dstNode       = dstLowerBase + nodeID;
+
+        dstNode->mBBox      = srcNode->mBBox;
+        dstNode->mFlags     = srcNode->mFlags;
+        dstNode->mValueMask = srcNode->mValueMask;
+        dstNode->mChildMask = srcNode->mChildMask;
+        if (srcGrid->hasMinMax()) {
+            dstNode->mMinimum = srcValues[srcNode->mMinimum];
+            dstNode->mMaximum = srcValues[srcNode->mMaximum];
+        }
+        if constexpr (std::is_same_v<SrcValueT, DstStatsT>) {
+            if (srcGrid->hasAverage())
+                dstNode->mAverage = srcValues[srcNode->mAverage];
+            if (srcGrid->hasStdDeviation())
+                dstNode->mStdDevi = srcValues[srcNode->mStdDevi];
+        }
+        constexpr uint32_t SIZE = SrcLowerT::SIZE;
+        for (uint32_t i = 0; i < SIZE; ++i) {
+            if (srcNode->mChildMask.isOn(i)) {
+                if constexpr (sizeof(SrcLowerT) == sizeof(DstLowerT) &&
+                              sizeof(SrcLeafT) == sizeof(DstLeafT)) {
+                    dstNode->mTable[i].child = srcNode->mTable[i].child;
+                } else {
+                    const uint64_t nodeSkip = nodeCount[1] - nodeID;
+                    const uint64_t srcOff   = sizeof(SrcLowerT) * nodeSkip;
+                    const uint64_t dstOff   = sizeof(DstLowerT) * nodeSkip;
+                    const uint64_t childID =
+                        (srcNode->mTable[i].child - srcOff) / sizeof(SrcLeafT);
+                    dstNode->mTable[i].child = dstOff + childID * sizeof(DstLeafT);
+                }
+            } else {
+                dstNode->mTable[i].value = srcValues[srcNode->mTable[i].value];
+            }
+        }
+    }
+
+    for (uint32_t leafID = 0; leafID < nodeCount[0]; ++leafID) {
+        const SrcLeafT *srcLeaf = srcTree.template getFirstNode<0>() + leafID;
+        DstLeafT *dstLeaf       = dstLeafBase + leafID;
+
+        dstLeaf->mBBoxMin = srcLeaf->mBBoxMin;
+        for (int i = 0; i < 3; ++i)
+            dstLeaf->mBBoxDif[i] = srcLeaf->mBBoxDif[i];
+        dstLeaf->mFlags     = srcLeaf->mFlags;
+        dstLeaf->mValueMask = srcLeaf->mValueMask;
+        if (srcGrid->hasMinMax()) {
+            dstLeaf->mMinimum = srcValues[srcLeaf->getMin()];
+            dstLeaf->mMaximum = srcValues[srcLeaf->getMax()];
+        }
+        if constexpr (std::is_same_v<SrcValueT, DstStatsT>) {
+            if (srcGrid->hasAverage())
+                dstLeaf->mAverage = srcValues[srcLeaf->getAvg()];
+            if (srcGrid->hasStdDeviation())
+                dstLeaf->mStdDevi = srcValues[srcLeaf->getDev()];
+        }
+        constexpr uint32_t LEAF_SIZE = 512u;
+        for (uint32_t i = 0; i < LEAF_SIZE; ++i) {
+            dstLeaf->mValues[i] = srcValues[srcLeaf->getValue(i)];
+        }
+    }
+
+    nanovdb::tools::updateChecksum(dstGrid);
+
+    return nanovdb::GridHandle<nanovdb::HostBuffer>(std::move(buffer));
+}
+
 } // namespace
+
+/// @brief Host-only build path for `fvdbToNanovdbGridWithValues`. Used when both the source grid
+/// and the user data are CPU-resident: avoids all CUDA context init, H2D upload, kernel launch,
+/// and D2H copy that the GPU path incurs.
+template <typename OutBuildT, typename TorchScalarT>
+nanovdb::GridHandle<nanovdb::HostBuffer>
+fvdbToNanovdbGridWithValuesHost(const GridBatchData &gridBatchData,
+                                const JaggedTensor &data,
+                                const std::vector<std::string> &names) {
+    using HostGridHandle = nanovdb::GridHandle<nanovdb::HostBuffer>;
+    using ValueT         = typename nanovdb::BuildToValueMap<OutBuildT>::type;
+
+    JaggedTensor cpuData = data;
+    if (cpuData.is_cuda()) {
+        cpuData = cpuData.cpu();
+    }
+    if (!cpuData.is_contiguous()) {
+        cpuData = cpuData.contiguous();
+    }
+
+    const int64_t rdim = cpuData.rdim();
+    std::vector<int64_t> tailSizes;
+    tailSizes.reserve(rdim > 0 ? static_cast<size_t>(rdim - 1) : 0);
+    for (int64_t di = 1; di < rdim; ++di) {
+        tailSizes.push_back(cpuData.rsize(di));
+    }
+    const uint64_t shapeBytes           = sizeof(int64_t) * (rdim + 1);
+    const uint64_t paddedBlindDataBytes = nanovdb::math::AlignUp<32UL>(shapeBytes);
+    const uint64_t blindOverhead        = sizeof(nanovdb::GridBlindMetaData) + paddedBlindDataBytes;
+
+    const uint8_t *hSrcBufferStart =
+        static_cast<const uint8_t *>(gridBatchData.nanoGridHandle().buffer().data());
+    const ValueT *hDataValuesBase = reinterpret_cast<const ValueT *>(cpuData.jdata().data_ptr());
+
+    // Per-batch values buffer of size `numVoxels + 1`: slot [0] is the inactive/background value
+    // (zero), slots [1..N] are the user data slice. Reused across batches if the new size fits.
+    std::vector<ValueT> valueBuf;
+
+    std::vector<HostGridHandle> buffers;
+    buffers.reserve(gridBatchData.batchSize());
+
+    for (int64_t bi = 0; bi < gridBatchData.batchSize(); ++bi) {
+        const std::string name = names.size() > 0 ? names[bi] : "";
+        TORCH_CHECK_VALUE(name.size() < nanovdb::GridData::MaxNameSize,
+                          "Grid name " + name + " exceeds maximum character length of " +
+                              std::to_string(nanovdb::GridData::MaxNameSize) + ".");
+
+        const int64_t numVoxelsBi = gridBatchData.numVoxelsAt(bi);
+        const int64_t cumVoxelsBi = gridBatchData.cumVoxelsAt(bi);
+        TORCH_CHECK_VALUE(
+            numVoxelsBi >= 0, "Invalid number of voxels at grid index ", bi, ": ", numVoxelsBi);
+
+        const auto *hSrcGrid = reinterpret_cast<const nanovdb::NanoGrid<nanovdb::ValueOnIndex> *>(
+            hSrcBufferStart + gridBatchData.cumBytesAt(bi));
+
+        const size_t valueBufElems = static_cast<size_t>(numVoxelsBi) + 1u;
+        if (valueBuf.size() < valueBufElems) {
+            valueBuf.resize(valueBufElems);
+        }
+        valueBuf[0] = ValueT{}; // background / inactive slot
+        if (numVoxelsBi > 0) {
+            std::memcpy(valueBuf.data() + 1,
+                        hDataValuesBase + cumVoxelsBi,
+                        static_cast<size_t>(numVoxelsBi) * sizeof(ValueT));
+        }
+
+        HostGridHandle gh = indexToGridHost<OutBuildT>(hSrcGrid, valueBuf.data());
+
+        const uint64_t origGridBytes = gh.buffer().size();
+        const uint64_t totalBytes    = origGridBytes + blindOverhead;
+
+        nanovdb::HostBuffer outBuf(totalBytes);
+        std::memcpy(outBuf.data(), gh.buffer().data(), origGridBytes);
+
+        std::vector<int64_t> shapeInts;
+        shapeInts.reserve(static_cast<size_t>(rdim + 1));
+        shapeInts.push_back(static_cast<int64_t>(rdim));
+        shapeInts.push_back(numVoxelsBi);
+        for (int64_t s: tailSizes) {
+            shapeInts.push_back(s);
+        }
+        TORCH_CHECK(static_cast<int64_t>(shapeInts.size()) == rdim + 1,
+                    "Internal error: blind data shape int count mismatch.");
+
+        patchGridWithBlindShape(static_cast<uint8_t *>(outBuf.data()),
+                                origGridBytes,
+                                totalBytes,
+                                gridBatchData.voxelSizeAt(bi),
+                                gridBatchData.voxelOriginAt(bi),
+                                name,
+                                shapeInts);
+
+        buffers.emplace_back(std::move(outBuf));
+    }
+
+    if (buffers.size() == 1) {
+        return std::move(buffers[0]);
+    }
+    return nanovdb::mergeGrids(buffers);
+}
 
 /// @brief Helper function to build a NanoVDB grid (e.g. nanovdb::FloatGrid, Vec3fGrid, ...) from
 /// an existing fvdb ValueOnIndex grid batch and a JaggedTensor of per-voxel values, using the
@@ -159,6 +478,15 @@ fvdbToNanovdbGridWithValues(const GridBatchData &gridBatchData,
         "Invalid parameter for names, must be empty or a list of the same length as the batch size. Got " +
             std::to_string(names.size()) + " names for batch size " +
             std::to_string(gridBatchData.batchSize()));
+
+    // CPU-resident grids take a pure-host path that mirrors `indexToGrid` without any CUDA
+    // context init, H2D upload, kernel launch, or D2H copy. This avoids regressing CPU-only
+    // workloads (the GPU path otherwise pays full upload+download costs even when the input
+    // never leaves the host).
+    if (!gridBatchData.device().is_cuda()) {
+        return fvdbToNanovdbGridWithValuesHost<OutBuildT, TorchScalarT>(
+            gridBatchData, data, names);
+    }
 
     using HostGridHandle   = nanovdb::GridHandle<nanovdb::HostBuffer>;
     using DeviceGridHandle = nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer>;
