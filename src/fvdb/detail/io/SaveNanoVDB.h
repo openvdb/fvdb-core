@@ -15,12 +15,12 @@ namespace io {
 
 nanovdb::GridHandle<nanovdb::HostBuffer>
 toNVDB(const GridBatchData &gridBatchData,
-       const std::optional<JaggedTensor> maybeData = std::nullopt,
-       const std::vector<std::string> &names       = {});
+       const std::optional<JaggedTensor> &maybeData = std::nullopt,
+       const std::vector<std::string> &names        = {});
 
 void saveNVDB(const std::string &path,
               const GridBatchData &gridBatchData,
-              const std::optional<JaggedTensor> maybeData,
+              const std::optional<JaggedTensor> &maybeData,
               const std::vector<std::string> &names = {},
               bool compressed                       = false,
               bool verbose                          = false);

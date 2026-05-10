@@ -84,7 +84,7 @@ from_nanovdb(nanovdb::GridHandle<nanovdb::HostBuffer> &handle) {
 
 nanovdb::GridHandle<nanovdb::HostBuffer>
 to_nanovdb(const GridBatchData &gridBatchData,
-           const std::optional<JaggedTensor> maybeData,
+           const std::optional<JaggedTensor> &maybeData,
            const std::vector<std::string> &names) {
     return detail::io::toNVDB(gridBatchData, maybeData, names);
 }
@@ -102,7 +102,7 @@ jcat(const std::vector<JaggedTensor> &vec, std::optional<int64_t> dim) {
 void
 save(const std::string &path,
      const GridBatchData &gridBatchData,
-     const std::optional<JaggedTensor> maybeData,
+     const std::optional<JaggedTensor> &maybeData,
      const std::vector<std::string> &names,
      bool compressed,
      bool verbose) {
@@ -112,7 +112,7 @@ save(const std::string &path,
 void
 save(const std::string &path,
      const GridBatchData &gridBatchData,
-     const std::optional<JaggedTensor> maybeData,
+     const std::optional<JaggedTensor> &maybeData,
      const std::string &name,
      bool compressed,
      bool verbose) {
