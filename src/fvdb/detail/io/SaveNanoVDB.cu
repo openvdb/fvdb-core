@@ -740,9 +740,6 @@ getIndexGrid(const GridBatchData &gridBatchData, const std::vector<std::string> 
     void *readHead    = isCuda ? nanoGridHdl.buffer().deviceData() : nanoGridHdl.buffer().data();
     const size_t sourceGridByteSize = nanoGridHdl.buffer().size();
 
-    // Issue #6: collapse the async-then-immediate-sync pattern. The previous code launched a
-    // single cudaMemcpyAsync and then immediately synchronized, which is equivalent to a plain
-    // cudaMemcpy with extra noise. Use a synchronous copy under the device guard for clarity.
     if (isCuda) {
         c10::cuda::CUDAGuard deviceGuard(gridBatchData.device());
         cudaCheck(cudaMemcpy(writeHead, readHead, sourceGridByteSize, cudaMemcpyDeviceToHost));
