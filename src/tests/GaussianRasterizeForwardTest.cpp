@@ -358,6 +358,7 @@ TEST(GaussianRasterizeForwardMaskedEdgeTile, Child) {
                                                             tileSize,
                                                             tileOffsets,
                                                             tileGaussianIds,
+                                                            -1, // numSharedChannelsOverride
                                                             backgrounds,
                                                             masks);
 
@@ -687,6 +688,7 @@ TEST_F(GaussianRasterizeForwardTestFixture, TestMultipleCamerasWithBackgrounds) 
                                                             tileSize,
                                                             tileOffsets,
                                                             tileGaussianIds,
+                                                            -1, // numSharedChannelsOverride
                                                             backgrounds);
 
     // Alphas and last IDs should be identical regardless of background
@@ -913,6 +915,7 @@ TEST_F(GaussianRasterizeForwardTestFixture, TestSparseRasterizationMultipleCamer
             tilePixelMask,
             tilePixelCumsum,
             pixelMap,
+            -1, // numSharedChannelsOverride
             backgrounds);
 
     // Alphas and last IDs should be identical regardless of background

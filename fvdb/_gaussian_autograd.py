@@ -384,6 +384,7 @@ class _RasterizeScreenSpaceGaussiansFn(torch.autograd.Function):
             tile_size,
             tile_offsets,
             tile_gaussian_ids,
+            -1,
             backgrounds,
             masks,
         )
@@ -530,6 +531,7 @@ class _RasterizeScreenSpaceGaussiansSparseFn(torch.autograd.Function):
             tile_pixel_mask,
             tile_pixel_cumsum,
             pixel_map,
+            -1,
             backgrounds,
             masks,
         )
