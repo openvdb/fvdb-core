@@ -333,7 +333,7 @@ template <typename ScalarType, size_t NUM_CHANNELS, bool IS_PACKED> struct Raste
                  const ScalarType px,
                  const ScalarType py) const {
         const auto delta         = gaussian.delta(px, py);
-        const auto sigma         = gaussian.sigma(px, py);
+        const auto sigma         = gaussian.sigma(delta);
         const auto expMinusSigma = __expf(-sigma);
         const auto alpha         = min(ALPHA_THRESHOLD, gaussian.opacity * expMinusSigma);
 
