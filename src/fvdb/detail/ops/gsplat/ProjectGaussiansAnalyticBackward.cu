@@ -42,7 +42,7 @@ projectionBackwardKernel(const int32_t offset,
                          Camera camera,
                          const T eps2d,
                          // fwd outputs
-                         const int32_t *__restrict__ radii,   // [C, N]
+                         const int32_t *__restrict__ radii,   // [C, N, 2]
                          const T *__restrict__ conics,        // [C, N, 3]
                          const T *__restrict__ compensations, // [C, N] optional
                          // grad outputs
@@ -75,7 +75,11 @@ projectionBackwardKernel(const int32_t offset,
     }
     gId += offset;
     auto idx = cId * N + gId;
-    if (radii[idx] <= 0) {
+    // Per-axis visibility — culled gaussians have (0, 0); we also short-circuit
+    // when either axis is zero, matching the forward's cull logic.
+    const int32_t radiusX = radii[idx * 2 + 0];
+    const int32_t radiusY = radii[idx * 2 + 1];
+    if (radiusX <= 0 || radiusY <= 0) {
         return;
     }
 
@@ -186,7 +190,8 @@ projectionBackwardKernel(const int32_t offset,
         gpuAtomicAdd(outDLossDMeans2dNormAccum + gId, norm);
         gpuAtomicAdd(outGradientStepCounts + gId, 1);
         if (outMaxRadiiAccum != nullptr) {
-            atomicMax(outMaxRadiiAccum + gId, radii[idx]);
+            const int32_t maxRadius = (radiusX > radiusY) ? radiusX : radiusY;
+            atomicMax(outMaxRadiiAccum + gId, maxRadius);
         }
     }
 }
@@ -205,7 +210,7 @@ dispatchProjectGaussiansAnalyticBwd(
     const uint32_t imageWidth,
     const uint32_t imageHeight,
     const float eps2d,
-    const torch::Tensor &radii,                             // [C, N]
+    const torch::Tensor &radii,                             // [C, N, 2]
     const torch::Tensor &conics,                            // [C, N, 3]
     const torch::Tensor &dLossDMeans2d,                     // [C, N, 2]
     const torch::Tensor &dLossDDepths,                      // [C, N]
@@ -231,7 +236,7 @@ dispatchProjectGaussiansAnalyticBwd<torch::kCUDA>(
     const uint32_t imageHeight,
     const float eps2d,
     // fwd outputs
-    const torch::Tensor &radii,  // [C, N]
+    const torch::Tensor &radii,  // [C, N, 2]
     const torch::Tensor &conics, // [C, N, 3]
     // grad outputs
     const torch::Tensor &dLossDMeans2d,                              // [C, N, 2]
@@ -412,7 +417,7 @@ dispatchProjectGaussiansAnalyticBwd<torch::kPrivateUse1>(
     const uint32_t imageHeight,
     const float eps2d,
     // fwd outputs
-    const torch::Tensor &radii,  // [C, N]
+    const torch::Tensor &radii,  // [C, N, 2]
     const torch::Tensor &conics, // [C, N, 3]
     // grad outputs
     const torch::Tensor &dLossDMeans2d,                     // [C, N, 2]
@@ -670,7 +675,7 @@ dispatchProjectGaussiansAnalyticBwd<torch::kCPU>(
     const uint32_t imageHeight,
     const float eps2d,
     // fwd outputs
-    const torch::Tensor &radii,  // [C, N]
+    const torch::Tensor &radii,  // [C, N, 2]
     const torch::Tensor &conics, // [C, N, 3]
     // grad outputs
     const torch::Tensor &dLossDMeans2d,                     // [C, N, 2]
@@ -696,7 +701,7 @@ projectGaussiansAnalyticBwd(
     const uint32_t imageWidth,
     const uint32_t imageHeight,
     const float eps2d,
-    const torch::Tensor &radii,                             // [C, N]
+    const torch::Tensor &radii,                             // [C, N, 2]
     const torch::Tensor &conics,                            // [C, N, 3]
     const torch::Tensor &dLossDMeans2d,                     // [C, N, 2]
     const torch::Tensor &dLossDDepths,                      // [C, N]

@@ -275,12 +275,13 @@ class ProjectedGaussianSplats:
     @property
     def radii(self) -> torch.Tensor:
         """
-        Return the 2D radii (in pixels) of each projected Gaussian in each image plane. The radius of a Gaussian is the maximum extent
-        of the Gaussian along any direction in the image plane.
+        Return the per-axis 2D radii (in pixels) of each projected Gaussian in each image plane.
+        Entry ``(c, n, 0)`` is the half-width of the AABB along x and ``(c, n, 1)`` is the
+        half-width along y. A Gaussian is considered visible iff both axes are positive.
 
         Returns:
-            radii (torch.Tensor): A tensor of shape ``(C, N)`` representing the 2D radius of each projected Gaussian, where
-                ``C`` is the number of image planes, and ``N`` is the number of projected Gaussians.
+            radii (torch.Tensor): A tensor of shape ``(C, N, 2)`` representing the per-axis 2D
+                radius of each projected Gaussian.
         """
         return self._radii
 
@@ -1658,9 +1659,9 @@ class GaussianSplat3d:
         num_tiles_h = math.ceil(H / tile_size)
         num_tiles_w = math.ceil(W / tile_size)
         tile_offsets, tile_gaussian_ids = _C.intersect_gaussian_tiles(
-            means2d,
-            radii,
-            depths,
+            means2d.contiguous(),
+            radii.contiguous(),
+            depths.contiguous(),
             C,
             tile_size,
             num_tiles_h,
@@ -2475,9 +2476,9 @@ class GaussianSplat3d:
             num_tiles_h = math.ceil(raster_h / tile_size)
             num_tiles_w = math.ceil(raster_w / tile_size)
             tile_offsets, tile_gaussian_ids = _C.intersect_gaussian_tiles(
-                pg.means2d,
-                pg.radii,
-                pg.depths,
+                pg.means2d.contiguous(),
+                pg.radii.contiguous(),
+                pg.depths.contiguous(),
                 C,
                 tile_size,
                 num_tiles_h,

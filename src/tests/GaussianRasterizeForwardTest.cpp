@@ -335,7 +335,7 @@ TEST(GaussianRasterizeForwardMaskedEdgeTile, Child) {
     const auto features  = torch::tensor({{{0.4f, 0.5f, -0.6f}}}, fopts);             // [C,N,D]
     const auto opacities = torch::tensor({{0.9f}}, fopts);                            // [C,N]
     const auto radii     = torch::tensor(
-        {{1}}, torch::TensorOptions().device(torch::kCUDA).dtype(torch::kInt32)); // [C,N]
+        {{{1, 1}}}, torch::TensorOptions().device(torch::kCUDA).dtype(torch::kInt32)); // [C,N,2]
     const auto depths      = torch::tensor({{1.0f}}, fopts);                          // [C,N]
     const auto backgrounds = torch::tensor({{0.1f, -0.2f, 0.3f}}, fopts);             // [C,D]
 

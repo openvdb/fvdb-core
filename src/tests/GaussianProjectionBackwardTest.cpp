@@ -49,7 +49,13 @@ struct GaussianProjectionBackwardTestFixture : public ::testing::Test {
         if (inputNames.size() > 5) {
             compensations = inputs[5].cuda();
             radii         = inputs[6].cuda();
-            conics        = inputs[7].cuda();
+            // The golden snapshots store radii as scalar [C, N]; the kernel
+            // now expects per-axis [C, N, 2]. Duplicate the scalar onto both
+            // axes to preserve the snapshot's cull mask (max(r, r) == r).
+            if (radii.dim() == 2) {
+                radii = radii.unsqueeze(-1).expand({-1, -1, 2}).contiguous();
+            }
+            conics = inputs[7].cuda();
         }
 
         imageWidth   = 647;

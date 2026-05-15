@@ -41,7 +41,7 @@ jaggedProjectionBackwardKernel(
     Camera camera,
     const T eps2d,
     // fwd outputs
-    const int32_t *__restrict__ radii,   // [N]
+    const int32_t *__restrict__ radii,   // [N, 2]
     const T *__restrict__ conics,        // [N, 3]
     const T *__restrict__ compensations, // [N] optional
     // grad outputs
@@ -57,7 +57,11 @@ jaggedProjectionBackwardKernel(
     T *__restrict__ outDLossDWorldToCamMatrices) { // [C, 4, 4] optional
     // parallelize over N.
     const uint32_t idx = cg::this_grid().thread_rank();
-    if (idx >= N || radii[idx] <= 0) {
+    if (idx >= N) {
+        return;
+    }
+    // Per-axis visibility: culled gaussians have (0, 0).
+    if (radii[idx * 2 + 0] <= 0 || radii[idx * 2 + 1] <= 0) {
         return;
     }
 
@@ -194,7 +198,7 @@ dispatchProjectGaussiansAnalyticJaggedBwd(const torch::Tensor &gSizes, // [B] ga
                                           const uint32_t imageWidth,
                                           const uint32_t imageHeight,
                                           const float eps2d,
-                                          const torch::Tensor &radii,         // [N]
+                                          const torch::Tensor &radii,         // [N, 2]
                                           const torch::Tensor &conics,        // [N, 3]
                                           const torch::Tensor &dLossDMeans2d, // [N, 2]
                                           const torch::Tensor &dLossDDepths,  // [N]
@@ -216,7 +220,7 @@ dispatchProjectGaussiansAnalyticJaggedBwd<torch::kCUDA>(
     const uint32_t imageHeight,
     const float eps2d,
     // fwd outputs
-    const torch::Tensor &radii,  // [N]
+    const torch::Tensor &radii,  // [N, 2]
     const torch::Tensor &conics, // [N, 3]
     // grad outputs
     const torch::Tensor &dLossDMeans2d, // [N, 2]
@@ -389,7 +393,7 @@ dispatchProjectGaussiansAnalyticJaggedBwd<torch::kCPU>(
     const uint32_t imageWidth,
     const uint32_t imageHeight,
     const float eps2d,
-    const torch::Tensor &radii,         // [N]
+    const torch::Tensor &radii,         // [N, 2]
     const torch::Tensor &conics,        // [N, 3]
     const torch::Tensor &dLossDMeans2d, // [N, 2]
     const torch::Tensor &dLossDDepths,  // [N]
@@ -410,7 +414,7 @@ projectGaussiansAnalyticJaggedBwd(const torch::Tensor &gSizes,             // [B
                                   const uint32_t imageWidth,
                                   const uint32_t imageHeight,
                                   const float eps2d,
-                                  const torch::Tensor &radii,         // [N]
+                                  const torch::Tensor &radii,         // [N, 2]
                                   const torch::Tensor &conics,        // [N, 3]
                                   const torch::Tensor &dLossDMeans2d, // [N, 2]
                                   const torch::Tensor &dLossDDepths,  // [N]
