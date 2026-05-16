@@ -72,7 +72,7 @@ prependGridNameBlindData(nanovdb::GridHandle<nanovdb::HostBuffer> &sourceHandle,
 
     nanovdb::GridBlindMetaData *fvdbMetadata = reinterpret_cast<nanovdb::GridBlindMetaData *>(
         outBytes + blindMetadataOffset + metadataBytes);
-    std::memcpy(fvdbMetadata, oldBlindMetadata, metadataBytes);
+    *fvdbMetadata = *oldBlindMetadata;
     fvdbMetadata->mDataOffset =
         static_cast<int64_t>(oldBlindMetadata->mDataOffset + paddedGridNameBytes);
 
