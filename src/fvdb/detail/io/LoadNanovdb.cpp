@@ -198,7 +198,8 @@ nanovdbTensorGridToFVDBGrid(const nanovdb::NanoGrid<SourceGridT> *sourceGrid) {
         copyIndexGridToHandle<SourceGridT, TargetGridT>(sourceGrid);
 
     // Check if this grid has FVDB blind data attached to it
-    bool foundFVDB = false;
+    bool foundFVDB          = false;
+    unsigned fvdbBlindIndex = 0;
     torch::Dtype blindDtype;
     for (unsigned i = 0; i < sourceGrid->blindDataCount(); i += 1) {
         const nanovdb::GridBlindMetaData &blindMetadata = sourceGrid->blindMetaData(i);
@@ -206,16 +207,16 @@ nanovdbTensorGridToFVDBGrid(const nanovdb::NanoGrid<SourceGridT> *sourceGrid) {
         if (blindMetadata.mDataClass == nanovdb::GridBlindDataClass::GridName) {
             continue;
         }
-        std::tuple<bool, std::optional<torch::Dtype>> isFvdb =
-            isFvdbBlindData(sourceGrid->blindMetaData(0));
+        std::tuple<bool, std::optional<torch::Dtype>> isFvdb = isFvdbBlindData(blindMetadata);
         if (std::get<0>(isFvdb)) {
             TORCH_CHECK(
                 !foundFVDB,
                 "Internal Error: Grid has multiple FVDB blind data tensors. Only one is supported.");
             TORCH_CHECK(std::get<1>(isFvdb).has_value(),
                         "Invalid blind metadata for nanovdb Tensor grid.");
-            foundFVDB  = true;
-            blindDtype = std::get<1>(isFvdb).value();
+            foundFVDB      = true;
+            fvdbBlindIndex = i;
+            blindDtype     = std::get<1>(isFvdb).value();
         } else {
             TORCH_WARN(
                 "Grid has blind data, but it is not valid FVDB blind data. Blind data will be ignored.");
@@ -233,7 +234,7 @@ nanovdbTensorGridToFVDBGrid(const nanovdb::NanoGrid<SourceGridT> *sourceGrid) {
     }
 
     // Pointer to actual blind data
-    uint8_t *readHead = (uint8_t *)(sourceGrid->blindMetaData(0).blindData());
+    uint8_t *readHead = (uint8_t *)(sourceGrid->blindMetaData(fvdbBlindIndex).blindData());
 
     // Read the shape of the tensor
     const int64_t ndim = *reinterpret_cast<int64_t *>(readHead);
@@ -363,11 +364,11 @@ nanovdbGridToFvdbGrid(const nanovdb::NanoGrid<SourceGridT> *sourceGrid) {
                 "Invalid FVDB blind metadata for nanovdb grid. Should not have extra type.");
 
             // Pointer to actual blind data
-            uint8_t *readHead = (uint8_t *)(sourceGrid->blindMetaData(0).blindData());
+            uint8_t *readHead = (uint8_t *)(blindMetadata.blindData());
 
             // Read the shape of the tensor
             const int64_t ndim = *reinterpret_cast<int64_t *>(readHead);
-            TORCH_CHECK(sourceGrid->blindMetaData(0).blindDataSize() ==
+            TORCH_CHECK(blindMetadata.blindDataSize() ==
                             nanovdb::math::AlignUp<32U>(sizeof(int64_t) * (ndim + 1)),
                         "Invalid FVDB blind data for nanovdb grid. Unexpected size.");
             readHead += sizeof(int64_t);
