@@ -1020,7 +1020,8 @@ class GridBatch:
         Returns:
             vertex_positions (JaggedTensor): Mesh vertex positions. Shape: ``(batch_size, num_vertices_for_grid_b, 3)``.
             face_indices (JaggedTensor): Triangle face indices. Shape: ``(batch_size, num_faces_for_grid_b, 3)``.
-            vertex_normals (JaggedTensor): Vertex normals. Shape: ``(batch_size, num_vertices_for_grid_b, 3)``.
+            unique_vertex_ids (JaggedTensor): Unique vertex IDs with int64 values.
+                Shape: ``(batch_size, num_vertices_for_grid_b, 3)``.
 
         .. seealso:: :meth:`Grid.marching_cubes`
         """
