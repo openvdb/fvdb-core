@@ -29,6 +29,63 @@ def _wrap_single_grid(cpp_impl):
     return Grid(data=cpp_impl)
 
 
+def dirty_mask_from_sidecars_single(
+    new_grid: "Grid",
+    new_sidecar: torch.Tensor,
+    old_grid: "Grid",
+    old_sidecar: torch.Tensor,
+) -> torch.Tensor:
+    """Compute a ``[new_grid.num_voxels]`` bool "dirty" mask flagging
+    voxels whose sidecar value on ``new_grid`` differs from the
+    corresponding voxel on ``old_grid`` (or is absent from it).
+
+    Intended as the backbone of dirty-region ESDF / occupancy updates:
+    pass the result as the optional ``dirty_mask`` argument to
+    :meth:`Grid.compute_esdf_incremental` (or any other downstream
+    op that gates on a dirty set). Built entirely on top of the
+    existing ``inject`` primitive — no new CUDA kernels.
+
+    Semantics per output voxel ``v`` in ``new_grid``:
+
+    - If ``v.ijk`` is **not** in ``old_grid``: marked dirty (the
+      voxel is new).
+    - If ``v.ijk`` IS in ``old_grid`` at some ``w`` and
+      ``new_sidecar[v] == old_sidecar[w]`` (elementwise equality
+      across all channels for multi-channel sidecars): **not** dirty.
+    - Otherwise: dirty.
+
+    Multi-channel sidecars (``[num_voxels, C]``) reduce via "any
+    channel differs" to per-voxel bool.
+
+    **Paper-framing**: fvdb exposes dirty-region information as a
+    user-visible torch tensor (the result of this function) rather
+    than as library-internal allocator state (nvblox's
+    ``BlockManager``-resident dirty-block set). The user can
+    inspect it, combine it with other predicates
+    (``mask & (weights > threshold)``), pass it to multiple
+    consumers, or drop it to reclaim memory. All composable,
+    nothing hidden.
+
+    Args:
+        new_grid (Grid): Grid whose voxel set we compute the mask on.
+        new_sidecar (torch.Tensor): ``[new_grid.num_voxels]`` or
+            ``[new_grid.num_voxels, C]`` sidecar on ``new_grid``.
+            Must be floating-point (uses NaN sentinels to detect
+            voxels absent from ``old_grid``).
+        old_grid (Grid): Baseline grid for comparison.
+        old_sidecar (torch.Tensor): Sidecar on ``old_grid`` with the
+            same per-voxel shape and dtype as ``new_sidecar``.
+
+    Returns:
+        dirty (torch.Tensor): ``[new_grid.num_voxels]`` bool tensor
+        on the same device as ``new_sidecar``.
+    """
+    return _fvdb_cpp.dirty_mask_from_sidecars(
+        new_grid.data, new_sidecar,
+        old_grid.data, old_sidecar,
+    )
+
+
 # ---------------------------------------------------------------------------
 #  Grid structure derivation
 # ---------------------------------------------------------------------------

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/detail/ops/MarchingCubes.h>
+#include <fvdb/detail/ops/MarchingCubesFast.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
 #include <fvdb/detail/utils/MarchingCubesData.h>
@@ -388,7 +389,9 @@ MarchingCubes(const GridBatchData &batchHdl, const torch::Tensor &sdf, double le
 } // anonymous namespace
 
 std::vector<JaggedTensor>
-marchingCubes(const GridBatchData &batchHdl, const JaggedTensor &field, double level) {
+marchingCubesLegacy(const GridBatchData &batchHdl,
+                    const JaggedTensor &field,
+                    double level) {
     TORCH_CHECK_VALUE(
         field.ldim() == 1,
         "Expected field to have 1 list dimension, i.e. be a single list of coordinate values, but got",
@@ -410,6 +413,21 @@ marchingCubes(const GridBatchData &batchHdl, const JaggedTensor &field, double l
     batchHdl.checkDevice(field);
     return FVDB_DISPATCH_KERNEL_DEVICE(
         field.device(), [&]() { return MarchingCubes<DeviceTag>(batchHdl, fieldJdata, level); });
+}
+
+// Public dispatcher. Routes to the fast sparse-compact / packed-key
+// variant (`marchingCubesFast`) whenever it's eligible, and to the legacy
+// implementation otherwise. `marchingCubesFast` internally covers both
+// float32 and float16 CUDA inputs (fp16 is upcast to fp32, the fp32
+// kernel runs, and output vertex positions are downcast back) so that
+// reality-capture's default fp16 TSDF pipelines get the full speedup.
+// Other dtypes (fp64) and non-CUDA devices are handled by the legacy
+// path, which `marchingCubesFast` forwards to internally.
+std::vector<JaggedTensor>
+marchingCubes(const GridBatchData &batchHdl,
+              const JaggedTensor &field,
+              double level) {
+    return marchingCubesFast(batchHdl, field, level);
 }
 
 } // namespace ops
