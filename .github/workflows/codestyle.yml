@@ -32,6 +32,11 @@ jobs:
         extensions: 'h,cpp,cc,cu,cuh'
         clangFormatVersion: 18
         style: file
+        # Forked nanoVDB headers under nanovdb_overrides/ keep upstream's
+        # formatting verbatim (apart from documented FVDB FORK deltas) so
+        # that diff-against-upstream + resync stay tractable. They are
+        # intentionally exempt from fvdb's clang-format style.
+        exclude: 'src/fvdb/nanovdb_overrides'
 
   include-guards:
     name: Include guards
@@ -41,6 +46,13 @@ jobs:
     - uses: swahtz/include-guards-check-action@master
       with:
         path: 'src/'
+        # Forked nanoVDB headers keep upstream's include-guard names
+        # (`NANOVDB_*_HAS_BEEN_INCLUDED`) so the override headers and any
+        # upstream copy that ends up on the include path share the same
+        # guard and don't double-include.
+        # NB: this is a `grep -v -e` pattern matched against paths relative
+        # to `path:` above, so no `src/` prefix.
+        ignore: 'fvdb/nanovdb_overrides'
 
   check-spdx-identifiers:
     name: SPDX identifiers

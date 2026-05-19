@@ -170,6 +170,10 @@ message(STATUS "fvdb: TORCH_INCLUDE_DIRS: ${TORCH_INCLUDE_DIRS}")
 
 target_include_directories(fvdb PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+    # Overrides directory must come BEFORE the upstream nanoVDB source so that
+    # forked headers (e.g. nanovdb/cuda/DeviceBuffer.h) win the include search.
+    # See src/fvdb/nanovdb_overrides/README.md.
+    $<BUILD_INTERFACE:${FVDB_NANOVDB_OVERRIDES_DIR}>
     $<BUILD_INTERFACE:${nanovdb_SOURCE_DIR}/nanovdb>
     $<BUILD_INTERFACE:${nvtx3_SOURCE_DIR}/include>
     $<BUILD_INTERFACE:${NANOVDB_EDITOR_INCLUDE_DIR}>

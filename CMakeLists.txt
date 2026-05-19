@@ -169,6 +169,11 @@ set_target_properties(_fvdb_cpp PROPERTIES
 target_include_directories(_fvdb_cpp PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${TORCH_INCLUDE_DIRS}
+    # Overrides directory must come BEFORE the upstream nanoVDB source so that
+    # forked headers (e.g. nanovdb/cuda/DeviceBuffer.h) win the include search.
+    # Mirror the ordering used in src/CMakeLists.txt for the fvdb target.
+    # See src/fvdb/nanovdb_overrides/README.md.
+    ${FVDB_NANOVDB_OVERRIDES_DIR}
     ${nanovdb_SOURCE_DIR}/nanovdb
     ${NANOVDB_EDITOR_INCLUDE_DIR})
 target_link_libraries(_fvdb_cpp PRIVATE
