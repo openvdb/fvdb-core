@@ -25,14 +25,18 @@ Class-methods for creating Grid objects from various sources:
 
 from __future__ import annotations
 
-import pathlib
 from typing import TYPE_CHECKING, Any, overload
+
+import pathlib
 
 import torch
 
 from ._fvdb_cpp import GridBatchData
 from .jagged_tensor import JaggedTensor
-from .types import DeviceIdentifier, NumericMaxRank1
+from .types import (
+    DeviceIdentifier,
+    NumericMaxRank1,
+)
 
 if TYPE_CHECKING:
     from .grid_batch import GridBatch
@@ -777,6 +781,106 @@ class Grid:
 
         return functional.merged_grid_single(self, other)
 
+    def decay_and_prune(
+        self,
+        sidecar: torch.Tensor,
+        decay_factor: float,
+        prune_threshold: float = 0.0,
+        extra_sidecars: "list[torch.Tensor] | tuple[torch.Tensor, ...]" = (),
+    ) -> "tuple[Grid, torch.Tensor, list[torch.Tensor]]":
+        """Multiplicatively decay a per-voxel sidecar and (optionally)
+        prune voxels whose decayed magnitude falls below a threshold.
+
+        Dynamic-scene support pattern mirroring nvblox's
+        ``Mapper.decay()`` + block-level deallocation, but expressed
+        entirely in terms of fvdb primitives:
+
+        1. ``sidecar_new = sidecar * decay_factor``  (pure torch op)
+        2. ``keep = |sidecar_new| > prune_threshold``  (pure torch op)
+        3. ``new_grid = self.pruned_grid(keep)``  (existing fvdb primitive)
+        4. ``sidecar_out = sidecar_new[keep]``; similar for extras.
+
+        **Paper-framing: this method demonstrates that per-field
+        decay is "free" under fvdb's sidecar-as-tensor architecture.**
+        Because each sidecar (``tsdf``, ``weights``, ``features``,
+        ``log_odds``, ...) is stored as a separate torch tensor
+        aligned to the sparse grid, selective decay is just a tensor
+        op on the field the user cares about -- there's no library
+        machinery needed to "know which layer to decay" (contrast
+        nvblox's block-packed ``{sdf, weight, color}`` tuples, which
+        need integrator-aware ``decay_tsdf`` / ``decay_color``
+        methods to reach individual fields within a block).
+
+        Common use cases (all 1-3 lines of Python):
+
+        .. code-block:: python
+
+            # Decay TSDF weights only, leaving tsdf + features alone.
+            # (Color / features decay independently by multiplying them.)
+            g2, w2, [tsdf2, feat2] = grid.decay_and_prune(
+                weights, decay_factor=0.95, prune_threshold=0.01,
+                extra_sidecars=[tsdf, features],
+            )
+
+            # Decay occupancy log-odds toward unknown (p=0.5).
+            g2, lo2, _ = grid.decay_and_prune(
+                log_odds, decay_factor=0.9, prune_threshold=0.1,
+            )
+
+            # Decay without prune (no topology change).
+            # Just use: weights *= decay_factor -- this helper is
+            # unnecessary for that case.
+
+        Args:
+            sidecar (torch.Tensor): ``[num_voxels]`` or
+                ``[num_voxels, C]`` per-voxel sidecar tensor to
+                decay. The decayed magnitude drives the prune mask.
+                For multi-channel sidecars, the per-voxel magnitude
+                is the L2 norm across channels.
+            decay_factor (float): Multiplicative scaling applied to
+                ``sidecar``. Typical: ``0.95`` (gentle decay) to
+                ``0.5`` (aggressive). ``1.0`` is no-op.
+            prune_threshold (float): Voxels whose decayed magnitude
+                is ``<= prune_threshold`` are dropped from the grid.
+                Default ``0.0`` means "never prune" (no topology
+                change; returns ``self`` as ``new_grid``).
+            extra_sidecars (list[torch.Tensor]): Additional per-
+                voxel sidecars to prune in-sync with the grid's
+                topology change. Each must have ``shape[0] ==
+                num_voxels``.
+
+        Returns:
+            new_grid (Grid): Pruned grid (equals ``self`` if
+                no voxels were pruned).
+            new_sidecar (torch.Tensor): Decayed + pruned sidecar.
+            new_extras (list[torch.Tensor]): Each ``extra_sidecars[i]``
+                pruned with the same mask.
+        """
+        decayed = sidecar * decay_factor
+
+        # Magnitude for pruning: L2 norm across channels for multi-
+        # channel sidecars, elementwise abs for 1-D.
+        if decayed.dim() == 1:
+            magnitude = decayed.abs()
+        else:
+            magnitude = decayed.norm(dim=1) if decayed.shape[1] > 0 \
+                else decayed.abs().sum(dim=tuple(range(1, decayed.dim())))
+
+        if prune_threshold <= 0.0:
+            return self, decayed, list(extra_sidecars)
+
+        keep_mask = magnitude > prune_threshold
+
+        if keep_mask.all().item():
+            # Nothing to prune — return topology unchanged, saving a
+            # pruneGrid call and the associated inject.
+            return self, decayed, list(extra_sidecars)
+
+        new_grid = self.pruned_grid(keep_mask)
+        new_sidecar = decayed[keep_mask]
+        new_extras = [t[keep_mask] for t in extra_sidecars]
+        return new_grid, new_sidecar, new_extras
+
     def pruned_grid(self, mask: torch.Tensor) -> Grid:
         """Return a pruned :class:`Grid` keeping only voxels where ``mask`` is ``True``.
 
@@ -1456,6 +1560,136 @@ class Grid:
     #                    Meshing / TSDF
     # ============================================================
 
+    def compute_esdf(
+        self,
+        tsdf: torch.Tensor,
+        weights: torch.Tensor,
+        truncation_distance: float,
+        max_distance: float,
+        weight_threshold: float = 1.0e-6,
+        prune_unreached: bool = False,
+        use_vbm: bool = True,
+    ) -> tuple["Grid", torch.Tensor]:
+        """Compute a Euclidean Signed Distance Field (ESDF) from an integrated TSDF.
+
+        The ESDF extends the TSDF's narrow-band signed distances outward
+        (and inward) across a wider band, producing per-voxel world-unit
+        signed distances with ``|d| <= max_distance``. Composes three
+        nanoVDB topology ops (``dilateGrid``, a VBM-stencil sweep kernel,
+        and optionally ``pruneGrid``) on the same sparse-grid substrate
+        used by ``integrate_tsdf``.
+
+        Args:
+            tsdf (torch.Tensor): ``[num_voxels]`` fp32 normalized TSDF
+                values in ``[-1, +1]`` (fvdb's ``integrate_tsdf``
+                convention: ``tsdf = clip(d_world / T, -1, +1)``).
+            weights (torch.Tensor): ``[num_voxels]`` fp32 integration
+                weights.
+            truncation_distance (float): TSDF truncation margin in
+                world units (the ``T`` of the normalization above).
+            max_distance (float): ESDF support radius in world units.
+            weight_threshold (float): Voxels with
+                ``weights <= weight_threshold`` are not used as
+                wavefront sources. Default ``1e-6``.
+            prune_unreached (bool): If ``True``, drop voxels the
+                wavefront never reached (distance clamped to
+                ``max_distance``). Default ``False``.
+            use_vbm (bool): Use :class:`VoxelBlockManager`-based sweep
+                kernel (default) vs per-leaf-slot iteration (ablation).
+
+        Returns:
+            esdf_grid (Grid): New :class:`Grid` for the ESDF support band.
+            esdf (torch.Tensor): ``[esdf_grid.num_voxels]`` fp32 world-unit
+                signed distance.
+        """
+        from . import functional
+
+        return functional.compute_esdf_single(
+            self,
+            tsdf,
+            weights,
+            truncation_distance,
+            max_distance,
+            weight_threshold,
+            prune_unreached,
+            use_vbm,
+        )
+
+    def compute_esdf_incremental(
+        self,
+        tsdf: torch.Tensor,
+        weights: torch.Tensor,
+        prev_esdf_grid: "Grid",
+        prev_esdf: torch.Tensor,
+        truncation_distance: float,
+        max_distance: float,
+        weight_threshold: float = 1.0e-6,
+        prune_unreached: bool = False,
+        use_vbm: bool = True,
+        dirty_mask: torch.Tensor | None = None,
+    ) -> tuple["Grid", torch.Tensor]:
+        """Incremental (warm-started) ESDF: reuse a previous ESDF as
+        the wavefront's initial state.
+
+        Same algorithm as :meth:`compute_esdf` but takes a previous
+        ``(esdf_grid, esdf)`` pair and merges / injects it into the
+        new support before running the sweep kernel. Correct under the
+        monotone-scene assumption (surfaces added or refined, but not
+        removed). When ``prev_esdf_grid`` is empty, falls through to
+        :meth:`compute_esdf` semantics.
+
+        When the optional ``dirty_mask`` is provided:
+
+        - If it is entirely ``False`` AND ``prev_esdf_grid`` is
+          non-empty, the call short-circuits in Python and returns
+          ``(prev_esdf_grid, prev_esdf)`` directly without entering
+          C++. This matches nvblox's ~50 μs "no dirty blocks" cache
+          hit but via a user-held tensor instead of hidden library
+          state.
+        - Otherwise, only dirty voxels seed the wavefront. Cost
+          scales with the dirty-region size rather than the full
+          grid — matches nvblox's block-dirty-tracking behaviour.
+
+        Build the mask with
+        :func:`fvdb.functional.dirty_mask_from_sidecars_single`
+        (pass ``(new_grid, new_weights, old_grid, old_weights)``) or
+        author any user-level predicate — it's just a bool tensor.
+
+        Args:
+            tsdf (torch.Tensor): ``[num_voxels]`` current TSDF values.
+            weights (torch.Tensor): ``[num_voxels]`` current weights.
+            prev_esdf_grid (Grid): Previous frame's ESDF grid.
+            prev_esdf (torch.Tensor): Previous frame's ``[prev_esdf_grid.num_voxels]``
+                fp32 signed-distance sidecar.
+            truncation_distance (float): TSDF truncation (world units).
+            max_distance (float): ESDF support radius (world units).
+            weight_threshold (float): Seeding threshold (default 1e-6).
+            prune_unreached (bool): Drop unreached voxels (default False).
+            use_vbm (bool): Use VBM sweep kernel (default True).
+            dirty_mask (torch.Tensor | None): Optional
+                ``[num_voxels]`` bool tensor marking voxels that
+                changed this frame. Default ``None`` = full recompute.
+
+        Returns:
+            esdf_grid (Grid): Merged ESDF support grid.
+            esdf (torch.Tensor): ``[esdf_grid.num_voxels]`` signed distance.
+        """
+        from . import functional
+
+        return functional.compute_esdf_incremental_single(
+            self,
+            tsdf,
+            weights,
+            prev_esdf_grid,
+            prev_esdf,
+            truncation_distance,
+            max_distance,
+            weight_threshold,
+            prune_unreached,
+            use_vbm,
+            dirty_mask,
+        )
+
     def marching_cubes(
         self, field: torch.Tensor, level: float = 0.0
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -1571,6 +1805,294 @@ class Grid:
             depth_images,
             feature_images,
             weight_images,
+        )
+
+    def integrate_tsdf_frames(
+        self,
+        truncation_distance: float,
+        projection_matrices: torch.Tensor,
+        cam_to_world_matrices: torch.Tensor,
+        tsdf: torch.Tensor,
+        weights: torch.Tensor,
+        depth_images: torch.Tensor,
+        weight_images: torch.Tensor | None = None,
+        features: torch.Tensor | None = None,
+        feature_images: torch.Tensor | None = None,
+    ):
+        """Integrate N depth frames with one-shot topology build.
+
+        Like :meth:`integrate_tsdf` but runs N frames in one call. The
+        union topology over all frames is built once up-front; each
+        frame's TSDF / weight update runs against that fixed topology.
+        Semantically identical to calling :meth:`integrate_tsdf` N
+        times in sequence but typically 3-5x faster for bulk /
+        offline RGB-D reconstruction, since the per-frame
+        ``buildPointTruncationShell + mergeGrids`` cost is amortized.
+
+        All per-frame tensors share the leading N dimension:
+        ``projection_matrices[N, 3, 3]``,
+        ``cam_to_world_matrices[N, 4, 4]``,
+        ``depth_images[N, H, W]`` (or ``[N, H, W, 1]``),
+        ``weight_images[N, H, W]`` (optional),
+        ``feature_images[N, H, W, D]`` (optional).
+
+        Args:
+            truncation_distance (float): TSDF truncation distance.
+            projection_matrices (torch.Tensor): ``[N, 3, 3]``.
+            cam_to_world_matrices (torch.Tensor): ``[N, 4, 4]``.
+            tsdf (torch.Tensor): Current TSDF values on this :class:`Grid`.
+            weights (torch.Tensor): Current integration weights on this :class:`Grid`.
+            depth_images (torch.Tensor): ``[N, H, W]`` or ``[N, H, W, 1]``.
+            weight_images (torch.Tensor | None): Optional per-pixel weights.
+            features (torch.Tensor | None): Optional ``[num_voxels, D]`` per-voxel features
+                on this :class:`Grid`. Dtype must match ``tsdf.dtype`` or be ``uint8``.
+                If provided, ``feature_images`` must also be provided.
+            feature_images (torch.Tensor | None): ``[N, H, W, D]`` per-pixel feature images.
+
+        Returns:
+            When no features are provided:
+                ``(updated_grid, updated_tsdf, updated_weights)``.
+            When features are provided:
+                ``(updated_grid, updated_tsdf, updated_weights, updated_features)``.
+        """
+        from . import functional
+
+        if features is not None or feature_images is not None:
+            if features is None or feature_images is None:
+                raise ValueError(
+                    "features and feature_images must be provided together"
+                )
+            return functional.integrate_tsdf_frames_with_features_single(
+                self,
+                truncation_distance,
+                projection_matrices,
+                cam_to_world_matrices,
+                tsdf,
+                features,
+                weights,
+                depth_images,
+                feature_images,
+                weight_images,
+            )
+        return functional.integrate_tsdf_frames_single(
+            self,
+            truncation_distance,
+            projection_matrices,
+            cam_to_world_matrices,
+            tsdf,
+            weights,
+            depth_images,
+            weight_images,
+        )
+
+    def integrate_tsdf_from_points(
+        self,
+        truncation_distance: float,
+        points: torch.Tensor,
+        sensor_origin: torch.Tensor,
+        tsdf: torch.Tensor,
+        weights: torch.Tensor,
+        point_features: torch.Tensor | None = None,
+        features: torch.Tensor | None = None,
+        carve_free_space: bool = True,
+    ):
+        """Integrate a LiDAR / point-cloud sweep into a TSDF volume via per-point ray-walking.
+
+        Unlike :meth:`integrate_tsdf` (which takes depth images and unprojects
+        them internally), this method ingests a point cloud directly and walks
+        rays from ``sensor_origin`` to each point endpoint through the sparse
+        grid using HDDA. This matches the VDBFusion / nvblox LiDAR integration
+        surface with no range-image projection proxy.
+
+        Args:
+            truncation_distance (float): TSDF truncation distance.
+            points (torch.Tensor): ``[N, 3]`` world-space point cloud.
+            sensor_origin (torch.Tensor): ``[3]`` world-space sensor origin
+                (per-frame; per-ray sensor origins are a future extension).
+            tsdf (torch.Tensor): Current TSDF values.
+            weights (torch.Tensor): Current integration weights.
+            point_features (torch.Tensor | None): Optional ``[N, D]`` per-
+                point feature vector (e.g. RGB colour). If provided,
+                ``features`` must also be supplied.
+            features (torch.Tensor | None): Optional ``[num_voxels, D]``
+                per-voxel feature vector. Dtype must match ``tsdf.dtype`` or
+                be ``uint8``.
+            carve_free_space (bool): If ``True``, voxels observed to be in
+                front of the endpoint (outside the truncation band) are
+                written ``tsdf = +1, weight = 1``. Matches VDBFusion /
+                nvblox default behaviour.
+
+        Returns:
+            When no features are provided:
+                ``(updated_grid: Grid, updated_tsdf: torch.Tensor,
+                updated_weights: torch.Tensor)``.
+            When features are provided:
+                ``(updated_grid: Grid, updated_tsdf: torch.Tensor,
+                updated_weights: torch.Tensor, updated_features: torch.Tensor)``.
+        """
+        from . import functional
+
+        if point_features is not None or features is not None:
+            if point_features is None or features is None:
+                raise ValueError(
+                    "point_features and features must be provided together"
+                )
+            return functional.integrate_tsdf_from_points_with_features_single(
+                self,
+                truncation_distance,
+                points,
+                sensor_origin,
+                tsdf,
+                features,
+                weights,
+                point_features,
+                carve_free_space,
+            )
+        return functional.integrate_tsdf_from_points_single(
+            self,
+            truncation_distance,
+            points,
+            sensor_origin,
+            tsdf,
+            weights,
+            carve_free_space,
+        )
+
+    def integrate_tsdf_from_points_frames(
+        self,
+        truncation_distance: float,
+        points_per_frame: list[torch.Tensor],
+        sensor_origins: torch.Tensor,
+        tsdf: torch.Tensor,
+        weights: torch.Tensor,
+        carve_free_space: bool = True,
+    ):
+        """Integrate N LiDAR sweeps into a persistent TSDF volume in one call.
+
+        Semantically equivalent to looping :meth:`integrate_tsdf_from_points`
+        N times in sequence (bit-identical output, pinned by
+        ``test_integrate_tsdf_from_points_frames_matches_sequential``),
+        but keeps the whole loop inside C++ so the per-frame
+        JaggedTensor + Python <-> C++ dispatch overhead is amortized.
+        Measured 2-3x speedup on Mai City seq00 (700 frames @ 20 cm
+        voxels, ~130 K pts/sweep) vs a Python ``for`` loop over
+        :meth:`integrate_tsdf_from_points`.
+
+        Args:
+            truncation_distance (float): TSDF truncation distance.
+            points_per_frame (list[torch.Tensor]): Length-N list;
+                each entry is ``[N_i, 3]`` world-frame points. Each
+                frame may have a different point count.
+            sensor_origins (torch.Tensor): ``[N, 3]`` per-frame sensor
+                origins in world frame.
+            tsdf (torch.Tensor): ``[num_voxels]`` current TSDF values.
+            weights (torch.Tensor): ``[num_voxels]`` current weights.
+            carve_free_space (bool): Same as single-frame integrate.
+
+        Returns:
+            ``(updated_grid: Grid, updated_tsdf: torch.Tensor,
+            updated_weights: torch.Tensor)``.
+
+        .. seealso:: :meth:`integrate_tsdf_from_points`
+        """
+        from . import functional
+
+        return functional.integrate_tsdf_from_points_frames_single(
+            self,
+            truncation_distance,
+            points_per_frame,
+            sensor_origins,
+            tsdf,
+            weights,
+            carve_free_space,
+        )
+
+    def integrate_occupancy_from_points(
+        self,
+        truncation_distance: float,
+        points: torch.Tensor,
+        sensor_origin: torch.Tensor,
+        log_odds: torch.Tensor,
+        log_odds_hit: float = 0.85,
+        log_odds_miss: float = -0.40,
+        log_odds_min: float = -4.0,
+        log_odds_max: float = 4.0,
+    ) -> tuple["Grid", torch.Tensor]:
+        """Integrate a single LiDAR / point-cloud sweep into a Bayesian
+        log-odds occupancy volume.
+
+        Sister primitive to :meth:`integrate_tsdf_from_points`: same
+        shell allocator, same HDDA ray-walk, but with log-odds
+        updates instead of running-weighted-avg signed distance.
+        Defaults match nvblox's ``ProjectiveIntegratorType.OCCUPANCY``
+        defaults (hit +0.85, miss -0.40, clamp [-4, +4]). The stored
+        sidecar IS the log-odds; to recover probability on the host:
+        ``p = torch.sigmoid(log_odds)``.
+
+        Args:
+            truncation_distance (float): Width of the hit band around
+                each point endpoint, and the shell-allocator dilation.
+            points (torch.Tensor): ``[N, 3]`` world-frame point cloud.
+            sensor_origin (torch.Tensor): ``[3]`` or ``[1, 3]``
+                world-frame sensor origin.
+            log_odds (torch.Tensor): ``[num_voxels]`` current
+                log-odds sidecar.
+            log_odds_hit (float): Increment per hit observation.
+            log_odds_miss (float): Increment per miss observation
+                (negative).
+            log_odds_min (float): Lower clamp bound.
+            log_odds_max (float): Upper clamp bound.
+
+        Returns:
+            updated_grid (Grid): Union of this grid and the new point
+                shell.
+            updated_log_odds (torch.Tensor): ``[updated_grid.num_voxels]``
+                log-odds sidecar.
+        """
+        from . import functional
+
+        return functional.integrate_occupancy_from_points_single(
+            self,
+            truncation_distance,
+            points,
+            sensor_origin,
+            log_odds,
+            log_odds_hit,
+            log_odds_miss,
+            log_odds_min,
+            log_odds_max,
+        )
+
+    def integrate_occupancy_from_points_frames(
+        self,
+        truncation_distance: float,
+        points_per_frame: list[torch.Tensor],
+        sensor_origins: torch.Tensor,
+        log_odds: torch.Tensor,
+        log_odds_hit: float = 0.85,
+        log_odds_miss: float = -0.40,
+        log_odds_min: float = -4.0,
+        log_odds_max: float = 4.0,
+    ) -> tuple["Grid", torch.Tensor]:
+        """Integrate N LiDAR sweeps into a persistent log-odds
+        occupancy volume in one C++ call.
+
+        Batched counterpart to :meth:`integrate_occupancy_from_points`,
+        matching the N-frame API of
+        :meth:`integrate_tsdf_from_points_frames`.
+        """
+        from . import functional
+
+        return functional.integrate_occupancy_from_points_frames_single(
+            self,
+            truncation_distance,
+            points_per_frame,
+            sensor_origins,
+            log_odds,
+            log_odds_hit,
+            log_odds_miss,
+            log_odds_min,
+            log_odds_max,
         )
 
     # ============================================================

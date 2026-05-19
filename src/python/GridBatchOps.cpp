@@ -50,7 +50,11 @@
 #include <fvdb/detail/ops/VoxelsAlongRays.h>
 
 // Meshing / TSDF
+#include <fvdb/detail/ops/ComputeESDF.h>
+#include <fvdb/detail/ops/DirtyMaskFromSidecars.h>
+#include <fvdb/detail/ops/IntegrateOccupancyFromPoints.h>
 #include <fvdb/detail/ops/IntegrateTSDF.h>
+#include <fvdb/detail/ops/IntegrateTSDFFromPoints.h>
 #include <fvdb/detail/ops/MarchingCubes.h>
 
 // Topology / misc
@@ -473,6 +477,118 @@ bind_grid_batch_ops(py::module &m) {
           py::arg("depth_images"),
           py::arg("feature_images"),
           py::arg("weight_images"));
+
+    m.def("integrate_tsdf_batch",
+          &ops::integrateTSDFBatch,
+          py::arg("grid"),
+          py::arg("truncation_margin"),
+          py::arg("projection_matrices"),
+          py::arg("cam_to_world_matrices"),
+          py::arg("tsdf"),
+          py::arg("weights"),
+          py::arg("depth_images"),
+          py::arg("weight_images"));
+
+    m.def("integrate_tsdf_batch_with_features",
+          &ops::integrateTSDFBatchWithFeatures,
+          py::arg("grid"),
+          py::arg("truncation_margin"),
+          py::arg("projection_matrices"),
+          py::arg("cam_to_world_matrices"),
+          py::arg("tsdf"),
+          py::arg("features"),
+          py::arg("weights"),
+          py::arg("depth_images"),
+          py::arg("feature_images"),
+          py::arg("weight_images"));
+
+    m.def("integrate_tsdf_from_points",
+          &ops::integrateTSDFFromPoints,
+          py::arg("grid"),
+          py::arg("truncation_margin"),
+          py::arg("points"),
+          py::arg("sensor_origins"),
+          py::arg("tsdf"),
+          py::arg("weights"),
+          py::arg("carve_free_space"));
+
+    m.def("integrate_tsdf_from_points_with_features",
+          &ops::integrateTSDFFromPointsWithFeatures,
+          py::arg("grid"),
+          py::arg("truncation_margin"),
+          py::arg("points"),
+          py::arg("sensor_origins"),
+          py::arg("tsdf"),
+          py::arg("features"),
+          py::arg("weights"),
+          py::arg("point_features"),
+          py::arg("carve_free_space"));
+
+    m.def("integrate_tsdf_from_points_frames",
+          &ops::integrateTSDFFromPointsFrames,
+          py::arg("grid"),
+          py::arg("truncation_margin"),
+          py::arg("points_per_frame"),
+          py::arg("sensor_origins"),
+          py::arg("tsdf"),
+          py::arg("weights"),
+          py::arg("carve_free_space"));
+
+    m.def("integrate_occupancy_from_points",
+          &ops::integrateOccupancyFromPoints,
+          py::arg("grid"),
+          py::arg("truncation_margin"),
+          py::arg("points"),
+          py::arg("sensor_origins"),
+          py::arg("log_odds"),
+          py::arg("log_odds_hit"),
+          py::arg("log_odds_miss"),
+          py::arg("log_odds_min"),
+          py::arg("log_odds_max"));
+
+    m.def("integrate_occupancy_from_points_frames",
+          &ops::integrateOccupancyFromPointsFrames,
+          py::arg("grid"),
+          py::arg("truncation_margin"),
+          py::arg("points_per_frame"),
+          py::arg("sensor_origins"),
+          py::arg("log_odds"),
+          py::arg("log_odds_hit"),
+          py::arg("log_odds_miss"),
+          py::arg("log_odds_min"),
+          py::arg("log_odds_max"));
+
+    m.def("compute_esdf",
+          &ops::computeESDF,
+          py::arg("grid"),
+          py::arg("tsdf"),
+          py::arg("weights"),
+          py::arg("truncation_distance"),
+          py::arg("max_distance"),
+          py::arg("weight_threshold"),
+          py::arg("prune_unreached"),
+          py::arg("use_vbm"));
+
+    m.def("compute_esdf_incremental",
+          &ops::computeESDFIncremental,
+          py::arg("grid"),
+          py::arg("tsdf"),
+          py::arg("weights"),
+          py::arg("prev_esdf_grid"),
+          py::arg("prev_esdf"),
+          py::arg("truncation_distance"),
+          py::arg("max_distance"),
+          py::arg("weight_threshold"),
+          py::arg("prune_unreached"),
+          py::arg("use_vbm"),
+          py::arg("dirty_mask"));
+
+    m.def("dirty_mask_from_sidecars",
+          &ops::dirtyMaskFromSidecars,
+          py::arg("new_grid"),
+          py::arg("new_sidecar"),
+          py::arg("old_grid"),
+          py::arg("old_sidecar"));
 
     // -----------------------------------------------------------------------
     // Topology / misc

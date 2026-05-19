@@ -139,6 +139,7 @@ set(FVDB_BINDINGS_CPP_FILES
     src/python/GridBatchDataBinding.cpp
     src/python/GridBatchOps.cpp
     src/python/JaggedTensorBinding.cpp
+    src/python/PersistentTSDFStateBinding.cpp
     src/python/ViewerBinding.cpp)
 
 # Build library

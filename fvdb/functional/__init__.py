@@ -10,51 +10,6 @@ Every operation has two variants:
 - ``*_single`` -- operates on :class:`~fvdb.Grid` with plain ``torch.Tensor``.
 """
 
-# Grid constructors (batch)
-from ._constructors import (
-    concatenate_grids,
-    gridbatch_from_dense,
-    gridbatch_from_dense_axis_aligned_bounds,
-    gridbatch_from_ijk,
-    gridbatch_from_mesh,
-    gridbatch_from_nearest_voxels_to_points,
-    gridbatch_from_points,
-    gridbatch_from_zero_grids,
-    gridbatch_from_zero_voxels,
-)
-
-# isort: split
-
-# Grid constructors (single)
-from ._constructors import (
-    grid_from_dense,
-    grid_from_dense_axis_aligned_bounds,
-    grid_from_ijk,
-    grid_from_mesh,
-    grid_from_nearest_voxels_to_points,
-    grid_from_points,
-    grid_from_zero_voxels,
-)
-
-# Dense <-> sparse I/O and grid-to-grid injection
-from ._dense import (
-    inject_batch,
-    inject_from_dense_cmajor_batch,
-    inject_from_dense_cmajor_single,
-    inject_from_dense_cminor_batch,
-    inject_from_dense_cminor_single,
-    inject_from_ijk_batch,
-    inject_from_ijk_single,
-    inject_single,
-    inject_to_dense_cmajor_batch,
-    inject_to_dense_cmajor_single,
-    inject_to_dense_cminor_batch,
-    inject_to_dense_cminor_single,
-)
-
-# Grid indexing
-from ._indexing import index_grid_batch
-
 # Interpolation / splatting
 from ._interpolation import (
     sample_bezier_batch,
@@ -73,24 +28,12 @@ from ._interpolation import (
     splat_trilinear_single,
 )
 
-# I/O
-from ._io import (
-    grid_names_in_nanovdb,
-    load_nanovdb,
-    load_nanovdb_single,
-    read_nanovdb_metadata,
-    save_nanovdb,
-    save_nanovdb_single,
-)
-
-# Meshing / TSDF
-from ._meshing import (
-    integrate_tsdf_batch,
-    integrate_tsdf_single,
-    integrate_tsdf_with_features_batch,
-    integrate_tsdf_with_features_single,
-    marching_cubes_batch,
-    marching_cubes_single,
+# Coordinate transforms
+from ._transforms import (
+    voxel_to_world_batch,
+    voxel_to_world_single,
+    world_to_voxel_batch,
+    world_to_voxel_single,
 )
 
 # Pooling / refinement
@@ -101,6 +44,22 @@ from ._pooling import (
     max_pool_single,
     refine_batch,
     refine_single,
+)
+
+# Dense <-> sparse I/O and grid-to-grid injection
+from ._dense import (
+    inject_batch,
+    inject_from_dense_cmajor_batch,
+    inject_from_dense_cmajor_single,
+    inject_from_dense_cminor_batch,
+    inject_from_dense_cminor_single,
+    inject_from_ijk_batch,
+    inject_from_ijk_single,
+    inject_single,
+    inject_to_dense_cmajor_batch,
+    inject_to_dense_cmajor_single,
+    inject_to_dense_cminor_batch,
+    inject_to_dense_cminor_single,
 )
 
 # Spatial queries
@@ -137,6 +96,27 @@ from ._ray import (
     voxels_along_rays_single,
 )
 
+# Meshing / TSDF
+from ._meshing import (
+    compute_esdf_incremental_single,
+    compute_esdf_single,
+    integrate_occupancy_from_points_frames_single,
+    integrate_occupancy_from_points_single,
+    integrate_tsdf_batch,
+    integrate_tsdf_frames_single,
+    integrate_tsdf_frames_with_features_single,
+    integrate_tsdf_from_points_batch,
+    integrate_tsdf_from_points_frames_single,
+    integrate_tsdf_from_points_single,
+    integrate_tsdf_from_points_with_features_batch,
+    integrate_tsdf_from_points_with_features_single,
+    integrate_tsdf_single,
+    integrate_tsdf_with_features_batch,
+    integrate_tsdf_with_features_single,
+    marching_cubes_batch,
+    marching_cubes_single,
+)
+
 # Grid topology
 from ._topology import (
     clip_batch,
@@ -155,6 +135,7 @@ from ._topology import (
     conv_transpose_grid_single,
     dilated_grid_batch,
     dilated_grid_single,
+    dirty_mask_from_sidecars_single,
     dual_grid_batch,
     dual_grid_single,
     edge_network_batch,
@@ -175,12 +156,41 @@ from ._topology import (
     refined_grid_single,
 )
 
-# Coordinate transforms
-from ._transforms import (
-    voxel_to_world_batch,
-    voxel_to_world_single,
-    world_to_voxel_batch,
-    world_to_voxel_single,
+# Grid indexing
+from ._indexing import index_grid_batch
+
+# Grid constructors (batch)
+from ._constructors import (
+    concatenate_grids,
+    gridbatch_from_dense,
+    gridbatch_from_dense_axis_aligned_bounds,
+    gridbatch_from_ijk,
+    gridbatch_from_mesh,
+    gridbatch_from_nearest_voxels_to_points,
+    gridbatch_from_points,
+    gridbatch_from_zero_grids,
+    gridbatch_from_zero_voxels,
+)
+
+# Grid constructors (single)
+from ._constructors import (
+    grid_from_dense,
+    grid_from_dense_axis_aligned_bounds,
+    grid_from_ijk,
+    grid_from_mesh,
+    grid_from_nearest_voxels_to_points,
+    grid_from_points,
+    grid_from_zero_voxels,
+)
+
+# I/O
+from ._io import (
+    grid_names_in_nanovdb,
+    load_nanovdb,
+    load_nanovdb_single,
+    read_nanovdb_metadata,
+    save_nanovdb,
+    save_nanovdb_single,
 )
 
 __all__ = [
@@ -254,9 +264,20 @@ __all__ = [
     "ray_implicit_intersection_batch",
     "ray_implicit_intersection_single",
     # Meshing
+    "compute_esdf_incremental_single",
+    "compute_esdf_single",
+    "integrate_occupancy_from_points_frames_single",
+    "integrate_occupancy_from_points_single",
     "marching_cubes_batch",
     "marching_cubes_single",
     "integrate_tsdf_batch",
+    "integrate_tsdf_frames_single",
+    "integrate_tsdf_frames_with_features_single",
+    "integrate_tsdf_from_points_batch",
+    "integrate_tsdf_from_points_frames_single",
+    "integrate_tsdf_from_points_single",
+    "integrate_tsdf_from_points_with_features_batch",
+    "integrate_tsdf_from_points_with_features_single",
     "integrate_tsdf_single",
     "integrate_tsdf_with_features_batch",
     "integrate_tsdf_with_features_single",
@@ -277,6 +298,7 @@ __all__ = [
     "dual_grid_single",
     "dilated_grid_batch",
     "dilated_grid_single",
+    "dirty_mask_from_sidecars_single",
     "merged_grid_batch",
     "merged_grid_single",
     "pruned_grid_batch",

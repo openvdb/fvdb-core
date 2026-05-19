@@ -116,6 +116,12 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/IjkToInvIndex.cu
     fvdb/detail/ops/Inject.cu
     fvdb/detail/ops/IntegrateTSDF.cu
+    fvdb/detail/ops/IntegrateTSDFFromPoints.cu
+    fvdb/detail/ops/IntegrateOccupancyFromPoints.cu
+    fvdb/detail/ops/BuildPointTruncationShell.cu
+    fvdb/detail/ops/PersistentTSDFState.cu
+    fvdb/detail/ops/ComputeESDF.cu
+    fvdb/detail/ops/DirtyMaskFromSidecars.cu
     fvdb/detail/ops/jagged/JaggedSort.cu
     fvdb/detail/ops/JaggedTensorIndex.cu
     fvdb/detail/ops/JCat0.cu
@@ -123,6 +129,7 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/JIdxForJOffsets.cu
     fvdb/detail/ops/JOffsetsFromJIdx.cu
     fvdb/detail/ops/MarchingCubes.cu
+    fvdb/detail/ops/MarchingCubesFast.cu
     fvdb/detail/ops/MortonHilbertFromIjk.cu
     fvdb/detail/ops/NearestIjkForPoints.cu
     fvdb/detail/ops/PointsInGrid.cu
