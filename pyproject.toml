@@ -11,8 +11,13 @@ license = { text = "Apache-2.0" }
 requires-python = ">=3.10"
 readme = "README.md"
 dependencies = [
-    # Require torch; users will choose the correct CUDA build from PyTorch's index
-    "torch>=2.8,<2.12",
+    # Require torch; users will choose the correct CUDA build from PyTorch's index.
+    # Upper bound is one minor release ahead of the highest torch we currently
+    # build against in CI; bumping the upper bound here is what `env/{build,test}_
+    # requirements.txt` rely on (both are unpinned, so `uv pip install` follows
+    # the wheel's range). When the build / test pipelines pick up a newer torch
+    # than this range, bump both.
+    "torch>=2.8,<2.13",
     "numpy",
 ]
 optional-dependencies = {viewer = ["nanovdb-editor>=0.0.23,<0.2.0"]}
