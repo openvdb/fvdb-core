@@ -39,6 +39,24 @@ find_package(Torch REQUIRED PATHS "${TORCH_PACKAGE_DIR}/share/cmake/Torch")
 # Without this we can't find TH/THC headers
 set(TORCH_SOURCE_INCLUDE_DIRS ${TORCH_PACKAGE_DIR}/include)
 
+# Conda-forge's `pytorch-gpu` package installs the C++ headers at
+# `$CONDA_PREFIX/include/{torch,ATen,c10,caffe2,tensorpipe}/`, and stages
+# them into the site-packages tree via symlinks. Recent conda-forge builds
+# (e.g. `pytorch-2.10.0-cuda130_mkl_py312_*_304`) have a packaging bug
+# where those symlinks land as `torch.c~`, `ATen.c~`, ... (the conda
+# file-conflict rename suffix), so `find_package(Torch)`'s
+# `<site-packages>/torch/include/<...>` references don't resolve and
+# `#include <torch/custom_class.h>` fails with "No such file or
+# directory" when fvdb builds against a conda-forge torch.
+#
+# Append the conda env's bare `include/` so the canonical
+# `$CONDA_PREFIX/include/torch/...` location is on the include path
+# regardless of the symlink state. The IS_DIRECTORY guard keeps this a
+# no-op for pip-installed torch (and for any non-conda environment).
+if(DEFINED ENV{CONDA_PREFIX} AND IS_DIRECTORY "$ENV{CONDA_PREFIX}/include/torch")
+    list(APPEND TORCH_INCLUDE_DIRS "$ENV{CONDA_PREFIX}/include")
+endif()
+
 if(NOT TORCH_PYTHON_LIBRARY)
   message(STATUS "Looking for torch_python library...")
 
