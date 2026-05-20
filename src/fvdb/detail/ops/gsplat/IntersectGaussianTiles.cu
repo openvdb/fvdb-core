@@ -849,12 +849,26 @@ intersectGaussianTilesPrivateUse1Impl(
                     intersectionsOffset;
 
                 if (intersectionsCount > 0) {
-                    FVDB_CUB_WRAPPER(cub::DeviceMergeSort::SortPairs,
-                                     intersectionKeys.data_ptr<int64_t>() + intersectionsOffset,
-                                     intersectionValues.data_ptr<int32_t>() + intersectionsOffset,
-                                     intersectionsCount,
-                                     cuda::std::less<>{},
-                                     stream);
+                    size_t tempStorageBytes = 0;
+                    void *tempStorage       = nullptr;
+                    C10_CUDA_CHECK(cub::DeviceMergeSort::SortPairs(
+                        tempStorage,
+                        tempStorageBytes,
+                        intersectionKeys.data_ptr<int64_t>() + intersectionsOffset,
+                        intersectionValues.data_ptr<int32_t>() + intersectionsOffset,
+                        intersectionsCount,
+                        cuda::std::less<>{},
+                        stream));
+                    C10_CUDA_CHECK(cudaMallocAsync(&tempStorage, tempStorageBytes, stream));
+                    C10_CUDA_CHECK(cub::DeviceMergeSort::SortPairs(
+                        tempStorage,
+                        tempStorageBytes,
+                        intersectionKeys.data_ptr<int64_t>() + intersectionsOffset,
+                        intersectionValues.data_ptr<int32_t>() + intersectionsOffset,
+                        intersectionsCount,
+                        cuda::std::less<>{},
+                        stream));
+                    C10_CUDA_CHECK(cudaFreeAsync(tempStorage, stream));
                 }
             }
         }
@@ -878,11 +892,6 @@ intersectGaussianTilesPrivateUse1Impl(
                 intersectionsOffset;
 
             if (intersectionsCount > 0) {
-                C10_CUDA_CHECK(nanovdb::util::cuda::memPrefetchAsync(
-                    intersectionValues.const_data_ptr<int32_t>() + intersectionsOffset,
-                    intersectionsCount * sizeof(int32_t),
-                    deviceId,
-                    stream));
                 const int NUM_BLOCKS_2 = cuda::ceil_div(intersectionsCount, NUM_THREADS);
                 computeTileOffsets<<<NUM_BLOCKS_2, NUM_THREADS, 0, stream>>>(
                     intersectionsOffset,

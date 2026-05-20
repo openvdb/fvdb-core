@@ -78,5 +78,25 @@ perCameraPrefetchBatchAsync(const torch::TensorList &tensors,
 #endif
 }
 
+void
+perCameraMemsetAsync(const torch::TensorList &tensors,
+                     uint32_t cameraOffset,
+                     uint32_t cameraCount,
+                     int value,
+                     cudaStream_t stream) {
+    for (size_t i = 0; i < tensors.size(); ++i) {
+        const auto &tensor = tensors[i];
+        TORCH_CHECK(tensor.is_contiguous(), "Tensor to prefetch is not contiguous");
+        TORCH_CHECK(cameraOffset + cameraCount <= tensor.size(0),
+                    "Tensor does not have a batched first dimension");
+        size_t scalarSize = c10::elementSize(tensor.scalar_type());
+        C10_CUDA_CHECK(cudaMemsetAsync(static_cast<uint8_t *>(tensor.data_ptr()) +
+                                           cameraOffset * tensor.stride(0) * scalarSize,
+                                       value,
+                                       cameraCount * tensor.stride(0) * scalarSize,
+                                       stream));
+    }
+}
+
 } // namespace detail
 } // namespace fvdb

@@ -695,6 +695,20 @@ launchRasterizeForwardKernels(
         C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
     }
 
+    auto reshapedAlphas  = outAlphas.jdata().view({C, renderWindow.height, renderWindow.width, 1});
+    auto reshapedLastIds = outLastIds.jdata().view({C, renderWindow.height, renderWindow.width});
+    auto reshapedFeatures =
+        outFeatures.jdata().view({C, renderWindow.height, renderWindow.width, channels});
+
+    std::vector<torch::Tensor> tensors = {means2d,
+                                          conics,
+                                          features,
+                                          opacities,
+                                          tileOffsets,
+                                          reshapedAlphas,
+                                          reshapedLastIds,
+                                          reshapedFeatures};
+
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto stream = c10::cuda::getStreamFromPool(false, deviceId);
@@ -707,21 +721,6 @@ launchRasterizeForwardKernels(
             cuda::ceil_div(deviceTileOffset + deviceTileCount, (tileExtentH * tileExtentW)) -
             cameraOffset;
         if (deviceTileCount) {
-            auto reshapedAlphas =
-                outAlphas.jdata().view({C, renderWindow.height, renderWindow.width, 1});
-            auto reshapedLastIds =
-                outLastIds.jdata().view({C, renderWindow.height, renderWindow.width});
-            auto reshapedFeatures =
-                outFeatures.jdata().view({C, renderWindow.height, renderWindow.width, channels});
-
-            std::vector<torch::Tensor> tensors = {means2d,
-                                                  conics,
-                                                  features,
-                                                  opacities,
-                                                  tileOffsets,
-                                                  reshapedAlphas,
-                                                  reshapedLastIds,
-                                                  reshapedFeatures};
             perCameraPrefetchBatchAsync(tensors, cameraOffset, cameraCount, deviceId, stream);
         }
         C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
