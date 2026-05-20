@@ -499,16 +499,14 @@ dispatchProjectGaussiansAnalyticBwd<torch::kPrivateUse1>(
             if (covars.has_value()) {
                 prefetchPtrs.emplace_back(dLossDCovars.data_ptr<float>() +
                                           elementOffset * dLossDCovars.stride(0));
-                prefetchSizes.emplace_back(elementCount * dLossDCovars.stride(0) *
-                                           sizeof(float));
+                prefetchSizes.emplace_back(elementCount * dLossDCovars.stride(0) * sizeof(float));
             } else {
                 prefetchPtrs.emplace_back(dLossDQuats.data_ptr<float>() +
                                           elementOffset * dLossDQuats.stride(0));
                 prefetchSizes.emplace_back(elementCount * dLossDQuats.stride(0) * sizeof(float));
                 prefetchPtrs.emplace_back(dLossDScales.data_ptr<float>() +
                                           elementOffset * dLossDScales.stride(0));
-                prefetchSizes.emplace_back(elementCount * dLossDScales.stride(0) *
-                                           sizeof(float));
+                prefetchSizes.emplace_back(elementCount * dLossDScales.stride(0) * sizeof(float));
             }
 
             C10_CUDA_CHECK(cudaMemPrefetchBatchAsync(prefetchPtrs.data(),
@@ -532,11 +530,11 @@ dispatchProjectGaussiansAnalyticBwd<torch::kPrivateUse1>(
                     elementCount * dLossDCovars.stride(0) * sizeof(float),
                     stream));
             } else {
-                C10_CUDA_CHECK(cudaMemsetAsync(
-                    dLossDQuats.data_ptr<float>() + elementOffset * dLossDQuats.stride(0),
-                    0,
-                    elementCount * dLossDQuats.stride(0) * sizeof(float),
-                    stream));
+                C10_CUDA_CHECK(cudaMemsetAsync(dLossDQuats.data_ptr<float>() +
+                                                   elementOffset * dLossDQuats.stride(0),
+                                               0,
+                                               elementCount * dLossDQuats.stride(0) * sizeof(float),
+                                               stream));
                 C10_CUDA_CHECK(cudaMemsetAsync(
                     dLossDScales.data_ptr<float>() + elementOffset * dLossDScales.stride(0),
                     0,

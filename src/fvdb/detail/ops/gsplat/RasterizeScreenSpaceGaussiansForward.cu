@@ -693,10 +693,8 @@ launchRasterizeForwardKernels(
         C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
     }
 
-    auto reshapedAlphas =
-        outAlphas.jdata().view({C, renderWindow.height, renderWindow.width, 1});
-    auto reshapedLastIds =
-        outLastIds.jdata().view({C, renderWindow.height, renderWindow.width});
+    auto reshapedAlphas  = outAlphas.jdata().view({C, renderWindow.height, renderWindow.width, 1});
+    auto reshapedLastIds = outLastIds.jdata().view({C, renderWindow.height, renderWindow.width});
     auto reshapedFeatures =
         outFeatures.jdata().view({C, renderWindow.height, renderWindow.width, channels});
 
