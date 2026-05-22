@@ -18,6 +18,8 @@
 
 namespace {
 
+constexpr const char *kGridName = "tensor-grid-with-leading-blind-name";
+
 void
 copyFixedString(char *target, const size_t maxSize, const std::string &source) {
     TORCH_CHECK_VALUE(source.size() < maxSize, "String is too long for fixed NanoVDB buffer.");
@@ -85,6 +87,69 @@ prependGridNameBlindData(nanovdb::GridHandle<nanovdb::HostBuffer> &sourceHandle,
     return nanovdb::GridHandle<nanovdb::HostBuffer>(std::move(outBuffer));
 }
 
+nanovdb::GridHandle<nanovdb::HostBuffer>
+makeTensorGridBlindDataHandle(const fvdb::GridBatchData &gridBatchData,
+                              const torch::Tensor &sourceData,
+                              const std::string &gridName) {
+    TORCH_CHECK(gridBatchData.batchSize() == 1, "Test fixture expects a single source grid.");
+    TORCH_CHECK(gridBatchData.device().is_cpu(), "Test fixture expects a CPU source grid.");
+    TORCH_CHECK(sourceData.device().is_cpu(), "Test fixture expects CPU tensor data.");
+    TORCH_CHECK(sourceData.scalar_type() == torch::kFloat32,
+                "Test fixture expects float32 tensor data.");
+    TORCH_CHECK(sourceData.dim() >= 1, "Test fixture expects at least one tensor dimension.");
+    TORCH_CHECK(gridBatchData.numVoxelsAt(0) == sourceData.size(0),
+                "Test fixture expects one tensor row per voxel.");
+
+    torch::Tensor contiguousData = sourceData.contiguous();
+
+    const nanovdb::GridData *sourceGridData = gridBatchData.nanoGridHandle().gridData(0);
+    TORCH_CHECK(sourceGridData != nullptr, "Expected a valid source grid.");
+
+    constexpr uint64_t metadataBytes = sizeof(nanovdb::GridBlindMetaData);
+    const uint64_t sourceGridBytes   = sourceGridData->mGridSize;
+    const uint64_t shapeBytes = sizeof(int64_t) * static_cast<uint64_t>(contiguousData.dim() + 1);
+    const uint64_t tensorBytes =
+        static_cast<uint64_t>(contiguousData.numel() * contiguousData.element_size());
+    const uint64_t blindDataBytes       = shapeBytes + tensorBytes;
+    const uint64_t paddedBlindDataBytes = nanovdb::math::AlignUp<32UL>(blindDataBytes);
+    const uint64_t totalBytes           = sourceGridBytes + metadataBytes + paddedBlindDataBytes;
+
+    nanovdb::HostBuffer outBuffer(totalBytes);
+    uint8_t *outBytes = static_cast<uint8_t *>(outBuffer.data());
+    std::memset(outBytes, 0, totalBytes);
+    std::memcpy(outBytes, gridBatchData.nanoGridHandle().buffer().data(), sourceGridBytes);
+
+    nanovdb::GridData *outGridData    = reinterpret_cast<nanovdb::GridData *>(outBytes);
+    outGridData->mGridSize            = totalBytes;
+    outGridData->mGridClass           = nanovdb::GridClass::TensorGrid;
+    outGridData->mGridType            = nanovdb::GridType::OnIndex;
+    outGridData->mBlindMetadataCount  = 1;
+    outGridData->mBlindMetadataOffset = static_cast<int64_t>(sourceGridBytes);
+    copyFixedString(outGridData->mGridName, nanovdb::GridData::MaxNameSize, gridName);
+
+    nanovdb::GridBlindMetaData *blindMetadata =
+        reinterpret_cast<nanovdb::GridBlindMetaData *>(outBytes + sourceGridBytes);
+    blindMetadata->mDataOffset = static_cast<int64_t>(metadataBytes);
+    blindMetadata->mValueCount = paddedBlindDataBytes;
+    blindMetadata->mValueSize  = 1;
+    blindMetadata->mSemantic   = nanovdb::GridBlindDataSemantic::Unknown;
+    blindMetadata->mDataClass  = nanovdb::GridBlindDataClass::Unknown;
+    blindMetadata->mDataType   = nanovdb::GridType::Unknown;
+    copyFixedString(
+        blindMetadata->mName, nanovdb::GridBlindMetaData::MaxNameSize, "fvdb_jdatafloat32");
+
+    uint8_t *writeHead                      = outBytes + sourceGridBytes + metadataBytes;
+    *reinterpret_cast<int64_t *>(writeHead) = contiguousData.dim();
+    writeHead += sizeof(int64_t);
+    for (int64_t di = 0; di < contiguousData.dim(); ++di) {
+        *reinterpret_cast<int64_t *>(writeHead) = contiguousData.size(di);
+        writeHead += sizeof(int64_t);
+    }
+    std::memcpy(writeHead, contiguousData.data_ptr(), tensorBytes);
+
+    return nanovdb::GridHandle<nanovdb::HostBuffer>(std::move(outBuffer));
+}
+
 c10::intrusive_ptr<fvdb::GridBatchData>
 makeTestGrid() {
     torch::Tensor ijk = torch::tensor({{0, 0, 0}, {1, 0, 0}, {0, 1, 0}, {0, 0, 1}},
@@ -95,15 +160,10 @@ makeTestGrid() {
 }
 
 void
-expectRoundTripWithLeadingGridNameBlindData(const torch::Tensor &sourceData) {
-    constexpr const char *gridName = "tensor-grid-with-leading-blind-name";
-
-    auto grid = makeTestGrid();
-    fvdb::JaggedTensor jaggedData(std::vector<torch::Tensor>{sourceData});
-    nanovdb::GridHandle<nanovdb::HostBuffer> sourceHandle =
-        fvdb::to_nanovdb(*grid, std::optional<fvdb::JaggedTensor>(jaggedData), {gridName});
+expectRoundTripWithLeadingGridNameBlindData(nanovdb::GridHandle<nanovdb::HostBuffer> &sourceHandle,
+                                            const torch::Tensor &sourceData) {
     nanovdb::GridHandle<nanovdb::HostBuffer> patchedHandle =
-        prependGridNameBlindData(sourceHandle, gridName);
+        prependGridNameBlindData(sourceHandle, kGridName);
 
     const nanovdb::GridData *gridData = patchedHandle.gridData(0);
     ASSERT_EQ(gridData->mBlindMetadataCount, 2u);
@@ -118,7 +178,7 @@ expectRoundTripWithLeadingGridNameBlindData(const torch::Tensor &sourceData) {
     const std::vector<std::string> &loadedNames = std::get<2>(loaded);
 
     ASSERT_EQ(loadedNames.size(), 1u);
-    EXPECT_EQ(loadedNames[0], gridName);
+    EXPECT_EQ(loadedNames[0], kGridName);
     EXPECT_TRUE(torch::equal(loadedData.jdata(), sourceData));
 }
 
@@ -127,11 +187,18 @@ expectRoundTripWithLeadingGridNameBlindData(const torch::Tensor &sourceData) {
 TEST(LoadNanovdb, TensorGridBlindDataCanFollowGridNameBlindData) {
     torch::Tensor sourceData =
         torch::arange(16, torch::TensorOptions().dtype(torch::kFloat32)).reshape({4, 2, 2});
-    expectRoundTripWithLeadingGridNameBlindData(sourceData);
+    auto grid = makeTestGrid();
+    nanovdb::GridHandle<nanovdb::HostBuffer> sourceHandle =
+        makeTensorGridBlindDataHandle(*grid, sourceData, kGridName);
+    expectRoundTripWithLeadingGridNameBlindData(sourceHandle, sourceData);
 }
 
 TEST(LoadNanovdb, TensorGridShapeBlindDataCanFollowGridNameBlindData) {
     torch::Tensor sourceData =
         torch::arange(12, torch::TensorOptions().dtype(torch::kFloat32)).reshape({4, 3});
-    expectRoundTripWithLeadingGridNameBlindData(sourceData);
+    auto grid = makeTestGrid();
+    fvdb::JaggedTensor jaggedData(std::vector<torch::Tensor>{sourceData});
+    nanovdb::GridHandle<nanovdb::HostBuffer> sourceHandle =
+        fvdb::to_nanovdb(*grid, std::optional<fvdb::JaggedTensor>(jaggedData), {kGridName});
+    expectRoundTripWithLeadingGridNameBlindData(sourceHandle, sourceData);
 }
