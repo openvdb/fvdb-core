@@ -19,7 +19,6 @@ from . import _fvdb_cpp as _C
 from ._fvdb_cpp import JaggedTensor as JaggedTensorCpp
 from .jagged_tensor import JaggedTensor
 
-
 # ---------------------------------------------------------------------------
 #  Projection (analytic)
 # ---------------------------------------------------------------------------
@@ -48,10 +47,7 @@ class _ProjectGaussiansFn(torch.autograd.Function):
         accum_step_counts: torch.Tensor | None = None,
         accum_max_radii: torch.Tensor | None = None,
     ):
-        # fvdb's kernel takes raw log_scales (it exps internally) — the
-        # binding's argument name "scales" is a misnomer carried over from
-        # the gsplat-aligned signature.
-        radii, means2d, depths, conics, compensations = _C.project_gaussians_analytic_fwd(
+        result = _C.project_gaussians_analytic_fwd(
             means,
             quats,
             log_scales,
@@ -66,18 +62,13 @@ class _ProjectGaussiansFn(torch.autograd.Function):
             calc_compensations,
             ortho,
         )
-        if not calc_compensations:
-            compensations = None
+        radii: torch.Tensor = result[0]
+        means2d: torch.Tensor = result[1]
+        depths: torch.Tensor = result[2]
+        conics: torch.Tensor = result[3]
+        compensations: torch.Tensor | None = result[4] if calc_compensations else None
 
-        to_save = [
-            means,
-            quats,
-            log_scales,
-            world_to_cam,
-            projection_matrices,
-            radii,
-            conics,
-        ]
+        to_save = [means, quats, log_scales, world_to_cam, projection_matrices, radii, conics]
         if compensations is not None:
             to_save.append(compensations)
         ctx.save_for_backward(*to_save)
@@ -127,11 +118,7 @@ class _ProjectGaussiansFn(torch.autograd.Function):
         assert grad_means2d is not None
         assert grad_depths is not None
         assert grad_conics is not None
-        viewmats_requires_grad = ctx.needs_input_grad[3]
-        # fvdb's kernel takes raw log_scales and returns dL/d(log_scales)
-        # directly (chain rule applied internally), despite the parameter
-        # being named "scales" in the binding.
-        d_means, _d_covars, d_quats, d_log_scales, d_w2c = _C.project_gaussians_analytic_bwd(
+        d_means, _, d_quats, d_scales, d_w2c = _C.project_gaussians_analytic_bwd(
             means,
             quats,
             log_scales,
@@ -147,7 +134,7 @@ class _ProjectGaussiansFn(torch.autograd.Function):
             grad_depths,
             grad_conics,
             grad_compensations,
-            viewmats_requires_grad,
+            ctx.needs_input_grad[3],
             ctx.ortho,
             ctx.accum_grad_norms,
             ctx.accum_max_radii,
@@ -157,7 +144,7 @@ class _ProjectGaussiansFn(torch.autograd.Function):
         return (
             d_means,
             d_quats,
-            d_log_scales,
+            d_scales,
             d_w2c,
             None,
             None,
@@ -316,26 +303,20 @@ class _EvaluateGaussianSHFn(torch.autograd.Function):
         view_dirs: torch.Tensor,  # [C, N, 3] or empty
         sh0_coeffs: torch.Tensor,  # [N, 1, D]
         shN_coeffs: torch.Tensor,  # [N, K-1, D] or empty
-        radii: torch.Tensor,  # [C, N, 2]
+        radii: torch.Tensor,  # [C, N] or [C, N, 2]
     ) -> torch.Tensor:
-        # fvdb's SH kernel expects scalar [C, N] radii (it checks >0 per
-        # (cam, gaussian)); collapse the per-axis input by taking the min so
-        # the visibility check is "both axes positive".
         if radii.dim() == 3:
-            radii_scalar = radii.amin(dim=-1).contiguous()
-        else:
-            radii_scalar = radii.contiguous()
-
+            radii = radii.amin(dim=-1).contiguous()
         render_quantities = _C.evaluate_spherical_harmonics_fwd(
             sh_degree_to_use,
             num_cameras,
             view_dirs,
             sh0_coeffs,
             shN_coeffs,
-            radii_scalar,
+            radii,
         )
 
-        ctx.save_for_backward(view_dirs, shN_coeffs, radii_scalar)
+        ctx.save_for_backward(view_dirs, shN_coeffs, radii)
         ctx.sh_degree_to_use = sh_degree_to_use
         ctx.num_cameras = num_cameras
         ctx.num_gaussians = sh0_coeffs.size(0)
@@ -349,7 +330,7 @@ class _EvaluateGaussianSHFn(torch.autograd.Function):
             return (None, None, None, None, None, None)
         d_loss_d_colors = d_loss_d_colors.contiguous()
 
-        view_dirs, shN_coeffs, radii_scalar = ctx.saved_tensors
+        view_dirs, shN_coeffs, radii = ctx.saved_tensors
 
         compute_d_loss_d_view_dirs = view_dirs.numel() > 0 and view_dirs.requires_grad
 
@@ -360,7 +341,7 @@ class _EvaluateGaussianSHFn(torch.autograd.Function):
             view_dirs,
             shN_coeffs,
             d_loss_d_colors,
-            radii_scalar,
+            radii,
             compute_d_loss_d_view_dirs,
         )
 
@@ -393,7 +374,7 @@ class _RasterizeScreenSpaceGaussiansFn(torch.autograd.Function):
         backgrounds: torch.Tensor | None,
         masks: torch.Tensor | None,
     ):
-        rendered_colors, rendered_alphas, last_ids = _C.rasterize_screen_space_gaussians_fwd(
+        result = _C.rasterize_screen_space_gaussians_fwd(
             means2d,
             conics,
             colors,
@@ -409,6 +390,9 @@ class _RasterizeScreenSpaceGaussiansFn(torch.autograd.Function):
             backgrounds,
             masks,
         )
+        rendered_colors = result[0]
+        rendered_alphas = result[1]
+        last_ids = result[2]
 
         to_save = [means2d, conics, colors, opacities, tile_offsets, tile_gaussian_ids, rendered_alphas, last_ids]
         if backgrounds is not None:
@@ -430,7 +414,7 @@ class _RasterizeScreenSpaceGaussiansFn(torch.autograd.Function):
         ctx.tile_size = tile_size
         ctx.absgrad = absgrad
 
-        return rendered_colors, rendered_alphas.float()
+        return rendered_colors, rendered_alphas
 
     @staticmethod
     def backward(ctx: Any, *grad_outputs: torch.Tensor | None) -> tuple[torch.Tensor | None, ...]:
@@ -457,7 +441,7 @@ class _RasterizeScreenSpaceGaussiansFn(torch.autograd.Function):
 
         assert d_loss_d_rendered_colors is not None
         assert d_loss_d_rendered_alphas is not None
-        _abs_d_means2d, d_means2d, d_conics, d_colors, d_opacities = _C.rasterize_screen_space_gaussians_bwd(
+        result = _C.rasterize_screen_space_gaussians_bwd(
             means2d,
             conics,
             colors,
@@ -478,6 +462,10 @@ class _RasterizeScreenSpaceGaussiansFn(torch.autograd.Function):
             backgrounds,
             masks,
         )
+        d_means2d = result[1]
+        d_conics = result[2]
+        d_colors = result[3]
+        d_opacities = result[4]
 
         return (
             d_means2d,

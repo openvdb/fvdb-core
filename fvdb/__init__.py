@@ -239,20 +239,10 @@ def gaussian_render_jagged(
         render_quantities = torch.cat([render_quantities, depths[gaussian_ids].unsqueeze(-1)], dim=-1)
 
     # --- Non-differentiable tile intersection ---
-    # Jagged render is packed by construction: means2d / radii / depths /
-    # conics are flat [nnz, ...] arrays with a per-element camera_ids; fvdb's
-    # intersect_gaussian_tiles takes that layout when camera_ids is provided.
     num_tiles_h = math.ceil(image_height / tile_size)
     num_tiles_w = math.ceil(image_width / tile_size)
     tile_offsets, tile_gaussian_ids_t = _C.intersect_gaussian_tiles(
-        means2d.contiguous(),
-        radii.contiguous(),
-        depths.contiguous(),
-        ccz,
-        tile_size,
-        num_tiles_h,
-        num_tiles_w,
-        camera_ids=camera_ids,
+        means2d, radii, depths, ccz, tile_size, num_tiles_h, num_tiles_w, camera_ids
     )
     if return_debug_info:
         debug_info["tile_offsets"] = tile_offsets

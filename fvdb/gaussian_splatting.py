@@ -1659,9 +1659,9 @@ class GaussianSplat3d:
         num_tiles_h = math.ceil(H / tile_size)
         num_tiles_w = math.ceil(W / tile_size)
         tile_offsets, tile_gaussian_ids = _C.intersect_gaussian_tiles(
-            means2d.contiguous(),
-            radii.contiguous(),
-            depths.contiguous(),
+            means2d,
+            radii,
+            depths,
             C,
             tile_size,
             num_tiles_h,
@@ -2476,9 +2476,9 @@ class GaussianSplat3d:
             num_tiles_h = math.ceil(raster_h / tile_size)
             num_tiles_w = math.ceil(raster_w / tile_size)
             tile_offsets, tile_gaussian_ids = _C.intersect_gaussian_tiles(
-                pg.means2d.contiguous(),
-                pg.radii.contiguous(),
-                pg.depths.contiguous(),
+                pg.means2d,
+                pg.radii,
+                pg.depths,
                 C,
                 tile_size,
                 num_tiles_h,
