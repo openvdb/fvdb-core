@@ -303,10 +303,8 @@ class _EvaluateGaussianSHFn(torch.autograd.Function):
         view_dirs: torch.Tensor,  # [C, N, 3] or empty
         sh0_coeffs: torch.Tensor,  # [N, 1, D]
         shN_coeffs: torch.Tensor,  # [N, K-1, D] or empty
-        radii: torch.Tensor,  # [C, N] or [C, N, 2]
+        radii: torch.Tensor,  # [C, N, 2]
     ) -> torch.Tensor:
-        if radii.dim() == 3:
-            radii = radii.amin(dim=-1).contiguous()
         render_quantities = _C.evaluate_spherical_harmonics_fwd(
             sh_degree_to_use,
             num_cameras,

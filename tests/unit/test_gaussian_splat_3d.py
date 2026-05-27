@@ -1400,23 +1400,17 @@ class TestGaussianRender(BaseGaussianTestCase):
             torch.save(depths, "regression_depths.pt")
             torch.save(conics, "regression_conics.pt")
 
-        # Regression test. The snapshot was stored when radii was a scalar
-        # [C, N] tensor (from ``radiusFromCovariance2dDet`` cast to int32);
-        # radii is now per-axis [C, N, 2]. The per-axis form keeps a handful
-        # (~0.4%) of gaussians whose old scalar truncated to 0 — both axes
-        # are still ≥ 1 after addBlur — so we compare other outputs on the
-        # joint-visible set rather than asserting set equality.
+        # Regression test
         test_radii = torch.load(self.data_path / "regression_radii.pt", weights_only=True)
         test_means2d = torch.load(self.data_path / "regression_means2d.pt", weights_only=True)
         test_depths = torch.load(self.data_path / "regression_depths.pt", weights_only=True)
         test_conics = torch.load(self.data_path / "regression_conics.pt", weights_only=True)
 
         visible = (radii > 0).all(dim=-1)
-        old_visible = test_radii > 0
-        joint = visible & old_visible
-        torch.testing.assert_close(means2d[joint], test_means2d[joint], atol=1e-4, rtol=1e-3)
-        torch.testing.assert_close(depths[joint], test_depths[joint], atol=1e-5, rtol=1e-4)
-        torch.testing.assert_close(conics[joint], test_conics[joint], atol=1e-5, rtol=1e-4)
+        torch.testing.assert_close(radii, test_radii)
+        torch.testing.assert_close(means2d[visible], test_means2d[visible])
+        torch.testing.assert_close(depths[visible], test_depths[visible])
+        torch.testing.assert_close(conics[visible], test_conics[visible], atol=1e-5, rtol=1e-4)
 
     def test_projection_camera_metadata(self):
         projected = self.gs3d.project_gaussians_for_images(

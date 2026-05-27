@@ -287,7 +287,7 @@ computeShBackward(
     const int64_t shDegreeToUse,
     const torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits> viewDirs,     // [C, N, 3]
     const torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits> shNCoeffs,    // [K-1, N, D]
-    const int *__restrict__ radii,                                                    // [C, N]
+    const int *__restrict__ radii,                                                    // [C, N, 2]
     const torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits>
         dLossDRenderQuantities,                                                       // [C, N, D]
     torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits> outDLossDSh0Coeffs, // [N, 1, D]
@@ -304,7 +304,8 @@ computeShBackward(
     const auto cid = eid / count;          // camera index
     const auto gid = eid % count + offset; // gaussian index
     const auto c   = idx % D;              // render channel
-    if (radii != nullptr && radii[cid * N + gid] <= 0) {
+    if (radii != nullptr &&
+        (radii[(cid * N + gid) * 2 + 0] <= 0 || radii[(cid * N + gid) * 2 + 1] <= 0)) {
         return;
     }
 
@@ -345,7 +346,7 @@ computeShDiffuseOnlyBackward(
     const int64_t D,
     const torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits>
         dLossDRenderQuantities,                                                      // [C, N, D]
-    const int *__restrict__ radii,                                                   // [C, N]
+    const int *__restrict__ radii,                                                   // [C, N, 2]
     torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits> outDLossDSh0Coeffs // [N, 1, D]
 ) {
     // parallelize over C * N * D
@@ -358,7 +359,8 @@ computeShDiffuseOnlyBackward(
     const auto cid = eid / count;          // camera index
     const auto gid = eid % count + offset; // gaussian index
     const auto c   = idx % D;              // render channel
-    if (radii != nullptr && radii[cid * N + gid] <= 0) {
+    if (radii != nullptr &&
+        (radii[(cid * N + gid) * 2 + 0] <= 0 || radii[(cid * N + gid) * 2 + 1] <= 0)) {
         return;
     }
 
@@ -376,7 +378,7 @@ dispatchEvaluateSphericalHarmonicsBwd(const int64_t shDegreeToUse,
                                       const torch::Tensor &viewDirs,  // [C, N, 3] or empty
                                       const torch::Tensor &shNCoeffs, // [N, K-1, D]
                                       const torch::Tensor &dLossDColors,
-                                      const torch::Tensor &radii,     // [C, N]
+                                      const torch::Tensor &radii,     // [C, N, 2]
                                       const bool computeDLossDViewDirs);
 
 template <>
@@ -388,7 +390,7 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kCUDA>(
     const torch::Tensor &viewDirs,               // [C, N, 3]
     const torch::Tensor &shNCoeffs,              // [N, K-1, D]
     const torch::Tensor &dLossDRenderQuantities, // [C, N, D]
-    const torch::Tensor &radii,                  // [C, N]
+    const torch::Tensor &radii,                  // [C, N, 2]
     const bool computeDLossDViewDirs) {
     FVDB_FUNC_RANGE();
     const at::cuda::OptionalCUDAGuard device_guard(at::device_of(dLossDRenderQuantities));
@@ -407,12 +409,14 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kCUDA>(
         TORCH_CHECK_VALUE(shDegreeToUse == 0, "shDegreeToUse must be 0 if no shNCoeffs");
     }
     if (hasRadii) {
-        TORCH_CHECK_VALUE(radii.dim() == 2, "radii must have two dimensions with shape [C, N]");
+        TORCH_CHECK_VALUE(radii.dim() == 3 && radii.size(2) == 2,
+                          "radii must have shape [C, N, 2] but got shape = ",
+                          radii.sizes());
         TORCH_CHECK_VALUE(numGaussians == radii.size(1),
-                          "radii must have shape [C, N] but got shape = ",
+                          "radii must have shape [C, N, 2] but got shape = ",
                           radii.sizes());
         TORCH_CHECK_VALUE(radii.size(0) == numCameras,
-                          "radii must have shape [C, N] and C must match numCameras");
+                          "radii must have shape [C, N, 2] and C must match numCameras");
         TORCH_CHECK_VALUE(radii.is_cuda(), "radii must be a CUDA tensor");
         TORCH_CHECK_VALUE(radii.is_contiguous(), "radii must be a contiguous");
     }
@@ -503,7 +507,7 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
     const torch::Tensor &viewDirs,               // [C, N, 3]
     const torch::Tensor &shNCoeffs,              // [N, K-1, D]
     const torch::Tensor &dLossDRenderQuantities, // [C, N, D]
-    const torch::Tensor &radii,                  // [C, N]
+    const torch::Tensor &radii,                  // [C, N, 2]
     const bool computeDLossDViewDirs) {
     FVDB_FUNC_RANGE();
 
@@ -521,12 +525,14 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
         TORCH_CHECK_VALUE(shDegreeToUse == 0, "shDegreeToUse must be 0 if no shNCoeffs");
     }
     if (hasRadii) {
-        TORCH_CHECK_VALUE(radii.dim() == 2, "radii must have two dimensions with shape [C, N]");
+        TORCH_CHECK_VALUE(radii.dim() == 3 && radii.size(2) == 2,
+                          "radii must have shape [C, N, 2] but got shape = ",
+                          radii.sizes());
         TORCH_CHECK_VALUE(numGaussians == radii.size(1),
-                          "radii must have shape [C, N] but got shape = ",
+                          "radii must have shape [C, N, 2] but got shape = ",
                           radii.sizes());
         TORCH_CHECK_VALUE(radii.size(0) == numCameras,
-                          "radii must have shape [C, N] and C must match numCameras");
+                          "radii must have shape [C, N, 2] and C must match numCameras");
         TORCH_CHECK_VALUE(radii.is_privateuseone(), "radii must be a PrivateUse1 tensor");
         TORCH_CHECK_VALUE(radii.is_contiguous(), "radii must be a contiguous");
     }
@@ -815,7 +821,7 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kCPU>(
     const torch::Tensor &viewDirs,               // [C, N, 3] or empty
     const torch::Tensor &shNCoeffs,              // [N, K-1, D]
     const torch::Tensor &dLossDRenderQuantities, // [C, N, D]
-    const torch::Tensor &radii,                  // [C, N]
+    const torch::Tensor &radii,                  // [C, N, 2]
     const bool computeDLossDViewDirs) {
     TORCH_CHECK(false, "CPU implementation not available");
 }
@@ -827,7 +833,7 @@ evaluateSphericalHarmonicsBwd(const int64_t shDegreeToUse,
                               const torch::Tensor &viewDirs,  // [C, N, 3] or empty
                               const torch::Tensor &shNCoeffs, // [N, K-1, D]
                               const torch::Tensor &dLossDColors,
-                              const torch::Tensor &radii,     // [C, N]
+                              const torch::Tensor &radii,     // [C, N, 2]
                               const bool computeDLossDViewDirs) {
     return FVDB_DISPATCH_KERNEL(dLossDColors.device(), [&]() {
         return dispatchEvaluateSphericalHarmonicsBwd<DeviceTag>(shDegreeToUse,

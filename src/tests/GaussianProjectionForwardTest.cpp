@@ -182,23 +182,18 @@ TEST_F(GaussianProjectionForwardTestFixture, TestPerspectiveProjection) {
                                                        false,
                                                        false);
 
-    // The golden snapshot's radii was saved as the old scalar [C, N] layout;
-    // radii is now per-axis [C, N, 2] with a per-axis formula, so we compare
-    // visibility sets instead of element-wise radii values.
-    const auto visible         = std::get<0>(torch::min(radii > 0, /*dim=*/-1));
-    const auto expectedVisible = expectedRadii > 0;
-    EXPECT_TRUE(visible.equal(expectedVisible));
-
     // Use relaxed tolerances to account for minor numerical differences between debug and release
     // builds. The default rtol=1e-5, atol=1e-8 are too strict for operations involving exp, sqrt,
     // and inverse
 #ifdef NDEBUG
     // Release build: stricter tolerances
     EXPECT_TRUE(torch::allclose(means2d, expectedMeans2d));
+    EXPECT_TRUE(torch::allclose(radii, expectedRadii));
     EXPECT_TRUE(torch::allclose(depths, expectedDepths));
 #else
     // Debug build: relaxed tolerances due to different FP optimizations
     EXPECT_TRUE(torch::allclose(means2d, expectedMeans2d, 1e-4, 1e-4));
+    EXPECT_TRUE(torch::allclose(radii.to(torch::kFloat), expectedRadii.to(torch::kFloat), 0, 1));
     EXPECT_TRUE(torch::allclose(depths, expectedDepths, 1e-5, 1e-5));
 #endif
     // rtol=1e-4 and atol=1e-4 accounts for the fact that the test data used log(scales) instead of
@@ -224,10 +219,8 @@ TEST_F(GaussianProjectionForwardTestFixture, TestOrthographicProjection) {
                                                        false,
                                                        true);
 
-    // Radii is now per-axis [C, N, 2]; a gaussian is visible iff both axes
-    // are positive. The golden snapshot stored the old scalar [C, N] mask.
+    // other outputs are undefined where radii is zero
     auto radiiNonZeroMask = std::get<0>(torch::min(radii > 0, /*dim=*/-1)); // [C, N]
-    EXPECT_TRUE(radiiNonZeroMask.equal(expectedRadii > 0));
 
     // Use relaxed tolerances to account for minor numerical differences between debug and release
     // builds
@@ -235,12 +228,14 @@ TEST_F(GaussianProjectionForwardTestFixture, TestOrthographicProjection) {
     // Release build: stricter tolerances
     EXPECT_TRUE(torch::allclose(means2d.index({radiiNonZeroMask}),
                                 expectedMeans2d.index({radiiNonZeroMask})));
+    EXPECT_TRUE(torch::allclose(radii, expectedRadii));
     EXPECT_TRUE(torch::allclose(depths.index({radiiNonZeroMask}),
                                 expectedDepths.index({radiiNonZeroMask})));
 #else
     // Debug build: relaxed tolerances due to different FP optimizations
     EXPECT_TRUE(torch::allclose(
         means2d.index({radiiNonZeroMask}), expectedMeans2d.index({radiiNonZeroMask}), 1e-4, 1e-4));
+    EXPECT_TRUE(torch::allclose(radii.to(torch::kFloat), expectedRadii.to(torch::kFloat), 0, 1));
     EXPECT_TRUE(torch::allclose(
         depths.index({radiiNonZeroMask}), expectedDepths.index({radiiNonZeroMask}), 1e-5, 1e-5));
 #endif
