@@ -36,6 +36,11 @@ endif()
 
 find_package(Torch REQUIRED PATHS "${TORCH_PACKAGE_DIR}/share/cmake/Torch")
 
+# Conda provides public PyTorch headers in the global environment include directory
+if(DEFINED ENV{CONDA_PREFIX})
+  list(APPEND TORCH_INCLUDE_DIRS "$ENV{CONDA_PREFIX}/include")
+endif()
+
 # Without this we can't find TH/THC headers
 set(TORCH_SOURCE_INCLUDE_DIRS ${TORCH_PACKAGE_DIR}/include)
 
