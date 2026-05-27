@@ -156,7 +156,7 @@ computeSh(
     const auto gid = eid % count + offset; // gaussian index
     const auto c   = idx % D;              // render channel
 
-    T result = T(0);
+    T result           = T(0);
     const bool visible = radii == nullptr ||
                          (radii[(cid * N + gid) * 2 + 0] > 0 && radii[(cid * N + gid) * 2 + 1] > 0);
     if (visible) {
