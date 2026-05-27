@@ -45,7 +45,7 @@ template <typename T, typename Camera> struct ProjectionForward {
     fvdb::TorchRAcc64<T, 2> mLogScalesAcc; // [N, 3]
 
     // Outputs
-    fvdb::TorchRAcc64<int32_t, 2> mOutRadiiAcc; // [C, N]
+    fvdb::TorchRAcc64<int32_t, 3> mOutRadiiAcc; // [C, N, 2]
     fvdb::TorchRAcc64<T, 3> mOutMeans2dAcc;     // [C, N, 2]
     fvdb::TorchRAcc64<T, 2> mOutDepthsAcc;      // [C, N]
     fvdb::TorchRAcc64<T, 3> mOutConicsAcc;      // [C, N, 3]
@@ -63,7 +63,7 @@ template <typename T, typename Camera> struct ProjectionForward {
                       const torch::Tensor &means,     // [N, 3]
                       const torch::Tensor &quats,     // [N, 4]
                       const torch::Tensor &logScales, // [N, 3]
-                      torch::Tensor outRadii,         // [C, N]
+                      torch::Tensor outRadii,         // [C, N, 2]
                       torch::Tensor outMeans2d,       // [C, N, 2]
                       torch::Tensor outDepths,        // [C, N]
                       torch::Tensor outConics,        // [C, N, 3]
@@ -72,7 +72,7 @@ template <typename T, typename Camera> struct ProjectionForward {
           mMeansAcc(means.packed_accessor64<T, 2, torch::RestrictPtrTraits>()),
           mQuatsAcc(quats.packed_accessor64<T, 2, torch::RestrictPtrTraits>()),
           mLogScalesAcc(logScales.packed_accessor64<T, 2, torch::RestrictPtrTraits>()),
-          mOutRadiiAcc(outRadii.packed_accessor64<int32_t, 2, torch::RestrictPtrTraits>()),
+          mOutRadiiAcc(outRadii.packed_accessor64<int32_t, 3, torch::RestrictPtrTraits>()),
           mOutMeans2dAcc(outMeans2d.packed_accessor64<T, 3, torch::RestrictPtrTraits>()),
           mOutDepthsAcc(outDepths.packed_accessor64<T, 2, torch::RestrictPtrTraits>()),
           mOutConicsAcc(outConics.packed_accessor64<T, 3, torch::RestrictPtrTraits>()),
@@ -109,35 +109,40 @@ template <typename T, typename Camera> struct ProjectionForward {
         auto [covar2d, mean2d, depthCam] =
             mCamera.projectWorldGaussianTo2D(cid, meanWorldSpace, covar);
         if (!mCamera.isDepthVisible(depthCam)) {
-            mOutRadiiAcc[cid][gid] = 0;
+            mOutRadiiAcc[cid][gid][0] = 0;
+            mOutRadiiAcc[cid][gid][1] = 0;
             return;
         }
 
         T compensation;
         const T det = addBlur(mEps2d, covar2d, compensation);
         if (det <= 0.f) {
-            mOutRadiiAcc[cid][gid] = 0;
+            mOutRadiiAcc[cid][gid][0] = 0;
+            mOutRadiiAcc[cid][gid][1] = 0;
             return;
         }
 
         const Mat2 covar2dInverse = covar2d.inverse();
 
-        // take 3 sigma as the radius (non-differentiable)
-        const T radius = radiusFromCovariance2dDet(covar2d, det, T(3));
-
-        if (radius <= mRadiusClip) {
-            mOutRadiiAcc[cid][gid] = 0;
+        // Per-axis radii from the 2D covariance diagonal at FVDB_EXTEND sigma.
+        // Both the radius-clip and the off-screen culls use these, so a gaussian
+        // survives the clip iff *either* axis exceeds it.
+        const T radiusX = ::cuda::std::ceil(T(FVDB_EXTEND) * ::cuda::std::sqrt(covar2d[0][0]));
+        const T radiusY = ::cuda::std::ceil(T(FVDB_EXTEND) * ::cuda::std::sqrt(covar2d[1][1]));
+        if (radiusX <= mRadiusClip && radiusY <= mRadiusClip) {
+            mOutRadiiAcc[cid][gid][0] = 0;
+            mOutRadiiAcc[cid][gid][1] = 0;
+            return;
+        }
+        if (mCamera.isProjectedFootprintOutsideImage(mean2d, radiusX, radiusY)) {
+            mOutRadiiAcc[cid][gid][0] = 0;
+            mOutRadiiAcc[cid][gid][1] = 0;
             return;
         }
 
-        // Mask out gaussians outside the image region
-        if (mCamera.isProjectedFootprintOutsideImage(mean2d, radius, radius)) {
-            mOutRadiiAcc[cid][gid] = 0;
-            return;
-        }
-
-        // Write outputs
-        mOutRadiiAcc[cid][gid]                   = int32_t(radius);
+        // Write outputs (per-axis radii match gsplat's intersect_tile convention).
+        mOutRadiiAcc[cid][gid][0]                = int32_t(radiusX);
+        mOutRadiiAcc[cid][gid][1]                = int32_t(radiusY);
         mOutMeans2dAcc[cid][gid][0]              = mean2d[0];
         mOutMeans2dAcc[cid][gid][1]              = mean2d[1];
         mOutDepthsAcc[cid][gid]                  = depthCam;
@@ -222,7 +227,7 @@ dispatchProjectGaussiansAnalyticFwd<torch::kCUDA>(
     const auto C                = worldToCamMatrices.size(0); // number of cameras
     at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream(means.device().index());
 
-    torch::Tensor outRadii   = torch::empty({C, N}, means.options().dtype(torch::kInt32));
+    torch::Tensor outRadii   = torch::empty({C, N, 2}, means.options().dtype(torch::kInt32));
     torch::Tensor outMeans2d = torch::empty({C, N, 2}, means.options());
     torch::Tensor outDepths  = torch::empty({C, N}, means.options());
     torch::Tensor outConics  = torch::empty({C, N, 3}, means.options());
@@ -320,7 +325,7 @@ dispatchProjectGaussiansAnalyticFwd<torch::kPrivateUse1>(
     const auto N = means.size(0);              // number of gaussians
     const auto C = worldToCamMatrices.size(0); // number of cameras
 
-    torch::Tensor outRadii   = torch::empty({C, N}, means.options().dtype(torch::kInt32));
+    torch::Tensor outRadii   = torch::empty({C, N, 2}, means.options().dtype(torch::kInt32));
     torch::Tensor outMeans2d = torch::empty({C, N, 2}, means.options());
     torch::Tensor outDepths  = torch::empty({C, N}, means.options());
     torch::Tensor outConics  = torch::empty({C, N, 3}, means.options());

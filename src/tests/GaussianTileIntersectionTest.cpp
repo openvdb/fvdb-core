@@ -39,12 +39,12 @@ class GaussianTileIntersectionTest : public ::testing::Test {
             },
             torch::kFloat32);
 
-        // Create radii tensor [C, N]
+        // Create radii tensor [C, N, 2] (per-axis pixel radius)
         auto const radii = torch::tensor(
-            {
-                {8, 8, 8}, // Camera 0
-                {8, 8, 8}  // Camera 1
-            },
+            {// Camera 0
+             {{8, 8}, {8, 8}, {8, 8}},
+             // Camera 1
+             {{8, 8}, {8, 8}, {8, 8}}},
             torch::kInt32);
 
         // Create depths tensor [C, N]
@@ -57,7 +57,7 @@ class GaussianTileIntersectionTest : public ::testing::Test {
 
         // Verify shapes match expected dimensions
         EXPECT_EQ(means2d.sizes(), std::vector<int64_t>({num_cameras, num_gaussians, 2}));
-        EXPECT_EQ(radii.sizes(), std::vector<int64_t>({num_cameras, num_gaussians}));
+        EXPECT_EQ(radii.sizes(), std::vector<int64_t>({num_cameras, num_gaussians, 2}));
         EXPECT_EQ(depths.sizes(), std::vector<int64_t>({num_cameras, num_gaussians}));
 
         return {means2d, radii, depths};
@@ -150,9 +150,10 @@ class GaussianTileIntersectionTest : public ::testing::Test {
 
             // Check each gaussian in this camera for intersection
             for (int64_t g = 0; g < num_gaussians; g++) {
-                float x   = means2d[cam_idx][g][0].item<float>();
-                float y   = means2d[cam_idx][g][1].item<float>();
-                int32_t r = radii[cam_idx][g].item<int32_t>();
+                float x    = means2d[cam_idx][g][0].item<float>();
+                float y    = means2d[cam_idx][g][1].item<float>();
+                int32_t rx = radii[cam_idx][g][0].item<int32_t>();
+                int32_t ry = radii[cam_idx][g][1].item<int32_t>();
 
                 // Compute tile bounds
                 float tile_left   = tile_w * tile_size;
@@ -160,9 +161,9 @@ class GaussianTileIntersectionTest : public ::testing::Test {
                 float tile_bottom = tile_h * tile_size;
                 float tile_top    = (tile_h + 1) * tile_size;
 
-                // Check if gaussian intersects tile bounds
-                bool intersects = x + r > tile_left && x - r < tile_right && y + r > tile_bottom &&
-                                  y - r < tile_top;
+                // Check if gaussian intersects tile bounds (per-axis AABB)
+                bool intersects = x + rx > tile_left && x - rx < tile_right &&
+                                  y + ry > tile_bottom && y - ry < tile_top;
 
                 if (intersects) {
                     tile_intersections.push_back(cam_idx * num_gaussians + g);
@@ -232,7 +233,7 @@ TEST_F(GaussianTileIntersectionTest, ZeroLengthGaussianTest) {
 
     // Create empty tensors with correct shapes
     auto means2d = torch::empty({numCameras, 0, 2}, torch::kFloat32); // [C, N=0, 2]
-    auto radii   = torch::empty({numCameras, 0}, torch::kInt32);      // [C. N=0]
+    auto radii   = torch::empty({numCameras, 0, 2}, torch::kInt32);   // [C, N=0, 2]
     auto depths  = torch::empty({numCameras, 0}, torch::kFloat32);    // [C, N=0]
 
     auto [tile_offsets, intersection_values] =
@@ -260,37 +261,43 @@ TEST_F(GaussianTileIntersectionTest, BadInputsFailTest) {
     const auto ng = 3;
 
     const std::vector<std::vector<std::vector<int64_t>>> configs = {
-        // Unpacked:
+        // Unpacked: shapes are {means2d, radii, depths} ([C, N, 2], [C, N, 2], [C, N]).
 
         // Wrong number of cameras
-        {{nc + 1, ng, 2}, {nc, ng}, {nc, ng}},
-        {{nc, ng, 2}, {nc - 1, ng}, {nc, ng}},
-        {{nc, ng, 2}, {nc, ng}, {nc + 8, ng}},
+        {{nc + 1, ng, 2}, {nc, ng, 2}, {nc, ng}},
+        {{nc, ng, 2}, {nc - 1, ng, 2}, {nc, ng}},
+        {{nc, ng, 2}, {nc, ng, 2}, {nc + 8, ng}},
         // Wrong number of gaussians
-        {{nc, ng + 1, 2}, {nc, ng}, {nc, ng}},
-        {{nc, ng, 2}, {nc, ng - 1}, {nc, ng}},
-        {{nc, ng, 2}, {nc, ng}, {nc, ng + 8}},
+        {{nc, ng + 1, 2}, {nc, ng, 2}, {nc, ng}},
+        {{nc, ng, 2}, {nc, ng - 1, 2}, {nc, ng}},
+        {{nc, ng, 2}, {nc, ng, 2}, {nc, ng + 8}},
         // Wrong mean dim
-        {{nc, ng, 4}, {nc, ng}, {nc, ng}},
+        {{nc, ng, 4}, {nc, ng, 2}, {nc, ng}},
+        // Wrong radii last-dim (must be 2)
+        {{nc, ng, 2}, {nc, ng, 3}, {nc, ng}},
+        {{nc, ng, 2}, {nc, ng, 1}, {nc, ng}},
         // Wrong number of dimensions
-        {{nc, 2}, {nc, 3}, {nc, 3}},
-        {{nc, 3, 2}, {nc}, {nc, 3}},
-        {{nc, 3, 2}, {nc, 3}, {nc}},
+        {{nc, 2}, {nc, 3, 2}, {nc, 3}},
+        {{nc, 3, 2}, {nc, 3}, {nc, 3}},
+        {{nc, 3, 2}, {nc, 3, 2}, {nc}},
 
-        // Packed:
+        // Packed: shapes are {means2d, radii, depths, camera_jidx} ([M, 2], [M, 2], [M], [M]).
 
         // Wrong number of gaussians
-        {{ng + 1, 2}, {ng}, {ng}, {ng}},
-        {{ng, 2}, {ng - 1}, {ng}, {ng}},
-        {{ng, 2}, {ng}, {ng + 8}, {ng}},
-        {{ng, 2}, {ng}, {ng}, {ng + 5}},
+        {{ng + 1, 2}, {ng, 2}, {ng}, {ng}},
+        {{ng, 2}, {ng - 1, 2}, {ng}, {ng}},
+        {{ng, 2}, {ng, 2}, {ng + 8}, {ng}},
+        {{ng, 2}, {ng, 2}, {ng}, {ng + 5}},
         // Wrong mean dim
-        {{ng, 4}, {nc, ng}, {nc, ng}, {ng}},
+        {{ng, 4}, {ng, 2}, {ng}, {ng}},
+        // Wrong radii last-dim
+        {{ng, 2}, {ng, 3}, {ng}, {ng}},
+        {{ng, 2}, {ng, 1}, {ng}, {ng}},
         // Wrong number of dimensions
-        {{ng, 4, 2}, {ng}, {ng}, {ng}},
-        {{ng, 2}, {ng, 7}, {ng}, {ng}},
-        {{ng, 2}, {ng}, {ng, 2, 1}, {ng}},
-        {{ng, 2}, {ng}, {ng, 2, 1}, {ng, 1}},
+        {{ng, 4, 2}, {ng, 2}, {ng}, {ng}},
+        {{ng, 2}, {ng}, {ng}, {ng}},
+        {{ng, 2}, {ng, 2, 1}, {ng}, {ng}},
+        {{ng, 2}, {ng, 2}, {ng, 2, 1}, {ng}},
     };
 
     for (auto config: configs) {
@@ -372,9 +379,9 @@ TEST_F(GaussianTileIntersectionTest, BasicIntersectionTest) {
 TEST_F(GaussianTileIntersectionTest, PackedFormatTest) {
     auto [means2d, radii, depths] = createTestData();
 
-    // Reshape tensors to packed format [M, 2] and [M]
+    // Reshape tensors to packed format: means2d [M, 2], radii [M, 2], depths [M]
     auto means2d_packed = means2d.reshape({-1, 2});
-    auto radii_packed   = radii.reshape({-1});
+    auto radii_packed   = radii.reshape({-1, 2});
     auto depths_packed  = depths.reshape({-1});
 
     // Create camera indices tensor
@@ -518,7 +525,7 @@ TEST_F(GaussianTileIntersectionTest, SparseZeroLengthGaussianTest) {
 
     // Create empty tensors with correct shapes
     auto means2d = torch::empty({numCameras, 0, 2}, torch::kFloat32); // [C, N=0, 2]
-    auto radii   = torch::empty({numCameras, 0}, torch::kInt32);      // [C. N=0]
+    auto radii   = torch::empty({numCameras, 0, 2}, torch::kInt32);   // [C, N=0, 2]
     auto depths  = torch::empty({numCameras, 0}, torch::kFloat32);    // [C, N=0]
 
     auto tile_mask           = torch::ones({numCameras, num_tiles_h, num_tiles_w}, torch::kBool);
@@ -550,9 +557,9 @@ TEST_F(GaussianTileIntersectionTest, SparseZeroLengthGaussianTest) {
 TEST_F(GaussianTileIntersectionTest, SparsePackedFormatTest) {
     auto [means2d, radii, depths] = createTestData();
 
-    // Reshape tensors to packed format [M, 2] and [M]
+    // Reshape tensors to packed format: means2d [M, 2], radii [M, 2], depths [M]
     auto means2d_packed = means2d.reshape({-1, 2});
-    auto radii_packed   = radii.reshape({-1});
+    auto radii_packed   = radii.reshape({-1, 2});
     auto depths_packed  = depths.reshape({-1});
 
     // Create camera indices tensor

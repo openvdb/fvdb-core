@@ -83,7 +83,7 @@ initJaggedAccessor(const fvdb::JaggedTensor &tensor, const std::string &name) {
 /// @tparam IS_PACKED Whether the Gaussian is packed (i.e. linearized across the outer dimensions)
 template <typename ScalarType, size_t NUM_CHANNELS, bool IS_PACKED> struct RasterizeCommonArgs {
     constexpr static size_t NUM_OUTER_DIMS         = IS_PACKED ? 1 : 2;
-    constexpr static ScalarType ALPHA_THRESHOLD    = ScalarType{0.999};
+    constexpr static ScalarType ALPHA_THRESHOLD    = ScalarType{0.99};
     using vec2t                                    = nanovdb::math::Vec2<ScalarType>;
     using vec3t                                    = nanovdb::math::Vec3<ScalarType>;
     template <typename T, int N> using TorchRAcc64 = fvdb::TorchRAcc64<T, N>;

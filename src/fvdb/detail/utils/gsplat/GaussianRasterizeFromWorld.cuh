@@ -21,7 +21,7 @@
 namespace fvdb::detail::ops {
 
 /// Opacity threshold used by 3DGS alpha compositing.
-constexpr __device__ float kAlphaThreshold = 0.999f;
+constexpr __device__ float kAlphaThreshold = 0.99f;
 
 /// Common dense-tile rasterization arguments shared by from-world forward/backward kernels.
 struct RasterizeFromWorldCommonArgs {
