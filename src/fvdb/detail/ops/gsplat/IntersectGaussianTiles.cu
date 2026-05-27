@@ -378,6 +378,7 @@ intersectGaussianTilesCudaImpl(
     if (isPacked) {
         TORCH_CHECK(cameraJIdx.value().is_cuda(), "cameraJIdx must be a CUDA tensor");
         TORCH_CHECK_VALUE(means2d.dim() == 2, "means2d must have 2 dimensions (M, 2)");
+        TORCH_CHECK_VALUE(means2d.size(1) == 2, "means2d must have 2 points in the last dimension");
         TORCH_CHECK_VALUE(radii.dim() == 2, "radii must have 2 dimensions (M, 2)");
         TORCH_CHECK_VALUE(radii.size(1) == 2, "radii must have 2 components in the last dimension");
         TORCH_CHECK_VALUE(depths.dim() == 1, "depths must have 1 dimension (M)");
@@ -613,6 +614,7 @@ intersectGaussianTilesPrivateUse1Impl(
         TORCH_CHECK(cameraJIdx.value().is_privateuseone(),
                     "camera_jidx must be a PrivateUse1 tensor");
         TORCH_CHECK_VALUE(means2d.dim() == 2, "means2d must have 2 dimensions (M, 2)");
+        TORCH_CHECK_VALUE(means2d.size(1) == 2, "means2d must have 2 points in the last dimension");
         TORCH_CHECK_VALUE(radii.dim() == 2, "radii must have 2 dimensions (M, 2)");
         TORCH_CHECK_VALUE(radii.size(1) == 2, "radii must have 2 components in the last dimension");
         TORCH_CHECK_VALUE(depths.dim() == 1, "depths must have 1 dimension (M)");
