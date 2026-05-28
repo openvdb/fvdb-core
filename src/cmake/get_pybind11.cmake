@@ -44,16 +44,24 @@ function(detect_torch_pybind11_version)
     string(REGEX MATCH "#define PYBIND11_VERSION_PATCH[ \t]+([0-9]+)" _ "${header_content}")
     set(PATCH "${CMAKE_MATCH_1}")
 
-    # string(REGEX MATCH) sets CMAKE_MATCH_1 to "" on no match, which DEFINED
-    # would still consider set — so check for non-empty instead.
-    if(MAJOR AND MINOR AND PATCH)
+    # string(REGEX MATCH) sets CMAKE_MATCH_1 to "" on no match, so test each
+    # component for non-empty explicitly. Avoid CMake's boolean coercion via
+    # `if(VAR)`, which treats a legitimate "0" component (e.g. PYBIND11_VERSION_PATCH
+    # 0 in a freshly-bumped major release) as false.
+    if(NOT "${MAJOR}" STREQUAL "" AND NOT "${MINOR}" STREQUAL "" AND NOT "${PATCH}" STREQUAL "")
         set(PYBIND11_VERSION_MAJOR "${MAJOR}" PARENT_SCOPE)
         set(PYBIND11_VERSION_MINOR "${MINOR}" PARENT_SCOPE)
         set(PYBIND11_VERSION_PATCH "${PATCH}" PARENT_SCOPE)
         set(PYBIND11_VERSION "${MAJOR}.${MINOR}.${PATCH}" PARENT_SCOPE)
         message(STATUS "Detected PyTorch's pybind11 version: ${MAJOR}.${MINOR}.${PATCH}")
     else()
-        message(FATAL_ERROR "Could not detect PyTorch's pybind11 version from ${PYBIND11_HEADER}")
+        # Couldn't parse a version, but TORCH_PYBIND11_INCLUDE_DIR is already set
+        # from the walk above, which is what the caller actually uses for the
+        # bundled-headers path. Only the CPM fallback below needs PYBIND11_VERSION,
+        # and that path guards against unset version explicitly.
+        message(STATUS
+            "Found PyTorch's bundled pybind11 at ${PYBIND11_HEADER} but could not "
+            "parse its version macros; bundled headers will still be used.")
     endif()
 endfunction()
 
@@ -88,6 +96,19 @@ else()
     if (pybind11_FOUND)
         message(STATUS "pybind11 found: ${pybind11_INCLUDE_DIRS}")
     else()
+        # Last-resort CPM fetch needs a concrete version to pin pybind11 to
+        # whatever pytorch was built against. If detect_torch_pybind11_version()
+        # couldn't extract one (no bundled headers + parse failure), we have no
+        # way to choose a compatible release here; bail with a clear message
+        # instead of silently fetching `v` (empty tag).
+        if(NOT PYBIND11_VERSION)
+            message(FATAL_ERROR
+                "pybind11 not found via PyTorch bundle or find_package, and "
+                "PYBIND11_VERSION is unset — cannot pin a CPM fetch. Install "
+                "pybind11 (e.g. `pip install pybind11` or `conda install pybind11`) "
+                "or ensure pytorch's bundled headers are discoverable.")
+        endif()
+
         # Set variables needed by pybind11
         set(PYBIND11_NEWPYTHON ON)
         set(PYTHON_INCLUDE_DIRS ${Python3_INCLUDE_DIRS})
