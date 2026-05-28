@@ -37,7 +37,7 @@ target_include_directories(fvdb_test_utils PRIVATE
 )
 
 target_link_libraries(fvdb_test_utils
-  PUBLIC ${TORCH_LIBRARIES}
+  PUBLIC torch
   PRIVATE PNG::PNG
 )
 # --- End Test Utilities Library Definition ---

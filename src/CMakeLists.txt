@@ -214,7 +214,7 @@ target_compile_options(fvdb PRIVATE
     $<$<AND:$<BOOL:${FVDB_LINEINFO}>,$<COMPILE_LANGUAGE:CUDA>>:-lineinfo>)
 
 target_link_libraries(fvdb
-    PUBLIC ${TORCH_LIBRARIES}
+    PUBLIC torch
     PRIVATE tinyply cutlass blosc::blosc ZLIB::ZLIB dispatch)
 
 # ----------------------------------------------------------------------------

@@ -4,10 +4,21 @@
 # First make sure Python is found
 find_package(Python3 COMPONENTS Interpreter Development REQUIRED)
 
-# Get PyTorch's pybind11 version
+# Get PyTorch's pybind11 version. Sets TORCH_PYBIND11_INCLUDE_DIR and
+# PYBIND11_VERSION in the parent scope when pytorch bundles its own pybind11
+# (pip wheels do; conda-forge dropped this several versions ago). Leaves them
+# unset otherwise, so the caller falls back to find_package(pybind11).
 function(detect_torch_pybind11_version)
-    # Try to find pybind11/detail/common.h in TORCH_INCLUDE_DIRS
-    foreach(dir ${TORCH_INCLUDE_DIRS})
+    set(_candidates)
+    # pip pytorch bundles pybind11 under TORCH_PACKAGE_DIR/include (set by
+    # get_torch.cmake). TORCH_INCLUDE_DIRS may or may not cover the same dir
+    # depending on which branch of TorchConfig fires, so check it too.
+    if(TORCH_PACKAGE_DIR)
+        list(APPEND _candidates "${TORCH_PACKAGE_DIR}/include")
+    endif()
+    list(APPEND _candidates ${TORCH_INCLUDE_DIRS})
+
+    foreach(dir ${_candidates})
         if(EXISTS "${dir}/pybind11/detail/common.h")
             set(PYBIND11_HEADER "${dir}/pybind11/detail/common.h")
             set(TORCH_PYBIND11_INCLUDE_DIR "${dir}" PARENT_SCOPE)
@@ -15,40 +26,32 @@ function(detect_torch_pybind11_version)
         endif()
     endforeach()
 
-    # If not found, try python site-packages
     if(NOT PYBIND11_HEADER)
-        if(EXISTS "${PYTHON_SITE_PACKAGES}/torch/include/pybind11/detail/common.h")
-            set(PYBIND11_HEADER "${PYTHON_SITE_PACKAGES}/torch/include/pybind11/detail/common.h")
-            set(TORCH_PYBIND11_INCLUDE_DIR "${PYTHON_SITE_PACKAGES}/torch/include" PARENT_SCOPE)
-        endif()
+        message(STATUS
+            "PyTorch does not bundle pybind11 in its include tree; "
+            "falling back to find_package(pybind11) for a compatible version.")
+        return()
     endif()
 
-    if(NOT PYBIND11_HEADER)
-        message(WARNING "Could not find pybind11 headers in PyTorch")
-    endif()
-
-    # Extract the version from the header by reading the file content
     file(READ "${PYBIND11_HEADER}" header_content)
 
-    # First try standard version defines
     string(REGEX MATCH "#define PYBIND11_VERSION_MAJOR[ \t]+([0-9]+)" _ "${header_content}")
     set(MAJOR "${CMAKE_MATCH_1}")
-
     string(REGEX MATCH "#define PYBIND11_VERSION_MINOR[ \t]+([0-9]+)" _ "${header_content}")
     set(MINOR "${CMAKE_MATCH_1}")
-
     string(REGEX MATCH "#define PYBIND11_VERSION_PATCH[ \t]+([0-9]+)" _ "${header_content}")
     set(PATCH "${CMAKE_MATCH_1}")
 
-    # Check if the regex patterns matched (not if values are non-zero)
-    if(DEFINED MAJOR AND DEFINED MINOR AND DEFINED PATCH)
+    # string(REGEX MATCH) sets CMAKE_MATCH_1 to "" on no match, which DEFINED
+    # would still consider set — so check for non-empty instead.
+    if(MAJOR AND MINOR AND PATCH)
         set(PYBIND11_VERSION_MAJOR "${MAJOR}" PARENT_SCOPE)
         set(PYBIND11_VERSION_MINOR "${MINOR}" PARENT_SCOPE)
         set(PYBIND11_VERSION_PATCH "${PATCH}" PARENT_SCOPE)
         set(PYBIND11_VERSION "${MAJOR}.${MINOR}.${PATCH}" PARENT_SCOPE)
         message(STATUS "Detected PyTorch's pybind11 version: ${MAJOR}.${MINOR}.${PATCH}")
     else()
-        message(FATAL_ERROR "Could not detect PyTorch's pybind11 version")
+        message(FATAL_ERROR "Could not detect PyTorch's pybind11 version from ${PYBIND11_HEADER}")
     endif()
 endfunction()
 

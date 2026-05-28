@@ -63,7 +63,7 @@ if(FVDB_BUILD_TESTS OR FVDB_BUILD_BENCHMARKS)
 
     target_link_libraries(dispatch_examples PUBLIC
         dispatch
-        ${TORCH_LIBRARIES}
+        torch
     )
 
     target_compile_options(dispatch_examples PRIVATE
