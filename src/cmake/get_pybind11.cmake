@@ -33,8 +33,10 @@ function(detect_torch_pybind11_version)
         return()
     endif()
 
+    # Extract the version from the header by reading the file content
     file(READ "${PYBIND11_HEADER}" header_content)
 
+    # First try standard version defines
     string(REGEX MATCH "#define PYBIND11_VERSION_MAJOR[ \t]+([0-9]+)" _ "${header_content}")
     set(MAJOR "${CMAKE_MATCH_1}")
     string(REGEX MATCH "#define PYBIND11_VERSION_MINOR[ \t]+([0-9]+)" _ "${header_content}")
