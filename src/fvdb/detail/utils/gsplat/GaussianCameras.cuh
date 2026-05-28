@@ -47,6 +47,12 @@ constexpr float kBackwardProjectionNearPlane = -1e10f;
 /// @brief Far-plane used when backward projection runs without user near/far clipping.
 constexpr float kBackwardProjectionFarPlane = 1e10f;
 
+/// @brief Sigma extent used when computing the 2D screen-space footprint of a
+/// gaussian from its covariance. A radius of `FVDB_EXTEND * sigma` covers
+/// ~99.91% of the gaussian's mass — anything outside this radius is treated as
+/// negligible by the projection / tile-intersection / radius-clip paths.
+constexpr float FVDB_EXTEND = 3.33f;
+
 /// @brief Unscented Transform hyperparameters.
 struct UTParams {
     float alpha                       = 0.1f;
@@ -91,17 +97,16 @@ isOutsideImageWithRadius(const nanovdb::math::Vec2<T> &mean2d,
 }
 
 /// @brief Estimate projected radius from a 2x2 covariance using the largest eigenvalue heuristic.
+/// Takes `FVDB_EXTEND` standard deviations of the largest eigenvalue, recovered from the
+/// trace/determinant of the 2x2 covariance.
 template <typename T>
 inline __device__ T
 radiusFromCovariance2dDet(const nanovdb::math::Mat2<T> &covar2d,
                           const T det,
-                          const T sigma,
                           const T detClamp = T(0.01)) {
-    // Matches the classic FVDB/gsplat heuristic: use the largest eigenvalue of the 2x2 covariance
-    // (via trace/determinant) and take `sigma` standard deviations.
     const T b  = T(0.5) * (covar2d[0][0] + covar2d[1][1]);
     const T v1 = b + ::cuda::std::sqrt(nanovdb::math::Max(detClamp, b * b - det));
-    return ::cuda::std::ceil(sigma * ::cuda::std::sqrt(v1));
+    return ::cuda::std::ceil(T(FVDB_EXTEND) * ::cuda::std::sqrt(v1));
 }
 
 /// @brief Pack symmetric inverse covariance [[a,b],[b,c]] into row-major-3 [a,b,c].
@@ -782,6 +787,14 @@ template <typename T> struct PerspectiveWithDistortionCamera {
         }
     }
 
+    /// @brief Returns true when the footprint AABB has no overlap with the image.
+    inline __device__ bool
+    isProjectedFootprintOutsideImage(const nanovdb::math::Vec2<T> &mean2d,
+                                     const T radiusX,
+                                     const T radiusY) const {
+        return isOutsideImageWithRadius(mean2d, radiusX, radiusY, imageWidth, imageHeight);
+    }
+
     /// @brief Returns camera-space depth at a given rolling-shutter time.
     inline __device__ T
     cameraDepthAtTime(const int64_t cid,
@@ -1166,6 +1179,14 @@ template <typename T> struct OrthographicWithDistortionCamera {
         copyMat3Accessor<T>(numCameras, worldToCamEndRotShared, worldToCamEndAcc);
         copyWorldToCamTranslation<T>(numCameras, worldToCamEndTransShared, worldToCamEndAcc);
         copyMat3Accessor<T>(numCameras, projectionMatsShared, projectionMatricesAcc);
+    }
+
+    /// @brief Returns true when the footprint AABB has no overlap with the image.
+    inline __device__ bool
+    isProjectedFootprintOutsideImage(const nanovdb::math::Vec2<T> &mean2d,
+                                     const T radiusX,
+                                     const T radiusY) const {
+        return isOutsideImageWithRadius(mean2d, radiusX, radiusY, imageWidth, imageHeight);
     }
 
     /// @brief Returns camera-space depth at a given rolling-shutter time.

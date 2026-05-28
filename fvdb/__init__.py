@@ -213,7 +213,7 @@ def gaussian_render_jagged(
             None,
             sh0.permute(1, 0, 2),  # [nnz, 1, D]
             None,
-            radii.unsqueeze(0),  # [1, nnz]
+            radii.unsqueeze(0),  # [1, nnz, 2] (per-axis)
         )
     else:
         sh0 = sh_coeffs_batched[0, :, :].unsqueeze(0)  # [1, nnz, D]
@@ -231,7 +231,7 @@ def gaussian_render_jagged(
             dirs.unsqueeze(0),  # [1, nnz, 3]
             sh0.permute(1, 0, 2),  # [nnz, 1, D]
             shN.permute(1, 0, 2),  # [nnz, K-1, D]
-            radii.unsqueeze(0),  # [1, nnz]
+            radii.unsqueeze(0),  # [1, nnz, 2] (per-axis)
         )
     render_quantities = render_quantities.squeeze(0)  # [nnz, D]
 
@@ -289,8 +289,8 @@ def evaluate_spherical_harmonics(
         sh_degree: Degree of spherical harmonics to use (0-3 typically).
         num_cameras: Number of camera views (C).
         sh0: DC term coefficients with shape [N, 1, D].
-        radii: Projected radii with shape [C, N] (int32). Points with radii <= 0
-               will output zeros.
+        radii: Per-axis projected radii with shape [C, N, 2] (int32). A point
+               is masked out unless both axes are positive.
         shN: Higher-order SH coefficients with shape [N, K-1, D] where
              K = (sh_degree+1)^2. Required when sh_degree > 0.
         view_directions: Unnormalized view directions with shape [C, N, 3].
@@ -303,8 +303,8 @@ def evaluate_spherical_harmonics(
         raise ValueError(f"sh0 must be 3-dimensional [N, 1, D], got {sh0.ndim}D")
     if sh0.shape[1] != 1:
         raise ValueError(f"sh0.shape[1] must be 1, got {sh0.shape[1]}")
-    if radii.ndim != 2:
-        raise ValueError(f"radii must be 2-dimensional [C, N], got {radii.ndim}D")
+    if radii.ndim != 3 or radii.shape[-1] != 2:
+        raise ValueError(f"radii must be shape [C, N, 2], got {tuple(radii.shape)}")
     if sh0.shape[0] != radii.shape[1]:
         raise ValueError(f"sh0.shape[0] ({sh0.shape[0]}) must match radii.shape[1] ({radii.shape[1]})")
     if sh_degree > 0 and view_directions is None:

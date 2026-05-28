@@ -192,8 +192,6 @@ template <typename ScalarType, typename Camera> struct ProjectionForwardUT {
     // Scalar Inputs
     const int64_t C;
     const int64_t N;
-    const int32_t mImageWidth;
-    const int32_t mImageHeight;
     const ScalarType mEps2d;
     const ScalarType mNearPlane;
     const ScalarType mFarPlane;
@@ -211,7 +209,7 @@ template <typename ScalarType, typename Camera> struct ProjectionForwardUT {
     const fvdb::TorchRAcc64<ScalarType, 2> mDistortionCoeffsAcc;        // [C, K]
 
     // Outputs
-    fvdb::TorchRAcc64<int32_t, 2> mOutRadiiAcc;      // [C, N]
+    fvdb::TorchRAcc64<int32_t, 3> mOutRadiiAcc;      // [C, N, 2]
     fvdb::TorchRAcc64<ScalarType, 3> mOutMeans2dAcc; // [C, N, 2]
     fvdb::TorchRAcc64<ScalarType, 2> mOutDepthsAcc;  // [C, N]
     fvdb::TorchRAcc64<ScalarType, 3> mOutConicsAcc;  // [C, N, 3]
@@ -224,8 +222,6 @@ template <typename ScalarType, typename Camera> struct ProjectionForwardUT {
 
     /// @brief Construct the functor with configuration and tensor references.
     ///
-    /// @param[in] imageWidth Image width in pixels.
-    /// @param[in] imageHeight Image height in pixels.
     /// @param[in] eps2d Blur epsilon added to covariance for numerical stability.
     /// @param[in] nearPlane Near-plane threshold for depth culling.
     /// @param[in] farPlane Far-plane threshold for depth culling.
@@ -241,14 +237,12 @@ template <typename ScalarType, typename Camera> struct ProjectionForwardUT {
     /// @param[in] worldToCamMatricesEnd [C,4,4] tensor.
     /// @param[in] projectionMatrices [C,3,3] tensor.
     /// @param[in] distortionCoeffs [C,K] tensor (K=0 for PINHOLE/ORTHOGRAPHIC; K=12 for OPENCV).
-    /// @param[out] outRadii [C,N] tensor.
+    /// @param[out] outRadii [C,N,2] tensor (per-axis pixel radius).
     /// @param[out] outMeans2d [C,N,2] tensor.
     /// @param[out] outDepths [C,N] tensor.
     /// @param[out] outConics [C,N,3] tensor.
     /// @param[out] outCompensations [C,N] tensor (optional, may be undefined).
-    ProjectionForwardUT(const int64_t imageWidth,
-                        const int64_t imageHeight,
-                        const ScalarType eps2d,
+    ProjectionForwardUT(const ScalarType eps2d,
                         const ScalarType nearPlane,
                         const ScalarType farPlane,
                         const ScalarType minRadius2d,
@@ -262,15 +256,13 @@ template <typename ScalarType, typename Camera> struct ProjectionForwardUT {
                         const torch::Tensor &worldToCamMatricesEnd,   // [C, 4, 4]
                         const torch::Tensor &projectionMatrices,      // [C, 3, 3]
                         const torch::Tensor &distortionCoeffs,        // [C, K]
-                        torch::Tensor &outRadii,                      // [C, N]
+                        torch::Tensor &outRadii,                      // [C, N, 2]
                         torch::Tensor &outMeans2d,                    // [C, N, 2]
                         torch::Tensor &outDepths,                     // [C, N]
                         torch::Tensor &outConics,                     // [C, N, 3]
                         torch::Tensor &outCompensations               // [C, N] optional
                         )
-        : C(projectionMatrices.size(0)), N(means.size(0)),
-          mImageWidth(static_cast<int32_t>(imageWidth)),
-          mImageHeight(static_cast<int32_t>(imageHeight)), mEps2d(eps2d), mNearPlane(nearPlane),
+        : C(projectionMatrices.size(0)), N(means.size(0)), mEps2d(eps2d), mNearPlane(nearPlane),
           mFarPlane(farPlane), mRadiusClip(minRadius2d), mUTParams(utParams), mCamera(camera),
           mMeansAcc(means.packed_accessor64<ScalarType, 2, torch::RestrictPtrTraits>()),
           mQuatsAcc(quats.packed_accessor64<ScalarType, 2, torch::RestrictPtrTraits>()),
@@ -283,7 +275,7 @@ template <typename ScalarType, typename Camera> struct ProjectionForwardUT {
               projectionMatrices.packed_accessor64<ScalarType, 3, torch::RestrictPtrTraits>()),
           mDistortionCoeffsAcc(
               distortionCoeffs.packed_accessor64<ScalarType, 2, torch::RestrictPtrTraits>()),
-          mOutRadiiAcc(outRadii.packed_accessor64<int32_t, 2, torch::RestrictPtrTraits>()),
+          mOutRadiiAcc(outRadii.packed_accessor64<int32_t, 3, torch::RestrictPtrTraits>()),
           mOutMeans2dAcc(outMeans2d.packed_accessor64<ScalarType, 3, torch::RestrictPtrTraits>()),
           mOutDepthsAcc(outDepths.packed_accessor64<ScalarType, 2, torch::RestrictPtrTraits>()),
           mOutConicsAcc(outConics.packed_accessor64<ScalarType, 3, torch::RestrictPtrTraits>()),
@@ -322,7 +314,8 @@ template <typename ScalarType, typename Camera> struct ProjectionForwardUT {
             const ScalarType tDepth = ScalarType(0.5);
             const ScalarType depth  = mCamera.cameraDepthAtTime(camId, meanWorldSpace, tDepth);
             if (depth < mNearPlane || depth > mFarPlane) {
-                mOutRadiiAcc[camId][gaussianId] = 0;
+                mOutRadiiAcc[camId][gaussianId][0] = 0;
+                mOutRadiiAcc[camId][gaussianId][1] = 0;
                 return;
             }
         }
@@ -351,20 +344,23 @@ template <typename ScalarType, typename Camera> struct ProjectionForwardUT {
             // Hard reject if any sigma point is behind the camera since the projection will be
             // discontinuous.
             if (status == ProjectionVisibility::BehindCamera) {
-                mOutRadiiAcc[camId][gaussianId] = 0;
+                mOutRadiiAcc[camId][gaussianId][0] = 0;
+                mOutRadiiAcc[camId][gaussianId][1] = 0;
                 return;
             }
             const bool valid_i  = (status == ProjectionVisibility::InImage);
             projected_points[i] = pix;
             valid_any |= valid_i;
             if (mUTParams.requireAllSigmaPointsInImage && !valid_i) {
-                mOutRadiiAcc[camId][gaussianId] = 0;
+                mOutRadiiAcc[camId][gaussianId][0] = 0;
+                mOutRadiiAcc[camId][gaussianId][1] = 0;
                 return;
             }
         }
 
         if (!mUTParams.requireAllSigmaPointsInImage && !valid_any) {
-            mOutRadiiAcc[camId][gaussianId] = 0;
+            mOutRadiiAcc[camId][gaussianId][0] = 0;
+            mOutRadiiAcc[camId][gaussianId][1] = 0;
             return;
         }
 
@@ -382,7 +378,8 @@ template <typename ScalarType, typename Camera> struct ProjectionForwardUT {
         ScalarType compensation;
         const ScalarType det_blur = addBlur(mEps2d, covar2d, compensation);
         if (det_blur <= ScalarType(0)) {
-            mOutRadiiAcc[camId][gaussianId] = 0;
+            mOutRadiiAcc[camId][gaussianId][0] = 0;
+            mOutRadiiAcc[camId][gaussianId][1] = 0;
             return;
         }
 
@@ -392,7 +389,8 @@ template <typename ScalarType, typename Camera> struct ProjectionForwardUT {
 
         const ScalarType det_psd = covar2d[0][0] * covar2d[1][1] - covar2d[0][1] * covar2d[1][0];
         if (!(det_psd > ScalarType(0))) {
-            mOutRadiiAcc[camId][gaussianId] = 0;
+            mOutRadiiAcc[camId][gaussianId][0] = 0;
+            mOutRadiiAcc[camId][gaussianId][1] = 0;
             return;
         }
 
@@ -402,25 +400,26 @@ template <typename ScalarType, typename Camera> struct ProjectionForwardUT {
         const ScalarType b      = 0.5f * (covar2d[0][0] + covar2d[1][1]);
         const ScalarType tmp    = sqrtf(max(0.01f, b * b - det_psd));
         const ScalarType v1     = b + tmp; // larger eigenvalue
-        const ScalarType extend = 3.0f;    // 3 sigma
+        const ScalarType extend = FVDB_EXTEND;
         ScalarType r1           = extend * sqrtf(v1);
         ScalarType radius_x     = ceilf(min(extend * sqrtf(covar2d[0][0]), r1));
         ScalarType radius_y     = ceilf(min(extend * sqrtf(covar2d[1][1]), r1));
 
         if (radius_x <= mRadiusClip && radius_y <= mRadiusClip) {
-            mOutRadiiAcc[camId][gaussianId] = 0;
+            mOutRadiiAcc[camId][gaussianId][0] = 0;
+            mOutRadiiAcc[camId][gaussianId][1] = 0;
             return;
         }
 
-        // Mask out gaussians outside the image region
-        if (mean2d[0] + radius_x <= 0 || mean2d[0] - radius_x >= mImageWidth ||
-            mean2d[1] + radius_y <= 0 || mean2d[1] - radius_y >= mImageHeight) {
-            mOutRadiiAcc[camId][gaussianId] = 0;
+        if (mCamera.isProjectedFootprintOutsideImage(mean2d, radius_x, radius_y)) {
+            mOutRadiiAcc[camId][gaussianId][0] = 0;
+            mOutRadiiAcc[camId][gaussianId][1] = 0;
             return;
         }
 
-        // Write outputs (using radius_x for compatibility, but could use both)
-        mOutRadiiAcc[camId][gaussianId]      = int32_t(max(radius_x, radius_y));
+        // Write outputs (per-axis pixel radii, matching gsplat's intersect_tile convention).
+        mOutRadiiAcc[camId][gaussianId][0]   = int32_t(radius_x);
+        mOutRadiiAcc[camId][gaussianId][1]   = int32_t(radius_y);
         mOutMeans2dAcc[camId][gaussianId][0] = mean2d[0];
         mOutMeans2dAcc[camId][gaussianId][1] = mean2d[1];
         mOutDepthsAcc[camId][gaussianId] =
@@ -552,7 +551,7 @@ dispatchProjectGaussiansUnscentedFwd<torch::kCUDA>(
     TORCH_CHECK_VALUE(distortionCoeffs.size(0) == C,
                       "distortionCoeffs must have shape [C,K] matching projectionMatrices.size(0)");
 
-    torch::Tensor outRadii   = torch::empty({C, N}, means.options().dtype(torch::kInt32));
+    torch::Tensor outRadii   = torch::empty({C, N, 2}, means.options().dtype(torch::kInt32));
     torch::Tensor outMeans2d = torch::empty({C, N, 2}, means.options());
     torch::Tensor outDepths  = torch::empty({C, N}, means.options());
     torch::Tensor outConics  = torch::empty({C, N, 3}, means.options());
@@ -580,8 +579,6 @@ dispatchProjectGaussiansUnscentedFwd<torch::kCUDA>(
                                                           rollingShutterType);
         const size_t SHARED_MEM_SIZE = camera.numSharedMemBytes();
         ProjectionForwardUT<scalar_t, OrthographicWithDistortionCamera<scalar_t>> projectionForward(
-            imageWidth,
-            imageHeight,
             eps2d,
             nearPlane,
             farPlane,
@@ -619,8 +616,6 @@ dispatchProjectGaussiansUnscentedFwd<torch::kCUDA>(
                                                          cameraModel);
         const size_t SHARED_MEM_SIZE = camera.numSharedMemBytes();
         ProjectionForwardUT<scalar_t, PerspectiveWithDistortionCamera<scalar_t>> projectionForward(
-            imageWidth,
-            imageHeight,
             eps2d,
             nearPlane,
             farPlane,

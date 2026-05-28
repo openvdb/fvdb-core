@@ -354,7 +354,10 @@ jobs:
           echo "Generated index.html:"
           cat "$INDEX_FILE"
 
-          aws s3 cp "$INDEX_FILE" "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${{ steps.proj.outputs.normalized }}/index.html" --content-type text/html --only-show-errors
+          aws s3 cp "$INDEX_FILE" "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${{ steps.proj.outputs.normalized }}/index.html" \
+            --content-type text/html \
+            --cache-control "public, max-age=60, must-revalidate" \
+            --only-show-errors
           echo "Index uploaded successfully"
 
       - name: Generate root simple index.html
@@ -374,7 +377,48 @@ jobs:
             done;
             echo "</body></html>";
           } > "$ROOT_INDEX"
-          aws s3 cp "$ROOT_INDEX" "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/index.html" --content-type text/html --only-show-errors
+          aws s3 cp "$ROOT_INDEX" "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/index.html" \
+            --content-type text/html \
+            --cache-control "public, max-age=60, must-revalidate" \
+            --only-show-errors
+
+      - name: Invalidate CloudFront cache for simple-index paths
+        run: |
+          set -euo pipefail
+          DOMAIN="${{ needs.versions.outputs.aws-cloudfront-distribution-domain }}"
+          if [ -z "$DOMAIN" ] || [ "$DOMAIN" = "null" ]; then
+            echo "No CloudFront distribution domain configured (aws.cloudfront_distribution_domain in versions.json); skipping invalidation"
+            exit 0
+          fi
+          DIST_ID=$(aws cloudfront list-distributions \
+            --query "DistributionList.Items[?DomainName=='$DOMAIN'].Id | [0]" \
+            --output text 2>/dev/null || echo "")
+          if [ -z "$DIST_ID" ] || [ "$DIST_ID" = "None" ]; then
+            echo "WARNING: Could not find CloudFront distribution for domain $DOMAIN; skipping invalidation"
+            echo "(IAM role may need cloudfront:ListDistributions permission)"
+            exit 0
+          fi
+          NORM="${{ steps.proj.outputs.normalized }}"
+          # Invalidate both the trailing-slash directory paths (what pip and
+          # browsers actually request) and the underlying index.html object
+          # paths. CloudFront caches each request URI independently, so
+          # invalidating only one form leaves the other stale.
+          PATHS=(
+            "/${SIMPLE_PREFIX}/"
+            "/${SIMPLE_PREFIX}/index.html"
+            "/${SIMPLE_PREFIX}/${NORM}/"
+            "/${SIMPLE_PREFIX}/${NORM}/index.html"
+          )
+          echo "Invalidating distribution $DIST_ID paths: ${PATHS[*]}"
+          if ! aws cloudfront create-invalidation \
+            --distribution-id "$DIST_ID" \
+            --paths "${PATHS[@]}" \
+            --query 'Invalidation.{Id:Id,Status:Status,CreateTime:CreateTime}' \
+            --output table; then
+            echo "WARNING: Failed to create CloudFront invalidation for distribution $DIST_ID; continuing without failing publish"
+            echo "(IAM role may need cloudfront:CreateInvalidation permission)"
+            exit 0
+          fi
 
   ##############################################################################
   # STOP EC2 BUILD RUNNERS

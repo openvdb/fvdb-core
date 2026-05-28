@@ -330,14 +330,14 @@ TEST(GaussianRasterizeForwardMaskedEdgeTile, Child) {
     auto fopts = torch::TensorOptions().device(torch::kCUDA).dtype(torch::kFloat32);
 
     // Single Gaussian that intersects the bottom-right edge tile.
-    const auto means2d   = torch::tensor({{{16.5f, 16.5f}}}, fopts);                  // [C,N,2]
-    const auto conics    = torch::tensor({{{1.0f, 0.0f, 1.0f}}}, fopts);              // [C,N,3]
-    const auto features  = torch::tensor({{{0.4f, 0.5f, -0.6f}}}, fopts);             // [C,N,D]
-    const auto opacities = torch::tensor({{0.9f}}, fopts);                            // [C,N]
+    const auto means2d   = torch::tensor({{{16.5f, 16.5f}}}, fopts);      // [C,N,2]
+    const auto conics    = torch::tensor({{{1.0f, 0.0f, 1.0f}}}, fopts);  // [C,N,3]
+    const auto features  = torch::tensor({{{0.4f, 0.5f, -0.6f}}}, fopts); // [C,N,D]
+    const auto opacities = torch::tensor({{0.9f}}, fopts);                // [C,N]
     const auto radii     = torch::tensor(
-        {{1}}, torch::TensorOptions().device(torch::kCUDA).dtype(torch::kInt32)); // [C,N]
-    const auto depths      = torch::tensor({{1.0f}}, fopts);                          // [C,N]
-    const auto backgrounds = torch::tensor({{0.1f, -0.2f, 0.3f}}, fopts);             // [C,D]
+        {{{1, 1}}}, torch::TensorOptions().device(torch::kCUDA).dtype(torch::kInt32)); // [C,N,2]
+    const auto depths      = torch::tensor({{1.0f}}, fopts);                               // [C,N]
+    const auto backgrounds = torch::tensor({{0.1f, -0.2f, 0.3f}}, fopts);                  // [C,D]
 
     auto masks     = torch::ones({C, (int64_t)tileExtentH, (int64_t)tileExtentW},
                              torch::TensorOptions().device(torch::kCUDA).dtype(torch::kBool));
@@ -358,6 +358,7 @@ TEST(GaussianRasterizeForwardMaskedEdgeTile, Child) {
                                                             tileSize,
                                                             tileOffsets,
                                                             tileGaussianIds,
+                                                            -1, // numSharedChannelsOverride
                                                             backgrounds,
                                                             masks);
 
@@ -687,6 +688,7 @@ TEST_F(GaussianRasterizeForwardTestFixture, TestMultipleCamerasWithBackgrounds) 
                                                             tileSize,
                                                             tileOffsets,
                                                             tileGaussianIds,
+                                                            -1, // numSharedChannelsOverride
                                                             backgrounds);
 
     // Alphas and last IDs should be identical regardless of background
@@ -913,6 +915,7 @@ TEST_F(GaussianRasterizeForwardTestFixture, TestSparseRasterizationMultipleCamer
             tilePixelMask,
             tilePixelCumsum,
             pixelMap,
+            -1, // numSharedChannelsOverride
             backgrounds);
 
     // Alphas and last IDs should be identical regardless of background

@@ -1106,6 +1106,7 @@ TEST_F(GaussianRasterizeTestFixture, TestDenseBackwardWithBackgrounds) {
                                                             tileSize,
                                                             tiles.tileOffsets,
                                                             tiles.tileGaussianIds,
+                                                            -1, // numSharedChannelsOverride
                                                             backgrounds);
 
     // Run forward pass WITHOUT backgrounds
@@ -1242,6 +1243,7 @@ TEST_F(GaussianRasterizeTestFixture, TestSparseBackwardWithBackgrounds) {
             sparse.tilePixelMask,
             sparse.tilePixelCumsum,
             sparse.pixelMap,
+            -1, // numSharedChannelsOverride
             backgrounds);
 
     // Run sparse forward pass WITHOUT backgrounds

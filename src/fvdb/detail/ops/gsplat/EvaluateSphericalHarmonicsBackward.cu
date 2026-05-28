@@ -287,7 +287,7 @@ computeShBackward(
     const int64_t shDegreeToUse,
     const torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits> viewDirs,     // [C, N, 3]
     const torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits> shNCoeffs,    // [K-1, N, D]
-    const int *__restrict__ radii,                                                    // [C, N]
+    const int *__restrict__ radii,                                                    // [C, N, 2]
     const torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits>
         dLossDRenderQuantities,                                                       // [C, N, D]
     torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits> outDLossDSh0Coeffs, // [N, 1, D]
@@ -304,7 +304,8 @@ computeShBackward(
     const auto cid = eid / count;          // camera index
     const auto gid = eid % count + offset; // gaussian index
     const auto c   = idx % D;              // render channel
-    if (radii != nullptr && radii[cid * N + gid] <= 0) {
+    if (radii != nullptr &&
+        (radii[(cid * N + gid) * 2 + 0] <= 0 || radii[(cid * N + gid) * 2 + 1] <= 0)) {
         return;
     }
 
@@ -345,7 +346,7 @@ computeShDiffuseOnlyBackward(
     const int64_t D,
     const torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits>
         dLossDRenderQuantities,                                                      // [C, N, D]
-    const int *__restrict__ radii,                                                   // [C, N]
+    const int *__restrict__ radii,                                                   // [C, N, 2]
     torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits> outDLossDSh0Coeffs // [N, 1, D]
 ) {
     // parallelize over C * N * D
@@ -358,7 +359,8 @@ computeShDiffuseOnlyBackward(
     const auto cid = eid / count;          // camera index
     const auto gid = eid % count + offset; // gaussian index
     const auto c   = idx % D;              // render channel
-    if (radii != nullptr && radii[cid * N + gid] <= 0) {
+    if (radii != nullptr &&
+        (radii[(cid * N + gid) * 2 + 0] <= 0 || radii[(cid * N + gid) * 2 + 1] <= 0)) {
         return;
     }
 
@@ -376,7 +378,7 @@ dispatchEvaluateSphericalHarmonicsBwd(const int64_t shDegreeToUse,
                                       const torch::Tensor &viewDirs,  // [C, N, 3] or empty
                                       const torch::Tensor &shNCoeffs, // [N, K-1, D]
                                       const torch::Tensor &dLossDColors,
-                                      const torch::Tensor &radii,     // [C, N]
+                                      const torch::Tensor &radii,     // [C, N, 2]
                                       const bool computeDLossDViewDirs);
 
 template <>
@@ -388,7 +390,7 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kCUDA>(
     const torch::Tensor &viewDirs,               // [C, N, 3]
     const torch::Tensor &shNCoeffs,              // [N, K-1, D]
     const torch::Tensor &dLossDRenderQuantities, // [C, N, D]
-    const torch::Tensor &radii,                  // [C, N]
+    const torch::Tensor &radii,                  // [C, N, 2]
     const bool computeDLossDViewDirs) {
     FVDB_FUNC_RANGE();
     const at::cuda::OptionalCUDAGuard device_guard(at::device_of(dLossDRenderQuantities));
@@ -407,12 +409,14 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kCUDA>(
         TORCH_CHECK_VALUE(shDegreeToUse == 0, "shDegreeToUse must be 0 if no shNCoeffs");
     }
     if (hasRadii) {
-        TORCH_CHECK_VALUE(radii.dim() == 2, "radii must have two dimensions with shape [C, N]");
+        TORCH_CHECK_VALUE(radii.dim() == 3 && radii.size(2) == 2,
+                          "radii must have shape [C, N, 2] but got shape = ",
+                          radii.sizes());
         TORCH_CHECK_VALUE(numGaussians == radii.size(1),
-                          "radii must have shape [C, N] but got shape = ",
+                          "radii must have shape [C, N, 2] but got shape = ",
                           radii.sizes());
         TORCH_CHECK_VALUE(radii.size(0) == numCameras,
-                          "radii must have shape [C, N] and C must match numCameras");
+                          "radii must have shape [C, N, 2] and C must match numCameras");
         TORCH_CHECK_VALUE(radii.is_cuda(), "radii must be a CUDA tensor");
         TORCH_CHECK_VALUE(radii.is_contiguous(), "radii must be a contiguous");
     }
@@ -503,7 +507,7 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
     const torch::Tensor &viewDirs,               // [C, N, 3]
     const torch::Tensor &shNCoeffs,              // [N, K-1, D]
     const torch::Tensor &dLossDRenderQuantities, // [C, N, D]
-    const torch::Tensor &radii,                  // [C, N]
+    const torch::Tensor &radii,                  // [C, N, 2]
     const bool computeDLossDViewDirs) {
     FVDB_FUNC_RANGE();
 
@@ -521,12 +525,14 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
         TORCH_CHECK_VALUE(shDegreeToUse == 0, "shDegreeToUse must be 0 if no shNCoeffs");
     }
     if (hasRadii) {
-        TORCH_CHECK_VALUE(radii.dim() == 2, "radii must have two dimensions with shape [C, N]");
+        TORCH_CHECK_VALUE(radii.dim() == 3 && radii.size(2) == 2,
+                          "radii must have shape [C, N, 2] but got shape = ",
+                          radii.sizes());
         TORCH_CHECK_VALUE(numGaussians == radii.size(1),
-                          "radii must have shape [C, N] but got shape = ",
+                          "radii must have shape [C, N, 2] but got shape = ",
                           radii.sizes());
         TORCH_CHECK_VALUE(radii.size(0) == numCameras,
-                          "radii must have shape [C, N] and C must match numCameras");
+                          "radii must have shape [C, N, 2] and C must match numCameras");
         TORCH_CHECK_VALUE(radii.is_privateuseone(), "radii must be a PrivateUse1 tensor");
         TORCH_CHECK_VALUE(radii.is_contiguous(), "radii must be a contiguous");
     }
@@ -553,8 +559,8 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
 
     const auto tensorOptions = dLossDRenderQuantities.options();
     if (hasShNCoeffs && K > 1) {
-        torch::Tensor dLossDShNCoeffs = torch::zeros_like(shNCoeffs);
-        torch::Tensor dLossDSh0Coeffs = torch::zeros({N, 1, D}, tensorOptions);
+        torch::Tensor dLossDShNCoeffs = torch::empty_like(shNCoeffs);
+        torch::Tensor dLossDSh0Coeffs = torch::empty({N, 1, D}, tensorOptions);
         torch::Tensor dLossDViewDirs;
         if (computeDLossDViewDirs) {
             dLossDViewDirs = torch::empty_like(viewDirs);
@@ -571,16 +577,26 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
             C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
         }
 
-        if (computeDLossDViewDirs) {
-            for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-                C10_CUDA_CHECK(cudaSetDevice(deviceId));
-                auto stream = c10::cuda::getStreamFromPool(false, deviceId);
-                C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
+        for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+            C10_CUDA_CHECK(cudaSetDevice(deviceId));
+            auto stream = c10::cuda::getStreamFromPool(false, deviceId);
+            C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
 
-                int64_t elementOffset, elementCount;
-                std::tie(elementOffset, elementCount) = deviceChunk(N, deviceId);
+            int64_t elementOffset, elementCount;
+            std::tie(elementOffset, elementCount) = deviceChunk(N, deviceId);
 
 #if (CUDART_VERSION < 13000)
+            nanovdb::util::cuda::memPrefetchAsync(
+                dLossDSh0Coeffs.data_ptr<scalar_t>() + elementOffset * dLossDSh0Coeffs.stride(0),
+                elementCount * dLossDSh0Coeffs.stride(0) * sizeof(scalar_t),
+                deviceId,
+                stream);
+            nanovdb::util::cuda::memPrefetchAsync(
+                dLossDShNCoeffs.data_ptr<scalar_t>() + elementOffset * dLossDShNCoeffs.stride(0),
+                elementCount * dLossDShNCoeffs.stride(0) * sizeof(scalar_t),
+                deviceId,
+                stream);
+            if (computeDLossDViewDirs) {
                 for (int cameraIndex = 0; cameraIndex < C; ++cameraIndex) {
                     nanovdb::util::cuda::memPrefetchAsync(
                         dLossDViewDirs.data_ptr<scalar_t>() +
@@ -590,13 +606,30 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
                         deviceId,
                         stream);
                 }
+            }
+            for (int cameraIndex = 0; cameraIndex < C; ++cameraIndex) {
+                nanovdb::util::cuda::memPrefetchAsync(
+                    dLossDRenderQuantities.data_ptr<scalar_t>() +
+                        cameraIndex * dLossDRenderQuantities.stride(0) +
+                        elementOffset * dLossDRenderQuantities.stride(1),
+                    elementCount * dLossDRenderQuantities.stride(1) * sizeof(scalar_t),
+                    deviceId,
+                    stream);
+            }
 #else
-                std::vector<void *> prefetchPtrs;
-                std::vector<size_t> prefetchSizes;
-                const cudaMemLocation location = {cudaMemLocationTypeDevice, deviceId};
-                std::vector<cudaMemLocation> prefetchLocations = {location};
-                std::vector<size_t> prefetchLocationIndices    = {0};
+            std::vector<void *> prefetchPtrs;
+            std::vector<size_t> prefetchSizes;
+            const cudaMemLocation location                 = {cudaMemLocationTypeDevice, deviceId};
+            std::vector<cudaMemLocation> prefetchLocations = {location};
+            std::vector<size_t> prefetchLocationIndices    = {0};
 
+            prefetchPtrs.emplace_back(dLossDSh0Coeffs.data_ptr<scalar_t>() +
+                                      elementOffset * dLossDSh0Coeffs.stride(0));
+            prefetchSizes.emplace_back(elementCount * dLossDSh0Coeffs.stride(0) * sizeof(scalar_t));
+            prefetchPtrs.emplace_back(dLossDShNCoeffs.data_ptr<scalar_t>() +
+                                      elementOffset * dLossDShNCoeffs.stride(0));
+            prefetchSizes.emplace_back(elementCount * dLossDShNCoeffs.stride(0) * sizeof(scalar_t));
+            if (computeDLossDViewDirs) {
                 for (int cameraIndex = 0; cameraIndex < C; ++cameraIndex) {
                     prefetchPtrs.emplace_back(dLossDViewDirs.data_ptr<scalar_t>() +
                                               cameraIndex * dLossDViewDirs.stride(0) +
@@ -604,16 +637,35 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
                     prefetchSizes.emplace_back(elementCount * dLossDViewDirs.stride(1) *
                                                sizeof(scalar_t));
                 }
+            }
+            for (int cameraIndex = 0; cameraIndex < C; ++cameraIndex) {
+                prefetchPtrs.emplace_back(dLossDRenderQuantities.data_ptr<scalar_t>() +
+                                          cameraIndex * dLossDRenderQuantities.stride(0) +
+                                          elementOffset * dLossDRenderQuantities.stride(1));
+                prefetchSizes.emplace_back(elementCount * dLossDRenderQuantities.stride(1) *
+                                           sizeof(scalar_t));
+            }
 
-                C10_CUDA_CHECK(cudaMemPrefetchBatchAsync(prefetchPtrs.data(),
-                                                         prefetchSizes.data(),
-                                                         prefetchPtrs.size(),
-                                                         prefetchLocations.data(),
-                                                         prefetchLocationIndices.data(),
-                                                         prefetchLocations.size(),
-                                                         0,
-                                                         stream));
+            C10_CUDA_CHECK(cudaMemPrefetchBatchAsync(prefetchPtrs.data(),
+                                                     prefetchSizes.data(),
+                                                     prefetchPtrs.size(),
+                                                     prefetchLocations.data(),
+                                                     prefetchLocationIndices.data(),
+                                                     prefetchLocations.size(),
+                                                     0,
+                                                     stream));
 #endif
+            C10_CUDA_CHECK(cudaMemsetAsync(
+                dLossDSh0Coeffs.data_ptr<scalar_t>() + elementOffset * dLossDSh0Coeffs.stride(0),
+                0,
+                elementCount * dLossDSh0Coeffs.stride(0) * sizeof(scalar_t),
+                stream));
+            C10_CUDA_CHECK(cudaMemsetAsync(
+                dLossDShNCoeffs.data_ptr<scalar_t>() + elementOffset * dLossDShNCoeffs.stride(0),
+                0,
+                elementCount * dLossDShNCoeffs.stride(0) * sizeof(scalar_t),
+                stream));
+            if (computeDLossDViewDirs) {
                 for (int cameraIndex = 0; cameraIndex < C; ++cameraIndex) {
                     C10_CUDA_CHECK(
                         cudaMemsetAsync(dLossDViewDirs.data_ptr<scalar_t>() +
@@ -623,8 +675,8 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
                                         elementCount * dLossDViewDirs.stride(1) * sizeof(scalar_t),
                                         stream));
                 }
-                C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
             }
+            C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
         }
 
         for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
@@ -659,16 +711,84 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
 
         return std::make_tuple(dLossDSh0Coeffs, dLossDShNCoeffs, dLossDViewDirs);
     } else {
-        torch::Tensor dLossDSh0Coeffs = torch::zeros({N, 1, D}, tensorOptions);
+        torch::Tensor dLossDSh0Coeffs = torch::empty({N, 1, D}, tensorOptions);
         torch::Tensor dLossDShNCoeffs;
         torch::Tensor dLossDViewDirs;
         if (N == 0) {
             return std::make_tuple(dLossDSh0Coeffs, dLossDShNCoeffs, dLossDViewDirs);
         }
 
+        std::vector<cudaEvent_t> events(c10::cuda::device_count());
         for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
             C10_CUDA_CHECK(cudaSetDevice(deviceId));
             auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+            C10_CUDA_CHECK(cudaEventCreate(&events[deviceId], cudaEventDisableTiming));
+            C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
+        }
+
+        for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+            C10_CUDA_CHECK(cudaSetDevice(deviceId));
+            auto stream = c10::cuda::getStreamFromPool(false, deviceId);
+            C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
+
+            int64_t elementOffset, elementCount;
+            std::tie(elementOffset, elementCount) = deviceChunk(N, deviceId);
+
+#if (CUDART_VERSION < 13000)
+            nanovdb::util::cuda::memPrefetchAsync(
+                dLossDSh0Coeffs.data_ptr<scalar_t>() + elementOffset * dLossDSh0Coeffs.stride(0),
+                elementCount * dLossDSh0Coeffs.stride(0) * sizeof(scalar_t),
+                deviceId,
+                stream);
+            for (int cameraIndex = 0; cameraIndex < C; ++cameraIndex) {
+                nanovdb::util::cuda::memPrefetchAsync(
+                    dLossDRenderQuantities.data_ptr<scalar_t>() +
+                        cameraIndex * dLossDRenderQuantities.stride(0) +
+                        elementOffset * dLossDRenderQuantities.stride(1),
+                    elementCount * dLossDRenderQuantities.stride(1) * sizeof(scalar_t),
+                    deviceId,
+                    stream);
+            }
+#else
+            std::vector<void *> prefetchPtrs;
+            std::vector<size_t> prefetchSizes;
+            const cudaMemLocation location                 = {cudaMemLocationTypeDevice, deviceId};
+            std::vector<cudaMemLocation> prefetchLocations = {location};
+            std::vector<size_t> prefetchLocationIndices    = {0};
+
+            prefetchPtrs.emplace_back(dLossDSh0Coeffs.data_ptr<scalar_t>() +
+                                      elementOffset * dLossDSh0Coeffs.stride(0));
+            prefetchSizes.emplace_back(elementCount * dLossDSh0Coeffs.stride(0) * sizeof(scalar_t));
+            for (int cameraIndex = 0; cameraIndex < C; ++cameraIndex) {
+                prefetchPtrs.emplace_back(dLossDRenderQuantities.data_ptr<scalar_t>() +
+                                          cameraIndex * dLossDRenderQuantities.stride(0) +
+                                          elementOffset * dLossDRenderQuantities.stride(1));
+                prefetchSizes.emplace_back(elementCount * dLossDRenderQuantities.stride(1) *
+                                           sizeof(scalar_t));
+            }
+
+            C10_CUDA_CHECK(cudaMemPrefetchBatchAsync(prefetchPtrs.data(),
+                                                     prefetchSizes.data(),
+                                                     prefetchPtrs.size(),
+                                                     prefetchLocations.data(),
+                                                     prefetchLocationIndices.data(),
+                                                     prefetchLocations.size(),
+                                                     0,
+                                                     stream));
+#endif
+            C10_CUDA_CHECK(cudaMemsetAsync(
+                dLossDSh0Coeffs.data_ptr<scalar_t>() + elementOffset * dLossDSh0Coeffs.stride(0),
+                0,
+                elementCount * dLossDSh0Coeffs.stride(0) * sizeof(scalar_t),
+                stream));
+            C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
+        }
+
+        for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+            C10_CUDA_CHECK(cudaSetDevice(deviceId));
+            auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+            C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
+            C10_CUDA_CHECK(cudaEventDestroy(events[deviceId]));
 
             int64_t elementOffset, elementCount;
             std::tie(elementOffset, elementCount) = deviceChunk(N, deviceId);
@@ -701,7 +821,7 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kCPU>(
     const torch::Tensor &viewDirs,               // [C, N, 3] or empty
     const torch::Tensor &shNCoeffs,              // [N, K-1, D]
     const torch::Tensor &dLossDRenderQuantities, // [C, N, D]
-    const torch::Tensor &radii,                  // [C, N]
+    const torch::Tensor &radii,                  // [C, N, 2]
     const bool computeDLossDViewDirs) {
     TORCH_CHECK(false, "CPU implementation not available");
 }
@@ -713,7 +833,7 @@ evaluateSphericalHarmonicsBwd(const int64_t shDegreeToUse,
                               const torch::Tensor &viewDirs,  // [C, N, 3] or empty
                               const torch::Tensor &shNCoeffs, // [N, K-1, D]
                               const torch::Tensor &dLossDColors,
-                              const torch::Tensor &radii,     // [C, N]
+                              const torch::Tensor &radii,     // [C, N, 2]
                               const bool computeDLossDViewDirs) {
     return FVDB_DISPATCH_KERNEL(dLossDColors.device(), [&]() {
         return dispatchEvaluateSphericalHarmonicsBwd<DeviceTag>(shDegreeToUse,

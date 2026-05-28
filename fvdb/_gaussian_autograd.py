@@ -303,7 +303,7 @@ class _EvaluateGaussianSHFn(torch.autograd.Function):
         view_dirs: torch.Tensor,  # [C, N, 3] or empty
         sh0_coeffs: torch.Tensor,  # [N, 1, D]
         shN_coeffs: torch.Tensor,  # [N, K-1, D] or empty
-        radii: torch.Tensor,  # [C, N]
+        radii: torch.Tensor,  # [C, N, 2]
     ) -> torch.Tensor:
         render_quantities = _C.evaluate_spherical_harmonics_fwd(
             sh_degree_to_use,
@@ -384,6 +384,7 @@ class _RasterizeScreenSpaceGaussiansFn(torch.autograd.Function):
             tile_size,
             tile_offsets,
             tile_gaussian_ids,
+            -1,
             backgrounds,
             masks,
         )
@@ -530,6 +531,7 @@ class _RasterizeScreenSpaceGaussiansSparseFn(torch.autograd.Function):
             tile_pixel_mask,
             tile_pixel_cumsum,
             pixel_map,
+            -1,
             backgrounds,
             masks,
         )
