@@ -25,22 +25,20 @@ set_target_properties(fvdb_test_utils
   CXX_STANDARD_REQUIRED ON
 )
 
-# Include PRIVATE for compiling the library, PUBLIC for consumers (test executables)
-# Add src dir PRIVATE to find <tests/utils/ImageUtils.h> from ImageUtils.cpp
-target_include_directories(fvdb_test_utils
-  PRIVATE
-    ${CMAKE_SOURCE_DIR}/src # To find <tests/utils/ImageUtils.h>
-    ${PNG_INCLUDE_DIRS}     # Include directory for png.h
-    ${NANOVDB_EDITOR_INCLUDE_DIR}
-  # PUBLIC includes could be added if ImageUtils.h included e.g., Torch headers
-  # PUBLIC
-    # ${TORCH_INCLUDE_DIRS}
+# Test util headers (utils/Tensor.h, utils/ImageUtils.h) include torch headers,
+# so torch must be a PUBLIC dependency. Test executables that include these
+# headers inherit torch's usage requirements transitively.
+target_include_directories(fvdb_test_utils PUBLIC
+  ${CMAKE_SOURCE_DIR}/src # To find <tests/utils/ImageUtils.h>
+)
+target_include_directories(fvdb_test_utils PRIVATE
+  ${PNG_INCLUDE_DIRS}
+  ${NANOVDB_EDITOR_INCLUDE_DIR}
 )
 
-# Link dependencies PRIVATE as they are implementation details
-target_link_libraries(fvdb_test_utils PRIVATE
-  PNG::PNG
-  ${TORCH_LIBRARIES} # Link utils against Torch
+target_link_libraries(fvdb_test_utils
+  PUBLIC torch
+  PRIVATE PNG::PNG
 )
 # --- End Test Utilities Library Definition ---
 
@@ -67,12 +65,18 @@ function(ConfigureTest CMAKE_TEST_NAME)
   # Test sources need to find <tests/utils/ImageUtils.h> etc.
   target_include_directories(${CMAKE_TEST_NAME}_obj PRIVATE
     ${CMAKE_SOURCE_DIR}/src # Include src for finding <tests/utils/...>
-    $<TARGET_PROPERTY:fvdb,INTERFACE_INCLUDE_DIRECTORIES> # Get includes exposed by fvdb
-    $<TARGET_PROPERTY:GTest::gtest,INTERFACE_INCLUDE_DIRECTORIES> # Get includes exposed by GTest::gtest
-    $<TARGET_PROPERTY:GTest::gtest_main,INTERFACE_INCLUDE_DIRECTORIES> # Get includes exposed by GTest::gtest_main
     ${CUDAToolkit_INCLUDE_DIRS}
     ${CUDAToolkit_INCLUDE_DIRS}/cccl
     ${NANOVDB_EDITOR_INCLUDE_DIR}
+  )
+
+  # Propagate usage requirements (include dirs, defines, SYSTEM marker) from
+  # fvdb and gtest into the OBJECT library's compilation. linking an OBJECT lib
+  # does not actually link — it only carries interface properties forward.
+  target_link_libraries(${CMAKE_TEST_NAME}_obj PRIVATE
+    fvdb
+    GTest::gtest
+    GTest::gtest_main
   )
 
   target_compile_options(${CMAKE_TEST_NAME}_obj PRIVATE

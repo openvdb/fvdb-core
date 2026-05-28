@@ -10,7 +10,7 @@
 #include <fvdb/detail/utils/cuda/ForEachPrivateUse1.cuh>
 
 #include <ATen/OpMathType.h>
-#include <THC/THCAtomics.cuh>
+#include <ATen/cuda/Atomic.cuh>
 #include <c10/cuda/CUDAException.h>
 
 #include <cstdint>
