@@ -12,8 +12,4 @@ find_dependency(Torch)
 
 include("${CMAKE_CURRENT_LIST_DIR}/fvdbTargets.cmake")
 
-# fvdb PUBLIC-links the imported torch targets (c10, c10_cuda, torch_cuda, ...),
-# so consumers inherit torch's INTERFACE_INCLUDE_DIRECTORIES transitively via the
-# link chain. No explicit TORCH_INCLUDE_DIRS propagation needed here.
-
 check_required_components(fvdb)
