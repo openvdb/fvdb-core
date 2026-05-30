@@ -814,23 +814,28 @@ intersectGaussianTilesPrivateUse1Impl(
     std::vector<int64_t> deviceIntersectionOffset(deviceCount);
     std::vector<int64_t> deviceIntersectionCount(deviceCount);
     int64_t totalIntersections = 0;
+    int32_t *deviceTotals      = nullptr;
+    C10_CUDA_CHECK(cudaMallocHost(&deviceTotals, deviceCount * sizeof(int32_t)));
     for (const auto deviceId: c10::irange(deviceCount)) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
         // The total is the last element of the device's inclusive-scan row. Issuing the copy on the
         // device's stream orders it after the scan; the synchronize below then guarantees it has
-        // completed before we read deviceTotal on the host.
-        int32_t deviceTotal = 0;
-        C10_CUDA_CHECK(cudaMemcpyAsync(&deviceTotal,
+        // completed before we read deviceTotals on the host.
+        C10_CUDA_CHECK(cudaMemcpyAsync(&deviceTotals[deviceId],
                                        deviceTilesPerGaussianCumsum[deviceId] + totalGaussians - 1,
                                        sizeof(int32_t),
                                        cudaMemcpyDeviceToHost,
                                        stream));
+    }
+    for (const auto deviceId: c10::irange(deviceCount)) {
+        C10_CUDA_CHECK(cudaSetDevice(deviceId));
         C10_CUDA_CHECK(cudaDeviceSynchronize());
         deviceIntersectionOffset[deviceId] = totalIntersections;
-        deviceIntersectionCount[deviceId]  = deviceTotal;
-        totalIntersections += deviceTotal;
+        deviceIntersectionCount[deviceId]  = deviceTotals[deviceId];
+        totalIntersections += deviceTotals[deviceId];
     }
+    C10_CUDA_CHECK(cudaFreeHost(deviceTotals));
 
     if (totalIntersections == 0) {
         for (const auto deviceId: c10::irange(deviceCount)) {
