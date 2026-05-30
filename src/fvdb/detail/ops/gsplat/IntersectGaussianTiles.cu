@@ -996,7 +996,7 @@ intersectGaussianTilesPrivateUse1Impl(
             const int64_t intersectionOffset = deviceIntersectionOffset[deviceId];
             const int64_t intersectionCount  = deviceIntersectionCount[deviceId];
             if (intersectionCount > 0) {
-                const int NUM_BLOCKS_2 = cuda::ceil_div(intersectionCount, NUM_THREADS);
+                const int NUM_BLOCKS_2 = cuda::ceil_div<int64_t>(intersectionCount, NUM_THREADS);
                 computeTileOffsets<<<NUM_BLOCKS_2, NUM_THREADS, 0, stream>>>(
                     intersectionOffset,
                     intersectionCount,
