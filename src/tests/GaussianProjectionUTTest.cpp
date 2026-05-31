@@ -196,7 +196,7 @@ TEST_F(GaussianProjectionUTTestFixture, CenteredGaussian_NoDistortion_AnalyticMe
     auto conics_cpu  = conics.cpu();
     auto radii_cpu   = radii.cpu();
 
-    EXPECT_GT(radii_cpu[0][0].item<int32_t>(), 0);
+    EXPECT_GT(radii_cpu[0][0].min().item<int32_t>(), 0);
     EXPECT_NEAR(depths_cpu[0][0].item<float>(), z, 1e-4f);
     EXPECT_NEAR(means2d_cpu[0][0][0].item<float>(), cx, 1e-3f);
     EXPECT_NEAR(means2d_cpu[0][0][1].item<float>(), cy, 1e-3f);
@@ -299,7 +299,7 @@ TEST_F(GaussianProjectionUTTestFixture, NonlinearUTCovariance_ProducesFinitePosi
     auto conics_cpu  = conics.cpu();
     auto means2d_cpu = means2d.cpu();
 
-    ASSERT_GT(radii_cpu[0][0].item<int32_t>(), 0);
+    ASSERT_GT(radii_cpu[0][0].min().item<int32_t>(), 0);
 
     const float a     = conics_cpu[0][0][0].item<float>();
     const float b     = conics_cpu[0][0][1].item<float>();
@@ -503,7 +503,7 @@ TEST_F(GaussianProjectionUTTestFixture, DepthNearCameraPlane_BelowZEps_HardRejec
                                      false);
 
     auto radii_cpu = radii.cpu();
-    EXPECT_EQ(radii_cpu[0][0].item<int32_t>(), 0);
+    EXPECT_EQ(radii_cpu[0][0].min().item<int32_t>(), 0);
 }
 
 TEST_F(GaussianProjectionUTTestFixture, DepthNearCameraPlane_AboveZEps_Projects) {
@@ -570,7 +570,7 @@ TEST_F(GaussianProjectionUTTestFixture, DepthNearCameraPlane_AboveZEps_Projects)
 
     auto radii_cpu   = radii.cpu();
     auto means2d_cpu = means2d.cpu();
-    EXPECT_GT(radii_cpu[0][0].item<int32_t>(), 0);
+    EXPECT_GT(radii_cpu[0][0].min().item<int32_t>(), 0);
     EXPECT_NEAR(means2d_cpu[0][0][0].item<float>(), cx, 5e-3f);
     EXPECT_NEAR(means2d_cpu[0][0][1].item<float>(), cy, 5e-3f);
 }
@@ -641,7 +641,7 @@ TEST_F(GaussianProjectionUTTestFixture, Orthographic_NoDistortion_AnalyticMeanAn
     auto depths_cpu  = depths.cpu();
     auto radii_cpu   = radii.cpu();
 
-    EXPECT_GT(radii_cpu[0][0].item<int32_t>(), 0);
+    EXPECT_GT(radii_cpu[0][0].min().item<int32_t>(), 0);
     EXPECT_NEAR(depths_cpu[0][0].item<float>(), z, 1e-4f);
     EXPECT_NEAR(means2d_cpu[0][0][0].item<float>(), fx * x + cx, 1e-3f);
     EXPECT_NEAR(means2d_cpu[0][0][1].item<float>(), fy * y + cy, 1e-3f);
@@ -810,8 +810,8 @@ TEST_F(GaussianProjectionUTTestFixture, MultiCamera_RadTanDistortion_PerCameraPa
 
     auto radii_cpu   = radii.cpu();
     auto means2d_cpu = means2d.cpu();
-    EXPECT_GT(radii_cpu[0][0].item<int32_t>(), 0);
-    EXPECT_GT(radii_cpu[1][0].item<int32_t>(), 0);
+    EXPECT_GT(radii_cpu[0][0].min().item<int32_t>(), 0);
+    EXPECT_GT(radii_cpu[1][0].min().item<int32_t>(), 0);
 
     const auto [u0, v0] = projectPointWithOpenCVDistortion(
         x, y, z, fx0, fy0, cx0, cy0, {k1_0, k2_0, k3_0}, {p1_0, p2_0}, {});
@@ -899,8 +899,8 @@ TEST_F(GaussianProjectionUTTestFixture, MultiCamera_Pinhole_ZeroCoeffTensor_PerC
 
     auto radii_cpu   = radii.cpu();
     auto means2d_cpu = means2d.cpu();
-    EXPECT_GT(radii_cpu[0][0].item<int32_t>(), 0);
-    EXPECT_GT(radii_cpu[1][0].item<int32_t>(), 0);
+    EXPECT_GT(radii_cpu[0][0].min().item<int32_t>(), 0);
+    EXPECT_GT(radii_cpu[1][0].min().item<int32_t>(), 0);
 
     // UT projects sigma points through a nonlinear model; tiny mean shifts can occur due to
     // floating point and second-order effects. Keep a slightly relaxed tolerance.
@@ -991,7 +991,7 @@ TEST_F(GaussianProjectionUTTestFixture,
 
     auto radii_cpu   = radii.cpu();
     auto means2d_cpu = means2d.cpu();
-    EXPECT_GT(radii_cpu[0][0].item<int32_t>(), 0);
+    EXPECT_GT(radii_cpu[0][0].min().item<int32_t>(), 0);
 
     const auto [expected_u, expected_v] =
         projectPointWithOpenCVDistortion(x, y, z, fx, fy, cx, cy, {k1, k2, k3}, {p1, p2}, {});
@@ -1084,7 +1084,7 @@ TEST_F(GaussianProjectionUTTestFixture,
 
     auto radii_cpu   = radii.cpu();
     auto means2d_cpu = means2d.cpu();
-    EXPECT_GT(radii_cpu[0][0].item<int32_t>(), 0);
+    EXPECT_GT(radii_cpu[0][0].min().item<int32_t>(), 0);
 
     const auto [expected_u, expected_v] = projectPointWithOpenCVDistortion(
         x, y, z, fx, fy, cx, cy, {k1, k2, k3, k4, k5, k6}, {p1, p2}, {});
@@ -1185,7 +1185,7 @@ TEST_F(GaussianProjectionUTTestFixture,
 
     auto radii_cpu   = radii.cpu();
     auto means2d_cpu = means2d.cpu();
-    EXPECT_GT(radii_cpu[0][0].item<int32_t>(), 0);
+    EXPECT_GT(radii_cpu[0][0].min().item<int32_t>(), 0);
 
     const auto [expected_u, expected_v] = projectPointWithOpenCVDistortion(
         x, y, z, fx, fy, cx, cy, {k1, k2, k3, k4, k5, k6}, {p1, p2}, {s1, s2, s3, s4});
@@ -1281,7 +1281,7 @@ TEST_F(GaussianProjectionUTTestFixture,
 
     auto radii_cpu   = radii.cpu();
     auto means2d_cpu = means2d.cpu();
-    EXPECT_GT(radii_cpu[0][0].item<int32_t>(), 0);
+    EXPECT_GT(radii_cpu[0][0].min().item<int32_t>(), 0);
 
     const auto [expected_u, expected_v] = projectPointWithOpenCVDistortion(
         x, y, z, fx, fy, cx, cy, {k1, k2, k3}, {p1, p2}, {s1, s2, s3, s4});
@@ -1349,7 +1349,7 @@ TEST_F(GaussianProjectionUTTestFixture, RadTanThinPrism_IgnoresK456EvenIfNonZero
 
     auto radii_cpu   = radii.cpu();
     auto means2d_cpu = means2d.cpu();
-    EXPECT_GT(radii_cpu[0][0].item<int32_t>(), 0);
+    EXPECT_GT(radii_cpu[0][0].min().item<int32_t>(), 0);
 
     // Verify we effectively use polynomial radial + thin-prism (ignore k4..k6).
     const float fx = 500.0f, fy = 500.0f, cx = 320.0f, cy = 240.0f;
@@ -1434,7 +1434,7 @@ TEST_F(GaussianProjectionUTTestFixture,
     // When the UT kernel discards a Gaussian, only radii are defined to be 0; other outputs are
     // undefined (may contain garbage). Only assert radii here.
     auto radii_cpu = radii.cpu();
-    EXPECT_EQ(radii_cpu[0][0].item<int32_t>(), 0);
+    EXPECT_EQ(radii_cpu[0][0].min().item<int32_t>(), 0);
 }
 
 TEST_F(GaussianProjectionUTTestFixture,
@@ -1506,7 +1506,7 @@ TEST_F(GaussianProjectionUTTestFixture,
                                      false);
 
     auto radii_cpu = radii.cpu();
-    EXPECT_GT(radii_cpu[0][0].item<int32_t>(), 0);
+    EXPECT_GT(radii_cpu[0][0].min().item<int32_t>(), 0);
 }
 
 TEST_F(GaussianProjectionUTTestFixture, RollingShutterNone_DepthUsesStartPoseNotCenter) {

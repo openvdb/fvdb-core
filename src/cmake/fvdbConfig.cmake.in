@@ -12,11 +12,4 @@ find_dependency(Torch)
 
 include("${CMAKE_CURRENT_LIST_DIR}/fvdbTargets.cmake")
 
-# Propagate Torch include directories to consumers, since fvdb's public headers
-# reference torch/ATen/c10 types.
-if(TARGET fvdb::fvdb AND TORCH_INCLUDE_DIRS)
-    set_property(TARGET fvdb::fvdb APPEND PROPERTY
-        INTERFACE_INCLUDE_DIRECTORIES "${TORCH_INCLUDE_DIRS}")
-endif()
-
 check_required_components(fvdb)

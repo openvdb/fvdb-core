@@ -29,6 +29,15 @@ void perCameraPrefetchBatchAsync(const torch::TensorList &tensors,
                                  int deviceId,
                                  cudaStream_t stream);
 
+/// Given a list of contiguous tensors each with dimensions [C, ...] where C is the number of
+/// cameras, we memset the slices [cameraOffset : cameraCount, ...] to the specified value
+/// on the input stream.
+void perCameraMemsetAsync(const torch::TensorList &tensors,
+                          uint32_t cameraOffset,
+                          uint32_t cameraCount,
+                          int value,
+                          cudaStream_t stream);
+
 } // namespace detail
 } // namespace fvdb
 
