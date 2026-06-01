@@ -830,7 +830,8 @@ intersectGaussianTilesPrivateUse1Impl(
     }
     for (const auto deviceId: c10::irange(deviceCount)) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
-        C10_CUDA_CHECK(cudaDeviceSynchronize());
+        auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+        C10_CUDA_CHECK(cudaStreamSynchronize(stream));
         deviceIntersectionOffset[deviceId] = totalIntersections;
         deviceIntersectionCount[deviceId]  = deviceTotals[deviceId];
         totalIntersections += deviceTotals[deviceId];
