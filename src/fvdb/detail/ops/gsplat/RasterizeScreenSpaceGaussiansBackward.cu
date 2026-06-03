@@ -1213,15 +1213,13 @@ callRasterizeBackwardPrivateUse1(
             renderedAlphas, lastGaussianIds, dLossDRenderedFeatures, dLossDRenderedAlphas);
     }();
 
+    const uint32_t tileExtentH    = renderWindow.tileExtentH(tileSize);
+    const uint32_t tileExtentW    = renderWindow.tileExtentW(tileSize);
+    const uint32_t tilesPerCamera = tileExtentH * tileExtentW;
     // Compute tile count: for sparse mode use activeTiles, for dense mode compute from image dims
-    uint32_t tileCount;
-    if (activeTiles.has_value()) {
-        tileCount = activeTiles.value().size(0);
-    } else {
-        const uint32_t tileExtentH = renderWindow.tileExtentH(tileSize);
-        const uint32_t tileExtentW = renderWindow.tileExtentW(tileSize);
-        tileCount                  = C * tileExtentH * tileExtentW;
-    }
+    uint32_t tileCount = activeTiles.has_value() ? activeTiles.value().size(0) : C * tilesPerCamera;
+    std::vector<torch::Tensor> tileTensors = {dLossDRenderedFeatures.jdata(),
+                                              dLossDRenderedAlphas.jdata()};
 
     std::vector<cudaEvent_t> events(c10::cuda::device_count());
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
@@ -1238,23 +1236,29 @@ callRasterizeBackwardPrivateUse1(
 
         uint32_t deviceTileOffset, deviceTileCount;
         std::tie(deviceTileOffset, deviceTileCount) = deviceChunk(tileCount, deviceId);
-        uint32_t cameraOffset                       = deviceTileOffset / (tileCount / C);
-        uint32_t cameraCount =
-            cuda::ceil_div(deviceTileOffset + deviceTileCount, tileCount / C) - cameraOffset;
         if (deviceTileCount) {
-            // Prefetch the outputs of the operator. The inputs are already resident on the GPU from
-            // the forward pass and while prefetching them is idempotent, it does incur an
-            // additional overhead.
-            std::vector<torch::Tensor> tensors = {dLossDRenderedFeatures.jdata(),
-                                                  dLossDRenderedAlphas.jdata(),
-                                                  outDLossDMeans2d,
-                                                  outDLossDConics,
-                                                  outDLossDFeatures,
-                                                  outDLossDOpacities};
+            std::vector<void *> prefetchPointers;
+            std::vector<size_t> prefetchSizes;
+            const TilePrefetchRange tileRange{deviceTileOffset,
+                                              deviceTileCount,
+                                              tileExtentH,
+                                              tileExtentW,
+                                              renderWindow.height,
+                                              renderWindow.width,
+                                              tileSize};
+            appendPerTilePrefetchRanges(prefetchPointers, prefetchSizes, tileTensors, tileRange);
+
+            const uint32_t cameraOffset = deviceTileOffset / tilesPerCamera;
+            const uint32_t cameraCount =
+                cuda::ceil_div(deviceTileOffset + deviceTileCount, tilesPerCamera) - cameraOffset;
+            std::vector<torch::Tensor> tensors = {
+                outDLossDMeans2d, outDLossDConics, outDLossDFeatures, outDLossDOpacities};
             if (absGrad) {
                 tensors.emplace_back(outDLossDMeans2dAbs);
             }
-            perCameraPrefetchBatchAsync(tensors, cameraOffset, cameraCount, deviceId, stream);
+            appendPerCameraPrefetchRanges(
+                prefetchPointers, prefetchSizes, tensors, cameraOffset, cameraCount);
+            memPrefetchBatchAsync(prefetchPointers, prefetchSizes, deviceId, stream);
 
             // Zero the outputs of the operator that need to be accumulated.
             tensors = {outDLossDMeans2d, outDLossDConics, outDLossDFeatures, outDLossDOpacities};
