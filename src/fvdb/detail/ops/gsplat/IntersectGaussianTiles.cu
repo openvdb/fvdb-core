@@ -750,8 +750,8 @@ intersectGaussianTilesPrivateUse1Impl(
     const auto tileMaskPtr =
         tileMask.has_value() ? tileMask.value().const_data_ptr<bool>() : nullptr;
 
-    const int deviceCount        = static_cast<int>(c10::cuda::device_count());
-    const uint32_t totalTileKeys = numCameras * totalTiles;
+    const int deviceCount       = static_cast<int>(c10::cuda::device_count());
+    const int64_t totalTileKeys = static_cast<int64_t>(numCameras) * totalTiles;
 
     // Give each device a contiguous range of the tile-key space [0, numCameras * totalTiles). The
     // linear tile-key L = cidx * totalTiles + tileIdx is monotonic in (camera, tile) -- the high
