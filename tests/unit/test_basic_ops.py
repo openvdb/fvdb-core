@@ -2111,6 +2111,25 @@ class TestBasicOps(unittest.TestCase):
             f"hit-time {isect.item()} expected ~4.5 (linear-interp zero crossing) within quarter voxel",
         )
 
+    @parameterized.expand(["cpu", "cuda"])
+    def test_ray_implicit_intersection_wrong_scalar_count_errors(self, device):
+        # ray_implicit_intersection iterates leaf voxels (HDDALeafVoxelIterator)
+        # and indexes gridScalars by getValue(ijk)-1, which is only valid with
+        # exactly one scalar per active voxel. A mismatched count must raise an
+        # error that points at the iterator contract rather than a generic
+        # shape complaint, so a caller with per-active-value data knows to use
+        # HDDAActiveValueIterator instead.
+        N = 8
+        grid = GridBatch.from_dense(1, [N, N, N], [0, 0, 0], voxel_sizes=1.0 / N, origins=[0, 0, 0], device=device)
+        num_voxels = int(grid.total_voxels)
+        bad_scalars = torch.zeros(num_voxels - 1, device=device, dtype=torch.float32)  # one too few
+        ray_o = torch.tensor([[-1.0, 0.5, 0.5]], device=device, dtype=torch.float32)
+        ray_d = torch.tensor([[1.0, 0.0, 0.0]], device=device, dtype=torch.float32)
+        with self.assertRaisesRegex(RuntimeError, "HDDALeafVoxelIterator"):
+            grid.ray_implicit_intersection(
+                fvdb.JaggedTensor(ray_o), fvdb.JaggedTensor(ray_d), fvdb.JaggedTensor(bad_scalars)
+            )
+
     @expand_tests(list(itertools.product(["cpu", "cuda"], [torch.float32, torch.float64])))
     def test_marching_cubes(self, device, dtype):
         # Generate the SDF for a sphere on a grid

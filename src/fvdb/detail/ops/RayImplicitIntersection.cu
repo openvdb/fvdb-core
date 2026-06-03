@@ -53,9 +53,11 @@ sgn(const T &val) {
 //  - `EpsZero` is a compile-time flag dispatched from the launcher when
 //    `eps == 0`, eliding the `if (deltaT < eps) continue;` branch which is
 //    the overwhelmingly common case.
-//  - HDDA per-voxel cost is already minimised by the fused dim+active
-//    descent in `HDDAVoxelIterator` (see HDDAIterators.h); this kernel
-//    only interacts with the iterator through its public API.
+//  - Iteration is over leaf voxels only via `HDDALeafVoxelIterator` (see
+//    HDDAIterators.h): it yields exactly the dim==1 active voxels and skips
+//    coarse active tiles in a single HDDA step. This matches the narrow-band
+//    inner loop of `nanovdb::ZeroCrossing` and guarantees the per-voxel
+//    `gridScalars` index below (`getValue(ijk) - 1`) is always in-bounds.
 template <typename ScalarT,
           bool EpsZero,
           template <typename T, int32_t D>
@@ -100,7 +102,7 @@ rayImplicitCallback(int32_t bidx,
     MathType lastT1     = MathType(0);
     bool found          = false;
 
-    for (auto it = HDDAVoxelIterator<decltype(gridAcc), ScalarT>(rayVox, gridAcc); it.isValid();
+    for (auto it = HDDALeafVoxelIterator<decltype(gridAcc), ScalarT>(rayVox, gridAcc); it.isValid();
          it++) {
         const MathType t0     = it->second.t0;
         const MathType t1     = it->second.t1;
@@ -190,9 +192,13 @@ RayImplicitIntersection(const GridBatchData &batchHdl,
         std::string("Expected grid_scalars to have 1 dimension (shape (num_voxels,)) but got ") +
             std::to_string(gridScalars.rdim()) + " dimensions");
     TORCH_CHECK(gridScalars.rsize(0) == batchHdl.totalVoxels(),
-                std::string("Expected one scalar per voxel but got ") +
-                    std::to_string(gridScalars.rsize(0)) + " scalars and there are " +
-                    std::to_string(batchHdl.totalVoxels()) + " voxels.");
+                std::string("ray_implicit_intersection iterates leaf voxels "
+                            "(HDDALeafVoxelIterator) and needs exactly one scalar per active "
+                            "voxel, but got ") +
+                    std::to_string(gridScalars.rsize(0)) + " scalars for " +
+                    std::to_string(batchHdl.totalVoxels()) +
+                    " voxels. For per-active-value data that includes coarse tiles, iterate "
+                    "with HDDAActiveValueIterator and branch on getDim().");
 
     auto optsF             = torch::TensorOptions().dtype(rayO.dtype()).device(rayO.device());
     torch::Tensor outTimes = torch::empty({rayO.rsize(0)}, optsF);

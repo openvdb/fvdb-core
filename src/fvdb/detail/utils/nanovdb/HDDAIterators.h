@@ -134,7 +134,24 @@ template <typename AccT, typename ScalarT> struct HDDASegmentIterator {
     TimespanT mTimespan;
 };
 
-template <typename AccT, typename ScalarT> struct HDDAVoxelIterator {
+// Iterates the active values an HDDA ray walk visits, yielding each as a
+// {coordinate, [t0, t1]} pair. `LeafOnly` selects what counts as a value:
+//
+//   - LeafOnly == false: every active value at any node level, i.e. active
+//     coarse tiles (dim > 1) as well as active leaf voxels (dim == 1). The
+//     caller must branch on `getDim()` to tell them apart. Exposed as the
+//     `HDDAActiveValueIterator` alias.
+//   - LeafOnly == true: only active leaf voxels (dim == 1); active tiles are
+//     skipped in a single coarse HDDA step. This mirrors the narrow-band
+//     inner loop of `nanovdb::ZeroCrossing`. Exposed as the
+//     `HDDALeafVoxelIterator` alias. Because every yielded value is a leaf
+//     voxel, a per-voxel buffer indexed by `getValue(ijk) - 1` is always
+//     in-bounds; ops with per-active-value buffers must use the active-value
+//     alias and handle tiles explicitly.
+//
+// `LeafOnly` is a compile-time flag, so NVCC prunes the unused branch and the
+// two aliases compile to distinct, fully specialised kernels.
+template <typename AccT, typename ScalarT, bool LeafOnly> struct HDDAValueIteratorImpl {
     using MathType = at::opmath_type<ScalarT>;
     struct PairT {
         nanovdb::Coord first;
@@ -152,10 +169,10 @@ template <typename AccT, typename ScalarT> struct HDDAVoxelIterator {
     using reference         = value_type &;
     using iterator_category = std::forward_iterator_tag;
 
-    HDDAVoxelIterator() = delete;
+    HDDAValueIteratorImpl() = delete;
 
     __hostdev__
-    HDDAVoxelIterator(const RayT &rayVox, const AccT &acc)
+    HDDAValueIteratorImpl(const RayT &rayVox, const AccT &acc)
         : mAcc(acc) {
         mRay = RayTInternal(nanovdb::math::Vec3<MathType>(rayVox.eye()),
                             nanovdb::math::Vec3<MathType>(rayVox.dir()),
@@ -182,15 +199,15 @@ template <typename AccT, typename ScalarT> struct HDDAVoxelIterator {
         return (const value_type *)&mData;
     }
 
-    __hostdev__ const HDDAVoxelIterator &
+    __hostdev__ const HDDAValueIteratorImpl &
     operator++() {
         mIsValid = nextVoxel();
         return *this;
     }
 
-    __hostdev__ HDDAVoxelIterator
+    __hostdev__ HDDAValueIteratorImpl
     operator++(int) {
-        HDDAVoxelIterator tmp = *this;
+        HDDAValueIteratorImpl tmp = *this;
         ++(*this);
         return tmp;
     }
@@ -212,9 +229,15 @@ template <typename AccT, typename ScalarT> struct HDDAVoxelIterator {
                 dim = mAcc.getDim(mHdda.voxel(), mRay);
             }
 
-            // NOTE: isActive returns true for both active voxels and active
-            // tiles; downstream callers handle that distinction via the dim.
-            if (mAcc.isActive(mHdda.voxel())) {
+            // `dim` (computed by the realign loop above) is the tree's node
+            // size at the current voxel: dim == 1 is a leaf voxel, dim > 1 is
+            // a coarse tile. isActive returns true for both. When LeafOnly,
+            // skip tiles so we yield only leaf voxels; the trailing
+            // mHdda.step() then jumps over the whole tile in one coarse step.
+            // When !LeafOnly the gate collapses to the original isActive check
+            // (no extra cost — dim is already in hand).
+            const bool isLeaf = (dim == 1);
+            if ((!LeafOnly || isLeaf) && mAcc.isActive(mHdda.voxel())) {
                 mData = {mHdda.voxel(), TimespanT(mHdda.time(), mHdda.next())};
                 mHdda.step();
                 return true;
@@ -231,6 +254,18 @@ template <typename AccT, typename ScalarT> struct HDDAVoxelIterator {
     HDDAT mHdda;
     value_type mData;
 };
+
+// Yields every active value the ray walk visits (leaf voxels AND coarse
+// tiles); the caller distinguishes them via getDim(). See
+// HDDAValueIteratorImpl above.
+template <typename AccT, typename ScalarT>
+using HDDAActiveValueIterator = HDDAValueIteratorImpl<AccT, ScalarT, /*LeafOnly=*/false>;
+
+// Yields only active leaf voxels (dim == 1), skipping coarse tiles. Use when
+// the per-value buffer has exactly one entry per active voxel (e.g. a
+// level-set scalar field). Mirrors nanovdb::ZeroCrossing's narrow-band walk.
+template <typename AccT, typename ScalarT>
+using HDDALeafVoxelIterator = HDDAValueIteratorImpl<AccT, ScalarT, /*LeafOnly=*/true>;
 
 } // namespace fvdb
 
