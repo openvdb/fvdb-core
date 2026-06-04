@@ -18,6 +18,7 @@ dependencies:
   - cuda-nvtx-dev
   - cuda-version=13.0
   - cxx-compiler
+  - einops
   - gcc_linux-64=14.3
   - gh
   - git
@@ -41,6 +42,7 @@ dependencies:
   - ninja
   - numpy
   - open-clip-torch
+  - openimageio
   - openssl
   - openusd
   - pandas
@@ -81,5 +83,3 @@ dependencies:
     - pytest-markdown-docs
     ## 3dgs tests
     - dlnr_lite
-    - einops
-    - oiio-static-python
