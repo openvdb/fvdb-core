@@ -18,13 +18,13 @@ dependencies:
   - myst-parser
   - numpy
   - openssl
-  - openimageio
   - pandas
   - parameterized
   - pip>=23.3.1
   - pkg-config
   - polyscope
   - py-opencv>=4.10[build=headless*]
+  - py-openimageio
   - pytest-benchmark
   - python=3.12
   - pytorch-gpu=2.11.0

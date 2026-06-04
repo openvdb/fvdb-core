@@ -42,7 +42,6 @@ dependencies:
   - ninja
   - numpy
   - open-clip-torch
-  - openimageio
   - openssl
   - openusd
   - pandas
@@ -52,6 +51,7 @@ dependencies:
   - polyscope
   - psutil
   - py-opencv>=4.10[build=headless*]
+  - py-openimageio
   - pybind11
   - pyrender
   - pytest-benchmark
