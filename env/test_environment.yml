@@ -18,6 +18,7 @@ dependencies:
   - myst-parser
   - numpy
   - openssl
+  - openimageio
   - pandas
   - parameterized
   - pip>=23.3.1
@@ -31,21 +32,13 @@ dependencies:
   - scikit-learn
   - sphinx_rtd_theme
   - sphinx>=7.0.0
-  - tensorboard
   - tqdm
   - zlib
   ## 3dgs
-  - pyproj
-  - scikit-image
-  - torchvision
-  - viser
   - ipykernel
   - nbmake
   - pip:
-    - gsplat
     - pytest-markdown-docs
     - point-cloud-utils
-    ## 3dgs tests
-    - oiio-static-python
 platforms:
   - linux-64
