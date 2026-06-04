@@ -328,7 +328,7 @@ jobs:
           fetch-depth: 0
           ref: ${{ inputs.branch || github.ref }}
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '${{ needs.versions.outputs.python-default }}'
       - name: Add post-release to version (TestPyPI only)
@@ -503,7 +503,10 @@ jobs:
           cat "$INDEX_FILE"
 
           echo "Uploading index.html to S3..."
-          aws s3 cp "$INDEX_FILE" "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${{ steps.proj.outputs.normalized }}/index.html" --content-type text/html --only-show-errors
+          aws s3 cp "$INDEX_FILE" "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${{ steps.proj.outputs.normalized }}/index.html" \
+            --content-type text/html \
+            --cache-control "public, max-age=60, must-revalidate" \
+            --only-show-errors
           echo "Index uploaded successfully"
 
       - name: Generate root simple index.html
@@ -524,7 +527,48 @@ jobs:
             done;
             echo "</body></html>";
           } > "$ROOT_INDEX"
-          aws s3 cp "$ROOT_INDEX" "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/index.html" --content-type text/html --only-show-errors
+          aws s3 cp "$ROOT_INDEX" "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/index.html" \
+            --content-type text/html \
+            --cache-control "public, max-age=60, must-revalidate" \
+            --only-show-errors
+
+      - name: Invalidate CloudFront cache for simple-index paths
+        run: |
+          set -euo pipefail
+          DOMAIN="${{ needs.versions.outputs.aws-cloudfront-distribution-domain }}"
+          if [ -z "$DOMAIN" ] || [ "$DOMAIN" = "null" ]; then
+            echo "No CloudFront distribution domain configured (aws.cloudfront_distribution_domain in versions.json); skipping invalidation"
+            exit 0
+          fi
+          DIST_ID=$(aws cloudfront list-distributions \
+            --query "DistributionList.Items[?DomainName=='$DOMAIN'].Id | [0]" \
+            --output text 2>/dev/null || echo "")
+          if [ -z "$DIST_ID" ] || [ "$DIST_ID" = "None" ]; then
+            echo "WARNING: Could not find CloudFront distribution for domain $DOMAIN; skipping invalidation"
+            echo "(IAM role may need cloudfront:ListDistributions permission)"
+            exit 0
+          fi
+          NORM="${{ steps.proj.outputs.normalized }}"
+          # Invalidate both the trailing-slash directory paths (what pip and
+          # browsers actually request) and the underlying index.html object
+          # paths. CloudFront caches each request URI independently, so
+          # invalidating only one form leaves the other stale.
+          PATHS=(
+            "/${SIMPLE_PREFIX}/"
+            "/${SIMPLE_PREFIX}/index.html"
+            "/${SIMPLE_PREFIX}/${NORM}/"
+            "/${SIMPLE_PREFIX}/${NORM}/index.html"
+          )
+          echo "Invalidating distribution $DIST_ID paths: ${PATHS[*]}"
+          if ! aws cloudfront create-invalidation \
+            --distribution-id "$DIST_ID" \
+            --paths "${PATHS[@]}" \
+            --query 'Invalidation.{Id:Id,Status:Status,CreateTime:CreateTime}' \
+            --output table; then
+            echo "WARNING: Failed to create CloudFront invalidation for distribution $DIST_ID; skipping invalidation"
+            echo "(IAM role may need cloudfront:CreateInvalidation permission)"
+            exit 0
+          fi
 
   ##############################################################################
   # GPU VALIDATION: SMOKE TEST + UNIT TESTS
@@ -650,7 +694,7 @@ jobs:
           ref: ${{ inputs.branch || github.ref }}
 
       - name: Set up fvdb_test Conda env
-        uses: mamba-org/setup-micromamba@v2
+        uses: mamba-org/setup-micromamba@v3
         with:
           cache-environment: false
           post-cleanup: 'all'
@@ -671,6 +715,8 @@ jobs:
       - name: Run unit tests
         run: |
           micromamba activate fvdb_test
+          NANOVDB_EDITOR_SPEC=$(python .github/scripts/get_viewer_dependency.py)
+          pip install "$NANOVDB_EDITOR_SPEC"
           cd tests
           pytest -v unit
 

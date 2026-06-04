@@ -4,8 +4,8 @@
 #ifndef FVDB_DETAIL_OPS_RAYIMPLICITINTERSECTION_H
 #define FVDB_DETAIL_OPS_RAYIMPLICITINTERSECTION_H
 
+#include <fvdb/GridBatchData.h>
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/GridBatchImpl.h>
 
 #include <torch/types.h>
 
@@ -13,7 +13,7 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-JaggedTensor rayImplicitIntersection(const GridBatchImpl &batchHdl,
+JaggedTensor rayImplicitIntersection(const GridBatchData &batchHdl,
                                      const JaggedTensor &rayOrigins,
                                      const JaggedTensor &rayDirections,
                                      const JaggedTensor &gridScalars,

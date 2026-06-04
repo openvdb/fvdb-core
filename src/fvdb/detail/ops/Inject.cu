@@ -1,11 +1,13 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+
+#include <fvdb/GridBatchData.h>
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/GridBatchImpl.h>
-#include <fvdb/detail/TorchDeviceBuffer.h>
+#include <fvdb/TorchDeviceBuffer.h>
 #include <fvdb/detail/ops/Inject.h>
 #include <fvdb/detail/utils/Utils.h>
+#include <fvdb/detail/utils/cuda/GridDim.h>
 #include <fvdb/detail/utils/cuda/Utils.cuh>
 #include <fvdb/detail/utils/nanovdb/ActiveVoxelIterator.h>
 
@@ -105,7 +107,7 @@ template <typename ValueType, int64_t Offset = -1> struct InjectGridPytorchFunct
     // with the source are left unchanged NOTE: If the source voxels are not a subset of the
     // destination voxels, the injection will be from the intersection of the two active voxel sets
     // into the destination This version presumes a runtime dimension parameter for input features
-    static constexpr int MaxThreadsPerBlock         = 256;
+    static constexpr int MaxThreadsPerBlock         = DEFAULT_BLOCK_DIM;
     static constexpr int MinBlocksPerMultiprocessor = 1;
 
     __device__ void
@@ -198,15 +200,15 @@ template <typename ValueType, int64_t Offset = -1> struct InjectGridPytorchFunct
 };
 
 template <torch::DeviceType DeviceTag>
-void dispatchInject(const GridBatchImpl &dstGridBatch,
-                    const GridBatchImpl &srcGridBatch,
+void dispatchInject(const GridBatchData &dstGridBatch,
+                    const GridBatchData &srcGridBatch,
                     JaggedTensor &dst,
                     const JaggedTensor &src);
 
 template <>
 void
-dispatchInject<torch::kCUDA>(const GridBatchImpl &dstGridBatch,
-                             const GridBatchImpl &srcGridBatch,
+dispatchInject<torch::kCUDA>(const GridBatchData &dstGridBatch,
+                             const GridBatchData &srcGridBatch,
                              JaggedTensor &dst,
                              const JaggedTensor &src) {
     c10::cuda::CUDAGuard deviceGuard(dstGridBatch.device());
@@ -241,6 +243,14 @@ dispatchInject<torch::kCUDA>(const GridBatchImpl &dstGridBatch,
         const torch::Tensor srcI = src.index(i).jdata();
 
         const auto srcLeafCount = srcGridBatch.numLeavesAt(i);
+        if (srcLeafCount == 0) {
+            // Nothing to inject from an empty source grid. In the out-of-place path,
+            // the Python wrapper (grid.py) prefills the destination with default_value;
+            // if the caller provided an explicit destination, skipping the kernel
+            // leaves that tensor unchanged. Skip the kernel launch — CUDA rejects
+            // <<<0, ...>>> as invalid config.
+            continue;
+        }
         const at::cuda::CUDAStream stream =
             at::cuda::getCurrentCUDAStream(srcGridBatch.device().index());
 
@@ -277,8 +287,8 @@ dispatchInject<torch::kCUDA>(const GridBatchImpl &dstGridBatch,
 
 template <>
 void
-dispatchInject<torch::kPrivateUse1>(const GridBatchImpl &dstGridBatch,
-                                    const GridBatchImpl &srcGridBatch,
+dispatchInject<torch::kPrivateUse1>(const GridBatchData &dstGridBatch,
+                                    const GridBatchData &srcGridBatch,
                                     JaggedTensor &dst,
                                     const JaggedTensor &src) {
     TORCH_CHECK_VALUE(dst.rdim() == src.rdim(),
@@ -310,7 +320,10 @@ dispatchInject<torch::kPrivateUse1>(const GridBatchImpl &dstGridBatch,
         torch::Tensor dstI       = dst.index(i).jdata();
         const torch::Tensor srcI = src.index(i).jdata();
 
-        const auto srcLeafCount                   = srcGridBatch.numLeavesAt(i);
+        const auto srcLeafCount = srcGridBatch.numLeavesAt(i);
+        if (srcLeafCount == 0) {
+            continue;
+        }
         const auto [srcContigStrides, srcStrides] = stridesAndContiguousStrides(srcI);
         const auto [dstContigStrides, dstStrides] = stridesAndContiguousStrides(dstI);
 
@@ -320,6 +333,11 @@ dispatchInject<torch::kPrivateUse1>(const GridBatchImpl &dstGridBatch,
 
             size_t deviceSrcLeafOffset, deviceSrcLeafCount;
             std::tie(deviceSrcLeafOffset, deviceSrcLeafCount) = deviceChunk(srcLeafCount, deviceId);
+            if (deviceSrcLeafCount == 0) {
+                // deviceChunk may yield 0 leaves on some devices when
+                // srcLeafCount < device_count(). Skip — CUDA rejects <<<0, ...>>>.
+                continue;
+            }
 
             AT_DISPATCH_V2(
                 src.scalar_type(),
@@ -357,8 +375,8 @@ dispatchInject<torch::kPrivateUse1>(const GridBatchImpl &dstGridBatch,
 
 template <>
 void
-dispatchInject<torch::kCPU>(const GridBatchImpl &dstGridBatch,
-                            const GridBatchImpl &srcGridBatch,
+dispatchInject<torch::kCPU>(const GridBatchData &dstGridBatch,
+                            const GridBatchData &srcGridBatch,
                             JaggedTensor &dst,
                             const JaggedTensor &src) {
     TORCH_CHECK_VALUE(dst.rdim() == src.rdim(),
@@ -420,8 +438,8 @@ dispatchInject<torch::kCPU>(const GridBatchImpl &dstGridBatch,
 } // anonymous namespace
 
 void
-inject(const GridBatchImpl &dstGridBatch,
-       const GridBatchImpl &srcGridBatch,
+inject(const GridBatchData &dstGridBatch,
+       const GridBatchData &srcGridBatch,
        JaggedTensor &dst,
        const JaggedTensor &src) {
     TORCH_CHECK(

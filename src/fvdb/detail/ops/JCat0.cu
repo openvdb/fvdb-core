@@ -88,6 +88,7 @@ computeIndexPutArg(
 JaggedTensor
 jCat0CUDA(const std::vector<JaggedTensor> &vec) {
     c10::cuda::CUDAGuard deviceGuard(vec[0].device());
+    cudaStream_t stream = c10::cuda::getCurrentCUDAStream(vec[0].device().index()).stream();
 
     int64_t totalElements = 0;
     int64_t maxElements   = 0;
@@ -118,7 +119,7 @@ jCat0CUDA(const std::vector<JaggedTensor> &vec) {
         torch::empty({vec[0].joffsets().size(0)},
                      torch::TensorOptions().dtype(JOffsetsScalarType).device(torch::kCUDA));
     const int64_t numBlocksCalcTensorSizes = GET_BLOCKS(outJOffsets.size(0), DEFAULT_BLOCK_DIM);
-    computeTensorSizes<<<numBlocksCalcTensorSizes, DEFAULT_BLOCK_DIM>>>(
+    computeTensorSizes<<<numBlocksCalcTensorSizes, DEFAULT_BLOCK_DIM, 0, stream>>>(
         thrust::raw_pointer_cast(offsets_d.data()),
         offsets_d.size(),
         outJOffsets.packed_accessor64<JOffsetsType, 1, torch::RestrictPtrTraits>());
@@ -152,7 +153,7 @@ jCat0CUDA(const std::vector<JaggedTensor> &vec) {
                 const int64_t numElements = jt.jdata().size(0);
                 const int64_t numBlocksComputeIndexPutArg =
                     GET_BLOCKS(numElements, DEFAULT_BLOCK_DIM);
-                computeIndexPutArg<<<numBlocksComputeIndexPutArg, DEFAULT_BLOCK_DIM>>>(
+                computeIndexPutArg<<<numBlocksComputeIndexPutArg, DEFAULT_BLOCK_DIM, 0, stream>>>(
                     jti,
                     thrust::raw_pointer_cast(offsets_d.data()),
                     offsets_d.size(),

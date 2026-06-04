@@ -28,7 +28,7 @@ segmentsAlongRaysCallback(int32_t bidx,
                           TensorAccessor<fvdb::JIdxType, 1> outJIdx,
                           TensorAccessor<fvdb::JLIdxType, 2> outJLIdx,
                           TensorAccessor<ScalarType, 2> outSegments,
-                          GridBatchImpl::Accessor batchAccessor,
+                          GridBatchData::Accessor batchAccessor,
                           int64_t maxSegments,
                           ScalarType eps) {
     const nanovdb::OnIndexGrid *gpuGrid = batchAccessor.grid(bidx);
@@ -129,7 +129,7 @@ countSegmentsAlongRaysCallback(int32_t bidx,
 
 template <torch::DeviceType DeviceTag>
 JaggedTensor
-SegmentsAlongRays(const GridBatchImpl &batchHdl,
+SegmentsAlongRays(const GridBatchData &batchHdl,
                   const JaggedTensor &rayOrigins,
                   const JaggedTensor &rayDirections,
                   int64_t maxSegments,
@@ -170,10 +170,6 @@ SegmentsAlongRays(const GridBatchImpl &batchHdl,
         rayOrigins.scalar_type(),
         "SegmentsAlongRays",
         AT_WRAP([&]() -> JaggedTensor {
-            int64_t numThreads = 384;
-            if constexpr (nanovdb::util::is_same<scalar_t, double>::value) {
-                numThreads = 256;
-            }
             const auto optsF =
                 torch::TensorOptions().dtype(rayOrigins.dtype()).device(rayOrigins.device());
             const auto optsI32 =
@@ -203,7 +199,7 @@ SegmentsAlongRays(const GridBatchImpl &batchHdl,
                         maxSegments,
                         eps);
                 };
-                forEachJaggedElementChannelCUDA<scalar_t, 2>(numThreads, 1, rayOrigins, cb1);
+                forEachJaggedElementChannelCUDA<scalar_t, 2>(1, rayOrigins, cb1);
             } else {
                 auto cb1 = [=](int32_t bidx,
                                int32_t eidx,
@@ -261,7 +257,7 @@ SegmentsAlongRays(const GridBatchImpl &batchHdl,
                                                                                    maxSegments,
                                                                                    eps);
                 };
-                forEachJaggedElementChannelCUDA<scalar_t, 2>(numThreads, 1, rayOrigins, cb2);
+                forEachJaggedElementChannelCUDA<scalar_t, 2>(1, rayOrigins, cb2);
             } else {
                 auto cb2 = [=](int32_t bidx,
                                int32_t eidx,
@@ -292,7 +288,7 @@ SegmentsAlongRays(const GridBatchImpl &batchHdl,
 } // anonymous namespace
 
 JaggedTensor
-segmentsAlongRays(const GridBatchImpl &batchHdl,
+segmentsAlongRays(const GridBatchData &batchHdl,
                   const JaggedTensor &rayOrigins,
                   const JaggedTensor &rayDirections,
                   int64_t maxSegments,

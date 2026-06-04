@@ -7,6 +7,7 @@ dependencies:
   - ca-certificates
   - certifi
   - cuda-version=13.0
+  - fvdb-core
   - git
   - gitpython
   - ipython

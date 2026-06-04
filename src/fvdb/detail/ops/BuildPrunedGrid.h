@@ -4,14 +4,14 @@
 #ifndef FVDB_DETAIL_OPS_BUILDPRUNEDGRID_H
 #define FVDB_DETAIL_OPS_BUILDPRUNEDGRID_H
 
+#include <fvdb/GridBatchData.h>
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/GridBatchImpl.h>
 
 namespace fvdb {
 namespace detail {
 namespace ops {
 
-c10::intrusive_ptr<GridBatchImpl> pruneGrid(const GridBatchImpl &gridBatch,
+c10::intrusive_ptr<GridBatchData> pruneGrid(const GridBatchData &gridBatch,
                                             const JaggedTensor &mask);
 
 } // namespace ops

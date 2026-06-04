@@ -21,9 +21,11 @@ spatial intelligence research and applications.
 
 ## Learning to Use *f*VDB
 
-After [installing *f*VDB](#installing-fvdb), we recommend starting with our [documentation](https://fvdb.ai/).
+After [installing *f*VDB](#installing-fvdb), we recommend starting with our [documentation](https://fvdb-core.readthedocs.io/).
 
-Beyond the [documentation](https://fvdb.ai/), the walk-through [notebooks](notebooks) in this repository
+You can also try our [TEACHME](docs/TEACHME) interactive lessons, designed to be used with an LLM coding agent (Claude Code, Cursor, or similar) that teaches you the *f*VDB API interactively. Just prompt: `Read docs/TEACHME and teach me how to use fvdb-core.`
+
+Beyond the [documentation](https://fvdb-core.readthedocs.io/), the walk-through [notebooks](notebooks) in this repository
 can provide an illustrated introduction to the main concepts in *f*VDB.
 
 
@@ -33,12 +35,12 @@ The `fvdb-core` Python package can be installed either using published packages 
 from source.
 
 For the most up-to-date information on installing *f*VDB's pip packages, please see the
-[installation documentation](https://fvdb.ai/installation.html).
+[installation documentation](https://fvdb-core.readthedocs.io/latest/installation.html).
 
 
 ## Building *f*VDB from Source
 
-If the [pre-built packages](https://fvdb.ai/installation.html) do not meet your needs, you can build *f*VDB from source in this repository.
+If the [pre-built packages](https://fvdb-core.readthedocs.io/latest/installation.html) do not meet your needs, you can build *f*VDB from source in this repository.
 
 ### Environment Management
 
@@ -87,7 +89,7 @@ conda activate fvdb
 ##### Other available environments
 * `fvdb_build`: Use `env/build_environment.yml` for a minimum set of dependencies needed just to build/package *f*VDB (note this environment won't have all the runtime dependencies needed to `import fvdb`).
 * `fvdb_test`: Use `env/test_environment.yml` for a runtime environment which has only the packages required to run the unit tests after building ƒVDB. This is the environment used by the CI pipeline to run the tests after building ƒVDB in the `fvdb_build` environment.
-* `fvdb_learn`: Use `env/learn_environment.yml` for additional runtime requirements and packages needed to run the [notebooks](notebooks) or [examples](examples) and view their visualizations.
+* `fvdb_learn`: Use `env/learn_environment.yml` to build an environment with the latest released/stable version of `fvdb-core` along with additional runtime packages needed to run the [notebooks](notebooks) or [examples](examples) and view their visualizations.  This environment cannot be used to build *f*VDB from source.
 
 ---
 
@@ -166,14 +168,14 @@ The build script automatically detects the CUDA architectures to build for based
 ./build.sh --cuda-arch-list=8.0;8.6+PTX
 ```
 
+fVDB always uses CPM to fetch NanoVDB Editor headers at the pinned source commit during builds. Viewer/runtime support remains optional and requires the `nanovdb-editor` Python package, which you can install with `pip install "fvdb-core[viewer]"` or provide from a local checkout via `-C cmake.define.CPM_nanovdb_editor_SOURCE=/path/to/nanovdb-editor`.
+
 #### Build Modifiers
 
 The build script supports the following build modifiers:
 
 - `gtests`: Enable building the gtest C++ unit tests.
 - `benchmarks`: Enable building the benchmarks.
-- `editor_skip`: Skip building the nanovdb_editor dependency.
-- `editor_force`: Force rebuild of the nanovdb_editor dependency.
 - `debug`: Build in debug mode with full debug symbols and no optimizations.
 - `strip_symbols`: Strip symbols from the build (will be ignored if debug is enabled).
 - `verbose`: Enable verbose build output for pip and CMake.

@@ -169,7 +169,7 @@ class FVDBAdapter(BackendAdapter):
         self._num_voxels = ijk.shape[0]
         ijk_dev = ijk.to(device)
         jt = fvdb.JaggedTensor(ijk_dev)
-        self._grid = fvdb.GridBatch.from_ijk(jt, voxel_sizes=1, origins=0, device=device)
+        self._grid = fvdb.GridBatch.from_ijk(jt, voxel_sizes=1, origins=0)
         self._plan = fvdb.ConvolutionPlan.from_grid_batch(
             kernel_size=kernel_size,
             stride=1,

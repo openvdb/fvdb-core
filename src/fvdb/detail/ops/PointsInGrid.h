@@ -4,14 +4,14 @@
 #ifndef FVDB_DETAIL_OPS_POINTSINGRID_H
 #define FVDB_DETAIL_OPS_POINTSINGRID_H
 
+#include <fvdb/GridBatchData.h>
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/GridBatchImpl.h>
 
 namespace fvdb {
 namespace detail {
 namespace ops {
 
-JaggedTensor pointsInGrid(const GridBatchImpl &batchHdl, const JaggedTensor &points);
+JaggedTensor pointsInGrid(const GridBatchData &batchHdl, const JaggedTensor &points);
 
 } // namespace ops
 } // namespace detail

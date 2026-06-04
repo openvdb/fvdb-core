@@ -1,6 +1,9 @@
 # Generated version file
 fvdb/version.py
 
+# Claude Code MCP config (machine-specific paths)
+.mcp.json
+
 # Generated compile_commands.json symlink
 compile_commands.json
 

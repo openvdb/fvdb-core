@@ -3,7 +3,7 @@
 #
 """
 Black-box encapsulation of configuration structures for sparse convolution using
-fVDB Grid and GridBatch. Design is intended to be reminiscent of the "plan" concept from FFT
+fVDB GridBatch. Design is intended to be reminiscent of the "plan" concept from FFT
 libraries. Like FFT plans, the convolution plan encapsulates a single direction - regular
 convolution, or transposed convolution, but can represent either.
 """
@@ -14,7 +14,8 @@ from typing import Any, overload
 import torch
 from fvdb.types import NumericMaxRank1, ValueConstraint, to_Vec3i
 
-from fvdb import Grid, GridBatch, JaggedTensor
+from fvdb import GridBatch, JaggedTensor
+from fvdb.functional._dispatch import _get_grid_data
 
 from . import _fvdb_cpp
 
@@ -76,8 +77,8 @@ class _PredGatherIGemmConvFn(torch.autograd.Function):
         ctx,
         features: torch.Tensor,
         weights: torch.Tensor,
-        feature_grid: _fvdb_cpp.GridBatch,
-        output_grid: _fvdb_cpp.GridBatch,
+        feature_grid,
+        output_grid,
         gs_topo: _fvdb_cpp.GatherScatterDefaultTopology,
         kernel_size: int,
         stride: int,
@@ -139,8 +140,7 @@ _Backend = _MatmulBackend | _DenseBackend | _GatherScatterBackend | _PredGatherI
 @dataclass(frozen=True)
 class ConvolutionPlan:
     """
-    A pre-configured plan for efficient sparse 3D convolution operations on :class:`fvdb.Grid`
-    and :class:`fvdb.GridBatch`.
+    A pre-configured plan for efficient sparse 3D convolution operations on :class:`fvdb.GridBatch`.
 
     :class:`ConvolutionPlan` encapsulates all the configuration and optimization structures needed
     to perform sparse convolution operations efficiently. Like `FFT plans in signal processing libraries <https://www.fftw.org/fftw3_doc/Using-Plans.html>`_,
@@ -157,7 +157,7 @@ class ConvolutionPlan:
 
     Usage Pattern:
 
-    1. Create a plan using one of the ``from_*`` class methods (see :meth:`from_grid_batch()`, and :meth:`from_grid()`).
+    1. Create a plan using one of the ``from_*`` class methods (see :meth:`from_grid_batch()`).
     2. Use the :meth:`execute()` method to perform convolutions with different weights and data on
        the same grid structures.
     3. Reuse the same plan for multiple convolutions with the same configuration
@@ -166,16 +166,16 @@ class ConvolutionPlan:
 
     .. code-block:: python
 
-        from fvdb import Grid, ConvolutionPlan
+        from fvdb import GridBatch, ConvolutionPlan
 
-        # Create a grid
-        my_grid = Grid.from_ijk(...)
+        # Create a grid batch
+        my_grid_batch = GridBatch.from_ijk(...)
 
         # Create a plan for 3x3x3 convolution with stride 1
-        plan = ConvolutionPlan.from_grid(
+        plan = ConvolutionPlan.from_grid_batch(
             kernel_size=3,
             stride=1,
-            source_grid=my_grid
+            source_grid=my_grid_batch
         )
 
         # execute convolution with different weights
@@ -336,130 +336,6 @@ class ConvolutionPlan:
         return cls(source_grid, target_grid, kernel_size, stride, channel_pairs, True, backend)
 
     @classmethod
-    def from_grid(
-        cls,
-        kernel_size: NumericMaxRank1,
-        stride: NumericMaxRank1,
-        source_grid: Grid,
-        target_grid: Grid | None = None,
-        *,
-        expert_config: dict[str, Any] = _DEFAULT_CONFIG,
-        channel_pairs: tuple[tuple[int, int], ...] = _ANY_CHANNEL_PAIRS,
-    ) -> "ConvolutionPlan":
-        """
-        Create a :class:`ConvolutionPlan` for convolution on a single grid. *i.e.* convolution where the input
-        and output domains are both of type :class:`fvdb.Grid`.
-
-        This method creates a plan for processing a single grid, which is suitable
-        when you have individual grids rather than batched data (for that case, use :meth:`from_grid_batch`).
-
-        Args:
-            kernel_size (NumericMaxRank1): Size of the convolution kernel. Can be a single int (cubic kernel)
-                        or a 3-element sequence for ``(x, y, z)`` dimensions.
-            stride (NumericMaxRank1): Convolution stride. Can be a single int or 3-element sequence.
-            source_grid (Grid): :class:`fvdb.Grid` encoding the structure of the input domain.
-            target_grid (Grid | None): :class:`fvdb.Grid` encoding the structure of the output domain.
-                If ``None``, the ``target_grid`` is automatically computed
-                based on ``kernel_size`` and ``stride`` applied to ``source_grid``.
-                *(For the dense backend, ``target_grid`` must be ``None``.)*
-            expert_config (dict[str, Any]): Advanced configuration options (rarely needed by typical users).
-            channel_pairs (tuple[tuple[int, int], ...]): Supported input/output channel combinations as tuples.
-                Defaults to ``_ANY_CHANNEL_PAIRS``, which means any channel pairs are supported.
-
-        Returns:
-            convolution_plan (ConvolutionPlan): Configured plan ready for :meth:`execute()` operations.
-
-        Example:
-
-        .. code-block:: python
-
-            # Create a single grid
-            grid = Grid.from_zero_voxels(device="cuda", voxel_size=0.1, origin=0)
-
-            # Create plan for 3x3x3 convolution
-            plan = ConvolutionPlan.from_grid(
-                kernel_size=3,
-                stride=1,
-                source_grid=grid
-            )
-
-            # execute to single grid data
-            features = torch.randn(100, 8, device="cuda")
-            weights = torch.randn(16, 8, 3, 3, 3, device="cuda")
-            output = plan.execute(features, weights)
-
-        """
-        kernel_size = to_Vec3i(kernel_size, value_constraint=ValueConstraint.POSITIVE)
-        stride = to_Vec3i(stride, value_constraint=ValueConstraint.POSITIVE)
-
-        backend_name = expert_config.get("backend", "default")
-
-        source_grid_batch = GridBatch(impl=source_grid._impl)
-        if backend_name == "dense":
-            if target_grid is not None:
-                raise ValueError("Target grid must be None for dense backend.")
-            target_grid_batch = source_grid_batch
-        elif target_grid is None:
-            target_grid_batch = source_grid_batch.conv_grid(kernel_size, stride)
-        else:
-            target_grid_batch = GridBatch(impl=target_grid._impl)
-
-        backend = cls._build_backend(
-            source_grid_batch, target_grid_batch, kernel_size, stride, channel_pairs, expert_config
-        )
-        return cls(source_grid_batch, target_grid_batch, kernel_size, stride, channel_pairs, False, backend)
-
-    @classmethod
-    def from_grid_transposed(
-        cls,
-        kernel_size: NumericMaxRank1,
-        stride: NumericMaxRank1,
-        source_grid: Grid,
-        target_grid: Grid | None = None,
-        *,
-        expert_config: dict[str, Any] = _DEFAULT_CONFIG,
-        channel_pairs: tuple[tuple[int, int], ...] = _ANY_CHANNEL_PAIRS,
-    ) -> "ConvolutionPlan":
-        """
-        Create a :class:`ConvolutionPlan` for *transposed* convolution on a single grid.
-
-        Args:
-            kernel_size (NumericMaxRank1): Size of the convolution kernel. Can be a single int (cubic kernel)
-                        or a 3-element sequence for ``(x, y, z)`` dimensions.
-            stride (NumericMaxRank1): Convolution stride. Can be a single int or 3-element sequence.
-            source_grid (Grid): :class:`fvdb.Grid` encoding the structure of the input domain.
-            target_grid (Grid | None): :class:`fvdb.Grid` encoding the structure of the output domain.
-                If ``None``, the ``target_grid`` is automatically computed
-                based on ``kernel_size`` and ``stride`` applied to ``source_grid``.
-                *(For the dense backend, ``target_grid`` must be ``None``.)*
-            expert_config (dict[str, Any]): Advanced configuration options (rarely needed by typical users).
-            channel_pairs (tuple[tuple[int, int], ...]): Supported input/output channel combinations as tuples.
-                Defaults to ``_ANY_CHANNEL_PAIRS``, which means any channel pairs are supported.
-
-        Returns:
-            convolution_plan (ConvolutionPlan): Configured plan ready for transposed convolution operations.
-        """
-        kernel_size = to_Vec3i(kernel_size, value_constraint=ValueConstraint.POSITIVE)
-        stride = to_Vec3i(stride, value_constraint=ValueConstraint.POSITIVE)
-
-        backend_name = expert_config.get("backend", "default")
-
-        source_grid_batch = GridBatch(impl=source_grid._impl)
-        if backend_name == "dense":
-            if target_grid is not None:
-                raise ValueError("Target grid must be None for dense backend, transposed.")
-            target_grid_batch = source_grid_batch
-        elif target_grid is None:
-            raise ValueError("Target grid must be provided for transposed convolution, except for dense backend.")
-        else:
-            target_grid_batch = GridBatch(impl=target_grid._impl)
-
-        backend = cls._build_backend(
-            source_grid_batch, target_grid_batch, kernel_size, stride, channel_pairs, expert_config, transposed=True
-        )
-        return cls(source_grid_batch, target_grid_batch, kernel_size, stride, channel_pairs, True, backend)
-
-    @classmethod
     def from_plan_transposed(cls, plan: "ConvolutionPlan") -> "ConvolutionPlan":
         """
         Create a transposed version of an existing :class:`ConvolutionPlan`.
@@ -484,10 +360,10 @@ class ConvolutionPlan:
         .. code-block:: python
 
             # Create forward plan
-            forward_plan = ConvolutionPlan.from_grid(
+            forward_plan = ConvolutionPlan.from_grid_batch(
                 kernel_size=3,
                 stride=1,
-                source_grid=input_grid
+                source_grid=input_grid_batch
             )
 
             # Create the corresponding backward/transpose plan
@@ -565,10 +441,10 @@ class ConvolutionPlan:
         the convolution kernel to the sparse voxel data according to the plan's
         pre-configured structure and optimizations.
 
-        If this plan was created for a single grid (*e.g.* using :meth:`from_grid()` or :meth:`from_grid_transposed()`),
-        then ``data`` should be a :class:`torch.Tensor` with shape ``(total_voxels, in_channels)``.
+        If the source grid batch has size 1,
+        then ``data`` can be a :class:`torch.Tensor` with shape ``(total_voxels, in_channels)``.
 
-        If this plan was created for a batch of grids (*e.g.* using :meth:`from_grid_batch()` or :meth:`from_grid_batch_transposed()`),
+        If the source grid batch has size > 1,
         then ``data`` should be a :class:`~fvdb.JaggedTensor` with shape ``(batch_size, num_voxels_in_grid_b, in_channels)``.
 
         .. note::
@@ -650,8 +526,8 @@ class ConvolutionPlan:
             out_tensor = _PredGatherIGemmConvFn.apply(
                 data.jdata,
                 weights,
-                self._source_grid._impl,
-                self._target_grid._impl,
+                _get_grid_data(self._source_grid),
+                _get_grid_data(self._target_grid),
                 backend.gs_topology,
                 backend.kernel_size,
                 backend.stride,
@@ -675,22 +551,6 @@ class ConvolutionPlan:
     # ============================================================
 
     @property
-    def source_grid(self) -> Grid:
-        """
-        Return the :class:`fvdb.Grid` representing the source domain of the convolution, or
-        raise an error if the plan was created for a batch of grids.
-
-        Returns:
-            source_grid (Grid): The source :class:`fvdb.Grid` of the convolution plan.
-
-        Raises:
-            ValueError: If the plan was created for a batch of grids.
-        """
-        if self._source_grid.grid_count != 1:
-            raise ValueError("Source grid must have batch size of 1 for Grid")
-        return Grid(impl=self._source_grid._impl)
-
-    @property
     def source_grid_batch(self) -> GridBatch:
         """
         Return the :class:`fvdb.GridBatch` representing the source domain of the convolution.
@@ -700,22 +560,6 @@ class ConvolutionPlan:
             source_grid_batch (GridBatch): The source :class:`fvdb.GridBatch` of the convolution plan.
         """
         return self._source_grid
-
-    @property
-    def target_grid(self) -> Grid:
-        """
-        Return the :class:`fvdb.Grid` representing the target domain of the convolution, or
-        raise an error if the plan was created for a batch of grids.
-
-        Returns:
-            target_grid (Grid): The target :class:`fvdb.Grid` of the convolution plan.
-
-        Raises:
-            ValueError: If the plan was created for a batch of grids.
-        """
-        if self._target_grid.grid_count != 1:
-            raise ValueError("Target grid must have batch size of 1 for Grid")
-        return Grid(impl=self._target_grid._impl)
 
     @property
     def target_grid_batch(self) -> GridBatch:
@@ -737,7 +581,7 @@ class ConvolutionPlan:
         Returns:
             has_fixed_topology (bool): ``True`` if source and target grids are the same topology, ``False`` otherwise.
         """
-        return self._source_grid._impl.is_same(self._target_grid._impl)
+        return _get_grid_data(self._source_grid).is_same(_get_grid_data(self._target_grid))
 
     # ============================================================
     #                 Private methods
@@ -770,16 +614,20 @@ class ConvolutionPlan:
         if backend_name == "dense":
             if not _vec_is_all(stride, 1):
                 raise ValueError("Dense backend requires stride 1.")
-            if not source_grid._impl.is_same(target_grid._impl):
+            if not source_grid.data.is_same(target_grid.data):
                 raise ValueError("Dense backend requires source_grid and target_grid to be the same.")
             return _DenseBackend()
 
         # Gather-scatter default — precomputed compacted topology with Python autograd
         if backend_name in ("gather_scatter", "default"):
             if transposed:
-                topo = _fvdb_cpp.gs_build_transpose_topology(source_grid._impl, target_grid._impl, kernel_size, stride)
+                topo = _fvdb_cpp.gs_build_transpose_topology(
+                    _get_grid_data(source_grid), _get_grid_data(target_grid), kernel_size, stride
+                )
             else:
-                topo = _fvdb_cpp.gs_build_topology(source_grid._impl, target_grid._impl, kernel_size, stride)
+                topo = _fvdb_cpp.gs_build_topology(
+                    _get_grid_data(source_grid), _get_grid_data(target_grid), kernel_size, stride
+                )
             return _GatherScatterBackend(topology=topo)
 
         # PredGatherIGemm — CUTLASS IGEMM on SM80+, forward only
@@ -795,14 +643,16 @@ class ConvolutionPlan:
             for cin, cout in channel_pairs:
                 if cin % 32 != 0 or cout % 32 != 0:
                     raise ValueError(f"PredGatherIGemm requires channel counts divisible by 32, got ({cin}, {cout}).")
-            gs_topo = _fvdb_cpp.gs_build_topology(source_grid._impl, target_grid._impl, kernel_size, stride)
+            gs_topo = _fvdb_cpp.gs_build_topology(
+                _get_grid_data(source_grid), _get_grid_data(target_grid), kernel_size, stride
+            )
             return _PredGatherIGemmBackend(gs_topology=gs_topo, kernel_size=int(ks_vals[0]), stride=int(st_vals[0]))
 
         raise ValueError(f"Unknown backend: {backend_name!r}")
 
     def _execute_dense(self, data: JaggedTensor, weights: torch.Tensor) -> JaggedTensor:
         source_grid = self._source_grid
-        assert source_grid._impl.is_same(self._target_grid._impl)
+        assert _get_grid_data(source_grid).is_same(_get_grid_data(self._target_grid))
 
         min_coord = source_grid.ijk.jdata.min(dim=0).values
         # BXYZC -> BCXYZ
@@ -818,29 +668,6 @@ class ConvolutionPlan:
 
 # These tests are to validate that the type-checking is happy. They won't actually run because
 # the grid generation is nonsense.
-
-
-def _grid_test_for_typing():
-    voxel_size = 0.1
-    origin = 0
-
-    grid = Grid.from_zero_voxels(device="cuda", voxel_size=voxel_size, origin=origin)
-
-    plan = ConvolutionPlan.from_grid(kernel_size=3, stride=1, source_grid=grid)
-    plan_t = ConvolutionPlan.from_plan_transposed(plan)
-
-    weights_1 = torch.randn(16, 8, 3, 3, 3, device="cuda")
-    weights_2 = torch.randn(16, 16, 3, 3, 3, device="cuda")
-    weights_3 = torch.randn(16, 16, 3, 3, 3, device="cuda")
-    weights_4 = torch.randn(8, 16, 3, 3, 3, device="cuda")
-
-    data_1 = torch.randn(100, 8, device="cuda")
-
-    out_1: torch.Tensor = plan.execute(data_1, weights_1)
-    out_2: torch.Tensor = plan.execute(out_1, weights_2)
-
-    out_3: torch.Tensor = plan_t.execute(out_2, weights_3)
-    out_4: torch.Tensor = plan_t.execute(out_3, weights_4)
 
 
 def _grid_batch_test_for_typing():

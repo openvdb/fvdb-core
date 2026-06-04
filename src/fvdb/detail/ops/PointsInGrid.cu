@@ -40,7 +40,7 @@ pointsInGridCallback(int32_t bidx,
 
 template <torch::DeviceType DeviceTag, typename scalar_t>
 JaggedTensor
-PointsInGrid(const GridBatchImpl &batchHdl, const JaggedTensor &points) {
+PointsInGrid(const GridBatchData &batchHdl, const JaggedTensor &points) {
     auto opts             = torch::TensorOptions().dtype(torch::kBool).device(points.device());
     torch::Tensor outMask = torch::empty({points.rsize(0)}, opts);
 
@@ -52,7 +52,7 @@ PointsInGrid(const GridBatchImpl &batchHdl, const JaggedTensor &points) {
                 pointsInGridCallback<scalar_t, JaggedRAcc64, TorchRAcc64>(
                     bidx, eidx, ptsA, outMaskAccessor, batchAcc);
             };
-        forEachJaggedElementChannelCUDA<scalar_t, 2>(1024, 1, points, cb);
+        forEachJaggedElementChannelCUDA<scalar_t, 2, 1024>(1, points, cb);
     } else if constexpr (DeviceTag == torch::kPrivateUse1) {
         auto cb = [=]
             __device__(int32_t bidx, int32_t eidx, int32_t cidx, JaggedRAcc64<scalar_t, 2> ptsA) {
@@ -75,7 +75,7 @@ namespace {
 
 template <torch::DeviceType DeviceTag>
 JaggedTensor
-dispatchPointsInGrid(const GridBatchImpl &batchHdl, const JaggedTensor &points) {
+dispatchPointsInGrid(const GridBatchData &batchHdl, const JaggedTensor &points) {
     batchHdl.checkNonEmptyGrid();
     batchHdl.checkDevice(points);
     TORCH_CHECK_TYPE(points.is_floating_point(), "points must have a floating point type");
@@ -98,7 +98,7 @@ dispatchPointsInGrid(const GridBatchImpl &batchHdl, const JaggedTensor &points) 
 } // namespace
 
 JaggedTensor
-pointsInGrid(const GridBatchImpl &batchHdl, const JaggedTensor &points) {
+pointsInGrid(const GridBatchData &batchHdl, const JaggedTensor &points) {
     TORCH_CHECK_VALUE(
         points.ldim() == 1,
         "Expected points to have 1 list dimension, i.e. be a single list of coordinate values, but got",

@@ -3,7 +3,7 @@
 
 #include "utils/Tensor.h"
 
-#include <fvdb/detail/ops/gsplat/GaussianMCMCAddNoise.h>
+#include <fvdb/detail/ops/gsplat/AddNoiseToGaussianMeans.h>
 
 #include <ATen/cuda/CUDAGeneratorImpl.h>
 #include <torch/torch.h>
@@ -36,7 +36,7 @@ class GaussianMCMCAddNoiseTest : public ::testing::Test {
     }
 
     // Save the current CUDA RNG state so we can reproduce the baseNoise that
-    // dispatchGaussianMCMCAddNoise draws internally.
+    // addNoiseToGaussianMeans draws internally.
     torch::Tensor
     saveCudaGeneratorState() {
         auto gen = at::cuda::detail::getDefaultCUDAGenerator();
@@ -63,7 +63,7 @@ TEST_F(GaussianMCMCAddNoiseTest, AppliesNoiseWithDeterministicBaseNoise) {
     const auto rngState = saveCudaGeneratorState();
     auto meansBaseline  = means.clone();
 
-    fvdb::detail::ops::dispatchGaussianMCMCAddNoise<torch::kCUDA>(
+    fvdb::detail::ops::addNoiseToGaussianMeans(
         means, logScales, logitOpacities, quats, noiseScale, 0.005, 100.0);
 
     restoreCudaGeneratorState(rngState);
@@ -90,7 +90,7 @@ TEST_F(GaussianMCMCAddNoiseTest, RespectsAnisotropicScales) {
 
     const auto rngState = saveCudaGeneratorState();
 
-    fvdb::detail::ops::dispatchGaussianMCMCAddNoise<torch::kCUDA>(
+    fvdb::detail::ops::addNoiseToGaussianMeans(
         means, logScales, logitOpacities, quats, noiseScale, 0.005, 100);
 
     restoreCudaGeneratorState(rngState);
@@ -114,7 +114,7 @@ TEST_F(GaussianMCMCAddNoiseTest, HighOpacitySuppressesNoise) {
             .contiguous();
     constexpr float noiseScale = 1.0f;
 
-    fvdb::detail::ops::dispatchGaussianMCMCAddNoise<torch::kCUDA>(
+    fvdb::detail::ops::addNoiseToGaussianMeans(
         means, logScales, logitOpacities, quats, noiseScale, 0.005, 100.0);
 
     // Gate approaches zero when opacity ~1; expect negligible movement.
@@ -132,7 +132,7 @@ TEST_F(GaussianMCMCAddNoiseTest, ZeroNoiseScaleNoOp) {
         {{1.0f, 0.0f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f, 0.0f}},
         floatOpts());
 
-    fvdb::detail::ops::dispatchGaussianMCMCAddNoise<torch::kCUDA>(
+    fvdb::detail::ops::addNoiseToGaussianMeans(
         means, logScales, logitOpacities, quats, /*noiseScale=*/0.0f, 0.005, 100.0);
 
     EXPECT_TRUE(torch::allclose(means, origMeans));
@@ -145,7 +145,7 @@ TEST_F(GaussianMCMCAddNoiseTest, CpuNotImplemented) {
     const auto quats =
         torch::tensor({{1.0f, 0.0f, 0.0f, 0.0f}}, fvdb::test::tensorOpts<float>(torch::kCPU));
 
-    EXPECT_THROW((fvdb::detail::ops::dispatchGaussianMCMCAddNoise<torch::kCPU>(
+    EXPECT_THROW((fvdb::detail::ops::addNoiseToGaussianMeans(
                      means, logScales, logitOpacities, quats, 1.0f, 0.005, 100)),
                  c10::Error);
 }

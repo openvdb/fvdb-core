@@ -4,14 +4,14 @@
 #ifndef FVDB_DETAIL_OPS_IJKTOINDEX_H
 #define FVDB_DETAIL_OPS_IJKTOINDEX_H
 
+#include <fvdb/GridBatchData.h>
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/GridBatchImpl.h>
 
 namespace fvdb {
 namespace detail {
 namespace ops {
 
-JaggedTensor ijkToIndex(const GridBatchImpl &batchHdl, const JaggedTensor &ijk, bool cumulative);
+JaggedTensor ijkToIndex(const GridBatchData &batchHdl, const JaggedTensor &ijk, bool cumulative);
 
 } // namespace ops
 } // namespace detail

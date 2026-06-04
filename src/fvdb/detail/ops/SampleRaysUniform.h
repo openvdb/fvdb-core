@@ -4,8 +4,8 @@
 #ifndef FVDB_DETAIL_OPS_SAMPLERAYSUNIFORM_H
 #define FVDB_DETAIL_OPS_SAMPLERAYSUNIFORM_H
 
+#include <fvdb/GridBatchData.h>
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/GridBatchImpl.h>
 
 #include <torch/types.h>
 
@@ -13,7 +13,7 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-JaggedTensor uniformRaySamples(const GridBatchImpl &batchHdl,
+JaggedTensor uniformRaySamples(const GridBatchData &batchHdl,
                                const JaggedTensor &rayO,
                                const JaggedTensor &rayD,
                                const JaggedTensor &tMin,

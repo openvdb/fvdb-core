@@ -19,7 +19,15 @@ namespace ops {
 
 namespace {
 
-template <typename scalar_t, template <typename T, int32_t D> typename TensorAccessor>
+// Maximum number of channels supported by the backward kernel. Bounded so we can
+// allocate on-stack scratch arrays inside the device callback without dynamic
+// allocation. Bump if a use case legitimately needs more channels.
+constexpr int MAX_VOLUME_RENDER_CHANNELS = 16;
+
+template <bool NeedsBackward,
+          typename scalar_t,
+          template <typename T, int32_t D>
+          typename TensorAccessor>
 __hostdev__ void
 volumeRenderFwdCallback(const TensorAccessor<scalar_t, 1> sigmas,
                         const TensorAccessor<scalar_t, 2> rgbs,
@@ -37,6 +45,22 @@ volumeRenderFwdCallback(const TensorAccessor<scalar_t, 1> sigmas,
     const JOffsetsType sampleStartIdx = jOffsets[rayIdx];
     const JOffsetsType numRaySamples  = jOffsets[rayIdx + 1] - sampleStartIdx;
 
+    // Per-ray accumulators. Kept thread-local (and, for accRgb, ideally
+    // register-resident) so the inner loop does not perform a global-memory
+    // read-modify-write on outRGB / outDepth / outOpacity for every sample.
+    // The final accumulator values are written unconditionally once per ray,
+    // so the host allocates outRGB / outOpacity (and outDepth on the backward
+    // path) with torch::empty -- no host-side zero fill is required. outWs is
+    // the sole exception: the host zero-fills it on the backward path so the
+    // prefix scan can safely read the early-termination tail.
+    scalar_t accRgb[MAX_VOLUME_RENDER_CHANNELS];
+#pragma unroll
+    for (int c = 0; c < MAX_VOLUME_RENDER_CHANNELS; ++c) {
+        accRgb[c] = static_cast<scalar_t>(0.0);
+    }
+    scalar_t accDepth   = static_cast<scalar_t>(0.0);
+    scalar_t accOpacity = static_cast<scalar_t>(0.0);
+
     // front to back compositing
     JOffsetsType numSamples = 0;
     scalar_t T              = static_cast<scalar_t>(1.0);
@@ -47,23 +71,40 @@ volumeRenderFwdCallback(const TensorAccessor<scalar_t, 1> sigmas,
             static_cast<scalar_t>(1.0) - c10::cuda::compat::exp(-sigmas[s] * deltas[s]);
         const scalar_t w = a * T; // weight of the sample point
 
+#pragma unroll MAX_VOLUME_RENDER_CHANNELS
         // Forward pass works for arbitrary number of channels
         for (int c = 0; c < numChannels; ++c) {
-            outRGB[rayIdx][c] += w * rgbs[s][c];
+            accRgb[c] += w * rgbs[s][c];
         }
-        outDepth[rayIdx] += w * ts[s];
-        // outDepthSq[rayIdx] += w*ts[s]*ts[s];
-        outOpacity[rayIdx] += w;
-        outWs[s] = w;
+        accDepth += w * ts[s];
+        // accDepthSq += w*ts[s]*ts[s];
+        accOpacity += w;
+        // Per-sample weight is only consumed by the backward pass; skip the
+        // global store entirely on the inference path (by far the largest
+        // memory-traffic savings when backward is not needed).
+        if constexpr (NeedsBackward) {
+            outWs[s] = w;
+        }
         T *= static_cast<scalar_t>(1.0) - a;
+        numSamples += 1;
 
         // ray has enough opacity
         if (T <= tsmtThreshold) {
             break;
         }
-        numSamples += 1;
     }
-    outTotalSamples[rayIdx] = numSamples;
+
+    for (int c = 0; c < numChannels; ++c) {
+        outRGB[rayIdx][c] = accRgb[c];
+    }
+    outOpacity[rayIdx] = accOpacity;
+    // outDepth and outTotalSamples are only read by the backward pass, so on
+    // the inference path we skip the per-ray store and leave the outputs as
+    // size-0 placeholders allocated by the host.
+    if constexpr (NeedsBackward) {
+        outDepth[rayIdx]        = accDepth;
+        outTotalSamples[rayIdx] = numSamples;
+    }
 }
 
 template <torch::DeviceType device,
@@ -91,14 +132,30 @@ volumeRenderBwdCallback(const TensorAccessor<scalar_t, 1> dLdOpacity,     // [B*
 
     const JOffsetsType sampleStartIdx = jOffsets[rayIdx];
     const JOffsetsType numRaySamples  = jOffsets[rayIdx + 1] - sampleStartIdx;
+    const int32_t numChannels         = rgbs.size(1);
+
+    // Empty ray: nothing to scan or accumulate. Leave out_dL_dsigmas and
+    // out_dLdRgbs at their zero-initialized values and skip the prefix scan
+    // (which would otherwise OOB-read dLdWs_times_ws[sampleStartIdx - 1]).
+    if (numRaySamples == 0) {
+        return;
+    }
 
     // front to back compositing
     JOffsetsType numSamples = 0;
-    scalar_t R = rgb[rayIdx][0], G = rgb[rayIdx][1], B = rgb[rayIdx][2];
+    // Per-channel final integrated radiance (from fwd pass) and running partial
+    // accumulator. Bounded stack storage; host checks numChannels against
+    // MAX_VOLUME_RENDER_CHANNELS before launching so overflow is impossible.
+    scalar_t finalRgb[MAX_VOLUME_RENDER_CHANNELS];
+    scalar_t partialRgb[MAX_VOLUME_RENDER_CHANNELS];
+    for (int c = 0; c < numChannels; ++c) {
+        finalRgb[c]   = rgb[rayIdx][c];
+        partialRgb[c] = static_cast<scalar_t>(0.0);
+    }
+
     scalar_t O = opacity[rayIdx], D = depth[rayIdx]; //, Dsq = depthSq[rayIdx];
-    scalar_t T = static_cast<scalar_t>(1.0), r = static_cast<scalar_t>(0.0),
-             g = static_cast<scalar_t>(0.0), b = static_cast<scalar_t>(0.0),
-             d = static_cast<scalar_t>(0.0);         //, dsq = static_cast<scalar_t>(0.0);
+    scalar_t T = static_cast<scalar_t>(1.0);
+    scalar_t d = static_cast<scalar_t>(0.0);         //, dsq = static_cast<scalar_t>(0.0);
     // compute prefix sum of dLdWs * ws
     // [a0, a1, a2, a3, ...] -> [a0, a0+a1, a0+a1+a2, a0+a1+a2+a3, ...]
     if constexpr (device == torch::kCUDA) {
@@ -120,23 +177,23 @@ volumeRenderBwdCallback(const TensorAccessor<scalar_t, 1> dLdOpacity,     // [B*
             static_cast<scalar_t>(1.0) - c10::cuda::compat::exp(-sigmas[s] * deltas[s]);
         const scalar_t w = a * T;
 
-        r += w * rgbs[s][0];
-        g += w * rgbs[s][1];
-        b += w * rgbs[s][2];
+        for (int c = 0; c < numChannels; ++c) {
+            partialRgb[c] += w * rgbs[s][c];
+        }
         d += w * ts[s]; // dsq += w*ts[s]*ts[s];
         T *= static_cast<scalar_t>(1.0) - a;
 
         // compute gradients by math...
-        out_dLdRgbs[s][0] = dLdRgb[rayIdx][0] * w;
-        out_dLdRgbs[s][1] = dLdRgb[rayIdx][1] * w;
-        out_dLdRgbs[s][2] = dLdRgb[rayIdx][2] * w;
+        scalar_t rgbGradSum = static_cast<scalar_t>(0.0);
+        for (int c = 0; c < numChannels; ++c) {
+            out_dLdRgbs[s][c] = dLdRgb[rayIdx][c] * w;
+            rgbGradSum += dLdRgb[rayIdx][c] * (rgbs[s][c] * T - (finalRgb[c] - partialRgb[c]));
+        }
 
         out_dL_dsigmas[s] =
-            deltas[s] * (dLdRgb[rayIdx][0] * (rgbs[s][0] * T - (R - r)) +
-                         dLdRgb[rayIdx][1] * (rgbs[s][1] * T - (G - g)) +
-                         dLdRgb[rayIdx][2] * (rgbs[s][2] * T - (B - b)) + // gradients from rgb
-                         dLdOpacity[rayIdx] * (1 - O) +                   // gradient from opacity
-                         dLdDepth[rayIdx] * (ts[s] * T - (D - d)) +       // gradient from depth
+            deltas[s] * (rgbGradSum +                               // gradients from rgb
+                         dLdOpacity[rayIdx] * (1 - O) +             // gradient from opacity
+                         dLdDepth[rayIdx] * (ts[s] * T - (D - d)) + // gradient from depth
                          // dLdDepthSq[rayIdx]*(ts[s]*ts[s]*T-(Dsq-dsq)) +
                          T * dLdWs[s] - (dLdWs_times_ws_sum - dLdWs_times_ws[s]) // gradient from ws
                         );
@@ -147,7 +204,7 @@ volumeRenderBwdCallback(const TensorAccessor<scalar_t, 1> dLdOpacity,     // [B*
     }
 }
 
-template <typename scalar_t>
+template <bool NeedsBackward, typename scalar_t>
 void
 volumeRenderCPU(const TorchAcc<scalar_t, 1> sigmas,       // [B*R*S]
                 const TorchAcc<scalar_t, 2> rgbs,         // [B*R*S, C]
@@ -164,19 +221,19 @@ volumeRenderCPU(const TorchAcc<scalar_t, 1> sigmas,       // [B*R*S]
     const int numChannels = rgbs.size(1);
 
     for (int rayIdx = 0; rayIdx < (jOffsets.size(0) - 1); rayIdx += 1) {
-        volumeRenderFwdCallback<scalar_t, TorchAcc>(sigmas,
-                                                    rgbs,
-                                                    deltas,
-                                                    ts,
-                                                    jOffsets,
-                                                    tsmtThreshold,
-                                                    numChannels,
-                                                    rayIdx,
-                                                    outTotalSamples,
-                                                    outOpacity,
-                                                    outDepth,
-                                                    outRGB,
-                                                    outWs);
+        volumeRenderFwdCallback<NeedsBackward, scalar_t, TorchAcc>(sigmas,
+                                                                   rgbs,
+                                                                   deltas,
+                                                                   ts,
+                                                                   jOffsets,
+                                                                   tsmtThreshold,
+                                                                   numChannels,
+                                                                   rayIdx,
+                                                                   outTotalSamples,
+                                                                   outOpacity,
+                                                                   outDepth,
+                                                                   outRGB,
+                                                                   outWs);
     }
 }
 
@@ -220,7 +277,7 @@ volumeRenderBackwardCPU(const TorchAcc<scalar_t, 1> dLdOpacity,     // [B*R]
     }
 }
 
-template <typename scalar_t>
+template <bool NeedsBackward, typename scalar_t>
 __global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
 volumeRender(const TorchRAcc64<scalar_t, 1> sigmas,
              const TorchRAcc64<scalar_t, 2> rgbs,
@@ -238,19 +295,19 @@ volumeRender(const TorchRAcc64<scalar_t, 1> sigmas,
         return;
     }
     const int numChannels = rgbs.size(1);
-    volumeRenderFwdCallback<scalar_t, TorchRAcc64>(sigmas,
-                                                   rgbs,
-                                                   deltas,
-                                                   ts,
-                                                   jOffsets,
-                                                   tsmtThreshold,
-                                                   numChannels,
-                                                   rayIdx,
-                                                   outTotalSamples,
-                                                   outOpacity,
-                                                   outDepth,
-                                                   outRGB,
-                                                   outWs);
+    volumeRenderFwdCallback<NeedsBackward, scalar_t, TorchRAcc64>(sigmas,
+                                                                  rgbs,
+                                                                  deltas,
+                                                                  ts,
+                                                                  jOffsets,
+                                                                  tsmtThreshold,
+                                                                  numChannels,
+                                                                  rayIdx,
+                                                                  outTotalSamples,
+                                                                  outOpacity,
+                                                                  outDepth,
+                                                                  outRGB,
+                                                                  outWs);
 }
 
 template <typename scalar_t>
@@ -305,7 +362,8 @@ void dispatchVolumeRender(const torch::Tensor sigmas,
                           torch::Tensor &outDepth,
                           torch::Tensor &outRgb,
                           torch::Tensor &outWs,
-                          torch::Tensor &outTotalSamples);
+                          torch::Tensor &outTotalSamples,
+                          bool needsBackward);
 
 template <torch::DeviceType DeviceTag>
 void dispatchVolumeRenderBackward(const torch::Tensor dLdOpacity,
@@ -328,17 +386,18 @@ void dispatchVolumeRenderBackward(const torch::Tensor dLdOpacity,
 template <>
 void
 dispatchVolumeRender<torch::kCUDA>(
-    const torch::Tensor sigmas,       // [B*R*S]
-    const torch::Tensor rgbs,         // [B*R*S, C]
-    const torch::Tensor deltas,       // [B*R*S]
-    const torch::Tensor ts,           // [B*R*S]
-    const torch::Tensor jOffsets,     // JaggedTensor joffsets for sigmas, rgbs, deltas, ts [B*R, 2]
+    const torch::Tensor sigmas,     // [B*R*S]
+    const torch::Tensor rgbs,       // [B*R*S, C]
+    const torch::Tensor deltas,     // [B*R*S]
+    const torch::Tensor ts,         // [B*R*S]
+    const torch::Tensor jOffsets,   // JaggedTensor joffsets for sigmas, rgbs, deltas, ts [B*R, 2]
     const float tsmtThreshold,
-    torch::Tensor &outOpacity,        // [B*R]
-    torch::Tensor &outDepth,          // [B*R]
-    torch::Tensor &outRgb,            // [B*R, C]
-    torch::Tensor &outWs,             // [B*R*S]
-    torch::Tensor &outTotalSamples) { // [B*R]
+    torch::Tensor &outOpacity,      // [B*R]
+    torch::Tensor &outDepth,        // [B*R]            (size-0 if !needsBackward)
+    torch::Tensor &outRgb,          // [B*R, C]
+    torch::Tensor &outWs,           // [B*R*S]          (size-0 if !needsBackward)
+    torch::Tensor &outTotalSamples, // [B*R]            (size-0 if !needsBackward)
+    bool needsBackward) {
     const int64_t numRays = jOffsets.size(0) - 1;
     const int64_t N       = sigmas.size(0);
 
@@ -356,14 +415,7 @@ dispatchVolumeRender<torch::kCUDA>(
                 "All tensors must be on the same device");
 
     c10::cuda::CUDAGuard deviceGuard(sigmas.device());
-
-    // auto opacity = torch::zeros({numRays}, sigmas.options());
-    // auto depth = torch::zeros({numRays}, sigmas.options());
-    // auto depthSq = torch::zeros({numRays}, sigmas.options());
-    // auto rgb = torch::zeros({numRays, 3}, sigmas.options());
-    // auto ws = torch::zeros({N}, sigmas.options());
-    // auto total_samples = torch::zeros({numRays},
-    // torch::dtype(torch::kLong).device(sigmas.device()));
+    cudaStream_t stream = c10::cuda::getCurrentCUDAStream(sigmas.device().index()).stream();
 
     const int64_t NUM_BLOCKS = GET_BLOCKS(numRays, DEFAULT_BLOCK_DIM);
 
@@ -371,25 +423,31 @@ dispatchVolumeRender<torch::kCUDA>(
         sigmas.scalar_type(),
         "volumeRender",
         AT_WRAP([&] {
-            volumeRender<scalar_t><<<NUM_BLOCKS, DEFAULT_BLOCK_DIM>>>(
-                sigmas.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>(),
-                rgbs.packed_accessor64<scalar_t, 2, torch::RestrictPtrTraits>(),
-                deltas.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>(),
-                ts.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>(),
-                jOffsets.packed_accessor64<JOffsetsType, 1, torch::RestrictPtrTraits>(),
-                tsmtThreshold,
-                outTotalSamples.packed_accessor64<int64_t, 1, torch::RestrictPtrTraits>(),
-                outOpacity.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>(),
-                outDepth.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>(),
-                // outDepthSq.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>(),
-                outRgb.packed_accessor64<scalar_t, 2, torch::RestrictPtrTraits>(),
-                outWs.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>());
-            C10_CUDA_KERNEL_LAUNCH_CHECK();
+            auto launch = [&](auto needsBackwardTag) {
+                constexpr bool kNeedsBackward = decltype(needsBackwardTag)::value;
+                volumeRender<kNeedsBackward, scalar_t>
+                    <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
+                        sigmas.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>(),
+                        rgbs.packed_accessor64<scalar_t, 2, torch::RestrictPtrTraits>(),
+                        deltas.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>(),
+                        ts.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>(),
+                        jOffsets.packed_accessor64<JOffsetsType, 1, torch::RestrictPtrTraits>(),
+                        tsmtThreshold,
+                        outTotalSamples.packed_accessor64<int64_t, 1, torch::RestrictPtrTraits>(),
+                        outOpacity.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>(),
+                        outDepth.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>(),
+                        outRgb.packed_accessor64<scalar_t, 2, torch::RestrictPtrTraits>(),
+                        outWs.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>());
+                C10_CUDA_KERNEL_LAUNCH_CHECK();
+            };
+            if (needsBackward) {
+                launch(std::true_type{});
+            } else {
+                launch(std::false_type{});
+            }
         }),
         AT_EXPAND(AT_FLOATING_TYPES),
         c10::kHalf);
-
-    // return {total_samples, opacity, depth, depthSq, rgb, ws};
 }
 
 template <>
@@ -431,6 +489,7 @@ dispatchVolumeRenderBackward<torch::kCUDA>(const torch::Tensor dLdOpacity,
                 "All tensors must be on the same device");
 
     c10::cuda::CUDAGuard deviceGuard(dLdOpacity.device());
+    cudaStream_t stream = c10::cuda::getCurrentCUDAStream(dLdOpacity.device().index()).stream();
 
     const int64_t N       = sigmas.size(0);
     const int64_t numRays = jOffsets.size(0) - 1;
@@ -446,7 +505,7 @@ dispatchVolumeRenderBackward<torch::kCUDA>(const torch::Tensor dLdOpacity,
         sigmas.scalar_type(),
         "volumeRenderBackward",
         AT_WRAP([&] {
-            volumeRenderBackward<scalar_t><<<NUM_BLOCKS, DEFAULT_BLOCK_DIM>>>(
+            volumeRenderBackward<scalar_t><<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
                 dLdOpacity.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>(),
                 dLdDepth.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>(),
                 // dLdDepthSq.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>(),
@@ -485,21 +544,31 @@ dispatchVolumeRender<torch::kCPU>(const torch::Tensor sigmas,
                                   torch::Tensor &outDepth,
                                   torch::Tensor &outRgb,
                                   torch::Tensor &outWs,
-                                  torch::Tensor &outTotalSamples) {
+                                  torch::Tensor &outTotalSamples,
+                                  bool needsBackward) {
     AT_DISPATCH_V2(sigmas.scalar_type(),
                    "volumeRender",
                    AT_WRAP([&] {
-                       volumeRenderCPU<scalar_t>(sigmas.accessor<scalar_t, 1>(),
-                                                 rgbs.accessor<scalar_t, 2>(),
-                                                 deltas.accessor<scalar_t, 1>(),
-                                                 ts.accessor<scalar_t, 1>(),
-                                                 jOffsets.accessor<JOffsetsType, 1>(),
-                                                 tsmtThreshold,
-                                                 outTotalSamples.accessor<int64_t, 1>(),
-                                                 outOpacity.accessor<scalar_t, 1>(),
-                                                 outDepth.accessor<scalar_t, 1>(),
-                                                 outRgb.accessor<scalar_t, 2>(),
-                                                 outWs.accessor<scalar_t, 1>());
+                       auto run = [&](auto needsBackwardTag) {
+                           constexpr bool kNeedsBackward = decltype(needsBackwardTag)::value;
+                           volumeRenderCPU<kNeedsBackward, scalar_t>(
+                               sigmas.accessor<scalar_t, 1>(),
+                               rgbs.accessor<scalar_t, 2>(),
+                               deltas.accessor<scalar_t, 1>(),
+                               ts.accessor<scalar_t, 1>(),
+                               jOffsets.accessor<JOffsetsType, 1>(),
+                               tsmtThreshold,
+                               outTotalSamples.accessor<int64_t, 1>(),
+                               outOpacity.accessor<scalar_t, 1>(),
+                               outDepth.accessor<scalar_t, 1>(),
+                               outRgb.accessor<scalar_t, 2>(),
+                               outWs.accessor<scalar_t, 1>());
+                       };
+                       if (needsBackward) {
+                           run(std::true_type{});
+                       } else {
+                           run(std::false_type{});
+                       }
                    }),
                    AT_EXPAND(AT_FLOATING_TYPES),
                    c10::kHalf);
@@ -557,13 +626,20 @@ volumeRender(const torch::Tensor &sigmas,
              const torch::Tensor &deltaTs,
              const torch::Tensor &ts,
              const torch::Tensor &jOffsets,
-             double tsmtThreshold) {
+             double tsmtThreshold,
+             bool needsBackward) {
     const int64_t numRays = jOffsets.size(0) - 1;
     const int64_t N       = sigmas.size(0);
 
     TORCH_CHECK(jOffsets.dim() == 1, "jOffsets must have shape (nRays+1,)");
     TORCH_CHECK(sigmas.dim() == 1, "sigmas must have shape (nRays*nSamplesPerRay,)");
-    TORCH_CHECK(rgbs.dim() == 2, "rgbs must have shape (nRays*nSamplesPerRay, 3)");
+    TORCH_CHECK(rgbs.dim() == 2, "rgbs must have shape (nRays*nSamplesPerRay, numChannels)");
+    TORCH_CHECK(rgbs.size(1) > 0 && rgbs.size(1) <= MAX_VOLUME_RENDER_CHANNELS,
+                "rgbs must have between 1 and ",
+                MAX_VOLUME_RENDER_CHANNELS,
+                " channels (got ",
+                rgbs.size(1),
+                ")");
     TORCH_CHECK(deltaTs.dim() == 1, "deltaTs must have shape (nRays*nSamplesPerRay,)");
     TORCH_CHECK(ts.dim() == 1, "ts must have shape (N,)");
 
@@ -588,12 +664,32 @@ volumeRender(const torch::Tensor &sigmas,
     TORCH_CHECK(sigmas.size(0) == ts.size(0),
                 "sigmas and ts must have the same number of elements");
 
-    torch::Tensor outOpacity = torch::zeros({numRays}, sigmas.options());
-    torch::Tensor outDepth   = torch::zeros({numRays}, sigmas.options());
-    torch::Tensor outRgb     = torch::zeros({numRays, 3}, sigmas.options());
-    torch::Tensor outWs      = torch::zeros({N}, sigmas.options());
-    torch::Tensor outTotalSamples =
-        torch::zeros({numRays}, torch::dtype(torch::kLong).device(sigmas.device()));
+    // outOpacity and outRgb are written once per ray unconditionally inside
+    // the kernel, so torch::empty is safe.
+    torch::Tensor outOpacity = torch::empty({numRays}, sigmas.options());
+    torch::Tensor outRgb     = torch::empty({numRays, rgbs.size(1)}, sigmas.options());
+
+    // outWs, outDepth, outTotalSamples are only consumed by the backward pass.
+    // When needsBackward is false we allocate size-0 placeholders so the dispatch
+    // layer can still create valid tensor accessors (dtype/device match the
+    // kernel specialization) without paying the global-memory allocation cost.
+    torch::Tensor outWs;
+    torch::Tensor outDepth;
+    torch::Tensor outTotalSamples;
+    if (needsBackward) {
+        // outWs must be zero-filled: backward's thrust::inclusive_scan reads all
+        // `numRaySamples` entries per ray, but the kernel's early-termination can
+        // leave a tail of entries unwritten.
+        outWs = torch::zeros({N}, sigmas.options());
+        // outDepth / outTotalSamples are written unconditionally per ray, so torch::empty is safe.
+        outDepth = torch::empty({numRays}, sigmas.options());
+        outTotalSamples =
+            torch::empty({numRays}, torch::dtype(torch::kLong).device(sigmas.device()));
+    } else {
+        outWs           = torch::empty({0}, sigmas.options());
+        outDepth        = torch::empty({0}, sigmas.options());
+        outTotalSamples = torch::empty({0}, torch::dtype(torch::kLong).device(sigmas.device()));
+    }
 
     FVDB_DISPATCH_KERNEL_DEVICE(sigmas.device(), [&]() {
         dispatchVolumeRender<DeviceTag>(sigmas,
@@ -606,7 +702,8 @@ volumeRender(const torch::Tensor &sigmas,
                                         outDepth,
                                         outRgb,
                                         outWs,
-                                        outTotalSamples);
+                                        outTotalSamples,
+                                        needsBackward);
     });
 
     return {outRgb, outDepth, outOpacity, outWs, outTotalSamples};
@@ -629,8 +726,41 @@ volumeRenderBackward(const torch::Tensor &dLdOpacity,
                      float tsmtThreshold) {
     const int64_t N = sigmas.size(0);
 
+    TORCH_CHECK(rgbs.dim() == 2,
+                "rgbs must be a 2D tensor of shape (N, C), but got a ",
+                rgbs.dim(),
+                "D tensor.");
+    TORCH_CHECK(dLdRgb.dim() == 2,
+                "dLdRgb must be a 2D tensor of shape (numRays, C), but got a ",
+                dLdRgb.dim(),
+                "D tensor.");
+    TORCH_CHECK(rgb.dim() == 2,
+                "rgb must be a 2D tensor of shape (numRays, C), but got a ",
+                rgb.dim(),
+                "D tensor.");
+    TORCH_CHECK(
+        rgbs.size(1) > 0, "rgbs must have at least one channel, but got ", rgbs.size(1), ".");
+    TORCH_CHECK(rgbs.size(1) <= MAX_VOLUME_RENDER_CHANNELS,
+                "Volume rendering backward supports at most ",
+                MAX_VOLUME_RENDER_CHANNELS,
+                " channels, but got ",
+                rgbs.size(1),
+                ".");
+    TORCH_CHECK(dLdRgb.size(1) == rgbs.size(1),
+                "dLdRgb and rgbs must have the same channel dimension, but got ",
+                dLdRgb.size(1),
+                " and ",
+                rgbs.size(1),
+                ".");
+    TORCH_CHECK(rgb.size(1) == rgbs.size(1),
+                "rgb and rgbs must have the same channel dimension, but got ",
+                rgb.size(1),
+                " and ",
+                rgbs.size(1),
+                ".");
+
     torch::Tensor dLdSigmas = torch::zeros({N}, sigmas.options());
-    torch::Tensor dLdRgbs   = torch::zeros({N, 3}, sigmas.options());
+    torch::Tensor dLdRgbs   = torch::zeros({N, rgbs.size(1)}, sigmas.options());
 
     FVDB_DISPATCH_KERNEL_DEVICE(sigmas.device(), [&]() {
         dispatchVolumeRenderBackward<DeviceTag>(dLdOpacity,

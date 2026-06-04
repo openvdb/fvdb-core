@@ -14,7 +14,7 @@ from fvdb.utils.tests import (
 from parameterized import parameterized, parameterized_class
 
 import fvdb
-from fvdb import Grid, GridBatch, JaggedTensor, volume_render
+from fvdb import GridBatch, JaggedTensor, volume_render
 
 all_device_combos = [
     ["cpu", True],
@@ -192,54 +192,64 @@ class TestSingleGridRayMarchingWithMisses(unittest.TestCase):
         # These are defined in the @parameterized_class decorator
         self.device = self.device
         self.dtype = self.dtype
-        self.grid = Grid.from_dense(
-            dense_dims=[32, 32, 32], device=self.device, voxel_size=[0.1, 0.1, 0.1], origin=[0, 0, 0]
+        self.grid = GridBatch.from_dense(
+            num_grids=1, dense_dims=[32, 32, 32], device=self.device, voxel_sizes=[0.1, 0.1, 0.1], origins=[0, 0, 0]
         )
 
         ray_o = torch.tensor([[100, 0, 0]]).to(self.device).to(self.dtype)
         ray_d_hit = torch.tensor([[-1, 0, 0]]).to(self.device).to(self.dtype)  # towards the grid
         ray_d_nohit = torch.tensor([[1, 0, 0]]).to(self.device).to(self.dtype)  # away from the grid
 
-        self.ray_o = ray_o.repeat(10, 1)  # shape [10, 3]
-        self.ray_d_interleave = torch.cat([ray_d_hit, ray_d_nohit], dim=0).repeat(5, 1)  # shape [10, 3]
-        self.ray_d_alternate = torch.cat([ray_d_hit.repeat(5, 1), ray_d_nohit.repeat(5, 1)], dim=0)  # shape [10, 3]
+        ray_o_rep = ray_o.repeat(10, 1)  # shape [10, 3]
+        ray_d_interleave = torch.cat([ray_d_hit, ray_d_nohit], dim=0).repeat(5, 1)  # shape [10, 3]
+        ray_d_alternate = torch.cat([ray_d_hit.repeat(5, 1), ray_d_nohit.repeat(5, 1)], dim=0)  # shape [10, 3]
+
+        self.ray_o = fvdb.JaggedTensor([ray_o_rep])
+        self.ray_d_interleave = fvdb.JaggedTensor([ray_d_interleave])
+        self.ray_d_alternate = fvdb.JaggedTensor([ray_d_alternate])
 
     def test_rays_intersect_voxels(self):
         did_hit = self.grid.rays_intersect_voxels(self.ray_o, self.ray_d_interleave, eps=1e-3)
         expected_hits = torch.Tensor([1, 0, 1, 0, 1, 0, 1, 0, 1, 0]).to(torch.bool).to(self.device)
-        self.assertTrue(torch.all(expected_hits == did_hit))
+        self.assertTrue(torch.all(expected_hits == did_hit.jdata))
 
         did_hit = self.grid.rays_intersect_voxels(self.ray_o, self.ray_d_alternate, eps=1e-3)
         expected_hits = torch.Tensor([1, 1, 1, 1, 1, 0, 0, 0, 0, 0]).to(torch.bool).to(self.device)
-        self.assertTrue(torch.all(expected_hits == did_hit))
+        self.assertTrue(torch.all(expected_hits == did_hit.jdata))
 
     def test_voxels_along_rays(self):
         voxels, times = self.grid.voxels_along_rays(self.ray_o, self.ray_d_interleave, 1, eps=1e-3)
         target_lshape = [1, 0, 1, 0, 1, 0, 1, 0, 1, 0]
+        sls = voxels.lshape[0]
+        vls = times.lshape[0]
         for i, expected_isect in enumerate(target_lshape):
-            self.assertEqual(voxels.lshape[i], expected_isect)
-            self.assertEqual(times.lshape[i], expected_isect)
+            self.assertEqual(sls[i], expected_isect)
+            self.assertEqual(vls[i], expected_isect)
 
         voxels, times = self.grid.voxels_along_rays(self.ray_o, self.ray_d_alternate, 1, eps=1e-3)
         target_lshape = [1, 1, 1, 1, 1, 0, 0, 0, 0, 0]
+        sls = voxels.lshape[0]
+        vls = times.lshape[0]
         for i, expected_isect in enumerate(target_lshape):
-            self.assertEqual(voxels.lshape[i], expected_isect)
-            self.assertEqual(times.lshape[i], expected_isect)
+            self.assertEqual(sls[i], expected_isect)
+            self.assertEqual(vls[i], expected_isect)
 
     def test_segments_along_rays(self):
         segments = self.grid.segments_along_rays(self.ray_o, self.ray_d_interleave, 1, eps=1e-3)
         target_lshape = [1, 0, 1, 0, 1, 0, 1, 0, 1, 0]
+        sls = segments.lshape[0]
         for i, expected_isect in enumerate(target_lshape):
-            self.assertEqual(segments.lshape[i], expected_isect)
+            self.assertEqual(sls[i], expected_isect)
 
         segments = self.grid.segments_along_rays(self.ray_o, self.ray_d_alternate, 1, eps=1e-3)
         target_lshape = [1, 1, 1, 1, 1, 0, 0, 0, 0, 0]
+        sls = segments.lshape[0]
         for i, expected_isect in enumerate(target_lshape):
-            self.assertEqual(segments.lshape[i], expected_isect)
+            self.assertEqual(sls[i], expected_isect)
 
     def test_uniform_ray_samples(self):
-        t_min = torch.zeros(self.ray_o.shape[0]).to(self.ray_o)
-        t_max = torch.ones(self.ray_o.shape[0]).to(self.ray_o) * 1e10
+        t_min = fvdb.JaggedTensor([torch.zeros(self.ray_o[0].rshape[0]).to(self.ray_o.jdata)])
+        t_max = fvdb.JaggedTensor([torch.ones(self.ray_o[0].rshape[0]).to(self.ray_o.jdata) * 1e10])
 
         samples = self.grid.uniform_ray_samples(
             self.ray_o,
@@ -253,8 +263,9 @@ class TestSingleGridRayMarchingWithMisses(unittest.TestCase):
             [8, 0, 8, 0, 8, 0, 8, 0, 8, 0] if self.dtype != torch.float16 else [7, 0, 7, 0, 7, 0, 7, 0, 7, 0]
         )
 
+        sls = samples.lshape[0]
         for i, expected_isect in enumerate(target_lshape):
-            self.assertEqual(samples.lshape[i], expected_isect)
+            self.assertEqual(sls[i], expected_isect)
 
         samples = self.grid.uniform_ray_samples(
             self.ray_o,
@@ -268,8 +279,9 @@ class TestSingleGridRayMarchingWithMisses(unittest.TestCase):
             [8, 8, 8, 8, 8, 0, 0, 0, 0, 0] if self.dtype != torch.float16 else [7, 7, 7, 7, 7, 0, 0, 0, 0, 0]
         )
 
+        sls = samples.lshape[0]
         for i, expected_isect in enumerate(target_lshape):
-            self.assertEqual(samples.lshape[i], expected_isect)
+            self.assertEqual(sls[i], expected_isect)
 
 
 @parameterized_class(("device", "dtype"), all_device_dtype_combos)
@@ -283,7 +295,7 @@ class TestVolumeRender(unittest.TestCase):
         vox_origin = torch.rand(3).to(self.device).to(self.dtype)
 
         pts = torch.rand(10000, 3).to(device=self.device, dtype=self.dtype) - 0.5
-        grid = GridBatch.from_points(JaggedTensor(pts), voxel_sizes=vox_size, origins=vox_origin, device=self.device)
+        grid = GridBatch.from_points(JaggedTensor(pts), voxel_sizes=vox_size, origins=vox_origin)
         self.grid = grid.dilated_grid(1)
         self.grid_dual = grid.dual_grid()
 
@@ -426,6 +438,490 @@ class TestVolumeRender(unittest.TestCase):
         # pc.add_scalar_quantity("sigma samples", sigma_samples.detach().squeeze().cpu(), enabled=True)
         # ps.show()
 
+    def test_volume_render_nchannel(self):
+        """
+        volume_render must handle an arbitrary number of channels, not just 3.
+        Run a 4-channel composite and cross-check it against two independent
+        2-channel runs on the same sample topology. Also verifies the backward
+        pass produces consistent gradients across widths.
+        """
+        if self.dtype == torch.float16:
+            self.skipTest("half precision accumulates too much error for the N-channel round trip")
+        t_threshold = 0.001
+        num_channels = 4
+
+        grid_data_rgb = (
+            torch.rand(self.grid_dual.total_voxels, num_channels).to(device=self.device, dtype=self.dtype) * 0.5
+        )
+        grid_data_sigma = torch.rand(self.grid_dual.total_voxels, 1).to(device=self.device, dtype=self.dtype) * 0.5
+        grid_data_rgb.requires_grad = True
+        grid_data_sigma.requires_grad = True
+
+        ray_o, ray_d = self.make_ray_grid((0.0, 0.0, -1.0), 8)
+        tmin = torch.zeros(ray_o.shape[0]).to(ray_o)
+        tmax = torch.ones(ray_o.shape[0]).to(ray_o) * 1e10
+        ray_intervals = self.grid.uniform_ray_samples(
+            JaggedTensor(ray_o), JaggedTensor(ray_d), JaggedTensor(tmin), JaggedTensor(tmax), self.step_size
+        )
+        ray_idx = ray_intervals.jidx.int()
+        ray_joffsets = ray_intervals.joffsets
+        ray_intervals = ray_intervals.jdata
+
+        ray_mid = ray_intervals.mean(1)
+        ray_dt = ray_intervals[:, 1] - ray_intervals[:, 0]
+        ray_pts = ray_o[ray_idx] + ray_mid[:, None] * ray_d[ray_idx]
+
+        rgb_samples_4 = self.grid_dual.sample_trilinear(JaggedTensor(ray_pts), JaggedTensor(grid_data_rgb)).jdata
+        sigma_samples = self.grid_dual.sample_trilinear(JaggedTensor(ray_pts), JaggedTensor(grid_data_sigma)).jdata
+        assert isinstance(rgb_samples_4, torch.Tensor)
+        assert isinstance(sigma_samples, torch.Tensor)
+
+        # 4-channel forward + backward
+        rgb4, depth4, opacity4, ws4, _ = volume_render(
+            sigma_samples.squeeze(), rgb_samples_4, ray_dt, ray_mid, ray_joffsets, t_threshold
+        )
+        self.assertEqual(rgb4.shape, (ray_o.shape[0], num_channels))
+        loss_4 = rgb4.sum() + depth4.sum()
+        loss_4.backward()
+        assert grid_data_rgb.grad is not None
+        assert grid_data_sigma.grad is not None
+        rgb_grad_4 = grid_data_rgb.grad.detach().clone()
+        sigma_grad_4 = grid_data_sigma.grad.detach().clone()
+        grid_data_rgb.grad.zero_()
+        grid_data_sigma.grad.zero_()
+
+        # Two 2-channel forwards + backwards on the same sample topology
+        grid_data_rgb_a = grid_data_rgb[:, 0:2].detach().clone().requires_grad_(True)
+        grid_data_rgb_b = grid_data_rgb[:, 2:4].detach().clone().requires_grad_(True)
+        rgb_samples_a = self.grid_dual.sample_trilinear(JaggedTensor(ray_pts), JaggedTensor(grid_data_rgb_a)).jdata
+        rgb_samples_b = self.grid_dual.sample_trilinear(JaggedTensor(ray_pts), JaggedTensor(grid_data_rgb_b)).jdata
+
+        rgb_a, depth_a, opacity_a, ws_a, _ = volume_render(
+            sigma_samples.squeeze(), rgb_samples_a, ray_dt, ray_mid, ray_joffsets, t_threshold
+        )
+        rgb_b, depth_b, opacity_b, ws_b, _ = volume_render(
+            sigma_samples.squeeze(), rgb_samples_b, ray_dt, ray_mid, ray_joffsets, t_threshold
+        )
+
+        rgb_cat = torch.cat([rgb_a, rgb_b], dim=1)
+        self.assertLess(torch.abs(rgb4 - rgb_cat).max().item(), 1e-4)
+        # Depth/opacity/ws must be channel-agnostic -- same across runs.
+        self.assertLess(torch.abs(depth4 - depth_a).max().item(), 1e-5)
+        self.assertLess(torch.abs(depth_a - depth_b).max().item(), 1e-5)
+        self.assertLess(torch.abs(opacity4 - opacity_a).max().item(), 1e-5)
+        self.assertLess(torch.abs(ws4 - ws_a).max().item(), 1e-5)
+
+        # Backward: loss = rgb.sum() + depth.sum(). For the 4-ch run, depth is counted once.
+        # For the split runs, each contributes a depth term, so add them but subtract one depth.sum()
+        # so the chain rule matches the 4-ch case.
+        (rgb_a.sum() + rgb_b.sum() + depth_a.sum()).backward()
+        assert grid_data_rgb_a.grad is not None
+        assert grid_data_rgb_b.grad is not None
+        assert grid_data_sigma.grad is not None
+        rgb_grad_a = grid_data_rgb_a.grad.detach().clone()
+        rgb_grad_b = grid_data_rgb_b.grad.detach().clone()
+        sigma_grad_split = grid_data_sigma.grad.detach().clone()
+
+        # Reconstructed 4-ch grad from two 2-ch grads
+        rgb_grad_split = torch.cat([rgb_grad_a, rgb_grad_b], dim=1)
+        self.assertLess(torch.abs(rgb_grad_4 - rgb_grad_split).max().item(), 1e-3)
+        self.assertLess(torch.abs(sigma_grad_4 - sigma_grad_split).max().item(), 1e-3)
+
+    def test_volume_render_rejects_too_many_channels(self):
+        """Channels above MAX_VOLUME_RENDER_CHANNELS must be rejected with a clear error."""
+        ray_o, ray_d = self.make_ray_grid((0.0, 0.0, -1.0), 4)
+        tmin = torch.zeros(ray_o.shape[0]).to(ray_o)
+        tmax = torch.ones(ray_o.shape[0]).to(ray_o) * 1e10
+        ray_intervals = self.grid.uniform_ray_samples(
+            JaggedTensor(ray_o), JaggedTensor(ray_d), JaggedTensor(tmin), JaggedTensor(tmax), self.step_size
+        )
+        ray_joffsets = ray_intervals.joffsets
+        ray_intervals_jdata = ray_intervals.jdata
+        N = ray_intervals_jdata.shape[0]
+        if N == 0:
+            self.skipTest("No samples along rays; cannot exercise channel guard")
+        sigma = torch.zeros(N, device=self.device, dtype=self.dtype)
+        dt = (ray_intervals_jdata[:, 1] - ray_intervals_jdata[:, 0]).contiguous()
+        tmid = ray_intervals_jdata.mean(1).contiguous()
+        # 17 > MAX_VOLUME_RENDER_CHANNELS (16)
+        rgbs_too_wide = torch.zeros(N, 17, device=self.device, dtype=self.dtype)
+        with self.assertRaisesRegex(RuntimeError, r"between 1 and .*channels.*17|17.*channels.*between 1 and"):
+            volume_render(sigma, rgbs_too_wide, dt, tmid, ray_joffsets, 0.001)
+
+    def test_volume_render_total_samples_counts_terminating_sample(self):
+        """Regression test for the off-by-one in ``volumeRenderFwdCallback``.
+
+        When the running transmittance ``T`` drops to or below ``tsmtThreshold`` the
+        ray terminates early. The sample that triggered the termination has already
+        been composited into ``outRGB``, ``outDepth``, ``outOpacity`` and ``outWs``,
+        so ``outTotalSamples[rayIdx]`` must include it. A previous version of the
+        kernel incremented ``numSamples`` only *after* the break check, which left
+        the reported total one short of the samples actually written.
+
+        The test constructs a deterministic per-ray sample layout with known
+        sigmas and verifies ``outTotalSamples`` equals the number of entries
+        actually written into ``outWs`` (i.e. the non-zero prefix).
+        """
+        if self.dtype == torch.float16:
+            self.skipTest("half precision is noisy near the transmittance threshold")
+
+        # sigma=20, dt=0.1 -> exp(-sigma*dt) = exp(-2) ~= 0.1353 per sample.
+        # Starting from T=1, after 3 samples T ~= 0.00247 which is below
+        # tsmtThreshold=0.01, so the loop breaks right after compositing sample 2.
+        # Expected outTotalSamples for a high-sigma ray: 3.
+        tsmt_threshold = 0.01
+
+        # Per-ray sample layouts (each ray may have a different number of slots).
+        ray_sizes = [10, 4, 0, 6]
+        sigma_per_ray = [20.0, 0.1, 0.0, 20.0]
+        # Expected tot_samples per ray after the fix:
+        #   ray 0: sigma=20 over 10 slots -> breaks after composite 3 -> tot=3
+        #   ray 1: sigma=0.1 over 4 slots -> T stays near 1, no break -> tot=4
+        #   ray 2: no slots -> tot=0
+        #   ray 3: sigma=20 over 6 slots -> breaks after composite 3 -> tot=3
+        expected_tot = [3, 4, 0, 3]
+
+        joffsets_py = [0]
+        for s in ray_sizes:
+            joffsets_py.append(joffsets_py[-1] + s)
+        joffsets = torch.tensor(joffsets_py, dtype=torch.int64, device=self.device)
+        N = int(joffsets[-1].item())
+
+        sigmas = torch.zeros(N, dtype=self.dtype, device=self.device)
+        for i, s in enumerate(ray_sizes):
+            start = joffsets_py[i]
+            sigmas[start : start + s] = sigma_per_ray[i]
+        dt = torch.full((N,), 0.1, dtype=self.dtype, device=self.device)
+        t = torch.arange(N, dtype=self.dtype, device=self.device) * 0.1
+        # Single-channel rgbs keep the comparisons simple and are enough to
+        # exercise the accumulation path. Mark sigmas as requires_grad so the
+        # Python wrapper takes the backward-aware path and actually materializes
+        # outWs / outTotalSamples (the inference fast path returns size-0
+        # placeholders for those tensors).
+        sigmas.requires_grad_(True)
+        rgbs = torch.ones((N, 1), dtype=self.dtype, device=self.device)
+
+        _, _, opacity, ws, tot_samples = volume_render(sigmas, rgbs, dt, t, joffsets, tsmt_threshold)
+
+        for ray_i in range(len(ray_sizes)):
+            start = joffsets_py[ray_i]
+            end = joffsets_py[ray_i + 1]
+            tot = int(tot_samples[ray_i].item())
+            ws_ray = ws[start:end]
+
+            # The reported total must be in-range and match the analytic expectation.
+            self.assertGreaterEqual(tot, 0)
+            self.assertLessEqual(tot, end - start)
+            self.assertEqual(
+                tot,
+                expected_tot[ray_i],
+                f"Ray {ray_i}: outTotalSamples={tot} but expected {expected_tot[ray_i]}",
+            )
+
+            # Every composited sample has strictly positive weight when sigma > 0
+            # and T > 0, so the reported total must match the number of non-zero
+            # entries in ws (which is zero-initialized at allocation time).
+            nz = int((ws_ray != 0).sum().item())
+            self.assertEqual(
+                tot,
+                nz,
+                f"Ray {ray_i}: outTotalSamples={tot} but ws has {nz} non-zero entries; "
+                "this indicates an off-by-one between outTotalSamples and outWs.",
+            )
+
+            # ws must be a contiguous non-zero prefix of length tot followed by
+            # untouched zeros.
+            if tot > 0:
+                self.assertTrue(
+                    torch.all(ws_ray[:tot] != 0).item(),
+                    f"Ray {ray_i}: ws[:tot] contains a zero entry",
+                )
+            if tot < end - start:
+                self.assertTrue(
+                    torch.all(ws_ray[tot:] == 0).item(),
+                    f"Ray {ray_i}: ws[tot:] contains a non-zero entry (write past tot)",
+                )
+
+            # outOpacity must equal the sum of the composited ws for the ray.
+            # This cross-checks that tot_samples and the accumulators agree.
+            self.assertTrue(
+                torch.isclose(
+                    opacity[ray_i],
+                    ws_ray.sum(),
+                    atol=1e-4 if self.dtype == torch.float32 else 1e-6,
+                ).item(),
+                f"Ray {ray_i}: outOpacity={opacity[ray_i].item()} disagrees with sum(ws)={ws_ray.sum().item()}",
+            )
+
+    def test_volume_render_backward_tolerates_none_grads(self):
+        """Regression test for the None-grad fallback in ``_VolumeRenderFn.backward``.
+
+        ``torch.autograd.Function.backward`` passes ``None`` for any forward
+        output whose gradient does not flow back from the downstream loss
+        (e.g. a loss that only touches ``rgb`` yields ``None`` for
+        ``dL/ddepth``, ``dL/dopacity`` and ``dL/dws``). The C++ backward
+        kernel requires real tensors for all four grad slots, so the Python
+        wrapper must zero-fill any missing grads with a tensor that matches
+        the corresponding forward output's shape / dtype / device.
+
+        This test backpropagates a loss that references only a subset of
+        the four differentiable outputs (exercising the ``None`` fallback
+        for the unused slots) and compares the resulting parameter
+        gradients against a reference loss that couples every output to
+        the loss with a zero multiplier, forcing autograd to pass real
+        zero tensors for every slot. The two gradients must agree: any
+        divergence would indicate a shape / dtype / device mismatch or a
+        missing-grad bug in the Python wrapper.
+        """
+        if self.dtype == torch.float16:
+            self.skipTest("half precision is noisy for gradient comparisons")
+        t_threshold = 0.001
+
+        # Fixture mirrors test_volume_render so we reuse the same trilinear-sampling setup. Base
+        # params are cloned into a fresh leaf tensor on every backward pass so autograd accumulators don't
+        # bleed across cases.
+        grid_data_rgb_base = torch.rand(self.grid_dual.total_voxels, 3, device=self.device, dtype=self.dtype) * 0.5
+        grid_data_sigma_base = torch.rand(self.grid_dual.total_voxels, 1, device=self.device, dtype=self.dtype) * 0.5
+
+        ray_o, ray_d = self.make_ray_grid((0.0, 0.0, -1.0), 8)
+        tmin = torch.zeros(ray_o.shape[0]).to(ray_o)
+        tmax = torch.ones(ray_o.shape[0]).to(ray_o) * 1e10
+        ray_intervals_jagged = self.grid.uniform_ray_samples(
+            JaggedTensor(ray_o), JaggedTensor(ray_d), JaggedTensor(tmin), JaggedTensor(tmax), self.step_size
+        )
+        ray_idx = ray_intervals_jagged.jidx.int()
+        ray_joffsets = ray_intervals_jagged.joffsets
+        ray_intervals = ray_intervals_jagged.jdata
+        ray_mid = ray_intervals.mean(1)
+        ray_dt = ray_intervals[:, 1] - ray_intervals[:, 0]
+        ray_pts = ray_o[ray_idx] + ray_mid[:, None] * ray_d[ray_idx]
+
+        def run_backward(selector):
+            """Run one forward+backward with fresh leaves and return (rgb_grad, sigma_grad)."""
+            rgb_params = grid_data_rgb_base.detach().clone().requires_grad_(True)
+            sigma_params = grid_data_sigma_base.detach().clone().requires_grad_(True)
+
+            rgb_samples = self.grid_dual.sample_trilinear(JaggedTensor(ray_pts), JaggedTensor(rgb_params)).jdata
+            sigma_samples = self.grid_dual.sample_trilinear(JaggedTensor(ray_pts), JaggedTensor(sigma_params)).jdata
+            assert isinstance(sigma_samples, torch.Tensor)
+
+            rgb, depth, opacity, ws, _ = volume_render(
+                sigma_samples.squeeze(), rgb_samples, ray_dt, ray_mid, ray_joffsets, t_threshold
+            )
+            loss = selector(rgb, depth, opacity, ws)
+            loss.backward()
+            assert rgb_params.grad is not None
+            assert sigma_params.grad is not None
+            return rgb_params.grad.detach().clone(), sigma_params.grad.detach().clone()
+
+        # Each case: (name, primary-loss selector, rgb-grad-expected-nonzero).
+        # rgb grads are only non-zero when the loss actually depends on rgb;
+        # depth/opacity/ws losses are rgb-independent (they only depend on
+        # sigmas through the compositing weights), so rgb.grad stays zero.
+        cases = [
+            ("rgb_only", lambda r, d, o, w: r.sum(), True),
+            ("depth_only", lambda r, d, o, w: d.sum(), False),
+            ("opacity_only", lambda r, d, o, w: o.sum(), False),
+            ("ws_only", lambda r, d, o, w: w.sum(), False),
+            ("rgb_and_opacity", lambda r, d, o, w: r.sum() + o.sum(), True),
+            ("rgb_and_ws", lambda r, d, o, w: r.sum() + w.sum(), True),
+        ]
+
+        # These gradient comparisons run through the trilinear-sampling
+        # backward path. On CUDA that path uses atomic adds, so two separate
+        # backward passes are not guaranteed to be near-bitwise-identical
+        # even when they are mathematically equivalent. Keep a strict
+        # tolerance on CPU, but relax it on CUDA to avoid flaky failures
+        # from expected nondeterministic accumulation order.
+        if self.device == "cuda":
+            atol = 5e-4 if self.dtype == torch.float32 else 1e-8
+        else:
+            atol = 1e-5 if self.dtype == torch.float32 else 1e-10
+
+        for name, primary, rgb_nonzero in cases:
+            with self.subTest(case=name):
+                # Reference couples every differentiable output to the loss
+                # with a zero multiplier, so autograd sends real zero
+                # tensors for every grad slot instead of None. Numerically
+                # equivalent to `primary` alone.
+                def reference(r, d, o, w, _p=primary):
+                    return _p(r, d, o, w) + 0.0 * (r.sum() + d.sum() + o.sum() + w.sum())
+
+                rgb_grad_partial, sigma_grad_partial = run_backward(primary)
+                rgb_grad_full, sigma_grad_full = run_backward(reference)
+
+                self.assertLess(
+                    (rgb_grad_partial - rgb_grad_full).abs().max().item(),
+                    atol,
+                    f"case={name}: rgb grads differ between None-fallback and explicit-zero paths",
+                )
+                self.assertLess(
+                    (sigma_grad_partial - sigma_grad_full).abs().max().item(),
+                    atol,
+                    f"case={name}: sigma grads differ between None-fallback and explicit-zero paths",
+                )
+
+                # Sanity: at least sigma must have a non-zero grad for every
+                # case (all four consumed outputs depend on sigmas via the
+                # compositing weights), otherwise we're not actually
+                # exercising the kernel.
+                self.assertGreater(
+                    sigma_grad_partial.abs().max().item(),
+                    0.0,
+                    f"case={name}: sigma grad is entirely zero; test is not exercising the backward kernel",
+                )
+                if rgb_nonzero:
+                    self.assertGreater(
+                        rgb_grad_partial.abs().max().item(),
+                        0.0,
+                        f"case={name}: loss depends on rgb but rgb grad is entirely zero",
+                    )
+
+    def test_volume_render_inference_fast_path(self):
+        """The Python wrapper's inference fast path.
+
+        ``volume_render`` routes through :class:`_VolumeRenderFn` only
+        when autograd is globally enabled **and** ``sigmas`` or ``rgbs``
+        requires grad. In every other case it calls
+        ``_fvdb_cpp.volume_render_fwd`` directly with
+        ``needsBackward=False``, which:
+
+          * skips the per-sample ``ws`` allocation and the dominant
+            global-memory traffic of zero-initializing it on the host,
+          * skips the per-ray ``depth`` / ``totalSamples`` writes,
+          * returns size-0 placeholder tensors for ``depth``, ``ws``,
+            ``total_samples`` (with matching dtype / device), and
+          * leaves the ``rgb`` and ``opacity`` outputs detached from
+            the autograd graph.
+
+        This test pins that contract for all three predicate triggers
+        and cross-checks ``rgb`` / ``opacity`` against the
+        backward-aware path.
+        """
+        t_threshold = 0.001
+
+        # Self-contained synthetic fixture. Per-ray sigmas are chosen
+        # so ray 0 hits early termination (high sigma over many slots),
+        # ray 1 composites every slot (low sigma), ray 2 composites a
+        # mid-density ramp -- exercising the fast path under a mix of
+        # behaviors rather than a single uniform case.
+        ray_sizes = [10, 4, 6]
+        sigma_per_ray = [20.0, 0.1, 1.0]
+        joffsets_py = [0]
+        for s in ray_sizes:
+            joffsets_py.append(joffsets_py[-1] + s)
+        joffsets = torch.tensor(joffsets_py, dtype=torch.int64, device=self.device)
+        N = int(joffsets[-1].item())
+        R = len(ray_sizes)
+        C = 3
+
+        sigmas_data = torch.zeros(N, dtype=self.dtype, device=self.device)
+        for i, s in enumerate(ray_sizes):
+            start = joffsets_py[i]
+            sigmas_data[start : start + s] = sigma_per_ray[i]
+        rgbs_data = torch.linspace(0.1, 0.9, N * C, dtype=self.dtype, device=self.device).reshape(N, C)
+        dt = torch.full((N,), 0.1, dtype=self.dtype, device=self.device)
+        t = torch.arange(N, dtype=self.dtype, device=self.device) * 0.1
+
+        # Reference: backward-aware path with full-shape outputs.
+        sigmas_train = sigmas_data.detach().clone().requires_grad_(True)
+        rgbs_train = rgbs_data.detach().clone().requires_grad_(True)
+        rgb_ref, depth_ref, opacity_ref, ws_ref, tot_ref = volume_render(
+            sigmas_train, rgbs_train, dt, t, joffsets, t_threshold
+        )
+        # Sanity: the reference itself must populate the full outputs,
+        # otherwise our ws/depth/total_samples placeholder assertions
+        # below would be meaningless.
+        self.assertEqual(rgb_ref.shape, (R, C))
+        self.assertEqual(opacity_ref.shape, (R,))
+        self.assertEqual(depth_ref.shape, (R,))
+        self.assertEqual(ws_ref.shape, (N,))
+        self.assertEqual(tot_ref.shape, (R,))
+        self.assertIsNotNone(rgb_ref.grad_fn)
+
+        # rgb / opacity arithmetic is identical between the two paths
+        # (the kernel template only gates the backward-only stores), so
+        # the fast path must match the reference to well within fp
+        # rounding noise. Tolerances mirror the project's standard
+        # dtype_to_atol helper but tightened for fp16
+        atol = 1e-3 if self.dtype == torch.float16 else 1e-5
+
+        def assert_fast_path(case_name, rgb, depth, opacity, ws, tot):
+            # Output shapes: rgb / opacity full, the rest size-0.
+            self.assertEqual(rgb.shape, (R, C), msg=f"case={case_name}: rgb shape")
+            self.assertEqual(opacity.shape, (R,), msg=f"case={case_name}: opacity shape")
+            self.assertEqual(depth.shape, (0,), msg=f"case={case_name}: depth must be size-0 placeholder")
+            self.assertEqual(ws.shape, (0,), msg=f"case={case_name}: ws must be size-0 placeholder")
+            self.assertEqual(tot.shape, (0,), msg=f"case={case_name}: total_samples must be size-0 placeholder")
+
+            # dtype / device of every output (incl. placeholders) must
+            # match the training-path equivalents, so callers that key
+            # off dtype don't accidentally hit a different code path.
+            self.assertEqual(rgb.dtype, rgb_ref.dtype, msg=f"case={case_name}: rgb dtype")
+            self.assertEqual(opacity.dtype, opacity_ref.dtype, msg=f"case={case_name}: opacity dtype")
+            self.assertEqual(depth.dtype, depth_ref.dtype, msg=f"case={case_name}: depth dtype")
+            self.assertEqual(ws.dtype, ws_ref.dtype, msg=f"case={case_name}: ws dtype")
+            self.assertEqual(tot.dtype, tot_ref.dtype, msg=f"case={case_name}: total_samples dtype")
+            self.assertEqual(rgb.device.type, rgb_ref.device.type, msg=f"case={case_name}: rgb device")
+            self.assertEqual(opacity.device.type, opacity_ref.device.type, msg=f"case={case_name}: opacity device")
+            self.assertEqual(depth.device.type, depth_ref.device.type, msg=f"case={case_name}: depth device")
+            self.assertEqual(ws.device.type, ws_ref.device.type, msg=f"case={case_name}: ws device")
+            self.assertEqual(tot.device.type, tot_ref.device.type, msg=f"case={case_name}: total_samples device")
+
+            # The fast path bypasses _VolumeRenderFn entirely, so no
+            # output is in the autograd graph -- even if some input
+            # had requires_grad=True. This is the contract that lets
+            # callers use the fast path inside no-grad regions without
+            # accidentally pulling tensors back onto the tape.
+            self.assertFalse(rgb.requires_grad, msg=f"case={case_name}: rgb must not require grad")
+            self.assertIsNone(rgb.grad_fn, msg=f"case={case_name}: rgb must not have a grad_fn")
+            self.assertFalse(opacity.requires_grad, msg=f"case={case_name}: opacity must not require grad")
+            self.assertIsNone(opacity.grad_fn, msg=f"case={case_name}: opacity must not have a grad_fn")
+
+            # rgb / opacity must match the reference. We detach the
+            # reference because it sits on the autograd graph.
+            self.assertLess(
+                (rgb - rgb_ref.detach()).abs().max().item(),
+                atol,
+                f"case={case_name}: rgb diverges from training path",
+            )
+            self.assertLess(
+                (opacity - opacity_ref.detach()).abs().max().item(),
+                atol,
+                f"case={case_name}: opacity diverges from training path",
+            )
+
+        # Trigger 1: no input requires grad. This is the canonical
+        # pure-inference call site (e.g. a renderer that only consumes
+        # rgb / opacity).
+        with self.subTest(case="no_requires_grad"):
+            outputs = volume_render(sigmas_data, rgbs_data, dt, t, joffsets, t_threshold)
+            assert_fast_path("no_requires_grad", *outputs)
+
+        # Trigger 2: torch.no_grad() short-circuits the predicate
+        # regardless of requires_grad on any input.
+        with self.subTest(case="under_no_grad"):
+            sigmas_g = sigmas_data.detach().clone().requires_grad_(True)
+            rgbs_g = rgbs_data.detach().clone().requires_grad_(True)
+            with torch.no_grad():
+                outputs = volume_render(sigmas_g, rgbs_g, dt, t, joffsets, t_threshold)
+            assert_fast_path("under_no_grad", *outputs)
+
+        # Trigger 3: only delta_ts (or ts) requires grad. Gradients
+        # never flow into those inputs, so the predicate ignores them
+        # and we still take the fast path. This pins the predicate's
+        # tightened contract (sigmas / rgbs are the only differentiable
+        # inputs that select the training path).
+        with self.subTest(case="only_delta_ts_requires_grad"):
+            dt_g = dt.detach().clone().requires_grad_(True)
+            outputs = volume_render(sigmas_data, rgbs_data, dt_g, t, joffsets, t_threshold)
+            assert_fast_path("only_delta_ts_requires_grad", *outputs)
+
+        with self.subTest(case="only_ts_requires_grad"):
+            t_g = t.detach().clone().requires_grad_(True)
+            outputs = volume_render(sigmas_data, rgbs_data, dt, t_g, joffsets, t_threshold)
+            assert_fast_path("only_ts_requires_grad", *outputs)
+
 
 class TestRayMarching(unittest.TestCase):
     def setUp(self):
@@ -519,6 +1015,136 @@ class TestRayMarching(unittest.TestCase):
         self.assertTrue(torch.allclose(nsteps_outside, torch.round(nsteps_outside), atol=dtype_to_atol(dtype)))
 
     @parameterized.expand(all_device_dtype_combos)
+    def test_uniform_ray_samples_cone_tracing_count_matches_generate(self, device, dtype):
+        """Regression test for the floor/ceil mismatch in ``SampleRaysUniform.cu``.
+
+        With ``cone_angle > 0`` and ``include_end_segments=True`` the count and
+        generate callbacks must agree on how ``t0`` is snapped to the first
+        step boundary inside each HDDA segment. Historically the count path used
+        ``floor(distToVox / stepSize)`` while the generate path used ``ceil``,
+        which silently under-allocates the output buffer under cone tracing:
+        since ``stepSize`` depends on ``t0`` when ``cone_angle > 0``, the two
+        callbacks then walk different ``t0`` trajectories and disagree on the
+        number of samples they emit. The generate pass ends up writing one
+        sample past the buffer the count pass allocated, corrupting adjacent
+        rays' slots.
+
+        The test uses a ray that traverses a long 1D contiguous run of voxels
+        with an aggressive cone angle so the per-step ``stepSize`` actually
+        grows inside the segment. The sample count and per-sample boundaries
+        are compared against a Python reference that mirrors the fixed
+        (``ceil``-rounded) algorithm. A pre-fix CUDA/CPU kernel would return
+        one fewer sample than the reference and mismatched boundaries in the
+        tail of the ray.
+        """
+        if dtype == torch.float16:
+            # The half-precision specialisation of ``nanovdb::math::Delta`` is 1e-3,
+            # which reshuffles the boundary-gap decisions. That code path is
+            # orthogonal to the floor/ceil fix we want to cover here, so we
+            # only exercise float32 / float64.
+            self.skipTest("half-precision Delta rearranges the boundary-gap checks")
+
+        import math as _math
+
+        # Long, thin dense grid so the ray sees a single merged HDDA segment
+        # spanning many voxels. Voxel size 1 and origin 0 give a grid whose
+        # axis-aligned bounding box is x in [-0.5, 49.5], y, z in [-0.5, 0.5].
+        grid = GridBatch.from_dense(num_grids=1, dense_dims=[50, 1, 1], device=device)
+
+        # Ray starts outside the grid at x = -5 and travels along +x through
+        # y = z = 0, so it hits every voxel (i, 0, 0) exactly once. The ray
+        # enters the grid at t = 4.5 and exits at t = 54.5.
+        rays_o = torch.tensor([[-5.0, 0.0, 0.0]], dtype=dtype, device=device)
+        rays_d = torch.tensor([[1.0, 0.0, 0.0]], dtype=dtype, device=device)
+        nears = torch.tensor([0.0], dtype=dtype, device=device)
+        fars = torch.tensor([60.0], dtype=dtype, device=device)
+
+        # Cone=0.5 is aggressive enough that ``stepSize = t0 * cone_angle``
+        # overtakes the 1.0 floor after t0 >= 2, so the per-iteration step
+        # really does grow across the while loop. This is the regime where
+        # floor and ceil paths diverge.
+        step_size = 1.0
+        cone_angle = 0.5
+
+        intervals = grid.uniform_ray_samples(
+            JaggedTensor(rays_o),
+            JaggedTensor(rays_d),
+            JaggedTensor(nears),
+            JaggedTensor(fars),
+            step_size,
+            cone_angle=cone_angle,
+            include_end_segments=True,
+        )
+        actual = intervals.jdata.detach().cpu().double().numpy()
+
+        # Reference implementation mirroring ``countSamplesPerRayCallback`` and
+        # ``generateRaySamplesCallback`` for a single HDDA segment
+        # [t_enter, t_exit] with the post-fix ``ceil`` rounding applied in both.
+        t_enter, t_exit = 4.5, 54.5
+        # ``Delta`` for float is small enough that the exact test boundaries
+        # (0.5 and 8.9375 gap widths) are always considered gaps.
+        delta = 1e-6
+
+        def _calc_dt(t: float, cone: float, min_step: float, max_step: float = 1e10) -> float:
+            return max(min_step, min(max_step, t * cone))
+
+        t0 = 0.0
+        step = _calc_dt(t0, cone_angle, step_size)
+        expected: list[tuple[float, float]] = []
+        dist_to_vox = t_enter - t0
+        t0 += _math.ceil(dist_to_vox / step) * step
+        t1 = t0 + step
+        if t0 > t_exit:
+            expected.append((t_enter, t_exit))
+        else:
+            if t0 - t_enter > delta:
+                expected.append((t_enter, t0))
+            while t1 < t_exit:
+                expected.append((t0, t1))
+                t0 = t1
+                step = _calc_dt(t0, cone_angle, step_size)
+                t1 += step
+            if t_exit - t0 > delta:
+                expected.append((t0, t_exit))
+
+        self.assertEqual(
+            actual.shape[0],
+            len(expected),
+            f"Sample count mismatch (device={device}, dtype={dtype}): got {actual.shape[0]}, "
+            f"expected {len(expected)}. Pre-fix code used floor() in the count path and "
+            f"typically returned one fewer sample than the generate path.",
+        )
+
+        # Use a fp32-appropriate tolerance for the cumulative step arithmetic.
+        tol = 1e-3 if dtype == torch.float32 else 1e-6
+        for i, (ref_s, ref_e) in enumerate(expected):
+            self.assertAlmostEqual(
+                float(actual[i, 0]),
+                ref_s,
+                delta=tol,
+                msg=f"t_start mismatch at sample {i} (device={device}, dtype={dtype})",
+            )
+            self.assertAlmostEqual(
+                float(actual[i, 1]),
+                ref_e,
+                delta=tol,
+                msg=f"t_end mismatch at sample {i} (device={device}, dtype={dtype})",
+            )
+
+        # Sanity invariants that must hold regardless of the specific algorithm:
+        # strict monotonicity of t_start, non-degenerate intervals, and that
+        # all samples lie within the grid's HDDA-clipped [t_enter, t_exit].
+        t_starts = intervals.jdata[:, 0].double()
+        t_ends = intervals.jdata[:, 1].double()
+        self.assertTrue(torch.all(t_ends > t_starts).item(), "Found a degenerate interval (t_end <= t_start)")
+        self.assertTrue(
+            torch.all(t_starts[1:] >= t_starts[:-1]).item(),
+            "Sample starts are not monotonically non-decreasing along the ray",
+        )
+        self.assertGreaterEqual(float(t_starts.min().item()), t_enter - tol)
+        self.assertLessEqual(float(t_ends.max().item()), t_exit + tol)
+
+    @parameterized.expand(all_device_dtype_combos)
     def test_segments_along_rays_bug(self, device, dtype):
         data_path = get_fvdb_test_data_path()
         data = torch.load(str(data_path / "ray_marching" / "repro_bug.pth"))
@@ -536,7 +1162,7 @@ class TestRayMarching(unittest.TestCase):
     def test_segments_along_rays_always_sorted(self, device, dtype):
         for eps in [0.0, 1e-5]:
             pts = torch.rand(10000, 3).to(device=device, dtype=dtype)
-            grid = GridBatch.from_points(JaggedTensor(pts), voxel_sizes=0.0001, origins=torch.zeros(3), device=device)
+            grid = GridBatch.from_points(JaggedTensor(pts), voxel_sizes=0.0001, origins=torch.zeros(3))
             grid = grid.dilated_grid(1)
 
             rays_o = -torch.ones(100, 3).to(device).to(dtype)
@@ -560,7 +1186,7 @@ class TestRayMarching(unittest.TestCase):
     def test_segments_along_rays_always_sorted_batched(self, device, dtype):
         for eps in [0.0, 1e-5]:
             pts = JaggedTensor([torch.rand(10000, 3).to(device=device, dtype=dtype)] * 2)
-            grid = GridBatch.from_points(pts, voxel_sizes=0.0001, origins=torch.zeros(3), device=device)
+            grid = GridBatch.from_points(pts, voxel_sizes=0.0001, origins=torch.zeros(3))
             grid = grid.dilated_grid(1)
 
             rays_o = -torch.ones(100, 3).to(device).to(dtype)
@@ -587,7 +1213,7 @@ class TestRayMarching(unittest.TestCase):
     def test_segments_along_rays_batch_size_mismatch_throws(self, device, dtype):
         pts = torch.rand(10000, 3).to(device=device, dtype=dtype)
         # pts = fvdb.JaggedTensor([torch.rand(10000, 3).to(device=device, dtype=dtype)]*2)
-        grid = GridBatch.from_points(JaggedTensor(pts), voxel_sizes=0.0001, origins=torch.zeros(3), device=device)
+        grid = GridBatch.from_points(JaggedTensor(pts), voxel_sizes=0.0001, origins=torch.zeros(3))
         grid = grid.dilated_grid(1)
 
         rays_o = -torch.ones(100, 3).to(device).to(dtype)
@@ -603,7 +1229,7 @@ class TestRayMarching(unittest.TestCase):
     def test_voxels_along_rays_always_sorted(self, device, dtype):
         for i in range(3):
             pts = torch.rand(10000, 3, device=device, dtype=dtype)
-            grid = GridBatch.from_points(JaggedTensor(pts), voxel_sizes=0.01, origins=torch.zeros(3), device=device)
+            grid = GridBatch.from_points(JaggedTensor(pts), voxel_sizes=0.01, origins=torch.zeros(3))
             grid = grid.dilated_grid(1)
 
             rays_o = -torch.ones(100, 3).to(device).to(dtype)
@@ -640,7 +1266,7 @@ class TestRayMarching(unittest.TestCase):
     def test_voxels_along_rays_batch_size_mismatch_throws(self, device, dtype):
         pts = torch.rand(10000, 3, device=device, dtype=dtype)
         # pts = fvdb.JaggedTensor([torch.rand(10000, 3).to(device=device, dtype=dtype)]*2)
-        grid = GridBatch.from_points(JaggedTensor(pts), voxel_sizes=0.0001, origins=torch.zeros(3), device=device)
+        grid = GridBatch.from_points(JaggedTensor(pts), voxel_sizes=0.0001, origins=torch.zeros(3))
         grid = grid.dilated_grid(1)
 
         rays_o = -torch.ones(100, 3, device=device, dtype=dtype)

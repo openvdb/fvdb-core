@@ -24,6 +24,9 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_cutlass.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_nanovdb.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_blosc.cmake)
 
+# zlib is required for NANOVDB_USE_ZIP (reading ZIP-compressed .nvdb files).
+find_package(ZLIB REQUIRED)
+
 # Enable testing at this level so CTest discovers tests from all subdirectories
 enable_testing()
 
@@ -44,38 +47,22 @@ execute_process(
 # Source files
 set(FVDB_CPP_FILES
     fvdb/Config.cpp
-    fvdb/detail/autograd/AvgPoolGrid.cpp
-    fvdb/detail/autograd/EvaluateSphericalHarmonics.cpp
-    fvdb/detail/autograd/Inject.cpp
-    fvdb/detail/autograd/GaussianProjection.cpp
-    fvdb/detail/autograd/GaussianRasterize.cpp
-    fvdb/detail/autograd/GaussianRasterizeFromWorld.cpp
-    fvdb/detail/autograd/GaussianRasterizeSparse.cpp
-    fvdb/detail/autograd/JaggedReduce.cpp
-    fvdb/detail/autograd/MaxPoolGrid.cpp
-    fvdb/detail/autograd/ReadFromDense.cpp
-    fvdb/detail/autograd/ReadIntoDense.cpp
-    fvdb/detail/autograd/SampleGrid.cpp
-    fvdb/detail/autograd/SplatIntoGrid.cpp
-    fvdb/detail/autograd/TransformPoints.cpp
-    fvdb/detail/autograd/UpsampleGrid.cpp
-    fvdb/detail/autograd/VolumeRender.cpp
     fvdb/detail/io/GaussianPlyIO.cpp
     fvdb/detail/io/LoadNanovdb.cpp
-    fvdb/detail/io/SaveNanoVDB.cpp
-    fvdb/detail/ops/gsplat/GaussianUtils.cpp
-    fvdb/detail/TorchDeviceBuffer.cpp
+    fvdb/detail/utils/cuda/Prefetch.cpp
+    fvdb/detail/ops/jagged/JaggedReductions.cpp
+    fvdb/TorchDeviceBuffer.cpp
     fvdb/detail/viewer/GaussianSplat3dView.cpp
     fvdb/detail/viewer/Viewer.cpp
     fvdb/FVDB.cpp
-    fvdb/GaussianSplat3d.cpp
-    fvdb/GridBatch.cpp
     fvdb/JaggedTensor.cpp
 )
 
 set(FVDB_CU_FILES
-    fvdb/detail/GridBatchImpl.cu
-    fvdb/detail/ops/ActiveGridGoords.cu
+    fvdb/GridBatchData.cu
+    fvdb/detail/GridBatchDataFactory.cu
+    fvdb/detail/io/SaveNanoVDB.cu
+    fvdb/detail/ops/ActiveGridCoords.cu
     fvdb/detail/ops/ActiveVoxelsInBoundsMask.cu
     fvdb/detail/ops/BuildCoarseGridFromFine.cu
     fvdb/detail/ops/BuildDenseGrid.cu
@@ -90,40 +77,45 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/BuildMergedGrids.cu
     fvdb/detail/ops/BuildPaddedGrid.cu
     fvdb/detail/ops/BuildPrunedGrid.cu
+    fvdb/detail/ops/ClipGrid.cu
+    fvdb/detail/ops/CloneGrid.cu
+    fvdb/detail/ops/ConcatenateGrids.cu
+    fvdb/detail/ops/IndexGrid.cu
+    fvdb/detail/ops/MakeContiguous.cu
+    fvdb/detail/ops/SerializeGrid.cu
     fvdb/detail/ops/CoarseIjkForFineGrid.cu
     fvdb/detail/ops/convolution/GatherScatterDefault.cu
     fvdb/detail/ops/convolution/PredGatherIGemm.cu
     fvdb/detail/ops/CoordsInGrid.cu
     fvdb/detail/ops/CubesInGrid.cu
-    fvdb/detail/ops/DownsampleGridAvgPool.cu
-    fvdb/detail/ops/DownsampleGridMaxPool.cu
+    fvdb/detail/ops/AvgPool.cu
+    fvdb/detail/ops/MaxPool.cu
     fvdb/detail/ops/GridEdgeNetwork.cu
     fvdb/detail/ops/gsplat/FusedSSIM.cu
-    fvdb/detail/ops/gsplat/GaussianComputeNanInfMask.cu
-    fvdb/detail/ops/gsplat/GaussianMCMCAddNoise.cu
-    fvdb/detail/ops/gsplat/GaussianMCMCRelocation.cu
-    fvdb/detail/ops/gsplat/GaussianProjectionBackward.cu
-    fvdb/detail/ops/gsplat/GaussianProjectionForward.cu
-    fvdb/detail/ops/gsplat/GaussianProjectionUT.cu
-    fvdb/detail/ops/gsplat/GaussianProjectionJaggedBackward.cu
-    fvdb/detail/ops/gsplat/GaussianProjectionJaggedForward.cu
-    fvdb/detail/ops/gsplat/GaussianRasterizeBackward.cu
-    fvdb/detail/ops/gsplat/GaussianRasterizeForward.cu
-    fvdb/detail/ops/gsplat/GaussianRasterizeFromWorldBackward.cu
-    fvdb/detail/ops/gsplat/GaussianRasterizeFromWorldForward.cu
-    fvdb/detail/ops/gsplat/GaussianRasterizeNumContributingGaussians.cu
-    fvdb/detail/ops/gsplat/GaussianRasterizeTopContributingGaussianIds.cu
-    fvdb/detail/ops/gsplat/GaussianRasterizeContributingGaussianIds.cu
-    fvdb/detail/ops/gsplat/GaussianSphericalHarmonicsBackward.cu
-    fvdb/detail/ops/gsplat/GaussianSphericalHarmonicsForward.cu
-    fvdb/detail/ops/gsplat/GaussianSplatSparse.cu
-    fvdb/detail/ops/gsplat/GaussianTileIntersection.cu
+    fvdb/detail/ops/gsplat/ComputeGaussianNanInfMask.cu
+    fvdb/detail/ops/gsplat/AddNoiseToGaussianMeans.cu
+    fvdb/detail/ops/gsplat/RelocateGaussians.cu
+    fvdb/detail/ops/gsplat/ProjectGaussiansAnalyticBackward.cu
+    fvdb/detail/ops/gsplat/ProjectGaussiansAnalyticForward.cu
+    fvdb/detail/ops/gsplat/ProjectGaussiansUnscentedForward.cu
+    fvdb/detail/ops/gsplat/ProjectGaussiansAnalyticJaggedBackward.cu
+    fvdb/detail/ops/gsplat/ProjectGaussiansAnalyticJaggedForward.cu
+    fvdb/detail/ops/gsplat/RasterizeScreenSpaceGaussiansBackward.cu
+    fvdb/detail/ops/gsplat/RasterizeScreenSpaceGaussiansForward.cu
+    fvdb/detail/ops/gsplat/RasterizeWorldSpaceGaussiansBackward.cu
+    fvdb/detail/ops/gsplat/RasterizeWorldSpaceGaussiansForward.cu
+    fvdb/detail/ops/gsplat/CountContributingGaussians.cu
+    fvdb/detail/ops/gsplat/IdentifyTopContributingGaussians.cu
+    fvdb/detail/ops/gsplat/IdentifyContributingGaussians.cu
+    fvdb/detail/ops/gsplat/EvaluateSphericalHarmonicsBackward.cu
+    fvdb/detail/ops/gsplat/EvaluateSphericalHarmonicsForward.cu
+    fvdb/detail/ops/gsplat/BuildSparseGaussianTileLayout.cu
+    fvdb/detail/ops/gsplat/IntersectGaussianTiles.cu
     fvdb/detail/ops/IjkForMesh.cu
     fvdb/detail/ops/IjkToIndex.cu
     fvdb/detail/ops/IjkToInvIndex.cu
     fvdb/detail/ops/Inject.cu
     fvdb/detail/ops/IntegrateTSDF.cu
-    fvdb/detail/ops/jagged/JaggedReduce.cu
     fvdb/detail/ops/jagged/JaggedSort.cu
     fvdb/detail/ops/JaggedTensorIndex.cu
     fvdb/detail/ops/JCat0.cu
@@ -136,23 +128,24 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/PointsInGrid.cu
     fvdb/detail/ops/PopulateGridMetadata.cu
     fvdb/detail/ops/RayImplicitIntersection.cu
-    fvdb/detail/ops/ReadFromDense.cu
-    fvdb/detail/ops/ReadIntoDense.cu
-    fvdb/detail/ops/SampleGridBezier.cu
-    fvdb/detail/ops/SampleGridBezierWithGrad.cu
-    fvdb/detail/ops/SampleGridBezierWithGradBackward.cu
-    fvdb/detail/ops/SampleGridTrilinear.cu
-    fvdb/detail/ops/SampleGridTrilinearWithGrad.cu
-    fvdb/detail/ops/SampleGridTrilinearWithGradBackward.cu
+    fvdb/detail/ops/InjectFromDense.cu
+    fvdb/detail/ops/InjectToDense.cu
+    fvdb/detail/ops/SampleBezier.cu
+    fvdb/detail/ops/SampleBezierWithGrad.cu
+    fvdb/detail/ops/SampleBezierWithGradBackward.cu
+    fvdb/detail/ops/SampleNearest.cu
+    fvdb/detail/ops/SampleTrilinear.cu
+    fvdb/detail/ops/SampleTrilinearWithGrad.cu
+    fvdb/detail/ops/SampleTrilinearWithGradBackward.cu
     fvdb/detail/ops/SampleRaysUniform.cu
     fvdb/detail/ops/SegmentsAlongRays.cu
     fvdb/detail/ops/SerializeEncode.cu
-    fvdb/detail/ops/SplatIntoGridBezier.cu
-    fvdb/detail/ops/SplatIntoGridTrilinear.cu
-    fvdb/detail/ops/TransformPointToGrid.cu
-    fvdb/detail/ops/UpsampleGridNearest.cu
+    fvdb/detail/ops/SplatBezier.cu
+    fvdb/detail/ops/SplatTrilinear.cu
+    fvdb/detail/ops/VoxelToWorld.cu
+    fvdb/detail/ops/Refine.cu
     fvdb/detail/ops/VolumeRender.cu
-    fvdb/detail/ops/VoxelNeighborhood.cu
+    fvdb/detail/ops/NeighborIndexes.cu
     fvdb/detail/ops/VoxelsAlongRays.cu
     fvdb/detail/utils/cuda/ForEachCUDA.cu
 )
@@ -173,16 +166,13 @@ set_target_properties(
     POSITION_INDEPENDENT_CODE ON
     INTERFACE_POSITION_INDEPENDENT_CODE ON)
 
-message(STATUS "fvdb: TORCH_INCLUDE_DIRS: ${TORCH_INCLUDE_DIRS}")
-
 target_include_directories(fvdb PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${nanovdb_SOURCE_DIR}/nanovdb
-    ${TORCH_INCLUDE_DIRS}
-    ${nvtx3_SOURCE_DIR}/include
-    ${NANOVDB_EDITOR_INCLUDE_DIR})
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+    $<BUILD_INTERFACE:${nanovdb_SOURCE_DIR}/nanovdb>
+    $<BUILD_INTERFACE:${nvtx3_SOURCE_DIR}/include>
+    $<BUILD_INTERFACE:${NANOVDB_EDITOR_INCLUDE_DIR}>
+    $<INSTALL_INTERFACE:include>)
 target_include_directories(fvdb PRIVATE
-    ${TORCH_SOURCE_INCLUDE_DIRS}
     ${tinyply_SOURCE_DIR}/source)
 
 # Needed by Torch for CUDA extensions
@@ -204,6 +194,7 @@ target_compile_options(fvdb PRIVATE
     "-Wno-maybe-uninitialized"
     "-fdiagnostics-color=always"
     "-DNANOVDB_USE_BLOSC"
+    "-DNANOVDB_USE_ZIP"
     "-fvisibility=default"
     "-Wall"
     "-Werror"
@@ -216,12 +207,37 @@ target_compile_options(fvdb PRIVATE
     "-Werror=all-warnings"
     "--threads=$ENV{NVCC_THREADS}"
     "-Xcompiler=-Wall,-Werror,-Wno-maybe-uninitialized"
+    "-DNANOVDB_USE_BLOSC"
+    "-DNANOVDB_USE_ZIP"
     ${TORCH_CUDA_COMMON_FLAGS}
     >
     $<$<AND:$<BOOL:${FVDB_LINEINFO}>,$<COMPILE_LANGUAGE:CUDA>>:-lineinfo>)
 
-target_link_libraries(fvdb PRIVATE
-    ${TORCH_LIBRARIES} tinyply cutlass blosc::blosc dispatch)
+target_link_libraries(fvdb
+    PUBLIC torch
+    PRIVATE tinyply cutlass blosc::blosc ZLIB::ZLIB dispatch)
+
+# ----------------------------------------------------------------------------
+# Precompiled headers (host C++ only)
+#
+# The fvdb target is a CXX/CUDA mix; nvcc does not support PCH. We scope the
+# precompiled headers to CXX via the COMPILE_LANGUAGE generator expression so
+# only the .cpp sources benefit. The current PCH set is intentionally small:
+# torch/types.h plus a few common C++ standard library headers used across many
+# translation units.
+#
+# Set FVDB_ENABLE_PCH=OFF for diagnostic builds where you want to see
+# precise per-TU header dependencies.
+# ----------------------------------------------------------------------------
+option(FVDB_ENABLE_PCH "Enable precompiled headers for the fvdb target" ON)
+if(FVDB_ENABLE_PCH)
+    target_precompile_headers(fvdb PRIVATE
+        "$<$<COMPILE_LANGUAGE:CXX>:<torch/types.h>>"
+        "$<$<COMPILE_LANGUAGE:CXX>:<vector>>"
+        "$<$<COMPILE_LANGUAGE:CXX>:<memory>>"
+        "$<$<COMPILE_LANGUAGE:CXX>:<optional>>"
+        "$<$<COMPILE_LANGUAGE:CXX>:<string>>")
+endif()
 
 # Add linker flags for Debug builds to preserve symbols
 if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
@@ -238,15 +254,35 @@ endif()
 option(FVDB_INSTALL_DEV "Install headers and system-level lib for development" ON)
 
 if(FVDB_INSTALL_DEV)
+    include(CMakePackageConfigHelpers)
+
     install(TARGETS fvdb
         EXPORT fvdb-targets
         LIBRARY DESTINATION lib)
 
-    # Use pattern exclusion to prevent recursion
-    install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/fvdb/
-        DESTINATION include
-        FILES_MATCHING PATTERN "*.h"
-        PATTERN "*/*" EXCLUDE)
+    file(GLOB _FVDB_PUBLIC_HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/fvdb/*.h")
+    install(FILES ${_FVDB_PUBLIC_HEADERS}
+        DESTINATION include/fvdb)
+
+    install(DIRECTORY ${nanovdb_SOURCE_DIR}/nanovdb/nanovdb/
+        DESTINATION include/nanovdb
+        FILES_MATCHING PATTERN "*.h")
+
+    install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch/macros.h
+        DESTINATION include/dispatch/dispatch)
+
+    install(EXPORT fvdb-targets
+        FILE fvdbTargets.cmake
+        NAMESPACE fvdb::
+        DESTINATION lib/cmake/fvdb)
+
+    configure_package_config_file(
+        ${CMAKE_CURRENT_SOURCE_DIR}/cmake/fvdbConfig.cmake.in
+        ${CMAKE_CURRENT_BINARY_DIR}/fvdbConfig.cmake
+        INSTALL_DESTINATION lib/cmake/fvdb)
+
+    install(FILES ${CMAKE_CURRENT_BINARY_DIR}/fvdbConfig.cmake
+        DESTINATION lib/cmake/fvdb)
 endif()
 
 # Add tests subdirectory if tests are enabled

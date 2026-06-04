@@ -5,23 +5,6 @@
 from enum import Enum, IntEnum
 
 
-class ProjectionType(str, Enum):
-    """
-    Enum representing camera projection types. Used in :class:`fvdb.GaussianSplat3d`, and
-    :mod:`fvdb.viz`.
-    """
-
-    PERSPECTIVE = "perspective"
-    """
-    Perspective projection type.
-    """
-
-    ORTHOGRAPHIC = "orthographic"
-    """
-    Orthographic projection type.
-    """
-
-
 class ShOrderingMode(str, Enum):
     """
     Enum representing spherical harmonics ordering modes used by Gaussian Splats..
@@ -74,11 +57,12 @@ class RollingShutterType(IntEnum):
     """
 
 
-class DistortionModel(IntEnum):
+class CameraModel(IntEnum):
     """
-    Distortion model for projection / ray generation.
+    Camera model for projection / ray generation.
 
     Notes:
+
     - ``PINHOLE`` and ``ORTHOGRAPHIC`` ignore distortion coefficients.
     - ``OPENCV_*`` variants use pinhole intrinsics plus OpenCV-style distortion. When distortion
       coefficients are provided, FVDB expects a packed layout:
@@ -117,4 +101,25 @@ class DistortionModel(IntEnum):
     ORTHOGRAPHIC = 5
     """
     Orthographic camera model (no distortion).
+    """
+
+
+class ProjectionMethod(IntEnum):
+    """
+    Projection implementation selector for Gaussian splatting camera models.
+    """
+
+    AUTO = 0
+    """
+    Choose the default implementation for the selected camera model.
+    """
+
+    ANALYTIC = 1
+    """
+    Use the analytic projection path.
+    """
+
+    UNSCENTED = 2
+    """
+    Use the unscented projection path.
     """

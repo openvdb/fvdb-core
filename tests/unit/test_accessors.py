@@ -6,7 +6,7 @@ import unittest
 import torch
 from parameterized import parameterized
 
-from fvdb import Grid, GridBatch, JaggedTensor
+from fvdb import GridBatch, JaggedTensor
 
 all_device_combos = [
     ["cpu"],
@@ -33,9 +33,9 @@ class TestAccessors(unittest.TestCase):
         read_jagged_data = grid_batch.inject_from_dense_cminor(dense_grid, dense_origin)
         self.assertIsInstance(read_jagged_data, JaggedTensor)
 
-        grid = Grid.from_points(sparse_points, voxel_size=0.1, origin=0.0)
-        read_tensor_data = grid.inject_from_dense_cminor(dense_grid, dense_origin)
-        self.assertIsInstance(read_tensor_data, torch.Tensor)
+        grid = GridBatch.from_points(JaggedTensor(sparse_points), voxel_sizes=0.1, origins=0.0)
+        read_jagged_data2 = grid.inject_from_dense_cminor(dense_grid, dense_origin)
+        self.assertIsInstance(read_jagged_data2, JaggedTensor)
 
     @parameterized.expand(all_device_combos)
     def test_write_to_dense_cminor(self, device):
@@ -47,8 +47,8 @@ class TestAccessors(unittest.TestCase):
         sparse_data = torch.tensor([[0], [0]], dtype=torch.float16, device=device)
         grid_batch.inject_to_dense_cminor(JaggedTensor(sparse_data), dense_origin, (RESOLUTION, RESOLUTION, RESOLUTION))
 
-        grid = Grid.from_points(zero_points, voxel_size=0.1, origin=0.0)
-        grid.inject_to_dense_cminor(sparse_data, dense_origin, (RESOLUTION, RESOLUTION, RESOLUTION))
+        grid = GridBatch.from_points(JaggedTensor(zero_points), voxel_sizes=0.1, origins=0.0)
+        grid.inject_to_dense_cminor(JaggedTensor(sparse_data), dense_origin, (RESOLUTION, RESOLUTION, RESOLUTION))
 
 
 if __name__ == "__main__":

@@ -1,8 +1,11 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <fvdb/GridBatchData.h>
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/ops/BuildDilatedGrid.h>
+#include <fvdb/detail/ops/BuildGridFromPoints.h>
+#include <fvdb/detail/ops/BuildMergedGrids.h>
 #include <fvdb/detail/ops/IntegrateTSDF.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Utils.h>
@@ -10,6 +13,7 @@
 
 #include <nanovdb/math/Math.h>
 
+#include <ATen/OpMathType.h>
 #include <c10/core/ScalarType.h>
 #include <c10/cuda/CUDAGuard.h>
 #include <c10/util/Exception.h>
@@ -89,18 +93,6 @@ unprojectDepthmapKernel(int64_t imageWidth,
     }
 }
 
-template <typename T> struct OpType {
-    using type = T;
-};
-
-template <> struct OpType<c10::Half> {
-    using type = float;
-};
-
-template <> struct OpType<nv_half> {
-    using type = float;
-};
-
 template <typename ScalarDataType, typename FeatureScalarDataType = ScalarDataType>
 __global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
 integrateTSDFKernel(const ScalarDataType truncationMargin,
@@ -115,16 +107,16 @@ integrateTSDFKernel(const ScalarDataType truncationMargin,
                     const fvdb::TorchRAcc64<ScalarDataType, 3> depthImages,
                     const fvdb::TorchRAcc64<FeatureScalarDataType, 4> featureImages,
                     const fvdb::TorchRAcc64<ScalarDataType, 3> weightImages,
-                    const fvdb::detail::BatchGridAccessor baseGridAcc,
-                    const fvdb::detail::BatchGridAccessor unionGridAcc,
+                    const fvdb::BatchGridAccessor baseGridAcc,
+                    const fvdb::BatchGridAccessor unionGridAcc,
                     const fvdb::JaggedRAcc64<ScalarDataType, 1> tsdfAcc,
                     const fvdb::JaggedRAcc64<ScalarDataType, 1> weightsAcc,
                     const fvdb::JaggedRAcc64<FeatureScalarDataType, 2> featuresAcc,
                     fvdb::TorchRAcc64<ScalarDataType, 1> outTsdfAcc,
                     fvdb::TorchRAcc64<ScalarDataType, 1> outWeightsAcc,
                     fvdb::TorchRAcc64<FeatureScalarDataType, 2> outFeaturesAcc) {
-    using ScalarType        = OpType<ScalarDataType>::type;
-    using FeatureScalarType = OpType<FeatureScalarDataType>::type;
+    using ScalarType        = at::opmath_type<ScalarDataType>;
+    using FeatureScalarType = at::opmath_type<FeatureScalarDataType>;
 
     using GridT        = nanovdb::ValueOnIndex;
     using LeafNodeType = nanovdb::NanoGrid<GridT>::LeafNodeType;
@@ -301,8 +293,8 @@ integrateTSDFKernel(const ScalarDataType truncationMargin,
             }
             const ScalarType newWeight =
                 oldWeight + pixelWeight; // ScalarType(1) + oldWeight * pixelWeight;
-            const ScalarType newTsdf        = (oldWeight * oldTsdf + tsdf) / newWeight;
-            outTsdfAcc[unionWriteOffset]    = ScalarDataType(newTsdf);
+            const ScalarType newTsdf     = (oldWeight * oldTsdf + pixelWeight * tsdf) / newWeight;
+            outTsdfAcc[unionWriteOffset] = ScalarDataType(newTsdf);
             outWeightsAcc[unionWriteOffset] = ScalarDataType(newWeight);
             if (hasFeatures) {
                 for (auto i = 0; i < outFeaturesAcc.size(1); ++i) {
@@ -312,7 +304,7 @@ integrateTSDFKernel(const ScalarDataType truncationMargin,
                         voxelInBaseGrid ? ScalarType(featuresAcc.data()[baseGridOffset][i])
                                         : ScalarType(0);
                     outFeaturesAcc[unionWriteOffset][i] = FeatureScalarDataType(
-                        (oldWeight * oldFeatureI + pixelFeatureI) / newWeight);
+                        (oldWeight * oldFeatureI + pixelWeight * pixelFeatureI) / newWeight);
                 }
             }
         } else {
@@ -327,6 +319,8 @@ unprojectDepthMapToPoints(const torch::Tensor &depthImages,
                           const torch::Tensor &projectionMatrices,
                           const torch::Tensor &invProjectionMatrices,
                           const torch::Tensor &camToWorldMatrices) {
+    const c10::cuda::CUDAGuard device_guard(depthImages.device());
+
     const int64_t batchSize      = depthImages.size(0);
     const int64_t imageHeight    = depthImages.size(1);
     const int64_t imageWidth     = depthImages.size(2);
@@ -373,10 +367,10 @@ unprojectDepthMapToPoints(const torch::Tensor &depthImages,
     return outUnprojectedPoints;
 }
 
-c10::intrusive_ptr<GridBatchImpl>
+c10::intrusive_ptr<GridBatchData>
 buildPointGrid(const double truncationMargin,
                const torch::Tensor &unprojectedPoints,
-               const GridBatchImpl &grid) {
+               const GridBatchData &grid) {
     std::vector<int64_t> numPadVoxels;
     std::vector<torch::Tensor> jaggedPointsList;
     for (auto i = 0; i < unprojectedPoints.size(0); ++i) {
@@ -404,7 +398,8 @@ buildPointGrid(const double truncationMargin,
     std::vector<nanovdb::Vec3d> voxelSizes;
     std::vector<nanovdb::Vec3d> origins;
     grid.gridVoxelSizesAndOrigins(voxelSizes, origins);
-    return GridBatchImpl::createFromPoints(jaggedPoints, voxelSizes, origins)->dilate(numPadVoxels);
+    auto pointGrid = ops::buildGridFromPoints(jaggedPoints, voxelSizes, origins);
+    return ops::dilateGrid(*pointGrid, numPadVoxels);
 }
 
 #define DISPATCH_FEATURE_TYPE(...)                                \
@@ -425,11 +420,13 @@ doIntegrate(const float truncationMargin,
             const torch::Tensor &invProjectionMatrices,
             const torch::Tensor &camToWorldMatrices,
             const torch::Tensor &worldToCamMatrices,
-            const GridBatchImpl &unionGrid,
-            const GridBatchImpl &baseGrid,
+            const GridBatchData &unionGrid,
+            const GridBatchData &baseGrid,
             const JaggedTensor &tsdf,
             const JaggedTensor &weights,
             const JaggedTensor &features) {
+    const c10::cuda::CUDAGuard device_guard(tsdf.device());
+
     const int64_t batchSize      = depthImages.size(0);
     const int64_t imageHeight    = depthImages.size(1);
     const int64_t imageWidth     = depthImages.size(2);
@@ -447,7 +444,7 @@ doIntegrate(const float truncationMargin,
         tsdf.scalar_type(),
         "integrateTSDFKernel",
         AT_WRAP([&]() {
-            using shared_scalar_t              = typename OpType<scalar_t>::type;
+            using shared_scalar_t              = at::opmath_type<scalar_t>;
             using SharedMat3T                  = nanovdb::math::Mat3<shared_scalar_t>;
             using SharedMat4T                  = nanovdb::math::Mat4<shared_scalar_t>;
             constexpr uint64_t VOXELS_PER_LEAF = nanovdb::OnIndexTree::LeafNodeType::NUM_VALUES;
@@ -616,7 +613,7 @@ checkInputTypes(const JaggedTensor &tsdf,
 }
 
 void
-checkInputSizes(const GridBatchImpl &grid,
+checkInputSizes(const GridBatchData &grid,
                 const JaggedTensor &tsdf,
                 const JaggedTensor &weights,
                 const std::optional<JaggedTensor> &features,
@@ -797,8 +794,8 @@ checkInputSizes(const GridBatchImpl &grid,
     }
 }
 
-std::tuple<c10::intrusive_ptr<GridBatchImpl>, JaggedTensor, JaggedTensor, JaggedTensor>
-integrateTSDFImpl(const c10::intrusive_ptr<GridBatchImpl> grid,
+std::tuple<c10::intrusive_ptr<GridBatchData>, JaggedTensor, JaggedTensor, JaggedTensor>
+integrateTSDFImpl(const c10::intrusive_ptr<GridBatchData> grid,
                   const double truncationMargin,
                   const torch::Tensor &projectionMatrices,
                   const torch::Tensor &camToWorldMatrices,
@@ -843,7 +840,8 @@ integrateTSDFImpl(const c10::intrusive_ptr<GridBatchImpl> grid,
         squeezedDepthImages, projectionMats, invProjectionMats, camToWorldMats);
 
     // Step 2: Build union grid grid from unprojected points and merge into with the old grid
-    const auto unionGrid = buildPointGrid(truncationMargin, unprojectedPoints, *grid)->merge(grid);
+    const auto pointGrid = buildPointGrid(truncationMargin, unprojectedPoints, *grid);
+    const auto unionGrid = ops::mergeGrids(*pointGrid, *grid);
 
     // Features are optional. If you don't pass them in, we will use placeholder values which are
     // just empty tensors.
@@ -885,8 +883,8 @@ integrateTSDFImpl(const c10::intrusive_ptr<GridBatchImpl> grid,
     return {unionGrid, outTsdf, outWeights, outFeatures};
 }
 
-std::tuple<c10::intrusive_ptr<GridBatchImpl>, JaggedTensor, JaggedTensor>
-integrateTSDF(const c10::intrusive_ptr<GridBatchImpl> grid,
+std::tuple<c10::intrusive_ptr<GridBatchData>, JaggedTensor, JaggedTensor>
+integrateTSDF(const c10::intrusive_ptr<GridBatchData> grid,
               const double truncationMargin,
               const torch::Tensor &projectionMatrices,
               const torch::Tensor &camToWorldMatrices,
@@ -909,8 +907,8 @@ integrateTSDF(const c10::intrusive_ptr<GridBatchImpl> grid,
     return {unionGrid, outTsdf, outWeights};
 }
 
-std::tuple<c10::intrusive_ptr<GridBatchImpl>, JaggedTensor, JaggedTensor, JaggedTensor>
-integrateTSDFWithFeatures(const c10::intrusive_ptr<GridBatchImpl> grid,
+std::tuple<c10::intrusive_ptr<GridBatchData>, JaggedTensor, JaggedTensor, JaggedTensor>
+integrateTSDFWithFeatures(const c10::intrusive_ptr<GridBatchData> grid,
                           const double truncationMargin,
                           const torch::Tensor &projectionMatrices,
                           const torch::Tensor &camToWorldMatrices,

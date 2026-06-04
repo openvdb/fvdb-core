@@ -4,8 +4,8 @@
 #ifndef FVDB_DETAIL_OPS_BUILDFINEGRIDFROMCOARSE_H
 #define FVDB_DETAIL_OPS_BUILDFINEGRIDFROMCOARSE_H
 
+#include <fvdb/GridBatchData.h>
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/GridBatchImpl.h>
 
 #include <optional>
 
@@ -13,12 +13,12 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-c10::intrusive_ptr<GridBatchImpl>
-buildFineGridFromCoarse(const GridBatchImpl &coarseBatchHdl,
+c10::intrusive_ptr<GridBatchData>
+buildFineGridFromCoarse(const GridBatchData &coarseBatchHdl,
                         const nanovdb::Coord subdivisionFactor,
                         const std::optional<JaggedTensor> &subdivMask);
 
-JaggedTensor fineIJKForCoarseGrid(const GridBatchImpl &batchHdl,
+JaggedTensor fineIJKForCoarseGrid(const GridBatchData &batchHdl,
                                   nanovdb::Coord upsamplingFactor,
                                   const std::optional<JaggedTensor> &maybeMask);
 

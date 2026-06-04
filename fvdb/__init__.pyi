@@ -3,9 +3,6 @@
 #
 from __future__ import annotations
 
-from collections.abc import Sequence
-from typing import overload
-
 import torch
 
 if torch.cuda.is_available():
@@ -17,9 +14,11 @@ def _parse_device_string(device_string: str | torch.device) -> torch.device: ...
 # The following import needs to come after the GridBatch and JaggedTensor imports
 # immediately above in order to avoid a circular dependency error.
 from . import nn, utils, viz
-from ._fvdb_cpp import config, hilbert, morton, volume_render
+from ._fvdb_cpp import NanoVDBGridMetadata, config, hilbert, morton
+from ._volume_render import volume_render
+from .attention import scaled_dot_product_attention
 from .convolution_plan import ConvolutionPlan
-from .enums import DistortionModel, ProjectionType, RollingShutterType, ShOrderingMode
+from .enums import CameraModel, ProjectionMethod, RollingShutterType, ShOrderingMode
 from .gaussian_splatting import GaussianSplat3d, ProjectedGaussianSplats
 from .grid import Grid
 from .grid_batch import GridBatch, gcat
@@ -66,9 +65,6 @@ from .torch_jagged import (
     where,
 )
 
-def scaled_dot_product_attention(
-    query: JaggedTensor, key: JaggedTensor, value: JaggedTensor, scale: float
-) -> JaggedTensor: ...
 def gaussian_render_jagged(
     means: JaggedTensor,
     quats: JaggedTensor,
@@ -92,14 +88,6 @@ def gaussian_render_jagged(
     ortho: bool = False,
     backgrounds: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]: ...
-def evaluate_spherical_harmonics(
-    sh_degree: int,
-    num_cameras: int,
-    sh0: torch.Tensor,
-    radii: torch.Tensor,
-    shN: torch.Tensor | None = None,
-    view_directions: torch.Tensor | None = None,
-) -> torch.Tensor: ...
 
 __all__ = [
     # Core classes
@@ -109,11 +97,12 @@ __all__ = [
     "GaussianSplat3d",
     "ProjectedGaussianSplats",
     "ConvolutionPlan",
-    "DistortionModel",
+    "CameraModel",
+    "ProjectionMethod",
     "RollingShutterType",
-    "ProjectionType",
     "ShOrderingMode",
     "Grid",
+    "NanoVDBGridMetadata",
     # JaggedTensor operations
     # Concatenation of jagged tensors or grid/grid batches
     "jcat",
@@ -125,7 +114,6 @@ __all__ = [
     "scaled_dot_product_attention",
     "volume_render",
     "gaussian_render_jagged",
-    "evaluate_spherical_harmonics",
     # Torch-compatible functions (work with both Tensor and JaggedTensor)
     "relu",
     "relu_",

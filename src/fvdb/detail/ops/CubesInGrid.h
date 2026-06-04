@@ -4,23 +4,25 @@
 #ifndef FVDB_DETAIL_OPS_CUBESINGRID_H
 #define FVDB_DETAIL_OPS_CUBESINGRID_H
 
+#include <fvdb/GridBatchData.h>
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/GridBatchImpl.h>
 #include <fvdb/detail/utils/Utils.h>
+
+#include <nanovdb/NanoVDB.h>
 
 namespace fvdb {
 namespace detail {
 namespace ops {
 
-JaggedTensor cubesInGrid(const GridBatchImpl &batchHdl,
+JaggedTensor cubesInGrid(const GridBatchData &batchHdl,
                          const JaggedTensor &cubeCenters,
-                         const Vec3dOrScalar &padMin,
-                         const Vec3dOrScalar &padMax);
+                         const nanovdb::Vec3d &padMin,
+                         const nanovdb::Vec3d &padMax);
 
-JaggedTensor cubesIntersectGrid(const GridBatchImpl &batchHdl,
+JaggedTensor cubesIntersectGrid(const GridBatchData &batchHdl,
                                 const JaggedTensor &cubeCenters,
-                                const Vec3dOrScalar &padMin,
-                                const Vec3dOrScalar &padMax);
+                                const nanovdb::Vec3d &padMin,
+                                const nanovdb::Vec3d &padMax);
 
 } // namespace ops
 } // namespace detail

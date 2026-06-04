@@ -10,10 +10,10 @@ from typing import List, Tuple, Union
 import numpy as np
 import point_cloud_utils as pcu
 import torch
-from fvdb.types import NumericMaxRank1, NumericMaxRank2
+from fvdb.types import NumericMaxRank2
 from fvdb.utils.tests import get_fvdb_example_data_path as _get_fvdb_example_data_path
 
-from fvdb import Grid, GridBatch, JaggedTensor
+from fvdb import GridBatch, JaggedTensor
 
 
 def _get_md5_checksum(file_path: Path):
@@ -26,27 +26,13 @@ def make_grid_batch_from_points(
 ) -> GridBatch:
     logging.info("Building GridBatch from points...")
     start = timeit.default_timer()
-    grid_batch = GridBatch.from_points(points, voxel_sizes=voxel_sizes, origins=origins, device=points.device)
+    grid_batch = GridBatch.from_points(points, voxel_sizes=voxel_sizes, origins=origins)
     grid_batch = grid_batch.dilated_grid(padding)
     torch.cuda.synchronize()
     logging.info(f"Done in {timeit.default_timer() - start}s")
     logging.info(f"GridBatch has {grid_batch.total_voxels} voxels")
 
     return grid_batch
-
-
-def make_grid_from_points(
-    points: torch.Tensor, padding: int, voxel_size: NumericMaxRank1, origin: NumericMaxRank1
-) -> Grid:
-    logging.info("Building Grid from points...")
-    start = timeit.default_timer()
-    grid = Grid.from_points(points, voxel_size=voxel_size, origin=origin, device=points.device)
-    grid = grid.dilated_grid(padding)
-    torch.cuda.synchronize()
-    logging.info(f"Done in {timeit.default_timer() - start}s")
-    logging.info(f"Grid has {grid.num_voxels} voxels")
-
-    return grid
 
 
 def make_ray_grid(
@@ -225,7 +211,6 @@ def plot_ray_segments(ray_o, ray_d, times, plot_every=1):
 
 
 __all__ = [
-    "make_grid_from_points",
     "make_ray_grid",
     "load_pointcloud",
     "load_mesh",

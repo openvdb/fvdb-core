@@ -4,10 +4,9 @@
 #ifndef FVDB_DETAIL_VIEWER_GAUSSIANSPLAT3DVIEW_H
 #define FVDB_DETAIL_VIEWER_GAUSSIANSPLAT3DVIEW_H
 
-#include <fvdb/GaussianSplat3d.h>
-
 #include <nanovdb_editor/putil/Raster.h>
 
+#include <functional>
 #include <string>
 
 namespace fvdb::detail::viewer {

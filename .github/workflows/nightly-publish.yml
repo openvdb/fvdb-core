@@ -81,7 +81,7 @@ jobs:
           mode: start
           github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
           ec2-image-id: ${{ needs.versions.outputs.aws-cpu-ami }}
-          ec2-instance-type: t3a.large
+          ec2-instance-type: m6a.xlarge
           subnet-id: ${{ needs.versions.outputs.aws-subnet }}
           security-group-id: ${{ needs.versions.outputs.aws-security-group }}
           label: nightly-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
@@ -157,13 +157,19 @@ jobs:
         run: |
           TORCH_TAG="$(echo "${{ matrix.torch-version }}" | tr -d '.')"
           CUDA_TAG="$(echo "${{ matrix.cuda-version }}" | tr -d '.')"
-          NIGHTLY_VERSION="0.0.0.dev$(date -u '+%Y%m%d')+pt${TORCH_TAG}.cu${CUDA_TAG}"
+          # Anchor the nightly at the upcoming release recorded in pyproject.toml
+          # (e.g. 0.5.0.dev0 -> 0.5.0) so PEP 440 ordering puts nightlies between
+          # the previous final release and the next one.
+          CURRENT_VERSION=$(grep -E '^version *=' pyproject.toml | head -n1 | sed -E 's/^version *= *"([^"]+)".*/\1/')
+          BASE_VERSION=$(echo "${CURRENT_VERSION%%+*}" | sed -E 's/(\.dev[0-9]+|\.post[0-9]+|(a|b|c|rc)[0-9]+)+$//')
+          if [ -z "$BASE_VERSION" ]; then
+            echo "Failed to parse base version from pyproject.toml (got '$CURRENT_VERSION')" >&2
+            exit 1
+          fi
+          NIGHTLY_VERSION="${BASE_VERSION}.dev$(date -u '+%Y%m%d')+pt${TORCH_TAG}.cu${CUDA_TAG}"
           sed -i -E "s/^version *= *\"[^\"]+\"/version = \"${NIGHTLY_VERSION}\"/" pyproject.toml
           echo "Nightly version: $NIGHTLY_VERSION"
           grep '^version' pyproject.toml
-
-      - name: Drop page cache to free RAM before build
-        run: sync && echo 3 > /proc/sys/vm/drop_caches
 
       - name: Build fvdb
         run: |
@@ -348,7 +354,10 @@ jobs:
           echo "Generated index.html:"
           cat "$INDEX_FILE"
 
-          aws s3 cp "$INDEX_FILE" "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${{ steps.proj.outputs.normalized }}/index.html" --content-type text/html --only-show-errors
+          aws s3 cp "$INDEX_FILE" "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${{ steps.proj.outputs.normalized }}/index.html" \
+            --content-type text/html \
+            --cache-control "public, max-age=60, must-revalidate" \
+            --only-show-errors
           echo "Index uploaded successfully"
 
       - name: Generate root simple index.html
@@ -368,7 +377,48 @@ jobs:
             done;
             echo "</body></html>";
           } > "$ROOT_INDEX"
-          aws s3 cp "$ROOT_INDEX" "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/index.html" --content-type text/html --only-show-errors
+          aws s3 cp "$ROOT_INDEX" "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/index.html" \
+            --content-type text/html \
+            --cache-control "public, max-age=60, must-revalidate" \
+            --only-show-errors
+
+      - name: Invalidate CloudFront cache for simple-index paths
+        run: |
+          set -euo pipefail
+          DOMAIN="${{ needs.versions.outputs.aws-cloudfront-distribution-domain }}"
+          if [ -z "$DOMAIN" ] || [ "$DOMAIN" = "null" ]; then
+            echo "No CloudFront distribution domain configured (aws.cloudfront_distribution_domain in versions.json); skipping invalidation"
+            exit 0
+          fi
+          DIST_ID=$(aws cloudfront list-distributions \
+            --query "DistributionList.Items[?DomainName=='$DOMAIN'].Id | [0]" \
+            --output text 2>/dev/null || echo "")
+          if [ -z "$DIST_ID" ] || [ "$DIST_ID" = "None" ]; then
+            echo "WARNING: Could not find CloudFront distribution for domain $DOMAIN; skipping invalidation"
+            echo "(IAM role may need cloudfront:ListDistributions permission)"
+            exit 0
+          fi
+          NORM="${{ steps.proj.outputs.normalized }}"
+          # Invalidate both the trailing-slash directory paths (what pip and
+          # browsers actually request) and the underlying index.html object
+          # paths. CloudFront caches each request URI independently, so
+          # invalidating only one form leaves the other stale.
+          PATHS=(
+            "/${SIMPLE_PREFIX}/"
+            "/${SIMPLE_PREFIX}/index.html"
+            "/${SIMPLE_PREFIX}/${NORM}/"
+            "/${SIMPLE_PREFIX}/${NORM}/index.html"
+          )
+          echo "Invalidating distribution $DIST_ID paths: ${PATHS[*]}"
+          if ! aws cloudfront create-invalidation \
+            --distribution-id "$DIST_ID" \
+            --paths "${PATHS[@]}" \
+            --query 'Invalidation.{Id:Id,Status:Status,CreateTime:CreateTime}' \
+            --output table; then
+            echo "WARNING: Failed to create CloudFront invalidation for distribution $DIST_ID; continuing without failing publish"
+            echo "(IAM role may need cloudfront:CreateInvalidation permission)"
+            exit 0
+          fi
 
   ##############################################################################
   # STOP EC2 BUILD RUNNERS

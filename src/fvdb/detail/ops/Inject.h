@@ -4,8 +4,8 @@
 #ifndef FVDB_DETAIL_OPS_INJECT_H
 #define FVDB_DETAIL_OPS_INJECT_H
 
+#include <fvdb/GridBatchData.h>
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/GridBatchImpl.h>
 
 #include <torch/types.h>
 
@@ -13,8 +13,8 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-void inject(const GridBatchImpl &dstGridBatch,
-            const GridBatchImpl &srcGridBatch,
+void inject(const GridBatchData &dstGridBatch,
+            const GridBatchData &srcGridBatch,
             JaggedTensor &dst,
             const JaggedTensor &src);
 

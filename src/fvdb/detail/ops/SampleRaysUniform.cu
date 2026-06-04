@@ -78,8 +78,12 @@ countSamplesPerRayCallback(int32_t bidx,
 
         if (includeEndpointSegments) {
             // Step t0 consistently until it intersects the voxel (t0 is out of the voxel)
+            // This MUST use the same rounding (`ceil`) as the generate-path callback below so that
+            // both callbacks emit the same number of samples per ray.
+            // With cone tracing (coneAngle > 0), `_calcDt` depends on `t0`, so any rounding
+            // mismatch silently diverges the two paths and can OOB-write during sample generation.
             ScalarType distToVox = it->t0 - t0;
-            t0 += c10::cuda::compat::floor(distToVox / stepSize) * stepSize;
+            t0 += c10::cuda::compat::ceil(distToVox / stepSize) * stepSize;
             t1 = t0 + stepSize;
 
             if (t0 > it->t1) {
@@ -274,7 +278,7 @@ generateRaySamplesCallback(int32_t bidx,
 
 template <torch::DeviceType DeviceTag>
 JaggedTensor
-UniformRaySamples(const GridBatchImpl &batchHdl,
+UniformRaySamples(const GridBatchData &batchHdl,
                   const JaggedTensor &rayOrigins,
                   const JaggedTensor &rayDirections,
                   const JaggedTensor &tMin,
@@ -340,10 +344,6 @@ UniformRaySamples(const GridBatchImpl &batchHdl,
         rayOrigins.scalar_type(),
         "UniformRaySamples",
         AT_WRAP([&]() -> JaggedTensor {
-            int64_t numThreads = 256 + 128;
-            if constexpr (nanovdb::util::is_same<scalar_t, double>::value) {
-                numThreads = 256;
-            }
             const auto optsF =
                 torch::TensorOptions().dtype(rayOrigins.dtype()).device(rayOrigins.device());
             const auto optsI32 =
@@ -381,7 +381,7 @@ UniformRaySamples(const GridBatchImpl &batchHdl,
                         includeEndpointSegments,
                         eps);
                 };
-                forEachJaggedElementChannelCUDA<scalar_t, 2>(numThreads, 1, rayOrigins, cb);
+                forEachJaggedElementChannelCUDA<scalar_t, 2>(1, rayOrigins, cb);
             } else {
                 auto cb = [=](int32_t bidx,
                               int32_t eidx,
@@ -448,7 +448,7 @@ UniformRaySamples(const GridBatchImpl &batchHdl,
                         returnMidpoint,
                         eps);
                 };
-                forEachJaggedElementChannelCUDA<scalar_t, 2>(numThreads, 1, rayOrigins, cb);
+                forEachJaggedElementChannelCUDA<scalar_t, 2>(1, rayOrigins, cb);
             } else {
                 auto cb = [=](int32_t bidx,
                               int32_t eidx,
@@ -488,7 +488,7 @@ UniformRaySamples(const GridBatchImpl &batchHdl,
 } // anonymous namespace
 
 JaggedTensor
-uniformRaySamples(const GridBatchImpl &batchHdl,
+uniformRaySamples(const GridBatchData &batchHdl,
                   const JaggedTensor &rayO,
                   const JaggedTensor &rayD,
                   const JaggedTensor &tMin,

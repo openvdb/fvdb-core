@@ -1077,6 +1077,20 @@ def to_Vec3fBroadcastable(
     return to_FloatingTensorBroadcastableRank1(x, (3,), dtype, value_constraint=value_constraint, do_broadcast_to=False)
 
 
+def validate_rank1_voxel_params(voxel_sizes: NumericMaxRank1, origins: NumericMaxRank1) -> None:
+    """Validate that voxel_sizes and origins are rank-1 for single-grid operations.
+
+    Args:
+        voxel_sizes (NumericMaxRank1): Voxel size, broadcastable to ``(3,)``.
+        origins (NumericMaxRank1): Grid origin, broadcastable to ``(3,)``.
+
+    Raises:
+        TypeError: If either argument is rank-2 (e.g. a list of lists).
+    """
+    to_Vec3fBroadcastable(voxel_sizes)
+    to_Vec3fBroadcastable(origins)
+
+
 def to_Vec3iBatchBroadcastable(
     x: NumericMaxRank2,
     dtype: torch.dtype = torch.int64,

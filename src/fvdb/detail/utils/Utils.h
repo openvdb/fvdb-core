@@ -4,18 +4,17 @@
 #ifndef FVDB_DETAIL_UTILS_UTILS_H
 #define FVDB_DETAIL_UTILS_UTILS_H
 
+#include <fvdb/TypeTraits.h>
 #include <fvdb/detail/utils/nanovdb/ActiveVoxelIterator.h>
 #include <fvdb/detail/utils/nanovdb/HDDAIterators.h>
 #include <fvdb/detail/utils/nanovdb/TorchNanoConversions.h>
 
 #include <ATen/Dispatch_v2.h>
-#include <c10/util/Half.h>
 #include <torch/types.h>
 #include <torch/version.h>
 
 #include <iostream>
 #include <memory>
-#include <type_traits>
 
 // A bunch of things defined to make intellisense work with nvcc
 #if defined(NDEVELOP_IDE_ONLY)
@@ -64,21 +63,6 @@ template <typename T> struct RestrictPtrTraits {
 
 namespace fvdb {
 namespace detail {
-
-/// @brief A helper struct to determine if a type is a floating-point type or a half-precision
-/// floating-point type.
-/// @tparam T The type to check.
-template <class T>
-struct is_floating_point_or_half
-    : std::integral_constant<bool,
-                             // Note: standard floating-point types
-                             std::is_same<float, typename std::remove_cv<T>::type>::value ||
-                                 std::is_same<double, typename std::remove_cv<T>::type>::value ||
-                                 std::is_same<long double, typename std::remove_cv<T>::type>::value
-                                 // Note: extended floating-point types (C++23, if supported)
-                                 ||
-                                 std::is_same<c10::Half, typename std::remove_cv<T>::type>::value> {
-};
 
 /// @brief Convert a 1d tensor of integer values into an std:vector<int64_t>
 /// @param shapeTensor a 1D tensor of integer values

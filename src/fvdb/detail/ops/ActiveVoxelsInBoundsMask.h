@@ -4,8 +4,8 @@
 #ifndef FVDB_DETAIL_OPS_ACTIVEVOXELSINBOUNDSMASK_H
 #define FVDB_DETAIL_OPS_ACTIVEVOXELSINBOUNDSMASK_H
 
+#include <fvdb/GridBatchData.h>
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/GridBatchImpl.h>
 
 #include <vector>
 
@@ -13,7 +13,7 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-JaggedTensor activeVoxelsInBoundsMask(const GridBatchImpl &batchHdl,
+JaggedTensor activeVoxelsInBoundsMask(const GridBatchData &batchHdl,
                                       const std::vector<nanovdb::Coord> &bboxMins,
                                       const std::vector<nanovdb::Coord> &bboxMaxs);
 

@@ -4,12 +4,12 @@
 #ifndef FVDB_DETAIL_VIEWER_VIEWER_H
 #define FVDB_DETAIL_VIEWER_VIEWER_H
 
-#include <fvdb/GaussianSplat3d.h>
-#include <fvdb/GridBatch.h>
+#include <fvdb/detail/utils/gsplat/GaussianCameras.cuh>
 #include <fvdb/detail/viewer/CameraView.h>
 #include <fvdb/detail/viewer/GaussianSplat3dView.h>
 
-#include <torch/torch.h>
+#include <c10/util/Exception.h>
+#include <torch/types.h>
 
 #include <nanovdb_editor/putil/Editor.h>
 
@@ -70,7 +70,12 @@ class Viewer {
 
     GaussianSplat3dView &addGaussianSplat3dView(const std::string &scene_name,
                                                 const std::string &name,
-                                                const GaussianSplat3d &splats);
+                                                const torch::Tensor &means,
+                                                const torch::Tensor &quats,
+                                                const torch::Tensor &logScales,
+                                                const torch::Tensor &logitOpacities,
+                                                const torch::Tensor &sh0,
+                                                const torch::Tensor &shN);
     CameraView &addCameraView(const std::string &scene_name,
                               const std::string &name,
                               const torch::Tensor &cameraToWorldMatrices,
@@ -138,9 +143,8 @@ class Viewer {
     float cameraFar(const std::string &scene_name);
     void setCameraFar(const std::string &scene_name, float far);
 
-    void setCameraProjectionType(const std::string &scene_name,
-                                 GaussianSplat3d::ProjectionType mode);
-    GaussianSplat3d::ProjectionType cameraProjectionType(const std::string &scene_name);
+    void setCameraModel(const std::string &scene_name, fvdb::detail::ops::DistortionModel model);
+    fvdb::detail::ops::DistortionModel cameraModel(const std::string &scene_name);
 
     std::string
     ipAddress() const {

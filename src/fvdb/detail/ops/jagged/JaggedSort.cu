@@ -123,7 +123,7 @@ JaggedArgsort(const JaggedTensor &jt) {
                         qsortCallback<scalar_t, TorchRAcc64>(
                             ridx, offsetAcc, dataAcc, idxAccessor, stackAccessor);
                     };
-                forEachTensorElementChannelCUDA<int64_t, 2>(256, 1, offsets, cb);
+                forEachTensorElementChannelCUDA<int64_t, 2>(1, offsets, cb);
             } else {
                 auto cb = [=](int32_t ridx, int32_t cidx, TorchAcc<int64_t, 2> offsetAcc) {
                     qsortCallback<scalar_t, TorchAcc>(

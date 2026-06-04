@@ -2,9 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
-#include "fvdb/detail/viewer/GaussianSplat3dView.h"
-
 #include <fvdb/detail/viewer/CameraView.h>
+#include <fvdb/detail/viewer/GaussianSplat3dView.h>
 #include <fvdb/detail/viewer/Viewer.h>
 
 #include <c10/util/Exception.h>
@@ -15,6 +14,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include <stdexcept>
 
 inline void
 pNanoLogPrint(pnanovdb_compute_log_level_t level, const char *format, ...) {
@@ -180,7 +180,12 @@ Viewer::removeView(const std::string &scene_name, const std::string &name) {
 fvdb::detail::viewer::GaussianSplat3dView &
 Viewer::addGaussianSplat3dView(const std::string &scene_name,
                                const std::string &name,
-                               const GaussianSplat3d &splats) {
+                               const torch::Tensor &means,
+                               const torch::Tensor &quats,
+                               const torch::Tensor &logScales,
+                               const torch::Tensor &logitOpacities,
+                               const torch::Tensor &sh0,
+                               const torch::Tensor &shN) {
     std::shared_ptr<pnanovdb_raster_gaussian_data_t> oldData;
     auto itPrev = mSplat3dViews.find(name);
     if (itPrev != mSplat3dViews.end()) {
@@ -189,14 +194,6 @@ Viewer::addGaussianSplat3dView(const std::string &scene_name,
 
     auto [it, inserted] = mSplat3dViews.emplace(
         std::piecewise_construct, std::forward_as_tuple(name), std::forward_as_tuple(name, *this));
-
-    // Get the various tensors to pass to the viewer
-    torch::Tensor means          = splats.means();
-    torch::Tensor quats          = splats.quats();
-    torch::Tensor logScales      = splats.logScales();
-    torch::Tensor logitOpacities = splats.logitOpacities();
-    torch::Tensor sh0            = splats.sh0();
-    torch::Tensor shN            = splats.shN();
 
     auto makeComputeArray = [this](const torch::Tensor &tensor) -> pnanovdb_compute_array_t * {
         torch::Tensor contig = tensor.cpu().contiguous();
@@ -375,18 +372,24 @@ Viewer::setCameraFar(const std::string &scene_name, float far) {
     updateCamera(scene_name);
 }
 
-GaussianSplat3d::ProjectionType
-Viewer::cameraProjectionType(const std::string &scene_name) {
+fvdb::detail::ops::DistortionModel
+Viewer::cameraModel(const std::string &scene_name) {
     getCamera(scene_name);
-    return mEditor.camera.config.is_orthographic ? GaussianSplat3d::ProjectionType::ORTHOGRAPHIC
-                                                 : GaussianSplat3d::ProjectionType::PERSPECTIVE;
+    return mEditor.camera.config.is_orthographic ? fvdb::detail::ops::DistortionModel::ORTHOGRAPHIC
+                                                 : fvdb::detail::ops::DistortionModel::PINHOLE;
 }
+
 void
-Viewer::setCameraProjectionType(const std::string &scene_name,
-                                GaussianSplat3d::ProjectionType mode) {
+Viewer::setCameraModel(const std::string &scene_name, fvdb::detail::ops::DistortionModel model) {
     getCamera(scene_name);
-    mEditor.camera.config.is_orthographic =
-        (mode == GaussianSplat3d::ProjectionType::ORTHOGRAPHIC) ? PNANOVDB_TRUE : PNANOVDB_FALSE;
+    if (model == fvdb::detail::ops::DistortionModel::PINHOLE) {
+        mEditor.camera.config.is_orthographic = PNANOVDB_FALSE;
+    } else if (model == fvdb::detail::ops::DistortionModel::ORTHOGRAPHIC) {
+        mEditor.camera.config.is_orthographic = PNANOVDB_TRUE;
+    } else {
+        throw std::invalid_argument(
+            "Viewer currently only supports CameraModel::PINHOLE and ORTHOGRAPHIC");
+    }
 
     updateCamera(scene_name);
 }
@@ -441,18 +444,20 @@ Viewer::addCameraView(const std::string &scene_name,
     for (int i = 0; i < (int)it->second.mView.num_cameras; i++) {
         torch::Tensor c2w = cameraToWorldMatrices.index({i}).contiguous().cpu();
         torch::Tensor K   = projectionMatrices.index({i}).contiguous().cpu();
+        auto c2w_acc      = c2w.accessor<float, 2>();
+        auto K_acc        = K.accessor<float, 2>();
 
-        float px = c2w[0][3].item<float>();
-        float py = c2w[1][3].item<float>();
-        float pz = c2w[2][3].item<float>();
+        float px = c2w_acc[0][3];
+        float py = c2w_acc[1][3];
+        float pz = c2w_acc[2][3];
 
-        float zx = c2w[0][2].item<float>();
-        float zy = c2w[1][2].item<float>();
-        float zz = c2w[2][2].item<float>();
+        float zx = c2w_acc[0][2];
+        float zy = c2w_acc[1][2];
+        float zz = c2w_acc[2][2];
 
-        float ux = c2w[0][1].item<float>();
-        float uy = c2w[1][1].item<float>();
-        float uz = c2w[2][1].item<float>();
+        float ux = c2w_acc[0][1];
+        float uy = c2w_acc[1][1];
+        float uz = c2w_acc[2][1];
 
         // NanoVDB editor camera
         // - state.position: orbit center (c2w translation)
@@ -476,14 +481,15 @@ Viewer::addCameraView(const std::string &scene_name,
         it->second.mView.configs[i].far_plane  = frustumFar;
 
         // Set perspective parameters from image sizes when available
-        float fy      = K[1][1].item<float>();
+        float fy      = K_acc[1][1];
         float width   = 0.f;
         float height  = 0.f;
         bool haveDims = imageSizes.numel() != 0;
         if (haveDims) {
             torch::Tensor dims = imageSizes.index({i}).contiguous().cpu();
-            height             = dims[0].item<float>();
-            width              = dims[1].item<float>();
+            auto dims_acc      = dims.accessor<float, 1>();
+            height             = dims_acc[0];
+            width              = dims_acc[1];
         }
 
         if (haveDims && height > 0.f && fy > 0.f) {

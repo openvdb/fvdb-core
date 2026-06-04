@@ -1,4 +1,4 @@
-name: fVDB Unit Tests
+name: fVDB Conda Build and Test
 
 on:
   pull_request_target:
@@ -64,7 +64,7 @@ jobs:
           subnet-id: ${{ needs.versions.outputs.aws-subnet }}
           security-group-id: ${{ needs.versions.outputs.aws-security-group }}
   fvdb-build:
-    name: fVDB Build
+    name: fVDB Build (Conda)
     needs: [start-build-runner, versions] # required to start the main job when the runner is ready
     runs-on: ${{ needs.start-build-runner.outputs.label }} # run the job on the newly created runner
     container:
@@ -121,7 +121,7 @@ jobs:
       #     git merge --no-ff $CURRENT_COMMIT --message "CI: Simulating merge of $CURRENT_COMMIT into $TARGET_BRANCH"
 
       - name: Set up fvdb_build Conda env
-        uses: mamba-org/setup-micromamba@v2
+        uses: mamba-org/setup-micromamba@v3
         with:
           post-cleanup: 'all'
           environment-name: fvdb_build
@@ -130,6 +130,8 @@ jobs:
       - name: Build fvdb
         run: |
           micromamba activate fvdb_build
+          NANOVDB_EDITOR_SPEC=$(python .github/scripts/get_viewer_dependency.py)
+          pip install "$NANOVDB_EDITOR_SPEC"
           ./build.sh wheel verbose gtests benchmarks --cuda-arch-list '8.9+PTX'
 
       - name: Upload wheel
@@ -208,7 +210,7 @@ jobs:
   ##############################################################################
   fvdb-gtests:
     needs: [start-tests-gpu-runner, versions] # required to start the main job when the runner is ready
-    name: fVDB GTests
+    name: fVDB GTests (Conda)
     runs-on: ${{ needs.start-tests-gpu-runner.outputs.label }} # run the job on the newly created runner
     container:
       image: nvidia/cuda:${{ needs.versions.outputs.cuda-130-patch }}-base-${{ needs.versions.outputs.docker-os-rocky }}
@@ -246,23 +248,12 @@ jobs:
           git merge pr_branch
 
       - name: Set up fvdb_test Conda env
-        uses: mamba-org/setup-micromamba@v2
+        uses: mamba-org/setup-micromamba@v3
         with:
           cache-environment: false
           post-cleanup: 'all'
           environment-name: fvdb_test
           environment-file: env/test_environment.yml
-
-      - name: Download package with nanovdb_editor
-        uses: actions/download-artifact@v8
-        with:
-            name: fvdb-test-package
-            path: ./dist
-
-      - name: Install nanovdb_editor
-        run: |
-            micromamba activate fvdb_test
-            pip install ./dist/nanovdb_editor*.whl
 
       - name: Download gtests
         uses: actions/download-artifact@v8
@@ -285,7 +276,7 @@ jobs:
   ##############################################################################
   fvdb-unit-tests:
     needs: [start-tests-gpu-runner, versions] # required to start the main job when the runner is ready
-    name: fVDB Unit Tests
+    name: fVDB Unit Tests (Conda)
     runs-on: ${{ needs.start-tests-gpu-runner.outputs.label }} # run the job on the newly created runner
     container:
       image: nvidia/cuda:${{ needs.versions.outputs.cuda-130-patch }}-base-${{ needs.versions.outputs.docker-os-rocky }}
@@ -324,7 +315,7 @@ jobs:
           git merge pr_branch
 
       - name: Set up fvdb_test Conda env
-        uses: mamba-org/setup-micromamba@v2
+        uses: mamba-org/setup-micromamba@v3
         with:
           cache-environment: false
           post-cleanup: 'all'
@@ -345,6 +336,8 @@ jobs:
       - name: Run tests
         run: |
             micromamba activate fvdb_test
+            NANOVDB_EDITOR_SPEC=$(python .github/scripts/get_viewer_dependency.py)
+            pip install "$NANOVDB_EDITOR_SPEC"
             cd tests;
             pytest -v unit
 
@@ -353,7 +346,7 @@ jobs:
   ##############################################################################
   fvdb-docs-test:
     needs: [start-tests-gpu-runner, versions] # required to start the main job when the runner is ready
-    name: fVDB Documentation Tests
+    name: fVDB Doc Tests (Conda)
     runs-on: ${{ needs.start-tests-gpu-runner.outputs.label }} # run the job on the newly created runner
     container:
       image: nvidia/cuda:${{ needs.versions.outputs.cuda-130-patch }}-base-${{ needs.versions.outputs.docker-os-rocky }}
@@ -391,7 +384,7 @@ jobs:
           git merge pr_branch
 
       - name: Set up fvdb_test Conda env
-        uses: mamba-org/setup-micromamba@v2
+        uses: mamba-org/setup-micromamba@v3
         with:
           cache-environment: false
           post-cleanup: 'all'
@@ -412,7 +405,12 @@ jobs:
       - name: Run markdown docs tests
         run: |
             micromamba activate fvdb_test
-            pytest --markdown-docs docs --ignore-glob="**/wip/**"
+            pytest --markdown-docs docs
+
+      - name: Run API reference validation
+        run: |
+            micromamba activate fvdb_test
+            pytest tests/test_teachme_api_refs.py -v
 
       - name: Run notebook tests
         run: |

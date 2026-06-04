@@ -4,8 +4,8 @@
 #ifndef FVDB_DETAIL_OPS_BUILDGRIDFROMNEARESTVOXELSTOPOINTS_H
 #define FVDB_DETAIL_OPS_BUILDGRIDFROMNEARESTVOXELSTOPOINTS_H
 
+#include <fvdb/GridBatchData.h>
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/GridBatchImpl.h>
 
 #include <vector>
 
@@ -13,7 +13,7 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-c10::intrusive_ptr<GridBatchImpl>
+c10::intrusive_ptr<GridBatchData>
 buildGridFromNearestVoxelsToPoints(const JaggedTensor &points,
                                    const std::vector<nanovdb::Vec3d> &voxelSizes,
                                    const std::vector<nanovdb::Vec3d> &origins);

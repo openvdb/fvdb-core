@@ -119,7 +119,7 @@ jobs:
         with:
           version: "${{ needs.versions.outputs.uv-version }}"
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '${{ needs.versions.outputs.python-default }}'
         env:
@@ -263,7 +263,7 @@ jobs:
         with:
           version: "${{ needs.versions.outputs.uv-version }}"
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '${{ needs.versions.outputs.python-default }}'
         env:

@@ -5,8 +5,8 @@
 #define FVDB_DETAIL_UTILS_CUDA_FOREACHPRIVATEUSE1_CUH
 
 #include <fvdb/Config.h>
+#include <fvdb/GridBatchData.h>
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/GridBatchImpl.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/cuda/GridDim.h>
 #include <fvdb/detail/utils/cuda/Utils.cuh>
@@ -19,11 +19,11 @@ namespace fvdb {
 
 namespace _private {
 
-template <typename Func, typename... Args>
-__global__ void
+template <int NumThreads, typename Func, typename... Args>
+__global__ void __launch_bounds__(NumThreads)
 forEachLeafPrivateUse1Kernel(int64_t leafChannelCount,
                              int64_t leafChannelOffset,
-                             fvdb::detail::GridBatchImpl::Accessor grid,
+                             fvdb::GridBatchData::Accessor grid,
                              const int32_t channelsPerLeaf,
                              Func func,
                              Args... args) {
@@ -41,11 +41,11 @@ forEachLeafPrivateUse1Kernel(int64_t leafChannelCount,
     }
 }
 
-template <typename Func, typename... Args>
-__global__ void
+template <int NumThreads, typename Func, typename... Args>
+__global__ void __launch_bounds__(NumThreads)
 forEachVoxelPrivateUse1Kernel(int64_t leafVoxelChannelCount,
                               int64_t leafVoxelChannelOffset,
-                              fvdb::detail::GridBatchImpl::Accessor grid,
+                              fvdb::GridBatchData::Accessor grid,
                               int64_t channelsPerVoxel,
                               Func func,
                               Args... args) {
@@ -70,8 +70,8 @@ forEachVoxelPrivateUse1Kernel(int64_t leafVoxelChannelCount,
     }
 }
 
-template <int32_t NDIMS, typename ScalarT, typename Func, typename... Args>
-__global__ void
+template <typename ScalarT, int32_t NDIMS, int NumThreads, typename Func, typename... Args>
+__global__ void __launch_bounds__(NumThreads)
 forEachJaggedElementChannelPrivateUse1Kernel(int64_t numel,
                                              int64_t offset,
                                              JaggedRAcc64<ScalarT, NDIMS> jaggedAcc,
@@ -89,8 +89,8 @@ forEachJaggedElementChannelPrivateUse1Kernel(int64_t numel,
     }
 }
 
-template <int32_t NDIMS, typename ScalarT, typename Func, typename... Args>
-__global__ void
+template <typename ScalarT, int32_t NDIMS, int NumThreads, typename Func, typename... Args>
+__global__ void __launch_bounds__(NumThreads)
 forEachTensorElementChannelPrivateUse1Kernel(int64_t numel,
                                              int64_t offset,
                                              TorchRAcc64<ScalarT, NDIMS> tensorAcc,
@@ -109,10 +109,10 @@ forEachTensorElementChannelPrivateUse1Kernel(int64_t numel,
 
 } // namespace _private
 
-template <typename Func, typename... Args>
+template <int NumThreads = DEFAULT_BLOCK_DIM, typename Func, typename... Args>
 void
 forEachLeafPrivateUse1(int64_t numChannels,
-                       const fvdb::detail::GridBatchImpl &batchHdl,
+                       const fvdb::GridBatchData &batchHdl,
                        Func func,
                        Args... args) {
     TORCH_CHECK(batchHdl.device().is_privateuseone(), "Grid batch must be on a PrivateUse1 device");
@@ -132,19 +132,18 @@ forEachLeafPrivateUse1(int64_t numChannels,
         const auto deviceLeafChannelCount  = deviceLeafCount * numChannels;
         const auto deviceLeafChannelOffset = deviceLeafOffset * numChannels;
 
-        const int64_t deviceNumBlocks = GET_BLOCKS(deviceLeafChannelCount, DEFAULT_BLOCK_DIM);
+        const int64_t deviceNumBlocks = GET_BLOCKS(deviceLeafChannelCount, NumThreads);
         TORCH_INTERNAL_ASSERT(deviceNumBlocks <
                                   static_cast<int64_t>(std::numeric_limits<unsigned int>::max()),
                               "Too many blocks in forEachLeafPrivateUse1");
         if (deviceNumBlocks > 0) {
-            _private::
-                forEachLeafPrivateUse1Kernel<<<deviceNumBlocks, DEFAULT_BLOCK_DIM, 0, stream>>>(
-                    deviceLeafChannelCount,
-                    deviceLeafChannelOffset,
-                    batchAccessor,
-                    numChannels,
-                    func,
-                    args...);
+            _private::forEachLeafPrivateUse1Kernel<NumThreads, Func, Args...>
+                <<<deviceNumBlocks, NumThreads, 0, stream>>>(deviceLeafChannelCount,
+                                                             deviceLeafChannelOffset,
+                                                             batchAccessor,
+                                                             numChannels,
+                                                             func,
+                                                             args...);
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         }
     }
@@ -152,10 +151,10 @@ forEachLeafPrivateUse1(int64_t numChannels,
     fvdb::detail::mergeStreams();
 }
 
-template <typename Func, typename... Args>
+template <int NumThreads = DEFAULT_BLOCK_DIM, typename Func, typename... Args>
 void
 forEachVoxelPrivateUse1(int64_t numChannels,
-                        const fvdb::detail::GridBatchImpl &batchHdl,
+                        const fvdb::GridBatchData &batchHdl,
                         Func func,
                         Args... args) {
     TORCH_CHECK(batchHdl.device().is_privateuseone(), "Grid batch must be on a PrivateUse1 device");
@@ -177,20 +176,19 @@ forEachVoxelPrivateUse1(int64_t numChannels,
         const auto deviceLeafVoxelChannelCount  = deviceLeafCount * VOXELS_PER_LEAF * numChannels;
         const auto deviceLeafVoxelChannelOffset = deviceLeafOffset * VOXELS_PER_LEAF * numChannels;
 
-        const int64_t deviceNumBlocks = GET_BLOCKS(deviceLeafVoxelChannelCount, DEFAULT_BLOCK_DIM);
+        const int64_t deviceNumBlocks = GET_BLOCKS(deviceLeafVoxelChannelCount, NumThreads);
         TORCH_INTERNAL_ASSERT(deviceNumBlocks <
                                   static_cast<int64_t>(std::numeric_limits<unsigned int>::max()),
                               "Too many blocks in forEachVoxelPrivateUse1");
 
         if (deviceNumBlocks > 0) {
-            _private::
-                forEachVoxelPrivateUse1Kernel<<<deviceNumBlocks, DEFAULT_BLOCK_DIM, 0, stream>>>(
-                    deviceLeafVoxelChannelCount,
-                    deviceLeafVoxelChannelOffset,
-                    batchAccessor,
-                    numChannels,
-                    func,
-                    args...);
+            _private::forEachVoxelPrivateUse1Kernel<NumThreads, Func, Args...>
+                <<<deviceNumBlocks, NumThreads, 0, stream>>>(deviceLeafVoxelChannelCount,
+                                                             deviceLeafVoxelChannelOffset,
+                                                             batchAccessor,
+                                                             numChannels,
+                                                             func,
+                                                             args...);
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         }
     }
@@ -198,7 +196,11 @@ forEachVoxelPrivateUse1(int64_t numChannels,
     fvdb::detail::mergeStreams();
 }
 
-template <typename ScalarT, int32_t NDIMS, typename Func, typename... Args>
+template <typename ScalarT,
+          int32_t NDIMS,
+          int NumThreads = DEFAULT_BLOCK_DIM,
+          typename Func,
+          typename... Args>
 void
 forEachJaggedElementChannelPrivateUse1(int64_t numChannels,
                                        const JaggedTensor &jaggedTensor,
@@ -215,10 +217,14 @@ forEachJaggedElementChannelPrivateUse1(int64_t numChannels,
         std::tie(deviceElementOffset, deviceElementCount) =
             fvdb::detail::deviceChunk(jaggedTensor.element_count(), deviceId);
 
-        const int64_t deviceNumBlocks = GET_BLOCKS(deviceElementCount, DEFAULT_BLOCK_DIM);
+        const int64_t deviceNumBlocks = GET_BLOCKS(deviceElementCount, NumThreads);
         if (deviceNumBlocks > 0) {
-            _private::forEachJaggedElementChannelPrivateUse1Kernel<NDIMS, ScalarT, Func, Args...>
-                <<<deviceNumBlocks, DEFAULT_BLOCK_DIM, 0, stream>>>(
+            _private::forEachJaggedElementChannelPrivateUse1Kernel<ScalarT,
+                                                                   NDIMS,
+                                                                   NumThreads,
+                                                                   Func,
+                                                                   Args...>
+                <<<deviceNumBlocks, NumThreads, 0, stream>>>(
                     deviceElementCount,
                     deviceElementOffset,
                     jaggedTensor.packed_accessor64<ScalarT, NDIMS, torch::RestrictPtrTraits>(),
@@ -232,7 +238,11 @@ forEachJaggedElementChannelPrivateUse1(int64_t numChannels,
     fvdb::detail::mergeStreams();
 }
 
-template <typename ScalarT, int32_t NDIMS, typename Func, typename... Args>
+template <typename ScalarT,
+          int32_t NDIMS,
+          int NumThreads = DEFAULT_BLOCK_DIM,
+          typename Func,
+          typename... Args>
 void
 forEachTensorElementChannelPrivateUse1(int64_t numChannels,
                                        const torch::Tensor &tensor,
@@ -248,10 +258,14 @@ forEachTensorElementChannelPrivateUse1(int64_t numChannels,
         std::tie(deviceElementOffset, deviceElementCount) =
             fvdb::detail::deviceChunk(tensor.size(0), deviceId);
 
-        const int64_t deviceNumBlocks = GET_BLOCKS(deviceElementCount, DEFAULT_BLOCK_DIM);
+        const int64_t deviceNumBlocks = GET_BLOCKS(deviceElementCount, NumThreads);
         if (deviceNumBlocks > 0) {
-            _private::forEachTensorElementChannelPrivateUse1Kernel<NDIMS, ScalarT, Func, Args...>
-                <<<deviceNumBlocks, DEFAULT_BLOCK_DIM, 0, stream>>>(
+            _private::forEachTensorElementChannelPrivateUse1Kernel<ScalarT,
+                                                                   NDIMS,
+                                                                   NumThreads,
+                                                                   Func,
+                                                                   Args...>
+                <<<deviceNumBlocks, NumThreads, 0, stream>>>(
                     deviceElementCount,
                     deviceElementOffset,
                     tensor.packed_accessor64<ScalarT, NDIMS, torch::RestrictPtrTraits>(),

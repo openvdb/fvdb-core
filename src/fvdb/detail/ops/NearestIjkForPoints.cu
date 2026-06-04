@@ -4,6 +4,7 @@
 #include <fvdb/detail/ops/NearestIjkForPoints.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
+#include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 #include <fvdb/detail/utils/cuda/RAIIRawDeviceBuffer.h>
 
@@ -61,8 +62,8 @@ template <>
 JaggedTensor
 dispatchNearestNeighborIJKForPoints<torch::kCUDA>(
     const JaggedTensor &jaggedPoints, const std::vector<VoxelCoordTransform> &transforms) {
-    TORCH_CHECK(jaggedPoints.device().is_cuda(), "GridBatchImpl must be on CUDA device");
-    TORCH_CHECK(jaggedPoints.device().has_index(), "GridBatchImpl must have a valid index");
+    TORCH_CHECK(jaggedPoints.device().is_cuda(), "GridBatchData must be on CUDA device");
+    TORCH_CHECK(jaggedPoints.device().has_index(), "GridBatchData must have a valid index");
 
     const torch::TensorOptions optsData =
         torch::TensorOptions().dtype(torch::kInt32).device(jaggedPoints.device());
@@ -93,7 +94,7 @@ dispatchNearestNeighborIJKForPoints<torch::kCUDA>(
                     bidx, eidx, pacc, transformDevPtr, outIJKAcc, outIJKBIdxAcc);
             };
 
-            forEachJaggedElementChannelCUDA<scalar_t, 2>(256, 1, jaggedPoints, cb);
+            forEachJaggedElementChannelCUDA<scalar_t, 2>(1, jaggedPoints, cb);
         }),
         AT_EXPAND(AT_FLOATING_TYPES),
         c10::kHalf);

@@ -1,0 +1,22 @@
+# Copyright Contributors to the OpenVDB Project
+# SPDX-License-Identifier: Apache-2.0
+#
+# CMake config for fvdb installed via pip (bundled in the Python wheel).
+# Assumes layout: share/cmake/fvdb/fvdbConfig.cmake relative to package root.
+
+get_filename_component(FVDB_INSTALL_PREFIX "${CMAKE_CURRENT_LIST_DIR}/../../../" ABSOLUTE)
+
+set(FVDB_INCLUDE_DIRS "${FVDB_INSTALL_PREFIX}/include")
+set(FVDB_LIBRARY_DIR "${FVDB_INSTALL_PREFIX}")
+
+find_library(FVDB_LIBRARY fvdb PATHS "${FVDB_LIBRARY_DIR}" NO_DEFAULT_PATH)
+
+if(NOT TARGET fvdb::fvdb)
+    add_library(fvdb::fvdb SHARED IMPORTED)
+    set_target_properties(fvdb::fvdb PROPERTIES
+        IMPORTED_LOCATION "${FVDB_LIBRARY}"
+        INTERFACE_INCLUDE_DIRECTORIES "${FVDB_INCLUDE_DIRS}")
+endif()
+
+include(FindPackageHandleStandardArgs)
+find_package_handle_standard_args(fvdb DEFAULT_MSG FVDB_LIBRARY FVDB_INCLUDE_DIRS)

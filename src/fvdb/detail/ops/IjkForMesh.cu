@@ -3,11 +3,13 @@
 //
 #include <fvdb/detail/ops/IjkForMesh.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
+#include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 #include <fvdb/detail/utils/cuda/GridDim.h>
 #include <fvdb/detail/utils/cuda/RAIIRawDeviceBuffer.h>
 
 #include <c10/cuda/CUDACachingAllocator.h>
+#include <c10/cuda/CUDAGuard.h>
 
 #include <cub/cub.cuh>
 
@@ -187,10 +189,12 @@ JaggedTensor
 dispatchIJKForMesh<torch::kCUDA>(const JaggedTensor &meshVertices,
                                  const JaggedTensor &meshFaces,
                                  const std::vector<VoxelCoordTransform> &transforms) {
-    TORCH_CHECK(meshVertices.device().is_cuda(), "GridBatchImpl must be on CUDA device");
-    TORCH_CHECK(meshVertices.device().has_index(), "GridBatchImpl must have a valid index");
-    TORCH_CHECK(meshFaces.device().is_cuda(), "GridBatchImpl must be on CUDA device");
-    TORCH_CHECK(meshFaces.device().has_index(), "GridBatchImpl must have a valid index");
+    TORCH_CHECK(meshVertices.device().is_cuda(), "GridBatchData must be on CUDA device");
+    TORCH_CHECK(meshVertices.device().has_index(), "GridBatchData must have a valid index");
+    TORCH_CHECK(meshFaces.device().is_cuda(), "GridBatchData must be on CUDA device");
+    TORCH_CHECK(meshFaces.device().has_index(), "GridBatchData must have a valid index");
+
+    const c10::cuda::CUDAGuard device_guard(meshFaces.device());
 
     RAIIRawDeviceBuffer<VoxelCoordTransform> transformsDVec(transforms.size(),
                                                             meshVertices.device());
@@ -229,7 +233,7 @@ dispatchIJKForMesh<torch::kCUDA>(const JaggedTensor &meshVertices,
                         countVoxelsPerTriToCheck<scalar_f, scalar_i>(
                             bidx, eidx, transformDevPtr, verticesAcc, facesAcc, samplesPerTriAcc);
                     };
-                    forEachJaggedElementChannelCUDA<scalar_i, 2>(1024, 1, meshFaces, cb);
+                    forEachJaggedElementChannelCUDA<scalar_i, 2, 1024>(1, meshFaces, cb);
 
                     // Compute the cumulative sum of the number of samples per triangle so each
                     // thread can figure out which triangle it's in
@@ -243,6 +247,8 @@ dispatchIJKForMesh<torch::kCUDA>(const JaggedTensor &meshVertices,
                     const int64_t numBlocks = GET_BLOCKS(totalSurfaceSamples, DEFAULT_BLOCK_DIM);
                     torch::Tensor outIJK    = torch::empty({totalSurfaceSamples, 3}, optsI32);
                     torch::Tensor outJidx   = torch::empty({totalSurfaceSamples}, optsJIdx);
+                    cudaStream_t stream =
+                        c10::cuda::getCurrentCUDAStream(meshFaces.device().index()).stream();
 
                     if (outIJK.numel() >= 1 << 31) {
                         auto outIJKAcc =
@@ -251,12 +257,12 @@ dispatchIJKForMesh<torch::kCUDA>(const JaggedTensor &meshVertices,
                             outJidx
                                 .packed_accessor64<fvdb::JIdxType, 1, torch::RestrictPtrTraits>();
                         generateSurfaceSamples<scalar_f, scalar_i, TorchRAcc64>
-                            <<<numBlocks, DEFAULT_BLOCK_DIM>>>(transformDevPtr,
-                                                               verticesAcc,
-                                                               facesAcc,
-                                                               samplesPerTriCumSumAcc,
-                                                               outIJKAcc,
-                                                               outJidxKAcc);
+                            <<<numBlocks, DEFAULT_BLOCK_DIM, 0, stream>>>(transformDevPtr,
+                                                                          verticesAcc,
+                                                                          facesAcc,
+                                                                          samplesPerTriCumSumAcc,
+                                                                          outIJKAcc,
+                                                                          outJidxKAcc);
                     } else {
                         auto outIJKAcc =
                             outIJK.packed_accessor64<int32_t, 2, torch::RestrictPtrTraits>();
@@ -264,12 +270,12 @@ dispatchIJKForMesh<torch::kCUDA>(const JaggedTensor &meshVertices,
                             outJidx
                                 .packed_accessor64<fvdb::JIdxType, 1, torch::RestrictPtrTraits>();
                         generateSurfaceSamples<scalar_f, scalar_i, TorchRAcc64>
-                            <<<numBlocks, DEFAULT_BLOCK_DIM>>>(transformDevPtr,
-                                                               verticesAcc,
-                                                               facesAcc,
-                                                               samplesPerTriCumSumAcc,
-                                                               outIJKAcc,
-                                                               outJidxKAcc);
+                            <<<numBlocks, DEFAULT_BLOCK_DIM, 0, stream>>>(transformDevPtr,
+                                                                          verticesAcc,
+                                                                          facesAcc,
+                                                                          samplesPerTriCumSumAcc,
+                                                                          outIJKAcc,
+                                                                          outJidxKAcc);
                     }
                     C10_CUDA_KERNEL_LAUNCH_CHECK();
 

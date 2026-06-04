@@ -4,7 +4,7 @@
 #ifndef FVDB_DETAIL_UTILS_SIMPLEOPHELPER_H
 #define FVDB_DETAIL_UTILS_SIMPLEOPHELPER_H
 
-#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/GridBatchData.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
@@ -88,7 +88,7 @@ validateDevice(torch::Device const &device) {
 
 template <torch::DeviceType DeviceTag, typename ElementType>
 torch::Tensor
-makeOutTensorFromGridBatch(GridBatchImpl const &grid_batch, ElementType const &element_type) {
+makeOutTensorFromGridBatch(GridBatchData const &grid_batch, ElementType const &element_type) {
     grid_batch.checkNonEmptyGrid();
     validateDevice<DeviceTag>(grid_batch.device());
 
@@ -198,7 +198,7 @@ struct BasePerActiveVoxelProcessor {
                int64_t const leafIdx,
                int64_t const voxelIdx,
                int64_t,
-               GridBatchImpl::Accessor gridAccessor,
+               GridBatchData::Accessor gridAccessor,
                Out_t out_accessor) const {
         auto const *grid      = gridAccessor.grid(batchIdx);
         auto const &leaf      = grid->tree().template getFirstNode<0>()[leafIdx];
@@ -211,19 +211,16 @@ struct BasePerActiveVoxelProcessor {
         }
     }
 
+    template <int NumThreads = 1024>
     JaggedTensor
-    execute(GridBatchImpl const &grid_batch,
-            OutElementType const &out_element = OutElementType{},
-            int const num_threads             = 1024) const {
+    execute(GridBatchData const &grid_batch,
+            OutElementType const &out_element = OutElementType{}) const {
         auto out_tensor =
             makeOutTensorFromGridBatch<DeviceTag, OutElementType>(grid_batch, out_element);
         auto out_accessor = makeAccessor<DeviceTag, OutElementType>(out_tensor);
         if constexpr (DeviceTag == torch::kCUDA) {
-            forEachVoxelCUDA(num_threads, // num threads
-                             1,
-                             grid_batch,
-                             *static_cast<Derived const *>(this),
-                             out_accessor);
+            forEachVoxelCUDA<NumThreads>(
+                1, grid_batch, *static_cast<Derived const *>(this), out_accessor);
         } else if constexpr (DeviceTag == torch::kPrivateUse1) {
             forEachVoxelPrivateUse1(
                 1, grid_batch, *static_cast<Derived const *>(this), out_accessor);
@@ -300,21 +297,21 @@ struct BasePerElementProcessor {
         static_cast<Derived const *>(this)->perElement(element_idx, in_accessor, out_accessor);
     }
 
+    template <int NumThreads = 1024>
     torch::Tensor
     execute(torch::Tensor const &in_tensor,
-            OutElementType const &out_element = OutElementType{},
-            int const num_threads             = 1024) const {
+            OutElementType const &out_element = OutElementType{}) const {
         auto out_tensor =
             makeOutTensorFromTensor<DeviceTag, OutElementType>(in_tensor, out_element);
         auto out_accessor         = makeAccessor<DeviceTag, OutElementType>(out_tensor);
         constexpr size_t IN_NDIMS = 1 + InElementType::NDIMS;
         using IN_T                = typename InElementType::value_type;
         if constexpr (DeviceTag == torch::kCUDA) {
-            forEachTensorElementChannelCUDA<IN_T, IN_NDIMS>(num_threads,
-                                                            1, // num channels, ignored
-                                                            in_tensor,
-                                                            *static_cast<Derived const *>(this),
-                                                            out_accessor);
+            forEachTensorElementChannelCUDA<IN_T, IN_NDIMS, NumThreads>(
+                1, // num channels, ignored
+                in_tensor,
+                *static_cast<Derived const *>(this),
+                out_accessor);
         } else if constexpr (DeviceTag == torch::kPrivateUse1) {
             forEachTensorElementChannelPrivateUse1<IN_T, IN_NDIMS>(
                 1, in_tensor, *static_cast<Derived const *>(this), out_accessor);
