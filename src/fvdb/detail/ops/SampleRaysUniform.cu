@@ -334,8 +334,8 @@ generateRaySamplesCallback(int32_t bidx,
 // Kernel launchers
 //
 // NVCC forbids defining an extended __device__ lambda inside a *generic* lambda. Plain function
-// templates are fine, so we route all specialized launches through these helpers instead of wrapping
-// them in a generic lambda at the call site.
+// templates are fine, so we route all specialized launches through these helpers instead of
+// wrapping them in a generic lambda at the call site.
 // ---------------------------------------------------------------------------
 
 template <torch::DeviceType DeviceTag,
