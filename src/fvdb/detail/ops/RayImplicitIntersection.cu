@@ -29,35 +29,27 @@ sgn(const T &val) {
 
 // Per-ray SDF zero-crossing search.
 //
-// Semantics match nanovdb::ZeroCrossing: the FIRST valid (non-NaN) voxel
-// along the ray seeds the sign reference, and the first subsequent voxel
-// with the opposite sign is reported as the hit. This naturally handles
-// both rays that start outside the surface (first sample positive, hit on
-// crossing into the negative band) AND rays that start inside the surface
-// (first sample negative, hit on crossing back out into the positive
-// band) without baking a fixed "positive = outside" convention into the
-// kernel. NaN voxels are treated as gaps so the band-continuity check
-// will fall back to bracket-entry time on the next valid voxel.
+// Semantics match nanovdb::ZeroCrossing: the FIRST valid (non-NaN) voxel along the ray seeds the
+// sign reference, and the first subsequent voxel with the opposite sign is reported as the hit.
+// This naturally handles both rays that start outside the surface (first sample positive, hit on
+// crossing into the negative band) AND rays that start inside the surface (first sample negative,
+// hit on crossing back out into the positive band) without baking a fixed "positive = outside"
+// convention into the kernel. NaN voxels are treated as gaps so the band-continuity check will
+// fall back to bracket-entry time on the next valid voxel.
 //
 // Performance notes:
 //
-//  - All output writes go through `_storeStreaming` (`__stwt`, `.CS` in
-//    SASS) so the write-once `outTimes` line never gets promoted into L1
-//    and evicts the active-mask leaf data we are walking.
-//  - `gridScalars` is read through the read-only data cache via
-//    `_loadReadOnly` (`__ldg`, `.NC` in SASS) so the side-buffer SDF data
-//    shares cache capacity instead of contending with the leaf accessor.
-//  - Time / scalar arithmetic is done in `MathType = at::opmath_type<ScalarT>`
-//    so `c10::Half` rays get fp32-precision interpolation; we cast back to
-//    `ScalarT` only at the streaming-store boundary.
-//  - `EpsZero` is a compile-time flag dispatched from the launcher when
-//    `eps == 0`, eliding the `if (deltaT < eps) continue;` branch which is
-//    the overwhelmingly common case.
-//  - Iteration is over leaf voxels only via `HDDALeafVoxelIterator` (see
-//    HDDAIterators.h): it yields exactly the dim==1 active voxels and skips
-//    coarse active tiles in a single HDDA step. This matches the narrow-band
-//    inner loop of `nanovdb::ZeroCrossing` and guarantees the per-voxel
-//    `gridScalars` index below (`getValue(ijk) - 1`) is always in-bounds.
+//  - All output writes go through `_storeStreaming` (`__stwt`, `.CS` in SASS) so the write-once
+//    `outTimes` line never gets promoted into L1 and evicts the active-mask leaf data we are
+//    walking.
+//  - `gridScalars` is read through the read-only data cache via `_loadReadOnly` (`__ldg`, `.NC`
+//    in SASS) so the side-buffer SDF data shares cache capacity instead of contending with the
+//    leaf accessor.
+//  - Time / scalar arithmetic is done in `MathType = at::opmath_type<ScalarT>` so `c10::Half`
+//    rays get fp32-precision interpolation; we cast back to `ScalarT` only at the streaming-store
+//    boundary.
+//  - `EpsZero` is a compile-time flag dispatched from the launcher when `eps == 0`, eliding the
+//    `if (deltaT < eps) continue;` branch which is the overwhelmingly common case.
 template <typename ScalarT,
           bool EpsZero,
           template <typename T, int32_t D>
@@ -91,11 +83,9 @@ rayImplicitCallback(int32_t bidx,
         return;
     }
 
-    // Reference state is seeded from the FIRST valid (non-NaN) voxel
-    // along the ray (see kernel docs above). `scalarSign == INVALID_SIGN`
-    // is the "no reference yet" sentinel; we only flag a hit once it has
-    // been replaced by a real voxel sign and the next valid voxel
-    // disagrees with it.
+    // Reference state is seeded from the FIRST valid (non-NaN) voxel along the ray (see kernel docs
+    // above). `scalarSign == INVALID_SIGN` is the "no reference yet" sentinel; we only flag a hit
+    // once it has been replaced by a real voxel sign and the next valid voxel disagrees with it.
     int scalarSign      = INVALID_SIGN;
     MathType lastScalar = MathType(0);
     MathType lastTime   = MathType(0);
@@ -124,14 +114,11 @@ rayImplicitCallback(int32_t bidx,
         const bool isHit   = isValid && hasRef && (scalarSign != voxelSign);
 
         if (isHit) {
-            // Sub-voxel-precise hit time when the previous sample is
-            // contiguous along the ray (typical narrow-band traversal):
-            // linear-interpolate between the bracketing (time, value)
-            // pairs. When there is a gap between the previous valid voxel
-            // and this one — either inactive voxels in the iterator or a
-            // run of NaN tile values — fall back to bracket-entry time
-            // to avoid interpolating across empty space (matching
-            // nanovdb::ZeroCrossing precision in that case).
+            // Sub-voxel-precise hit time when the previous sample is contiguous along the ray
+            // (typical narrow-band traversal): linear-interpolate between the bracketing (time,
+            // value) pairs. When there is a gap between the previous valid voxel and this one —
+            // either inactive voxels in the iterator or a run of NaN tile values — fall back to
+            // bracket-entry time to avoid interpolating across empty space.
             const bool contiguous   = (t0 == lastT1);
             const MathType lamCont  = voxelValue / (voxelValue - lastScalar);
             const MathType timeCont = lamCont * lastTime + (MathType(1) - lamCont) * voxelTime;
@@ -141,9 +128,9 @@ rayImplicitCallback(int32_t bidx,
             break;
         }
 
-        // Only update the sign-reference state from valid (non-NaN) voxels;
-        // NaN voxels are treated as gaps so a subsequent valid voxel will
-        // see `contiguous == false` and fall back to bracket-entry time.
+        // Only update the sign-reference state from valid (non-NaN) voxels; NaN voxels are treated
+        // as gaps so a subsequent valid voxel will see `contiguous == false` and fall back to
+        // bracket-entry time.
         if (isValid) {
             scalarSign = voxelSign;
             lastScalar = voxelValue;
@@ -203,9 +190,9 @@ RayImplicitIntersection(const GridBatchData &batchHdl,
     auto optsF             = torch::TensorOptions().dtype(rayO.dtype()).device(rayO.device());
     torch::Tensor outTimes = torch::empty({rayO.rsize(0)}, optsF);
 
-    // `eps == 0` is the dominant call site (the Python binding's default).
-    // Specialise the kernel on `EpsZero` so NVCC drops the per-voxel
-    // `deltaT < eps` branch and one register entirely in that case.
+    // `eps == 0` is the dominant call site (the Python binding's default). Specialise the kernel on
+    // `EpsZero` so NVCC drops the per-voxel `deltaT < eps` branch and one register entirely in that
+    // case.
     const bool epsZero = (eps == 0.0f);
 
     AT_DISPATCH_V2(

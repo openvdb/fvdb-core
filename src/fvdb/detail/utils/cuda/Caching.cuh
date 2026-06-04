@@ -11,19 +11,17 @@
 // ---------------------------------------------------------------------------
 // Cache-hint helpers for write-once outputs and read-only inputs.
 //
-// These are deliberately tiny and inline. They route stores through the
-// streaming-store path (`__stwt`, `.CS` qualifier in SASS) so write-once
-// output tensors don't get promoted into L1 and evict the voxel-data working
-// set, and route loads through the read-only data cache (`__ldg`, `.NC`
-// qualifier in SASS) so read-mostly side-buffer data shares cache capacity
-// instead of competing with the active-mask leaf data on L1.
+// These are deliberately tiny and inline. They route stores through the streaming-store path
+// (`__stwt`, `.CS` qualifier in SASS) so write-once output tensors don't get promoted into L1
+// and evict the voxel-data working set, and route loads through the read-only data cache (`__ldg`,
+// `.NC` qualifier in SASS) so read-mostly side-buffer data shares cache capacity instead of
+// competing with the active-mask leaf data on L1.
 //
-// `__stwt` and `__ldg` are only available on device, and only for a fixed
-// set of scalar and vector types (see the CUDA C++ Programming Guide,
-// "Load and Store Functions Using Cache Hints"). For host compilation and
-// for scalar types without a matching overload (e.g. c10::Half) we fall
-// back to a plain assignment / dereference; NVCC will fully inline both
-// branches so the CPU path is unaffected.
+// `__stwt` and `__ldg` are only available on device, and only for a fixed set of scalar and
+// vector types (see the CUDA C++ Programming Guide, "Load and Store Functions Using Cache
+// Hints"). For host compilation and for scalar types without a matching overload (e.g. c10::Half)
+// we fall back to a plain assignment / dereference; NVCC will fully inline both branches so the
+// CPU path is unaffected.
 // ---------------------------------------------------------------------------
 
 namespace fvdb {
@@ -64,9 +62,9 @@ _storeStreamingPair(T *ptr, const T a, const T b) {
 #endif
 }
 
-// Read a value through the read-only data cache when the type / device
-// permit. `__ldg` exists for the standard scalar widths and pointer types;
-// for c10::Half / at::BFloat16 etc. we fall back to a plain dereference.
+// Read a value through the read-only data cache when the type / device permit. `__ldg` exists for
+// the standard scalar widths and pointer types; for c10::Half / at::BFloat16 etc. we fall back to
+// a plain dereference.
 template <typename T>
 __hostdev__ __forceinline__ T
 _loadReadOnly(const T *ptr) {

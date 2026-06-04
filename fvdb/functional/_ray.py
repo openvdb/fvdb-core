@@ -138,12 +138,12 @@ def ray_implicit_intersection_batch(
 ) -> JaggedTensor:
     """Find ray intersections with an implicit surface defined by grid scalars on a grid batch.
 
-    The first valid (non-NaN) voxel sampled along each ray seeds the sign
-    reference, and the first subsequent voxel with the opposite sign is
-    reported as the intersection. Both "positive outside" and
-    "negative outside" SDF conventions are handled identically, and a ray
-    that enters the bbox already inside the surface is reported at the
-    *exit* of the surface along the ray.
+    The first valid (non-NaN) voxel sampled along each ray seeds the sign reference, and the first
+    subsequent voxel with the opposite sign is reported as the intersection. Both "positive outside"
+    and "negative outside" SDF conventions are therefore handled identically, and a ray that enters
+    the bbox already inside the surface is reported at the *exit* of the surface along the ray.
+    "negative outside" SDF conventions are handled identically, and a ray that enters the bbox
+    already inside the surface is reported at the *exit* of the surface along the ray.
 
     Args:
         grid (GridBatch): The grid batch defining the implicit surface topology.
@@ -324,12 +324,10 @@ def ray_implicit_intersection_single(
 ) -> torch.Tensor:
     """Find ray intersections with an implicit surface defined by grid scalars on a single grid.
 
-    The first valid (non-NaN) voxel sampled along each ray seeds the sign
-    reference, and the first subsequent voxel with the opposite sign is
-    reported as the intersection. Both "positive outside" and
-    "negative outside" SDF conventions are handled identically, and a ray
-    that enters the bbox already inside the surface is reported at the
-    *exit* of the surface along the ray.
+    The first valid (non-NaN) voxel sampled along each ray seeds the sign reference, and the first
+    subsequent voxel with the opposite sign is reported as the intersection. Both "positive outside"
+    and "negative outside" SDF conventions are therefore handled identically, and a ray that enters
+    the bbox already inside the surface is reported at the *exit* of the surface along the ray.
 
     Args:
         grid (Grid): The single grid defining the implicit surface topology.

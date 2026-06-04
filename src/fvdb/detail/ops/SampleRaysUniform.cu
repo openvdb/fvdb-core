@@ -24,25 +24,17 @@ _calcDt(ScalarType t, ScalarType coneAngle, ScalarType minStepSize, const Scalar
     return nanovdb::math::Clamp(t * coneAngle, minStepSize, maxStepSize);
 }
 
-// Write-once streaming stores (`_storeStreaming` / `_storeStreamingPair`)
-// for the generate kernel output live in
-// <fvdb/detail/utils/cuda/Caching.cuh> and are reused across multiple ops.
-// They are visible from this anonymous namespace via plain name lookup
-// because they live in the enclosing `fvdb::detail::ops` namespace.
-
-// Write one sample's (times, rayIdx) and bump the per-ray sample counter.
-// CSEs `rayStartIdx + numSamples` into a single local, and routes the two
-// output tensors through the streaming-store helpers above. Kept as a plain
-// function template (not a lambda) because NVCC forbids extended __device__
-// lambdas inside generic lambdas, which is what the launchers use.
+// Write one sample's (times, rayIdx) and bump the per-ray sample counter. CSEs `rayStartIdx +
+// numSamples` into a single local, and routes the two output tensors through the streaming-store
+// helpers from <fvdb/detail/utils/cuda/Caching.cuh>. Kept as a plain function template (not a
+// lambda) because NVCC forbids extended __device__ lambdas inside generic lambdas, which is what
+// the launchers use.
 //
-// The (a, b) pair can mix types: when `ScalarType == c10::Half`, the HDDA
-// iterator returns `it->t0` / `it->t1` in `at::opmath_type<Half> = float`,
-// while the local `t0` / `t1` step variables stay in `ScalarType`. Rather
-// than forcing callers to cast at every site, we take them as separate
-// deduced types `A, B` and convert to `ScalarType` here. `ScalarType` must
-// be specified explicitly at the call site because it's no longer used in a
-// function parameter slot.
+// The (a, b) pair can mix types: when `ScalarType == c10::Half`, the HDDA iterator returns
+// `it->t0` / `it->t1` in `at::opmath_type<Half> = float`, while the local `t0` / `t1` step
+// variables stay in `ScalarType`. Rather than forcing callers to cast at every site, we take them
+// as separate deduced types `A, B` and convert to `ScalarType` here. `ScalarType` must be
+// specified explicitly at the call site because it's no longer used in a function parameter slot.
 template <bool ReturnMidpoint,
           typename ScalarType,
           typename RayTimesAcc,
@@ -59,9 +51,8 @@ _emitSample(RayTimesAcc &outRayTimes,
     const ScalarType sa = static_cast<ScalarType>(a);
     const ScalarType sb = static_cast<ScalarType>(b);
     if constexpr (ReturnMidpoint) {
-        // Cast the sum explicitly: `c10::Half + c10::Half` promotes to float
-        // on some PyTorch / CUDA configurations, which would fail deduction
-        // in `_storeStreaming`.
+        // Cast the sum explicitly: `c10::Half + c10::Half` promotes to float on some PyTorch / CUDA
+        // configurations, which would fail deduction in `_storeStreaming`.
         const ScalarType mid = static_cast<ScalarType>((sa + sb) * ScalarType(0.5));
         _storeStreaming(&outRayTimes[idx][0], mid);
     } else {
@@ -70,12 +61,11 @@ _emitSample(RayTimesAcc &outRayTimes,
     _storeStreaming(&outJIdx[idx], rayIdx);
 }
 
-// Counts the number of samples a ray will emit. Templated on `ConeZero`
-// (coneAngle == 0) and `IncludeEndpoints` (include_end_segments) so NVCC can
-// prune the dead branches and, critically, hoist `stepSize = minStepSize` out
-// of the inner while-loops when ConeZero is true. That removes a Clamp+mul
-// from the hot per-sample body and drops several live registers, which is the
-// main lever we have on this latency-bound traversal.
+// Counts the number of samples a ray will emit. Templated on `ConeZero` (coneAngle == 0) and
+// `IncludeEndpoints` (include_end_segments) so the compiler can prune the dead branches and,
+// critically, hoist `stepSize = minStepSize` out of the inner while-loops when ConeZero is true.
+// That removes a Clamp+mul from the hot per-sample body and drops several live registers, which is
+// the main performance lever we have on this latency-bound traversal.
 template <typename ScalarType,
           bool ConeZero,
           bool IncludeEndpoints,
@@ -116,18 +106,18 @@ countSamplesPerRayCallback(int32_t bidx,
     // Count samples along ray
     int32_t numSamples = 0;
 
-    // maxStepSize is only referenced on the non-ConeZero path; declaring it
-    // at function scope keeps it visible to every `_calcDt` call in the loop
-    // body without relying on constexpr (c10::Half has no constexpr ctor
-    // from double in older PyTorch).
+    // maxStepSize is only referenced on the non-ConeZero path; declaring it at function scope keeps
+    // it visible to every `_calcDt` call in the loop body. It's `const` rather than `constexpr`
+    // because c10::Half has no constexpr constructor (Half(float) does a runtime fp32->fp16
+    // conversion), so a half-typed compile-time constant isn't possible.
     const ScalarType maxStepSize = static_cast<ScalarType>(1e10);
 
     // Count samples
     ScalarType t0 = tMini;
     ScalarType stepSize;
     if constexpr (ConeZero) {
-        // In the cone_angle == 0 case _calcDt collapses to minStepSize and is
-        // loop-invariant; compute it once and let NVCC hoist it out.
+        // In the cone_angle == 0 case _calcDt collapses to minStepSize and is loop-invariant;
+        // compute it once and let NVCC hoist it out.
         stepSize = minStepSize;
     } else {
         stepSize = _calcDt(t0, coneAngle, minStepSize, maxStepSize);
@@ -146,9 +136,9 @@ countSamplesPerRayCallback(int32_t bidx,
         if constexpr (IncludeEndpoints) {
             // Step t0 consistently until it intersects the voxel (t0 is out of the voxel)
             // This MUST use the same rounding (`ceil`) as the generate-path callback below so that
-            // both callbacks emit the same number of samples per ray.
-            // With cone tracing (coneAngle > 0), `_calcDt` depends on `t0`, so any rounding
-            // mismatch silently diverges the two paths and can OOB-write during sample generation.
+            // both callbacks emit the same number of samples per ray. With cone tracing
+            // (coneAngle > 0), `_calcDt` depends on `t0`, so any rounding mismatch silently
+            // diverges the two paths and can OOB-write during sample generation.
             ScalarType distToVox = it->t0 - t0;
             t0 += c10::cuda::compat::ceil(distToVox / stepSize) * stepSize;
             t1 = t0 + stepSize;
@@ -201,10 +191,9 @@ countSamplesPerRayCallback(int32_t bidx,
     outRayCounts[eidx + 1] = numSamples;
 }
 
-// Emits the actual samples computed by countSamplesPerRayCallback. Templated
-// on ConeZero, IncludeEndpoints, and ReturnMidpoint for the same reasons as
-// the count variant: prune dead branches, hoist stepSize, and drop the
-// per-sample `returnMidpoint` test from the write path.
+// Emits the actual samples computed by countSamplesPerRayCallback. Templated on ConeZero,
+// IncludeEndpoints, and ReturnMidpoint for the same reasons as the count variant: prune dead
+// branches, hoist stepSize, and drop the per-sample `returnMidpoint` test from the write path.
 template <typename ScalarType,
           bool ConeZero,
           bool IncludeEndpoints,
@@ -344,11 +333,9 @@ generateRaySamplesCallback(int32_t bidx,
 // ---------------------------------------------------------------------------
 // Kernel launchers
 //
-// NVCC forbids defining an extended __device__ lambda inside a *generic*
-// lambda (CUDA C++ Programming Guide, "Restrictions on extended lambda
-// expressions"). Plain function templates are fine, so we route all
-// specialized launches through these helpers instead of wrapping them in a
-// generic lambda at the call site.
+// NVCC forbids defining an extended __device__ lambda inside a *generic* lambda. Plain function
+// templates are fine, so we route all specialized launches through these helpers instead of wrapping
+// them in a generic lambda at the call site.
 // ---------------------------------------------------------------------------
 
 template <torch::DeviceType DeviceTag,
@@ -580,12 +567,11 @@ UniformRaySamples(const GridBatchData &batchHdl,
             torch::Tensor rayCounts = torch::zeros({rayOrigins.rsize(0) + 1}, optsI32); // [B*M]
             auto outCountsAcc       = tensorAccessor<DeviceTag, int32_t, 1>(rayCounts);
 
-            // Dispatch to the (ConeZero, IncludeEndpoints) specialization of
-            // `launchCount` so NVCC can prune dead branches and hoist
-            // stepSize out of the inner loop in `countSamplesPerRayCallback`.
-            // See the callback for why. The helper itself is a plain
-            // function template (not a generic lambda) because NVCC forbids
-            // __device__ lambdas inside generic lambdas.
+            // Dispatch to the (ConeZero, IncludeEndpoints) specialization of `launchCount` so NVCC
+            // can prune dead branches and hoist stepSize out of the inner loop in
+            // `countSamplesPerRayCallback`. See the callback for why. The helper itself is a plain
+            // function template (not a generic lambda) because NVCC forbids __device__ lambdas
+            // inside generic lambdas.
             const scalar_t castedMinStepSize = static_cast<scalar_t>(minStepSize);
             const scalar_t castedConeAngle   = static_cast<scalar_t>(coneAngle);
             const scalar_t castedEps         = static_cast<scalar_t>(eps);
@@ -657,8 +643,8 @@ UniformRaySamples(const GridBatchData &batchHdl,
 
             auto outRayTimesAcc = tensorAccessor<DeviceTag, scalar_t, 2>(outRayTimes);
 
-            // Same (ConeZero, IncludeEndpoints, ReturnMidpoint) specialization
-            // pattern as the count pass above.
+            // Same (ConeZero, IncludeEndpoints, ReturnMidpoint) specialization pattern as the count
+            // pass above.
             if (coneAngle == 0.0) {
                 if (includeEndpointSegments) {
                     if (returnMidpoint) {
