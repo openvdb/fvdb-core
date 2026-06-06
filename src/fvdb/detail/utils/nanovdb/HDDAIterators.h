@@ -208,24 +208,29 @@ template <typename AccT, typename ScalarT, bool LeafOnly> struct HDDAValueIterat
     __hostdev__ bool
     nextVoxel() {
         do {
-            // Re-align the HDDA to the correct level. mHdda's level needs up to three passes to
-            // stabilise (4096 -> 128 -> 8 -> 1) and on each pass we have to re-query getDim at the
-            // snapped voxel. Bound the loop at three iterations so a degenerate accessor can't spin
-            // forever; in practice the loop converges in <= 3 passes by construction of the level
-            // hierarchy.
+            // Re-align the HDDA to the tree level at the current voxel. A single update can leave
+            // the HDDA one level short when a step crosses several node levels at once, so we retry
+            // up to three passes (root -> upper -> lower -> leaf is the deepest transition). The
+            // `#pragma unroll` is load-bearing: without it ptxas keeps this bounded loop rolled
+            // (the body is two getDim tree-walks plus an update, too big to auto-unroll) and emits
+            // a data-dependent backedge that adds warp divergence at level transitions. Forcing the
+            // unroll turns the <=3 passes into predicated straight-line code with no backedge.
             int dim = mAcc.getDim(mHdda.voxel(), mRay);
+            // Emit the pragma only in the CUDA device pass: it's meaningless on the host and the
+            // host compiler treats unknown pragmas as errors (-Werror=unknown-pragmas).
+#if defined(__CUDA_ARCH__)
+#pragma unroll
+#endif
             for (int pass = 0; pass < 3 && mHdda.dim() != dim; ++pass) {
                 mRay.setMinTime(mHdda.time());
                 mHdda.update(mRay, dim);
                 dim = mAcc.getDim(mHdda.voxel(), mRay);
             }
 
-            // `dim` (computed by the realign loop above) is the tree's node size at the current
-            // voxel: dim == 1 is a leaf voxel, dim > 1 is a coarse tile. isActive returns true
-            // for both. When LeafOnly, skip tiles so we yield only leaf voxels; the trailing
-            // mHdda.step() then jumps over the whole tile in one coarse step. When !LeafOnly the
-            // gate collapses to the original isActive check (no extra cost — dim is already
-            // in hand).
+            // dim == 1 is a leaf voxel, dim > 1 a coarse tile; isActive is true for both. When
+            // LeafOnly, skip tiles so we yield only leaf voxels (the trailing mHdda.step() jumps
+            // the whole tile in one coarse step); when !LeafOnly the gate collapses to the original
+            // isActive check.
             const bool isLeaf = (dim == 1);
             if ((!LeafOnly || isLeaf) && mAcc.isActive(mHdda.voxel())) {
                 mData = {mHdda.voxel(), TimespanT(mHdda.time(), mHdda.next())};
