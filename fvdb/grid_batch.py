@@ -1148,6 +1148,11 @@ class GridBatch:
     ) -> JaggedTensor:
         """Find ray intersections with an implicit surface defined by scalar voxel data in this grid batch.
 
+        The first valid (non-NaN) voxel sampled along each ray seeds the sign reference, and the first
+        subsequent voxel with the opposite sign is reported as the intersection. Both "positive outside"
+        and "negative outside" SDF conventions are therefore handled identically, and a ray that enters
+        the bbox already inside the surface is reported at the *exit* of the surface along the ray.
+
         Args:
             ray_origins (JaggedTensor): Ray origins in world space. Shape: ``(batch_size, num_rays_for_grid_b, 3)``.
             ray_directions (JaggedTensor): Ray directions (should be normalized). Shape: ``(batch_size, num_rays_for_grid_b, 3)``.

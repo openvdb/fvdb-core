@@ -1230,6 +1230,11 @@ class Grid:
         The implicit surface is defined by the zero level-set of
         ``grid_scalars``.
 
+        The first valid (non-NaN) voxel sampled along each ray seeds the sign reference, and the first
+        subsequent voxel with the opposite sign is reported as the intersection. Both "positive outside"
+        and "negative outside" SDF conventions are therefore handled identically, and a ray that enters
+        the bbox already inside the surface is reported at the *exit* of the surface along the ray.
+
         Args:
             ray_origins (torch.Tensor): Ray origins of shape ``(N, 3)``.
             ray_directions (torch.Tensor): Ray directions of shape ``(N, 3)``.
