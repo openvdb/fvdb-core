@@ -34,7 +34,6 @@ dependencies:
   - sphinx>=7.0.0
   - tqdm
   - zlib
-  ## 3dgs
   - ipykernel
   - nbmake
   - pip:
