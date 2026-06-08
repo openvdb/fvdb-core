@@ -141,6 +141,7 @@ endfunction()
 
 # Configure an example test
 ConfigureTest(ExampleTest "ExampleTest.cpp")
+ConfigureTest(LoadNanovdbTest "../../tests/cpp/LoadNanovdbTest.cpp")
 
 # Configure unit tests
 ConfigureTest(HDDAIteratorsTest "HDDAIteratorsTest.cpp")
