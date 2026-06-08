@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 """Functional API for meshing and TSDF integration on sparse grids."""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -36,7 +37,8 @@ def marching_cubes_batch(
     Returns:
         vertices (JaggedTensor): Mesh vertex positions, shape ``(B, -1, 3)``.
         faces (JaggedTensor): Triangle face indices.
-        normals (JaggedTensor): Per-vertex normals.
+        unique_vertex_ids (JaggedTensor): Unique vertex IDs with int64 values,
+            shape ``(B, -1, 3)``.
 
     .. seealso:: :func:`marching_cubes_single`
     """
@@ -60,7 +62,8 @@ def marching_cubes_single(
     Returns:
         vertices (torch.Tensor): Mesh vertex positions, shape ``(N, 3)``.
         faces (torch.Tensor): Triangle face indices.
-        normals (torch.Tensor): Per-vertex normals.
+        unique_vertex_ids (torch.Tensor): Unique vertex IDs with dtype ``torch.int64``,
+            shape ``(N, 3)``.
 
     .. seealso:: :func:`marching_cubes_batch`
     """

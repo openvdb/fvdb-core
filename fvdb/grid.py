@@ -1475,8 +1475,8 @@ class Grid:
                 ``(num_vertices, 3)``.
             faces (torch.Tensor): Triangle face indices of shape
                 ``(num_faces, 3)``.
-            normals (torch.Tensor): Vertex normals of shape
-                ``(num_vertices, 3)``.
+            unique_vertex_ids (torch.Tensor): Unique vertex IDs of shape
+                ``(num_vertices, 3)`` and dtype ``torch.int64``.
         """
         from . import functional
 
