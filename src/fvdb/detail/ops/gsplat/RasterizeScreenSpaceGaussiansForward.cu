@@ -684,8 +684,9 @@ launchRasterizeForwardKernels(
     auto outAlphas   = fvdb::JaggedTensor(alphasToRenderVec);
     auto outLastIds  = fvdb::JaggedTensor(lastIdsToRenderVec);
 
-    auto isSparse      = activeTiles.has_value();
-    uint32_t tileCount = isSparse ? activeTiles.value().size(0) : C * tileExtentH * tileExtentW;
+    auto isSparse                 = activeTiles.has_value();
+    const uint32_t tilesPerCamera = tileExtentH * tileExtentW;
+    uint32_t tileCount            = isSparse ? activeTiles.value().size(0) : C * tilesPerCamera;
 
     std::vector<cudaEvent_t> events(c10::cuda::device_count());
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
@@ -700,14 +701,8 @@ launchRasterizeForwardKernels(
     auto reshapedFeatures =
         outFeatures.jdata().view({C, renderWindow.height, renderWindow.width, channels});
 
-    std::vector<torch::Tensor> tensors = {means2d,
-                                          conics,
-                                          features,
-                                          opacities,
-                                          tileOffsets,
-                                          reshapedAlphas,
-                                          reshapedLastIds,
-                                          reshapedFeatures};
+    std::vector<torch::Tensor> tileTensors = {
+        tileOffsets, reshapedAlphas, reshapedLastIds, reshapedFeatures};
 
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
@@ -716,12 +711,27 @@ launchRasterizeForwardKernels(
 
         uint32_t deviceTileOffset, deviceTileCount;
         std::tie(deviceTileOffset, deviceTileCount) = deviceChunk(tileCount, deviceId);
-        uint32_t cameraOffset = deviceTileOffset / (tileExtentH * tileExtentW);
-        uint32_t cameraCount =
-            cuda::ceil_div(deviceTileOffset + deviceTileCount, (tileExtentH * tileExtentW)) -
-            cameraOffset;
         if (deviceTileCount) {
-            perCameraPrefetchBatchAsync(tensors, cameraOffset, cameraCount, deviceId, stream);
+            std::vector<void *> prefetchPointers;
+            std::vector<size_t> prefetchSizes;
+            const TilePrefetchRange tileRange{deviceTileOffset,
+                                              deviceTileCount,
+                                              tileExtentH,
+                                              tileExtentW,
+                                              renderWindow.height,
+                                              renderWindow.width,
+                                              tileSize};
+            appendPerTilePrefetchRanges(prefetchPointers, prefetchSizes, tileTensors, tileRange);
+            if constexpr (!IS_PACKED) {
+                const uint32_t cameraOffset = deviceTileOffset / tilesPerCamera;
+                const uint32_t cameraCount =
+                    cuda::ceil_div(deviceTileOffset + deviceTileCount, tilesPerCamera) -
+                    cameraOffset;
+                std::vector<torch::Tensor> cameraTensors = {means2d, conics, features, opacities};
+                appendPerCameraPrefetchRanges(
+                    prefetchPointers, prefetchSizes, cameraTensors, cameraOffset, cameraCount);
+            }
+            memPrefetchBatchAsync(prefetchPointers, prefetchSizes, deviceId, stream);
         }
         C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
     }
