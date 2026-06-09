@@ -43,7 +43,7 @@ dependencies:
   - numpy
   - open-clip-torch
   - openssl
-  - openusd
+  - openusd>=26.03
   - pandas
   - parameterized
   - pip
