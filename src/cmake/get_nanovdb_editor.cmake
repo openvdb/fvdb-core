@@ -4,14 +4,19 @@
 #   * fVDB always uses CPM-pinned NanoVDB Editor headers during builds.
 #   * Viewer/runtime binaries are optional and come from the installed
 #     nanovdb-editor pip package unless a local source checkout is provided.
-#   * When CPM_nanovdb_editor_SOURCE points at a local repository, fVDB builds
-#     and installs nanovdb_editor from that source checkout instead.
+#   * When CPM_nanovdb_editor_SOURCE points at a local repository, fVDB uses
+#     headers from that source checkout and also builds and installs the
+#     nanovdb_editor wheel from it during CMake configure.
+#     Pass it via build.sh, e.g.
+#       ./build.sh install -C cmake.define.CPM_nanovdb_editor_SOURCE=/path/to/nanovdb-editor
+#     The value is cached by CMake; clear it on a subsequent non-clean build with
+#       ./build.sh install -C cmake.define.CPM_nanovdb_editor_SOURCE=
 set(NANOVDB_EDITOR_BUILD_TYPE "Release" CACHE STRING "Build type for nanovdb_editor (Release/Debug)")
 
 # fVDB pins NanoVDB Editor headers to an exact source commit via CPM
 # Note: only change this when the interfaces have changed
-set(NANOVDB_EDITOR_TAG c2eeb18b2e381e8e7cf0979b84ef3551620d7f74)
-set(NANOVDB_EDITOR_VERSION 0.0.25)   # version at this commit
+set(NANOVDB_EDITOR_TAG 06f0bc8d424446e77545f3d41dd36bedc678b131)
+set(NANOVDB_EDITOR_VERSION 0.1.1-dev)   # version at this commit
 
 CPMAddPackage(
     NAME nanovdb_editor
