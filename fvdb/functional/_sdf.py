@@ -18,9 +18,9 @@ if TYPE_CHECKING:
     from ..grid_batch import GridBatch
 
 
-def _to_cpp_smoothing(smoothing: SmoothingMode | int) -> "_fvdb_cpp.SmoothingMode":
+def _to_cpp_smoothing(smoothing: SmoothingMode) -> "_fvdb_cpp.SmoothingMode":
     """Convert a public :class:`fvdb.SmoothingMode` to the bound C++ enum (matched by member name)."""
-    return getattr(_fvdb_cpp.SmoothingMode, SmoothingMode(smoothing).name)
+    return getattr(_fvdb_cpp.SmoothingMode, smoothing.name)
 
 
 # ---------------------------------------------------------------------------
@@ -34,7 +34,7 @@ def reinitialize_sdf_batch(
     band: int = 3,
     smooth: int = 0,
     order: int = 3,
-    smoothing: SmoothingMode | int = SmoothingMode.MEAN_CURVATURE,
+    smoothing: SmoothingMode = SmoothingMode.MEAN_CURVATURE,
     redistance_iters: int = -1,
 ) -> JaggedTensor:
     """Re-initialize a signed per-voxel field into an SDF on the same grid batch.
@@ -72,7 +72,7 @@ def reinitialize_sdf_single(
     band: int = 3,
     smooth: int = 0,
     order: int = 3,
-    smoothing: SmoothingMode | int = SmoothingMode.MEAN_CURVATURE,
+    smoothing: SmoothingMode = SmoothingMode.MEAN_CURVATURE,
     redistance_iters: int = -1,
 ) -> torch.Tensor:
     """Re-initialize a signed per-voxel field into an SDF on a single grid.
@@ -111,7 +111,7 @@ def retopologize_sdf_batch(
     band: int = 3,
     smooth: int = 0,
     order: int = 3,
-    smoothing: SmoothingMode | int = SmoothingMode.MEAN_CURVATURE,
+    smoothing: SmoothingMode = SmoothingMode.MEAN_CURVATURE,
     redistance_iters: int = -1,
     pad: bool = True,
     prune: bool = True,
@@ -173,7 +173,7 @@ def retopologize_sdf_single(
     band: int = 3,
     smooth: int = 0,
     order: int = 3,
-    smoothing: SmoothingMode | int = SmoothingMode.MEAN_CURVATURE,
+    smoothing: SmoothingMode = SmoothingMode.MEAN_CURVATURE,
     redistance_iters: int = -1,
     pad: bool = True,
     prune: bool = True,

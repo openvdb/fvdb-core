@@ -1035,7 +1035,7 @@ class GridBatch:
         band: int = 3,
         smooth: int = 0,
         order: int = 3,
-        smoothing: SmoothingMode | str = SmoothingMode.MEAN_CURVATURE,
+        smoothing: SmoothingMode = SmoothingMode.MEAN_CURVATURE,
         redistance_iters: int = -1,
     ) -> JaggedTensor:
         """Re-initialize a signed per-voxel field into an SDF on this grid batch (topology unchanged).
@@ -1068,7 +1068,7 @@ class GridBatch:
         band: int = 3,
         smooth: int = 0,
         order: int = 3,
-        smoothing: SmoothingMode | str = SmoothingMode.MEAN_CURVATURE,
+        smoothing: SmoothingMode = SmoothingMode.MEAN_CURVATURE,
         redistance_iters: int = -1,
         pad: bool = True,
         prune: bool = True,

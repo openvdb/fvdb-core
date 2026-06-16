@@ -67,8 +67,8 @@ class ReinitializeSdfTests(unittest.TestCase):
         for order in (1, 2, 3):
             phi = self.grid.reinitialize_sdf(field, band=self.band, order=order)
             self.assertEqual(phi.shape[0], self.grid.num_voxels)
-        # smoothing mode accepts the SmoothingMode enum or its integer value
-        for mode in (fvdb.SmoothingMode.MEAN_CURVATURE, fvdb.SmoothingMode.TAUBIN, 1):
+        # smoothing mode is selected with the SmoothingMode enum
+        for mode in (fvdb.SmoothingMode.MEAN_CURVATURE, fvdb.SmoothingMode.TAUBIN):
             phi = self.grid.reinitialize_sdf(field, band=self.band, smooth=4, smoothing=mode)
             self.assertEqual(phi.shape[0], self.grid.num_voxels)
 

@@ -1489,7 +1489,7 @@ class Grid:
         band: int = 3,
         smooth: int = 0,
         order: int = 3,
-        smoothing: SmoothingMode | str = SmoothingMode.MEAN_CURVATURE,
+        smoothing: SmoothingMode = SmoothingMode.MEAN_CURVATURE,
         redistance_iters: int = -1,
     ) -> torch.Tensor:
         """Re-initialize a signed per-voxel field into an SDF on this grid (topology unchanged).
@@ -1520,7 +1520,7 @@ class Grid:
         band: int = 3,
         smooth: int = 0,
         order: int = 3,
-        smoothing: SmoothingMode | str = SmoothingMode.MEAN_CURVATURE,
+        smoothing: SmoothingMode = SmoothingMode.MEAN_CURVATURE,
         redistance_iters: int = -1,
         pad: bool = True,
         prune: bool = True,
