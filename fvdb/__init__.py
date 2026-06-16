@@ -271,7 +271,7 @@ def gaussian_render_jagged(
 
 from .convolution_plan import ConvolutionPlan
 from .gaussian_splatting import GaussianSplat3d, ProjectedGaussianSplats
-from .enums import CameraModel, ProjectionMethod, RollingShutterType, ShOrderingMode
+from .enums import CameraModel, ProjectionMethod, RollingShutterType, ShOrderingMode, SmoothingMode
 from ._gaussian_autograd import _EvaluateGaussianSHFn
 
 
@@ -383,6 +383,7 @@ __all__ = [
     "ProjectionMethod",
     "RollingShutterType",
     "ShOrderingMode",
+    "SmoothingMode",
     "ConvolutionPlan",
     "NanoVDBGridMetadata",
     # Concatenation of jagged tensors or grid/grid batches
