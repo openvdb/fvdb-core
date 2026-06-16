@@ -1512,9 +1512,7 @@ class Grid:
         """
         from . import functional
 
-        return functional.reinitialize_sdf_single(
-            self, field, band, smooth, order, smoothing, redistance_iters
-        )
+        return functional.reinitialize_sdf_single(self, field, band, smooth, order, smoothing, redistance_iters)
 
     def retopologize_sdf(
         self,
