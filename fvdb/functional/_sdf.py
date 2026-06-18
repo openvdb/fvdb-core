@@ -150,20 +150,18 @@ def retopologize_sdf_batch(
 
     .. seealso:: :func:`retopologize_sdf_single`, :func:`reinitialize_sdf_batch`
     """
+    # per-grid narrow-band half-width; voxel size may vary across the batch
+    band_width = band * grid.voxel_sizes[:, 0]
     if pad:
-        # Seed fresh voxels as exterior. A single positive seed >= every grid's band width is fine:
+        # Seed fresh voxels as exterior. A positive seed >= every grid's band width is fine:
         # reinitialize_sdf re-clamps it to that grid's +band*vx, so only its (positive) sign matters.
-        seed = band * float(grid.voxel_sizes[:, 0].max())
         dilated = grid.dilated_grid(band)
-        field = inject_batch(dilated, grid, field, default_value=seed)
+        field = inject_batch(dilated, grid, field, default_value=float(band_width.max()))
         grid = dilated
     phi = reinitialize_sdf_batch(grid, field, band, smooth, order, smoothing, redistance_iters)
     if not prune:
         return grid, phi
-    # per-voxel band half-width (voxel size may vary per grid in the batch)
-    voxel_sizes = grid.voxel_sizes[:, 0].to(phi.jdata.device)
-    band_width = band * voxel_sizes[phi.jidx.long()] * 0.999
-    mask = phi.jdata.abs() < band_width
+    mask = phi.jdata.abs() < band_width.to(phi.jdata.device)[phi.jidx.long()] * 0.999
     return grid.pruned_grid(phi.jagged_like(mask)), phi.rmask(mask)
 
 
@@ -211,8 +209,11 @@ def retopologize_sdf_single(
 
     .. seealso:: :func:`retopologize_sdf_batch`, :func:`reinitialize_sdf_single`
     """
+    # narrow-band half-width
     band_width = band * float(grid.voxel_size[0])
     if pad:
+        # Seed fresh voxels as exterior. A positive seed >= the grid's band width is fine:
+        # reinitialize_sdf re-clamps it to +band*vx, so only its (positive) sign matters.
         dilated = grid.dilated_grid(band)
         field = inject_single(dilated, grid, field, default_value=band_width)
         grid = dilated
