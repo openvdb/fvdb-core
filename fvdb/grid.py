@@ -1483,6 +1483,34 @@ class Grid:
 
         return functional.marching_cubes_single(self, field, level)
 
+    def dual_contour(
+        self,
+        field: torch.Tensor,
+        iso: float = 0.0,
+        reduce: int = 1,
+        adaptivity: float = 0.0,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Extract a dual-contouring (DC + QEF) mesh from a per-voxel SDF on this grid.
+
+        Places one vertex per surface cell via quadratic-error-function minimization (sharp-feature
+        preserving), with optional cluster-collapse decimation. Needs a narrow-band SDF with a
+        >= ~3-voxel band for a watertight result (e.g. from :meth:`retopologize_sdf`).
+
+        Args:
+            field (torch.Tensor): Per-voxel signed distance values, shape ``(num_voxels,)``.
+            iso (float): Isovalue at which to extract the surface.
+            reduce (int): Uniform ``F x F x F`` cluster-collapse decimation factor (``1`` = full detail).
+            adaptivity (float): Curvature-adaptive decimation in ``[0, 1.5]`` (``0`` = uniform/off).
+
+        Returns:
+            vertices (torch.Tensor): Vertex positions, shape ``(V, 3)``.
+            faces (torch.Tensor): Triangle face indices, shape ``(T, 3)``.
+            normals (torch.Tensor): Per-vertex (normalized SDF gradient) normals, shape ``(V, 3)``.
+        """
+        from . import functional
+
+        return functional.dual_contour_single(self, field, iso, reduce, adaptivity)
+
     def reinitialize_sdf(
         self,
         field: torch.Tensor,
@@ -1528,7 +1556,7 @@ class Grid:
         """Retopologize a signed field into a clean narrow-band SDF on a (possibly pruned) grid.
 
         If ``pad`` is ``True`` this grid is first dilated by ``band`` voxels so the redistance has
-        room to build a full-width band, then :meth:`reinitialize_sdf` is run, and finally, if
+        room to fill the full ``±band*vx`` band, then :meth:`reinitialize_sdf` is run, and finally, if
         ``prune`` is ``True``, the grid is pruned to the voxels strictly inside the band
         (``|phi| < band*vx*0.999``).
 
@@ -1541,10 +1569,11 @@ class Grid:
                 :attr:`~fvdb.SmoothingMode.MEAN_CURVATURE` (default) or
                 :attr:`~fvdb.SmoothingMode.TAUBIN` (volume-preserving). Only used when ``smooth > 0``.
             redistance_iters (int): Number of redistancing sweeps; ``<= 0`` uses the default.
-            pad (bool): If ``True`` (default) dilate by ``band`` first so the output band is a full
-                ``band`` voxels wide even if the input grid was thinner. New voxels are seeded as
-                exterior (``+band*vx``), which is correct when the interior (``phi < 0``) is already
-                represented; for a hollow thin shell, pass ``pad=False`` with a pre-banded grid.
+            pad (bool): If ``True`` (default) dilate by ``band`` first so the output band reaches the
+                full ``band`` voxels on each side of the surface (``±band*vx``) even if the input grid
+                was thinner. New voxels are seeded as exterior (``+band*vx``), which is correct when the
+                interior (``phi < 0``) is already represented; for a hollow thin shell, pass
+                ``pad=False`` with a pre-banded grid.
             prune (bool): If ``True`` prune to the narrow band, else return the (padded) grid.
 
         Returns:

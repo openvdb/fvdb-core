@@ -30,8 +30,7 @@ enum class SmoothingMode : int32_t {
 /// same per-voxel ordering as the input.
 ///
 /// @param batchHdl    Grid batch defining the sparse topology.
-/// @param field       Per-voxel signed field (a single list of scalar values, numel ==
-/// totalVoxels).
+/// @param field       Per-voxel signed field: a floating-point JaggedTensor of shape [B, -1].
 /// @param band        Narrow-band half-width in voxels. The field is clamped to [-band*vx, band*vx]
 ///                    each sweep and the "outside" Dirichlet value for inactive neighbours is
 ///                    +band*vx.
@@ -40,7 +39,8 @@ enum class SmoothingMode : int32_t {
 /// @param order       TVD-RK order: 1 (forward Euler), 2 (Heun), or 3 (Shu-Osher).
 /// @param smooth      Number of smoothing passes (0 disables smoothing).
 /// @param smoothing   Which Laplacian flow each smoothing pass applies (mean-curvature or Taubin).
-/// @return A new per-voxel SDF JaggedTensor on the same grid/ordering as @p field.
+/// @return A per-voxel SDF: a JaggedTensor of shape [B, -1] with the same dtype, grid, and ordering
+///         as @p field.
 JaggedTensor reinitializeSdf(const GridBatchData &batchHdl,
                              const JaggedTensor &field,
                              int band,
