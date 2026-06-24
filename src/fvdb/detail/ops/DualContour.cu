@@ -573,6 +573,9 @@ orientTrianglesKernel(int64_t numTriangles,
 // bit-reproducible run to run.
 // This is a simplified, single-level form of the octree-based adaptive DC simplification of [Ju et
 // al. 2002]; OpenVDB's VolumeToMesh instead does the full seam-stitched octree region merge.
+
+/// @brief Gather a cell's 8 cube-corner SDF values and gradients from the neighbour table into
+/// `cornerSdf` / `cornerGradient` (shared by the decimation kernels' per-cell QEF work).
 __device__ inline void
 loadCellCorners(int32_t cellValueIndex,
                 const int32_t *neighborTable,
@@ -1041,7 +1044,7 @@ meshOneGrid(OnIndexGridT *grid,
                     .clamp_min(1)
                     .to(torch::kFloat32);
             const float flatCosThreshold =
-                (float)std::cos(adaptivity * 60.0 * 3.14159265358979323846 / 180.0);
+                (float)std::cos(adaptivity * 60.0 * nanovdb::math::pi<double>() / 180.0);
             torch::Tensor blockFlatBuf =
                 (blockNormalSum.norm(2, /*dim=*/1) / blockCellCount >= flatCosThreshold)
                     .to(torch::kUInt8);
