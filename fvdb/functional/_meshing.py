@@ -88,9 +88,8 @@ def dual_contour_batch(
         grid (GridBatch): The grid batch defining the sparse topology.
         field (JaggedTensor): Per-voxel signed distance values.
         iso (float): Isovalue at which to extract the surface. Default ``0.0``.
-        reduce (int): Uniform ``F x F x F`` cluster-collapse decimation factor (``1`` = full detail).
-        adaptivity (float): Curvature-adaptive decimation in ``[0, 1.5]`` (``0`` = uniform/off):
-            collapse flat blocks while keeping detail at features.
+        reduce (int): Uniform ``F x F x F`` cluster-collapse decimation block size. ``reduce=1`` is full detail only when ``adaptivity == 0``; when ``adaptivity > 0`` it instead sets the coarse-block size for the adaptive collapse (default ``8`` when ``reduce <= 1``).
+        adaptivity (float): Curvature-adaptive decimation in ``[0, 1.5]`` (``0`` = off). When ``> 0``, flat blocks are collapsed while features keep full detail, so the mesh is simplified even at ``reduce=1``.
 
     Returns:
         vertices (JaggedTensor): Mesh vertex positions, shape ``(B, -1, 3)``.
@@ -117,8 +116,8 @@ def dual_contour_single(
         grid (Grid): The single grid defining the sparse topology.
         field (torch.Tensor): Per-voxel signed distance values.
         iso (float): Isovalue at which to extract the surface. Default ``0.0``.
-        reduce (int): Uniform ``F x F x F`` cluster-collapse decimation factor (``1`` = full detail).
-        adaptivity (float): Curvature-adaptive decimation in ``[0, 1.5]`` (``0`` = uniform/off).
+        reduce (int): Uniform ``F x F x F`` cluster-collapse decimation block size. ``reduce=1`` is full detail only when ``adaptivity == 0``; when ``adaptivity > 0`` it instead sets the coarse-block size for the adaptive collapse (default ``8`` when ``reduce <= 1``).
+        adaptivity (float): Curvature-adaptive decimation in ``[0, 1.5]`` (``0`` = off). When ``> 0``, flat blocks are collapsed while features keep full detail, so the mesh is simplified even at ``reduce=1``.
 
     Returns:
         vertices (torch.Tensor): Vertex positions, shape ``(V, 3)``.

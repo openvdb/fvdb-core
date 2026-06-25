@@ -34,9 +34,12 @@ namespace ops {
 /// @param batchHdl    Grid batch defining the sparse topology.
 /// @param field       Per-voxel signed field: a floating-point JaggedTensor of shape [B, -1].
 /// @param iso         Isovalue of the surface to extract.
-/// @param reduce      Uniform F x F x F cluster-collapse decimation factor (1 = full resolution).
-/// @param adaptivity  Curvature-adaptive decimation in [0, 1.5] (0 = uniform/off): collapse flat
-///                    blocks while keeping full detail at features.
+/// @param reduce      Uniform F x F x F cluster-collapse decimation block size. reduce=1 is full
+///                    resolution only when adaptivity==0; when adaptivity>0 it instead sets the
+///                    coarse-block size for the adaptive collapse (defaulting to 8 when reduce<=1).
+/// @param adaptivity  Curvature-adaptive decimation in [0, 1.5] (0 = off). When >0, flat blocks are
+///                    collapsed while features keep full detail -- so the mesh is simplified even at
+///                    reduce=1.
 /// @return A (vertices, faces, normals) tuple, each jagged over the grid batch: vertices and
 ///         normals are float32 JaggedTensors of shape [B, -1, 3] and faces is an int64 JaggedTensor
 ///         of shape [B, -1, 3]. faces holds grid-local triangle vertex indices; normals is the
