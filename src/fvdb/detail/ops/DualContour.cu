@@ -38,6 +38,7 @@
 #include <nanovdb/tools/VoxelBlockManager.h>
 #include <nanovdb/tools/cuda/VoxelBlockManager.cuh>
 
+#include <ATen/cuda/Atomic.cuh>
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAException.h>
 
@@ -53,25 +54,15 @@ namespace ops {
 namespace {
 
 // ------------------------- box-stencil geometry (compile-time) -------------------------
-// A 3x3x3 box-stencil neighbour is addressed by a spoke index in [0,27):
-// spoke = (di+1)*9 + (dj+1)*3 + (dk+1); the centre (the voxel itself) is spoke 13. The mesher only
-// touches a subset of the 27 spokes (8 cube corners, 6 faces, 3 connectivity fans), so the gather
-// emits just those `numColumns` columns. All of this is static, so it is computed once at compile
-// time into `kGeometry` and passed by value into the kernels (no __constant__ / per-call setup).
-constexpr int
-spokeIndex(int di, int dj, int dk) {
-    return (di + 1) * 9 + (dj + 1) * 3 + (dk + 1);
-}
 
-/// @brief Column of `spoke` within the sorted-unique `usedSpokes[0..numColumns)`, or -1 if absent.
-/// Binary search (std::lower_bound is constexpr in C++20) since usedSpokes is sorted.
-constexpr int
-columnOfSpoke(const int *usedSpokes, int numColumns, int spoke) {
-    const int *end   = usedSpokes + numColumns;
-    const int *found = std::lower_bound(usedSpokes, end, spoke);
-    return (found != end && *found == spoke) ? int(found - usedSpokes) : -1;
-}
-
+/// @brief Compile-time description of the 3x3x3 box stencil used by the mesher.
+///
+/// A box-stencil neighbour is addressed by a spoke index in [0,27):
+/// `spoke = (di+1)*9 + (dj+1)*3 + (dk+1)`; the centre (the voxel itself) is spoke 13. The mesher
+/// only touches a subset of the 27 spokes (8 cube corners, 6 faces, 3 connectivity fans), so the
+/// gather emits just those `numColumns` columns. All of this is static, so it is computed once at
+/// compile time into `kGeometry` and passed by value into the kernels (no `__constant__` /
+/// per-call setup).
 struct BoxStencilGeometry {
     int numColumns{0};
     int usedSpokes[27]{};      // the `numColumns` gathered spokes (sorted, unique)
@@ -87,6 +78,20 @@ struct BoxStencilGeometry {
     int faceSpoke[6]{};
     float cornerOffset[8][3]{}; // the 8 corner offsets in [0,1]^3
 };
+
+constexpr int
+spokeIndex(int di, int dj, int dk) {
+    return (di + 1) * 9 + (dj + 1) * 3 + (dk + 1);
+}
+
+/// @brief Column of `spoke` within the sorted-unique `usedSpokes[0..numColumns)`, or -1 if absent.
+/// Binary search (std::lower_bound is constexpr in C++20) since usedSpokes is sorted.
+constexpr int
+columnOfSpoke(const int *usedSpokes, int numColumns, int spoke) {
+    const int *end   = usedSpokes + numColumns;
+    const int *found = std::lower_bound(usedSpokes, end, spoke);
+    return (found != end && *found == spoke) ? int(found - usedSpokes) : -1;
+}
 
 constexpr BoxStencilGeometry
 makeBoxStencilGeometry() {
@@ -262,6 +267,54 @@ gatherFusedKernel(const OnIndexGridT *grid,
     voxelCoord[centerIndex * 3 + 2]  = globalCoord[2];
 }
 
+/// @brief One cube edge's iso-surface crossing: the linearly interpolated crossing point (in the
+/// cell-local [0,1]^3 frame) and the unit surface normal there.
+struct EdgeCrossing {
+    float point[3];  // crossing position in the cell's [0,1]^3 frame
+    float normal[3]; // unit surface normal at the crossing (from the interpolated corner gradients)
+};
+
+/// @brief Compute cube edge `edge`'s iso crossing from the cell's 8 corner SDFs/gradients. Returns
+/// false (leaving `out` untouched) when both endpoints lie on the same side of `iso`, i.e. the edge
+/// does not cross the surface. This is the per-edge primitive the three QEF kernels share
+/// (placeQefVerticesKernel, cellNormalKernel, clusterQefAccumKernel), so the 12-edge
+/// crossing/normal interpolation lives in exactly one place.
+__device__ inline bool
+computeEdgeCrossing(int edge,
+                    const float cornerSdf[8],
+                    const float cornerGradient[8][3],
+                    BoxStencilGeometry geometry,
+                    float iso,
+                    EdgeCrossing &out) {
+    const int cornerA = geometry.edgeCornerA[edge], cornerB = geometry.edgeCornerB[edge];
+    const float sdfA = cornerSdf[cornerA], sdfB = cornerSdf[cornerB];
+    if ((sdfA < iso) == (sdfB < iso))
+        return false; // endpoints on the same side of iso -> this edge does not cross the surface
+    // crossingT = fraction along A->B where the linearly-interpolated sdf reaches iso (the edge
+    // root); fall back to the midpoint if the two endpoints are (numerically) equal
+    const float sdfDelta = sdfB - sdfA;
+    float crossingT      = (fabsf(sdfDelta) > 1e-12f) ? (iso - sdfA) / sdfDelta : 0.5f;
+    crossingT            = fminf(fmaxf(crossingT, 0.f), 1.f);
+    // crossing point and (un-normalised) normal, both linearly interpolated between the two corners
+    float edgeNormal[3];
+#pragma unroll
+    for (int axis = 0; axis < 3; ++axis) {
+        out.point[axis] = geometry.cornerOffset[cornerA][axis] +
+                          crossingT * (geometry.cornerOffset[cornerB][axis] -
+                                       geometry.cornerOffset[cornerA][axis]);
+        edgeNormal[axis] =
+            cornerGradient[cornerA][axis] +
+            crossingT * (cornerGradient[cornerB][axis] - cornerGradient[cornerA][axis]);
+    }
+    // normalise n_i (the eps keeps a (near-)zero gradient finite)
+    const float invLen = rsqrtf(edgeNormal[0] * edgeNormal[0] + edgeNormal[1] * edgeNormal[1] +
+                                edgeNormal[2] * edgeNormal[2] + 1e-24f);
+    out.normal[0]      = edgeNormal[0] * invLen;
+    out.normal[1]      = edgeNormal[1] * invLen;
+    out.normal[2]      = edgeNormal[2] * invLen;
+    return true;
+}
+
 /// @brief (QEF) Place one dual-contouring vertex per surface cell. The vertex is the point x
 /// minimising the quadratic error function  E(x) = sum_i [ n_i . (x - p_i) ]^2  over the cell's
 /// edge intersections, where p_i is the i-th edge zero-crossing and n_i the unit surface normal
@@ -312,33 +365,11 @@ placeQefVerticesKernel(const int32_t *surfaceCells,
     // contributes one tangent-plane constraint (its crossing point p_i and the normal n_i there)
 #pragma unroll
     for (int edge = 0; edge < 12; ++edge) {
-        const int cornerA = geometry.edgeCornerA[edge], cornerB = geometry.edgeCornerB[edge];
-        const float sdfA = cornerSdf[cornerA], sdfB = cornerSdf[cornerB];
-        if ((sdfA < iso) == (sdfB < iso))
-            continue; // endpoints on the same side of iso -> this edge does not cross the surface
-        // crossingT = fraction along A->B where the linearly-interpolated sdf reaches iso (the edge
-        // root); fall back to the midpoint if the two endpoints are (numerically) equal
-        float sdfDelta  = sdfB - sdfA;
-        float crossingT = (fabsf(sdfDelta) > 1e-12f) ? (iso - sdfA) / sdfDelta : 0.5f;
-        crossingT       = fminf(fmaxf(crossingT, 0.f), 1.f);
-        // crossing point p_i and normal n_i, both linearly interpolated between the two corners
-        // (the corner gradients supply the surface normal)
-        float crossing[3], edgeNormal[3];
-#pragma unroll
-        for (int axis = 0; axis < 3; ++axis) {
-            crossing[axis] = geometry.cornerOffset[cornerA][axis] +
-                             crossingT * (geometry.cornerOffset[cornerB][axis] -
-                                          geometry.cornerOffset[cornerA][axis]);
-            edgeNormal[axis] =
-                cornerGradient[cornerA][axis] +
-                crossingT * (cornerGradient[cornerB][axis] - cornerGradient[cornerA][axis]);
-        }
-        // normalise n_i (the eps keeps a (near-)zero gradient finite)
-        float invLen = rsqrtf(edgeNormal[0] * edgeNormal[0] + edgeNormal[1] * edgeNormal[1] +
-                              edgeNormal[2] * edgeNormal[2] + 1e-24f);
-        double nx = edgeNormal[0] * invLen, ny = edgeNormal[1] * invLen,
-               nz                = edgeNormal[2] * invLen;
-        double normalDotCrossing = nx * crossing[0] + ny * crossing[1] + nz * crossing[2];
+        EdgeCrossing ec;
+        if (!computeEdgeCrossing(edge, cornerSdf, cornerGradient, geometry, iso, ec))
+            continue;
+        const double nx = ec.normal[0], ny = ec.normal[1], nz = ec.normal[2];
+        const double normalDotCrossing = nx * ec.point[0] + ny * ec.point[1] + nz * ec.point[2];
         // A += n n^T (6 unique entries), b-term normalRhs += n (n.p), and track the crossing
         // centroid
         normalMatrix[0] += nx * nx;
@@ -350,9 +381,9 @@ placeQefVerticesKernel(const int32_t *surfaceCells,
         normalRhs[0] += nx * normalDotCrossing;
         normalRhs[1] += ny * normalDotCrossing;
         normalRhs[2] += nz * normalDotCrossing;
-        crossingSum[0] += crossing[0];
-        crossingSum[1] += crossing[1];
-        crossingSum[2] += crossing[2];
+        crossingSum[0] += ec.point[0];
+        crossingSum[1] += ec.point[1];
+        crossingSum[2] += ec.point[2];
         ++numCrossings;
     }
     double localVertex[3];
@@ -621,23 +652,12 @@ cellNormalKernel(const int32_t *surfaceCells,
     float normalSum[3] = {0, 0, 0};
 #pragma unroll
     for (int edge = 0; edge < 12; ++edge) {
-        int cornerA = geometry.edgeCornerA[edge], cornerB = geometry.edgeCornerB[edge];
-        float sdfA = cornerSdf[cornerA], sdfB = cornerSdf[cornerB];
-        if ((sdfA < iso) == (sdfB < iso))
+        EdgeCrossing ec;
+        if (!computeEdgeCrossing(edge, cornerSdf, cornerGradient, geometry, iso, ec))
             continue;
-        float sdfDelta  = sdfB - sdfA;
-        float crossingT = (fabsf(sdfDelta) > 1e-12f) ? (iso - sdfA) / sdfDelta : 0.5f;
-        crossingT       = fminf(fmaxf(crossingT, 0.f), 1.f);
-        float nx        = cornerGradient[cornerA][0] +
-                   crossingT * (cornerGradient[cornerB][0] - cornerGradient[cornerA][0]),
-              ny = cornerGradient[cornerA][1] +
-                   crossingT * (cornerGradient[cornerB][1] - cornerGradient[cornerA][1]),
-              nz = cornerGradient[cornerA][2] +
-                   crossingT * (cornerGradient[cornerB][2] - cornerGradient[cornerA][2]);
-        float invLen = rsqrtf(nx * nx + ny * ny + nz * nz + 1e-24f);
-        normalSum[0] += nx * invLen;
-        normalSum[1] += ny * invLen;
-        normalSum[2] += nz * invLen;
+        normalSum[0] += ec.normal[0];
+        normalSum[1] += ec.normal[1];
+        normalSum[2] += ec.normal[2];
     }
     float invLen           = rsqrtf(normalSum[0] * normalSum[0] + normalSum[1] * normalSum[1] +
                           normalSum[2] * normalSum[2] + 1e-24f);
@@ -743,36 +763,17 @@ clusterQefAccumKernel(const int32_t *surfaceCells,
            cellOriginZ    = voxelCoord[int64_t(cellValueIndex) * 3 + 2] - originZ;
     double localMatrix[6] = {0, 0, 0, 0, 0, 0}, localRhs[3] = {0, 0, 0},
            localCrossingSum[3] = {0, 0, 0}, localNormalSum[3] = {0, 0, 0};
+    int numCrossings = 0;
 #pragma unroll
     for (int edge = 0; edge < 12; ++edge) {
-        int cornerA = geometry.edgeCornerA[edge], cornerB = geometry.edgeCornerB[edge];
-        float sdfA = cornerSdf[cornerA], sdfB = cornerSdf[cornerB];
-        if ((sdfA < iso) == (sdfB < iso))
+        EdgeCrossing ec;
+        if (!computeEdgeCrossing(edge, cornerSdf, cornerGradient, geometry, iso, ec))
             continue;
-        float sdfDelta  = sdfB - sdfA;
-        float crossingT = (fabsf(sdfDelta) > 1e-12f) ? (iso - sdfA) / sdfDelta : 0.5f;
-        crossingT       = fminf(fmaxf(crossingT, 0.f), 1.f);
-        float crossingX =
-            geometry.cornerOffset[cornerA][0] +
-            crossingT * (geometry.cornerOffset[cornerB][0] - geometry.cornerOffset[cornerA][0]);
-        float crossingY =
-            geometry.cornerOffset[cornerA][1] +
-            crossingT * (geometry.cornerOffset[cornerB][1] - geometry.cornerOffset[cornerA][1]);
-        float crossingZ =
-            geometry.cornerOffset[cornerA][2] +
-            crossingT * (geometry.cornerOffset[cornerB][2] - geometry.cornerOffset[cornerA][2]);
-        float nx = cornerGradient[cornerA][0] +
-                   crossingT * (cornerGradient[cornerB][0] - cornerGradient[cornerA][0]),
-              ny = cornerGradient[cornerA][1] +
-                   crossingT * (cornerGradient[cornerB][1] - cornerGradient[cornerA][1]),
-              nz = cornerGradient[cornerA][2] +
-                   crossingT * (cornerGradient[cornerB][2] - cornerGradient[cornerA][2]);
-        float invLen = rsqrtf(nx * nx + ny * ny + nz * nz + 1e-24f);
-        nx *= invLen;
-        ny *= invLen;
-        nz *= invLen;
-        double px = cellOriginX + crossingX, py = cellOriginY + crossingY,
-               pz = cellOriginZ + crossingZ, normalDotCrossing = nx * px + ny * py + nz * pz;
+        // shift the cell-local crossing into the cluster's shared origin frame before accumulating
+        const float nx = ec.normal[0], ny = ec.normal[1], nz = ec.normal[2];
+        const double px = cellOriginX + ec.point[0], py = cellOriginY + ec.point[1],
+                     pz                = cellOriginZ + ec.point[2],
+                     normalDotCrossing = nx * px + ny * py + nz * pz;
         localMatrix[0] += nx * nx;
         localMatrix[1] += nx * ny;
         localMatrix[2] += nx * nz;
@@ -788,22 +789,16 @@ clusterQefAccumKernel(const int32_t *surfaceCells,
         localNormalSum[0] += nx;
         localNormalSum[1] += ny;
         localNormalSum[2] += nz;
+        ++numCrossings;
     }
     for (int j = 0; j < 6; ++j)
-        atomicAdd(&normalMatrix[clusterId * 6 + j], localMatrix[j]);
+        gpuAtomicAddNoReturn(&normalMatrix[clusterId * 6 + j], localMatrix[j]);
     for (int j = 0; j < 3; ++j) {
-        atomicAdd(&normalRhs[clusterId * 3 + j], localRhs[j]);
-        atomicAdd(&crossingSum[clusterId * 3 + j], localCrossingSum[j]);
-        atomicAdd(&normalSum[clusterId * 3 + j], localNormalSum[j]);
+        gpuAtomicAddNoReturn(&normalRhs[clusterId * 3 + j], localRhs[j]);
+        gpuAtomicAddNoReturn(&crossingSum[clusterId * 3 + j], localCrossingSum[j]);
+        gpuAtomicAddNoReturn(&normalSum[clusterId * 3 + j], localNormalSum[j]);
     }
-    int numCrossings = 0;
-#pragma unroll
-    for (int edge = 0; edge < 12; ++edge) {
-        int cornerA = geometry.edgeCornerA[edge], cornerB = geometry.edgeCornerB[edge];
-        if ((cornerSdf[cornerA] < iso) != (cornerSdf[cornerB] < iso))
-            ++numCrossings;
-    }
-    atomicAdd(&crossingCount[clusterId], (double)numCrossings);
+    gpuAtomicAddNoReturn(&crossingCount[clusterId], (double)numCrossings);
 }
 
 /// @brief Solve one vertex per cluster from its accumulated QEF -- same centroid re-centring + 0.05
