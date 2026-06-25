@@ -26,6 +26,11 @@ namespace ops {
 /// (@p reduce / @p adaptivity) contracts the connectivity onto fewer vertices.
 /// Requires a >= ~3-voxel band for a watertight result.
 ///
+/// @note Vertex placement and the emitted normals are computed in index space (the QEF and the
+///       central-difference gradient). This is exact for isotropic voxel sizes -- the assumption of
+///       the narrow-band SDF ops (reinitialize_sdf / retopologize_sdf) this op consumes, which use a
+///       scalar voxel size; for strongly anisotropic voxels the emitted normals are approximate.
+///
 /// @param batchHdl    Grid batch defining the sparse topology.
 /// @param field       Per-voxel signed field: a floating-point JaggedTensor of shape [B, -1].
 /// @param iso         Isovalue of the surface to extract.

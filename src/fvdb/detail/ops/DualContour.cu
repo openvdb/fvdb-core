@@ -43,6 +43,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <vector>
 
 namespace fvdb {
@@ -224,7 +225,9 @@ gatherFusedKernel(const OnIndexGridT *grid,
             (int32_t)stencil[geometry.usedSpokes[column]];
     }
 
-    // central-difference gradient (inactive face stencil==0 -> use the centre value)
+    // central-difference gradient (inactive face stencil==0 -> use the centre value). Computed in
+    // index space; normalised, this is the correct world normal for isotropic voxels (the uniform
+    // scale cancels) -- the assumption of the SDF ops this consumes. See the note in DualContour.h.
     const float centerSdf = sdf[centerIndex];
     auto faceValue        = [&](int spoke) {
         uint64_t neighbor = stencil[spoke];
@@ -1242,6 +1245,14 @@ dualContour(const GridBatchData &batchHdl,
             VoxelCoordTransform transform = batchHdl.primalTransformAt(b);
             VBMHelper vbm(grid, stream);
             const int64_t valueCount = (int64_t)vbm.valueCount; // numVoxels + 1
+            // Value indices are stored as int32 in the neighbour table / surface-cell / coord
+            // buffers; fail loudly rather than silently overflow on an enormous single grid.
+            TORCH_CHECK(valueCount <= std::numeric_limits<int32_t>::max(),
+                        "dual_contour: grid ",
+                        b,
+                        " has too many voxels (",
+                        valueCount,
+                        ") for int32 value indexing");
 
             // gather the field into a value-indexed SDF buffer: slot 0 = "outside" sentinel (>=
             // iso) so inactive corners classify as outside, and slots [1..numVoxels] = this grid's
