@@ -28,8 +28,8 @@ namespace ops {
 ///
 /// @note Vertex placement and the emitted normals are computed in index space (the QEF and the
 ///       central-difference gradient). This is exact for isotropic voxel sizes -- the assumption of
-///       the narrow-band SDF ops (reinitialize_sdf / retopologize_sdf) this op consumes, which use a
-///       scalar voxel size; for strongly anisotropic voxels the emitted normals are approximate.
+///       the narrow-band SDF ops (reinitialize_sdf / retopologize_sdf) this op consumes, which use
+///       a scalar voxel size; for strongly anisotropic voxels the emitted normals are approximate.
 ///
 /// @param batchHdl    Grid batch defining the sparse topology.
 /// @param field       Per-voxel signed field: a floating-point JaggedTensor of shape [B, -1].
