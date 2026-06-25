@@ -254,6 +254,8 @@ gatherFusedKernel(const OnIndexGridT *grid,
     for (int corner = 0; corner < 8; ++corner) {
         uint64_t cornerIndex = stencil[geometry.cornerSpoke[corner]];
         numInsideCorners += (sdf[cornerIndex] < iso) ? 1 : 0;
+        // corner 0 is offset (0,0,0) -- the anchor voxel itself (== centerIndex), which is always
+        // active here (this thread only runs for an active voxel), so skip its redundant check.
         if (corner)
             allCornersActive &= (cornerIndex > 0);
     }
@@ -968,6 +970,10 @@ meshOneGrid(OnIndexGridT *grid,
                                            refNormalBuf.data_ptr<float>());
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     } else {
+        // Cluster block size in voxels. Uniform decimation uses `reduce` directly. The curvature-
+        // adaptive path (adaptivity > 0, reduce left at its default) groups cells into 8^3 coarse
+        // blocks: a flat block collapses to one vertex while feature blocks stay full resolution,
+        // so 8 sets only how coarse the *flat* regions become.
         const int blockSize = (adaptivity > 0.0 && reduce <= 1) ? 8 : std::max(1, reduce);
         // surface-cell coord bounds (for the mixed-radix cluster keys): a gather + amin/amax
         // reduction in place of a hand-rolled atomic-min/max kernel.
