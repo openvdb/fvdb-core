@@ -136,7 +136,8 @@ jobs:
       - name: Install pip dependencies
         run: |
           uv venv
-          uv pip install --no-cache-dir -r fvdb/env/build_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu130
+          echo "torch==${{ needs.versions.outputs.torch-full-version }}" > "${RUNNER_TEMP}/torch-constraints.txt"
+          uv pip install --no-cache-dir -c "${RUNNER_TEMP}/torch-constraints.txt" -r fvdb/env/build_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu130
 
       - name: Build fvdb
         run: |
@@ -273,7 +274,8 @@ jobs:
       - name: Install pip dependencies
         run: |
           uv venv
-          uv pip install --no-cache-dir -r fvdb/env/test_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu130
+          echo "torch==${{ needs.versions.outputs.torch-full-version }}" > "${RUNNER_TEMP}/torch-constraints.txt"
+          uv pip install --no-cache-dir -c "${RUNNER_TEMP}/torch-constraints.txt" -r fvdb/env/test_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu130
 
       - name: Download package
         uses: actions/download-artifact@v8
