@@ -54,10 +54,11 @@ struct VBMHelper {
 // ------------------------- per-block decode helpers (device) -------------------------
 // Two ways to decode a block (pick one, and invoke it at most once per kernel since each path
 // allocates a block-sized __shared__ array):
-//   * vbmDecodeBlock(.., maps)  -- you declare `__shared__ VbmBlockMaps maps;` in the kernel and own
-//     it afterwards (use this when the kernel needs the raw maps, e.g. for a custom stencil read).
+//   * vbmDecodeBlock(.., maps)  -- you declare `__shared__ VbmBlockMaps maps;` in the kernel and
+//   own it afterwards (use this when the kernel needs the raw maps, e.g. for a custom stencil
+//   read).
 //   * vbmDecodeFaceStencil(.., out) -- the 6-face preamble; it owns its own __shared__ VbmBlockMaps
-//     internally, so the kernel declares no shared scratch of its own.
+//   internally, so the kernel declares no shared scratch of its own.
 //
 // Per-VBM-block shared decode scratch: the inverse leaf/offset maps for one 2^Log2BlockWidth block.
 template <int Log2BlockWidth> struct VbmBlockMaps {
