@@ -222,8 +222,10 @@ jobs:
           CUDA_TAG="cu$(echo "${{ matrix.cuda-version }}" | tr -d '.')"
           TORCH_VERSION="${{ matrix.torch-version }}"
           echo "Installing PyTorch ${TORCH_VERSION} for ${CUDA_TAG}"
-          # Install build requirements with explicit PyTorch version (explicit version takes precedence)
-          uv pip install --no-cache torch==${TORCH_VERSION}.0 -r env/build_requirements.txt --extra-index-url https://download.pytorch.org/whl/${CUDA_TAG}
+          # Pin the tested PyTorch via a constraints file so the unbounded torch in
+          # build_requirements.txt resolves to the matrix version.
+          echo "torch==${TORCH_VERSION}.0" > "${RUNNER_TEMP}/torch-constraints.txt"
+          uv pip install --no-cache -c "${RUNNER_TEMP}/torch-constraints.txt" -r env/build_requirements.txt --extra-index-url https://download.pytorch.org/whl/${CUDA_TAG}
 
       - name: Add a post-release to version (used for testing on TestPyPI)
         if: ${{ needs.pr-flags.outputs.s3 == 'false' }}
@@ -651,7 +653,8 @@ jobs:
       - name: Install wheel
         run: |
           CUDA_TAG="cu$(echo "${{ matrix.cuda-version }}" | tr -d '.')"
-          uv pip install --no-cache torch==${{ matrix.torch-version }}.0 --extra-index-url https://download.pytorch.org/whl/${CUDA_TAG}
+          echo "torch==${{ matrix.torch-version }}.0" > "${RUNNER_TEMP}/torch-constraints.txt"
+          uv pip install --no-cache -c "${RUNNER_TEMP}/torch-constraints.txt" torch --extra-index-url https://download.pytorch.org/whl/${CUDA_TAG}
           uv pip install dist/fvdb_core-*.whl
 
       - name: Run smoke test

@@ -151,7 +151,10 @@ jobs:
           TORCH_VERSION="${{ matrix.torch-version }}"
           echo "Installing PyTorch ${TORCH_VERSION} for ${CUDA_TAG}"
           uv venv
-          uv pip install --no-cache torch==${TORCH_VERSION}.0 -r env/build_requirements.txt --extra-index-url https://download.pytorch.org/whl/${CUDA_TAG}
+          # Pin the tested PyTorch via a constraints file so the unbounded torch in
+          # build_requirements.txt resolves to the matrix version.
+          echo "torch==${TORCH_VERSION}.0" > "${RUNNER_TEMP}/torch-constraints.txt"
+          uv pip install --no-cache -c "${RUNNER_TEMP}/torch-constraints.txt" -r env/build_requirements.txt --extra-index-url https://download.pytorch.org/whl/${CUDA_TAG}
 
       - name: Set nightly version
         run: |

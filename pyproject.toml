@@ -11,8 +11,8 @@ license = { text = "Apache-2.0" }
 requires-python = ">=3.10"
 readme = "README.md"
 dependencies = [
-    # Require torch; users will choose the correct CUDA build from PyTorch's index
-    "torch>=2.8,<2.13",
+    # Require torch; users will choose the correct CUDA build from PyTorch's index.
+    "torch>=2.8",
     "numpy",
 ]
 optional-dependencies = {viewer = ["nanovdb-editor>=0.0.23,<0.2.0"]}

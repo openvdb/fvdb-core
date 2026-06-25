@@ -152,7 +152,8 @@ jobs:
       - name: Install pip dependencies
         run: |
           uv venv
-          uv pip install --no-cache-dir -r env/build_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu128
+          echo "torch==${{ needs.versions.outputs.torch-full-version }}" > "${RUNNER_TEMP}/torch-constraints.txt"
+          uv pip install --no-cache-dir -c "${RUNNER_TEMP}/torch-constraints.txt" -r env/build_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu128
 
       - name: Build fvdb
         run: |
@@ -316,7 +317,8 @@ jobs:
       - name: Install pip dependencies
         run: |
           uv venv
-          uv pip install --no-cache-dir -r env/build_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu128
+          echo "torch==${{ needs.versions.outputs.torch-full-version }}" > "${RUNNER_TEMP}/torch-constraints.txt"
+          uv pip install --no-cache-dir -c "${RUNNER_TEMP}/torch-constraints.txt" -r env/build_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu128
 
       - name: Download gtests
         uses: actions/download-artifact@v8
@@ -409,7 +411,8 @@ jobs:
       - name: Install pip dependencies
         run: |
           uv venv
-          uv pip install --no-cache-dir -r env/test_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu128
+          echo "torch==${{ needs.versions.outputs.torch-full-version }}" > "${RUNNER_TEMP}/torch-constraints.txt"
+          uv pip install --no-cache-dir -c "${RUNNER_TEMP}/torch-constraints.txt" -r env/test_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu128
           uv pip install --no-cache-dir setuptools
 
       - name: Download package
@@ -504,7 +507,8 @@ jobs:
       - name: Install pip dependencies
         run: |
           uv venv
-          uv pip install --no-cache-dir -r env/test_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu128
+          echo "torch==${{ needs.versions.outputs.torch-full-version }}" > "${RUNNER_TEMP}/torch-constraints.txt"
+          uv pip install --no-cache-dir -c "${RUNNER_TEMP}/torch-constraints.txt" -r env/test_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu128
 
       - name: Download package
         uses: actions/download-artifact@v8
