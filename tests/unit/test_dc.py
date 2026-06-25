@@ -168,9 +168,10 @@ class DualContourTests(unittest.TestCase):
 
     def test_dc_sphere_is_valid_closed_genus0(self):
         """A closed sphere mesh is a well-formed genus-0 manifold: non-empty, face indices in range,
-        every triangle non-degenerate, normals aligned with the vertices, no boundary or non-manifold
-        edges, and Euler characteristic ``V - E + F == 2`` -- an exact topological invariant DC should
-        satisfy for a well-resolved closed SDF. (Subsumes the generic mesh-validity checks.)"""
+        every triangle non-degenerate, one normal per vertex (n.shape == v.shape), no boundary or
+        non-manifold edges, and Euler characteristic ``V - E + F == 2`` -- an exact topological
+        invariant DC should satisfy for a well-resolved closed SDF. (Normal *direction* is checked in
+        test_dc_sphere_radius_and_normals_accurate; this subsumes the generic mesh-validity checks.)"""
         v, f, n = self.mesh_grid.dual_contour(self.phi, iso=0.0)
         self.assertGreater(v.shape[0], 0)
         self.assertGreater(f.shape[0], 0)

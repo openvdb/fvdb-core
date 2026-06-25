@@ -52,8 +52,14 @@ struct VBMHelper {
 };
 
 // ------------------------- per-block decode helpers (device) -------------------------
+// Two ways to decode a block (pick one, and invoke it at most once per kernel since each path
+// allocates a block-sized __shared__ array):
+//   * vbmDecodeBlock(.., maps)  -- you declare `__shared__ VbmBlockMaps maps;` in the kernel and own
+//     it afterwards (use this when the kernel needs the raw maps, e.g. for a custom stencil read).
+//   * vbmDecodeFaceStencil(.., out) -- the 6-face preamble; it owns its own __shared__ VbmBlockMaps
+//     internally, so the kernel declares no shared scratch of its own.
+//
 // Per-VBM-block shared decode scratch: the inverse leaf/offset maps for one 2^Log2BlockWidth block.
-// Declare one as __shared__ in the kernel and hand it to vbmDecodeBlock.
 template <int Log2BlockWidth> struct VbmBlockMaps {
     uint32_t leafIndex[1 << Log2BlockWidth];
     uint16_t voxelOffset[1 << Log2BlockWidth];
@@ -109,7 +115,9 @@ vbmReadFaceStencil(const OnIndexGridT *grid, const VbmBlockMaps<Log2BlockWidth> 
 
 // Full face-stencil kernel preamble: decode this block, and for active threads read the 6-face
 // stencil into `out`. Returns false (caller should return) for unused slots. Owns its __shared__
-// scratch, so the kernel needs no shared declaration of its own.
+// scratch (a VbmBlockMaps), so the kernel needs no shared declaration of its own -- but for that
+// reason it must be called at most once per kernel. For any other neighbour pattern, use
+// vbmDecodeBlock with your own `__shared__ VbmBlockMaps` instead.
 template <int Log2BlockWidth>
 __device__ inline bool
 vbmDecodeFaceStencil(const OnIndexGridT *grid,
