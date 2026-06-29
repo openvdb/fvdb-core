@@ -29,9 +29,9 @@ jobs:
     name: Scan workflows + enforce runner-token policy
     runs-on: ubuntu-latest
     env:
-      # Pinned tool versions. Bump deliberately; new releases may surface new
-      # findings.
-      ZIZMOR_VERSION: "1.*"
+      # Exact tool versions so the gate is deterministic. Bump deliberately;
+      # new releases may surface new findings that fail unrelated PRs.
+      ZIZMOR_VERSION: "1.26.1"
       ACTIONLINT_VERSION: "v1.7.7"
     steps:
       # 1. Trusted tree from BASE: the policy script lives here and is never

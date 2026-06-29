@@ -185,7 +185,12 @@ def check_no_leaks_outside_workflows(repo_root: Path, violations: list[str], ref
     try:
         out = subprocess.run(cmd, capture_output=True, text=True, check=False)
     except FileNotFoundError:
-        # No git available; skip the repo-wide check (workflow rules still run).
+        # git is required to verify confinement; if it is unavailable we cannot
+        # run the check, so fail closed rather than silently passing.
+        violations.append(
+            f"<repo-wide leak check>: 'git' not found; cannot verify "
+            f"'{TOKEN_NAME}' is confined to .github/workflows/"
+        )
         return
 
     # `git grep` exits 0 when matches are found and 1 when there are none. Any

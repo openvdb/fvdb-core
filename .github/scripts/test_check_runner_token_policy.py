@@ -260,6 +260,18 @@ def test_leak_check_fails_closed_on_missing_ref(tmp_path):
     assert any("git grep' failed" in v for v in violations)
 
 
+def test_leak_check_fails_closed_when_git_missing(monkeypatch):
+    """If git is not installed, the leak check must record a violation."""
+
+    def _raise(*args, **kwargs):
+        raise FileNotFoundError("git")
+
+    monkeypatch.setattr(policy.subprocess, "run", _raise)
+    violations: list[str] = []
+    policy.check_no_leaks_outside_workflows(REPO_ROOT, violations)
+    assert any("'git' not found" in v for v in violations)
+
+
 def _git_available() -> bool:
     try:
         subprocess.run(["git", "--version"], capture_output=True, check=False)
