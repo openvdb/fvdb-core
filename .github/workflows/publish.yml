@@ -138,7 +138,7 @@ jobs:
         uses: machulav/ec2-github-runner@v2
         with:
           mode: start
-          github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
+          github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
           ec2-image-id: ${{ needs.versions.outputs.aws-cpu-ami }}
           ec2-instance-type: m6a.8xlarge
           subnet-id: ${{ needs.versions.outputs.aws-subnet }}
@@ -599,7 +599,7 @@ jobs:
         uses: machulav/ec2-github-runner@v2
         with:
           mode: start
-          github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
+          github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
           ec2-image-id: ${{ needs.versions.outputs.aws-gpu-ami }}
           ec2-instance-type: g6.xlarge
           subnet-id: ${{ needs.versions.outputs.aws-subnet }}
@@ -765,7 +765,7 @@ jobs:
         uses: machulav/ec2-github-runner@v2
         with:
           mode: stop
-          github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
+          github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
           label: val-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
           ec2-instance-id: ${{ steps.find-instance.outputs.instance-id }}
 
@@ -811,6 +811,6 @@ jobs:
         uses: machulav/ec2-github-runner@v2
         with:
           mode: stop
-          github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
+          github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
           label: ec2-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
           ec2-instance-id: ${{ steps.find-instance.outputs.instance-id }}

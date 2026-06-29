@@ -52,7 +52,7 @@ jobs:
         uses: machulav/ec2-github-runner@v2
         with:
           mode: start
-          github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
+          github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
           ec2-image-id: ${{ needs.versions.outputs.aws-cpu-ami }}
           ec2-instance-type: m6a.8xlarge
           subnet-id: ${{ needs.versions.outputs.aws-subnet }}
@@ -211,7 +211,7 @@ jobs:
         uses: machulav/ec2-github-runner@v2
         with:
           mode: stop
-          github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
+          github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
           label: ${{ needs.start-build-runner.outputs.label }}
           ec2-instance-id: ${{ needs.start-build-runner.outputs.ec2-instance-id }}
 
@@ -236,7 +236,7 @@ jobs:
         uses: machulav/ec2-github-runner@v2
         with:
           mode: start
-          github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
+          github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
           ec2-image-id: ${{ needs.versions.outputs.aws-gpu-ami }}
           ec2-instance-type: g6.2xlarge # 8 CPU-core, L4 GPU
           subnet-id: ${{ needs.versions.outputs.aws-subnet }}
@@ -558,6 +558,6 @@ jobs:
         uses: machulav/ec2-github-runner@v2
         with:
           mode: stop
-          github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
+          github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
           label: ${{ needs.start-tests-gpu-runner.outputs.label }}
           ec2-instance-id: ${{ needs.start-tests-gpu-runner.outputs.ec2-instance-id }}
