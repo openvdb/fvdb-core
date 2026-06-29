@@ -169,34 +169,45 @@ def check_workflow_file(path: Path, violations: list[str]) -> None:
                 )
 
 
-def check_no_leaks_outside_workflows(repo_root: Path, violations: list[str]) -> None:
-    """Rule 1: the token name must not appear anywhere except the workflows."""
+def check_no_leaks_outside_workflows(repo_root: Path, violations: list[str], ref: str | None = None) -> None:
+    """Rule 1: the token name must not appear anywhere except the workflows.
+
+    When ``ref`` is given (e.g. a PR head SHA or ``FETCH_HEAD``), the search runs
+    against that commit's *tree* instead of the working tree. This lets the
+    Workflow Security gate enforce Rule 1 over the whole proposed PR snapshot --
+    including files outside ``.github/workflows`` -- while the policy script
+    itself still runs from the trusted base checkout. ``git grep`` only reads
+    blobs, so scanning an untrusted ref executes nothing.
+    """
+    cmd = ["git", "-C", str(repo_root), "grep", "-l", "-I", "-F", TOKEN_NAME]
+    if ref:
+        cmd.append(ref)
     try:
-        out = subprocess.run(
-            ["git", "-C", str(repo_root), "grep", "-l", "-I", "-F", TOKEN_NAME],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        out = subprocess.run(cmd, capture_output=True, text=True, check=False)
     except FileNotFoundError:
         # No git available; skip the repo-wide check (workflow rules still run).
         return
 
     # `git grep` exits 0 when matches are found and 1 when there are none. Any
-    # other code (e.g. 128 when repo_root is not a git worktree) means the leak
-    # check could not run -- fail closed rather than silently passing.
+    # other code (e.g. 128 when repo_root is not a git worktree, or the ref is
+    # missing) means the leak check could not run -- fail closed rather than
+    # silently passing.
     if out.returncode not in (0, 1):
         violations.append(
             f"<repo-wide leak check>: 'git grep' failed (exit {out.returncode}) "
-            f"in {repo_root}; cannot verify '{TOKEN_NAME}' is confined to "
-            f".github/workflows/. stderr: {out.stderr.strip()!r}"
+            f"in {repo_root}{f' for ref {ref}' if ref else ''}; cannot verify "
+            f"'{TOKEN_NAME}' is confined to .github/workflows/. "
+            f"stderr: {out.stderr.strip()!r}"
         )
         return
 
-    for rel in out.stdout.splitlines():
-        rel = rel.strip()
-        if not rel:
+    for line in out.stdout.splitlines():
+        line = line.strip()
+        if not line:
             continue
+        # With a ref, `git grep` prefixes each match with "<ref>:"; strip it to
+        # get the repo-relative path.
+        rel = line.split(":", 1)[1] if ref else line
         if any(rel.startswith(p) for p in ALLOWED_PATH_PREFIXES):
             continue
         violations.append(f"{rel}: '{TOKEN_NAME}' must not be referenced outside " f".github/workflows/")
@@ -215,6 +226,12 @@ def main() -> int:
         default=".",
         help="repo root for the leak check (default: current directory)",
     )
+    parser.add_argument(
+        "--leak-check-ref",
+        default=None,
+        help="git ref/commit to run the Rule 1 leak check against (e.g. a PR "
+        "head SHA or FETCH_HEAD). Defaults to the working tree.",
+    )
     args = parser.parse_args()
 
     workflow_dir = Path(args.workflow_dir)
@@ -230,7 +247,7 @@ def main() -> int:
     for path in files:
         check_workflow_file(path, violations)
 
-    check_no_leaks_outside_workflows(repo_root, violations)
+    check_no_leaks_outside_workflows(repo_root, violations, ref=args.leak_check_ref)
 
     if violations:
         print(

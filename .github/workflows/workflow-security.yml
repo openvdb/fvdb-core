@@ -43,29 +43,41 @@ jobs:
 
       # 2. Overlay ONLY the PR head's proposed workflow files as data to scan.
       #    Nothing from the PR is executed; the trusted scripts above are kept.
+      #    Fetch via the pull ref (refs/pull/<n>/head) rather than by SHA from
+      #    origin so this works for forked PRs too, where the head SHA is not
+      #    reachable from the base repo's branches.
       - name: Overlay PR workflow files (data only)
         if: github.event_name == 'pull_request_target'
         env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          git fetch --no-tags --depth=1 origin "$HEAD_SHA"
+          git fetch --no-tags --depth=1 origin "refs/pull/${PR_NUMBER}/head"
+          echo "Fetched PR #${PR_NUMBER} head $(git rev-parse FETCH_HEAD) (event head: ${HEAD_SHA})"
           # Replace the workflows dir with the PR's version; keep everything
           # else (including .github/scripts) at the trusted base revision.
           rm -rf .github/workflows
-          git checkout "$HEAD_SHA" -- .github/workflows
-          echo "Scanning PR workflow files from $HEAD_SHA:"
+          git checkout FETCH_HEAD -- .github/workflows
+          echo "Scanning PR workflow files:"
           ls -1 .github/workflows
 
       # 3a. Repo-specific policy: the admin runner token may only be used as the
       #     github-token input to machulav/ec2-github-runner. The policy script
       #     and its tests run from the trusted base checkout (not the PR).
+      #     Rules 2-4 scan the overlaid PR workflow files; the Rule 1 leak check
+      #     runs against the PR head commit tree (read-only) so it also catches
+      #     runner-token references the PR adds outside .github/workflows.
       - name: Enforce EC2 runner token policy
         run: |
           set -euo pipefail
           python3 -m pip install --quiet 'pyyaml==6.*' 'pytest>=8,<9'
           python3 -m pytest .github/scripts/test_check_runner_token_policy.py -q
-          python3 .github/scripts/check_runner_token_policy.py .github/workflows
+          leak_ref_args=()
+          if [ "${GITHUB_EVENT_NAME}" = "pull_request_target" ]; then
+            leak_ref_args=(--leak-check-ref FETCH_HEAD)
+          fi
+          python3 .github/scripts/check_runner_token_policy.py .github/workflows "${leak_ref_args[@]}"
 
       # 3b. actionlint: workflow syntax / type / shell-injection issues.
       - name: Run actionlint

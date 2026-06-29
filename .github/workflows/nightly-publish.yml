@@ -123,7 +123,7 @@ jobs:
       - name: Install prerequisites
         run: |
           dnf install -y git wget procps-ng findutils gcc-toolset-${NEEDS_VERSIONS_OUTPUTS_GCC_TOOLSET}
-          echo 'source /opt/rh/gcc-toolset-${NEEDS_VERSIONS_OUTPUTS_GCC_TOOLSET}/enable' > /etc/profile.d/gcc-toolset-${NEEDS_VERSIONS_OUTPUTS_GCC_TOOLSET}.sh
+          echo "source /opt/rh/gcc-toolset-${NEEDS_VERSIONS_OUTPUTS_GCC_TOOLSET}/enable" > /etc/profile.d/gcc-toolset-${NEEDS_VERSIONS_OUTPUTS_GCC_TOOLSET}.sh
         env:
           NEEDS_VERSIONS_OUTPUTS_GCC_TOOLSET: ${{ needs.versions.outputs.gcc-toolset }}
 
@@ -195,7 +195,7 @@ jobs:
       - name: Build fvdb
         run: |
           source .venv/bin/activate
-          ./build.sh wheel strip_symbols verbose --cuda-arch-list '${NEEDS_VERSIONS_OUTPUTS_CUDA_ARCH_PUBLISH}'
+          ./build.sh wheel strip_symbols verbose --cuda-arch-list "${NEEDS_VERSIONS_OUTPUTS_CUDA_ARCH_PUBLISH}"
         env:
           NEEDS_VERSIONS_OUTPUTS_CUDA_ARCH_PUBLISH: ${{ needs.versions.outputs.cuda-arch-publish }}
 

@@ -150,7 +150,7 @@ jobs:
         run: |
           source .venv/bin/activate
           cd fvdb;
-          ./build.sh wheel verbose gtests benchmarks --cuda-arch-list '${NEEDS_VERSIONS_OUTPUTS_CUDA_ARCH_PR}'
+          ./build.sh wheel verbose gtests benchmarks --cuda-arch-list "${NEEDS_VERSIONS_OUTPUTS_CUDA_ARCH_PR}"
         env:
           NEEDS_VERSIONS_OUTPUTS_CUDA_ARCH_PR: ${{ needs.versions.outputs.cuda-arch-pr }}
 

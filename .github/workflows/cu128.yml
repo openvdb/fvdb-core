@@ -168,7 +168,7 @@ jobs:
           source .venv/bin/activate
           NANOVDB_EDITOR_SPEC=$(python .github/scripts/get_viewer_dependency.py)
           pip install "$NANOVDB_EDITOR_SPEC"
-          ./build.sh wheel verbose gtests benchmarks --cuda-arch-list '${NEEDS_VERSIONS_OUTPUTS_CUDA_ARCH_PR}'
+          ./build.sh wheel verbose gtests benchmarks --cuda-arch-list "${NEEDS_VERSIONS_OUTPUTS_CUDA_ARCH_PR}"
         env:
           NEEDS_VERSIONS_OUTPUTS_CUDA_ARCH_PR: ${{ needs.versions.outputs.cuda-arch-pr }}
 

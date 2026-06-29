@@ -241,6 +241,25 @@ def test_leak_check_fails_closed_outside_git_worktree(tmp_path):
     assert any("git grep' failed" in v for v in violations)
 
 
+def test_leak_check_against_ref_passes_on_clean_repo():
+    """Scanning a committed ref (the gate's PR-tree mode) flags nothing here:
+    the token name only appears in allowed CI paths at HEAD."""
+    if not _git_available():
+        pytest.skip("git not available")
+    violations: list[str] = []
+    policy.check_no_leaks_outside_workflows(REPO_ROOT, violations, ref="HEAD")
+    assert violations == [], "\n".join(violations)
+
+
+def test_leak_check_fails_closed_on_missing_ref(tmp_path):
+    """An unknown ref must fail closed rather than silently passing."""
+    if not _git_available():
+        pytest.skip("git not available")
+    violations: list[str] = []
+    policy.check_no_leaks_outside_workflows(REPO_ROOT, violations, ref="no_such_ref_xyz")
+    assert any("git grep' failed" in v for v in violations)
+
+
 def _git_available() -> bool:
     try:
         subprocess.run(["git", "--version"], capture_output=True, check=False)
