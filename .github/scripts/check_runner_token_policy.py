@@ -49,14 +49,13 @@ ALLOWED_LINE = re.compile(r"^\s*github-token:\s*\$\{\{\s*secrets\." + re.escape(
 
 # Paths (relative to repo root) that are allowed to mention the token name at
 # all. The workflows are where it is legitimately used; CI tooling under
-# .github/scripts/ (this script and its tests) and the security doc reference it
-# by name out of necessity. None of these can expose the token *value*: rules
-# 2-3 guarantee the secret is only ever interpolated into the machulav action,
-# so a file merely containing the name string is harmless.
+# .github/scripts/ (this script and its tests) references it by name out of
+# necessity. None of these can expose the token *value*: rules 2-3 guarantee the
+# secret is only ever interpolated into the machulav action, so a file merely
+# containing the name string is harmless.
 ALLOWED_PATH_PREFIXES = (
     ".github/workflows/",
     ".github/scripts/",
-    ".github/workflow-security.md",
 )
 
 
