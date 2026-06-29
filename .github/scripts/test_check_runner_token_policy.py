@@ -138,6 +138,76 @@ def test_token_via_non_github_token_input_is_rejected(tmp_path):
     assert violations  # line rule and/or disallowed-input rule fire
 
 
+# --- rule 5: no dynamic secret access (evades the textual name check) --------
+
+
+def test_dynamic_secret_access_via_format_is_rejected(tmp_path):
+    """secrets[format(...)] resolves the token without spelling its name."""
+    violations = _check(
+        tmp_path,
+        """
+        name: bad
+        on: [push]
+        jobs:
+          leak:
+            runs-on: ubuntu-latest
+            steps:
+              - run: echo "${{ secrets[format('EC2_RUNNER_%s', 'TOKEN')] }}"
+        """,
+    )
+    assert any("dynamic secret access" in v for v in violations)
+
+
+def test_dynamic_secret_access_via_matrix_is_rejected(tmp_path):
+    violations = _check(
+        tmp_path,
+        """
+        name: bad
+        on: [push]
+        jobs:
+          leak:
+            runs-on: ubuntu-latest
+            steps:
+              - run: echo "${{ secrets[matrix.name] }}"
+        """,
+    )
+    assert any("dynamic secret access" in v for v in violations)
+
+
+def test_dynamic_secret_access_is_rejected_even_without_token_name(tmp_path):
+    """The check runs on every workflow, even ones that never name the token."""
+    violations = _check(
+        tmp_path,
+        """
+        name: bad
+        on: [push]
+        jobs:
+          leak:
+            runs-on: ubuntu-latest
+            steps:
+              - run: echo "${{ secrets['SOME_OTHER_SECRET'] }}"
+        """,
+    )
+    assert any("dynamic secret access" in v for v in violations)
+
+
+def test_identifier_ending_in_secrets_is_not_flagged(tmp_path):
+    """`\\b` must not match e.g. mysecrets[0] (not a secrets-context access)."""
+    violations = _check(
+        tmp_path,
+        """
+        name: ok
+        on: [push]
+        jobs:
+          build:
+            runs-on: ubuntu-latest
+            steps:
+              - run: echo "${{ fromJSON(needs.x.outputs.mysecrets)[0] }}"
+        """,
+    )
+    assert violations == []
+
+
 # --- rule 3: only machulav/ec2-github-runner may consume the token -----------
 
 

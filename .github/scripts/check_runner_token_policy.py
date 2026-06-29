@@ -23,6 +23,14 @@ This script enforces, by inspecting the workflow files themselves:
      fine -- rule 2 guarantees they can never reference the token, since it
      only ever appears as the ``github-token`` input.)
 
+  5. No dynamic secret access (``secrets[...]``) anywhere in a workflow. Rules
+     1-4 are textual: they key on the literal name ``EC2_RUNNER_TOKEN``. Dynamic
+     indexing such as ``secrets[format('EC2_RUNNER_%s', 'TOKEN')]`` or
+     ``secrets[matrix.name]`` could resolve the admin token *without* spelling
+     its name, evading every other rule. It is never used legitimately here, so
+     reject it outright (this check runs on every workflow, even ones that never
+     mention the token by name).
+
 Usage:
     check_runner_token_policy.py [WORKFLOW_DIR] [--repo-root DIR]
 
@@ -46,6 +54,10 @@ ALLOWED_ACTION = "machulav/ec2-github-runner"
 # The one and only allowed textual form, e.g.
 #   github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
 ALLOWED_LINE = re.compile(r"^\s*github-token:\s*\$\{\{\s*secrets\." + re.escape(TOKEN_NAME) + r"\s*\}\}\s*$")
+
+# Dynamic secret access, e.g. secrets['X'], secrets[matrix.y], secrets[format(...)].
+# The \b avoids matching identifiers that merely end in "secrets" (e.g. mysecrets[0]).
+DYNAMIC_SECRET = re.compile(r"\bsecrets\s*\[")
 
 # Paths (relative to repo root) that are allowed to mention the token name at
 # all. The workflows are where it is legitimately used; CI tooling under
@@ -72,6 +84,21 @@ def iter_steps(job: dict):
 
 def check_workflow_file(path: Path, violations: list[str]) -> None:
     text = path.read_text()
+
+    # --- Rule 5: no dynamic secret access (runs on every workflow). -----------
+    # Must run before the token-name early return below: the whole point is that
+    # dynamic indexing can reach the token without naming it.
+    for lineno, line in enumerate(text.splitlines(), start=1):
+        if DYNAMIC_SECRET.search(line):
+            fail(
+                violations,
+                path,
+                None,
+                f"line {lineno}: dynamic secret access is not allowed -- use "
+                f"'secrets.<NAME>', not 'secrets[...]' (it can resolve "
+                f"'{TOKEN_NAME}' without naming it): {line.strip()!r}",
+            )
+
     if TOKEN_REF not in text and TOKEN_NAME not in text:
         return
 
