@@ -5,8 +5,9 @@
 
 This script enforces, by inspecting the workflow files themselves:
 
-  1. The token name may appear ONLY inside ``.github/workflows/*.{yml,yaml}``
-     (and in this enforcement script). It must not leak into source, docs, etc.
+  1. The token name may appear ONLY inside ``.github/workflows/`` and the CI
+     tooling under ``.github/scripts/`` (this enforcement script and its tests).
+     It must not leak into product source, docs, etc.
 
   2. Every textual occurrence in a workflow must be EXACTLY the action input:
          github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
@@ -69,6 +70,8 @@ ALLOWED_PATH_PREFIXES = (
     ".github/workflows/",
     ".github/scripts/",
 )
+# Human-readable form of the allowed locations, for violation/error messages.
+ALLOWED_PATHS_DESC = " or ".join(ALLOWED_PATH_PREFIXES)
 
 
 def fail(violations: list[str], path: Path, job: str | None, message: str) -> None:
@@ -215,7 +218,7 @@ def check_no_leaks_outside_workflows(repo_root: Path, violations: list[str], ref
         # run the check, so fail closed rather than silently passing.
         violations.append(
             f"<repo-wide leak check>: 'git' not found; cannot verify "
-            f"'{TOKEN_NAME}' is confined to .github/workflows/"
+            f"'{TOKEN_NAME}' is confined to {ALLOWED_PATHS_DESC}"
         )
         return
 
@@ -227,7 +230,7 @@ def check_no_leaks_outside_workflows(repo_root: Path, violations: list[str], ref
         violations.append(
             f"<repo-wide leak check>: 'git grep' failed (exit {out.returncode}) "
             f"in {repo_root}{f' for ref {ref}' if ref else ''}; cannot verify "
-            f"'{TOKEN_NAME}' is confined to .github/workflows/. "
+            f"'{TOKEN_NAME}' is confined to {ALLOWED_PATHS_DESC}. "
             f"stderr: {out.stderr.strip()!r}"
         )
         return
@@ -241,7 +244,7 @@ def check_no_leaks_outside_workflows(repo_root: Path, violations: list[str], ref
         rel = line.split(":", 1)[1] if ref else line
         if any(rel.startswith(p) for p in ALLOWED_PATH_PREFIXES):
             continue
-        violations.append(f"{rel}: '{TOKEN_NAME}' must not be referenced outside " f".github/workflows/")
+        violations.append(f"{rel}: '{TOKEN_NAME}' must not be referenced outside {ALLOWED_PATHS_DESC}")
 
 
 def main() -> int:
