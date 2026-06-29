@@ -4,8 +4,8 @@
 name: Sync Doc Version
 
 on:
-  schedule:
-    - cron: "0 8 * * *"
+  release:
+    types: [published]
   workflow_dispatch:
 
 permissions:
@@ -57,7 +57,6 @@ jobs:
           steps.release.outputs.version != steps.current.outputs.version
         uses: peter-evans/create-pull-request@v8
         with:
-          token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
           commit-message: "Update doc stable version to ${{ steps.release.outputs.version }}"
           signoff: true
           branch: auto/sync-doc-version
