@@ -1,6 +1,7 @@
 name: fVDB Conda Build and Test
 
 on:
+  # zizmor: ignore[dangerous-triggers] pull_request_target is required to provision AWS runners; privileged credentials are scoped to runner lifecycle jobs.
   pull_request_target:
     branches:
       - '**'
