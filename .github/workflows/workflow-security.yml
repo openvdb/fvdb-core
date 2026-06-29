@@ -1,0 +1,84 @@
+name: Workflow Security
+
+# Why pull_request_target (not pull_request):
+#   This is a SECURITY GATE protecting tokens used for runner registration. With
+#   pull_request_target the workflow definition, the policy script, and the
+#   tooling all come from the BASE branch, so a malicious PR cannot edit the
+#   check to make it pass. We then overlay ONLY the PR head's proposed
+#   .github/workflows files as inert data and scan them -- we never execute any
+#   PR-provided code and expose no secrets (permissions are read-only).
+on:
+  # zizmor: ignore[dangerous-triggers] No secrets are used and no PR code is executed; the PR's workflow YAML is checked out as data only and scanned by base-controlled tooling.
+  pull_request_target:
+    branches:
+      - '**'
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  workflow-security:
+    name: Scan workflows + enforce runner-token policy
+    runs-on: ubuntu-latest
+    env:
+      # Pinned tool versions. Bump deliberately; new releases may surface new
+      # findings.
+      ZIZMOR_VERSION: "1.*"
+      ACTIONLINT_VERSION: "v1.7.7"
+    steps:
+      # 1. Trusted tree from BASE: the policy script lives here and is never
+      #    overwritten by the PR.
+      - name: Checkout base (trusted)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      # 2. Overlay ONLY the PR head's proposed workflow files as data to scan.
+      #    Nothing from the PR is executed; the trusted scripts above are kept.
+      - name: Overlay PR workflow files (data only)
+        if: github.event_name == 'pull_request_target'
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin "$HEAD_SHA"
+          # Replace the workflows dir with the PR's version; keep everything
+          # else (including .github/scripts) at the trusted base revision.
+          rm -rf .github/workflows
+          git checkout "$HEAD_SHA" -- .github/workflows
+          echo "Scanning PR workflow files from $HEAD_SHA:"
+          ls -1 .github/workflows
+
+      # 3a. Repo-specific policy: the admin runner token may only be used as the
+      #     github-token input to machulav/ec2-github-runner.
+      - name: Enforce EC2 runner token policy
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet 'pyyaml==6.*'
+          python3 .github/scripts/check_runner_token_policy.py .github/workflows
+
+      # 3b. actionlint: workflow syntax / type / shell-injection issues.
+      - name: Run actionlint
+        run: |
+          set -euo pipefail
+          go install "github.com/rhysd/actionlint/cmd/actionlint@${ACTIONLINT_VERSION}"
+          "$(go env GOPATH)/bin/actionlint" -color
+
+      # 3c. zizmor: dangerous triggers, unpinned actions, credential exposure,
+      #     template injection, excessive permissions, etc.
+      - name: Run zizmor
+        env:
+          # Read-only default token enables zizmor's online audits.
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet "zizmor==${ZIZMOR_VERSION}"
+          zizmor --persona=regular .github/workflows
