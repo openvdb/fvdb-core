@@ -38,6 +38,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0 # Fetch all history for all branches
+          persist-credentials: false
       - name: Determine the target branch of the PR
         run: |
           echo "Fetching pull request metadata..."
@@ -107,7 +108,9 @@ jobs:
       - name: Build fvdb
         run: |
           micromamba activate fvdb_build
-          TORCH_CUDA_ARCH_LIST="${{ needs.versions.outputs.cuda-arch-publish }}" ./build.sh wheel verbose gtests benchmarks
+          TORCH_CUDA_ARCH_LIST="${NEEDS_VERSIONS_OUTPUTS_CUDA_ARCH_PUBLISH}" ./build.sh wheel verbose gtests benchmarks
+        env:
+          NEEDS_VERSIONS_OUTPUTS_CUDA_ARCH_PUBLISH: ${{ needs.versions.outputs.cuda-arch-publish }}
 
       - name: Upload wheel
         uses: actions/upload-artifact@v7
@@ -154,6 +157,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0 # Fetch all history for all branches
+          persist-credentials: false
       - name: Determine the target branch of the PR
         run: |
           echo "Fetching pull request metadata..."

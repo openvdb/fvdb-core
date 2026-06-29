@@ -31,6 +31,7 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
+          persist-credentials: false
       - name: Decide whether to build
         id: decide
         run: |
@@ -67,8 +68,10 @@ jobs:
       - name: Stagger job starts to avoid API rate limits
         run: |
           DELAY=$((RANDOM % 16))
-          echo "Delaying start by ${DELAY} seconds for Python ${{ matrix.python-version }}"
+          echo "Delaying start by ${DELAY} seconds for Python ${MATRIX_PYTHON_VERSION}"
           sleep $DELAY
+        env:
+          MATRIX_PYTHON_VERSION: ${{ matrix.python-version }}
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v6
         with:
@@ -118,12 +121,15 @@ jobs:
     steps:
       - name: Install prerequisites
         run: |
-          dnf install -y git wget procps-ng findutils gcc-toolset-${{ needs.versions.outputs.gcc-toolset }}
-          echo 'source /opt/rh/gcc-toolset-${{ needs.versions.outputs.gcc-toolset }}/enable' > /etc/profile.d/gcc-toolset-${{ needs.versions.outputs.gcc-toolset }}.sh
+          dnf install -y git wget procps-ng findutils gcc-toolset-${NEEDS_VERSIONS_OUTPUTS_GCC_TOOLSET}
+          echo 'source /opt/rh/gcc-toolset-${NEEDS_VERSIONS_OUTPUTS_GCC_TOOLSET}/enable' > /etc/profile.d/gcc-toolset-${NEEDS_VERSIONS_OUTPUTS_GCC_TOOLSET}.sh
+        env:
+          NEEDS_VERSIONS_OUTPUTS_GCC_TOOLSET: ${{ needs.versions.outputs.gcc-toolset }}
 
       - uses: actions/checkout@v6
         with:
           ref: main
+          persist-credentials: false
 
       - name: Install uv
         uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
@@ -132,34 +138,42 @@ jobs:
 
       - name: Set up Python
         run: |
-          uv python install ${{ matrix.python-version }}
+          uv python install ${MATRIX_PYTHON_VERSION}
           uv venv
+        env:
+          MATRIX_PYTHON_VERSION: ${{ matrix.python-version }}
 
       - name: Install CMake
         run: >
-          wget -nv https://github.com/Kitware/CMake/releases/download/v${{ needs.versions.outputs.cmake-version }}/cmake-${{ needs.versions.outputs.cmake-version }}-linux-x86_64.sh &&
+          wget -nv https://github.com/Kitware/CMake/releases/download/v${NEEDS_VERSIONS_OUTPUTS_CMAKE_VERSION}/cmake-${NEEDS_VERSIONS_OUTPUTS_CMAKE_VERSION}-linux-x86_64.sh &&
           mkdir /opt/cmake &&
-          sh cmake-${{ needs.versions.outputs.cmake-version }}-linux-x86_64.sh --prefix=/usr/local --skip-license &&
+          sh cmake-${NEEDS_VERSIONS_OUTPUTS_CMAKE_VERSION}-linux-x86_64.sh --prefix=/usr/local --skip-license &&
           cmake --version
+        env:
+          NEEDS_VERSIONS_OUTPUTS_CMAKE_VERSION: ${{ needs.versions.outputs.cmake-version }}
 
       - name: Install system dependencies
         run: dnf install -y zlib-devel libpng-devel pkgconfig unzip procps-ng findutils
 
       - name: Install pip dependencies
         run: |
-          CUDA_TAG="cu$(echo "${{ matrix.cuda-version }}" | tr -d '.')"
-          TORCH_VERSION="${{ matrix.torch-version }}"
+          CUDA_TAG="cu$(echo "${MATRIX_CUDA_VERSION}" | tr -d '.')"
+          TORCH_VERSION="${MATRIX_TORCH_VERSION}"
           echo "Installing PyTorch ${TORCH_VERSION} for ${CUDA_TAG}"
           uv venv
           # Pin the tested PyTorch via a constraints file so the unbounded torch in
           # build_requirements.txt resolves to the version recorded in versions.json.
-          echo "torch==${{ needs.versions.outputs.torch-full-version }}" > "${RUNNER_TEMP}/torch-constraints.txt"
+          echo "torch==${NEEDS_VERSIONS_OUTPUTS_TORCH_FULL_VERSION}" > "${RUNNER_TEMP}/torch-constraints.txt"
           uv pip install --no-cache -c "${RUNNER_TEMP}/torch-constraints.txt" -r env/build_requirements.txt --extra-index-url https://download.pytorch.org/whl/${CUDA_TAG}
+        env:
+          MATRIX_CUDA_VERSION: ${{ matrix.cuda-version }}
+          MATRIX_TORCH_VERSION: ${{ matrix.torch-version }}
+          NEEDS_VERSIONS_OUTPUTS_TORCH_FULL_VERSION: ${{ needs.versions.outputs.torch-full-version }}
 
       - name: Set nightly version
         run: |
-          TORCH_TAG="$(echo "${{ matrix.torch-version }}" | tr -d '.')"
-          CUDA_TAG="$(echo "${{ matrix.cuda-version }}" | tr -d '.')"
+          TORCH_TAG="$(echo "${MATRIX_TORCH_VERSION}" | tr -d '.')"
+          CUDA_TAG="$(echo "${MATRIX_CUDA_VERSION}" | tr -d '.')"
           # Anchor the nightly at the upcoming release recorded in pyproject.toml
           # (e.g. 0.5.0.dev0 -> 0.5.0) so PEP 440 ordering puts nightlies between
           # the previous final release and the next one.
@@ -173,18 +187,23 @@ jobs:
           sed -i -E "s/^version *= *\"[^\"]+\"/version = \"${NIGHTLY_VERSION}\"/" pyproject.toml
           echo "Nightly version: $NIGHTLY_VERSION"
           grep '^version' pyproject.toml
+        env:
+          MATRIX_TORCH_VERSION: ${{ matrix.torch-version }}
+          MATRIX_CUDA_VERSION: ${{ matrix.cuda-version }}
 
       - name: Build fvdb
         run: |
           source .venv/bin/activate
-          ./build.sh wheel strip_symbols verbose --cuda-arch-list '${{ needs.versions.outputs.cuda-arch-publish }}'
+          ./build.sh wheel strip_symbols verbose --cuda-arch-list '${NEEDS_VERSIONS_OUTPUTS_CUDA_ARCH_PUBLISH}'
+        env:
+          NEEDS_VERSIONS_OUTPUTS_CUDA_ARCH_PUBLISH: ${{ needs.versions.outputs.cuda-arch-publish }}
 
       - name: Repair wheel for manylinux
         run: |
           source .venv/bin/activate
           pip install auditwheel patchelf
           ldd --version | head -n1
-          CUDA_MAJOR=$(echo "${{ matrix.cuda-version }}" | cut -d. -f1)
+          CUDA_MAJOR=$(echo "${MATRIX_CUDA_VERSION}" | cut -d. -f1)
           auditwheel repair dist/fvdb_core-*.whl -w dist/ \
             --exclude libcuda.so.1 \
             --exclude libcudart.so.${CUDA_MAJOR} \
@@ -215,6 +234,8 @@ jobs:
             rm dist/fvdb_core-*-linux_x86_64.whl
           fi
           ls -lh dist/
+        env:
+          MATRIX_CUDA_VERSION: ${{ matrix.cuda-version }}
 
       - name: Upload wheel
         uses: actions/upload-artifact@v7
@@ -269,7 +290,7 @@ jobs:
           set -euo pipefail
           CUTOFF=$(date -u -d '30 days ago' '+%Y-%m-%d')
           echo "Pruning nightly wheels uploaded before $CUTOFF"
-          LISTING=$(aws s3 ls "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${{ steps.proj.outputs.normalized }}/" 2>/dev/null || true)
+          LISTING=$(aws s3 ls "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${STEPS_PROJ_OUTPUTS_NORMALIZED}/" 2>/dev/null || true)
           if [ -z "$LISTING" ]; then
             echo "No existing wheels found (first run or empty prefix) -- nothing to prune"
             exit 0
@@ -280,16 +301,18 @@ jobs:
             FILE_PART=$(echo "$line" | awk '{print $4}')
             if [[ "$FILE_PART" == *.whl ]] && [[ "$DATE_PART" < "$CUTOFF" ]]; then
               echo "Removing: $FILE_PART (uploaded $DATE_PART)"
-              aws s3 rm "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${{ steps.proj.outputs.normalized }}/$FILE_PART" --only-show-errors
+              aws s3 rm "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${STEPS_PROJ_OUTPUTS_NORMALIZED}/$FILE_PART" --only-show-errors
               DELETED=$((DELETED + 1))
             fi
           done <<< "$LISTING"
           echo "Pruned $DELETED old nightly wheel(s)"
+        env:
+          STEPS_PROJ_OUTPUTS_NORMALIZED: ${{ steps.proj.outputs.normalized }}
 
       - name: Upload wheels to S3 project directory
         run: |
           set -euo pipefail
-          DEST="s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${{ steps.proj.outputs.normalized }}/"
+          DEST="s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${STEPS_PROJ_OUTPUTS_NORMALIZED}/"
           echo "Uploading wheels to $DEST"
           shopt -s nullglob
           upload_failed=0
@@ -308,21 +331,23 @@ jobs:
           fi
           echo "All wheels uploaded successfully"
           sleep 2
+        env:
+          STEPS_PROJ_OUTPUTS_NORMALIZED: ${{ steps.proj.outputs.normalized }}
 
       - name: Generate project index.html
         run: |
           set -euo pipefail
-          OUTDIR="dist/index-gen/${{ steps.proj.outputs.normalized }}"
+          OUTDIR="dist/index-gen/${STEPS_PROJ_OUTPUTS_NORMALIZED}"
           mkdir -p "$OUTDIR"
           INDEX_FILE="$OUTDIR/index.html"
-          TITLE="Links for ${{ steps.proj.outputs.project_name }}"
-          wheels=$(aws s3 ls "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${{ steps.proj.outputs.normalized }}/" | { grep -E '\.whl$' || true; } | awk '{print $4}')
+          TITLE="Links for ${STEPS_PROJ_OUTPUTS_PROJECT_NAME}"
+          wheels=$(aws s3 ls "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${STEPS_PROJ_OUTPUTS_NORMALIZED}/" | { grep -E '\.whl$' || true; } | awk '{print $4}')
 
           echo "Found wheels in S3:"
           echo "$wheels"
 
           if [ -z "$wheels" ]; then
-            echo "WARNING: No wheels found in S3 at s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${{ steps.proj.outputs.normalized }}/"
+            echo "WARNING: No wheels found in S3 at s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${STEPS_PROJ_OUTPUTS_NORMALIZED}/"
             echo "This may indicate an upload failure or timing issue"
           fi
 
@@ -339,7 +364,7 @@ jobs:
                 echo "  Computed SHA256 from local file: ${sha:0:16}..." >&2
               else
                 echo "  Downloading $whl to compute hash..." >&2
-                if aws s3 cp "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${{ steps.proj.outputs.normalized }}/$whl" "/tmp/$whl" --only-show-errors; then
+                if aws s3 cp "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${STEPS_PROJ_OUTPUTS_NORMALIZED}/$whl" "/tmp/$whl" --only-show-errors; then
                   sha=$(sha256sum "/tmp/$whl" | awk '{print $1}')
                   rm "/tmp/$whl"
                   echo "  Computed SHA256 from S3 file: ${sha:0:16}..." >&2
@@ -357,11 +382,14 @@ jobs:
           echo "Generated index.html:"
           cat "$INDEX_FILE"
 
-          aws s3 cp "$INDEX_FILE" "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${{ steps.proj.outputs.normalized }}/index.html" \
+          aws s3 cp "$INDEX_FILE" "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${STEPS_PROJ_OUTPUTS_NORMALIZED}/index.html" \
             --content-type text/html \
             --cache-control "public, max-age=60, must-revalidate" \
             --only-show-errors
           echo "Index uploaded successfully"
+        env:
+          STEPS_PROJ_OUTPUTS_NORMALIZED: ${{ steps.proj.outputs.normalized }}
+          STEPS_PROJ_OUTPUTS_PROJECT_NAME: ${{ steps.proj.outputs.project_name }}
 
       - name: Generate root simple index.html
         run: |
@@ -388,7 +416,7 @@ jobs:
       - name: Invalidate CloudFront cache for simple-index paths
         run: |
           set -euo pipefail
-          DOMAIN="${{ needs.versions.outputs.aws-cloudfront-distribution-domain }}"
+          DOMAIN="${NEEDS_VERSIONS_OUTPUTS_AWS_CLOUDFRONT_DISTRIBUTION_DOMAIN}"
           if [ -z "$DOMAIN" ] || [ "$DOMAIN" = "null" ]; then
             echo "No CloudFront distribution domain configured (aws.cloudfront_distribution_domain in versions.json); skipping invalidation"
             exit 0
@@ -401,7 +429,7 @@ jobs:
             echo "(IAM role may need cloudfront:ListDistributions permission)"
             exit 0
           fi
-          NORM="${{ steps.proj.outputs.normalized }}"
+          NORM="${STEPS_PROJ_OUTPUTS_NORMALIZED}"
           # Invalidate both the trailing-slash directory paths (what pip and
           # browsers actually request) and the underlying index.html object
           # paths. CloudFront caches each request URI independently, so
@@ -422,6 +450,9 @@ jobs:
             echo "(IAM role may need cloudfront:CreateInvalidation permission)"
             exit 0
           fi
+        env:
+          NEEDS_VERSIONS_OUTPUTS_AWS_CLOUDFRONT_DISTRIBUTION_DOMAIN: ${{ needs.versions.outputs.aws-cloudfront-distribution-domain }}
+          STEPS_PROJ_OUTPUTS_NORMALIZED: ${{ steps.proj.outputs.normalized }}
 
   ##############################################################################
   # STOP EC2 BUILD RUNNERS
@@ -446,7 +477,7 @@ jobs:
       - name: Find EC2 instance ID by label
         id: find-instance
         run: |
-          LABEL="nightly-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}"
+          LABEL="nightly-${MATRIX_PYTHON_VERSION}-pt${MATRIX_TORCH_VERSION}-cu${MATRIX_CUDA_VERSION}-${{ github.run_id }}"
           echo "Looking for instance with RunnerLabel: $LABEL"
 
           INSTANCE_ID=$(aws ec2 describe-instances \
@@ -462,6 +493,10 @@ jobs:
             echo "Found instance: $INSTANCE_ID"
             echo "instance-id=$INSTANCE_ID" >> $GITHUB_OUTPUT
           fi
+        env:
+          MATRIX_PYTHON_VERSION: ${{ matrix.python-version }}
+          MATRIX_TORCH_VERSION: ${{ matrix.torch-version }}
+          MATRIX_CUDA_VERSION: ${{ matrix.cuda-version }}
       - name: Stop EC2 runner
         if: steps.find-instance.outputs.instance-id != ''
         uses: machulav/ec2-github-runner@v2

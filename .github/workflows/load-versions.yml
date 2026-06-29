@@ -99,6 +99,7 @@ jobs:
           sparse-checkout: .github/versions.json
           sparse-checkout-cone-mode: false
           ref: ${{ inputs.ref || '' }}
+          persist-credentials: false
       - name: Parse versions.json
         id: parse
         run: |

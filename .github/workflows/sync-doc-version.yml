@@ -18,6 +18,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Get latest release version
         id: release
@@ -48,8 +50,11 @@ jobs:
           steps.release.outputs.skip != 'true' &&
           steps.release.outputs.version != steps.current.outputs.version
         run: |
-          echo "Updating doc version from ${{ steps.current.outputs.version }} to ${{ steps.release.outputs.version }}"
-          ./devtools/update-doc-versions.sh "${{ steps.release.outputs.version }}"
+          echo "Updating doc version from ${STEPS_CURRENT_OUTPUTS_VERSION} to ${STEPS_RELEASE_OUTPUTS_VERSION}"
+          ./devtools/update-doc-versions.sh "${STEPS_RELEASE_OUTPUTS_VERSION}"
+        env:
+          STEPS_CURRENT_OUTPUTS_VERSION: ${{ steps.current.outputs.version }}
+          STEPS_RELEASE_OUTPUTS_VERSION: ${{ steps.release.outputs.version }}
 
       - name: Create pull request
         if: >-

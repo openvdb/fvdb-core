@@ -52,13 +52,16 @@ jobs:
           apt-get install -y software-properties-common
           add-apt-repository -y ppa:ubuntu-toolchain-r/test
           apt-get update
-          apt-get install -y gcc-${{ needs.versions.outputs.gcc-toolset }} g++-${{ needs.versions.outputs.gcc-toolset }}
-          update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-${{ needs.versions.outputs.gcc-toolset }} 100
-          update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-${{ needs.versions.outputs.gcc-toolset }} 100
+          apt-get install -y gcc-${NEEDS_VERSIONS_OUTPUTS_GCC_TOOLSET} g++-${NEEDS_VERSIONS_OUTPUTS_GCC_TOOLSET}
+          update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-${NEEDS_VERSIONS_OUTPUTS_GCC_TOOLSET} 100
+          update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-${NEEDS_VERSIONS_OUTPUTS_GCC_TOOLSET} 100
+        env:
+          NEEDS_VERSIONS_OUTPUTS_GCC_TOOLSET: ${{ needs.versions.outputs.gcc-toolset }}
       ### Get the PR branch and apply changes to the target branch
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0 # Fetch all history for all branches
+          persist-credentials: false
       - name: Determine the target branch of the PR
         run: |
           echo "Fetching pull request metadata..."
@@ -127,10 +130,12 @@ jobs:
 
       - name: Install CMake
         run: >
-          wget -nv https://github.com/Kitware/CMake/releases/download/v${{ needs.versions.outputs.cmake-version }}/cmake-${{ needs.versions.outputs.cmake-version }}-linux-x86_64.sh &&
+          wget -nv https://github.com/Kitware/CMake/releases/download/v${NEEDS_VERSIONS_OUTPUTS_CMAKE_VERSION}/cmake-${NEEDS_VERSIONS_OUTPUTS_CMAKE_VERSION}-linux-x86_64.sh &&
           mkdir /opt/cmake &&
-          sh cmake-${{ needs.versions.outputs.cmake-version }}-linux-x86_64.sh --prefix=/usr/local --skip-license &&
+          sh cmake-${NEEDS_VERSIONS_OUTPUTS_CMAKE_VERSION}-linux-x86_64.sh --prefix=/usr/local --skip-license &&
           cmake --version
+        env:
+          NEEDS_VERSIONS_OUTPUTS_CMAKE_VERSION: ${{ needs.versions.outputs.cmake-version }}
 
       - name: Install apt dependencies
         run: apt install -y zlib1g-dev libpng-dev pkg-config
@@ -138,14 +143,18 @@ jobs:
       - name: Install pip dependencies
         run: |
           uv venv
-          echo "torch==${{ needs.versions.outputs.torch-full-version }}" > "${RUNNER_TEMP}/torch-constraints.txt"
+          echo "torch==${NEEDS_VERSIONS_OUTPUTS_TORCH_FULL_VERSION}" > "${RUNNER_TEMP}/torch-constraints.txt"
           uv pip install --no-cache-dir -c "${RUNNER_TEMP}/torch-constraints.txt" -r fvdb/env/build_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu128
+        env:
+          NEEDS_VERSIONS_OUTPUTS_TORCH_FULL_VERSION: ${{ needs.versions.outputs.torch-full-version }}
 
       - name: Build fvdb
         run: |
           source .venv/bin/activate
           cd fvdb;
-          TORCH_CUDA_ARCH_LIST="${{ needs.versions.outputs.cuda-arch-pr }}" ./build.sh wheel verbose gtests benchmarks
+          TORCH_CUDA_ARCH_LIST="${NEEDS_VERSIONS_OUTPUTS_CUDA_ARCH_PR}" ./build.sh wheel verbose gtests benchmarks
+        env:
+          NEEDS_VERSIONS_OUTPUTS_CUDA_ARCH_PR: ${{ needs.versions.outputs.cuda-arch-pr }}
 
       - name: Upload wheel
         uses: actions/upload-artifact@v7
@@ -204,6 +213,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0 # Fetch all history for all branches
+          persist-credentials: false
       - name: Determine the target branch of the PR
         run: |
           echo "Fetching pull request metadata..."
@@ -276,8 +286,10 @@ jobs:
       - name: Install pip dependencies
         run: |
           uv venv
-          echo "torch==${{ needs.versions.outputs.torch-full-version }}" > "${RUNNER_TEMP}/torch-constraints.txt"
+          echo "torch==${NEEDS_VERSIONS_OUTPUTS_TORCH_FULL_VERSION}" > "${RUNNER_TEMP}/torch-constraints.txt"
           uv pip install --no-cache-dir -c "${RUNNER_TEMP}/torch-constraints.txt" -r fvdb/env/test_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu128
+        env:
+          NEEDS_VERSIONS_OUTPUTS_TORCH_FULL_VERSION: ${{ needs.versions.outputs.torch-full-version }}
 
       - name: Download package
         uses: actions/download-artifact@v8
