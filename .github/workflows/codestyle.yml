@@ -17,7 +17,7 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
-      - uses: psf/black@stable
+      - uses: psf/black@87928e6d6761a4a6d22250e1fee5601b3998086e # stable
         with:
           options: "--check --diff --verbose"
           src: "./"
@@ -44,7 +44,7 @@ jobs:
     - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       with:
         persist-credentials: false
-    - uses: swahtz/include-guards-check-action@master
+    - uses: swahtz/include-guards-check-action@41d1997205f936c50e23272c849398168b72083a # master
       with:
         path: 'src/'
 
@@ -55,7 +55,7 @@ jobs:
     - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       with:
         persist-credentials: false
-    - uses: enarx/spdx@master
+    - uses: enarx/spdx@d4020ee98e3101dd487c5184f27c6a6fb4f88709 # master
       with:
         licenses: |-
           Apache-2.0

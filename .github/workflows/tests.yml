@@ -21,8 +21,6 @@ permissions:
   deployments: read
   pull-requests: read
   issues: read
-  # Need ID token write permission to use OIDC
-  id-token: write
 
 jobs:
   ##############################################################################
@@ -41,6 +39,8 @@ jobs:
     name: Start CPU-only EC2 runner for build
     needs: [check-changes, versions]
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write  # Required for AWS OIDC
     if: >-
       needs.check-changes.outputs.should_test == 'true'
       && (github.event.pull_request.draft == false || github.event_name != 'pull_request_target')
@@ -161,6 +161,8 @@ jobs:
       - fvdb-build # required to wait when the main job is done
       - versions
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write  # Required for AWS OIDC
     # required to stop the runner even if the error happened in the previous jobs, but only if the
     # start-build-runner job was not skipped
     if: ${{ always() && needs.start-build-runner.result != 'skipped' }}
@@ -186,6 +188,8 @@ jobs:
     name: Start EC2 GPU runner for tests
     needs: [fvdb-build, versions]
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write  # Required for AWS OIDC
     outputs:
       label: ${{ steps.start-tests-gpu-runner.outputs.label }}
       ec2-instance-id: ${{ steps.start-tests-gpu-runner.outputs.ec2-instance-id }}
@@ -438,6 +442,8 @@ jobs:
       - fvdb-docs-test # required to wait when the main job is done
       - versions
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write  # Required for AWS OIDC
     # required to stop the runner even if the error happened in the previous jobs
     # but only if the start-tests-gpu-runner job was not skipped
     if: ${{ always() && needs.start-tests-gpu-runner.result != 'skipped' }}

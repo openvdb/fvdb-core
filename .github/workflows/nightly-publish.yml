@@ -14,7 +14,6 @@ concurrency:
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
   ##############################################################################
@@ -61,6 +60,8 @@ jobs:
     needs: [check-new-commits, versions]
     if: needs.check-new-commits.outputs.should_build == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write  # Required for AWS OIDC
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.versions.outputs.publish-matrix) }}
@@ -252,6 +253,8 @@ jobs:
     needs: [nightly-build, versions]
     if: ${{ !cancelled() && needs.nightly-build.result == 'success' }}
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write  # Required for AWS OIDC
     env:
       S3_BUCKET: fvdb-packages
       SIMPLE_PREFIX: simple-nightly
@@ -465,6 +468,8 @@ jobs:
       - versions
     runs-on: ubuntu-latest
     if: ${{ always() && needs.start-build-runner.result != 'skipped' }}
+    permissions:
+      id-token: write  # Required for AWS OIDC
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.versions.outputs.publish-matrix) }}
