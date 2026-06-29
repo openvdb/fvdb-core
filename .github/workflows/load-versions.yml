@@ -94,7 +94,7 @@ jobs:
       auditwheel-excludes: ${{ steps.parse.outputs.auditwheel-excludes }}
       auditwheel-excludes-cuda-major: ${{ steps.parse.outputs.auditwheel-excludes-cuda-major }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           sparse-checkout: .github/versions.json
           sparse-checkout-cone-mode: false
