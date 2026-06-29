@@ -58,11 +58,13 @@ jobs:
           ls -1 .github/workflows
 
       # 3a. Repo-specific policy: the admin runner token may only be used as the
-      #     github-token input to machulav/ec2-github-runner.
+      #     github-token input to machulav/ec2-github-runner. The policy script
+      #     and its tests run from the trusted base checkout (not the PR).
       - name: Enforce EC2 runner token policy
         run: |
           set -euo pipefail
-          python3 -m pip install --quiet 'pyyaml==6.*'
+          python3 -m pip install --quiet 'pyyaml==6.*' 'pytest>=8,<9'
+          python3 -m pytest .github/scripts/test_check_runner_token_policy.py -q
           python3 .github/scripts/check_runner_token_policy.py .github/workflows
 
       # 3b. actionlint: workflow syntax / type / shell-injection issues.

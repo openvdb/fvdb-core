@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 """Repo-specific CI policy for the EC2 runner admin token.
 
@@ -47,11 +48,15 @@ ALLOWED_ACTION = "machulav/ec2-github-runner"
 ALLOWED_LINE = re.compile(r"^\s*github-token:\s*\$\{\{\s*secrets\." + re.escape(TOKEN_NAME) + r"\s*\}\}\s*$")
 
 # Paths (relative to repo root) that are allowed to mention the token name at
-# all. The workflows are where it is legitimately used; this script names it by
-# necessity.
+# all. The workflows are where it is legitimately used; CI tooling under
+# .github/scripts/ (this script and its tests) and the security doc reference it
+# by name out of necessity. None of these can expose the token *value*: rules
+# 2-3 guarantee the secret is only ever interpolated into the machulav action,
+# so a file merely containing the name string is harmless.
 ALLOWED_PATH_PREFIXES = (
     ".github/workflows/",
-    ".github/scripts/check_runner_token_policy.py",
+    ".github/scripts/",
+    ".github/workflow-security.md",
 )
 
 
@@ -175,6 +180,17 @@ def check_no_leaks_outside_workflows(repo_root: Path, violations: list[str]) -> 
         )
     except FileNotFoundError:
         # No git available; skip the repo-wide check (workflow rules still run).
+        return
+
+    # `git grep` exits 0 when matches are found and 1 when there are none. Any
+    # other code (e.g. 128 when repo_root is not a git worktree) means the leak
+    # check could not run -- fail closed rather than silently passing.
+    if out.returncode not in (0, 1):
+        violations.append(
+            f"<repo-wide leak check>: 'git grep' failed (exit {out.returncode}) "
+            f"in {repo_root}; cannot verify '{TOKEN_NAME}' is confined to "
+            f".github/workflows/. stderr: {out.stderr.strip()!r}"
+        )
         return
 
     for rel in out.stdout.splitlines():
