@@ -33,6 +33,8 @@ jobs:
       # new releases may surface new findings that fail unrelated PRs.
       ZIZMOR_VERSION: "1.26.1"
       ACTIONLINT_VERSION: "v1.7.7"
+      PYYAML_VERSION: "6.0.3"
+      PYTEST_VERSION: "9.0.3"
     steps:
       # 1. Trusted tree from BASE: the policy script lives here and is never
       #    overwritten by the PR.
@@ -71,7 +73,7 @@ jobs:
       - name: Enforce EC2 runner token policy
         run: |
           set -euo pipefail
-          python3 -m pip install --quiet 'pyyaml==6.*' 'pytest>=8,<9'
+          python3 -m pip install --quiet "pyyaml==${PYYAML_VERSION}" "pytest==${PYTEST_VERSION}"
           python3 -m pytest .github/scripts/test_check_runner_token_policy.py -q
           leak_ref_args=()
           if [ "${GITHUB_EVENT_NAME}" = "pull_request_target" ]; then
