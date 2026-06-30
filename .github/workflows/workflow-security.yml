@@ -82,7 +82,15 @@ jobs:
           python3 .github/scripts/check_runner_token_policy.py .github/workflows "${leak_ref_args[@]}"
 
       # 3b. actionlint: workflow syntax / type / shell-injection issues.
+      #     actionlint runs shellcheck on run: scripts when shellcheck is present
+      #     (it is on GitHub-hosted runners). Exclude a few low-value word-
+      #     splitting / style codes (SC2086 et al.) that fire on pre-existing
+      #     scripts across the repo; every other shellcheck check (including
+      #     SC2016 single-quote expansion) and actionlint's own expression /
+      #     injection checks stay on. Drop excludes here to tighten later.
       - name: Run actionlint
+        env:
+          SHELLCHECK_OPTS: "-e SC2086,SC2174,SC2012,SC2129"
         run: |
           set -euo pipefail
           go install "github.com/rhysd/actionlint/cmd/actionlint@${ACTIONLINT_VERSION}"
