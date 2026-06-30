@@ -12,6 +12,7 @@ namespace {
 
 __global__ void
 computeBatchOffsetsFromMetadata(
+    //
     uint32_t numGrids,
     fvdb::GridBatchData::GridMetadata *perGridMetadata,
     torch::PackedTensorAccessor64<fvdb::JOffsetsType, 1, torch::RestrictPtrTraits>
