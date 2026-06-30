@@ -4,8 +4,8 @@
 name: Sync Doc Version
 
 on:
-  schedule:
-    - cron: "0 8 * * *"
+  release:
+    types: [published]
   workflow_dispatch:
 
 permissions:
@@ -17,7 +17,12 @@ jobs:
     if: github.repository == 'openvdb/fvdb-core'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          # `release: published` checks out the tag (detached HEAD); pin to the
+          # default branch so the doc-version PR is always based on main.
+          ref: main
+          persist-credentials: false
 
       - name: Get latest release version
         id: release
@@ -48,16 +53,18 @@ jobs:
           steps.release.outputs.skip != 'true' &&
           steps.release.outputs.version != steps.current.outputs.version
         run: |
-          echo "Updating doc version from ${{ steps.current.outputs.version }} to ${{ steps.release.outputs.version }}"
-          ./devtools/update-doc-versions.sh "${{ steps.release.outputs.version }}"
+          echo "Updating doc version from ${STEPS_CURRENT_OUTPUTS_VERSION} to ${STEPS_RELEASE_OUTPUTS_VERSION}"
+          ./devtools/update-doc-versions.sh "${STEPS_RELEASE_OUTPUTS_VERSION}"
+        env:
+          STEPS_CURRENT_OUTPUTS_VERSION: ${{ steps.current.outputs.version }}
+          STEPS_RELEASE_OUTPUTS_VERSION: ${{ steps.release.outputs.version }}
 
       - name: Create pull request
         if: >-
           steps.release.outputs.skip != 'true' &&
           steps.release.outputs.version != steps.current.outputs.version
-        uses: peter-evans/create-pull-request@v8
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
-          token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
           commit-message: "Update doc stable version to ${{ steps.release.outputs.version }}"
           signoff: true
           branch: auto/sync-doc-version
