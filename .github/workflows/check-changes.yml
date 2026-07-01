@@ -28,7 +28,12 @@ jobs:
         id: filter
         if: github.event_name == 'pull_request_target'
         with:
-          predicate-quantifier: 'every'
+          # Use the default 'some' quantifier: `src` is true when AT LEAST ONE
+          # changed file is a source file. A mixed PR (code + docs) therefore
+          # still runs the tests; only a PR whose files are ALL docs/non-code is
+          # treated as docs-only. Do NOT use 'every' here — that would skip the
+          # tests whenever any file is excluded (e.g. a code change that also
+          # touches a README), leaving real source changes untested.
           filters: |
             src:
               - '**'
