@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: CC-BY-4.0 -->
 <!-- Copyright Contributors to the OpenVDB project. -->
 
-# fVDB Committers
+# fVDB Maintainers
 
 The current fVDB maintainers are:
 

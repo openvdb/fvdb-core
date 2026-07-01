@@ -13,7 +13,7 @@ The contributor role is the starting role for anyone participating in the projec
 * Review the [coding standards](https://www.openvdb.org/documentation/doxygen/codingStyle.html) to ensure your contribution is in line with the project's coding and styling guidelines.
 * Have a signed CLA on file ( see [below](#contributor-license-agreements) )
 * Submit your code as a PR with the appropriate [DCO sign-off](#commit-sign-off).
-* Have your submission approved by the [committer(s)](#committer) and merged into the codebase.
+* Have your submission approved by the [maintainer(s)](#maintainer) and merged into the codebase.
 
 ### Legal Requirements
 
@@ -46,7 +46,7 @@ can be merged.
   Agreement](https://docs.linuxfoundation.org/lfx/easycla/contributors/corporate-contributor).
 
 The ƒVDB CLAs are the standard forms used by Linux Foundation
-projects and [recommended by the ASWF TAC](https://github.com/AcademySoftwareFoundation/tac/blob/master/process/contributing.md#contributor-license-agreement-cla). You can review the text of the CLAs in the [TSC directory](tsc/).
+projects and [recommended by the ASWF TAC](https://github.com/AcademySoftwareFoundation/tac/blob/master/process/contributing.md#contributor-license-agreement-cla). You can review the text of the CLAs in the [TSC directory](https://github.com/AcademySoftwareFoundation/openvdb/tree/master/tsc).
 
 #### Commit Sign-Off
 
@@ -68,7 +68,7 @@ This role enables the participant to commit code directly to the repository, but
 * Show your experience with the codebase through contributions and engagement on the community channels.
 * Request to become a maintainer.
 * Have the majority of maintainers approve you becoming a maintainer.
-* Your name and email is added to the MAINTAINERS.md file for the project.
+* Your name and email are added to the MAINTAINERS.md file for the project.
 
 ### Maintainer responsibilities
 
