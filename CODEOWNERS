@@ -1,6 +1,23 @@
 # fVDB CODEOWNERS
 # See https://help.github.com/articles/about-codeowners/
 # for more info about CODEOWNERS file
+#
+# This file is kept identical across the fvdb-core, fvdb-reality-capture,
+# and fvdb-examples repositories. Later matches take precedence over
+# earlier ones.
 
-# Default owner for all files is fvdb-dev. Later matches take precedence over this line
+# Default owner for all files: any fVDB maintainer may review.
 * @openvdb/fvdb-dev
+
+# Governance, legal, and CI/CD infrastructure require review from an
+# NVIDIA maintainer (fvdb-dev-nvidia, a child team of fvdb-dev). These
+# patterns match even when the file does not yet exist, so a non-NVIDIA
+# contributor cannot add one without an NVIDIA maintainer's approval.
+/.github/            @openvdb/fvdb-dev-nvidia
+/CODEOWNERS          @openvdb/fvdb-dev-nvidia
+/LICENSE             @openvdb/fvdb-dev-nvidia
+/MAINTAINERS.md      @openvdb/fvdb-dev-nvidia
+/CODE_OF_CONDUCT.md  @openvdb/fvdb-dev-nvidia
+/CONTRIBUTING.md     @openvdb/fvdb-dev-nvidia
+/SECURITY.md         @openvdb/fvdb-dev-nvidia
+/.gitmodules         @openvdb/fvdb-dev-nvidia
