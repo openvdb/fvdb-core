@@ -57,6 +57,12 @@ code and has the right to release it under the
 [Apache License, version 2.0](LICENSE)
 license. See the [TAC documentation on contribution sign off](https://github.com/AcademySoftwareFoundation/tac/blob/master/process/contributing.md#contribution-sign-off) for more information on this requirement.
 
+#### Signed Commits
+
+In addition to the DCO sign-off above, commits must be cryptographically signed
+(`git commit --gpg-sign` / `-S`; SSH signing keys are supported). Do not bypass
+signing or verification hooks (avoid `--no-gpg-sign` and `--no-verify`).
+
 ## Maintainer
 
 The maintainer role is the equivalent of the "Committer" role in the charter.
