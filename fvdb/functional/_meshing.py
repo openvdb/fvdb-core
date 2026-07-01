@@ -70,6 +70,68 @@ def marching_cubes_single(
     return result[0].jdata, result[1].jdata, result[2].jdata
 
 
+def dual_contour_batch(
+    grid: GridBatch,
+    field: JaggedTensor,
+    iso: float = 0.0,
+    reduce: int = 1,
+    adaptivity: float = 0.0,
+) -> tuple[JaggedTensor, JaggedTensor, JaggedTensor]:
+    """Extract a dual-contouring (DC + QEF) mesh from an SDF on a grid batch.
+
+    Places one vertex per surface cell by minimizing a quadratic error function from the cell's edge
+    zero-crossings and SDF-gradient normals (sharp-feature preserving), with optional cluster-collapse
+    decimation. Requires a narrow-band SDF with a >= ~3-voxel band for a watertight result (e.g. from
+    :func:`retopologize_sdf_batch`).
+
+    Args:
+        grid (GridBatch): The grid batch defining the sparse topology.
+        field (JaggedTensor): Per-voxel signed distance values.
+        iso (float): Isovalue at which to extract the surface. Default ``0.0``.
+        reduce (int): Uniform ``F x F x F`` cluster-collapse decimation block size. ``reduce=1`` is full detail only when ``adaptivity == 0``; when ``adaptivity > 0`` it instead sets the coarse-block size for the adaptive collapse (default ``8`` when ``reduce <= 1``).
+        adaptivity (float): Curvature-adaptive decimation in ``[0, 1.5]`` (``0`` = off). When ``> 0``, flat blocks are collapsed while features keep full detail, so the mesh is simplified even at ``reduce=1``.
+
+    Returns:
+        vertices (JaggedTensor): Mesh vertex positions, shape ``(B, -1, 3)``.
+        faces (JaggedTensor): Triangle face indices, shape ``(B, -1, 3)``.
+        normals (JaggedTensor): Per-vertex (normalized SDF gradient) normals, shape ``(B, -1, 3)``.
+
+    .. seealso:: :func:`dual_contour_single`, :func:`marching_cubes_batch`
+    """
+    grid_data = grid.data
+    result = _fvdb_cpp.dual_contour(grid_data, field._impl, iso, reduce, adaptivity)
+    return JaggedTensor(impl=result[0]), JaggedTensor(impl=result[1]), JaggedTensor(impl=result[2])
+
+
+def dual_contour_single(
+    grid: Grid,
+    field: torch.Tensor,
+    iso: float = 0.0,
+    reduce: int = 1,
+    adaptivity: float = 0.0,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Extract a dual-contouring (DC + QEF) mesh from an SDF on a single grid.
+
+    Args:
+        grid (Grid): The single grid defining the sparse topology.
+        field (torch.Tensor): Per-voxel signed distance values.
+        iso (float): Isovalue at which to extract the surface. Default ``0.0``.
+        reduce (int): Uniform ``F x F x F`` cluster-collapse decimation block size. ``reduce=1`` is full detail only when ``adaptivity == 0``; when ``adaptivity > 0`` it instead sets the coarse-block size for the adaptive collapse (default ``8`` when ``reduce <= 1``).
+        adaptivity (float): Curvature-adaptive decimation in ``[0, 1.5]`` (``0`` = off). When ``> 0``, flat blocks are collapsed while features keep full detail, so the mesh is simplified even at ``reduce=1``.
+
+    Returns:
+        vertices (torch.Tensor): Vertex positions, shape ``(V, 3)``.
+        faces (torch.Tensor): Triangle face indices, shape ``(T, 3)``.
+        normals (torch.Tensor): Per-vertex (normalized SDF gradient) normals, shape ``(V, 3)``.
+
+    .. seealso:: :func:`dual_contour_batch`, :func:`marching_cubes_single`
+    """
+    grid_data = grid.data
+    field_jt = JaggedTensor(field)
+    result = _fvdb_cpp.dual_contour(grid_data, field_jt._impl, iso, reduce, adaptivity)
+    return result[0].jdata, result[1].jdata, result[2].jdata
+
+
 def integrate_tsdf_batch(
     grid: GridBatch,
     truncation_distance: float,
