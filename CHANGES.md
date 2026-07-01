@@ -5,40 +5,17 @@ fVDB Version History
 
 *113 commits, 500+ files changed, 10 contributors.*
 
-This release eliminates the C++ implementation behind `GridBatch` in
-favor of a new `torch.nn.functional`-style `fvdb.functional` module,
-with `GridBatch` now a thin pure-Python class delegating to it, and
-adds a complementary single-grid `Grid` class alongside it. It also
-moves the entire Gaussian splatting autograd and rendering pipeline
-from C++ into pure Python. Multi-GPU Gaussian splatting rasterization
-and projection get another round of performance tuning, and fVDB gains
-its first SDF reinitialization/retopologization operators alongside
-NanoVDB loading fixes and PyTorch 2.11/Python 3.14 support. Documentation
-has moved to a fully versioned Read the Docs site.
+This release eliminates the C++ implementation behind `GridBatch` in favor of a new `torch.nn.functional`-style `fvdb.functional` module, with `GridBatch` now a thin pure-Python class delegating to it, and adds a complementary single-grid `Grid` class alongside it. It also moves the entire Gaussian splatting autograd and rendering pipeline from C++ into pure Python. Multi-GPU Gaussian splatting rasterization and projection get another round of performance tuning, and fVDB gains its first SDF reinitialization/retopologization operators alongside NanoVDB loading fixes and PyTorch 2.11/Python 3.14 support. Documentation has moved to a fully versioned Read the Docs site.
 
 **Highlights:**
-- Eliminated the C++ `GridBatch` implementation for a new functional
-  API (`fvdb.functional`), with `GridBatch` reimplemented as a thin
-  Python wrapper and a new complementary `Grid` class added, and moved
-  Gaussian splatting's autograd/pipeline logic from C++ to pure
-  Python.
-- Continued multi-GPU Gaussian splatting performance work:
-  repartitioned SH/projection kernels, smarter prefetching,
-  shared-memory rasterization optimizations, and improved parity with
-  gsplat.
-- Added the first SDF reinitialization/retopologization operators and
-  a `sample_nearest` grid sampling operator, and generalized
-  `volume_render` to N channels.
-- Fixed NanoVDB loading of mixed grid types and added a
-  `read_metadata` API; optimized `saveNVDB`/`to_nanovdb`.
-- fVDB now supports PyTorch 2.11, Python 3.14, and SM 8.6, with the
-  `torch_scatter` and `torchsparse` dependencies removed.
-- Documentation moved to a fully versioned Read the Docs site, with
-  new interactive TEACHME lessons for the core API.
+- Eliminated the C++ `GridBatch` implementation for a new functional API (`fvdb.functional`), with `GridBatch` reimplemented as a thin Python wrapper and a new complementary `Grid` class added, and moved Gaussian splatting's autograd/pipeline logic from C++ to pure Python.
+- Continued multi-GPU Gaussian splatting performance work: repartitioned SH/projection kernels, smarter prefetching, shared-memory rasterization optimizations, and improved parity with gsplat.
+- Added the first SDF reinitialization/retopologization operators and a `sample_nearest` grid sampling operator, and generalized `volume_render` to N channels.
+- Fixed NanoVDB loading of mixed grid types and added a `read_metadata` API; optimized `saveNVDB`/`to_nanovdb`.
+- fVDB now supports PyTorch 2.11, Python 3.14, and SM 8.6, with the `torch_scatter` and `torchsparse` dependencies removed.
+- Documentation moved to a fully versioned Read the Docs site, with new interactive TEACHME lessons for the core API.
 
-**Contributors:** @swahtz, @matthewdcong, @harrism, @fwilliams,
-@phapalova, @blackencino, @areidmeyer, @zlalena, @mvanhorn,
-@jinhwanlazy
+**Contributors:** @swahtz, @matthewdcong, @harrism, @fwilliams, @phapalova, @blackencino, @areidmeyer, @zlalena, @mvanhorn, @jinhwanlazy
 
 ---
 
@@ -180,39 +157,17 @@ has moved to a fully versioned Read the Docs site.
 
 *140 commits, 300+ files changed, 10 contributors.*
 
-This release delivers major advances across the Gaussian splatting
-pipeline, sparse convolution, multi-GPU performance, and build/release
-infrastructure. fVDB now supports PyTorch 2.10 and CUDA 12.8/13.0, and
-ships its first formal release process with automated nightly builds.
+This release delivers major advances across the Gaussian splatting pipeline, sparse convolution, multi-GPU performance, and build/release infrastructure. fVDB now supports PyTorch 2.10 and CUDA 12.8/13.0, and ships its first formal release process with automated nightly builds.
 
 **Highlights:**
-- Gaussian splatting gains a new rasterize-from-world path that
-  renders directly from 3D Gaussians, Unscented Transform projection
-  for non-pinhole camera models, full MCMC splatting support, sparse
-  rendering, per-pixel/per-tile masking, and a composable camera model
-  that decouples kernels from camera internals. Numerous gradient
-  correctness fixes harden the backward pass.
-- Sparse convolution has been consolidated into a single
-  GatherScatterDefault backend with full feature support including
-  transposed convolution and arbitrary strides. A new PredGatherIGemm
-  backend using CUTLASS/CuTe implicit-GEMM with TF32 tensor cores
-  delivers significantly faster convolution on dense grids.
-- A new multi-axis dispatch framework provides flexible kernel
-  execution across multiple dimensions with typed views and for_each
-  iteration.
-- SampleGridTrilinear is roughly 2x faster via vectorized float4 loads
-  and a fused stencil-plus-sample optimization. Morton and Hilbert
-  space-filling curve ordering is now available for grid coordinates.
-- Multi-GPU scaling is significantly improved through batched
-  prefetching, device-centric synchronization, and radix sort
-  optimizations. All tensor index accessors are now 64-bit, enabling
-  larger datasets.
-- A fully automated nightly wheel build and publish pipeline, a formal
-  OneFlow release process with automation scripts, and GPU-validated
-  publish workflows are all new in this release.
+- Gaussian splatting gains a new rasterize-from-world path that renders directly from 3D Gaussians, Unscented Transform projection for non-pinhole camera models, full MCMC splatting support, sparse rendering, per-pixel/per-tile masking, and a composable camera model that decouples kernels from camera internals. Numerous gradient correctness fixes harden the backward pass.
+- Sparse convolution has been consolidated into a single GatherScatterDefault backend with full feature support including transposed convolution and arbitrary strides. A new PredGatherIGemm backend using CUTLASS/CuTe implicit-GEMM with TF32 tensor cores delivers significantly faster convolution on dense grids.
+- A new multi-axis dispatch framework provides flexible kernel execution across multiple dimensions with typed views and for_each iteration.
+- SampleGridTrilinear is roughly 2x faster via vectorized float4 loads and a fused stencil-plus-sample optimization. Morton and Hilbert space-filling curve ordering is now available for grid coordinates.
+- Multi-GPU scaling is significantly improved through batched prefetching, device-centric synchronization, and radix sort optimizations. All tensor index accessors are now 64-bit, enabling larger datasets.
+- A fully automated nightly wheel build and publish pipeline, a formal OneFlow release process with automation scripts, and GPU-validated publish workflows are all new in this release.
 
-**Contributors:** @blackencino, @fwilliams, @harrism, @iYuqinL,
-@kmuseth, @matthewdcong, @phapalova, @areidmeyer, @swahtz, @zlalena
+**Contributors:** @blackencino, @fwilliams, @harrism, @iYuqinL, @kmuseth, @matthewdcong, @phapalova, @areidmeyer, @swahtz, @zlalena
 
 ---
 
