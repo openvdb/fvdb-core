@@ -160,6 +160,12 @@ has moved to a fully versioned Read the Docs site.
 - Swept CI tokens to least-privilege scopes and scoped the bundled shellcheck security check to real issues (#672, #674 - @swahtz).
 - Removed the PyTorch upper-bound pin in `pyproject.toml`, updated `CONDA_OVERRIDE_CUDA` to 13.0, fixed a flaky bfloat16 JaggedTensor test, and silenced spurious warnings in the test suite (#671, #519, #517, #654 - @swahtz, @fwilliams, @mvanhorn).
 
+---
+
+### Repository Governance
+
+- Split `CODEOWNERS` into two review tiers — any maintainer may review general code, while governance, legal, and CI/CD infrastructure files (`.github/`, `LICENSE`, `MAINTAINERS.md`, `SECURITY.md`, etc.) require sign-off from an NVIDIA maintainer. Kept identical across `fvdb-core`, `fvdb-reality-capture`, and `fvdb-examples` (#676 - @harrism).
+
 ## Version 0.4.2 - March 25, 2026
 
 **Bug Fixes:**
