@@ -29,11 +29,12 @@ jobs:
         if: github.event_name == 'pull_request_target'
         with:
           # Use the default 'some' quantifier: `src` is true when AT LEAST ONE
-          # changed file is a source file. A mixed PR (code + docs) therefore
-          # still runs the tests; only a PR whose files are ALL docs/non-code is
-          # treated as docs-only. Do NOT use 'every' here — that would skip the
-          # tests whenever any file is excluded (e.g. a code change that also
-          # touches a README), leaving real source changes untested.
+          # changed file is outside the excluded paths below. A PR mixing
+          # excluded and non-excluded files therefore still runs the tests; only
+          # a PR whose files are ALL in excluded paths is treated as skippable.
+          # Do NOT use 'every' here — that would skip the tests whenever any file
+          # is excluded (e.g. a code change that also touches a README), leaving
+          # real changes untested.
           filters: |
             src:
               - '**'
