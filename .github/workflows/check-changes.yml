@@ -1,10 +1,10 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 #
-# Reusable workflow: decide whether a PR touches real source files or only
-# documentation / non-code paths. Callers gate their expensive jobs on the
-# `should_test` output so docs-only PRs skip the work while still reporting
-# the required status checks (skipped == passed).
+# Reusable workflow: decide whether a PR needs testing, or touches only
+# skippable (docs / non-code) paths. Callers gate their expensive jobs on the
+# `should_test` output so skippable-only PRs skip the work while still
+# reporting the required status checks (skipped == passed).
 
 name: Check for relevant changes
 
@@ -12,60 +12,38 @@ on:
   workflow_call:
     outputs:
       should_test:
-        description: "'true' when any non-doc source file changed, 'false' for docs-only"
+        description: "'true' unless every changed file is a skippable (docs/non-code) path"
         value: ${{ jobs.check-changes.outputs.should_test }}
 
-# Permissions are inherited from the calling workflow; it must grant
-# pull-requests: read (or contents: read) so the PR file list can be read.
+# Permissions are inherited from the calling workflow.
 
 jobs:
   check-changes:
     name: Check for relevant changes
     runs-on: ubuntu-latest
     outputs:
-      should_test: ${{ steps.decide.outputs.should_test }}
+      # Run tests unless this is a PR whose files are ALL skippable paths.
+      should_test: ${{ github.event_name != 'pull_request_target' || steps.filter.outputs.skippable_only != 'true' }}
     steps:
-      - name: Decide whether tests should run
-        id: decide
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-
-          # Non-PR events (push to main, manual dispatch) always run the full suite.
-          if [ "${{ github.event_name }}" != "pull_request_target" ]; then
-            echo "Event is ${{ github.event_name }}; running tests."
-            echo "should_test=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # List the files this PR changes (paginated, in case of large PRs).
-          files="$(gh api --paginate \
-            "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" \
-            --jq '.[].filename')"
-
-          echo "Changed files:"
-          printf '%s\n' "$files"
-
-          # Drop paths with no associated tests. NOTE: docs/ and notebooks/ are
-          # NOT excluded — the Doc Tests job runs `pytest --markdown-docs docs`
-          # and `pytest --nbmake notebooks/`, so changes there must run the suite.
-          # Only non-docs markdown (README, CHANGES, governance files, ...) and the
-          # tooling dirs are skipped. Anything left means a real source file changed.
-          code="$(printf '%s\n' "$files" | awk '
-            /^CODEOWNERS$/                { next }
-            /^debug\//                    { next }
-            /^devtools\//                 { next }
-            /^scripts\//                  { next }
-            /\.md$/ && $0 !~ /^docs\//    { next }
-            { print }
-          ')"
-
-          if [ -n "$code" ]; then
-            echo "Source files changed -> running tests:"
-            printf '%s\n' "$code"
-            echo "should_test=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "Docs-only change -> skipping build/tests."
-            echo "should_test=false" >> "$GITHUB_OUTPUT"
-          fi
+      - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
+        id: filter
+        if: github.event_name == 'pull_request_target'
+        with:
+          # 'every' makes the filter true only when EVERY changed file matches one
+          # of these patterns, i.e. the PR touches only skippable paths; we invert
+          # that for should_test. A mixed PR (skippable + real source) has at least
+          # one non-matching file, so skippable_only is false and tests run.
+          #
+          # NOTE: docs/ and notebooks/ are intentionally NOT listed — the Doc Tests
+          # job runs `pytest --markdown-docs docs` and `pytest --nbmake notebooks/`,
+          # so changes there must run the suite. Only root-level `*.md` (README,
+          # CHANGES, governance docs) is skippable; `docs/**/*.md` is not matched by
+          # `*.md` and therefore still triggers tests.
+          predicate-quantifier: 'every'
+          filters: |
+            skippable_only:
+              - '*.md'
+              - 'CODEOWNERS'
+              - 'debug/**'
+              - 'devtools/**'
+              - 'scripts/**'
