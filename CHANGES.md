@@ -1,10 +1,147 @@
 fVDB Version History
 ====================
 
-## Version 0.5.0 - In Development
+## Version 0.5.0 - July 1, 2026
 
-- Upgraded to PyTorch 2.11 and added Python 3.14 support.
-- Added SM 8.6 to the CUDA architecture list for published wheels to match PyTorch's support.
+*113 commits, 500+ files changed, 10 contributors.*
+
+This release eliminates the C++ implementation behind `GridBatch` in favor of a new `torch.nn.functional`-style `fvdb.functional` module, with `GridBatch` now a thin pure-Python class delegating to it, and adds a complementary single-grid `Grid` class alongside it. It also moves the entire Gaussian splatting autograd and rendering pipeline from C++ into pure Python. Multi-GPU Gaussian splatting rasterization and projection get another round of performance tuning, and fVDB gains its first SDF reinitialization/retopologization operators alongside NanoVDB loading fixes and PyTorch 2.11/Python 3.14 support. Documentation has moved to a fully versioned Read the Docs site.
+
+**Highlights:**
+- Eliminated the C++ `GridBatch` implementation for a new functional API (`fvdb.functional`), with `GridBatch` reimplemented as a thin Python wrapper and a new complementary `Grid` class added, and moved Gaussian splatting's autograd/pipeline logic from C++ to pure Python.
+- Continued multi-GPU Gaussian splatting performance work: repartitioned SH/projection kernels, smarter prefetching, shared-memory rasterization optimizations, and improved parity with gsplat.
+- Added the first SDF reinitialization/retopologization operators and a `sample_nearest` grid sampling operator, and generalized `volume_render` to N channels.
+- Fixed NanoVDB loading of mixed grid types and added a `read_metadata` API; optimized `saveNVDB`/`to_nanovdb`.
+- fVDB now supports PyTorch 2.11, Python 3.14, and SM 8.6, with the `torch_scatter` and `torchsparse` dependencies removed.
+- Documentation moved to a fully versioned Read the Docs site, with new interactive TEACHME lessons for the core API.
+
+**Contributors:** @swahtz, @matthewdcong, @harrism, @fwilliams, @phapalova, @blackencino, @areidmeyer, @zlalena, @mvanhorn, @jinhwanlazy
+
+---
+
+### Core Library Architecture (Major)
+
+- Eliminated the legacy C++ `GridBatch` wrapper class and its `Vec3*OrScalar` type system (~2,600 lines), replacing them with a frozen `GridBatchData` struct and a `torch.nn.functional`-style `fvdb.functional` module (~120 functions with explicit `_batch`/`_single` variants). `GridBatch` is now a thin pure-Python class whose methods delegate to `fvdb.functional`, and a new complementary `Grid` class was added for the single-grid case (`grid_count == 1`), with plain `torch.Tensor` I/O instead of `JaggedTensor` (#582 - @blackencino).
+- Promoted `GridBatchData`, `TorchDeviceBuffer`, `VoxelCoordTransform`, and related type traits from private `detail` headers to the public `fvdb` namespace, and added CMake installation rules for public headers so downstream C++ projects can link against fVDB (#632, #633 - @swahtz).
+
+---
+
+### Gaussian Splatting & Rendering
+
+**New Features:**
+- Updated the Gaussian splatting camera API to separate camera semantics from projection implementation, replacing the old `ProjectionType`/`DistortionModel` split with explicit `CameraModel`/`ProjectionMethod` controls, and added world-space render parity for depth and RGBD paths (#518 - @fwilliams).
+
+**Architecture:**
+- Moved the entire Gaussian splatting autograd and pipeline from C++ into pure Python `torch.autograd.Function` implementations, eliminating the C++ `GaussianSplat3d` class (#595 - @fwilliams), with a follow-up fixing a synchronization regression it introduced (#599 - @matthewdcong) and restoring comments lost in the migration (#603 - @swahtz).
+- Renamed 21 Gaussian splatting operator file pairs for clarity and extracted shared CUDA utilities (BinSearch, CubWrapper, Prefetch, WarpReduce) with no functional changes (#596 - @fwilliams).
+
+**Optimizations:**
+- Repartitioned multi-GPU spherical harmonics and projection kernels across Gaussians instead of camera-Gaussian pairs, removing the system-scope atomics that bottlenecked the interconnect (#546, #547 - @matthewdcong).
+- Added shared-memory feature caching and opacity-threshold culling to forward/backward rasterization, and reduced shared memory usage in pinhole projection by parameterizing blocks per-camera (#554, #555 - @matthewdcong).
+- Fused `computeGradientState` into `projectionBackwardKernel` to avoid redundant global memory reads (#560 - @matthewdcong).
+- Improved multi-GPU prefetching with batched `cudaMemPrefetchBatchAsync` calls and finer per-tile (rather than per-camera) granularity, and iterated multi-GPU tile intersection to reduce cross-device communication during the radix sort (#657, #664, #665 - @matthewdcong).
+- Added a warp-level early exit to forward rasterization on top of the existing block-level exit (#658 - @matthewdcong).
+- Improved rasterization parity with gsplat by tuning the alpha threshold and sigma clamp, and using per-axis 2D radii for tile intersection (#659 - @matthewdcong).
+- Reordered `Gaussian2D` fields for better memory alignment, removed an unused spherical harmonics function, and eliminated a redundant delta computation (#624, #630, #651 - @matthewdcong).
+- Materialized repeated opacities so image-space multi-GPU and world-space rasterization implementations always see a contiguous tensor (#600 - @matthewdcong).
+
+**Bug Fixes:**
+- Fixed a missing warp-level reduction causing incorrect quaternion gradient accumulation across multiple cameras in the projection backward pass (#534 - @swahtz).
+- Fixed a `cudaErrorIllegalArgument` crash in tile intersection prefetch when a subset of Gaussians has zero intersections (#553 - @matthewdcong).
+- Fixed gradient accumulation tensors not being initialized on the Unscented Transform projection's early-return path (#608 - @harrism).
+
+---
+
+### Grid Operations, Sampling & SDF
+
+- Added a `sample_nearest` nearest-neighbor sampling operator for `GridBatch` and `Grid` (#628, #637 - @swahtz).
+- Added Vec2 and double-precision vectorized fast paths to `SampleGridTrilinear` (#639 - @swahtz).
+- Generalized `volume_render` to support up to 16 radiance channels for spectral rendering pipelines, rewrote its forward pass around per-ray register accumulation, and moved its autograd layer to Python (#636, #640 - @swahtz).
+- Added narrow-band SDF reinitialize and retopologize operators built around a ported VoxelBlockManager eikonal solver — the first component of a NanoVDB port of OpenVDB's `VolumeToMesh` (#669 - @swahtz).
+- Optimized the per-ray SDF zero-crossing kernel `ray_implicit_intersection` and its underlying HDDA traversal layer, fixing several correctness issues along the way (#663 - @swahtz).
+- Optimized `saveNVDB`/`to_nanovdb` to build grids directly on-device (or via a host-only fast path) instead of rebuilding through CPU `setValue` calls (#650 - @swahtz).
+- Fixed a CUDA crash in `Grid.inject_from()` when the source grid has 0 active voxels, which surfaced in narrow-band level-set simulations (#616 - @harrism).
+- Fixed the TSDF/feature-blending weighted average formula to correctly apply `pixelWeight` to new samples (#588 - @jinhwanlazy).
+
+---
+
+### NanoVDB
+
+- Fixed wrong-type dispatch when loading multi-grid NanoVDB handles with mixed grid types, and added a `read_metadata` API (#641 - @swahtz).
+- Updated the bundled NanoVDB Editor dependency, moving off a version with ABI issues (#556 - @areidmeyer).
+- Added `nanovdb-editor` as an optional dependency and switched to consuming it from pip instead of building it from source (#559, #580, #581 - @swahtz, @phapalova).
+
+---
+
+### JaggedTensor
+
+- Reimplemented `jsum`/`jmin`/`jmax` reductions on top of PyTorch's built-in `scatter_reduce_`, removing ~450 lines of custom CUDA/autograd code and the `torch_scatter` test dependency it required (#578, #571 - @swahtz).
+
+---
+
+### Neural Network Modules
+
+- Added support for additional PyTorch attention backends (Flash, memory-efficient, math) in `scaled_dot_product_attention` by wrapping JaggedTensor data in nested tensors, selected the same way as PyTorch's built-in `sdpa_kernel` context manager (#365 - @swahtz).
+
+---
+
+### Core Library: Correctness & Performance
+
+- Eliminated redundant `.item()` calls on CUDA tensors that triggered implicit device syncs, consolidating them into single bulk `.cpu()` transfers (#586 - @swahtz).
+- Passed the current PyTorch CUDA stream to 15 kernel launches that previously used the implicit default stream, and added missing CUDA device guards across kernel-launching functions (#587, #589 - @swahtz).
+- Replaced the runtime `numThreads` argument in the forEach CUDA dispatch framework with a compile-time template parameter, enabling `__launch_bounds__` on all forEach kernels for better register allocation (#638 - @swahtz).
+
+---
+
+### Viewer
+
+- Added a `camera_fov` getter/setter to `fvdb.viz.Scene`, exposed through both C++ and Python (#558 - @swahtz).
+- Fixed `fvdb.viz.PointCloudView` using an outdated `add_gaussian_splat_3d_view` signature (#631 - @swahtz).
+
+---
+
+### PyTorch & CUDA Compatibility
+
+- fVDB now builds and runs with **PyTorch 2.11** and adds **Python 3.14** support, including SM 8.6 in the published wheels' CUDA architecture list to match PyTorch's support (#573, #561 - @swahtz, @matthewdcong).
+- Removed the `torchsparse` dependency from all environment and CI configurations (#572 - @swahtz).
+
+---
+
+### Build & Packaging
+
+- Upgraded clang-tools to 21 to fix a clangd SIGSEGV on CUDA files, and conda environments to gcc/g++ 14.3 (#491, #557 - @fwilliams, @swahtz).
+- Removed the vestigial `setup.py` and GitLab CI configuration (#570 - @swahtz).
+- Refactored CMake to consume libtorch through the canonical `torch` imported target instead of legacy `TORCH_INCLUDE_DIRS`/`TORCH_LIBRARIES` variables, retiring the deprecated THC headers and fixing a Conda build failure along the way (#661, #662 - @matthewdcong, @swahtz).
+- Fixed a Torch CMake header path issue and disambiguated CI job names (#635 - @swahtz).
+- Sped up incremental builds with ccache/sccache auto-detection, host-side precompiled headers, and trimmed Torch header includes (#644 - @swahtz).
+- Updated the dev environment's OpenUSD version (#667 - @zlalena).
+
+---
+
+### Documentation
+
+- Migrated documentation hosting to Read the Docs with full versioned-docs support: a pre-build hook for version generation, a dedicated Sphinx-build CI workflow, and sidebar/redirect/URL fixes (#610, #613, #615, #618, #622, #623, #625, #646 - @swahtz).
+- Added `docs/TEACHME`, a set of LLM-loadable interactive lesson documents that teach the fVDB API through an AI coding assistant (#584 - @harrism).
+- Fixed and expanded the tutorial notebooks — moved them out of WIP status, corrected broken API calls, added CI testing, and incorporated review feedback (#592, #598 - @harrism).
+- Fixed the docs deployment workflow, Sphinx code-sample borders, and README/docs redirect URLs (#566, #577, #605, #626 - @swahtz).
+
+---
+
+### CI / DevOps / Release Infrastructure
+
+- Hardened the release process scripts: idempotent `start-release.sh` re-runs, draft release PRs with fixed smoke-test Python setup, branch-integrity preservation in `finish-release-process.sh`, and automated doc-version updates (#528, #529, #544, #552, #563 - @harrism, @swahtz).
+- Fixed the publish workflow across several iterations: Rocky Linux 8 / manylinux_2_28 containers, the Python install action, additional system dependencies, and dual S3 + PyPI publishing with GPU-validated tests (#536, #537, #538, #540, #545 - @harrism, @swahtz).
+- Fixed several nightly wheel build and publish issues: missing tool errors, stale caches, CloudFront invalidation, and anchoring the nightly version to the upcoming release in `pyproject.toml` (#549, #574, #634, #645, #647 - @swahtz, @phapalova).
+- Replaced the Slack unanswered-issues report with event-driven issue triage labels, after first fixing its insider-issue filtering (#522, #551 - @harrism).
+- Centralized GitHub workflow and doc-version configuration into shared config, updated CI Actions versions, added git installation to CI system dependencies, and reverted a failing drop-cache step (#569, #611, #526, #629 - @swahtz, @phapalova).
+- Swept CI tokens to least-privilege scopes and scoped the bundled shellcheck security check to real issues (#672, #674 - @swahtz).
+- Removed the PyTorch upper-bound pin in `pyproject.toml`, updated `CONDA_OVERRIDE_CUDA` to 13.0, fixed a flaky bfloat16 JaggedTensor test, and silenced spurious warnings in the test suite (#671, #519, #517, #654 - @swahtz, @fwilliams, @mvanhorn).
+
+---
+
+### Repository Governance
+
+- Split `CODEOWNERS` into two review tiers — any maintainer may review general code, while governance, legal, and CI/CD infrastructure files (`.github/`, `LICENSE`, `MAINTAINERS.md`, `SECURITY.md`, etc.) require sign-off from an NVIDIA maintainer. Kept identical across `fvdb-core`, `fvdb-reality-capture`, and `fvdb-examples` (#676 - @harrism).
 
 ## Version 0.4.2 - March 25, 2026
 
@@ -20,39 +157,17 @@ fVDB Version History
 
 *140 commits, 300+ files changed, 10 contributors.*
 
-This release delivers major advances across the Gaussian splatting
-pipeline, sparse convolution, multi-GPU performance, and build/release
-infrastructure. fVDB now supports PyTorch 2.10 and CUDA 12.8/13.0, and
-ships its first formal release process with automated nightly builds.
+This release delivers major advances across the Gaussian splatting pipeline, sparse convolution, multi-GPU performance, and build/release infrastructure. fVDB now supports PyTorch 2.10 and CUDA 12.8/13.0, and ships its first formal release process with automated nightly builds.
 
 **Highlights:**
-- Gaussian splatting gains a new rasterize-from-world path that
-  renders directly from 3D Gaussians, Unscented Transform projection
-  for non-pinhole camera models, full MCMC splatting support, sparse
-  rendering, per-pixel/per-tile masking, and a composable camera model
-  that decouples kernels from camera internals. Numerous gradient
-  correctness fixes harden the backward pass.
-- Sparse convolution has been consolidated into a single
-  GatherScatterDefault backend with full feature support including
-  transposed convolution and arbitrary strides. A new PredGatherIGemm
-  backend using CUTLASS/CuTe implicit-GEMM with TF32 tensor cores
-  delivers significantly faster convolution on dense grids.
-- A new multi-axis dispatch framework provides flexible kernel
-  execution across multiple dimensions with typed views and for_each
-  iteration.
-- SampleGridTrilinear is roughly 2x faster via vectorized float4 loads
-  and a fused stencil-plus-sample optimization. Morton and Hilbert
-  space-filling curve ordering is now available for grid coordinates.
-- Multi-GPU scaling is significantly improved through batched
-  prefetching, device-centric synchronization, and radix sort
-  optimizations. All tensor index accessors are now 64-bit, enabling
-  larger datasets.
-- A fully automated nightly wheel build and publish pipeline, a formal
-  OneFlow release process with automation scripts, and GPU-validated
-  publish workflows are all new in this release.
+- Gaussian splatting gains a new rasterize-from-world path that renders directly from 3D Gaussians, Unscented Transform projection for non-pinhole camera models, full MCMC splatting support, sparse rendering, per-pixel/per-tile masking, and a composable camera model that decouples kernels from camera internals. Numerous gradient correctness fixes harden the backward pass.
+- Sparse convolution has been consolidated into a single GatherScatterDefault backend with full feature support including transposed convolution and arbitrary strides. A new PredGatherIGemm backend using CUTLASS/CuTe implicit-GEMM with TF32 tensor cores delivers significantly faster convolution on dense grids.
+- A new multi-axis dispatch framework provides flexible kernel execution across multiple dimensions with typed views and for_each iteration.
+- SampleGridTrilinear is roughly 2x faster via vectorized float4 loads and a fused stencil-plus-sample optimization. Morton and Hilbert space-filling curve ordering is now available for grid coordinates.
+- Multi-GPU scaling is significantly improved through batched prefetching, device-centric synchronization, and radix sort optimizations. All tensor index accessors are now 64-bit, enabling larger datasets.
+- A fully automated nightly wheel build and publish pipeline, a formal OneFlow release process with automation scripts, and GPU-validated publish workflows are all new in this release.
 
-**Contributors:** @blackencino, @fwilliams, @harrism, @iYuqinL,
-@kmuseth, @matthewdcong, @phapalova, @areidmeyer, @swahtz, @zlalena
+**Contributors:** @blackencino, @fwilliams, @harrism, @iYuqinL, @kmuseth, @matthewdcong, @phapalova, @areidmeyer, @swahtz, @zlalena
 
 ---
 
