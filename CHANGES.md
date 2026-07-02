@@ -3,7 +3,7 @@ fVDB Version History
 
 ## Version 0.5.0 - July 1, 2026
 
-*113 commits, 500+ files changed, 10 contributors.*
+*115 commits, 500+ files changed, 10 contributors.*
 
 This release eliminates the C++ implementation behind `GridBatch` in favor of a new `torch.nn.functional`-style `fvdb.functional` module, with `GridBatch` now a thin pure-Python class delegating to it, and adds a complementary single-grid `Grid` class alongside it. It also moves the entire Gaussian splatting autograd and rendering pipeline from C++ into pure Python. Multi-GPU Gaussian splatting rasterization and projection get another round of performance tuning, and fVDB gains its first SDF reinitialization/retopologization operators alongside NanoVDB loading fixes and PyTorch 2.11/Python 3.14 support. Documentation has moved to a fully versioned Read the Docs site.
 
@@ -68,6 +68,7 @@ This release eliminates the C++ implementation behind `GridBatch` in favor of a 
 ### NanoVDB
 
 - Fixed wrong-type dispatch when loading multi-grid NanoVDB handles with mixed grid types, and added a `read_metadata` API (#641 - @swahtz).
+- Fixed TensorGrid blind-data loading reading channel 0 for every channel, which silently returned incorrect data for all channels of multi-channel grids (#652 - @mvanhorn).
 - Updated the bundled NanoVDB Editor dependency, moving off a version with ABI issues (#556 - @areidmeyer).
 - Added `nanovdb-editor` as an optional dependency and switched to consuming it from pip instead of building it from source (#559, #580, #581 - @swahtz, @phapalova).
 
@@ -124,6 +125,7 @@ This release eliminates the C++ implementation behind `GridBatch` in favor of a 
 - Added `docs/TEACHME`, a set of LLM-loadable interactive lesson documents that teach the fVDB API through an AI coding assistant (#584 - @harrism).
 - Fixed and expanded the tutorial notebooks — moved them out of WIP status, corrected broken API calls, added CI testing, and incorporated review feedback (#592, #598 - @harrism).
 - Fixed the docs deployment workflow, Sphinx code-sample borders, and README/docs redirect URLs (#566, #577, #605, #626 - @swahtz).
+- Fixed the `marching_cubes` docstrings to describe the third return value correctly as unique vertex indices (int64), not vertex normals (#653 - @mvanhorn).
 
 ---
 
