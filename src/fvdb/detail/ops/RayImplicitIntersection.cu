@@ -5,8 +5,10 @@
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
 #include <fvdb/detail/utils/Utils.h>
+#include <fvdb/detail/utils/cuda/Caching.cuh>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 
+#include <ATen/OpMathType.h>
 #include <c10/cuda/CUDAException.h>
 
 namespace fvdb {
@@ -25,7 +27,31 @@ sgn(const T &val) {
     return (T(0) < val) - (val < T(0));
 }
 
+// Per-ray SDF zero-crossing search.
+//
+// Semantics match nanovdb::ZeroCrossing: the FIRST valid (non-NaN) voxel along the ray seeds the
+// sign reference, and the first subsequent voxel with the opposite sign is reported as the hit.
+// This naturally handles both rays that start outside the surface (first sample positive, hit on
+// crossing into the negative band) AND rays that start inside the surface (first sample negative,
+// hit on crossing back out into the positive band) without baking a fixed "positive = outside"
+// convention into the kernel. NaN voxels are treated as gaps so the band-continuity check will
+// fall back to bracket-entry time on the next valid voxel.
+//
+// Performance notes:
+//
+//  - All output writes go through `_storeStreaming` (`__stwt`, `.CS` in SASS) so the write-once
+//    `outTimes` line never gets promoted into L1 and evicts the active-mask leaf data we are
+//    walking.
+//  - `gridScalars` is read through the read-only data cache via `_loadReadOnly` (`__ldg`, `.NC`
+//    in SASS) so the side-buffer SDF data shares cache capacity instead of contending with the
+//    leaf accessor.
+//  - Time / scalar arithmetic is done in `MathType = at::opmath_type<ScalarT>` so `c10::Half`
+//    rays get fp32-precision interpolation; we cast back to `ScalarT` only at the streaming-store
+//    boundary.
+//  - `EpsZero` is a compile-time flag dispatched from the launcher when `eps == 0`, eliding the
+//    `if (deltaT < eps) continue;` branch which is the overwhelmingly common case.
 template <typename ScalarT,
+          bool EpsZero,
           template <typename T, int32_t D>
           typename JaggedAccessor,
           template <typename T, int32_t D>
@@ -39,6 +65,8 @@ rayImplicitCallback(int32_t bidx,
                     BatchGridAccessor batchAcc,
                     TensorAccessor<ScalarT, 1> outTimes,
                     ScalarT eps) {
+    using MathType = at::opmath_type<ScalarT>;
+
     const nanovdb::OnIndexGrid *gpuGrid = batchAcc.grid(bidx);
     const auto gridAcc                  = gpuGrid->getAccessor();
 
@@ -51,53 +79,67 @@ rayImplicitCallback(int32_t bidx,
     nanovdb::math::Ray<ScalarT> rayVox =
         transform.applyToRay(rayO[0], rayO[1], rayO[2], rayD[0], rayD[1], rayD[2]);
     if (!rayVox.clip(dualBbox)) {
-        outTimes[eidx] = -1.0;
+        _storeStreaming(&outTimes[eidx], static_cast<ScalarT>(-1.0));
         return;
     }
 
-    int scalarSign     = INVALID_SIGN; // Initialize to dummy value to check if first intersection
-    ScalarT lastScalar = 0.0;
-    ScalarT lastTime   = rayVox.t0();
-    bool found         = false;
+    // Reference state is seeded from the FIRST valid (non-NaN) voxel along the ray (see kernel docs
+    // above). `scalarSign == INVALID_SIGN` is the "no reference yet" sentinel; we only flag a hit
+    // once it has been replaced by a real voxel sign and the next valid voxel disagrees with it.
+    int scalarSign      = INVALID_SIGN;
+    MathType lastScalar = MathType(0);
+    MathType lastTime   = MathType(0);
+    MathType lastT1     = MathType(0);
+    bool found          = false;
 
-    for (auto it = HDDAVoxelIterator<decltype(gridAcc), ScalarT>(rayVox, gridAcc); it.isValid();
+    for (auto it = HDDALeafVoxelIterator<decltype(gridAcc), ScalarT>(rayVox, gridAcc); it.isValid();
          it++) {
-        const ScalarT t0 = it->second.t0, t1 = it->second.t1;
-        const ScalarT deltaT      = t1 - t0;
-        const nanovdb::Coord &ijk = it->first;
-        if (deltaT < eps) {
-            continue;
+        const MathType t0     = it->second.t0;
+        const MathType t1     = it->second.t1;
+        const MathType deltaT = t1 - t0;
+        if constexpr (!EpsZero) {
+            if (deltaT < static_cast<MathType>(eps)) {
+                continue;
+            }
         }
 
-        const int64_t voxelIndex = gridAcc.getValue(ijk) - 1;
-        const ScalarT voxelValue = gridScalars[voxelIndex];
-        const ScalarT voxelTime  = 0.5 * (t0 + t1);
-        const int voxelSign      = sgn(voxelValue);
+        const nanovdb::Coord &ijk = it->first;
+        const int64_t voxelIndex  = gridAcc.getValue(ijk) - 1;
+        const MathType voxelValue = static_cast<MathType>(_loadReadOnly(&gridScalars[voxelIndex]));
+        const MathType voxelTime  = MathType(0.5) * (t0 + t1);
+        const int voxelSign       = sgn(voxelValue);
 
-        // Francis: This might be faster than the if below since it doesn't require a branch
-        // const bool hit = (scalarSign != INVALID_SIGN) && (voxelSign != INVALID_SIGN) &&
-        // (scalarSign != voxelSign); const ScalarT s0 = lastScalar; const ScalarT s1 = voxelValue;
-        // const ScalarT lam = s1 / (s1 - s0); // Linearly interpolate values along rays
-        // const ScalarT hitTime = lam * lastTime + (1.0 - lam) * voxelTime;
-        // outTimes[eidx] = (hit && !found) ? hitTime : outTimes[eidx];
-        // found = found || hit;
+        const bool isValid = (voxelSign != INVALID_SIGN);
+        const bool hasRef  = (scalarSign != INVALID_SIGN);
+        const bool isHit   = isValid && hasRef && (scalarSign != voxelSign);
 
-        // sign change from a valid value to a valid value, then return
-        if (scalarSign != INVALID_SIGN && voxelSign != INVALID_SIGN &&
-            scalarSign != voxelSign) {          // sign change, return
-            const ScalarT s0  = lastScalar;
-            const ScalarT s1  = voxelValue;
-            const ScalarT lam = s1 / (s1 - s0); // Linearly interpolate values along rays
-            outTimes[eidx]    = lam * lastTime + (1.0 - lam) * voxelTime;
-            found             = true;
+        if (isHit) {
+            // Sub-voxel-precise hit time when the previous sample is contiguous along the ray
+            // (typical narrow-band traversal): linear-interpolate between the bracketing (time,
+            // value) pairs. When there is a gap between the previous valid voxel and this one —
+            // either inactive voxels in the iterator or a run of NaN tile values — fall back to
+            // bracket-entry time to avoid interpolating across empty space.
+            const bool contiguous   = (t0 == lastT1);
+            const MathType lamCont  = voxelValue / (voxelValue - lastScalar);
+            const MathType timeCont = lamCont * lastTime + (MathType(1) - lamCont) * voxelTime;
+            const MathType hitTime  = contiguous ? timeCont : t0;
+            _storeStreaming(&outTimes[eidx], static_cast<ScalarT>(hitTime));
+            found = true;
             break;
         }
-        scalarSign = voxelSign;
-        lastScalar = voxelValue;
-        lastTime   = voxelTime;
+
+        // Only update the sign-reference state from valid (non-NaN) voxels; NaN voxels are treated
+        // as gaps so a subsequent valid voxel will see `contiguous == false` and fall back to
+        // bracket-entry time.
+        if (isValid) {
+            scalarSign = voxelSign;
+            lastScalar = voxelValue;
+            lastTime   = voxelTime;
+            lastT1     = t1;
+        }
     }
     if (!found) {
-        outTimes[eidx] = -1.0;
+        _storeStreaming(&outTimes[eidx], static_cast<ScalarT>(-1.0));
     }
 }
 
@@ -137,12 +179,21 @@ RayImplicitIntersection(const GridBatchData &batchHdl,
         std::string("Expected grid_scalars to have 1 dimension (shape (num_voxels,)) but got ") +
             std::to_string(gridScalars.rdim()) + " dimensions");
     TORCH_CHECK(gridScalars.rsize(0) == batchHdl.totalVoxels(),
-                std::string("Expected one scalar per voxel but got ") +
-                    std::to_string(gridScalars.rsize(0)) + " scalars and there are " +
-                    std::to_string(batchHdl.totalVoxels()) + " voxels.");
+                std::string("ray_implicit_intersection iterates leaf voxels "
+                            "(HDDALeafVoxelIterator) and needs exactly one scalar per active "
+                            "voxel, but got ") +
+                    std::to_string(gridScalars.rsize(0)) + " scalars for " +
+                    std::to_string(batchHdl.totalVoxels()) +
+                    " voxels. For per-active-value data that includes coarse tiles, iterate "
+                    "with HDDAActiveValueIterator and branch on getDim().");
 
     auto optsF             = torch::TensorOptions().dtype(rayO.dtype()).device(rayO.device());
     torch::Tensor outTimes = torch::empty({rayO.rsize(0)}, optsF);
+
+    // `eps == 0` is the dominant call site (the Python binding's default). Specialise the kernel on
+    // `EpsZero` so NVCC drops the per-voxel `deltaT < eps` branch and one register entirely in that
+    // case.
+    const bool epsZero = (eps == 0.0f);
 
     AT_DISPATCH_V2(
         rayO.scalar_type(),
@@ -154,24 +205,81 @@ RayImplicitIntersection(const GridBatchData &batchHdl,
             auto outTimesAcc    = tensorAccessor<DeviceTag, scalar_t, 1>(outTimes);
 
             if constexpr (DeviceTag == torch::kCUDA) {
-                auto cb = [=] __device__(int32_t bidx,
-                                         int32_t eidx,
-                                         int32_t cidx,
-                                         JaggedRAcc64<scalar_t, 2> rOA) {
-                    rayImplicitCallback<scalar_t, JaggedRAcc64, TorchRAcc64>(
-                        bidx, eidx, rOA, rayDAcc, gridScalarsAcc, batchAcc, outTimesAcc, eps);
-                };
-                forEachJaggedElementChannelCUDA<scalar_t, 2>(1, rayO, cb);
-            } else {
-                auto cb =
-                    [=](int32_t bidx, int32_t eidx, int32_t cidx, JaggedAcc<scalar_t, 2> rOA) {
-                        rayImplicitCallback<scalar_t, JaggedAcc, TorchAcc>(
-                            bidx, eidx, rOA, rayDAcc, gridScalarsAcc, batchAcc, outTimesAcc, eps);
+                if (epsZero) {
+                    auto cb = [=] __device__(int32_t bidx,
+                                             int32_t eidx,
+                                             int32_t cidx,
+                                             JaggedRAcc64<scalar_t, 2> rOA) {
+                        rayImplicitCallback<scalar_t,
+                                            /*EpsZero=*/true,
+                                            JaggedRAcc64,
+                                            TorchRAcc64>(bidx,
+                                                         eidx,
+                                                         rOA,
+                                                         rayDAcc,
+                                                         gridScalarsAcc,
+                                                         batchAcc,
+                                                         outTimesAcc,
+                                                         scalar_t(eps));
                     };
-                forEachJaggedElementChannelCPU<scalar_t, 2>(1, rayO, cb);
+                    forEachJaggedElementChannelCUDA<scalar_t, 2>(1, rayO, cb);
+                } else {
+                    auto cb = [=] __device__(int32_t bidx,
+                                             int32_t eidx,
+                                             int32_t cidx,
+                                             JaggedRAcc64<scalar_t, 2> rOA) {
+                        rayImplicitCallback<scalar_t,
+                                            /*EpsZero=*/false,
+                                            JaggedRAcc64,
+                                            TorchRAcc64>(bidx,
+                                                         eidx,
+                                                         rOA,
+                                                         rayDAcc,
+                                                         gridScalarsAcc,
+                                                         batchAcc,
+                                                         outTimesAcc,
+                                                         scalar_t(eps));
+                    };
+                    forEachJaggedElementChannelCUDA<scalar_t, 2>(1, rayO, cb);
+                }
+            } else {
+                if (epsZero) {
+                    auto cb =
+                        [=](int32_t bidx, int32_t eidx, int32_t cidx, JaggedAcc<scalar_t, 2> rOA) {
+                            rayImplicitCallback<scalar_t,
+                                                /*EpsZero=*/true,
+                                                JaggedAcc,
+                                                TorchAcc>(bidx,
+                                                          eidx,
+                                                          rOA,
+                                                          rayDAcc,
+                                                          gridScalarsAcc,
+                                                          batchAcc,
+                                                          outTimesAcc,
+                                                          scalar_t(eps));
+                        };
+                    forEachJaggedElementChannelCPU<scalar_t, 2>(1, rayO, cb);
+                } else {
+                    auto cb =
+                        [=](int32_t bidx, int32_t eidx, int32_t cidx, JaggedAcc<scalar_t, 2> rOA) {
+                            rayImplicitCallback<scalar_t,
+                                                /*EpsZero=*/false,
+                                                JaggedAcc,
+                                                TorchAcc>(bidx,
+                                                          eidx,
+                                                          rOA,
+                                                          rayDAcc,
+                                                          gridScalarsAcc,
+                                                          batchAcc,
+                                                          outTimesAcc,
+                                                          scalar_t(eps));
+                        };
+                    forEachJaggedElementChannelCPU<scalar_t, 2>(1, rayO, cb);
+                }
             }
         }),
-        AT_EXPAND(AT_FLOATING_TYPES));
+        AT_EXPAND(AT_FLOATING_TYPES),
+        c10::kHalf);
 
     return rayO.jagged_like(outTimes);
 }

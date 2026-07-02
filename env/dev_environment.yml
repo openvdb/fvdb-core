@@ -18,6 +18,7 @@ dependencies:
   - cuda-nvtx-dev
   - cuda-version=13.0
   - cxx-compiler
+  - einops
   - gcc_linux-64=14.3
   - gh
   - git
@@ -42,7 +43,7 @@ dependencies:
   - numpy
   - open-clip-torch
   - openssl
-  - openusd
+  - openusd>=26.03
   - pandas
   - parameterized
   - pip
@@ -50,11 +51,12 @@ dependencies:
   - polyscope
   - psutil
   - py-opencv>=4.10[build=headless*]
+  - py-openimageio
   - pybind11
   - pyrender
   - pytest-benchmark
   - python=3.12
-  - pytorch-gpu=2.10.0
+  - pytorch-gpu=2.11.0
   - rich
   - sam2
   - scikit-build-core
@@ -81,5 +83,3 @@ dependencies:
     - pytest-markdown-docs
     ## 3dgs tests
     - dlnr_lite
-    - einops
-    - oiio-static-python

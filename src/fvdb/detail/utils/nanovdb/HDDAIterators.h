@@ -94,26 +94,28 @@ template <typename AccT, typename ScalarT> struct HDDASegmentIterator {
         mTimespan.t0 = mRay.t1() + static_cast<ScalarT>(5.0);
         mTimespan.t1 = mRay.t1();
         do {
-            // Coordinate of the current voxel
+            // Re-align the HDDA to the correct level if mHdda's current dim disagrees with the
+            // tree's dim at the current voxel. After HDDA::update snaps mVoxel to the new grid
+            // level we have to query isActive at the snapped voxel, so we always do the isActive
+            // lookup *after* the dim check.
             const int dim = mAcc.getDim(mHdda.voxel(), mRay);
-
-            // Set the level of HDDA
             if (mHdda.dim() != dim) {
                 mRay.setMinTime(mHdda.time());
                 mHdda.update(mRay, dim);
             }
+            const bool active = mAcc.isActive(mHdda.voxel());
 
-            const bool isActive = mAcc.isActive(mHdda.voxel());
+            // Predicated TimeSpan writes: only the `leaving` break is a real branch. The entering
+            // and leaving t0/t1 updates are expressed as selects so rays in the same warp whose
+            // `active` state differs don't diverge at the setter level.
+            const bool wasValid = mTimespan.valid();
+            const MathType t    = mHdda.time();
 
-            if (isActive) {               // We're inside an active region
-                if (!mTimespan.valid()) { // This is the first hit
-                    mTimespan.t0 = mHdda.time();
-                }
-            } else {                      // We're not in an active region
-                if (mTimespan.valid()) {  // We were just in an active region
-                    mTimespan.t1 = mHdda.time();
-                    break;
-                }
+            mTimespan.t0       = (active && !wasValid) ? t : mTimespan.t0;
+            const bool leaving = (!active && wasValid);
+            mTimespan.t1       = leaving ? t : mTimespan.t1;
+            if (leaving) {
+                break;
             }
         } while (mHdda.step());
 
@@ -130,7 +132,18 @@ template <typename AccT, typename ScalarT> struct HDDASegmentIterator {
     TimespanT mTimespan;
 };
 
-template <typename AccT, typename ScalarT> struct HDDAVoxelIterator {
+// Iterates the active values an HDDA ray walk visits, yielding each as a {coordinate, [t0, t1]}
+// pair. `LeafOnly` selects what counts as a value:
+//
+//   - LeafOnly == false: every active value at any node level, i.e. active coarse tiles (dim > 1)
+//     as well as active leaf voxels (dim == 1). The caller must branch on `getDim()` to tell them
+//     apart. Exposed as the `HDDAActiveValueIterator` alias.
+//   - LeafOnly == true: only active leaf voxels (dim == 1); active tiles are skipped in a single
+//     coarse HDDA step. This mirrors the narrow-band inner loop of `nanovdb::ZeroCrossing`. Exposed
+//     as the `HDDALeafVoxelIterator` alias. Because every yielded value is a leaf voxel, a
+//     per-voxel buffer indexed by `getValue(ijk) - 1` is always in-bounds; ops with
+//     per-active-value buffers must use the active-value alias and handle tiles explicitly.
+template <typename AccT, typename ScalarT, bool LeafOnly> struct HDDAValueIteratorImpl {
     using MathType = at::opmath_type<ScalarT>;
     struct PairT {
         nanovdb::Coord first;
@@ -148,10 +161,10 @@ template <typename AccT, typename ScalarT> struct HDDAVoxelIterator {
     using reference         = value_type &;
     using iterator_category = std::forward_iterator_tag;
 
-    HDDAVoxelIterator() = delete;
+    HDDAValueIteratorImpl() = delete;
 
     __hostdev__
-    HDDAVoxelIterator(const RayT &rayVox, const AccT &acc)
+    HDDAValueIteratorImpl(const RayT &rayVox, const AccT &acc)
         : mAcc(acc) {
         mRay = RayTInternal(nanovdb::math::Vec3<MathType>(rayVox.eye()),
                             nanovdb::math::Vec3<MathType>(rayVox.dir()),
@@ -178,15 +191,15 @@ template <typename AccT, typename ScalarT> struct HDDAVoxelIterator {
         return (const value_type *)&mData;
     }
 
-    __hostdev__ const HDDAVoxelIterator &
+    __hostdev__ const HDDAValueIteratorImpl &
     operator++() {
         mIsValid = nextVoxel();
         return *this;
     }
 
-    __hostdev__ HDDAVoxelIterator
+    __hostdev__ HDDAValueIteratorImpl
     operator++(int) {
-        HDDAVoxelIterator tmp = *this;
+        HDDAValueIteratorImpl tmp = *this;
         ++(*this);
         return tmp;
     }
@@ -195,29 +208,31 @@ template <typename AccT, typename ScalarT> struct HDDAVoxelIterator {
     __hostdev__ bool
     nextVoxel() {
         do {
-            // Adjust HDDA level
-            // This can take three passes to complete, since mVoxel gains precision each pass
-            // 4096 -> 128
-            // 128  -> 8
-            // 8    -> 1
+            // Re-align the HDDA to the tree level at the current voxel. A single update can leave
+            // the HDDA one level short when a step crosses several node levels at once, so we retry
+            // up to three passes (root -> upper -> lower -> leaf is the deepest transition). The
+            // `#pragma unroll` is load-bearing: without it ptxas keeps this bounded loop rolled
+            // (the body is two getDim tree-walks plus an update, too big to auto-unroll) and emits
+            // a data-dependent backedge that adds warp divergence at level transitions. Forcing the
+            // unroll turns the <=3 passes into predicated straight-line code with no backedge.
             int dim = mAcc.getDim(mHdda.voxel(), mRay);
-            if (mHdda.dim() != dim) {
+            // Emit the pragma only in the CUDA device pass: it's meaningless on the host and the
+            // host compiler treats unknown pragmas as errors (-Werror=unknown-pragmas).
+#if defined(__CUDA_ARCH__)
+#pragma unroll
+#endif
+            for (int pass = 0; pass < 3 && mHdda.dim() != dim; ++pass) {
                 mRay.setMinTime(mHdda.time());
                 mHdda.update(mRay, dim);
-            }
-            dim = mAcc.getDim(mHdda.voxel(), mRay);
-            if (mHdda.dim() != dim) {
-                mRay.setMinTime(mHdda.time());
-                mHdda.update(mRay, dim);
-            }
-            dim = mAcc.getDim(mHdda.voxel(), mRay);
-            if (mHdda.dim() != dim) {
-                mRay.setMinTime(mHdda.time());
-                mHdda.update(mRay, dim);
+                dim = mAcc.getDim(mHdda.voxel(), mRay);
             }
 
-            // NOTE: This will return true if a tile is active
-            if (mAcc.isActive(mHdda.voxel())) { // We hit an active voxel, increment hdda and return
+            // dim == 1 is a leaf voxel, dim > 1 a coarse tile; isActive is true for both. When
+            // LeafOnly, skip tiles so we yield only leaf voxels (the trailing mHdda.step() jumps
+            // the whole tile in one coarse step); when !LeafOnly the gate collapses to the original
+            // isActive check.
+            const bool isLeaf = (dim == 1);
+            if ((!LeafOnly || isLeaf) && mAcc.isActive(mHdda.voxel())) {
                 mData = {mHdda.voxel(), TimespanT(mHdda.time(), mHdda.next())};
                 mHdda.step();
                 return true;
@@ -234,6 +249,17 @@ template <typename AccT, typename ScalarT> struct HDDAVoxelIterator {
     HDDAT mHdda;
     value_type mData;
 };
+
+// Yields every active value the ray walk visits (leaf voxels AND coarse tiles); the caller
+// distinguishes them via getDim(). See HDDAValueIteratorImpl above.
+template <typename AccT, typename ScalarT>
+using HDDAActiveValueIterator = HDDAValueIteratorImpl<AccT, ScalarT, /*LeafOnly=*/false>;
+
+// Yields only active leaf voxels (dim == 1), skipping coarse tiles. Use when the per-value buffer
+// has exactly one entry per active voxel (e.g. a level-set scalar field). Mirrors
+// nanovdb::ZeroCrossing's narrow-band walk.
+template <typename AccT, typename ScalarT>
+using HDDALeafVoxelIterator = HDDAValueIteratorImpl<AccT, ScalarT, /*LeafOnly=*/true>;
 
 } // namespace fvdb
 

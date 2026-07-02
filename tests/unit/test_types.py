@@ -411,7 +411,7 @@ class TestTypesRedux(unittest.TestCase):
             result = to_FloatingScalar(inp)
             self.assertSameDevice(result, inp)
             self.assertEqual(result.shape, torch.Size([]))
-            if inp is not 1:
+            if inp != 1:
                 self.assertAlmostEqual(result.item(), 1.5, places=5)
 
     def test_scalar_conversion_failures(self):

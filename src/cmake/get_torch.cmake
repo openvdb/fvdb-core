@@ -36,9 +36,6 @@ endif()
 
 find_package(Torch REQUIRED PATHS "${TORCH_PACKAGE_DIR}/share/cmake/Torch")
 
-# Without this we can't find TH/THC headers
-set(TORCH_SOURCE_INCLUDE_DIRS ${TORCH_PACKAGE_DIR}/include)
-
 if(NOT TORCH_PYTHON_LIBRARY)
   message(STATUS "Looking for torch_python library...")
 

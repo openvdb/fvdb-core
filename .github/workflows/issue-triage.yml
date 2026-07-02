@@ -30,12 +30,13 @@ jobs:
         id: membership
         env:
           GH_TOKEN: ${{ secrets.ISSUES_PAT }}
+          GITHUB_EVENT_ISSUE_USER_LOGIN: ${{ github.event.issue.user.login }}
         run: |
           if [ -z "${GH_TOKEN:-}" ]; then
             echo "::error::ISSUES_PAT is not configured"
             exit 1
           fi
-          AUTHOR="${{ github.event.issue.user.login }}"
+          AUTHOR="${GITHUB_EVENT_ISSUE_USER_LOGIN}"
           RESPONSE=$( (gh api "orgs/openvdb/teams/fvdb-dev/memberships/$AUTHOR" \
             -i --silent 2>&1 || true) )
           HTTP_CODE=$(printf '%s\n' "$RESPONSE" | grep -m1 '^HTTP/' | awk '{print $2}' || true)

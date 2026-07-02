@@ -870,6 +870,21 @@ def integrate_tsdf_with_features(
     weight_images: torch.Tensor | None,
 ) -> tuple[GridBatchData, JaggedTensor, JaggedTensor, JaggedTensor]: ...
 
+# SDF ops
+class SmoothingMode(Enum):
+    MEAN_CURVATURE = ...
+    TAUBIN = ...
+
+def reinitialize_sdf(
+    grid: GridBatchData,
+    field: JaggedTensor,
+    band: int,
+    redistance_iters: int,
+    order: int,
+    smooth: int,
+    smoothing: SmoothingMode,
+) -> JaggedTensor: ...
+
 # Topology / misc
 def grid_edge_network(
     grid: GridBatchData,
