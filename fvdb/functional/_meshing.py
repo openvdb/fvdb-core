@@ -37,8 +37,13 @@ def marching_cubes_batch(
     Returns:
         vertices (JaggedTensor): Mesh vertex positions, shape ``(B, -1, 3)``.
         faces (JaggedTensor): Triangle face indices.
-        unique_vertex_ids (JaggedTensor): Unique vertex IDs with int64 values,
-            shape ``(B, -1, 3)``.
+        vertex_edge_keys (JaggedTensor): Edge keys used to deduplicate mesh
+            vertices, dtype ``torch.int64``, shape ``(B, -1, 3)``. Each row
+            ``[batch_idx, voxel_a, voxel_b]`` identifies the grid edge on which
+            the vertex was interpolated, where ``voxel_a`` and ``voxel_b`` are
+            flat voxel indices of the two endpoint voxels (``voxel_a >=
+            voxel_b``). This can be used to map mesh vertices back to the grid
+            edges and voxels they originated from.
 
     .. seealso:: :func:`marching_cubes_single`
     """
@@ -62,8 +67,14 @@ def marching_cubes_single(
     Returns:
         vertices (torch.Tensor): Mesh vertex positions, shape ``(N, 3)``.
         faces (torch.Tensor): Triangle face indices.
-        unique_vertex_ids (torch.Tensor): Unique vertex IDs with dtype ``torch.int64``,
-            shape ``(N, 3)``.
+        vertex_edge_keys (torch.Tensor): Edge keys used to deduplicate mesh
+            vertices, dtype ``torch.int64``, shape ``(N, 3)``. Each row
+            ``[batch_idx, voxel_a, voxel_b]`` identifies the grid edge on which
+            the vertex was interpolated, where ``voxel_a`` and ``voxel_b`` are
+            flat voxel indices of the two endpoint voxels (``voxel_a >=
+            voxel_b``). This can be used to map mesh vertices back to the grid
+            edges and voxels they originated from. ``batch_idx`` is always
+            ``0`` for a single grid.
 
     .. seealso:: :func:`marching_cubes_batch`
     """
