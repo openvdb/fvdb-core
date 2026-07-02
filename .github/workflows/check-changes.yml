@@ -23,27 +23,30 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       # Run tests unless this is a PR whose files are ALL skippable paths.
-      should_test: ${{ github.event_name != 'pull_request_target' || steps.filter.outputs.skippable_only != 'true' }}
+      should_test: ${{ github.event_name != 'pull_request_target' || steps.filter.outputs.needs_tests == 'true' }}
     steps:
       - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
         id: filter
         if: github.event_name == 'pull_request_target'
         with:
-          # 'every' makes the filter true only when EVERY changed file matches one
-          # of these patterns, i.e. the PR touches only skippable paths; we invert
-          # that for should_test. A mixed PR (skippable + real source) has at least
-          # one non-matching file, so skippable_only is false and tests run.
+          # paths-filter's 'every' quantifies over PATTERNS PER FILE (a file
+          # matches only if it satisfies all patterns of the list), while the
+          # filter output is true when ANY changed file matches. So needs_tests
+          # asks: does at least one changed file match '**' AND every negated
+          # skippable path — i.e. is at least one changed file real source? A
+          # skippable-only PR matches nothing, needs_tests is false, tests skip.
           #
-          # NOTE: docs/ and notebooks/ are intentionally NOT listed — the Doc Tests
+          # NOTE: docs/ and notebooks/ are intentionally NOT excluded — the Doc Tests
           # job runs `pytest --markdown-docs docs` and `pytest --nbmake notebooks/`,
           # so changes there must run the suite. Only root-level `*.md` (README,
-          # CHANGES, governance docs) is skippable; `docs/**/*.md` is not matched by
-          # `*.md` and therefore still triggers tests.
+          # CHANGES, governance docs) is skippable; `docs/**/*.md` is not matched
+          # by the `!*.md` exclusion and therefore still triggers tests.
           predicate-quantifier: 'every'
           filters: |
-            skippable_only:
-              - '*.md'
-              - 'CODEOWNERS'
-              - 'debug/**'
-              - 'devtools/**'
-              - 'scripts/**'
+            needs_tests:
+              - '**'
+              - '!*.md'
+              - '!CODEOWNERS'
+              - '!debug/**'
+              - '!devtools/**'
+              - '!scripts/**'
