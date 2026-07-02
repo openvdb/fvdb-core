@@ -1021,7 +1021,11 @@ class GridBatch:
         Returns:
             vertex_positions (JaggedTensor): Mesh vertex positions. Shape: ``(batch_size, num_vertices_for_grid_b, 3)``.
             face_indices (JaggedTensor): Triangle face indices. Shape: ``(batch_size, num_faces_for_grid_b, 3)``.
-            vertex_normals (JaggedTensor): Vertex normals. Shape: ``(batch_size, num_vertices_for_grid_b, 3)``.
+            vertex_edge_keys (JaggedTensor): Edge keys used to deduplicate mesh vertices, dtype ``torch.int64``.
+                Shape: ``(batch_size, num_vertices_for_grid_b, 3)``. Each row ``[batch_idx, voxel_a, voxel_b]``
+                identifies the grid edge on which the vertex was interpolated, where ``voxel_a`` and ``voxel_b``
+                are flat voxel indices of the two endpoint voxels (``voxel_a >= voxel_b``). This can be used to
+                map mesh vertices back to the grid edges and voxels they originated from.
 
         .. seealso:: :meth:`Grid.marching_cubes`
         """

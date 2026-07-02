@@ -1476,8 +1476,15 @@ class Grid:
                 ``(num_vertices, 3)``.
             faces (torch.Tensor): Triangle face indices of shape
                 ``(num_faces, 3)``.
-            normals (torch.Tensor): Vertex normals of shape
-                ``(num_vertices, 3)``.
+            vertex_edge_keys (torch.Tensor): Edge keys used to deduplicate
+                mesh vertices, dtype ``torch.int64``, shape
+                ``(num_vertices, 3)``. Each row ``[batch_idx, voxel_a,
+                voxel_b]`` identifies the grid edge on which the vertex was
+                interpolated, where ``voxel_a`` and ``voxel_b`` are flat
+                voxel indices of the two endpoint voxels (``voxel_a >=
+                voxel_b``). This can be used to map mesh vertices back to the
+                grid edges and voxels they originated from. ``batch_idx`` is
+                always ``0`` for a single grid.
         """
         from . import functional
 
