@@ -23,7 +23,7 @@
   },
   "cmake_version": "4.0.3",
   "uv": {
-    "version": "0.7.5",
+    "version": "0.11.26",
     "action_sha": "d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86"
   },
   "docker_os": {
