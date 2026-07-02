@@ -36,7 +36,7 @@ jaggedProjectionForwardKernel(const uint32_t B,
                               const T eps2d,
                               const T radiusClip,
                               // outputs
-                              int32_t *__restrict__ radii,  // [N]
+                              int32_t *__restrict__ radii,  // [N, 2]
                               T *__restrict__ means2d,      // [N, 2]
                               T *__restrict__ depths,       // [N]
                               T *__restrict__ conics,       // [N, 3]
@@ -74,38 +74,41 @@ jaggedProjectionForwardKernel(const uint32_t B,
     }
     auto [covar2d, mean2d, depthCam] = camera.projectWorldGaussianTo2D(cId, meanWorldSpace, covar);
     if (!camera.isDepthVisible(depthCam)) {
-        radii[idx] = 0;
+        radii[idx * 2 + 0] = 0;
+        radii[idx * 2 + 1] = 0;
         return;
     }
 
     T compensation;
     const T det = addBlur(eps2d, covar2d, compensation);
     if (det <= 0.f) {
-        radii[idx] = 0;
+        radii[idx * 2 + 0] = 0;
+        radii[idx * 2 + 1] = 0;
         return;
     }
 
     // compute the inverse of the 2d covariance
     const nanovdb::math::Mat2<T> covar2dInverse = covar2d.inverse();
 
-    // take 3 sigma as the radius (non-differentiable)
-    const T radius = radiusFromCovariance2dDet(covar2d, det, T(3));
-    // T v2 = b - sqrt(max(0.1f, b * b - det));
-    // T radius = ceil(3.f * sqrt(max(v1, v2)));
-
-    if (radius <= radiusClip) {
-        radii[idx] = 0;
+    // Per-axis radii from the 2D covariance diagonal at FVDB_EXTEND sigma.
+    // Both the radius-clip and the off-screen culls use these, so a gaussian
+    // survives the clip iff *either* axis exceeds it.
+    const T radiusX = ::cuda::std::ceil(T(FVDB_EXTEND) * ::cuda::std::sqrt(covar2d[0][0]));
+    const T radiusY = ::cuda::std::ceil(T(FVDB_EXTEND) * ::cuda::std::sqrt(covar2d[1][1]));
+    if (radiusX <= radiusClip && radiusY <= radiusClip) {
+        radii[idx * 2 + 0] = 0;
+        radii[idx * 2 + 1] = 0;
+        return;
+    }
+    if (camera.isProjectedFootprintOutsideImage(mean2d, radiusX, radiusY)) {
+        radii[idx * 2 + 0] = 0;
+        radii[idx * 2 + 1] = 0;
         return;
     }
 
-    // mask out gaussians outside the image region
-    if (camera.isProjectedFootprintOutsideImage(mean2d, radius, radius)) {
-        radii[idx] = 0;
-        return;
-    }
-
-    // write to outputs
-    radii[idx]                               = (int32_t)radius;
+    // Per-axis radii (matches gsplat's intersect_tile convention).
+    radii[idx * 2 + 0]                       = (int32_t)radiusX;
+    radii[idx * 2 + 1]                       = (int32_t)radiusY;
     means2d[idx * 2]                         = mean2d[0];
     means2d[idx * 2 + 1]                     = mean2d[1];
     depths[idx]                              = depthCam;
@@ -189,7 +192,7 @@ dispatchProjectGaussiansAnalyticJaggedFwd<torch::kCUDA>(
 
     at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream(means.device().index());
 
-    torch::Tensor radii   = torch::empty({N}, means.options().dtype(torch::kInt32));
+    torch::Tensor radii   = torch::empty({N, 2}, means.options().dtype(torch::kInt32));
     torch::Tensor means2d = torch::empty({N, 2}, means.options());
     torch::Tensor depths  = torch::empty({N}, means.options());
     torch::Tensor conics  = torch::empty({N, 3}, means.options());

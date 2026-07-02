@@ -5,10 +5,13 @@
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
 #include <fvdb/detail/utils/Utils.h>
+#include <fvdb/detail/utils/cuda/Caching.cuh>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 
 #include <c10/cuda/CUDAException.h>
 #include <c10/cuda/CUDAMathCompat.h>
+
+#include <type_traits>
 
 namespace fvdb {
 namespace detail {
@@ -21,7 +24,51 @@ _calcDt(ScalarType t, ScalarType coneAngle, ScalarType minStepSize, const Scalar
     return nanovdb::math::Clamp(t * coneAngle, minStepSize, maxStepSize);
 }
 
+// Write one sample's (times, rayIdx) and bump the per-ray sample counter. CSEs `rayStartIdx +
+// numSamples` into a single local, and routes the two output tensors through the streaming-store
+// helpers from <fvdb/detail/utils/cuda/Caching.cuh>. Kept as a plain function template (not a
+// lambda) because NVCC forbids extended __device__ lambdas inside generic lambdas, which is what
+// the launchers use.
+//
+// The (a, b) pair can mix types: when `ScalarType == c10::Half`, the HDDA iterator returns
+// `it->t0` / `it->t1` in `at::opmath_type<Half> = float`, while the local `t0` / `t1` step
+// variables stay in `ScalarType`. Rather than forcing callers to cast at every site, we take them
+// as separate deduced types `A, B` and convert to `ScalarType` here. `ScalarType` must be
+// specified explicitly at the call site because it's no longer used in a function parameter slot.
+template <bool ReturnMidpoint,
+          typename ScalarType,
+          typename RayTimesAcc,
+          typename JIdxAcc,
+          typename A,
+          typename B>
+__hostdev__ __forceinline__ void
+_emitSample(RayTimesAcc &outRayTimes,
+            JIdxAcc &outJIdx,
+            fvdb::JOffsetsType idx,
+            int32_t rayIdx,
+            const A &a,
+            const B &b) {
+    const ScalarType sa = static_cast<ScalarType>(a);
+    const ScalarType sb = static_cast<ScalarType>(b);
+    if constexpr (ReturnMidpoint) {
+        // Cast the sum explicitly: `c10::Half + c10::Half` promotes to float on some PyTorch / CUDA
+        // configurations, which would fail deduction in `_storeStreaming`.
+        const ScalarType mid = static_cast<ScalarType>((sa + sb) * ScalarType(0.5));
+        _storeStreaming(&outRayTimes[idx][0], mid);
+    } else {
+        _storeStreamingPair(&outRayTimes[idx][0], sa, sb);
+    }
+    _storeStreaming(&outJIdx[idx], rayIdx);
+}
+
+// Counts the number of samples a ray will emit. Templated on `ConeZero` (coneAngle == 0) and
+// `IncludeEndpoints` (include_end_segments) so the compiler can prune the dead branches and,
+// critically, hoist `stepSize = minStepSize` out of the inner while-loops when ConeZero is true.
+// That removes a Clamp+mul from the hot per-sample body and drops several live registers, which is
+// the main performance lever we have on this latency-bound traversal.
 template <typename ScalarType,
+          bool ConeZero,
+          bool IncludeEndpoints,
           template <typename T, int32_t D>
           typename JaggedAccessor,
           template <typename T, int32_t D>
@@ -37,7 +84,6 @@ countSamplesPerRayCallback(int32_t bidx,
                            BatchGridAccessor batchAccessor,
                            ScalarType minStepSize,
                            ScalarType coneAngle,
-                           bool includeEndpointSegments,
                            ScalarType eps) {
     const nanovdb::OnIndexGrid *gpuGrid = batchAccessor.grid(bidx);
 
@@ -60,11 +106,22 @@ countSamplesPerRayCallback(int32_t bidx,
     // Count samples along ray
     int32_t numSamples = 0;
 
-    ScalarType maxStepSize = static_cast<ScalarType>(1e10);
+    // maxStepSize is only referenced on the non-ConeZero path; declaring it at function scope keeps
+    // it visible to every `_calcDt` call in the loop body. It's `const` rather than `constexpr`
+    // because c10::Half has no constexpr constructor (Half(float) does a runtime fp32->fp16
+    // conversion), so a half-typed compile-time constant isn't possible.
+    const ScalarType maxStepSize = static_cast<ScalarType>(1e10);
 
     // Count samples
-    ScalarType t0       = tMini;
-    ScalarType stepSize = _calcDt(t0, coneAngle, minStepSize, maxStepSize);
+    ScalarType t0 = tMini;
+    ScalarType stepSize;
+    if constexpr (ConeZero) {
+        // In the cone_angle == 0 case _calcDt collapses to minStepSize and is loop-invariant;
+        // compute it once and let NVCC hoist it out.
+        stepSize = minStepSize;
+    } else {
+        stepSize = _calcDt(t0, coneAngle, minStepSize, maxStepSize);
+    }
     ScalarType t1;
 
     // For each contiguous segment of voxels
@@ -76,12 +133,12 @@ countSamplesPerRayCallback(int32_t bidx,
             continue;
         }
 
-        if (includeEndpointSegments) {
+        if constexpr (IncludeEndpoints) {
             // Step t0 consistently until it intersects the voxel (t0 is out of the voxel)
             // This MUST use the same rounding (`ceil`) as the generate-path callback below so that
-            // both callbacks emit the same number of samples per ray.
-            // With cone tracing (coneAngle > 0), `_calcDt` depends on `t0`, so any rounding
-            // mismatch silently diverges the two paths and can OOB-write during sample generation.
+            // both callbacks emit the same number of samples per ray. With cone tracing
+            // (coneAngle > 0), `_calcDt` depends on `t0`, so any rounding mismatch silently
+            // diverges the two paths and can OOB-write during sample generation.
             ScalarType distToVox = it->t0 - t0;
             t0 += c10::cuda::compat::ceil(distToVox / stepSize) * stepSize;
             t1 = t0 + stepSize;
@@ -101,8 +158,10 @@ countSamplesPerRayCallback(int32_t bidx,
 
             while (t1 < it->t1) {
                 numSamples += 1;
-                t0       = t1;
-                stepSize = _calcDt(t0, coneAngle, minStepSize, maxStepSize);
+                t0 = t1;
+                if constexpr (!ConeZero) {
+                    stepSize = _calcDt(t0, coneAngle, minStepSize, maxStepSize);
+                }
                 t1 += stepSize;
             }
 
@@ -114,13 +173,17 @@ countSamplesPerRayCallback(int32_t bidx,
         } else {
             // Step t0 consistently until it intersects the voxel (tmid is in the voxel)
             ScalarType distToVox = it->t0 - t0;
-            t0       = t0 + c10::cuda::compat::floor(distToVox / stepSize + 0.5f) * stepSize;
-            stepSize = _calcDt(t0, coneAngle, minStepSize, maxStepSize);
-            t1       = t0 + stepSize;
+            t0 = t0 + c10::cuda::compat::floor(distToVox / stepSize + 0.5f) * stepSize;
+            if constexpr (!ConeZero) {
+                stepSize = _calcDt(t0, coneAngle, minStepSize, maxStepSize);
+            }
+            t1 = t0 + stepSize;
             while ((t0 + t1) * 0.5 < it->t1 && (t0 + t1) * 0.5 >= it->t0) {
                 numSamples += 1;
-                t0       = t1;
-                stepSize = _calcDt(t0, coneAngle, minStepSize, maxStepSize);
+                t0 = t1;
+                if constexpr (!ConeZero) {
+                    stepSize = _calcDt(t0, coneAngle, minStepSize, maxStepSize);
+                }
                 t1 += stepSize;
             }
         }
@@ -128,7 +191,13 @@ countSamplesPerRayCallback(int32_t bidx,
     outRayCounts[eidx + 1] = numSamples;
 }
 
+// Emits the actual samples computed by countSamplesPerRayCallback. Templated on ConeZero,
+// IncludeEndpoints, and ReturnMidpoint for the same reasons as the count variant: prune dead
+// branches, hoist stepSize, and drop the per-sample `returnMidpoint` test from the write path.
 template <typename ScalarType,
+          bool ConeZero,
+          bool IncludeEndpoints,
+          bool ReturnMidpoint,
           template <typename T, int32_t D>
           typename JaggedAccessor,
           template <typename T, int32_t D>
@@ -147,8 +216,6 @@ generateRaySamplesCallback(int32_t bidx,
                            BatchGridAccessor batchAccessor,
                            ScalarType minStepSize,
                            ScalarType coneAngle,
-                           bool includeEndpointSegments,
-                           bool returnMidpoint,
                            ScalarType eps) {
     const nanovdb::OnIndexGrid *gpuGrid = batchAccessor.grid(bidx);
 
@@ -176,11 +243,17 @@ generateRaySamplesCallback(int32_t bidx,
     // Count samples along ray
     fvdb::JOffsetsType numSamples = 0;
 
-    ScalarType maxStepSize = static_cast<ScalarType>(1e10);
+    // See matching comment in countSamplesPerRayCallback.
+    const ScalarType maxStepSize = static_cast<ScalarType>(1e10);
 
     // Track ray sample and region of space which it occupies
-    ScalarType t0       = tMini;
-    ScalarType stepSize = _calcDt(t0, coneAngle, minStepSize, maxStepSize);
+    ScalarType t0 = tMini;
+    ScalarType stepSize;
+    if constexpr (ConeZero) {
+        stepSize = minStepSize;
+    } else {
+        stepSize = _calcDt(t0, coneAngle, minStepSize, maxStepSize);
+    }
     ScalarType t1;
 
     const fvdb::JOffsetsType rayStartIdx = outJOffsets[rayIdx];
@@ -194,7 +267,7 @@ generateRaySamplesCallback(int32_t bidx,
             continue;
         }
 
-        if (includeEndpointSegments) {
+        if constexpr (IncludeEndpoints) {
             // Step t0 consistently until it intersects the voxel
             ScalarType distToVox = it->t0 - t0;
             t0 += c10::cuda::compat::ceil(distToVox / stepSize) * stepSize;
@@ -203,13 +276,8 @@ generateRaySamplesCallback(int32_t bidx,
             if (t0 > it->t1) {
                 // A single step would take us past the end of the segment,
                 // so we only record one step here.
-                if (returnMidpoint) {
-                    outRayTimes[rayStartIdx + numSamples][0] = (it->t0 + it->t1) / ScalarType(2.0);
-                } else {
-                    outRayTimes[rayStartIdx + numSamples][0] = it->t0;
-                    outRayTimes[rayStartIdx + numSamples][1] = it->t1;
-                }
-                outJIdx[rayStartIdx + numSamples] = rayIdx;
+                _emitSample<ReturnMidpoint, ScalarType>(
+                    outRayTimes, outJIdx, rayStartIdx + numSamples, rayIdx, it->t0, it->t1);
                 numSamples += 1;
                 continue;
             }
@@ -217,62 +285,198 @@ generateRaySamplesCallback(int32_t bidx,
             if ((t0 - it->t0) > nanovdb::math::Delta<ScalarType>::value()) {
                 // There exists a gap between t0 and the start of the segment,
                 // so we record it as a sample.
-                if (returnMidpoint) {
-                    outRayTimes[rayStartIdx + numSamples][0] = (it->t0 + t0) / ScalarType(2.0);
-                } else {
-                    outRayTimes[rayStartIdx + numSamples][0] = it->t0;
-                    outRayTimes[rayStartIdx + numSamples][1] = t0;
-                }
-                outJIdx[rayStartIdx + numSamples] = rayIdx;
+                _emitSample<ReturnMidpoint, ScalarType>(
+                    outRayTimes, outJIdx, rayStartIdx + numSamples, rayIdx, it->t0, t0);
                 numSamples += 1;
             }
 
             while (t1 < it->t1) {
-                if (returnMidpoint) {
-                    outRayTimes[rayStartIdx + numSamples][0] = (t0 + t1) / ScalarType(2.0);
-                } else {
-                    outRayTimes[rayStartIdx + numSamples][0] = t0;
-                    outRayTimes[rayStartIdx + numSamples][1] = t1;
-                }
-                outJIdx[rayStartIdx + numSamples] = rayIdx;
+                _emitSample<ReturnMidpoint, ScalarType>(
+                    outRayTimes, outJIdx, rayStartIdx + numSamples, rayIdx, t0, t1);
                 numSamples += 1;
-                t0       = t1;
-                stepSize = _calcDt(t0, coneAngle, minStepSize, maxStepSize);
+                t0 = t1;
+                if constexpr (!ConeZero) {
+                    stepSize = _calcDt(t0, coneAngle, minStepSize, maxStepSize);
+                }
                 t1 += stepSize;
             }
 
             if ((it->t1 - t0) > nanovdb::math::Delta<ScalarType>::value()) {
                 // There exists a gap between the end of the segment and t0,
                 // so we record it as a sample.
-                if (returnMidpoint) {
-                    outRayTimes[rayStartIdx + numSamples][0] = (t0 + it->t1) / ScalarType(2.0);
-                } else {
-                    outRayTimes[rayStartIdx + numSamples][0] = t0;
-                    outRayTimes[rayStartIdx + numSamples][1] = it->t1;
-                }
-                outJIdx[rayStartIdx + numSamples] = rayIdx;
+                _emitSample<ReturnMidpoint, ScalarType>(
+                    outRayTimes, outJIdx, rayStartIdx + numSamples, rayIdx, t0, it->t1);
                 numSamples += 1;
             }
         } else {
             // Step t0 consistently until it intersects the voxel (tmid is in the voxel)
             ScalarType distToVox = it->t0 - t0;
-            t0       = t0 + c10::cuda::compat::floor(distToVox / stepSize + 0.5f) * stepSize;
-            stepSize = _calcDt(t0, coneAngle, minStepSize, maxStepSize);
-            t1       = t0 + stepSize;
-            while ((t0 + t1) * 0.5 < it->t1 && (t0 + t1) * 0.5 >= it->t0) {
-                if (returnMidpoint) {
-                    outRayTimes[rayStartIdx + numSamples][0] = (t0 + t1) / ScalarType(2.0);
-                } else {
-                    outRayTimes[rayStartIdx + numSamples][0] = t0;
-                    outRayTimes[rayStartIdx + numSamples][1] = t1;
-                }
-                outJIdx[rayStartIdx + numSamples] = rayIdx;
-                numSamples += 1;
-                t0       = t1;
+            t0 = t0 + c10::cuda::compat::floor(distToVox / stepSize + 0.5f) * stepSize;
+            if constexpr (!ConeZero) {
                 stepSize = _calcDt(t0, coneAngle, minStepSize, maxStepSize);
+            }
+            t1 = t0 + stepSize;
+            while ((t0 + t1) * 0.5 < it->t1 && (t0 + t1) * 0.5 >= it->t0) {
+                _emitSample<ReturnMidpoint, ScalarType>(
+                    outRayTimes, outJIdx, rayStartIdx + numSamples, rayIdx, t0, t1);
+                numSamples += 1;
+                t0 = t1;
+                if constexpr (!ConeZero) {
+                    stepSize = _calcDt(t0, coneAngle, minStepSize, maxStepSize);
+                }
                 t1 += stepSize;
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Kernel launchers
+//
+// NVCC forbids defining an extended __device__ lambda inside a *generic* lambda. Plain function
+// templates are fine, so we route all specialized launches through these helpers instead of
+// wrapping them in a generic lambda at the call site.
+// ---------------------------------------------------------------------------
+
+template <torch::DeviceType DeviceTag,
+          bool ConeZero,
+          bool IncludeEndpoints,
+          typename ScalarT,
+          typename RayDirAcc,
+          typename TMinAcc,
+          typename TMaxAcc,
+          typename CountsAcc,
+          typename BatchAcc>
+void
+launchCount(const JaggedTensor &rayOrigins,
+            const RayDirAcc rayDirectionsAcc,
+            const TMinAcc tMinAcc,
+            const TMaxAcc tMaxAcc,
+            CountsAcc outCountsAcc,
+            const BatchAcc batchAcc,
+            ScalarT minStepSize,
+            ScalarT coneAngle,
+            ScalarT eps) {
+    if constexpr (DeviceTag == torch::kCUDA) {
+        auto cb = [=] __device__(int32_t bidx,
+                                 int32_t eidx,
+                                 int32_t cidx,
+                                 JaggedRAcc64<ScalarT, 2> rayOriginsAcc) {
+            countSamplesPerRayCallback<ScalarT,
+                                       ConeZero,
+                                       IncludeEndpoints,
+                                       JaggedRAcc64,
+                                       TorchRAcc64>(bidx,
+                                                    eidx,
+                                                    rayOriginsAcc,
+                                                    rayDirectionsAcc,
+                                                    tMinAcc,
+                                                    tMaxAcc,
+                                                    outCountsAcc,
+                                                    batchAcc,
+                                                    minStepSize,
+                                                    coneAngle,
+                                                    eps);
+        };
+        forEachJaggedElementChannelCUDA<ScalarT, 2>(1, rayOrigins, cb);
+    } else {
+        auto cb = [=](int32_t bidx,
+                      int32_t eidx,
+                      int32_t cidx,
+                      JaggedAcc<ScalarT, 2> rayOriginsAcc) {
+            countSamplesPerRayCallback<ScalarT, ConeZero, IncludeEndpoints, JaggedAcc, TorchAcc>(
+                bidx,
+                eidx,
+                rayOriginsAcc,
+                rayDirectionsAcc,
+                tMinAcc,
+                tMaxAcc,
+                outCountsAcc,
+                batchAcc,
+                minStepSize,
+                coneAngle,
+                eps);
+        };
+        forEachJaggedElementChannelCPU<ScalarT, 2>(1, rayOrigins, cb);
+    }
+}
+
+template <torch::DeviceType DeviceTag,
+          bool ConeZero,
+          bool IncludeEndpoints,
+          bool ReturnMidpoint,
+          typename ScalarT,
+          typename RayDirAcc,
+          typename TMinAcc,
+          typename TMaxAcc,
+          typename JOffsetsAcc,
+          typename JIdxAcc,
+          typename JLIdxAcc,
+          typename RayTimesAcc,
+          typename BatchAcc>
+void
+launchGenerate(const JaggedTensor &rayOrigins,
+               const RayDirAcc rayDirectionsAcc,
+               const TMinAcc tMinAcc,
+               const TMaxAcc tMaxAcc,
+               const JOffsetsAcc outJOffsetsAcc,
+               JIdxAcc outJIdxAcc,
+               JLIdxAcc outJLIdxAcc,
+               RayTimesAcc outRayTimesAcc,
+               const BatchAcc batchAcc,
+               ScalarT minStepSize,
+               ScalarT coneAngle,
+               ScalarT eps) {
+    if constexpr (DeviceTag == torch::kCUDA) {
+        auto cb = [=] __device__(int32_t bidx,
+                                 int32_t eidx,
+                                 int32_t cidx,
+                                 JaggedRAcc64<ScalarT, 2> rayOriginsAcc) {
+            generateRaySamplesCallback<ScalarT,
+                                       ConeZero,
+                                       IncludeEndpoints,
+                                       ReturnMidpoint,
+                                       JaggedRAcc64,
+                                       TorchRAcc64>(bidx,
+                                                    eidx,
+                                                    rayOriginsAcc,
+                                                    rayDirectionsAcc,
+                                                    tMinAcc,
+                                                    tMaxAcc,
+                                                    outJOffsetsAcc,
+                                                    outJIdxAcc,
+                                                    outJLIdxAcc,
+                                                    outRayTimesAcc,
+                                                    batchAcc,
+                                                    minStepSize,
+                                                    coneAngle,
+                                                    eps);
+        };
+        forEachJaggedElementChannelCUDA<ScalarT, 2>(1, rayOrigins, cb);
+    } else {
+        auto cb =
+            [=](int32_t bidx, int32_t eidx, int32_t cidx, JaggedAcc<ScalarT, 2> rayOriginsAcc) {
+                generateRaySamplesCallback<ScalarT,
+                                           ConeZero,
+                                           IncludeEndpoints,
+                                           ReturnMidpoint,
+                                           JaggedAcc,
+                                           TorchAcc>(bidx,
+                                                     eidx,
+                                                     rayOriginsAcc,
+                                                     rayDirectionsAcc,
+                                                     tMinAcc,
+                                                     tMaxAcc,
+                                                     outJOffsetsAcc,
+                                                     outJIdxAcc,
+                                                     outJLIdxAcc,
+                                                     outRayTimesAcc,
+                                                     batchAcc,
+                                                     minStepSize,
+                                                     coneAngle,
+                                                     eps);
+            };
+        forEachJaggedElementChannelCPU<ScalarT, 2>(1, rayOrigins, cb);
     }
 }
 
@@ -362,46 +566,60 @@ UniformRaySamples(const GridBatchData &batchHdl,
             // Count number of segments along each ray
             torch::Tensor rayCounts = torch::zeros({rayOrigins.rsize(0) + 1}, optsI32); // [B*M]
             auto outCountsAcc       = tensorAccessor<DeviceTag, int32_t, 1>(rayCounts);
-            if constexpr (DeviceTag == torch::kCUDA) {
-                auto cb = [=] __device__(int32_t bidx,
-                                         int32_t eidx,
-                                         int32_t cidx,
-                                         JaggedRAcc64<scalar_t, 2> rayOriginsAcc) {
-                    countSamplesPerRayCallback<scalar_t, JaggedRAcc64, TorchRAcc64>(
-                        bidx,
-                        eidx,
-                        rayOriginsAcc,
-                        rayDirectionsAcc,
-                        tMinAcc,
-                        tMaxAcc,
-                        outCountsAcc,
-                        batchAcc,
-                        minStepSize,
-                        coneAngle,
-                        includeEndpointSegments,
-                        eps);
-                };
-                forEachJaggedElementChannelCUDA<scalar_t, 2>(1, rayOrigins, cb);
+
+            // Dispatch to the (ConeZero, IncludeEndpoints) specialization of `launchCount` so NVCC
+            // can prune dead branches and hoist stepSize out of the inner loop in
+            // `countSamplesPerRayCallback`. See the callback for why. The helper itself is a plain
+            // function template (not a generic lambda) because NVCC forbids __device__ lambdas
+            // inside generic lambdas.
+            const scalar_t castedMinStepSize = static_cast<scalar_t>(minStepSize);
+            const scalar_t castedConeAngle   = static_cast<scalar_t>(coneAngle);
+            const scalar_t castedEps         = static_cast<scalar_t>(eps);
+
+            if (coneAngle == 0.0) {
+                if (includeEndpointSegments) {
+                    launchCount<DeviceTag, true, true, scalar_t>(rayOrigins,
+                                                                 rayDirectionsAcc,
+                                                                 tMinAcc,
+                                                                 tMaxAcc,
+                                                                 outCountsAcc,
+                                                                 batchAcc,
+                                                                 castedMinStepSize,
+                                                                 castedConeAngle,
+                                                                 castedEps);
+                } else {
+                    launchCount<DeviceTag, true, false, scalar_t>(rayOrigins,
+                                                                  rayDirectionsAcc,
+                                                                  tMinAcc,
+                                                                  tMaxAcc,
+                                                                  outCountsAcc,
+                                                                  batchAcc,
+                                                                  castedMinStepSize,
+                                                                  castedConeAngle,
+                                                                  castedEps);
+                }
             } else {
-                auto cb = [=](int32_t bidx,
-                              int32_t eidx,
-                              int32_t cidx,
-                              JaggedAcc<scalar_t, 2> rayOriginsAcc) {
-                    countSamplesPerRayCallback<scalar_t, JaggedAcc, TorchAcc>(
-                        bidx,
-                        eidx,
-                        rayOriginsAcc,
-                        rayDirectionsAcc,
-                        tMinAcc,
-                        tMaxAcc,
-                        outCountsAcc,
-                        batchAcc,
-                        minStepSize,
-                        coneAngle,
-                        includeEndpointSegments,
-                        eps);
-                };
-                forEachJaggedElementChannelCPU<scalar_t, 2>(1, rayOrigins, cb);
+                if (includeEndpointSegments) {
+                    launchCount<DeviceTag, false, true, scalar_t>(rayOrigins,
+                                                                  rayDirectionsAcc,
+                                                                  tMinAcc,
+                                                                  tMaxAcc,
+                                                                  outCountsAcc,
+                                                                  batchAcc,
+                                                                  castedMinStepSize,
+                                                                  castedConeAngle,
+                                                                  castedEps);
+                } else {
+                    launchCount<DeviceTag, false, false, scalar_t>(rayOrigins,
+                                                                   rayDirectionsAcc,
+                                                                   tMinAcc,
+                                                                   tMaxAcc,
+                                                                   outCountsAcc,
+                                                                   batchAcc,
+                                                                   castedMinStepSize,
+                                                                   castedConeAngle,
+                                                                   castedEps);
+                }
             }
 
             // Compute joffsets for the output samples
@@ -425,54 +643,124 @@ UniformRaySamples(const GridBatchData &batchHdl,
 
             auto outRayTimesAcc = tensorAccessor<DeviceTag, scalar_t, 2>(outRayTimes);
 
-            if constexpr (DeviceTag == torch::kCUDA) {
-                auto cb = [=] __device__(int32_t bidx,
-                                         int32_t eidx,
-                                         int32_t cidx,
-                                         JaggedRAcc64<scalar_t, 2> rayOriginsAcc) {
-                    generateRaySamplesCallback<scalar_t, JaggedRAcc64, TorchRAcc64>(
-                        bidx,
-                        eidx,
-                        rayOriginsAcc,
-                        rayDirectionsAcc,
-                        tMinAcc,
-                        tMaxAcc,
-                        outJOffsetsAcc,
-                        outJIdxAcc,
-                        outJLIdxAcc,
-                        outRayTimesAcc,
-                        batchAcc,
-                        minStepSize,
-                        coneAngle,
-                        includeEndpointSegments,
-                        returnMidpoint,
-                        eps);
-                };
-                forEachJaggedElementChannelCUDA<scalar_t, 2>(1, rayOrigins, cb);
+            // Same (ConeZero, IncludeEndpoints, ReturnMidpoint) specialization pattern as the count
+            // pass above.
+            if (coneAngle == 0.0) {
+                if (includeEndpointSegments) {
+                    if (returnMidpoint) {
+                        launchGenerate<DeviceTag, true, true, true, scalar_t>(rayOrigins,
+                                                                              rayDirectionsAcc,
+                                                                              tMinAcc,
+                                                                              tMaxAcc,
+                                                                              outJOffsetsAcc,
+                                                                              outJIdxAcc,
+                                                                              outJLIdxAcc,
+                                                                              outRayTimesAcc,
+                                                                              batchAcc,
+                                                                              castedMinStepSize,
+                                                                              castedConeAngle,
+                                                                              castedEps);
+                    } else {
+                        launchGenerate<DeviceTag, true, true, false, scalar_t>(rayOrigins,
+                                                                               rayDirectionsAcc,
+                                                                               tMinAcc,
+                                                                               tMaxAcc,
+                                                                               outJOffsetsAcc,
+                                                                               outJIdxAcc,
+                                                                               outJLIdxAcc,
+                                                                               outRayTimesAcc,
+                                                                               batchAcc,
+                                                                               castedMinStepSize,
+                                                                               castedConeAngle,
+                                                                               castedEps);
+                    }
+                } else {
+                    if (returnMidpoint) {
+                        launchGenerate<DeviceTag, true, false, true, scalar_t>(rayOrigins,
+                                                                               rayDirectionsAcc,
+                                                                               tMinAcc,
+                                                                               tMaxAcc,
+                                                                               outJOffsetsAcc,
+                                                                               outJIdxAcc,
+                                                                               outJLIdxAcc,
+                                                                               outRayTimesAcc,
+                                                                               batchAcc,
+                                                                               castedMinStepSize,
+                                                                               castedConeAngle,
+                                                                               castedEps);
+                    } else {
+                        launchGenerate<DeviceTag, true, false, false, scalar_t>(rayOrigins,
+                                                                                rayDirectionsAcc,
+                                                                                tMinAcc,
+                                                                                tMaxAcc,
+                                                                                outJOffsetsAcc,
+                                                                                outJIdxAcc,
+                                                                                outJLIdxAcc,
+                                                                                outRayTimesAcc,
+                                                                                batchAcc,
+                                                                                castedMinStepSize,
+                                                                                castedConeAngle,
+                                                                                castedEps);
+                    }
+                }
             } else {
-                auto cb = [=](int32_t bidx,
-                              int32_t eidx,
-                              int32_t cidx,
-                              JaggedAcc<scalar_t, 2> rayOriginsAcc) {
-                    generateRaySamplesCallback<scalar_t, JaggedAcc, TorchAcc>(
-                        bidx,
-                        eidx,
-                        rayOriginsAcc,
-                        rayDirectionsAcc,
-                        tMinAcc,
-                        tMaxAcc,
-                        outJOffsetsAcc,
-                        outJIdxAcc,
-                        outJLIdxAcc,
-                        outRayTimesAcc,
-                        batchAcc,
-                        minStepSize,
-                        coneAngle,
-                        includeEndpointSegments,
-                        returnMidpoint,
-                        eps);
-                };
-                forEachJaggedElementChannelCPU<scalar_t, 2>(1, rayOrigins, cb);
+                if (includeEndpointSegments) {
+                    if (returnMidpoint) {
+                        launchGenerate<DeviceTag, false, true, true, scalar_t>(rayOrigins,
+                                                                               rayDirectionsAcc,
+                                                                               tMinAcc,
+                                                                               tMaxAcc,
+                                                                               outJOffsetsAcc,
+                                                                               outJIdxAcc,
+                                                                               outJLIdxAcc,
+                                                                               outRayTimesAcc,
+                                                                               batchAcc,
+                                                                               castedMinStepSize,
+                                                                               castedConeAngle,
+                                                                               castedEps);
+                    } else {
+                        launchGenerate<DeviceTag, false, true, false, scalar_t>(rayOrigins,
+                                                                                rayDirectionsAcc,
+                                                                                tMinAcc,
+                                                                                tMaxAcc,
+                                                                                outJOffsetsAcc,
+                                                                                outJIdxAcc,
+                                                                                outJLIdxAcc,
+                                                                                outRayTimesAcc,
+                                                                                batchAcc,
+                                                                                castedMinStepSize,
+                                                                                castedConeAngle,
+                                                                                castedEps);
+                    }
+                } else {
+                    if (returnMidpoint) {
+                        launchGenerate<DeviceTag, false, false, true, scalar_t>(rayOrigins,
+                                                                                rayDirectionsAcc,
+                                                                                tMinAcc,
+                                                                                tMaxAcc,
+                                                                                outJOffsetsAcc,
+                                                                                outJIdxAcc,
+                                                                                outJLIdxAcc,
+                                                                                outRayTimesAcc,
+                                                                                batchAcc,
+                                                                                castedMinStepSize,
+                                                                                castedConeAngle,
+                                                                                castedEps);
+                    } else {
+                        launchGenerate<DeviceTag, false, false, false, scalar_t>(rayOrigins,
+                                                                                 rayDirectionsAcc,
+                                                                                 tMinAcc,
+                                                                                 tMaxAcc,
+                                                                                 outJOffsetsAcc,
+                                                                                 outJIdxAcc,
+                                                                                 outJLIdxAcc,
+                                                                                 outRayTimesAcc,
+                                                                                 batchAcc,
+                                                                                 castedMinStepSize,
+                                                                                 castedConeAngle,
+                                                                                 castedEps);
+                    }
+                }
             }
 
             if (returnMidpoint) {

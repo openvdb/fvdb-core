@@ -59,9 +59,9 @@ set(FVDB_CPP_FILES
 )
 
 set(FVDB_CU_FILES
-    fvdb/detail/io/SaveNanoVDB.cu
     fvdb/GridBatchData.cu
     fvdb/detail/GridBatchDataFactory.cu
+    fvdb/detail/io/SaveNanoVDB.cu
     fvdb/detail/ops/ActiveGridCoords.cu
     fvdb/detail/ops/ActiveVoxelsInBoundsMask.cu
     fvdb/detail/ops/BuildCoarseGridFromFine.cu
@@ -144,6 +144,7 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/SplatTrilinear.cu
     fvdb/detail/ops/VoxelToWorld.cu
     fvdb/detail/ops/Refine.cu
+    fvdb/detail/ops/ReinitializeSdf.cu
     fvdb/detail/ops/VolumeRender.cu
     fvdb/detail/ops/NeighborIndexes.cu
     fvdb/detail/ops/VoxelsAlongRays.cu
@@ -166,20 +167,13 @@ set_target_properties(
     POSITION_INDEPENDENT_CODE ON
     INTERFACE_POSITION_INDEPENDENT_CODE ON)
 
-message(STATUS "fvdb: TORCH_INCLUDE_DIRS: ${TORCH_INCLUDE_DIRS}")
-
 target_include_directories(fvdb PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
     $<BUILD_INTERFACE:${nanovdb_SOURCE_DIR}/nanovdb>
     $<BUILD_INTERFACE:${nvtx3_SOURCE_DIR}/include>
     $<BUILD_INTERFACE:${NANOVDB_EDITOR_INCLUDE_DIR}>
     $<INSTALL_INTERFACE:include>)
-foreach(_torch_inc_dir IN LISTS TORCH_INCLUDE_DIRS)
-    target_include_directories(fvdb SYSTEM PUBLIC
-        $<BUILD_INTERFACE:${_torch_inc_dir}>)
-endforeach()
 target_include_directories(fvdb PRIVATE
-    ${TORCH_SOURCE_INCLUDE_DIRS}
     ${tinyply_SOURCE_DIR}/source)
 
 # Needed by Torch for CUDA extensions
@@ -220,8 +214,9 @@ target_compile_options(fvdb PRIVATE
     >
     $<$<AND:$<BOOL:${FVDB_LINEINFO}>,$<COMPILE_LANGUAGE:CUDA>>:-lineinfo>)
 
-target_link_libraries(fvdb PRIVATE
-    ${TORCH_LIBRARIES} tinyply cutlass blosc::blosc ZLIB::ZLIB dispatch)
+target_link_libraries(fvdb
+    PUBLIC torch
+    PRIVATE tinyply cutlass blosc::blosc ZLIB::ZLIB dispatch)
 
 # ----------------------------------------------------------------------------
 # Precompiled headers (host C++ only)

@@ -1553,9 +1553,6 @@ class TestBasicOps(unittest.TestCase):
 
     @parameterized.expand(all_device_dtype_combos)
     def test_ray_implicit_intersection(self, device, dtype):
-        if dtype == torch.float16:
-            return  # TODO: Implement rayimplicit marching for half
-
         # Generate the SDF for a sphere on a grid
         N = 32
         sphere_rad = 0.35
@@ -1613,6 +1610,525 @@ class TestBasicOps(unittest.TestCase):
         # ps.register_point_cloud("cam_o", cam_o.cpu().numpy())
         # ps.register_point_cloud("hits", hit_pts.cpu().numpy())
         # ps.show()
+
+    @parameterized.expand(all_device_dtype_combos)
+    def test_ray_implicit_intersection_starts_inside_surface(self, device, dtype):
+        # Regression test: a ray whose origin is INSIDE the surface should
+        # report a hit at the EXIT crossing (where SDF flips back from
+        # negative to positive), not -1 and not the bracket-entry of the
+        # very first active voxel. This matches nanovdb::ZeroCrossing
+        # semantics, which seeds the sign reference from the first valid
+        # voxel and reports the first subsequent sign flip.
+        N = 32
+        sphere_rad = 0.35
+        ii, jj, kk = torch.meshgrid([torch.arange(N)] * 3, indexing="ij")
+        xx, yy, zz = (
+            ii.float() / (float(N) - 1) - 0.5,
+            jj.float() / (float(N) - 1) - 0.5,
+            kk.float() / (float(N) - 1) - 0.5,
+        )
+        sphere_sdf = torch.sqrt(xx**2 + yy**2 + zz**2) - sphere_rad
+
+        # Origin sits at the sphere center (in world coords this is
+        # (0.5, 0.5, 0.5) since voxel_sizes=1/N and origins=[0,0,0]) so the
+        # ray starts well inside the surface.
+        origin_world = torch.tensor([0.5, 0.5, 0.5], dtype=torch.float32)
+
+        # Six axis-aligned rays leaving the center should each hit the
+        # sphere surface at distance ~ sphere_rad.
+        directions = torch.tensor(
+            [
+                [1.0, 0.0, 0.0],
+                [-1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, -1.0, 0.0],
+                [0.0, 0.0, 1.0],
+                [0.0, 0.0, -1.0],
+            ],
+            dtype=torch.float32,
+        )
+        ray_o = origin_world.unsqueeze(0).repeat(directions.shape[0], 1)
+        ray_d = directions
+
+        sphere_sdf = sphere_sdf.to(device).to(dtype)
+        ray_o = ray_o.to(device).to(dtype)
+        ray_d = ray_d.to(device).to(dtype)
+
+        grid = GridBatch.from_dense(
+            1, [sphere_sdf.shape[i] for i in range(3)], [0] * 3, voxel_sizes=1.0 / N, origins=[0] * 3, device=device
+        )
+        sdf_p = grid.inject_from_dense_cminor(sphere_sdf.unsqueeze(-1).unsqueeze(0)).jdata.squeeze()
+
+        isect = grid.ray_implicit_intersection(
+            fvdb.JaggedTensor(ray_o), fvdb.JaggedTensor(ray_d), fvdb.JaggedTensor(sdf_p.squeeze())
+        ).jdata
+
+        # Every ray must report a hit (no -1).
+        self.assertTrue(torch.all(isect >= 0).item(), f"unexpected misses, isect={isect}")
+
+        # The hit point should sit on the sphere surface within a voxel of
+        # tolerance — bracket-entry precision is the worst case here.
+        hit_pts = ray_o + isect.unsqueeze(-1) * ray_d
+        sdf_samp = grid.sample_trilinear(fvdb.JaggedTensor(hit_pts), fvdb.JaggedTensor(sdf_p.unsqueeze(1))).jdata
+        voxel_diag = torch.norm(grid.voxel_sizes[0]).item()
+        self.assertLess(abs(sdf_samp).max().item(), voxel_diag)
+
+    @parameterized.expand(all_device_dtype_combos)
+    def test_ray_implicit_intersection_two_disjoint_regions(self, device, dtype):
+        # Regression test: when a ray crosses two disjoint narrow-band
+        # regions (here two separate spheres along +x), the reported hit
+        # must lie on the surface of the FIRST region. Before band
+        # continuity was tracked the algorithm could linearly interpolate
+        # across the empty gap between bands and produce a hit time inside
+        # that gap (i.e. nowhere near either surface).
+        N = 64
+        sphere_rad = 0.07
+        ii, jj, kk = torch.meshgrid([torch.arange(N)] * 3, indexing="ij")
+        xx, yy, zz = (
+            ii.float() / (float(N) - 1) - 0.5,
+            jj.float() / (float(N) - 1) - 0.5,
+            kk.float() / (float(N) - 1) - 0.5,
+        )
+        # Two spheres, centered at (-0.25, 0, 0) and (+0.25, 0, 0) in
+        # normalized [-0.5, 0.5] coords (so world coords (0.25, 0.5, 0.5)
+        # and (0.75, 0.5, 0.5)). SDF is the min of the two per-sphere SDFs.
+        sdf_a = torch.sqrt((xx + 0.25) ** 2 + yy**2 + zz**2) - sphere_rad
+        sdf_b = torch.sqrt((xx - 0.25) ** 2 + yy**2 + zz**2) - sphere_rad
+        scene_sdf = torch.minimum(sdf_a, sdf_b)
+
+        # Ray starts at world x = -1 (well outside the bbox), aimed in +x.
+        # World y, z = 0.5 to pass through both sphere centers.
+        ray_o = torch.tensor([[-1.0, 0.5, 0.5]], dtype=torch.float32)
+        ray_d = torch.tensor([[1.0, 0.0, 0.0]], dtype=torch.float32)
+
+        scene_sdf = scene_sdf.to(device).to(dtype)
+        ray_o = ray_o.to(device).to(dtype)
+        ray_d = ray_d.to(device).to(dtype)
+
+        grid = GridBatch.from_dense(
+            1, [scene_sdf.shape[i] for i in range(3)], [0] * 3, voxel_sizes=1.0 / N, origins=[0] * 3, device=device
+        )
+        sdf_p = grid.inject_from_dense_cminor(scene_sdf.unsqueeze(-1).unsqueeze(0)).jdata.squeeze()
+
+        isect = grid.ray_implicit_intersection(
+            fvdb.JaggedTensor(ray_o), fvdb.JaggedTensor(ray_d), fvdb.JaggedTensor(sdf_p.squeeze())
+        ).jdata
+
+        self.assertTrue(torch.all(isect >= 0).item(), f"unexpected miss, isect={isect}")
+
+        # Expected first-surface entry x-coord (world) ~ 0.25 - sphere_rad =
+        # 0.18. Hit time along this ray equals the world-space distance
+        # because |ray_d| == 1. The reported t must therefore be near
+        # ray_o.x + 0.25 - sphere_rad - ray_o.x = 1 + 0.25 - 0.07 = 1.18,
+        # i.e. far away from the gap region between the two spheres
+        # (around x=0.5, t=1.5). One voxel of slack covers bracket-entry
+        # precision.
+        expected_t = (0.25 - sphere_rad) - (-1.0)
+        gap_t = 0.5 - (-1.0)
+        voxel_size = 1.0 / N
+        self.assertLess(abs(isect.item() - expected_t), 2.0 * voxel_size)
+        self.assertGreater(abs(isect.item() - gap_t), 5.0 * voxel_size)
+
+    @parameterized.expand(all_device_dtype_combos)
+    def test_ray_implicit_intersection_sign_of_zero(self, device, dtype):
+        # Regression test (cf. nanovdb HDDA's "+-0" issue exercised in
+        # TestNanoVDB.cc:1520-1552 and the paired-direction cases in
+        # OpenVDB's TestLevelSetRayIntersector.cc:71-215). A ray with
+        # direction (1, +0, +0) must produce the exact same hit time as
+        # one with (1, -0, -0) (and likewise for y, z and negative
+        # directions). This guards against sign-of-zero divergence in
+        # the HDDA initialisation, where an unhandled `-0` axis would
+        # produce a different stepping schedule from `+0`.
+        N = 32
+        sphere_rad = 0.3
+        voxel_size = 1.0 / N
+        sphere_center = torch.tensor([0.5, 0.5, 0.5])
+
+        ii, jj, kk = torch.meshgrid([torch.arange(N, dtype=torch.float)] * 3, indexing="ij")
+        xx = ii / N - sphere_center[0]
+        yy = jj / N - sphere_center[1]
+        zz = kk / N - sphere_center[2]
+        sphere_sdf = (torch.sqrt(xx**2 + yy**2 + zz**2) - sphere_rad).to(device).to(dtype)
+
+        grid = GridBatch.from_dense(1, [N, N, N], [0, 0, 0], voxel_sizes=voxel_size, origins=[0, 0, 0], device=device)
+        sdf_p = grid.inject_from_dense_cminor(sphere_sdf.unsqueeze(-1).unsqueeze(0)).jdata.squeeze()
+
+        # For each axis-aligned principal direction, the two listed
+        # directions differ ONLY by the sign of the zeroed components.
+        paired_dirs = [
+            ([1.0, 0.0, 0.0], [1.0, -0.0, -0.0]),
+            ([-1.0, 0.0, 0.0], [-1.0, -0.0, -0.0]),
+            ([0.0, 1.0, 0.0], [-0.0, 1.0, -0.0]),
+            ([0.0, -1.0, 0.0], [-0.0, -1.0, -0.0]),
+            ([0.0, 0.0, 1.0], [-0.0, -0.0, 1.0]),
+            ([0.0, 0.0, -1.0], [-0.0, -0.0, -1.0]),
+        ]
+
+        # Origin at the sphere centre so every axis-aligned ray must hit.
+        ray_o = sphere_center.unsqueeze(0).to(device).to(dtype)
+
+        for d_pos, d_neg in paired_dirs:
+            d_pos_t = torch.tensor([d_pos], dtype=torch.float32).to(device).to(dtype)
+            d_neg_t = torch.tensor([d_neg], dtype=torch.float32).to(device).to(dtype)
+
+            isect_pos = grid.ray_implicit_intersection(
+                fvdb.JaggedTensor(ray_o), fvdb.JaggedTensor(d_pos_t), fvdb.JaggedTensor(sdf_p)
+            ).jdata
+            isect_neg = grid.ray_implicit_intersection(
+                fvdb.JaggedTensor(ray_o), fvdb.JaggedTensor(d_neg_t), fvdb.JaggedTensor(sdf_p)
+            ).jdata
+
+            self.assertTrue((isect_pos >= 0).all().item(), f"+0 dir miss: {d_pos}")
+            self.assertTrue((isect_neg >= 0).all().item(), f"-0 dir miss: {d_neg}")
+            self.assertTrue(
+                torch.equal(isect_pos, isect_neg),
+                f"sign-of-zero divergence: dir {d_pos} vs {d_neg}, "
+                f"isect {isect_pos.tolist()} vs {isect_neg.tolist()}",
+            )
+
+    @parameterized.expand(all_device_dtype_combos)
+    def test_ray_implicit_intersection_axis_aligned_analytic(self, device, dtype):
+        # Adapted from TestLevelSetRayIntersector.cc:43-247: axis-aligned
+        # rays through the sphere centre should report a hit time within
+        # a voxel diagonal of the analytic ray-sphere intersection root.
+        # All six principal directions are exercised, which also catches
+        # negative-axis HDDA back-stepping bugs (the "Jan@GitHub" case
+        # in TestVolumeRayIntersector.cc:213-232).
+        N = 64 if device == "cuda" else 32
+        sphere_rad = 0.3
+        voxel_size = 1.0 / N
+        sphere_center = torch.tensor([0.5, 0.5, 0.5])
+
+        ii, jj, kk = torch.meshgrid([torch.arange(N, dtype=torch.float)] * 3, indexing="ij")
+        xx = ii / N - sphere_center[0]
+        yy = jj / N - sphere_center[1]
+        zz = kk / N - sphere_center[2]
+        sphere_sdf = (torch.sqrt(xx**2 + yy**2 + zz**2) - sphere_rad).to(device).to(dtype)
+
+        grid = GridBatch.from_dense(1, [N, N, N], [0, 0, 0], voxel_sizes=voxel_size, origins=[0, 0, 0], device=device)
+        sdf_p = grid.inject_from_dense_cminor(sphere_sdf.unsqueeze(-1).unsqueeze(0)).jdata.squeeze()
+
+        # Ray origin sits 0.5 world units outside the bbox along the
+        # ±axis, aimed at the sphere centre. Analytic hit time is the
+        # distance from origin to the nearest sphere surface point.
+        cases = [
+            (torch.tensor([-0.5, 0.5, 0.5]), torch.tensor([1.0, 0.0, 0.0])),
+            (torch.tensor([1.5, 0.5, 0.5]), torch.tensor([-1.0, 0.0, 0.0])),
+            (torch.tensor([0.5, -0.5, 0.5]), torch.tensor([0.0, 1.0, 0.0])),
+            (torch.tensor([0.5, 1.5, 0.5]), torch.tensor([0.0, -1.0, 0.0])),
+            (torch.tensor([0.5, 0.5, -0.5]), torch.tensor([0.0, 0.0, 1.0])),
+            (torch.tensor([0.5, 0.5, 1.5]), torch.tensor([0.0, 0.0, -1.0])),
+        ]
+        expected_t = 1.0 - sphere_rad
+        voxel_diag = (3.0**0.5) * voxel_size
+
+        for ray_o, ray_d in cases:
+            ray_o_t = ray_o.unsqueeze(0).to(device).to(dtype)
+            ray_d_t = ray_d.unsqueeze(0).to(device).to(dtype)
+            isect = grid.ray_implicit_intersection(
+                fvdb.JaggedTensor(ray_o_t), fvdb.JaggedTensor(ray_d_t), fvdb.JaggedTensor(sdf_p)
+            ).jdata
+            self.assertTrue(
+                (isect >= 0).all().item(),
+                f"miss: o={ray_o.tolist()} d={ray_d.tolist()}",
+            )
+            err = abs(isect.item() - expected_t)
+            self.assertLess(
+                err,
+                voxel_diag,
+                f"hit-time {isect.item()} expected {expected_t} (err {err}), voxel_diag {voxel_diag} "
+                f"for o={ray_o.tolist()} d={ray_d.tolist()}",
+            )
+
+    @parameterized.expand(all_device_dtype_combos)
+    def test_ray_implicit_intersection_diagonal_analytic(self, device, dtype):
+        # Adapted from TestLevelSetRayIntersector.cc:249-278: a diagonal
+        # ray hitting the sphere surface should report a hit time within
+        # a voxel diagonal of the analytic root. Unlike the axis-aligned
+        # cases this exercises HDDA stepping along all three axes
+        # simultaneously.
+        N = 64 if device == "cuda" else 32
+        sphere_rad = 0.3
+        voxel_size = 1.0 / N
+        sphere_center = torch.tensor([0.5, 0.5, 0.5])
+
+        ii, jj, kk = torch.meshgrid([torch.arange(N, dtype=torch.float)] * 3, indexing="ij")
+        xx = ii / N - sphere_center[0]
+        yy = jj / N - sphere_center[1]
+        zz = kk / N - sphere_center[2]
+        sphere_sdf = (torch.sqrt(xx**2 + yy**2 + zz**2) - sphere_rad).to(device).to(dtype)
+
+        grid = GridBatch.from_dense(1, [N, N, N], [0, 0, 0], voxel_sizes=voxel_size, origins=[0, 0, 0], device=device)
+        sdf_p = grid.inject_from_dense_cminor(sphere_sdf.unsqueeze(-1).unsqueeze(0)).jdata.squeeze()
+
+        # Ray from a corner of the bbox aimed at the sphere centre.
+        ray_o_world = torch.tensor([-0.2, -0.2, -0.2])
+        diff = sphere_center - ray_o_world
+        ray_d_world = diff / diff.norm()  # unit-length toward centre
+        analytic_t0 = diff.norm().item() - sphere_rad
+
+        ray_o_t = ray_o_world.unsqueeze(0).to(device).to(dtype)
+        ray_d_t = ray_d_world.unsqueeze(0).to(device).to(dtype)
+        isect = grid.ray_implicit_intersection(
+            fvdb.JaggedTensor(ray_o_t), fvdb.JaggedTensor(ray_d_t), fvdb.JaggedTensor(sdf_p)
+        ).jdata
+
+        voxel_diag = (3.0**0.5) * voxel_size
+        self.assertTrue((isect >= 0).all().item(), f"miss: o={ray_o_world.tolist()} d={ray_d_world.tolist()}")
+        err = abs(isect.item() - analytic_t0)
+        self.assertLess(
+            err,
+            voxel_diag,
+            f"hit-time {isect.item()} expected {analytic_t0} (err {err}), voxel_diag {voxel_diag}",
+        )
+
+    @parameterized.expand(all_device_dtype_combos)
+    def test_ray_implicit_intersection_explicit_misses(self, device, dtype):
+        # Adapted from TestLevelSetRayIntersector.cc:311-389
+        # (testMissedIntersections): rays that miss the surface must
+        # return -1, both for rays that completely miss the grid bbox
+        # AND for rays that traverse the bbox but never cross the zero
+        # level set. The existing fvdb ray_implicit_intersection tests
+        # only assert positive hits; the miss path was unguarded.
+        N = 32
+        sphere_rad = 0.3
+        voxel_size = 1.0 / N
+        sphere_center = torch.tensor([0.5, 0.5, 0.5])
+
+        ii, jj, kk = torch.meshgrid([torch.arange(N, dtype=torch.float)] * 3, indexing="ij")
+        xx = ii / N - sphere_center[0]
+        yy = jj / N - sphere_center[1]
+        zz = kk / N - sphere_center[2]
+        sphere_sdf = (torch.sqrt(xx**2 + yy**2 + zz**2) - sphere_rad).to(device).to(dtype)
+
+        grid = GridBatch.from_dense(1, [N, N, N], [0, 0, 0], voxel_sizes=voxel_size, origins=[0, 0, 0], device=device)
+        sdf_p = grid.inject_from_dense_cminor(sphere_sdf.unsqueeze(-1).unsqueeze(0)).jdata.squeeze()
+
+        miss_cases = [
+            # Ray bypasses the bbox entirely (y stays at 5.0, well outside [0, 1]).
+            (torch.tensor([-0.5, 5.0, 0.5]), torch.tensor([1.0, 0.0, 0.0])),
+            # Ray clips a corner of the bbox at (y=0.05, z=0.05); along
+            # this line the SDF stays well above zero (min distance to
+            # sphere centre ~0.636, so SDF >= 0.336 throughout).
+            (torch.tensor([-0.5, 0.05, 0.05]), torch.tensor([1.0, 0.0, 0.0])),
+            # Ray points away from the bbox and never enters it.
+            (torch.tensor([-0.5, -0.5, -0.5]), torch.tensor([0.0, 0.0, -1.0])),
+            # Ray traverses the bbox along a face-aligned path that
+            # grazes outside the sphere on +y.
+            (torch.tensor([-0.5, 0.95, 0.5]), torch.tensor([1.0, 0.0, 0.0])),
+        ]
+        for ray_o, ray_d in miss_cases:
+            ray_o_t = ray_o.unsqueeze(0).to(device).to(dtype)
+            ray_d_t = ray_d.unsqueeze(0).to(device).to(dtype)
+            isect = grid.ray_implicit_intersection(
+                fvdb.JaggedTensor(ray_o_t), fvdb.JaggedTensor(ray_d_t), fvdb.JaggedTensor(sdf_p)
+            ).jdata
+            self.assertEqual(
+                isect.item(),
+                -1.0,
+                f"expected miss (-1), got {isect.item()} for o={ray_o.tolist()} d={ray_d.tolist()}",
+            )
+
+    @parameterized.expand(all_device_dtype_combos)
+    def test_ray_implicit_intersection_non_trivial_transform(self, device, dtype):
+        # Adapted from TestLevelSetRayIntersector.cc:99-216 (which uses
+        # `s = 0.5, 1.5, 1.0` voxel sizes and sphere centres at
+        # (20, 0, 0), (0, 20, 0), (0, 0, 20)). Every existing fvdb
+        # ray_implicit_intersection test runs with `voxel_sizes=1/N,
+        # origins=[0,0,0]`, leaving `transform.applyToRay` (in
+        # RayImplicitIntersection.cu) unexercised for non-identity
+        # transforms.
+        N = 32
+        voxel_size = 0.25
+        grid_origin = (10.0, 20.0, 30.0)
+        sphere_rad = 2.0
+
+        # Sphere centred in world space at the centre of the grid bbox.
+        sphere_center = torch.tensor(
+            [
+                grid_origin[0] + N * voxel_size / 2,
+                grid_origin[1] + N * voxel_size / 2,
+                grid_origin[2] + N * voxel_size / 2,
+            ]
+        )
+
+        ii, jj, kk = torch.meshgrid([torch.arange(N, dtype=torch.float)] * 3, indexing="ij")
+        xx = ii * voxel_size + grid_origin[0] - sphere_center[0]
+        yy = jj * voxel_size + grid_origin[1] - sphere_center[1]
+        zz = kk * voxel_size + grid_origin[2] - sphere_center[2]
+        sphere_sdf = (torch.sqrt(xx**2 + yy**2 + zz**2) - sphere_rad).to(device).to(dtype)
+
+        grid = GridBatch.from_dense(
+            1, [N, N, N], [0, 0, 0], voxel_sizes=voxel_size, origins=list(grid_origin), device=device
+        )
+        sdf_p = grid.inject_from_dense_cminor(sphere_sdf.unsqueeze(-1).unsqueeze(0)).jdata.squeeze()
+
+        # Ray fired along +x toward the sphere centre, originating
+        # 1 world unit before the bbox.
+        ray_o_world = torch.tensor([grid_origin[0] - 1.0, sphere_center[1].item(), sphere_center[2].item()])
+        ray_d_world = torch.tensor([1.0, 0.0, 0.0])
+        ray_o_t = ray_o_world.unsqueeze(0).to(device).to(dtype)
+        ray_d_t = ray_d_world.unsqueeze(0).to(device).to(dtype)
+
+        isect = grid.ray_implicit_intersection(
+            fvdb.JaggedTensor(ray_o_t), fvdb.JaggedTensor(ray_d_t), fvdb.JaggedTensor(sdf_p)
+        ).jdata
+
+        expected_t = sphere_center[0].item() - sphere_rad - ray_o_world[0].item()
+        voxel_diag = (3.0**0.5) * voxel_size
+        self.assertTrue((isect >= 0).all().item())
+        self.assertLess(
+            abs(isect.item() - expected_t),
+            voxel_diag,
+            f"hit-time {isect.item()} expected {expected_t}, voxel_diag {voxel_diag}",
+        )
+
+    @parameterized.expand(all_device_dtype_combos)
+    def test_ray_implicit_intersection_high_resolution_sweep(self, device, dtype):
+        # Stress test adapted from TestLevelSetRayIntersector.cc:280-308:
+        # fire a 2-D grid of axis-aligned rays at an SDF sphere and
+        # verify every reported hit lands on the sphere surface within
+        # one voxel diagonal. This exercises the linear-interpolation
+        # branch (lines 121-136 of RayImplicitIntersection.cu) over
+        # thousands of rays — a uniform half-voxel bias would slip
+        # past the existing 3 tests but get caught here.
+        if dtype == torch.float16:
+            self.skipTest("fp16 sweep precision insufficient for voxel-diagonal tolerance")
+        N = 64 if device == "cuda" else 32
+        width = 64 if device == "cuda" else 32
+        sphere_rad = 0.3
+        voxel_size = 1.0 / N
+        sphere_center = torch.tensor([0.5, 0.5, 0.5])
+
+        ii, jj, kk = torch.meshgrid([torch.arange(N, dtype=torch.float)] * 3, indexing="ij")
+        xx = ii / N - sphere_center[0]
+        yy = jj / N - sphere_center[1]
+        zz = kk / N - sphere_center[2]
+        sphere_sdf = (torch.sqrt(xx**2 + yy**2 + zz**2) - sphere_rad).to(device).to(dtype)
+
+        grid = GridBatch.from_dense(1, [N, N, N], [0, 0, 0], voxel_sizes=voxel_size, origins=[0, 0, 0], device=device)
+        sdf_p = grid.inject_from_dense_cminor(sphere_sdf.unsqueeze(-1).unsqueeze(0)).jdata.squeeze()
+
+        # Sweep ray origins on a 2-D grid in the xy plane at z = -0.5,
+        # all firing along +z. Origins span the full bbox in xy plus a
+        # 0.05 world-unit margin so the rays at the edges of the sweep
+        # also cleanly miss.
+        margin = 0.05
+        coords = torch.linspace(-margin, 1.0 + margin, width)
+        gx, gy = torch.meshgrid(coords, coords, indexing="ij")
+        rays_o = torch.stack([gx.flatten(), gy.flatten(), torch.full((width * width,), -0.5)], dim=-1)
+        rays_d = torch.tensor([0.0, 0.0, 1.0]).expand(width * width, 3).contiguous()
+        rays_o_t = rays_o.to(device).to(dtype)
+        rays_d_t = rays_d.to(device).to(dtype)
+
+        isect = grid.ray_implicit_intersection(
+            fvdb.JaggedTensor(rays_o_t), fvdb.JaggedTensor(rays_d_t), fvdb.JaggedTensor(sdf_p)
+        ).jdata
+        hit_mask = isect >= 0.0
+
+        # The sphere covers a known fraction of the swept square. The
+        # area of the analytic shadow disk (radius 0.3) divided by the
+        # window area (1.1 x 1.1) is ~0.234. Require at least 70% of
+        # that as a sanity floor.
+        sphere_xy_area_frac = 3.14159265 * sphere_rad**2 / ((1.0 + 2 * margin) ** 2)
+        expected_hits_low = int(0.7 * sphere_xy_area_frac * width**2)
+        self.assertGreater(
+            hit_mask.sum().item(),
+            expected_hits_low,
+            f"only {hit_mask.sum().item()} hits, expected at least {expected_hits_low}",
+        )
+
+        # Each hit point must lie on the sphere surface within a voxel
+        # diagonal of slack (matches the bracket-entry precision the
+        # interp branch can guarantee).
+        o_hits = rays_o_t[hit_mask]
+        d_hits = rays_d_t[hit_mask]
+        t_hits = isect[hit_mask]
+        hit_pts = o_hits + t_hits.unsqueeze(-1) * d_hits
+        # Promote to fp32 for the geometric distance calculation so
+        # this check stays meaningful for fp16 ray data (skipped above
+        # but kept robust here).
+        sc_f32 = sphere_center.to(device).to(torch.float32)
+        hit_pts_f32 = hit_pts.to(torch.float32)
+        hit_dists = (hit_pts_f32 - sc_f32.unsqueeze(0)).norm(dim=-1)
+        position_err = (hit_dists - sphere_rad).abs()
+        voxel_diag = (3.0**0.5) * voxel_size
+        max_err = position_err.max().item()
+        self.assertLess(
+            max_err,
+            voxel_diag,
+            f"max sphere-surface position err {max_err} exceeds voxel diag {voxel_diag} "
+            f"over {hit_mask.sum().item()} hits",
+        )
+
+    @parameterized.expand(all_device_dtype_combos)
+    def test_ray_implicit_intersection_single_voxel_bracket_entry(self, device, dtype):
+        # Pin down the linear-interpolation branch on
+        # RayImplicitIntersection.cu:121-136.
+        #
+        # fvdb stores values at primal voxel positions (world coord
+        # i * voxel_size + origin). The trilinear sampler treats those
+        # as 8 corners of an interpolation cube around a query point
+        # (uses primalTransform; see SampleTrilinear.cu:43 + the
+        # `xyz.floor()` in TrilinearStencil.h). The ray-marching
+        # kernels — including this one — use dualTransform (see
+        # RayImplicitIntersection.cu:79), which shifts the ray by half
+        # a voxel in voxel space so that the HDDA's voxel-space cells
+        # [i, i+1] map back to world-space cells of width voxel_size
+        # CENTERED at the primal voxel position. Equivalently: a value
+        # stored at primal voxel `i` is the cell-centered sample for
+        # the cell that spans world x in [(i-0.5)*w + origin,
+        # (i+0.5)*w + origin]. These are the same world positions
+        # described two different ways; the kernel's linear interp
+        # between two adjacent cell centers equals the linear interp
+        # between two adjacent corner samples spaced one voxel apart.
+        #
+        # Test setup: SDF = +1 for i < 4, -1 for i >= 4, voxel_size=1,
+        # origin=0. The two bracketing samples sit at world x=3 (+1)
+        # and x=4 (-1). A symmetric +1/-1 step puts the linearly
+        # interpolated zero at world x=3.5 exactly, so a ray from
+        # world x=-1 along +x reports hit time t=4.5.
+        N = 8
+        voxel_size = 1.0
+        sdf_dense = torch.full((N, N, N), 1.0)
+        sdf_dense[4:, :, :] = -1.0
+        sdf_dense = sdf_dense.to(device).to(dtype)
+
+        grid = GridBatch.from_dense(1, [N, N, N], [0, 0, 0], voxel_sizes=voxel_size, origins=[0, 0, 0], device=device)
+        sdf_p = grid.inject_from_dense_cminor(sdf_dense.unsqueeze(-1).unsqueeze(0)).jdata.squeeze()
+
+        ray_o = torch.tensor([[-1.0, 4.0, 4.0]]).to(device).to(dtype)
+        ray_d = torch.tensor([[1.0, 0.0, 0.0]]).to(device).to(dtype)
+        isect = grid.ray_implicit_intersection(
+            fvdb.JaggedTensor(ray_o), fvdb.JaggedTensor(ray_d), fvdb.JaggedTensor(sdf_p)
+        ).jdata
+        self.assertTrue((isect >= 0).all().item())
+        # Quarter-voxel tolerance covers numerical noise around the
+        # exact analytic answer of t=4.5.
+        self.assertLess(
+            abs(isect.item() - 4.5),
+            0.25 * voxel_size,
+            f"hit-time {isect.item()} expected ~4.5 (linear-interp zero crossing) within quarter voxel",
+        )
+
+    @parameterized.expand(["cpu", "cuda"])
+    def test_ray_implicit_intersection_wrong_scalar_count_errors(self, device):
+        # ray_implicit_intersection iterates leaf voxels (HDDALeafVoxelIterator)
+        # and indexes gridScalars by getValue(ijk)-1, which is only valid with
+        # exactly one scalar per active voxel. A mismatched count must raise an
+        # error that points at the iterator contract rather than a generic
+        # shape complaint, so a caller with per-active-value data knows to use
+        # HDDAActiveValueIterator instead.
+        N = 8
+        grid = GridBatch.from_dense(1, [N, N, N], [0, 0, 0], voxel_sizes=1.0 / N, origins=[0, 0, 0], device=device)
+        num_voxels = int(grid.total_voxels)
+        bad_scalars = torch.zeros(num_voxels - 1, device=device, dtype=torch.float32)  # one too few
+        ray_o = torch.tensor([[-1.0, 0.5, 0.5]], device=device, dtype=torch.float32)
+        ray_d = torch.tensor([[1.0, 0.0, 0.0]], device=device, dtype=torch.float32)
+        with self.assertRaisesRegex(RuntimeError, "HDDALeafVoxelIterator"):
+            grid.ray_implicit_intersection(
+                fvdb.JaggedTensor(ray_o), fvdb.JaggedTensor(ray_d), fvdb.JaggedTensor(bad_scalars)
+            )
 
     @expand_tests(list(itertools.product(["cpu", "cuda"], [torch.float32, torch.float64])))
     def test_marching_cubes(self, device, dtype):

@@ -93,6 +93,14 @@ from ._meshing import (
     marching_cubes_single,
 )
 
+# Signed distance fields
+from ._sdf import (
+    reinitialize_sdf_batch,
+    reinitialize_sdf_single,
+    retopologize_sdf_batch,
+    retopologize_sdf_single,
+)
+
 # Pooling / refinement
 from ._pooling import (
     avg_pool_batch,
@@ -260,6 +268,11 @@ __all__ = [
     "integrate_tsdf_single",
     "integrate_tsdf_with_features_batch",
     "integrate_tsdf_with_features_single",
+    # Signed distance fields
+    "reinitialize_sdf_batch",
+    "reinitialize_sdf_single",
+    "retopologize_sdf_batch",
+    "retopologize_sdf_single",
     # Topology
     "clip_batch",
     "clip_single",

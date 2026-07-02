@@ -56,7 +56,7 @@ struct SphericalHarmonincsBackwardTestFixture : public ::testing::TestWithParam<
         K         = (shDegreeToUse + 1) * (shDegreeToUse + 1);
         shNCoeffs = torch::full({numGaussians, K - 1, numChannels}, 1.0f, floatOptsCUDA);
 
-        radii = torch::full({numCameras, numGaussians}, 1, intOptsCUDA);
+        radii = torch::full({numCameras, numGaussians, 2}, 1, intOptsCUDA);
 
         dLossDRenderQuantities =
             torch::full({numCameras, numGaussians, numChannels}, 1.0f, floatOptsCUDA);
@@ -72,10 +72,11 @@ struct SphericalHarmonincsBackwardTestFixture : public ::testing::TestWithParam<
     void
     setHalfOfRadiiToZero() {
         radii         = radii.cpu();
-        auto radiiAcc = radii.accessor<int, 2>();
+        auto radiiAcc = radii.accessor<int, 3>();
         for (int64_t i = 0; i < radii.size(0); ++i) {
             for (int64_t j = 0; j < radii.size(1); ++j) {
-                radiiAcc[i][j] = j % 2;
+                radiiAcc[i][j][0] = j % 2;
+                radiiAcc[i][j][1] = j % 2;
             }
         }
         const auto intOptsCUDA = fvdb::test::tensorOpts<int>(torch::kCUDA);

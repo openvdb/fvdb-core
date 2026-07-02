@@ -63,7 +63,7 @@ if(FVDB_BUILD_TESTS OR FVDB_BUILD_BENCHMARKS)
 
     target_link_libraries(dispatch_examples PUBLIC
         dispatch
-        ${TORCH_LIBRARIES}
+        torch
     )
 
     target_compile_options(dispatch_examples PRIVATE
@@ -118,13 +118,18 @@ if(FVDB_BUILD_TESTS)
 
         target_include_directories(${CMAKE_TEST_NAME}_obj PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/tests
-            $<TARGET_PROPERTY:dispatch,INTERFACE_INCLUDE_DIRECTORIES>
-            $<TARGET_PROPERTY:dispatch_examples,INTERFACE_INCLUDE_DIRECTORIES>
-            $<TARGET_PROPERTY:GTest::gtest,INTERFACE_INCLUDE_DIRECTORIES>
-            $<TARGET_PROPERTY:GTest::gtest_main,INTERFACE_INCLUDE_DIRECTORIES>
-            ${TORCH_INCLUDE_DIRS}
             ${CUDAToolkit_INCLUDE_DIRS}
             ${CUDAToolkit_INCLUDE_DIRS}/cccl
+        )
+
+        # Propagate usage requirements (include dirs, defines, SYSTEM marker)
+        # from linked targets into the OBJECT library's compilation. Linking an
+        # OBJECT lib does not actually link — only interface properties flow.
+        target_link_libraries(${CMAKE_TEST_NAME}_obj PRIVATE
+            dispatch
+            dispatch_examples
+            GTest::gtest
+            GTest::gtest_main
         )
 
         target_compile_options(${CMAKE_TEST_NAME}_obj PRIVATE
@@ -159,7 +164,6 @@ if(FVDB_BUILD_TESTS)
         target_link_libraries(${CMAKE_TEST_NAME}
             dispatch
             dispatch_examples
-            ${TORCH_LIBRARIES}
             GTest::gtest
             GTest::gtest_main
             $<TARGET_NAME_IF_EXISTS:conda_env>

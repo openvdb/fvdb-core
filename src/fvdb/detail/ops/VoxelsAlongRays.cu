@@ -58,7 +58,7 @@ voxelsAlongRaysCallback(int32_t bidx,
 
     fvdb::JOffsetsType numVox         = 0;
     const fvdb::JOffsetsType startIdx = outJOffsets[rayIdx];
-    for (auto it = HDDAVoxelIterator<decltype(primalAcc), ScalarType>(rayVox, primalAcc);
+    for (auto it = HDDAActiveValueIterator<decltype(primalAcc), ScalarType>(rayVox, primalAcc);
          it.isValid();
          ++it) {
         const ScalarType t0 = it->second.t0, t1 = it->second.t1;
@@ -144,7 +144,7 @@ countVoxelsAlongRaysCallback(int32_t bidx,
     }
     int32_t numVox = 0;
     nanovdb::Coord lastIjk;
-    for (auto it = HDDAVoxelIterator<decltype(primalAcc), ScalarType>(rayVox, primalAcc);
+    for (auto it = HDDAActiveValueIterator<decltype(primalAcc), ScalarType>(rayVox, primalAcc);
          it.isValid();
          ++it) {
         const ScalarType t0 = it->second.t0, t1 = it->second.t1;

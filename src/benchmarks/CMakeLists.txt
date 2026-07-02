@@ -40,7 +40,6 @@ function(ConfigureDispatchBench CMAKE_BENCH_NAME)
     target_link_libraries(${CMAKE_BENCH_NAME}
         dispatch
         fvdb
-        ${TORCH_LIBRARIES}
         benchmark::benchmark_main
         $<TARGET_NAME_IF_EXISTS:conda_env>
     )
@@ -98,7 +97,6 @@ function(ConfigureBench CMAKE_BENCH_NAME)
     )
     target_link_libraries(${CMAKE_BENCH_NAME}
         fvdb
-        ${TORCH_LIBRARIES}
         benchmark::benchmark_main
         $<TARGET_NAME_IF_EXISTS:conda_env>
     )

@@ -34,6 +34,7 @@ import numpy as np
 import torch
 
 from . import _fvdb_cpp, _parse_device_string
+from .enums import SmoothingMode
 from .jagged_tensor import JaggedTensor
 from .types import DeviceIdentifier, GridBatchIndex, NumericMaxRank1, NumericMaxRank2
 
@@ -1029,6 +1030,84 @@ class GridBatch:
 
         return functional.marching_cubes_batch(self, field, level)
 
+    def reinitialize_sdf(
+        self,
+        field: JaggedTensor,
+        band: int = 3,
+        smooth: int = 0,
+        order: int = 3,
+        smoothing: SmoothingMode = SmoothingMode.MEAN_CURVATURE,
+        redistance_iters: int = -1,
+    ) -> JaggedTensor:
+        """Re-initialize a signed per-voxel field into an SDF on this grid batch (topology unchanged).
+
+        Redistances ``field`` to ``|grad phi| = 1`` (TVD-RK Godunov eikonal solve with a frozen
+        Peng sign), then optionally de-staircases it with curvature-based smoothing.
+
+        Args:
+            field (JaggedTensor): Per-voxel signed field values.
+            band (int): Narrow-band half-width in voxels (clamps the field to ``[-band*vx, band*vx]``).
+            smooth (int): Number of smoothing passes (``0`` disables smoothing).
+            order (int): TVD-RK order, one of ``1``, ``2``, or ``3``.
+            smoothing (SmoothingMode): Which Laplacian flow each smoothing pass applies --
+                :attr:`~fvdb.SmoothingMode.MEAN_CURVATURE` (default) or
+                :attr:`~fvdb.SmoothingMode.TAUBIN` (volume-preserving). Only used when ``smooth > 0``.
+            redistance_iters (int): Number of redistancing sweeps; ``<= 0`` uses the default.
+
+        Returns:
+            sdf (JaggedTensor): The re-initialized SDF, same per-voxel ordering as ``field``.
+
+        .. seealso:: :meth:`Grid.reinitialize_sdf`
+        """
+        from . import functional
+
+        return functional.reinitialize_sdf_batch(self, field, band, smooth, order, smoothing, redistance_iters)
+
+    def retopologize_sdf(
+        self,
+        field: JaggedTensor,
+        band: int = 3,
+        smooth: int = 0,
+        order: int = 3,
+        smoothing: SmoothingMode = SmoothingMode.MEAN_CURVATURE,
+        redistance_iters: int = -1,
+        pad: bool = True,
+        prune: bool = True,
+    ) -> tuple["GridBatch", JaggedTensor]:
+        """Retopologize a signed field into a clean narrow-band SDF on a (possibly pruned) grid batch.
+
+        If ``pad`` is ``True`` the grid is first dilated by ``band`` voxels so the redistance has
+        room to build a full-width band, then :meth:`reinitialize_sdf` is run, and finally, if
+        ``prune`` is ``True``, the grid is pruned to the voxels strictly inside the band
+        (``|phi| < band*vx*0.999``).
+
+        Args:
+            field (JaggedTensor): Per-voxel signed field values.
+            band (int): Narrow-band half-width in voxels.
+            smooth (int): Number of smoothing passes (``0`` disables smoothing).
+            order (int): TVD-RK order, one of ``1``, ``2``, or ``3``.
+            smoothing (SmoothingMode): Which Laplacian flow each smoothing pass applies --
+                :attr:`~fvdb.SmoothingMode.MEAN_CURVATURE` (default) or
+                :attr:`~fvdb.SmoothingMode.TAUBIN` (volume-preserving). Only used when ``smooth > 0``.
+            redistance_iters (int): Number of redistancing sweeps; ``<= 0`` uses the default.
+            pad (bool): If ``True`` (default) dilate by ``band`` first so the output band is a full
+                ``band`` voxels wide even if the input grid was thinner. New voxels are seeded as
+                exterior (``+band*vx``), which is correct when the interior (``phi < 0``) is already
+                represented; for a hollow thin shell, pass ``pad=False`` with a pre-banded grid.
+            prune (bool): If ``True`` prune to the narrow band, else return the (padded) grid batch.
+
+        Returns:
+            out_grid (GridBatch): The pruned (or padded/original) grid batch.
+            sdf (JaggedTensor): The narrow-band SDF, aligned with ``out_grid``.
+
+        .. seealso:: :meth:`Grid.retopologize_sdf`
+        """
+        from . import functional
+
+        return functional.retopologize_sdf_batch(
+            self, field, band, smooth, order, smoothing, redistance_iters, pad, prune
+        )
+
     def max_pool(
         self,
         pool_factor: NumericMaxRank1,
@@ -1148,6 +1227,11 @@ class GridBatch:
         eps: float = 0.0,
     ) -> JaggedTensor:
         """Find ray intersections with an implicit surface defined by scalar voxel data in this grid batch.
+
+        The first valid (non-NaN) voxel sampled along each ray seeds the sign reference, and the first
+        subsequent voxel with the opposite sign is reported as the intersection. Both "positive outside"
+        and "negative outside" SDF conventions are therefore handled identically, and a ray that enters
+        the bbox already inside the surface is reported at the *exit* of the surface along the ray.
 
         Args:
             ray_origins (JaggedTensor): Ray origins in world space. Shape: ``(batch_size, num_rays_for_grid_b, 3)``.

@@ -9,13 +9,18 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   test-python-black-lint:
     name: Python code style (black)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: psf/black@stable
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - uses: psf/black@87928e6d6761a4a6d22250e1fee5601b3998086e # stable
         with:
           options: "--check --diff --verbose"
           src: "./"
@@ -25,8 +30,10 @@ jobs:
     name: C++ code style (clang-format)
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v6
-    - uses: DoozyX/clang-format-lint-action@v0.20
+    - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      with:
+        persist-credentials: false
+    - uses: DoozyX/clang-format-lint-action@bcb4eb2cb0d707ee4f3e5cc3b456eb075f12cf73 # v0.20
       with:
         source: 'src/'
         extensions: 'h,cpp,cc,cu,cuh'
@@ -37,8 +44,10 @@ jobs:
     name: Include guards
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v6
-    - uses: swahtz/include-guards-check-action@master
+    - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      with:
+        persist-credentials: false
+    - uses: swahtz/include-guards-check-action@41d1997205f936c50e23272c849398168b72083a # master
       with:
         path: 'src/'
 
@@ -46,8 +55,10 @@ jobs:
     name: SPDX identifiers
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v6
-    - uses: enarx/spdx@master
+    - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      with:
+        persist-credentials: false
+    - uses: enarx/spdx@d4020ee98e3101dd487c5184f27c6a6fb4f88709 # master
       with:
         licenses: |-
           Apache-2.0
@@ -58,7 +69,9 @@ jobs:
     name: Trailing spaces
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      with:
+        persist-credentials: false
     - name: test
       run: |
           set +e
@@ -71,7 +84,9 @@ jobs:
     name: Spaces not tabs
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      with:
+        persist-credentials: false
     - name: test
       run: |
           set +e

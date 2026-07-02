@@ -26,8 +26,8 @@ namespace ops {
 /// (unpacked) where K depends on sh_degree_to_use
 /// @param[in] dLossDColors Gradients of the loss function with respect to output colors [N, 3]
 /// - ∂L/∂colors
-/// @param[in] radii radii [N] (packed) or [C, N] (unpacked) used in the forward pass for
-/// level-of-detail
+/// @param[in] radii Per-axis projected radii [C, N, 2] used in the forward pass; a gaussian
+/// is masked unless both axes are positive.
 /// @param[in] computeDLossDViewDirs Whether to compute gradients with respect to direction
 /// vectors
 ///
@@ -42,7 +42,7 @@ evaluateSphericalHarmonicsBwd(const int64_t shDegreeToUse,
                               const torch::Tensor &viewDirs,  // [C, N, 3] or empty
                               const torch::Tensor &shNCoeffs, // [N, K-1, D]
                               const torch::Tensor &dLossDColors,
-                              const torch::Tensor &radii,     // [C, N]
+                              const torch::Tensor &radii,     // [C, N, 2]
                               const bool computeDLossDViewDirs);
 
 } // namespace ops
