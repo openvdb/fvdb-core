@@ -145,6 +145,7 @@ ConfigureTest(ExampleTest "ExampleTest.cpp")
 # Configure unit tests
 ConfigureTest(HDDAIteratorsTest "HDDAIteratorsTest.cpp")
 ConfigureTest(PrefetchTest "PrefetchTest.cpp")
+ConfigureTest(LoadNanovdbTest "LoadNanovdbTest.cpp")
 ConfigureTest(JaggedTensorTest "JaggedTensorTest.cpp")
 ConfigureTest(PackedJaggedAccessorTest "PackedJaggedAccessorTest.cu")
 ConfigureTest(GaussianComputeSparseInfoTest "GaussianComputeSparseInfoTest.cpp")
