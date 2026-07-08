@@ -109,7 +109,7 @@ class TestGaussianSplatSceneContract:
         scene = _SceneWithoutServer()
         tensors = _make_gaussian_splat_view_tensors("rrr_ggg_bbb")
 
-        with patch("fvdb.viz._scene.GaussianSplat3dView") as view_type:
+        with patch("fvdb.viz._scene.GaussianSplat3dView", autospec=True) as view_type:
             result = scene.add_gaussian_splat_tensors(
                 "raw tensors",
                 **tensors,
