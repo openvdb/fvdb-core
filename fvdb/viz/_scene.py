@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 import logging
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING
+import warnings
 
 import numpy as np
 import torch
@@ -20,6 +21,7 @@ from ..types import (
 from ._camera_view import CamerasView
 from ._fog_volume_view import FogVolumeView
 from ._gaussian_splat_3d_view import GaussianSplat3dView
+from ._gaussian_splat_view_data import GaussianSplatViewData, _ShOrdering
 from ._image_view import ImageView
 from ._level_set_view import LevelSetView
 from ._nanovdb_grid_view import add_nanovdb_grid_views
@@ -28,28 +30,6 @@ from ._viewer_server import _get_viewer_server_cpp
 
 if TYPE_CHECKING:
     from .. import Grid, GridBatch, JaggedTensor
-
-
-class _GaussianSplat3dLike(Protocol):
-    """Tensor interface required by :meth:`Scene.add_gaussian_splat_3d`."""
-
-    @property
-    def means(self) -> torch.Tensor: ...
-
-    @property
-    def quats(self) -> torch.Tensor: ...
-
-    @property
-    def log_scales(self) -> torch.Tensor: ...
-
-    @property
-    def logit_opacities(self) -> torch.Tensor: ...
-
-    @property
-    def sh0(self) -> torch.Tensor: ...
-
-    @property
-    def shN(self) -> torch.Tensor: ...
 
 
 def get_scene(name: str = "fVDB Scene") -> "Scene":
@@ -145,10 +125,17 @@ class Scene:
         )
 
     @torch.no_grad()
-    def add_gaussian_splat_3d(
+    def add_gaussian_splat_tensors(
         self,
         name: str,
-        gaussian_splat_3d: _GaussianSplat3dLike,
+        *,
+        means: torch.Tensor,
+        quats: torch.Tensor,
+        log_scales: torch.Tensor,
+        logit_opacities: torch.Tensor,
+        sh0: torch.Tensor,
+        shN: torch.Tensor,
+        sh_ordering: _ShOrdering = "rgb_rgb_rgb",
         tile_size: int = 16,
         min_radius_2d: float = 0.0,
         eps_2d: float = 0.3,
@@ -156,11 +143,22 @@ class Scene:
         sh_degree_to_use: int = -1,
     ) -> GaussianSplat3dView:
         """
-        Add a ``fvdb_reality_capture.GaussianSplat3d`` to the viewer and return a view for it.
+        Add renderer-ready Gaussian splat tensors to the viewer and return a view for them.
+
+        All tensor parameters are keyword-only. They use the same shape and type contract as
+        :class:`GaussianSplatViewData`.
 
         Args:
             name (str): The name of the Gaussian splat 3D scene. This must be unique among all views added to the scene.
-            gaussian_splat_3d (fvdb_reality_capture.GaussianSplat3d): The Gaussian splat 3D scene to add.
+            means (torch.Tensor): Gaussian means with shape ``(N, 3)``.
+            quats (torch.Tensor): Gaussian quaternions with shape ``(N, 4)`` in
+                ``(w, x, y, z)`` component order.
+            log_scales (torch.Tensor): Gaussian logarithmic scales with shape ``(N, 3)``.
+            logit_opacities (torch.Tensor): Gaussian opacity logits with shape ``(N,)``.
+            sh0 (torch.Tensor): Zeroth-order spherical harmonics coefficients.
+            shN (torch.Tensor): Higher-order spherical harmonics coefficients.
+            sh_ordering (str): Spherical harmonics tensor layout. Must be ``"rgb_rgb_rgb"`` or
+                ``"rrr_ggg_bbb"``. Default is ``"rgb_rgb_rgb"``.
             tile_size (int): The tile size to use for rendering. Default is 16.
             min_radius_2d (float): The minimum radius in pixels to use when rendering splats. Default is 0.0.
             eps_2d (float): The epsilon value to use when rendering splats. Default is 0.3.
@@ -171,21 +169,101 @@ class Scene:
         Returns:
             gaussian_splat_3d_view (GaussianSplat3dView): A view for the Gaussian splats added to the scene.
         """
+        data = GaussianSplatViewData(
+            means=means,
+            quats=quats,
+            log_scales=log_scales,
+            logit_opacities=logit_opacities,
+            sh0=sh0,
+            shN=shN,
+            sh_ordering=sh_ordering,
+        )
         return GaussianSplat3dView(
             scene_name=self._name,
             name=name,
-            means=gaussian_splat_3d.means,
-            quats=gaussian_splat_3d.quats,
-            log_scales=gaussian_splat_3d.log_scales,
-            logit_opacities=gaussian_splat_3d.logit_opacities,
-            sh0=gaussian_splat_3d.sh0,
-            shN=gaussian_splat_3d.shN,
+            means=data.means,
+            quats=data.quats,
+            log_scales=data.log_scales,
+            logit_opacities=data.logit_opacities,
+            sh0=data.sh0,
+            shN=data.shN,
             tile_size=tile_size,
             min_radius_2d=min_radius_2d,
             eps_2d=eps_2d,
             antialias=antialias,
             sh_degree_to_use=sh_degree_to_use,
+            sh_ordering_mode=data.sh_ordering,
             _private=GaussianSplat3dView.__PRIVATE__,
+        )
+
+    @torch.no_grad()
+    def add_gaussian_splat_3d(
+        self,
+        name: str,
+        gaussian_splat_3d: GaussianSplatViewData,
+        tile_size: int = 16,
+        min_radius_2d: float = 0.0,
+        eps_2d: float = 0.3,
+        antialias: bool = False,
+        sh_degree_to_use: int = -1,
+    ) -> GaussianSplat3dView:
+        """Add Gaussian splat view data to the viewer and return a view for it.
+
+        Args:
+            name (str): The unique name of the Gaussian splat view within this scene.
+            gaussian_splat_3d (GaussianSplatViewData): Renderer-ready Gaussian splat tensors and
+                their spherical harmonics layout. Passing an object that only exposes the six
+                legacy tensor properties remains supported temporarily, but is deprecated.
+            tile_size (int): The tile size to use for rendering. Default is 16.
+            min_radius_2d (float): The minimum radius in pixels to render. Default is 0.0.
+            eps_2d (float): The 2D epsilon used when rendering. Default is 0.3.
+            antialias (bool): Whether to use antialiasing. Default is False.
+            sh_degree_to_use (int): The spherical harmonics degree to render. ``-1`` selects the
+                maximum degree available in the data. Default is -1.
+
+        Returns:
+            GaussianSplat3dView: A view for the Gaussian splats added to the scene.
+        """
+        if isinstance(gaussian_splat_3d, GaussianSplatViewData):
+            data = gaussian_splat_3d
+        else:
+            warnings.warn(
+                "Passing a model-shaped object to Scene.add_gaussian_splat_3d() is deprecated; "
+                "pass GaussianSplatViewData instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            tensor_fields = ("means", "quats", "log_scales", "logit_opacities", "sh0", "shN")
+            missing_fields = [field for field in tensor_fields if not hasattr(gaussian_splat_3d, field)]
+            if missing_fields:
+                missing = ", ".join(missing_fields)
+                raise TypeError(
+                    "gaussian_splat_3d must be GaussianSplatViewData; "
+                    f"the deprecated model-shaped input is missing: {missing}"
+                )
+            data = GaussianSplatViewData(
+                means=gaussian_splat_3d.means,
+                quats=gaussian_splat_3d.quats,
+                log_scales=gaussian_splat_3d.log_scales,
+                logit_opacities=gaussian_splat_3d.logit_opacities,
+                sh0=gaussian_splat_3d.sh0,
+                shN=gaussian_splat_3d.shN,
+            )
+
+        return self.add_gaussian_splat_tensors(
+            name,
+            means=data.means,
+            quats=data.quats,
+            log_scales=data.log_scales,
+            logit_opacities=data.logit_opacities,
+            sh0=data.sh0,
+            shN=data.shN,
+            sh_ordering=data.sh_ordering,
+            tile_size=tile_size,
+            min_radius_2d=min_radius_2d,
+            eps_2d=eps_2d,
+            antialias=antialias,
+            sh_degree_to_use=sh_degree_to_use,
         )
 
     @torch.no_grad()

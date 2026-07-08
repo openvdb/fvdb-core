@@ -9,6 +9,10 @@ fVDB Version History
   `fvdb_reality_capture.evaluate_spherical_harmonics` instead. The associated `ShOrderingMode`,
   `RollingShutterType`, `CameraModel`, and `ProjectionMethod` enums now also live in `fvdb_reality_capture`. The
   low-level compiled Gaussian kernels and viewer support remain in fVDB Core.
+- Decoupled `fvdb.viz` from application-owned Gaussian model classes. `Scene.add_gaussian_splat_3d` now accepts the
+  immutable, core-owned `GaussianSplatViewData` tensor contract and delegates to the new
+  `Scene.add_gaussian_splat_tensors` primitive. The legacy six-property model interface remains temporarily available
+  with a deprecation warning.
 
 ## Version 0.5.0 - July 1, 2026
 
