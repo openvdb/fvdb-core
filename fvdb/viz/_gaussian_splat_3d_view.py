@@ -10,7 +10,7 @@ from .._fvdb_cpp import GaussianSplat3dView as GaussianSplat3dViewCpp
 from ._viewer_server import _get_viewer_server_cpp
 
 
-class ShOrderingMode(str, Enum):
+class _ShOrderingMode(str, Enum):
     RGB_RGB_RGB = "rgb_rgb_rgb"
     RRR_GGG_BBB = "rrr_ggg_bbb"
 
@@ -46,7 +46,7 @@ class GaussianSplat3dView:
         eps_2d: float = 0.3,
         antialias: bool = False,
         sh_degree_to_use: int = -1,
-        sh_ordering_mode: ShOrderingMode = ShOrderingMode.RGB_RGB_RGB,
+        sh_ordering_mode: str = _ShOrderingMode.RGB_RGB_RGB,
         _private: Any = None,
     ):
         """
@@ -71,8 +71,8 @@ class GaussianSplat3dView:
             antialias (bool): Whether to use antialiasing when rendering splats. Default is False.
             sh_degree_to_use (int): The degree of spherical harmonics to use when rendering colors.
                 If -1, the maximum degree supported by the Gaussian splat 3D scene is used. Default is -1.
-            sh_ordering_mode (ShOrderingMode): The spherical harmonics ordering mode to use when rendering colors.
-                Default is :attr:`ShOrderingMode.RGB_RGB_RGB`.
+            sh_ordering_mode (str): The spherical harmonics ordering mode to use when rendering colors. Pass a
+                ``fvdb_reality_capture.ShOrderingMode`` value. Default is ``RGB_RGB_RGB``.
             _private (Any): A private object to prevent direct construction. Must be :attr:`GaussianSplat3dView.__PRIVATE__`.
         """
         if _private is not self.__PRIVATE__:
@@ -91,7 +91,7 @@ class GaussianSplat3dView:
             shN=shN,
         )
 
-        if sh_ordering_mode not in (ShOrderingMode.RGB_RGB_RGB, ShOrderingMode.RRR_GGG_BBB):
+        if sh_ordering_mode not in (_ShOrderingMode.RGB_RGB_RGB, _ShOrderingMode.RRR_GGG_BBB):
             raise ValueError(f"Invalid ShOrderingMode: {sh_ordering_mode}")
 
         view.tile_size = tile_size
@@ -99,9 +99,9 @@ class GaussianSplat3dView:
         view.eps_2d = eps_2d
         view.antialias = antialias
         view.sh_degree_to_use = sh_degree_to_use
-        if sh_ordering_mode == ShOrderingMode.RRR_GGG_BBB:
+        if sh_ordering_mode == _ShOrderingMode.RRR_GGG_BBB:
             view.rgb_rgb_rgb_sh = False
-        elif sh_ordering_mode == ShOrderingMode.RGB_RGB_RGB:
+        elif sh_ordering_mode == _ShOrderingMode.RGB_RGB_RGB:
             view.rgb_rgb_rgb_sh = True
         else:
             raise ValueError(f"Invalid ShOrderingMode: {sh_ordering_mode}")
@@ -204,31 +204,33 @@ class GaussianSplat3dView:
         view.sh_degree_to_use = degree
 
     @property
-    def sh_ordering_mode(self) -> ShOrderingMode:
+    def sh_ordering_mode(self) -> str:
         """
         Get the spherical harmonics ordering mode used for rendering colors.
 
         Returns:
-            ShOrderingMode: The spherical harmonics ordering mode.
+            str: The spherical harmonics ordering mode. Compare against
+            ``fvdb_reality_capture.ShOrderingMode`` values.
         """
         view = self._get_view()
         if view.rgb_rgb_rgb_sh:
-            return ShOrderingMode.RRR_GGG_BBB
+            return _ShOrderingMode.RRR_GGG_BBB
         else:
-            return ShOrderingMode.RGB_RGB_RGB
+            return _ShOrderingMode.RGB_RGB_RGB
 
     @sh_ordering_mode.setter
-    def sh_ordering_mode(self, mode: ShOrderingMode):
+    def sh_ordering_mode(self, mode: str):
         """
         Set the spherical harmonics ordering mode used for rendering colors.
 
         Args:
-            mode (ShOrderingMode): The spherical harmonics ordering mode.
+            mode (str): The spherical harmonics ordering mode. Pass a
+                ``fvdb_reality_capture.ShOrderingMode`` value.
         """
         view = self._get_view()
-        if mode == ShOrderingMode.RRR_GGG_BBB:
+        if mode == _ShOrderingMode.RRR_GGG_BBB:
             view.rgb_rgb_rgb_sh = False
-        elif mode == ShOrderingMode.RGB_RGB_RGB:
+        elif mode == _ShOrderingMode.RGB_RGB_RGB:
             view.rgb_rgb_rgb_sh = True
         else:
             raise ValueError(f"Invalid ShOrderingMode: {mode}")

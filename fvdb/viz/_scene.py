@@ -2,12 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 import numpy as np
 import torch
 
-from ..gaussian_splatting import GaussianSplat3d
 from ..types import (
     NumericMaxRank1,
     NumericMaxRank2,
@@ -29,6 +28,28 @@ from ._viewer_server import _get_viewer_server_cpp
 
 if TYPE_CHECKING:
     from .. import Grid, GridBatch, JaggedTensor
+
+
+class _GaussianSplat3dLike(Protocol):
+    """Tensor interface required by :meth:`Scene.add_gaussian_splat_3d`."""
+
+    @property
+    def means(self) -> torch.Tensor: ...
+
+    @property
+    def quats(self) -> torch.Tensor: ...
+
+    @property
+    def log_scales(self) -> torch.Tensor: ...
+
+    @property
+    def logit_opacities(self) -> torch.Tensor: ...
+
+    @property
+    def sh0(self) -> torch.Tensor: ...
+
+    @property
+    def shN(self) -> torch.Tensor: ...
 
 
 def get_scene(name: str = "fVDB Scene") -> "Scene":
@@ -127,7 +148,7 @@ class Scene:
     def add_gaussian_splat_3d(
         self,
         name: str,
-        gaussian_splat_3d: GaussianSplat3d,
+        gaussian_splat_3d: _GaussianSplat3dLike,
         tile_size: int = 16,
         min_radius_2d: float = 0.0,
         eps_2d: float = 0.3,
@@ -135,11 +156,11 @@ class Scene:
         sh_degree_to_use: int = -1,
     ) -> GaussianSplat3dView:
         """
-        Add a :class:`fvdb.GaussianSplat3d` to the viewer and return a view for it.
+        Add a ``fvdb_reality_capture.GaussianSplat3d`` to the viewer and return a view for it.
 
         Args:
             name (str): The name of the Gaussian splat 3D scene. This must be unique among all views added to the scene.
-            gaussian_splat_3d (GaussianSplat3d): The Gaussian splat 3D scene to add.
+            gaussian_splat_3d (fvdb_reality_capture.GaussianSplat3d): The Gaussian splat 3D scene to add.
             tile_size (int): The tile size to use for rendering. Default is 16.
             min_radius_2d (float): The minimum radius in pixels to use when rendering splats. Default is 0.0.
             eps_2d (float): The epsilon value to use when rendering splats. Default is 0.3.
