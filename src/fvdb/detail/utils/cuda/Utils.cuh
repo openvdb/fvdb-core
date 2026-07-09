@@ -50,13 +50,13 @@ mergeStreams() {
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
-        C10_CUDA_CHECK(cudaEventCreate(&events[deviceId], cudaEventDisableTiming));
+        C10_CUDA_CHECK(cudaEventCreateWithFlags(&events[deviceId], cudaEventDisableTiming));
         C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
     }
 
     // Create an event on the merge device
     C10_CUDA_CHECK(cudaSetDevice(mergeDeviceId));
-    C10_CUDA_CHECK(cudaEventCreate(&mergeEvent, cudaEventDisableTiming));
+    C10_CUDA_CHECK(cudaEventCreateWithFlags(&mergeEvent, cudaEventDisableTiming));
     auto mergeStream = c10::cuda::getCurrentCUDAStream(mergeDeviceId);
     // On the merge stream, wait until the per-device events have completed
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
