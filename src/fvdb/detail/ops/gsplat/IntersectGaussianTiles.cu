@@ -860,7 +860,7 @@ intersectGaussianTilesPrivateUse1Impl(
         for (const auto deviceId: c10::irange(deviceCount)) {
             C10_CUDA_CHECK(cudaSetDevice(deviceId));
             auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
-            C10_CUDA_CHECK(cudaEventCreate(&events[deviceId], cudaEventDisableTiming));
+            C10_CUDA_CHECK(cudaEventCreateWithFlags(&events[deviceId], cudaEventDisableTiming));
             C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
         }
 
