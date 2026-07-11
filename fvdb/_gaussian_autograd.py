@@ -300,21 +300,34 @@ class _EvaluateGaussianSHFn(torch.autograd.Function):
         ctx,
         sh_degree_to_use: int,
         num_cameras: int,
-        view_dirs: torch.Tensor,  # [C, N, 3] or empty
-        sh0_coeffs: torch.Tensor,  # [N, 1, D]
-        shN_coeffs: torch.Tensor,  # [N, K-1, D] or empty
-        radii: torch.Tensor,  # [C, N, 2]
+        means: torch.Tensor,  # [N, 3] (dense) or [sum(N_i), 3] (indexed)
+        world_to_cam_matrices: torch.Tensor,  # [C, 4, 4] or [sum(C_i), 4, 4]
+        camera_ids: torch.Tensor,  # empty (dense) or [P] int32
+        gaussian_ids: torch.Tensor,  # empty (dense) or [P] int32
+        sh0_coeffs: torch.Tensor,  # [N, 1, D] (dense) or [P, 1, D] (indexed)
+        shN_coeffs: torch.Tensor,  # [N, K-1, D] (dense) or [P, K-1, D] (indexed)
+        radii: torch.Tensor,  # [C, N, 2] (dense) or [1, P, 2] (indexed)
     ) -> torch.Tensor:
         render_quantities = _C.evaluate_spherical_harmonics_fwd(
             sh_degree_to_use,
             num_cameras,
-            view_dirs,
+            means,
+            world_to_cam_matrices,
+            camera_ids,
+            gaussian_ids,
             sh0_coeffs,
             shN_coeffs,
             radii,
         )
 
-        ctx.save_for_backward(view_dirs, shN_coeffs, radii)
+        ctx.save_for_backward(
+            means,
+            world_to_cam_matrices,
+            camera_ids,
+            gaussian_ids,
+            shN_coeffs,
+            radii,
+        )
         ctx.sh_degree_to_use = sh_degree_to_use
         ctx.num_cameras = num_cameras
         ctx.num_gaussians = sh0_coeffs.size(0)
@@ -325,25 +338,29 @@ class _EvaluateGaussianSHFn(torch.autograd.Function):
     def backward(ctx: Any, *grad_outputs: torch.Tensor | None) -> tuple[torch.Tensor | None, ...]:
         d_loss_d_colors = grad_outputs[0]
         if d_loss_d_colors is None:
-            return (None, None, None, None, None, None)
+            return (None, None, None, None, None, None, None, None, None)
         d_loss_d_colors = d_loss_d_colors.contiguous()
 
-        view_dirs, shN_coeffs, radii = ctx.saved_tensors
+        means, world_to_cam_matrices, camera_ids, gaussian_ids, shN_coeffs, radii = ctx.saved_tensors
+        compute_d_loss_d_means = ctx.needs_input_grad[2]
+        compute_d_loss_d_viewmats = ctx.needs_input_grad[3]
 
-        compute_d_loss_d_view_dirs = view_dirs.numel() > 0 and view_dirs.requires_grad
-
-        d_sh0, d_shN, d_view_dirs = _C.evaluate_spherical_harmonics_bwd(
+        d_sh0, d_shN, d_means, d_viewmats = _C.evaluate_spherical_harmonics_bwd(
             ctx.sh_degree_to_use,
             ctx.num_cameras,
             ctx.num_gaussians,
-            view_dirs,
+            means,
+            world_to_cam_matrices,
+            camera_ids,
+            gaussian_ids,
             shN_coeffs,
             d_loss_d_colors,
             radii,
-            compute_d_loss_d_view_dirs,
+            compute_d_loss_d_means,
+            compute_d_loss_d_viewmats,
         )
 
-        return (None, None, d_view_dirs, d_sh0, d_shN, None)
+        return (None, None, d_means, d_viewmats, None, None, d_sh0, d_shN, None)
 
 
 # ---------------------------------------------------------------------------

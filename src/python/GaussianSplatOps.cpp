@@ -225,7 +225,10 @@ bind_gaussian_splat_ops(py::module &m) {
           &ops::evaluateSphericalHarmonicsFwd,
           py::arg("sh_degree_to_use"),
           py::arg("num_cameras"),
-          py::arg("view_dirs"),
+          py::arg("means"),
+          py::arg("world_to_cam_matrices"),
+          py::arg("camera_ids"),
+          py::arg("gaussian_ids"),
           py::arg("sh0_coeffs"),
           py::arg("sh_n_coeffs"),
           py::arg("radii"));
@@ -235,11 +238,15 @@ bind_gaussian_splat_ops(py::module &m) {
           py::arg("sh_degree_to_use"),
           py::arg("num_cameras"),
           py::arg("num_gaussians"),
-          py::arg("view_dirs"),
+          py::arg("means"),
+          py::arg("world_to_cam_matrices"),
+          py::arg("camera_ids"),
+          py::arg("gaussian_ids"),
           py::arg("sh_n_coeffs"),
           py::arg("d_loss_d_colors"),
           py::arg("radii"),
-          py::arg("compute_d_loss_d_view_dirs"));
+          py::arg("compute_d_loss_d_means"),
+          py::arg("compute_d_loss_d_world_to_cam_matrices"));
 
     m.def("rasterize_screen_space_gaussians_fwd",
           &ops::rasterizeScreenSpaceGaussiansFwd,

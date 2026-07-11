@@ -39,17 +39,18 @@ struct SphericalHarmonincsBackwardTestFixture : public ::testing::TestWithParam<
         const auto floatOptsCUDA = fvdb::test::tensorOpts<float>(torch::kCUDA);
         const auto intOptsCUDA   = fvdb::test::tensorOpts<int>(torch::kCUDA);
 
-        const auto cosAzimuth =
-            torch::cos(torch::full({numCameras, numGaussians, 1}, azimuth, floatOptsCUDA));
-        const auto sinAzimuth =
-            torch::sin(torch::full({numCameras, numGaussians, 1}, azimuth, floatOptsCUDA));
+        const auto cosAzimuth = torch::cos(torch::full({numGaussians, 1}, azimuth, floatOptsCUDA));
+        const auto sinAzimuth = torch::sin(torch::full({numGaussians, 1}, azimuth, floatOptsCUDA));
         const auto cosElevation =
-            torch::cos(torch::full({numCameras, numGaussians, 1}, elevation, floatOptsCUDA));
+            torch::cos(torch::full({numGaussians, 1}, elevation, floatOptsCUDA));
         const auto sinElevation =
-            torch::sin(torch::full({numCameras, numGaussians, 1}, elevation, floatOptsCUDA));
+            torch::sin(torch::full({numGaussians, 1}, elevation, floatOptsCUDA));
 
-        viewDirs = torch::cat({cosAzimuth * cosElevation, sinAzimuth * cosElevation, sinElevation},
-                              2); // [C, N, 3]
+        means = torch::cat({cosAzimuth * cosElevation, sinAzimuth * cosElevation, sinElevation},
+                           1); // [N, 3]
+        worldToCamMatrices = torch::eye(4, floatOptsCUDA).unsqueeze(0).repeat({numCameras, 1, 1});
+        cameraIds          = torch::empty({0}, intOptsCUDA);
+        gaussianIds        = torch::empty({0}, intOptsCUDA);
 
         sh0Coeffs = torch::full({numGaussians, 1, numChannels}, 1.0f, floatOptsCUDA);
 
@@ -90,14 +91,18 @@ struct SphericalHarmonincsBackwardTestFixture : public ::testing::TestWithParam<
             const int64_t shDegreeToUse,
             const bool setZeroRadii = false) {
         {
-            auto [dLossDSh0Coeffs, dLossDShNCoeffs, dLossDViewDirs] =
+            auto [dLossDSh0Coeffs, dLossDShNCoeffs, dLossDMeans, dLossDWorldToCamMatrices] =
                 fvdb::detail::ops::evaluateSphericalHarmonicsBwd(shDegreeToUse,
                                                                  numCameras,
                                                                  numGaussians,
-                                                                 viewDirs,
+                                                                 means,
+                                                                 worldToCamMatrices,
+                                                                 cameraIds,
+                                                                 gaussianIds,
                                                                  shNCoeffs,
                                                                  dLossDRenderQuantities,
                                                                  radii,
+                                                                 true,
                                                                  true);
 
             if (setZeroRadii) {
@@ -107,30 +112,33 @@ struct SphericalHarmonincsBackwardTestFixture : public ::testing::TestWithParam<
                 const auto dLdShNSlice = dLossDShNCoeffs.index({torch::indexing::Slice(0, -1, 2),
                                                                 torch::indexing::Slice(),
                                                                 torch::indexing::Slice()});
-                const auto dLDViewDirsSlice =
-                    dLossDViewDirs.index({torch::indexing::Slice(),
-                                          torch::indexing::Slice(0, -1, 2),
-                                          torch::indexing::Slice()});
+                const auto dLdMeansSlice =
+                    dLossDMeans.index({torch::indexing::Slice(0, -1, 2), torch::indexing::Slice()});
 
                 EXPECT_TRUE(torch::allclose(dLdSh0Slice, torch::zeros_like(dLdSh0Slice)));
                 EXPECT_TRUE(torch::allclose(dLdShNSlice, torch::zeros_like(dLdShNSlice)));
-                EXPECT_TRUE(torch::allclose(dLDViewDirsSlice, torch::zeros_like(dLDViewDirsSlice)));
+                EXPECT_TRUE(torch::allclose(dLdMeansSlice, torch::zeros_like(dLdMeansSlice)));
             }
             EXPECT_TRUE(dLossDSh0Coeffs.sizes() == sh0Coeffs.sizes());
             EXPECT_TRUE(dLossDShNCoeffs.sizes() == shNCoeffs.sizes());
-            EXPECT_TRUE(dLossDViewDirs.sizes() == viewDirs.sizes());
+            EXPECT_TRUE(dLossDMeans.sizes() == means.sizes());
+            EXPECT_TRUE(dLossDWorldToCamMatrices.sizes() == worldToCamMatrices.sizes());
         }
 
-        // We don't return view direction gradients if you don't ask for them
+        // We don't return geometry gradients if you don't ask for them
         {
-            auto [dLossDSh0Coeffs, dLossDShNCoeffs, dLossDViewDirs] =
+            auto [dLossDSh0Coeffs, dLossDShNCoeffs, dLossDMeans, dLossDWorldToCamMatrices] =
                 fvdb::detail::ops::evaluateSphericalHarmonicsBwd(shDegreeToUse,
                                                                  numCameras,
                                                                  numGaussians,
-                                                                 viewDirs,
+                                                                 means,
+                                                                 worldToCamMatrices,
+                                                                 cameraIds,
+                                                                 gaussianIds,
                                                                  shNCoeffs,
                                                                  dLossDRenderQuantities,
                                                                  radii,
+                                                                 false,
                                                                  false);
             if (setZeroRadii) {
                 const auto dLdSh0Slice = dLossDSh0Coeffs.index({torch::indexing::Slice(0, -1, 2),
@@ -145,7 +153,8 @@ struct SphericalHarmonincsBackwardTestFixture : public ::testing::TestWithParam<
             }
             EXPECT_TRUE(dLossDSh0Coeffs.sizes() == sh0Coeffs.sizes());
             EXPECT_TRUE(dLossDShNCoeffs.sizes() == shNCoeffs.sizes());
-            EXPECT_FALSE(dLossDViewDirs.defined());
+            EXPECT_FALSE(dLossDMeans.defined());
+            EXPECT_FALSE(dLossDWorldToCamMatrices.defined());
         }
     }
 
@@ -172,64 +181,83 @@ struct SphericalHarmonincsBackwardTestFixture : public ::testing::TestWithParam<
         const auto expectedSh0Sizes = std::vector({numGaussians, int64_t(1), numChannels});
 
         {
-            auto [dLossDSh0Coeffs, dLossDShNCoeffs, dLossDViewDirs] =
+            auto [dLossDSh0Coeffs, dLossDShNCoeffs, dLossDMeans, dLossDWorldToCamMatrices] =
                 fvdb::detail::ops::evaluateSphericalHarmonicsBwd(shDegreeToUse,
                                                                  numCameras,
                                                                  numGaussians,
-                                                                 viewDirs,
+                                                                 means,
+                                                                 worldToCamMatrices,
+                                                                 cameraIds,
+                                                                 gaussianIds,
                                                                  shNCoeffs,
                                                                  dLossDRenderQuantities,
                                                                  radii,
+                                                                 true,
                                                                  true);
             EXPECT_TRUE(dLossDSh0Coeffs.sizes() == expectedSh0Sizes);
             EXPECT_FALSE(dLossDShNCoeffs.defined());
-            EXPECT_FALSE(dLossDViewDirs.defined());
+            EXPECT_FALSE(dLossDMeans.defined());
+            EXPECT_FALSE(dLossDWorldToCamMatrices.defined());
             EXPECT_TRUE(torch::allclose(dLossDSh0Coeffs, expectedDLossDSh0Coeffs));
         }
 
         // You can pass in an empty tensor for shNCoeffs and we return an empty tensor for the
-        // gradient of shN and viewDirs
+        // gradient of shN, means, and worldToCamMatrices
         {
             shNCoeffs = torch::Tensor();
-            auto [dLossDSh0Coeffs, dLossDShNCoeffs, dLossDViewDirs] =
+            auto [dLossDSh0Coeffs, dLossDShNCoeffs, dLossDMeans, dLossDWorldToCamMatrices] =
                 fvdb::detail::ops::evaluateSphericalHarmonicsBwd(shDegreeToUse,
                                                                  numCameras,
                                                                  numGaussians,
-                                                                 viewDirs,
+                                                                 means,
+                                                                 worldToCamMatrices,
+                                                                 cameraIds,
+                                                                 gaussianIds,
                                                                  shNCoeffs,
                                                                  dLossDRenderQuantities,
                                                                  radii,
+                                                                 true,
                                                                  true);
             EXPECT_TRUE(dLossDSh0Coeffs.sizes() == expectedSh0Sizes);
             EXPECT_FALSE(dLossDShNCoeffs.defined());
-            EXPECT_FALSE(dLossDViewDirs.defined());
+            EXPECT_FALSE(dLossDMeans.defined());
+            EXPECT_FALSE(dLossDWorldToCamMatrices.defined());
             EXPECT_TRUE(torch::allclose(dLossDSh0Coeffs, expectedDLossDSh0Coeffs));
         }
 
-        // You can pass in an empty tensor for shNCoeffs and viewDirs and we return empty tensors
-        // for their gradients
+        // You can pass in empty tensors for shNCoeffs, means, and worldToCamMatrices and we return
+        // empty tensors for their gradients
         {
-            shNCoeffs = torch::Tensor();
-            viewDirs  = torch::Tensor();
-            auto [dLossDSh0Coeffs, dLossDShNCoeffs, dLossDViewDirs] =
+            shNCoeffs          = torch::Tensor();
+            means              = torch::Tensor();
+            worldToCamMatrices = torch::Tensor();
+            auto [dLossDSh0Coeffs, dLossDShNCoeffs, dLossDMeans, dLossDWorldToCamMatrices] =
                 fvdb::detail::ops::evaluateSphericalHarmonicsBwd(shDegreeToUse,
                                                                  numCameras,
                                                                  numGaussians,
-                                                                 viewDirs,
+                                                                 means,
+                                                                 worldToCamMatrices,
+                                                                 cameraIds,
+                                                                 gaussianIds,
                                                                  shNCoeffs,
                                                                  dLossDRenderQuantities,
                                                                  radii,
+                                                                 true,
                                                                  true);
             EXPECT_TRUE(dLossDSh0Coeffs.sizes() == expectedSh0Sizes);
             EXPECT_FALSE(dLossDShNCoeffs.defined());
-            EXPECT_FALSE(dLossDViewDirs.defined());
+            EXPECT_FALSE(dLossDMeans.defined());
+            EXPECT_FALSE(dLossDWorldToCamMatrices.defined());
             EXPECT_TRUE(torch::allclose(dLossDSh0Coeffs, expectedDLossDSh0Coeffs));
         }
     }
 
     torch::Tensor sh0Coeffs;
     torch::Tensor shNCoeffs;
-    torch::Tensor viewDirs;
+    torch::Tensor means;
+    torch::Tensor worldToCamMatrices;
+    torch::Tensor cameraIds;
+    torch::Tensor gaussianIds;
     torch::Tensor radii;
     torch::Tensor dLossDRenderQuantities;
     int64_t K;
@@ -250,6 +278,45 @@ TEST_P(SphericalHarmonincsBackwardTestFixture, TestShBackward) {
     }
 }
 
+TEST(GaussianSphericalHarmonicsBackwardTest, IndexedWorldInputsScatterGeometryGradients) {
+    const auto floatOptsCUDA = fvdb::test::tensorOpts<float>(torch::kCUDA);
+    const auto intOptsCUDA   = fvdb::test::tensorOpts<int>(torch::kCUDA);
+
+    const auto means =
+        torch::tensor({{1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f, 1.0f}}, floatOptsCUDA);
+    auto worldToCamMatrices = torch::eye(4, floatOptsCUDA).unsqueeze(0).repeat({3, 1, 1});
+    worldToCamMatrices.index_put_({0, 0, 3}, 0.25f);
+    worldToCamMatrices.index_put_({2, 1, 3}, -0.5f);
+
+    const auto cameraIds              = torch::tensor({2, 0}, intOptsCUDA);
+    const auto gaussianIds            = torch::tensor({2, 0}, intOptsCUDA);
+    const auto shNCoeffs              = torch::ones({2, 3, 1}, floatOptsCUDA);
+    const auto dLossDRenderQuantities = torch::ones({1, 2, 1}, floatOptsCUDA);
+    const auto radii                  = torch::ones({1, 2, 2}, intOptsCUDA);
+
+    auto [dLossDSh0Coeffs, dLossDShNCoeffs, dLossDMeans, dLossDWorldToCamMatrices] =
+        fvdb::detail::ops::evaluateSphericalHarmonicsBwd(1,
+                                                         1,
+                                                         2,
+                                                         means,
+                                                         worldToCamMatrices,
+                                                         cameraIds,
+                                                         gaussianIds,
+                                                         shNCoeffs,
+                                                         dLossDRenderQuantities,
+                                                         radii,
+                                                         true,
+                                                         true);
+
+    EXPECT_TRUE(dLossDSh0Coeffs.sizes() == std::vector<int64_t>({2, 1, 1}));
+    EXPECT_TRUE(dLossDShNCoeffs.sizes() == shNCoeffs.sizes());
+    EXPECT_TRUE(dLossDMeans.sizes() == means.sizes());
+    EXPECT_TRUE(dLossDWorldToCamMatrices.sizes() == worldToCamMatrices.sizes());
+    EXPECT_TRUE(torch::allclose(dLossDMeans.index({1}), torch::zeros({3}, floatOptsCUDA)));
+    EXPECT_TRUE(
+        torch::allclose(dLossDWorldToCamMatrices.index({1}), torch::zeros({4, 4}, floatOptsCUDA)));
+}
+
 #undef DEBUG_BENCHMARK
 #ifdef DEBUG_BENCHMARK
 TEST_F(SphericalHarmonincsBackwardTestFixture, BenchmarkSh0) {
@@ -266,14 +333,18 @@ TEST_F(SphericalHarmonincsBackwardTestFixture, BenchmarkSh0) {
 
     for (int i = 0; i < 10; i += 1) {
         torch::cuda::synchronize();
-        auto [dLossDSh0Coeffs, dLossDShNCoeffs, dLossDViewDirs] =
+        auto [dLossDSh0Coeffs, dLossDShNCoeffs, dLossDMeans, dLossDWorldToCamMatrices] =
             fvdb::detail::ops::evaluateSphericalHarmonicsBwd(shDegreeToUse,
                                                              numCameras,
                                                              numGaussians,
-                                                             viewDirs,
+                                                             means,
+                                                             worldToCamMatrices,
+                                                             cameraIds,
+                                                             gaussianIds,
                                                              shNCoeffs,
                                                              dLossDRenderQuantities,
                                                              radii,
+                                                             false,
                                                              false);
         torch::cuda::synchronize();
     }
@@ -283,14 +354,18 @@ TEST_F(SphericalHarmonincsBackwardTestFixture, BenchmarkSh0) {
     for (int i = 0; i < totalIters; i += 1) {
         torch::cuda::synchronize();
         auto start = std::chrono::high_resolution_clock::now();
-        auto [dLossDSh0Coeffs, dLossDShNCoeffs, dLossDViewDirs] =
+        auto [dLossDSh0Coeffs, dLossDShNCoeffs, dLossDMeans, dLossDWorldToCamMatrices] =
             fvdb::detail::ops::evaluateSphericalHarmonicsBwd(shDegreeToUse,
                                                              numCameras,
                                                              numGaussians,
-                                                             viewDirs,
+                                                             means,
+                                                             worldToCamMatrices,
+                                                             cameraIds,
+                                                             gaussianIds,
                                                              shNCoeffs,
                                                              dLossDRenderQuantities,
                                                              radii,
+                                                             false,
                                                              false);
         torch::cuda::synchronize();
         auto end      = std::chrono::high_resolution_clock::now();
@@ -317,14 +392,18 @@ TEST_F(SphericalHarmonincsBackwardTestFixture, BenchmarkSh0WithViewDirGrad) {
 
     for (int i = 0; i < 10; i += 1) {
         torch::cuda::synchronize();
-        auto [dLossDSh0Coeffs, dLossDShNCoeffs, dLossDViewDirs] =
+        auto [dLossDSh0Coeffs, dLossDShNCoeffs, dLossDMeans, dLossDWorldToCamMatrices] =
             fvdb::detail::ops::evaluateSphericalHarmonicsBwd(shDegreeToUse,
                                                              numCameras,
                                                              numGaussians,
-                                                             viewDirs,
+                                                             means,
+                                                             worldToCamMatrices,
+                                                             cameraIds,
+                                                             gaussianIds,
                                                              shNCoeffs,
                                                              dLossDRenderQuantities,
                                                              radii,
+                                                             false,
                                                              false);
         torch::cuda::synchronize();
     }
@@ -334,14 +413,18 @@ TEST_F(SphericalHarmonincsBackwardTestFixture, BenchmarkSh0WithViewDirGrad) {
     for (int i = 0; i < totalIters; i += 1) {
         torch::cuda::synchronize();
         auto start = std::chrono::high_resolution_clock::now();
-        auto [dLossDSh0Coeffs, dLossDShNCoeffs, dLossDViewDirs] =
+        auto [dLossDSh0Coeffs, dLossDShNCoeffs, dLossDMeans, dLossDWorldToCamMatrices] =
             fvdb::detail::ops::evaluateSphericalHarmonicsBwd(shDegreeToUse,
                                                              numCameras,
                                                              numGaussians,
-                                                             viewDirs,
+                                                             means,
+                                                             worldToCamMatrices,
+                                                             cameraIds,
+                                                             gaussianIds,
                                                              shNCoeffs,
                                                              dLossDRenderQuantities,
                                                              radii,
+                                                             true,
                                                              true);
         torch::cuda::synchronize();
         auto end      = std::chrono::high_resolution_clock::now();
@@ -367,14 +450,18 @@ TEST_F(SphericalHarmonincsBackwardTestFixture, BenchmarkShNWithViewDirGrad) {
 
     for (int i = 0; i < 10; i += 1) {
         torch::cuda::synchronize();
-        auto [dLossDSh0Coeffs, dLossDShNCoeffs, dLossDViewDirs] =
+        auto [dLossDSh0Coeffs, dLossDShNCoeffs, dLossDMeans, dLossDWorldToCamMatrices] =
             fvdb::detail::ops::evaluateSphericalHarmonicsBwd(shDegreeToUse,
                                                              numCameras,
                                                              numGaussians,
-                                                             viewDirs,
+                                                             means,
+                                                             worldToCamMatrices,
+                                                             cameraIds,
+                                                             gaussianIds,
                                                              shNCoeffs,
                                                              dLossDRenderQuantities,
                                                              radii,
+                                                             false,
                                                              false);
         torch::cuda::synchronize();
     }
@@ -384,14 +471,18 @@ TEST_F(SphericalHarmonincsBackwardTestFixture, BenchmarkShNWithViewDirGrad) {
     for (int i = 0; i < totalIters; i += 1) {
         torch::cuda::synchronize();
         auto start = std::chrono::high_resolution_clock::now();
-        auto [dLossDSh0Coeffs, dLossDShNCoeffs, dLossDViewDirs] =
+        auto [dLossDSh0Coeffs, dLossDShNCoeffs, dLossDMeans, dLossDWorldToCamMatrices] =
             fvdb::detail::ops::evaluateSphericalHarmonicsBwd(shDegreeToUse,
                                                              numCameras,
                                                              numGaussians,
-                                                             viewDirs,
+                                                             means,
+                                                             worldToCamMatrices,
+                                                             cameraIds,
+                                                             gaussianIds,
                                                              shNCoeffs,
                                                              dLossDRenderQuantities,
                                                              radii,
+                                                             true,
                                                              true);
         torch::cuda::synchronize();
         auto end      = std::chrono::high_resolution_clock::now();
@@ -417,14 +508,18 @@ TEST_F(SphericalHarmonincsBackwardTestFixture, BenchmarkShNWithoutViewDirGrad) {
 
     for (int i = 0; i < 10; i += 1) {
         torch::cuda::synchronize();
-        auto [dLossDSh0Coeffs, dLossDShNCoeffs, dLossDViewDirs] =
+        auto [dLossDSh0Coeffs, dLossDShNCoeffs, dLossDMeans, dLossDWorldToCamMatrices] =
             fvdb::detail::ops::evaluateSphericalHarmonicsBwd(shDegreeToUse,
                                                              numCameras,
                                                              numGaussians,
-                                                             viewDirs,
+                                                             means,
+                                                             worldToCamMatrices,
+                                                             cameraIds,
+                                                             gaussianIds,
                                                              shNCoeffs,
                                                              dLossDRenderQuantities,
                                                              radii,
+                                                             false,
                                                              false);
         torch::cuda::synchronize();
     }
@@ -434,14 +529,18 @@ TEST_F(SphericalHarmonincsBackwardTestFixture, BenchmarkShNWithoutViewDirGrad) {
     for (int i = 0; i < totalIters; i += 1) {
         torch::cuda::synchronize();
         auto start = std::chrono::high_resolution_clock::now();
-        auto [dLossDSh0Coeffs, dLossDShNCoeffs, dLossDViewDirs] =
+        auto [dLossDSh0Coeffs, dLossDShNCoeffs, dLossDMeans, dLossDWorldToCamMatrices] =
             fvdb::detail::ops::evaluateSphericalHarmonicsBwd(shDegreeToUse,
                                                              numCameras,
                                                              numGaussians,
-                                                             viewDirs,
+                                                             means,
+                                                             worldToCamMatrices,
+                                                             cameraIds,
+                                                             gaussianIds,
                                                              shNCoeffs,
                                                              dLossDRenderQuantities,
                                                              radii,
+                                                             false,
                                                              false);
         torch::cuda::synchronize();
         auto end      = std::chrono::high_resolution_clock::now();

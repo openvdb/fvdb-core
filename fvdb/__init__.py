@@ -116,7 +116,7 @@ def gaussian_render_jagged(
         scales: Jagged tensor of Gaussian scales ``[sum(N_i), 3]``.
         opacities: Jagged tensor of Gaussian opacities ``[sum(N_i)]``.
         sh_coeffs: Jagged tensor of SH coefficients ``[sum(N_i), K, D]``.
-        viewmats: Jagged tensor of world-to-camera matrices ``[sum(C_i), 4, 4]``.
+        viewmats: Jagged tensor of rigid world-to-camera matrices ``[sum(C_i), 4, 4]``.
         Ks: Jagged tensor of intrinsic matrices ``[sum(C_i), 3, 3]``.
         image_width: Output image width in pixels.
         image_height: Output image height in pixels.
@@ -161,7 +161,7 @@ def gaussian_render_jagged(
     dd1 = means.joffsets[1:].repeat_interleave(c_sizes, 0)
     shifts = dd0[1:] - dd1[:-1]
     shifts = torch.cat([torch.tensor([0], device=means.device), shifts])
-    shifts_cumsum = shifts.cumsum(0)
+    shifts_cumsum = shifts.cumsum(0, dtype=torch.int32)
     gaussian_ids = torch.arange(camera_ids.size(0), device=means.device, dtype=torch.int32)
     gaussian_ids = gaussian_ids + shifts_cumsum.repeat_interleave(tt, 0)
 
@@ -210,7 +210,10 @@ def gaussian_render_jagged(
         render_quantities = _EvaluateGaussianSHFn.apply(
             actual_sh_degree,
             1,
-            None,
+            means.jdata,
+            viewmats.jdata,
+            camera_ids,
+            gaussian_ids,
             sh0.permute(1, 0, 2),  # [nnz, 1, D]
             None,
             radii.unsqueeze(0),  # [1, nnz, 2] (per-axis)
@@ -218,17 +221,13 @@ def gaussian_render_jagged(
     else:
         sh0 = sh_coeffs_batched[0, :, :].unsqueeze(0)  # [1, nnz, D]
         shN = sh_coeffs_batched[1:, :, :]  # [K-1, nnz, D]
-        # FIXME (Francis): Compute view directions in the kernel instead of
-        # materializing a large tensor here.  Doing so would require updating
-        # the current backward pass as well.
-        camtoworlds = torch.linalg.inv(viewmats.jdata)  # [ccz, 4, 4]
-        # NOTE: dirs are not normalized here; the SH evaluation kernel normalizes
-        # them internally.
-        dirs = means.jdata[gaussian_ids] - camtoworlds[camera_ids, :3, 3]
         render_quantities = _EvaluateGaussianSHFn.apply(
             actual_sh_degree,
             1,
-            dirs.unsqueeze(0),  # [1, nnz, 3]
+            means.jdata,
+            viewmats.jdata,
+            camera_ids,
+            gaussian_ids,
             sh0.permute(1, 0, 2),  # [nnz, 1, D]
             shN.permute(1, 0, 2),  # [nnz, K-1, D]
             radii.unsqueeze(0),  # [1, nnz, 2] (per-axis)
@@ -278,23 +277,25 @@ from ._gaussian_autograd import _EvaluateGaussianSHFn
 def evaluate_spherical_harmonics(
     sh_degree: int,
     num_cameras: int,
+    means: torch.Tensor,
+    world_to_camera_matrices: torch.Tensor,
     sh0: torch.Tensor,
     radii: torch.Tensor,
     shN: torch.Tensor | None = None,
-    view_directions: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Evaluate spherical harmonics to compute view-dependent features/colors.
 
     Args:
         sh_degree: Degree of spherical harmonics to use (0-3 typically).
         num_cameras: Number of camera views (C).
+        means: World-space Gaussian means with shape [N, 3].
+        world_to_camera_matrices: Rigid world-to-camera transforms with shape
+            [C, 4, 4]. Rotation blocks must be orthonormal.
         sh0: DC term coefficients with shape [N, 1, D].
         radii: Per-axis projected radii with shape [C, N, 2] (int32). A point
                is masked out unless both axes are positive.
         shN: Higher-order SH coefficients with shape [N, K-1, D] where
              K = (sh_degree+1)^2. Required when sh_degree > 0.
-        view_directions: Unnormalized view directions with shape [C, N, 3].
-                         Required when sh_degree > 0.
 
     Returns:
         Tensor of shape [C, N, D] containing the evaluated features/colors.
@@ -307,14 +308,22 @@ def evaluate_spherical_harmonics(
         raise ValueError(f"radii must be shape [C, N, 2], got {tuple(radii.shape)}")
     if sh0.shape[0] != radii.shape[1]:
         raise ValueError(f"sh0.shape[0] ({sh0.shape[0]}) must match radii.shape[1] ({radii.shape[1]})")
-    if sh_degree > 0 and view_directions is None:
-        raise ValueError("view_directions is required when sh_degree > 0")
-    if view_directions is None:
-        view_directions = radii.new_empty(0)
     if shN is None:
         N, _, D = sh0.shape
         shN = sh0.new_empty(N, 0, D)
-    return _EvaluateGaussianSHFn.apply(sh_degree, num_cameras, view_directions, sh0, shN, radii)
+
+    empty_ids = torch.empty(0, dtype=torch.int32, device=means.device)
+    return _EvaluateGaussianSHFn.apply(
+        sh_degree,
+        num_cameras,
+        means,
+        world_to_camera_matrices,
+        empty_ids,
+        empty_ids,
+        sh0,
+        shN,
+        radii,
+    )
 
 
 # Import torch-compatible functions that work with both Tensor and JaggedTensor
