@@ -278,7 +278,7 @@ TEST_P(SphericalHarmonincsBackwardTestFixture, TestShBackward) {
     }
 }
 
-TEST(GaussianSphericalHarmonicsBackwardTest, IndexedWorldInputsScatterGeometryGradients) {
+TEST(GaussianSphericalHarmonicsBackwardTest, TestPackedModeScattersGeometryGradients) {
     const auto floatOptsCUDA = fvdb::test::tensorOpts<float>(torch::kCUDA);
     const auto intOptsCUDA   = fvdb::test::tensorOpts<int>(torch::kCUDA);
 
@@ -373,12 +373,12 @@ TEST_F(SphericalHarmonincsBackwardTestFixture, BenchmarkSh0) {
         totalTime += duration.count();
     }
 
-    std::cerr << "Avg for deg-0 Spherical Harmonics Backward with no viewDir grad (over "
+    std::cerr << "Avg for deg-0 Spherical Harmonics Backward with no geometry grad (over "
               << totalIters << " iters): " << (double(totalTime) / double(totalIters)) << " ms"
               << std::endl;
 }
 
-TEST_F(SphericalHarmonincsBackwardTestFixture, BenchmarkSh0WithViewDirGrad) {
+TEST_F(SphericalHarmonincsBackwardTestFixture, BenchmarkSh0WithGeometryGrad) {
     const float azimuth         = 0.0f;
     const float elevation       = 0.0f;
     const int64_t shDegreeToUse = 0;
@@ -432,11 +432,12 @@ TEST_F(SphericalHarmonincsBackwardTestFixture, BenchmarkSh0WithViewDirGrad) {
         totalTime += duration.count();
     }
 
-    std::cerr << "Avg for deg-0 Spherical Harmonics Backward with viewDir grad (over " << totalIters
-              << " iters): " << (double(totalTime) / double(totalIters)) << " ms" << std::endl;
+    std::cerr << "Avg for deg-0 Spherical Harmonics Backward with geometry grad (over "
+              << totalIters << " iters): " << (double(totalTime) / double(totalIters)) << " ms"
+              << std::endl;
 }
 
-TEST_F(SphericalHarmonincsBackwardTestFixture, BenchmarkShNWithViewDirGrad) {
+TEST_F(SphericalHarmonincsBackwardTestFixture, BenchmarkShNWithGeometryGrad) {
     const float azimuth         = 0.0f;
     const float elevation       = 0.0f;
     const int64_t shDegreeToUse = 4;
@@ -490,11 +491,12 @@ TEST_F(SphericalHarmonincsBackwardTestFixture, BenchmarkShNWithViewDirGrad) {
         totalTime += duration.count();
     }
 
-    std::cerr << "Avg for deg-N Spherical Harmonics Backward with viewDir grad (over " << totalIters
-              << " iters): " << (double(totalTime) / double(totalIters)) << " ms" << std::endl;
+    std::cerr << "Avg for deg-N Spherical Harmonics Backward with geometry grad (over "
+              << totalIters << " iters): " << (double(totalTime) / double(totalIters)) << " ms"
+              << std::endl;
 }
 
-TEST_F(SphericalHarmonincsBackwardTestFixture, BenchmarkShNWithoutViewDirGrad) {
+TEST_F(SphericalHarmonincsBackwardTestFixture, BenchmarkShNWithoutGeometryGrad) {
     const float azimuth         = 0.0f;
     const float elevation       = 0.0f;
     const int64_t shDegreeToUse = 4;
@@ -548,7 +550,7 @@ TEST_F(SphericalHarmonincsBackwardTestFixture, BenchmarkShNWithoutViewDirGrad) {
         totalTime += duration.count();
     }
 
-    std::cerr << "Avg for deg-N Spherical Harmonics Backward with no viewDir grad (over "
+    std::cerr << "Avg for deg-N Spherical Harmonics Backward with no geometry grad (over "
               << totalIters << " iters): " << (double(totalTime) / double(totalIters)) << " ms"
               << std::endl;
 }

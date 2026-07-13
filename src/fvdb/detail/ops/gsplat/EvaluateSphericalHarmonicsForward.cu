@@ -133,7 +133,8 @@ evalShFunction(const int64_t degree,  // degree of SH to be evaluated
 // transforms [R | t], so the camera center is -R^T t and the direction is mean + R^T t.
 template <typename T>
 inline __device__ float3
-viewDirectionFromViewMatrix(const T *__restrict__ mean, const T *__restrict__ worldToCamMatrix) {
+viewDirectionFromWorldToCamMatrix(const T *__restrict__ mean,
+                                  const T *__restrict__ worldToCamMatrix) {
     const T tx = worldToCamMatrix[3];
     const T ty = worldToCamMatrix[7];
     const T tz = worldToCamMatrix[11];
@@ -144,9 +145,9 @@ viewDirectionFromViewMatrix(const T *__restrict__ mean, const T *__restrict__ wo
 }
 
 // Evaluate SH directly from world-space Gaussian means and rigid world-to-camera matrices.
-// cameraIds and gaussianIds are both null for a dense [C, N] problem. For an indexed problem,
-// the logical shape is [1, N] and the two arrays map each logical Gaussian-camera pair back to
-// its camera and world-space Gaussian.
+// cameraIds and gaussianIds are both null for an unpacked [C, N] problem. For packed evaluation,
+// the logical shape is [1, N] and the two arrays map each packed Gaussian-camera pair back to its
+// source camera and world-space Gaussian.
 template <typename T>
 __global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
 computeSh(
@@ -171,7 +172,7 @@ computeSh(
         return;
     }
 
-    const auto eid = idx / D;              // cidx * N + gidx
+    const auto eid = idx / D;              // cid * N + gid
     const auto cid = eid / count;          // camera index
     const auto gid = eid % count + offset; // gaussian index
     const auto c   = idx % D;              // render channel
@@ -182,10 +183,10 @@ computeSh(
     if (visible) {
         static_assert(std::is_same<T, float>::value,
                       "SH kernels assume float precision (float3 casts)");
-        const int64_t worldCid = cameraIds == nullptr ? cid : cameraIds[gid];
-        const int64_t worldGid = gaussianIds == nullptr ? gid : gaussianIds[gid];
-        const float3 viewDir =
-            viewDirectionFromViewMatrix(means + worldGid * 3, worldToCamMatrices + worldCid * 16);
+        const int64_t cameraId   = cameraIds == nullptr ? cid : cameraIds[gid];
+        const int64_t gaussianId = gaussianIds == nullptr ? gid : gaussianIds[gid];
+        const float3 viewDir     = viewDirectionFromWorldToCamMatrix(
+            means + gaussianId * 3, worldToCamMatrices + cameraId * 16);
         result = evalShFunction(shDegreeToUse, gid, c, viewDir, sh0Coeffs, shNCoeffs);
     }
     outRenderQuantities[(cid * N + gid) * D + c] = result;
@@ -255,10 +256,10 @@ dispatchEvaluateSphericalHarmonicsFwd<torch::kCUDA>(const int64_t shDegreeToUse,
 
     const at::cuda::OptionalCUDAGuard device_guard(at::device_of(sh0Coeffs));
 
-    const bool hasShNCoeffs = shNCoeffs.defined();
-    const bool hasMeans     = means.defined();
-    const bool hasViewMats  = worldToCamMatrices.defined();
-    const bool hasRadii     = radii.defined();
+    const bool hasShNCoeffs          = shNCoeffs.defined();
+    const bool hasMeans              = means.defined();
+    const bool hasWorldToCamMatrices = worldToCamMatrices.defined();
+    const bool hasRadii              = radii.defined();
 
     const int64_t numGaussians = sh0Coeffs.size(0);
 
@@ -267,7 +268,7 @@ dispatchEvaluateSphericalHarmonicsFwd<torch::kCUDA>(const int64_t shDegreeToUse,
 
     if (hasShNCoeffs) {
         TORCH_CHECK_VALUE(hasMeans, "means must be defined if shNCoeffs is defined");
-        TORCH_CHECK_VALUE(hasViewMats,
+        TORCH_CHECK_VALUE(hasWorldToCamMatrices,
                           "worldToCamMatrices must be defined if shNCoeffs is defined");
         TORCH_CHECK_VALUE(shNCoeffs.is_cuda(), "shNCoeffs must be a CUDA tensor");
         TORCH_CHECK_VALUE(shNCoeffs.dim() == 3, "shNCoeffs must have shape [N, K, D]");
@@ -295,9 +296,10 @@ dispatchEvaluateSphericalHarmonicsFwd<torch::kCUDA>(const int64_t shDegreeToUse,
 
     const bool hasCameraIds   = cameraIds.defined() && cameraIds.numel() > 0;
     const bool hasGaussianIds = gaussianIds.defined() && gaussianIds.numel() > 0;
-    const bool indexed        = hasCameraIds || hasGaussianIds ||
-                         (hasMeans && hasViewMats && cameraIds.defined() && gaussianIds.defined() &&
-                          (means.size(0) != N || worldToCamMatrices.size(0) != C));
+    const bool isPacked =
+        hasCameraIds || hasGaussianIds ||
+        (hasMeans && hasWorldToCamMatrices && cameraIds.defined() && gaussianIds.defined() &&
+         (means.size(0) != N || worldToCamMatrices.size(0) != C));
 
     // View directions are computed in the kernel from the means and world-to-camera matrices.
     if (hasShNCoeffs && K > 0 && shDegreeToUse > 0) {
@@ -317,8 +319,8 @@ dispatchEvaluateSphericalHarmonicsFwd<torch::kCUDA>(const int64_t shDegreeToUse,
         TORCH_CHECK_VALUE(
             hasCameraIds == hasGaussianIds,
             "cameraIds and gaussianIds must either both be empty or both be populated");
-        if (indexed) {
-            TORCH_CHECK_VALUE(C == 1, "indexed SH evaluation must have numCameras == 1");
+        if (isPacked) {
+            TORCH_CHECK_VALUE(C == 1, "packed SH evaluation must have numCameras == 1");
             TORCH_CHECK_VALUE(cameraIds.is_cuda() && gaussianIds.is_cuda(),
                               "cameraIds and gaussianIds must be CUDA tensors");
             TORCH_CHECK_VALUE(cameraIds.scalar_type() == torch::kInt32 &&
@@ -333,9 +335,9 @@ dispatchEvaluateSphericalHarmonicsFwd<torch::kCUDA>(const int64_t shDegreeToUse,
                                   gaussianIds.device() == sh0Coeffs.device(),
                               "cameraIds and gaussianIds must be on the same device as sh0Coeffs");
         } else {
-            TORCH_CHECK_VALUE(means.size(0) == N, "means must have shape [N, 3] in dense mode");
+            TORCH_CHECK_VALUE(means.size(0) == N, "means must have shape [N, 3] in unpacked mode");
             TORCH_CHECK_VALUE(worldToCamMatrices.size(0) == C,
-                              "worldToCamMatrices must have shape [C, 4, 4] in dense mode");
+                              "worldToCamMatrices must have shape [C, 4, 4] in unpacked mode");
         }
     }
 
@@ -358,8 +360,8 @@ dispatchEvaluateSphericalHarmonicsFwd<torch::kCUDA>(const int64_t shDegreeToUse,
             shDegreeToUse,
             means.data_ptr<scalar_t>(),
             worldToCamMatrices.data_ptr<scalar_t>(),
-            indexed ? cameraIds.data_ptr<int32_t>() : nullptr,
-            indexed ? gaussianIds.data_ptr<int32_t>() : nullptr,
+            isPacked ? cameraIds.data_ptr<int32_t>() : nullptr,
+            isPacked ? gaussianIds.data_ptr<int32_t>() : nullptr,
             sh0Coeffs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
             shNCoeffs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
             radiiPtr,
@@ -398,10 +400,10 @@ dispatchEvaluateSphericalHarmonicsFwd<torch::kPrivateUse1>(const int64_t shDegre
     // 2: sh0Coeffs + shNCoeffs + world-space geometry
     // 2: sh0Coeffs + shNCoeffs + world-space geometry + radii
 
-    const bool hasShNCoeffs = shNCoeffs.defined();
-    const bool hasMeans     = means.defined();
-    const bool hasViewMats  = worldToCamMatrices.defined();
-    const bool hasRadii     = radii.defined();
+    const bool hasShNCoeffs          = shNCoeffs.defined();
+    const bool hasMeans              = means.defined();
+    const bool hasWorldToCamMatrices = worldToCamMatrices.defined();
+    const bool hasRadii              = radii.defined();
 
     const int64_t numGaussians = sh0Coeffs.size(0);
 
@@ -410,7 +412,7 @@ dispatchEvaluateSphericalHarmonicsFwd<torch::kPrivateUse1>(const int64_t shDegre
 
     if (hasShNCoeffs) {
         TORCH_CHECK_VALUE(hasMeans, "means must be defined if shNCoeffs is defined");
-        TORCH_CHECK_VALUE(hasViewMats,
+        TORCH_CHECK_VALUE(hasWorldToCamMatrices,
                           "worldToCamMatrices must be defined if shNCoeffs is defined");
         TORCH_CHECK_VALUE(shNCoeffs.is_privateuseone(), "shNCoeffs must be a PrivateUse1 tensor");
         TORCH_CHECK_VALUE(shNCoeffs.dim() == 3, "shNCoeffs must have shape [N, K, D]");
@@ -439,7 +441,7 @@ dispatchEvaluateSphericalHarmonicsFwd<torch::kPrivateUse1>(const int64_t shDegre
         const bool hasCameraIds   = cameraIds.defined() && cameraIds.numel() > 0;
         const bool hasGaussianIds = gaussianIds.defined() && gaussianIds.numel() > 0;
         TORCH_CHECK_VALUE(!hasCameraIds && !hasGaussianIds,
-                          "indexed SH evaluation is not available on PrivateUse1");
+                          "packed SH evaluation is not available on PrivateUse1");
         TORCH_CHECK_VALUE(means.is_privateuseone() && means.scalar_type() == torch::kFloat32,
                           "means must be a float32 PrivateUse1 tensor");
         TORCH_CHECK_VALUE(means.dim() == 2 && means.size(0) == N && means.size(1) == 3 &&

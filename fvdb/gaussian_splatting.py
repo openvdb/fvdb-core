@@ -324,7 +324,7 @@ class GaussianSplat3d:
 
     Together, these define a radiance field which can be volume rendered to produce images and depths from
     arbitrary viewpoints. This class provides a variety of methods for rendering and manipulating Gaussian splats radiance fields.
-    Camera matrices supplied to its rendering methods are interpreted as rigid world-to-camera transforms
+    World-to-camera matrices supplied to its rendering methods are interpreted as rigid transforms
     with orthonormal rotation blocks.
     These include:
 

@@ -34,7 +34,8 @@ writeDLossDViewDir(T x, T y, T z, T vX, T vY, T vZ, T inorm, float3 *dLossDViewD
 
 template <typename T>
 inline __device__ float3
-viewDirectionFromViewMatrix(const T *__restrict__ mean, const T *__restrict__ worldToCamMatrix) {
+viewDirectionFromWorldToCamMatrix(const T *__restrict__ mean,
+                                  const T *__restrict__ worldToCamMatrix) {
     const T tx = worldToCamMatrix[3];
     const T ty = worldToCamMatrix[7];
     const T tz = worldToCamMatrix[11];
@@ -319,7 +320,7 @@ computeShBackward(
         return;
     }
 
-    const auto eid = idx / D;              // cidx * N + gidx
+    const auto eid = idx / D;              // cid * N + gid
     const auto cid = eid / count;          // camera index
     const auto gid = eid % count + offset; // gaussian index
     const auto c   = idx % D;              // render channel
@@ -330,10 +331,11 @@ computeShBackward(
 
     static_assert(std::is_same<T, float>::value,
                   "SH kernels assume float precision (float3 casts)");
-    const int64_t worldCid    = cameraIds == nullptr ? cid : cameraIds[gid];
-    const int64_t worldGid    = gaussianIds == nullptr ? gid : gaussianIds[gid];
-    const T *worldToCamMatrix = worldToCamMatrices + worldCid * 16;
-    const float3 viewDir      = viewDirectionFromViewMatrix(means + worldGid * 3, worldToCamMatrix);
+    const int64_t cameraId    = cameraIds == nullptr ? cid : cameraIds[gid];
+    const int64_t gaussianId  = gaussianIds == nullptr ? gid : gaussianIds[gid];
+    const T *worldToCamMatrix = worldToCamMatrices + cameraId * 16;
+    const float3 viewDir =
+        viewDirectionFromWorldToCamMatrix(means + gaussianId * 3, worldToCamMatrix);
     const T *dLossDRenderQuantityPtr = dLossDRenderQuantities[cid][gid].data();
 
     float3 dLossDViewDir{T(0), T(0), T(0)};
@@ -351,8 +353,9 @@ computeShBackward(
                       dLossDViewDirPtr);
 
     // Adjacent threads handle the feature channels of the same camera-Gaussian pair. Reduce
-    // their direction gradients before chaining into means and view matrices so the geometry
-    // path performs one set of atomics per pair (or per warp for D > warp size), not per channel.
+    // their direction gradients before chaining into means and world-to-camera matrices so the
+    // geometry path performs one set of atomics per pair (or per warp for D > warp size), not per
+    // channel.
     if (dLossDViewDirPtr != nullptr) {
         auto activeThreads = cooperative_groups::coalesced_threads();
         auto pairThreads =
@@ -369,7 +372,7 @@ computeShBackward(
     }
 
     if (outDLossDMeans != nullptr) {
-        T *dLossDMean = outDLossDMeans + worldGid * 3;
+        T *dLossDMean = outDLossDMeans + gaussianId * 3;
         gpuAtomicAdd(dLossDMean, dLossDViewDir.x);
         gpuAtomicAdd(dLossDMean + 1, dLossDViewDir.y);
         gpuAtomicAdd(dLossDMean + 2, dLossDViewDir.z);
@@ -380,7 +383,7 @@ computeShBackward(
         // their direction gradients by source camera before touching the hot output matrix.
         auto activePairs = cooperative_groups::coalesced_threads();
         auto cameraPairs =
-            cooperative_groups::labeled_partition(activePairs, static_cast<int>(worldCid));
+            cooperative_groups::labeled_partition(activePairs, static_cast<int>(cameraId));
         const T gx = cooperative_groups::reduce(
             cameraPairs, T(dLossDViewDir.x), cooperative_groups::plus<T>());
         const T gy = cooperative_groups::reduce(
@@ -388,26 +391,26 @@ computeShBackward(
         const T gz = cooperative_groups::reduce(
             cameraPairs, T(dLossDViewDir.z), cooperative_groups::plus<T>());
         if (cameraPairs.thread_rank() == 0) {
-            T *outMatrix = outDLossDWorldToCamMatrices + worldCid * 16;
-            const T tx   = worldToCamMatrix[3];
-            const T ty   = worldToCamMatrix[7];
-            const T tz   = worldToCamMatrix[11];
-            atomicAdd_system(outMatrix, tx * gx);
-            atomicAdd_system(outMatrix + 1, tx * gy);
-            atomicAdd_system(outMatrix + 2, tx * gz);
-            atomicAdd_system(outMatrix + 3,
+            T *outDLossDWorldToCamMatrix = outDLossDWorldToCamMatrices + cameraId * 16;
+            const T tx                   = worldToCamMatrix[3];
+            const T ty                   = worldToCamMatrix[7];
+            const T tz                   = worldToCamMatrix[11];
+            atomicAdd_system(outDLossDWorldToCamMatrix, tx * gx);
+            atomicAdd_system(outDLossDWorldToCamMatrix + 1, tx * gy);
+            atomicAdd_system(outDLossDWorldToCamMatrix + 2, tx * gz);
+            atomicAdd_system(outDLossDWorldToCamMatrix + 3,
                              worldToCamMatrix[0] * gx + worldToCamMatrix[1] * gy +
                                  worldToCamMatrix[2] * gz);
-            atomicAdd_system(outMatrix + 4, ty * gx);
-            atomicAdd_system(outMatrix + 5, ty * gy);
-            atomicAdd_system(outMatrix + 6, ty * gz);
-            atomicAdd_system(outMatrix + 7,
+            atomicAdd_system(outDLossDWorldToCamMatrix + 4, ty * gx);
+            atomicAdd_system(outDLossDWorldToCamMatrix + 5, ty * gy);
+            atomicAdd_system(outDLossDWorldToCamMatrix + 6, ty * gz);
+            atomicAdd_system(outDLossDWorldToCamMatrix + 7,
                              worldToCamMatrix[4] * gx + worldToCamMatrix[5] * gy +
                                  worldToCamMatrix[6] * gz);
-            atomicAdd_system(outMatrix + 8, tz * gx);
-            atomicAdd_system(outMatrix + 9, tz * gy);
-            atomicAdd_system(outMatrix + 10, tz * gz);
-            atomicAdd_system(outMatrix + 11,
+            atomicAdd_system(outDLossDWorldToCamMatrix + 8, tz * gx);
+            atomicAdd_system(outDLossDWorldToCamMatrix + 9, tz * gy);
+            atomicAdd_system(outDLossDWorldToCamMatrix + 10, tz * gz);
+            atomicAdd_system(outDLossDWorldToCamMatrix + 11,
                              worldToCamMatrix[8] * gx + worldToCamMatrix[9] * gy +
                                  worldToCamMatrix[10] * gz);
         }
@@ -481,14 +484,14 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kCUDA>(
     FVDB_FUNC_RANGE();
     const at::cuda::OptionalCUDAGuard device_guard(at::device_of(dLossDRenderQuantities));
 
-    const bool hasShNCoeffs = shNCoeffs.defined();
-    const bool hasMeans     = means.defined();
-    const bool hasViewMats  = worldToCamMatrices.defined();
-    const bool hasRadii     = radii.defined();
+    const bool hasShNCoeffs          = shNCoeffs.defined();
+    const bool hasMeans              = means.defined();
+    const bool hasWorldToCamMatrices = worldToCamMatrices.defined();
+    const bool hasRadii              = radii.defined();
 
     if (hasShNCoeffs) {
         TORCH_CHECK_VALUE(hasMeans, "means must be defined if shNCoeffs is defined");
-        TORCH_CHECK_VALUE(hasViewMats,
+        TORCH_CHECK_VALUE(hasWorldToCamMatrices,
                           "worldToCamMatrices must be defined if shNCoeffs is defined");
         TORCH_CHECK_VALUE(shNCoeffs.is_cuda(), "shNCoeffs must be a CUDA tensor");
         TORCH_CHECK_VALUE(shNCoeffs.dim() == 3, "shNCoeffs must have shape [N, K-1, D]");
@@ -519,9 +522,10 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kCUDA>(
 
     const bool hasCameraIds   = cameraIds.defined() && cameraIds.numel() > 0;
     const bool hasGaussianIds = gaussianIds.defined() && gaussianIds.numel() > 0;
-    const bool indexed        = hasCameraIds || hasGaussianIds ||
-                         (hasMeans && hasViewMats && cameraIds.defined() && gaussianIds.defined() &&
-                          (means.size(0) != N || worldToCamMatrices.size(0) != C));
+    const bool isPacked =
+        hasCameraIds || hasGaussianIds ||
+        (hasMeans && hasWorldToCamMatrices && cameraIds.defined() && gaussianIds.defined() &&
+         (means.size(0) != N || worldToCamMatrices.size(0) != C));
 
     // View directions are computed in the kernel from the means and world-to-camera matrices.
     if (hasShNCoeffs && K > 1 && shDegreeToUse > 0) {
@@ -538,12 +542,12 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kCUDA>(
         TORCH_CHECK_VALUE(
             means.device() == dLossDRenderQuantities.device() &&
                 worldToCamMatrices.device() == dLossDRenderQuantities.device(),
-            "means and worldToCamMatrices must be on the same device as dLossDColors");
+            "means and worldToCamMatrices must be on the same device as dLossDRenderQuantities");
         TORCH_CHECK_VALUE(
             hasCameraIds == hasGaussianIds,
             "cameraIds and gaussianIds must either both be empty or both be populated");
-        if (indexed) {
-            TORCH_CHECK_VALUE(C == 1, "indexed SH evaluation must have numCameras == 1");
+        if (isPacked) {
+            TORCH_CHECK_VALUE(C == 1, "packed SH evaluation must have numCameras == 1");
             TORCH_CHECK_VALUE(cameraIds.is_cuda() && gaussianIds.is_cuda(),
                               "cameraIds and gaussianIds must be CUDA tensors");
             TORCH_CHECK_VALUE(cameraIds.scalar_type() == torch::kInt32 &&
@@ -557,11 +561,11 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kCUDA>(
             TORCH_CHECK_VALUE(
                 cameraIds.device() == dLossDRenderQuantities.device() &&
                     gaussianIds.device() == dLossDRenderQuantities.device(),
-                "cameraIds and gaussianIds must be on the same device as dLossDColors");
+                "cameraIds and gaussianIds must be on the same device as dLossDRenderQuantities");
         } else {
-            TORCH_CHECK_VALUE(means.size(0) == N, "means must have shape [N, 3] in dense mode");
+            TORCH_CHECK_VALUE(means.size(0) == N, "means must have shape [N, 3] in unpacked mode");
             TORCH_CHECK_VALUE(worldToCamMatrices.size(0) == C,
-                              "worldToCamMatrices must have shape [C, 4, 4] in dense mode");
+                              "worldToCamMatrices must have shape [C, 4, 4] in unpacked mode");
         }
     }
 
@@ -599,8 +603,8 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kCUDA>(
             shDegreeToUse,
             means.data_ptr<scalar_t>(),
             worldToCamMatrices.data_ptr<scalar_t>(),
-            indexed ? cameraIds.data_ptr<int32_t>() : nullptr,
-            indexed ? gaussianIds.data_ptr<int32_t>() : nullptr,
+            isPacked ? cameraIds.data_ptr<int32_t>() : nullptr,
+            isPacked ? gaussianIds.data_ptr<int32_t>() : nullptr,
             shNCoeffs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
             radiiPtr,
             dLossDRenderQuantities.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
@@ -655,14 +659,14 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
     const bool computeDLossDWorldToCamMatrices) {
     FVDB_FUNC_RANGE();
 
-    const bool hasShNCoeffs = shNCoeffs.defined();
-    const bool hasMeans     = means.defined();
-    const bool hasViewMats  = worldToCamMatrices.defined();
-    const bool hasRadii     = radii.defined();
+    const bool hasShNCoeffs          = shNCoeffs.defined();
+    const bool hasMeans              = means.defined();
+    const bool hasWorldToCamMatrices = worldToCamMatrices.defined();
+    const bool hasRadii              = radii.defined();
 
     if (hasShNCoeffs) {
         TORCH_CHECK_VALUE(hasMeans, "means must be defined if shNCoeffs is defined");
-        TORCH_CHECK_VALUE(hasViewMats,
+        TORCH_CHECK_VALUE(hasWorldToCamMatrices,
                           "worldToCamMatrices must be defined if shNCoeffs is defined");
         TORCH_CHECK_VALUE(shNCoeffs.is_privateuseone(), "shNCoeffs must be a PrivateUse1 tensor");
         TORCH_CHECK_VALUE(shNCoeffs.dim() == 3, "shNCoeffs must have shape [N, K-1, D]");
@@ -694,7 +698,7 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
         const bool hasCameraIds   = cameraIds.defined() && cameraIds.numel() > 0;
         const bool hasGaussianIds = gaussianIds.defined() && gaussianIds.numel() > 0;
         TORCH_CHECK_VALUE(!hasCameraIds && !hasGaussianIds,
-                          "indexed SH evaluation is not available on PrivateUse1");
+                          "packed SH evaluation is not available on PrivateUse1");
         TORCH_CHECK_VALUE(means.is_privateuseone() && means.scalar_type() == torch::kFloat32,
                           "means must be a float32 PrivateUse1 tensor");
         TORCH_CHECK_VALUE(means.dim() == 2 && means.size(0) == N && means.size(1) == 3 &&
