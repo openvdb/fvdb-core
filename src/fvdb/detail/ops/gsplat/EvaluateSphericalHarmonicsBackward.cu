@@ -465,18 +465,19 @@ dispatchEvaluateSphericalHarmonicsBwd(const int64_t shDegreeToUse,
 
 template <>
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
-dispatchEvaluateSphericalHarmonicsBwd<torch::kCUDA>(const int64_t shDegreeToUse,
-                                                    const int64_t numCameras,
-                                                    const int64_t numGaussians,
-                                                    const torch::Tensor &means,
-                                                    const torch::Tensor &worldToCamMatrices,
-                                                    const torch::Tensor &cameraIds,
-                                                    const torch::Tensor &gaussianIds,
-                                                    const torch::Tensor &shNCoeffs,
-                                                    const torch::Tensor &dLossDRenderQuantities,
-                                                    const torch::Tensor &radii,
-                                                    const bool computeDLossDMeans,
-                                                    const bool computeDLossDWorldToCamMatrices) {
+dispatchEvaluateSphericalHarmonicsBwd<torch::kCUDA>(
+    const int64_t shDegreeToUse,
+    const int64_t numCameras,
+    const int64_t numGaussians,
+    const torch::Tensor &means,                  // [N, 3]
+    const torch::Tensor &worldToCamMatrices,     // [C, 4, 4]
+    const torch::Tensor &cameraIds,              // [N] optional
+    const torch::Tensor &gaussianIds,            // [N] optional
+    const torch::Tensor &shNCoeffs,              // [N, K-1, D]
+    const torch::Tensor &dLossDRenderQuantities, // [C, N, D]
+    const torch::Tensor &radii,                  // [C, N, 2]
+    const bool computeDLossDMeans,
+    const bool computeDLossDWorldToCamMatrices) {
     FVDB_FUNC_RANGE();
     const at::cuda::OptionalCUDAGuard device_guard(at::device_of(dLossDRenderQuantities));
 
@@ -643,13 +644,13 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
     const int64_t shDegreeToUse,
     const int64_t numCameras,
     const int64_t numGaussians,
-    const torch::Tensor &means,
-    const torch::Tensor &worldToCamMatrices,
-    const torch::Tensor &cameraIds,
-    const torch::Tensor &gaussianIds,
-    const torch::Tensor &shNCoeffs,
-    const torch::Tensor &dLossDRenderQuantities,
-    const torch::Tensor &radii,
+    const torch::Tensor &means,                  // [N, 3]
+    const torch::Tensor &worldToCamMatrices,     // [C, 4, 4]
+    const torch::Tensor &cameraIds,              // [N] optional
+    const torch::Tensor &gaussianIds,            // [N] optional
+    const torch::Tensor &shNCoeffs,              // [N, K-1, D]
+    const torch::Tensor &dLossDRenderQuantities, // [C, N, D]
+    const torch::Tensor &radii,                  // [C, N, 2]
     const bool computeDLossDMeans,
     const bool computeDLossDWorldToCamMatrices) {
     FVDB_FUNC_RANGE();
