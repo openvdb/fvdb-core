@@ -128,8 +128,26 @@ evalShFunction(const int64_t degree,  // degree of SH to be evaluated
     return result + T(0.5);
 }
 
-// Evalute Spherical Harmonic functions at the given directions, assuming a uniform minibatch
-// of C cameras, each with N gaussians, and K SH coefficients per gaussian.
+// Compute the world-space direction from a camera center to a Gaussian center without
+// materializing the full [C, N, 3] direction tensor. World-to-camera matrices are rigid
+// transforms [R | t], so the camera center is -R^T t and the direction is mean + R^T t.
+template <typename T>
+inline __device__ float3
+viewDirectionFromWorldToCamMatrix(const T *__restrict__ mean,
+                                  const T *__restrict__ worldToCamMatrix) {
+    const T tx = worldToCamMatrix[3];
+    const T ty = worldToCamMatrix[7];
+    const T tz = worldToCamMatrix[11];
+    return make_float3(
+        mean[0] + worldToCamMatrix[0] * tx + worldToCamMatrix[4] * ty + worldToCamMatrix[8] * tz,
+        mean[1] + worldToCamMatrix[1] * tx + worldToCamMatrix[5] * ty + worldToCamMatrix[9] * tz,
+        mean[2] + worldToCamMatrix[2] * tx + worldToCamMatrix[6] * ty + worldToCamMatrix[10] * tz);
+}
+
+// Evaluate SH directly from world-space Gaussian means and rigid world-to-camera matrices.
+// cameraIds and gaussianIds are both null for an unpacked [C, N] problem. For packed evaluation,
+// the logical shape is [1, N] and the two arrays map each packed Gaussian-camera pair back to its
+// source camera and world-space Gaussian.
 template <typename T>
 __global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
 computeSh(
@@ -139,7 +157,10 @@ computeSh(
     const int64_t N,
     const int64_t D,
     const int64_t shDegreeToUse,
-    const torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits> viewDirs,  // [C, N, 3]
+    const T *__restrict__ means,                                                   // [N, 3]
+    const T *__restrict__ worldToCamMatrices,                                      // [C, 4, 4]
+    const int32_t *__restrict__ cameraIds,                                         // [N] optional
+    const int32_t *__restrict__ gaussianIds,                                       // [N] optional
     const torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits> sh0Coeffs, // [1, N, D]
     const torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits> shNCoeffs, // [K-1, N, D]
     const int *__restrict__ radii,                                                 // [C, N, 2]
@@ -151,7 +172,7 @@ computeSh(
         return;
     }
 
-    const auto eid = idx / D;              // cidx * N + gidx
+    const auto eid = idx / D;              // cid * N + gid
     const auto cid = eid / count;          // camera index
     const auto gid = eid % count + offset; // gaussian index
     const auto c   = idx % D;              // render channel
@@ -162,11 +183,11 @@ computeSh(
     if (visible) {
         static_assert(std::is_same<T, float>::value,
                       "SH kernels assume float precision (float3 casts)");
-        using vec3t            = float3;
-        const bool hasViewDirs = viewDirs.size(0) > 0;
-        const vec3t dir        = hasViewDirs ? *reinterpret_cast<vec3t *>(viewDirs[cid][gid].data())
-                                             : vec3t{0.f, 0.f, 0.f};
-        result                 = evalShFunction(shDegreeToUse, gid, c, dir, sh0Coeffs, shNCoeffs);
+        const int64_t cameraId   = cameraIds == nullptr ? cid : cameraIds[gid];
+        const int64_t gaussianId = gaussianIds == nullptr ? gid : gaussianIds[gid];
+        const float3 viewDir     = viewDirectionFromWorldToCamMatrix(
+            means + gaussianId * 3, worldToCamMatrices + cameraId * 16);
+        result = evalShFunction(shDegreeToUse, gid, c, viewDir, sh0Coeffs, shNCoeffs);
     }
     outRenderQuantities[(cid * N + gid) * D + c] = result;
 }
@@ -203,35 +224,42 @@ computeShDiffuseOnly(const int64_t offset,
 } // namespace
 
 template <torch::DeviceType>
-torch::Tensor dispatchEvaluateSphericalHarmonicsFwd(const int64_t shDegreeToUse,
-                                                    const int64_t numCameras,
-                                                    const torch::Tensor &viewDirs,  // [C, N, 3]
-                                                    const torch::Tensor &sh0Coeffs, // [1, N, D]
-                                                    const torch::Tensor &shNCoeffs, // [N, K-1, D]
-                                                    const torch::Tensor &radii      // [C, N, 2]
+torch::Tensor
+dispatchEvaluateSphericalHarmonicsFwd(const int64_t shDegreeToUse,
+                                      const int64_t numCameras,
+                                      const torch::Tensor &means,              // [N, 3]
+                                      const torch::Tensor &worldToCamMatrices, // [C, 4, 4]
+                                      const torch::Tensor &cameraIds,          // [N] optional
+                                      const torch::Tensor &gaussianIds,        // [N] optional
+                                      const torch::Tensor &sh0Coeffs,          // [N, 1, D]
+                                      const torch::Tensor &shNCoeffs,          // [N, K-1, D]
+                                      const torch::Tensor &radii               // [C, N, 2]
 );
 
 template <>
 torch::Tensor
 dispatchEvaluateSphericalHarmonicsFwd<torch::kCUDA>(const int64_t shDegreeToUse,
                                                     const int64_t numCameras,
-                                                    const torch::Tensor &viewDirs,  // [C, N, 3]
-                                                    const torch::Tensor &sh0Coeffs, // [N, 1, D]
-                                                    const torch::Tensor &shNCoeffs, // [N, K-1, D]
-                                                    const torch::Tensor &radii      // [C, N, 2]
-) {
+                                                    const torch::Tensor &means,
+                                                    const torch::Tensor &worldToCamMatrices,
+                                                    const torch::Tensor &cameraIds,
+                                                    const torch::Tensor &gaussianIds,
+                                                    const torch::Tensor &sh0Coeffs,
+                                                    const torch::Tensor &shNCoeffs,
+                                                    const torch::Tensor &radii) {
     FVDB_FUNC_RANGE();
     // Valid modes:
     // 0: sh0Coeffs only
     // 1: sh0Coeffs + radii
-    // 2: sh0Coeffs + shNCoeffs + viewDirs
-    // 2: sh0Coeffs + shNCoeffs + viewDirs + radii
+    // 2: sh0Coeffs + shNCoeffs + world-space geometry
+    // 2: sh0Coeffs + shNCoeffs + world-space geometry + radii
 
     const at::cuda::OptionalCUDAGuard device_guard(at::device_of(sh0Coeffs));
 
-    const bool hasShNCoeffs = shNCoeffs.defined();
-    const bool hasViewDirs  = viewDirs.defined();
-    const bool hasRadii     = radii.defined();
+    const bool hasShNCoeffs          = shNCoeffs.defined();
+    const bool hasMeans              = means.defined();
+    const bool hasWorldToCamMatrices = worldToCamMatrices.defined();
+    const bool hasRadii              = radii.defined();
 
     const int64_t numGaussians = sh0Coeffs.size(0);
 
@@ -239,7 +267,9 @@ dispatchEvaluateSphericalHarmonicsFwd<torch::kCUDA>(const int64_t shDegreeToUse,
     TORCH_CHECK_VALUE(sh0Coeffs.is_cuda(), "sh0Coeffs must be a CUDA tensor");
 
     if (hasShNCoeffs) {
-        TORCH_CHECK_VALUE(hasViewDirs, "viewDirs must be defined if shNCoeffs is defined");
+        TORCH_CHECK_VALUE(hasMeans, "means must be defined if shNCoeffs is defined");
+        TORCH_CHECK_VALUE(hasWorldToCamMatrices,
+                          "worldToCamMatrices must be defined if shNCoeffs is defined");
         TORCH_CHECK_VALUE(shNCoeffs.is_cuda(), "shNCoeffs must be a CUDA tensor");
         TORCH_CHECK_VALUE(shNCoeffs.dim() == 3, "shNCoeffs must have shape [N, K, D]");
         TORCH_CHECK_VALUE(shNCoeffs.size(0) == numGaussians, "shNCoeffs must have shape [N, K, D]");
@@ -264,15 +294,51 @@ dispatchEvaluateSphericalHarmonicsFwd<torch::kCUDA>(const int64_t shDegreeToUse,
     const auto TOTAL_ELEMS = C * N * D;
     const auto NUM_BLOCKS  = GET_BLOCKS(TOTAL_ELEMS, DEFAULT_BLOCK_DIM);
 
-    // If you are using degree > 0, then we are going to use the directions tensor which means
-    // we need to check it has the right shape
+    const bool hasCameraIds   = cameraIds.defined() && cameraIds.numel() > 0;
+    const bool hasGaussianIds = gaussianIds.defined() && gaussianIds.numel() > 0;
+    const bool isPacked =
+        hasCameraIds || hasGaussianIds ||
+        (hasMeans && hasWorldToCamMatrices && cameraIds.defined() && gaussianIds.defined() &&
+         (means.size(0) != N || worldToCamMatrices.size(0) != C));
+
+    // View directions are computed in the kernel from the means and world-to-camera matrices.
     if (hasShNCoeffs && K > 0 && shDegreeToUse > 0) {
-        TORCH_CHECK_VALUE(viewDirs.dim() == 3, "viewDirs must have shape [C, N, 3]");
+        TORCH_CHECK_VALUE(means.is_cuda() && means.scalar_type() == torch::kFloat32,
+                          "means must be a float32 CUDA tensor");
+        TORCH_CHECK_VALUE(means.dim() == 2 && means.size(1) == 3 && means.is_contiguous(),
+                          "means must be contiguous with shape [N, 3]");
+        TORCH_CHECK_VALUE(worldToCamMatrices.is_cuda() &&
+                              worldToCamMatrices.scalar_type() == torch::kFloat32,
+                          "worldToCamMatrices must be a float32 CUDA tensor");
+        TORCH_CHECK_VALUE(worldToCamMatrices.dim() == 3 && worldToCamMatrices.size(1) == 4 &&
+                              worldToCamMatrices.size(2) == 4 && worldToCamMatrices.is_contiguous(),
+                          "worldToCamMatrices must be contiguous with shape [C, 4, 4]");
+        TORCH_CHECK_VALUE(means.device() == sh0Coeffs.device() &&
+                              worldToCamMatrices.device() == sh0Coeffs.device(),
+                          "means and worldToCamMatrices must be on the same device as sh0Coeffs");
         TORCH_CHECK_VALUE(
-            shNCoeffs.size(0) == viewDirs.size(1),
-            "shNCoeffs must have shape [N, K, D] and viewDirs must have shape [C, N, 3]");
-        TORCH_CHECK_VALUE(viewDirs.is_cuda(), "dirs must be a CUDA tensor");
-        TORCH_CHECK_VALUE(viewDirs.size(-1) == 3, "dirs must have last dimension 3");
+            hasCameraIds == hasGaussianIds,
+            "cameraIds and gaussianIds must either both be empty or both be populated");
+        if (isPacked) {
+            TORCH_CHECK_VALUE(C == 1, "packed SH evaluation must have numCameras == 1");
+            TORCH_CHECK_VALUE(cameraIds.is_cuda() && gaussianIds.is_cuda(),
+                              "cameraIds and gaussianIds must be CUDA tensors");
+            TORCH_CHECK_VALUE(cameraIds.scalar_type() == torch::kInt32 &&
+                                  gaussianIds.scalar_type() == torch::kInt32,
+                              "cameraIds and gaussianIds must be int32 tensors");
+            TORCH_CHECK_VALUE(cameraIds.dim() == 1 && gaussianIds.dim() == 1 &&
+                                  cameraIds.size(0) == N && gaussianIds.size(0) == N,
+                              "cameraIds and gaussianIds must have shape [N]");
+            TORCH_CHECK_VALUE(cameraIds.is_contiguous() && gaussianIds.is_contiguous(),
+                              "cameraIds and gaussianIds must be contiguous");
+            TORCH_CHECK_VALUE(cameraIds.device() == sh0Coeffs.device() &&
+                                  gaussianIds.device() == sh0Coeffs.device(),
+                              "cameraIds and gaussianIds must be on the same device as sh0Coeffs");
+        } else {
+            TORCH_CHECK_VALUE(means.size(0) == N, "means must have shape [N, 3] in unpacked mode");
+            TORCH_CHECK_VALUE(worldToCamMatrices.size(0) == C,
+                              "worldToCamMatrices must have shape [C, 4, 4] in unpacked mode");
+        }
     }
 
     if (N == 0) {
@@ -292,7 +358,10 @@ dispatchEvaluateSphericalHarmonicsFwd<torch::kCUDA>(const int64_t shDegreeToUse,
             N,
             D,
             shDegreeToUse,
-            viewDirs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
+            means.data_ptr<scalar_t>(),
+            worldToCamMatrices.data_ptr<scalar_t>(),
+            isPacked ? cameraIds.data_ptr<int32_t>() : nullptr,
+            isPacked ? gaussianIds.data_ptr<int32_t>() : nullptr,
             sh0Coeffs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
             shNCoeffs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
             radiiPtr,
@@ -315,24 +384,26 @@ dispatchEvaluateSphericalHarmonicsFwd<torch::kCUDA>(const int64_t shDegreeToUse,
 
 template <>
 torch::Tensor
-dispatchEvaluateSphericalHarmonicsFwd<torch::kPrivateUse1>(
-    const int64_t shDegreeToUse,
-    const int64_t numCameras,
-    const torch::Tensor &viewDirs,  // [C, N, 3]
-    const torch::Tensor &sh0Coeffs, // [N, 1, D]
-    const torch::Tensor &shNCoeffs, // [N, K-1, D]
-    const torch::Tensor &radii      // [C, N, 2]
-) {
+dispatchEvaluateSphericalHarmonicsFwd<torch::kPrivateUse1>(const int64_t shDegreeToUse,
+                                                           const int64_t numCameras,
+                                                           const torch::Tensor &means,
+                                                           const torch::Tensor &worldToCamMatrices,
+                                                           const torch::Tensor &cameraIds,
+                                                           const torch::Tensor &gaussianIds,
+                                                           const torch::Tensor &sh0Coeffs,
+                                                           const torch::Tensor &shNCoeffs,
+                                                           const torch::Tensor &radii) {
     FVDB_FUNC_RANGE();
     // Valid modes:
     // 0: sh0Coeffs only
     // 1: sh0Coeffs + radii
-    // 2: sh0Coeffs + shNCoeffs + viewDirs
-    // 2: sh0Coeffs + shNCoeffs + viewDirs + radii
+    // 2: sh0Coeffs + shNCoeffs + world-space geometry
+    // 2: sh0Coeffs + shNCoeffs + world-space geometry + radii
 
-    const bool hasShNCoeffs = shNCoeffs.defined();
-    const bool hasViewDirs  = viewDirs.defined();
-    const bool hasRadii     = radii.defined();
+    const bool hasShNCoeffs          = shNCoeffs.defined();
+    const bool hasMeans              = means.defined();
+    const bool hasWorldToCamMatrices = worldToCamMatrices.defined();
+    const bool hasRadii              = radii.defined();
 
     const int64_t numGaussians = sh0Coeffs.size(0);
 
@@ -340,7 +411,9 @@ dispatchEvaluateSphericalHarmonicsFwd<torch::kPrivateUse1>(
     TORCH_CHECK_VALUE(sh0Coeffs.is_privateuseone(), "sh0Coeffs must be a PrivateUse1 tensor");
 
     if (hasShNCoeffs) {
-        TORCH_CHECK_VALUE(hasViewDirs, "viewDirs must be defined if shNCoeffs is defined");
+        TORCH_CHECK_VALUE(hasMeans, "means must be defined if shNCoeffs is defined");
+        TORCH_CHECK_VALUE(hasWorldToCamMatrices,
+                          "worldToCamMatrices must be defined if shNCoeffs is defined");
         TORCH_CHECK_VALUE(shNCoeffs.is_privateuseone(), "shNCoeffs must be a PrivateUse1 tensor");
         TORCH_CHECK_VALUE(shNCoeffs.dim() == 3, "shNCoeffs must have shape [N, K, D]");
         TORCH_CHECK_VALUE(shNCoeffs.size(0) == numGaussians, "shNCoeffs must have shape [N, K, D]");
@@ -363,15 +436,24 @@ dispatchEvaluateSphericalHarmonicsFwd<torch::kPrivateUse1>(
     const int64_t C = numCameras;
     const int64_t D = sh0Coeffs.size(2);
 
-    // If you are using degree > 0, then we are going to use the directions tensor which means
-    // we need to check it has the right shape
+    // View directions are computed in the kernel from the means and world-to-camera matrices.
     if (hasShNCoeffs && K > 0 && shDegreeToUse > 0) {
-        TORCH_CHECK_VALUE(viewDirs.dim() == 3, "viewDirs must have shape [C, N, 3]");
-        TORCH_CHECK_VALUE(
-            shNCoeffs.size(0) == viewDirs.size(1),
-            "shNCoeffs must have shape [N, K, D] and viewDirs must have shape [C, N, 3]");
-        TORCH_CHECK_VALUE(viewDirs.is_privateuseone(), "dirs must be a PrivateUse1 tensor");
-        TORCH_CHECK_VALUE(viewDirs.size(-1) == 3, "dirs must have last dimension 3");
+        const bool hasCameraIds   = cameraIds.defined() && cameraIds.numel() > 0;
+        const bool hasGaussianIds = gaussianIds.defined() && gaussianIds.numel() > 0;
+        TORCH_CHECK_VALUE(!hasCameraIds && !hasGaussianIds,
+                          "packed SH evaluation is not available on PrivateUse1");
+        TORCH_CHECK_VALUE(means.is_privateuseone() && means.scalar_type() == torch::kFloat32,
+                          "means must be a float32 PrivateUse1 tensor");
+        TORCH_CHECK_VALUE(means.dim() == 2 && means.size(0) == N && means.size(1) == 3 &&
+                              means.is_contiguous(),
+                          "means must be contiguous with shape [N, 3]");
+        TORCH_CHECK_VALUE(worldToCamMatrices.is_privateuseone() &&
+                              worldToCamMatrices.scalar_type() == torch::kFloat32,
+                          "worldToCamMatrices must be a float32 PrivateUse1 tensor");
+        TORCH_CHECK_VALUE(worldToCamMatrices.dim() == 3 && worldToCamMatrices.size(0) == C &&
+                              worldToCamMatrices.size(1) == 4 && worldToCamMatrices.size(2) == 4 &&
+                              worldToCamMatrices.is_contiguous(),
+                          "worldToCamMatrices must be contiguous with shape [C, 4, 4]");
     }
 
     if (N == 0) {
@@ -400,7 +482,10 @@ dispatchEvaluateSphericalHarmonicsFwd<torch::kPrivateUse1>(
                 N,
                 D,
                 shDegreeToUse,
-                viewDirs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
+                means.data_ptr<scalar_t>(),
+                worldToCamMatrices.data_ptr<scalar_t>(),
+                nullptr,
+                nullptr,
                 sh0Coeffs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
                 shNCoeffs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
                 radiiPtr,
@@ -428,25 +513,36 @@ template <>
 torch::Tensor
 dispatchEvaluateSphericalHarmonicsFwd<torch::kCPU>(const int64_t shDegreeToUse,
                                                    const int64_t numCameras,
-                                                   const torch::Tensor &dirs,      // [N, 3]
-                                                   const torch::Tensor &sh0Coeffs, // [1, N, D]
-                                                   const torch::Tensor &shNCoeffs, // [K-1, N, D]
-                                                   const torch::Tensor &radii      // [C, N, 2]
-) {
+                                                   const torch::Tensor &means,
+                                                   const torch::Tensor &worldToCamMatrices,
+                                                   const torch::Tensor &cameraIds,
+                                                   const torch::Tensor &gaussianIds,
+                                                   const torch::Tensor &sh0Coeffs,
+                                                   const torch::Tensor &shNCoeffs,
+                                                   const torch::Tensor &radii) {
     TORCH_CHECK(false, "CPU implementation not available");
 }
 
 torch::Tensor
 evaluateSphericalHarmonicsFwd(const int64_t shDegreeToUse,
                               const int64_t numCameras,
-                              const torch::Tensor &viewDirs,  // [C, N, 3]
-                              const torch::Tensor &sh0Coeffs, // [1, N, D]
-                              const torch::Tensor &shNCoeffs, // [N, K-1, D]
-                              const torch::Tensor &radii      // [C, N, 2]
-) {
+                              const torch::Tensor &means,
+                              const torch::Tensor &worldToCamMatrices,
+                              const torch::Tensor &cameraIds,
+                              const torch::Tensor &gaussianIds,
+                              const torch::Tensor &sh0Coeffs,
+                              const torch::Tensor &shNCoeffs,
+                              const torch::Tensor &radii) {
     return FVDB_DISPATCH_KERNEL(sh0Coeffs.device(), [&]() {
-        return dispatchEvaluateSphericalHarmonicsFwd<DeviceTag>(
-            shDegreeToUse, numCameras, viewDirs, sh0Coeffs, shNCoeffs, radii);
+        return dispatchEvaluateSphericalHarmonicsFwd<DeviceTag>(shDegreeToUse,
+                                                                numCameras,
+                                                                means,
+                                                                worldToCamMatrices,
+                                                                cameraIds,
+                                                                gaussianIds,
+                                                                sh0Coeffs,
+                                                                shNCoeffs,
+                                                                radii);
     });
 }
 
