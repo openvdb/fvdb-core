@@ -156,8 +156,8 @@ computeSh(
     const int64_t N,
     const int64_t D,
     const int64_t shDegreeToUse,
-    const T *__restrict__ means,                                                   // [G, 3]
-    const T *__restrict__ worldToCamMatrices,                                      // [V, 4, 4]
+    const T *__restrict__ means,                                                   // [N, 3]
+    const T *__restrict__ worldToCamMatrices,                                      // [C, 4, 4]
     const int32_t *__restrict__ cameraIds,                                         // [N] optional
     const int32_t *__restrict__ gaussianIds,                                       // [N] optional
     const torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits> sh0Coeffs, // [1, N, D]
@@ -226,8 +226,8 @@ template <torch::DeviceType>
 torch::Tensor
 dispatchEvaluateSphericalHarmonicsFwd(const int64_t shDegreeToUse,
                                       const int64_t numCameras,
-                                      const torch::Tensor &means,              // [G, 3]
-                                      const torch::Tensor &worldToCamMatrices, // [V, 4, 4]
+                                      const torch::Tensor &means,              // [N, 3]
+                                      const torch::Tensor &worldToCamMatrices, // [C, 4, 4]
                                       const torch::Tensor &cameraIds,          // [N] optional
                                       const torch::Tensor &gaussianIds,        // [N] optional
                                       const torch::Tensor &sh0Coeffs,          // [N, 1, D]
@@ -304,13 +304,13 @@ dispatchEvaluateSphericalHarmonicsFwd<torch::kCUDA>(const int64_t shDegreeToUse,
         TORCH_CHECK_VALUE(means.is_cuda() && means.scalar_type() == torch::kFloat32,
                           "means must be a float32 CUDA tensor");
         TORCH_CHECK_VALUE(means.dim() == 2 && means.size(1) == 3 && means.is_contiguous(),
-                          "means must be contiguous with shape [G, 3]");
+                          "means must be contiguous with shape [N, 3]");
         TORCH_CHECK_VALUE(worldToCamMatrices.is_cuda() &&
                               worldToCamMatrices.scalar_type() == torch::kFloat32,
                           "worldToCamMatrices must be a float32 CUDA tensor");
         TORCH_CHECK_VALUE(worldToCamMatrices.dim() == 3 && worldToCamMatrices.size(1) == 4 &&
                               worldToCamMatrices.size(2) == 4 && worldToCamMatrices.is_contiguous(),
-                          "worldToCamMatrices must be contiguous with shape [V, 4, 4]");
+                          "worldToCamMatrices must be contiguous with shape [C, 4, 4]");
         TORCH_CHECK_VALUE(means.device() == sh0Coeffs.device() &&
                               worldToCamMatrices.device() == sh0Coeffs.device(),
                           "means and worldToCamMatrices must be on the same device as sh0Coeffs");

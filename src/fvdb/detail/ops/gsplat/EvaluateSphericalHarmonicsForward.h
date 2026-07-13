@@ -20,9 +20,9 @@ namespace ops {
 /// @param[in] shDegreeToUse Degree of spherical harmonics to use (0-3 typically, higher degrees
 /// provide more detail)
 /// @param[in] numCameras Number of cameras used for rendering
-/// @param[in] means Gaussian means in world space [G, 3], where G is N in dense mode
-/// @param[in] worldToCamMatrices Rigid world-to-camera matrices [V, 4, 4], where V is C in dense
-/// mode. The matrices must be rigid transforms with orthonormal rotation blocks.
+/// @param[in] means Gaussian means in world space [N, 3]
+/// @param[in] worldToCamMatrices Rigid world-to-camera matrices [C, 4, 4]. The matrices must be
+/// rigid transforms with orthonormal rotation blocks.
 /// @param[in] cameraIds Camera index for each packed work item, or empty for unpacked evaluation
 /// @param[in] gaussianIds Gaussian index for each packed work item, or empty for unpacked
 /// evaluation
@@ -36,8 +36,8 @@ namespace ops {
 /// @return Features/colors [N, D] computed from the spherical harmonics evaluation
 torch::Tensor evaluateSphericalHarmonicsFwd(const int64_t shDegreeToUse,
                                             const int64_t numCameras,
-                                            const torch::Tensor &means,              // [G, 3]
-                                            const torch::Tensor &worldToCamMatrices, // [V, 4, 4]
+                                            const torch::Tensor &means,              // [N, 3]
+                                            const torch::Tensor &worldToCamMatrices, // [C, 4, 4]
                                             const torch::Tensor &cameraIds,          // [N] or empty
                                             const torch::Tensor &gaussianIds,        // [N] or empty
                                             const torch::Tensor &sh0Coeffs,          // [1, N, D]

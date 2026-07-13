@@ -300,8 +300,8 @@ computeShBackward(
     const int64_t K,
     const int64_t D,
     const int64_t shDegreeToUse,
-    const T *__restrict__ means,                                                   // [G, 3]
-    const T *__restrict__ worldToCamMatrices,                                      // [V, 4, 4]
+    const T *__restrict__ means,                                                   // [N, 3]
+    const T *__restrict__ worldToCamMatrices,                                      // [C, 4, 4]
     const int32_t *__restrict__ cameraIds,                                         // [N] optional
     const int32_t *__restrict__ gaussianIds,                                       // [N] optional
     const torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits> shNCoeffs, // [K-1, N, D]
@@ -310,8 +310,8 @@ computeShBackward(
         dLossDRenderQuantities,                                                    // [C, N, D]
     torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits> outDLossDSh0Coeffs, // [N, 1, D]
     torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits> outDLossDShNCoeffs, // [N, K-1, D]
-    T *__restrict__ outDLossDMeans,             // [G, 3] optional
-    T *__restrict__ outDLossDWorldToCamMatrices // [V, 4, 4] optional
+    T *__restrict__ outDLossDMeans,             // [N, 3] optional
+    T *__restrict__ outDLossDWorldToCamMatrices // [C, 4, 4] optional
 ) {
     // parallelize over C * N * D
     auto idx = blockIdx.x * blockDim.x + threadIdx.x; // cidx * N * D + gidx * D + c
@@ -453,8 +453,8 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 dispatchEvaluateSphericalHarmonicsBwd(const int64_t shDegreeToUse,
                                       const int64_t numCameras,
                                       const int64_t numGaussians,
-                                      const torch::Tensor &means,              // [G, 3]
-                                      const torch::Tensor &worldToCamMatrices, // [V, 4, 4]
+                                      const torch::Tensor &means,              // [N, 3]
+                                      const torch::Tensor &worldToCamMatrices, // [C, 4, 4]
                                       const torch::Tensor &cameraIds,          // [N] optional
                                       const torch::Tensor &gaussianIds,        // [N] optional
                                       const torch::Tensor &shNCoeffs,          // [N, K-1, D]
@@ -527,13 +527,13 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kCUDA>(const int64_t shDegreeToUse,
         TORCH_CHECK_VALUE(means.is_cuda() && means.scalar_type() == torch::kFloat32,
                           "means must be a float32 CUDA tensor");
         TORCH_CHECK_VALUE(means.dim() == 2 && means.size(1) == 3 && means.is_contiguous(),
-                          "means must be contiguous with shape [G, 3]");
+                          "means must be contiguous with shape [N, 3]");
         TORCH_CHECK_VALUE(worldToCamMatrices.is_cuda() &&
                               worldToCamMatrices.scalar_type() == torch::kFloat32,
                           "worldToCamMatrices must be a float32 CUDA tensor");
         TORCH_CHECK_VALUE(worldToCamMatrices.dim() == 3 && worldToCamMatrices.size(1) == 4 &&
                               worldToCamMatrices.size(2) == 4 && worldToCamMatrices.is_contiguous(),
-                          "worldToCamMatrices must be contiguous with shape [V, 4, 4]");
+                          "worldToCamMatrices must be contiguous with shape [C, 4, 4]");
         TORCH_CHECK_VALUE(
             means.device() == dLossDRenderQuantities.device() &&
                 worldToCamMatrices.device() == dLossDRenderQuantities.device(),

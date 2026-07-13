@@ -20,9 +20,9 @@ namespace ops {
 /// @param[in] shDegreeToUse Degree of spherical harmonics used in the forward pass
 /// @param[in] numCameras Number of cameras used in the forward pass
 /// @param[in] numGaussians Number of Gaussians used in the forward pass
-/// @param[in] means Gaussian means in world space [G, 3], where G is N in dense mode
-/// @param[in] worldToCamMatrices Rigid world-to-camera matrices [V, 4, 4], where V is C in dense
-/// mode. The matrices must be rigid transforms with orthonormal rotation blocks.
+/// @param[in] means Gaussian means in world space [N, 3]
+/// @param[in] worldToCamMatrices Rigid world-to-camera matrices [C, 4, 4]. The matrices must be
+/// rigid transforms with orthonormal rotation blocks.
 /// @param[in] cameraIds Camera index for each packed work item, or empty for unpacked evaluation
 /// @param[in] gaussianIds Gaussian index for each packed work item, or empty for unpacked
 /// evaluation
@@ -38,8 +38,8 @@ namespace ops {
 ///
 /// @return std::tuple containing gradients of the loss function with respect to:
 ///         - SH coefficients [N, K, 3] - ∂L/∂sh_coeffs
-///         - Gaussian means [G, 3] - ∂L/∂means (if requested, otherwise empty tensor)
-///         - World-to-camera matrices [V, 4, 4] - ∂L/∂viewmats (if requested, otherwise empty
+///         - Gaussian means [N, 3] - ∂L/∂means (if requested, otherwise empty tensor)
+///         - World-to-camera matrices [C, 4, 4] - ∂L/∂viewmats (if requested, otherwise empty
 ///         tensor)
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 evaluateSphericalHarmonicsBwd(const int64_t shDegreeToUse,
