@@ -517,9 +517,9 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kCUDA>(
     const int64_t TOTAL_ELEMS = C * N * D;
     const int64_t NUM_BLOCKS  = GET_BLOCKS(TOTAL_ELEMS, DEFAULT_BLOCK_DIM);
 
-    const bool hasCamIds   = cameraIds.defined() && cameraIds.numel() > 0;
-    const bool hasGaussIds = gaussianIds.defined() && gaussianIds.numel() > 0;
-    const bool indexed     = hasCamIds || hasGaussIds ||
+    const bool hasCameraIds   = cameraIds.defined() && cameraIds.numel() > 0;
+    const bool hasGaussianIds = gaussianIds.defined() && gaussianIds.numel() > 0;
+    const bool indexed        = hasCameraIds || hasGaussianIds ||
                          (hasMeans && hasViewMats && cameraIds.defined() && gaussianIds.defined() &&
                           (means.size(0) != N || worldToCamMatrices.size(0) != C));
 
@@ -540,7 +540,7 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kCUDA>(
                 worldToCamMatrices.device() == dLossDRenderQuantities.device(),
             "means and worldToCamMatrices must be on the same device as dLossDColors");
         TORCH_CHECK_VALUE(
-            hasCamIds == hasGaussIds,
+            hasCameraIds == hasGaussianIds,
             "cameraIds and gaussianIds must either both be empty or both be populated");
         if (indexed) {
             TORCH_CHECK_VALUE(C == 1, "indexed SH evaluation must have numCameras == 1");
@@ -691,9 +691,9 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
 
     // View directions are computed in the kernel from the means and world-to-camera matrices.
     if (hasShNCoeffs && K > 1 && shDegreeToUse > 0) {
-        const bool hasCamIds   = cameraIds.defined() && cameraIds.numel() > 0;
-        const bool hasGaussIds = gaussianIds.defined() && gaussianIds.numel() > 0;
-        TORCH_CHECK_VALUE(!hasCamIds && !hasGaussIds,
+        const bool hasCameraIds   = cameraIds.defined() && cameraIds.numel() > 0;
+        const bool hasGaussianIds = gaussianIds.defined() && gaussianIds.numel() > 0;
+        TORCH_CHECK_VALUE(!hasCameraIds && !hasGaussianIds,
                           "indexed SH evaluation is not available on PrivateUse1");
         TORCH_CHECK_VALUE(means.is_privateuseone() && means.scalar_type() == torch::kFloat32,
                           "means must be a float32 PrivateUse1 tensor");
