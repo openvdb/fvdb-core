@@ -3188,7 +3188,6 @@ class TestEvaluateSphericalHarmonics(unittest.TestCase):
         C = 2  # number of cameras
 
         means = torch.randn(N, 3, device=self.device)
-        viewmats = self._make_rigid_viewmats(C)
         sh0 = torch.randn(N, 1, D, device=self.device)
         radii = torch.ones(C, N, 2, dtype=torch.int32, device=self.device)
 
@@ -3196,7 +3195,6 @@ class TestEvaluateSphericalHarmonics(unittest.TestCase):
             sh_degree=0,
             num_cameras=C,
             means=means,
-            world_to_camera_matrices=viewmats,
             sh0=sh0,
             radii=radii,
         )
@@ -3213,7 +3211,6 @@ class TestEvaluateSphericalHarmonics(unittest.TestCase):
         C = 1
 
         means = torch.randn(N, 3, device=self.device)
-        viewmats = self._make_rigid_viewmats(C)
         # Known sh0 values
         sh0 = torch.ones(N, 1, D, device=self.device)
         radii = torch.ones(C, N, 2, dtype=torch.int32, device=self.device)
@@ -3222,9 +3219,9 @@ class TestEvaluateSphericalHarmonics(unittest.TestCase):
             sh_degree=0,
             num_cameras=C,
             means=means,
-            world_to_camera_matrices=viewmats,
             sh0=sh0,
             radii=radii,
+            world_to_camera_matrices=None,
         )
 
         # For degree 0: result = 0.2820947917738781 * sh0 + 0.5
@@ -3245,10 +3242,11 @@ class TestEvaluateSphericalHarmonics(unittest.TestCase):
         shN = torch.randn(N, 3, D, device=self.device)
         radii = torch.ones(C, N, 2, dtype=torch.int32, device=self.device)
 
-        with self.assertRaises(TypeError):
+        with self.assertRaisesRegex(ValueError, "world_to_camera_matrices is required when sh_degree > 0"):
             evaluate_spherical_harmonics(
                 sh_degree=1,
                 num_cameras=C,
+                means=means,
                 sh0=sh0,
                 radii=radii,
                 shN=shN,
@@ -3331,7 +3329,6 @@ class TestEvaluateSphericalHarmonics(unittest.TestCase):
         C = 1
 
         means = torch.randn(N, 3, device=self.device)
-        viewmats = self._make_rigid_viewmats(C)
         sh0 = torch.randn(N, 1, D, device=self.device, requires_grad=True)
         # Note: radii must be provided for backward pass to work correctly
         # (matches GaussianSplat3d usage pattern)
@@ -3341,7 +3338,6 @@ class TestEvaluateSphericalHarmonics(unittest.TestCase):
             sh_degree=0,
             num_cameras=C,
             means=means,
-            world_to_camera_matrices=viewmats,
             sh0=sh0,
             radii=radii,
         )

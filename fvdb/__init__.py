@@ -278,10 +278,10 @@ def evaluate_spherical_harmonics(
     sh_degree: int,
     num_cameras: int,
     means: torch.Tensor,
-    world_to_camera_matrices: torch.Tensor,
     sh0: torch.Tensor,
     radii: torch.Tensor,
     shN: torch.Tensor | None = None,
+    world_to_camera_matrices: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Evaluate spherical harmonics to compute view-dependent features/colors.
 
@@ -289,13 +289,14 @@ def evaluate_spherical_harmonics(
         sh_degree: Degree of spherical harmonics to use (0-3 typically).
         num_cameras: Number of camera views (C).
         means: World-space Gaussian means with shape [N, 3].
-        world_to_camera_matrices: Rigid world-to-camera transforms with shape
-            [C, 4, 4]. Rotation blocks must be orthonormal.
         sh0: DC term coefficients with shape [N, 1, D].
         radii: Per-axis projected radii with shape [C, N, 2] (int32). A point
                is masked out unless both axes are positive.
         shN: Higher-order SH coefficients with shape [N, K-1, D] where
              K = (sh_degree+1)^2. Required when sh_degree > 0.
+        world_to_camera_matrices: Rigid world-to-camera transforms with shape
+            [C, 4, 4]. Rotation blocks must be orthonormal. Required when
+            sh_degree > 0.
 
     Returns:
         Tensor of shape [C, N, D] containing the evaluated features/colors.
@@ -308,6 +309,10 @@ def evaluate_spherical_harmonics(
         raise ValueError(f"radii must be shape [C, N, 2], got {tuple(radii.shape)}")
     if sh0.shape[0] != radii.shape[1]:
         raise ValueError(f"sh0.shape[0] ({sh0.shape[0]}) must match radii.shape[1] ({radii.shape[1]})")
+    if sh_degree > 0 and world_to_camera_matrices is None:
+        raise ValueError("world_to_camera_matrices is required when sh_degree > 0")
+    if world_to_camera_matrices is None:
+        world_to_camera_matrices = sh0.new_empty(0)
     if shN is None:
         N, _, D = sh0.shape
         shN = sh0.new_empty(N, 0, D)
