@@ -16,7 +16,53 @@
 
 void
 bind_jagged_tensor(py::module &m) {
-    py::class_<fvdb::JaggedTensor>(m, "JaggedTensor")
+    // py::custom_type_setup runs before PyType_Ready, so Py_TPFLAGS_HAVE_GC is
+    // seen by tp_alloc (which adds the GC header to each instance) and by
+    // pybind11_object_new (which calls PyObject_GC_Track).
+    //
+    // tp_traverse exposes the tensor members to the cyclic GC so it can detect cycles such as:
+    //   dst_out -> grad_fn -> ctx.dst_jt_impl -> mData (TensorImpl::pyobj_) -> dst_out
+    // tp_clear breaks any such cycles by resetting the tensor members once the GC confirms the
+    // group is unreachable.
+    py::class_<fvdb::JaggedTensor>(
+        m, "JaggedTensor", py::custom_type_setup([](PyHeapTypeObject *heap_type) {
+            auto *type = &heap_type->ht_type;
+            type->tp_flags |= Py_TPFLAGS_HAVE_GC;
+            type->tp_traverse = [](PyObject *self, visitproc visit, void *arg) -> int {
+#if PY_VERSION_HEX >= 0x03090000
+                Py_VISIT(Py_TYPE(self));
+#endif
+                if (!py::detail::is_holder_constructed(self))
+                    return 0;
+
+                const auto visit_tensor = [&visit, &arg](const at::Tensor &tensor) -> int {
+                    if (!tensor.defined())
+                        return 0;
+                    Py_VISIT(tensor.unsafeGetTensorImpl()->pyobj_slot()->load_pyobj());
+                    return 0;
+                };
+
+                auto &jt = py::cast<fvdb::JaggedTensor &>(py::handle(self));
+                if (int ret = visit_tensor(jt.jdata()))
+                    return ret;
+                if (int ret = visit_tensor(jt.jidx()))
+                    return ret;
+                if (int ret = visit_tensor(jt.joffsets()))
+                    return ret;
+                if (int ret = visit_tensor(jt.jlidx()))
+                    return ret;
+                return 0;
+            };
+            type->tp_clear = [](PyObject *self) -> int {
+                if (!py::detail::is_holder_constructed(self))
+                    return 0;
+
+                auto *jt = py::cast<fvdb::JaggedTensor *>(py::handle(self));
+                if (jt)
+                    jt->invalidate();
+                return 0;
+            };
+        }))
         .def(py::init<torch::Tensor>(), py::arg("tensor"))
         .def(py::init<std::vector<torch::Tensor> &>(), py::arg("tensor_list"))
         .def(py::init<std::vector<std::vector<torch::Tensor>> &>(), py::arg("tensor_list"))
