@@ -21,7 +21,7 @@ from ..types import (
 from ._camera_view import CamerasView
 from ._fog_volume_view import FogVolumeView
 from ._gaussian_splat_3d_view import GaussianSplat3dView
-from ._gaussian_splat_view_data import GaussianSplatViewData, _ShOrdering
+from ._gaussian_splat_view_data import GaussianSplatViewData, ShOrderingMode
 from ._image_view import ImageView
 from ._level_set_view import LevelSetView
 from ._nanovdb_grid_view import add_nanovdb_grid_views
@@ -135,7 +135,7 @@ class Scene:
         logit_opacities: torch.Tensor,
         sh0: torch.Tensor,
         shN: torch.Tensor,
-        sh_ordering: _ShOrdering = "rgb_rgb_rgb",
+        sh_ordering: ShOrderingMode = ShOrderingMode.RGB_RGB_RGB,
         tile_size: int = 16,
         min_radius_2d: float = 0.0,
         eps_2d: float = 0.3,
