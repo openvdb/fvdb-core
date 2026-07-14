@@ -4,7 +4,7 @@
 from ._camera_view import CamerasView
 from ._fog_volume_view import FogVolumeView
 from ._gaussian_splat_3d_view import GaussianSplat3dView
-from ._gaussian_splat_view_data import GaussianSplatViewData
+from ._gaussian_splat_view_data import GaussianSplatViewData, ShOrderingMode
 from ._image_view import ImageView
 from ._level_set_view import LevelSetView
 from ._point_cloud_view import PointCloudView
@@ -19,6 +19,7 @@ __all__ = [
     "FogVolumeView",
     "GaussianSplat3dView",
     "GaussianSplatViewData",
+    "ShOrderingMode",
     "CamerasView",
     "ImageView",
     "LevelSetView",

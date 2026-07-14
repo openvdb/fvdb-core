@@ -6,12 +6,7 @@ from typing import Any
 import torch
 
 from .._fvdb_cpp import GaussianSplat3dView as GaussianSplat3dViewCpp
-from ._gaussian_splat_view_data import (
-    _RGB_RGB_RGB_SH_ORDERING,
-    _RRR_GGG_BBB_SH_ORDERING,
-    _ShOrdering,
-    _VALID_SH_ORDERINGS,
-)
+from ._gaussian_splat_view_data import ShOrderingMode
 from ._viewer_server import _get_viewer_server_cpp
 
 
@@ -46,7 +41,7 @@ class GaussianSplat3dView:
         eps_2d: float = 0.3,
         antialias: bool = False,
         sh_degree_to_use: int = -1,
-        sh_ordering_mode: _ShOrdering = _RGB_RGB_RGB_SH_ORDERING,
+        sh_ordering_mode: ShOrderingMode = ShOrderingMode.RGB_RGB_RGB,
         _private: Any = None,
     ):
         """
@@ -94,7 +89,9 @@ class GaussianSplat3dView:
             shN=shN,
         )
 
-        if not isinstance(sh_ordering_mode, str) or sh_ordering_mode not in _VALID_SH_ORDERINGS:
+        try:
+            sh_ordering_mode = ShOrderingMode(sh_ordering_mode)
+        except ValueError:
             raise ValueError(f"Invalid spherical harmonics ordering: {sh_ordering_mode!r}")
 
         view.tile_size = tile_size
@@ -102,12 +99,7 @@ class GaussianSplat3dView:
         view.eps_2d = eps_2d
         view.antialias = antialias
         view.sh_degree_to_use = sh_degree_to_use
-        if sh_ordering_mode == _RRR_GGG_BBB_SH_ORDERING:
-            view.rgb_rgb_rgb_sh = False
-        elif sh_ordering_mode == _RGB_RGB_RGB_SH_ORDERING:
-            view.rgb_rgb_rgb_sh = True
-        else:
-            raise ValueError(f"Invalid spherical harmonics ordering: {sh_ordering_mode!r}")
+        view.rgb_rgb_rgb_sh = sh_ordering_mode == ShOrderingMode.RGB_RGB_RGB
 
     @property
     def tile_size(self) -> int:
@@ -207,35 +199,27 @@ class GaussianSplat3dView:
         view.sh_degree_to_use = degree
 
     @property
-    def sh_ordering_mode(self) -> str:
+    def sh_ordering_mode(self) -> ShOrderingMode:
         """
         Get the spherical harmonics ordering mode used for rendering colors.
 
         Returns:
-            str: The spherical harmonics tensor layout, either ``"rgb_rgb_rgb"`` or
-                ``"rrr_ggg_bbb"``.
+            ShOrderingMode: The spherical harmonics tensor layout.
         """
         view = self._get_view()
-        if view.rgb_rgb_rgb_sh:
-            return _RGB_RGB_RGB_SH_ORDERING
-        else:
-            return _RRR_GGG_BBB_SH_ORDERING
+        return ShOrderingMode.RGB_RGB_RGB if view.rgb_rgb_rgb_sh else ShOrderingMode.RRR_GGG_BBB
 
     @sh_ordering_mode.setter
-    def sh_ordering_mode(self, mode: _ShOrdering):
+    def sh_ordering_mode(self, mode: ShOrderingMode):
         """
         Set the spherical harmonics ordering mode used for rendering colors.
 
         Args:
-            mode (str): The spherical harmonics tensor layout. Must be ``"rgb_rgb_rgb"`` or
-                ``"rrr_ggg_bbb"``.
+            mode (ShOrderingMode): The spherical harmonics tensor layout.
         """
         view = self._get_view()
-        if not isinstance(mode, str) or mode not in _VALID_SH_ORDERINGS:
+        try:
+            mode = ShOrderingMode(mode)
+        except ValueError:
             raise ValueError(f"Invalid spherical harmonics ordering: {mode!r}")
-        if mode == _RRR_GGG_BBB_SH_ORDERING:
-            view.rgb_rgb_rgb_sh = False
-        elif mode == _RGB_RGB_RGB_SH_ORDERING:
-            view.rgb_rgb_rgb_sh = True
-        else:
-            raise ValueError(f"Invalid spherical harmonics ordering: {mode!r}")
+        view.rgb_rgb_rgb_sh = mode == ShOrderingMode.RGB_RGB_RGB

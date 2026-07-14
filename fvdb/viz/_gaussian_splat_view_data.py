@@ -2,15 +2,37 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 from dataclasses import dataclass
-from typing import Literal
+from enum import Enum
 
 import torch
 
 
-_RGB_RGB_RGB_SH_ORDERING = "rgb_rgb_rgb"
-_RRR_GGG_BBB_SH_ORDERING = "rrr_ggg_bbb"
-_VALID_SH_ORDERINGS = (_RGB_RGB_RGB_SH_ORDERING, _RRR_GGG_BBB_SH_ORDERING)
-_ShOrdering = Literal["rgb_rgb_rgb", "rrr_ggg_bbb"]
+class ShOrderingMode(str, Enum):
+    """
+    Enum representing spherical harmonics ordering modes used by Gaussian splats.
+    Spherical harmonics for Gaussian splatting can be stored differently in memory depending on the application. For example,
+    PLY files store spherical harmonics in ``RRR_GGG_BBB`` order, while some rendering codes
+    (including ``fvdb_reality_capture.GaussianSplat3d``) use ``RGB_RGB_RGB`` order.
+
+    This enum defines two common ordering modes:
+
+    - ``RGB_RGB_RGB``: The feature channels are interleaved for each coefficient. *i.e.* The spherical harmonics
+      tensor corresponds to a (row-major) contiguous tensor of shape ``[num_coefficients, num_sh_bases, channels]``, where channels=3 for RGB.
+    - ``RRR_GGG_BBB``: The feature channels are stored in separate blocks for each coefficient. *i.e.* The spherical harmonics
+      tensor corresponds to a (row-major) contiguous tensor of shape ``[num_coefficients, channels, num_sh_bases]``, where channels=3 for RGB.
+    """
+
+    RGB_RGB_RGB = "rgb_rgb_rgb"
+    """
+    The feature channels of spherical harmonics are interleaved for each coefficient. *i.e.* The spherical harmonics
+    tensor corresponds to a (row-major) contiguous tensor of shape ``[num_coefficients, num_sh_bases, channels]``, where channels=3 for RGB.
+    """
+
+    RRR_GGG_BBB = "rrr_ggg_bbb"
+    """
+    The feature channels of spherical harmonics are stored in separate blocks for each coefficient. *i.e.* The spherical harmonics
+    tensor corresponds to a (row-major) contiguous tensor of shape ``[num_coefficients, channels, num_sh_bases]``, where channels=3 for RGB.
+    """
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -42,7 +64,7 @@ class GaussianSplatViewData:
     logit_opacities: torch.Tensor
     sh0: torch.Tensor
     shN: torch.Tensor
-    sh_ordering: _ShOrdering = _RGB_RGB_RGB_SH_ORDERING
+    sh_ordering: ShOrderingMode = ShOrderingMode.RGB_RGB_RGB
 
     def __post_init__(self) -> None:
         tensors = {
@@ -59,11 +81,11 @@ class GaussianSplatViewData:
             if not tensor.dtype.is_floating_point:
                 raise TypeError(f"{name} must have a floating-point dtype, got {tensor.dtype}")
 
-        if not isinstance(self.sh_ordering, str) or self.sh_ordering not in _VALID_SH_ORDERINGS:
-            valid = ", ".join(repr(value) for value in _VALID_SH_ORDERINGS)
+        try:
+            object.__setattr__(self, "sh_ordering", ShOrderingMode(self.sh_ordering))
+        except ValueError:
+            valid = ", ".join(repr(m.value) for m in ShOrderingMode)
             raise ValueError(f"sh_ordering must be one of {valid}, got {self.sh_ordering!r}")
-        canonical_sh_ordering = next(value for value in _VALID_SH_ORDERINGS if value == self.sh_ordering)
-        object.__setattr__(self, "sh_ordering", canonical_sh_ordering)
 
         dtype = self.means.dtype
         device = self.means.device
@@ -101,7 +123,7 @@ class GaussianSplatViewData:
                 f"shN must contain {num_gaussians} Gaussians in its leading dimension, got {self.shN.shape[0]}"
             )
 
-        if self.sh_ordering == _RGB_RGB_RGB_SH_ORDERING:
+        if self.sh_ordering == ShOrderingMode.RGB_RGB_RGB:
             if self.sh0.shape[1] != 1:
                 raise ValueError(
                     'sh0 must have shape (N, 1, C) for sh_ordering="rgb_rgb_rgb", ' f"got {tuple(self.sh0.shape)}"
