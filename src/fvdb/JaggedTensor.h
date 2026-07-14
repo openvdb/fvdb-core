@@ -376,18 +376,6 @@ class JaggedTensor : public torch::CustomClassHolder {
     /// @param data A data tensor with the same number of elements as the original data
     void set_jdata(const torch::Tensor &data);
 
-    /// @brief Reset all tensor members to undefined tensors.
-    ///        Intended for use by the Python cyclic GC tp_clear callback; leaves
-    ///        the JaggedTensor in an invalid state and must only be called when
-    ///        the object is being collected.
-    void
-    invalidate() {
-        mData     = torch::Tensor{};
-        mBatchIdx = torch::Tensor{};
-        mOffsets  = torch::Tensor{};
-        mListIdx  = torch::Tensor{};
-    }
-
     /// @brief  Get the raw data indexed by this JaggedTensor
     /// @return The raw data tensor
     const torch::Tensor &
