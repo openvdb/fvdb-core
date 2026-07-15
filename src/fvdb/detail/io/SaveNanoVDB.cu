@@ -212,6 +212,7 @@ assembleOnIndexBlindBuffer(const GridBatchData &gridBatchData,
                              totalPayload;
     nanovdb::HostBuffer writeBuf(allocSize);
 
+    // Source grid pointer (possibly on the device) and destination host pointer.
     uint8_t *writeHead = static_cast<uint8_t *>(writeBuf.data());
     uint8_t *readHead  = static_cast<uint8_t *>(isCuda ? nanoGridHdl.buffer().deviceData()
                                                       : nanoGridHdl.buffer().data());
@@ -245,6 +246,8 @@ assembleOnIndexBlindBuffer(const GridBatchData &gridBatchData,
         readHead += gridBytes;
         writeHead += gridBytes;
 
+        // Fill the blind-metadata header and its payload (just past the header), then advance past
+        // the header and the full padded payload (the trailing bytes are the 32B alignment pad).
         nanovdb::GridBlindMetaData *blindMeta =
             reinterpret_cast<nanovdb::GridBlindMetaData *>(writeHead);
         writeBlind(batchIdx, blindMeta, writeHead + sizeof(nanovdb::GridBlindMetaData));
@@ -252,6 +255,7 @@ assembleOnIndexBlindBuffer(const GridBatchData &gridBatchData,
         writeHead += sizeof(nanovdb::GridBlindMetaData) + paddedPayloadBytes[batchIdx];
     }
 
+    // Synchronize the CUDA stream if we queued any GPU -> CPU transfers.
     if (isCuda) {
         at::cuda::CUDAStream stream =
             at::cuda::getCurrentCUDAStream(gridBatchData.device().index());
@@ -953,7 +957,10 @@ saveIndexGridWithBlindData(const std::string &path,
     }
 
     const std::string fvdbBlindName = "fvdb_jdata" + TorchScalarTypeToStr(cpuData.scalar_type());
-    const uint8_t *jdataBase        = static_cast<const uint8_t *>(cpuData.jdata().data_ptr());
+
+    // Pointer to the start of jdata for slicing per-batch values without allocating fresh
+    // JaggedTensor objects each iteration.
+    const uint8_t *jdataBase = static_cast<const uint8_t *>(cpuData.jdata().data_ptr());
 
     nanovdb::GridHandle<nanovdb::HostBuffer> writeHandle = assembleOnIndexBlindBuffer(
         gridBatchData,
