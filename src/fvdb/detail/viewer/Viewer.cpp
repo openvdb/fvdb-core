@@ -2,15 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
+#include <fvdb/detail/io/SaveNanoVDB.h>
 #include <fvdb/detail/viewer/CameraView.h>
 #include <fvdb/detail/viewer/GaussianSplat3dView.h>
 #include <fvdb/detail/viewer/Viewer.h>
-#include <fvdb/detail/io/SaveNanoVDB.h>
-
-#include <editor/PipelineTypes.h>
 
 #include <c10/util/Exception.h>
 
+#include <editor/PipelineTypes.h>
 #include <nanovdb_editor/putil/Raster.h>
 
 #include <cmath>
@@ -598,15 +597,21 @@ Viewer::addNanoVDBGridView(const std::string &scene_name,
     // size is always a multiple of 4.
     const uint64_t bufferBytes = handle.buffer().size();
     TORCH_CHECK(bufferBytes % sizeof(uint32_t) == 0,
-                "Internal error: NanoVDB buffer size ", bufferBytes, " is not 4-byte aligned");
+                "Internal error: NanoVDB buffer size ",
+                bufferBytes,
+                " is not 4-byte aligned");
     pnanovdb_compute_array_t *array = mEditor.compute.create_array(
         sizeof(uint32_t), bufferBytes / sizeof(uint32_t), handle.buffer().data());
 
     pnanovdb_editor_token_t *sceneToken = mEditor.editor.get_token(scene_name.c_str());
     pnanovdb_editor_token_t *nameToken  = mEditor.editor.get_token(name.c_str());
 
-    mEditor.editor.add_nanovdb_3(&mEditor.editor, sceneToken, nameToken, array,
-                                 pnanovdb_pipeline_type_noop, render_pipeline);
+    mEditor.editor.add_nanovdb_3(&mEditor.editor,
+                                 sceneToken,
+                                 nameToken,
+                                 array,
+                                 pnanovdb_pipeline_type_noop,
+                                 render_pipeline);
 
     mEditor.compute.destroy_array(array);
 

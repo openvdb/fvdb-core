@@ -242,9 +242,7 @@ class Scene:
         Returns:
             level_set_view (LevelSetView): The newly created view.
         """
-        view_names = add_nanovdb_grid_views(
-            self._name, name, grid, sdf, "add_level_set_view", "sdf"
-        )
+        view_names = add_nanovdb_grid_views(self._name, name, grid, sdf, "add_level_set_view", "sdf")
         return LevelSetView(
             scene_name=self._name,
             name=name,
@@ -282,9 +280,7 @@ class Scene:
         Returns:
             fog_volume_view (FogVolumeView): The newly created view.
         """
-        view_names = add_nanovdb_grid_views(
-            self._name, name, grid, density, "add_fog_volume_view", "density"
-        )
+        view_names = add_nanovdb_grid_views(self._name, name, grid, density, "add_fog_volume_view", "density")
         return FogVolumeView(
             scene_name=self._name,
             name=name,

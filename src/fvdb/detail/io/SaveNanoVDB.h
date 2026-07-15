@@ -22,8 +22,8 @@ toNVDB(const GridBatchData &gridBatchData,
 // The float values are stored directly (no shape prefix) so the nanovdb-editor surface
 // shader can read them via: val_addr = blind_data_base + val_index * sizeof(float).
 // floatValues must be a 1D float32 JaggedTensor with one entry per active voxel.
-nanovdb::GridHandle<nanovdb::HostBuffer>
-toNVDBWithBlindFloat(const GridBatchData &gridBatchData, const JaggedTensor &floatValues);
+nanovdb::GridHandle<nanovdb::HostBuffer> toNVDBWithBlindFloat(const GridBatchData &gridBatchData,
+                                                              const JaggedTensor &floatValues);
 
 void saveNVDB(const std::string &path,
               const GridBatchData &gridBatchData,

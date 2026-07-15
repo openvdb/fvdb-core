@@ -4,11 +4,11 @@
 #ifndef FVDB_DETAIL_VIEWER_VIEWER_H
 #define FVDB_DETAIL_VIEWER_VIEWER_H
 
+#include <fvdb/GridBatchData.h>
+#include <fvdb/JaggedTensor.h>
 #include <fvdb/detail/utils/gsplat/GaussianCameras.cuh>
 #include <fvdb/detail/viewer/CameraView.h>
 #include <fvdb/detail/viewer/GaussianSplat3dView.h>
-#include <fvdb/GridBatchData.h>
-#include <fvdb/JaggedTensor.h>
 
 #include <c10/util/Exception.h>
 #include <torch/types.h>
