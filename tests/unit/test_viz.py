@@ -125,6 +125,82 @@ class TestViewerScene(unittest.TestCase):
         rgba_flat2 = rgba_data2.reshape(-1)
         view.update(rgba_flat2)
 
+    def test_add_level_set(self):
+        scene = fvdb.viz.Scene("test_level_set")
+
+        ijk = torch.randint(0, 16, (50, 3), dtype=torch.int32)
+        grid = fvdb.Grid.from_ijk(ijk)
+        sdf = fvdb.JaggedTensor([torch.randn(grid.num_voxels, dtype=torch.float32)])
+
+        view = scene.add_level_set("terrain", grid, sdf)
+        assert view is not None
+        assert isinstance(view, fvdb.viz.LevelSetView)
+        assert view.name == "terrain"
+        assert view.scene_name == "test_level_set"
+        # A single grid maps to a single view named exactly `name` (no `[i]` suffix).
+        assert view._view_names == ["terrain"]
+
+        # Update with fresh SDF values on the same grid.
+        sdf2 = fvdb.JaggedTensor([torch.randn(grid.num_voxels, dtype=torch.float32)])
+        view.update(grid, sdf2)
+        assert view._view_names == ["terrain"]
+
+    def test_add_fog_volume(self):
+        scene = fvdb.viz.Scene("test_fog_volume")
+
+        ijk = torch.randint(0, 16, (50, 3), dtype=torch.int32)
+        grid = fvdb.Grid.from_ijk(ijk)
+        density = fvdb.JaggedTensor([torch.rand(grid.num_voxels, dtype=torch.float32)])
+
+        view = scene.add_fog_volume("cloud", grid, density)
+        assert view is not None
+        assert isinstance(view, fvdb.viz.FogVolumeView)
+        assert view.name == "cloud"
+        assert view.scene_name == "test_fog_volume"
+        assert view._view_names == ["cloud"]
+
+    def test_add_level_set_gridbatch(self):
+        # A multi-grid GridBatch is expanded into one editor view per grid, named `name[i]`,
+        # because the nanovdb-editor renders only one grid per view.
+        scene = fvdb.viz.Scene("test_level_set_batch")
+
+        ijk0 = torch.randint(0, 16, (40, 3), dtype=torch.int32)
+        ijk1 = torch.randint(0, 16, (30, 3), dtype=torch.int32)
+        grid_batch = fvdb.GridBatch.from_ijk(fvdb.JaggedTensor([ijk0, ijk1]))
+        assert grid_batch.grid_count == 2
+
+        sdf = grid_batch.jagged_like(torch.randn(grid_batch.total_voxels, dtype=torch.float32))
+
+        view = scene.add_level_set("surf", grid_batch, sdf)
+        assert isinstance(view, fvdb.viz.LevelSetView)
+        assert view._view_names == ["surf[0]", "surf[1]"]
+
+    def test_add_level_set_invalid(self):
+        scene = fvdb.viz.Scene("test_level_set_invalid")
+
+        ijk = torch.randint(0, 16, (50, 3), dtype=torch.int32)
+        grid = fvdb.Grid.from_ijk(ijk)
+
+        # Wrong dtype (float64 instead of float32).
+        with pytest.raises(TypeError):
+            scene.add_level_set(
+                "bad_dtype", grid, fvdb.JaggedTensor([torch.randn(grid.num_voxels, dtype=torch.float64)])
+            )
+
+        # Wrong length (does not match voxel count).
+        with pytest.raises(ValueError):
+            scene.add_level_set(
+                "bad_len", grid, fvdb.JaggedTensor([torch.randn(grid.num_voxels + 1, dtype=torch.float32)])
+            )
+
+        # Not a Grid or GridBatch.
+        with pytest.raises(TypeError):
+            scene.add_level_set(
+                "bad_grid",
+                ijk,  # type: ignore[arg-type]
+                fvdb.JaggedTensor([torch.randn(grid.num_voxels, dtype=torch.float32)]),
+            )
+
     def test_camera_fov(self):
         scene = fvdb.viz.Scene("test_camera_fov")
 

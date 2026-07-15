@@ -5,6 +5,9 @@
 #include <fvdb/detail/viewer/CameraView.h>
 #include <fvdb/detail/viewer/GaussianSplat3dView.h>
 #include <fvdb/detail/viewer/Viewer.h>
+#include <fvdb/detail/io/SaveNanoVDB.h>
+
+#include <editor/PipelineTypes.h>
 
 #include <c10/util/Exception.h>
 
@@ -555,6 +558,59 @@ Viewer::addImage(const std::string &scene_name,
     }
 
     mEditor.compute.destroy_array(image_nanovdb);
+}
+
+void
+Viewer::addLevelSetView(const std::string &scene_name,
+                        const std::string &name,
+                        const GridBatchData &grid,
+                        const JaggedTensor &sdf) {
+    addNanoVDBGridView(scene_name, name, grid, sdf, pnanovdb_pipeline_type_nanovdb_surface);
+}
+
+void
+Viewer::addFogVolumeView(const std::string &scene_name,
+                         const std::string &name,
+                         const GridBatchData &grid,
+                         const JaggedTensor &density) {
+    addNanoVDBGridView(scene_name, name, grid, density, pnanovdb_pipeline_type_nanovdb_render);
+}
+
+void
+Viewer::addNanoVDBGridView(const std::string &scene_name,
+                           const std::string &name,
+                           const GridBatchData &grid,
+                           const JaggedTensor &floatValues,
+                           pnanovdb_pipeline_type_t render_pipeline) {
+    // The nanovdb-editor renders exactly one grid per view (its shader decodes a single
+    // grid anchored at byte offset 0 of the uploaded buffer). Callers must expand a
+    // multi-grid GridBatch into one view per grid; see fvdb.viz._nanovdb_grid_view.
+    TORCH_CHECK(grid.batchSize() == 1,
+                "addNanoVDBGridView expects a single grid (batchSize == 1), got a batch of ",
+                grid.batchSize(),
+                ". The viewer renders one grid per view; add one view per grid.");
+
+    auto handle = detail::io::toNVDBWithBlindFloat(grid, floatValues);
+
+    // Match the editor's own NanoVDB upload convention (compute.load_nanovdb): a NanoVDB
+    // buffer is a uint32 array, so element_size = 4. This becomes the GPU buffer's
+    // structure_stride at upload time. NanoVDB grids are 32-byte aligned, so the buffer
+    // size is always a multiple of 4.
+    const uint64_t bufferBytes = handle.buffer().size();
+    TORCH_CHECK(bufferBytes % sizeof(uint32_t) == 0,
+                "Internal error: NanoVDB buffer size ", bufferBytes, " is not 4-byte aligned");
+    pnanovdb_compute_array_t *array = mEditor.compute.create_array(
+        sizeof(uint32_t), bufferBytes / sizeof(uint32_t), handle.buffer().data());
+
+    pnanovdb_editor_token_t *sceneToken = mEditor.editor.get_token(scene_name.c_str());
+    pnanovdb_editor_token_t *nameToken  = mEditor.editor.get_token(name.c_str());
+
+    mEditor.editor.add_nanovdb_3(&mEditor.editor, sceneToken, nameToken, array,
+                                 pnanovdb_pipeline_type_noop, render_pipeline);
+
+    mEditor.compute.destroy_array(array);
+
+    mNanoVDBViews[name] = NanoVDBView{name};
 }
 
 } // namespace fvdb::detail::viewer

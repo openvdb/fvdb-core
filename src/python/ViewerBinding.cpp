@@ -277,6 +277,28 @@ bind_viewer(py::module &m) {
              "Add an RGBA8 image as a 2D NanoVDB grid to the viewer. "
              "The rgba_image should be a 1D uint8 tensor of size width * height * 4 "
              "containing packed RGBA values.")
+        .def("add_level_set_view",
+             &fvdb::detail::viewer::Viewer::addLevelSetView,
+             py::arg("scene_name"),
+             py::arg("name"),
+             py::arg("grid"),
+             py::arg("sdf"),
+             "Add a single grid with per-voxel float32 SDF values as a level-set isosurface "
+             "(rendered by the nanovdb-editor surface pipeline). The grid must contain exactly "
+             "one grid.")
+        .def("add_fog_volume_view",
+             &fvdb::detail::viewer::Viewer::addFogVolumeView,
+             py::arg("scene_name"),
+             py::arg("name"),
+             py::arg("grid"),
+             py::arg("density"),
+             "Add a single grid with per-voxel float32 density values as a fog volume "
+             "(rendered by the nanovdb-editor render pipeline). The grid must contain exactly "
+             "one grid.")
+        .def("has_nanovdb_view",
+             &fvdb::detail::viewer::Viewer::hasNanoVDBView,
+             py::arg("name"),
+             "Check if a NanoVDB grid view with the given name exists.")
         .def("wait_for_interrupt",
              &fvdb::detail::viewer::Viewer::waitForInteerrupt,
              "Block until the viewer is interrupted by the user (Ctrl-C or closing the window)");
