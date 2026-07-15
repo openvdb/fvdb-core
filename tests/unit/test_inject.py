@@ -1,8 +1,10 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 #
+import gc
 import itertools
 import unittest
+import weakref
 from typing import Callable
 
 import numpy as np
@@ -761,6 +763,24 @@ class InjectionTests(unittest.TestCase):
 
         toinds, frominds = torch.where(b1_comparison)
         self.assertTrue(torch.all(one_indices == frominds))
+
+
+def test_inject_autograd_result_does_not_leak():
+    src_ijk = torch.tensor([[0, 0, 0], [1, 0, 0]], dtype=torch.int32)
+    dst_ijk = src_ijk[:1].clone()
+    src_grid = fvdb.GridBatch.from_ijk(fvdb.JaggedTensor([src_ijk]))
+    dst_grid = fvdb.GridBatch.from_ijk(fvdb.JaggedTensor([dst_ijk]))
+    features = torch.randn(src_grid.total_voxels, 1, requires_grad=True)
+
+    result = dst_grid.inject_from(src_grid, fvdb.JaggedTensor([features]))
+    assert result.jdata.grad_fn is not None
+    result.jdata.sum().backward()
+
+    result_ref = weakref.ref(result.jdata)
+    del result
+    gc.collect()
+
+    assert result_ref() is None, "reference cycle leak detected"
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
