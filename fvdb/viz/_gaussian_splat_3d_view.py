@@ -69,7 +69,7 @@ class GaussianSplat3dView:
             antialias (bool): Whether to use antialiasing when rendering splats. Default is False.
             sh_degree_to_use (int): The degree of spherical harmonics to use when rendering colors.
                 If -1, the maximum degree supported by the Gaussian splat 3D scene is used. Default is -1.
-            sh_ordering_mode (str): The spherical harmonics tensor layout to use when rendering colors. Must be
+            sh_ordering_mode (ShOrderingMode): The spherical harmonics tensor layout to use when rendering colors. Must be
                 ``"rgb_rgb_rgb"`` or ``"rrr_ggg_bbb"``. Default is ``"rgb_rgb_rgb"``.
             _private (Any): A private object used by :class:`Scene` to construct the view.
         """
@@ -89,17 +89,12 @@ class GaussianSplat3dView:
             shN=shN,
         )
 
-        try:
-            sh_ordering_mode = ShOrderingMode(sh_ordering_mode)
-        except ValueError:
-            raise ValueError(f"Invalid spherical harmonics ordering: {sh_ordering_mode!r}")
-
         view.tile_size = tile_size
         view.min_radius_2d = min_radius_2d
         view.eps_2d = eps_2d
         view.antialias = antialias
         view.sh_degree_to_use = sh_degree_to_use
-        view.rgb_rgb_rgb_sh = sh_ordering_mode == ShOrderingMode.RGB_RGB_RGB
+        self.sh_ordering_mode = sh_ordering_mode
 
     @property
     def tile_size(self) -> int:
@@ -206,8 +201,7 @@ class GaussianSplat3dView:
         Returns:
             ShOrderingMode: The spherical harmonics tensor layout.
         """
-        view = self._get_view()
-        return ShOrderingMode.RGB_RGB_RGB if view.rgb_rgb_rgb_sh else ShOrderingMode.RRR_GGG_BBB
+        return self._sh_ordering_mode
 
     @sh_ordering_mode.setter
     def sh_ordering_mode(self, mode: ShOrderingMode):
@@ -222,4 +216,5 @@ class GaussianSplat3dView:
             mode = ShOrderingMode(mode)
         except ValueError:
             raise ValueError(f"Invalid spherical harmonics ordering: {mode!r}")
+        self._sh_ordering_mode = mode
         view.rgb_rgb_rgb_sh = mode == ShOrderingMode.RGB_RGB_RGB

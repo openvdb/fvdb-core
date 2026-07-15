@@ -94,16 +94,14 @@ class TestGaussianSplatViewData:
 
 
 class TestGaussianSplatSceneContract:
-    @pytest.mark.parametrize(
-        ("rgb_rgb_rgb_sh", "expected"),
-        [(True, "rgb_rgb_rgb"), (False, "rrr_ggg_bbb")],
-    )
-    def test_view_reports_native_spherical_harmonics_layout(self, rgb_rgb_rgb_sh, expected):
+    @pytest.mark.parametrize("mode", list(fvdb.viz.ShOrderingMode))
+    def test_view_stores_spherical_harmonics_layout(self, mode):
         view = object.__new__(fvdb.viz.GaussianSplat3dView)
-        native_view = SimpleNamespace(rgb_rgb_rgb_sh=rgb_rgb_rgb_sh)
 
-        with patch.object(view, "_get_view", return_value=native_view):
-            assert view.sh_ordering_mode == expected
+        with patch.object(view, "_get_view", return_value=SimpleNamespace()):
+            view.sh_ordering_mode = mode
+
+        assert view.sh_ordering_mode is mode
 
     def test_raw_tensor_api_forwards_renderer_inputs(self):
         scene = _SceneWithoutServer()
@@ -134,7 +132,7 @@ class TestGaussianSplatSceneContract:
             "eps_2d": 0.1,
             "antialias": True,
             "sh_degree_to_use": 2,
-            "sh_ordering_mode": "rrr_ggg_bbb",
+            "sh_ordering_mode": fvdb.viz.ShOrderingMode.RRR_GGG_BBB,
         }
 
     def test_view_data_api_delegates_to_raw_tensor_api(self):
@@ -199,7 +197,6 @@ class TestGaussianSplatSceneContract:
 
 
 class TestViewerServer(unittest.TestCase):
-
     @classmethod
     def setUpClass(cls):
         try:
@@ -223,7 +220,6 @@ class TestViewerServer(unittest.TestCase):
 
 
 class TestViewerScene(unittest.TestCase):
-
     @classmethod
     def setUpClass(cls):
         try:

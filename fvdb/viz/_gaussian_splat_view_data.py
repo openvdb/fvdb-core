@@ -78,8 +78,8 @@ class GaussianSplatViewData:
         for name, tensor in tensors.items():
             if not isinstance(tensor, torch.Tensor):
                 raise TypeError(f"{name} must be a torch.Tensor, got {type(tensor).__name__}")
-            if not tensor.dtype.is_floating_point:
-                raise TypeError(f"{name} must have a floating-point dtype, got {tensor.dtype}")
+            if tensor.dtype != torch.float32:
+                raise TypeError(f"{name} must have dtype torch.float32, got {tensor.dtype}")
 
         try:
             object.__setattr__(self, "sh_ordering", ShOrderingMode(self.sh_ordering))
@@ -100,6 +100,8 @@ class GaussianSplatViewData:
         if self.means.ndim != 2 or self.means.shape[1] != 3:
             raise ValueError(f"means must have shape (N, 3), got {tuple(self.means.shape)}")
         num_gaussians = self.means.shape[0]
+        if num_gaussians == 0:
+            raise ValueError("Gaussian splat data must contain at least one Gaussian")
         expected_shapes = {
             "quats": (num_gaussians, 4),
             "log_scales": (num_gaussians, 3),
@@ -128,8 +130,8 @@ class GaussianSplatViewData:
                 raise ValueError(
                     'sh0 must have shape (N, 1, C) for sh_ordering="rgb_rgb_rgb", ' f"got {tuple(self.sh0.shape)}"
                 )
-            if self.sh0.shape[2] == 0:
-                raise ValueError("sh0 must contain at least one channel")
+            if self.sh0.shape[2] != 3:
+                raise ValueError(f"sh0 must contain exactly 3 RGB channels, got {self.sh0.shape[2]}")
             if self.shN.shape[2] != self.sh0.shape[2]:
                 raise ValueError(
                     f"sh0 and shN must have the same channel dimension, got {self.sh0.shape[2]} and {self.shN.shape[2]}"
@@ -139,8 +141,8 @@ class GaussianSplatViewData:
                 raise ValueError(
                     'sh0 must have shape (N, C, 1) for sh_ordering="rrr_ggg_bbb", ' f"got {tuple(self.sh0.shape)}"
                 )
-            if self.sh0.shape[1] == 0:
-                raise ValueError("sh0 must contain at least one channel")
+            if self.sh0.shape[1] != 3:
+                raise ValueError(f"sh0 must contain exactly 3 RGB channels, got {self.sh0.shape[1]}")
             if self.shN.shape[1] != self.sh0.shape[1]:
                 raise ValueError(
                     f"sh0 and shN must have the same channel dimension, got {self.sh0.shape[1]} and {self.shN.shape[1]}"
