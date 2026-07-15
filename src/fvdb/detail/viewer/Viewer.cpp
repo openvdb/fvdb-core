@@ -9,7 +9,6 @@
 
 #include <c10/util/Exception.h>
 
-#include <editor/PipelineTypes.h>
 #include <nanovdb_editor/putil/Raster.h>
 
 #include <cmath>
@@ -67,6 +66,19 @@ namespace fvdb::detail::viewer {
 
 constexpr float DEFAULT_CAMERA_FOV_RADIANS  = 60.f * M_PI / 180.f;
 constexpr float DEFAULT_CAMERA_ASPECT_RATIO = 4.f / 3.f;
+
+inline pnanovdb_pipeline_type_t
+getPipelineType(pnanovdb_editor_t &editor, const char *typeId) {
+    pnanovdb_pipeline_type_t type      = 0;
+    pnanovdb_editor_token_t *typeToken = editor.get_token(typeId);
+    TORCH_CHECK(
+        typeToken, "nanovdb-editor could not create token for pipeline type '", typeId, "'");
+    TORCH_CHECK(editor.get_pipeline_type(&editor, typeToken, &type),
+                "nanovdb-editor could not resolve pipeline type '",
+                typeId,
+                "'");
+    return type;
+}
 
 void
 Viewer::updateCamera(const std::string &scene_name) {
@@ -564,7 +576,11 @@ Viewer::addLevelSetView(const std::string &scene_name,
                         const std::string &name,
                         const GridBatchData &grid,
                         const JaggedTensor &sdf) {
-    addNanoVDBGridView(scene_name, name, grid, sdf, pnanovdb_pipeline_type_nanovdb_surface);
+    addNanoVDBGridView(scene_name,
+                       name,
+                       grid,
+                       sdf,
+                       getPipelineType(mEditor.editor, "pnanovdb_pipeline_type_nanovdb_surface"));
 }
 
 void
@@ -572,7 +588,11 @@ Viewer::addFogVolumeView(const std::string &scene_name,
                          const std::string &name,
                          const GridBatchData &grid,
                          const JaggedTensor &density) {
-    addNanoVDBGridView(scene_name, name, grid, density, pnanovdb_pipeline_type_nanovdb_render);
+    addNanoVDBGridView(scene_name,
+                       name,
+                       grid,
+                       density,
+                       getPipelineType(mEditor.editor, "pnanovdb_pipeline_type_nanovdb_render"));
 }
 
 void
@@ -610,7 +630,7 @@ Viewer::addNanoVDBGridView(const std::string &scene_name,
                                  sceneToken,
                                  nameToken,
                                  array,
-                                 pnanovdb_pipeline_type_noop,
+                                 getPipelineType(mEditor.editor, "pnanovdb_pipeline_type_noop"),
                                  render_pipeline);
 
     mEditor.compute.destroy_array(array);
