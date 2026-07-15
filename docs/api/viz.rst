@@ -9,6 +9,7 @@ Gaussian splats
 
 .. autoclass:: fvdb.viz.ShOrderingMode
     :members:
+    :no-index:
 
 The viewer accepts Gaussian splats through the core-owned
 :class:`fvdb.viz.GaussianSplatViewData` tensor contract. Libraries that own a
