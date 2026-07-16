@@ -29,8 +29,21 @@ if(NOT nanovdb_editor_ADDED)
 endif()
 
 string(SUBSTRING "${NANOVDB_EDITOR_TAG}" 0 7 NANOVDB_EDITOR_TAG_SHORT)
-set(NANOVDB_EDITOR_INCLUDE_DIR ${nanovdb_editor_SOURCE_DIR})
-message(STATUS "Using NanoVDB Editor headers from ${NANOVDB_EDITOR_INCLUDE_DIR} (tag ${NANOVDB_EDITOR_TAG_SHORT})")
+
+# CPM downloads the entire nanovdb-editor repository, but only the headers in
+# the top-level "nanovdb_editor" folder are the public, versioned interface that
+# fVDB is allowed to include as <nanovdb_editor/...>. Everything else is internal
+# implementation detail.
+set(NANOVDB_EDITOR_INCLUDE_DIR ${nanovdb_editor_BINARY_DIR}/include)
+if(NOT EXISTS "${nanovdb_editor_SOURCE_DIR}/nanovdb_editor")
+    message(FATAL_ERROR
+        "Expected public headers at ${nanovdb_editor_SOURCE_DIR}/nanovdb_editor, "
+        "but the directory is missing")
+endif()
+file(REMOVE_RECURSE ${NANOVDB_EDITOR_INCLUDE_DIR}/nanovdb_editor)
+file(COPY ${nanovdb_editor_SOURCE_DIR}/nanovdb_editor
+     DESTINATION ${NANOVDB_EDITOR_INCLUDE_DIR})
+message(STATUS "Using NanoVDB Editor public headers from ${NANOVDB_EDITOR_INCLUDE_DIR} (tag ${NANOVDB_EDITOR_TAG_SHORT})")
 
 set(NANOVDB_EDITOR_BUILD_FROM_SOURCE OFF)
 if(DEFINED CPM_nanovdb_editor_SOURCE AND NOT "${CPM_nanovdb_editor_SOURCE}" STREQUAL "")
