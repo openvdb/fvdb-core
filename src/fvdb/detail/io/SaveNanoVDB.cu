@@ -1097,8 +1097,7 @@ toNVDBWithBlindFloat(const GridBatchData &gridBatchData, const JaggedTensor &flo
     std::vector<uint64_t> paddedPayloadBytes;
     paddedPayloadBytes.reserve(gridBatchData.batchSize());
     for (int64_t batchIdx = 0; batchIdx < gridBatchData.batchSize(); ++batchIdx) {
-        const uint64_t valueCount =
-            static_cast<uint64_t>(gridBatchData.numVoxelsAt(batchIdx)) + 1u;
+        const uint64_t valueCount = static_cast<uint64_t>(gridBatchData.numVoxelsAt(batchIdx)) + 1u;
         paddedPayloadBytes.push_back(nanovdb::math::AlignUp<32UL>(valueCount * sizeof(float)));
     }
 
