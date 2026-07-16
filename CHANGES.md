@@ -1,6 +1,19 @@
 fVDB Version History
 ====================
 
+## Version 0.6.0 - In Development
+
+- **Breaking:** Moved the high-level Gaussian splatting Python API to fVDB Reality Capture and removed its former
+  `fvdb` entry points. Use `fvdb_reality_capture.GaussianSplat3d`,
+  `fvdb_reality_capture.ProjectedGaussianSplats`, `fvdb_reality_capture.gaussian_render_jagged`, and
+  `fvdb_reality_capture.evaluate_spherical_harmonics` instead. The associated `ShOrderingMode`,
+  `RollingShutterType`, `CameraModel`, and `ProjectionMethod` enums now also live in `fvdb_reality_capture`. The
+  low-level compiled Gaussian kernels and viewer support remain in fVDB Core.
+- Decoupled `fvdb.viz` from application-owned Gaussian model classes. `Scene.add_gaussian_splat_3d` now accepts the
+  immutable, core-owned `GaussianSplatViewData` tensor contract and delegates to the new
+  `Scene.add_gaussian_splat_tensors` primitive. The legacy six-property model interface remains temporarily available
+  with a deprecation warning.
+
 ## Version 0.5.0 - July 1, 2026
 
 *115 commits, 500+ files changed, 10 contributors.*

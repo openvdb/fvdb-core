@@ -28,7 +28,6 @@ Features
 ƒVDB provides the following key features:
 
 -   A sparse volumetric grid data structure optimized for GPU memory efficiency and performance.
--   A highly optimized Gaussian splat data structure for representing radiance fields on the GPU.
 -   A jagged tensor data structure for efficient representation of sparse, non-uniform data on the GPU.
 -   A suite of GPU-accelerated algorithms for volumetric data manipulation, ray tracing, and volume rendering.
 -   A state of the art visualizer capable of streaming massive volumetric datasets to a web browser or Jupyter notebook.
@@ -76,7 +75,7 @@ spatial intelligence research and applications.
 In addition to the core ƒVDB library, we also provide the `ƒVDB Reality Capture <https://fvdb-reality-capture.readthedocs.io/>`_ toolbox,
 which is a collection of tools and utilities for 3D reconstruction and scene understanding using ƒVDB. Analogous to how `torchvision <https://pytorch.org/vision/stable/index.html>`_
 provides datasets, models, and transforms for computer vision tasks, `ƒVDB Reality Capture <https://fvdb-reality-capture.readthedocs.io/>`_ provides datasets, models, and
-algorithms for 3D reconstruction from sensor data.
+algorithms for 3D reconstruction from sensor data, including the high-level Gaussian splatting Python API.
 
 .. toctree::
    :caption: Introduction
@@ -115,7 +114,6 @@ algorithms for 3D reconstruction from sensor data.
    api/convolution_plan
    api/sparse_grids
    api/functional
-   api/gaussian_splatting
    api/viz
    api/enums
    api/nn
