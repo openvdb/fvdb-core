@@ -55,12 +55,16 @@ class Viewer {
 
     // Shared implementation behind addLevelSetView / addFogVolumeView: builds an ONINDEX NanoVDB
     // buffer carrying `floatValues` as blind data and registers it under the given nanovdb-editor
-    // render pipeline. `grid` must contain exactly one grid (batchSize() == 1).
+    // render pipeline and shader. `render_shader` must be the shader that `render_pipeline` uses
+    // (e.g. "editor/editor_surface.slang" for the surface pipeline) since add_nanovdb_3 otherwise
+    // leaves the object on the editor's default scalar shader. `grid` must contain exactly one
+    // grid (batchSize() == 1).
     void addNanoVDBGridView(const std::string &scene_name,
                             const std::string &name,
                             const GridBatchData &grid,
                             const JaggedTensor &floatValues,
-                            pnanovdb_pipeline_type_t render_pipeline);
+                            pnanovdb_pipeline_type_t render_pipeline,
+                            const std::string &render_shader);
 
   public:
     Viewer(const std::string &ipAddress,

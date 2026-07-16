@@ -580,7 +580,8 @@ Viewer::addLevelSetView(const std::string &scene_name,
                        name,
                        grid,
                        sdf,
-                       getPipelineType(mEditor.editor, "pnanovdb_pipeline_type_nanovdb_surface"));
+                       getPipelineType(mEditor.editor, "pnanovdb_pipeline_type_nanovdb_surface"),
+                       "editor/editor_surface.slang");
 }
 
 void
@@ -592,7 +593,8 @@ Viewer::addFogVolumeView(const std::string &scene_name,
                        name,
                        grid,
                        density,
-                       getPipelineType(mEditor.editor, "pnanovdb_pipeline_type_nanovdb_render"));
+                       getPipelineType(mEditor.editor, "pnanovdb_pipeline_type_nanovdb_render"),
+                       "editor/editor.slang");
 }
 
 void
@@ -600,7 +602,8 @@ Viewer::addNanoVDBGridView(const std::string &scene_name,
                            const std::string &name,
                            const GridBatchData &grid,
                            const JaggedTensor &floatValues,
-                           pnanovdb_pipeline_type_t render_pipeline) {
+                           pnanovdb_pipeline_type_t render_pipeline,
+                           const std::string &render_shader) {
     // The nanovdb-editor renders exactly one grid per view (its shader decodes a single
     // grid anchored at byte offset 0 of the uploaded buffer). Callers must expand a
     // multi-grid GridBatch into one view per grid; see fvdb.viz._nanovdb_grid_view.
@@ -632,6 +635,28 @@ Viewer::addNanoVDBGridView(const std::string &scene_name,
                                  array,
                                  getPipelineType(mEditor.editor, "pnanovdb_pipeline_type_noop"),
                                  render_pipeline);
+
+    // add_nanovdb_3 only applies render_pipeline as a soft default (apply_default_stage sets it
+    // only when the render stage is not already configured), so the editor's "Render:" dropdown
+    // may not land on it. Force the render stage explicitly, exactly as the editor UI does when
+    // you pick a renderer from that dropdown, so the dropdown shows the surface (SDF) renderer.
+    mEditor.editor.set_pipeline(
+        &mEditor.editor, sceneToken, nameToken, pnanovdb_pipeline_stage_render, render_pipeline);
+
+    // add_nanovdb_3 leaves the object on the editor's default shader (nanovdb_render's
+    // editor/editor.slang), which shades per-voxel scalars. Override it with the shader that
+    // matches render_pipeline so level sets draw as an HDDA isosurface. Same map_params pattern as
+    // addImage; setting the render pipeline above does not touch the object's shader.
+    pnanovdb_editor_shader_name_t *mapped =
+        (pnanovdb_editor_shader_name_t *)mEditor.editor.map_params(
+            &mEditor.editor,
+            sceneToken,
+            nameToken,
+            PNANOVDB_REFLECT_DATA_TYPE(pnanovdb_editor_shader_name_t));
+    if (mapped) {
+        mapped->shader_name = mEditor.editor.get_token(render_shader.c_str());
+        mEditor.editor.unmap_params(&mEditor.editor, sceneToken, nameToken);
+    }
 
     mEditor.compute.destroy_array(array);
 
