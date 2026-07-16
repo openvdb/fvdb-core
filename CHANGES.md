@@ -1,6 +1,12 @@
 fVDB Version History
 ====================
 
+
+## Version 0.5.1 - July 16, 2026
+
+**Bug Fixes:**
+- Fix a reference cycle in `_InjectFn` causing a memory leak.
+
 ## Version 0.5.0 - July 1, 2026
 
 *115 commits, 500+ files changed, 10 contributors.*
