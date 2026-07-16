@@ -647,6 +647,8 @@ Viewer::addNanoVDBGridView(const std::string &scene_name,
     // editor/editor.slang), which shades per-voxel scalars. Override it with the shader that
     // matches render_pipeline so level sets draw as an HDDA isosurface. Same map_params pattern as
     // addImage; setting the render pipeline above does not touch the object's shader.
+    // TODO:  Note this is a bug (openvdb/nanovdb-editor#213) and when fixed in NanoVDB Editor (i.e.
+    // setting the pipeline sets the appropriate default shader automatically), this can be removed.
     pnanovdb_editor_shader_name_t *mapped =
         (pnanovdb_editor_shader_name_t *)mEditor.editor.map_params(
             &mEditor.editor,
