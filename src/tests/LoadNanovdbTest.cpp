@@ -3,6 +3,7 @@
 
 #include <fvdb/FVDB.h>
 #include <fvdb/JaggedTensor.h>
+#include <fvdb/detail/io/SaveNanoVDB.h>
 
 #include <nanovdb/NanoVDB.h>
 
@@ -201,4 +202,34 @@ TEST(LoadNanovdb, TensorGridShapeBlindDataCanFollowGridNameBlindData) {
     nanovdb::GridHandle<nanovdb::HostBuffer> sourceHandle =
         fvdb::to_nanovdb(*grid, std::optional<fvdb::JaggedTensor>(jaggedData), {kGridName});
     expectRoundTripWithLeadingGridNameBlindData(sourceHandle, sourceData);
+}
+
+TEST(SaveNanoVDB, BlindFloatPayloadMatchesValueOnIndexIndexSpace) {
+    auto grid = makeTestGrid();
+    torch::Tensor sourceData =
+        torch::tensor({-3.5f, -1.25f, 2.0f, 7.0f}, torch::TensorOptions().dtype(torch::kFloat32));
+    fvdb::JaggedTensor jaggedData(std::vector<torch::Tensor>{sourceData});
+
+    nanovdb::GridHandle<nanovdb::HostBuffer> handle =
+        fvdb::detail::io::toNVDBWithBlindFloat(*grid, jaggedData);
+
+    const auto *savedGrid = handle.grid<nanovdb::ValueOnIndex>(0);
+    ASSERT_NE(savedGrid, nullptr);
+    ASSERT_EQ(savedGrid->blindDataCount(), 1u);
+
+    const nanovdb::GridBlindMetaData &metadata = savedGrid->blindMetaData(0);
+    EXPECT_EQ(std::string(metadata.mName), "fvdb_sdf_float32");
+    EXPECT_EQ(metadata.mDataType, nanovdb::GridType::Float);
+    EXPECT_EQ(metadata.mValueSize, sizeof(float));
+
+    // ValueOnIndex reserves index 0 for background and active voxel values use
+    // indices 1..N, so the blind payload must live in that same index space.
+    ASSERT_EQ(metadata.mValueCount, static_cast<uint64_t>(sourceData.numel() + 1));
+
+    const float *payload = static_cast<const float *>(metadata.blindData());
+    ASSERT_NE(payload, nullptr);
+    EXPECT_FLOAT_EQ(payload[0], 0.0f);
+    for (int64_t i = 0; i < sourceData.numel(); ++i) {
+        EXPECT_FLOAT_EQ(payload[i + 1], sourceData[i].item<float>());
+    }
 }

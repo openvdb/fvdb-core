@@ -1331,6 +1331,21 @@ class Viewer:
         width: int,
         height: int,
     ) -> None: ...
+    def add_level_set_view(
+        self,
+        scene_name: str,
+        name: str,
+        grid: GridBatchData,
+        sdf: JaggedTensor,
+    ) -> None: ...
+    def add_fog_volume_view(
+        self,
+        scene_name: str,
+        name: str,
+        grid: GridBatchData,
+        density: JaggedTensor,
+    ) -> None: ...
+    def has_nanovdb_view(self, name: str) -> bool: ...
     def wait_for_interrupt(self) -> None: ...
 
 class config:

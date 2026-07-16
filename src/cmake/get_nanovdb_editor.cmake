@@ -10,8 +10,11 @@ set(NANOVDB_EDITOR_BUILD_TYPE "Release" CACHE STRING "Build type for nanovdb_edi
 
 # fVDB pins NanoVDB Editor headers to an exact source commit via CPM
 # Note: only change this when the interfaces have changed
-set(NANOVDB_EDITOR_TAG c2eeb18b2e381e8e7cf0979b84ef3551620d7f74)
-set(NANOVDB_EDITOR_VERSION 0.0.25)   # version at this commit
+# 7efb611: adds add_nanovdb_3 API and pnanovdb_pipeline_type_nanovdb_surface = 12
+#          required for add_level_set / add_fog_volume viewer methods.
+# 39fb452: adds get_pipeline_type() used to resolve pnanovdb_pipeline_type_t
+set(NANOVDB_EDITOR_TAG 39fb4523db9e4dac50f2e2ac54c3898152101c14)
+set(NANOVDB_EDITOR_VERSION 0.1.5)   # version at this commit
 
 CPMAddPackage(
     NAME nanovdb_editor
