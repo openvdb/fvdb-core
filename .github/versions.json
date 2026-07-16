@@ -7,15 +7,15 @@
     "default": "13.0",
     "conda_override": "13.0",
     "arch_list_pr": "8.9+PTX",
-    "arch_list_publish": "7.5;8.0;9.0;10.0;12.0+PTX"
+    "arch_list_publish": "7.5;8.0;8.6;9.0;10.0;12.0+PTX"
   },
   "python": {
-    "matrix": ["3.10", "3.11", "3.12", "3.13"],
+    "matrix": ["3.10", "3.11", "3.12", "3.13", "3.14"],
     "default": "3.12"
   },
   "torch": {
-    "version": "2.10",
-    "full_version": "2.10.0"
+    "version": "2.11",
+    "full_version": "2.11.0"
   },
   "gcc": {
     "toolset": "14",
@@ -23,7 +23,7 @@
   },
   "cmake_version": "4.0.3",
   "uv": {
-    "version": "0.7.5",
+    "version": "0.11.26",
     "action_sha": "d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86"
   },
   "docker_os": {
@@ -40,8 +40,8 @@
     "cloudfront_distribution_domain": "d36m13axqqhiit.cloudfront.net"
   },
   "publish_matrix": {
-    "python-version": ["3.10", "3.11", "3.12", "3.13"],
-    "torch-version": ["2.10"],
+    "python-version": ["3.10", "3.11", "3.12", "3.13", "3.14"],
+    "torch-version": ["2.11"],
     "cuda-version": ["12.8", "13.0"],
     "include": [
       { "cuda-version": "12.8", "cuda-image-tag": "12.8.1" },

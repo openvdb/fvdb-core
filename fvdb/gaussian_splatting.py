@@ -275,12 +275,13 @@ class ProjectedGaussianSplats:
     @property
     def radii(self) -> torch.Tensor:
         """
-        Return the 2D radii (in pixels) of each projected Gaussian in each image plane. The radius of a Gaussian is the maximum extent
-        of the Gaussian along any direction in the image plane.
+        Return the per-axis 2D radii (in pixels) of each projected Gaussian in each image plane.
+        Entry ``(c, n, 0)`` is the half-width of the AABB along x and ``(c, n, 1)`` is the
+        half-width along y. A Gaussian is considered visible iff both axes are positive.
 
         Returns:
-            radii (torch.Tensor): A tensor of shape ``(C, N)`` representing the 2D radius of each projected Gaussian, where
-                ``C`` is the number of image planes, and ``N`` is the number of projected Gaussians.
+            radii (torch.Tensor): A tensor of shape ``(C, N, 2)`` representing the per-axis 2D
+                radius of each projected Gaussian.
         """
         return self._radii
 
@@ -323,6 +324,8 @@ class GaussianSplat3d:
 
     Together, these define a radiance field which can be volume rendered to produce images and depths from
     arbitrary viewpoints. This class provides a variety of methods for rendering and manipulating Gaussian splats radiance fields.
+    World-to-camera matrices supplied to its rendering methods are interpreted as rigid transforms
+    with orthonormal rotation blocks.
     These include:
 
     - Rendering images with arbitrary channels using spherical harmonics for view-dependent color
@@ -1589,18 +1592,32 @@ class GaussianSplat3d:
             sh_degree_to_use = sh_degree
 
         if sh_degree_to_use > 0:
-            # FIXME (Francis): Compute view directions in the kernel instead of
-            # materializing a large [C, N, 3] tensor here.  Doing so would require
-            # updating the current backward pass as well.
-            cam_to_world, info = torch.linalg.inv_ex(w2c)
-            # NOTE: view_dirs are not normalized here; the SH evaluation kernel
-            # normalizes them internally.
-            view_dirs = means[None, :, :] - cam_to_world[:, None, :3, 3]
-            return _EvaluateGaussianSHFn.apply(sh_degree_to_use, C, view_dirs, sh0, shN, radii)
+            empty_ids = torch.empty(0, dtype=torch.int32, device=means.device)
+            return _EvaluateGaussianSHFn.apply(
+                sh_degree_to_use,
+                C,
+                means,
+                w2c,
+                empty_ids,
+                empty_ids,
+                sh0,
+                shN,
+                radii,
+            )
         else:
-            view_dirs = means.new_empty(0)
             shN = sh0.new_empty(sh0.shape[0], 0, sh0.shape[2])
-            return _EvaluateGaussianSHFn.apply(sh_degree_to_use, C, view_dirs, sh0, shN, radii)
+            empty_ids = torch.empty(0, dtype=torch.int32, device=means.device)
+            return _EvaluateGaussianSHFn.apply(
+                sh_degree_to_use,
+                C,
+                means,
+                w2c,
+                empty_ids,
+                empty_ids,
+                sh0,
+                shN,
+                radii,
+            )
 
     def _make_render_features(
         self,

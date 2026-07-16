@@ -52,6 +52,7 @@
 // Meshing / TSDF
 #include <fvdb/detail/ops/IntegrateTSDF.h>
 #include <fvdb/detail/ops/MarchingCubes.h>
+#include <fvdb/detail/ops/ReinitializeSdf.h>
 
 // Topology / misc
 #include <fvdb/detail/ops/GridEdgeNetwork.h>
@@ -120,6 +121,14 @@ bind_grid_batch_ops(py::module &m) {
     using GBI     = fvdb::GridBatchData;
     using JT      = fvdb::JaggedTensor;
     namespace ops = fvdb::detail::ops;
+
+    // -----------------------------------------------------------------------
+    // Enum types
+    // -----------------------------------------------------------------------
+    py::enum_<ops::SmoothingMode>(m, "SmoothingMode")
+        .value("MEAN_CURVATURE", ops::SmoothingMode::MEAN_CURVATURE)
+        .value("TAUBIN", ops::SmoothingMode::TAUBIN)
+        .export_values();
 
     // -----------------------------------------------------------------------
     // Interpolation: forward
@@ -449,6 +458,16 @@ bind_grid_batch_ops(py::module &m) {
 
     m.def(
         "marching_cubes", &ops::marchingCubes, py::arg("grid"), py::arg("field"), py::arg("level"));
+
+    m.def("reinitialize_sdf",
+          &ops::reinitializeSdf,
+          py::arg("grid"),
+          py::arg("field"),
+          py::arg("band"),
+          py::arg("redistance_iters"),
+          py::arg("order"),
+          py::arg("smooth"),
+          py::arg("smoothing"));
 
     m.def("integrate_tsdf",
           &ops::integrateTSDF,

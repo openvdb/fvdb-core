@@ -4,6 +4,8 @@
 #ifndef FVDB_DETAIL_VIEWER_VIEWER_H
 #define FVDB_DETAIL_VIEWER_VIEWER_H
 
+#include <fvdb/GridBatchData.h>
+#include <fvdb/JaggedTensor.h>
 #include <fvdb/detail/utils/gsplat/GaussianCameras.cuh>
 #include <fvdb/detail/viewer/CameraView.h>
 #include <fvdb/detail/viewer/GaussianSplat3dView.h>
@@ -38,6 +40,10 @@ class Viewer {
     std::string mIpAddress;
     int mPort;
     std::string mCurrentSceneName;
+
+    struct NanoVDBView {
+        std::string name;
+    };
 
     // Views are currently shared by all scenes and need to have unique names
     std::map<std::string, GaussianSplat3dView> mSplat3dViews;
@@ -79,12 +85,26 @@ class Viewer {
     std::map<std::string, NumberView> mNumberViews;
     std::map<std::string, TextView> mTextViews;
     std::map<std::string, CheckboxView> mCheckboxViews;
+    std::map<std::string, NanoVDBView> mNanoVDBViews;
 
     void updateCamera(const std::string &scene_name);
     void getCamera(const std::string &scene_name);
 
     void startServer();
     void stopServer();
+
+    // Shared implementation behind addLevelSetView / addFogVolumeView: builds an ONINDEX NanoVDB
+    // buffer carrying `floatValues` as blind data and registers it under the given nanovdb-editor
+    // render pipeline and shader. `render_shader` must be the shader that `render_pipeline` uses
+    // (e.g. "editor/editor_surface.slang" for the surface pipeline) since add_nanovdb_3 otherwise
+    // leaves the object on the editor's default scalar shader. `grid` must contain exactly one
+    // grid (batchSize() == 1).
+    void addNanoVDBGridView(const std::string &scene_name,
+                            const std::string &name,
+                            const GridBatchData &grid,
+                            const JaggedTensor &floatValues,
+                            pnanovdb_pipeline_type_t render_pipeline,
+                            const std::string &render_shader);
 
     struct FieldInfo {
         std::string name;
@@ -162,6 +182,25 @@ class Viewer {
                   const torch::Tensor &rgba_image,
                   int64_t width,
                   int64_t height);
+
+    // Add a single grid (batchSize() == 1) with per-voxel float32 SDF values as a level-set
+    // isosurface, rendered by the nanovdb-editor "surface" pipeline (HDDA zero-crossing).
+    void addLevelSetView(const std::string &scene_name,
+                         const std::string &name,
+                         const GridBatchData &grid,
+                         const JaggedTensor &sdf);
+
+    // Add a single grid (batchSize() == 1) with per-voxel float32 density values as a fog volume,
+    // rendered by the nanovdb-editor "render" pipeline (volumetric ray-marcher).
+    void addFogVolumeView(const std::string &scene_name,
+                          const std::string &name,
+                          const GridBatchData &grid,
+                          const JaggedTensor &density);
+
+    bool
+    hasNanoVDBView(const std::string &name) const {
+        return mNanoVDBViews.find(name) != mNanoVDBViews.end();
+    }
 
     SliderView addSlider(const std::string &scene_name,
                          const std::string &name,

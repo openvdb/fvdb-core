@@ -225,7 +225,10 @@ bind_gaussian_splat_ops(py::module &m) {
           &ops::evaluateSphericalHarmonicsFwd,
           py::arg("sh_degree_to_use"),
           py::arg("num_cameras"),
-          py::arg("view_dirs"),
+          py::arg("means"),
+          py::arg("world_to_cam_matrices"),
+          py::arg("camera_ids"),
+          py::arg("gaussian_ids"),
           py::arg("sh0_coeffs"),
           py::arg("sh_n_coeffs"),
           py::arg("radii"));
@@ -235,11 +238,15 @@ bind_gaussian_splat_ops(py::module &m) {
           py::arg("sh_degree_to_use"),
           py::arg("num_cameras"),
           py::arg("num_gaussians"),
-          py::arg("view_dirs"),
+          py::arg("means"),
+          py::arg("world_to_cam_matrices"),
+          py::arg("camera_ids"),
+          py::arg("gaussian_ids"),
           py::arg("sh_n_coeffs"),
           py::arg("d_loss_d_colors"),
           py::arg("radii"),
-          py::arg("compute_d_loss_d_view_dirs"));
+          py::arg("compute_d_loss_d_means"),
+          py::arg("compute_d_loss_d_world_to_cam_matrices"));
 
     m.def("rasterize_screen_space_gaussians_fwd",
           &ops::rasterizeScreenSpaceGaussiansFwd,
@@ -254,8 +261,9 @@ bind_gaussian_splat_ops(py::module &m) {
           py::arg("tile_size"),
           py::arg("tile_offsets"),
           py::arg("tile_gaussian_ids"),
-          py::arg("backgrounds"),
-          py::arg("masks"));
+          py::arg("num_shared_channels_override") = -1,
+          py::arg("backgrounds")                  = py::none(),
+          py::arg("masks")                        = py::none());
 
     m.def("rasterize_screen_space_gaussians_bwd",
           &ops::rasterizeScreenSpaceGaussiansBwd,
@@ -297,8 +305,9 @@ bind_gaussian_splat_ops(py::module &m) {
           py::arg("tile_pixel_mask"),
           py::arg("tile_pixel_cumsum"),
           py::arg("pixel_map"),
-          py::arg("backgrounds"),
-          py::arg("masks"));
+          py::arg("num_shared_channels_override") = -1,
+          py::arg("backgrounds")                  = py::none(),
+          py::arg("masks")                        = py::none());
 
     m.def("rasterize_screen_space_gaussians_sparse_bwd",
           &ops::rasterizeScreenSpaceGaussiansSparseBwd,

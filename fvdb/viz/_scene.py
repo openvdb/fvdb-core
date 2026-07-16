@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 import logging
+from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
@@ -18,11 +19,17 @@ from ..types import (
     to_Vec3fBatch,
 )
 from ._camera_view import CamerasView
+from ._fog_volume_view import FogVolumeView
 from ._gaussian_splat_3d_view import GaussianSplat3dView
 from ._image_view import ImageView
+from ._level_set_view import LevelSetView
+from ._nanovdb_grid_view import add_nanovdb_grid_views
 from ._point_cloud_view import PointCloudView
 from ._viewer_server import _get_viewer_server_cpp
 from ._widget_views import CheckboxView, NumberView, SliderView, TextView
+
+if TYPE_CHECKING:
+    from .. import Grid, GridBatch, JaggedTensor
 
 
 def get_scene(name: str = "fVDB Scene") -> "Scene":
@@ -209,6 +216,83 @@ class Scene:
             width=width,
             height=height,
             _private=ImageView.__PRIVATE__,
+        )
+
+    @torch.no_grad()
+    def add_level_set(
+        self,
+        name: str,
+        grid: "Grid | GridBatch",
+        sdf: "JaggedTensor",
+    ) -> LevelSetView:
+        """
+        Add an fvdb sparse grid with per-voxel SDF values to the viewer as an isosurface.
+
+        The surface is rendered by the ``nanovdb_surface`` pipeline (HDDA zero-crossing).
+        If a view with ``name`` already exists it is replaced.
+
+        .. note::
+
+            The nanovdb-editor renders one grid per view.  If ``grid`` is a
+            :class:`~fvdb.GridBatch` with more than one grid, one view is created per
+            grid, named ``name[i]`` for grid ``i``.
+
+        Args:
+            name (str): Unique name for this view within the scene.
+            grid: A :class:`~fvdb.Grid` or :class:`~fvdb.GridBatch` whose active voxels
+                define the domain.
+            sdf: A :class:`~fvdb.JaggedTensor` of shape ``(N,)`` and dtype ``float32``
+                containing one signed-distance value per active voxel (summed over the
+                batch), in world-space units.  Negative values are inside the surface,
+                positive values are outside.
+
+        Returns:
+            level_set_view (LevelSetView): The newly created view.
+        """
+        view_names = add_nanovdb_grid_views(self._name, name, grid, sdf, "add_level_set_view", "sdf")
+        return LevelSetView(
+            scene_name=self._name,
+            name=name,
+            view_names=view_names,
+            _private=LevelSetView.__PRIVATE__,
+        )
+
+    @torch.no_grad()
+    def add_fog_volume(
+        self,
+        name: str,
+        grid: "Grid | GridBatch",
+        density: "JaggedTensor",
+    ) -> FogVolumeView:
+        """
+        Add an fvdb sparse grid with per-voxel density values to the viewer as a fog volume.
+
+        The volume is rendered by the ``nanovdb_render`` pipeline (ray-marcher).
+        If a view with ``name`` already exists it is replaced.
+
+        .. note::
+
+            The nanovdb-editor renders one grid per view.  If ``grid`` is a
+            :class:`~fvdb.GridBatch` with more than one grid, one view is created per
+            grid, named ``name[i]`` for grid ``i``.
+
+        Args:
+            name (str): Unique name for this view within the scene.
+            grid: A :class:`~fvdb.Grid` or :class:`~fvdb.GridBatch` whose active voxels
+                define the domain.
+            density: A :class:`~fvdb.JaggedTensor` of shape ``(N,)`` and dtype ``float32``
+                containing one non-negative density value per active voxel (summed over
+                the batch).
+
+        Returns:
+            fog_volume_view (FogVolumeView): The newly created view.
+        """
+        view_names = add_nanovdb_grid_views(self._name, name, grid, density, "add_fog_volume_view", "density")
+        return FogVolumeView(
+            scene_name=self._name,
+            name=name,
+            view_names=view_names,
+            _private=FogVolumeView.__PRIVATE__,
         )
 
     @torch.no_grad()

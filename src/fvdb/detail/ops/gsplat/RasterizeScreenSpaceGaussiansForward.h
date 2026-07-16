@@ -38,6 +38,8 @@ namespace ops {
 /// where its Gaussians start
 /// @param[in] tileGaussianIds Flattened Gaussian IDs for tile intersection [n_isects] indicating
 /// which Gaussians affect each tile
+/// @param[in] numSharedChannelsOverride Override for number of shared memory channels (-1 means
+/// auto-select from {NUM_CHANNELS, 64, 32, 16}; otherwise must be one of 64, 32, 16)
 /// @param[in] backgrounds Optional background color per camera [C, D]. If provided, background
 /// colors will be blended with transparent pixels. If not provided, background is assumed to be
 /// black.
@@ -59,6 +61,7 @@ rasterizeScreenSpaceGaussiansFwd(const torch::Tensor &means2d,
                                  uint32_t tileSize,
                                  const torch::Tensor &tileOffsets,
                                  const torch::Tensor &tileGaussianIds,
+                                 int64_t numSharedChannelsOverride              = -1,
                                  const at::optional<torch::Tensor> &backgrounds = at::nullopt,
                                  const at::optional<torch::Tensor> &masks       = at::nullopt);
 
@@ -80,6 +83,8 @@ rasterizeScreenSpaceGaussiansFwd(const torch::Tensor &means2d,
 /// @param tilePixelMask Tensor containing the mask for each tile pixel.
 /// @param tilePixelCumsum Tensor containing the cumulative sum of tile pixels.
 /// @param pixelMap Tensor containing the mapping of pixels to output indices.
+/// @param numSharedChannelsOverride Override for number of shared memory channels (-1 means
+/// auto-select from {NUM_CHANNELS, 64, 32, 16}; otherwise must be one of 64, 32, 16)
 /// @param backgrounds Optional background color per camera [C, D]. If provided, background
 /// colors will be blended with transparent pixels. If not provided, background is assumed to be
 /// black.
@@ -105,6 +110,7 @@ rasterizeScreenSpaceGaussiansSparseFwd(const fvdb::JaggedTensor &pixelsToRender,
                                        const torch::Tensor &tilePixelMask,
                                        const torch::Tensor &tilePixelCumsum,
                                        const torch::Tensor &pixelMap,
+                                       int64_t numSharedChannelsOverride              = -1,
                                        const at::optional<torch::Tensor> &backgrounds = at::nullopt,
                                        const at::optional<torch::Tensor> &masks = at::nullopt);
 

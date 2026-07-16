@@ -100,8 +100,13 @@ class _InjectFn(torch.autograd.Function):
     def forward(ctx, src_jdata, dst_jdata, dst_grid_data, src_grid_data, dst_jt_impl, src_jt_impl):
         ctx.dst_grid_data = dst_grid_data
         ctx.src_grid_data = src_grid_data
-        ctx.dst_jt_impl = dst_jt_impl
-        ctx.src_jt_impl = src_jt_impl
+        # Keep independent structure carriers for backward.  The caller replaces
+        # dst_jt_impl.jdata with dst_out below, so retaining that same implementation
+        # here would form a reference cycle through dst_out's autograd context.
+        # Detached data preserves the device and leading dimension needed by
+        # jagged_like without retaining either input's autograd history.
+        ctx.dst_jt_impl = dst_jt_impl.jagged_like(dst_jdata.detach())
+        ctx.src_jt_impl = src_jt_impl.jagged_like(src_jdata.detach())
         # Clone dst so the op is out-of-place.  mark_dirty on non-contiguous
         # views disconnects _InjectFnBackward from the autograd graph (PyTorch
         # inserts AsStridedBackward → CopySlices that bypasses the custom

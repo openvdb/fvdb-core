@@ -20,30 +20,40 @@ namespace ops {
 /// @param[in] shDegreeToUse Degree of spherical harmonics used in the forward pass
 /// @param[in] numCameras Number of cameras used in the forward pass
 /// @param[in] numGaussians Number of Gaussians used in the forward pass
-/// @param[in] viewDirs Direction vectors [N, 3] (packed) or [C, N, 3] (unpacked) used in the
-/// forward pass
+/// @param[in] means Gaussian means in world space [N, 3]
+/// @param[in] worldToCamMatrices Rigid world-to-camera matrices [C, 4, 4]. The matrices must be
+/// rigid transforms with orthonormal rotation blocks.
+/// @param[in] cameraIds Camera index for each packed work item, or empty for unpacked evaluation
+/// @param[in] gaussianIds Gaussian index for each packed work item, or empty for unpacked
+/// evaluation
 /// @param[in] shNCoeffs Spherical harmonic coefficients [N, K-1, D] (packed) or [K-1, N, D]
 /// (unpacked) where K depends on sh_degree_to_use
 /// @param[in] dLossDColors Gradients of the loss function with respect to output colors [N, 3]
 /// - ∂L/∂colors
-/// @param[in] radii radii [N] (packed) or [C, N] (unpacked) used in the forward pass for
-/// level-of-detail
-/// @param[in] computeDLossDViewDirs Whether to compute gradients with respect to direction
-/// vectors
+/// @param[in] radii Per-axis projected radii [C, N, 2] used in the forward pass; a gaussian
+/// is masked unless both axes are positive.
+/// @param[in] computeDLossDMeans Whether to compute gradients with respect to means
+/// @param[in] computeDLossDWorldToCamMatrices Whether to compute gradients with respect to
+/// world-to-camera matrices
 ///
 /// @return std::tuple containing gradients of the loss function with respect to:
 ///         - SH coefficients [N, K, 3] - ∂L/∂sh_coeffs
-///         - Direction vectors [N, 3] - ∂L/∂dirs (if compute_v_dirs is true, otherwise empty
+///         - Gaussian means [N, 3] - ∂L/∂means (if requested, otherwise empty tensor)
+///         - World-to-camera matrices [C, 4, 4] - ∂L/∂viewmats (if requested, otherwise empty
 ///         tensor)
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 evaluateSphericalHarmonicsBwd(const int64_t shDegreeToUse,
                               const int64_t numCameras,
                               const int64_t numGaussians,
-                              const torch::Tensor &viewDirs,  // [C, N, 3] or empty
-                              const torch::Tensor &shNCoeffs, // [N, K-1, D]
+                              const torch::Tensor &means,
+                              const torch::Tensor &worldToCamMatrices,
+                              const torch::Tensor &cameraIds,
+                              const torch::Tensor &gaussianIds,
+                              const torch::Tensor &shNCoeffs,
                               const torch::Tensor &dLossDColors,
-                              const torch::Tensor &radii,     // [C, N]
-                              const bool computeDLossDViewDirs);
+                              const torch::Tensor &radii,
+                              const bool computeDLossDMeans,
+                              const bool computeDLossDWorldToCamMatrices);
 
 } // namespace ops
 } // namespace detail

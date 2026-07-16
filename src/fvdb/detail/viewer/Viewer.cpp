@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
+#include <fvdb/detail/io/SaveNanoVDB.h>
 #include <fvdb/detail/viewer/CameraView.h>
 #include <fvdb/detail/viewer/GaussianSplat3dView.h>
 #include <fvdb/detail/viewer/ParamViews.h>
@@ -72,6 +73,19 @@ namespace fvdb::detail::viewer {
 
 constexpr float DEFAULT_CAMERA_FOV_RADIANS  = 60.f * M_PI / 180.f;
 constexpr float DEFAULT_CAMERA_ASPECT_RATIO = 4.f / 3.f;
+
+inline pnanovdb_pipeline_type_t
+getPipelineType(pnanovdb_editor_t &editor, const char *typeId) {
+    pnanovdb_pipeline_type_t type      = 0;
+    pnanovdb_editor_token_t *typeToken = editor.get_token(typeId);
+    TORCH_CHECK(
+        typeToken, "nanovdb-editor could not create token for pipeline type '", typeId, "'");
+    TORCH_CHECK(editor.get_pipeline_type(&editor, typeToken, &type),
+                "nanovdb-editor could not resolve pipeline type '",
+                typeId,
+                "'");
+    return type;
+}
 
 void
 Viewer::updateCamera(const std::string &scene_name) {
@@ -624,6 +638,100 @@ Viewer::addImage(const std::string &scene_name,
     }
 
     mEditor.compute.destroy_array(image_nanovdb);
+}
+
+void
+Viewer::addLevelSetView(const std::string &scene_name,
+                        const std::string &name,
+                        const GridBatchData &grid,
+                        const JaggedTensor &sdf) {
+    addNanoVDBGridView(scene_name,
+                       name,
+                       grid,
+                       sdf,
+                       getPipelineType(mEditor.editor, "pnanovdb_pipeline_type_nanovdb_surface"),
+                       "editor/editor_surface.slang");
+}
+
+void
+Viewer::addFogVolumeView(const std::string &scene_name,
+                         const std::string &name,
+                         const GridBatchData &grid,
+                         const JaggedTensor &density) {
+    addNanoVDBGridView(scene_name,
+                       name,
+                       grid,
+                       density,
+                       getPipelineType(mEditor.editor, "pnanovdb_pipeline_type_nanovdb_render"),
+                       "editor/editor.slang");
+}
+
+void
+Viewer::addNanoVDBGridView(const std::string &scene_name,
+                           const std::string &name,
+                           const GridBatchData &grid,
+                           const JaggedTensor &floatValues,
+                           pnanovdb_pipeline_type_t render_pipeline,
+                           const std::string &render_shader) {
+    // The nanovdb-editor renders exactly one grid per view (its shader decodes a single
+    // grid anchored at byte offset 0 of the uploaded buffer). Callers must expand a
+    // multi-grid GridBatch into one view per grid; see fvdb.viz._nanovdb_grid_view.
+    TORCH_CHECK(grid.batchSize() == 1,
+                "addNanoVDBGridView expects a single grid (batchSize == 1), got a batch of ",
+                grid.batchSize(),
+                ". The viewer renders one grid per view; add one view per grid.");
+
+    auto handle = detail::io::toNVDBWithBlindFloat(grid, floatValues);
+
+    // Match the editor's own NanoVDB upload convention (compute.load_nanovdb): a NanoVDB
+    // buffer is a uint32 array, so element_size = 4. This becomes the GPU buffer's
+    // structure_stride at upload time. NanoVDB grids are 32-byte aligned, so the buffer
+    // size is always a multiple of 4.
+    const uint64_t bufferBytes = handle.buffer().size();
+    TORCH_CHECK(bufferBytes % sizeof(uint32_t) == 0,
+                "Internal error: NanoVDB buffer size ",
+                bufferBytes,
+                " is not 4-byte aligned");
+    pnanovdb_compute_array_t *array = mEditor.compute.create_array(
+        sizeof(uint32_t), bufferBytes / sizeof(uint32_t), handle.buffer().data());
+
+    pnanovdb_editor_token_t *sceneToken = mEditor.editor.get_token(scene_name.c_str());
+    pnanovdb_editor_token_t *nameToken  = mEditor.editor.get_token(name.c_str());
+
+    mEditor.editor.add_nanovdb_3(&mEditor.editor,
+                                 sceneToken,
+                                 nameToken,
+                                 array,
+                                 getPipelineType(mEditor.editor, "pnanovdb_pipeline_type_noop"),
+                                 render_pipeline);
+
+    // add_nanovdb_3 only applies render_pipeline as a soft default (apply_default_stage sets it
+    // only when the render stage is not already configured), so the editor's "Render:" dropdown
+    // may not land on it. Force the render stage explicitly, exactly as the editor UI does when
+    // you pick a renderer from that dropdown, so the dropdown shows the surface (SDF) renderer.
+    mEditor.editor.set_pipeline(
+        &mEditor.editor, sceneToken, nameToken, pnanovdb_pipeline_stage_render, render_pipeline);
+
+    // add_nanovdb_3 leaves the object on the editor's default shader (nanovdb_render's
+    // editor/editor.slang), which shades per-voxel scalars. Override it with the shader that
+    // matches render_pipeline so level sets draw as an HDDA isosurface. Same map_params pattern as
+    // addImage; setting the render pipeline above does not touch the object's shader.
+    // TODO:  Note this is a bug (openvdb/nanovdb-editor#213) and when fixed in NanoVDB Editor (i.e.
+    // setting the pipeline sets the appropriate default shader automatically), this can be removed.
+    pnanovdb_editor_shader_name_t *mapped =
+        (pnanovdb_editor_shader_name_t *)mEditor.editor.map_params(
+            &mEditor.editor,
+            sceneToken,
+            nameToken,
+            PNANOVDB_REFLECT_DATA_TYPE(pnanovdb_editor_shader_name_t));
+    if (mapped) {
+        mapped->shader_name = mEditor.editor.get_token(render_shader.c_str());
+        mEditor.editor.unmap_params(&mEditor.editor, sceneToken, nameToken);
+    }
+
+    mEditor.compute.destroy_array(array);
+
+    mNanoVDBViews[name] = NanoVDBView{name};
 }
 
 namespace {

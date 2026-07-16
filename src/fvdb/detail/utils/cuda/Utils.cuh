@@ -18,15 +18,21 @@ namespace detail {
 static constexpr size_t kPageSize = 1u << 21;
 
 inline std::tuple<size_t, size_t>
-deviceAlignedChunk(size_t alignment, size_t size, c10::DeviceIndex device) {
-    size_t chunkSize = alignment * ((size + alignment * c10::cuda::device_count() - 1) /
-                                    (c10::cuda::device_count() * alignment));
+deviceAlignedChunk(size_t alignment, size_t size, c10::DeviceIndex device, size_t deviceCount) {
+    TORCH_CHECK(deviceCount > 0, "Device count must be greater than 0");
+    size_t chunkSize =
+        alignment * ((size + alignment * deviceCount - 1) / (deviceCount * alignment));
     auto chunkOffset = chunkSize * device;
     if (chunkOffset + chunkSize > size) {
         chunkOffset = std::min(chunkOffset, size);
         chunkSize   = std::min(chunkSize, size - chunkOffset);
     }
     return std::make_tuple(chunkOffset, chunkSize);
+}
+
+inline std::tuple<size_t, size_t>
+deviceAlignedChunk(size_t alignment, size_t size, c10::DeviceIndex device) {
+    return deviceAlignedChunk(alignment, size, device, c10::cuda::device_count());
 }
 
 inline std::tuple<size_t, size_t>
@@ -44,13 +50,13 @@ mergeStreams() {
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
-        C10_CUDA_CHECK(cudaEventCreate(&events[deviceId], cudaEventDisableTiming));
+        C10_CUDA_CHECK(cudaEventCreateWithFlags(&events[deviceId], cudaEventDisableTiming));
         C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
     }
 
     // Create an event on the merge device
     C10_CUDA_CHECK(cudaSetDevice(mergeDeviceId));
-    C10_CUDA_CHECK(cudaEventCreate(&mergeEvent, cudaEventDisableTiming));
+    C10_CUDA_CHECK(cudaEventCreateWithFlags(&mergeEvent, cudaEventDisableTiming));
     auto mergeStream = c10::cuda::getCurrentCUDAStream(mergeDeviceId);
     // On the merge stream, wait until the per-device events have completed
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {

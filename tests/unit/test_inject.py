@@ -1,8 +1,10 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 #
+import gc
 import itertools
 import unittest
+import weakref
 from typing import Callable
 
 import numpy as np
@@ -499,7 +501,7 @@ class InjectionTests(unittest.TestCase):
         loss = sidecar23.jdata.sum()
         loss.backward()
         self.assertTrue(sidecar23.requires_grad, "sidecar23 should require gradients")
-        assert sidecar2.jdata.grad is None, "sidecar2 should have gradients"
+        assert not sidecar2.jdata.is_leaf or sidecar2.jdata.grad is None, "sidecar2 should have gradients"
         assert sidecar1.jdata.grad is not None, "sidecar1 should not have gradients"
         assert sidecar3.jdata.grad is not None, "sidecar3 should have gradients"
         sidecar1_grad = sidecar1.jdata.grad.clone().detach()
@@ -528,7 +530,7 @@ class InjectionTests(unittest.TestCase):
         loss = sidecar23_bf.jdata.sum()
         loss.backward()
         self.assertTrue(sidecar23_bf.requires_grad, "sidecar23_bf should require gradients")
-        assert sidecar2_bf.jdata.grad is None, "sidecar2_bf should have gradients"
+        assert not sidecar2_bf.jdata.is_leaf or sidecar2_bf.jdata.grad is None, "sidecar2_bf should have gradients"
         assert sidecar1_bf.jdata.grad is not None, "sidecar1_bf should not have gradients"
         assert sidecar3_bf.jdata.grad is not None, "sidecar3_bf should have gradients"
         sidecar1_bf_grad = sidecar1_bf.jdata.grad.clone().detach()
@@ -662,7 +664,7 @@ class InjectionTests(unittest.TestCase):
         self.assertTrue(sidecar123.requires_grad, "sidecar123 should require gradients")
         assert sidecar1.jdata.grad is not None, "sidecar1 should have gradients"
         assert sidecar3.jdata.grad is not None, "sidecar3 should have gradients"
-        assert sidecar123.jdata.grad is None, "sidecar123 should not have gradients"
+        assert not sidecar123.jdata.is_leaf or sidecar123.jdata.grad is None, "sidecar123 should not have gradients"
         assert sidecar123_base.jdata.grad is not None, "sidecar123_base should have gradients"
         sidecar1_grad = sidecar1.jdata.grad.clone().detach()
         sidecar3_grad = sidecar3.jdata.grad.clone().detach()
@@ -699,7 +701,9 @@ class InjectionTests(unittest.TestCase):
         self.assertTrue(sidecar123_bf.requires_grad, "sidecar123_bf should require gradients")
         assert sidecar1_bf.jdata.grad is not None, "sidecar1_bf should have gradients"
         assert sidecar3_bf.jdata.grad is not None, "sidecar3_bf should have gradients"
-        assert sidecar123_bf.jdata.grad is None, "sidecar123_bf should not have gradients"
+        assert (
+            not sidecar123_bf.jdata.is_leaf or sidecar123_bf.jdata.grad is None
+        ), "sidecar123_bf should not have gradients"
         assert sidecar123_base_bf.jdata.grad is not None, "sidecar123_base_bf should have gradients"
         sidecar1_bf_grad = sidecar1_bf.jdata.grad.clone().detach()
         sidecar3_bf_grad = sidecar3_bf.jdata.grad.clone().detach()
@@ -759,6 +763,24 @@ class InjectionTests(unittest.TestCase):
 
         toinds, frominds = torch.where(b1_comparison)
         self.assertTrue(torch.all(one_indices == frominds))
+
+
+def test_inject_autograd_result_does_not_leak():
+    src_ijk = torch.tensor([[0, 0, 0], [1, 0, 0]], dtype=torch.int32)
+    dst_ijk = src_ijk[:1].clone()
+    src_grid = fvdb.GridBatch.from_ijk(fvdb.JaggedTensor([src_ijk]))
+    dst_grid = fvdb.GridBatch.from_ijk(fvdb.JaggedTensor([dst_ijk]))
+    features = torch.randn(src_grid.total_voxels, 1, requires_grad=True)
+
+    result = dst_grid.inject_from(src_grid, fvdb.JaggedTensor([features]))
+    assert result.jdata.grad_fn is not None
+    result.jdata.sum().backward()
+
+    result_ref = weakref.ref(result.jdata)
+    del result
+    gc.collect()
+
+    assert result_ref() is None, "reference cycle leak detected"
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")

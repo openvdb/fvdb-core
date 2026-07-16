@@ -220,7 +220,7 @@ TEST_F(GaussianProjectionForwardTestFixture, TestOrthographicProjection) {
                                                        true);
 
     // other outputs are undefined where radii is zero
-    auto radiiNonZeroMask = radii > 0; // [C, N]
+    auto radiiNonZeroMask = std::get<0>(torch::min(radii > 0, /*dim=*/-1)); // [C, N]
 
     // Use relaxed tolerances to account for minor numerical differences between debug and release
     // builds

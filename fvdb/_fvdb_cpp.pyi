@@ -238,7 +238,10 @@ def project_gaussians_analytic_bwd(
 def evaluate_spherical_harmonics_fwd(
     sh_degree_to_use: int,
     num_cameras: int,
-    view_dirs: torch.Tensor,
+    means: torch.Tensor,
+    world_to_cam_matrices: torch.Tensor,
+    camera_ids: torch.Tensor,
+    gaussian_ids: torch.Tensor,
     sh0_coeffs: torch.Tensor,
     sh_n_coeffs: torch.Tensor,
     radii: torch.Tensor,
@@ -247,11 +250,15 @@ def evaluate_spherical_harmonics_bwd(
     sh_degree_to_use: int,
     num_cameras: int,
     num_gaussians: int,
-    view_dirs: torch.Tensor,
+    means: torch.Tensor,
+    world_to_cam_matrices: torch.Tensor,
+    camera_ids: torch.Tensor,
+    gaussian_ids: torch.Tensor,
     sh_n_coeffs: torch.Tensor,
     d_loss_d_colors: torch.Tensor,
     radii: torch.Tensor,
-    compute_d_loss_d_view_dirs: bool,
+    compute_d_loss_d_means: bool,
+    compute_d_loss_d_world_to_cam_matrices: bool,
 ) -> tuple[torch.Tensor, ...]: ...
 def rasterize_screen_space_gaussians_fwd(
     means2d: torch.Tensor,
@@ -870,6 +877,21 @@ def integrate_tsdf_with_features(
     weight_images: torch.Tensor | None,
 ) -> tuple[GridBatchData, JaggedTensor, JaggedTensor, JaggedTensor]: ...
 
+# SDF ops
+class SmoothingMode(Enum):
+    MEAN_CURVATURE = ...
+    TAUBIN = ...
+
+def reinitialize_sdf(
+    grid: GridBatchData,
+    field: JaggedTensor,
+    band: int,
+    redistance_iters: int,
+    order: int,
+    smooth: int,
+    smoothing: SmoothingMode,
+) -> JaggedTensor: ...
+
 # Topology / misc
 def grid_edge_network(
     grid: GridBatchData,
@@ -1372,6 +1394,21 @@ class Viewer:
         width: int,
         height: int,
     ) -> None: ...
+    def add_level_set_view(
+        self,
+        scene_name: str,
+        name: str,
+        grid: GridBatchData,
+        sdf: JaggedTensor,
+    ) -> None: ...
+    def add_fog_volume_view(
+        self,
+        scene_name: str,
+        name: str,
+        grid: GridBatchData,
+        density: JaggedTensor,
+    ) -> None: ...
+    def has_nanovdb_view(self, name: str) -> bool: ...
     def wait_for_interrupt(self) -> None: ...
     def add_slider(
         self,

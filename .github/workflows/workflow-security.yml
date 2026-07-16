@@ -1,0 +1,108 @@
+name: Workflow Security
+
+# Why pull_request_target (not pull_request):
+#   This is a SECURITY GATE protecting tokens used for runner registration. With
+#   pull_request_target the workflow definition, the policy script, and the
+#   tooling all come from the BASE branch, so a malicious PR cannot edit the
+#   check to make it pass. We then overlay ONLY the PR head's proposed
+#   .github/workflows files as inert data and scan them -- we never execute any
+#   PR-provided code and expose no secrets (permissions are read-only).
+on:
+  # zizmor: ignore[dangerous-triggers] No secrets are used and no PR code is executed; the PR's workflow YAML is checked out as data only and scanned by base-controlled tooling.
+  pull_request_target:
+    branches:
+      - '**'
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  workflow-security:
+    name: Scan workflows + enforce runner-token policy
+    runs-on: ubuntu-latest
+    env:
+      # Exact tool versions so the gate is deterministic. Bump deliberately;
+      # new releases may surface new findings that fail unrelated PRs.
+      ZIZMOR_VERSION: "1.26.1"
+      ACTIONLINT_VERSION: "v1.7.7"
+      PYYAML_VERSION: "6.0.3"
+      PYTEST_VERSION: "9.0.3"
+    steps:
+      # 1. Trusted tree from BASE: the policy script lives here and is never
+      #    overwritten by the PR.
+      - name: Checkout base (trusted)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      # 2. Overlay ONLY the PR head's proposed workflow files as data to scan.
+      #    Nothing from the PR is executed; the trusted scripts above are kept.
+      #    Fetch via the pull ref (refs/pull/<n>/head) rather than by SHA from
+      #    origin so this works for forked PRs too, where the head SHA is not
+      #    reachable from the base repo's branches.
+      - name: Overlay PR workflow files (data only)
+        if: github.event_name == 'pull_request_target'
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin "refs/pull/${PR_NUMBER}/head"
+          echo "Fetched PR #${PR_NUMBER} head $(git rev-parse FETCH_HEAD) (event head: ${HEAD_SHA})"
+          # Replace the workflows dir with the PR's version; keep everything
+          # else (including .github/scripts) at the trusted base revision.
+          rm -rf .github/workflows
+          git checkout FETCH_HEAD -- .github/workflows
+          echo "Scanning PR workflow files:"
+          ls -1 .github/workflows
+
+      # 3a. Repo-specific policy: the admin runner token may only be used as the
+      #     github-token input to machulav/ec2-github-runner. The policy script
+      #     and its tests run from the trusted base checkout (not the PR).
+      #     Rules 2-4 scan the overlaid PR workflow files; the Rule 1 leak check
+      #     runs against the PR head commit tree (read-only) so it also catches
+      #     runner-token references the PR adds outside .github/workflows.
+      - name: Enforce EC2 runner token policy
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet "pyyaml==${PYYAML_VERSION}" "pytest==${PYTEST_VERSION}"
+          python3 -m pytest .github/scripts/test_check_runner_token_policy.py -q
+          leak_ref_args=()
+          if [ "${GITHUB_EVENT_NAME}" = "pull_request_target" ]; then
+            leak_ref_args=(--leak-check-ref FETCH_HEAD)
+          fi
+          python3 .github/scripts/check_runner_token_policy.py .github/workflows "${leak_ref_args[@]}"
+
+      # 3b. actionlint: workflow syntax / type / shell-injection issues.
+      #     actionlint runs shellcheck on run: scripts when shellcheck is present
+      #     (it is on GitHub-hosted runners). Exclude a few low-value word-
+      #     splitting / style codes (SC2086 et al.) that fire on pre-existing
+      #     scripts across the repo; every other shellcheck check (including
+      #     SC2016 single-quote expansion) and actionlint's own expression /
+      #     injection checks stay on. Drop excludes here to tighten later.
+      - name: Run actionlint
+        env:
+          SHELLCHECK_OPTS: "-e SC2086,SC2174,SC2012,SC2129"
+        run: |
+          set -euo pipefail
+          go install "github.com/rhysd/actionlint/cmd/actionlint@${ACTIONLINT_VERSION}"
+          "$(go env GOPATH)/bin/actionlint" -color
+
+      # 3c. zizmor: dangerous triggers, unpinned actions, credential exposure,
+      #     template injection, excessive permissions, etc.
+      - name: Run zizmor
+        env:
+          # Read-only default token enables zizmor's online audits.
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet "zizmor==${ZIZMOR_VERSION}"
+          zizmor --persona=regular .github/workflows

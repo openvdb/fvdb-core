@@ -367,7 +367,7 @@ class TestDenseInterfaceBatch(unittest.TestCase):
         max_coord = ijk.max(0).values
         dims = max_coord - min_coord + 1
 
-        dense_size = torch.tensor(dims, device=device)
+        dense_size = dims.detach().clone().to(device)
 
         # Single-channel and multi-dimensional channel shapes
         for eshape in [(3,), (5, 7)]:
@@ -809,7 +809,7 @@ class TestDenseInterfaceSingle(unittest.TestCase):
         max_coord = ijk.max(0).values
         dims = max_coord - min_coord + 1
 
-        dense_size = torch.tensor(dims, device=device)
+        dense_size = dims.detach().clone().to(device)
 
         # Single-channel and multi-dimensional channel shapes
         for eshape in [(3,), (5, 7)]:

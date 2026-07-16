@@ -1,10 +1,10 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 #
-# Reusable workflow: detect whether a PR touches source files or only
-# documentation / non-code paths. Callers gate their real jobs on the
-# `should_test` output so that docs-only PRs are marked as passed
-# (not perpetually "waiting for status").
+# Reusable workflow: decide whether a PR needs testing, or touches only
+# skippable (docs / non-code) paths. Callers gate their expensive jobs on the
+# `should_test` output so skippable-only PRs skip the work while still
+# reporting the required status checks (skipped == passed).
 
 name: Check for relevant changes
 
@@ -12,27 +12,40 @@ on:
   workflow_call:
     outputs:
       should_test:
-        description: "'true' when the change includes source files, 'false' for docs-only"
+        description: "'true' unless every changed file is a skippable (docs/non-code) path"
         value: ${{ jobs.check-changes.outputs.should_test }}
 
-# Permissions are inherited from the calling workflow; do not set them here.
+# Permissions are inherited from the calling workflow.
 
 jobs:
   check-changes:
     name: Check for relevant changes
     runs-on: ubuntu-latest
     outputs:
-      should_test: ${{ github.event_name != 'pull_request_target' || steps.filter.outputs.src == 'true' }}
+      # Run tests unless this is a PR whose files are ALL skippable paths.
+      should_test: ${{ github.event_name != 'pull_request_target' || steps.filter.outputs.needs_tests == 'true' }}
     steps:
-      - uses: dorny/paths-filter@v4
+      - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
         id: filter
         if: github.event_name == 'pull_request_target'
         with:
+          # paths-filter's 'every' quantifies over PATTERNS PER FILE (a file
+          # matches only if it satisfies all patterns of the list), while the
+          # filter output is true when ANY changed file matches. So needs_tests
+          # asks: does at least one changed file match '**' AND every negated
+          # skippable path — i.e. is at least one changed file real source? A
+          # skippable-only PR matches nothing, needs_tests is false, tests skip.
+          #
+          # NOTE: docs/ and notebooks/ are intentionally NOT excluded — the Doc Tests
+          # job runs `pytest --markdown-docs docs` and `pytest --nbmake notebooks/`,
+          # so changes there must run the suite. Only root-level `*.md` (README,
+          # CHANGES, governance docs) is skippable; `docs/**/*.md` is not matched
+          # by the `!*.md` exclusion and therefore still triggers tests.
           predicate-quantifier: 'every'
           filters: |
-            src:
+            needs_tests:
               - '**'
-              - '!**/*.md'
+              - '!*.md'
               - '!CODEOWNERS'
               - '!debug/**'
               - '!devtools/**'
