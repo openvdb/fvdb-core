@@ -161,7 +161,6 @@ jobs:
           CUDA_TAG="cu$(echo "${MATRIX_CUDA_VERSION}" | tr -d '.')"
           TORCH_VERSION="${MATRIX_TORCH_VERSION}"
           echo "Installing PyTorch ${TORCH_VERSION} for ${CUDA_TAG}"
-          uv venv
           # Pin the tested PyTorch via a constraints file so the unbounded torch in
           # build_requirements.txt resolves to the version recorded in versions.json.
           echo "torch==${NEEDS_VERSIONS_OUTPUTS_TORCH_FULL_VERSION}" > "${RUNNER_TEMP}/torch-constraints.txt"
