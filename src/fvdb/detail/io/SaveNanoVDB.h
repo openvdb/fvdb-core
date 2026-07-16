@@ -19,9 +19,10 @@ toNVDB(const GridBatchData &gridBatchData,
        const std::vector<std::string> &names        = {});
 
 // Build an ONINDEX NanoVDB buffer with float32 values appended as blind metadata slot 0.
-// The float values are stored directly (no shape prefix) so the nanovdb-editor surface
-// shader can read them via: val_addr = blind_data_base + val_index * sizeof(float).
-// floatValues must be a 1D float32 JaggedTensor with one entry per active voxel.
+// ValueOnIndex reserves index 0 for background and stores active voxel indices as 1..N, so the
+// blind payload stores a background float first, followed by the user values. This lets editor
+// shaders read via: val_addr = blind_data_base + val_index * sizeof(float).
+// floatValues must still be a 1D float32 JaggedTensor with one entry per active voxel.
 nanovdb::GridHandle<nanovdb::HostBuffer> toNVDBWithBlindFloat(const GridBatchData &gridBatchData,
                                                               const JaggedTensor &floatValues);
 

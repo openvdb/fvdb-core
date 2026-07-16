@@ -1092,12 +1092,14 @@ toNVDBWithBlindFloat(const GridBatchData &gridBatchData, const JaggedTensor &flo
     JaggedTensor cpuFloats = floatValues.cpu().contiguous();
     TORCH_CHECK(cpuFloats.is_contiguous(), "Internal error: float values must be contiguous");
 
-    // Blind payload per grid: raw float32 values (one per voxel), padded to 32B.
+    // Blind payload per grid: background slot 0 plus one raw float32 value per active voxel,
+    // padded to 32B. ValueOnIndex uses index 0 for background and 1..N for active voxels.
     std::vector<uint64_t> paddedPayloadBytes;
     paddedPayloadBytes.reserve(gridBatchData.batchSize());
     for (int64_t batchIdx = 0; batchIdx < gridBatchData.batchSize(); ++batchIdx) {
-        paddedPayloadBytes.push_back(
-            nanovdb::math::AlignUp<32UL>(gridBatchData.numVoxelsAt(batchIdx) * sizeof(float)));
+        const uint64_t valueCount =
+            static_cast<uint64_t>(gridBatchData.numVoxelsAt(batchIdx)) + 1u;
+        paddedPayloadBytes.push_back(nanovdb::math::AlignUp<32UL>(valueCount * sizeof(float)));
     }
 
     const float *floatBase = static_cast<const float *>(cpuFloats.jdata().data_ptr());
@@ -1109,10 +1111,10 @@ toNVDBWithBlindFloat(const GridBatchData &gridBatchData, const JaggedTensor &flo
         [&](int64_t batchIdx, nanovdb::GridBlindMetaData *blindMeta, uint8_t *payload) {
             const int64_t numVoxels = gridBatchData.numVoxelsAt(batchIdx);
 
-            // float32 values at data_offset from this header. The nanovdb-editor surface shader
-            // reads: val_addr + val_index * 4, interpreting the result as a float.
+            // float32 values at data_offset from this header. The nanovdb-editor shaders read:
+            // val_addr + val_index * 4, interpreting the result as a float.
             blindMeta->mDataOffset = int64_t(sizeof(nanovdb::GridBlindMetaData));
-            blindMeta->mValueCount = numVoxels;
+            blindMeta->mValueCount = static_cast<uint64_t>(numVoxels) + 1u;
             blindMeta->mValueSize  = sizeof(float);
             blindMeta->mSemantic   = nanovdb::GridBlindDataSemantic::Unknown;
             blindMeta->mDataClass  = nanovdb::GridBlindDataClass::Unknown;
@@ -1122,9 +1124,10 @@ toNVDBWithBlindFloat(const GridBatchData &gridBatchData, const JaggedTensor &flo
                                   "fvdb_sdf_float32",
                                   "blind metadata name");
 
-            // Raw float values in active-voxel order (val_index == flat active index).
+            // Slot 0 is the ValueOnIndex background. Active voxels use indices 1..N.
+            std::memset(payload, 0, sizeof(float));
             const float *srcFloats = floatBase + gridBatchData.cumVoxelsAt(batchIdx);
-            std::memcpy(payload, srcFloats, numVoxels * sizeof(float));
+            std::memcpy(payload + sizeof(float), srcFloats, numVoxels * sizeof(float));
         });
 }
 
