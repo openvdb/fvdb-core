@@ -11,7 +11,7 @@ from fvdb.utils.tests import (
     generate_random_4x4_xform,
 )
 
-from fvdb import GaussianSplat3d
+from fvdb_reality_capture import GaussianSplat3d
 
 
 def save_tensors_torchscript(tensor_list, filepath, tensor_names=None):

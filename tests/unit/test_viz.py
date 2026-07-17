@@ -5,6 +5,9 @@
 import sys
 import unittest
 import warnings
+from dataclasses import FrozenInstanceError
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -15,8 +18,185 @@ import fvdb
 PORT = 8080
 
 
-class TestViewerServer(unittest.TestCase):
+def _make_gaussian_splat_view_tensors(sh_ordering="rgb_rgb_rgb"):
+    num_gaussians = 3
+    num_channels = 3
+    num_higher_order_coefficients = 8
+    tensors = {
+        "means": torch.randn(num_gaussians, 3),
+        "quats": torch.randn(num_gaussians, 4),
+        "log_scales": torch.randn(num_gaussians, 3),
+        "logit_opacities": torch.randn(num_gaussians),
+    }
+    if sh_ordering == "rgb_rgb_rgb":
+        tensors["sh0"] = torch.randn(num_gaussians, 1, num_channels)
+        tensors["shN"] = torch.randn(num_gaussians, num_higher_order_coefficients, num_channels)
+    else:
+        tensors["sh0"] = torch.randn(num_gaussians, num_channels, 1)
+        tensors["shN"] = torch.randn(num_gaussians, num_channels, num_higher_order_coefficients)
+    return tensors
 
+
+class _SceneWithoutServer(fvdb.viz.Scene):
+    def __init__(self, name="test_gaussian_splat_contract"):
+        self._name = name
+
+    def __del__(self):
+        pass
+
+
+class TestGaussianSplatViewData:
+    def test_is_frozen_and_keeps_zero_copy_tensor_references(self):
+        tensors = _make_gaussian_splat_view_tensors()
+
+        data = fvdb.viz.GaussianSplatViewData(**tensors)
+
+        for name, tensor in tensors.items():
+            assert getattr(data, name) is tensor
+        with pytest.raises(FrozenInstanceError):
+            data.means = torch.empty_like(data.means)
+
+    @pytest.mark.parametrize("sh_ordering", ["rgb_rgb_rgb", "rrr_ggg_bbb"])
+    def test_accepts_both_spherical_harmonics_layouts(self, sh_ordering):
+        tensors = _make_gaussian_splat_view_tensors(sh_ordering)
+
+        data = fvdb.viz.GaussianSplatViewData(**tensors, sh_ordering=sh_ordering)
+
+        assert data.sh_ordering == sh_ordering
+
+    @pytest.mark.parametrize(
+        ("field", "replacement", "error_type"),
+        [
+            ("means", torch.randn(3, 2), ValueError),
+            ("quats", torch.randn(2, 4), ValueError),
+            ("log_scales", torch.ones(3, 3, dtype=torch.int64), TypeError),
+            ("logit_opacities", torch.randn(3, 1), ValueError),
+            ("sh0", torch.randn(3, 3), ValueError),
+            ("shN", torch.randn(3, 8, 4), ValueError),
+        ],
+    )
+    def test_rejects_invalid_tensor_contracts(self, field, replacement, error_type):
+        tensors = _make_gaussian_splat_view_tensors()
+        tensors[field] = replacement
+
+        with pytest.raises(error_type):
+            fvdb.viz.GaussianSplatViewData(**tensors)
+
+    def test_rejects_mixed_dtypes_and_unknown_spherical_harmonics_layout(self):
+        tensors = _make_gaussian_splat_view_tensors()
+        tensors["quats"] = tensors["quats"].double()
+        with pytest.raises(TypeError, match="same dtype|must have dtype"):
+            fvdb.viz.GaussianSplatViewData(**tensors)
+
+        tensors = _make_gaussian_splat_view_tensors()
+        with pytest.raises(ValueError, match="sh_ordering"):
+            fvdb.viz.GaussianSplatViewData(**tensors, sh_ordering="unknown")
+
+
+class TestGaussianSplatSceneContract:
+    @pytest.mark.parametrize("mode", list(fvdb.viz.ShOrderingMode))
+    def test_view_stores_spherical_harmonics_layout(self, mode):
+        view = object.__new__(fvdb.viz.GaussianSplat3dView)
+
+        with patch.object(view, "_get_view", return_value=SimpleNamespace()):
+            view.sh_ordering_mode = mode
+
+        assert view.sh_ordering_mode is mode
+
+    def test_raw_tensor_api_forwards_renderer_inputs(self):
+        scene = _SceneWithoutServer()
+        tensors = _make_gaussian_splat_view_tensors("rrr_ggg_bbb")
+
+        with patch("fvdb.viz._scene.GaussianSplat3dView", autospec=True) as view_type:
+            result = scene.add_gaussian_splat_tensors(
+                "raw tensors",
+                **tensors,
+                sh_ordering="rrr_ggg_bbb",
+                tile_size=8,
+                min_radius_2d=0.25,
+                eps_2d=0.1,
+                antialias=True,
+                sh_degree_to_use=2,
+            )
+
+        assert result is view_type.return_value
+        view_type.assert_called_once()
+        forwarded = dict(view_type.call_args.kwargs)
+        forwarded.pop("_private")
+        assert forwarded == {
+            "scene_name": scene._name,
+            "name": "raw tensors",
+            **tensors,
+            "tile_size": 8,
+            "min_radius_2d": 0.25,
+            "eps_2d": 0.1,
+            "antialias": True,
+            "sh_degree_to_use": 2,
+            "sh_ordering_mode": fvdb.viz.ShOrderingMode.RRR_GGG_BBB,
+        }
+
+    def test_view_data_api_delegates_to_raw_tensor_api(self):
+        scene = _SceneWithoutServer()
+        tensors = _make_gaussian_splat_view_tensors("rrr_ggg_bbb")
+        data = fvdb.viz.GaussianSplatViewData(**tensors, sh_ordering="rrr_ggg_bbb")
+
+        with patch.object(
+            _SceneWithoutServer,
+            "add_gaussian_splat_tensors",
+            autospec=True,
+            return_value=object(),
+        ) as add_tensors:
+            result = scene.add_gaussian_splat_3d(
+                "view data",
+                data,
+                tile_size=32,
+                min_radius_2d=0.5,
+                eps_2d=0.2,
+                antialias=True,
+                sh_degree_to_use=1,
+            )
+
+        assert result is add_tensors.return_value
+        add_tensors.assert_called_once_with(
+            scene,
+            "view data",
+            **tensors,
+            sh_ordering="rrr_ggg_bbb",
+            tile_size=32,
+            min_radius_2d=0.5,
+            eps_2d=0.2,
+            antialias=True,
+            sh_degree_to_use=1,
+        )
+
+    def test_legacy_model_shape_warns_and_remains_compatible(self):
+        scene = _SceneWithoutServer()
+        tensors = _make_gaussian_splat_view_tensors()
+        legacy_model = SimpleNamespace(**tensors)
+
+        with patch.object(
+            _SceneWithoutServer,
+            "add_gaussian_splat_tensors",
+            autospec=True,
+            return_value=object(),
+        ) as add_tensors:
+            with pytest.warns(DeprecationWarning, match="GaussianSplatViewData"):
+                scene.add_gaussian_splat_3d("legacy", legacy_model)
+
+        add_tensors.assert_called_once_with(
+            scene,
+            "legacy",
+            **tensors,
+            sh_ordering="rgb_rgb_rgb",
+            tile_size=16,
+            min_radius_2d=0.0,
+            eps_2d=0.3,
+            antialias=False,
+            sh_degree_to_use=-1,
+        )
+
+
+class TestViewerServer(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         try:
@@ -40,7 +220,6 @@ class TestViewerServer(unittest.TestCase):
 
 
 class TestViewerScene(unittest.TestCase):
-
     @classmethod
     def setUpClass(cls):
         try:

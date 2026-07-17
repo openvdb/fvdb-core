@@ -1,18 +1,13 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 
-from enum import Enum
 from typing import Any
 
 import torch
 
 from .._fvdb_cpp import GaussianSplat3dView as GaussianSplat3dViewCpp
+from ._gaussian_splat_view_data import ShOrderingMode
 from ._viewer_server import _get_viewer_server_cpp
-
-
-class ShOrderingMode(str, Enum):
-    RGB_RGB_RGB = "rgb_rgb_rgb"
-    RRR_GGG_BBB = "rrr_ggg_bbb"
 
 
 class GaussianSplat3dView:
@@ -60,20 +55,23 @@ class GaussianSplat3dView:
             scene_name (str): The name of the scene the view belongs to.
             name (str): The name of the GaussianSplat3dView.
             means (torch.Tensor): Gaussian means tensor of shape (N, 3).
-            quats (torch.Tensor): Gaussian quaternions tensor of shape (N, 4).
+            quats (torch.Tensor): Gaussian quaternions tensor of shape ``(N, 4)`` in
+                ``(w, x, y, z)`` component order.
             log_scales (torch.Tensor): Gaussian log-scales tensor of shape (N, 3).
             logit_opacities (torch.Tensor): Gaussian logit-opacities tensor of shape (N,).
-            sh0 (torch.Tensor): Zeroth-order SH coefficients tensor of shape (N, 1, D).
-            shN (torch.Tensor): Higher-order SH coefficients tensor of shape (N, K-1, D).
+            sh0 (torch.Tensor): Zeroth-order SH coefficients with shape ``(N, 1, D)`` for
+                ``"rgb_rgb_rgb"`` ordering or ``(N, D, 1)`` for ``"rrr_ggg_bbb"`` ordering.
+            shN (torch.Tensor): Higher-order SH coefficients with shape ``(N, K - 1, D)`` for
+                ``"rgb_rgb_rgb"`` ordering or ``(N, D, K - 1)`` for ``"rrr_ggg_bbb"`` ordering.
             tile_size (int): The tile size to use for rendering. Default is 16.
             min_radius_2d (float): The minimum radius in pixels to use when rendering splats. Default is 0.0.
             eps_2d (float): The epsilon value to use when rendering splats. Default is 0.3.
             antialias (bool): Whether to use antialiasing when rendering splats. Default is False.
             sh_degree_to_use (int): The degree of spherical harmonics to use when rendering colors.
                 If -1, the maximum degree supported by the Gaussian splat 3D scene is used. Default is -1.
-            sh_ordering_mode (ShOrderingMode): The spherical harmonics ordering mode to use when rendering colors.
-                Default is :attr:`ShOrderingMode.RGB_RGB_RGB`.
-            _private (Any): A private object to prevent direct construction. Must be :attr:`GaussianSplat3dView.__PRIVATE__`.
+            sh_ordering_mode (ShOrderingMode): The spherical harmonics tensor layout to use when rendering colors. Must be
+                ``"rgb_rgb_rgb"`` or ``"rrr_ggg_bbb"``. Default is ``"rgb_rgb_rgb"``.
+            _private (Any): A private object used by :class:`Scene` to construct the view.
         """
         if _private is not self.__PRIVATE__:
             raise ValueError("GaussianSplat3dView constructor is private. Use Scene.add_gaussian_splat_3d() instead.")
@@ -91,20 +89,12 @@ class GaussianSplat3dView:
             shN=shN,
         )
 
-        if sh_ordering_mode not in (ShOrderingMode.RGB_RGB_RGB, ShOrderingMode.RRR_GGG_BBB):
-            raise ValueError(f"Invalid ShOrderingMode: {sh_ordering_mode}")
-
         view.tile_size = tile_size
         view.min_radius_2d = min_radius_2d
         view.eps_2d = eps_2d
         view.antialias = antialias
         view.sh_degree_to_use = sh_degree_to_use
-        if sh_ordering_mode == ShOrderingMode.RRR_GGG_BBB:
-            view.rgb_rgb_rgb_sh = False
-        elif sh_ordering_mode == ShOrderingMode.RGB_RGB_RGB:
-            view.rgb_rgb_rgb_sh = True
-        else:
-            raise ValueError(f"Invalid ShOrderingMode: {sh_ordering_mode}")
+        self.sh_ordering_mode = sh_ordering_mode
 
     @property
     def tile_size(self) -> int:
@@ -209,13 +199,9 @@ class GaussianSplat3dView:
         Get the spherical harmonics ordering mode used for rendering colors.
 
         Returns:
-            ShOrderingMode: The spherical harmonics ordering mode.
+            ShOrderingMode: The spherical harmonics tensor layout.
         """
-        view = self._get_view()
-        if view.rgb_rgb_rgb_sh:
-            return ShOrderingMode.RRR_GGG_BBB
-        else:
-            return ShOrderingMode.RGB_RGB_RGB
+        return self._sh_ordering_mode
 
     @sh_ordering_mode.setter
     def sh_ordering_mode(self, mode: ShOrderingMode):
@@ -223,12 +209,12 @@ class GaussianSplat3dView:
         Set the spherical harmonics ordering mode used for rendering colors.
 
         Args:
-            mode (ShOrderingMode): The spherical harmonics ordering mode.
+            mode (ShOrderingMode): The spherical harmonics tensor layout.
         """
         view = self._get_view()
-        if mode == ShOrderingMode.RRR_GGG_BBB:
-            view.rgb_rgb_rgb_sh = False
-        elif mode == ShOrderingMode.RGB_RGB_RGB:
-            view.rgb_rgb_rgb_sh = True
-        else:
-            raise ValueError(f"Invalid ShOrderingMode: {mode}")
+        try:
+            mode = ShOrderingMode(mode)
+        except ValueError:
+            raise ValueError(f"Invalid spherical harmonics ordering: {mode!r}")
+        self._sh_ordering_mode = mode
+        view.rgb_rgb_rgb_sh = mode == ShOrderingMode.RGB_RGB_RGB
