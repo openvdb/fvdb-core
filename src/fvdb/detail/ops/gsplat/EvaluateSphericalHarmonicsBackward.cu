@@ -399,17 +399,23 @@ template <typename T> struct AddViewDirectionGradients {
     }
 };
 
-template <bool UseSystemAtomics, typename T>
-__device__ inline void
-storeWorldToCamMatrixGradient(T *__restrict__ output, const int64_t index, const T value) {
-    if constexpr (UseSystemAtomics) {
-        atomicAdd_system(output + index, value);
-    } else {
-        output[index] = value;
+struct AssignOutput {
+    template <typename T>
+    __device__ static void
+    update(T *__restrict__ output, const T value) {
+        *output = value;
     }
-}
+};
 
-template <bool UseSystemAtomics, typename T>
+struct SystemAtomicAddOutput {
+    template <typename T>
+    __device__ static void
+    update(T *__restrict__ output, const T value) {
+        atomicAdd_system(output, value);
+    }
+};
+
+template <typename OutputUpdatePolicy, typename T>
 __device__ inline void
 writeWorldToCamMatrixGradient(const T *__restrict__ worldToCamMatrix,
                               const ViewDirectionGradient<T> &gradient,
@@ -417,33 +423,27 @@ writeWorldToCamMatrixGradient(const T *__restrict__ worldToCamMatrix,
     const T tx = worldToCamMatrix[3];
     const T ty = worldToCamMatrix[7];
     const T tz = worldToCamMatrix[11];
-    storeWorldToCamMatrixGradient<UseSystemAtomics>(output, 0, tx * gradient.x);
-    storeWorldToCamMatrixGradient<UseSystemAtomics>(output, 1, tx * gradient.y);
-    storeWorldToCamMatrixGradient<UseSystemAtomics>(output, 2, tx * gradient.z);
-    storeWorldToCamMatrixGradient<UseSystemAtomics>(output,
-                                                    3,
-                                                    worldToCamMatrix[0] * gradient.x +
-                                                        worldToCamMatrix[1] * gradient.y +
-                                                        worldToCamMatrix[2] * gradient.z);
-    storeWorldToCamMatrixGradient<UseSystemAtomics>(output, 4, ty * gradient.x);
-    storeWorldToCamMatrixGradient<UseSystemAtomics>(output, 5, ty * gradient.y);
-    storeWorldToCamMatrixGradient<UseSystemAtomics>(output, 6, ty * gradient.z);
-    storeWorldToCamMatrixGradient<UseSystemAtomics>(output,
-                                                    7,
-                                                    worldToCamMatrix[4] * gradient.x +
-                                                        worldToCamMatrix[5] * gradient.y +
-                                                        worldToCamMatrix[6] * gradient.z);
-    storeWorldToCamMatrixGradient<UseSystemAtomics>(output, 8, tz * gradient.x);
-    storeWorldToCamMatrixGradient<UseSystemAtomics>(output, 9, tz * gradient.y);
-    storeWorldToCamMatrixGradient<UseSystemAtomics>(output, 10, tz * gradient.z);
-    storeWorldToCamMatrixGradient<UseSystemAtomics>(output,
-                                                    11,
-                                                    worldToCamMatrix[8] * gradient.x +
-                                                        worldToCamMatrix[9] * gradient.y +
-                                                        worldToCamMatrix[10] * gradient.z);
+    OutputUpdatePolicy::update(output, tx * gradient.x);
+    OutputUpdatePolicy::update(output + 1, tx * gradient.y);
+    OutputUpdatePolicy::update(output + 2, tx * gradient.z);
+    OutputUpdatePolicy::update(output + 3,
+                               worldToCamMatrix[0] * gradient.x + worldToCamMatrix[1] * gradient.y +
+                                   worldToCamMatrix[2] * gradient.z);
+    OutputUpdatePolicy::update(output + 4, ty * gradient.x);
+    OutputUpdatePolicy::update(output + 5, ty * gradient.y);
+    OutputUpdatePolicy::update(output + 6, ty * gradient.z);
+    OutputUpdatePolicy::update(output + 7,
+                               worldToCamMatrix[4] * gradient.x + worldToCamMatrix[5] * gradient.y +
+                                   worldToCamMatrix[6] * gradient.z);
+    OutputUpdatePolicy::update(output + 8, tz * gradient.x);
+    OutputUpdatePolicy::update(output + 9, tz * gradient.y);
+    OutputUpdatePolicy::update(output + 10, tz * gradient.z);
+    OutputUpdatePolicy::update(output + 11,
+                               worldToCamMatrix[8] * gradient.x + worldToCamMatrix[9] * gradient.y +
+                                   worldToCamMatrix[10] * gradient.z);
 }
 
-template <typename T>
+template <typename OutputUpdatePolicy, typename T>
 __global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
 reduceUnpackedViewDirectionGradientsToWorldToCamMatrices(
     const int64_t N,
@@ -473,7 +473,7 @@ reduceUnpackedViewDirectionGradientsToWorldToCamMatrices(
     if (threadIdx.x == 0) {
         const T *worldToCamMatrix    = worldToCamMatrices + cameraId * 16;
         T *outDLossDWorldToCamMatrix = outDLossDWorldToCamMatrices + cameraId * 16;
-        writeWorldToCamMatrixGradient<true>(
+        writeWorldToCamMatrixGradient<OutputUpdatePolicy>(
             worldToCamMatrix, reducedGradient, outDLossDWorldToCamMatrix);
     }
 }
@@ -520,7 +520,7 @@ viewDirectionGradientsToWorldToCamMatrices(const int64_t numWorldToCamMatrices,
     const T *worldToCamMatrix    = worldToCamMatrices + cameraId * 16;
     const T *reducedGradient     = reducedViewDirectionGradients + cameraId * 3;
     T *outDLossDWorldToCamMatrix = outDLossDWorldToCamMatrices + cameraId * 16;
-    writeWorldToCamMatrixGradient<false>(
+    writeWorldToCamMatrixGradient<AssignOutput>(
         worldToCamMatrix,
         {reducedGradient[0], reducedGradient[1], reducedGradient[2]},
         outDLossDWorldToCamMatrix);
@@ -748,7 +748,7 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kCUDA>(
                         dLossDWorldToCamMatrices.data_ptr<scalar_t>());
                 C10_CUDA_KERNEL_LAUNCH_CHECK();
             } else {
-                reduceUnpackedViewDirectionGradientsToWorldToCamMatrices<scalar_t>
+                reduceUnpackedViewDirectionGradientsToWorldToCamMatrices<AssignOutput, scalar_t>
                     <<<numWorldToCamMatrices, DEFAULT_BLOCK_DIM, 0, stream>>>(
                         N,
                         0,
@@ -1044,7 +1044,8 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
 
             if (computeDLossDWorldToCamMatrices) {
                 const auto numWorldToCamMatrices = worldToCamMatrices.size(0);
-                reduceUnpackedViewDirectionGradientsToWorldToCamMatrices<scalar_t>
+                reduceUnpackedViewDirectionGradientsToWorldToCamMatrices<SystemAtomicAddOutput,
+                                                                         scalar_t>
                     <<<numWorldToCamMatrices, DEFAULT_BLOCK_DIM, 0, stream>>>(
                         N,
                         elementOffset,
