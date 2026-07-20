@@ -10,10 +10,12 @@ from ._level_set_view import LevelSetView
 from ._point_cloud_view import PointCloudView
 from ._scene import Scene, get_scene
 from ._utils import grid_edge_network, gridbatch_edge_network
-from ._viewer_server import init, show, wait_for_interrupt
+from ._viewer_server import init, shutdown, show, wait_for_interrupt
+from ._widget_views import CheckboxView, NumberView, SliderView, TextView
 
 __all__ = [
     "init",
+    "shutdown",
     "show",
     "wait_for_interrupt",
     "FogVolumeView",
@@ -28,4 +30,8 @@ __all__ = [
     "Scene",
     "grid_edge_network",
     "gridbatch_edge_network",
+    "CheckboxView",
+    "NumberView",
+    "SliderView",
+    "TextView",
 ]

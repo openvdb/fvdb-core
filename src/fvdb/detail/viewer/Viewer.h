@@ -9,14 +9,17 @@
 #include <fvdb/detail/utils/gsplat/GaussianCameras.cuh>
 #include <fvdb/detail/viewer/CameraView.h>
 #include <fvdb/detail/viewer/GaussianSplat3dView.h>
+#include <fvdb/detail/viewer/ParamViews.h>
 
 #include <c10/util/Exception.h>
 #include <torch/types.h>
 
 #include <nanovdb_editor/putil/Editor.h>
 
+#include <cstdint>
 #include <map>
 #include <string>
+#include <vector>
 
 namespace fvdb::detail::viewer {
 
@@ -45,6 +48,43 @@ class Viewer {
     // Views are currently shared by all scenes and need to have unique names
     std::map<std::string, GaussianSplat3dView> mSplat3dViews;
     std::map<std::string, CameraView> mCameraViews;
+
+    enum class CustomParamKind {
+        Slider,        ///< float, useSlider=true, has min/max/step
+        Number,        ///< float, useSlider=false, optional min/max/step
+        Text,          ///< char[length] string
+        Checkbox,      ///< bool32 rendered as checkbox (isBool=true)
+        SubmitCounter, ///< hidden uint32 bumped by editor on Enter (companion to Text fields with
+                       ///< commitOnEnter=true)
+    };
+
+    struct CustomParamSpec {
+        std::string name;
+        CustomParamKind kind = CustomParamKind::Slider;
+        // Numeric (slider/number/checkbox)
+        bool hasMin        = false;
+        bool hasMax        = false;
+        bool hasStep       = false;
+        float minValue     = 0.f;
+        float maxValue     = 0.f;
+        float stepValue    = 0.01f;
+        float defaultFloat = 0.f;
+        // Text
+        int32_t lengthChars = 0;
+        std::string defaultText;
+        bool commitOnEnter =
+            false;              ///< Text only: render with EnterReturnsTrue and bump submit counter
+        std::string
+            submitCounterField; ///< Text only: name of the companion SubmitCounter spec, if any
+        // Bool
+        bool defaultBool = false;
+    };
+
+    std::map<std::string, std::vector<CustomParamSpec>> mSceneCustomParams;
+    std::map<std::string, SliderView> mSliderViews;
+    std::map<std::string, NumberView> mNumberViews;
+    std::map<std::string, TextView> mTextViews;
+    std::map<std::string, CheckboxView> mCheckboxViews;
     std::map<std::string, NanoVDBView> mNanoVDBViews;
 
     void updateCamera(const std::string &scene_name);
@@ -64,6 +104,31 @@ class Viewer {
                             pnanovdb_pipeline_type_t render_pipeline,
                             const std::string &render_shader = "");
 
+    struct FieldInfo {
+        std::string name;
+        std::string type; ///< "float", "int32", "char", "bool32", ...
+        uint64_t offset       = 0;
+        uint64_t size         = 0;
+        uint64_t element_size = 0;
+    };
+
+    static std::string buildSchemaJson(const std::vector<CustomParamSpec> &specs);
+
+    bool
+    findFieldInfo(const std::string &scene_name, const std::string &field_name, FieldInfo &out);
+
+    bool readFieldBytes(const std::string &scene_name, const FieldInfo &field, void *dest);
+
+    bool writeFieldBytes(const std::string &scene_name, const FieldInfo &field, const void *src);
+
+    void submitSchemaForScene(const std::string &scene_name);
+
+    const CustomParamSpec *findSpec(const std::string &scene_name,
+                                    const std::string &field_name) const;
+
+    CustomParamSpec &replaceOrAppendSpec(const std::string &scene_name,
+                                         const CustomParamSpec &spec);
+
   public:
     Viewer(const std::string &ipAddress,
            const int port,
@@ -72,6 +137,8 @@ class Viewer {
     ~Viewer();
 
     void reset();
+
+    void stop();
 
     void setSceneName(const std::string &scene_name);
 
@@ -132,6 +199,87 @@ class Viewer {
     hasNanoVDBView(const std::string &name) const {
         return mNanoVDBViews.find(name) != mNanoVDBViews.end();
     }
+
+    SliderView addSlider(const std::string &scene_name,
+                         const std::string &name,
+                         float min,
+                         float max,
+                         float initial,
+                         float step);
+
+    NumberView addNumber(const std::string &scene_name,
+                         const std::string &name,
+                         float initial,
+                         bool hasMin,
+                         float min,
+                         bool hasMax,
+                         float max,
+                         float step);
+
+    TextView addText(const std::string &scene_name,
+                     const std::string &name,
+                     const std::string &initial,
+                     int32_t maxLength,
+                     bool commitOnEnter = false);
+
+    CheckboxView addCheckbox(const std::string &scene_name, const std::string &name, bool initial);
+
+    bool
+    hasSlider(const std::string &name) const {
+        return mSliderViews.find(name) != mSliderViews.end();
+    }
+    bool
+    hasNumber(const std::string &name) const {
+        return mNumberViews.find(name) != mNumberViews.end();
+    }
+    bool
+    hasText(const std::string &name) const {
+        return mTextViews.find(name) != mTextViews.end();
+    }
+    bool
+    hasCheckbox(const std::string &name) const {
+        return mCheckboxViews.find(name) != mCheckboxViews.end();
+    }
+
+    SliderView
+    getSlider(const std::string &name) const {
+        const auto it = mSliderViews.find(name);
+        TORCH_CHECK(it != mSliderViews.end(), "No SliderView with name '", name, "' found");
+        return it->second;
+    }
+    NumberView
+    getNumber(const std::string &name) const {
+        const auto it = mNumberViews.find(name);
+        TORCH_CHECK(it != mNumberViews.end(), "No NumberView with name '", name, "' found");
+        return it->second;
+    }
+    TextView
+    getText(const std::string &name) const {
+        const auto it = mTextViews.find(name);
+        TORCH_CHECK(it != mTextViews.end(), "No TextView with name '", name, "' found");
+        return it->second;
+    }
+    CheckboxView
+    getCheckbox(const std::string &name) const {
+        const auto it = mCheckboxViews.find(name);
+        TORCH_CHECK(it != mCheckboxViews.end(), "No CheckboxView with name '", name, "' found");
+        return it->second;
+    }
+
+    std::vector<std::string> sceneWidgetNames(const std::string &scene_name) const;
+
+    float readFloatField(const std::string &scene_name, const std::string &field_name);
+    void writeFloatField(const std::string &scene_name, const std::string &field_name, float value);
+
+    std::string readStringField(const std::string &scene_name, const std::string &field_name);
+    void writeStringField(const std::string &scene_name,
+                          const std::string &field_name,
+                          const std::string &value);
+
+    bool readBoolField(const std::string &scene_name, const std::string &field_name);
+    void writeBoolField(const std::string &scene_name, const std::string &field_name, bool value);
+
+    uint32_t readUInt32Field(const std::string &scene_name, const std::string &field_name);
 
     bool
     hasGaussianSplat3dView(const std::string &name) const {
