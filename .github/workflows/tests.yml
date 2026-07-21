@@ -61,7 +61,7 @@ jobs:
           mode: start
           github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
           ec2-image-id: ${{ needs.versions.outputs.aws-cpu-ami }}
-          ec2-instance-type: m6a.8xlarge
+          ec2-instance-type: m6a.16xlarge
           subnet-id: ${{ needs.versions.outputs.aws-subnet }}
           security-group-id: ${{ needs.versions.outputs.aws-security-group }}
   fvdb-build:
@@ -207,7 +207,7 @@ jobs:
           mode: start
           github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
           ec2-image-id: ${{ needs.versions.outputs.aws-gpu-ami }}
-          ec2-instance-type: g6.xlarge # 4 CPU-core, L4 GPU
+          ec2-instance-type: g6f.xlarge # 4 CPU-core, 1/8 L4 GPU
           subnet-id: ${{ needs.versions.outputs.aws-subnet }}
           security-group-id: ${{ needs.versions.outputs.aws-security-group }}
 
