@@ -35,13 +35,12 @@ endif()
 
 string(SUBSTRING "${NANOVDB_EDITOR_TAG}" 0 7 NANOVDB_EDITOR_TAG_SHORT)
 
-set(NANOVDB_EDITOR_INCLUDE_DIR ${nanovdb_editor_BINARY_DIR}/include)
-if(NOT EXISTS "${NANOVDB_EDITOR_INCLUDE_DIR}/nanovdb_editor")
+if(NOT TARGET nanovdb_editor::public_headers)
     message(FATAL_ERROR
-        "Expected public headers at ${NANOVDB_EDITOR_INCLUDE_DIR}/nanovdb_editor, "
-        "but the directory is missing")
+        "Expected nanovdb_editor::public_headers interface target from CPM nanovdb_editor "
+        "(NANOVDB_EDITOR_PUBLIC_HEADERS_ONLY=ON)")
 endif()
-message(STATUS "Using NanoVDB Editor headers from ${NANOVDB_EDITOR_INCLUDE_DIR} (tag ${NANOVDB_EDITOR_TAG_SHORT})")
+message(STATUS "Using NanoVDB Editor public headers target nanovdb_editor::public_headers (tag ${NANOVDB_EDITOR_TAG_SHORT})")
 
 set(NANOVDB_EDITOR_BUILD_FROM_SOURCE OFF)
 if(DEFINED CPM_nanovdb_editor_SOURCE AND NOT "${CPM_nanovdb_editor_SOURCE}" STREQUAL "")
@@ -216,5 +215,4 @@ else()
         message(FATAL_ERROR "nanovdb_editor installation verification failed after build")
     endif()
     message(STATUS "Installed nanovdb_editor binaries from ${NANOVDB_EDITOR_PACKAGE_DIR}")
-    message(STATUS "NANOVDB_EDITOR_INCLUDE_DIR: ${NANOVDB_EDITOR_INCLUDE_DIR}")
 endif()

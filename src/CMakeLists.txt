@@ -171,7 +171,6 @@ target_include_directories(fvdb PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
     $<BUILD_INTERFACE:${nanovdb_SOURCE_DIR}/nanovdb>
     $<BUILD_INTERFACE:${nvtx3_SOURCE_DIR}/include>
-    $<BUILD_INTERFACE:${NANOVDB_EDITOR_INCLUDE_DIR}>
     $<INSTALL_INTERFACE:include>)
 target_include_directories(fvdb PRIVATE
     ${tinyply_SOURCE_DIR}/source)
@@ -215,7 +214,7 @@ target_compile_options(fvdb PRIVATE
     $<$<AND:$<BOOL:${FVDB_LINEINFO}>,$<COMPILE_LANGUAGE:CUDA>>:-lineinfo>)
 
 target_link_libraries(fvdb
-    PUBLIC torch
+    PUBLIC torch nanovdb_editor::public_headers
     PRIVATE tinyply cutlass blosc::blosc ZLIB::ZLIB dispatch)
 
 # ----------------------------------------------------------------------------
