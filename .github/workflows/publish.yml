@@ -380,7 +380,7 @@ jobs:
           echo "Built sdist:"
           ls -lh dist/
       - name: Publish distribution
-        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
         with:
           repository-url: ${{ (needs.pr-flags.outputs.release == 'true' && 'https://upload.pypi.org/legacy/') || 'https://test.pypi.org/legacy/' }}
           verbose: true
