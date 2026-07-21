@@ -272,6 +272,9 @@ jobs:
         run: |
             tar -xvf fvdb-gtest.tar
 
+      - name: Show GPU info
+        run: nvidia-smi
+
       - name: Run tests
         run: |
             micromamba activate fvdb_test
@@ -340,6 +343,9 @@ jobs:
         run: |
             micromamba activate fvdb_test
             pip install ./dist/*.whl
+
+      - name: Show GPU info
+        run: nvidia-smi
 
       - name: Run tests
         run: |
@@ -410,6 +416,9 @@ jobs:
         run: |
             micromamba activate fvdb_test
             pip install ./dist/*.whl
+
+      - name: Show GPU info
+        run: nvidia-smi
 
       - name: Run markdown docs tests
         run: |
