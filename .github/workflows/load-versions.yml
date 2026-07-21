@@ -50,6 +50,8 @@ on:
         value: ${{ jobs.load.outputs.aws-cpu-ami }}
       aws-gpu-ami:
         value: ${{ jobs.load.outputs.aws-gpu-ami }}
+      aws-fgpu-ami:
+        value: ${{ jobs.load.outputs.aws-fgpu-ami }}
       aws-subnet:
         value: ${{ jobs.load.outputs.aws-subnet }}
       aws-security-group:
@@ -87,6 +89,7 @@ jobs:
       aws-region: ${{ steps.parse.outputs.aws-region }}
       aws-cpu-ami: ${{ steps.parse.outputs.aws-cpu-ami }}
       aws-gpu-ami: ${{ steps.parse.outputs.aws-gpu-ami }}
+      aws-fgpu-ami: ${{ steps.parse.outputs.aws-fgpu-ami }}
       aws-subnet: ${{ steps.parse.outputs.aws-subnet }}
       aws-security-group: ${{ steps.parse.outputs.aws-security-group }}
       aws-cloudfront-distribution-domain: ${{ steps.parse.outputs.aws-cloudfront-distribution-domain }}
@@ -125,6 +128,7 @@ jobs:
             echo "aws-region=$(jq -r '.aws.region' $CFG)"
             echo "aws-cpu-ami=$(jq -r '.aws.cpu_ami' $CFG)"
             echo "aws-gpu-ami=$(jq -r '.aws.gpu_ami' $CFG)"
+            echo "aws-fgpu-ami=$(jq -r '.aws.fgpu_ami' $CFG)"
             echo "aws-subnet=$(jq -r '.aws.subnet' $CFG)"
             echo "aws-security-group=$(jq -r '.aws.security_group' $CFG)"
             echo "aws-cloudfront-distribution-domain=$(jq -r '.aws.cloudfront_distribution_domain // ""' $CFG)"

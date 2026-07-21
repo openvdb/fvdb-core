@@ -206,7 +206,7 @@ jobs:
         with:
           mode: start
           github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
-          ec2-image-id: ${{ needs.versions.outputs.aws-gpu-ami }}
+          ec2-image-id: ${{ needs.versions.outputs.aws-fgpu-ami }}
           ec2-instance-type: g6f.xlarge # 4 CPU-core, 1/8 L4 GPU
           subnet-id: ${{ needs.versions.outputs.aws-subnet }}
           security-group-id: ${{ needs.versions.outputs.aws-security-group }}
