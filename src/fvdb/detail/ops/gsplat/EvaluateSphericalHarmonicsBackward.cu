@@ -11,6 +11,8 @@
 #include <ATen/cuda/Atomic.cuh>
 #include <c10/cuda/CUDAGuard.h>
 
+#include <cub/block/block_reduce.cuh>
+
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
 
@@ -311,8 +313,8 @@ computeShBackward(
         dLossDRenderQuantities,                                                    // [C, N, D]
     torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits> outDLossDSh0Coeffs, // [N, 1, D]
     torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits> outDLossDShNCoeffs, // [N, K-1, D]
-    T *__restrict__ outDLossDMeans,             // [N, 3] optional
-    T *__restrict__ outDLossDWorldToCamMatrices // [C, 4, 4] optional
+    T *__restrict__ outDLossDMeans,   // [N, 3] optional
+    T *__restrict__ outDLossDViewDirs // [C, N, 3] optional
 ) {
     // parallelize over C * N * D
     auto idx = blockIdx.x * blockDim.x + threadIdx.x; // cidx * N * D + gidx * D + c
@@ -339,9 +341,8 @@ computeShBackward(
     const T *dLossDRenderQuantityPtr = dLossDRenderQuantities[cid][gid].data();
 
     float3 dLossDViewDir{T(0), T(0), T(0)};
-    float3 *dLossDViewDirPtr = outDLossDMeans == nullptr && outDLossDWorldToCamMatrices == nullptr
-                                   ? nullptr
-                                   : &dLossDViewDir;
+    float3 *dLossDViewDirPtr =
+        outDLossDMeans == nullptr && outDLossDViewDirs == nullptr ? nullptr : &dLossDViewDir;
     evalShFunctionVJP(shDegreeToUse,
                       gid,
                       c,
@@ -353,9 +354,9 @@ computeShBackward(
                       dLossDViewDirPtr);
 
     // Adjacent threads handle the feature channels of the same camera-Gaussian pair. Reduce
-    // their direction gradients before chaining into means and world-to-camera matrices so the
-    // geometry path performs one set of atomics per pair (or per warp for D > warp size), not per
-    // channel.
+    // their direction gradients before writing the intermediate buffer and chaining into means,
+    // so the geometry path performs one set of atomics per pair (or per warp for D > warp size),
+    // not per channel.
     if (dLossDViewDirPtr != nullptr) {
         auto activeThreads = cooperative_groups::coalesced_threads();
         auto pairThreads =
@@ -377,44 +378,152 @@ computeShBackward(
         gpuAtomicAdd(dLossDMean + 1, dLossDViewDir.y);
         gpuAtomicAdd(dLossDMean + 2, dLossDViewDir.z);
     }
-    if (outDLossDWorldToCamMatrices != nullptr) {
-        // d(mean + R^T t) / dR = t * dLossDViewDir^T and
-        // d(mean + R^T t) / dt = R. Pair leaders are still adjacent in each warp, so reduce
-        // their direction gradients by source camera before touching the hot output matrix.
-        auto activePairs = cooperative_groups::coalesced_threads();
-        auto cameraPairs =
-            cooperative_groups::labeled_partition(activePairs, static_cast<int>(cameraId));
-        const T gx = cooperative_groups::reduce(
-            cameraPairs, T(dLossDViewDir.x), cooperative_groups::plus<T>());
-        const T gy = cooperative_groups::reduce(
-            cameraPairs, T(dLossDViewDir.y), cooperative_groups::plus<T>());
-        const T gz = cooperative_groups::reduce(
-            cameraPairs, T(dLossDViewDir.z), cooperative_groups::plus<T>());
-        if (cameraPairs.thread_rank() == 0) {
-            T *outDLossDWorldToCamMatrix = outDLossDWorldToCamMatrices + cameraId * 16;
-            const T tx                   = worldToCamMatrix[3];
-            const T ty                   = worldToCamMatrix[7];
-            const T tz                   = worldToCamMatrix[11];
-            atomicAdd_system(outDLossDWorldToCamMatrix, tx * gx);
-            atomicAdd_system(outDLossDWorldToCamMatrix + 1, tx * gy);
-            atomicAdd_system(outDLossDWorldToCamMatrix + 2, tx * gz);
-            atomicAdd_system(outDLossDWorldToCamMatrix + 3,
-                             worldToCamMatrix[0] * gx + worldToCamMatrix[1] * gy +
-                                 worldToCamMatrix[2] * gz);
-            atomicAdd_system(outDLossDWorldToCamMatrix + 4, ty * gx);
-            atomicAdd_system(outDLossDWorldToCamMatrix + 5, ty * gy);
-            atomicAdd_system(outDLossDWorldToCamMatrix + 6, ty * gz);
-            atomicAdd_system(outDLossDWorldToCamMatrix + 7,
-                             worldToCamMatrix[4] * gx + worldToCamMatrix[5] * gy +
-                                 worldToCamMatrix[6] * gz);
-            atomicAdd_system(outDLossDWorldToCamMatrix + 8, tz * gx);
-            atomicAdd_system(outDLossDWorldToCamMatrix + 9, tz * gy);
-            atomicAdd_system(outDLossDWorldToCamMatrix + 10, tz * gz);
-            atomicAdd_system(outDLossDWorldToCamMatrix + 11,
-                             worldToCamMatrix[8] * gx + worldToCamMatrix[9] * gy +
-                                 worldToCamMatrix[10] * gz);
-        }
+    if (outDLossDViewDirs != nullptr) {
+        T *outDLossDViewDir = outDLossDViewDirs + (cid * N + gid) * 3;
+        gpuAtomicAdd(outDLossDViewDir, dLossDViewDir.x);
+        gpuAtomicAdd(outDLossDViewDir + 1, dLossDViewDir.y);
+        gpuAtomicAdd(outDLossDViewDir + 2, dLossDViewDir.z);
     }
+}
+
+template <typename T> struct ViewDirectionGradient {
+    T x;
+    T y;
+    T z;
+};
+
+template <typename T> struct AddViewDirectionGradients {
+    __device__ ViewDirectionGradient<T>
+    operator()(const ViewDirectionGradient<T> &lhs, const ViewDirectionGradient<T> &rhs) const {
+        return {lhs.x + rhs.x, lhs.y + rhs.y, lhs.z + rhs.z};
+    }
+};
+
+struct AssignOutput {
+    template <typename T>
+    __device__ static void
+    update(T *__restrict__ output, const T value) {
+        *output = value;
+    }
+};
+
+struct SystemAtomicAddOutput {
+    template <typename T>
+    __device__ static void
+    update(T *__restrict__ output, const T value) {
+        atomicAdd_system(output, value);
+    }
+};
+
+template <typename OutputUpdatePolicy, typename T>
+__device__ inline void
+writeWorldToCamMatrixGradient(const T *__restrict__ worldToCamMatrix,
+                              const ViewDirectionGradient<T> &gradient,
+                              T *__restrict__ output) {
+    const T tx = worldToCamMatrix[3];
+    const T ty = worldToCamMatrix[7];
+    const T tz = worldToCamMatrix[11];
+    OutputUpdatePolicy::update(output, tx * gradient.x);
+    OutputUpdatePolicy::update(output + 1, tx * gradient.y);
+    OutputUpdatePolicy::update(output + 2, tx * gradient.z);
+    OutputUpdatePolicy::update(output + 3,
+                               worldToCamMatrix[0] * gradient.x + worldToCamMatrix[1] * gradient.y +
+                                   worldToCamMatrix[2] * gradient.z);
+    OutputUpdatePolicy::update(output + 4, ty * gradient.x);
+    OutputUpdatePolicy::update(output + 5, ty * gradient.y);
+    OutputUpdatePolicy::update(output + 6, ty * gradient.z);
+    OutputUpdatePolicy::update(output + 7,
+                               worldToCamMatrix[4] * gradient.x + worldToCamMatrix[5] * gradient.y +
+                                   worldToCamMatrix[6] * gradient.z);
+    OutputUpdatePolicy::update(output + 8, tz * gradient.x);
+    OutputUpdatePolicy::update(output + 9, tz * gradient.y);
+    OutputUpdatePolicy::update(output + 10, tz * gradient.z);
+    OutputUpdatePolicy::update(output + 11,
+                               worldToCamMatrix[8] * gradient.x + worldToCamMatrix[9] * gradient.y +
+                                   worldToCamMatrix[10] * gradient.z);
+}
+
+template <typename OutputUpdatePolicy, typename T>
+__global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
+reduceUnpackedViewDirectionGradientsToWorldToCamMatrices(
+    const int64_t N,
+    const int64_t offset,
+    const int64_t count,
+    const T *__restrict__ worldToCamMatrices,
+    const T *__restrict__ dLossDViewDirs,
+    T *__restrict__ outDLossDWorldToCamMatrices) {
+    const int64_t cameraId = blockIdx.x;
+
+    T gx = T(0);
+    T gy = T(0);
+    T gz = T(0);
+    for (int64_t localGid = threadIdx.x; localGid < count; localGid += blockDim.x) {
+        const int64_t gid      = offset + localGid;
+        const T *dLossDViewDir = dLossDViewDirs + (cameraId * N + gid) * 3;
+        gx += dLossDViewDir[0];
+        gy += dLossDViewDir[1];
+        gz += dLossDViewDir[2];
+    }
+
+    using BlockReduce = cub::BlockReduce<ViewDirectionGradient<T>, DEFAULT_BLOCK_DIM>;
+    __shared__ typename BlockReduce::TempStorage tempStorage;
+    const auto reducedGradient =
+        BlockReduce(tempStorage).Reduce({gx, gy, gz}, AddViewDirectionGradients<T>{});
+
+    if (threadIdx.x == 0) {
+        const T *worldToCamMatrix    = worldToCamMatrices + cameraId * 16;
+        T *outDLossDWorldToCamMatrix = outDLossDWorldToCamMatrices + cameraId * 16;
+        writeWorldToCamMatrixGradient<OutputUpdatePolicy>(
+            worldToCamMatrix, reducedGradient, outDLossDWorldToCamMatrix);
+    }
+}
+
+template <typename T>
+__global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
+reducePackedViewDirectionGradients(const int64_t N,
+                                   const int32_t *__restrict__ cameraIds,
+                                   const T *__restrict__ dLossDViewDirs,
+                                   T *__restrict__ outReducedViewDirectionGradients) {
+    const int64_t gid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (gid >= N) {
+        return;
+    }
+
+    const int32_t cameraId         = cameraIds[gid];
+    const T *dLossDViewDir         = dLossDViewDirs + gid * 3;
+    auto activeThreads             = cooperative_groups::coalesced_threads();
+    auto threadsForCamera          = cooperative_groups::labeled_partition(activeThreads, cameraId);
+    ViewDirectionGradient<T> local = {dLossDViewDir[0], dLossDViewDir[1], dLossDViewDir[2]};
+    local.x = cooperative_groups::reduce(threadsForCamera, local.x, cooperative_groups::plus<T>());
+    local.y = cooperative_groups::reduce(threadsForCamera, local.y, cooperative_groups::plus<T>());
+    local.z = cooperative_groups::reduce(threadsForCamera, local.z, cooperative_groups::plus<T>());
+
+    if (threadsForCamera.thread_rank() == 0) {
+        T *reducedGradient = outReducedViewDirectionGradients + cameraId * 3;
+        gpuAtomicAdd(reducedGradient, local.x);
+        gpuAtomicAdd(reducedGradient + 1, local.y);
+        gpuAtomicAdd(reducedGradient + 2, local.z);
+    }
+}
+
+template <typename T>
+__global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
+viewDirectionGradientsToWorldToCamMatrices(const int64_t numWorldToCamMatrices,
+                                           const T *__restrict__ worldToCamMatrices,
+                                           const T *__restrict__ reducedViewDirectionGradients,
+                                           T *__restrict__ outDLossDWorldToCamMatrices) {
+    const int64_t cameraId = blockIdx.x * blockDim.x + threadIdx.x;
+    if (cameraId >= numWorldToCamMatrices) {
+        return;
+    }
+
+    const T *worldToCamMatrix    = worldToCamMatrices + cameraId * 16;
+    const T *reducedGradient     = reducedViewDirectionGradients + cameraId * 3;
+    T *outDLossDWorldToCamMatrix = outDLossDWorldToCamMatrices + cameraId * 16;
+    writeWorldToCamMatrixGradient<AssignOutput>(
+        worldToCamMatrix,
+        {reducedGradient[0], reducedGradient[1], reducedGradient[2]},
+        outDLossDWorldToCamMatrix);
 }
 
 template <typename T>
@@ -582,11 +691,13 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kCUDA>(
         torch::Tensor dLossDSh0Coeffs = torch::zeros({N, 1, D}, tensorOptions);
         torch::Tensor dLossDMeans;
         torch::Tensor dLossDWorldToCamMatrices;
+        torch::Tensor dLossDViewDirs;
         if (computeDLossDMeans) {
             dLossDMeans = torch::zeros_like(means);
         }
         if (computeDLossDWorldToCamMatrices) {
             dLossDWorldToCamMatrices = torch::zeros_like(worldToCamMatrices);
+            dLossDViewDirs           = torch::zeros({C, N, 3}, tensorOptions);
         }
         if (N == 0) {
             return std::make_tuple(
@@ -611,9 +722,43 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kCUDA>(
             dLossDSh0Coeffs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
             dLossDShNCoeffs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
             computeDLossDMeans ? dLossDMeans.data_ptr<scalar_t>() : nullptr,
-            computeDLossDWorldToCamMatrices ? dLossDWorldToCamMatrices.data_ptr<scalar_t>()
-                                            : nullptr);
+            computeDLossDWorldToCamMatrices ? dLossDViewDirs.data_ptr<scalar_t>() : nullptr);
         C10_CUDA_KERNEL_LAUNCH_CHECK();
+
+        if (computeDLossDWorldToCamMatrices) {
+            const auto numWorldToCamMatrices = worldToCamMatrices.size(0);
+            if (isPacked) {
+                torch::Tensor reducedViewDirectionGradients =
+                    torch::zeros({numWorldToCamMatrices, 3}, tensorOptions);
+                const auto packedReductionBlocks = GET_BLOCKS(N, DEFAULT_BLOCK_DIM);
+                reducePackedViewDirectionGradients<scalar_t>
+                    <<<packedReductionBlocks, DEFAULT_BLOCK_DIM, 0, stream>>>(
+                        N,
+                        cameraIds.data_ptr<int32_t>(),
+                        dLossDViewDirs.data_ptr<scalar_t>(),
+                        reducedViewDirectionGradients.data_ptr<scalar_t>());
+                C10_CUDA_KERNEL_LAUNCH_CHECK();
+
+                const auto viewMatrixBlocks = GET_BLOCKS(numWorldToCamMatrices, DEFAULT_BLOCK_DIM);
+                viewDirectionGradientsToWorldToCamMatrices<scalar_t>
+                    <<<viewMatrixBlocks, DEFAULT_BLOCK_DIM, 0, stream>>>(
+                        numWorldToCamMatrices,
+                        worldToCamMatrices.data_ptr<scalar_t>(),
+                        reducedViewDirectionGradients.data_ptr<scalar_t>(),
+                        dLossDWorldToCamMatrices.data_ptr<scalar_t>());
+                C10_CUDA_KERNEL_LAUNCH_CHECK();
+            } else {
+                reduceUnpackedViewDirectionGradientsToWorldToCamMatrices<AssignOutput, scalar_t>
+                    <<<numWorldToCamMatrices, DEFAULT_BLOCK_DIM, 0, stream>>>(
+                        N,
+                        0,
+                        N,
+                        worldToCamMatrices.data_ptr<scalar_t>(),
+                        dLossDViewDirs.data_ptr<scalar_t>(),
+                        dLossDWorldToCamMatrices.data_ptr<scalar_t>());
+                C10_CUDA_KERNEL_LAUNCH_CHECK();
+            }
+        }
 
         return std::make_tuple(
             dLossDSh0Coeffs, dLossDShNCoeffs, dLossDMeans, dLossDWorldToCamMatrices);
@@ -723,11 +868,13 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
         torch::Tensor dLossDSh0Coeffs = torch::empty({N, 1, D}, tensorOptions);
         torch::Tensor dLossDMeans;
         torch::Tensor dLossDWorldToCamMatrices;
+        torch::Tensor dLossDViewDirs;
         if (computeDLossDMeans) {
             dLossDMeans = torch::empty_like(means);
         }
         if (computeDLossDWorldToCamMatrices) {
             dLossDWorldToCamMatrices = torch::zeros_like(worldToCamMatrices);
+            dLossDViewDirs           = torch::empty({C, N, 3}, tensorOptions);
         }
         if (N == 0) {
             return std::make_tuple(
@@ -768,6 +915,17 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
                     deviceId,
                     stream);
             }
+            if (computeDLossDWorldToCamMatrices) {
+                for (int cameraIndex = 0; cameraIndex < C; ++cameraIndex) {
+                    nanovdb::util::cuda::memPrefetchAsync(
+                        dLossDViewDirs.data_ptr<scalar_t>() +
+                            cameraIndex * dLossDViewDirs.stride(0) +
+                            elementOffset * dLossDViewDirs.stride(1),
+                        elementCount * dLossDViewDirs.stride(1) * sizeof(scalar_t),
+                        deviceId,
+                        stream);
+                }
+            }
             for (int cameraIndex = 0; cameraIndex < C; ++cameraIndex) {
                 nanovdb::util::cuda::memPrefetchAsync(
                     dLossDRenderQuantities.data_ptr<scalar_t>() +
@@ -794,6 +952,15 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
                 prefetchPtrs.emplace_back(dLossDMeans.data_ptr<scalar_t>() +
                                           elementOffset * dLossDMeans.stride(0));
                 prefetchSizes.emplace_back(elementCount * dLossDMeans.stride(0) * sizeof(scalar_t));
+            }
+            if (computeDLossDWorldToCamMatrices) {
+                for (int cameraIndex = 0; cameraIndex < C; ++cameraIndex) {
+                    prefetchPtrs.emplace_back(dLossDViewDirs.data_ptr<scalar_t>() +
+                                              cameraIndex * dLossDViewDirs.stride(0) +
+                                              elementOffset * dLossDViewDirs.stride(1));
+                    prefetchSizes.emplace_back(elementCount * dLossDViewDirs.stride(1) *
+                                               sizeof(scalar_t));
+                }
             }
             for (int cameraIndex = 0; cameraIndex < C; ++cameraIndex) {
                 prefetchPtrs.emplace_back(dLossDRenderQuantities.data_ptr<scalar_t>() +
@@ -829,6 +996,17 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
                     elementCount * dLossDMeans.stride(0) * sizeof(scalar_t),
                     stream));
             }
+            if (computeDLossDWorldToCamMatrices) {
+                for (int cameraIndex = 0; cameraIndex < C; ++cameraIndex) {
+                    C10_CUDA_CHECK(
+                        cudaMemsetAsync(dLossDViewDirs.data_ptr<scalar_t>() +
+                                            cameraIndex * dLossDViewDirs.stride(0) +
+                                            elementOffset * dLossDViewDirs.stride(1),
+                                        0,
+                                        elementCount * dLossDViewDirs.stride(1) * sizeof(scalar_t),
+                                        stream));
+                }
+            }
             C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
         }
 
@@ -861,9 +1039,22 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
                 dLossDSh0Coeffs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
                 dLossDShNCoeffs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
                 computeDLossDMeans ? dLossDMeans.data_ptr<scalar_t>() : nullptr,
-                computeDLossDWorldToCamMatrices ? dLossDWorldToCamMatrices.data_ptr<scalar_t>()
-                                                : nullptr);
+                computeDLossDWorldToCamMatrices ? dLossDViewDirs.data_ptr<scalar_t>() : nullptr);
             C10_CUDA_KERNEL_LAUNCH_CHECK();
+
+            if (computeDLossDWorldToCamMatrices) {
+                const auto numWorldToCamMatrices = worldToCamMatrices.size(0);
+                reduceUnpackedViewDirectionGradientsToWorldToCamMatrices<SystemAtomicAddOutput,
+                                                                         scalar_t>
+                    <<<numWorldToCamMatrices, DEFAULT_BLOCK_DIM, 0, stream>>>(
+                        N,
+                        elementOffset,
+                        elementCount,
+                        worldToCamMatrices.data_ptr<scalar_t>(),
+                        dLossDViewDirs.data_ptr<scalar_t>(),
+                        dLossDWorldToCamMatrices.data_ptr<scalar_t>());
+                C10_CUDA_KERNEL_LAUNCH_CHECK();
+            }
         }
         mergeStreams();
 
