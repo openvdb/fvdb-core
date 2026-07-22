@@ -168,8 +168,7 @@ set_target_properties(_fvdb_cpp PROPERTIES
 
 target_include_directories(_fvdb_cpp PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${nanovdb_SOURCE_DIR}/nanovdb
-    ${NANOVDB_EDITOR_INCLUDE_DIR})
+    ${nanovdb_SOURCE_DIR}/nanovdb)
 target_link_libraries(_fvdb_cpp PRIVATE
     ${TORCH_PYTHON_LIBRARY}
     fvdb)

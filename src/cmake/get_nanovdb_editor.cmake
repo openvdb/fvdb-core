@@ -15,16 +15,18 @@ set(NANOVDB_EDITOR_BUILD_TYPE "Release" CACHE STRING "Build type for nanovdb_edi
 
 # fVDB pins NanoVDB Editor headers to an exact source commit via CPM
 # Note: only change this when the interfaces have changed
-# 39fb452: adds get_pipeline_type() used to resolve pnanovdb_pipeline_type_t
-set(NANOVDB_EDITOR_TAG 39fb4523db9e4dac50f2e2ac54c3898152101c14)
-set(NANOVDB_EDITOR_VERSION 0.1.6)   # version at this commit
+# dd40e38: adds NANOVDB_EDITOR_PUBLIC_HEADERS_ONLY and NANOVDB_EDITOR_USE_EXTERNAL_ZLIB
+set(NANOVDB_EDITOR_TAG dd40e38b9d09fe4c6f724f92e7090693eb04d5eb)
+set(NANOVDB_EDITOR_VERSION 0.1.6)
+# Note: NANOVDB_EDITOR_VERSION should be >= version at NANOVDB_EDITOR_TAG commit
 
 CPMAddPackage(
     NAME nanovdb_editor
     GITHUB_REPOSITORY openvdb/nanovdb-editor
     GIT_TAG ${NANOVDB_EDITOR_TAG}
     VERSION ${NANOVDB_EDITOR_VERSION}
-    DOWNLOAD_ONLY YES
+    OPTIONS
+        "NANOVDB_EDITOR_PUBLIC_HEADERS_ONLY ON"
 )
 
 if(NOT nanovdb_editor_ADDED)
@@ -32,8 +34,13 @@ if(NOT nanovdb_editor_ADDED)
 endif()
 
 string(SUBSTRING "${NANOVDB_EDITOR_TAG}" 0 7 NANOVDB_EDITOR_TAG_SHORT)
-set(NANOVDB_EDITOR_INCLUDE_DIR ${nanovdb_editor_SOURCE_DIR})
-message(STATUS "Using NanoVDB Editor headers from ${NANOVDB_EDITOR_INCLUDE_DIR} (tag ${NANOVDB_EDITOR_TAG_SHORT})")
+
+if(NOT TARGET nanovdb_editor::public_headers)
+    message(FATAL_ERROR
+        "Expected nanovdb_editor::public_headers interface target from CPM nanovdb_editor "
+        "(NANOVDB_EDITOR_PUBLIC_HEADERS_ONLY=ON)")
+endif()
+message(STATUS "Using NanoVDB Editor public headers target nanovdb_editor::public_headers (tag ${NANOVDB_EDITOR_TAG_SHORT})")
 
 set(NANOVDB_EDITOR_BUILD_FROM_SOURCE OFF)
 if(DEFINED CPM_nanovdb_editor_SOURCE AND NOT "${CPM_nanovdb_editor_SOURCE}" STREQUAL "")
@@ -90,6 +97,13 @@ if(NANOVDB_EDITOR_INSTALLED)
         message(STATUS "Installed nanovdb_editor version not found")
     else()
         message(STATUS "Using installed nanovdb_editor binaries version ${NANOVDB_EDITOR_INSTALLED_VERSION} from ${NANOVDB_EDITOR_PACKAGE_DIR}")
+        if(NOT NANOVDB_EDITOR_BUILD_FROM_SOURCE AND
+           NOT NANOVDB_EDITOR_INSTALLED_VERSION VERSION_EQUAL NANOVDB_EDITOR_VERSION)
+            message(WARNING
+                "Installed nanovdb_editor wheel version ${NANOVDB_EDITOR_INSTALLED_VERSION} does not match "
+                "the pinned NANOVDB_EDITOR_VERSION ${NANOVDB_EDITOR_VERSION}. "
+                "Update the pin or reinstall a matching nanovdb-editor wheel.")
+        endif()
     endif()
 else()
     message(STATUS
@@ -112,10 +126,11 @@ endif()
 
 file(READ ${VERSION_FILE} NANOVDB_EDITOR_SOURCE_VERSION)
 string(STRIP ${NANOVDB_EDITOR_SOURCE_VERSION} NANOVDB_EDITOR_SOURCE_VERSION)
-if(NOT NANOVDB_EDITOR_SOURCE_VERSION STREQUAL NANOVDB_EDITOR_VERSION)
-    message(WARNING
-        "NanoVDB Editor source version ${NANOVDB_EDITOR_SOURCE_VERSION} does not match "
-        "the pinned fVDB version ${NANOVDB_EDITOR_VERSION}")
+if(NANOVDB_EDITOR_VERSION VERSION_LESS NANOVDB_EDITOR_SOURCE_VERSION)
+    message(FATAL_ERROR
+        "NanoVDB Editor source version ${NANOVDB_EDITOR_SOURCE_VERSION} is newer than "
+        "the pinned fVDB version ${NANOVDB_EDITOR_VERSION}; "
+        "NANOVDB_EDITOR_VERSION should be >= the version at NANOVDB_EDITOR_TAG")
 endif()
 
 # Build and install nanovdb_editor wheel
@@ -179,6 +194,7 @@ execute_process(
         -Ccmake.define.NANOVDB_EDITOR_BUILD_TESTS=OFF \
         -Ccmake.define.NANOVDB_EDITOR_COMMIT_HASH=${NANOVDB_EDITOR_COMMIT_HASH} \
         -Ccmake.define.NANOVDB_EDITOR_FVDB_COMMIT_HASH=${FVDB_COMMIT_HASH} \
+        -Ccmake.define.NANOVDB_EDITOR_USE_EXTERNAL_ZLIB=ON \
         --config-settings=cmake.build-type=${NANOVDB_EDITOR_BUILD_TYPE} \
         -v \
         --no-build-isolation
@@ -199,5 +215,4 @@ else()
         message(FATAL_ERROR "nanovdb_editor installation verification failed after build")
     endif()
     message(STATUS "Installed nanovdb_editor binaries from ${NANOVDB_EDITOR_PACKAGE_DIR}")
-    message(STATUS "NANOVDB_EDITOR_INCLUDE_DIR: ${NANOVDB_EDITOR_INCLUDE_DIR}")
 endif()
