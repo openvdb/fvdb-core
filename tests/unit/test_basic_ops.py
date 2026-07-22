@@ -2111,6 +2111,52 @@ class TestBasicOps(unittest.TestCase):
             f"hit-time {isect.item()} expected ~4.5 (linear-interp zero crossing) within quarter voxel",
         )
 
+    @parameterized.expand(all_device_dtype_combos)
+    def test_ray_implicit_intersection_no_data_zero_prefix(self, device, dtype):
+        # Regression test for issue #692: a ray that starts far from the
+        # surface band must report the FIRST genuine sign change, not a
+        # spurious crossing seeded by the no-data prefix.
+        #
+        # Sparse fvdb SDFs (e.g. integrate_tsdf + reinitialize_sdf) leave
+        # active-but-unobserved voxels outside the narrow band at exactly
+        # 0. Mathematically sgn(0) == 0, so if the kernel treated 0 as a
+        # real sign it would latch the very first 0 voxel as its reference
+        # and flag a "sign change" the instant the ray reached the first
+        # signed (+/-) voxel — collapsing the hit to ~a voxel from the
+        # origin regardless of where the real surface is. The kernel must
+        # instead treat 0 as a gap (like NaN): it neither seeds the sign
+        # reference nor triggers a hit.
+        #
+        # Setup along +x (voxel_size=1, origin=0): i in [0,3] = 0 (no-data
+        # prefix), i in [4,5] = +1 (outside band), i in [6,7] = -1 (inside).
+        # The only true crossing is the +1 -> -1 step bracketed by the
+        # samples at world x=5 and x=6, whose symmetric interpolated zero
+        # sits at world x=5.5. A ray from world x=-1 along +x therefore hits
+        # at t=6.5. The buggy kernel instead reported ~t=4.5 (a bogus 0->+1
+        # "crossing" near the start of the signed band).
+        N = 8
+        voxel_size = 1.0
+        sdf_dense = torch.zeros((N, N, N))
+        sdf_dense[4:6, :, :] = 1.0
+        sdf_dense[6:, :, :] = -1.0
+        sdf_dense = sdf_dense.to(device).to(dtype)
+
+        grid = GridBatch.from_dense(1, [N, N, N], [0, 0, 0], voxel_sizes=voxel_size, origins=[0, 0, 0], device=device)
+        sdf_p = grid.inject_from_dense_cminor(sdf_dense.unsqueeze(-1).unsqueeze(0)).jdata.squeeze()
+
+        ray_o = torch.tensor([[-1.0, 4.0, 4.0]]).to(device).to(dtype)
+        ray_d = torch.tensor([[1.0, 0.0, 0.0]]).to(device).to(dtype)
+        isect = grid.ray_implicit_intersection(
+            fvdb.JaggedTensor(ray_o), fvdb.JaggedTensor(ray_d), fvdb.JaggedTensor(sdf_p)
+        ).jdata
+        self.assertTrue((isect >= 0).all().item(), f"unexpected miss, isect={isect}")
+        self.assertLess(
+            abs(isect.item() - 6.5),
+            0.25 * voxel_size,
+            f"hit-time {isect.item()} expected ~6.5 (true +1->-1 crossing); a value near 4.5 means "
+            f"the no-data (0) prefix spuriously seeded the sign reference (issue #692)",
+        )
+
     @parameterized.expand(["cpu", "cuda"])
     def test_ray_implicit_intersection_wrong_scalar_count_errors(self, device):
         # ray_implicit_intersection iterates leaf voxels (HDDALeafVoxelIterator)
