@@ -2397,13 +2397,13 @@ class TestBasicOps(unittest.TestCase):
             fvdb.GridBatch.from_nearest_voxels_to_points(pts_too_big, voxel_sizes=1.0, origins=[0] * 3)
 
         with self.assertRaises(ValueError):
-            fvdb.GridBatch.from_dense(VAL_BIG, [10, 10, 10], [0, 0, 0], 1.0, [0] * 3)
+            fvdb.GridBatch.from_dense(VAL_BIG, [4, 4, 4], [0, 0, 0], 1.0, [0] * 3)
 
         fvdb.GridBatch.from_points(pts_too_big[:-1], 1.0, [0] * 3)
         fvdb.GridBatch.from_ijk(ijk_too_big[:-1], voxel_sizes=1.0, origins=[0] * 3)
         fvdb.GridBatch.from_mesh(pts_too_big[:-1], faces_too_big[:-1], voxel_sizes=1.0, origins=[0] * 3)
         fvdb.GridBatch.from_nearest_voxels_to_points(pts_too_big[:-1], voxel_sizes=1.0, origins=[0] * 3)
-        fvdb.GridBatch.from_dense(VAL_OKAY, [10, 10, 10], [0, 0, 0], 1.0, [0] * 3, device=device)
+        fvdb.GridBatch.from_dense(VAL_OKAY, [4, 4, 4], [0, 0, 0], 1.0, [0] * 3, device=device)
 
 
 if __name__ == "__main__":
