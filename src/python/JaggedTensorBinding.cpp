@@ -6,8 +6,6 @@
 #include <pybind11/pytypes.h>
 #include <pybind11/stl.h>
 
-#include "TypeCasters.h"
-
 #include <fvdb/FVDB.h>
 
 #include <torch/extension.h>
