@@ -5,13 +5,13 @@
 #include <pybind11/pytypes.h>
 #include <pybind11/stl.h>
 
-#include "TypeCasters.h"
-
 #include <fvdb/detail/utils/gsplat/GaussianCameras.cuh>
 #include <fvdb/detail/viewer/CameraView.h>
 #include <fvdb/detail/viewer/GaussianSplat3dView.h>
 #include <fvdb/detail/viewer/ParamViews.h>
 #include <fvdb/detail/viewer/Viewer.h>
+
+#include <torch/python.h>
 
 void
 bind_viewer(py::module &m) {
