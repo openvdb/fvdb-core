@@ -119,7 +119,7 @@ def retopologize_sdf_batch(
     """Retopologize a signed field into a clean narrow-band SDF on a (possibly pruned) grid batch.
 
     If ``pad`` is ``True`` the grid is first dilated by ``band`` voxels (so the eikonal solve has room
-    to propagate a full-width band), then :func:`reinitialize_sdf_batch` is run, and finally, if
+    to fill the full ``±band*vx`` band), then :func:`reinitialize_sdf_batch` is run, and finally, if
     ``prune`` is ``True``, the grid is pruned to the voxels strictly inside the band
     (``|phi| < band*vx*0.999``). The prune reuses :meth:`GridBatch.pruned_grid`; the resulting field
     is selected in the grid's canonical voxel order so it stays aligned with the pruned grid.
@@ -135,12 +135,12 @@ def retopologize_sdf_batch(
             :attr:`~fvdb.SmoothingMode.TAUBIN` (volume-preserving). Only used when ``smooth > 0``.
         redistance_iters (int): Number of redistancing sweeps. ``<= 0`` uses the default.
         pad (bool): If ``True`` (default) dilate the grid by ``band`` voxels before redistancing so
-            the output narrow band is a full ``band`` voxels wide even if the input grid had a
-            thinner active region. Newly added voxels are seeded as *exterior* (``+band*vx``), which
-            is correct when the dilation extends outward -- i.e. when the grid's interior (the
-            ``phi < 0`` region) is already represented (the usual case for occupancy/TSDF/mesh-derived
-            fields). For a thin shell that does not fill its interior, pass ``pad=False`` and supply a
-            grid that already has an adequate band.
+            the output band reaches the full ``band`` voxels on each side of the surface (``±band*vx``)
+            even if the input grid had a thinner active region. Newly added voxels are seeded as
+            *exterior* (``+band*vx``), which is correct when the dilation extends outward -- i.e. when
+            the grid's interior (the ``phi < 0`` region) is already represented (the usual case for
+            occupancy/TSDF/mesh-derived fields). For a thin shell that does not fill its interior, pass
+            ``pad=False`` and supply a grid that already has an adequate band.
         prune (bool): If ``True`` prune to the narrow band; if ``False`` return the (possibly
             padded) grid and the re-initialized field unchanged.
 
@@ -179,7 +179,7 @@ def retopologize_sdf_single(
     """Retopologize a signed field into a clean narrow-band SDF on a (possibly pruned) single grid.
 
     If ``pad`` is ``True`` the grid is first dilated by ``band`` voxels (so the eikonal solve has room
-    to propagate a full-width band), then :func:`reinitialize_sdf_single` is run, and finally, if
+    to fill the full ``±band*vx`` band), then :func:`reinitialize_sdf_single` is run, and finally, if
     ``prune`` is ``True``, the grid is pruned to the voxels strictly inside the band
     (``|phi| < band*vx*0.999``).
 
@@ -194,12 +194,12 @@ def retopologize_sdf_single(
             :attr:`~fvdb.SmoothingMode.TAUBIN` (volume-preserving). Only used when ``smooth > 0``.
         redistance_iters (int): Number of redistancing sweeps. ``<= 0`` uses the default.
         pad (bool): If ``True`` (default) dilate the grid by ``band`` voxels before redistancing so
-            the output narrow band is a full ``band`` voxels wide even if the input grid had a
-            thinner active region. Newly added voxels are seeded as *exterior* (``+band*vx``), which
-            is correct when the dilation extends outward -- i.e. when the grid's interior (the
-            ``phi < 0`` region) is already represented (the usual case for occupancy/TSDF/mesh-derived
-            fields). For a thin shell that does not fill its interior, pass ``pad=False`` and supply a
-            grid that already has an adequate band.
+            the output band reaches the full ``band`` voxels on each side of the surface (``±band*vx``)
+            even if the input grid had a thinner active region. Newly added voxels are seeded as
+            *exterior* (``+band*vx``), which is correct when the dilation extends outward -- i.e. when
+            the grid's interior (the ``phi < 0`` region) is already represented (the usual case for
+            occupancy/TSDF/mesh-derived fields). For a thin shell that does not fill its interior, pass
+            ``pad=False`` and supply a grid that already has an adequate band.
         prune (bool): If ``True`` prune to the narrow band; if ``False`` return the (possibly padded)
             grid and the re-initialized field unchanged.
 
