@@ -866,6 +866,15 @@ intersectGaussianTilesPrivateUse1Impl(
         torch::Tensor tileJOffsets = torch::empty({numCameras, numTilesH, numTilesW},
                                                   means2d.options().dtype(torch::kInt32));
 
+        // The use of cudaMallocAsync/cudaMallocFree as opposed to a torch::Tensor with a kCUDA
+        // device is intentional. PyTorch does not support mixing the use of multiple accelerators,
+        // i.e. kCUDA and kPrivateUse1. Moreover, the CUDACachingAllocator does not recycle/trim
+        // blocks until it exceeds the available GPU memory. As the number of intersections
+        // increases (due to Gaussian refinement), the size of the existing blocks are exceeded and
+        // additional blocks of increasing size need to be allocated. This leads to contention with
+        // the Unified Memory pool allocator which leads to spurious OOM errors.
+
+        // TODO: Explore the use of a memory resource model to avoid the raw allocation.
         for (const auto deviceId: c10::irange(deviceCount)) {
             C10_CUDA_CHECK(cudaSetDevice(deviceId));
             auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
