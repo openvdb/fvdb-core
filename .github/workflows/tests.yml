@@ -60,10 +60,8 @@ jobs:
         with:
           mode: start
           github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
-          ec2-image-id: ${{ needs.versions.outputs.aws-cpu-ami }}
           ec2-instance-type: m6a.8xlarge
-          subnet-id: ${{ needs.versions.outputs.aws-subnet }}
-          security-group-id: ${{ needs.versions.outputs.aws-security-group }}
+          availability-zones-config: ${{ needs.versions.outputs.aws-cpu-az-config }}
   fvdb-build:
     name: fVDB Build (Conda)
     needs: [start-build-runner, versions] # required to start the main job when the runner is ready
@@ -206,10 +204,8 @@ jobs:
         with:
           mode: start
           github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
-          ec2-image-id: ${{ needs.versions.outputs.aws-gpu-ami }}
           ec2-instance-type: g6.xlarge # 4 CPU-core, L4 GPU
-          subnet-id: ${{ needs.versions.outputs.aws-subnet }}
-          security-group-id: ${{ needs.versions.outputs.aws-security-group }}
+          availability-zones-config: ${{ needs.versions.outputs.aws-gpu-az-config }}
 
   ##############################################################################
   # RUN FVDB GTESTS
