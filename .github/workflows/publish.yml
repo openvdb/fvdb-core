@@ -145,10 +145,8 @@ jobs:
         with:
           mode: start
           github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
-          ec2-image-id: ${{ needs.versions.outputs.aws-cpu-ami }}
           ec2-instance-type: m6a.8xlarge
-          subnet-id: ${{ needs.versions.outputs.aws-subnet }}
-          security-group-id: ${{ needs.versions.outputs.aws-security-group }}
+          availability-zones-config: ${{ needs.versions.outputs.aws-cpu-az-config }}
           label: ec2-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
           aws-resource-tags: >
             [
@@ -643,10 +641,8 @@ jobs:
         with:
           mode: start
           github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
-          ec2-image-id: ${{ needs.versions.outputs.aws-gpu-ami }}
           ec2-instance-type: g6.xlarge
-          subnet-id: ${{ needs.versions.outputs.aws-subnet }}
-          security-group-id: ${{ needs.versions.outputs.aws-security-group }}
+          availability-zones-config: ${{ needs.versions.outputs.aws-gpu-az-config }}
           label: val-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
           aws-resource-tags: >
             [
