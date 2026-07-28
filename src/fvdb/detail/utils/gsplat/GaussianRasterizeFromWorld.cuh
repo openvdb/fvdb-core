@@ -10,6 +10,7 @@
 #include <fvdb/detail/utils/cuda/math/Rotation.cuh>
 #include <fvdb/detail/utils/gsplat/GaussianCameras.cuh>
 #include <fvdb/detail/utils/gsplat/GaussianMath.cuh>
+#include <fvdb/detail/utils/gsplat/GaussianTileRange.cuh>
 
 #include <nanovdb/math/Math.h>
 #include <nanovdb/math/Ray.h>
@@ -25,7 +26,7 @@ constexpr __device__ float kAlphaThreshold = 0.99f;
 
 /// Common dense-tile rasterization arguments shared by from-world forward/backward kernels.
 struct RasterizeFromWorldCommonArgs {
-    using TileOffsetsAccessor     = fvdb::TorchRAcc64<int32_t, 3>;
+    using TileOffsetsAccessor     = fvdb::TorchRAcc64<int64_t, 3>;
     using TileGaussianIdsAccessor = fvdb::TorchRAcc64<int32_t, 1>;
     using Acc2f                   = fvdb::TorchRAcc64<float, 2>;
     using Acc3f                   = fvdb::TorchRAcc64<float, 3>;
@@ -38,7 +39,7 @@ struct RasterizeFromWorldCommonArgs {
     uint32_t numTilesW;
     uint32_t numTilesH;
     uint32_t numChannels;
-    int32_t totalIntersections;
+    int64_t totalIntersections;
 
     TileOffsetsAccessor tileOffsets;         // [C, TH, TW]
     TileGaussianIdsAccessor tileGaussianIds; // [n_isects]
@@ -80,20 +81,18 @@ struct RasterizeFromWorldCommonArgs {
         return (masks != nullptr) && (!masks[tileId(cameraId, tileRow, tileCol)]);
     }
 
-    inline __device__ cuda::std::tuple<int32_t, int32_t>
+    inline __device__ cuda::std::tuple<int64_t, int64_t>
     tileGaussianRange(const uint32_t cameraId,
                       const uint32_t tileRow,
                       const uint32_t tileCol) const {
-        const uint32_t numCameras            = tileOffsets.size(0);
-        const int32_t firstGaussianIdInBlock = tileOffsets[cameraId][tileRow][tileCol];
-        auto [nextTileRow, nextTileCol]      = (tileCol < numTilesW - 1)
-                                                   ? cuda::std::make_tuple(tileRow, tileCol + 1)
-                                                   : cuda::std::make_tuple(tileRow + 1, 0u);
-        const int32_t lastGaussianIdInBlock =
-            ((cameraId == numCameras - 1) && (nextTileRow == numTilesH))
-                ? totalIntersections
-                : tileOffsets[cameraId][nextTileRow][nextTileCol];
-        return {firstGaussianIdInBlock, lastGaussianIdInBlock};
+        return fvdb::detail::ops::tileGaussianRange(tileOffsets,
+                                                    totalIntersections,
+                                                    tileOffsets.size(0),
+                                                    numTilesH,
+                                                    numTilesW,
+                                                    cameraId,
+                                                    tileRow,
+                                                    tileCol);
     }
 
     inline __device__ float

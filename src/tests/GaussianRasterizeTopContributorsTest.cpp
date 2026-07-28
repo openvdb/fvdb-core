@@ -30,7 +30,7 @@ struct GaussianRasterizeTopContributorsTestFixture : public ::testing::Test {
         means2d                           = inputs[0].cuda();
         conics                            = inputs[1].cuda();
         opacities                         = inputs[2].cuda();
-        tileOffsets                       = inputs[3].cuda();
+        tileOffsets                       = inputs[3].to(torch::kInt64).cuda();
         tileGaussianIds                   = inputs[4].cuda();
         imageDims                         = inputs[5];
 

@@ -326,8 +326,8 @@ template <typename ScalarType, bool IS_PACKED> struct RasterizeContributingGauss
     volumeRenderTileForward(const uint32_t cameraId,
                             const uint32_t row,
                             const uint32_t col,
-                            const uint32_t firstGaussianIdInBlock,
-                            const uint32_t lastGaussianIdInBlock,
+                            const int64_t firstGaussianIdInBlock,
+                            const int64_t lastGaussianIdInBlock,
                             const uint32_t blockSize,
                             const bool pixelIsActive,
                             const uint32_t activePixelIndex) {
@@ -349,7 +349,7 @@ template <typename ScalarType, bool IS_PACKED> struct RasterizeContributingGauss
         // this thread to load gaussians into shared memory
         bool done = !pixelIsActive;
 
-        const uint32_t numBatches =
+        const int64_t numBatches =
             (lastGaussianIdInBlock - firstGaussianIdInBlock + blockSize - 1) / blockSize;
 
         // TODO: This condition seems to be met when batch size is >1.  Kept here for debugging.
@@ -370,7 +370,7 @@ template <typename ScalarType, bool IS_PACKED> struct RasterizeContributingGauss
         // collect and process batches of gaussians
         // each thread loads one gaussian at a time before rasterizing its
         // designated pixel
-        for (uint32_t b = 0; b < numBatches; ++b) {
+        for (int64_t b = 0; b < numBatches; ++b) {
             // Sync threads before we start integrating the next batch
             // If all threads are done, we can break early
             if (__syncthreads_count(done) == blockSize) {
@@ -379,8 +379,8 @@ template <typename ScalarType, bool IS_PACKED> struct RasterizeContributingGauss
 
             // Each thread fetches one gaussian from front to back (tile_gaussian_ids is depth
             // sorted)
-            const uint32_t batchStart = firstGaussianIdInBlock + blockSize * b;
-            const uint32_t idx        = batchStart + tidx;
+            const int64_t batchStart = firstGaussianIdInBlock + blockSize * b;
+            const int64_t idx        = batchStart + tidx;
             if (idx < lastGaussianIdInBlock) {
                 const int32_t g =
                     commonArgs.mTileGaussianIds[idx]; // which gaussian we're rendering
@@ -392,7 +392,9 @@ template <typename ScalarType, bool IS_PACKED> struct RasterizeContributingGauss
 
             // Volume render Gaussians in this batch
             if (pixelIsActive) { // skip inactive sparse pixels
-                const uint32_t batchSize = min(blockSize, lastGaussianIdInBlock - batchStart);
+                const int64_t remaining = lastGaussianIdInBlock - batchStart;
+                const uint32_t batchSize =
+                    static_cast<uint32_t>(remaining < blockSize ? remaining : blockSize);
                 for (uint32_t t = 0; (t < batchSize) && !done; ++t) {
                     const Gaussian2D<ScalarType> gaussian = sharedGaussians[t];
 
@@ -489,8 +491,8 @@ rasterizeContributingGaussianIdsForward(
         return;
     }
 
-    int32_t firstGaussianIdInBlock;
-    int32_t lastGaussianIdInBlock;
+    int64_t firstGaussianIdInBlock;
+    int64_t lastGaussianIdInBlock;
     cuda::std::tie(firstGaussianIdInBlock, lastGaussianIdInBlock) =
         commonArgs.tileGaussianRange(cameraId, tileRow, tileCol);
 

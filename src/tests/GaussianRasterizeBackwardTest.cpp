@@ -110,10 +110,10 @@ class GaussianTestHelper {
         const int32_t numGaussians = (int32_t)gaussianPositions.size();
 
         auto tileOffsets = torch::zeros({numCameras, numTilesH, numTilesW},
-                                        torch::dtype(torch::kInt32).device(torch::kCUDA));
+                                        torch::dtype(torch::kInt64).device(torch::kCUDA));
 
         std::vector<int32_t> tileGaussianIds;
-        int32_t currentOffset = 0;
+        int64_t currentOffset = 0;
 
         // Create tile intersections for each camera
         for (int cameraIdx = 0; cameraIdx < numCameras; ++cameraIdx) {
@@ -376,10 +376,10 @@ struct GaussianRasterizeTestFixture : public ::testing::Test {
         conics                  = inputs[1].cuda();
         colors                  = inputs[2].cuda();
         opacities               = inputs[3].cuda();
-        tileOffsets             = inputs[4].cuda();
+        tileOffsets             = inputs[4].to(torch::kInt64).cuda();
         tileGaussianIds         = inputs[5].cuda();
         renderedAlphas          = inputs[6].cuda();
-        lastGaussianIdsPerPixel = inputs[7].cuda();
+        lastGaussianIdsPerPixel = inputs[7].to(torch::kInt64).cuda();
         dLossDRenderedColors    = inputs[8].cuda();
         dLossDRenderedAlphas    = inputs[9].cuda();
 

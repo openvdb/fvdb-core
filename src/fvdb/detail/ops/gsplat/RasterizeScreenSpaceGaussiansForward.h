@@ -34,8 +34,8 @@ namespace ops {
 /// @param[in] imageOriginW Horizontal origin of the render window
 /// @param[in] imageOriginH Vertical origin of the render window
 /// @param[in] tileSize Size of tiles used for rasterization optimization
-/// @param[in] tileOffsets Offsets for tiles [C, tile_height, tile_width] indicating for each tile
-/// where its Gaussians start
+/// @param[in] tileOffsets int64 offsets for tiles [C, tile_height, tile_width] indicating for each
+/// tile where its intersections start
 /// @param[in] tileGaussianIds Flattened Gaussian IDs for tile intersection [n_isects] indicating
 /// which Gaussians affect each tile
 /// @param[in] numSharedChannelsOverride Override for number of shared memory channels (-1 means
@@ -48,7 +48,8 @@ namespace ops {
 /// @return std::tuple containing:
 ///         - Rendered image features/colors [C, render_height, render_width, D]
 ///         - Alpha values [C, render_height, render_width, 1]
-///         - Last Gaussian ID rendered at each pixel [C, render_height, render_width]
+///         - Last flattened intersection index rendered at each pixel as int64
+///           [C, render_height, render_width]
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
 rasterizeScreenSpaceGaussiansFwd(const torch::Tensor &means2d,
                                  const torch::Tensor &conics,
@@ -77,7 +78,7 @@ rasterizeScreenSpaceGaussiansFwd(const torch::Tensor &means2d,
 /// @param imageOriginW Horizontal origin of the render window
 /// @param imageOriginH Vertical origin of the render window
 /// @param tileSize Size of the tiles used for processing.
-/// @param tileOffsets Tensor containing offsets for each tile.
+/// @param tileOffsets int64 tensor containing offsets for each tile.
 /// @param tileGaussianIds Tensor mapping tiles to Gaussian IDs.
 /// @param activeTiles Tensor containing the indices of active tiles.
 /// @param tilePixelMask Tensor containing the mask for each tile pixel.
@@ -92,7 +93,7 @@ rasterizeScreenSpaceGaussiansFwd(const torch::Tensor &means2d,
 /// @return A tuple containing:
 ///         - Output colors JaggedTensor for the specified pixels.
 ///         - Output alphas JaggedTensor for the specified pixels.
-///         - Output last Gaussian IDs JaggedTensor for the specified pixels.
+///         - Output last flattened intersection indices as an int64 JaggedTensor.
 std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor, fvdb::JaggedTensor>
 rasterizeScreenSpaceGaussiansSparseFwd(const fvdb::JaggedTensor &pixelsToRender,
                                        const torch::Tensor &means2d,

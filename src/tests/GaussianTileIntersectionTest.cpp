@@ -69,19 +69,20 @@ class GaussianTileIntersectionTest : public ::testing::Test {
                        const torch::Tensor &intersection_values,
                        const torch::Tensor &depths,
                        const torch::Tensor &tile_mask = torch::Tensor()) {
+        EXPECT_EQ(tile_offsets.scalar_type(), torch::kInt64);
         // Handle dense case - iterate through 3D tensor
         if (tile_offsets.dim() == 3) {
             for (uint32_t c = 0; c < num_cameras; c++) {
                 for (uint32_t h = 0; h < num_tiles_h; h++) {
                     for (uint32_t w = 0; w < num_tiles_w; w++) {
-                        int start = tile_offsets[c][h][w].item<int32_t>();
-                        int end;
+                        int64_t start = tile_offsets[c][h][w].item<int64_t>();
+                        int64_t end;
                         if (w < num_tiles_w - 1) {
-                            end = tile_offsets[c][h][w + 1].item<int32_t>();
+                            end = tile_offsets[c][h][w + 1].item<int64_t>();
                         } else if (h < num_tiles_h - 1) {
-                            end = tile_offsets[c][h + 1][0].item<int32_t>();
+                            end = tile_offsets[c][h + 1][0].item<int64_t>();
                         } else {
-                            end = (c < num_cameras - 1) ? tile_offsets[c + 1][0][0].item<int32_t>()
+                            end = (c < num_cameras - 1) ? tile_offsets[c + 1][0][0].item<int64_t>()
                                                         : intersection_values.size(0);
                         }
                         verifyTileDepthOrder(start, end, intersection_values, depths);
@@ -91,10 +92,11 @@ class GaussianTileIntersectionTest : public ::testing::Test {
         }
         // Handle sparse case - iterate through 1D tensor
         else {
-            for (int i = 0; i < tile_offsets.size(0); i++) {
-                int start = tile_offsets[i].item<int32_t>();
-                int end   = (i < tile_offsets.size(0) - 1) ? tile_offsets[i + 1].item<int32_t>()
-                                                           : intersection_values.size(0);
+            for (int64_t i = 0; i < tile_offsets.size(0); i++) {
+                int64_t start = tile_offsets[i].item<int64_t>();
+                int64_t end   = (i < tile_offsets.size(0) - 1)
+                                    ? tile_offsets[i + 1].item<int64_t>()
+                                    : intersection_values.size(0);
                 verifyTileDepthOrder(start, end, intersection_values, depths);
             }
         }
@@ -102,11 +104,11 @@ class GaussianTileIntersectionTest : public ::testing::Test {
 
     // Helper to verify depth order within a single tile's range
     void
-    verifyTileDepthOrder(int start,
-                         int end,
+    verifyTileDepthOrder(int64_t start,
+                         int64_t end,
                          const torch::Tensor &intersection_values,
                          const torch::Tensor &depths) {
-        for (int i = start + 1; i < end; i++) {
+        for (int64_t i = start + 1; i < end; i++) {
             int global_idx1 = intersection_values[i - 1].item<int32_t>();
             int global_idx2 = intersection_values[i].item<int32_t>();
 
@@ -133,6 +135,7 @@ class GaussianTileIntersectionTest : public ::testing::Test {
                             const torch::Tensor &radii,
                             const torch::Tensor &depths,
                             const torch::Tensor &active_tiles) {
+        EXPECT_EQ(tile_offsets.scalar_type(), torch::kInt64);
         // Generate expected output by computing intersections for each active tile
         std::vector<std::vector<int32_t>> expected_intersections;
         int32_t total_expected = 0;
@@ -188,16 +191,16 @@ class GaussianTileIntersectionTest : public ::testing::Test {
 
         EXPECT_EQ(intersection_values.size(0), total_expected);
 
-        int32_t curr_offset = 0;
-        for (int32_t i = 0; i < num_active_tiles; i++) {
-            int32_t next_offset = tile_offsets[i + 1].item<int32_t>();
+        int64_t curr_offset = 0;
+        for (int64_t i = 0; i < num_active_tiles; i++) {
+            int64_t next_offset = tile_offsets[i + 1].item<int64_t>();
             EXPECT_GE(next_offset, curr_offset) << "Tile offsets must be monotonically increasing";
-            int32_t num_intersections = next_offset - curr_offset;
+            int64_t num_intersections = next_offset - curr_offset;
 
             EXPECT_EQ(static_cast<std::size_t>(num_intersections), expected_intersections[i].size())
                 << "Number of intersections mismatch for tile " << i;
 
-            for (int32_t j = 0; j < num_intersections; j++) {
+            for (int64_t j = 0; j < num_intersections; j++) {
                 EXPECT_EQ(intersection_values[curr_offset + j].item<int32_t>(),
                           expected_intersections[i][j])
                     << "Intersection mismatch at tile " << i << " index " << j;
@@ -252,6 +255,7 @@ TEST_F(GaussianTileIntersectionTest, ZeroLengthGaussianTest) {
 
     // For zero Gaussians, we should still get a valid tile_offsets tensor filled with zeros
     EXPECT_EQ(tile_offsets.sizes(), std::vector<int64_t>({numCameras, num_tiles_h, num_tiles_w}));
+    EXPECT_EQ(tile_offsets.scalar_type(), torch::kInt64);
     EXPECT_TRUE(tile_offsets.equal(torch::zeros_like(tile_offsets)));
     EXPECT_EQ(intersection_values.numel(), 0);
 }
@@ -349,7 +353,8 @@ TEST_F(GaussianTileIntersectionTest, ZeroRadiusGaussianTest) {
                                                   num_tiles_w);
 
     // Verify that there are no intersections
-    EXPECT_EQ(tile_offsets.sum().item<int32_t>(), 0);
+    EXPECT_EQ(tile_offsets.scalar_type(), torch::kInt64);
+    EXPECT_EQ(tile_offsets.sum().item<int64_t>(), 0);
 }
 
 TEST_F(GaussianTileIntersectionTest, BasicIntersectionTest) {
@@ -371,6 +376,7 @@ TEST_F(GaussianTileIntersectionTest, BasicIntersectionTest) {
 
     // Verify dimensions
     EXPECT_EQ(tile_offsets.sizes(), std::vector<int64_t>({num_cameras, num_tiles_h, num_tiles_w}));
+    EXPECT_EQ(tile_offsets.scalar_type(), torch::kInt64);
 
     // Verify depth sorting
     verifyDepthSorting(tile_offsets, intersection_values, depths);
@@ -443,15 +449,16 @@ TEST_F(GaussianTileIntersectionTest, DenseViaSparseTest) {
 
     // Verify dimensions
     EXPECT_EQ(tile_offsets.sizes(), std::vector<int64_t>({num_active_tiles + 1}));
+    EXPECT_EQ(tile_offsets.scalar_type(), torch::kInt64);
 
     // Verify that offsets are monotonically increasing
     for (int64_t i = 1; i < tile_offsets.size(0); i++) {
-        EXPECT_GE(tile_offsets[i].item<int32_t>(), tile_offsets[i - 1].item<int32_t>())
+        EXPECT_GE(tile_offsets[i].item<int64_t>(), tile_offsets[i - 1].item<int64_t>())
             << "Tile offsets must be monotonically increasing";
     }
 
     // Verify that the last offset equals the size of intersection_values
-    EXPECT_EQ(tile_offsets[tile_offsets.size(0) - 1].item<int32_t>(), intersection_values.size(0))
+    EXPECT_EQ(tile_offsets[tile_offsets.size(0) - 1].item<int64_t>(), intersection_values.size(0))
         << "Last offset should equal number of intersections";
 
     // Verify depth sorting
@@ -487,17 +494,18 @@ TEST_F(GaussianTileIntersectionTest, SparseIntersectionTest) {
     tile_mask           = tile_mask.cpu();
 
     EXPECT_EQ(tile_offsets.sizes(), std::vector<int64_t>({num_active_tiles + 1}));
+    EXPECT_EQ(tile_offsets.scalar_type(), torch::kInt64);
 
     // tile_offsets should be: [0 2 3 4 5 5 5 5 7] (note 9 elements)
 
     // Verify that offsets are monotonically increasing
     for (int64_t i = 1; i < tile_offsets.size(0); i++) {
-        EXPECT_GE(tile_offsets[i].item<int32_t>(), tile_offsets[i - 1].item<int32_t>())
+        EXPECT_GE(tile_offsets[i].item<int64_t>(), tile_offsets[i - 1].item<int64_t>())
             << "Tile offsets must be monotonically increasing";
     }
 
     // Verify that the last offset equals the size of intersection_values minus 1
-    EXPECT_EQ(tile_offsets[-1].item<int32_t>(), intersection_values.size(0));
+    EXPECT_EQ(tile_offsets[-1].item<int64_t>(), intersection_values.size(0));
 
     verifyDepthSorting(tile_offsets, intersection_values, depths, tile_mask);
 }
@@ -550,6 +558,7 @@ TEST_F(GaussianTileIntersectionTest, SparseZeroLengthGaussianTest) {
 
     // For zero Gaussians, we should still get a valid tile_offsets tensor
     EXPECT_EQ(tile_offsets.sizes(), std::vector<int64_t>({num_active_tiles + 1}));
+    EXPECT_EQ(tile_offsets.scalar_type(), torch::kInt64);
     EXPECT_TRUE(tile_offsets.equal(torch::zeros_like(tile_offsets)));
     EXPECT_EQ(intersection_values.numel(), 0);
 }

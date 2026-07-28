@@ -175,7 +175,7 @@ def main(output_path: str, h=512, w=1024):
         state.means2d,
         state.inv_covar_2d,
         state.opacities,
-        state.tile_offsets,
+        state.tile_offsets.to(torch.int64),
         state.tile_gaussian_ids,
         image_dims,
     ]

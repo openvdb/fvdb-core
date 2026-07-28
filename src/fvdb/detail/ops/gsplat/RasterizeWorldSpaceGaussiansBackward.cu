@@ -36,7 +36,7 @@ template <uint32_t NUM_CHANNELS, typename Camera> struct RasterizeFromWorldBackw
     Camera camera;
     // Forward outputs
     fvdb::TorchRAcc64<float, 4> renderedAlphas; // [C,H,W,1]
-    fvdb::TorchRAcc64<int32_t, 3> lastIds;      // [C,H,W]
+    fvdb::TorchRAcc64<int64_t, 3> lastIds;      // [C,H,W]
     // Grad outputs
     fvdb::TorchRAcc64<float, 4> dLossDRenderedFeatures; // [C,H,W,D]
     fvdb::TorchRAcc64<float, 4> dLossDRenderedAlphas;   // [C,H,W,1]
@@ -94,7 +94,7 @@ rasterizeFromWorld3DGSBackwardKernel(
     }
 
     // Forward state for this pixel.
-    int32_t binFinal = -1;
+    int64_t binFinal = -1;
     float T_final    = 1.0f;
     float T          = 1.0f;
 
@@ -136,17 +136,19 @@ rasterizeFromWorld3DGSBackwardKernel(
     const uint32_t threadRank      = block.thread_rank();
     cg::thread_block_tile<32> warp = cg::tiled_partition<32>(block);
 
-    const int32_t nIsects   = rangeEnd - rangeStart;
-    const uint32_t nBatches = (nIsects + (int32_t)blockSize - 1) / (int32_t)blockSize;
+    const int64_t nIsects  = rangeEnd - rangeStart;
+    const int64_t nBatches = (nIsects + blockSize - 1) / blockSize;
 
     // Reduce max binFinal within warp (used to early-skip).
-    const int32_t warpBinFinal = cg::reduce(warp, binFinal, cg::greater<int32_t>());
+    const int64_t warpBinFinal = cg::reduce(warp, binFinal, cg::greater<int64_t>());
 
-    for (uint32_t b = 0; b < nBatches; ++b) {
+    for (int64_t b = 0; b < nBatches; ++b) {
         block.sync();
-        const int32_t batchEnd  = rangeEnd - 1 - (int32_t)(blockSize * b);
-        const int32_t batchSize = min((int32_t)blockSize, batchEnd + 1 - rangeStart);
-        const int32_t idx       = batchEnd - (int32_t)threadRank;
+        const int64_t batchEnd  = rangeEnd - 1 - blockSize * b;
+        const int64_t remaining = batchEnd + 1 - rangeStart;
+        const uint32_t batchSize =
+            static_cast<uint32_t>(remaining < blockSize ? remaining : blockSize);
+        const int64_t idx = batchEnd - threadRank;
 
         if (idx >= rangeStart) {
             const int32_t flatId = common.tileGaussianIds[idx];
@@ -177,8 +179,10 @@ rasterizeFromWorld3DGSBackwardKernel(
         block.sync();
 
         // Process gaussians in this batch, from back-to-front.
-        const int32_t startT = max(0, batchEnd - warpBinFinal);
-        for (int32_t t = startT; t < batchSize; ++t) {
+        const int64_t startT64 = batchEnd > warpBinFinal ? batchEnd - warpBinFinal : 0;
+        const uint32_t startT =
+            startT64 < batchSize ? static_cast<uint32_t>(startT64) : batchSize;
+        for (uint32_t t = startT; t < batchSize; ++t) {
             bool valid = done;
             if (batchEnd - t > binFinal) {
                 valid = false;
@@ -406,7 +410,7 @@ launchBackward(const torch::Tensor &means,
     const uint32_t tileExtentH = (imageHeight + tileSize - 1) / tileSize;
     const dim3 blockDim(tileSize, tileSize, 1);
     const dim3 gridDim(C * tileExtentH * tileExtentW, 1, 1);
-    const int32_t totalIntersections = static_cast<int32_t>(tileGaussianIds.size(0));
+    const int64_t totalIntersections = tileGaussianIds.size(0);
 
     RasterizeFromWorldCommonArgs args{
         imageWidth,
@@ -418,7 +422,7 @@ launchBackward(const torch::Tensor &means,
         tileExtentH,
         NUM_CHANNELS,
         totalIntersections,
-        tileOffsets.packed_accessor64<int32_t, 3, torch::RestrictPtrTraits>(),
+        tileOffsets.packed_accessor64<int64_t, 3, torch::RestrictPtrTraits>(),
         tileGaussianIds.packed_accessor64<int32_t, 1, torch::RestrictPtrTraits>(),
         nullptr,
         nullptr,
@@ -443,7 +447,7 @@ launchBackward(const torch::Tensor &means,
         args,
         camera,
         renderedAlphas.packed_accessor64<float, 4, torch::RestrictPtrTraits>(),
-        lastIds.packed_accessor64<int32_t, 3, torch::RestrictPtrTraits>(),
+        lastIds.packed_accessor64<int64_t, 3, torch::RestrictPtrTraits>(),
         dLossDRenderedFeatures.packed_accessor64<float, 4, torch::RestrictPtrTraits>(),
         dLossDRenderedAlphas.packed_accessor64<float, 4, torch::RestrictPtrTraits>(),
         dMeans.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
@@ -524,6 +528,10 @@ dispatchGaussianRasterizeFromWorld3DGSBackward<torch::kCUDA>(
     TORCH_CHECK_VALUE(opacities.is_cuda(), "opacities must be CUDA");
     TORCH_CHECK_VALUE(renderedAlphas.is_cuda(), "renderedAlphas must be CUDA");
     TORCH_CHECK_VALUE(lastIds.is_cuda(), "lastIds must be CUDA");
+    TORCH_CHECK_VALUE(tileOffsets.scalar_type() == torch::kInt64,
+                      "tileOffsets must have dtype int64");
+    TORCH_CHECK_VALUE(lastIds.scalar_type() == torch::kInt64,
+                      "lastIds must have dtype int64");
 
     const int64_t C = features.size(0);
     const int64_t N = means.size(0);

@@ -1,10 +1,16 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/cuda/BinSearch.cuh>
 #include <fvdb/detail/utils/cuda/math/AffineTransform.cuh>
 #include <fvdb/detail/utils/cuda/math/Rotation.cuh>
 #include <fvdb/detail/utils/gsplat/GaussianMath.cuh>
+#include <fvdb/detail/utils/gsplat/GaussianTileRange.cuh>
+
+#include <ATen/cuda/CUDAContext.h>
+#include <c10/cuda/CUDAException.h>
+#include <torch/torch.h>
 
 #include <gtest/gtest.h>
 
@@ -14,6 +20,7 @@
 #if !defined(__CUDA_ARCH__)
 #include <cmath>
 #endif
+#include <limits>
 
 namespace fvdb::detail::ops {
 namespace {
@@ -21,6 +28,20 @@ namespace {
 using Mat3f = nanovdb::math::Mat3<float>;
 using Vec4f = nanovdb::math::Vec4<float>;
 using Vec3f = nanovdb::math::Vec3<float>;
+
+__global__ void
+readTileGaussianRange(const fvdb::TorchRAcc64<int64_t, 3> tileOffsets,
+                      const int64_t totalIntersections,
+                      int64_t *range) {
+    const auto [first, last] =
+        tileGaussianRange(tileOffsets, totalIntersections, 1, 1, 2, 0, 0, 0);
+    range[0] = first;
+    range[1] = last;
+    const auto [finalFirst, finalLast] =
+        tileGaussianRange(tileOffsets, totalIntersections, 1, 1, 2, 0, 0, 1);
+    range[2] = finalFirst;
+    range[3] = finalLast;
+}
 
 // Minimal math helpers: CUDA intrinsics on device, `std::` on host.
 __host__ __device__ inline float
@@ -303,6 +324,27 @@ TEST(GaussianUtilsTest, PoseRt_WorldToCamAndBack_RoundTrip) {
     const Vec3f p_world_from_cam = R.transpose() * (p_cam_in - t);
     const Vec3f p_cam_rt         = R * p_world_from_cam + t;
     expectVecNear(p_cam_rt, p_cam_in, 2e-5f);
+}
+
+TEST(GaussianUtilsTest, TileGaussianRangePreservesOffsetsAboveInt32) {
+    constexpr int64_t first = static_cast<int64_t>(std::numeric_limits<int32_t>::max()) + 17;
+    constexpr int64_t last  = first + 29;
+    constexpr int64_t total = last + 31;
+    const auto options = torch::TensorOptions().dtype(torch::kInt64).device(torch::kCUDA);
+    const auto tileOffsets = torch::tensor({first, last}, options).view({1, 1, 2});
+    auto range             = torch::empty({4}, options);
+
+    readTileGaussianRange<<<1, 1, 0, at::cuda::getDefaultCUDAStream().stream()>>>(
+        tileOffsets.packed_accessor64<int64_t, 3, torch::RestrictPtrTraits>(),
+        total,
+        range.data_ptr<int64_t>());
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
+
+    const auto rangeCpu = range.cpu();
+    EXPECT_EQ(rangeCpu[0].item<int64_t>(), first);
+    EXPECT_EQ(rangeCpu[1].item<int64_t>(), last);
+    EXPECT_EQ(rangeCpu[2].item<int64_t>(), last);
+    EXPECT_EQ(rangeCpu[3].item<int64_t>(), total);
 }
 
 } // namespace fvdb::detail::ops

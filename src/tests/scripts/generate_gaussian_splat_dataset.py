@@ -184,7 +184,7 @@ def generate_gaussian_splat_dataset(
 
     # Generate intersection data
     # Initialize tile offsets
-    tile_offsets = torch.zeros(batch_size, tile_height, tile_width, dtype=torch.int32, device=device)
+    tile_offsets = torch.zeros(batch_size, tile_height, tile_width, dtype=torch.int64, device=device)
 
     # List to collect gaussian IDs that intersect with each tile
     all_gaussian_ids = []

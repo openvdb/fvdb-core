@@ -39,7 +39,7 @@ struct RasterizeForwardArgs {
 
     JaggedRAcc64<ScalarType, 2> mOutFeatures; // [[nPixels, NUM_CHANNELS]_0..._C]
     JaggedRAcc64<ScalarType, 2> mOutAlphas;   // [[nPixels, 1]_0..._C]
-    JaggedRAcc64<int32_t, 1> mOutLastIds;     // [[nPixels]_0..._C]
+    JaggedRAcc64<int64_t, 1> mOutLastIds;     // [[nPixels]_0..._C]
 
     RasterizeForwardArgs(
         const torch::Tensor &means2d,         // [C, N, 2] or [nnz, 2]
@@ -81,7 +81,7 @@ struct RasterizeForwardArgs {
                      pixelMap),
           mOutFeatures(initJaggedAccessor<ScalarType, 2>(outFeatures, "outFeatures")),
           mOutAlphas(initJaggedAccessor<ScalarType, 2>(outAlphas, "outAlphas")),
-          mOutLastIds(initJaggedAccessor<int32_t, 1>(outLastIds, "outLastIds")) {}
+          mOutLastIds(initJaggedAccessor<int64_t, 1>(outLastIds, "outLastIds")) {}
 
     /// @brief Write the alpha value for a pixel
     /// @param pixelIndex The index of the pixel
@@ -95,7 +95,7 @@ struct RasterizeForwardArgs {
     /// @param pixelIndex The index of the pixel
     /// @param lastId The last ID to write
     __device__ void
-    writeLastId(uint64_t pixelIndex, int32_t lastId) {
+    writeLastId(uint64_t pixelIndex, int64_t lastId) {
         mOutLastIds.data()[pixelIndex] = lastId;
     }
 
@@ -155,8 +155,8 @@ struct RasterizeForwardArgs {
     volumeRenderTileForward(const uint32_t cameraId,
                             const uint32_t row,
                             const uint32_t col,
-                            const uint32_t firstGaussianIdInBlock,
-                            const uint32_t lastGaussianIdInBlock,
+                            const int64_t firstGaussianIdInBlock,
+                            const int64_t lastGaussianIdInBlock,
                             const uint32_t blockSize,
                             const bool pixelIsActive,
                             const uint32_t activePixelIndex) {
@@ -168,7 +168,7 @@ struct RasterizeForwardArgs {
 
         // Process Gaussians in batches of block size (i.e. one Gaussian per thread in the block)
         const uint32_t tidx = threadIdx.y * blockDim.x + threadIdx.x;
-        const uint32_t numBatches =
+        const int64_t numBatches =
             (lastGaussianIdInBlock - firstGaussianIdInBlock + blockSize - 1) / blockSize;
 
         // (row, col) coordinates are relative to the specified image origin which may
@@ -185,7 +185,7 @@ struct RasterizeForwardArgs {
         // so the per-chunk accumTransmittance and curIdx are identical across chunks. Capture them
         // from the first chunk and write them out at the end.
         ScalarType accumTransmittanceFinal = 1.0f;
-        int32_t curIdxFinal                = -1;
+        int64_t curIdxFinal                = -1;
 
         constexpr size_t NUM_CHUNKS =
             (NUM_CHANNELS + NUM_SHARED_CHANNELS - 1) / NUM_SHARED_CHANNELS;
@@ -201,12 +201,12 @@ struct RasterizeForwardArgs {
             // and sort of just ignore small impact gaussians ¯\_(ツ)_/¯.
             ScalarType accumTransmittance = 1.0f;
             // index of most recent gaussian to write to this thread's pixel
-            int32_t curIdx = -1;
+            int64_t curIdx = -1;
             // We don't return right away if the pixel is not in the image since we want
             // to use this thread to load gaussians into shared memory
             bool done = !pixelIsActive;
 
-            for (uint32_t b = 0; b < numBatches; ++b) {
+            for (int64_t b = 0; b < numBatches; ++b) {
                 // Sync threads before we start integrating the next batch (and between chunks).
                 // If all threads are done, we can break early.
                 __syncthreads();
@@ -216,8 +216,8 @@ struct RasterizeForwardArgs {
 
                 // Each thread fetches one gaussian from front to back (mTileGaussianIds is depth
                 // sorted)
-                const uint32_t batchStart = firstGaussianIdInBlock + blockSize * b;
-                const uint32_t idx        = batchStart + tidx;
+                const int64_t batchStart = firstGaussianIdInBlock + blockSize * b;
+                const int64_t idx        = batchStart + tidx;
                 if (idx < lastGaussianIdInBlock) {
                     const int32_t g =
                         commonArgs.mTileGaussianIds[idx]; // which gaussian we're rendering
@@ -240,7 +240,9 @@ struct RasterizeForwardArgs {
                 // already done (saturated or outside image bounds). Block-level
                 // __syncthreads_and above only fires once all 8 warps finish.
                 if (!__all_sync(0xffffffffu, done)) {
-                    const uint32_t batchSize = min(blockSize, lastGaussianIdInBlock - batchStart);
+                    const int64_t remaining = lastGaussianIdInBlock - batchStart;
+                    const uint32_t batchSize =
+                        static_cast<uint32_t>(remaining < blockSize ? remaining : blockSize);
                     for (uint32_t t = 0; (t < batchSize) && !done; ++t) {
                         const Gaussian2D<ScalarType> gaussian = sharedGaussians[t];
 
@@ -342,8 +344,8 @@ rasterizeGaussiansForward(
         return;
     }
 
-    int32_t firstGaussianIdInBlock;
-    int32_t lastGaussianIdInBlock;
+    int64_t firstGaussianIdInBlock;
+    int64_t lastGaussianIdInBlock;
     cuda::std::tie(firstGaussianIdInBlock, lastGaussianIdInBlock) =
         commonArgs.tileGaussianRange(cameraId, tileRow, tileCol);
 
@@ -424,7 +426,7 @@ launchRasterizeForwardKernelWithTemplatedSharedChannels(
     for (const auto &size: sizes) {
         featuresToRenderVec.push_back(torch::empty({size, channels}, features.options()));
         alphasToRenderVec.push_back(torch::empty({size, 1}, features.options()));
-        lastIdsToRenderVec.push_back(torch::empty({size}, features.options().dtype(torch::kInt32)));
+        lastIdsToRenderVec.push_back(torch::empty({size}, features.options().dtype(torch::kInt64)));
     }
 
     auto outFeatures = fvdb::JaggedTensor(featuresToRenderVec);
@@ -677,7 +679,7 @@ launchRasterizeForwardKernels(
     for (const auto &size: sizes) {
         featuresToRenderVec.push_back(torch::empty({size, channels}, features.options()));
         alphasToRenderVec.push_back(torch::empty({size, 1}, features.options()));
-        lastIdsToRenderVec.push_back(torch::empty({size}, features.options().dtype(torch::kInt32)));
+        lastIdsToRenderVec.push_back(torch::empty({size}, features.options().dtype(torch::kInt64)));
     }
 
     auto outFeatures = fvdb::JaggedTensor(featuresToRenderVec);
@@ -1196,6 +1198,8 @@ rasterizeScreenSpaceGaussiansFwd(const torch::Tensor &means2d,
                                  const int64_t numSharedChannelsOverride,
                                  const at::optional<torch::Tensor> &backgrounds,
                                  const at::optional<torch::Tensor> &masks) {
+    TORCH_CHECK_VALUE(tileOffsets.scalar_type() == torch::kInt64,
+                      "tileOffsets must have dtype int64");
     const RenderWindow2D renderWindow{imageWidth, imageHeight, imageOriginW, imageOriginH};
     return FVDB_DISPATCH_KERNEL(means2d.device(), [&]() {
         return dispatchRasterizeScreenSpaceGaussiansFwd<DeviceTag>(means2d,
@@ -1232,6 +1236,8 @@ rasterizeScreenSpaceGaussiansSparseFwd(const fvdb::JaggedTensor &pixelsToRender,
                                        const int64_t numSharedChannelsOverride,
                                        const at::optional<torch::Tensor> &backgrounds,
                                        const at::optional<torch::Tensor> &masks) {
+    TORCH_CHECK_VALUE(tileOffsets.scalar_type() == torch::kInt64,
+                      "tileOffsets must have dtype int64");
     const RenderWindow2D renderWindow{imageWidth, imageHeight, imageOriginW, imageOriginH};
     return FVDB_DISPATCH_KERNEL(means2d.device(), [&]() {
         return dispatchRasterizeScreenSpaceGaussiansSparseFwd<DeviceTag>(pixelsToRender,

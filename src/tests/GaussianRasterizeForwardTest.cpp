@@ -47,7 +47,7 @@ struct GaussianRasterizeForwardTestFixture : public ::testing::Test {
         conics                            = inputs[1].cuda();
         colors                            = inputs[2].cuda();
         opacities                         = inputs[3].cuda();
-        tileOffsets                       = inputs[4].cuda();
+        tileOffsets                       = inputs[4].to(torch::kInt64).cuda();
         tileGaussianIds                   = inputs[5].cuda();
         imageDims                         = inputs[6].cuda();
 
@@ -89,7 +89,7 @@ struct GaussianRasterizeForwardTestFixture : public ::testing::Test {
 
         expectedRenderedColors = expectedOutputs[0].cuda();
         expectedRenderedAlphas = expectedOutputs[1].cuda();
-        expectedLastIds        = expectedOutputs[2].cuda();
+        expectedLastIds        = expectedOutputs[2].to(torch::kInt64).cuda();
     }
 
     fvdb::JaggedTensor
@@ -496,6 +496,7 @@ TEST_F(GaussianRasterizeForwardTestFixture, TestBasicInputsAndOutputs) {
 
     EXPECT_TRUE(torch::allclose(outColors, expectedRenderedColors));
     EXPECT_TRUE(torch::allclose(outAlphas, expectedRenderedAlphas));
+    EXPECT_EQ(outLastIds.scalar_type(), torch::kInt64);
     EXPECT_TRUE(torch::equal(outLastIds, expectedLastIds));
 }
 
@@ -1129,4 +1130,22 @@ TEST_F(GaussianRasterizeForwardTestFixture, CPUThrows) {
                                                             tileOffsets,
                                                             tileGaussianIds),
         c10::NotImplementedError);
+}
+
+TEST_F(GaussianRasterizeForwardTestFixture, RejectsInt32TileOffsets) {
+    loadTestData("rasterize_forward_inputs.pt", "rasterize_forward_outputs.pt");
+    tileOffsets = tileOffsets.to(torch::kInt32);
+    EXPECT_THROW(
+        fvdb::detail::ops::rasterizeScreenSpaceGaussiansFwd(means2d,
+                                                            conics,
+                                                            colors,
+                                                            opacities,
+                                                            static_cast<uint32_t>(imageWidth),
+                                                            static_cast<uint32_t>(imageHeight),
+                                                            static_cast<uint32_t>(imageOriginW),
+                                                            static_cast<uint32_t>(imageOriginH),
+                                                            tileSize,
+                                                            tileOffsets,
+                                                            tileGaussianIds),
+        c10::ValueError);
 }

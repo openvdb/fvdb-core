@@ -32,11 +32,11 @@ namespace ops {
 /// @param[in] imageOriginW Horizontal origin of the render window
 /// @param[in] imageOriginH Vertical origin of the render window
 /// @param[in] tileSize Size of tiles used for rasterization optimization
-/// @param[in] tileOffsets Offsets for tiles [C, tile_height, tile_width]
+/// @param[in] tileOffsets int64 offsets for tiles [C, tile_height, tile_width]
 /// @param[in] tileGaussianIds Flattened Gaussian IDs for tile intersection [n_isects]
 /// @param[in] renderedAlphas Alpha values from forward pass [C, render_height, render_width, 1]
-/// @param[in] lastIds Last Gaussian IDs per pixel from forward pass [C, render_height,
-/// render_width]
+/// @param[in] lastIds Last flattened intersection indices per pixel from forward pass as int64
+/// [C, render_height, render_width]
 /// @param[out] dLossDRenderedFeatures Gradients of loss with respect to rendered features [C,
 /// render_height, render_width, D]
 /// @param[out] dLossDRenderedAlphas Gradients of loss with respect to rendered alphas [C,
@@ -95,10 +95,11 @@ rasterizeScreenSpaceGaussiansBwd(const torch::Tensor &means2d,
 /// @param[in] imageOriginW Horizontal origin of the render window
 /// @param[in] imageOriginH Vertical origin of the render window
 /// @param[in] tileSize Size of tiles used for rasterization optimization
-/// @param[in] tileOffsets Offsets for tiles [C, tile_height, tile_width]
+/// @param[in] tileOffsets int64 offsets for tiles [C, tile_height, tile_width]
 /// @param[in] tileGaussianIds Flattened Gaussian IDs for tile intersection [n_isects]
 /// @param[in] renderedAlphas Alpha values from sparse forward pass [JaggedTensor]
-/// @param[in] lastIds Last Gaussian IDs per pixel from sparse forward pass [JaggedTensor]
+/// @param[in] lastIds Last flattened intersection indices per pixel from sparse forward pass as an
+/// int64 JaggedTensor
 /// @param[in] dLossDRenderedFeatures Gradients of loss w.r.t sparse rendered features
 /// [JaggedTensor]
 /// @param[in] dLossDRenderedAlphas Gradients of loss w.r.t sparse rendered alphas [JaggedTensor]
