@@ -445,6 +445,14 @@ jobs:
           pip install ./dist/*.whl
 
       - name: Run tests
+        env:
+          # The whole parametrized matrix shares one process, so the caching allocator's
+          # reserved pool only ever grows and its high-water mark ends up far above any
+          # single test's live footprint. Freeing straight back to the driver keeps the
+          # suite within the runner's VRAM, at the cost of a cudaMalloc/cudaFree per
+          # allocation. See
+          # https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-alloc-conf
+          PYTORCH_NO_CUDA_MEMORY_CACHING: 1
         run: |
           source .venv/bin/activate
           NANOVDB_EDITOR_SPEC=$(python .github/scripts/get_viewer_dependency.py)

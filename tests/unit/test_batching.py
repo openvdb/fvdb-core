@@ -16,7 +16,7 @@ all_device_dtype_combos = [
     ["cuda", torch.float32],
 ]
 
-NVOX = 1_000_000
+NVOX = 100_000
 
 
 class TestBatching(unittest.TestCase):

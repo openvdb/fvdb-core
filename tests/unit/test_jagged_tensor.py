@@ -457,7 +457,7 @@ class TestJaggedTensor(unittest.TestCase):
             device,
             dtype,
             last_dims=(3,),
-            base_num=1_000_000 if device == "cuda" else 1000,
+            base_num=100_000 if device == "cuda" else 1000,
             vary_num=100,
             empty_prob=0.0,
         )
@@ -468,7 +468,7 @@ class TestJaggedTensor(unittest.TestCase):
             device,
             dtype,
             last_dims=(3,),
-            base_num=1_000_000 if device == "cuda" else 1000,
+            base_num=100_000 if device == "cuda" else 1000,
             vary_num=100,
             empty_prob=0.0,
         )
