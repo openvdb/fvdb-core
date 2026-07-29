@@ -1172,13 +1172,15 @@ callRasterizeBackwardPrivateUse1(
     const std::optional<torch::Tensor> &pixelMap        = std::nullopt) {
     TORCH_CHECK(tileSize > 0, "Tile size must be greater than 0");
 
-    torch::Tensor outDLossDMeans2d   = torch::empty_like(means2d);
-    torch::Tensor outDLossDConics    = torch::empty_like(conics);
-    torch::Tensor outDLossDFeatures  = torch::empty_like(features);
-    torch::Tensor outDLossDOpacities = torch::empty_like(opacities);
+    // These are shared accumulation buffers on PrivateUse1. Initialize them before partitioning
+    // tile work so each buffer is cleared exactly once before any device starts accumulating.
+    torch::Tensor outDLossDMeans2d   = torch::zeros_like(means2d);
+    torch::Tensor outDLossDConics    = torch::zeros_like(conics);
+    torch::Tensor outDLossDFeatures  = torch::zeros_like(features);
+    torch::Tensor outDLossDOpacities = torch::zeros_like(opacities);
     torch::Tensor outDLossDMeans2dAbs;
     if (absGrad) {
-        outDLossDMeans2dAbs = torch::empty_like(means2d);
+        outDLossDMeans2dAbs = torch::zeros_like(means2d);
     }
 
     // Just return empty tensors if there are no gaussians, cameras, or intersections
@@ -1248,24 +1250,7 @@ callRasterizeBackwardPrivateUse1(
                                               tileSize};
             appendPerTilePrefetchRanges(prefetchPointers, prefetchSizes, tileTensors, tileRange);
 
-            const uint32_t cameraOffset = deviceTileOffset / tilesPerCamera;
-            const uint32_t cameraCount =
-                cuda::ceil_div(deviceTileOffset + deviceTileCount, tilesPerCamera) - cameraOffset;
-            std::vector<torch::Tensor> tensors = {
-                outDLossDMeans2d, outDLossDConics, outDLossDFeatures, outDLossDOpacities};
-            if (absGrad) {
-                tensors.emplace_back(outDLossDMeans2dAbs);
-            }
-            appendPerCameraPrefetchRanges(
-                prefetchPointers, prefetchSizes, tensors, cameraOffset, cameraCount);
             memPrefetchBatchAsync(prefetchPointers, prefetchSizes, deviceId, stream);
-
-            // Zero the outputs of the operator that need to be accumulated.
-            tensors = {outDLossDMeans2d, outDLossDConics, outDLossDFeatures, outDLossDOpacities};
-            if (absGrad) {
-                tensors.emplace_back(outDLossDMeans2dAbs);
-            }
-            perCameraMemsetAsync(tensors, cameraOffset, cameraCount, 0, stream);
         }
         C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
     }

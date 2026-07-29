@@ -15,6 +15,7 @@
 
 #include <iostream>
 #include <memory>
+#include <string>
 
 // A bunch of things defined to make intellisense work with nvcc
 #if defined(NDEVELOP_IDE_ONLY)
@@ -258,7 +259,7 @@ TorchScalarTypeToStr(torch::ScalarType stype) {
         // ComplexDouble, Bool, QInt8, QUInt8, QInt32, BFloat16, QUInt4x2, QUInt2x4
     }
 #else
-    return c10::getDtypeNames(stype).first;
+    return std::string(c10::getDtypeNames(stype).first);
 #endif
 }
 

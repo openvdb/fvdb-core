@@ -18,10 +18,21 @@ namespace {
 
 constexpr int INVALID_SIGN = 10;
 
+// Classify a voxel's SDF value as inside (-1), outside (+1), or "no reference" (INVALID_SIGN).
+//
+// Both NaN and *exactly* zero map to INVALID_SIGN, i.e. they are treated as gaps that neither seed
+// the sign reference nor trigger a crossing. NaN is an explicit gap marker. Exact zero is the
+// background/no-data fill of a sparse narrow band: ops like `reinitialize_sdf` leave every active
+// voxel outside the reinitialised band at 0, so a ray that starts far from the surface walks a long
+// prefix of active-but-uncomputed 0 voxels before reaching real signed data. Mapping 0 to a real
+// sign (the mathematical `sgn(0) == 0`) would let that background seed a bogus reference and report
+// a spurious crossing the instant the ray touched the first genuine +/- voxel (issue #692). A true
+// on-surface voxel is still bracketed by its signed neighbours, so this only costs bracket-entry
+// (rather than interpolated) precision on the vanishingly rare exactly-0 sample.
 template <typename T>
 __forceinline__ __hostdev__ int
 sgn(const T &val) {
-    if (val != val) {
+    if (val != val || val == T(0)) {
         return INVALID_SIGN;
     }
     return (T(0) < val) - (val < T(0));
@@ -29,13 +40,21 @@ sgn(const T &val) {
 
 // Per-ray SDF zero-crossing search.
 //
-// Semantics match nanovdb::ZeroCrossing: the FIRST valid (non-NaN) voxel along the ray seeds the
-// sign reference, and the first subsequent voxel with the opposite sign is reported as the hit.
-// This naturally handles both rays that start outside the surface (first sample positive, hit on
-// crossing into the negative band) AND rays that start inside the surface (first sample negative,
-// hit on crossing back out into the positive band) without baking a fixed "positive = outside"
-// convention into the kernel. NaN voxels are treated as gaps so the band-continuity check will
-// fall back to bracket-entry time on the next valid voxel.
+// Semantics match nanovdb::ZeroCrossing: the FIRST valid (signed, non-gap) voxel along the ray
+// seeds the sign reference, and the first subsequent voxel with the opposite sign is reported as
+// the hit. This naturally handles both rays that start outside the surface (first sample positive,
+// hit on crossing into the negative band) AND rays that start inside the surface (first sample
+// negative, hit on crossing back out into the positive band) without baking a fixed
+// "positive = outside" convention into the kernel.
+//
+// A "gap" voxel is one whose value carries no sign: NaN, or *exactly* zero. Unlike a classic dense
+// nanovdb level set (where inactive voxels carry the signed background value, so the sign field is
+// defined everywhere along the ray), an fvdb OnIndexGrid carries no background sign in inactive
+// voxels, and TSDF-derived grids additionally contain *active* voxels with value 0 -- the
+// unobserved / out-of-band no-data fill left behind by integrate_tsdf + reinitialize_sdf. Seeding
+// the reference from such a 0 would report a spurious crossing the instant the ray reached the
+// first genuine +/- voxel (issue #692), so gaps neither seed the reference nor trigger a hit; the
+// band-continuity check then falls back to bracket-entry time on the next valid voxel. See sgn().
 //
 // Performance notes:
 //

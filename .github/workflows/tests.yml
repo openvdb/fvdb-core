@@ -60,10 +60,8 @@ jobs:
         with:
           mode: start
           github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
-          ec2-image-id: ${{ needs.versions.outputs.aws-cpu-ami }}
           ec2-instance-type: m6a.8xlarge
-          subnet-id: ${{ needs.versions.outputs.aws-subnet }}
-          security-group-id: ${{ needs.versions.outputs.aws-security-group }}
+          availability-zones-config: ${{ needs.versions.outputs.aws-cpu-az-config }}
   fvdb-build:
     name: fVDB Build (Conda)
     needs: [start-build-runner, versions] # required to start the main job when the runner is ready
@@ -208,10 +206,8 @@ jobs:
         with:
           mode: start
           github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
-          ec2-image-id: ${{ needs.versions.outputs.aws-fgpu-ami }}
-          ec2-instance-type: g6f.xlarge # 4 CPU-core, 1/8 L4 GPU
-          subnet-id: ${{ needs.versions.outputs.aws-subnet }}
-          security-group-id: ${{ needs.versions.outputs.aws-security-group }}
+          ec2-instance-type: g6.xlarge # 4 CPU-core, L4 GPU
+          availability-zones-config: ${{ needs.versions.outputs.aws-gpu-az-config }}
 
   ##############################################################################
   # RUN FVDB GTESTS
@@ -344,6 +340,14 @@ jobs:
             pip install ./dist/*.whl
 
       - name: Run tests
+        env:
+          # The whole parametrized matrix shares one process, so the caching allocator's
+          # reserved pool only ever grows and its high-water mark ends up far above any
+          # single test's live footprint. Freeing straight back to the driver keeps the
+          # suite within the runner's VRAM, at the cost of a cudaMalloc/cudaFree per
+          # allocation. See
+          # https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-alloc-conf
+          PYTORCH_NO_CUDA_MEMORY_CACHING: 1
         run: |
             micromamba activate fvdb_test
             NANOVDB_EDITOR_SPEC=$(python .github/scripts/get_viewer_dependency.py)

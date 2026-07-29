@@ -55,20 +55,27 @@ setup_parallel_build_jobs() {
   if [ "$NUM_ARCH" -lt 1 ]; then
     NUM_ARCH=1
   fi
-  NVCC_THREADS=$NUM_ARCH
 
-  # Check if we have enough RAM for even one job with full NVCC_THREADS
-  # Requirement: JOB_RAM_GB * NVCC_THREADS
-  MIN_RAM_REQUIRED=$((JOB_RAM_GB * NVCC_THREADS))
+  # if NVCC_THREADS is set, use that; otherwise derive from the number of CUDA architectures
+  if [ -n "$NVCC_THREADS" ]; then
+    echo "Using NVCC_THREADS=$NVCC_THREADS"
+  else
+    NVCC_THREADS=$NUM_ARCH
 
-  if [ "$RAM_GB" -lt "$MIN_RAM_REQUIRED" ]; then
-      NVCC_THREADS=1
+    # Check if we have enough RAM for even one job with full NVCC_THREADS
+    # Requirement: JOB_RAM_GB * NVCC_THREADS
+    MIN_RAM_REQUIRED=$((JOB_RAM_GB * NVCC_THREADS))
+
+    if [ "$RAM_GB" -lt "$MIN_RAM_REQUIRED" ]; then
+        NVCC_THREADS=1
+    fi
+
+    # Limit NVCC_THREADS to NPROC to ensure we don't oversubscribe
+    if [ "$NVCC_THREADS" -gt "$NPROC" ]; then
+        NVCC_THREADS=$NPROC
+    fi
   fi
-
-  # Limit NVCC_THREADS to NPROC to ensure we don't oversubscribe
-  if [ "$NVCC_THREADS" -gt "$NPROC" ]; then
-      NVCC_THREADS=$NPROC
-  fi
+  export NVCC_THREADS
 
   # Determine max jobs based on CPU:
   # We want CMAKE_BUILD_PARALLEL_LEVEL * NVCC_THREADS <= NPROC
@@ -90,7 +97,6 @@ setup_parallel_build_jobs() {
   if [ -n "$CMAKE_BUILD_PARALLEL_LEVEL" ]; then
     echo "Using CMAKE_BUILD_PARALLEL_LEVEL=$CMAKE_BUILD_PARALLEL_LEVEL"
   else
-
     CMAKE_BUILD_PARALLEL_LEVEL=$PARALLEL_JOBS
 
     echo "Setting nvcc --threads to $NVCC_THREADS based on the number of CUDA architectures ($NUM_ARCH)"
@@ -99,7 +105,6 @@ setup_parallel_build_jobs() {
     echo "  Constraint: Estimated RAM ($((CMAKE_BUILD_PARALLEL_LEVEL * NVCC_THREADS * JOB_RAM_GB))) GB <= Available RAM ($RAM_GB GB)"
 
     export CMAKE_BUILD_PARALLEL_LEVEL
-    export NVCC_THREADS
   fi
 }
 
