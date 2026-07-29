@@ -507,3 +507,147 @@ jobs:
           github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
           label: nightly-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
           ec2-instance-id: ${{ steps.find-instance.outputs.instance-id }}
+
+  ##############################################################################
+  # START NIGHTLY TESTS GPU RUNNER
+  #
+  # The PR workflows build with NANOVDB_USE_SYNC_CUDA_MALLOC because they test on
+  # fractional-GPU (vGPU) runners, which cannot use cudaMallocAsync. This whole
+  # GPU instance is therefore the only place the default asynchronous NanoVDB
+  # allocation path gets exercised, so it runs once a night against the published
+  # nightly wheel instead of on every pull request.
+  ##############################################################################
+  start-tests-gpu-runner:
+    name: Start EC2 GPU runner for nightly tests
+    needs: [nightly-build, versions]
+    if: ${{ !cancelled() && needs.nightly-build.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write  # Required for AWS OIDC
+    outputs:
+      label: ${{ steps.start-tests-gpu-runner.outputs.label }}
+      ec2-instance-id: ${{ steps.start-tests-gpu-runner.outputs.ec2-instance-id }}
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@254c19bd240aabef8777f48595e9d2d7b972184b # v6.2.1
+        with:
+          role-to-assume: ${{ needs.versions.outputs.aws-role }}
+          aws-region: ${{ needs.versions.outputs.aws-region }}
+      - name: Start EC2 GPU runner
+        id: start-tests-gpu-runner
+        uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
+        with:
+          mode: start
+          github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
+          ec2-instance-type: g6.xlarge # 4 CPU-core, L4 GPU
+          availability-zones-config: ${{ needs.versions.outputs.aws-gpu-az-config }}
+
+  ##############################################################################
+  # RUN NIGHTLY UNIT TESTS
+  ##############################################################################
+  nightly-unit-tests:
+    name: fVDB Nightly Unit Tests
+    needs: [start-tests-gpu-runner, versions]
+    runs-on: ${{ needs.start-tests-gpu-runner.outputs.label }}
+    container:
+      image: nvidia/cuda:${{ needs.versions.outputs.cuda-default-patch }}-cudnn-devel-${{ needs.versions.outputs.docker-os-rocky }}
+      env:
+        PYTHONPATH: ""
+      options: --rm
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - name: Install prerequisites
+        run: |
+          dnf install -y git wget procps-ng findutils gcc-toolset-${NEEDS_VERSIONS_OUTPUTS_GCC_TOOLSET}
+          echo "source /opt/rh/gcc-toolset-${NEEDS_VERSIONS_OUTPUTS_GCC_TOOLSET}/enable" > /etc/profile.d/gcc-toolset-${NEEDS_VERSIONS_OUTPUTS_GCC_TOOLSET}.sh
+        env:
+          NEEDS_VERSIONS_OUTPUTS_GCC_TOOLSET: ${{ needs.versions.outputs.gcc-toolset }}
+
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
+        with:
+          version: "${{ needs.versions.outputs.uv-version }}"
+
+      - name: Set up Python
+        run: |
+          uv python install ${NEEDS_VERSIONS_OUTPUTS_PYTHON_DEFAULT}
+          uv venv
+        env:
+          NEEDS_VERSIONS_OUTPUTS_PYTHON_DEFAULT: ${{ needs.versions.outputs.python-default }}
+
+      - name: Install system dependencies
+        run: dnf install -y zlib-devel libpng-devel
+
+      - name: Install pip dependencies
+        run: |
+          CUDA_TAG="cu$(echo "${NEEDS_VERSIONS_OUTPUTS_CUDA_DEFAULT}" | tr -d '.')"
+          echo "torch==${NEEDS_VERSIONS_OUTPUTS_TORCH_FULL_VERSION}" > "${RUNNER_TEMP}/torch-constraints.txt"
+          uv pip install --no-cache -c "${RUNNER_TEMP}/torch-constraints.txt" -r env/test_requirements.txt --extra-index-url https://download.pytorch.org/whl/${CUDA_TAG} --index-strategy unsafe-best-match
+          uv pip install --no-cache setuptools
+        env:
+          NEEDS_VERSIONS_OUTPUTS_CUDA_DEFAULT: ${{ needs.versions.outputs.cuda-default }}
+          NEEDS_VERSIONS_OUTPUTS_TORCH_FULL_VERSION: ${{ needs.versions.outputs.torch-full-version }}
+
+      # Test the default Python/CUDA cell of the publish matrix; the other cells
+      # differ only in interpreter and CUDA minor version.
+      - name: Download package
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: fvdb-nightly-${{ needs.versions.outputs.python-default }}-torch${{ needs.versions.outputs.torch-version }}-cu${{ needs.versions.outputs.cuda-default }}
+          path: ./dist
+
+      - name: Install package
+        run: |
+          source .venv/bin/activate
+          pip install ./dist/*.whl
+
+      - name: Run unit tests
+        run: |
+          source .venv/bin/activate
+          NANOVDB_EDITOR_SPEC=$(python .github/scripts/get_viewer_dependency.py)
+          pip install "$NANOVDB_EDITOR_SPEC"
+          cd tests;
+          pytest -v unit
+
+      - name: Cleanup
+        if: always()
+        run: |
+          echo "Cleaning up /__w/_temp directory"
+          rm -rf /__w/_temp/*
+          echo "Cleanup completed"
+
+  ##############################################################################
+  # STOP NIGHTLY TESTS GPU RUNNER
+  ##############################################################################
+  stop-tests-gpu-runner:
+    name: Stop GPU EC2 runner for nightly tests
+    needs:
+      - start-tests-gpu-runner # required to get output from the start-tests-gpu-runner job
+      - nightly-unit-tests # required to wait when the main job is done
+      - versions
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write  # Required for AWS OIDC
+    # required to stop the runner even if the error happened in the previous jobs,
+    # but only if the start-tests-gpu-runner job was not skipped
+    if: ${{ always() && needs.start-tests-gpu-runner.result != 'skipped' }}
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@254c19bd240aabef8777f48595e9d2d7b972184b # v6.2.1
+        with:
+          role-to-assume: ${{ needs.versions.outputs.aws-role }}
+          aws-region: ${{ needs.versions.outputs.aws-region }}
+      - name: Stop EC2 runner
+        uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
+        with:
+          mode: stop
+          github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
+          label: ${{ needs.start-tests-gpu-runner.outputs.label }}
+          ec2-instance-id: ${{ needs.start-tests-gpu-runner.outputs.ec2-instance-id }}

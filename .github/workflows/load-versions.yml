@@ -30,6 +30,8 @@ on:
         value: ${{ jobs.load.outputs.cuda-128-patch }}
       cuda-130-patch:
         value: ${{ jobs.load.outputs.cuda-130-patch }}
+      cuda-default-patch:
+        value: ${{ jobs.load.outputs.cuda-default-patch }}
       cuda-conda-override:
         value: ${{ jobs.load.outputs.cuda-conda-override }}
       cuda-arch-pr:
@@ -83,6 +85,7 @@ jobs:
       cuda-default: ${{ steps.parse.outputs.cuda-default }}
       cuda-128-patch: ${{ steps.parse.outputs.cuda-128-patch }}
       cuda-130-patch: ${{ steps.parse.outputs.cuda-130-patch }}
+      cuda-default-patch: ${{ steps.parse.outputs.cuda-default-patch }}
       cuda-conda-override: ${{ steps.parse.outputs.cuda-conda-override }}
       cuda-arch-pr: ${{ steps.parse.outputs.cuda-arch-pr }}
       cuda-arch-publish: ${{ steps.parse.outputs.cuda-arch-publish }}
@@ -124,6 +127,7 @@ jobs:
             echo "cuda-default=$(jq -r '.cuda.default' $CFG)"
             echo "cuda-128-patch=$(jq -r '.cuda.versions["12.8"].patch' $CFG)"
             echo "cuda-130-patch=$(jq -r '.cuda.versions["13.0"].patch' $CFG)"
+            echo "cuda-default-patch=$(jq -r '.cuda.versions[.cuda.default].patch' $CFG)"
             echo "cuda-conda-override=$(jq -r '.cuda.conda_override' $CFG)"
             echo "cuda-arch-pr=$(jq -r '.cuda.arch_list_pr' $CFG)"
             echo "cuda-arch-publish=$(jq -r '.cuda.arch_list_publish' $CFG)"
