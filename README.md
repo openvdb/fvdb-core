@@ -179,6 +179,9 @@ The build script supports the following build modifiers:
 - `debug`: Build in debug mode with full debug symbols and no optimizations.
 - `strip_symbols`: Strip symbols from the build (will be ignored if debug is enabled).
 - `verbose`: Enable verbose build output for pip and CMake.
+- `sync_cuda_malloc`: Compile with `-DNANOVDB_USE_SYNC_CUDA_MALLOC` so NanoVDB allocates with
+  `cudaMalloc`/`cudaFree` instead of the async variants. Required on vGPU slices, where async
+  allocation is unavailable because it depends on GPU unified memory.
 
 ### Running Tests
 

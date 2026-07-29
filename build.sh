@@ -26,6 +26,8 @@ usage() {
   echo "  debug          Build in debug mode with full debug symbols and no optimizations."
   echo "  lineinfo       Enable CUDA lineinfo (sets FVDB_LINEINFO=ON)."
   echo "  strip_symbols  Strip symbols from the build (will be ignored if debug is enabled)."
+  echo "  sync_cuda_malloc  Compile with -DNANOVDB_USE_SYNC_CUDA_MALLOC so NanoVDB uses"
+  echo "                    synchronous cudaMalloc/cudaFree (required on vGPU slices)."
   echo "  verbose        Enable verbose build output for pip and CMake."
   echo "  trace          Enable CMake trace output for debugging configuration."
   echo ""
@@ -310,6 +312,10 @@ while (( "$#" )); do
     elif [[ "$1" == "strip_symbols" ]]; then
       echo "Enabling strip symbols build"
       CONFIG_SETTINGS+=" --config-settings=cmake.define.FVDB_STRIP_SYMBOLS=ON"
+      is_config_arg_handled=true
+    elif [[ "$1" == "sync_cuda_malloc" ]]; then
+      echo "Enabling synchronous NanoVDB CUDA allocation (-DNANOVDB_USE_SYNC_CUDA_MALLOC)"
+      CONFIG_SETTINGS+=" --config-settings=cmake.define.FVDB_USE_SYNC_CUDA_MALLOC=ON"
       is_config_arg_handled=true
     fi
   fi

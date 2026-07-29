@@ -61,7 +61,7 @@ jobs:
           mode: start
           github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
           ec2-image-id: ${{ needs.versions.outputs.aws-cpu-ami }}
-          ec2-instance-type: m6a.16xlarge
+          ec2-instance-type: m6a.8xlarge
           subnet-id: ${{ needs.versions.outputs.aws-subnet }}
           security-group-id: ${{ needs.versions.outputs.aws-security-group }}
   fvdb-build:
@@ -134,7 +134,9 @@ jobs:
           micromamba activate fvdb_build
           NANOVDB_EDITOR_SPEC=$(python .github/scripts/get_viewer_dependency.py)
           pip install "$NANOVDB_EDITOR_SPEC"
-          ./build.sh wheel verbose gtests benchmarks --cuda-arch-list '8.9+PTX'
+          # sync_cuda_malloc: the test runners are fractional-GPU (vGPU) instances
+          # where cudaMallocAsync is unavailable, so NanoVDB must use cudaMalloc.
+          ./build.sh wheel verbose gtests benchmarks sync_cuda_malloc --cuda-arch-list '8.9+PTX'
 
       - name: Upload wheel
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -272,9 +274,6 @@ jobs:
         run: |
             tar -xvf fvdb-gtest.tar
 
-      - name: Show GPU info
-        run: nvidia-smi
-
       - name: Run tests
         run: |
             micromamba activate fvdb_test
@@ -343,9 +342,6 @@ jobs:
         run: |
             micromamba activate fvdb_test
             pip install ./dist/*.whl
-
-      - name: Show GPU info
-        run: nvidia-smi
 
       - name: Run tests
         run: |
@@ -416,9 +412,6 @@ jobs:
         run: |
             micromamba activate fvdb_test
             pip install ./dist/*.whl
-
-      - name: Show GPU info
-        run: nvidia-smi
 
       - name: Run markdown docs tests
         run: |
