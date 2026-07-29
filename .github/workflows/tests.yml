@@ -206,7 +206,7 @@ jobs:
         with:
           mode: start
           github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
-          ec2-instance-type: g6f.xlarge # 4 CPU-core, 1/8 L4 GPU
+          ec2-instance-type: g6f.2xlarge # 8 CPU-core, 1/4 L4 GPU
           availability-zones-config: ${{ needs.versions.outputs.aws-fgpu-az-config }}
 
   ##############################################################################
