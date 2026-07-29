@@ -647,8 +647,7 @@ intersectGaussianTilesCudaImpl(
             // intersections
             torch::Tensor tileJOffsets = torch::empty({numCameras, numTilesH, numTilesW},
                                                       means2d.options().dtype(torch::kInt64));
-            const int NUM_BLOCKS_2 =
-                cuda::ceil_div<int64_t>(totalIntersections, NUM_THREADS);
+            const int NUM_BLOCKS_2     = cuda::ceil_div<int64_t>(totalIntersections, NUM_THREADS);
             computeTileOffsets<<<NUM_BLOCKS_2, NUM_THREADS, 0, stream>>>(
                 0,
                 totalIntersections,
@@ -838,7 +837,7 @@ intersectGaussianTilesPrivateUse1Impl(
     std::vector<int64_t> deviceIntersectionOffset(deviceCount);
     std::vector<int64_t> deviceIntersectionCount(deviceCount);
     int64_t totalIntersections = 0;
-    int64_t *deviceTotals = nullptr;
+    int64_t *deviceTotals      = nullptr;
     C10_CUDA_CHECK(cudaMallocHost(&deviceTotals, deviceCount * sizeof(int64_t)));
     for (const auto deviceId: c10::irange(deviceCount)) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));

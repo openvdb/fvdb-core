@@ -40,7 +40,7 @@ namespace fvdb::detail::ops {
 /// @param[in] rollingShutterType Rolling shutter policy
 /// @param[in] cameraModel Camera/distortion model
 /// @param[in] settings Render settings (image dimensions, tile size, etc.)
-/// @param[in] tileOffsets int64 tile offsets [C, tileH, tileW]
+/// @param[in] tileOffsets tile offsets [C, tileH, tileW]
 /// @param[in] tileGaussianIds Tile Gaussian IDs [n_isects]
 /// @param[in] backgrounds Optional per-camera background [C, D]
 /// @param[in] masks Optional per-tile boolean mask [C, tileH, tileW]
@@ -48,7 +48,7 @@ namespace fvdb::detail::ops {
 /// @return std::tuple containing:
 ///         - Rendered features [C, H, W, D]
 ///         - Alpha values [C, H, W, 1]
-///         - Last flattened intersection index per pixel as int64 [C, H, W]
+///         - Last flattened intersection index per pixel [C, H, W]
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
 rasterizeWorldSpaceGaussiansFwd(const torch::Tensor &means,
                                 const torch::Tensor &quats,

@@ -13,7 +13,7 @@ namespace detail {
 namespace ops {
 
 /// @brief Compute the intersection of 2D Gaussians with image tiles for efficient rasterization
-/// @return int64 tile offsets and int32 Gaussian IDs
+/// @return tile offsets and Gaussian IDs
 std::tuple<torch::Tensor, torch::Tensor>
 intersectGaussianTiles(const torch::Tensor &means2d,                 // [C, N, 2] or [M, 2]
                        const torch::Tensor &radii,                   // [C, N, 2] or [M, 2]
@@ -25,7 +25,7 @@ intersectGaussianTiles(const torch::Tensor &means2d,                 // [C, N, 2
                        const uint32_t numTilesW);
 
 /// @brief Compute the intersection of 2D Gaussians with image tiles for sparse rendering
-/// @return int64 tile offsets and int32 Gaussian IDs
+/// @return tile offsets and Gaussian IDs
 std::tuple<torch::Tensor, torch::Tensor>
 intersectGaussianTilesSparse(const torch::Tensor &means2d,                 // [C, N, 2] or [M, 2]
                              const torch::Tensor &radii,                   // [C, N, 2] or [M, 2]

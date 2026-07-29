@@ -180,8 +180,7 @@ rasterizeFromWorld3DGSBackwardKernel(
 
         // Process gaussians in this batch, from back-to-front.
         const int64_t startT64 = batchEnd > warpBinFinal ? batchEnd - warpBinFinal : 0;
-        const uint32_t startT =
-            startT64 < batchSize ? static_cast<uint32_t>(startT64) : batchSize;
+        const uint32_t startT  = startT64 < batchSize ? static_cast<uint32_t>(startT64) : batchSize;
         for (uint32_t t = startT; t < batchSize; ++t) {
             bool valid = done;
             if (batchEnd - t > binFinal) {
@@ -530,8 +529,7 @@ dispatchGaussianRasterizeFromWorld3DGSBackward<torch::kCUDA>(
     TORCH_CHECK_VALUE(lastIds.is_cuda(), "lastIds must be CUDA");
     TORCH_CHECK_VALUE(tileOffsets.scalar_type() == torch::kInt64,
                       "tileOffsets must have dtype int64");
-    TORCH_CHECK_VALUE(lastIds.scalar_type() == torch::kInt64,
-                      "lastIds must have dtype int64");
+    TORCH_CHECK_VALUE(lastIds.scalar_type() == torch::kInt64, "lastIds must have dtype int64");
 
     const int64_t C = features.size(0);
     const int64_t N = means.size(0);

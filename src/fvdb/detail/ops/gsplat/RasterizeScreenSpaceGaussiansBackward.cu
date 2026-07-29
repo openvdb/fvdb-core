@@ -1755,8 +1755,7 @@ rasterizeScreenSpaceGaussiansBwd(const torch::Tensor &means2d,
                                  const at::optional<torch::Tensor> &masks) {
     TORCH_CHECK_VALUE(tileOffsets.scalar_type() == torch::kInt64,
                       "tileOffsets must have dtype int64");
-    TORCH_CHECK_VALUE(lastIds.scalar_type() == torch::kInt64,
-                      "lastIds must have dtype int64");
+    TORCH_CHECK_VALUE(lastIds.scalar_type() == torch::kInt64, "lastIds must have dtype int64");
     const RenderWindow2D renderWindow{imageWidth, imageHeight, imageOriginW, imageOriginH};
     return FVDB_DISPATCH_KERNEL(means2d.device(), [&]() {
         return dispatchRasterizeScreenSpaceGaussiansBwd<DeviceTag>(means2d,

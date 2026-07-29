@@ -35,10 +35,10 @@ namespace fvdb::detail::ops {
 /// @param[in] rollingShutterType Rolling shutter policy
 /// @param[in] cameraModel Camera/distortion model
 /// @param[in] settings Render settings (image dimensions, tile size, etc.)
-/// @param[in] tileOffsets int64 tile offsets [C, tileH, tileW]
+/// @param[in] tileOffsets tile offsets [C, tileH, tileW]
 /// @param[in] tileGaussianIds Tile Gaussian IDs [n_isects]
 /// @param[in] renderedAlphas Alpha values from forward pass [C, H, W, 1]
-/// @param[in] lastIds Last flattened intersection index per pixel as int64 [C, H, W]
+/// @param[in] lastIds Last flattened intersection index per pixel [C, H, W]
 /// @param[in] dLossDRenderedFeatures Gradients w.r.t. rendered features [C, H, W, D]
 /// @param[in] dLossDRenderedAlphas Gradients w.r.t. rendered alphas [C, H, W, 1]
 /// @param[in] backgrounds Optional per-camera background [C, D]

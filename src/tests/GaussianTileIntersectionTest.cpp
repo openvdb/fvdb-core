@@ -94,9 +94,8 @@ class GaussianTileIntersectionTest : public ::testing::Test {
         else {
             for (int64_t i = 0; i < tile_offsets.size(0); i++) {
                 int64_t start = tile_offsets[i].item<int64_t>();
-                int64_t end   = (i < tile_offsets.size(0) - 1)
-                                    ? tile_offsets[i + 1].item<int64_t>()
-                                    : intersection_values.size(0);
+                int64_t end   = (i < tile_offsets.size(0) - 1) ? tile_offsets[i + 1].item<int64_t>()
+                                                               : intersection_values.size(0);
                 verifyTileDepthOrder(start, end, intersection_values, depths);
             }
         }

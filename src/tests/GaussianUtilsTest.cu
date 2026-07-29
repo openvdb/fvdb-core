@@ -33,10 +33,9 @@ __global__ void
 readTileGaussianRange(const fvdb::TorchRAcc64<int64_t, 3> tileOffsets,
                       const int64_t totalIntersections,
                       int64_t *range) {
-    const auto [first, last] =
-        tileGaussianRange(tileOffsets, totalIntersections, 1, 1, 2, 0, 0, 0);
-    range[0] = first;
-    range[1] = last;
+    const auto [first, last] = tileGaussianRange(tileOffsets, totalIntersections, 1, 1, 2, 0, 0, 0);
+    range[0]                 = first;
+    range[1]                 = last;
     const auto [finalFirst, finalLast] =
         tileGaussianRange(tileOffsets, totalIntersections, 1, 1, 2, 0, 0, 1);
     range[2] = finalFirst;
@@ -330,9 +329,9 @@ TEST(GaussianUtilsTest, TileGaussianRangePreservesOffsetsAboveInt32) {
     constexpr int64_t first = static_cast<int64_t>(std::numeric_limits<int32_t>::max()) + 17;
     constexpr int64_t last  = first + 29;
     constexpr int64_t total = last + 31;
-    const auto options = torch::TensorOptions().dtype(torch::kInt64).device(torch::kCUDA);
-    const auto tileOffsets = torch::tensor({first, last}, options).view({1, 1, 2});
-    auto range             = torch::empty({4}, options);
+    const auto options      = torch::TensorOptions().dtype(torch::kInt64).device(torch::kCUDA);
+    const auto tileOffsets  = torch::tensor({first, last}, options).view({1, 1, 2});
+    auto range              = torch::empty({4}, options);
 
     readTileGaussianRange<<<1, 1, 0, at::cuda::getDefaultCUDAStream().stream()>>>(
         tileOffsets.packed_accessor64<int64_t, 3, torch::RestrictPtrTraits>(),
