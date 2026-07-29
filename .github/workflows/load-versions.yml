@@ -56,6 +56,8 @@ on:
         value: ${{ jobs.load.outputs.aws-cpu-az-config }}
       aws-gpu-az-config:
         value: ${{ jobs.load.outputs.aws-gpu-az-config }}
+      aws-fgpu-az-config:
+        value: ${{ jobs.load.outputs.aws-fgpu-az-config }}
       aws-security-group:
         value: ${{ jobs.load.outputs.aws-security-group }}
       aws-cloudfront-distribution-domain:
@@ -94,6 +96,7 @@ jobs:
       aws-fgpu-ami: ${{ steps.parse.outputs.aws-fgpu-ami }}
       aws-cpu-az-config: ${{ steps.parse.outputs.aws-cpu-az-config }}
       aws-gpu-az-config: ${{ steps.parse.outputs.aws-gpu-az-config }}
+      aws-fgpu-az-config: ${{ steps.parse.outputs.aws-fgpu-az-config }}
       aws-security-group: ${{ steps.parse.outputs.aws-security-group }}
       aws-cloudfront-distribution-domain: ${{ steps.parse.outputs.aws-cloudfront-distribution-domain }}
       publish-matrix: ${{ steps.parse.outputs.publish-matrix }}
@@ -134,6 +137,7 @@ jobs:
             echo "aws-fgpu-ami=$(jq -r '.aws.fgpu_ami' $CFG)"
             echo "aws-cpu-az-config=$(jq -c '.aws as $a | [$a.subnets[] | {imageId: $a.cpu_ami, subnetId: .id, securityGroupId: $a.security_group}]' $CFG)"
             echo "aws-gpu-az-config=$(jq -c '.aws as $a | [$a.subnets[] | {imageId: $a.gpu_ami, subnetId: .id, securityGroupId: $a.security_group}]' $CFG)"
+            echo "aws-fgpu-az-config=$(jq -c '.aws as $a | [$a.subnets[] | {imageId: $a.fgpu_ami, subnetId: .id, securityGroupId: $a.security_group}]' $CFG)"
             echo "aws-security-group=$(jq -r '.aws.security_group' $CFG)"
             echo "aws-cloudfront-distribution-domain=$(jq -r '.aws.cloudfront_distribution_domain // ""' $CFG)"
             echo "publish-matrix=$(jq -c '.publish_matrix' $CFG)"
