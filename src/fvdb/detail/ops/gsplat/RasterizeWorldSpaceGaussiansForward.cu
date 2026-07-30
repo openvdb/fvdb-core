@@ -32,7 +32,7 @@ template <uint32_t NUM_CHANNELS, typename Camera> struct RasterizeFromWorldForwa
     Camera camera;
     fvdb::TorchRAcc64<float, 4> outFeatures;  // [C,H,W,D]
     fvdb::TorchRAcc64<float, 4> outAlphas;    // [C,H,W,1]
-    fvdb::TorchRAcc64<int64_t, 3> outLastIds; // [C,H,W]
+    fvdb::TorchRAcc64<int32_t, 3> outLastIds; // [C,H,W]
 
     inline __device__ void
     volumeRenderTileForward() const {
@@ -47,7 +47,7 @@ template <uint32_t NUM_CHANNELS, typename Camera> struct RasterizeFromWorldForwa
                                 row * outFeatures.stride(1) + col * outFeatures.stride(2);
         float *outAlphaPtr = outAlphas.data() + camId * outAlphas.stride(0) +
                              row * outAlphas.stride(1) + col * outAlphas.stride(2);
-        int64_t *outLastIdPtr = outLastIds.data() + camId * outLastIds.stride(0) +
+        int32_t *outLastIdPtr = outLastIds.data() + camId * outLastIds.stride(0) +
                                 row * outLastIds.stride(1) + col * outLastIds.stride(2);
 
         // Parity with classic rasterizer: masked tiles write background and exit.
@@ -109,8 +109,8 @@ template <uint32_t NUM_CHANNELS, typename Camera> struct RasterizeFromWorldForwa
         auto *gaussBatch =
             reinterpret_cast<SharedGaussian<NUM_CHANNELS> *>(gaussAddr); // [blockSize]
 
-        float transmittance = 1.0f;
-        int64_t curIdx      = -1;
+        float transmittance            = 1.0f;
+        int32_t lastIntersectionOffset = -1;
         float pixOut[NUM_CHANNELS];
 #pragma unroll
         for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
@@ -126,8 +126,9 @@ template <uint32_t NUM_CHANNELS, typename Camera> struct RasterizeFromWorldForwa
                 break;
             }
 
-            const int64_t batchStart = rangeStart + blockSize * b;
-            const int64_t idx        = batchStart + threadRank;
+            const int64_t batchOffset = blockSize * b;
+            const int64_t batchStart  = rangeStart + batchOffset;
+            const int64_t idx         = batchStart + threadRank;
             if (idx < rangeEnd) {
                 const int32_t flatId = common.tileGaussianIds[idx];
                 idBatch[threadRank]  = flatId;
@@ -185,8 +186,8 @@ template <uint32_t NUM_CHANNELS, typename Camera> struct RasterizeFromWorldForwa
                 for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
                     pixOut[k] += common.features[cid][gid][k] * contrib;
                 }
-                curIdx        = batchStart + t;
-                transmittance = nextTransmittance;
+                lastIntersectionOffset = static_cast<int32_t>(batchOffset + t);
+                transmittance          = nextTransmittance;
             }
         }
 
@@ -195,7 +196,7 @@ template <uint32_t NUM_CHANNELS, typename Camera> struct RasterizeFromWorldForwa
         }
 
         outAlphaPtr[0]  = 1.0f - transmittance;
-        outLastIdPtr[0] = curIdx;
+        outLastIdPtr[0] = lastIntersectionOffset;
 #pragma unroll
         for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
             outFeaturesPtr[k * outFeatures.stride(3)] =
@@ -235,7 +236,7 @@ launchForward(const torch::Tensor &means,
     torch::Tensor outAlphas = torch::zeros({C, (int64_t)imageHeight, (int64_t)imageWidth, 1}, opts);
     torch::Tensor outLastIds =
         torch::zeros({C, (int64_t)imageHeight, (int64_t)imageWidth},
-                     torch::TensorOptions().dtype(torch::kInt64).device(features.device()));
+                     torch::TensorOptions().dtype(torch::kInt32).device(features.device()));
 
     const uint32_t tileExtentW = (imageWidth + tileSize - 1) / tileSize;
     const uint32_t tileExtentH = (imageHeight + tileSize - 1) / tileSize;
@@ -274,7 +275,7 @@ launchForward(const torch::Tensor &means,
         camera,
         outFeatures.packed_accessor64<float, 4, torch::RestrictPtrTraits>(),
         outAlphas.packed_accessor64<float, 4, torch::RestrictPtrTraits>(),
-        outLastIds.packed_accessor64<int64_t, 3, torch::RestrictPtrTraits>()};
+        outLastIds.packed_accessor64<int32_t, 3, torch::RestrictPtrTraits>()};
 
     const size_t blockSize = (size_t)tileSize * (size_t)tileSize;
     size_t sharedMem       = (alignof(nanovdb::math::Mat3<float>) - 1) + camera.numSharedMemBytes();

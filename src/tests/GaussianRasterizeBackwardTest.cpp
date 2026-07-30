@@ -15,10 +15,51 @@
 #include <gtest/gtest.h>
 
 #include <cstdlib>
+#include <limits>
 
 #ifndef FVDB_EXTERNAL_TEST_DATA_PATH
 #error "FVDB_EXTERNAL_TEST_DATA_PATH must be defined"
 #endif
+
+namespace {
+
+torch::Tensor
+toTileRelativeLastIds(const torch::Tensor &lastIds,
+                      const torch::Tensor &tileOffsets,
+                      const uint32_t tileSize) {
+    auto relative = lastIds.to(torch::kCPU).to(torch::kInt64).contiguous();
+    auto offsets  = tileOffsets.to(torch::kCPU).to(torch::kInt64).contiguous();
+
+    TORCH_CHECK_VALUE(relative.dim() == 3, "lastIds must have shape [C, H, W]");
+    TORCH_CHECK_VALUE(offsets.dim() == 3, "tileOffsets must have shape [C, TH, TW]");
+    TORCH_CHECK_VALUE(relative.size(0) <= offsets.size(0),
+                      "lastIds cannot have more cameras than tileOffsets");
+
+    auto relativeAcc      = relative.accessor<int64_t, 3>();
+    const auto offsetsAcc = offsets.accessor<int64_t, 3>();
+    for (int64_t camera = 0; camera < relative.size(0); ++camera) {
+        for (int64_t row = 0; row < relative.size(1); ++row) {
+            const int64_t tileRow = row / tileSize;
+            TORCH_CHECK_VALUE(tileRow < offsets.size(1), "lastIds height exceeds tileOffsets");
+            for (int64_t col = 0; col < relative.size(2); ++col) {
+                int64_t &lastId = relativeAcc[camera][row][col];
+                if (lastId < 0) {
+                    continue;
+                }
+
+                const int64_t tileCol = col / tileSize;
+                TORCH_CHECK_VALUE(tileCol < offsets.size(2), "lastIds width exceeds tileOffsets");
+                lastId -= offsetsAcc[camera][tileRow][tileCol];
+                TORCH_CHECK_VALUE(lastId >= 0 && lastId <= std::numeric_limits<int32_t>::max(),
+                                  "Tile-relative lastIds value must fit in int32");
+            }
+        }
+    }
+
+    return relative.to(torch::kInt32).to(lastIds.device());
+}
+
+} // namespace
 
 // Helper class to reduce test code repetition
 class GaussianTestHelper {
@@ -372,6 +413,12 @@ struct GaussianRasterizeTestFixture : public ::testing::Test {
 
         auto inputs = fvdb::test::loadTensors(inputsPath, inputNames);
 
+        imageWidth   = 1297;
+        imageHeight  = 840;
+        imageOriginW = 0;
+        imageOriginH = 0;
+        tileSize     = 16;
+
         means2d                 = inputs[0].cuda();
         conics                  = inputs[1].cuda();
         colors                  = inputs[2].cuda();
@@ -379,7 +426,7 @@ struct GaussianRasterizeTestFixture : public ::testing::Test {
         tileOffsets             = inputs[4].to(torch::kInt64).cuda();
         tileGaussianIds         = inputs[5].cuda();
         renderedAlphas          = inputs[6].cuda();
-        lastGaussianIdsPerPixel = inputs[7].to(torch::kInt64).cuda();
+        lastGaussianIdsPerPixel = toTileRelativeLastIds(inputs[7], inputs[4], tileSize).cuda();
         dLossDRenderedColors    = inputs[8].cuda();
         dLossDRenderedAlphas    = inputs[9].cuda();
 
@@ -388,12 +435,6 @@ struct GaussianRasterizeTestFixture : public ::testing::Test {
         expectedDLossDConics    = expectedOutputs[1].cuda();
         expectedDLossDColors    = expectedOutputs[2].cuda();
         expectedDLossDOpacities = expectedOutputs[3].cuda();
-
-        imageWidth   = 1297;
-        imageHeight  = 840;
-        imageOriginW = 0;
-        imageOriginH = 0;
-        tileSize     = 16;
     }
 
     void

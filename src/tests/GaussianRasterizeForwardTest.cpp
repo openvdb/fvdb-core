@@ -24,6 +24,7 @@
 #endif
 
 #include <cstdlib>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -33,11 +34,66 @@
 
 namespace {
 constexpr const char *kMaskedEdgeTileChildEnv = "FVDB_GSPLAT_MASKED_EDGE_TILE_CHILD";
+
+torch::Tensor
+convertLastIds(const torch::Tensor &lastIds,
+               const torch::Tensor &tileOffsets,
+               const uint32_t tileSize,
+               const bool toTileRelative) {
+    auto converted = lastIds.to(torch::kCPU).to(torch::kInt64).contiguous();
+    auto offsets   = tileOffsets.to(torch::kCPU).to(torch::kInt64).contiguous();
+
+    TORCH_CHECK_VALUE(converted.dim() == 3, "lastIds must have shape [C, H, W]");
+    TORCH_CHECK_VALUE(offsets.dim() == 3, "tileOffsets must have shape [C, TH, TW]");
+    TORCH_CHECK_VALUE(converted.size(0) <= offsets.size(0),
+                      "lastIds cannot have more cameras than tileOffsets");
+
+    auto convertedAcc     = converted.accessor<int64_t, 3>();
+    const auto offsetsAcc = offsets.accessor<int64_t, 3>();
+    for (int64_t camera = 0; camera < converted.size(0); ++camera) {
+        for (int64_t row = 0; row < converted.size(1); ++row) {
+            const int64_t tileRow = row / tileSize;
+            TORCH_CHECK_VALUE(tileRow < offsets.size(1), "lastIds height exceeds tileOffsets");
+            for (int64_t col = 0; col < converted.size(2); ++col) {
+                int64_t &lastId = convertedAcc[camera][row][col];
+                if (lastId < 0) {
+                    continue;
+                }
+
+                const int64_t tileCol = col / tileSize;
+                TORCH_CHECK_VALUE(tileCol < offsets.size(2), "lastIds width exceeds tileOffsets");
+                const int64_t tileStart = offsetsAcc[camera][tileRow][tileCol];
+                lastId                  = toTileRelative ? lastId - tileStart : lastId + tileStart;
+                TORCH_CHECK_VALUE(lastId >= 0 && lastId <= std::numeric_limits<int32_t>::max(),
+                                  "Converted lastIds value must fit in int32");
+            }
+        }
+    }
+
+    return converted.to(torch::kInt32).to(lastIds.device());
+}
+
+torch::Tensor
+toTileRelativeLastIds(const torch::Tensor &lastIds,
+                      const torch::Tensor &tileOffsets,
+                      const uint32_t tileSize) {
+    return convertLastIds(lastIds, tileOffsets, tileSize, true);
+}
+
+torch::Tensor
+toAbsoluteLastIds(const torch::Tensor &lastIds,
+                  const torch::Tensor &tileOffsets,
+                  const uint32_t tileSize) {
+    return convertLastIds(lastIds, tileOffsets, tileSize, false);
+}
 } // namespace
 
 struct GaussianRasterizeForwardTestFixture : public ::testing::Test {
     void
     loadInputData(const std::string insPath) {
+        // Set the random seed for reproducibility.
+        torch::manual_seed(0);
+
         const std::string dataPath =
             std::string(FVDB_EXTERNAL_TEST_DATA_PATH) + std::string("/unit_tests/gsplat");
         const std::string inputsPath = dataPath + std::string("/") + insPath;
@@ -69,9 +125,6 @@ struct GaussianRasterizeForwardTestFixture : public ::testing::Test {
 
     void
     loadTestData(const std::string insPath, const std::string outsPath) {
-        // Set the random seed for reproducibility.
-        torch::manual_seed(0);
-
         loadInputData(insPath);
 
         const std::string dataPath =
@@ -89,7 +142,7 @@ struct GaussianRasterizeForwardTestFixture : public ::testing::Test {
 
         expectedRenderedColors = expectedOutputs[0].cuda();
         expectedRenderedAlphas = expectedOutputs[1].cuda();
-        expectedLastIds        = expectedOutputs[2].to(torch::kInt64).cuda();
+        expectedLastIds = toTileRelativeLastIds(expectedOutputs[2], tileOffsets, tileSize).cuda();
     }
 
     fvdb::JaggedTensor
@@ -425,6 +478,28 @@ TEST(GaussianRasterizeForwardMaskedEdgeTile, NoDeadlock) {
 #endif
 }
 
+TEST(GaussianRasterizeForwardLastIds, AreTileRelativeInt32) {
+    const auto floats = torch::TensorOptions().device(torch::kCUDA).dtype(torch::kFloat32);
+    const auto ints   = torch::TensorOptions().device(torch::kCUDA).dtype(torch::kInt32);
+    const auto longs  = torch::TensorOptions().device(torch::kCUDA).dtype(torch::kInt64);
+
+    const auto means2d =
+        torch::tensor({{{8.5f, 8.5f}, {24.5f, 8.5f}}}, floats); // One Gaussian per tile.
+    const auto conics          = torch::tensor({{{1.0f, 0.0f, 1.0f}, {1.0f, 0.0f, 1.0f}}}, floats);
+    const auto features        = torch::tensor({{{1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}}}, floats);
+    const auto opacities       = torch::tensor({{0.5f, 0.5f}}, floats);
+    const auto tileOffsets     = torch::tensor({{{0, 1}}}, longs);
+    const auto tileGaussianIds = torch::tensor({0, 1}, ints);
+
+    const auto result = fvdb::detail::ops::rasterizeScreenSpaceGaussiansFwd(
+        means2d, conics, features, opacities, 32, 16, 0, 0, 16, tileOffsets, tileGaussianIds);
+    const auto &lastIds = std::get<2>(result);
+
+    EXPECT_EQ(lastIds.scalar_type(), torch::kInt32);
+    EXPECT_EQ(lastIds[0][8][8].item<int32_t>(), 0);
+    EXPECT_EQ(lastIds[0][8][24].item<int32_t>(), 0);
+}
+
 // This is a helper function to generate the output data for the test cases.
 // Only enable this test when you want to update the output data.
 TEST_F(GaussianRasterizeForwardTestFixture, DISABLED_GenerateOutputData) {
@@ -446,7 +521,8 @@ TEST_F(GaussianRasterizeForwardTestFixture, DISABLED_GenerateOutputData) {
                                                                 tileOffsets,
                                                                 tileGaussianIds);
 
-        std::vector<torch::Tensor> outputData = {renderedColors, renderedAlphas, lastIds};
+        std::vector<torch::Tensor> outputData = {
+            renderedColors, renderedAlphas, toAbsoluteLastIds(lastIds, tileOffsets, tileSize)};
 
         auto outputFilename = std::string("rasterize_forward_outputs.pt");
 
@@ -471,7 +547,8 @@ TEST_F(GaussianRasterizeForwardTestFixture, DISABLED_GenerateOutputData) {
                 tileOffsets,
                 tileGaussianIds);
 
-        std::vector<torch::Tensor> outputData = {renderedColors, renderedAlphas, lastIds};
+        std::vector<torch::Tensor> outputData = {
+            renderedColors, renderedAlphas, toAbsoluteLastIds(lastIds, tileOffsets, tileSize)};
 
         auto outputFilename = std::string("rasterize_forward_outputs_64.pt");
         storeData(outputFilename, outputData);
@@ -496,7 +573,7 @@ TEST_F(GaussianRasterizeForwardTestFixture, TestBasicInputsAndOutputs) {
 
     EXPECT_TRUE(torch::allclose(outColors, expectedRenderedColors));
     EXPECT_TRUE(torch::allclose(outAlphas, expectedRenderedAlphas));
-    EXPECT_EQ(outLastIds.scalar_type(), torch::kInt64);
+    EXPECT_EQ(outLastIds.scalar_type(), torch::kInt32);
     EXPECT_TRUE(torch::equal(outLastIds, expectedLastIds));
 }
 
@@ -527,8 +604,7 @@ TEST_F(GaussianRasterizeForwardTestFixture, TestConcatenatedChannels) {
 // Compares the output of multi-camera rasterization with the output of sequential single-camera
 // rasterization.
 TEST_F(GaussianRasterizeForwardTestFixture, TestMultipleCameras) {
-    // the output here is not used in this test.
-    loadTestData("rasterize_forward_inputs_3cams.pt", "rasterize_forward_outputs.pt");
+    loadInputData("rasterize_forward_inputs_3cams.pt");
 
     // run all 3 cameras at once
     const auto [outColorsAll, outAlphasAll, outLastIdsAll] =
@@ -584,15 +660,9 @@ TEST_F(GaussianRasterizeForwardTestFixture, TestMultipleCameras) {
                                                                 tileOffsets_1cam,
                                                                 tileGaussianIds_1cam);
 
-        // add start offset back to non-background pixels
-        outLastIds = outLastIds + start;
-        // mask out the background pixels
-        auto background_mask = (outLastIdsAll[i].unsqueeze(0) == -1);
-        outLastIds.masked_fill_(background_mask, -1);
-
         outColorsList.push_back(outColors);
         outAlphasList.push_back(outAlphas);
-        outLastIdsList.push_back(outLastIds); // Store the raw output index
+        outLastIdsList.push_back(outLastIds);
 
 // Uncomment to dump binarized lastIds images for comparison
 #if 0
@@ -646,7 +716,7 @@ TEST_F(GaussianRasterizeForwardTestFixture, TestMultipleCameras) {
 }
 
 TEST_F(GaussianRasterizeForwardTestFixture, TestMultipleCamerasWithBackgrounds) {
-    loadTestData("rasterize_forward_inputs_3cams.pt", "rasterize_forward_outputs.pt");
+    loadInputData("rasterize_forward_inputs_3cams.pt");
 
     const int numCameras  = means2d.size(0);
     const int numChannels = colors.size(-1);
@@ -797,8 +867,7 @@ TEST_F(GaussianRasterizeForwardTestFixture, TestSparseRasterizationConcatenatedC
 }
 
 TEST_F(GaussianRasterizeForwardTestFixture, TestSparseRasterizationMultipleCameras) {
-    // the output here is not used in this test.
-    loadTestData("rasterize_forward_inputs_3cams.pt", "rasterize_forward_outputs.pt");
+    loadInputData("rasterize_forward_inputs_3cams.pt");
 
     const int numCameras = means2d.size(0);
 
@@ -851,7 +920,7 @@ TEST_F(GaussianRasterizeForwardTestFixture, TestSparseRasterizationMultipleCamer
 }
 
 TEST_F(GaussianRasterizeForwardTestFixture, TestSparseRasterizationMultipleCamerasWithBackgrounds) {
-    loadTestData("rasterize_forward_inputs_3cams.pt", "rasterize_forward_outputs.pt");
+    loadInputData("rasterize_forward_inputs_3cams.pt");
 
     const int numCameras  = means2d.size(0);
     const int numChannels = colors.size(-1);
@@ -960,7 +1029,7 @@ TEST_F(GaussianRasterizeForwardTestFixture, TestSparseRasterizationMultipleCamer
 // the rasterization produces the same results as non-packed mode.
 // This specifically tests the fix for deriving numCameras from tileOffsets instead of means2d.
 TEST_F(GaussianRasterizeForwardTestFixture, TestPackedModeMultipleCameras) {
-    loadTestData("rasterize_forward_inputs_3cams.pt", "rasterize_forward_outputs.pt");
+    loadInputData("rasterize_forward_inputs_3cams.pt");
 
     const int numCameras         = means2d.size(0);
     const int numGaussiansPerCam = means2d.size(1);
@@ -1020,14 +1089,14 @@ TEST_F(GaussianRasterizeForwardTestFixture, TestPackedModeMultipleCameras) {
     EXPECT_TRUE(torch::allclose(outAlphasPacked, expectedAlphas, 1e-4, 1e-4))
         << "Packed mode alphas don't match non-packed mode";
 
-    // lastIds should be identical since both modes use the same global indices
+    // lastIds should be identical since both modes use the same tile-relative indices.
     EXPECT_TRUE(torch::equal(outLastIdsPacked, expectedLastIds))
         << "Packed mode lastIds don't match non-packed mode";
 }
 
 // Test packed mode with sparse rasterization and multiple cameras
 TEST_F(GaussianRasterizeForwardTestFixture, TestPackedModeSparseMultipleCameras) {
-    loadTestData("rasterize_forward_inputs_3cams.pt", "rasterize_forward_outputs.pt");
+    loadInputData("rasterize_forward_inputs_3cams.pt");
 
     const int numCameras         = means2d.size(0);
     const int numGaussiansPerCam = means2d.size(1);

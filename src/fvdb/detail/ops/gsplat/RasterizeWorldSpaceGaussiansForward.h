@@ -48,7 +48,7 @@ namespace fvdb::detail::ops {
 /// @return std::tuple containing:
 ///         - Rendered features [C, H, W, D]
 ///         - Alpha values [C, H, W, 1]
-///         - Last flattened intersection index per pixel [C, H, W]
+///         - Last tile-relative intersection index per pixel, or -1 if none [C, H, W]
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
 rasterizeWorldSpaceGaussiansFwd(const torch::Tensor &means,
                                 const torch::Tensor &quats,

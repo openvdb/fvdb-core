@@ -36,7 +36,7 @@ template <uint32_t NUM_CHANNELS, typename Camera> struct RasterizeFromWorldBackw
     Camera camera;
     // Forward outputs
     fvdb::TorchRAcc64<float, 4> renderedAlphas; // [C,H,W,1]
-    fvdb::TorchRAcc64<int64_t, 3> lastIds;      // [C,H,W]
+    fvdb::TorchRAcc64<int32_t, 3> lastIds;      // [C,H,W]
     // Grad outputs
     fvdb::TorchRAcc64<float, 4> dLossDRenderedFeatures; // [C,H,W,D]
     fvdb::TorchRAcc64<float, 4> dLossDRenderedAlphas;   // [C,H,W,1]
@@ -94,9 +94,9 @@ rasterizeFromWorld3DGSBackwardKernel(
     }
 
     // Forward state for this pixel.
-    int64_t binFinal = -1;
-    float T_final    = 1.0f;
-    float T          = 1.0f;
+    int32_t lastIntersectionOffset = -1;
+    float T_final                  = 1.0f;
+    float T                        = 1.0f;
 
     float v_render_c[NUM_CHANNELS];
 #pragma unroll
@@ -106,7 +106,7 @@ rasterizeFromWorld3DGSBackwardKernel(
     float v_render_a = 0.f;
 
     if (done) {
-        binFinal = args.lastIds[camId][row][col];
+        lastIntersectionOffset = args.lastIds[camId][row][col];
 
         const float alphaFinal = args.renderedAlphas[camId][row][col][0];
         T_final                = 1.0f - alphaFinal;
@@ -139,16 +139,17 @@ rasterizeFromWorld3DGSBackwardKernel(
     const int64_t nIsects  = rangeEnd - rangeStart;
     const int64_t nBatches = (nIsects + blockSize - 1) / blockSize;
 
-    // Reduce max binFinal within warp (used to early-skip).
-    const int64_t warpBinFinal = cg::reduce(warp, binFinal, cg::greater<int64_t>());
+    // Reduce the last tile-relative intersection offset within the warp for early skipping.
+    const int32_t lastIntersectionOffsetInWarp =
+        cg::reduce(warp, lastIntersectionOffset, cg::greater<int32_t>());
 
     for (int64_t b = 0; b < nBatches; ++b) {
         block.sync();
-        const int64_t batchEnd  = rangeEnd - 1 - blockSize * b;
-        const int64_t remaining = batchEnd + 1 - rangeStart;
+        const int64_t batchEndOffset = nIsects - 1 - blockSize * b;
+        const int64_t remaining      = batchEndOffset + 1;
         const uint32_t batchSize =
             static_cast<uint32_t>(remaining < blockSize ? remaining : blockSize);
-        const int64_t idx = batchEnd - threadRank;
+        const int64_t idx = rangeStart + batchEndOffset - threadRank;
 
         if (idx >= rangeStart) {
             const int32_t flatId = common.tileGaussianIds[idx];
@@ -179,11 +180,13 @@ rasterizeFromWorld3DGSBackwardKernel(
         block.sync();
 
         // Process gaussians in this batch, from back-to-front.
-        const int64_t startT64 = batchEnd > warpBinFinal ? batchEnd - warpBinFinal : 0;
+        const int64_t startT64 = batchEndOffset > lastIntersectionOffsetInWarp
+                                     ? batchEndOffset - lastIntersectionOffsetInWarp
+                                     : 0;
         const uint32_t startT  = startT64 < batchSize ? static_cast<uint32_t>(startT64) : batchSize;
         for (uint32_t t = startT; t < batchSize; ++t) {
             bool valid = done;
-            if (batchEnd - t > binFinal) {
+            if (batchEndOffset - t > lastIntersectionOffset) {
                 valid = false;
             }
 
@@ -446,7 +449,7 @@ launchBackward(const torch::Tensor &means,
         args,
         camera,
         renderedAlphas.packed_accessor64<float, 4, torch::RestrictPtrTraits>(),
-        lastIds.packed_accessor64<int64_t, 3, torch::RestrictPtrTraits>(),
+        lastIds.packed_accessor64<int32_t, 3, torch::RestrictPtrTraits>(),
         dLossDRenderedFeatures.packed_accessor64<float, 4, torch::RestrictPtrTraits>(),
         dLossDRenderedAlphas.packed_accessor64<float, 4, torch::RestrictPtrTraits>(),
         dMeans.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
@@ -529,7 +532,7 @@ dispatchGaussianRasterizeFromWorld3DGSBackward<torch::kCUDA>(
     TORCH_CHECK_VALUE(lastIds.is_cuda(), "lastIds must be CUDA");
     TORCH_CHECK_VALUE(tileOffsets.scalar_type() == torch::kInt64,
                       "tileOffsets must have dtype int64");
-    TORCH_CHECK_VALUE(lastIds.scalar_type() == torch::kInt64, "lastIds must have dtype int64");
+    TORCH_CHECK_VALUE(lastIds.scalar_type() == torch::kInt32, "lastIds must have dtype int32");
 
     const int64_t C = features.size(0);
     const int64_t N = means.size(0);

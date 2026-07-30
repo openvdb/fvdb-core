@@ -39,7 +39,7 @@ struct RasterizeForwardArgs {
 
     JaggedRAcc64<ScalarType, 2> mOutFeatures; // [[nPixels, NUM_CHANNELS]_0..._C]
     JaggedRAcc64<ScalarType, 2> mOutAlphas;   // [[nPixels, 1]_0..._C]
-    JaggedRAcc64<int64_t, 1> mOutLastIds;     // [[nPixels]_0..._C]
+    JaggedRAcc64<int32_t, 1> mOutLastIds;     // [[nPixels]_0..._C]
 
     RasterizeForwardArgs(
         const torch::Tensor &means2d,         // [C, N, 2] or [nnz, 2]
@@ -81,7 +81,7 @@ struct RasterizeForwardArgs {
                      pixelMap),
           mOutFeatures(initJaggedAccessor<ScalarType, 2>(outFeatures, "outFeatures")),
           mOutAlphas(initJaggedAccessor<ScalarType, 2>(outAlphas, "outAlphas")),
-          mOutLastIds(initJaggedAccessor<int64_t, 1>(outLastIds, "outLastIds")) {}
+          mOutLastIds(initJaggedAccessor<int32_t, 1>(outLastIds, "outLastIds")) {}
 
     /// @brief Write the alpha value for a pixel
     /// @param pixelIndex The index of the pixel
@@ -95,7 +95,7 @@ struct RasterizeForwardArgs {
     /// @param pixelIndex The index of the pixel
     /// @param lastId The last ID to write
     __device__ void
-    writeLastId(uint64_t pixelIndex, int64_t lastId) {
+    writeLastId(uint64_t pixelIndex, int32_t lastId) {
         mOutLastIds.data()[pixelIndex] = lastId;
     }
 
@@ -182,10 +182,10 @@ struct RasterizeForwardArgs {
         ScalarType pixOut[NUM_CHANNELS] = {0.f};
 
         // The alpha sequence is feature-independent (depends only on opacity + conic + position),
-        // so the per-chunk accumTransmittance and curIdx are identical across chunks. Capture them
-        // from the first chunk and write them out at the end.
-        ScalarType accumTransmittanceFinal = 1.0f;
-        int64_t curIdxFinal                = -1;
+        // so the per-chunk accumTransmittance and last intersection offset are identical across
+        // chunks. Capture them from the first chunk and write them out at the end.
+        ScalarType accumTransmittanceFinal  = 1.0f;
+        int32_t lastIntersectionOffsetFinal = -1;
 
         constexpr size_t NUM_CHUNKS =
             (NUM_CHANNELS + NUM_SHARED_CHANNELS - 1) / NUM_SHARED_CHANNELS;
@@ -200,8 +200,9 @@ struct RasterizeForwardArgs {
             // However, this makes the backward pass 1.5x slower, so we stick with float for now
             // and sort of just ignore small impact gaussians ¯\_(ツ)_/¯.
             ScalarType accumTransmittance = 1.0f;
-            // index of most recent gaussian to write to this thread's pixel
-            int64_t curIdx = -1;
+            // Tile-relative intersection offset of the most recent Gaussian written to this
+            // thread's pixel.
+            int32_t lastIntersectionOffset = -1;
             // We don't return right away if the pixel is not in the image since we want
             // to use this thread to load gaussians into shared memory
             bool done = !pixelIsActive;
@@ -216,8 +217,9 @@ struct RasterizeForwardArgs {
 
                 // Each thread fetches one gaussian from front to back (mTileGaussianIds is depth
                 // sorted)
-                const int64_t batchStart = firstGaussianIdInBlock + blockSize * b;
-                const int64_t idx        = batchStart + tidx;
+                const int64_t batchOffset = blockSize * b;
+                const int64_t batchStart  = firstGaussianIdInBlock + batchOffset;
+                const int64_t idx         = batchStart + tidx;
                 if (idx < lastGaussianIdInBlock) {
                     const int32_t g =
                         commonArgs.mTileGaussianIds[idx]; // which gaussian we're rendering
@@ -273,22 +275,22 @@ struct RasterizeForwardArgs {
                             }
                         }
 
-                        curIdx             = batchStart + t;
-                        accumTransmittance = nextTransmittance;
+                        lastIntersectionOffset = static_cast<int32_t>(batchOffset + t);
+                        accumTransmittance     = nextTransmittance;
                     }
                 }
             }
 
             if (chunk == 0) {
-                accumTransmittanceFinal = accumTransmittance;
-                curIdxFinal             = curIdx;
+                accumTransmittanceFinal     = accumTransmittance;
+                lastIntersectionOffsetFinal = lastIntersectionOffset;
             }
         }
 
         if (pixelIsActive) {
             const auto pixIdx = commonArgs.pixelIndex(cameraId, row, col, activePixelIndex);
             writeAlpha(pixIdx, 1.0f - accumTransmittanceFinal);
-            writeLastId(pixIdx, curIdxFinal);
+            writeLastId(pixIdx, lastIntersectionOffsetFinal);
             writeFeatures(pixIdx, [&](uint32_t k) {
                 return commonArgs.mHasBackgrounds
                            ? pixOut[k] +
@@ -426,7 +428,7 @@ launchRasterizeForwardKernelWithTemplatedSharedChannels(
     for (const auto &size: sizes) {
         featuresToRenderVec.push_back(torch::empty({size, channels}, features.options()));
         alphasToRenderVec.push_back(torch::empty({size, 1}, features.options()));
-        lastIdsToRenderVec.push_back(torch::empty({size}, features.options().dtype(torch::kInt64)));
+        lastIdsToRenderVec.push_back(torch::empty({size}, features.options().dtype(torch::kInt32)));
     }
 
     auto outFeatures = fvdb::JaggedTensor(featuresToRenderVec);
@@ -679,7 +681,7 @@ launchRasterizeForwardKernels(
     for (const auto &size: sizes) {
         featuresToRenderVec.push_back(torch::empty({size, channels}, features.options()));
         alphasToRenderVec.push_back(torch::empty({size, 1}, features.options()));
-        lastIdsToRenderVec.push_back(torch::empty({size}, features.options().dtype(torch::kInt64)));
+        lastIdsToRenderVec.push_back(torch::empty({size}, features.options().dtype(torch::kInt32)));
     }
 
     auto outFeatures = fvdb::JaggedTensor(featuresToRenderVec);

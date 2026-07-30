@@ -138,7 +138,7 @@ expectFiniteRaster(const RasterResult &result, const int64_t channels) {
                 torch::IntArrayRef({1, kImageHeight, kImageWidth, 1}));
     EXPECT_TRUE(torch::isfinite(std::get<0>(result)).all().item<bool>());
     EXPECT_TRUE(torch::isfinite(std::get<1>(result)).all().item<bool>());
-    EXPECT_EQ(std::get<2>(result).scalar_type(), torch::kInt64);
+    EXPECT_EQ(std::get<2>(result).scalar_type(), torch::kInt32);
     EXPECT_GT(std::get<1>(result).sum().item<float>(), 0.0f);
 }
 

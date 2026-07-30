@@ -48,7 +48,7 @@ namespace ops {
 /// @return std::tuple containing:
 ///         - Rendered image features/colors [C, render_height, render_width, D]
 ///         - Alpha values [C, render_height, render_width, 1]
-///         - Last flattened intersection index rendered at each pixel
+///         - Last tile-relative intersection index rendered at each pixel, or -1 if none
 ///           [C, render_height, render_width]
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
 rasterizeScreenSpaceGaussiansFwd(const torch::Tensor &means2d,
@@ -93,7 +93,8 @@ rasterizeScreenSpaceGaussiansFwd(const torch::Tensor &means2d,
 /// @return A tuple containing:
 ///         - Output colors JaggedTensor for the specified pixels.
 ///         - Output alphas JaggedTensor for the specified pixels.
-///         - Output last flattened intersection indices as a JaggedTensor.
+///         - Output last tile-relative intersection indices as a JaggedTensor, with -1 where no
+///           intersection contributed.
 std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor, fvdb::JaggedTensor>
 rasterizeScreenSpaceGaussiansSparseFwd(const fvdb::JaggedTensor &pixelsToRender,
                                        const torch::Tensor &means2d,
