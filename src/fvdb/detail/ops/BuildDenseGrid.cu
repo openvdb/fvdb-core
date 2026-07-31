@@ -61,6 +61,14 @@ checkInputs(const torch::Device device,
     TORCH_CHECK((__uint128_t)size[0] * size[1] * size[2] * batchSize <=
                     std::numeric_limits<int64_t>::max(),
                 "Size and batch size exceed the number of voxels supported by a GridBatch");
+    // The unmasked path materializes every cell as a coordinate and feeds it to NanoVDB's
+    // PointsToGrid, whose radix sort casts the count to int32 (PointsToGrid.cuh:645) and silently
+    // corrupts the grid above 2^31 cells (~1291^3). The masked path builds only the selected
+    // subset, so it is exempt here.
+    TORCH_CHECK(mask.has_value() || (__uint128_t)size[0] * size[1] * size[2] <=
+                                        (__uint128_t)std::numeric_limits<int32_t>::max(),
+                "Unmasked dense grid volume exceeds the 2^31-coordinate limit of the NanoVDB grid "
+                "builder. Provide a sparse mask or reduce the dense dimensions.");
     if (mask.has_value()) {
         TORCH_CHECK(mask.value().device() == device,
                     "Mask device must match device of dense grid to build");

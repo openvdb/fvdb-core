@@ -236,6 +236,27 @@ _createNanoGridFromIJK(const JaggedTensor &ijk) {
     const int64_t numGrids = ijk.joffsets().size(0) - 1;
     TORCH_CHECK(numGrids == ijk.num_outer_lists(),
                 "If this happens, Francis' paranoia was justified. File a bug");
+
+    // NanoVDB's PointsToGrid / DistributedPointsToGrid radix sort casts the per-grid coordinate
+    // count to int32 (PointsToGrid.cuh:645), which silently corrupts the grid above 2^31
+    // candidates. Reject that here rather than return a garbage grid. joffsets is tiny
+    // (numGrids + 1 entries), so the host copy is cheap.
+    {
+        const torch::Tensor joffsetsCpu = ijk.joffsets().cpu();
+        const auto joffsetsAcc          = joffsetsCpu.accessor<fvdb::JOffsetsType, 1>();
+        for (int64_t gi = 0; gi + 1 < joffsetsCpu.size(0); gi += 1) {
+            const int64_t nCoords = joffsetsAcc[gi + 1] - joffsetsAcc[gi];
+            TORCH_CHECK(nCoords <= std::numeric_limits<int32_t>::max(),
+                        "Grid ",
+                        gi,
+                        " would be built from ",
+                        nCoords,
+                        " candidate coordinates, which exceeds the ",
+                        std::numeric_limits<int32_t>::max(),
+                        "-coordinate limit of the NanoVDB grid builder. Reduce the grid size.");
+        }
+    }
+
     return FVDB_DISPATCH_KERNEL(ijk.device(),
                                 [&]() { return dispatchCreateNanoGridFromIJK<DeviceTag>(ijk); });
 }
