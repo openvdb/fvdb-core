@@ -2450,6 +2450,24 @@ class TestBasicOps(unittest.TestCase):
         self.assertTrue(torch.equal(clipped["cpu"][1].ijk.jdata, clipped["cuda"][1].ijk.jdata.cpu()))
         self.assertTrue(torch.equal(clipped["cpu"][0].jdata, clipped["cuda"][0].jdata.cpu()))
 
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA required")
+    def test_conv_grid_fast_path_parity(self):
+        # conv_grid uses leaf-mask morphology on CUDA for the fast paths: stride-1 uniform odd
+        # kernels (symmetric dilation), stride-1 uniform even kernels (positive pad), and the
+        # stride == kernel_size / kernel_size == 1 coarsening short circuit. Verify the output
+        # topology matches the CPU coordinate-list reference across those combos (and one fallback).
+        torch.manual_seed(0)
+        ijk = torch.randint(-20, 20, (4000, 3), dtype=torch.int32)
+        # (kernel, stride): 3^3 s1 -> 1 dilate; 5^3 s1 -> 2 dilates; 2^3 s1 -> 1 pad;
+        # 2^3 s2 & 4^3 s4 -> coarsen (pow2); 1 s1 -> identity; 3^3 s2 -> coord fallback.
+        combos = [(3, 1), (5, 1), (2, 1), (2, 2), (4, 4), (1, 1), (3, 2)]
+        for ksize, stride in combos:
+            g_cpu = GridBatch.from_ijk(JaggedTensor([ijk]))
+            g_cuda = GridBatch.from_ijk(JaggedTensor([ijk.cuda()]))
+            s_cpu = set(map(tuple, g_cpu.conv_grid(ksize, stride).ijk.jdata.tolist()))
+            s_cuda = set(map(tuple, g_cuda.conv_grid(ksize, stride).ijk.jdata.cpu().tolist()))
+            self.assertEqual(s_cpu, s_cuda, f"conv_grid mismatch for kernel={ksize} stride={stride}")
+
     @parameterized.expand(all_device_dtype_combos)
     def test_dual_without_border(self, device, dtype):
         vox_size = np.random.rand() * 0.1 + 0.05

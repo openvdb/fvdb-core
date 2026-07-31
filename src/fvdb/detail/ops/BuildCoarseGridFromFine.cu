@@ -48,10 +48,9 @@ nanovdb::GridHandle<TorchDeviceBuffer>
 dispatchBuildCoarseGridFromFine(const GridBatchData &fineGridBatch,
                                 const nanovdb::Coord branchingFactor);
 
-template <>
 nanovdb::GridHandle<TorchDeviceBuffer>
-dispatchBuildCoarseGridFromFine<torch::kCUDA>(const GridBatchData &fineGridBatch,
-                                              const nanovdb::Coord branchingFactor) {
+coarseGridHandleFromFineCUDA(const GridBatchData &fineGridBatch,
+                             const nanovdb::Coord &branchingFactor) {
     // fvdb coarsening maps fine voxel f to floor(f / factor); NanoVDB's CoarsenGrid maps f to
     // floor(f / 2) per pass (its coarsenComponent is exactly floor(n/2) for all n, and it unions
     // each 2^3 fine block). So a uniform power-of-two factor is that many CoarsenGrid passes -- no
@@ -94,6 +93,13 @@ dispatchBuildCoarseGridFromFine<torch::kCUDA>(const GridBatchData &fineGridBatch
 
     return handles.size() == 1 ? std::move(handles[0])
                                : nanovdb::cuda::mergeGridHandles(handles, &guide);
+}
+
+template <>
+nanovdb::GridHandle<TorchDeviceBuffer>
+dispatchBuildCoarseGridFromFine<torch::kCUDA>(const GridBatchData &fineGridBatch,
+                                              const nanovdb::Coord branchingFactor) {
+    return coarseGridHandleFromFineCUDA(fineGridBatch, branchingFactor);
 }
 
 template <>
