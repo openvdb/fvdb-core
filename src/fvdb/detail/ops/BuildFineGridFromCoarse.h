@@ -6,6 +6,9 @@
 
 #include <fvdb/GridBatchData.h>
 #include <fvdb/JaggedTensor.h>
+#include <fvdb/TorchDeviceBuffer.h>
+
+#include <nanovdb/GridHandle.h>
 
 #include <optional>
 
@@ -21,6 +24,15 @@ buildFineGridFromCoarse(const GridBatchData &coarseBatchHdl,
 JaggedTensor fineIJKForCoarseGrid(const GridBatchData &batchHdl,
                                   nanovdb::Coord upsamplingFactor,
                                   const std::optional<JaggedTensor> &maybeMask);
+
+// CUDA-only: build the subdivided (fine) grid topology handle for `factor` -- RefineGrid passes for
+// uniform power-of-two factors (an optional per-coarse-voxel mask is applied via PruneGrid first),
+// coordinate-list fallback otherwise. Exposed so buildGridForConvTranspose can reuse it for its
+// (kernel_size == 1 || stride == kernel_size) subdivision short circuit.
+nanovdb::GridHandle<TorchDeviceBuffer>
+fineGridHandleFromCoarseCUDA(const GridBatchData &coarseBatchHdl,
+                             const nanovdb::Coord &factor,
+                             const std::optional<JaggedTensor> &mask);
 
 } // namespace ops
 } // namespace detail
