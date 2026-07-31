@@ -647,7 +647,7 @@ intersectGaussianTilesCudaImpl(
             // intersections
             torch::Tensor tileJOffsets = torch::empty({numCameras, numTilesH, numTilesW},
                                                       means2d.options().dtype(torch::kInt64));
-            const int NUM_BLOCKS_2     = cuda::ceil_div<int64_t>(totalIntersections, NUM_THREADS);
+            const int NUM_BLOCKS_2     = (totalIntersections + NUM_THREADS - 1) / NUM_THREADS;
             computeTileOffsets<<<NUM_BLOCKS_2, NUM_THREADS, 0, stream>>>(
                 0,
                 totalIntersections,
