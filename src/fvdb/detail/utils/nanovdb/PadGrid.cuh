@@ -693,7 +693,7 @@ PadGrid<BuildT>::padRoot() {
     // This encoding scheme mirrors the one used in PointsToGrid (and DilateGrid); it is what
     // makes the enumerated voxel order match the coordinate-list path this replaces.
     auto coordToKey = [](const Coord &ijk) -> uint64_t {
-        static constexpr int64_t kOffset = 1 << 31;
+        static constexpr int64_t kOffset = int64_t(1) << 31;
         return (uint64_t(uint32_t(int64_t(ijk[2]) + kOffset) >> 12)) |
                (uint64_t(uint32_t(int64_t(ijk[1]) + kOffset) >> 12) << 21) |
                (uint64_t(uint32_t(int64_t(ijk[0]) + kOffset) >> 12) << 42);
@@ -723,7 +723,7 @@ PadGrid<BuildT>::padRoot() {
                             srcUpper->origin().offsetBy(di, dj, dk), rootTileDim);
                         auto sortKey = coordToKey(testBBox.min());
                         auto tileKey = RootT::CoordToKey(testBBox.min());
-                        if (testBBox.hasOverlap(dilatedBBox) & (dilatedTiles.count(sortKey) == 0)) {
+                        if (testBBox.hasOverlap(dilatedBBox) && (dilatedTiles.count(sortKey) == 0)) {
                             typename RootT::Tile neighborTile{tileKey};
                             dilatedTiles.emplace(sortKey, neighborTile);
                         }
