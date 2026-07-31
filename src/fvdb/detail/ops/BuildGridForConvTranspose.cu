@@ -10,9 +10,14 @@
 #include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 #include <fvdb/detail/utils/cuda/GridDim.h>
+#include <fvdb/detail/utils/nanovdb/CreateEmptyGridHandle.h>
+#include <fvdb/detail/utils/nanovdb/PadGrid.cuh>
 
 #include <nanovdb/tools/CreateNanoGrid.h>
+#include <nanovdb/tools/cuda/DilateGrid.cuh>
 #include <nanovdb/tools/cuda/PointsToGrid.cuh>
+#include <nanovdb/tools/cuda/RefineGrid.cuh>
+#include <nanovdb/util/MorphologyHelpers.h>
 
 #include <c10/cuda/CUDACachingAllocator.h>
 #include <c10/cuda/CUDAGuard.h>
@@ -179,11 +184,99 @@ convTransposeIJKForGrid(const GridBatchData &batchHdl,
         outIJK, outIJKBIdx, batchHdl.jlidx(), batchHdl.batchSize());
 }
 
+// Applies fn(grid) -> handle to each non-empty batch item, empties -> empty grid, then merges.
+template <typename PerGridFn>
+static nanovdb::GridHandle<TorchDeviceBuffer>
+perItemGridHandle(const GridBatchData &base, const TorchDeviceBuffer &guide, PerGridFn &&fn) {
+    std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> handles;
+    handles.reserve(base.batchSize());
+    for (int64_t i = 0; i < base.batchSize(); i += 1) {
+        if (base.numVoxelsAt(i) == 0) {
+            handles.push_back(createEmptyGridHandle(base.device()));
+            continue;
+        }
+        nanovdb::OnIndexGrid *grid = base.mGridHdl->deviceGrid<nanovdb::ValueOnIndex>(i);
+        TORCH_CHECK(grid, "Grid is null");
+        handles.push_back(fn(grid));
+    }
+    return handles.size() == 1 ? std::move(handles[0])
+                               : nanovdb::cuda::mergeGridHandles(handles, &guide);
+}
+
 template <>
 nanovdb::GridHandle<TorchDeviceBuffer>
 dispatchBuildGridForConvTranspose<torch::kCUDA>(const GridBatchData &baseGridHdl,
                                                 const nanovdb::Coord &kernelSize,
                                                 const nanovdb::Coord &stride) {
+    // Fast path 1: (kernel_size == 1 || stride == kernel_size) is pure subdivision by stride --
+    // exactly the coordinate short circuit in convTransposeIJKForGrid -- so reuse the leaf-mask
+    // subdivide builder (RefineGrid for uniform power-of-two stride, coordinate fallback
+    // otherwise).
+    if (kernelSize == nanovdb::Coord(1) || stride == kernelSize) {
+        return fineGridHandleFromCoarseCUDA(baseGridHdl, stride, std::nullopt);
+    }
+
+    const bool uniformKernel = (kernelSize[0] == kernelSize[1] && kernelSize[1] == kernelSize[2]);
+
+    c10::cuda::CUDAGuard deviceGuard(baseGridHdl.device());
+    at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream(baseGridHdl.device().index());
+    TorchDeviceBuffer guide(0, baseGridHdl.device());
+
+    // Fast path 2: stride 1 with a uniform kernel builds S (+) window (dstIjk = srcIjk + offset),
+    // identical to the forward conv: odd kernel k -> (k-1)/2 symmetric dilations, even kernel k ->
+    // (k-1) positive pad passes.
+    if (stride == nanovdb::Coord(1) && uniformKernel && kernelSize[0] > 1) {
+        const int k = kernelSize[0];
+        return perItemGridHandle(baseGridHdl, guide, [&](nanovdb::OnIndexGrid *grid) {
+            nanovdb::GridHandle<TorchDeviceBuffer> handle;
+            if (k % 2 == 1) {
+                for (int p = 0; p < (k - 1) / 2; p += 1) {
+                    nanovdb::tools::cuda::DilateGrid<nanovdb::ValueOnIndex> op(grid,
+                                                                               stream.stream());
+                    op.setOperation(nanovdb::tools::morphology::NN_FACE_EDGE_VERTEX);
+                    op.setChecksum(nanovdb::CheckMode::Default);
+                    op.setVerbose(0);
+                    handle = op.getHandle(guide);
+                    C10_CUDA_KERNEL_LAUNCH_CHECK();
+                    grid = handle.deviceGrid<nanovdb::ValueOnIndex>();
+                }
+            } else {
+                for (int p = 0; p < k - 1; p += 1) {
+                    morphology::PadGrid<nanovdb::ValueOnIndex> op(
+                        grid, /*positiveOctant=*/true, stream.stream());
+                    op.setChecksum(nanovdb::CheckMode::Default);
+                    handle = op.getHandle(guide);
+                    C10_CUDA_KERNEL_LAUNCH_CHECK();
+                    grid = handle.deviceGrid<nanovdb::ValueOnIndex>();
+                }
+            }
+            return handle;
+        });
+    }
+
+    // Fast path 3: stride 2, kernel 3 (the classic upsampling conv-transpose). The output is
+    // 2S (+) [-1,1]^3 (dstIjk = 2*srcIjk + offset, offset in [-1,1]^3). RefineGrid gives
+    // 2S (+) {0,1}^3, and one negative pad pass adds (+) {-1,0}^3, composing to (+) [-1,1]^3.
+    if (stride == nanovdb::Coord(2) && uniformKernel && kernelSize[0] == 3) {
+        return perItemGridHandle(baseGridHdl, guide, [&](nanovdb::OnIndexGrid *grid) {
+            nanovdb::tools::cuda::RefineGrid<nanovdb::ValueOnIndex> refineOp(grid, stream.stream());
+            refineOp.setChecksum(nanovdb::CheckMode::Default);
+            refineOp.setVerbose(0);
+            nanovdb::GridHandle<TorchDeviceBuffer> refined = refineOp.getHandle(guide);
+            C10_CUDA_KERNEL_LAUNCH_CHECK();
+
+            morphology::PadGrid<nanovdb::ValueOnIndex> padOp(
+                refined.deviceGrid<nanovdb::ValueOnIndex>(),
+                /*positiveOctant=*/false,
+                stream.stream());
+            padOp.setChecksum(nanovdb::CheckMode::Default);
+            nanovdb::GridHandle<TorchDeviceBuffer> handle = padOp.getHandle(guide);
+            C10_CUDA_KERNEL_LAUNCH_CHECK();
+            return handle;
+        });
+    }
+
+    // Fallback: general coordinate-list path.
     JaggedTensor coords = convTransposeIJKForGrid(baseGridHdl, kernelSize, stride);
     return ops::_createNanoGridFromIJK(coords);
 }
