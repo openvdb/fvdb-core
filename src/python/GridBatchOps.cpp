@@ -662,6 +662,19 @@ bind_grid_batch_ops(py::module &m) {
         py::arg("exclude_border") = false);
 
     m.def(
+        "build_padded_grid",
+        [](const GBI &grid, int bmin, int bmax, bool excludeBorder) {
+            if (grid.batchSize() == 0) {
+                return fvdb::detail::makeEmptyGridBatchData(grid.device());
+            }
+            return ops::buildPaddedGrid(grid, bmin, bmax, excludeBorder);
+        },
+        py::arg("grid"),
+        py::arg("bmin"),
+        py::arg("bmax"),
+        py::arg("exclude_border") = false);
+
+    m.def(
         "clip_grid",
         [](const GBI &grid,
            const std::vector<std::vector<int32_t>> &ijkMin,
