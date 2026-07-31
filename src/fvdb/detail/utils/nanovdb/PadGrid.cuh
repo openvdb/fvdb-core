@@ -723,7 +723,8 @@ PadGrid<BuildT>::padRoot() {
                             srcUpper->origin().offsetBy(di, dj, dk), rootTileDim);
                         auto sortKey = coordToKey(testBBox.min());
                         auto tileKey = RootT::CoordToKey(testBBox.min());
-                        if (testBBox.hasOverlap(dilatedBBox) && (dilatedTiles.count(sortKey) == 0)) {
+                        if (testBBox.hasOverlap(dilatedBBox) &&
+                            (dilatedTiles.count(sortKey) == 0)) {
                             typename RootT::Tile neighborTile{tileKey};
                             dilatedTiles.emplace(sortKey, neighborTile);
                         }
