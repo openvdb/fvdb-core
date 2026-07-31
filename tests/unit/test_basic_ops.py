@@ -2399,6 +2399,34 @@ class TestBasicOps(unittest.TestCase):
         loss.backward()
         self.assertTrue(torch.equal(clipped_features_grad, features.grad))
 
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA required")
+    def test_clip_grid_mask_based_parity(self):
+        # clipGrid now prunes the source grid to the in-bounds mask (leaf-mask morphology) rather
+        # than rebuilding from a coordinate list. Verify on a non-dense grid that (a) clipped
+        # features stay row-aligned with the clipped grid, and (b) CUDA and CPU produce the
+        # identical clipped grid in identical (canonical) order.
+        torch.manual_seed(0)
+        ijk = torch.randint(-16, 16, (5000, 3), dtype=torch.int32)
+        bmin, bmax = [[-4, -4, -4]], [[8, 8, 8]]
+
+        clipped = {}
+        for device in ("cpu", "cuda"):
+            grid = GridBatch.from_ijk(JaggedTensor([ijk.to(device)]))
+            # Use each voxel's own ijk as its feature, so row-alignment is directly checkable
+            # without assuming any ordering.
+            feats = JaggedTensor([grid.ijk.jdata.to(torch.float64)])
+            clipped_feats, clipped_grid = grid.clip(feats, bmin, bmax)
+            # Every clipped feature row must equal the ijk of the corresponding clipped voxel.
+            self.assertTrue(torch.equal(clipped_feats.jdata, clipped_grid.ijk.jdata.to(torch.float64)))
+            # Every clipped voxel lies inside the clip box.
+            lo = torch.tensor([-4, -4, -4], device=clipped_grid.ijk.jdata.device)
+            hi = torch.tensor([8, 8, 8], device=clipped_grid.ijk.jdata.device)
+            self.assertTrue(torch.all(clipped_grid.ijk.jdata >= lo) and torch.all(clipped_grid.ijk.jdata <= hi))
+            clipped[device] = (clipped_feats, clipped_grid)
+
+        self.assertTrue(torch.equal(clipped["cpu"][1].ijk.jdata, clipped["cuda"][1].ijk.jdata.cpu()))
+        self.assertTrue(torch.equal(clipped["cpu"][0].jdata, clipped["cuda"][0].jdata.cpu()))
+
     @parameterized.expand(all_device_dtype_combos)
     def test_dual_without_border(self, device, dtype):
         vox_size = np.random.rand() * 0.1 + 0.05
