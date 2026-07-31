@@ -18,8 +18,6 @@
 #include <cub/cub.cuh>
 #include <cuda/std/functional>
 
-#include <limits>
-
 #define FVDB_CUB_WRAPPER(func, ...)                                             \
     do {                                                                        \
         size_t tempStorageBytes = 0;                                            \
@@ -491,14 +489,8 @@ intersectGaussianTilesCudaImpl(
                           "activeTiles must have 1 dimension (numActiveTiles)");
     }
 
-    const int64_t numGaussians64 = isPacked ? means2d.size(0) : means2d.size(1);
-    const int64_t totalGaussians64 =
-        isPacked ? means2d.size(0) : static_cast<int64_t>(numCameras) * numGaussians64;
-    TORCH_CHECK_VALUE(
-        totalGaussians64 <= std::numeric_limits<int32_t>::max(),
-        "The number of Gaussians must fit in int32 because tile Gaussian IDs use int32");
-    const uint32_t numGaussians   = static_cast<uint32_t>(numGaussians64);
-    const uint32_t totalGaussians = static_cast<uint32_t>(totalGaussians64);
+    const uint32_t numGaussians   = isPacked ? means2d.size(0) : means2d.size(1);
+    const uint32_t totalGaussians = isPacked ? means2d.size(0) : numCameras * numGaussians;
 
     // const uint32_t numCameras      = means2d.size(0);
     const uint32_t totalTiles    = numTilesH * numTilesW;
@@ -740,14 +732,8 @@ intersectGaussianTilesPrivateUse1Impl(
                           "activeTiles must have 1 dimension (numActiveTiles)");
     }
 
-    const int64_t numGaussians64 = isPacked ? means2d.size(0) : means2d.size(1);
-    const int64_t totalGaussians64 =
-        isPacked ? means2d.size(0) : static_cast<int64_t>(numCameras) * numGaussians64;
-    TORCH_CHECK_VALUE(
-        totalGaussians64 <= std::numeric_limits<int32_t>::max(),
-        "The number of Gaussians must fit in int32 because tile Gaussian IDs use int32");
-    const uint32_t numGaussians   = static_cast<uint32_t>(numGaussians64);
-    const uint32_t totalGaussians = static_cast<uint32_t>(totalGaussians64);
+    const uint32_t numGaussians   = isPacked ? means2d.size(0) : means2d.size(1);
+    const uint32_t totalGaussians = isPacked ? means2d.size(0) : numCameras * numGaussians;
 
     // const uint32_t numCameras      = means2d.size(0);
     const uint32_t totalTiles    = numTilesH * numTilesW;
