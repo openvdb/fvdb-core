@@ -777,6 +777,29 @@ class TestBasicOps(unittest.TestCase):
 
         self.assertEqual(predicted_ijk_set, expected_ijk_set)
 
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA required")
+    def test_nearest_voxels_to_points_peak_memory(self):
+        # from_nearest_voxels_to_points now builds one voxel per point and pads by {0,1}^3 via
+        # leaf-mask morphology, instead of materializing 8 candidate coordinates per point (plus
+        # two 8N int32 batch-index arrays) and radix-sorting them. Verify the torch-visible peak
+        # is a small fraction of the old ~160 B/point.
+        n = 2_000_000
+        pts = torch.randn(n, 3, device="cuda", dtype=torch.float32)
+        torch.cuda.synchronize()
+        base = torch.cuda.memory_allocated()
+        torch.cuda.reset_peak_memory_stats()
+        grid = GridBatch.from_nearest_voxels_to_points(fvdb.JaggedTensor(pts), voxel_sizes=0.05)
+        torch.cuda.synchronize()
+        peak_extra = torch.cuda.max_memory_allocated() - base
+        # The old path peaked at > 300 MiB of torch tensors for 2M points (8N int32 coords + two
+        # 8N int32 jidx arrays); the mask path allocates ~one N-coord list plus the output grid.
+        self.assertGreater(grid.total_voxels, 0)
+        self.assertLess(
+            peak_extra,
+            150 * 1024 * 1024,
+            f"from_nearest_voxels_to_points torch peak {peak_extra / 1024 / 1024:.1f} MiB too large",
+        )
+
     @parameterized.expand(all_device_dtype_combos + bfloat16_combos)
     def test_refine(self, device, dtype):
         p = torch.randn(100, 3, device=device, dtype=torch.float)
