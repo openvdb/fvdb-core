@@ -437,9 +437,9 @@ template <class BuildT, bool Positive> struct PadLeafNodesFunctor {
                 const auto leafOrigin = dstLeaf.origin();
 
                 uint64_t originalWordsShifted[10][3][3] = {};
-                using WordStencilT  = uint64_t (&)[10][3][3]; // [x-voxel offset][y-block][z-block]
+                using WordStencilT  = uint64_t(&)[10][3][3]; // [x-voxel offset][y-block][z-block]
                 auto &originalWords = reinterpret_cast<WordStencilT>(
-                    originalWordsShifted[1][1][1]);           // logical range [-1,8][-1,1][-1,1]
+                    originalWordsShifted[1][1][1]);          // logical range [-1,8][-1,1][-1,1]
 
                 // Gather source leaves in the octant's 2x2x2 block neighborhood:
                 //   positive octant -> blocks at offsets {-1,0}^3 (content flows +dir)
@@ -530,7 +530,7 @@ template <typename BuildT, bool Positive> struct ErodeKeepMaskFunctor {
         const auto leafOrigin = leaf.origin();
 
         uint64_t originalWordsShifted[10][3][3] = {};
-        using WordStencilT                      = uint64_t (&)[10][3][3];
+        using WordStencilT                      = uint64_t(&)[10][3][3];
         auto &originalWords = reinterpret_cast<WordStencilT>(originalWordsShifted[1][1][1]);
 
         // Erosion gathers the opposite octant of padding:
