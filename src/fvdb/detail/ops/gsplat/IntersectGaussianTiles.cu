@@ -380,7 +380,7 @@ computeTileOffsets(const int64_t offset,
     // tile (cid, ti, tj) sorted by depth.
 
     // Parallelize over intersections
-    for (int64_t idx = blockIdx.x * blockDim.x + threadIdx.x; idx < count;
+    for (int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x; idx < count;
          idx += static_cast<int64_t>(blockDim.x) * gridDim.x) {
         auto isectIdx = idx + offset;
         // Bit-packed key for the camera/tile part of the this intersection
