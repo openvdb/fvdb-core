@@ -109,25 +109,26 @@ template <uint32_t NUM_CHANNELS, typename Camera> struct RasterizeFromWorldForwa
         auto *gaussBatch =
             reinterpret_cast<SharedGaussian<NUM_CHANNELS> *>(gaussAddr); // [blockSize]
 
-        float transmittance = 1.0f;
-        int32_t curIdx      = -1;
+        float transmittance            = 1.0f;
+        int32_t lastIntersectionOffset = -1;
         float pixOut[NUM_CHANNELS];
 #pragma unroll
         for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
             pixOut[k] = 0.f;
         }
 
-        const int32_t nIsects     = rangeEnd - rangeStart;
-        const uint32_t nBatches   = (nIsects + blockSize - 1) / blockSize;
+        const int64_t nIsects     = rangeEnd - rangeStart;
+        const int64_t nBatches    = (nIsects + blockSize - 1) / blockSize;
         const uint32_t threadRank = block.thread_rank();
 
-        for (uint32_t b = 0; b < nBatches; ++b) {
+        for (int64_t b = 0; b < nBatches; ++b) {
             if (__syncthreads_count(done) >= (int)blockSize) {
                 break;
             }
 
-            const int32_t batchStart = rangeStart + (int32_t)(blockSize * b);
-            const int32_t idx        = batchStart + (int32_t)threadRank;
+            const int64_t batchOffset = blockSize * b;
+            const int64_t batchStart  = rangeStart + batchOffset;
+            const int64_t idx         = batchStart + threadRank;
             if (idx < rangeEnd) {
                 const int32_t flatId = common.tileGaussianIds[idx];
                 idBatch[threadRank]  = flatId;
@@ -154,8 +155,9 @@ template <uint32_t NUM_CHANNELS, typename Camera> struct RasterizeFromWorldForwa
 
             __syncthreads();
 
+            const int64_t remaining = rangeEnd - batchStart;
             const uint32_t batchSize =
-                min((uint32_t)blockSize, (uint32_t)max(0, rangeEnd - batchStart));
+                static_cast<uint32_t>(remaining < blockSize ? remaining : blockSize);
             for (uint32_t t = 0; (t < batchSize) && !done; ++t) {
                 const SharedGaussian<NUM_CHANNELS> g = gaussBatch[t];
                 // 3DGS ray-ellipsoid visibility in "whitened" coordinates (see 3D-GUT paper
@@ -184,8 +186,8 @@ template <uint32_t NUM_CHANNELS, typename Camera> struct RasterizeFromWorldForwa
                 for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
                     pixOut[k] += common.features[cid][gid][k] * contrib;
                 }
-                curIdx        = (uint32_t)(batchStart + (int32_t)t);
-                transmittance = nextTransmittance;
+                lastIntersectionOffset = static_cast<int32_t>(batchOffset + t);
+                transmittance          = nextTransmittance;
             }
         }
 
@@ -194,7 +196,7 @@ template <uint32_t NUM_CHANNELS, typename Camera> struct RasterizeFromWorldForwa
         }
 
         outAlphaPtr[0]  = 1.0f - transmittance;
-        outLastIdPtr[0] = curIdx;
+        outLastIdPtr[0] = lastIntersectionOffset;
 #pragma unroll
         for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
             outFeaturesPtr[k * outFeatures.stride(3)] =
@@ -241,7 +243,7 @@ launchForward(const torch::Tensor &means,
     const dim3 blockDim(tileSize, tileSize, 1);
     const dim3 gridDim(C * tileExtentH * tileExtentW, 1, 1);
 
-    const int32_t totalIntersections = (int32_t)tileGaussianIds.size(0);
+    const int64_t totalIntersections = tileGaussianIds.size(0);
 
     RasterizeFromWorldCommonArgs commonArgs{
         imageWidth,
@@ -253,7 +255,7 @@ launchForward(const torch::Tensor &means,
         tileExtentH,
         NUM_CHANNELS,
         totalIntersections,
-        tileOffsets.packed_accessor64<int32_t, 3, torch::RestrictPtrTraits>(),
+        tileOffsets.packed_accessor64<int64_t, 3, torch::RestrictPtrTraits>(),
         tileGaussianIds.packed_accessor64<int32_t, 1, torch::RestrictPtrTraits>(),
         nullptr,
         nullptr,
@@ -345,6 +347,8 @@ dispatchGaussianRasterizeFromWorld3DGSForward<torch::kCUDA>(
     TORCH_CHECK_VALUE(features.is_cuda(), "features must be CUDA");
     TORCH_CHECK_VALUE(tileOffsets.is_cuda(), "tileOffsets must be CUDA");
     TORCH_CHECK_VALUE(tileGaussianIds.is_cuda(), "tileGaussianIds must be CUDA");
+    TORCH_CHECK_VALUE(tileOffsets.scalar_type() == torch::kInt64,
+                      "tileOffsets must have dtype int64");
 
     TORCH_CHECK_VALUE(means.dim() == 2 && means.size(1) == 3, "means must have shape [N,3]");
     TORCH_CHECK_VALUE(quats.dim() == 2 && quats.size(1) == 4, "quats must have shape [N,4]");

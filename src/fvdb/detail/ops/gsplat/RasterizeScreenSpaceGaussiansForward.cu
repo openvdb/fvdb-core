@@ -155,8 +155,8 @@ struct RasterizeForwardArgs {
     volumeRenderTileForward(const uint32_t cameraId,
                             const uint32_t row,
                             const uint32_t col,
-                            const uint32_t firstGaussianIdInBlock,
-                            const uint32_t lastGaussianIdInBlock,
+                            const int64_t firstGaussianIdInBlock,
+                            const int64_t lastGaussianIdInBlock,
                             const uint32_t blockSize,
                             const bool pixelIsActive,
                             const uint32_t activePixelIndex) {
@@ -168,7 +168,7 @@ struct RasterizeForwardArgs {
 
         // Process Gaussians in batches of block size (i.e. one Gaussian per thread in the block)
         const uint32_t tidx = threadIdx.y * blockDim.x + threadIdx.x;
-        const uint32_t numBatches =
+        const int64_t numBatches =
             (lastGaussianIdInBlock - firstGaussianIdInBlock + blockSize - 1) / blockSize;
 
         // (row, col) coordinates are relative to the specified image origin which may
@@ -182,10 +182,10 @@ struct RasterizeForwardArgs {
         ScalarType pixOut[NUM_CHANNELS] = {0.f};
 
         // The alpha sequence is feature-independent (depends only on opacity + conic + position),
-        // so the per-chunk accumTransmittance and curIdx are identical across chunks. Capture them
-        // from the first chunk and write them out at the end.
-        ScalarType accumTransmittanceFinal = 1.0f;
-        int32_t curIdxFinal                = -1;
+        // so the per-chunk accumTransmittance and last intersection offset are identical across
+        // chunks. Capture them from the first chunk and write them out at the end.
+        ScalarType accumTransmittanceFinal  = 1.0f;
+        int32_t lastIntersectionOffsetFinal = -1;
 
         constexpr size_t NUM_CHUNKS =
             (NUM_CHANNELS + NUM_SHARED_CHANNELS - 1) / NUM_SHARED_CHANNELS;
@@ -200,13 +200,14 @@ struct RasterizeForwardArgs {
             // However, this makes the backward pass 1.5x slower, so we stick with float for now
             // and sort of just ignore small impact gaussians ¯\_(ツ)_/¯.
             ScalarType accumTransmittance = 1.0f;
-            // index of most recent gaussian to write to this thread's pixel
-            int32_t curIdx = -1;
+            // Tile-relative intersection offset of the most recent Gaussian written to this
+            // thread's pixel.
+            int32_t lastIntersectionOffset = -1;
             // We don't return right away if the pixel is not in the image since we want
             // to use this thread to load gaussians into shared memory
             bool done = !pixelIsActive;
 
-            for (uint32_t b = 0; b < numBatches; ++b) {
+            for (int64_t b = 0; b < numBatches; ++b) {
                 // Sync threads before we start integrating the next batch (and between chunks).
                 // If all threads are done, we can break early.
                 __syncthreads();
@@ -216,8 +217,9 @@ struct RasterizeForwardArgs {
 
                 // Each thread fetches one gaussian from front to back (mTileGaussianIds is depth
                 // sorted)
-                const uint32_t batchStart = firstGaussianIdInBlock + blockSize * b;
-                const uint32_t idx        = batchStart + tidx;
+                const int64_t batchOffset = blockSize * b;
+                const int64_t batchStart  = firstGaussianIdInBlock + batchOffset;
+                const int64_t idx         = batchStart + tidx;
                 if (idx < lastGaussianIdInBlock) {
                     const int32_t g =
                         commonArgs.mTileGaussianIds[idx]; // which gaussian we're rendering
@@ -240,7 +242,9 @@ struct RasterizeForwardArgs {
                 // already done (saturated or outside image bounds). Block-level
                 // __syncthreads_and above only fires once all 8 warps finish.
                 if (!__all_sync(0xffffffffu, done)) {
-                    const uint32_t batchSize = min(blockSize, lastGaussianIdInBlock - batchStart);
+                    const int64_t remaining = lastGaussianIdInBlock - batchStart;
+                    const uint32_t batchSize =
+                        static_cast<uint32_t>(remaining < blockSize ? remaining : blockSize);
                     for (uint32_t t = 0; (t < batchSize) && !done; ++t) {
                         const Gaussian2D<ScalarType> gaussian = sharedGaussians[t];
 
@@ -271,22 +275,22 @@ struct RasterizeForwardArgs {
                             }
                         }
 
-                        curIdx             = batchStart + t;
-                        accumTransmittance = nextTransmittance;
+                        lastIntersectionOffset = static_cast<int32_t>(batchOffset + t);
+                        accumTransmittance     = nextTransmittance;
                     }
                 }
             }
 
             if (chunk == 0) {
-                accumTransmittanceFinal = accumTransmittance;
-                curIdxFinal             = curIdx;
+                accumTransmittanceFinal     = accumTransmittance;
+                lastIntersectionOffsetFinal = lastIntersectionOffset;
             }
         }
 
         if (pixelIsActive) {
             const auto pixIdx = commonArgs.pixelIndex(cameraId, row, col, activePixelIndex);
             writeAlpha(pixIdx, 1.0f - accumTransmittanceFinal);
-            writeLastId(pixIdx, curIdxFinal);
+            writeLastId(pixIdx, lastIntersectionOffsetFinal);
             writeFeatures(pixIdx, [&](uint32_t k) {
                 return commonArgs.mHasBackgrounds
                            ? pixOut[k] +
@@ -342,8 +346,8 @@ rasterizeGaussiansForward(
         return;
     }
 
-    int32_t firstGaussianIdInBlock;
-    int32_t lastGaussianIdInBlock;
+    int64_t firstGaussianIdInBlock;
+    int64_t lastGaussianIdInBlock;
     cuda::std::tie(firstGaussianIdInBlock, lastGaussianIdInBlock) =
         commonArgs.tileGaussianRange(cameraId, tileRow, tileCol);
 
@@ -1196,6 +1200,8 @@ rasterizeScreenSpaceGaussiansFwd(const torch::Tensor &means2d,
                                  const int64_t numSharedChannelsOverride,
                                  const at::optional<torch::Tensor> &backgrounds,
                                  const at::optional<torch::Tensor> &masks) {
+    TORCH_CHECK_VALUE(tileOffsets.scalar_type() == torch::kInt64,
+                      "tileOffsets must have dtype int64");
     const RenderWindow2D renderWindow{imageWidth, imageHeight, imageOriginW, imageOriginH};
     return FVDB_DISPATCH_KERNEL(means2d.device(), [&]() {
         return dispatchRasterizeScreenSpaceGaussiansFwd<DeviceTag>(means2d,
@@ -1232,6 +1238,8 @@ rasterizeScreenSpaceGaussiansSparseFwd(const fvdb::JaggedTensor &pixelsToRender,
                                        const int64_t numSharedChannelsOverride,
                                        const at::optional<torch::Tensor> &backgrounds,
                                        const at::optional<torch::Tensor> &masks) {
+    TORCH_CHECK_VALUE(tileOffsets.scalar_type() == torch::kInt64,
+                      "tileOffsets must have dtype int64");
     const RenderWindow2D renderWindow{imageWidth, imageHeight, imageOriginW, imageOriginH};
     return FVDB_DISPATCH_KERNEL(means2d.device(), [&]() {
         return dispatchRasterizeScreenSpaceGaussiansSparseFwd<DeviceTag>(pixelsToRender,

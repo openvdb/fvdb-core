@@ -41,6 +41,7 @@ WorldSpaceInputs
 makeInputs() {
     const auto floats = torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA);
     const auto ints   = torch::TensorOptions().dtype(torch::kInt32).device(torch::kCUDA);
+    const auto longs  = torch::TensorOptions().dtype(torch::kInt64).device(torch::kCUDA);
     auto intrinsics =
         torch::tensor({{{12.0f, 0.0f, 3.5f}, {0.0f, 12.0f, 3.5f}, {0.0f, 0.0f, 1.0f}}}, floats);
     return {
@@ -52,7 +53,7 @@ makeInputs() {
         torch::eye(4, floats).unsqueeze(0),
         intrinsics,
         torch::zeros({1, 12}, floats),
-        torch::zeros({1, 1, 1}, ints),
+        torch::zeros({1, 1, 1}, longs),
         torch::tensor({0}, ints),
     };
 }
@@ -137,6 +138,7 @@ expectFiniteRaster(const RasterResult &result, const int64_t channels) {
                 torch::IntArrayRef({1, kImageHeight, kImageWidth, 1}));
     EXPECT_TRUE(torch::isfinite(std::get<0>(result)).all().item<bool>());
     EXPECT_TRUE(torch::isfinite(std::get<1>(result)).all().item<bool>());
+    EXPECT_EQ(std::get<2>(result).scalar_type(), torch::kInt32);
     EXPECT_GT(std::get<1>(result).sum().item<float>(), 0.0f);
 }
 

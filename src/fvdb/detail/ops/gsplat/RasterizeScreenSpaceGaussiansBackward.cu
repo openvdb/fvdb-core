@@ -610,8 +610,8 @@ struct RasterizeBackwardArgs {
         const uint32_t cameraId,
         const uint32_t row,
         const uint32_t col,
-        const int32_t firstGaussianIdInBlock,
-        const int32_t lastGaussianIdInBlock,
+        const int64_t firstGaussianIdInBlock,
+        const int64_t lastGaussianIdInBlock,
         const uint32_t blockSize,
         const bool pixelIsActive,
         const uint32_t activePixelIndex) {
@@ -631,7 +631,7 @@ struct RasterizeBackwardArgs {
         // Only access memory if the pixel is active (within image bounds)
         ScalarType finalTransmittance  = ScalarType{1};
         ScalarType dLossDRenderedAlpha = ScalarType{0};
-        int32_t lastGaussianId         = 0;
+        int32_t lastIntersectionOffset = -1;
 
         if (pixelIsActive) {
             // this is the T AFTER the last gaussian in this pixel
@@ -641,8 +641,8 @@ struct RasterizeBackwardArgs {
             // pixel
             dLossDRenderedAlpha = readDLossDRenderedAlpha(pixIdx);
 
-            // ID of the last Gaussian to contribute to this pixel
-            lastGaussianId = readLastId(pixIdx);
+            // Tile-relative offset of the last Gaussian intersection to contribute to this pixel.
+            lastIntersectionOffset = readLastId(pixIdx);
         }
 
         namespace cg = cooperative_groups;
@@ -650,12 +650,12 @@ struct RasterizeBackwardArgs {
         const cg::thread_block_tile<WARP_TILE_SIZE> warp =
             cg::tiled_partition<WARP_TILE_SIZE>(block);
 
-        const int32_t lastGaussianIdInWarp = warpMax(lastGaussianId, warp);
+        const int32_t lastIntersectionOffsetInWarp = warpMax(lastIntersectionOffset, warp);
 
         // Process Gaussians in batches of block size (i.e. one Gaussian per thread in the block)
-        const uint32_t tidx = threadIdx.y * blockDim.x + threadIdx.x;
-        const uint32_t numBatches =
-            (lastGaussianIdInBlock - firstGaussianIdInBlock + blockSize - 1) / blockSize;
+        const uint32_t tidx            = threadIdx.y * blockDim.x + threadIdx.x;
+        const int64_t numIntersections = lastGaussianIdInBlock - firstGaussianIdInBlock;
+        const int64_t numBatches       = (numIntersections + blockSize - 1) / blockSize;
 
         constexpr size_t NUM_CHUNKS =
             (NUM_CHANNELS + NUM_SHARED_CHANNELS - 1) / NUM_SHARED_CHANNELS;
@@ -685,18 +685,18 @@ struct RasterizeBackwardArgs {
                 dLossDRenderedFeature[k] = ScalarType{0};
             }
 
-            for (uint32_t b = 0; b < numBatches; ++b) {
+            for (int64_t b = 0; b < numBatches; ++b) {
                 // resync all threads before writing next batch of shared mem
                 __syncthreads();
 
                 // Each thread fetches one gaussian into shared memory.
                 // Gaussians are stored in shared memory locations in order of decreasing
                 // distance from the camera. Gaussians are processed in batches of size
-                // blockSize (i.e. one Gaussian per thread in the block), and batchEnd is the
-                // index of the last gaussian. NOTE: These values can be negative so must be
-                // int32 instead of uint32
-                const int32_t batchEnd = lastGaussianIdInBlock - 1 - blockSize * b;
-                const int32_t idx      = batchEnd - tidx;
+                // blockSize (i.e. one Gaussian per thread in the block). batchEndOffset is relative
+                // to the tile's first intersection. NOTE: These values can be negative so must be
+                // signed instead of unsigned.
+                const int64_t batchEndOffset = numIntersections - 1 - blockSize * b;
+                const int64_t idx            = firstGaussianIdInBlock + batchEndOffset - tidx;
                 if (idx >= firstGaussianIdInBlock) {
                     const int32_t g =
                         commonArgs.mTileGaussianIds[idx]; // Gaussian index in [C * N] or [nnz]
@@ -718,8 +718,15 @@ struct RasterizeBackwardArgs {
                 // 0 index is the furthest back gaussian in the batch
                 // For each Gaussian which contributes to this pixel, compute this pixel's
                 // gradient contribution to that Gaussian
-                const int32_t batchSize = min(blockSize, batchEnd + 1 - firstGaussianIdInBlock);
-                for (uint32_t t = max(0, batchEnd - lastGaussianIdInWarp); t < batchSize; ++t) {
+                const int64_t remaining = batchEndOffset + 1;
+                const uint32_t batchSize =
+                    static_cast<uint32_t>(remaining < blockSize ? remaining : blockSize);
+                const int64_t firstT64 = batchEndOffset > lastIntersectionOffsetInWarp
+                                             ? batchEndOffset - lastIntersectionOffsetInWarp
+                                             : 0;
+                const uint32_t firstT =
+                    firstT64 < batchSize ? static_cast<uint32_t>(firstT64) : batchSize;
+                for (uint32_t t = firstT; t < batchSize; ++t) {
                     // (row, col) coordinates are relative to the specified image origin which may
                     // be a crop so we need to add the origin to get the absolute pixel coordinates
                     const ScalarType px =
@@ -727,7 +734,7 @@ struct RasterizeBackwardArgs {
                     const ScalarType py =
                         row + ScalarType(commonArgs.renderOriginY()) + ScalarType{0.5};
 
-                    bool valid = pixelIsActive && (batchEnd - t <= lastGaussianId);
+                    bool valid = pixelIsActive && (batchEndOffset - t <= lastIntersectionOffset);
 
                     const auto [gaussianIsValid, delta, expMinusSigma, alpha] = [&]() {
                         if (valid) {
@@ -849,8 +856,8 @@ rasterizeGaussiansBackward(
         return;
     }
 
-    int32_t firstGaussianIdInBlock;
-    int32_t lastGaussianIdInBlock;
+    int64_t firstGaussianIdInBlock;
+    int64_t lastGaussianIdInBlock;
     cuda::std::tie(firstGaussianIdInBlock, lastGaussianIdInBlock) =
         commonArgs.tileGaussianRange(cameraId, tileRow, tileCol);
 
@@ -1747,6 +1754,9 @@ rasterizeScreenSpaceGaussiansBwd(const torch::Tensor &means2d,
                                  const int64_t numSharedChannelsOverride,
                                  const at::optional<torch::Tensor> &backgrounds,
                                  const at::optional<torch::Tensor> &masks) {
+    TORCH_CHECK_VALUE(tileOffsets.scalar_type() == torch::kInt64,
+                      "tileOffsets must have dtype int64");
+    TORCH_CHECK_VALUE(lastIds.scalar_type() == torch::kInt32, "lastIds must have dtype int32");
     const RenderWindow2D renderWindow{imageWidth, imageHeight, imageOriginW, imageOriginH};
     return FVDB_DISPATCH_KERNEL(means2d.device(), [&]() {
         return dispatchRasterizeScreenSpaceGaussiansBwd<DeviceTag>(means2d,
@@ -1793,6 +1803,10 @@ rasterizeScreenSpaceGaussiansSparseBwd(const fvdb::JaggedTensor &pixelsToRender,
                                        const int64_t numSharedChannelsOverride,
                                        const at::optional<torch::Tensor> &backgrounds,
                                        const at::optional<torch::Tensor> &masks) {
+    TORCH_CHECK_VALUE(tileOffsets.scalar_type() == torch::kInt64,
+                      "tileOffsets must have dtype int64");
+    TORCH_CHECK_VALUE(lastIds.jdata().scalar_type() == torch::kInt32,
+                      "lastIds must have dtype int32");
     const RenderWindow2D renderWindow{imageWidth, imageHeight, imageOriginW, imageOriginH};
     return FVDB_DISPATCH_KERNEL(means2d.device(), [&]() {
         return dispatchRasterizeScreenSpaceGaussiansSparseBwd<DeviceTag>(pixelsToRender,

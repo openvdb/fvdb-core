@@ -10,6 +10,7 @@
 #include <fvdb/detail/utils/cuda/math/Rotation.cuh>
 #include <fvdb/detail/utils/gsplat/Gaussian2D.cuh>
 #include <fvdb/detail/utils/gsplat/GaussianMath.cuh>
+#include <fvdb/detail/utils/gsplat/GaussianTileRange.cuh>
 
 #include <nanovdb/math/Math.h>
 
@@ -96,7 +97,7 @@ template <typename ScalarType, size_t NUM_CHANNELS, bool IS_PACKED> struct Raste
     uint32_t mBlockOffset;
     uint32_t mNumCameras;
     uint32_t mNumGaussiansPerCamera;
-    uint32_t mTotalIntersections;
+    int64_t mTotalIntersections;
     // Raster window (crop) dimensions/origin. These are render-target coordinates, not full camera
     // sensor dimensions.
     RenderWindow2D mRenderWindow;
@@ -114,9 +115,9 @@ template <typename ScalarType, size_t NUM_CHANNELS, bool IS_PACKED> struct Raste
     // Tile offsets: can be 3D [C, nTilesH, nTilesW] (dense) or 1D [AT + 1] (sparse)
     // We store both accessor types but only one is valid based on mTileOffsetsAreSparse
     bool mTileOffsetsAreSparse;
-    TorchRAcc64<int32_t, 3>
+    TorchRAcc64<int64_t, 3>
         mTileOffsets; // [C, nTilesH, nTilesW] - used when !mTileOffsetsAreSparse
-    TorchRAcc64<int32_t, 1> mSparseTileOffsets; // [AT + 1] - used when mTileOffsetsAreSparse
+    TorchRAcc64<int64_t, 1> mSparseTileOffsets; // [AT + 1] - used when mTileOffsetsAreSparse
     // Common optional input tensors
     bool mHasFeatures;
     VectorAccessor mFeatures;                // [C, N, NUM_CHANNELS] or [nnz, NUM_CHANNELS]
@@ -158,14 +159,14 @@ template <typename ScalarType, size_t NUM_CHANNELS, bool IS_PACKED> struct Raste
           mTileOffsetsAreSparse(tileOffsets.dim() == 1),
           // Initialize 3D accessor for dense mode, or placeholder for sparse mode
           mTileOffsets(mTileOffsetsAreSparse
-                           ? initAccessor<int32_t, 3>(
+                           ? initAccessor<int64_t, 3>(
                                  torch::empty({0, 0, 0}, tileOffsets.options()), "tileOffsets")
-                           : initAccessor<int32_t, 3>(tileOffsets, "tileOffsets")),
+                           : initAccessor<int64_t, 3>(tileOffsets, "tileOffsets")),
           // Initialize 1D accessor for sparse mode, or placeholder for dense mode
           mSparseTileOffsets(
               mTileOffsetsAreSparse
-                  ? initAccessor<int32_t, 1>(tileOffsets, "sparseTileOffsets")
-                  : initAccessor<int32_t, 1>(torch::empty({0}, tileOffsets.options()),
+                  ? initAccessor<int64_t, 1>(tileOffsets, "sparseTileOffsets")
+                  : initAccessor<int64_t, 1>(torch::empty({0}, tileOffsets.options()),
                                              "sparseTileOffsets")),
           mHasFeatures(features.has_value()),
           mFeatures(initAccessor<ScalarType, NUM_OUTER_DIMS + 1>(
@@ -175,7 +176,8 @@ template <typename ScalarType, size_t NUM_CHANNELS, bool IS_PACKED> struct Raste
           mMasks(initAccessor<bool, 3>(masks, means2d.options().dtype(torch::kBool), "masks")),
           mHasMasks(masks.has_value()), mBlockOffset(blockOffset),
           mIsSparse(activeTiles.has_value()),
-          mActiveTiles(initAccessor<int32_t, 1>(activeTiles, tileOffsets.options(), "activeTiles")),
+          mActiveTiles(initAccessor<int32_t, 1>(
+              activeTiles, tileOffsets.options().dtype(torch::kInt32), "activeTiles")),
           mTilePixelMask(initAccessor<uint64_t, 2>(
               tilePixelMask, means2d.options().dtype(torch::kUInt64), "tilePixelMask")),
           mTilePixelCumsum(initAccessor<int64_t, 1>(
@@ -421,7 +423,7 @@ template <typename ScalarType, size_t NUM_CHANNELS, bool IS_PACKED> struct Raste
     }
 
     // Get the first and last Gaussian ID in the current tile
-    inline __device__ cuda::std::tuple<int32_t, int32_t>
+    inline __device__ cuda::std::tuple<int64_t, int64_t>
     tileGaussianRange(uint32_t cameraId, uint32_t tileRow, uint32_t tileCol) {
         // In sparse mode with 1D tile offsets, use the sparse offsets directly
         // indexed by the tile ordinal (blockIdx.x + mBlockOffset)
@@ -430,16 +432,14 @@ template <typename ScalarType, size_t NUM_CHANNELS, bool IS_PACKED> struct Raste
             return {mSparseTileOffsets[tileOrdinal], mSparseTileOffsets[tileOrdinal + 1]};
         }
 
-        // Dense mode: look up by (cameraId, tileRow, tileCol)
-        const int32_t firstGaussianIdInBlock = mTileOffsets[cameraId][tileRow][tileCol];
-        auto [nextTileRow, nextTileCol]      = (tileCol < mNumTilesW - 1)
-                                                   ? std::make_tuple(tileRow, tileCol + 1)
-                                                   : std::make_tuple(tileRow + 1, 0u); // wrap around
-        const int32_t lastGaussianIdInBlock =
-            ((cameraId == mNumCameras - 1) && (nextTileRow == mNumTilesH))
-                ? mTotalIntersections
-                : mTileOffsets[cameraId][nextTileRow][nextTileCol];
-        return {firstGaussianIdInBlock, lastGaussianIdInBlock};
+        return fvdb::detail::ops::tileGaussianRange(mTileOffsets,
+                                                    mTotalIntersections,
+                                                    mNumCameras,
+                                                    mNumTilesH,
+                                                    mNumTilesW,
+                                                    cameraId,
+                                                    tileRow,
+                                                    tileCol);
     }
 
     /// @brief Get the block dimensions for the forward/backward pass
