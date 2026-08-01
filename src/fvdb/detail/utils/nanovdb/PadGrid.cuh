@@ -175,7 +175,6 @@ template <class BuildT, bool Positive> struct PadInternalNodesFunctor {
 
         const auto &srcTree = srcGrid->tree();
         const auto &lower   = srcTree.template getFirstNode<1>()[lowerID];
-        auto &valueMask     = const_cast<LowerMaskT &>(lower.valueMask());
 
         for (std::size_t jj = sliceID * LeafNodesPerSlice; jj < (sliceID + 1) * LeafNodesPerSlice;
              jj += MaxThreadsPerBlock) {
