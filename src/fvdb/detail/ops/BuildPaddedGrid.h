@@ -10,8 +10,13 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-c10::intrusive_ptr<GridBatchData>
-buildPaddedGrid(const GridBatchData &baseBatchHdl, int bmin, int bmax, bool excludeBorder);
+// Build a grid whose topology is the source padded (Minkowski-summed) / eroded by the box
+// [bmin, bmax]^3. When `dualTransform` is true the result is reinterpreted onto the dual
+// (corner) lattice -- the source's primal/dual transforms are swapped -- which is what
+// `dual_grid` wants. When false the result stays on the *same* lattice as the source and keeps
+// the source's transforms verbatim, which is what a plain padded grid wants.
+c10::intrusive_ptr<GridBatchData> buildPaddedGrid(
+    const GridBatchData &baseBatchHdl, int bmin, int bmax, bool excludeBorder, bool dualTransform);
 
 } // namespace ops
 } // namespace detail

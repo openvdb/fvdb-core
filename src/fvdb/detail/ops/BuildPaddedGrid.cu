@@ -319,8 +319,8 @@ dispatchBuildPaddedGrid<torch::kCUDA>(const GridBatchData &baseBatchHdl,
     const int totalPasses = numPositive + numNegative;
 
     // Identity case (bmin == bmax == 0): no morphology passes run, so return a copy of the whole
-    // source handle (all batch items, empty ones included). The tail then applies the dual
-    // transform swap.
+    // source handle (all batch items, empty ones included). The tail then applies the transform
+    // fix-up (dual swap or verbatim copy, per `dualTransform`).
     if (totalPasses == 0) {
         return baseBatchHdl.nanoGridHandle().copy<TorchDeviceBuffer>(guide);
     }
@@ -400,7 +400,8 @@ dispatchBuildPaddedGrid<torch::kCPU>(const GridBatchData &baseBatchHdl,
 }
 
 c10::intrusive_ptr<GridBatchData>
-buildPaddedGrid(const GridBatchData &baseBatchHdl, int bmin, int bmax, bool excludeBorder) {
+buildPaddedGrid(
+    const GridBatchData &baseBatchHdl, int bmin, int bmax, bool excludeBorder, bool dualTransform) {
     // The structuring element [bmin, bmax]^3 must contain the origin so the padded grid is a
     // superset of the primal (and the erosion a subset); a box excluding the origin would be a
     // translation, which this op does not model. This also lets the CUDA path decompose the box
@@ -436,10 +437,23 @@ buildPaddedGrid(const GridBatchData &baseBatchHdl, int bmin, int bmax, bool excl
     ops::populateGridMetadata(hdl, voxS, voxO, batchOffsets, hostMeta, deviceMeta, &batchMeta);
     batchMeta.mIsContiguous = true;
 
+    // Fix up the per-grid transforms. populateGridMetadata already recomputed primal/dual
+    // transforms from the source's (voxelSize, origin), so here we just carry the source's stored
+    // transforms over verbatim -- either swapped (dual) or as-is (plain pad).
     for (int64_t i = 0; i < bs; i++) {
-        hostMeta[i].mDualTransform   = baseBatchHdl.mHostGridMetadata[i].mPrimalTransform;
-        hostMeta[i].mPrimalTransform = baseBatchHdl.mHostGridMetadata[i].mDualTransform;
-        hostMeta[i].mVoxelSize       = baseBatchHdl.mHostGridMetadata[i].mVoxelSize;
+        const auto &srcMeta = baseBatchHdl.mHostGridMetadata[i];
+        if (dualTransform) {
+            // dual_grid: result voxels sit at the *corners* of the source voxels, so the source's
+            // dual (corner-aligned) transform becomes the result's primal (center-aligned)
+            // transform, and vice versa. This shifts the origin by half a voxel.
+            hostMeta[i].mPrimalTransform = srcMeta.mDualTransform;
+            hostMeta[i].mDualTransform   = srcMeta.mPrimalTransform;
+        } else {
+            // Plain padded grid: same lattice as the source, so keep its transforms unchanged.
+            hostMeta[i].mPrimalTransform = srcMeta.mPrimalTransform;
+            hostMeta[i].mDualTransform   = srcMeta.mDualTransform;
+        }
+        hostMeta[i].mVoxelSize = srcMeta.mVoxelSize;
     }
     syncMetadataToDevice(hostMeta, deviceMeta, bs, device, true);
 

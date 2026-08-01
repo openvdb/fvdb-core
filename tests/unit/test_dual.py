@@ -110,6 +110,49 @@ class TestBasicOps(unittest.TestCase):
         )
         assert (_grid.ijk.jdata == _target_ijk).all(), _grid.ijk.jdata
 
+    @parameterized.expand(all_device_combos)
+    def test_dual_grid_transform_is_dual_lattice(self, device):
+        # dual_grid places its result on the corner (dual) lattice: the source's dual
+        # (corner-aligned) transform becomes the result's primal transform, so the reported origin
+        # shifts by exactly -0.5 voxel while the voxel size is unchanged.
+        torch.manual_seed(7)
+        ijks = [torch.randint(-30, 30, (500, 3), dtype=torch.int32)]
+        voxel_sizes = [0.3, 0.5, 0.7]
+        origins = [1.25, -2.0, 0.5]
+        g = _build_grid(ijks, device, voxel_sizes, origins)
+        d = g.dual_grid()
+        self.assertTrue(torch.allclose(d.voxel_sizes, g.voxel_sizes), "dual_grid changed the voxel size")
+        expected_origin = g.origins - 0.5 * g.voxel_sizes
+        self.assertTrue(
+            torch.allclose(d.origins, expected_origin),
+            f"dual origin {d.origins.tolist()} != base - 0.5*voxel {expected_origin.tolist()}",
+        )
+
+    @parameterized.expand(all_device_combos)
+    def test_build_padded_grid_preserves_transform(self, device):
+        # A plain padded grid lives on the *same* lattice as the source, so build_padded_grid must
+        # keep the source's primal origin and voxel size for every box -- it must NOT swap
+        # primal/dual transforms the way dual_grid does. Regression test: buildPaddedGrid used to
+        # unconditionally swap, which leaked dual semantics into this generic padding primitive
+        # (openvdb/fvdb-core#710 review).
+        torch.manual_seed(8)
+        ijks = [torch.randint(-30, 30, (500, 3), dtype=torch.int32)]
+        voxel_sizes = [0.3, 0.5, 0.7]
+        origins = [1.25, -2.0, 0.5]
+        g = _build_grid(ijks, device, voxel_sizes, origins)
+        for bmin, bmax in [(0, 0), (0, 1), (-1, 0), (-1, 1), (0, 2), (-2, 1)]:
+            for exclude_border in (False, True):
+                r = _build_padded_grid(g, bmin, bmax, exclude_border)
+                self.assertTrue(
+                    torch.allclose(r.voxel_sizes, g.voxel_sizes),
+                    f"box=({bmin},{bmax}) exclude_border={exclude_border}: voxel size changed",
+                )
+                self.assertTrue(
+                    torch.allclose(r.origins, g.origins),
+                    f"box=({bmin},{bmax}) exclude_border={exclude_border}: "
+                    f"origin changed to {r.origins.tolist()} (base {g.origins.tolist()})",
+                )
+
 
 @unittest.skipUnless(torch.cuda.is_available(), "CUDA is required for the mask-morphology padded-grid path")
 class TestPadGridCuda(unittest.TestCase):
