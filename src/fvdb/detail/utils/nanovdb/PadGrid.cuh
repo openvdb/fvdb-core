@@ -436,9 +436,13 @@ template <class BuildT, bool Positive> struct PadLeafNodesFunctor {
                 const auto leafOrigin = dstLeaf.origin();
 
                 uint64_t originalWordsShifted[10][3][3] = {};
-                using WordStencilT  = uint64_t(&)[10][3][3]; // [x-voxel offset][y-block][z-block]
-                auto &originalWords = reinterpret_cast<WordStencilT>(
-                    originalWordsShifted[1][1][1]);          // logical range [-1,8][-1,1][-1,1]
+                // Logical stencil indices: x-voxel offset in [-1,8], y/z-block in [-1,1], centered
+                // onto the [10][3][3] array by a +1 offset. (Binding a uint64_t(&)[10][3][3]
+                // reference to the middle element and indexing it with negative/out-of-range
+                // subscripts is undefined behavior -- the notional array does not exist there.)
+                auto originalWords = [&](int i, int dBj, int dBk) -> uint64_t & {
+                    return originalWordsShifted[i + 1][dBj + 1][dBk + 1];
+                };
 
                 // Gather source leaves in the octant's 2x2x2 block neighborhood:
                 //   positive octant -> blocks at offsets {-1,0}^3 (content flows +dir)
@@ -452,12 +456,12 @@ template <class BuildT, bool Positive> struct PadLeafNodesFunctor {
                             if (auto neighborLeafPtr = srcTree.root().probeLeaf(neighborOrigin)) {
                                 auto neighborWords = neighborLeafPtr->valueMask().words();
                                 if (dBi == -1)
-                                    originalWords[-1][dBj][dBk] = neighborWords[7];
+                                    originalWords(-1, dBj, dBk) = neighborWords[7];
                                 else if (dBi == 1)
-                                    originalWords[8][dBj][dBk] = neighborWords[0];
+                                    originalWords(8, dBj, dBk) = neighborWords[0];
                                 else
                                     for (int i = 0; i < 8; i++)
-                                        originalWords[i][dBj][dBk] = neighborWords[i];
+                                        originalWords(i, dBj, dBk) = neighborWords[i];
                             }
                         }
 
@@ -465,42 +469,42 @@ template <class BuildT, bool Positive> struct PadLeafNodesFunctor {
                     // Pad +z: for each block word, OR in the copy shifted one voxel toward +z
                     for (int i = -1; i <= 8; i++)
                         for (int dBj = -1; dBj <= 0; dBj++) {
-                            uint64_t w = originalWords[i][dBj][0];
-                            w |= (originalWords[i][dBj][0] & 0x7f7f7f7f7f7f7f7fUL) << 1;
-                            w |= (originalWords[i][dBj][-1] & 0x8080808080808080UL) >> 7;
-                            originalWords[i][dBj][0] = w;
+                            uint64_t w = originalWords(i, dBj, 0);
+                            w |= (originalWords(i, dBj, 0) & 0x7f7f7f7f7f7f7f7fUL) << 1;
+                            w |= (originalWords(i, dBj, -1) & 0x8080808080808080UL) >> 7;
+                            originalWords(i, dBj, 0) = w;
                         }
                     // Pad +y
                     for (int i = -1; i <= 8; i++) {
-                        uint64_t w = originalWords[i][0][0];
-                        w |= (originalWords[i][0][0] & 0x00ffffffffffffffUL) << 8;
-                        w |= (originalWords[i][-1][0] & 0xff00000000000000UL) >> 56;
-                        originalWords[i][0][0] = w;
+                        uint64_t w = originalWords(i, 0, 0);
+                        w |= (originalWords(i, 0, 0) & 0x00ffffffffffffffUL) << 8;
+                        w |= (originalWords(i, -1, 0) & 0xff00000000000000UL) >> 56;
+                        originalWords(i, 0, 0) = w;
                     }
                     // Pad +x
                     auto paddedWords = const_cast<Mask<3> &>(dstLeaf.valueMask()).words();
                     for (int i = 0; i <= 7; i++)
-                        paddedWords[i] = originalWords[i][0][0] | originalWords[i - 1][0][0];
+                        paddedWords[i] = originalWords(i, 0, 0) | originalWords(i - 1, 0, 0);
                 } else {
                     // Pad -z
                     for (int i = -1; i <= 8; i++)
                         for (int dBj = 0; dBj <= 1; dBj++) {
-                            uint64_t w = originalWords[i][dBj][0];
-                            w |= (originalWords[i][dBj][0] & 0xfefefefefefefefeUL) >> 1;
-                            w |= (originalWords[i][dBj][1] & 0x0101010101010101UL) << 7;
-                            originalWords[i][dBj][0] = w;
+                            uint64_t w = originalWords(i, dBj, 0);
+                            w |= (originalWords(i, dBj, 0) & 0xfefefefefefefefeUL) >> 1;
+                            w |= (originalWords(i, dBj, 1) & 0x0101010101010101UL) << 7;
+                            originalWords(i, dBj, 0) = w;
                         }
                     // Pad -y
                     for (int i = -1; i <= 8; i++) {
-                        uint64_t w = originalWords[i][0][0];
-                        w |= (originalWords[i][0][0] & 0xffffffffffffff00UL) >> 8;
-                        w |= (originalWords[i][1][0] & 0x00000000000000ffUL) << 56;
-                        originalWords[i][0][0] = w;
+                        uint64_t w = originalWords(i, 0, 0);
+                        w |= (originalWords(i, 0, 0) & 0xffffffffffffff00UL) >> 8;
+                        w |= (originalWords(i, 1, 0) & 0x00000000000000ffUL) << 56;
+                        originalWords(i, 0, 0) = w;
                     }
                     // Pad -x
                     auto paddedWords = const_cast<Mask<3> &>(dstLeaf.valueMask()).words();
                     for (int i = 0; i <= 7; i++)
-                        paddedWords[i] = originalWords[i][0][0] | originalWords[i + 1][0][0];
+                        paddedWords[i] = originalWords(i, 0, 0) | originalWords(i + 1, 0, 0);
                 }
             }
         return;
@@ -529,8 +533,12 @@ template <typename BuildT, bool Positive> struct ErodeKeepMaskFunctor {
         const auto leafOrigin = leaf.origin();
 
         uint64_t originalWordsShifted[10][3][3] = {};
-        using WordStencilT                      = uint64_t(&)[10][3][3];
-        auto &originalWords = reinterpret_cast<WordStencilT>(originalWordsShifted[1][1][1]);
+        // See PadLeafNodesFunctor: logical indices (x-voxel offset in [-1,8], y/z-block in [-1,1])
+        // are centered onto the [10][3][3] array by a +1 offset, avoiding the negative-subscript
+        // UB of a middle-element reinterpret_cast reference.
+        auto originalWords = [&](int i, int dBj, int dBk) -> uint64_t & {
+            return originalWordsShifted[i + 1][dBj + 1][dBk + 1];
+        };
 
         // Erosion gathers the opposite octant of padding:
         //   positive octant keep(c) = AND_{d in {0,1}^3} src(c+d) -> read blocks { 0,1}^3
@@ -544,12 +552,12 @@ template <typename BuildT, bool Positive> struct ErodeKeepMaskFunctor {
                     if (auto neighborLeafPtr = srcTree.root().probeLeaf(neighborOrigin)) {
                         auto neighborWords = neighborLeafPtr->valueMask().words();
                         if (dBi == -1)
-                            originalWords[-1][dBj][dBk] = neighborWords[7];
+                            originalWords(-1, dBj, dBk) = neighborWords[7];
                         else if (dBi == 1)
-                            originalWords[8][dBj][dBk] = neighborWords[0];
+                            originalWords(8, dBj, dBk) = neighborWords[0];
                         else
                             for (int i = 0; i < 8; i++)
-                                originalWords[i][dBj][dBk] = neighborWords[i];
+                                originalWords(i, dBj, dBk) = neighborWords[i];
                     }
                 }
 
@@ -558,40 +566,40 @@ template <typename BuildT, bool Positive> struct ErodeKeepMaskFunctor {
             // Erode toward +z: keep(c) &= src(c+(0,0,1))
             for (int i = 0; i <= 8; i++)
                 for (int dBj = 0; dBj <= 1; dBj++) {
-                    uint64_t w = originalWords[i][dBj][0];
-                    w &= ((originalWords[i][dBj][0] & 0xfefefefefefefefeUL) >> 1) |
-                         ((originalWords[i][dBj][1] & 0x0101010101010101UL) << 7);
-                    originalWords[i][dBj][0] = w;
+                    uint64_t w = originalWords(i, dBj, 0);
+                    w &= ((originalWords(i, dBj, 0) & 0xfefefefefefefefeUL) >> 1) |
+                         ((originalWords(i, dBj, 1) & 0x0101010101010101UL) << 7);
+                    originalWords(i, dBj, 0) = w;
                 }
             // Erode toward +y
             for (int i = 0; i <= 8; i++) {
-                uint64_t w = originalWords[i][0][0];
-                w &= ((originalWords[i][0][0] & 0xffffffffffffff00UL) >> 8) |
-                     ((originalWords[i][1][0] & 0x00000000000000ffUL) << 56);
-                originalWords[i][0][0] = w;
+                uint64_t w = originalWords(i, 0, 0);
+                w &= ((originalWords(i, 0, 0) & 0xffffffffffffff00UL) >> 8) |
+                     ((originalWords(i, 1, 0) & 0x00000000000000ffUL) << 56);
+                originalWords(i, 0, 0) = w;
             }
             // Erode toward +x
             for (int i = 0; i <= 7; i++)
-                keepWords[i] = originalWords[i][0][0] & originalWords[i + 1][0][0];
+                keepWords[i] = originalWords(i, 0, 0) & originalWords(i + 1, 0, 0);
         } else {
             // Erode toward -z: keep(c) &= src(c+(0,0,-1))
             for (int i = -1; i <= 7; i++)
                 for (int dBj = -1; dBj <= 0; dBj++) {
-                    uint64_t w = originalWords[i][dBj][0];
-                    w &= ((originalWords[i][dBj][0] & 0x7f7f7f7f7f7f7f7fUL) << 1) |
-                         ((originalWords[i][dBj][-1] & 0x8080808080808080UL) >> 7);
-                    originalWords[i][dBj][0] = w;
+                    uint64_t w = originalWords(i, dBj, 0);
+                    w &= ((originalWords(i, dBj, 0) & 0x7f7f7f7f7f7f7f7fUL) << 1) |
+                         ((originalWords(i, dBj, -1) & 0x8080808080808080UL) >> 7);
+                    originalWords(i, dBj, 0) = w;
                 }
             // Erode toward -y
             for (int i = -1; i <= 7; i++) {
-                uint64_t w = originalWords[i][0][0];
-                w &= ((originalWords[i][0][0] & 0x00ffffffffffffffUL) << 8) |
-                     ((originalWords[i][-1][0] & 0xff00000000000000UL) >> 56);
-                originalWords[i][0][0] = w;
+                uint64_t w = originalWords(i, 0, 0);
+                w &= ((originalWords(i, 0, 0) & 0x00ffffffffffffffUL) << 8) |
+                     ((originalWords(i, -1, 0) & 0xff00000000000000UL) >> 56);
+                originalWords(i, 0, 0) = w;
             }
             // Erode toward -x
             for (int i = 0; i <= 7; i++)
-                keepWords[i] = originalWords[i][0][0] & originalWords[i - 1][0][0];
+                keepWords[i] = originalWords(i, 0, 0) & originalWords(i - 1, 0, 0);
         }
     }
 };
