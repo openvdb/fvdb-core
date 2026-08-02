@@ -594,11 +594,36 @@ TEST_F(GaussianRasterizeForwardTestFixture, TestConcatenatedChannels) {
                                                             static_cast<uint32_t>(imageOriginH),
                                                             tileSize,
                                                             tileOffsets,
-                                                            tileGaussianIds);
+                                                            tileGaussianIds,
+                                                            16); // force chunked rendering
 
     EXPECT_TRUE(torch::allclose(outColors, expectedRenderedColors));
     EXPECT_TRUE(torch::allclose(outAlphas, expectedRenderedAlphas));
     EXPECT_TRUE(torch::equal(outLastIds, expectedLastIds));
+
+    const auto backgrounds = torch::linspace(-1.0f, 1.0f, colors.size(-1), colors.options())
+                                 .repeat({means2d.size(0), 1});
+    const auto [outColorsWithBackground, outAlphasWithBackground, outLastIdsWithBackground] =
+        fvdb::detail::ops::rasterizeScreenSpaceGaussiansFwd(means2d,
+                                                            conics,
+                                                            colors,
+                                                            opacities,
+                                                            static_cast<uint32_t>(imageWidth),
+                                                            static_cast<uint32_t>(imageHeight),
+                                                            static_cast<uint32_t>(imageOriginW),
+                                                            static_cast<uint32_t>(imageOriginH),
+                                                            tileSize,
+                                                            tileOffsets,
+                                                            tileGaussianIds,
+                                                            16,
+                                                            backgrounds);
+
+    const auto expectedWithBackground =
+        expectedRenderedColors +
+        (1.0f - expectedRenderedAlphas) * backgrounds.view({means2d.size(0), 1, 1, -1});
+    EXPECT_TRUE(torch::allclose(outColorsWithBackground, expectedWithBackground, 1e-5, 1e-5));
+    EXPECT_TRUE(torch::allclose(outAlphasWithBackground, expectedRenderedAlphas));
+    EXPECT_TRUE(torch::equal(outLastIdsWithBackground, expectedLastIds));
 }
 
 // Compares the output of multi-camera rasterization with the output of sequential single-camera
@@ -855,7 +880,8 @@ TEST_F(GaussianRasterizeForwardTestFixture, TestSparseRasterizationConcatenatedC
             activeTiles,
             tilePixelMask,
             tilePixelCumsum,
-            pixelMap);
+            pixelMap,
+            16); // force chunked rendering
 
     EXPECT_TRUE(compareSparseWithDensePixels(pixelsToRender,
                                              outColorsSparse,

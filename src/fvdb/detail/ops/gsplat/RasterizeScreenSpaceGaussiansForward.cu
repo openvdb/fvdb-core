@@ -99,15 +99,23 @@ struct RasterizeForwardArgs {
         mOutLastIds.data()[pixelIndex] = lastId;
     }
 
-    /// @brief Write the features for a pixel
+    /// @brief Write a chunk of features for a pixel
     /// @param pixelIndex The index of the pixel
+    /// @param channelStart The first output channel in the chunk
+    /// @param numChannels The number of output channels in the chunk
     /// @param f The function to write the features
     template <typename F>
     __device__ void
-    writeFeatures(uint64_t pixelIndex, F &&f) {
-#pragma unroll
-        for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
-            mOutFeatures.data()[pixelIndex][k] = f(k);
+    writeFeatureChunk(uint64_t pixelIndex, size_t channelStart, size_t numChannels, F &&f) {
+        if constexpr (IS_CHUNKED) {
+            for (uint32_t k = 0; k < numChannels; ++k) {
+                mOutFeatures.data()[pixelIndex][channelStart + k] = f(k);
+            }
+        } else {
+#pragma unroll NUM_CHANNELS
+            for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
+                mOutFeatures.data()[pixelIndex][k] = f(k);
+            }
         }
     }
 
@@ -179,14 +187,6 @@ struct RasterizeForwardArgs {
         // collect and process batches of gaussians
         // each thread loads one gaussian at a time before rasterizing its
         // designated pixel
-        ScalarType pixOut[NUM_CHANNELS] = {0.f};
-
-        // The alpha sequence is feature-independent (depends only on opacity + conic + position),
-        // so the per-chunk accumTransmittance and last intersection offset are identical across
-        // chunks. Capture them from the first chunk and write them out at the end.
-        ScalarType accumTransmittanceFinal  = 1.0f;
-        int32_t lastIntersectionOffsetFinal = -1;
-
         constexpr size_t NUM_CHUNKS =
             (NUM_CHANNELS + NUM_SHARED_CHANNELS - 1) / NUM_SHARED_CHANNELS;
 
@@ -194,6 +194,11 @@ struct RasterizeForwardArgs {
             const size_t channelStart = chunk * NUM_SHARED_CHANNELS;
             const size_t numChannels =
                 min(NUM_CHANNELS - channelStart, static_cast<size_t>(NUM_SHARED_CHANNELS));
+
+            // Keep only the current channel chunk in thread-local storage. In particular, avoid a
+            // NUM_CHANNELS-sized array here: that causes the compiler to scalarize and duplicate
+            // the entire high-channel output state in every shared-memory specialization.
+            ScalarType pixOut[NUM_SHARED_CHANNELS] = {0.f};
 
             // NOTE: The accumulated transmittance is used in the backward pass, and
             // since it's a sum of many small numbers, we should really use double precision.
@@ -264,7 +269,7 @@ struct RasterizeForwardArgs {
                         const ScalarType vis = alpha * accumTransmittance;
                         if constexpr (IS_CHUNKED) {
                             for (uint32_t k = 0; k < numChannels; ++k) {
-                                pixOut[channelStart + k] +=
+                                pixOut[k] +=
                                     sharedGaussianFeatures[t * NUM_SHARED_CHANNELS + k] * vis;
                             }
                         } else {
@@ -281,22 +286,19 @@ struct RasterizeForwardArgs {
                 }
             }
 
-            if (chunk == 0) {
-                accumTransmittanceFinal     = accumTransmittance;
-                lastIntersectionOffsetFinal = lastIntersectionOffset;
+            if (pixelIsActive) {
+                const auto pixIdx = commonArgs.pixelIndex(cameraId, row, col, activePixelIndex);
+                if (chunk == 0) {
+                    writeAlpha(pixIdx, 1.0f - accumTransmittance);
+                    writeLastId(pixIdx, lastIntersectionOffset);
+                }
+                writeFeatureChunk(pixIdx, channelStart, numChannels, [&](uint32_t k) {
+                    return commonArgs.mHasBackgrounds
+                               ? pixOut[k] + accumTransmittance *
+                                                 commonArgs.mBackgrounds[cameraId][channelStart + k]
+                               : pixOut[k];
+                });
             }
-        }
-
-        if (pixelIsActive) {
-            const auto pixIdx = commonArgs.pixelIndex(cameraId, row, col, activePixelIndex);
-            writeAlpha(pixIdx, 1.0f - accumTransmittanceFinal);
-            writeLastId(pixIdx, lastIntersectionOffsetFinal);
-            writeFeatures(pixIdx, [&](uint32_t k) {
-                return commonArgs.mHasBackgrounds
-                           ? pixOut[k] +
-                                 accumTransmittanceFinal * commonArgs.mBackgrounds[cameraId][k]
-                           : pixOut[k];
-            });
         }
     }
 };
@@ -339,7 +341,7 @@ rasterizeGaussiansForward(
             auto pixIdx = commonArgs.pixelIndex(cameraId, row, col, activePixelIndex);
             args.writeAlpha(pixIdx, 0.0f);
             args.writeLastId(pixIdx, -1);
-            args.writeFeatures(pixIdx, [&](uint32_t k) {
+            args.writeFeatureChunk(pixIdx, 0, NUM_CHANNELS, [&](uint32_t k) {
                 return commonArgs.mHasBackgrounds ? commonArgs.mBackgrounds[cameraId][k] : 0.0f;
             });
         }
