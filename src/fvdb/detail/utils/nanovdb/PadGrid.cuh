@@ -716,6 +716,12 @@ PadGrid<BuildT>::padRoot() {
                                   rootAndUpperSize,
                                   cudaMemcpyDeviceToHost,
                                   mStream));
+        // Synchronize before dereferencing on the host below. nanovdb::HostBuffer::create()
+        // currently returns pageable memory, which makes the D2H copy implicitly host-synchronous,
+        // but that is not guaranteed -- a pinned host buffer would leave the copy in flight and the
+        // host read would race on uninitialized data. An explicit sync is correct regardless of the
+        // host-buffer allocation strategy (and negligible: one small copy per grid).
+        cudaCheck(cudaStreamSynchronize(mStream));
         auto srcRootAndUpper = static_cast<RootT *>(srcRootAndUpperBuffer.data());
 
         for (uint32_t t = 0; t < srcRootAndUpper->tileCount(); t++) {
