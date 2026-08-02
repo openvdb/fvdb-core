@@ -271,9 +271,14 @@ erodeOncePass(nanovdb::OnIndexGrid *grid,
     // Allocate the per-leaf keep-mask sidecar as a torch CUDA tensor so its emptiness can be
     // tested reliably with a torch reduction below (a raw device buffer viewed via from_blob does
     // not reduce correctly).
-    const int64_t maskBytes = static_cast<int64_t>(sizeof(nanovdb::Mask<3>)) * leafCount;
+    // Use a uint64 tensor (not uint8) so its data pointer is guaranteed 8-byte aligned for
+    // Mask<3> -- which is 8 uint64_t words -- since the kernels dereference it as Mask<3>*.
+    // (A uint8 tensor's data_ptr alignment isn't guaranteed by the tensor API, even though
+    // torch's allocators over-align in practice.)
+    const int64_t maskWords =
+        static_cast<int64_t>(sizeof(nanovdb::Mask<3>) / sizeof(uint64_t)) * leafCount;
     torch::Tensor keepTensor =
-        torch::empty({maskBytes}, torch::TensorOptions().dtype(torch::kUInt8).device(device));
+        torch::empty({maskWords}, torch::TensorOptions().dtype(torch::kUInt64).device(device));
     auto *keepMasks = reinterpret_cast<nanovdb::Mask<3> *>(keepTensor.data_ptr());
     if (positive) {
         nanovdb::util::cuda::lambdaKernel<<<(leafCount + 127) / 128, 128, 0, stream>>>(
@@ -293,7 +298,9 @@ erodeOncePass(nanovdb::OnIndexGrid *grid,
     // PruneGrid (via TopologyBuilder) dereferences a null d_upperOffsets when the result has no
     // nodes, so it cannot build an empty grid. Detect an all-empty keep mask (erosion removed
     // everything) and return an explicit empty grid instead -- same guard as BuildPrunedGrid.cu.
-    if (!keepTensor.any().item<bool>()) {
+    // Reduce over a uint8 view: torch's any() (an `or` reduction) is not implemented for uint64.
+    // The view is zero-copy and "any nonzero byte" == "any nonzero word".
+    if (!keepTensor.view(torch::kUInt8).any().item<bool>()) {
         return createEmptyGridHandle(device);
     }
 
@@ -372,7 +379,13 @@ dispatchBuildPaddedGrid<torch::kCUDA>(const GridBatchData &baseBatchHdl,
                               .mNodeCount[0]
                         : baseBatchHdl.numLeavesAt(i);
                 if (leafCount == 0) {
-                    break; // already eroded to empty; further erosion is a no-op
+                    // No leaves to erode -- already eroded to empty, or (defensively) a
+                    // leaf-free tile grid. Ensure `handle` is a valid empty grid rather than
+                    // the default-constructed one before breaking.
+                    if (!haveHandle) {
+                        handle = createEmptyGridHandle(baseBatchHdl.device());
+                    }
+                    break;
                 }
                 handle = erodeOncePass(
                     grid, leafCount, positive, baseBatchHdl.device(), guide, stream.stream());
