@@ -153,6 +153,48 @@ class TestBasicOps(unittest.TestCase):
                     f"origin changed to {r.origins.tolist()} (base {g.origins.tolist()})",
                 )
 
+    @parameterized.expand(all_device_combos)
+    def test_sliced_batch_padding_matches_contiguous(self, device):
+        # A sliced/indexed GridBatch is a *view* that shares the underlying handle, so
+        # batchSize() < nanoGridHandle().gridCount(). dual_grid / build_padded_grid must map each
+        # logical item to its grid by byte offset (not by physical index) and must not copy the
+        # whole handle. Regression for the non-contiguous-batch bug (openvdb/fvdb-core#710 review):
+        # before the fix, dual_grid on a sliced batch returned the wrong grids (CUDA) or corrupted
+        # the heap (CPU), and build_padded_grid pulled in the excluded sibling grids.
+        torch.manual_seed(11)
+        coords = [
+            torch.tensor([[0, 0, 0]], dtype=torch.int32),
+            torch.randint(-20, 20, (300, 3), dtype=torch.int32),
+            torch.tensor([[50, 50, 50], [50, 50, 51]], dtype=torch.int32),
+            torch.randint(80, 120, (200, 3), dtype=torch.int32),
+        ]
+        n = len(coords)
+        voxel_sizes = [[0.1 * (b + 1)] * 3 for b in range(n)]
+        origins = [[float(b), -0.5 * b, 0.25 * b] for b in range(n)]
+        full = _build_grid(coords, device, voxel_sizes, origins)
+
+        # Each selection is non-contiguous (tail, gap, reversed pair, single middle item).
+        for sel in ([1, 2, 3], [0, 2], [3, 1], [2]):
+            view = full[sel]
+            ref = _build_grid(
+                [coords[s] for s in sel],
+                device,
+                [voxel_sizes[s] for s in sel],
+                [origins[s] for s in sel],
+            )
+            self.assertEqual(view.grid_count, len(sel), f"sel={sel}: view grid_count")
+
+            vd, rd = view.dual_grid(), ref.dual_grid()
+            self.assertEqual(_ijk_sets(vd), _ijk_sets(rd), f"dual_grid mismatch sel={sel}")
+            self.assertTrue(torch.allclose(vd.origins, rd.origins), f"dual origins sel={sel}")
+
+            for bmin, bmax in [(0, 0), (-1, 1), (0, 2)]:
+                self.assertEqual(
+                    _ijk_sets(_build_padded_grid(view, bmin, bmax)),
+                    _ijk_sets(_build_padded_grid(ref, bmin, bmax)),
+                    f"build_padded_grid({bmin},{bmax}) mismatch sel={sel}",
+                )
+
 
 @unittest.skipUnless(torch.cuda.is_available(), "CUDA is required for the mask-morphology padded-grid path")
 class TestPadGridCuda(unittest.TestCase):

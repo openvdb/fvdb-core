@@ -146,8 +146,12 @@ buildPaddedGridFromGridWithoutBorderCPU(const GridBatchData &baseBatchHdl, int B
 
     std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> batchHandles;
     batchHandles.reserve(baseGridHdl.gridCount());
-    for (uint32_t bidx = 0; bidx < baseGridHdl.gridCount(); bidx += 1) {
-        const nanovdb::OnIndexGrid *baseGrid = baseGridHdl.template grid<GridT>(bidx);
+    const uint8_t *const bufBase = baseGridHdl.buffer().data();
+    for (int64_t i = 0; i < baseBatchHdl.batchSize(); i += 1) {
+        // Map logical batch index -> grid by byte offset (correct for sliced/non-contiguous views;
+        // grid<GridT>(i) would index the underlying handle physically).
+        const nanovdb::OnIndexGrid *baseGrid =
+            reinterpret_cast<const nanovdb::OnIndexGrid *>(bufBase + baseBatchHdl.cumBytesAt(i));
         if (!baseGrid) {
             throw std::runtime_error("Failed to get pointer to nanovdb index grid");
         }
@@ -200,8 +204,12 @@ buildPaddedGridFromGridCPU(const GridBatchData &baseBatchHdl, int BMIN, int BMAX
 
     std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> batchHandles;
     batchHandles.reserve(baseGridHdl.gridCount());
-    for (uint32_t bidx = 0; bidx < baseGridHdl.gridCount(); bidx += 1) {
-        const nanovdb::OnIndexGrid *baseGrid = baseGridHdl.template grid<GridT>(bidx);
+    const uint8_t *const bufBase = baseGridHdl.buffer().data();
+    for (int64_t i = 0; i < baseBatchHdl.batchSize(); i += 1) {
+        // Map logical batch index -> grid by byte offset (correct for sliced/non-contiguous views;
+        // grid<GridT>(i) would index the underlying handle physically).
+        const nanovdb::OnIndexGrid *baseGrid =
+            reinterpret_cast<const nanovdb::OnIndexGrid *>(bufBase + baseBatchHdl.cumBytesAt(i));
         if (!baseGrid) {
             throw std::runtime_error("Failed to get pointer to nanovdb index grid");
         }
@@ -318,12 +326,26 @@ dispatchBuildPaddedGrid<torch::kCUDA>(const GridBatchData &baseBatchHdl,
     const int numNegative = -bmin;
     const int totalPasses = numPositive + numNegative;
 
-    // Identity case (bmin == bmax == 0): no morphology passes run, so return a copy of the whole
-    // source handle (all batch items, empty ones included). The tail then applies the transform
-    // fix-up (dual swap or verbatim copy, per `dualTransform`).
+    // Identity case (bmin == bmax == 0): no morphology passes run. For a *contiguous* batch the
+    // whole underlying handle is exactly the result, so copy it in one shot. A sliced /
+    // non-contiguous batch shares a handle holding MORE grids than batchSize(), so instead rebuild
+    // from the Accessor-mapped coordinates (like the PrivateUse1 path). This is rare and degenerate
+    // -- only build_padded_grid(0, 0) reaches it; dual_grid, being (0, 1), never does. The tail
+    // then applies the transform fix-up (dual swap or verbatim copy, per `dualTransform`).
     if (totalPasses == 0) {
-        return baseBatchHdl.nanoGridHandle().copy<TorchDeviceBuffer>(guide);
+        if (baseBatchHdl.isContiguous()) {
+            return baseBatchHdl.nanoGridHandle().copy<TorchDeviceBuffer>(guide);
+        }
+        return ops::_createNanoGridFromIJK(
+            paddedIJKForGrid<torch::kCUDA>(baseBatchHdl, nanovdb::CoordBBox::createCube(0, 0)));
     }
+
+    // Each batch item's grid lives at byte offset cumBytesAt(i) inside the (possibly shared)
+    // buffer. This is how GridBatchData::Accessor::grid() maps a logical batch index to its grid,
+    // and is correct for sliced/non-contiguous views where item i is NOT the i-th physical grid --
+    // so we must not use mGridHdl->deviceGrid(i), which indexes the handle physically.
+    uint8_t *const bufBase = baseBatchHdl.nanoGridHandle().buffer().deviceData();
+    TORCH_CHECK(bufBase != nullptr, "Grid buffer is null");
 
     std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> handles;
     handles.reserve(baseBatchHdl.batchSize());
@@ -333,8 +355,8 @@ dispatchBuildPaddedGrid<torch::kCUDA>(const GridBatchData &baseBatchHdl,
             continue;
         }
 
-        nanovdb::OnIndexGrid *grid = baseBatchHdl.mGridHdl->deviceGrid<nanovdb::ValueOnIndex>(i);
-        TORCH_CHECK(grid, "Grid is null");
+        nanovdb::OnIndexGrid *grid =
+            reinterpret_cast<nanovdb::OnIndexGrid *>(bufBase + baseBatchHdl.cumBytesAt(i));
 
         nanovdb::GridHandle<TorchDeviceBuffer> handle;
         bool haveHandle = false;
