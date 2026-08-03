@@ -191,6 +191,8 @@ struct RasterizeForwardArgs {
         constexpr size_t NUM_CHUNKS =
             (NUM_CHANNELS + NUM_SHARED_CHANNELS - 1) / NUM_SHARED_CHANNELS;
 
+        const auto pixIdx = commonArgs.pixelIndex(cameraId, row, col, activePixelIndex);
+
         for (size_t chunk = 0; chunk < NUM_CHUNKS; ++chunk) {
             const size_t channelStart = chunk * NUM_SHARED_CHANNELS;
             const size_t numChannels =
@@ -288,7 +290,9 @@ struct RasterizeForwardArgs {
             }
 
             if (pixelIsActive) {
-                const auto pixIdx = commonArgs.pixelIndex(cameraId, row, col, activePixelIndex);
+                // The alpha sequence is feature-independent (depends only on opacity + conic +
+                // position), so the per-chunk accumTransmittance and last intersection offset are
+                // identical across chunks.
                 if (chunk == 0) {
                     writeAlpha(pixIdx, 1.0f - accumTransmittance);
                     writeLastId(pixIdx, lastIntersectionOffset);
