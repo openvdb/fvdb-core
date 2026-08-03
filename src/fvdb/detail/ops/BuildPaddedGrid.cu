@@ -298,9 +298,9 @@ erodeOncePass(nanovdb::OnIndexGrid *grid,
     // PruneGrid (via TopologyBuilder) dereferences a null d_upperOffsets when the result has no
     // nodes, so it cannot build an empty grid. Detect an all-empty keep mask (erosion removed
     // everything) and return an explicit empty grid instead -- same guard as BuildPrunedGrid.cu.
-    // Reduce over a uint8 view: torch's any() (an `or` reduction) is not implemented for uint64.
-    // The view is zero-copy and "any nonzero byte" == "any nonzero word".
-    if (!keepTensor.view(torch::kUInt8).any().item<bool>()) {
+    // Reduce via (!= 0).any(): any() alone (an `or` reduction) is not implemented for uint64 on
+    // CUDA, but the `!=` yields a bool tensor whose reduction is.
+    if (!(keepTensor != 0).any().item<bool>()) {
         return createEmptyGridHandle(device);
     }
 
