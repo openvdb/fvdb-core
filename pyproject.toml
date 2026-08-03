@@ -15,7 +15,6 @@ dependencies = [
     "torch>=2.8",
     "numpy",
 ]
-optional-dependencies = {viewer = ["nanovdb-editor>=0.1.6,<0.2.0"]}
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
@@ -30,6 +29,12 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Visualization",
     "Topic :: Multimedia :: Graphics :: 3D Modeling",
 ]
+
+[project.optional-dependencies]
+viewer = ["nanovdb-editor>=0.1.6,<0.2.0"]
+# Mesh/point-cloud loading and plotting used by fvdb.utils.examples. These are imported
+# lazily, so the core package works without them; install with `pip install fvdb-core[examples]`.
+examples = ["point_cloud_utils", "polyscope"]
 
 [tool.scikit-build]
 build-dir = "build/{wheel_tag}-{build_type}"
