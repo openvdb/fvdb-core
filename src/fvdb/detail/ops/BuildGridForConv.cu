@@ -220,7 +220,6 @@ dispatchBuildGridForConv<torch::kCUDA>(const GridBatchData &baseGridHdl,
                 continue;
             }
 
-            // deviceGridPtrAt).
             nanovdb::OnIndexGrid *grid = baseGridHdl.deviceGridPtrAt(i);
             TORCH_CHECK(grid, "Grid is null");
             nanovdb::GridHandle<TorchDeviceBuffer> handle;

@@ -134,7 +134,7 @@ dispatchCreateNanoGridFromDense<torch::kCUDA>(int64_t batchSize,
 
     // Every batch item is the same dense box (a mask, if given, is shared across the batch), so
     // build the grid once and copy it for the remaining items instead of re-running the radix sort
-    // over the identical coordinate list batchSize times. (The kCPU path already does this.)
+    // over the identical coordinate list batchSize times.
     const int64_t nVoxels = ijkData.size(0);
     std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> handles;
     handles.reserve(batchSize);

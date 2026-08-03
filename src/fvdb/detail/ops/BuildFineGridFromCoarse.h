@@ -25,10 +25,9 @@ JaggedTensor fineIJKForCoarseGrid(const GridBatchData &batchHdl,
                                   nanovdb::Coord upsamplingFactor,
                                   const std::optional<JaggedTensor> &maybeMask);
 
-// CUDA-only: build the subdivided (fine) grid topology handle for `factor` -- RefineGrid passes for
-// uniform power-of-two factors (an optional per-coarse-voxel mask is applied via PruneGrid first),
-// coordinate-list fallback otherwise. Exposed so buildGridForConvTranspose can reuse it for its
-// (kernel_size == 1 || stride == kernel_size) subdivision short circuit.
+// Build the subdivided (fine) grid topology handle for `factor` -- RefineGrid passes for uniform
+// power-of-two factors (an optional per-coarse-voxel mask is applied via PruneGrid first),
+// coordinate-list fallback otherwise.
 nanovdb::GridHandle<TorchDeviceBuffer>
 fineGridHandleFromCoarseCUDA(const GridBatchData &coarseBatchHdl,
                              const nanovdb::Coord &factor,

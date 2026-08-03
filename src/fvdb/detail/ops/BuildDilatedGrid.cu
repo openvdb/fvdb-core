@@ -47,10 +47,9 @@ dispatchDilateGrid<torch::kCUDA>(const GridBatchData &gridBatch,
 
         if (dilationAmount[i] == 0) {
             // 0-dilation item in a mixed batch: clone logical grid i by byte offset (correct for
-            // sliced views) with the mGridIndex/mGridCount header fixup.
+            // sliced views)
             handle = ops::cloneGridHandleAt(gridBatch, i);
         } else {
-            // deviceGridPtrAt).
             nanovdb::OnIndexGrid *grid = gridBatch.deviceGridPtrAt(i);
             TORCH_CHECK(grid, "Grid is null");
 

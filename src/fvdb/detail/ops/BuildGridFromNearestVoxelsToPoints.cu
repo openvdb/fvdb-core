@@ -32,7 +32,7 @@ dispatchBuildGridFromNearestVoxelsToPoints(const JaggedTensor &points,
 namespace {
 
 // Computes floor(transform(point)) -- the base voxel of the cell containing each point. One
-// coordinate per point (vs the eight the old path emitted).
+// coordinate per point.
 template <typename ScalarT>
 __device__ void
 flooredIjkForPointCallback(int32_t bidx,
@@ -94,8 +94,7 @@ dispatchBuildGridFromNearestVoxelsToPoints<torch::kCUDA>(
     at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream(points.device().index());
 
     // Build the base grid from the single voxel containing each point. Points are unstructured, so
-    // one sort is unavoidable -- but on N candidates, not 8N, which also lifts the int32 overflow
-    // threshold 8x and removes the old kernel's eidx*8 index overflow.
+    // one sort is unavoidable.
     JaggedTensor flooredIjk                        = flooredIjkForPoints(points, txs);
     nanovdb::GridHandle<TorchDeviceBuffer> baseHdl = ops::_createNanoGridFromIJK(flooredIjk);
 

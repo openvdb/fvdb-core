@@ -68,8 +68,7 @@ coarseGridHandleFromFineCUDA(const GridBatchData &fineGridBatch,
 
     if (nPasses == 0) {
         // Coarsening factor 1 is the identity: the coarse grid == the fine grid. Compact the
-        // (possibly sliced) selected grids into a fresh contiguous handle -- a byte copy with a
-        // header fixup, correct for non-contiguous views and far cheaper than a coordinate rebuild.
+        // (possibly sliced) selected grids into a fresh contiguous handle.
         return ops::contiguousGridHandle(fineGridBatch);
     }
 
