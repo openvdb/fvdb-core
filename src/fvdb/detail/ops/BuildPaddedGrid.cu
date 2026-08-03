@@ -6,6 +6,7 @@
 #include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/BuildGridFromIjk.h>
 #include <fvdb/detail/ops/BuildPaddedGrid.h>
+#include <fvdb/detail/ops/MakeContiguous.h>
 #include <fvdb/detail/ops/PopulateGridMetadata.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Utils.h>
@@ -331,16 +332,16 @@ dispatchBuildPaddedGrid<torch::kCUDA>(const GridBatchData &baseBatchHdl,
 
     // Identity case (bmin == bmax == 0): no morphology passes run. For a *contiguous* batch the
     // whole underlying handle is exactly the result, so copy it in one shot. A sliced /
-    // non-contiguous batch shares a handle holding MORE grids than batchSize(), so instead rebuild
-    // from the Accessor-mapped coordinates (like the PrivateUse1 path). This is rare and degenerate
-    // -- only build_padded_grid(0, 0) reaches it; dual_grid, being (0, 1), never does. The tail
-    // then applies the transform fix-up (dual swap or verbatim copy, per `dualTransform`).
+    // non-contiguous batch shares a handle holding MORE grids than batchSize(), so compact just the
+    // selected grids into a fresh contiguous handle -- a byte copy with header fix-up, no radix
+    // sort and no joffsets().cpu() sync. This is rare and degenerate -- only build_padded_grid(0, 0)
+    // reaches it; dual_grid, being (0, 1), never does. The tail then applies the transform fix-up
+    // (dual swap or verbatim copy, per `dualTransform`).
     if (totalPasses == 0) {
         if (baseBatchHdl.isContiguous()) {
             return baseBatchHdl.nanoGridHandle().copy<TorchDeviceBuffer>(guide);
         }
-        return ops::_createNanoGridFromIJK(
-            paddedIJKForGrid<torch::kCUDA>(baseBatchHdl, nanovdb::CoordBBox::createCube(0, 0)));
+        return ops::contiguousGridHandle(baseBatchHdl);
     }
 
     std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> handles;
