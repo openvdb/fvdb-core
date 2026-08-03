@@ -334,9 +334,9 @@ dispatchBuildPaddedGrid<torch::kCUDA>(const GridBatchData &baseBatchHdl,
     // whole underlying handle is exactly the result, so copy it in one shot. A sliced /
     // non-contiguous batch shares a handle holding MORE grids than batchSize(), so compact just the
     // selected grids into a fresh contiguous handle -- a byte copy with header fix-up, no radix
-    // sort and no joffsets().cpu() sync. This is rare and degenerate -- only build_padded_grid(0, 0)
-    // reaches it; dual_grid, being (0, 1), never does. The tail then applies the transform fix-up
-    // (dual swap or verbatim copy, per `dualTransform`).
+    // sort and no joffsets().cpu() sync. This is rare and degenerate -- only build_padded_grid(0,
+    // 0) reaches it; dual_grid, being (0, 1), never does. The tail then applies the transform
+    // fix-up (dual swap or verbatim copy, per `dualTransform`).
     if (totalPasses == 0) {
         if (baseBatchHdl.isContiguous()) {
             return baseBatchHdl.nanoGridHandle().copy<TorchDeviceBuffer>(guide);
