@@ -117,7 +117,7 @@ dispatchPruneGrid<torch::kCPU>(const GridBatchData &gridBatch, const JaggedTenso
         auto proxyGrid         = std::make_shared<ProxyGridT>(-1.0f);
         auto proxyGridAccessor = proxyGrid->getWriteAccessor();
 
-        const torch::Tensor maskI = mask.index(bidx).jdata().squeeze();
+        const torch::Tensor maskI = mask.index(bidx).jdata().reshape({-1});
         const int64_t joffset     = gridBatch.cumVoxelsAt(bidx);
         const auto maskIacc       = maskI.accessor<bool, 1>();
         for (auto it = ActiveVoxelIterator<-1>(tree); it.isValid(); it++) {
