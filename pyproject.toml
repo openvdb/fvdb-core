@@ -56,6 +56,3 @@ target-version = ["py311"]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 norecursedirs = [".*", "build", "dist"]
-markers = [
-    "conv_semantics_pending: temporary strict-xfail tracking for issue #668",
-]

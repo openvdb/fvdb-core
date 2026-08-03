@@ -1593,6 +1593,40 @@ TEST(GatherScatterDefaultError, WrongTopologyDirection) {
         c10::Error);
 }
 
+TEST(GatherScatterDefaultBackward, DirectionIsEndpointMetadataOnly) {
+    auto const device = torch::Device(torch::kCPU);
+    auto fine         = makeDenseTestGrid(4, device);
+    nanovdb::Coord const kernelSize(3, 3, 3);
+    nanovdb::Coord const stride(2, 2, 2);
+    auto coarse  = ops::buildGridForConv(*fine, kernelSize, stride);
+    auto forward = ops::gatherScatterDefaultSparseConvTopology(*fine, *coarse, kernelSize, stride);
+
+    int64_t constexpr inputChannels  = 3;
+    int64_t constexpr outputChannels = 5;
+    torch::manual_seed(668);
+    auto features = torch::randn({fine->totalVoxels(), inputChannels}, torch::kFloat64);
+    auto weights =
+        torch::randn({outputChannels, inputChannels, kernelSize[0], kernelSize[1], kernelSize[2]},
+                     torch::kFloat64);
+    auto gradOutput = torch::randn({coarse->totalVoxels(), outputChannels}, torch::kFloat64);
+
+    auto [forwardGradFeatures, forwardGradWeights] =
+        ops::gatherScatterDefaultSparseConvBackward(gradOutput, features, weights, forward);
+    auto [referenceGradFeatures, referenceGradWeights] =
+        naiveConvBackward(gradOutput, features, weights, forward);
+
+    auto transposedMetadata      = forward;
+    transposedMetadata.direction = ops::ConvDirection::Transposed;
+    auto [transposedGradFeatures, transposedGradWeights] =
+        ops::gatherScatterDefaultSparseConvTransposeBackward(
+            gradOutput, features, weights, transposedMetadata);
+
+    EXPECT_TRUE(torch::allclose(forwardGradFeatures, referenceGradFeatures, 1e-8, 1e-8));
+    EXPECT_TRUE(torch::allclose(forwardGradWeights, referenceGradWeights, 1e-8, 1e-8));
+    EXPECT_TRUE(torch::equal(transposedGradFeatures, forwardGradFeatures));
+    EXPECT_TRUE(torch::equal(transposedGradWeights, forwardGradWeights));
+}
+
 TEST(GatherScatterDefaultError, FeaturesNot2D) {
     auto device     = torch::Device(torch::kCPU);
     auto grid       = makeDenseTestGrid(4, device);

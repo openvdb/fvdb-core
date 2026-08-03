@@ -9,7 +9,7 @@ import pytest
 import torch
 
 from fvdb import ConvolutionPlan, GridBatch, JaggedTensor, _fvdb_cpp
-from fvdb.convolution_plan import _GatherScatterBackend, _PredGatherIGemmBackend
+from fvdb.convolution_plan import _GatherScatterBackend, _MatmulBackend, _PredGatherIGemmBackend
 from fvdb.utils.tests.convolution_semantics_oracle import (
     ConvolutionRelation,
     forward_degrees,
@@ -542,8 +542,9 @@ def test_exact_transpose_preserves_zero_degree_rows_and_columns() -> None:
     assert reversed_full_support.coverage_report.output_zero_count == 1
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
 def test_pred_gather_plan_transpose_uses_reversed_fallback_topology() -> None:
-    source = _grid([(-2, 0, 0), (0, 0, 0), (3, 0, 0)])
+    source = _grid([(-2, 0, 0), (0, 0, 0), (3, 0, 0)], device="cuda")
     plan = ConvolutionPlan.from_grid_batch(
         kernel_size=3,
         stride=1,
@@ -613,8 +614,6 @@ def test_weighted_plan_transpose_dot_product_and_both_backward_paths(starts_tran
     )
 
 
-@pytest.mark.conv_semantics_pending(slice="5", issue=668)
-@pytest.mark.xfail(strict=True, reason="issue #668; remove in Slice 5")
 def test_matmul_backend_requires_shared_grid_data() -> None:
     source = _grid([(0, 0, 0), (1, 0, 0)])
     distinct_equal_target = _grid([(0, 0, 0), (1, 0, 0)])
@@ -625,16 +624,204 @@ def test_matmul_backend_requires_shared_grid_data() -> None:
         target_grid=distinct_equal_target,
     )
     assert isinstance(plan._backend, _GatherScatterBackend)
+    assert plan.target_grid_batch is distinct_equal_target
+
+    features = torch.tensor([[2.0, -1.0], [0.5, 3.0]], dtype=torch.float64)
+    weight_matrix = torch.tensor([[1.0, 2.0], [-3.0, 0.5], [4.0, -2.0]], dtype=torch.float64)
+    weights = weight_matrix[:, :, None, None, None]
+    torch.testing.assert_close(plan.execute(features, weights), features @ weight_matrix.transpose(0, 1))
 
 
-@pytest.mark.conv_semantics_pending(slice="5", issue=668)
-@pytest.mark.xfail(strict=True, reason="issue #668; remove in Slice 5")
-def test_dense_backend_rejects_unsupported_geometry() -> None:
-    grid = _grid([(0, 0, 0)])
-    with pytest.raises(ValueError, match="disabled"):
-        ConvolutionPlan.from_grid_batch(
-            kernel_size=5,
+def test_generated_k1_s1_preserves_identity_and_matmul_fast_path() -> None:
+    source = _grid([(-1, 0, 0), (0, 0, 0), (3, 0, 0)])
+    plan = ConvolutionPlan.from_grid_batch(kernel_size=1, stride=1, source_grid=source)
+
+    assert plan.target_grid_batch is source
+    assert plan.target_grid_batch.data.is_same(source.data)
+    assert isinstance(plan._backend, _MatmulBackend)
+    assert plan.topology_policy == "full_support"
+
+
+@pytest.mark.parametrize("weight_layout", ["compact", "public"])
+def test_matmul_accepts_2d_and_public_5d_weights_for_flat_and_jagged_data(weight_layout) -> None:
+    source = _grid([(-1, 0, 0), (0, 0, 0), (3, 0, 0)])
+    plan = ConvolutionPlan.from_grid_batch(
+        kernel_size=1,
+        stride=1,
+        source_grid=source,
+        channel_pairs=((2, 3),),
+    )
+    features = torch.tensor([[2.0, -1.0], [0.5, 3.0], [-4.0, 2.0]], dtype=torch.float64)
+    weight_matrix = torch.tensor([[1.0, 2.0], [-3.0, 0.5], [4.0, -2.0]], dtype=torch.float64)
+    weights = weight_matrix if weight_layout == "compact" else weight_matrix[:, :, None, None, None]
+    expected = features @ weight_matrix.transpose(0, 1)
+
+    flat_output = plan.execute(features, weights)
+    jagged_output = plan.execute(JaggedTensor(features), weights)
+    assert isinstance(flat_output, torch.Tensor)
+    assert isinstance(jagged_output, JaggedTensor)
+    torch.testing.assert_close(flat_output, expected)
+    torch.testing.assert_close(jagged_output.jdata, expected)
+
+
+@pytest.mark.parametrize("weight_shape", [(3, 2, 1), (3, 2, 1, 1, 2)])
+def test_matmul_rejects_noncanonical_weight_shapes(weight_shape) -> None:
+    source = _grid([(0, 0, 0)])
+    plan = ConvolutionPlan.from_grid_batch(kernel_size=1, stride=1, source_grid=source)
+    with pytest.raises(ValueError, match=r"\[C_out, C_in\].*\[C_out, C_in, 1, 1, 1\]"):
+        plan.execute(torch.ones((1, 2)), torch.ones(weight_shape))
+
+
+@pytest.mark.parametrize("factory_name", ["from_grid_batch", "from_grid_batch_transposed"])
+@pytest.mark.parametrize("kernel_size", [1, 3])
+def test_dense_backend_is_disabled_for_all_factories_and_identity_geometry(factory_name, kernel_size) -> None:
+    source = _grid([(0, 0, 0)])
+    factory = getattr(ConvolutionPlan, factory_name)
+    with pytest.raises(ValueError, match="dense convolution backend is disabled"):
+        factory(
+            kernel_size=kernel_size,
             stride=1,
-            source_grid=grid,
+            source_grid=source,
             expert_config={"backend": "dense"},
+        )
+
+
+def test_dense_backend_is_disabled_in_private_backend_selection() -> None:
+    source = _grid([(0, 0, 0)])
+    with pytest.raises(ValueError, match="dense convolution backend is disabled"):
+        ConvolutionPlan._build_backend(
+            source,
+            source,
+            torch.tensor([1, 1, 1], dtype=torch.int32),
+            torch.tensor([1, 1, 1], dtype=torch.int32),
+            (),
+            {"backend": "dense"},
+        )
+
+
+@pytest.mark.parametrize("kernel_size", [3, 5, 7])
+@pytest.mark.parametrize("stride", [1, 2])
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
+def test_pred_gather_admits_only_pinned_phase_safe_geometries(kernel_size, stride) -> None:
+    source = _grid([(-1, 0, 0), (0, 0, 0)], device="cuda")
+    plan = ConvolutionPlan.from_grid_batch(
+        kernel_size=kernel_size,
+        stride=stride,
+        source_grid=source,
+        channel_pairs=((32, 64),),
+        expert_config={"backend": "pred_gather_igemm"},
+    )
+    assert isinstance(plan._backend, _PredGatherIGemmBackend)
+    assert plan._backend.kernel_size == kernel_size
+    assert plan._backend.stride == stride
+
+
+@pytest.mark.parametrize(
+    ("kernel_size", "stride", "channel_pairs", "match"),
+    [
+        (1, 1, ((32, 64),), "uniform kernel sizes 3, 5, 7"),
+        (4, 1, ((32, 64),), "uniform kernel sizes 3, 5, 7"),
+        (9, 1, ((32, 64),), "uniform kernel sizes 3, 5, 7"),
+        ((3, 3, 5), 1, ((32, 64),), "uniform kernel sizes 3, 5, 7"),
+        (3, 3, ((32, 64),), "uniform strides 1, 2"),
+        (3, (1, 2, 1), ((32, 64),), "uniform strides 1, 2"),
+        (3, 1, ((16, 64),), "channel counts divisible by 32"),
+        (3, 1, ((32, 48),), "channel counts divisible by 32"),
+    ],
+)
+def test_pred_gather_rejects_geometry_or_channels_outside_pinned_boundary(
+    kernel_size, stride, channel_pairs, match
+) -> None:
+    source = _grid([(0, 0, 0)])
+    with pytest.raises(ValueError, match=match):
+        ConvolutionPlan.from_grid_batch(
+            kernel_size=kernel_size,
+            stride=stride,
+            source_grid=source,
+            channel_pairs=channel_pairs,
+            expert_config={"backend": "pred_gather_igemm"},
+        )
+
+
+@pytest.mark.parametrize(("in_channels", "out_channels"), [(16, 64), (32, 48)])
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
+def test_pred_gather_unknown_channel_plan_fails_closed_at_usage_and_execution(
+    monkeypatch, in_channels, out_channels
+) -> None:
+    source = _grid([(0, 0, 0)], device="cuda")
+    plan = ConvolutionPlan.from_grid_batch(
+        kernel_size=3,
+        stride=1,
+        source_grid=source,
+        expert_config={"backend": "pred_gather_igemm"},
+    )
+    assert plan.valid_usage(32, 64, 3, 1, transposed=False)
+    assert not plan.valid_usage(in_channels, out_channels, 3, 1, transposed=False)
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("native PredGatherIGemm dispatch received unsupported channels")
+
+    monkeypatch.setattr(_fvdb_cpp, "pred_gather_igemm_conv", fail_if_called)
+    features = torch.ones((source.total_voxels, in_channels), dtype=torch.float32, device="cuda")
+    weights = torch.ones((out_channels, in_channels, 3, 3, 3), dtype=torch.float32, device="cuda")
+    with pytest.raises(ValueError, match="channel counts divisible by 32"):
+        plan.execute(features, weights)
+
+
+def test_pred_gather_rejects_transposed_factory_without_building_target(monkeypatch) -> None:
+    source = _grid([(0, 0, 0)])
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("target topology was built before backend admission")
+
+    monkeypatch.setattr(GridBatch, "conv_transpose_grid", fail_if_called)
+    with pytest.raises(ValueError, match="does not support transposed convolution"):
+        ConvolutionPlan.from_grid_batch_transposed(
+            kernel_size=3,
+            stride=1,
+            source_grid=source,
+            channel_pairs=((32, 64),),
+            expert_config={"backend": "pred_gather_igemm"},
+        )
+
+
+def test_pred_gather_rejects_cpu_grid_without_building_target(monkeypatch) -> None:
+    source = _grid([(0, 0, 0)])
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("target topology was built before backend admission")
+
+    monkeypatch.setattr(GridBatch, "conv_grid", fail_if_called)
+    with pytest.raises(ValueError, match="grids on CUDA"):
+        ConvolutionPlan.from_grid_batch(
+            kernel_size=3,
+            stride=1,
+            source_grid=source,
+            channel_pairs=((32, 64),),
+            expert_config={"backend": "pred_gather_igemm"},
+        )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
+def test_pred_gather_rejects_multi_grid_batch_without_building_target(monkeypatch) -> None:
+    source = GridBatch.from_ijk(
+        JaggedTensor(
+            [
+                torch.tensor([[0, 0, 0]], dtype=torch.int32, device="cuda"),
+                torch.tensor([[1, 0, 0]], dtype=torch.int32, device="cuda"),
+            ]
+        )
+    )
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("target topology was built before backend admission")
+
+    monkeypatch.setattr(GridBatch, "conv_grid", fail_if_called)
+    with pytest.raises(ValueError, match="only batch size 1"):
+        ConvolutionPlan.from_grid_batch(
+            kernel_size=3,
+            stride=1,
+            source_grid=source,
+            channel_pairs=((32, 64),),
+            expert_config={"backend": "pred_gather_igemm"},
         )

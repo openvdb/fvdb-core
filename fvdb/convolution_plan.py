@@ -29,6 +29,10 @@ _ANY_CHANNEL_PAIRS: tuple[tuple[int, int], ...] = ()
 _TRANSFORM_COMPATIBILITY_ATOL = 1.0e-6
 _TRANSFORM_COMPATIBILITY_RTOL = 1.0e-6
 _WARNED_INCOMPLETE_COVERAGE_GEOMETRIES: set[tuple[tuple[int, int, int], tuple[int, int, int]]] = set()
+_DENSE_BACKEND_DISABLED_MESSAGE = (
+    "The dense convolution backend is disabled because it does not yet implement the canonical sparse geometry "
+    "and public transposed-weight layout; use backend='default' or backend='gather_scatter'."
+)
 
 
 @dataclass(frozen=True)
@@ -317,6 +321,64 @@ def _channel_pair_supported(in_channels: int, out_channels: int, channel_pairs: 
     return (in_channels, out_channels) in channel_pairs
 
 
+def _pred_gather_igemm_channel_pair_supported(in_channels: int, out_channels: int) -> bool:
+    return in_channels > 0 and out_channels > 0 and in_channels % 32 == 0 and out_channels % 32 == 0
+
+
+def _validate_pred_gather_igemm_admission(
+    kernel_size: torch.Tensor,
+    stride: torch.Tensor,
+    channel_pairs: tuple[tuple[int, int], ...],
+    *,
+    transposed: bool,
+) -> tuple[int, int]:
+    """Pin the legacy PredGatherIGemm phase-safe admission boundary."""
+    if transposed:
+        raise ValueError("PredGatherIGemm backend does not support transposed convolution.")
+
+    kernel_values = [int(value) for value in kernel_size.tolist()]
+    if len(set(kernel_values)) != 1 or kernel_values[0] not in (3, 5, 7):
+        raise ValueError(f"PredGatherIGemm supports only uniform kernel sizes 3, 5, 7; got {kernel_values}.")
+
+    stride_values = [int(value) for value in stride.tolist()]
+    if len(set(stride_values)) != 1 or stride_values[0] not in (1, 2):
+        raise ValueError(f"PredGatherIGemm supports only uniform strides 1, 2; got {stride_values}.")
+
+    for channel_pair in channel_pairs:
+        if len(channel_pair) != 2 or channel_pair[0] <= 0 or channel_pair[1] <= 0:
+            raise ValueError("channel_pair must be a tuple of two positive integers")
+        in_channels, out_channels = channel_pair
+        if not _pred_gather_igemm_channel_pair_supported(in_channels, out_channels):
+            raise ValueError(
+                f"PredGatherIGemm requires channel counts divisible by 32; got ({in_channels}, {out_channels})."
+            )
+
+    return kernel_values[0], stride_values[0]
+
+
+def _validate_pred_gather_igemm_grid_admission(source_grid: GridBatch, target_grid: GridBatch | None = None) -> None:
+    """Reject grid configurations that the native PredGatherIGemm kernel cannot execute."""
+    if source_grid.device.type != "cuda":
+        raise ValueError("PredGatherIGemm requires source and target grids on CUDA.")
+    if source_grid.grid_count != 1:
+        raise ValueError(f"PredGatherIGemm supports only batch size 1; got {source_grid.grid_count} source grids.")
+    if target_grid is None:
+        return
+    if target_grid.device.type != "cuda":
+        raise ValueError("PredGatherIGemm requires source and target grids on CUDA.")
+    if target_grid.grid_count != 1:
+        raise ValueError(f"PredGatherIGemm supports only batch size 1; got {target_grid.grid_count} target grids.")
+
+
+def _matmul_weight_matrix(weights: torch.Tensor) -> torch.Tensor:
+    """Normalize supported identity-convolution weights to ``[C_out, C_in]``."""
+    if weights.ndim == 2:
+        return weights
+    if weights.ndim == 5 and tuple(weights.shape[2:]) == (1, 1, 1):
+        return weights[:, :, 0, 0, 0]
+    raise ValueError("The K=1, S=1 matmul backend requires weights shaped [C_out, C_in] or [C_out, C_in, 1, 1, 1].")
+
+
 # ============================================================
 #  Autograd functions for gather-scatter convolution
 # ============================================================
@@ -390,13 +452,6 @@ class _MatmulBackend:
 
 
 @dataclass(frozen=True)
-class _DenseBackend:
-    """Dense convolution via torch.nn.functional — no precomputed data."""
-
-    pass
-
-
-@dataclass(frozen=True)
 class _GatherScatterBackend:
     """Default gather-scatter convolution with precomputed compacted topology (Python autograd)."""
 
@@ -415,7 +470,7 @@ class _PredGatherIGemmBackend:
     stride: int
 
 
-_Backend = _MatmulBackend | _DenseBackend | _GatherScatterBackend | _PredGatherIGemmBackend
+_Backend = _MatmulBackend | _GatherScatterBackend | _PredGatherIGemmBackend
 
 
 @dataclass(frozen=True)
@@ -432,9 +487,10 @@ class ConvolutionPlan:
     allowing users to focus on the core convolution parameters: input/output channels,
     kernel size, stride, and the grid structure.
 
-    Transposition is treated as just a different kind of kernel, so the inputs and outputs and
-    weights are treated the same as if it were a regular convolution. For the default padded case,
-    transposed outputs can't automatically infer the target_grid, so it must be provided.
+    A plan stores one finite convolution relation. Generated plans use complete structural support;
+    an explicit target restricts that relation. A transposed plan evaluates the same fine/coarse
+    connectivity in the opposite direction and is not a value inverse. For an exact finite adjoint,
+    use :meth:`from_plan_transposed` rather than reconstructing a plan from grids.
 
     Usage Pattern:
 
@@ -516,7 +572,6 @@ class ConvolutionPlan:
             target_grid (GridBatch | None): :class:`fvdb.GridBatch` encoding the structure of the output domain.
                 If ``None``, the ``target_grid`` is automatically computed
                 based on ``kernel_size`` and ``stride`` applied to ``source_grid``.
-                *(For the dense backend, ``target_grid`` must be ``None``.)*
             expert_config (dict[str, Any]): Advanced configuration options *(rarely needed by typical users)*.
             channel_pairs (tuple[tuple[int, int], ...]): Supported input/output channel combinations as tuples.
                 Each tuple represents (input_channels, output_channels).
@@ -560,10 +615,11 @@ class ConvolutionPlan:
         backend_name = expert_config.get("backend", "default")
 
         if backend_name == "dense":
-            if target_grid is not None:
-                raise ValueError("Target grid must be None for dense backend.")
-            target_grid = source_grid
-        elif target_grid is None:
+            raise ValueError(_DENSE_BACKEND_DISABLED_MESSAGE)
+        if backend_name == "pred_gather_igemm":
+            _validate_pred_gather_igemm_admission(kernel_size, stride, channel_pairs, transposed=False)
+            _validate_pred_gather_igemm_grid_admission(source_grid, target_grid)
+        if target_grid is None:
             target_grid = source_grid.conv_grid(kernel_size, stride)
 
         geometry = _fvdb_cpp.ConvolutionGeometry(kernel_size, stride)
@@ -605,17 +661,17 @@ class ConvolutionPlan:
         *i.e.* transposed convolution where the input
         and output domains are both of type :class:`fvdb.GridBatch`.
 
-        Transposed convolution (also known as deconvolution) is commonly used for
-        upsampling operations, such as in decoder networks or generative models.
-        It performs the mathematical transpose of the convolution operation.
+        Transposed convolution is commonly used for decoder and generative operations. It evaluates
+        the same fine/coarse graph in the opposite direction; it is not an inverse and need not
+        recover an input or its topology.
 
         .. note::
 
-            Though deconvolution is the "reverse" of convolution in some sense, this configuration
-            still treats input and output channels as inputs and outputs, it doesn't swap them.
-            The source and target grids are not swapped, it is best to think of deconvolution as
-            convolution with a different kernel than deconvolution, but it is otherwise the same kind
-            of abstract operation.
+            ``target_grid=None`` selects ``"full_support"`` and generates the complete uncropped
+            transposed support. An explicit target selects ``"restricted"`` and may contain
+            zero-degree rows. This factory supports independently learned transpose weights; for
+            the exact weighted adjoint of a particular plan, use :meth:`from_plan_transposed` and
+            pass ``weight.transpose(0, 1).contiguous()`` at execution.
 
         Args:
             kernel_size (NumericMaxRank1): Size of the convolution kernel. Can be a single int (cubic kernel)
@@ -625,7 +681,6 @@ class ConvolutionPlan:
             target_grid (GridBatch | None): :class:`fvdb.GridBatch` encoding the structure of the output domain.
                 If ``None``, the ``target_grid`` is automatically computed
                 based on ``kernel_size`` and ``stride`` applied to ``source_grid``.
-                *(For the dense backend, ``target_grid`` must be ``None``.)*
             expert_config (dict[str, Any]): Advanced configuration options (rarely needed by typical users).
             channel_pairs (tuple[tuple[int, int], ...]): Supported input/output channel combinations as tuples.
                 Defaults to ``_ANY_CHANNEL_PAIRS``, which means any channel pairs are supported.
@@ -647,10 +702,11 @@ class ConvolutionPlan:
         backend_name = expert_config.get("backend", "default")
 
         if backend_name == "dense":
-            if target_grid is not None:
-                raise ValueError("Target grid must be None for dense backend, transposed.")
-            target_grid = source_grid
-        elif target_grid is None:
+            raise ValueError(_DENSE_BACKEND_DISABLED_MESSAGE)
+        if backend_name == "pred_gather_igemm":
+            _validate_pred_gather_igemm_admission(kernel_size, stride, channel_pairs, transposed=True)
+            _validate_pred_gather_igemm_grid_admission(source_grid, target_grid)
+        if target_grid is None:
             target_grid = source_grid.conv_transpose_grid(kernel_size, stride)
 
         geometry = _fvdb_cpp.ConvolutionGeometry(kernel_size, stride)
@@ -732,11 +788,6 @@ class ConvolutionPlan:
             backend = _GatherScatterBackend(topology=_fvdb_cpp.gs_reverse_topology(plan._backend.gs_topology))
         elif isinstance(plan._backend, _MatmulBackend):
             backend = plan._backend
-        elif isinstance(plan._backend, _DenseBackend):
-            raise ValueError(
-                "from_plan_transposed does not support the dense backend because it cannot guarantee "
-                "an exact transpose of the stored finite operator"
-            )
         else:
             raise TypeError(f"Cannot transpose unknown convolution backend: {type(plan._backend)}")
 
@@ -785,8 +836,12 @@ class ConvolutionPlan:
         kernel_size = to_Vec3i(kernel_size, value_constraint=ValueConstraint.POSITIVE)
         stride = to_Vec3i(stride, value_constraint=ValueConstraint.POSITIVE)
 
+        backend_channels_supported = not isinstance(
+            self._backend, _PredGatherIGemmBackend
+        ) or _pred_gather_igemm_channel_pair_supported(in_channels, out_channels)
         return (
             _channel_pair_supported(in_channels, out_channels, self._channel_pairs)
+            and backend_channels_supported
             and tuple(kernel_size.tolist()) == tuple(self._geometry.kernel_size)
             and tuple(stride.tolist()) == tuple(self._geometry.stride)
             and transposed == self._transposed
@@ -828,7 +883,9 @@ class ConvolutionPlan:
                  *(i)* :class:`torch.Tensor` for single grids: shape ``(total_voxels, in_channels)`` **or**
                  *(ii)* :class:`~fvdb.JaggedTensor` for batches of grids: shape ``(batch_size, num_voxels_in_grid_b, in_channels)``
             weights (torch.Tensor): Convolution kernel weights with shape:
-                    ``(out_channels, in_channels, kernel_size[0], kernel_size[1], kernel_size[2])``
+                    ``(out_channels, in_channels, kernel_size[0], kernel_size[1], kernel_size[2])``.
+                    Identity ``K=1, S=1`` plans also accept the compact shape
+                    ``(out_channels, in_channels)``.
 
         Returns:
             output_features (torch.Tensor | JaggedTensor): Convolved features with the same type as input:
@@ -852,38 +909,44 @@ class ConvolutionPlan:
             batch_features = JaggedTensor(torch.randn(5, 1000, 32, device="cuda"))
             output = plan.execute(batch_features, weights)  # Shape: (5, output_voxels, 64)
         """
-        out_c = weights.shape[0]
-        in_c = weights.shape[1]
-        if not _channel_pair_supported(in_c, out_c, self._channel_pairs):
-            raise ValueError(f"Channel pair {in_c, out_c} is not supported")
-
         assert isinstance(data, (torch.Tensor, JaggedTensor)), "data must be a torch.Tensor or JaggedTensor"
         assert isinstance(weights, torch.Tensor), "weights must be a torch.Tensor"
+
+        backend = self._backend
+        if isinstance(backend, _MatmulBackend):
+            weight_matrix = _matmul_weight_matrix(weights)
+            out_c, in_c = weight_matrix.shape
+        else:
+            if weights.ndim < 2:
+                raise ValueError("Convolution weights must have output and input channel dimensions")
+            out_c = weights.shape[0]
+            in_c = weights.shape[1]
+
+        if not _channel_pair_supported(in_c, out_c, self._channel_pairs):
+            raise ValueError(f"Channel pair {in_c, out_c} is not supported")
+        if isinstance(backend, _PredGatherIGemmBackend) and not _pred_gather_igemm_channel_pair_supported(in_c, out_c):
+            raise ValueError(
+                f"PredGatherIGemm requires input and output channel counts divisible by 32; got ({in_c}, {out_c})."
+            )
 
         is_flat: bool = isinstance(data, torch.Tensor)
         if is_flat:
             if self._source_grid.grid_count != 1:
                 raise ValueError("Source grid must have batch size of 1 for flat data")
 
-        backend = self._backend
-
         # Matmul: 1x1x1 kernel, stride 1 — no kernel map needed
         if isinstance(backend, _MatmulBackend):
             if is_flat:
-                return data.matmul(weights.transpose(0, 1))
+                return data.matmul(weight_matrix.transpose(0, 1))
             else:
-                out_data = data.jdata.matmul(weights.transpose(0, 1))
+                out_data = data.jdata.matmul(weight_matrix.transpose(0, 1))
                 return data.jagged_like(out_data)
 
         if is_flat:
             data = JaggedTensor(data)
 
-        # Dense: pure-Python path via torch.nn.functional
-        if isinstance(backend, _DenseBackend):
-            result = self._execute_dense(data, weights)
-
-        # Gather-scatter (new): precomputed topology with Python autograd
-        elif isinstance(backend, _GatherScatterBackend):
+        # Gather-scatter: precomputed normalized topology with Python autograd
+        if isinstance(backend, _GatherScatterBackend):
             out_tensor = _GatherScatterConvFn.apply(data.jdata, weights, backend.topology, self._transposed)
             if out_tensor is None:
                 raise ValueError("Gather-scatter convolution returned None")
@@ -1009,70 +1072,46 @@ class ConvolutionPlan:
         """
         Determine the convolution method and build the appropriate backend.
         """
+        backend_name = expert_config.get("backend", "default")
+        if backend_name == "dense":
+            raise ValueError(_DENSE_BACKEND_DISABLED_MESSAGE)
+
         for channel_pair in channel_pairs:
             if len(channel_pair) != 2 or channel_pair[0] <= 0 or channel_pair[1] <= 0:
                 raise ValueError("channel_pair must be a tuple of two positive integers")
 
-        backend_name = expert_config.get("backend", "default")
-
-        # 1x1x1 conv with stride 1 is just a matmul — no kernel map needed
-        if _vec_is_all(stride, 1) and _vec_is_all(kernel_size, 1):
-            return _MatmulBackend()
-
-        # Dense backend — pure Python, no kernel map
-        if backend_name == "dense":
-            if not _vec_is_all(stride, 1):
-                raise ValueError("Dense backend requires stride 1.")
-            if not source_grid.data.is_same(target_grid.data):
-                raise ValueError("Dense backend requires source_grid and target_grid to be the same.")
-            return _DenseBackend()
-
-        # Gather-scatter default — precomputed compacted topology with Python autograd
-        if backend_name in ("gather_scatter", "default"):
-            if transposed:
-                topo = _fvdb_cpp.gs_build_transpose_topology(
-                    _get_grid_data(source_grid), _get_grid_data(target_grid), kernel_size, stride
-                )
-            else:
-                topo = _fvdb_cpp.gs_build_topology(
-                    _get_grid_data(source_grid), _get_grid_data(target_grid), kernel_size, stride
-                )
-            return _GatherScatterBackend(topology=topo)
-
-        # PredGatherIGemm — CUTLASS IGEMM on SM80+, forward only
         if backend_name == "pred_gather_igemm":
-            if transposed:
-                raise ValueError("PredGatherIGemm backend does not support transposed convolution.")
-            ks_vals = kernel_size.tolist()
-            if len(set(ks_vals)) != 1 or ks_vals[0] not in (3, 5, 7):
-                raise ValueError(f"PredGatherIGemm supports uniform kernel sizes 3, 5, 7; got {ks_vals}.")
-            st_vals = stride.tolist()
-            if len(set(st_vals)) != 1 or st_vals[0] not in (1, 2):
-                raise ValueError(f"PredGatherIGemm supports uniform strides 1, 2; got {st_vals}.")
-            for cin, cout in channel_pairs:
-                if cin % 32 != 0 or cout % 32 != 0:
-                    raise ValueError(f"PredGatherIGemm requires channel counts divisible by 32, got ({cin}, {cout}).")
+            kernel, step = _validate_pred_gather_igemm_admission(
+                kernel_size, stride, channel_pairs, transposed=transposed
+            )
+            _validate_pred_gather_igemm_grid_admission(source_grid, target_grid)
             gs_topo = _fvdb_cpp.gs_build_topology(
                 _get_grid_data(source_grid), _get_grid_data(target_grid), kernel_size, stride
             )
-            return _PredGatherIGemmBackend(gs_topology=gs_topo, kernel_size=int(ks_vals[0]), stride=int(st_vals[0]))
+            return _PredGatherIGemmBackend(gs_topology=gs_topo, kernel_size=kernel, stride=step)
 
-        raise ValueError(f"Unknown backend: {backend_name!r}")
+        if backend_name not in ("gather_scatter", "default"):
+            raise ValueError(f"Unknown backend: {backend_name!r}")
 
-    def _execute_dense(self, data: JaggedTensor, weights: torch.Tensor) -> JaggedTensor:
-        source_grid = self._source_grid
-        assert _get_grid_data(source_grid).is_same(_get_grid_data(self._target_grid))
+        # Identity geometry is matmul only when row ordering is guaranteed by
+        # shared GridBatchData identity. Distinct equal-looking grids use the
+        # ordinary rulebook until an ordered-topology equality predicate exists.
+        if (
+            _vec_is_all(stride, 1)
+            and _vec_is_all(kernel_size, 1)
+            and _get_grid_data(source_grid).is_same(_get_grid_data(target_grid))
+        ):
+            return _MatmulBackend()
 
-        min_coord = source_grid.ijk.jdata.min(dim=0).values
-        # BXYZC -> BCXYZ
-        dense_feature = source_grid.inject_to_dense_cmajor(data, min_coord=min_coord)
-        if self._transposed:
-            dense_feature = torch.nn.functional.conv_transpose3d(dense_feature, weights, padding=1, stride=1)
+        if transposed:
+            topology = _fvdb_cpp.gs_build_transpose_topology(
+                _get_grid_data(source_grid), _get_grid_data(target_grid), kernel_size, stride
+            )
         else:
-            dense_feature = torch.nn.functional.conv3d(dense_feature, weights, padding=1, stride=1)
-        # BCXYZ -> BXYZC
-        dense_feature = dense_feature.contiguous()
-        return source_grid.inject_from_dense_cmajor(dense_feature, dense_origins=min_coord)
+            topology = _fvdb_cpp.gs_build_topology(
+                _get_grid_data(source_grid), _get_grid_data(target_grid), kernel_size, stride
+            )
+        return _GatherScatterBackend(topology=topology)
 
 
 # These tests are to validate that the type-checking is happy. They won't actually run because

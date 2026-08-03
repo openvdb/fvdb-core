@@ -732,10 +732,14 @@ struct gs_default_conv_op {
 };
 
 // =============================================================================
-// Backward convolution (forward direction)
+// Backward convolution (shared by forward and transposed entry points)
+//
+// The topology arrays are already oriented for execution. Direction is
+// endpoint metadata validated by the wrappers below; this executor neither
+// reapplies convolution geometry nor swaps gather/scatter indices.
 // =============================================================================
 
-struct gs_default_conv_backward_op {
+struct gs_default_backward_op {
     template <typename Tag>
         requires with_type<Tag, torch::DeviceType> && with_type<Tag, torch::ScalarType>
     static std::tuple<torch::Tensor, torch::Tensor>
@@ -819,92 +823,17 @@ struct gs_default_conv_backward_op {
             torch::Tensor, torch::Tensor, torch::Tensor, GatherScatterDefaultTopology const &)>;
 };
 
-// =============================================================================
-// Backward convolution (transposed direction)
-// =============================================================================
-
-struct gs_default_conv_transpose_backward_op {
-    template <typename Tag>
-        requires with_type<Tag, torch::DeviceType> && with_type<Tag, torch::ScalarType>
-    static std::tuple<torch::Tensor, torch::Tensor>
-    op(Tag tg,
-       torch::Tensor grad_output,
-       torch::Tensor features,
-       torch::Tensor weights,
-       GatherScatterDefaultTopology const &topo) {
-        constexpr auto dev = tag_get<torch::DeviceType>(Tag{});
-
-        auto guard = make_device_guard(tag<dev>{}, features);
-
-        int64_t const F     = topo.featureTotalVoxels;
-        int64_t const O     = topo.outputTotalVoxels;
-        int64_t const K     = topo.kernelVolume;
-        int64_t const C_in  = weights.size(1);
-        int64_t const C_out = weights.size(0);
-        int64_t const TP    = topo.totalPairs;
-
-        auto W = weights.permute({2, 3, 4, 1, 0}).reshape({K, C_in, C_out}).contiguous();
-        if (W.scalar_type() != features.scalar_type()) {
-            W = W.to(features.scalar_type());
-        }
-
-        auto grad_features = torch::zeros({F, C_in}, features.options());
-        auto grad_W_flat   = torch::zeros({K, C_in, C_out}, features.options());
-
-        if (O == 0 || K == 0 || TP == 0) {
-            auto ks           = topo.kernelSize;
-            auto grad_weights = grad_W_flat.reshape({ks[0], ks[1], ks[2], C_in, C_out})
-                                    .permute({4, 3, 0, 1, 2})
-                                    .contiguous();
-            return {grad_features, grad_weights};
-        }
-
-        auto off_acc = topo.offsets.accessor<int64_t, 1>();
-
-        int64_t const max_n = maxPairsPerOffset(topo.offsets, K);
-        auto feat_buf       = torch::empty({max_n, C_in}, features.options());
-        auto grad_buf       = torch::empty({max_n, C_out}, features.options());
-        auto grad_feat_buf  = torch::empty({max_n, C_in}, features.options());
-
-        for (int64_t k = 0; k < K; ++k) {
-            int64_t const start = off_acc[k];
-            int64_t const end   = off_acc[k + 1];
-            int64_t const n_k   = end - start;
-
-            if (n_k == 0)
-                continue;
-
-            auto gi_k = topo.gatherIndices.slice(0, start, end);
-            auto si_k = topo.scatterIndices.slice(0, start, end);
-            auto fb_k = feat_buf.slice(0, 0, n_k);
-            auto gb_k = grad_buf.slice(0, 0, n_k);
-            auto gf_k = grad_feat_buf.slice(0, 0, n_k);
-
-            gsDefaultGather(tg, features, fb_k, gi_k, n_k, C_in);
-            gsDefaultGather(tg, grad_output, gb_k, si_k, n_k, C_out);
-
-            mmOutSafe(gf_k, gb_k, W[k].t());
-            gsDefaultScatterAdd(tg, gf_k, grad_features, gi_k, n_k, C_in);
-
-            auto gw_k = grad_W_flat[k];
-            mmOutSafe(gw_k, fb_k.t(), gb_k);
-        }
-
-        auto ks           = topo.kernelSize;
-        auto grad_weights = grad_W_flat.reshape({ks[0], ks[1], ks[2], C_in, C_out})
-                                .permute({4, 3, 0, 1, 2})
-                                .contiguous();
-
-        return {grad_features, grad_weights};
-    }
-
-    using space      = axes<torch_full_device_axis, torch_full_float_stype_axis>;
-    using subspaces  = coverage<space>;
-    using dispatcher = dispatch_table<
-        space,
-        std::tuple<torch::Tensor, torch::Tensor>(
-            torch::Tensor, torch::Tensor, torch::Tensor, GatherScatterDefaultTopology const &)>;
-};
+static std::tuple<torch::Tensor, torch::Tensor>
+executeGatherScatterDefaultBackward(torch::Tensor gradOutput,
+                                    torch::Tensor features,
+                                    torch::Tensor weights,
+                                    GatherScatterDefaultTopology const &topology,
+                                    torch::ScalarType workingType) {
+    static auto const table =
+        dispatch_table_from_op<gs_default_backward_op>("gather_scatter_default_shared_backward");
+    auto const device = features.device().type();
+    return table.select(dispatch_set{device, workingType})(gradOutput, features, weights, topology);
+}
 
 // =============================================================================
 // Type-erased entry points
@@ -948,11 +877,7 @@ gatherScatterDefaultSparseConvBackward(torch::Tensor grad_output,
     if (grad_output.scalar_type() != working_st)
         grad_output = grad_output.to(working_st);
 
-    static auto const table = dispatch_table_from_op<gs_default_conv_backward_op>(
-        "gather_scatter_default_sparse_conv_backward");
-
-    auto const dev = features.device().type();
-    return table.select(dispatch_set{dev, working_st})(grad_output, features, weights, topo);
+    return executeGatherScatterDefaultBackward(grad_output, features, weights, topo, working_st);
 }
 
 torch::Tensor
@@ -995,11 +920,7 @@ gatherScatterDefaultSparseConvTransposeBackward(torch::Tensor grad_output,
     if (grad_output.scalar_type() != working_st)
         grad_output = grad_output.to(working_st);
 
-    static auto const table = dispatch_table_from_op<gs_default_conv_transpose_backward_op>(
-        "gather_scatter_default_sparse_conv_transpose_backward");
-
-    auto const dev = features.device().type();
-    return table.select(dispatch_set{dev, working_st})(grad_output, features, weights, topo);
+    return executeGatherScatterDefaultBackward(grad_output, features, weights, topo, working_st);
 }
 
 } // namespace ops

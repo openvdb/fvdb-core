@@ -48,6 +48,10 @@ enum class ConvDirection { Forward, Transposed };
 ///
 /// Built once and reused across multiple convolutions on the same grid pair.
 ///
+/// @note @c direction is validated by the public forward/transposed entry
+/// points. The execution kernels consume these already-oriented index arrays;
+/// they do not apply geometry or swap the arrays again.
+///
 /// @note Voxel indices and per-offset pair counts are stored as int32 for
 /// memory efficiency and fast GPU atomics.  Each grid in the batch must have
 /// fewer than 2^31 total voxels; the topology builders enforce this at
