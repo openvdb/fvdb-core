@@ -577,11 +577,19 @@ TEST_F(GaussianRasterizeForwardTestFixture, TestBasicInputsAndOutputs) {
     EXPECT_TRUE(torch::equal(outLastIds, expectedLastIds));
 }
 
-TEST_F(GaussianRasterizeForwardTestFixture, TestConcatenatedChannels) {
+// Parameterized over maxSharedChannels: 16 and 32 exercise chunked rendering (multiple chunks for
+// 64-channel input), 64 exercises the non-chunked path (all channels fit in one chunk).
+struct GaussianRasterizeForwardChunkedTestFixture : public GaussianRasterizeForwardTestFixture,
+                                                    public ::testing::WithParamInterface<uint32_t> {
+};
+
+TEST_P(GaussianRasterizeForwardChunkedTestFixture, TestConcatenatedChannels) {
     loadTestData("rasterize_forward_inputs.pt", "rasterize_forward_outputs_64.pt");
 
     colors                 = catChannelsToDim(colors, 64);
     expectedRenderedColors = catChannelsToDim(expectedRenderedColors, 64);
+
+    const uint32_t maxSharedChannels = GetParam();
 
     const auto [outColors, outAlphas, outLastIds] =
         fvdb::detail::ops::rasterizeScreenSpaceGaussiansFwd(means2d,
@@ -594,12 +602,41 @@ TEST_F(GaussianRasterizeForwardTestFixture, TestConcatenatedChannels) {
                                                             static_cast<uint32_t>(imageOriginH),
                                                             tileSize,
                                                             tileOffsets,
-                                                            tileGaussianIds);
+                                                            tileGaussianIds,
+                                                            maxSharedChannels);
 
     EXPECT_TRUE(torch::allclose(outColors, expectedRenderedColors));
     EXPECT_TRUE(torch::allclose(outAlphas, expectedRenderedAlphas));
     EXPECT_TRUE(torch::equal(outLastIds, expectedLastIds));
+
+    const auto backgrounds = torch::linspace(-1.0f, 1.0f, colors.size(-1), colors.options())
+                                 .repeat({means2d.size(0), 1});
+    const auto [outColorsWithBackground, outAlphasWithBackground, outLastIdsWithBackground] =
+        fvdb::detail::ops::rasterizeScreenSpaceGaussiansFwd(means2d,
+                                                            conics,
+                                                            colors,
+                                                            opacities,
+                                                            static_cast<uint32_t>(imageWidth),
+                                                            static_cast<uint32_t>(imageHeight),
+                                                            static_cast<uint32_t>(imageOriginW),
+                                                            static_cast<uint32_t>(imageOriginH),
+                                                            tileSize,
+                                                            tileOffsets,
+                                                            tileGaussianIds,
+                                                            maxSharedChannels,
+                                                            backgrounds);
+
+    const auto expectedWithBackground =
+        expectedRenderedColors +
+        (1.0f - expectedRenderedAlphas) * backgrounds.view({means2d.size(0), 1, 1, -1});
+    EXPECT_TRUE(torch::allclose(outColorsWithBackground, expectedWithBackground, 1e-5, 1e-5));
+    EXPECT_TRUE(torch::allclose(outAlphasWithBackground, expectedRenderedAlphas));
+    EXPECT_TRUE(torch::equal(outLastIdsWithBackground, expectedLastIds));
 }
+
+INSTANTIATE_TEST_SUITE_P(ChunkedRendering,
+                         GaussianRasterizeForwardChunkedTestFixture,
+                         ::testing::Values(16u, 32u, 64u));
 
 // Compares the output of multi-camera rasterization with the output of sequential single-camera
 // rasterization.
@@ -824,13 +861,21 @@ TEST_F(GaussianRasterizeForwardTestFixture, TestSparseRasterization) {
                                              expectedLastIds));
 }
 
-TEST_F(GaussianRasterizeForwardTestFixture, TestSparseRasterizationConcatenatedChannels) {
+// Parameterized over maxSharedChannels: 16 and 32 exercise chunked rendering (multiple chunks for
+// 64-channel input), 64 exercises the non-chunked path (all channels fit in one chunk).
+struct GaussianRasterizeForwardSparseChunkedTestFixture
+    : public GaussianRasterizeForwardTestFixture,
+      public ::testing::WithParamInterface<uint32_t> {};
+
+TEST_P(GaussianRasterizeForwardSparseChunkedTestFixture,
+       TestSparseRasterizationConcatenatedChannels) {
     loadTestData("rasterize_forward_inputs.pt", "rasterize_forward_outputs_64.pt");
 
     colors                 = catChannelsToDim(colors, 64);
     expectedRenderedColors = catChannelsToDim(expectedRenderedColors, 64);
 
-    const int numCameras = means2d.size(0);
+    const uint32_t maxSharedChannels = GetParam();
+    const int numCameras             = means2d.size(0);
 
     auto const pixelsToRender = generateSparsePixelCoords(numCameras, 100).cuda();
 
@@ -855,7 +900,8 @@ TEST_F(GaussianRasterizeForwardTestFixture, TestSparseRasterizationConcatenatedC
             activeTiles,
             tilePixelMask,
             tilePixelCumsum,
-            pixelMap);
+            pixelMap,
+            maxSharedChannels);
 
     EXPECT_TRUE(compareSparseWithDensePixels(pixelsToRender,
                                              outColorsSparse,
@@ -865,6 +911,10 @@ TEST_F(GaussianRasterizeForwardTestFixture, TestSparseRasterizationConcatenatedC
                                              expectedRenderedAlphas,
                                              expectedLastIds));
 }
+
+INSTANTIATE_TEST_SUITE_P(ChunkedRendering,
+                         GaussianRasterizeForwardSparseChunkedTestFixture,
+                         ::testing::Values(16u, 32u, 64u));
 
 TEST_F(GaussianRasterizeForwardTestFixture, TestSparseRasterizationMultipleCameras) {
     loadInputData("rasterize_forward_inputs_3cams.pt");
