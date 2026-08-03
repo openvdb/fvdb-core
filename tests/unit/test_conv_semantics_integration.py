@@ -9,7 +9,7 @@ import pytest
 import torch
 
 from fvdb import ConvolutionPlan, GridBatch, JaggedTensor, _fvdb_cpp
-from fvdb.convolution_plan import _GatherScatterBackend
+from fvdb.convolution_plan import _GatherScatterBackend, _PredGatherIGemmBackend
 from fvdb.utils.tests.convolution_semantics_oracle import (
     ConvolutionRelation,
     forward_degrees,
@@ -26,6 +26,22 @@ def _grid(coordinates, *, voxel_sizes=1.0, origins=(0.0, 0.0, 0.0), device="cpu"
 
 def _coordinate_set(grid: GridBatch) -> set[tuple[int, int, int]]:
     return {tuple(coordinate) for coordinate in grid.ijk.jdata.cpu().tolist()}
+
+
+def _gather_scatter_topology(plan: ConvolutionPlan) -> _fvdb_cpp.GatherScatterDefaultTopology:
+    assert isinstance(plan._backend, _GatherScatterBackend)
+    return plan._backend.topology
+
+
+def _topology_edges(topology: _fvdb_cpp.GatherScatterDefaultTopology) -> set[tuple[int, int, int]]:
+    gather = topology.gather_indices.cpu()
+    scatter = topology.scatter_indices.cpu()
+    offsets = topology.offsets.cpu()
+    return {
+        (tap, int(gather[edge].item()), int(scatter[edge].item()))
+        for tap in range(topology.kernel_volume)
+        for edge in range(int(offsets[tap].item()), int(offsets[tap + 1].item()))
+    }
 
 
 def test_plan_stores_canonical_geometry_and_reports_transform_compatibility() -> None:
@@ -404,6 +420,197 @@ def test_explicit_transform_rejects_device_mismatch() -> None:
             source_grid=fine,
             target_grid=coarse,
         )
+
+
+@pytest.mark.parametrize("starts_transposed", [False, True])
+def test_plan_transpose_is_constant_time_exact_array_reversal(monkeypatch, starts_transposed) -> None:
+    fine = _grid([(-3, 0, 0), (0, 0, 0), (2, 0, 0), (9, 0, 0)])
+    coarse = _grid([(-2, 0, 0), (0, 0, 0), (4, 0, 0), (7, 0, 0)])
+    factory = ConvolutionPlan.from_grid_batch_transposed if starts_transposed else ConvolutionPlan.from_grid_batch
+    plan = factory(
+        kernel_size=(4, 1, 1),
+        stride=1,
+        source_grid=coarse if starts_transposed else fine,
+        target_grid=fine if starts_transposed else coarse,
+        channel_pairs=((2, 3), (4, 5)),
+    )
+    topology = _gather_scatter_topology(plan)
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("from_plan_transposed rebuilt topology")
+
+    monkeypatch.setattr(ConvolutionPlan, "_build_backend", staticmethod(fail_if_called))
+    reversed_plan = ConvolutionPlan.from_plan_transposed(plan)
+    reversed_topology = _gather_scatter_topology(reversed_plan)
+
+    assert torch.equal(reversed_topology.gather_indices, topology.scatter_indices)
+    assert torch.equal(reversed_topology.scatter_indices, topology.gather_indices)
+    assert torch.equal(reversed_topology.offsets, topology.offsets)
+    assert reversed_topology.gather_indices.data_ptr() == topology.scatter_indices.data_ptr()
+    assert reversed_topology.scatter_indices.data_ptr() == topology.gather_indices.data_ptr()
+    assert reversed_topology.offsets.data_ptr() == topology.offsets.data_ptr()
+    assert reversed_topology.feature_total_voxels == topology.output_total_voxels
+    assert reversed_topology.output_total_voxels == topology.feature_total_voxels
+    assert reversed_topology.total_pairs == topology.total_pairs
+    assert reversed_topology.is_transposed is not topology.is_transposed
+    assert reversed_plan.source_grid_batch is plan.target_grid_batch
+    assert reversed_plan.target_grid_batch is plan.source_grid_batch
+    assert reversed_plan.topology_policy == "restricted"
+    assert reversed_plan.topology_provenance == "exact_transpose"
+    assert reversed_plan._channel_pairs == ((3, 2), (5, 4))
+
+
+@pytest.mark.parametrize("starts_transposed", [False, True])
+def test_independent_explicit_builder_matches_reversed_edge_set(starts_transposed) -> None:
+    fine = _grid([(-3, 0, 0), (0, 0, 0), (2, 0, 0), (9, 0, 0)])
+    coarse = _grid([(-2, 0, 0), (0, 0, 0), (4, 0, 0), (7, 0, 0)])
+    if starts_transposed:
+        plan = ConvolutionPlan.from_grid_batch_transposed(
+            kernel_size=(4, 1, 1), stride=1, source_grid=coarse, target_grid=fine
+        )
+        independent = ConvolutionPlan.from_grid_batch(
+            kernel_size=(4, 1, 1), stride=1, source_grid=fine, target_grid=coarse
+        )
+    else:
+        plan = ConvolutionPlan.from_grid_batch(kernel_size=(4, 1, 1), stride=1, source_grid=fine, target_grid=coarse)
+        independent = ConvolutionPlan.from_grid_batch_transposed(
+            kernel_size=(4, 1, 1), stride=1, source_grid=coarse, target_grid=fine
+        )
+
+    reversed_plan = ConvolutionPlan.from_plan_transposed(plan)
+    assert _topology_edges(_gather_scatter_topology(reversed_plan)) == _topology_edges(
+        _gather_scatter_topology(independent)
+    )
+    assert independent.topology_provenance == "explicit_target"
+
+
+def test_double_plan_transpose_recovers_exact_topology_and_domains() -> None:
+    source = _grid([(-4, 0, 0), (-1, 0, 0), (0, 0, 0), (3, 0, 0), (8, 0, 0)])
+    plan = ConvolutionPlan.from_grid_batch(
+        kernel_size=(4, 1, 1), stride=(2, 1, 1), source_grid=source, channel_pairs=((2, 3),)
+    )
+    topology = _gather_scatter_topology(plan)
+
+    transposed = ConvolutionPlan.from_plan_transposed(plan)
+    twice_transposed = ConvolutionPlan.from_plan_transposed(transposed)
+    twice_topology = _gather_scatter_topology(twice_transposed)
+
+    assert plan.topology_policy == "full_support"
+    assert plan.topology_provenance == "generated"
+    assert transposed.topology_policy == "restricted"
+    assert transposed.topology_provenance == "exact_transpose"
+    assert twice_transposed.topology_policy == "restricted"
+    assert twice_transposed.topology_provenance == "exact_transpose"
+    assert twice_transposed.source_grid_batch is plan.source_grid_batch
+    assert twice_transposed.target_grid_batch is plan.target_grid_batch
+    assert twice_topology.gather_indices.data_ptr() == topology.gather_indices.data_ptr()
+    assert twice_topology.scatter_indices.data_ptr() == topology.scatter_indices.data_ptr()
+    assert twice_topology.offsets.data_ptr() == topology.offsets.data_ptr()
+    assert twice_topology.is_transposed == topology.is_transposed
+    assert twice_transposed.valid_usage(2, 3, (4, 1, 1), (2, 1, 1), transposed=False)
+
+
+def test_exact_transpose_preserves_zero_degree_rows_and_columns() -> None:
+    fine = _grid([(0, 0, 0), (1, 0, 0), (10, 0, 0)])
+    coarse = _grid([(0, 0, 0), (7, 0, 0), (8, 0, 0)])
+    restricted = ConvolutionPlan.from_grid_batch(kernel_size=(3, 1, 1), stride=1, source_grid=fine, target_grid=coarse)
+    assert restricted.coverage_report is not None
+    assert restricted.coverage_report.input_zero_count == 1
+    assert restricted.coverage_report.output_zero_count == 2
+
+    reversed_plan = ConvolutionPlan.from_plan_transposed(restricted)
+    assert reversed_plan.coverage_report is not None
+    assert reversed_plan.coverage_report.input_zero_count == 2
+    assert reversed_plan.coverage_report.output_zero_count == 1
+    assert reversed_plan.coverage_report.input_degree_histogram == restricted.coverage_report.output_degree_histogram
+    assert reversed_plan.coverage_report.output_degree_histogram == restricted.coverage_report.input_degree_histogram
+
+    residue_source = _grid([(0, 0, 0), (1, 0, 0)])
+    full_support = ConvolutionPlan.from_grid_batch(
+        kernel_size=1,
+        stride=(2, 1, 1),
+        source_grid=residue_source,
+        acknowledge_incomplete_coverage=True,
+    )
+    assert full_support.coverage_report is not None
+    assert full_support.coverage_report.input_zero_count == 1
+    assert full_support.coverage_report.output_zero_count == 0
+    reversed_full_support = ConvolutionPlan.from_plan_transposed(full_support)
+    assert reversed_full_support.topology_policy == "restricted"
+    assert reversed_full_support.coverage_report is not None
+    assert reversed_full_support.coverage_report.input_zero_count == 0
+    assert reversed_full_support.coverage_report.output_zero_count == 1
+
+
+def test_pred_gather_plan_transpose_uses_reversed_fallback_topology() -> None:
+    source = _grid([(-2, 0, 0), (0, 0, 0), (3, 0, 0)])
+    plan = ConvolutionPlan.from_grid_batch(
+        kernel_size=3,
+        stride=1,
+        source_grid=source,
+        channel_pairs=((32, 64),),
+        expert_config={"backend": "pred_gather_igemm"},
+    )
+    assert isinstance(plan._backend, _PredGatherIGemmBackend)
+
+    reversed_plan = ConvolutionPlan.from_plan_transposed(plan)
+    assert isinstance(reversed_plan._backend, _GatherScatterBackend)
+    assert (
+        reversed_plan._backend.topology.gather_indices.data_ptr()
+        == plan._backend.gs_topology.scatter_indices.data_ptr()
+    )
+    assert (
+        reversed_plan._backend.topology.scatter_indices.data_ptr()
+        == plan._backend.gs_topology.gather_indices.data_ptr()
+    )
+    assert reversed_plan.valid_usage(64, 32, 3, 1, transposed=True)
+
+
+@pytest.mark.parametrize("starts_transposed", [False, True])
+def test_weighted_plan_transpose_dot_product_and_both_backward_paths(starts_transposed) -> None:
+    fine = _grid([(-3, 0, 0), (0, 0, 0), (2, 0, 0), (9, 0, 0)])
+    coarse = _grid([(-2, 0, 0), (0, 0, 0), (4, 0, 0), (7, 0, 0)])
+    factory = ConvolutionPlan.from_grid_batch_transposed if starts_transposed else ConvolutionPlan.from_grid_batch
+    plan = factory(
+        kernel_size=(4, 1, 1),
+        stride=1,
+        source_grid=coarse if starts_transposed else fine,
+        target_grid=fine if starts_transposed else coarse,
+        channel_pairs=((2, 3),),
+    )
+    reversed_plan = ConvolutionPlan.from_plan_transposed(plan)
+
+    generator = torch.Generator().manual_seed(668 + int(starts_transposed))
+    features = torch.randn((plan.source_grid_batch.total_voxels, 2), generator=generator, dtype=torch.float64)
+    features.requires_grad_(True)
+    weights = torch.randn((3, 2, 4, 1, 1), generator=generator, dtype=torch.float64)
+    weights.requires_grad_(True)
+    dual = torch.randn((plan.target_grid_batch.total_voxels, 3), generator=generator, dtype=torch.float64)
+
+    output = plan.execute(features, weights)
+    transpose_weights = weights.detach().transpose(0, 1).contiguous()
+    transposed_output = reversed_plan.execute(dual, transpose_weights)
+    lhs = torch.sum(output * dual)
+    rhs = torch.sum(features * transposed_output)
+    torch.testing.assert_close(lhs, rhs, rtol=1.0e-12, atol=1.0e-12)
+
+    grad_features, grad_weights = torch.autograd.grad(lhs, (features, weights))
+    torch.testing.assert_close(grad_features, transposed_output, rtol=1.0e-12, atol=1.0e-12)
+
+    dual_for_backward = dual.detach().clone().requires_grad_(True)
+    transpose_weights_for_backward = transpose_weights.detach().clone().requires_grad_(True)
+    transposed_for_backward = reversed_plan.execute(dual_for_backward, transpose_weights_for_backward)
+    reverse_loss = torch.sum(transposed_for_backward * features.detach())
+    grad_dual, grad_transpose_weights = torch.autograd.grad(
+        reverse_loss, (dual_for_backward, transpose_weights_for_backward)
+    )
+    torch.testing.assert_close(grad_dual, output.detach(), rtol=1.0e-12, atol=1.0e-12)
+    torch.testing.assert_close(
+        grad_transpose_weights,
+        grad_weights.transpose(0, 1).contiguous(),
+        rtol=1.0e-12,
+        atol=1.0e-12,
+    )
 
 
 @pytest.mark.conv_semantics_pending(slice="5", issue=668)

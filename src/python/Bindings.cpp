@@ -560,6 +560,11 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
             return t.direction == fvdb::detail::ops::ConvDirection::Transposed;
         });
 
+    m.def("gs_reverse_topology",
+          &fvdb::detail::ops::reverseGatherScatterDefaultTopology,
+          "Return a constant-time reversed view of a gather-scatter topology.",
+          py::arg("topology"));
+
     // --- Forward topology + conv ---
 
     m.def(

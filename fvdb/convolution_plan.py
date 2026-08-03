@@ -480,6 +480,7 @@ class ConvolutionPlan:
     _backend: _Backend
     _transform_compatibility: ConvolutionTransformCompatibility
     _topology_policy: str
+    _topology_provenance: str
     _coverage_report: ConvolutionCoverageReport | None
 
     # ============================================================
@@ -555,6 +556,7 @@ class ConvolutionPlan:
         stride = to_Vec3i(stride, value_constraint=ValueConstraint.POSITIVE)
 
         resolved_policy = _resolve_topology_policy(target_grid, topology_policy)
+        topology_provenance = "generated" if resolved_policy == "full_support" else "explicit_target"
         backend_name = expert_config.get("backend", "default")
 
         if backend_name == "dense":
@@ -580,6 +582,7 @@ class ConvolutionPlan:
             backend,
             compatibility,
             resolved_policy,
+            topology_provenance,
             coverage_report,
         )
 
@@ -640,6 +643,7 @@ class ConvolutionPlan:
         stride = to_Vec3i(stride, value_constraint=ValueConstraint.POSITIVE)
 
         resolved_policy = _resolve_topology_policy(target_grid, topology_policy)
+        topology_provenance = "generated" if resolved_policy == "full_support" else "explicit_target"
         backend_name = expert_config.get("backend", "default")
 
         if backend_name == "dense":
@@ -667,6 +671,7 @@ class ConvolutionPlan:
             backend,
             compatibility,
             resolved_policy,
+            topology_provenance,
             coverage_report,
         )
 
@@ -675,14 +680,17 @@ class ConvolutionPlan:
         """
         Create a transposed version of an existing :class:`ConvolutionPlan`.
 
-        This method creates a new plan that performs the transpose operation of the
-        given plan (*i.e* convolution becomes transposed convolution and vice versa).
-        It automatically swaps the source and target grids, reverses the channel pairs, and flips the transposed flag.
+        This method creates a new plan that performs the exact transpose operation of
+        the given plan (*i.e* convolution becomes transposed convolution and vice versa).
+        It swaps the source and target grids, reverses the stored finite edge set and
+        channel pairs, and flips the transposed flag. It does not reconstruct topology
+        from the swapped grids.
 
         .. note::
 
-            This is particularly useful for creating encoder-decoder pairs where
-            the decoder needs to undo the operations of the encoder.
+            This is useful when a paired layer must apply the exact finite
+            adjoint connectivity of an existing plan. It is not an inverse and
+            need not recover the original input.
 
         Args:
             plan (ConvolutionPlan): An existing :class:`ConvolutionPlan` to transpose.
@@ -704,7 +712,7 @@ class ConvolutionPlan:
             # Create the corresponding backward/transpose plan
             transposed_plan = ConvolutionPlan.from_plan_transposed(forward_plan)
         """
-        # Swap source/target grids, flip transposed flag, reverse channel pairs
+        # Swap source/target grids, flip transposed flag, reverse channel pairs.
         source_grid = plan._target_grid
         target_grid = plan._source_grid
         transposed = not plan._transposed
@@ -715,15 +723,23 @@ class ConvolutionPlan:
         else:
             compatibility = _transform_compatibility(source_grid, target_grid, plan._geometry)
         _validate_transform_compatibility(compatibility)
-        backend = cls._build_backend(
-            source_grid,
-            target_grid,
-            torch.tensor(plan._geometry.kernel_size, dtype=torch.int32),
-            torch.tensor(plan._geometry.stride, dtype=torch.int32),
-            channel_pairs,
-            _DEFAULT_CONFIG,
-            transposed=transposed,
-        )
+
+        if isinstance(plan._backend, _GatherScatterBackend):
+            backend: _Backend = _GatherScatterBackend(topology=_fvdb_cpp.gs_reverse_topology(plan._backend.topology))
+        elif isinstance(plan._backend, _PredGatherIGemmBackend):
+            # PredGatherIGemm is forward-only. Its exact transpose uses the
+            # already-stored default gather/scatter fallback rulebook.
+            backend = _GatherScatterBackend(topology=_fvdb_cpp.gs_reverse_topology(plan._backend.gs_topology))
+        elif isinstance(plan._backend, _MatmulBackend):
+            backend = plan._backend
+        elif isinstance(plan._backend, _DenseBackend):
+            raise ValueError(
+                "from_plan_transposed does not support the dense backend because it cannot guarantee "
+                "an exact transpose of the stored finite operator"
+            )
+        else:
+            raise TypeError(f"Cannot transpose unknown convolution backend: {type(plan._backend)}")
+
         coverage_report = _coverage_report(backend, source_grid, target_grid)
         _validate_coverage_policy(coverage_report, "restricted", False)
         return cls(
@@ -735,6 +751,7 @@ class ConvolutionPlan:
             backend,
             compatibility,
             "restricted",
+            "exact_transpose",
             coverage_report,
         )
 
@@ -948,6 +965,16 @@ class ConvolutionPlan:
     def topology_policy(self) -> str:
         """Resolved ``"full_support"`` or ``"restricted"`` topology policy."""
         return self._topology_policy
+
+    @property
+    def topology_provenance(self) -> str:
+        """How this plan's finite topology was obtained.
+
+        Values are ``"generated"``, ``"explicit_target"``, or
+        ``"exact_transpose"``. Exact transposes always use the stored finite
+        edge set of their source plan and therefore have restricted policy.
+        """
+        return self._topology_provenance
 
     @property
     def coverage_report(self) -> ConvolutionCoverageReport | None:

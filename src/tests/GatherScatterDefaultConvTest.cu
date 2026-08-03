@@ -827,6 +827,75 @@ TEST(GatherScatterDefaultTopology, SanityChecks) {
     }
 }
 
+TEST(GatherScatterDefaultTopology, ReverseIsConstantTimeExactAndInvolutive) {
+    for (auto devType: {torch::kCPU, torch::kCUDA}) {
+        skipIfCudaUnavailable(devType);
+        auto const device = makeDevice(devType);
+        auto fine =
+            makeGrid(torch::tensor({{-5, -2, 0}, {-1, 0, 2}, {0, 1, 2}, {3, 4, 5}, {7, 2, -3}},
+                                   torch::dtype(torch::kInt32)),
+                     device);
+        nanovdb::Coord const kernelSize(4, 3, 2);
+        nanovdb::Coord const stride(3, 2, 4);
+        auto coarse = ops::buildGridForConv(*fine, kernelSize, stride);
+        auto forward =
+            ops::gatherScatterDefaultSparseConvTopology(*fine, *coarse, kernelSize, stride);
+
+        EXPECT_NO_THROW(ops::validateGatherScatterDefaultTopology(*fine, *coarse, forward));
+        auto reversed = ops::reverseGatherScatterDefaultTopology(forward);
+
+        EXPECT_TRUE(reversed.gatherIndices.is_same(forward.scatterIndices));
+        EXPECT_TRUE(reversed.scatterIndices.is_same(forward.gatherIndices));
+        EXPECT_TRUE(reversed.offsets.is_same(forward.offsets));
+        EXPECT_EQ(reversed.featureTotalVoxels, forward.outputTotalVoxels);
+        EXPECT_EQ(reversed.outputTotalVoxels, forward.featureTotalVoxels);
+        EXPECT_EQ(reversed.kernelVolume, forward.kernelVolume);
+        EXPECT_EQ(reversed.totalPairs, forward.totalPairs);
+        EXPECT_EQ(reversed.kernelSize, forward.kernelSize);
+        EXPECT_EQ(reversed.stride, forward.stride);
+        EXPECT_EQ(reversed.direction, ops::ConvDirection::Transposed);
+        EXPECT_NO_THROW(ops::validateGatherScatterDefaultTopology(*fine, *coarse, reversed));
+
+        auto roundTrip = ops::reverseGatherScatterDefaultTopology(reversed);
+        EXPECT_TRUE(roundTrip.gatherIndices.is_same(forward.gatherIndices));
+        EXPECT_TRUE(roundTrip.scatterIndices.is_same(forward.scatterIndices));
+        EXPECT_TRUE(roundTrip.offsets.is_same(forward.offsets));
+        EXPECT_EQ(roundTrip.featureTotalVoxels, forward.featureTotalVoxels);
+        EXPECT_EQ(roundTrip.outputTotalVoxels, forward.outputTotalVoxels);
+        EXPECT_EQ(roundTrip.direction, ops::ConvDirection::Forward);
+        EXPECT_NO_THROW(ops::validateGatherScatterDefaultTopology(*fine, *coarse, roundTrip));
+    }
+}
+
+TEST(GatherScatterDefaultTopology, ValidatorRejectsMetadataRangesAndNoncanonicalEdges) {
+    auto const device = torch::Device(torch::kCPU);
+    auto grid         = makeDenseTestGrid(2, device);
+    nanovdb::Coord const kernelSize(1, 1, 1);
+    nanovdb::Coord const stride(1, 1, 1);
+    auto topology = ops::gatherScatterDefaultSparseConvTopology(*grid, *grid, kernelSize, stride);
+    ASSERT_GT(topology.totalPairs, 1);
+    EXPECT_NO_THROW(ops::validateGatherScatterDefaultTopology(*grid, *grid, topology));
+
+    auto badMetadata = topology;
+    ++badMetadata.featureTotalVoxels;
+    EXPECT_THROW(ops::validateGatherScatterDefaultTopology(*grid, *grid, badMetadata), c10::Error);
+
+    auto badOffsets    = topology;
+    badOffsets.offsets = topology.offsets.clone();
+    badOffsets.offsets.index_put_({0}, 1);
+    EXPECT_THROW(ops::validateGatherScatterDefaultTopology(*grid, *grid, badOffsets), c10::Error);
+
+    auto badRange          = topology;
+    badRange.gatherIndices = torch::full_like(topology.gatherIndices, topology.featureTotalVoxels);
+    EXPECT_THROW(ops::validateGatherScatterDefaultTopology(*grid, *grid, badRange), c10::Error);
+
+    auto badEdge             = topology;
+    badEdge.gatherIndices    = topology.gatherIndices.clone();
+    int32_t const firstIndex = topology.gatherIndices[0].item<int32_t>();
+    badEdge.gatherIndices.index_put_({0}, (firstIndex + 1) % topology.featureTotalVoxels);
+    EXPECT_THROW(ops::validateGatherScatterDefaultTopology(*grid, *grid, badEdge), c10::Error);
+}
+
 TEST(GatherScatterDefaultBackward, IdentityGradients) {
     for (auto dev_type: {torch::kCPU, torch::kCUDA}) {
         skipIfCudaUnavailable(dev_type);

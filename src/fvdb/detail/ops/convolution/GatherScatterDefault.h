@@ -76,6 +76,27 @@ struct GatherScatterDefaultTopology {
     ConvDirection direction;    ///< Whether this topology is for forward or transposed convolution.
 };
 
+/// @brief Return the constant-time execution view of the reversed rulebook.
+///
+/// The returned topology aliases all tensors in @p topology. Gather and scatter
+/// indices and their corresponding cardinalities are swapped, the direction is
+/// flipped, and tap-grouped offsets and convolution geometry are unchanged.
+/// No tensor data is copied or rebuilt.
+GatherScatterDefaultTopology
+reverseGatherScatterDefaultTopology(GatherScatterDefaultTopology const &topology);
+
+/// @brief Validate a topology against its normalized fine/coarse grid domains.
+///
+/// This explicit test/debug utility checks tensor metadata, index ranges,
+/// tap-grouped offsets, uniqueness, and equality with the complete canonical
+/// fine/coarse relation. It is intentionally not called from release execution.
+/// @param fine_grid Fine-lattice domain, independent of execution direction.
+/// @param coarse_grid Coarse-lattice domain, independent of execution direction.
+/// @param topology Execution-oriented topology to validate.
+void validateGatherScatterDefaultTopology(GridBatchData const &fine_grid,
+                                          GridBatchData const &coarse_grid,
+                                          GatherScatterDefaultTopology const &topology);
+
 /// @brief Build a compacted forward topology via two-pass atomic counting.
 /// @param feature_grid  Grid batch containing the input feature voxels.
 /// @param output_grid   Grid batch containing the output voxels.

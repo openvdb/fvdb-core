@@ -71,6 +71,8 @@ class GatherScatterDefaultTopology:
     @property
     def is_transposed(self) -> bool: ...
 
+def gs_reverse_topology(topology: GatherScatterDefaultTopology) -> GatherScatterDefaultTopology: ...
+
 # Forward topology + conv
 def gs_build_topology(
     feature_grid: GridBatchData,
