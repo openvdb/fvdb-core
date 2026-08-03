@@ -419,7 +419,7 @@ fineGridHandleFromCoarseCUDA(const GridBatchData &coarseBatchHdl,
             handles.push_back(createEmptyGridHandle(coarseBatchHdl.device()));
             continue;
         }
-        // Byte-offset accessor: correct for sliced/non-contiguous batches (see deviceGridPtrAt).
+
         nanovdb::OnIndexGrid *grid = src->deviceGridPtrAt(i);
         TORCH_CHECK(grid, "Grid is null");
         nanovdb::GridHandle<TorchDeviceBuffer> handle;
@@ -478,7 +478,6 @@ dispatchBuildFineGridFromCoarse<torch::kCPU>(const GridBatchData &coarseBatchHdl
     std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> batchHandles;
     batchHandles.reserve(coarseGridHdl.gridCount());
     for (int64_t bidx = 0; bidx < coarseBatchHdl.batchSize(); bidx += 1) {
-        // Byte-offset accessor: correct for sliced/non-contiguous batches (see hostGridPtrAt).
         const nanovdb::OnIndexGrid *coarseGrid = coarseBatchHdl.hostGridPtrAt(bidx);
         if (!coarseGrid) {
             throw std::runtime_error("Failed to get pointer to nanovdb index grid");

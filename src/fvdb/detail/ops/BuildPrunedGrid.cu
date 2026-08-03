@@ -46,7 +46,7 @@ dispatchPruneGrid<torch::kCUDA>(const GridBatchData &gridBatch, const JaggedTens
     std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> handles;
     for (int i = 0; i < gridBatch.batchSize(); i += 1) {
         nanovdb::GridHandle<TorchDeviceBuffer> handle;
-        // Byte-offset accessor: correct for sliced/non-contiguous batches (see deviceGridPtrAt).
+
         // This also keeps the grid aligned with numLeavesAt(i)/mask.index(i), which are
         // item-indexed.
         nanovdb::OnIndexGrid *grid = gridBatch.deviceGridPtrAt(i);
@@ -110,7 +110,6 @@ dispatchPruneGrid<torch::kCPU>(const GridBatchData &gridBatch, const JaggedTenso
     std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> gridHandles;
     gridHandles.reserve(gridHdl.gridCount());
     for (int64_t bidx = 0; bidx < gridBatch.batchSize(); bidx += 1) {
-        // Byte-offset accessor: correct for sliced/non-contiguous batches (see hostGridPtrAt).
         const nanovdb::OnIndexGrid *grid = gridBatch.hostGridPtrAt(bidx);
         if (!grid) {
             throw std::runtime_error("Failed to get pointer to nanovdb index grid");
