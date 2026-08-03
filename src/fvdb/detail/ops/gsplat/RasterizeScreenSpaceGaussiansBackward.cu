@@ -12,8 +12,10 @@
 #include <fvdb/detail/utils/gsplat/GaussianRasterize.cuh>
 
 #include <ATen/cuda/Atomic.cuh>
+#include <ATen/ops/from_blob.h>
 #include <c10/core/DeviceType.h>
 #include <c10/cuda/CUDAGuard.h>
+#include <torch/csrc/cuda/nccl.h>
 
 #include <cooperative_groups.h>
 
@@ -326,13 +328,13 @@ struct RasterizeBackwardArgs {
         auto dLossDFeaturesGaussianPtr = getAccessorPointer<ScalarType>(mOutDLossDFeatures, g);
         if constexpr (IS_CHUNKED) {
             for (uint32_t k = 0; k < numChannels; ++k) {
-                atomicAdd_system(dLossDFeaturesGaussianPtr + channelStart + k,
-                                 featureGradientContribution[k]);
+                atomicAdd(dLossDFeaturesGaussianPtr + channelStart + k,
+                          featureGradientContribution[k]);
             }
         } else {
 #pragma unroll NUM_CHANNELS
             for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
-                atomicAdd_system(dLossDFeaturesGaussianPtr + k, featureGradientContribution[k]);
+                atomicAdd(dLossDFeaturesGaussianPtr + k, featureGradientContribution[k]);
             }
         }
     }
@@ -351,29 +353,24 @@ struct RasterizeBackwardArgs {
         const vec2t &pixelMean2dAbsGradientContribution,
         const ScalarType pixelOpacityGradientContribution) {
         auto *dLossDConicsGaussianPtr = getAccessorPointer<vec3t>(mOutDLossDConics, g);
-        atomicAdd_system(&dLossDConicsGaussianPtr->operator[](0),
-                         pixelConicGradientContribution[0]);
-        atomicAdd_system(&dLossDConicsGaussianPtr->operator[](1),
-                         pixelConicGradientContribution[1]);
-        atomicAdd_system(&dLossDConicsGaussianPtr->operator[](2),
-                         pixelConicGradientContribution[2]);
+        atomicAdd(&dLossDConicsGaussianPtr->operator[](0), pixelConicGradientContribution[0]);
+        atomicAdd(&dLossDConicsGaussianPtr->operator[](1), pixelConicGradientContribution[1]);
+        atomicAdd(&dLossDConicsGaussianPtr->operator[](2), pixelConicGradientContribution[2]);
 
         auto *dLossDMeans2DGaussianPtr = getAccessorPointer<vec2t>(mOutDLossDMeans2d, g);
-        atomicAdd_system(&dLossDMeans2DGaussianPtr->operator[](0),
-                         pixelMean2dGradientContribution[0]);
-        atomicAdd_system(&dLossDMeans2DGaussianPtr->operator[](1),
-                         pixelMean2dGradientContribution[1]);
+        atomicAdd(&dLossDMeans2DGaussianPtr->operator[](0), pixelMean2dGradientContribution[0]);
+        atomicAdd(&dLossDMeans2DGaussianPtr->operator[](1), pixelMean2dGradientContribution[1]);
 
         if (mAbsGrad) {
             auto *dLossDMeans2dAbsGaussianPtr = getAccessorPointer<vec2t>(mOutDLossDMeans2dAbs, g);
-            atomicAdd_system(&dLossDMeans2dAbsGaussianPtr->operator[](0),
-                             pixelMean2dAbsGradientContribution[0]);
-            atomicAdd_system(&dLossDMeans2dAbsGaussianPtr->operator[](1),
-                             pixelMean2dAbsGradientContribution[1]);
+            atomicAdd(&dLossDMeans2dAbsGaussianPtr->operator[](0),
+                      pixelMean2dAbsGradientContribution[0]);
+            atomicAdd(&dLossDMeans2dAbsGaussianPtr->operator[](1),
+                      pixelMean2dAbsGradientContribution[1]);
         }
 
         auto *dLossDOpacitiesGaussianPtr = get1DAccessorPointer<ScalarType>(mOutDLossDOpacities, g);
-        atomicAdd_system(dLossDOpacitiesGaussianPtr, pixelOpacityGradientContribution);
+        atomicAdd(dLossDOpacitiesGaussianPtr, pixelOpacityGradientContribution);
     }
 
     /// @brief Accumulate the features of this Gaussian into the accumulated features
@@ -1154,6 +1151,62 @@ callRasterizeBackwardWithCorrectSharedChannels(
     }
 }
 
+template <typename ScalarType>
+void
+reduceGradientShards(std::vector<torch::Tensor> &localGradients, torch::Tensor &outputGradient) {
+    const int64_t numElements = localGradients.front().numel();
+    std::vector<torch::Tensor> reducedShards(c10::cuda::device_count());
+    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+        const auto [shardOffset, shardSize] = deviceChunk(numElements, deviceId);
+        if (shardSize == 0) {
+            continue;
+        }
+
+        reducedShards[deviceId] =
+            localGradients[deviceId].view({-1}).narrow(0, shardOffset, shardSize);
+    }
+
+    if (numElements % c10::cuda::device_count() == 0) {
+        torch::cuda::nccl::reduce_scatter(localGradients, reducedShards);
+    } else {
+        // NCCL reduce-scatter requires equally sized shards. For an uneven tensor, reduce each
+        // ceil-divided shard into its owning device's local receive slice.
+        for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+            const auto [shardOffset, shardSize] = deviceChunk(numElements, deviceId);
+            if (shardSize == 0) {
+                continue;
+            }
+
+            std::vector<torch::Tensor> inputShards;
+            inputShards.reserve(c10::cuda::device_count());
+            for (const auto sourceDeviceId: c10::irange(c10::cuda::device_count())) {
+                inputShards.emplace_back(
+                    localGradients[sourceDeviceId].view({-1}).narrow(0, shardOffset, shardSize));
+            }
+            torch::cuda::nccl::reduce(
+                inputShards, reducedShards[deviceId], static_cast<int32_t>(deviceId));
+        }
+    }
+
+    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+        const auto [shardOffset, shardSize] = deviceChunk(numElements, deviceId);
+        if (shardSize == 0) {
+            continue;
+        }
+
+        C10_CUDA_CHECK(cudaSetDevice(deviceId));
+        auto stream          = c10::cuda::getCurrentCUDAStream(deviceId);
+        auto *outputShardPtr = outputGradient.data_ptr<ScalarType>() + shardOffset;
+        C10_CUDA_CHECK(nanovdb::util::cuda::memPrefetchAsync(
+            outputShardPtr, shardSize * sizeof(ScalarType), deviceId, stream));
+        C10_CUDA_CHECK(cudaMemcpyAsync(outputShardPtr,
+                                       reducedShards[deviceId].data_ptr<ScalarType>(),
+                                       shardSize * sizeof(ScalarType),
+                                       cudaMemcpyDeviceToDevice,
+                                       stream));
+    }
+}
+
 template <typename ScalarType, size_t NUM_CHANNELS, size_t NUM_SHARED_CHANNELS, bool IS_PACKED>
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 callRasterizeBackwardPrivateUse1(
@@ -1179,24 +1232,24 @@ callRasterizeBackwardPrivateUse1(
     const std::optional<torch::Tensor> &pixelMap        = std::nullopt) {
     TORCH_CHECK(tileSize > 0, "Tile size must be greater than 0");
 
-    // These are shared accumulation buffers on PrivateUse1. Initialize them before partitioning
-    // tile work so each buffer is cleared exactly once before any device starts accumulating.
-    torch::Tensor outDLossDMeans2d   = torch::zeros_like(means2d);
-    torch::Tensor outDLossDConics    = torch::zeros_like(conics);
-    torch::Tensor outDLossDFeatures  = torch::zeros_like(features);
-    torch::Tensor outDLossDOpacities = torch::zeros_like(opacities);
-    torch::Tensor outDLossDMeans2dAbs;
-    if (absGrad) {
-        outDLossDMeans2dAbs = torch::zeros_like(means2d);
-    }
-
     // Just return empty tensors if there are no gaussians, cameras, or intersections
     if (means2d.numel() == 0 || tileGaussianIds.numel() == 0) {
-        return std::make_tuple(outDLossDMeans2dAbs,
-                               outDLossDMeans2d,
-                               outDLossDConics,
-                               outDLossDFeatures,
-                               outDLossDOpacities);
+        return std::make_tuple(absGrad ? torch::zeros_like(means2d) : torch::Tensor(),
+                               torch::zeros_like(means2d),
+                               torch::zeros_like(conics),
+                               torch::zeros_like(features),
+                               torch::zeros_like(opacities));
+    }
+
+    // These managed outputs are populated from contiguous, device-local gradient shards after the
+    // raster kernels complete. Keep them contiguous so each device can publish one flat range.
+    torch::Tensor outDLossDMeans2d   = torch::empty(means2d.sizes(), means2d.options());
+    torch::Tensor outDLossDConics    = torch::empty(conics.sizes(), conics.options());
+    torch::Tensor outDLossDFeatures  = torch::empty(features.sizes(), features.options());
+    torch::Tensor outDLossDOpacities = torch::empty(opacities.sizes(), opacities.options());
+    torch::Tensor outDLossDMeans2dAbs;
+    if (absGrad) {
+        outDLossDMeans2dAbs = torch::empty(means2d.sizes(), means2d.options());
     }
 
     // tileOffsets can be 3D (dense) or 1D (sparse)
@@ -1231,6 +1284,17 @@ callRasterizeBackwardPrivateUse1(
                                               dLossDRenderedAlphas.jdata()};
 
     std::vector<cudaEvent_t> events(c10::cuda::device_count());
+    std::vector<ScalarType *> outDLossDMeans2DLocalPtrs(c10::cuda::device_count(), nullptr);
+    std::vector<ScalarType *> outDLossDConicsLocalPtrs(c10::cuda::device_count(), nullptr);
+    std::vector<ScalarType *> outDLossDFeaturesLocalPtrs(c10::cuda::device_count(), nullptr);
+    std::vector<ScalarType *> outDLossDOpacitiesLocalPtrs(c10::cuda::device_count(), nullptr);
+    std::vector<ScalarType *> outDLossDMeans2DAbsLocalPtrs(c10::cuda::device_count(), nullptr);
+    std::vector<torch::Tensor> outDLossDMeans2DLocals(c10::cuda::device_count());
+    std::vector<torch::Tensor> outDLossDConicsLocals(c10::cuda::device_count());
+    std::vector<torch::Tensor> outDLossDFeaturesLocals(c10::cuda::device_count());
+    std::vector<torch::Tensor> outDLossDOpacitiesLocals(c10::cuda::device_count());
+    std::vector<torch::Tensor> outDLossDMeans2DAbsLocals(c10::cuda::device_count());
+
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
@@ -1270,6 +1334,51 @@ callRasterizeBackwardPrivateUse1(
 
         uint32_t deviceTileOffset, deviceTileCount;
         std::tie(deviceTileOffset, deviceTileCount) = deviceChunk(tileCount, deviceId);
+        const auto localTensorOptions =
+            at::TensorOptions().dtype(means2d.scalar_type()).device(at::kCUDA, deviceId);
+
+        const size_t means2dBytes   = means2d.numel() * means2d.element_size();
+        const size_t conicsBytes    = conics.numel() * conics.element_size();
+        const size_t featuresBytes  = features.numel() * features.element_size();
+        const size_t opacitiesBytes = opacities.numel() * opacities.element_size();
+
+        ScalarType *&outDLossDMeans2DLocalPtr = outDLossDMeans2DLocalPtrs[deviceId];
+        C10_CUDA_CHECK(cudaMallocAsync(&outDLossDMeans2DLocalPtr, means2dBytes, stream));
+        C10_CUDA_CHECK(cudaMemsetAsync(outDLossDMeans2DLocalPtr, 0, means2dBytes, stream));
+        torch::Tensor &outDLossDMeans2DLocal = outDLossDMeans2DLocals[deviceId];
+        outDLossDMeans2DLocal =
+            at::from_blob(outDLossDMeans2DLocalPtr, means2d.sizes(), localTensorOptions);
+
+        ScalarType *&outDLossDConicsLocalPtr = outDLossDConicsLocalPtrs[deviceId];
+        C10_CUDA_CHECK(cudaMallocAsync(&outDLossDConicsLocalPtr, conicsBytes, stream));
+        C10_CUDA_CHECK(cudaMemsetAsync(outDLossDConicsLocalPtr, 0, conicsBytes, stream));
+        torch::Tensor &outDLossDConicsLocal = outDLossDConicsLocals[deviceId];
+        outDLossDConicsLocal =
+            at::from_blob(outDLossDConicsLocalPtr, conics.sizes(), localTensorOptions);
+
+        ScalarType *&outDLossDFeaturesLocalPtr = outDLossDFeaturesLocalPtrs[deviceId];
+        C10_CUDA_CHECK(cudaMallocAsync(&outDLossDFeaturesLocalPtr, featuresBytes, stream));
+        C10_CUDA_CHECK(cudaMemsetAsync(outDLossDFeaturesLocalPtr, 0, featuresBytes, stream));
+        torch::Tensor &outDLossDFeaturesLocal = outDLossDFeaturesLocals[deviceId];
+        outDLossDFeaturesLocal =
+            at::from_blob(outDLossDFeaturesLocalPtr, features.sizes(), localTensorOptions);
+
+        ScalarType *&outDLossDOpacitiesLocalPtr = outDLossDOpacitiesLocalPtrs[deviceId];
+        C10_CUDA_CHECK(cudaMallocAsync(&outDLossDOpacitiesLocalPtr, opacitiesBytes, stream));
+        C10_CUDA_CHECK(cudaMemsetAsync(outDLossDOpacitiesLocalPtr, 0, opacitiesBytes, stream));
+        torch::Tensor &outDLossDOpacitiesLocal = outDLossDOpacitiesLocals[deviceId];
+        outDLossDOpacitiesLocal =
+            at::from_blob(outDLossDOpacitiesLocalPtr, opacities.sizes(), localTensorOptions);
+
+        ScalarType *&outDLossDMeans2DAbsLocalPtr = outDLossDMeans2DAbsLocalPtrs[deviceId];
+        torch::Tensor &outDLossDMeans2DAbsLocal  = outDLossDMeans2DAbsLocals[deviceId];
+        if (absGrad) {
+            C10_CUDA_CHECK(cudaMallocAsync(&outDLossDMeans2DAbsLocalPtr, means2dBytes, stream));
+            C10_CUDA_CHECK(cudaMemsetAsync(outDLossDMeans2DAbsLocalPtr, 0, means2dBytes, stream));
+            outDLossDMeans2DAbsLocal =
+                at::from_blob(outDLossDMeans2DAbsLocalPtr, means2d.sizes(), localTensorOptions);
+        }
+
         if (deviceTileCount) {
             RasterizeBackwardArgs<ScalarType, NUM_CHANNELS, NUM_SHARED_CHANNELS, IS_PACKED> args(
                 means2d,
@@ -1287,11 +1396,11 @@ callRasterizeBackwardPrivateUse1(
                 reshapedLastGaussianIds,
                 reshapedDLossDRenderedFeatures,
                 reshapedDLossDRenderedAlphas,
-                outDLossDMeans2d,
-                outDLossDConics,
-                outDLossDFeatures,
-                outDLossDOpacities,
-                absGrad ? std::make_optional(outDLossDMeans2dAbs) : std::nullopt,
+                outDLossDMeans2DLocal,
+                outDLossDConicsLocal,
+                outDLossDFeaturesLocal,
+                outDLossDOpacitiesLocal,
+                absGrad ? std::make_optional(outDLossDMeans2DAbsLocal) : std::nullopt,
                 activeTiles,
                 tilePixelMask,
                 tilePixelCumsum,
@@ -1319,6 +1428,26 @@ callRasterizeBackwardPrivateUse1(
             rasterizeGaussiansBackward<ScalarType, NUM_CHANNELS, NUM_SHARED_CHANNELS, IS_PACKED>
                 <<<gridDim, blockDim, sharedMemSize, stream>>>(args);
             C10_CUDA_KERNEL_LAUNCH_CHECK();
+        }
+    }
+
+    reduceGradientShards<ScalarType>(outDLossDMeans2DLocals, outDLossDMeans2d);
+    reduceGradientShards<ScalarType>(outDLossDConicsLocals, outDLossDConics);
+    reduceGradientShards<ScalarType>(outDLossDFeaturesLocals, outDLossDFeatures);
+    reduceGradientShards<ScalarType>(outDLossDOpacitiesLocals, outDLossDOpacities);
+    if (absGrad) {
+        reduceGradientShards<ScalarType>(outDLossDMeans2DAbsLocals, outDLossDMeans2dAbs);
+    }
+
+    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+        C10_CUDA_CHECK(cudaSetDevice(deviceId));
+        auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+        C10_CUDA_CHECK(cudaFreeAsync(outDLossDMeans2DLocalPtrs[deviceId], stream));
+        C10_CUDA_CHECK(cudaFreeAsync(outDLossDConicsLocalPtrs[deviceId], stream));
+        C10_CUDA_CHECK(cudaFreeAsync(outDLossDFeaturesLocalPtrs[deviceId], stream));
+        C10_CUDA_CHECK(cudaFreeAsync(outDLossDOpacitiesLocalPtrs[deviceId], stream));
+        if (absGrad) {
+            C10_CUDA_CHECK(cudaFreeAsync(outDLossDMeans2DAbsLocalPtrs[deviceId], stream));
         }
     }
 
