@@ -7,10 +7,7 @@
 #include <fvdb/detail/ops/BuildGridFromPoints.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Utils.h>
-#include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 #include <fvdb/detail/utils/cuda/ForEachPrivateUse1.cuh>
-#include <fvdb/detail/utils/cuda/GridDim.h>
-#include <fvdb/detail/utils/cuda/RAIIRawDeviceBuffer.h>
 #include <fvdb/detail/utils/nanovdb/CreateEmptyGridHandle.h>
 
 #include <nanovdb/cuda/GridHandle.cuh>
@@ -72,11 +69,13 @@ template <typename ScalarT> class TransformedPointPtr {
             .round();
     }
 
-    /// @brief Required by `pointer_traits` to deduce `element_type`. Only the return type is used
-    ///        (it is called in an unevaluated context), so returning by value is fine.
+    /// @brief Required by `pointer_traits` to deduce `element_type` -- only the return *type* is
+    ///        used. Deliberately does not read `mPoints`: `pointer_traits` never evaluates this,
+    ///        and returning a default coordinate keeps it well defined for an empty point set if
+    ///        some future code path (or debug instrumentation) ever does evaluate it.
     __hostdev__ inline nanovdb::Coord
     operator*() const {
-        return (*this)[0];
+        return nanovdb::Coord();
     }
 
   private:
@@ -128,6 +127,18 @@ dispatchBuildGridFromPoints<torch::kCUDA>(const JaggedTensor &points,
     // invocation over the whole batch.
     const torch::Tensor pointsBOffsetTensor = points.joffsets().cpu();
     const auto pointsBOffset                = pointsBOffsetTensor.accessor<fvdb::JOffsetsType, 1>();
+
+    // The loop below indexes txs by batch item, so make the invariant explicit rather than
+    // relying on the caller. joffsets holds one offset per batch item plus a terminating entry.
+    TORCH_CHECK(pointsBOffset.size(0) >= 1,
+                "Expected joffsets to have at least one entry, got ",
+                pointsBOffset.size(0));
+    TORCH_CHECK(static_cast<int64_t>(txs.size()) == pointsBOffset.size(0) - 1,
+                "Expected one transform per batch item, but got ",
+                txs.size(),
+                " transforms for ",
+                pointsBOffset.size(0) - 1,
+                " batch items");
 
     // TransformedPointPtr indexes the points as a flat (N, 3) array, so it needs the standard
     // contiguous layout. This is a no-op for the contiguous inputs we expect in practice.
