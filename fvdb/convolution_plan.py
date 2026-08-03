@@ -8,6 +8,7 @@ libraries. Like FFT plans, the convolution plan encapsulates a single direction 
 convolution, or transposed convolution, but can represent either.
 """
 
+import warnings
 from dataclasses import dataclass
 from typing import Any, overload
 
@@ -27,6 +28,25 @@ _ANY_CHANNEL_PAIRS: tuple[tuple[int, int], ...] = ()
 
 _TRANSFORM_COMPATIBILITY_ATOL = 1.0e-6
 _TRANSFORM_COMPATIBILITY_RTOL = 1.0e-6
+_WARNED_INCOMPLETE_COVERAGE_GEOMETRIES: set[tuple[tuple[int, int, int], tuple[int, int, int]]] = set()
+
+
+@dataclass(frozen=True)
+class ConvolutionCoverageReport:
+    """Exact rulebook degree diagnostics for a finite convolution plan."""
+
+    input_row_count: int
+    output_row_count: int
+    input_zero_count: int
+    input_zero_fraction: float
+    input_degree_min: int
+    input_degree_max: int
+    input_degree_histogram: tuple[tuple[int, int], ...]
+    output_zero_count: int
+    output_zero_fraction: float
+    output_degree_min: int
+    output_degree_max: int
+    output_degree_histogram: tuple[tuple[int, int], ...]
 
 
 @dataclass(frozen=True)
@@ -118,6 +138,140 @@ def _transform_compatibility(
         compatible=scale_compatible and registration_integer and registration_zero,
         registration_offset=registration_offset,
     )
+
+
+def _resolve_topology_policy(target_grid: GridBatch | None, topology_policy: str | None) -> str:
+    if topology_policy is None:
+        return "full_support" if target_grid is None else "restricted"
+    if topology_policy not in ("full_support", "restricted"):
+        raise ValueError("topology_policy must be 'full_support' or 'restricted'")
+    if topology_policy == "full_support" and target_grid is not None:
+        raise ValueError("topology_policy='full_support' requires target_grid=None")
+    if topology_policy == "restricted" and target_grid is None:
+        raise ValueError("topology_policy='restricted' requires an explicit target_grid")
+    return topology_policy
+
+
+def _warn_if_incomplete_residue_coverage(
+    geometry: _fvdb_cpp.ConvolutionGeometry, acknowledge_incomplete_coverage: bool
+) -> None:
+    if acknowledge_incomplete_coverage:
+        return
+    kernel_size = tuple(geometry.kernel_size)
+    stride = tuple(geometry.stride)
+    uncovered_axes = []
+    for axis, (kernel, step, padding_before) in enumerate(
+        zip(kernel_size, stride, geometry.padding_before, strict=True)
+    ):
+        residues = {(tap - padding_before) % step for tap in range(kernel)}
+        if len(residues) != step:
+            uncovered_axes.append(axis)
+    if not uncovered_axes:
+        return
+    geometry_key = (kernel_size, stride)
+    if geometry_key in _WARNED_INCOMPLETE_COVERAGE_GEOMETRIES:
+        return
+    _WARNED_INCOMPLETE_COVERAGE_GEOMETRIES.add(geometry_key)
+    warnings.warn(
+        "This convolution geometry leaves uncovered stride residues on axes "
+        f"{uncovered_axes}; some active fine coordinates can have zero rulebook degree. "
+        "This matches dense Torch sampling. Pass acknowledge_incomplete_coverage=True to suppress this warning.",
+        UserWarning,
+        stacklevel=3,
+    )
+
+
+def _degree_summary(degrees: torch.Tensor) -> tuple[int, float, int, int, tuple[tuple[int, int], ...]]:
+    row_count = int(degrees.numel())
+    if row_count == 0:
+        return 0, 0.0, 0, 0, ()
+    degrees = degrees.cpu()
+    zero_count = int((degrees == 0).sum().item())
+    unique_degrees, counts = torch.unique(degrees, sorted=True, return_counts=True)
+    histogram = tuple(
+        (int(degree.item()), int(count.item())) for degree, count in zip(unique_degrees, counts, strict=True)
+    )
+    return (
+        zero_count,
+        zero_count / row_count,
+        int(degrees.min().item()),
+        int(degrees.max().item()),
+        histogram,
+    )
+
+
+def _coverage_report(
+    backend: "_Backend", source_grid: GridBatch, target_grid: GridBatch
+) -> ConvolutionCoverageReport | None:
+    if isinstance(backend, _MatmulBackend):
+        input_row_count = source_grid.total_voxels
+        output_row_count = target_grid.total_voxels
+        return ConvolutionCoverageReport(
+            input_row_count=input_row_count,
+            output_row_count=output_row_count,
+            input_zero_count=0,
+            input_zero_fraction=0.0,
+            input_degree_min=1 if input_row_count else 0,
+            input_degree_max=1 if input_row_count else 0,
+            input_degree_histogram=((1, input_row_count),) if input_row_count else (),
+            output_zero_count=0,
+            output_zero_fraction=0.0,
+            output_degree_min=1 if output_row_count else 0,
+            output_degree_max=1 if output_row_count else 0,
+            output_degree_histogram=((1, output_row_count),) if output_row_count else (),
+        )
+    elif isinstance(backend, _GatherScatterBackend):
+        input_degrees = torch.bincount(
+            backend.topology.gather_indices.to(dtype=torch.int64),
+            minlength=backend.topology.feature_total_voxels,
+        )
+        output_degrees = torch.bincount(
+            backend.topology.scatter_indices.to(dtype=torch.int64),
+            minlength=backend.topology.output_total_voxels,
+        )
+    elif isinstance(backend, _PredGatherIGemmBackend):
+        input_degrees = torch.bincount(
+            backend.gs_topology.gather_indices.to(dtype=torch.int64),
+            minlength=backend.gs_topology.feature_total_voxels,
+        )
+        output_degrees = torch.bincount(
+            backend.gs_topology.scatter_indices.to(dtype=torch.int64),
+            minlength=backend.gs_topology.output_total_voxels,
+        )
+    else:
+        return None
+
+    input_summary = _degree_summary(input_degrees)
+    output_summary = _degree_summary(output_degrees)
+    return ConvolutionCoverageReport(
+        input_row_count=int(input_degrees.numel()),
+        output_row_count=int(output_degrees.numel()),
+        input_zero_count=input_summary[0],
+        input_zero_fraction=input_summary[1],
+        input_degree_min=input_summary[2],
+        input_degree_max=input_summary[3],
+        input_degree_histogram=input_summary[4],
+        output_zero_count=output_summary[0],
+        output_zero_fraction=output_summary[1],
+        output_degree_min=output_summary[2],
+        output_degree_max=output_summary[3],
+        output_degree_histogram=output_summary[4],
+    )
+
+
+def _validate_coverage_policy(
+    coverage_report: ConvolutionCoverageReport | None, topology_policy: str, strict_output_coverage: bool
+) -> None:
+    if coverage_report is None:
+        return
+    if topology_policy == "full_support" and coverage_report.output_zero_count:
+        raise RuntimeError(
+            "Generated full-support topology contains " f"{coverage_report.output_zero_count} zero-degree output rows."
+        )
+    if topology_policy == "restricted" and strict_output_coverage and coverage_report.output_zero_count:
+        raise ValueError(
+            "Restricted topology contains " f"{coverage_report.output_zero_count} zero-degree output rows."
+        )
 
 
 def _vec_is_all(v: torch.Tensor, i: int | float) -> bool:
@@ -292,6 +446,8 @@ class ConvolutionPlan:
     _transposed: bool
     _backend: _Backend
     _transform_compatibility: ConvolutionTransformCompatibility
+    _topology_policy: str
+    _coverage_report: ConvolutionCoverageReport | None
 
     # ============================================================
     #                 Factory methods
@@ -307,6 +463,9 @@ class ConvolutionPlan:
         *,
         expert_config: dict[str, Any] = _DEFAULT_CONFIG,
         channel_pairs: tuple[tuple[int, int], ...] = _ANY_CHANNEL_PAIRS,
+        topology_policy: str | None = None,
+        strict_output_coverage: bool = False,
+        acknowledge_incomplete_coverage: bool = False,
     ) -> "ConvolutionPlan":
         """
         Create a :class:`ConvolutionPlan` for convolution on batches of grids. *i.e.* convolution where the input
@@ -329,6 +488,12 @@ class ConvolutionPlan:
                 Each tuple represents (input_channels, output_channels).
                 *e.g*: ``((32, 64), (64, 128))`` supports 32->64 and 64->128 convolutions.
                 Defaults to ``_ANY_CHANNEL_PAIRS``, which means any channel pairs are supported.
+            topology_policy (str | None): ``"full_support"`` generates the complete structural support;
+                ``"restricted"`` requires ``target_grid`` and restricts the relation to it. When omitted,
+                the policy is inferred from ``target_grid``.
+            strict_output_coverage (bool): Reject explicit targets with degree-zero output rows.
+            acknowledge_incomplete_coverage (bool): Suppress the once-per-geometry warning for
+                stride residues that are intentionally not sampled.
 
         Returns:
             convolution_plan (ConvolutionPlan): Configured plan ready for :meth:`execute()` operations.
@@ -356,6 +521,7 @@ class ConvolutionPlan:
         kernel_size = to_Vec3i(kernel_size, value_constraint=ValueConstraint.POSITIVE)
         stride = to_Vec3i(stride, value_constraint=ValueConstraint.POSITIVE)
 
+        resolved_policy = _resolve_topology_policy(target_grid, topology_policy)
         backend_name = expert_config.get("backend", "default")
 
         if backend_name == "dense":
@@ -366,9 +532,22 @@ class ConvolutionPlan:
             target_grid = source_grid.conv_grid(kernel_size, stride)
 
         geometry = _fvdb_cpp.ConvolutionGeometry(kernel_size, stride)
+        _warn_if_incomplete_residue_coverage(geometry, acknowledge_incomplete_coverage)
         backend = cls._build_backend(source_grid, target_grid, kernel_size, stride, channel_pairs, expert_config)
         compatibility = _transform_compatibility(source_grid, target_grid, geometry)
-        return cls(source_grid, target_grid, geometry, channel_pairs, False, backend, compatibility)
+        coverage_report = _coverage_report(backend, source_grid, target_grid)
+        _validate_coverage_policy(coverage_report, resolved_policy, strict_output_coverage)
+        return cls(
+            source_grid,
+            target_grid,
+            geometry,
+            channel_pairs,
+            False,
+            backend,
+            compatibility,
+            resolved_policy,
+            coverage_report,
+        )
 
     @classmethod
     def from_grid_batch_transposed(
@@ -380,6 +559,9 @@ class ConvolutionPlan:
         *,
         expert_config: dict[str, Any] = _DEFAULT_CONFIG,
         channel_pairs: tuple[tuple[int, int], ...] = _ANY_CHANNEL_PAIRS,
+        topology_policy: str | None = None,
+        strict_output_coverage: bool = False,
+        acknowledge_incomplete_coverage: bool = False,
     ) -> "ConvolutionPlan":
         """
         Create a :class:`ConvolutionPlan` for *transposed* convolution on batches of grids.
@@ -410,6 +592,12 @@ class ConvolutionPlan:
             expert_config (dict[str, Any]): Advanced configuration options (rarely needed by typical users).
             channel_pairs (tuple[tuple[int, int], ...]): Supported input/output channel combinations as tuples.
                 Defaults to ``_ANY_CHANNEL_PAIRS``, which means any channel pairs are supported.
+            topology_policy (str | None): ``"full_support"`` generates the complete structural support;
+                ``"restricted"`` requires ``target_grid``. When omitted, the policy is inferred from
+                ``target_grid``.
+            strict_output_coverage (bool): Reject explicit targets with degree-zero output rows.
+            acknowledge_incomplete_coverage (bool): Suppress the once-per-geometry warning for
+                stride residues that are intentionally not sampled.
 
         Returns:
             convolution_plan (ConvolutionPlan): Configured plan ready for transposed convolution operations via :meth:`execute()`.
@@ -417,6 +605,7 @@ class ConvolutionPlan:
         kernel_size = to_Vec3i(kernel_size, value_constraint=ValueConstraint.POSITIVE)
         stride = to_Vec3i(stride, value_constraint=ValueConstraint.POSITIVE)
 
+        resolved_policy = _resolve_topology_policy(target_grid, topology_policy)
         backend_name = expert_config.get("backend", "default")
 
         if backend_name == "dense":
@@ -424,14 +613,27 @@ class ConvolutionPlan:
                 raise ValueError("Target grid must be None for dense backend, transposed.")
             target_grid = source_grid
         elif target_grid is None:
-            raise ValueError("Target grid must be provided for transposed convolution, except for dense backend.")
+            target_grid = source_grid.conv_transpose_grid(kernel_size, stride)
 
         geometry = _fvdb_cpp.ConvolutionGeometry(kernel_size, stride)
+        _warn_if_incomplete_residue_coverage(geometry, acknowledge_incomplete_coverage)
         backend = cls._build_backend(
             source_grid, target_grid, kernel_size, stride, channel_pairs, expert_config, transposed=True
         )
         compatibility = _transform_compatibility(target_grid, source_grid, geometry)
-        return cls(source_grid, target_grid, geometry, channel_pairs, True, backend, compatibility)
+        coverage_report = _coverage_report(backend, source_grid, target_grid)
+        _validate_coverage_policy(coverage_report, resolved_policy, strict_output_coverage)
+        return cls(
+            source_grid,
+            target_grid,
+            geometry,
+            channel_pairs,
+            True,
+            backend,
+            compatibility,
+            resolved_policy,
+            coverage_report,
+        )
 
     @classmethod
     def from_plan_transposed(cls, plan: "ConvolutionPlan") -> "ConvolutionPlan":
@@ -486,7 +688,19 @@ class ConvolutionPlan:
             compatibility = _transform_compatibility(target_grid, source_grid, plan._geometry)
         else:
             compatibility = _transform_compatibility(source_grid, target_grid, plan._geometry)
-        return cls(source_grid, target_grid, plan._geometry, channel_pairs, transposed, backend, compatibility)
+        coverage_report = _coverage_report(backend, source_grid, target_grid)
+        _validate_coverage_policy(coverage_report, "restricted", False)
+        return cls(
+            source_grid,
+            target_grid,
+            plan._geometry,
+            channel_pairs,
+            transposed,
+            backend,
+            compatibility,
+            "restricted",
+            coverage_report,
+        )
 
     # ============================================================
     #                 Validation
@@ -693,6 +907,16 @@ class ConvolutionPlan:
     def transform_compatibility(self) -> ConvolutionTransformCompatibility:
         """Report-only first-release fine/coarse transform compatibility diagnostic."""
         return self._transform_compatibility
+
+    @property
+    def topology_policy(self) -> str:
+        """Resolved ``"full_support"`` or ``"restricted"`` topology policy."""
+        return self._topology_policy
+
+    @property
+    def coverage_report(self) -> ConvolutionCoverageReport | None:
+        """Exact input/output rulebook degree diagnostics, when the backend has a rulebook."""
+        return self._coverage_report
 
     @property
     def has_fixed_topology(self) -> bool:

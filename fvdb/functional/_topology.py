@@ -442,6 +442,8 @@ def conv_grid_batch(
     """
     ks = to_Vec3i(kernel_size, value_constraint=ValueConstraint.POSITIVE).tolist()
     st = to_Vec3i(stride, value_constraint=ValueConstraint.POSITIVE).tolist()
+    if ks == [1, 1, 1] and st == [1, 1, 1]:
+        return grid
     return _wrap_grid(_fvdb_cpp.conv_grid(grid.data, ks, st))
 
 
@@ -464,6 +466,8 @@ def conv_grid_single(
     """
     ks = to_Vec3i(kernel_size, value_constraint=ValueConstraint.POSITIVE).tolist()
     st = to_Vec3i(stride, value_constraint=ValueConstraint.POSITIVE).tolist()
+    if ks == [1, 1, 1] and st == [1, 1, 1]:
+        return grid
     return _wrap_single_grid(_fvdb_cpp.conv_grid(grid.data, ks, st))
 
 

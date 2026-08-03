@@ -55,6 +55,7 @@
 #include <fvdb/JaggedTensor.h>
 #include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/BuildGridForConv.h>
+#include <fvdb/detail/ops/BuildGridForConvTranspose.h>
 #include <fvdb/detail/ops/BuildGridFromIjk.h>
 #include <fvdb/detail/ops/convolution/ConvolutionGeometry.h>
 #include <fvdb/detail/ops/convolution/GatherScatterDefault.h>
@@ -63,6 +64,7 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <cmath>
 #include <limits>
 #include <string>
@@ -211,6 +213,94 @@ TEST(ConvolutionGeometry, UsesEuclideanDivisionForNegativeCoordinates) {
     EXPECT_EQ(coarse, nanovdb::Coord(-1));
     EXPECT_EQ(geometry.fineFromCoarse(coarse, nanovdb::Coord(3)), nanovdb::Coord(-2));
     EXPECT_FALSE(geometry.coarseFromFine(nanovdb::Coord(-2), nanovdb::Coord(2), coarse));
+}
+
+TEST(ConvolutionGeometry, DirectProjectionQuotientAndBlockArePhaseAwareForSizesOneThroughSix) {
+    std::array<nanovdb::Coord, 5> const fineCoords = {
+        nanovdb::Coord(-7, -5, -3),
+        nanovdb::Coord(-2, -1, 0),
+        nanovdb::Coord(0, 1, 2),
+        nanovdb::Coord(3, 4, 5),
+        nanovdb::Coord(8, 7, 6),
+    };
+    for (int32_t k = 1; k <= 6; ++k) {
+        ops::ConvolutionGeometry const geometry{nanovdb::Coord(k), nanovdb::Coord(k)};
+        for (nanovdb::Coord const &fine: fineCoords) {
+            nanovdb::Coord const shifted = fine + geometry.paddingBefore();
+            nanovdb::Coord const coarse(ops::ConvolutionGeometry::floorDiv(shifted[0], k),
+                                        ops::ConvolutionGeometry::floorDiv(shifted[1], k),
+                                        ops::ConvolutionGeometry::floorDiv(shifted[2], k));
+            nanovdb::Coord const tap(ops::ConvolutionGeometry::floorMod(shifted[0], k),
+                                     ops::ConvolutionGeometry::floorMod(shifted[1], k),
+                                     ops::ConvolutionGeometry::floorMod(shifted[2], k));
+            nanovdb::Coord rebuilt;
+            EXPECT_TRUE(geometry.coarseFromFine(fine, tap, rebuilt)) << "K=" << k;
+            EXPECT_EQ(rebuilt, coarse) << "K=" << k;
+            EXPECT_EQ(geometry.fineFromCoarse(coarse, tap), fine) << "K=" << k;
+        }
+    }
+
+    ops::ConvolutionGeometry const mixed(nanovdb::Coord(2, 3, 4), nanovdb::Coord(2, 3, 4));
+    nanovdb::Coord const mixedFine(-3, -4, 6);
+    nanovdb::Coord const mixedShifted = mixedFine + mixed.paddingBefore();
+    nanovdb::Coord const mixedCoarse(ops::ConvolutionGeometry::floorDiv(mixedShifted[0], 2),
+                                     ops::ConvolutionGeometry::floorDiv(mixedShifted[1], 3),
+                                     ops::ConvolutionGeometry::floorDiv(mixedShifted[2], 4));
+    nanovdb::Coord const mixedTap(ops::ConvolutionGeometry::floorMod(mixedShifted[0], 2),
+                                  ops::ConvolutionGeometry::floorMod(mixedShifted[1], 3),
+                                  ops::ConvolutionGeometry::floorMod(mixedShifted[2], 4));
+    EXPECT_EQ(mixed.fineFromCoarse(mixedCoarse, mixedTap), mixedFine);
+    EXPECT_EQ(ops::ConvolutionGeometry(nanovdb::Coord(2), nanovdb::Coord(2)).paddingBefore(),
+              nanovdb::Coord(0));
+}
+
+TEST(BuildGridForConv, DirectProjectionUsesOneEmissionPerInputForKEqualsS) {
+    auto const device = torch::Device(torch::kCPU);
+    auto ijk          = torch::tensor({{-7, -3, -1}, {-2, -1, 0}, {0, 1, 2}, {3, 4, 5}, {8, 7, 6}},
+                             torch::dtype(torch::kInt32));
+    auto grid         = makeGrid(ijk, device);
+    for (int32_t k = 1; k <= 6; ++k) {
+        auto output      = ops::buildGridForConv(*grid, nanovdb::Coord(k), nanovdb::Coord(k));
+        auto const stats = ops::lastBuildGridForConvResourceStats();
+        EXPECT_EQ(stats.inputVoxelCount, grid->totalVoxels()) << "K=" << k;
+        EXPECT_EQ(stats.kernelVolume, static_cast<int64_t>(k) * k * k) << "K=" << k;
+        EXPECT_EQ(stats.validEmissionCount, grid->totalVoxels()) << "K=" << k;
+        EXPECT_TRUE(stats.usedDirectProjection) << "K=" << k;
+        EXPECT_EQ(stats.countRequestedBytes, 0u) << "K=" << k;
+        EXPECT_EQ(stats.prefixRequestedBytes, 0u) << "K=" << k;
+        EXPECT_EQ(stats.peakRequestedBytes, stats.emissionRequestedBytes) << "K=" << k;
+        EXPECT_LE(output->totalVoxels(), grid->totalVoxels()) << "K=" << k;
+    }
+
+    auto coarse = makeGrid(torch::tensor({{-2, 1, 0}}, torch::dtype(torch::kInt32)), device);
+    auto fine =
+        ops::buildGridForConvTranspose(*coarse, nanovdb::Coord(2, 3, 4), nanovdb::Coord(2, 3, 4));
+    EXPECT_EQ(fine->totalVoxels(), 2 * 3 * 4);
+}
+
+TEST(BuildGridForConv, CountThenFillReportsExactSparseEmissionCount) {
+    auto const device = torch::Device(torch::kCPU);
+    auto ijk          = torch::tensor({{-4, 0, 0}, {-1, 0, 0}, {0, 0, 0}, {3, 0, 0}, {4, 0, 0}},
+                             torch::dtype(torch::kInt32));
+    auto grid         = makeGrid(ijk, device);
+    ops::ConvolutionGeometry const geometry(nanovdb::Coord(3, 1, 1), nanovdb::Coord(4, 1, 1));
+    int64_t expectedM = 0;
+    for (int64_t index = 0; index < ijk.size(0); ++index) {
+        nanovdb::Coord const fine(ijk[index][0].item<int32_t>(), 0, 0);
+        for (int64_t tap = 0; tap < geometry.kernelVolume(); ++tap) {
+            nanovdb::Coord ignored;
+            expectedM += geometry.coarseFromFine(fine, geometry.tapCoord(tap), ignored) ? 1 : 0;
+        }
+    }
+    (void)ops::buildGridForConv(*grid, geometry.kernelSize(), geometry.stride());
+    auto const stats = ops::lastBuildGridForConvResourceStats();
+    EXPECT_FALSE(stats.usedDirectProjection);
+    EXPECT_EQ(stats.validEmissionCount, expectedM);
+    EXPECT_LT(stats.validEmissionCount, stats.inputVoxelCount * stats.kernelVolume);
+    EXPECT_EQ(stats.emissionRequestedBytes,
+              static_cast<uint64_t>(expectedM) * (3 * sizeof(int32_t) + sizeof(fvdb::JIdxType)));
+    EXPECT_GT(stats.countRequestedBytes, 0u);
+    EXPECT_GT(stats.prefixRequestedBytes, 0u);
 }
 
 TEST(ConvolutionGeometry, RejectsInvalidAndOverflowingVolumes) {

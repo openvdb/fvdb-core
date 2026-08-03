@@ -959,6 +959,7 @@ def conv_grid(
     kernel_size: list[int],
     stride: list[int],
 ) -> GridBatchData: ...
+def last_conv_grid_resource_stats() -> dict[str, int | bool]: ...
 def conv_transpose_grid(
     grid: GridBatchData,
     kernel_size: list[int],
