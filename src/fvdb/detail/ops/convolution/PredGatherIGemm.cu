@@ -17,6 +17,7 @@
 #include "dispatch/dispatch_table.h"
 #include "dispatch/with_value.h"
 
+#include <fvdb/detail/ops/convolution/ConvolutionGeometry.h>
 #include <fvdb/detail/ops/convolution/PredGatherIGemm.h>
 
 #include <nanovdb/NanoVDB.h>
@@ -1095,6 +1096,10 @@ predGatherIGemmSparseConv(torch::Tensor features,
                 "PredGatherIGemm supports kernel sizes 3, 5, 7; got ",
                 kernel_size);
     TORCH_CHECK(stride == 1 || stride == 2, "PredGatherIGemm supports strides 1, 2; got ", stride);
+
+    ConvolutionGeometry const geometry{nanovdb::Coord(kernel_size), nanovdb::Coord(stride)};
+    TORCH_CHECK(geometry.tapOffset(nanovdb::Coord(0)) == nanovdb::Coord(-(kernel_size / 2)),
+                "PredGatherIGemm's admitted odd-kernel phase must match ConvolutionGeometry");
 
     const int64_t C = features.size(1);
     const int64_t K = weights.size(0);

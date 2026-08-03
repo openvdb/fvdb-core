@@ -21,6 +21,7 @@
 #include <fvdb/detail/dispatch/ForEachActiveVoxel.cuh>
 #include <fvdb/detail/dispatch/GridAccessor.h>
 #include <fvdb/detail/dispatch/TensorChecks.h>
+#include <fvdb/detail/ops/convolution/ConvolutionGeometry.h>
 #include <fvdb/detail/ops/convolution/GatherScatterDefault.h>
 
 #include <torch/types.h>
@@ -96,17 +97,11 @@ struct twopass_topology_op {
        nanovdb::Coord kernel_size,
        nanovdb::Coord stride,
        ConvDirection direction) {
-        int64_t const ks0 = kernel_size[0];
-        int64_t const ks1 = kernel_size[1];
-        int64_t const ks2 = kernel_size[2];
-        int64_t const K   = ks0 * ks1 * ks2;
+        ConvolutionGeometry const geometry(kernel_size, stride);
+        int64_t const K = geometry.kernelVolume();
 
         int64_t const featureTotal = feature_grid.totalVoxels();
         int64_t const output_total = output_grid.totalVoxels();
-
-        nanovdb::Coord const kernel_start(static_cast<int>(std::floor(-ks0 / 2.0 + 1)),
-                                          static_cast<int>(std::floor(-ks1 / 2.0 + 1)),
-                                          static_cast<int>(std::floor(-ks2 / 2.0 + 1)));
 
         bool const is_transposed = (direction == ConvDirection::Transposed);
         auto const device        = output_grid.device();
@@ -130,22 +125,12 @@ struct twopass_topology_op {
                 auto feat_tree_acc    = feat_grid->getAccessor();
 
                 for (int64_t k = 0; k < K; ++k) {
-                    int32_t const k0 = kernel_start[0] + static_cast<int32_t>(k / (ks1 * ks2));
-                    int32_t const k1 = kernel_start[1] + static_cast<int32_t>((k / ks2) % ks1);
-                    int32_t const k2 = kernel_start[2] + static_cast<int32_t>(k % ks2);
-
                     nanovdb::Coord probe;
                     if (is_transposed) {
-                        int32_t const r0 = ijk[0] - k0;
-                        int32_t const r1 = ijk[1] - k1;
-                        int32_t const r2 = ijk[2] - k2;
-                        if (r0 % stride[0] != 0 || r1 % stride[1] != 0 || r2 % stride[2] != 0)
+                        if (!geometry.coarseFromFine(ijk, geometry.tapCoord(k), probe))
                             continue;
-                        probe = nanovdb::Coord(r0 / stride[0], r1 / stride[1], r2 / stride[2]);
                     } else {
-                        probe = nanovdb::Coord(ijk[0] * stride[0] + k0,
-                                               ijk[1] * stride[1] + k1,
-                                               ijk[2] * stride[2] + k2);
+                        probe = geometry.fineFromCoarse(ijk, geometry.tapCoord(k));
                     }
 
                     if (feat_tree_acc.isActive(probe)) {
@@ -201,22 +186,12 @@ struct twopass_topology_op {
                 int64_t const feat_base = feature_acc.voxelOffset(batch_idx);
 
                 for (int64_t k = 0; k < K; ++k) {
-                    int32_t const k0 = kernel_start[0] + static_cast<int32_t>(k / (ks1 * ks2));
-                    int32_t const k1 = kernel_start[1] + static_cast<int32_t>((k / ks2) % ks1);
-                    int32_t const k2 = kernel_start[2] + static_cast<int32_t>(k % ks2);
-
                     nanovdb::Coord probe;
                     if (is_transposed) {
-                        int32_t const r0 = ijk[0] - k0;
-                        int32_t const r1 = ijk[1] - k1;
-                        int32_t const r2 = ijk[2] - k2;
-                        if (r0 % stride[0] != 0 || r1 % stride[1] != 0 || r2 % stride[2] != 0)
+                        if (!geometry.coarseFromFine(ijk, geometry.tapCoord(k), probe))
                             continue;
-                        probe = nanovdb::Coord(r0 / stride[0], r1 / stride[1], r2 / stride[2]);
                     } else {
-                        probe = nanovdb::Coord(ijk[0] * stride[0] + k0,
-                                               ijk[1] * stride[1] + k1,
-                                               ijk[2] * stride[2] + k2);
+                        probe = geometry.fineFromCoarse(ijk, geometry.tapCoord(k));
                     }
 
                     if (feat_tree_acc.isActive(probe)) {

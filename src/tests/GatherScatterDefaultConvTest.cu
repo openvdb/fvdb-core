@@ -56,6 +56,7 @@
 #include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/BuildGridForConv.h>
 #include <fvdb/detail/ops/BuildGridFromIjk.h>
+#include <fvdb/detail/ops/convolution/ConvolutionGeometry.h>
 #include <fvdb/detail/ops/convolution/GatherScatterDefault.h>
 
 #include <torch/types.h>
@@ -63,6 +64,7 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <limits>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -178,6 +180,47 @@ makeStridedTestGrid(torch::Device device) {
         ijk[i][2] = coords[i][2];
     }
     return makeGrid(ijk, device);
+}
+
+// =============================================================================
+// Canonical geometry
+// =============================================================================
+
+TEST(ConvolutionGeometry, StoresCanonicalPhaseAndTapLayout) {
+    ops::ConvolutionGeometry const geometry(nanovdb::Coord(4, 3, 6), nanovdb::Coord(2, 3, 4));
+
+    EXPECT_EQ(geometry.semanticsVersion(), 1);
+    EXPECT_EQ(geometry.kernelVolume(), 72);
+    EXPECT_EQ(geometry.paddingBefore(), nanovdb::Coord(1, 1, 2));
+    EXPECT_EQ(geometry.paddingAfter(), nanovdb::Coord(2, 1, 3));
+    EXPECT_EQ(geometry.tapCoord(23), nanovdb::Coord(1, 0, 5));
+    EXPECT_EQ(geometry.tapOffset(geometry.tapCoord(23)), nanovdb::Coord(0, -1, 3));
+    EXPECT_EQ(geometry.fineFromCoarse(nanovdb::Coord(3, -2, 1), nanovdb::Coord(0, 0, 0)),
+              nanovdb::Coord(5, -7, 2));
+}
+
+TEST(ConvolutionGeometry, UsesEuclideanDivisionForNegativeCoordinates) {
+    EXPECT_EQ(ops::ConvolutionGeometry::floorDiv(-5, 4), -2);
+    EXPECT_EQ(ops::ConvolutionGeometry::floorMod(-5, 4), 3);
+    EXPECT_TRUE(ops::ConvolutionGeometry::isDivisible(-4, 4));
+    EXPECT_FALSE(ops::ConvolutionGeometry::isDivisible(-3, 4));
+
+    ops::ConvolutionGeometry const geometry(nanovdb::Coord(4), nanovdb::Coord(4));
+    nanovdb::Coord coarse;
+    EXPECT_TRUE(geometry.coarseFromFine(nanovdb::Coord(-2), nanovdb::Coord(3), coarse));
+    EXPECT_EQ(coarse, nanovdb::Coord(-1));
+    EXPECT_EQ(geometry.fineFromCoarse(coarse, nanovdb::Coord(3)), nanovdb::Coord(-2));
+    EXPECT_FALSE(geometry.coarseFromFine(nanovdb::Coord(-2), nanovdb::Coord(2), coarse));
+}
+
+TEST(ConvolutionGeometry, RejectsInvalidAndOverflowingVolumes) {
+    EXPECT_THROW((void)ops::ConvolutionGeometry(nanovdb::Coord(0, 1, 1), nanovdb::Coord(1)),
+                 c10::Error);
+    EXPECT_THROW((void)ops::ConvolutionGeometry(nanovdb::Coord(1), nanovdb::Coord(0, 1, 1)),
+                 c10::Error);
+    EXPECT_THROW((void)ops::ConvolutionGeometry(nanovdb::Coord(std::numeric_limits<int32_t>::max()),
+                                                nanovdb::Coord(1)),
+                 c10::Error);
 }
 
 static torch::TensorOptions

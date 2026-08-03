@@ -25,6 +25,100 @@ _DEFAULT_CONFIG: dict[str, Any] = {
 
 _ANY_CHANNEL_PAIRS: tuple[tuple[int, int], ...] = ()
 
+_TRANSFORM_COMPATIBILITY_ATOL = 1.0e-6
+_TRANSFORM_COMPATIBILITY_RTOL = 1.0e-6
+
+
+@dataclass(frozen=True)
+class ConvolutionTransformCompatibility:
+    """Report-only compatibility of a plan's normalized fine and coarse lattices.
+
+    The first unified-semantics release requires matching batch/device metadata,
+    ``h_coarse == stride * h_fine``, and the canonical uniform registration
+    ``a == 0``. Comparisons use ``atol=rtol=1e-6``. This record intentionally
+    reports incompatibility without rejecting plan construction until Slice 3b.
+    """
+
+    fine_grid_count: int
+    coarse_grid_count: int
+    same_batch_size: bool
+    same_device: bool
+    scale_compatible: bool
+    registration_integer: bool
+    registration_zero: bool
+    compatible: bool
+    registration_offset: torch.Tensor | None
+
+
+def _transform_compatibility(
+    fine_grid: GridBatch, coarse_grid: GridBatch, geometry: _fvdb_cpp.ConvolutionGeometry
+) -> ConvolutionTransformCompatibility:
+    """Compute the report-only first-release lattice-registration diagnostic."""
+    same_batch_size = fine_grid.grid_count == coarse_grid.grid_count
+    same_device = fine_grid.device == coarse_grid.device
+    if not same_batch_size or not same_device:
+        return ConvolutionTransformCompatibility(
+            fine_grid_count=fine_grid.grid_count,
+            coarse_grid_count=coarse_grid.grid_count,
+            same_batch_size=same_batch_size,
+            same_device=same_device,
+            scale_compatible=False,
+            registration_integer=False,
+            registration_zero=False,
+            compatible=False,
+            registration_offset=None,
+        )
+
+    # GridBatchData exposes the authoritative double-precision metadata on the
+    # host. Keep this construction-time diagnostic off the execution device and
+    # avoid losing registration precision through GridBatch's float32 view.
+    fine_data = _get_grid_data(fine_grid)
+    coarse_data = _get_grid_data(coarse_grid)
+    fine_voxel_sizes = fine_data.voxel_sizes
+    coarse_voxel_sizes = coarse_data.voxel_sizes
+    fine_origins = fine_data.origins
+    coarse_origins = coarse_data.origins
+    expected_coarse_voxel_sizes = fine_voxel_sizes * torch.tensor(
+        geometry.stride, dtype=fine_voxel_sizes.dtype, device=fine_voxel_sizes.device
+    )
+    scale_compatible = bool(
+        torch.allclose(
+            coarse_voxel_sizes,
+            expected_coarse_voxel_sizes,
+            atol=_TRANSFORM_COMPATIBILITY_ATOL,
+            rtol=_TRANSFORM_COMPATIBILITY_RTOL,
+        )
+    )
+    registration_offset = (coarse_origins - fine_origins) / fine_voxel_sizes
+    rounded_registration = torch.round(registration_offset)
+    registration_integer = bool(
+        torch.allclose(
+            registration_offset,
+            rounded_registration,
+            atol=_TRANSFORM_COMPATIBILITY_ATOL,
+            rtol=_TRANSFORM_COMPATIBILITY_RTOL,
+        )
+    )
+    registration_zero = bool(
+        torch.allclose(
+            registration_offset,
+            torch.zeros_like(registration_offset),
+            atol=_TRANSFORM_COMPATIBILITY_ATOL,
+            rtol=_TRANSFORM_COMPATIBILITY_RTOL,
+        )
+    )
+    return ConvolutionTransformCompatibility(
+        fine_grid_count=fine_grid.grid_count,
+        coarse_grid_count=coarse_grid.grid_count,
+        same_batch_size=True,
+        same_device=True,
+        scale_compatible=scale_compatible,
+        registration_integer=registration_integer,
+        registration_zero=registration_zero,
+        compatible=scale_compatible and registration_integer and registration_zero,
+        registration_offset=registration_offset,
+    )
+
 
 def _vec_is_all(v: torch.Tensor, i: int | float) -> bool:
     return bool(torch.all(torch.eq(v, i)).item())
@@ -193,11 +287,11 @@ class ConvolutionPlan:
 
     _source_grid: GridBatch
     _target_grid: GridBatch
-    _kernel_size: torch.Tensor
-    _stride: torch.Tensor
+    _geometry: _fvdb_cpp.ConvolutionGeometry
     _channel_pairs: tuple[tuple[int, int], ...]
     _transposed: bool
     _backend: _Backend
+    _transform_compatibility: ConvolutionTransformCompatibility
 
     # ============================================================
     #                 Factory methods
@@ -271,8 +365,10 @@ class ConvolutionPlan:
         elif target_grid is None:
             target_grid = source_grid.conv_grid(kernel_size, stride)
 
+        geometry = _fvdb_cpp.ConvolutionGeometry(kernel_size, stride)
         backend = cls._build_backend(source_grid, target_grid, kernel_size, stride, channel_pairs, expert_config)
-        return cls(source_grid, target_grid, kernel_size, stride, channel_pairs, False, backend)
+        compatibility = _transform_compatibility(source_grid, target_grid, geometry)
+        return cls(source_grid, target_grid, geometry, channel_pairs, False, backend, compatibility)
 
     @classmethod
     def from_grid_batch_transposed(
@@ -330,10 +426,12 @@ class ConvolutionPlan:
         elif target_grid is None:
             raise ValueError("Target grid must be provided for transposed convolution, except for dense backend.")
 
+        geometry = _fvdb_cpp.ConvolutionGeometry(kernel_size, stride)
         backend = cls._build_backend(
             source_grid, target_grid, kernel_size, stride, channel_pairs, expert_config, transposed=True
         )
-        return cls(source_grid, target_grid, kernel_size, stride, channel_pairs, True, backend)
+        compatibility = _transform_compatibility(target_grid, source_grid, geometry)
+        return cls(source_grid, target_grid, geometry, channel_pairs, True, backend, compatibility)
 
     @classmethod
     def from_plan_transposed(cls, plan: "ConvolutionPlan") -> "ConvolutionPlan":
@@ -378,13 +476,17 @@ class ConvolutionPlan:
         backend = cls._build_backend(
             source_grid,
             target_grid,
-            plan._kernel_size,
-            plan._stride,
+            torch.tensor(plan._geometry.kernel_size, dtype=torch.int32),
+            torch.tensor(plan._geometry.stride, dtype=torch.int32),
             channel_pairs,
             _DEFAULT_CONFIG,
             transposed=transposed,
         )
-        return cls(source_grid, target_grid, plan._kernel_size, plan._stride, channel_pairs, transposed, backend)
+        if transposed:
+            compatibility = _transform_compatibility(target_grid, source_grid, plan._geometry)
+        else:
+            compatibility = _transform_compatibility(source_grid, target_grid, plan._geometry)
+        return cls(source_grid, target_grid, plan._geometry, channel_pairs, transposed, backend, compatibility)
 
     # ============================================================
     #                 Validation
@@ -418,8 +520,8 @@ class ConvolutionPlan:
 
         return (
             _channel_pair_supported(in_channels, out_channels, self._channel_pairs)
-            and torch.equal(kernel_size, self._kernel_size)
-            and torch.equal(stride, self._stride)
+            and tuple(kernel_size.tolist()) == tuple(self._geometry.kernel_size)
+            and tuple(stride.tolist()) == tuple(self._geometry.stride)
             and transposed == self._transposed
         )
 
@@ -571,6 +673,26 @@ class ConvolutionPlan:
             target_grid_batch (GridBatch): The target :class:`fvdb.GridBatch` of the convolution plan.
         """
         return self._target_grid
+
+    @property
+    def geometry(self) -> _fvdb_cpp.ConvolutionGeometry:
+        """Canonical immutable geometry shared by this plan's topology and executors."""
+        return self._geometry
+
+    @property
+    def kernel_size(self) -> torch.Tensor:
+        """Kernel dimensions in the canonical ``torch_same_phase`` geometry."""
+        return torch.tensor(self._geometry.kernel_size, dtype=torch.int32)
+
+    @property
+    def stride(self) -> torch.Tensor:
+        """Stride dimensions in the canonical ``torch_same_phase`` geometry."""
+        return torch.tensor(self._geometry.stride, dtype=torch.int32)
+
+    @property
+    def transform_compatibility(self) -> ConvolutionTransformCompatibility:
+        """Report-only first-release fine/coarse transform compatibility diagnostic."""
+        return self._transform_compatibility
 
     @property
     def has_fixed_topology(self) -> bool:
