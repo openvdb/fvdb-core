@@ -14,7 +14,7 @@ import unittest
 import torch
 from fvdb.nn import SimpleUNet
 from fvdb.types import DeviceIdentifier, resolve_device
-from fvdb.utils.tests.convolution_utils import (
+from fvdb_test_utils.convolution_utils import (
     REDUCED_DEVICE_DTYPE_COMBOS,
     create_grid_from_coords,
 )

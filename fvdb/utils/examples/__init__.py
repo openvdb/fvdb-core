@@ -2,18 +2,42 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 import hashlib
+import importlib
 import logging
 import timeit
 from pathlib import Path
+from types import ModuleType
 from typing import List, Tuple, Union
 
 import numpy as np
-import point_cloud_utils as pcu
 import torch
 from fvdb.types import NumericMaxRank2
-from fvdb.utils.tests import get_fvdb_example_data_path as _get_fvdb_example_data_path
+from fvdb.utils._data_repo import fetch_data_repo
 
 from fvdb import GridBatch, JaggedTensor
+
+_EXAMPLE_DATA_REPO = "voxel-foundation/fvdb-example-data"
+_EXAMPLE_DATA_REVISION = "613c3a4e220eb45b9ae0271dca4808ab484ee134"
+
+
+def _import_optional(module_name: str) -> ModuleType:
+    """Import one of the optional example dependencies, or explain how to install it.
+
+    These are imported lazily so that importing fvdb, or this module, does not require
+    dependencies that only the example helpers need.
+    """
+    try:
+        return importlib.import_module(module_name)
+    except ImportError as e:
+        raise ImportError(
+            f"'{module_name}' is required for this fvdb example helper but is not installed. "
+            f"Install the example dependencies with: pip install 'fvdb-core[examples]'"
+        ) from e
+
+
+def get_fvdb_example_data_path() -> Path:
+    """Get the path to the downloaded fvdb-example-data snapshot."""
+    return fetch_data_repo(_EXAMPLE_DATA_REPO, _EXAMPLE_DATA_REVISION, "fvdb_example_data")
 
 
 def _get_md5_checksum(file_path: Path):
@@ -66,6 +90,8 @@ def load_pointcloud(
     device=torch.device("cuda"),
     dtype=torch.float32,
 ) -> torch.Tensor:
+    pcu = _import_optional("point_cloud_utils")
+
     logging.info(f"Loading pointlcoud {data_path}...")
     start = timeit.default_timer()
     pts = pcu.load_mesh_v(data_path)
@@ -79,6 +105,8 @@ def load_pointcloud(
 def load_mesh(
     data_path, expected_md5, skip_every=1, mode="vn", device=torch.device("cuda"), dtype=torch.float32
 ) -> List[torch.Tensor]:
+    pcu = _import_optional("point_cloud_utils")
+
     if _get_md5_checksum(data_path) != expected_md5:
         raise ValueError(f"Checksum for {data_path} is incorrect, expected {expected_md5}")
     logging.info(f"Loading mesh {data_path}...")
@@ -107,7 +135,7 @@ def load_mesh(
 
 
 def load_dragon_mesh(skip_every=1, mode="vn", device=torch.device("cuda"), dtype=torch.float32) -> List[torch.Tensor]:
-    data_path = _get_fvdb_example_data_path() / "meshes" / "dragon.ply"
+    data_path = get_fvdb_example_data_path() / "meshes" / "dragon.ply"
     return load_mesh(
         data_path,
         expected_md5="0222e7d2147eebcb2eacdaf6263a9512",
@@ -119,7 +147,7 @@ def load_dragon_mesh(skip_every=1, mode="vn", device=torch.device("cuda"), dtype
 
 
 def load_happy_mesh(skip_every=1, mode="vn", device=torch.device("cuda"), dtype=torch.float32) -> List[torch.Tensor]:
-    data_path = _get_fvdb_example_data_path() / "meshes" / "happy.ply"
+    data_path = get_fvdb_example_data_path() / "meshes" / "happy.ply"
     return load_mesh(
         data_path,
         expected_md5="5cfe3c9c0b58bad9a77b47ae04454160",
@@ -131,7 +159,7 @@ def load_happy_mesh(skip_every=1, mode="vn", device=torch.device("cuda"), dtype=
 
 
 def load_bunny_mesh(skip_every=1, mode="vn", device=torch.device("cuda"), dtype=torch.float32) -> List[torch.Tensor]:
-    data_path = _get_fvdb_example_data_path() / "meshes" / "bunny.ply"
+    data_path = get_fvdb_example_data_path() / "meshes" / "bunny.ply"
     return load_mesh(
         data_path,
         expected_md5="fe2f062a8e22b7dab895a1945c32cd58",
@@ -143,7 +171,7 @@ def load_bunny_mesh(skip_every=1, mode="vn", device=torch.device("cuda"), dtype=
 
 
 def load_car_1_mesh(skip_every=1, mode="vf", device=torch.device("cuda"), dtype=torch.float32) -> List[torch.Tensor]:
-    data_path = _get_fvdb_example_data_path() / "meshes" / "car-mesh-1.ply"
+    data_path = get_fvdb_example_data_path() / "meshes" / "car-mesh-1.ply"
     return load_mesh(
         data_path,
         expected_md5="969f91abdf00bad792ca2af347c58499",
@@ -155,7 +183,7 @@ def load_car_1_mesh(skip_every=1, mode="vf", device=torch.device("cuda"), dtype=
 
 
 def load_car_2_mesh(skip_every=1, mode="vf", device=torch.device("cuda"), dtype=torch.float32) -> List[torch.Tensor]:
-    data_path = _get_fvdb_example_data_path() / "meshes" / "car-mesh-2.ply"
+    data_path = get_fvdb_example_data_path() / "meshes" / "car-mesh-2.ply"
     return load_mesh(
         data_path,
         expected_md5="d4aa0dd4f4609ea1b19aca7d8618d22a",
@@ -167,7 +195,7 @@ def load_car_2_mesh(skip_every=1, mode="vf", device=torch.device("cuda"), dtype=
 
 
 def load_car_3_mesh(skip_every=1, mode="vf", device=torch.device("cuda"), dtype=torch.float32) -> List[torch.Tensor]:
-    data_path = _get_fvdb_example_data_path() / "meshes" / "car-mesh-3.ply"
+    data_path = get_fvdb_example_data_path() / "meshes" / "car-mesh-3.ply"
     return load_mesh(
         data_path,
         expected_md5="a058d534da71748167799db0351f21f4",
@@ -179,7 +207,7 @@ def load_car_3_mesh(skip_every=1, mode="vf", device=torch.device("cuda"), dtype=
 
 
 def load_car_4_mesh(skip_every=1, mode="vf", device=torch.device("cuda"), dtype=torch.float32) -> List[torch.Tensor]:
-    data_path = _get_fvdb_example_data_path() / "meshes" / "car-mesh-4.ply"
+    data_path = get_fvdb_example_data_path() / "meshes" / "car-mesh-4.ply"
     return load_mesh(
         data_path,
         expected_md5="6238478fcf1f963e38a95b52a1521b5d",
@@ -191,7 +219,7 @@ def load_car_4_mesh(skip_every=1, mode="vf", device=torch.device("cuda"), dtype=
 
 
 def plot_ray_segments(ray_o, ray_d, times, plot_every=1):
-    import polyscope as ps
+    ps = _import_optional("polyscope")
 
     for i in range(0, ray_o.shape[0], plot_every):
         t0s = times[i].jdata[:, 0].unsqueeze(-1)
@@ -211,6 +239,7 @@ def plot_ray_segments(ray_o, ray_d, times, plot_every=1):
 
 
 __all__ = [
+    "get_fvdb_example_data_path",
     "make_ray_grid",
     "load_pointcloud",
     "load_mesh",

@@ -22,7 +22,7 @@ from fvdb.types import (
     is_LShapeSpec,
     is_RShapeSpec,
 )
-from fvdb.utils.tests import get_fvdb_test_data_path, probabilistic_test
+from fvdb_test_utils import get_fvdb_test_data_path, probabilistic_test
 from parameterized import parameterized
 
 import fvdb
