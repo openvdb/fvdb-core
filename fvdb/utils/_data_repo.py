@@ -21,6 +21,7 @@ import site
 import tarfile
 import tempfile
 import urllib.request
+from collections.abc import Iterator
 from pathlib import Path
 
 __all__ = ["fetch_data_repo", "local_repo_path"]
@@ -41,6 +42,14 @@ _FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _REPO_NAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]*$")
 
 _DOWNLOAD_TIMEOUT_SECONDS = 600
+
+# GitHub's REST API requires a User-Agent. urllib sends "Python-urllib/<ver>" by default, which
+# GitHub accepts, but an explicit one identifies the client and is not subject to that default
+# changing underneath us.
+_GITHUB_API_HEADERS = {
+    "Accept": "application/vnd.github.sha",
+    "User-Agent": "fvdb-core-data-fetcher",
+}
 
 
 def _is_editable_install() -> bool:
@@ -86,7 +95,7 @@ def _resolve_revision(github_repo: str, revision: str) -> str:
     # Branch and tag names are mutable, so resolve them to a SHA in order to tell a stale
     # snapshot from a current one. The .sha media type makes the response the bare SHA.
     url = f"https://api.github.com/repos/{github_repo}/commits/{revision}"
-    request = urllib.request.Request(url, headers={"Accept": "application/vnd.github.sha"})
+    request = urllib.request.Request(url, headers=_GITHUB_API_HEADERS)
     with urllib.request.urlopen(request, timeout=_DOWNLOAD_TIMEOUT_SECONDS) as response:
         resolved = response.read().decode("utf-8").strip()
 
@@ -106,6 +115,33 @@ def _current_revision(repo_path: Path) -> str | None:
         return None
 
 
+def _checked_members(tar: tarfile.TarFile, dest_path: Path) -> Iterator[tarfile.TarInfo]:
+    """Yield archive members, rejecting any that are unsafe to extract.
+
+    Used only on interpreters that predate tarfile's extraction filters. It applies the checks
+    that matter for the member types a GitHub source tarball contains: every member must be a
+    regular file or a directory, and must land inside ``dest_path``. Symlinks, hard links,
+    device nodes, absolute paths and paths containing ``..`` are rejected. A bad member raises
+    rather than being skipped, so a tampered archive fails loudly instead of quietly extracting
+    less than expected.
+    """
+    dest_root = dest_path.resolve()
+    for member in tar.getmembers():
+        if not (member.isfile() or member.isdir()):
+            raise ValueError(
+                f"Refusing to extract archive member {member.name!r}: expected a regular file or "
+                f"directory, got type {member.type!r}"
+            )
+        target = (dest_root / member.name).resolve()
+        if target != dest_root and dest_root not in target.parents:
+            raise ValueError(f"Refusing to extract archive member {member.name!r} outside of {dest_root}")
+        # Normalize permissions the way the "data" filter does, rather than trusting the modes
+        # recorded in the archive. This drops setuid/setgid bits and guarantees the extracted
+        # tree stays readable/traversable for the move into place below.
+        member.mode = 0o755 if member.isdir() else 0o644
+        yield member
+
+
 def _extract_snapshot(archive_path: Path, dest_path: Path, sha: str) -> None:
     """Extract a GitHub source tarball, stripping its single top-level directory."""
     with tarfile.open(archive_path, mode="r:gz") as tar:
@@ -113,8 +149,10 @@ def _extract_snapshot(archive_path: Path, dest_path: Path, sha: str) -> None:
         try:
             tar.extractall(dest_path, filter="data")
         except TypeError:
-            # The 'filter' argument requires Python 3.11.4+; older interpreters extract as before.
-            tar.extractall(dest_path)  # nosec B202 - trusted source (github.com), pinned revision
+            # The 'filter' argument only exists from Python 3.10.12 / 3.11.4 onwards, and this
+            # project supports >=3.10, so this path is reachable. Validate the members by hand
+            # rather than extracting unchecked.
+            tar.extractall(dest_path, members=_checked_members(tar, dest_path))  # nosec B202
 
     extracted = [child for child in dest_path.iterdir() if child.is_dir()]
     if len(extracted) != 1:
