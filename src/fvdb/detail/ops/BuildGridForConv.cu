@@ -412,6 +412,11 @@ buildGridForConv(const GridBatchData &baseBatchHdl,
     ConvolutionGeometry const geometry(kernelSize, stride);
     std::vector<nanovdb::Vec3d> voxS, voxO;
     baseBatchHdl.gridVoxelSizesAndOrigins(voxS, voxO);
+    for (auto &voxelSize: voxS) {
+        for (int axis = 0; axis < 3; ++axis) {
+            voxelSize[axis] *= geometry.stride()[axis];
+        }
+    }
     auto hdl = FVDB_DISPATCH_KERNEL_DEVICE(baseBatchHdl.device(), [&]() {
         return dispatchBuildGridForConv<DeviceTag>(
             baseBatchHdl, geometry.kernelSize(), geometry.stride());

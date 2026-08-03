@@ -51,12 +51,11 @@ class ConvolutionCoverageReport:
 
 @dataclass(frozen=True)
 class ConvolutionTransformCompatibility:
-    """Report-only compatibility of a plan's normalized fine and coarse lattices.
+    """Compatibility of a plan's normalized fine and coarse lattices.
 
     The first unified-semantics release requires matching batch/device metadata,
     ``h_coarse == stride * h_fine``, and the canonical uniform registration
-    ``a == 0``. Comparisons use ``atol=rtol=1e-6``. This record intentionally
-    reports incompatibility without rejecting plan construction until Slice 3b.
+    ``a == 0``. Comparisons use ``atol=rtol=1e-6``.
     """
 
     fine_grid_count: int
@@ -73,7 +72,7 @@ class ConvolutionTransformCompatibility:
 def _transform_compatibility(
     fine_grid: GridBatch, coarse_grid: GridBatch, geometry: _fvdb_cpp.ConvolutionGeometry
 ) -> ConvolutionTransformCompatibility:
-    """Compute the report-only first-release lattice-registration diagnostic."""
+    """Compute the first-release lattice-registration diagnostic."""
     same_batch_size = fine_grid.grid_count == coarse_grid.grid_count
     same_device = fine_grid.device == coarse_grid.device
     if not same_batch_size or not same_device:
@@ -138,6 +137,40 @@ def _transform_compatibility(
         compatible=scale_compatible and registration_integer and registration_zero,
         registration_offset=registration_offset,
     )
+
+
+def _validate_transform_compatibility(compatibility: ConvolutionTransformCompatibility) -> None:
+    migration_hint = (
+        "Rebuild the explicit target with stride-scaled voxel sizes and identical origins. "
+        "GridBatch.coarsened_grid uses a different block-centroid transform contract."
+    )
+    if not compatibility.same_batch_size:
+        raise ValueError(
+            "Convolution fine and coarse grids must have the same batch size; "
+            f"got {compatibility.fine_grid_count} and {compatibility.coarse_grid_count}. {migration_hint}"
+        )
+    if not compatibility.same_device:
+        raise ValueError(f"Convolution fine and coarse grids must be on the same device. {migration_hint}")
+    if not compatibility.scale_compatible:
+        raise ValueError(
+            "Convolution voxel size mismatch: expected h_coarse = stride * h_fine in every batch and axis. "
+            f"{migration_hint}"
+        )
+    registration_offset = compatibility.registration_offset
+    if registration_offset is None or not bool(torch.isfinite(registration_offset).all().item()):
+        raise ValueError(f"Convolution registration offset must be finite. {migration_hint}")
+    if not compatibility.registration_integer:
+        raise ValueError(
+            "Convolution grids have a fractional lattice registration offset. "
+            f"The first release supports only a=0. {migration_hint}"
+        )
+    if not compatibility.registration_zero:
+        raise ValueError(
+            "Convolution grids have a nonzero integer lattice registration offset. "
+            f"The first release supports only a=0. {migration_hint}"
+        )
+    if not compatibility.compatible:
+        raise RuntimeError("Convolution transform compatibility validation reached an inconsistent state")
 
 
 def _resolve_topology_policy(target_grid: GridBatch | None, topology_policy: str | None) -> str:
@@ -532,9 +565,10 @@ class ConvolutionPlan:
             target_grid = source_grid.conv_grid(kernel_size, stride)
 
         geometry = _fvdb_cpp.ConvolutionGeometry(kernel_size, stride)
+        compatibility = _transform_compatibility(source_grid, target_grid, geometry)
+        _validate_transform_compatibility(compatibility)
         _warn_if_incomplete_residue_coverage(geometry, acknowledge_incomplete_coverage)
         backend = cls._build_backend(source_grid, target_grid, kernel_size, stride, channel_pairs, expert_config)
-        compatibility = _transform_compatibility(source_grid, target_grid, geometry)
         coverage_report = _coverage_report(backend, source_grid, target_grid)
         _validate_coverage_policy(coverage_report, resolved_policy, strict_output_coverage)
         return cls(
@@ -616,11 +650,12 @@ class ConvolutionPlan:
             target_grid = source_grid.conv_transpose_grid(kernel_size, stride)
 
         geometry = _fvdb_cpp.ConvolutionGeometry(kernel_size, stride)
+        compatibility = _transform_compatibility(target_grid, source_grid, geometry)
+        _validate_transform_compatibility(compatibility)
         _warn_if_incomplete_residue_coverage(geometry, acknowledge_incomplete_coverage)
         backend = cls._build_backend(
             source_grid, target_grid, kernel_size, stride, channel_pairs, expert_config, transposed=True
         )
-        compatibility = _transform_compatibility(target_grid, source_grid, geometry)
         coverage_report = _coverage_report(backend, source_grid, target_grid)
         _validate_coverage_policy(coverage_report, resolved_policy, strict_output_coverage)
         return cls(
@@ -675,6 +710,11 @@ class ConvolutionPlan:
         transposed = not plan._transposed
         channel_pairs = tuple((dst, src) for src, dst in plan._channel_pairs)
 
+        if transposed:
+            compatibility = _transform_compatibility(target_grid, source_grid, plan._geometry)
+        else:
+            compatibility = _transform_compatibility(source_grid, target_grid, plan._geometry)
+        _validate_transform_compatibility(compatibility)
         backend = cls._build_backend(
             source_grid,
             target_grid,
@@ -684,10 +724,6 @@ class ConvolutionPlan:
             _DEFAULT_CONFIG,
             transposed=transposed,
         )
-        if transposed:
-            compatibility = _transform_compatibility(target_grid, source_grid, plan._geometry)
-        else:
-            compatibility = _transform_compatibility(source_grid, target_grid, plan._geometry)
         coverage_report = _coverage_report(backend, source_grid, target_grid)
         _validate_coverage_policy(coverage_report, "restricted", False)
         return cls(
@@ -905,7 +941,7 @@ class ConvolutionPlan:
 
     @property
     def transform_compatibility(self) -> ConvolutionTransformCompatibility:
-        """Report-only first-release fine/coarse transform compatibility diagnostic."""
+        """Validated first-release fine/coarse transform compatibility diagnostic."""
         return self._transform_compatibility
 
     @property
