@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/GridBatchData.h>
+#include <fvdb/TorchDeviceBuffer.h>
 #include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/BuildGridFromIjk.h>
 #include <fvdb/detail/ops/BuildPaddedGrid.h>
@@ -11,10 +12,14 @@
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 #include <fvdb/detail/utils/cuda/ForEachPrivateUse1.cuh>
 #include <fvdb/detail/utils/cuda/GridDim.h>
+#include <fvdb/detail/utils/nanovdb/CreateEmptyGridHandle.h>
+#include <fvdb/detail/utils/nanovdb/PadGrid.cuh>
 
 #include <nanovdb/NanoVDB.h>
 #include <nanovdb/tools/CreateNanoGrid.h>
-#include <nanovdb/tools/cuda/PointsToGrid.cuh>
+#include <nanovdb/tools/cuda/PruneGrid.cuh>
+#include <nanovdb/util/cuda/DeviceGridTraits.cuh>
+#include <nanovdb/util/cuda/Util.h>
 
 #include <c10/cuda/CUDACachingAllocator.h>
 #include <c10/cuda/CUDAGuard.h>
@@ -67,59 +72,6 @@ copyCoords(const fvdb::JIdxType bidx,
                       outIJKBIdx);
 }
 
-__device__ inline void
-copyCoordsWithoutBorder(
-    const typename nanovdb::DefaultReadAccessor<nanovdb::ValueOnIndex> gridAccessor,
-    const fvdb::JIdxType bidx,
-    const int64_t base,
-    const nanovdb::Coord &ijk0,
-    const nanovdb::CoordBBox &bbox,
-    const TorchRAcc64<int64_t, 1> packInfoBase,
-    TorchRAcc64<int32_t, 2> outIJK,
-    TorchRAcc64<fvdb::JIdxType, 1> outIJKBIdx) {
-    static_assert(sizeof(nanovdb::Coord) == 3 * sizeof(int32_t));
-    nanovdb::Coord ijk;
-    bool active = true;
-    for (int di = bbox.min()[0]; di <= bbox.max()[0]; di += 1) {
-        for (int dj = bbox.min()[1]; dj <= bbox.max()[1]; dj += 1) {
-            for (int dk = bbox.min()[2]; dk <= bbox.max()[2]; dk += 1) {
-                ijk    = ijk0 + nanovdb::Coord(di, dj, dk);
-                active = active && gridAccessor.isActive(ijk);
-            }
-        }
-    }
-    if (active) {
-        int64_t outBase     = packInfoBase[base];
-        outIJK[outBase][0]  = ijk0[0];
-        outIJK[outBase][1]  = ijk0[1];
-        outIJK[outBase][2]  = ijk0[2];
-        outIJKBIdx[outBase] = bidx;
-    }
-}
-
-__device__ inline void
-countCoordsWithoutBorder(
-    const typename nanovdb::DefaultReadAccessor<nanovdb::ValueOnIndex> gridAccessor,
-    const fvdb::JIdxType bidx,
-    const int64_t base,
-    const nanovdb::Coord &ijk0,
-    const nanovdb::CoordBBox &bbox,
-    TorchRAcc64<int64_t, 1> outCounter) {
-    static_assert(sizeof(nanovdb::Coord) == 3 * sizeof(int32_t));
-    nanovdb::Coord ijk;
-    bool active = true;
-    for (int di = bbox.min()[0]; di <= bbox.max()[0]; di += 1) {
-        for (int dj = bbox.min()[1]; dj <= bbox.max()[1]; dj += 1) {
-            for (int dk = bbox.min()[2]; dk <= bbox.max()[2]; dk += 1) {
-                ijk    = ijk0 + nanovdb::Coord(di, dj, dk);
-                active = active && gridAccessor.isActive(ijk);
-            }
-        }
-    }
-
-    outCounter[base] = active ? 1 : 0;
-}
-
 __device__ void
 ijkForGridVoxelCallback(int32_t bidx,
                         int32_t lidx,
@@ -142,53 +94,6 @@ ijkForGridVoxelCallback(int32_t bidx,
         const int64_t base        = (baseOffset + value) * totalPadAmount;
         const nanovdb::Coord ijk0 = leaf.offsetToGlobalCoord(vidx);
         copyCoords(bidx, base, ijk0, bbox, outIJKData, outIJKBIdx);
-    }
-}
-
-__device__ void
-ijkForGridVoxelCallbackWithoutBorder(int32_t bidx,
-                                     int32_t lidx,
-                                     int32_t vidx,
-                                     int32_t cidx,
-                                     const GridBatchData::Accessor batchAcc,
-                                     const nanovdb::CoordBBox bbox,
-                                     const TorchRAcc64<int64_t, 1> packInfoBase,
-                                     TorchRAcc64<int32_t, 2> outIJKData,
-                                     TorchRAcc64<fvdb::JIdxType, 1> outIJKBIdx) {
-    const nanovdb::OnIndexGrid *gridPtr = batchAcc.grid(bidx);
-    const auto gridAccessor             = gridPtr->getAccessor();
-    const typename nanovdb::OnIndexGrid::LeafNodeType &leaf =
-        gridPtr->tree().template getFirstNode<0>()[lidx];
-    const int64_t baseOffset = batchAcc.voxelOffset(bidx);
-
-    if (leaf.isActive(vidx)) {
-        const int64_t value       = ((int64_t)leaf.getValue(vidx)) - 1;
-        const int64_t base        = baseOffset + value;
-        const nanovdb::Coord ijk0 = leaf.offsetToGlobalCoord(vidx);
-        copyCoordsWithoutBorder(
-            gridAccessor, bidx, base, ijk0, bbox, packInfoBase, outIJKData, outIJKBIdx);
-    }
-}
-
-__device__ void
-ijkForGridVoxelCallbackWithoutBorderCount(int32_t bidx,
-                                          int32_t lidx,
-                                          int32_t vidx,
-                                          int32_t cidx,
-                                          const GridBatchData::Accessor batchAcc,
-                                          const nanovdb::CoordBBox bbox,
-                                          TorchRAcc64<int64_t, 1> outCounter) {
-    const nanovdb::OnIndexGrid *gridPtr = batchAcc.grid(bidx);
-    const auto gridAccessor             = gridPtr->getAccessor();
-    const typename nanovdb::OnIndexGrid::LeafNodeType &leaf =
-        gridPtr->tree().template getFirstNode<0>()[lidx];
-    const int64_t baseOffset = batchAcc.voxelOffset(bidx);
-
-    if (leaf.isActive(vidx)) {
-        const int64_t value       = ((int64_t)leaf.getValue(vidx)) - 1;
-        const int64_t base        = baseOffset + value;
-        const nanovdb::Coord ijk0 = leaf.offsetToGlobalCoord(vidx);
-        countCoordsWithoutBorder(gridAccessor, bidx, base, ijk0, bbox, outCounter);
     }
 }
 
@@ -231,62 +136,6 @@ paddedIJKForGrid(const GridBatchData &batchHdl, const nanovdb::CoordBBox &bbox) 
         outIJK, batchHdl.voxelOffsets() * totalPadAmount, batchHdl.jlidx());
 }
 
-JaggedTensor
-paddedIJKForGridWithoutBorder(const GridBatchData &batchHdl, const nanovdb::CoordBBox &bbox) {
-    TORCH_CHECK(batchHdl.device().is_cuda(), "GridBatchData must be on CUDA device");
-    TORCH_CHECK(batchHdl.device().has_index(), "GridBatchData must have a valid index");
-
-    const torch::TensorOptions optsData =
-        torch::TensorOptions().dtype(torch::kInt32).device(batchHdl.device());
-    const torch::TensorOptions optsBIdx =
-        torch::TensorOptions().dtype(fvdb::JIdxScalarType).device(batchHdl.device());
-    const torch::TensorOptions optsCounter =
-        torch::TensorOptions().dtype(torch::kInt64).device(batchHdl.device());
-
-    torch::Tensor outCounter = torch::empty({batchHdl.totalVoxels()}, optsCounter);
-    auto outCounterAcc       = outCounter.packed_accessor64<int64_t, 1, torch::RestrictPtrTraits>();
-    auto cb                  = [=] __device__(int32_t bidx,
-                             int32_t lidx,
-                             int32_t vidx,
-                             int32_t cidx,
-                             GridBatchData::Accessor bacc) {
-        ijkForGridVoxelCallbackWithoutBorderCount(
-            bidx, lidx, vidx, cidx, bacc, bbox, outCounterAcc);
-    };
-    forEachVoxelCUDA<512>(1, batchHdl, cb);
-
-    torch::Tensor cumCounts    = torch::cumsum(outCounter, 0);
-    int64_t numVoxels          = cumCounts[-1].item<int64_t>();
-    torch::Tensor packInfoBase = cumCounts - outCounter;
-
-    torch::Tensor outIJK = torch::empty({numVoxels, 3}, optsData);
-    torch::Tensor outIJKBIdx =
-        torch::empty({numVoxels}, optsBIdx); // TODO: Don't populate for single batch
-    if (numVoxels == 0) {
-        // TODO(ruilong): Shall we raise error? Do we support empty grid?
-        return JaggedTensor::from_data_indices_and_list_ids(
-            outIJK, outIJKBIdx, batchHdl.jlidx(), batchHdl.batchSize());
-    }
-
-    auto outIJKAcc = outIJK.packed_accessor64<int32_t, 2, torch::RestrictPtrTraits>();
-    auto outIJKBIdxAcc =
-        outIJKBIdx.packed_accessor64<fvdb::JIdxType, 1, torch::RestrictPtrTraits>();
-    auto packInfoBaseAcc = packInfoBase.packed_accessor64<int64_t, 1, torch::RestrictPtrTraits>();
-
-    auto cb2 = [=] __device__(int32_t bidx,
-                              int32_t lidx,
-                              int32_t vidx,
-                              int32_t cidx,
-                              GridBatchData::Accessor bacc) {
-        ijkForGridVoxelCallbackWithoutBorder(
-            bidx, lidx, vidx, cidx, bacc, bbox, packInfoBaseAcc, outIJKAcc, outIJKBIdxAcc);
-    };
-    forEachVoxelCUDA<512>(1, batchHdl, cb2);
-
-    return JaggedTensor::from_data_indices_and_list_ids(
-        outIJK, outIJKBIdx, batchHdl.jlidx(), batchHdl.batchSize());
-}
-
 nanovdb::GridHandle<TorchDeviceBuffer>
 buildPaddedGridFromGridWithoutBorderCPU(const GridBatchData &baseBatchHdl, int BMIN, int BMAX) {
     using GridT = nanovdb::ValueOnIndex;
@@ -297,8 +146,12 @@ buildPaddedGridFromGridWithoutBorderCPU(const GridBatchData &baseBatchHdl, int B
 
     std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> batchHandles;
     batchHandles.reserve(baseGridHdl.gridCount());
-    for (uint32_t bidx = 0; bidx < baseGridHdl.gridCount(); bidx += 1) {
-        const nanovdb::OnIndexGrid *baseGrid = baseGridHdl.template grid<GridT>(bidx);
+    const uint8_t *const bufBase = baseGridHdl.buffer().data();
+    for (int64_t i = 0; i < baseBatchHdl.batchSize(); i += 1) {
+        // Map logical batch index -> grid by byte offset (correct for sliced/non-contiguous views;
+        // grid<GridT>(i) would index the underlying handle physically).
+        const nanovdb::OnIndexGrid *baseGrid =
+            reinterpret_cast<const nanovdb::OnIndexGrid *>(bufBase + baseBatchHdl.cumBytesAt(i));
         if (!baseGrid) {
             throw std::runtime_error("Failed to get pointer to nanovdb index grid");
         }
@@ -351,8 +204,12 @@ buildPaddedGridFromGridCPU(const GridBatchData &baseBatchHdl, int BMIN, int BMAX
 
     std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> batchHandles;
     batchHandles.reserve(baseGridHdl.gridCount());
-    for (uint32_t bidx = 0; bidx < baseGridHdl.gridCount(); bidx += 1) {
-        const nanovdb::OnIndexGrid *baseGrid = baseGridHdl.template grid<GridT>(bidx);
+    const uint8_t *const bufBase = baseGridHdl.buffer().data();
+    for (int64_t i = 0; i < baseBatchHdl.batchSize(); i += 1) {
+        // Map logical batch index -> grid by byte offset (correct for sliced/non-contiguous views;
+        // grid<GridT>(i) would index the underlying handle physically).
+        const nanovdb::OnIndexGrid *baseGrid =
+            reinterpret_cast<const nanovdb::OnIndexGrid *>(bufBase + baseBatchHdl.cumBytesAt(i));
         if (!baseGrid) {
             throw std::runtime_error("Failed to get pointer to nanovdb index grid");
         }
@@ -387,20 +244,163 @@ buildPaddedGridFromGridCPU(const GridBatchData &baseBatchHdl, int BMIN, int BMAX
     }
 }
 
+// One unit padding pass (Minkowski sum by {0,1}^3 if positive, else {-1,0}^3), building the
+// padded topology directly from the source leaf masks via TopologyBuilder (no coordinate list).
+static nanovdb::GridHandle<TorchDeviceBuffer>
+padOncePass(nanovdb::OnIndexGrid *grid,
+            bool positive,
+            const TorchDeviceBuffer &guide,
+            cudaStream_t stream) {
+    fvdb::detail::morphology::PadGrid<nanovdb::ValueOnIndex> op(grid, positive, stream);
+    op.setChecksum(nanovdb::CheckMode::Default);
+    auto handle = op.getHandle(guide);
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
+    return handle;
+}
+
+// One unit erosion pass (exclude-border padding). Computes a per-leaf "keep" mask sidecar
+// (voxel survives iff its whole octant neighborhood is active) then prunes the source grid to
+// it via PruneGrid. The keep mask is a subset of the source, so the result is exact.
+static nanovdb::GridHandle<TorchDeviceBuffer>
+erodeOncePass(nanovdb::OnIndexGrid *grid,
+              uint32_t leafCount,
+              bool positive,
+              const torch::Device &device,
+              const TorchDeviceBuffer &guide,
+              cudaStream_t stream) {
+    // Allocate the per-leaf keep-mask sidecar as a torch CUDA tensor so its emptiness can be
+    // tested reliably with a torch reduction below (a raw device buffer viewed via from_blob does
+    // not reduce correctly).
+    // Use a uint64 tensor (not uint8) so its data pointer is guaranteed 8-byte aligned for
+    // Mask<3> -- which is 8 uint64_t words -- since the kernels dereference it as Mask<3>*.
+    // (A uint8 tensor's data_ptr alignment isn't guaranteed by the tensor API, even though
+    // torch's allocators over-align in practice.)
+    const int64_t maskWords =
+        static_cast<int64_t>(sizeof(nanovdb::Mask<3>) / sizeof(uint64_t)) * leafCount;
+    torch::Tensor keepTensor =
+        torch::empty({maskWords}, torch::TensorOptions().dtype(torch::kUInt64).device(device));
+    auto *keepMasks = reinterpret_cast<nanovdb::Mask<3> *>(keepTensor.data_ptr());
+    if (positive) {
+        nanovdb::util::cuda::lambdaKernel<<<(leafCount + 127) / 128, 128, 0, stream>>>(
+            leafCount,
+            fvdb::detail::morphology::ErodeKeepMaskFunctor<nanovdb::ValueOnIndex, true>(),
+            grid,
+            keepMasks);
+    } else {
+        nanovdb::util::cuda::lambdaKernel<<<(leafCount + 127) / 128, 128, 0, stream>>>(
+            leafCount,
+            fvdb::detail::morphology::ErodeKeepMaskFunctor<nanovdb::ValueOnIndex, false>(),
+            grid,
+            keepMasks);
+    }
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
+
+    // PruneGrid (via TopologyBuilder) dereferences a null d_upperOffsets when the result has no
+    // nodes, so it cannot build an empty grid. Detect an all-empty keep mask (erosion removed
+    // everything) and return an explicit empty grid instead -- same guard as BuildPrunedGrid.cu.
+    // Reduce via (!= 0).any(): any() alone (an `or` reduction) is not implemented for uint64 on
+    // CUDA, but the `!=` yields a bool tensor whose reduction is.
+    if (!(keepTensor != 0).any().item<bool>()) {
+        return createEmptyGridHandle(device);
+    }
+
+    nanovdb::tools::cuda::PruneGrid<nanovdb::ValueOnIndex> pruneOp(grid, keepMasks, stream);
+    pruneOp.setChecksum(nanovdb::CheckMode::Default);
+    pruneOp.setVerbose(0);
+    auto handle = pruneOp.getHandle(guide);
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
+    return handle;
+}
+
 template <>
 nanovdb::GridHandle<TorchDeviceBuffer>
 dispatchBuildPaddedGrid<torch::kCUDA>(const GridBatchData &baseBatchHdl,
                                       int bmin,
                                       int bmax,
                                       bool excludeBorder) {
-    JaggedTensor coords;
-    nanovdb::CoordBBox bbox = nanovdb::CoordBBox::createCube(bmin, bmax);
-    if (excludeBorder) {
-        coords = paddedIJKForGridWithoutBorder(baseBatchHdl, bbox);
-    } else {
-        coords = paddedIJKForGrid<torch::kCUDA>(baseBatchHdl, bbox);
+    c10::cuda::CUDAGuard deviceGuard(baseBatchHdl.device());
+    at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream(baseBatchHdl.device().index());
+
+    // This guide buffer is a hack to pass a device (with index) into the TopologyBuilder buffer
+    // allocation (see BuildDilatedGrid.cu). The created grid buffers inherit the guide's
+    // device.
+    TorchDeviceBuffer guide(0, baseBatchHdl.device());
+
+    // Pad by [bmin, bmax]^3 = (bmax positive unit passes) followed by (-bmin negative unit
+    // passes). Minkowski sums / erosions by boxes compose, so the order is immaterial.
+    // dual_grid (0, 1) is exactly one positive pass.
+    const int numPositive = bmax;
+    const int numNegative = -bmin;
+    const int totalPasses = numPositive + numNegative;
+
+    // Identity case (bmin == bmax == 0): no morphology passes run. For a *contiguous* batch the
+    // whole underlying handle is exactly the result, so copy it in one shot. A sliced /
+    // non-contiguous batch shares a handle holding MORE grids than batchSize(), so instead rebuild
+    // from the Accessor-mapped coordinates (like the PrivateUse1 path). This is rare and degenerate
+    // -- only build_padded_grid(0, 0) reaches it; dual_grid, being (0, 1), never does. The tail
+    // then applies the transform fix-up (dual swap or verbatim copy, per `dualTransform`).
+    if (totalPasses == 0) {
+        if (baseBatchHdl.isContiguous()) {
+            return baseBatchHdl.nanoGridHandle().copy<TorchDeviceBuffer>(guide);
+        }
+        return ops::_createNanoGridFromIJK(
+            paddedIJKForGrid<torch::kCUDA>(baseBatchHdl, nanovdb::CoordBBox::createCube(0, 0)));
     }
-    return ops::_createNanoGridFromIJK(coords);
+
+    // Each batch item's grid lives at byte offset cumBytesAt(i) inside the (possibly shared)
+    // buffer. This is how GridBatchData::Accessor::grid() maps a logical batch index to its grid,
+    // and is correct for sliced/non-contiguous views where item i is NOT the i-th physical grid --
+    // so we must not use mGridHdl->deviceGrid(i), which indexes the handle physically.
+    uint8_t *const bufBase = baseBatchHdl.nanoGridHandle().buffer().deviceData();
+    TORCH_CHECK(bufBase != nullptr, "Grid buffer is null");
+
+    std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> handles;
+    handles.reserve(baseBatchHdl.batchSize());
+    for (int64_t i = 0; i < baseBatchHdl.batchSize(); ++i) {
+        if (baseBatchHdl.numVoxelsAt(i) == 0) {
+            handles.push_back(createEmptyGridHandle(baseBatchHdl.device()));
+            continue;
+        }
+
+        nanovdb::OnIndexGrid *grid =
+            reinterpret_cast<nanovdb::OnIndexGrid *>(bufBase + baseBatchHdl.cumBytesAt(i));
+
+        nanovdb::GridHandle<TorchDeviceBuffer> handle;
+        bool haveHandle = false;
+        for (int p = 0; p < totalPasses; ++p) {
+            const bool positive = (p < numPositive);
+            if (!excludeBorder) {
+                handle = padOncePass(grid, positive, guide, stream.stream());
+            } else {
+                const uint32_t leafCount =
+                    haveHandle
+                        ? nanovdb::util::cuda::DeviceGridTraits<nanovdb::ValueOnIndex>::getTreeData(
+                              grid)
+                              .mNodeCount[0]
+                        : baseBatchHdl.numLeavesAt(i);
+                if (leafCount == 0) {
+                    // No leaves to erode -- already eroded to empty, or (defensively) a
+                    // leaf-free tile grid. Ensure `handle` is a valid empty grid rather than
+                    // the default-constructed one before breaking.
+                    if (!haveHandle) {
+                        handle = createEmptyGridHandle(baseBatchHdl.device());
+                    }
+                    break;
+                }
+                handle = erodeOncePass(
+                    grid, leafCount, positive, baseBatchHdl.device(), guide, stream.stream());
+            }
+            haveHandle = true;
+            grid       = handle.deviceGrid<nanovdb::ValueOnIndex>();
+        }
+
+        handles.push_back(std::move(handle));
+    }
+
+    if (handles.size() == 1) {
+        return std::move(handles[0]);
+    }
+    return nanovdb::cuda::mergeGridHandles(handles, &guide);
 }
 
 template <>
@@ -409,13 +409,15 @@ dispatchBuildPaddedGrid<torch::kPrivateUse1>(const GridBatchData &baseBatchHdl,
                                              int bmin,
                                              int bmax,
                                              bool excludeBorder) {
-    JaggedTensor coords;
+    // Multi-GPU / PrivateUse1 keeps the coordinate-list path (TopologyBuilder-based morphology
+    // is single-device). The exclude-border variant was never supported here (its old code path
+    // called a CUDA-only helper that asserts is_cuda), so reject it explicitly rather than
+    // crash obscurely.
+    TORCH_CHECK(!excludeBorder,
+                "dual_grid/build_padded_grid with exclude_border=True is not supported on "
+                "PrivateUse1 (multi-GPU) devices");
     nanovdb::CoordBBox bbox = nanovdb::CoordBBox::createCube(bmin, bmax);
-    if (excludeBorder) {
-        coords = paddedIJKForGridWithoutBorder(baseBatchHdl, bbox);
-    } else {
-        coords = paddedIJKForGrid<torch::kPrivateUse1>(baseBatchHdl, bbox);
-    }
+    JaggedTensor coords     = paddedIJKForGrid<torch::kPrivateUse1>(baseBatchHdl, bbox);
     return ops::_createNanoGridFromIJK(coords);
 }
 
@@ -433,7 +435,17 @@ dispatchBuildPaddedGrid<torch::kCPU>(const GridBatchData &baseBatchHdl,
 }
 
 c10::intrusive_ptr<GridBatchData>
-buildPaddedGrid(const GridBatchData &baseBatchHdl, int bmin, int bmax, bool excludeBorder) {
+buildPaddedGrid(
+    const GridBatchData &baseBatchHdl, int bmin, int bmax, bool excludeBorder, bool dualTransform) {
+    // The structuring element [bmin, bmax]^3 must contain the origin so the padded grid is a
+    // superset of the primal (and the erosion a subset); a box excluding the origin would be a
+    // translation, which this op does not model. This also lets the CUDA path decompose the box
+    // into unit positive/negative octant passes.
+    TORCH_CHECK_VALUE(bmin <= 0 && bmax >= 0,
+                      "buildPaddedGrid requires bmin <= 0 <= bmax, got bmin=",
+                      bmin,
+                      ", bmax=",
+                      bmax);
     std::vector<nanovdb::Vec3d> voxS, voxO;
     baseBatchHdl.gridVoxelSizesAndOrigins(voxS, voxO);
     auto hdl = FVDB_DISPATCH_KERNEL(baseBatchHdl.device(), [&]() {
@@ -460,10 +472,23 @@ buildPaddedGrid(const GridBatchData &baseBatchHdl, int bmin, int bmax, bool excl
     ops::populateGridMetadata(hdl, voxS, voxO, batchOffsets, hostMeta, deviceMeta, &batchMeta);
     batchMeta.mIsContiguous = true;
 
+    // Fix up the per-grid transforms. populateGridMetadata already recomputed primal/dual
+    // transforms from the source's (voxelSize, origin), so here we just carry the source's stored
+    // transforms over verbatim -- either swapped (dual) or as-is (plain pad).
     for (int64_t i = 0; i < bs; i++) {
-        hostMeta[i].mDualTransform   = baseBatchHdl.mHostGridMetadata[i].mPrimalTransform;
-        hostMeta[i].mPrimalTransform = baseBatchHdl.mHostGridMetadata[i].mDualTransform;
-        hostMeta[i].mVoxelSize       = baseBatchHdl.mHostGridMetadata[i].mVoxelSize;
+        const auto &srcMeta = baseBatchHdl.mHostGridMetadata[i];
+        if (dualTransform) {
+            // dual_grid: result voxels sit at the *corners* of the source voxels, so the source's
+            // dual (corner-aligned) transform becomes the result's primal (center-aligned)
+            // transform, and vice versa. This shifts the origin by half a voxel.
+            hostMeta[i].mPrimalTransform = srcMeta.mDualTransform;
+            hostMeta[i].mDualTransform   = srcMeta.mPrimalTransform;
+        } else {
+            // Plain padded grid: same lattice as the source, so keep its transforms unchanged.
+            hostMeta[i].mPrimalTransform = srcMeta.mPrimalTransform;
+            hostMeta[i].mDualTransform   = srcMeta.mDualTransform;
+        }
+        hostMeta[i].mVoxelSize = srcMeta.mVoxelSize;
     }
     syncMetadataToDevice(hostMeta, deviceMeta, bs, device, true);
 
