@@ -127,7 +127,7 @@ dispatchBuildGridFromPoints<torch::kCUDA>(const JaggedTensor &points,
     // offsets on the host in order to slice the point array. Ideally this would be a single
     // invocation over the whole batch.
     const torch::Tensor pointsBOffsetTensor = points.joffsets().cpu();
-    const auto pointsBOffset = pointsBOffsetTensor.accessor<fvdb::JOffsetsType, 1>();
+    const auto pointsBOffset                = pointsBOffsetTensor.accessor<fvdb::JOffsetsType, 1>();
 
     // TransformedPointPtr indexes the points as a flat (N, 3) array, so it needs the standard
     // contiguous layout. This is a no-op for the contiguous inputs we expect in practice.
