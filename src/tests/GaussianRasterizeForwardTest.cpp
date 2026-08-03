@@ -579,9 +579,9 @@ TEST_F(GaussianRasterizeForwardTestFixture, TestBasicInputsAndOutputs) {
 
 // Parameterized over maxSharedChannels: 16 and 32 exercise chunked rendering (multiple chunks for
 // 64-channel input), 64 exercises the non-chunked path (all channels fit in one chunk).
-struct GaussianRasterizeForwardChunkedTestFixture
-    : public GaussianRasterizeForwardTestFixture,
-      public ::testing::WithParamInterface<uint32_t> {};
+struct GaussianRasterizeForwardChunkedTestFixture : public GaussianRasterizeForwardTestFixture,
+                                                    public ::testing::WithParamInterface<uint32_t> {
+};
 
 TEST_P(GaussianRasterizeForwardChunkedTestFixture, TestConcatenatedChannels) {
     loadTestData("rasterize_forward_inputs.pt", "rasterize_forward_outputs_64.pt");
@@ -875,7 +875,7 @@ TEST_P(GaussianRasterizeForwardSparseChunkedTestFixture,
     expectedRenderedColors = catChannelsToDim(expectedRenderedColors, 64);
 
     const uint32_t maxSharedChannels = GetParam();
-    const int      numCameras        = means2d.size(0);
+    const int numCameras             = means2d.size(0);
 
     auto const pixelsToRender = generateSparsePixelCoords(numCameras, 100).cuda();
 

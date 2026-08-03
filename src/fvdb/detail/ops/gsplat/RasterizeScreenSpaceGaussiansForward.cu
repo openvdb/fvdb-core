@@ -112,7 +112,7 @@ struct RasterizeForwardArgs {
                 mOutFeatures.data()[pixelIndex][channelStart + k] = f(k);
             }
         } else {
-               assert(channelStart == 0 && numChannels == NUM_CHANNELS);
+            assert(channelStart == 0 && numChannels == NUM_CHANNELS);
 #pragma unroll NUM_CHANNELS
             for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
                 mOutFeatures.data()[pixelIndex][k] = f(k);
