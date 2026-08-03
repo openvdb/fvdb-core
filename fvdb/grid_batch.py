@@ -557,6 +557,11 @@ class GridBatch:
         """
         from . import functional
 
+        # Coarsening by 1 is the identity (same topology and transforms): return this grid as-is,
+        # preserving its (possibly sliced/non-contiguous) view and metadata with no copy.
+        if bool((torch.as_tensor(coarsening_factor) == 1).all()):
+            return self
+
         return functional.coarsened_grid_batch(self, coarsening_factor)
 
     def contiguous(self) -> "GridBatch":
@@ -699,6 +704,11 @@ class GridBatch:
         .. seealso:: :meth:`Grid.dilated_grid`
         """
         from . import functional
+
+        # Dilating by 0 is the identity: return this grid as-is (no copy), preserving its
+        # (possibly sliced/non-contiguous) view and metadata.
+        if dilation == 0:
+            return self
 
         return functional.dilated_grid_batch(self, dilation)
 
@@ -1490,6 +1500,11 @@ class GridBatch:
         .. seealso:: :meth:`Grid.refined_grid`
         """
         from . import functional
+
+        # Subdividing by 1 with no mask is the identity: return this grid as-is (no copy),
+        # preserving its view/metadata. (A mask still prunes, so it is not an identity.)
+        if mask is None and bool((torch.as_tensor(subdiv_factor) == 1).all()):
+            return self
 
         return functional.refined_grid_batch(self, subdiv_factor, mask)
 

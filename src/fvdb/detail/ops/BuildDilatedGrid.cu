@@ -5,6 +5,7 @@
 #include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/BuildDilatedGrid.h>
 #include <fvdb/detail/ops/CloneGrid.h>
+#include <fvdb/detail/ops/MakeContiguous.h>
 #include <fvdb/detail/utils/Utils.h>
 
 #include <nanovdb/NanoVDB.h>
@@ -38,24 +39,20 @@ dispatchDilateGrid<torch::kCUDA>(const GridBatchData &gridBatch,
     // passes it to the created buffer.
     TorchDeviceBuffer guide(0, gridBatch.device());
 
-    // Create a grid for each batch item and store the handles
+    // Create a grid for each batch item and store the handles. (An all-zero dilation is handled
+    // upstream in dilateGrid() via cloneGrid, so the 0-branch below only fires for a mixed batch.)
     std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> handles;
     for (int i = 0; i < gridBatch.batchSize(); i += 1) {
         nanovdb::GridHandle<TorchDeviceBuffer> handle;
 
         if (dilationAmount[i] == 0) {
-            const auto &srcHdl = gridBatch.nanoGridHandle();
-            uint8_t *srcData   = srcHdl.buffer().deviceData();
-            for (int g = 0; g < i; ++g) {
-                srcData += srcHdl.gridSize(g);
-            }
-            const uint64_t gridBytes = srcHdl.gridSize(i);
-            TorchDeviceBuffer dstBuf(gridBytes, gridBatch.device());
-            cudaMemcpyAsync(
-                dstBuf.deviceData(), srcData, gridBytes, cudaMemcpyDeviceToDevice, stream.stream());
-            handle = nanovdb::GridHandle<TorchDeviceBuffer>(std::move(dstBuf));
+            // 0-dilation item in a mixed batch: clone logical grid i by byte offset (correct for
+            // sliced views) with the mGridIndex/mGridCount header fixup.
+            handle = ops::cloneGridHandleAt(gridBatch, i);
         } else {
-            nanovdb::OnIndexGrid *grid = gridBatch.mGridHdl->deviceGrid<nanovdb::ValueOnIndex>(i);
+            // Byte-offset accessor: correct for sliced/non-contiguous batches (see
+            // deviceGridPtrAt).
+            nanovdb::OnIndexGrid *grid = gridBatch.deviceGridPtrAt(i);
             TORCH_CHECK(grid, "Grid is null");
 
             for (auto j = 0; j < dilationAmount[i]; j += 1) {
@@ -91,12 +88,11 @@ dispatchDilateGrid<torch::kCPU>(const GridBatchData &gridBatch,
     using GridT     = nanovdb::ValueOnIndex;
     using IndexTree = nanovdb::NanoTree<GridT>;
 
-    const nanovdb::GridHandle<TorchDeviceBuffer> &gridHdl = gridBatch.nanoGridHandle();
-
     std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> gridHandles;
-    gridHandles.reserve(gridHdl.gridCount());
-    for (uint32_t bidx = 0; bidx < gridHdl.gridCount(); bidx += 1) {
-        const nanovdb::OnIndexGrid *grid = gridHdl.template grid<GridT>(bidx);
+    gridHandles.reserve(gridBatch.batchSize());
+    for (int64_t bidx = 0; bidx < gridBatch.batchSize(); bidx += 1) {
+        // Byte-offset accessor: correct for sliced/non-contiguous batches (see hostGridPtrAt).
+        const nanovdb::OnIndexGrid *grid = gridBatch.hostGridPtrAt(bidx);
         if (!grid) {
             throw std::runtime_error("Failed to get pointer to nanovdb index grid");
         }

@@ -44,8 +44,9 @@ buildFineGridFromCoarseGridCPU(const GridBatchData &coarseBatchHdl,
 
     std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> batchHandles;
     batchHandles.reserve(coarseGridHdl.gridCount());
-    for (uint32_t bidx = 0; bidx < coarseGridHdl.gridCount(); bidx += 1) {
-        const nanovdb::OnIndexGrid *coarseGrid = coarseGridHdl.template grid<GridT>(bidx);
+    for (int64_t bidx = 0; bidx < coarseBatchHdl.batchSize(); bidx += 1) {
+        // Byte-offset accessor: correct for sliced/non-contiguous batches (see hostGridPtrAt).
+        const nanovdb::OnIndexGrid *coarseGrid = coarseBatchHdl.hostGridPtrAt(bidx);
         if (!coarseGrid) {
             throw std::runtime_error("Failed to get pointer to nanovdb index grid");
         }
@@ -195,7 +196,8 @@ perItemGridHandle(const GridBatchData &base, const TorchDeviceBuffer &guide, Per
             handles.push_back(createEmptyGridHandle(base.device()));
             continue;
         }
-        nanovdb::OnIndexGrid *grid = base.mGridHdl->deviceGrid<nanovdb::ValueOnIndex>(i);
+        // Byte-offset accessor: correct for sliced/non-contiguous batches (see deviceGridPtrAt).
+        nanovdb::OnIndexGrid *grid = base.deviceGridPtrAt(i);
         TORCH_CHECK(grid, "Grid is null");
         handles.push_back(fn(grid));
     }
@@ -309,8 +311,9 @@ dispatchBuildGridForConvTranspose<torch::kCPU>(const GridBatchData &baseBatchHdl
         }
     }
 
-    for (uint32_t bidx = 0; bidx < baseGridHdl.gridCount(); bidx += 1) {
-        const nanovdb::OnIndexGrid *baseGrid = baseGridHdl.template grid<GridT>(bidx);
+    for (int64_t bidx = 0; bidx < baseBatchHdl.batchSize(); bidx += 1) {
+        // Byte-offset accessor: correct for sliced/non-contiguous batches (see hostGridPtrAt).
+        const nanovdb::OnIndexGrid *baseGrid = baseBatchHdl.hostGridPtrAt(bidx);
         if (!baseGrid) {
             throw std::runtime_error("Failed to get pointer to nanovdb index grid");
         }
