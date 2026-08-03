@@ -124,7 +124,6 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/JOffsetsFromJIdx.cu
     fvdb/detail/ops/MarchingCubes.cu
     fvdb/detail/ops/MortonHilbertFromIjk.cu
-    fvdb/detail/ops/NearestIjkForPoints.cu
     fvdb/detail/ops/PointsInGrid.cu
     fvdb/detail/ops/PopulateGridMetadata.cu
     fvdb/detail/ops/RayImplicitIntersection.cu

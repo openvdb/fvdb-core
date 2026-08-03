@@ -61,6 +61,14 @@ checkInputs(const torch::Device device,
     TORCH_CHECK((__uint128_t)size[0] * size[1] * size[2] * batchSize <=
                     std::numeric_limits<int64_t>::max(),
                 "Size and batch size exceed the number of voxels supported by a GridBatch");
+    // The unmasked path materializes every cell as a coordinate and feeds it to NanoVDB's
+    // PointsToGrid, whose radix sort casts the count to int32 (PointsToGrid.cuh:645) and silently
+    // corrupts the grid above 2^31 cells (~1291^3). The masked path builds only the selected
+    // subset, so it is exempt here.
+    TORCH_CHECK(mask.has_value() || (__uint128_t)size[0] * size[1] * size[2] <=
+                                        (__uint128_t)std::numeric_limits<int32_t>::max(),
+                "Unmasked dense grid volume exceeds the 2^31-coordinate limit of the NanoVDB grid "
+                "builder. Provide a sparse mask or reduce the dense dimensions.");
     if (mask.has_value()) {
         TORCH_CHECK(mask.value().device() == device,
                     "Mask device must match device of dense grid to build");
@@ -124,16 +132,23 @@ dispatchCreateNanoGridFromDense<torch::kCUDA>(int64_t batchSize,
 
     TORCH_CHECK(ijkData.is_contiguous(), "ijkData must be contiguous");
 
-    // Create a grid for each batch item and store the handles
+    // Every batch item is the same dense box (a mask, if given, is shared across the batch), so
+    // build the grid once and copy it for the remaining items instead of re-running the radix sort
+    // over the identical coordinate list batchSize times.
+    const int64_t nVoxels = ijkData.size(0);
     std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> handles;
+    handles.reserve(batchSize);
     for (int64_t i = 0; i < batchSize; i += 1) {
-        const int64_t nVoxels = ijkData.size(0);
-        handles.push_back(
-            nVoxels == 0
-                ? createEmptyGridHandle(guide.device())
-                : nanovdb::tools::cuda::voxelsToGrid<GridT, nanovdb::Coord *, TorchDeviceBuffer>(
-                      (nanovdb::Coord *)ijkData.data_ptr(), nVoxels, 1.0, guide));
-        C10_CUDA_KERNEL_LAUNCH_CHECK();
+        if (nVoxels == 0) {
+            handles.push_back(createEmptyGridHandle(guide.device()));
+        } else if (i == 0) {
+            handles.push_back(
+                nanovdb::tools::cuda::voxelsToGrid<GridT, nanovdb::Coord *, TorchDeviceBuffer>(
+                    (nanovdb::Coord *)ijkData.data_ptr(), nVoxels, 1.0, guide));
+            C10_CUDA_KERNEL_LAUNCH_CHECK();
+        } else {
+            handles.push_back(handles[0].copy(guide));
+        }
     }
 
     if (handles.size() == 1) {
@@ -201,25 +216,26 @@ dispatchCreateNanoGridFromDense<torch::kPrivateUse1>(int64_t batchSize,
 
     TORCH_CHECK(ijkData.is_contiguous(), "ijkData must be contiguous");
 
-    // Create a grid for each batch item and store the handles
+    // Every batch item is the same dense box, so build the grid once and copy it for the remaining
+    // items instead of re-running DistributedPointsToGrid over the identical coordinate list.
+    const int64_t nVoxels = ijkData.size(0);
     std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> handles;
+    handles.reserve(batchSize);
     for (int64_t i = 0; i < batchSize; i++) {
-        const int64_t nVoxels = ijkData.size(0);
-
         if (!nVoxels) {
-            auto handle = createEmptyGridHandle(device);
-            handles.emplace_back(std::move(handle));
-        } else {
+            handles.emplace_back(createEmptyGridHandle(device));
+        } else if (i == 0) {
             int32_t *dataPtr = ijkData.data_ptr<int32_t>();
             auto coordPtr    = reinterpret_cast<nanovdb::Coord *>(dataPtr);
 
             nanovdb::cuda::DeviceMesh mesh;
             nanovdb::tools::cuda::DistributedPointsToGrid<GridT> converter(mesh);
-            auto handle =
-                converter.getHandle<nanovdb::Coord *, TorchDeviceBuffer>(coordPtr, nVoxels, guide);
-            handles.emplace_back(std::move(handle));
+            handles.emplace_back(
+                converter.getHandle<nanovdb::Coord *, TorchDeviceBuffer>(coordPtr, nVoxels, guide));
+            C10_CUDA_KERNEL_LAUNCH_CHECK();
+        } else {
+            handles.emplace_back(handles[0].copy(guide));
         }
-        C10_CUDA_KERNEL_LAUNCH_CHECK();
     }
 
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {

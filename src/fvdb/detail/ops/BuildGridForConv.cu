@@ -3,6 +3,7 @@
 //
 #include <fvdb/GridBatchData.h>
 #include <fvdb/detail/GridBatchDataFactory.h>
+#include <fvdb/detail/ops/BuildCoarseGridFromFine.h>
 #include <fvdb/detail/ops/BuildGridForConv.h>
 #include <fvdb/detail/ops/BuildGridFromIjk.h>
 #include <fvdb/detail/ops/CoarseIjkForFineGrid.h>
@@ -10,9 +11,13 @@
 #include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 #include <fvdb/detail/utils/cuda/GridDim.h>
+#include <fvdb/detail/utils/nanovdb/CreateEmptyGridHandle.h>
+#include <fvdb/detail/utils/nanovdb/PadGrid.cuh>
 
 #include <nanovdb/tools/CreateNanoGrid.h>
+#include <nanovdb/tools/cuda/DilateGrid.cuh>
 #include <nanovdb/tools/cuda/PointsToGrid.cuh>
+#include <nanovdb/util/MorphologyHelpers.h>
 
 #include <c10/cuda/CUDACachingAllocator.h>
 #include <c10/cuda/CUDAGuard.h>
@@ -38,8 +43,8 @@ buildCoarseGridFromFineGridCPU(const GridBatchData &fineBatchHdl,
 
     std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> batchHandles;
     batchHandles.reserve(fineGridHdl.gridCount());
-    for (uint32_t bidx = 0; bidx < fineGridHdl.gridCount(); bidx += 1) {
-        const nanovdb::OnIndexGrid *fineGrid = fineGridHdl.template grid<GridT>(bidx);
+    for (int64_t bidx = 0; bidx < fineBatchHdl.batchSize(); bidx += 1) {
+        const nanovdb::OnIndexGrid *fineGrid = fineBatchHdl.hostGridPtrAt(bidx);
         if (!fineGrid) {
             throw std::runtime_error("Failed to get pointer to nanovdb index grid");
         }
@@ -189,6 +194,63 @@ nanovdb::GridHandle<TorchDeviceBuffer>
 dispatchBuildGridForConv<torch::kCUDA>(const GridBatchData &baseGridHdl,
                                        const nanovdb::Coord &kernelSize,
                                        const nanovdb::Coord &stride) {
+    // Fast path 1: (kernel_size == 1 || stride == kernel_size) is pure coarsening by stride --
+    // exactly the coordinate short circuit in convIJKForGrid -- so reuse the leaf-mask coarsen
+    // builder (CoarsenGrid for uniform power-of-two stride, coordinate fallback otherwise).
+    if (kernelSize == nanovdb::Coord(1) || stride == kernelSize) {
+        return coarseGridHandleFromFineCUDA(baseGridHdl, stride);
+    }
+
+    // Fast path 2: stride 1 with a uniform kernel builds S (+) window, where window is the kernel's
+    // offset box. For an odd kernel k the window is [-(k-1)/2, (k-1)/2]^3 == (k-1)/2 symmetric unit
+    // dilations; for an even kernel k it is [0, k-1]^3 == (k-1) positive unit pad passes. No
+    // coordinate list, no radix sort.
+    const bool uniformKernel = (kernelSize[0] == kernelSize[1] && kernelSize[1] == kernelSize[2]);
+    if (stride == nanovdb::Coord(1) && uniformKernel && kernelSize[0] > 1) {
+        c10::cuda::CUDAGuard deviceGuard(baseGridHdl.device());
+        at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream(baseGridHdl.device().index());
+        TorchDeviceBuffer guide(0, baseGridHdl.device());
+        const int k = kernelSize[0];
+
+        std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> handles;
+        handles.reserve(baseGridHdl.batchSize());
+        for (int64_t i = 0; i < baseGridHdl.batchSize(); i += 1) {
+            if (baseGridHdl.numVoxelsAt(i) == 0) {
+                handles.push_back(createEmptyGridHandle(baseGridHdl.device()));
+                continue;
+            }
+
+            nanovdb::OnIndexGrid *grid = baseGridHdl.deviceGridPtrAt(i);
+            TORCH_CHECK(grid, "Grid is null");
+            nanovdb::GridHandle<TorchDeviceBuffer> handle;
+            if (k % 2 == 1) {
+                for (int p = 0; p < (k - 1) / 2; p += 1) {
+                    nanovdb::tools::cuda::DilateGrid<nanovdb::ValueOnIndex> op(grid,
+                                                                               stream.stream());
+                    op.setOperation(nanovdb::tools::morphology::NN_FACE_EDGE_VERTEX);
+                    op.setChecksum(nanovdb::CheckMode::Default);
+                    op.setVerbose(0);
+                    handle = op.getHandle(guide);
+                    C10_CUDA_KERNEL_LAUNCH_CHECK();
+                    grid = handle.deviceGrid<nanovdb::ValueOnIndex>();
+                }
+            } else {
+                for (int p = 0; p < k - 1; p += 1) {
+                    morphology::PadGrid<nanovdb::ValueOnIndex> op(
+                        grid, /*positiveOctant=*/true, stream.stream());
+                    op.setChecksum(nanovdb::CheckMode::Default);
+                    handle = op.getHandle(guide);
+                    C10_CUDA_KERNEL_LAUNCH_CHECK();
+                    grid = handle.deviceGrid<nanovdb::ValueOnIndex>();
+                }
+            }
+            handles.push_back(std::move(handle));
+        }
+        return handles.size() == 1 ? std::move(handles[0])
+                                   : nanovdb::cuda::mergeGridHandles(handles, &guide);
+    }
+
+    // Fallback: general coordinate-list path (non-uniform kernels, general strides > 1).
     JaggedTensor coords = convIJKForGrid(baseGridHdl, kernelSize, stride);
     return ops::_createNanoGridFromIJK(coords);
 }
@@ -218,8 +280,8 @@ dispatchBuildGridForConv<torch::kCPU>(const GridBatchData &baseBatchHdl,
         }
     }
 
-    for (uint32_t bidx = 0; bidx < baseGridHdl.gridCount(); bidx += 1) {
-        const nanovdb::OnIndexGrid *baseGrid = baseGridHdl.template grid<GridT>(bidx);
+    for (int64_t bidx = 0; bidx < baseBatchHdl.batchSize(); bidx += 1) {
+        const nanovdb::OnIndexGrid *baseGrid = baseBatchHdl.hostGridPtrAt(bidx);
         if (!baseGrid) {
             throw std::runtime_error("Failed to get pointer to nanovdb index grid");
         }

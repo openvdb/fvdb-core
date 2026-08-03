@@ -326,6 +326,15 @@ struct GridBatchData : public torch::CustomClassHolder {
         return mHostGridMetadata[bi].mCumBytes;
     }
 
+    // Pointer to the i-th *logical* grid of this batch, resolved by byte offset (cumBytesAt(i))
+    // so it is correct for sliced / indexed / non-contiguous views, where item i is NOT the i-th
+    // physical grid in the underlying handle. Prefer these over nanoGridHandle().deviceGrid(i) /
+    // .grid(i) (which index the handle physically and read the wrong grid for a view). Defined in
+    // GridBatchData.cu. `deviceGridPtrAt` returns a device pointer (CUDA kernels /
+    // TopologyBuilder), `hostGridPtrAt` a host pointer (CPU proxy-grid paths).
+    nanovdb::OnIndexGrid *deviceGridPtrAt(int64_t bi) const;
+    nanovdb::OnIndexGrid *hostGridPtrAt(int64_t bi) const;
+
     const VoxelCoordTransform &
     primalTransformAt(int64_t bi) const {
         bi = negativeToPositiveIndexWithRangecheck(bi);

@@ -21,6 +21,17 @@ GridBatchData::device() const {
     return mGridHdl->buffer().device();
 }
 
+nanovdb::OnIndexGrid *
+GridBatchData::deviceGridPtrAt(int64_t bi) const {
+    return reinterpret_cast<nanovdb::OnIndexGrid *>(mGridHdl->buffer().deviceData() +
+                                                    cumBytesAt(bi));
+}
+
+nanovdb::OnIndexGrid *
+GridBatchData::hostGridPtrAt(int64_t bi) const {
+    return reinterpret_cast<nanovdb::OnIndexGrid *>(mGridHdl->buffer().data() + cumBytesAt(bi));
+}
+
 bool
 GridBatchData::isEmpty() const {
     return mGridHdl->buffer().isEmpty();

@@ -777,6 +777,29 @@ class TestBasicOps(unittest.TestCase):
 
         self.assertEqual(predicted_ijk_set, expected_ijk_set)
 
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA required")
+    def test_nearest_voxels_to_points_peak_memory(self):
+        # from_nearest_voxels_to_points now builds one voxel per point and pads by {0,1}^3 via
+        # leaf-mask morphology, instead of materializing 8 candidate coordinates per point (plus
+        # two 8N int32 batch-index arrays) and radix-sorting them. Verify the torch-visible peak
+        # is a small fraction of the old ~160 B/point.
+        n = 2_000_000
+        pts = torch.randn(n, 3, device="cuda", dtype=torch.float32)
+        torch.cuda.synchronize()
+        base = torch.cuda.memory_allocated()
+        torch.cuda.reset_peak_memory_stats()
+        grid = GridBatch.from_nearest_voxels_to_points(fvdb.JaggedTensor(pts), voxel_sizes=0.05)
+        torch.cuda.synchronize()
+        peak_extra = torch.cuda.max_memory_allocated() - base
+        # The old path peaked at > 300 MiB of torch tensors for 2M points (8N int32 coords + two
+        # 8N int32 jidx arrays); the mask path allocates ~one N-coord list plus the output grid.
+        self.assertGreater(grid.total_voxels, 0)
+        self.assertLess(
+            peak_extra,
+            150 * 1024 * 1024,
+            f"from_nearest_voxels_to_points torch peak {peak_extra / 1024 / 1024:.1f} MiB too large",
+        )
+
     @parameterized.expand(all_device_dtype_combos + bfloat16_combos)
     def test_refine(self, device, dtype):
         p = torch.randn(100, 3, device=device, dtype=torch.float)
@@ -2398,6 +2421,70 @@ class TestBasicOps(unittest.TestCase):
         loss = (features[ijk_clip_mask.repeat(num_features, 1).swapaxes(0, 1)].pow(3)).sum()
         loss.backward()
         self.assertTrue(torch.equal(clipped_features_grad, features.grad))
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA required")
+    def test_clip_grid_mask_based_parity(self):
+        # clipGrid now prunes the source grid to the in-bounds mask (leaf-mask morphology) rather
+        # than rebuilding from a coordinate list. Verify on a non-dense grid that (a) clipped
+        # features stay row-aligned with the clipped grid, and (b) CUDA and CPU produce the
+        # identical clipped grid in identical (canonical) order.
+        torch.manual_seed(0)
+        ijk = torch.randint(-16, 16, (5000, 3), dtype=torch.int32)
+        bmin, bmax = [[-4, -4, -4]], [[8, 8, 8]]
+
+        clipped = {}
+        for device in ("cpu", "cuda"):
+            grid = GridBatch.from_ijk(JaggedTensor([ijk.to(device)]))
+            # Use each voxel's own ijk as its feature, so row-alignment is directly checkable
+            # without assuming any ordering.
+            feats = JaggedTensor([grid.ijk.jdata.to(torch.float64)])
+            clipped_feats, clipped_grid = grid.clip(feats, bmin, bmax)
+            # Every clipped feature row must equal the ijk of the corresponding clipped voxel.
+            self.assertTrue(torch.equal(clipped_feats.jdata, clipped_grid.ijk.jdata.to(torch.float64)))
+            # Every clipped voxel lies inside the clip box.
+            lo = torch.tensor([-4, -4, -4], device=clipped_grid.ijk.jdata.device)
+            hi = torch.tensor([8, 8, 8], device=clipped_grid.ijk.jdata.device)
+            self.assertTrue(torch.all(clipped_grid.ijk.jdata >= lo) and torch.all(clipped_grid.ijk.jdata <= hi))
+            clipped[device] = (clipped_feats, clipped_grid)
+
+        self.assertTrue(torch.equal(clipped["cpu"][1].ijk.jdata, clipped["cuda"][1].ijk.jdata.cpu()))
+        self.assertTrue(torch.equal(clipped["cpu"][0].jdata, clipped["cuda"][0].jdata.cpu()))
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA required")
+    def test_conv_grid_fast_path_parity(self):
+        # conv_grid uses leaf-mask morphology on CUDA for the fast paths: stride-1 uniform odd
+        # kernels (symmetric dilation), stride-1 uniform even kernels (positive pad), and the
+        # stride == kernel_size / kernel_size == 1 coarsening short circuit. Verify the output
+        # topology matches the CPU coordinate-list reference across those combos (and one fallback).
+        torch.manual_seed(0)
+        ijk = torch.randint(-20, 20, (4000, 3), dtype=torch.int32)
+        # (kernel, stride): 3^3 s1 -> 1 dilate; 5^3 s1 -> 2 dilates; 2^3 s1 -> 1 pad;
+        # 2^3 s2 & 4^3 s4 -> coarsen (pow2); 1 s1 -> identity; 3^3 s2 -> coord fallback.
+        combos = [(3, 1), (5, 1), (2, 1), (2, 2), (4, 4), (1, 1), (3, 2)]
+        for ksize, stride in combos:
+            g_cpu = GridBatch.from_ijk(JaggedTensor([ijk]))
+            g_cuda = GridBatch.from_ijk(JaggedTensor([ijk.cuda()]))
+            s_cpu = set(map(tuple, g_cpu.conv_grid(ksize, stride).ijk.jdata.tolist()))
+            s_cuda = set(map(tuple, g_cuda.conv_grid(ksize, stride).ijk.jdata.cpu().tolist()))
+            self.assertEqual(s_cpu, s_cuda, f"conv_grid mismatch for kernel={ksize} stride={stride}")
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA required")
+    def test_conv_transpose_grid_fast_path_parity(self):
+        # conv_transpose_grid uses leaf-mask morphology on CUDA: the stride == kernel_size /
+        # kernel_size == 1 subdivision short circuit (RefineGrid), stride-1 uniform kernels
+        # (dilate/pad), and stride-2 kernel-3 upsampling (RefineGrid + negative pad). Verify the
+        # topology matches the CPU coordinate-list reference across those combos (and fallbacks).
+        torch.manual_seed(0)
+        ijk = torch.randint(-16, 16, (3000, 3), dtype=torch.int32)
+        # (kernel, stride): 1 s1 & 2 s2 & 4 s4 -> subdivide (RefineGrid); 3 s3 -> subdivide fallback;
+        # 3 s1 -> dilate; 2 s1 -> pad; 3 s2 -> refine+negpad; 5 s2 -> coord fallback.
+        combos = [(1, 1), (2, 2), (4, 4), (3, 3), (3, 1), (2, 1), (3, 2), (5, 2)]
+        for ksize, stride in combos:
+            g_cpu = GridBatch.from_ijk(JaggedTensor([ijk]))
+            g_cuda = GridBatch.from_ijk(JaggedTensor([ijk.cuda()]))
+            s_cpu = set(map(tuple, g_cpu.conv_transpose_grid(ksize, stride).ijk.jdata.tolist()))
+            s_cuda = set(map(tuple, g_cuda.conv_transpose_grid(ksize, stride).ijk.jdata.cpu().tolist()))
+            self.assertEqual(s_cpu, s_cuda, f"conv_transpose_grid mismatch kernel={ksize} stride={stride}")
 
     @parameterized.expand(all_device_dtype_combos)
     def test_dual_without_border(self, device, dtype):
