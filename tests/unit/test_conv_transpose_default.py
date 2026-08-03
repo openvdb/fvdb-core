@@ -10,6 +10,11 @@ dense PyTorch ground truth to verify correctness of:
   - Forward pass values
   - Backward pass gradients
 
+This legacy suite deliberately uses only odd kernel extents, for which
+``K // 2 == P_before = floor((K - 1) / 2)``. General even and mixed-axis
+phase coverage lives in ``test_conv_semantics.py`` and
+``test_conv_semantics_integration.py``.
+
 =============================================================================
 TOPOLOGY FOR TRANSPOSED CONVOLUTION
 =============================================================================
@@ -24,12 +29,13 @@ For TRANSPOSED convolution with stride S:
     - Each input scatters to multiple outputs
     - Output coordinates are "expanded" (multiplied by stride)
 
-CRITICAL INSIGHT:
-    For stride=1, both topologies are IDENTICAL!
+ODD-KERNEL INSIGHT:
+    For stride=1, both generated topologies are identical for the symmetric
+    odd footprints exercised in this file.
     - Regular conv: output at c + offset for each input c
     - Transpose conv: output at c + offset for each input c
 
-    For stride > 1, they DIFFER:
+    For stride > 1, they differ:
     - Regular conv: outputs at {o : exists c with o*S in [c-K//2, c+K//2]}
     - Transpose conv: outputs at {c*S + offset : for each input c}
 
@@ -44,13 +50,13 @@ For REGULAR convolution:
 For TRANSPOSED convolution:
     - Each input at c SCATTERS to outputs: output[c + k - K//2] += input[c] * kernel[k]
     - Equivalently: output at o = sum over k of: input[o - k + K//2] * kernel[k]
-    - This is convolution with a FLIPPED kernel
+    - This is the adjoint action of the same finite edges; the sparse rulebook
+      does not add a spatial kernel flip. Any flipped-kernel identity depends
+      on how a separate dense convolution convention is written.
 
-The mathematical relationship: conv_transpose(x, W) = conv(x, flip(W))
-where flip reverses all spatial dimensions of the kernel.
-
-For stride=1, PyTorch's conv_transpose3d with padding=K//2 gives the same
-output shape as conv3d with padding="same", making comparison straightforward.
+For this odd-kernel suite, PyTorch's conv_transpose3d with
+padding=K//2=P_before gives the same output shape as conv3d with
+padding="same", making comparison straightforward.
 """
 
 import math

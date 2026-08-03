@@ -428,7 +428,11 @@ def conv_grid_batch(
     kernel_size: NumericMaxRank1,
     stride: NumericMaxRank1 = 1,
 ) -> GridBatch:
-    """Return the output grid for a convolution on a grid batch.
+    """Return the complete structural-support grid for a convolution on a grid batch.
+
+    It uses the canonical Torch phase ``p = stride * q + u - floor((K - 1) / 2)`` per axis.
+    The result is a convolution lattice (voxel size scaled by ``stride``, canonical origin), not a
+    block-coarsened grid. ``K=S=1`` returns ``grid`` itself.
 
     Args:
         grid (GridBatch): The input grid batch.
@@ -452,7 +456,10 @@ def conv_grid_single(
     kernel_size: NumericMaxRank1,
     stride: NumericMaxRank1 = 1,
 ) -> Grid:
-    """Return the output grid for a convolution on a single grid.
+    """Return the complete structural-support grid for a convolution on a single grid.
+
+    This is the canonical convolution lattice, not a cell-coarsening operation. ``K=S=1`` returns
+    ``grid`` itself.
 
     Args:
         grid (Grid): The input single grid.
@@ -476,7 +483,10 @@ def conv_transpose_grid_batch(
     kernel_size: NumericMaxRank1,
     stride: NumericMaxRank1 = 1,
 ) -> GridBatch:
-    """Return the output grid for a transposed convolution on a grid batch.
+    """Return the complete structural-support grid for a transposed convolution on a grid batch.
+
+    Each active input coordinate spreads through all canonical Torch-phase taps. This generated
+    support is not a value inverse of a forward convolution.
 
     Args:
         grid (GridBatch): The input grid batch.
@@ -498,7 +508,10 @@ def conv_transpose_grid_single(
     kernel_size: NumericMaxRank1,
     stride: NumericMaxRank1 = 1,
 ) -> Grid:
-    """Return the output grid for a transposed convolution on a single grid.
+    """Return the complete structural-support grid for a transposed convolution on a single grid.
+
+    Each active input coordinate spreads through all canonical Torch-phase taps; this does not
+    imply value inversion.
 
     Args:
         grid (Grid): The input single grid.

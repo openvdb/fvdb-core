@@ -13,6 +13,10 @@ baseline understanding of:
 
 This file does NOT test fVDB sparse convolution - it validates our understanding
 of PyTorch semantics that we use as ground truth in test_conv_default.py.
+
+The cases in this legacy file use odd kernel extents, so their ``K // 2``
+notation is exactly ``P_before = floor((K - 1) / 2)``. General even-kernel
+phase is covered by the independent canonical semantics oracle.
 """
 
 import unittest

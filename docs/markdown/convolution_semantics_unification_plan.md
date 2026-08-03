@@ -654,7 +654,7 @@ for stride greater than one. The local kernel phase remains the same.
 Let `q_min` be the minimum active coarse coordinate. Densify the coarse input
 over its bounding box and call:
 
-```python
+```python notest
 torch.nn.functional.conv_transpose3d(
     dense_input,
     fvdb_weights.transpose(0, 1).contiguous(),
@@ -1138,7 +1138,7 @@ Slice 1 should land the independent scalar and dense-oracle tests as ordinary
 passing tests. A production-facing Python assertion that demonstrates behavior
 scheduled for Slice 3a, 3b, or 5 should carry both:
 
-```python
+```python notest
 @pytest.mark.conv_semantics_pending(slice="3a", issue=668)
 @pytest.mark.xfail(strict=True, reason="issue #668; remove in Slice 3a")
 ```
@@ -1217,6 +1217,9 @@ That is a lower bound before masked-compaction output and grid construction,
 versus 160,000,000 bytes (approximately 153 MiB) for one coordinate and batch
 row per input. A replacement that merely moves this allocation or relies on a
 larger GPU fails the resource test.
+
+The measured release-gate results are recorded in
+[Convolution Semantics Resource Report](convolution_semantics_resource_report.md).
 
 ## 14. Current-code audit against the proposal
 

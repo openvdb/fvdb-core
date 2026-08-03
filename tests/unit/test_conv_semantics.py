@@ -8,6 +8,10 @@ from itertools import product
 import pytest
 import torch
 
+from fvdb.utils.tests.convolution_utils import (
+    compute_conv_grid_topology_ground_truth,
+    compute_conv_transpose_topology_ground_truth,
+)
 from fvdb.utils.tests.convolution_semantics_oracle import (
     MAX_DENSE_ORACLE_SPATIAL_SITES,
     ConvolutionRelation,
@@ -84,6 +88,38 @@ def test_issue_668_16_cubed_round_trip_structural_regression() -> None:
     assert len(coarse) == 5**3
     assert set(fine).issubset(transpose_support(coarse, relation))
     assert all(degree > 0 for degree in forward_degrees(fine, relation).values())
+
+
+@pytest.mark.parametrize(
+    ("kernel", "stride"),
+    [((4, 1, 1), (4, 1, 1)), ((4, 3, 2), (3, 2, 1)), ((3, 3, 3), (4, 4, 4))],
+)
+def test_legacy_topology_helpers_follow_canonical_relation(kernel, stride) -> None:
+    fine = [(-5, -1, 0), (-1, 0, 1), (0, 2, -3), (3, -2, 4), (8, 1, -1)]
+    relation = ConvolutionRelation(kernel, stride)
+    fine_tensor = torch.tensor(fine, dtype=torch.int32)
+
+    helper_forward = compute_conv_grid_topology_ground_truth(
+        fine_tensor, kernel, stride, torch.device("cpu"), torch.float64
+    )
+    assert {tuple(row) for row in helper_forward.tolist()} == forward_support(fine, relation)
+
+    coarse = sorted(forward_support(fine, relation))
+    helper_transpose = compute_conv_transpose_topology_ground_truth(
+        torch.tensor(coarse, dtype=torch.int32), kernel, stride, torch.device("cpu")
+    )
+    assert {tuple(row) for row in helper_transpose.tolist()} == transpose_support(coarse, relation)
+
+
+def test_legacy_topology_helpers_preserve_empty_coordinate_shape() -> None:
+    empty = torch.empty((0, 3), dtype=torch.int32)
+    assert compute_conv_grid_topology_ground_truth(
+        empty, (4, 3, 2), (3, 2, 1), torch.device("cpu"), torch.float64
+    ).shape == (0, 3)
+    assert compute_conv_transpose_topology_ground_truth(empty, (4, 3, 2), (3, 2, 1), torch.device("cpu")).shape == (
+        0,
+        3,
+    )
 
 
 @pytest.mark.parametrize(

@@ -3,6 +3,29 @@ fVDB Version History
 
 ## Version 0.6.0 - In Development
 
+- **Breaking:** Unified sparse convolution and transposed-convolution geometry around the Torch-phase relation
+  ``p = stride * q + u - floor((kernel_size - 1) / 2)`` (issue #668). Generated topology is now complete
+  structural support (`full_support`); an explicit target is a `restricted` evaluation domain, not a different
+  kernel rule. This changes generated topology for affected even kernels, `kernel_size == stride >= 3`, and
+  `kernel_size=1, stride>1`; the proved `kernel_size=stride=2` path is retained.
+- **Breaking:** Generated strided convolution grids now have voxel size `stride * h` and the canonical input
+  origin; generated transposed grids apply the inverse scale. Explicit convolution grid pairs with incompatible
+  scale or origin registration now fail instead of being silently interpreted in index space. `coarsened_grid`
+  remains a block-centroid cell grid and must not be used as a convolution target.
+- `ConvolutionPlan.from_grid_batch_transposed(..., target_grid=None)` now generates full transposed support.
+  A saved decoder target is an explicit restriction and may have zero-degree rows; transposed convolution is
+  adjoint connectivity, not a value inverse. `ConvolutionPlan.from_plan_transposed` reverses a plan's exact
+  finite edges; a tied weighted adjoint uses `weight.transpose(0, 1).contiguous()`.
+- `Grid.conv_grid(1, 1)` and `GridBatch.conv_grid(1, 1)` now return the source object. One-tap convolutions with
+  larger stride sample stride-aligned residues rather than coarsening all blocks. Removed rows had zero linear
+  degree before bias, but a model with bias can observe their removal.
+- **Migration:** Invalidate serialized or in-memory topology/plan caches when upgrading: cache keys must include
+  the convolution-semantics version. Weight spatial ordering is unchanged, but affected checkpoints can produce
+  different topologies and world registration. No legacy geometry mode is shipped in 0.6.0; migrate model
+  configuration and cached plans to the canonical relation.
+- The dense convolution expert backend is disabled until it can realize this contract exactly. PredGatherIGemm
+  remains limited to its supported odd kernels and strides; unsupported combinations fail at plan construction.
+
 - **Breaking:** Moved the high-level Gaussian splatting Python API to fVDB Reality Capture and removed its former
   `fvdb` entry points. Use `fvdb_reality_capture.GaussianSplat3d`,
   `fvdb_reality_capture.ProjectedGaussianSplats`, `fvdb_reality_capture.gaussian_render_jagged`, and

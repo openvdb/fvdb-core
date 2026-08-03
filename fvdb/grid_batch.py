@@ -545,7 +545,10 @@ class GridBatch:
         return functional.clipped_grid_batch(self, ijk_min, ijk_max)
 
     def coarsened_grid(self, coarsening_factor: NumericMaxRank1) -> "GridBatch":
-        """Return a coarsened version of this grid batch by keeping every N-th voxel.
+        """Return a block-coarsened cell grid for pooling and aggregation.
+
+        This operation groups physical cells and uses a block-centroid transform. It is not
+        equivalent to :meth:`conv_grid`, whose output is a Torch-phase convolution lattice.
 
         Args:
             coarsening_factor (NumericMaxRank1): Coarsening factor, broadcastable to shape ``(3,)``, integer dtype.
@@ -572,7 +575,13 @@ class GridBatch:
         return functional.contiguous_batch(self)
 
     def conv_grid(self, kernel_size: NumericMaxRank1, stride: NumericMaxRank1 = 1) -> "GridBatch":
-        """Return the output grid topology for a convolution applied to this grid batch.
+        """Return the full-support output grid for a convolution applied to this grid batch.
+
+        The generated coordinates are the positive structural support of
+        ``p = stride * q + u - floor((kernel_size - 1) / 2)`` componentwise.
+        A strided result has voxel size ``stride * h`` and the same canonical origin. It is not a
+        coarsened cell grid. ``kernel_size=stride=1`` returns this object itself; ``kernel_size=1``
+        with a larger stride samples stride-aligned residues.
 
         Args:
             kernel_size (NumericMaxRank1): Convolution kernel size, broadcastable to shape ``(3,)``, integer dtype.
@@ -588,7 +597,11 @@ class GridBatch:
         return functional.conv_grid_batch(self, kernel_size, stride)
 
     def conv_transpose_grid(self, kernel_size: NumericMaxRank1, stride: NumericMaxRank1 = 1) -> "GridBatch":
-        """Return the output grid topology for a transposed convolution applied to this grid batch.
+        """Return the complete full-support output grid for transposed convolution.
+
+        Each active coarse coordinate spreads through every canonical tap. The result has voxel
+        size ``h / stride`` and the same canonical origin. This is generated structural support,
+        not a value inverse of a forward convolution.
 
         Args:
             kernel_size (NumericMaxRank1): Convolution kernel size, broadcastable to shape ``(3,)``, integer dtype.
