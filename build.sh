@@ -423,7 +423,10 @@ elif [ "$BUILD_TYPE" == "ctest" ]; then
     # --- Find and Run Tests ---
     echo "Searching for test build directory..."
     # Find CMakeCache.txt to locate the build root
-    CMAKE_CACHE=$(find build -name CMakeCache.txt -type f -print -quit 2>/dev/null)
+    # scikit-build keeps the project cache directly below build/. Dependency
+    # subbuilds may also contain caches, so restrict discovery to the project
+    # build root instead of accepting the first recursive match.
+    CMAKE_CACHE=$(find build -mindepth 2 -maxdepth 2 -name CMakeCache.txt -type f -print -quit 2>/dev/null)
 
     if [ -z "$CMAKE_CACHE" ]; then
         echo "Error: Could not find CMakeCache.txt in build directory"
