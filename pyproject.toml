@@ -54,5 +54,9 @@ target-version = ["py311"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Make the `fvdb_test_utils` helper package importable. It deliberately lives under
+# tests/ rather than inside fvdb/ so that it is not packaged into the wheel; it depends
+# on the dev-only `parameterized` package declared in env/test_requirements.txt.
+pythonpath = ["tests"]
 python_files = ["test_*.py"]
 norecursedirs = [".*", "build", "dist"]

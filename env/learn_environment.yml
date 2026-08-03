@@ -9,7 +9,6 @@ dependencies:
   - cuda-version=13.0
   - fvdb-core
   - git
-  - gitpython
   - ipython
   - jupyterlab
   - linkify-it-py

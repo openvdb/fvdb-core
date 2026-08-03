@@ -7,7 +7,6 @@ channels:
   - conda-forge
 dependencies:
   - git
-  - gitpython
   - ca-certificates
   - certifi
   - openssl

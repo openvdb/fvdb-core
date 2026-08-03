@@ -22,7 +22,6 @@ dependencies:
   - gcc_linux-64=14.3
   - gh
   - git
-  - gitpython
   - gxx_linux-64=14.3
   - ipykernel
   - ipython

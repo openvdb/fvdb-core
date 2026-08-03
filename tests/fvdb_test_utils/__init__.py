@@ -4,13 +4,9 @@
 import functools
 import itertools
 import math
-import site
-import tempfile
 from pathlib import Path
 from typing import Any, Sequence, overload
 
-import git
-import git.repo
 import torch
 from fvdb.types import (
     DeviceIdentifier,
@@ -24,10 +20,10 @@ from fvdb.types import (
     to_Vec3iBatch,
     to_Vec3iBatchBroadcastable,
 )
-from git.exc import InvalidGitRepositoryError
 from parameterized import parameterized
 
 from fvdb import JaggedTensor
+from fvdb.utils._data_repo import fetch_data_repo
 
 from .grid_utils import (
     make_dense_grid_and_point_data,
@@ -49,99 +45,10 @@ def set_testing_git_tag(git_tag):
     git_tag_for_data = git_tag
 
 
-def _is_editable_install() -> bool:
-    # check we're not in a site package
-    module_path = Path(__file__).resolve()
-    for site_path in site.getsitepackages():
-        if str(module_path).startswith(site_path):
-            return False
-    # check if we're in the source directory
-    module_dir = module_path.parent.parent.parent.parent
-    return (module_dir / "pyproject.toml").is_file()
-
-
-def _get_local_repo_path(repo_name: str) -> Path:
-    """Get the local path where a git repository should be cloned.
-
-    Args:
-        repo_name: The name of the repository (e.g., 'fvdb_example_data', 'fvdb_test_data')
-
-    Returns:
-        Path to the local repository directory
-    """
-    if _is_editable_install():
-        external_dir = Path(__file__).resolve().parent.parent.parent.parent / "external"
-        if not external_dir.exists():
-            external_dir.mkdir()
-        local_repo_path = external_dir
-    else:
-        local_repo_path = Path(tempfile.gettempdir())
-
-    local_repo_path = local_repo_path / repo_name
-    return local_repo_path
-
-
-def _clone_git_repo(git_url: str, git_tag: str, repo_name: str) -> tuple[Path, git.repo.Repo]:
-    """Generic function to clone and checkout a git repository.
-
-    Args:
-        git_url: URL of the git repository to clone
-        git_tag: Git tag or commit hash to checkout
-        repo_name: Name for the local repository directory
-
-    Returns:
-        Tuple of (repo_path, repo) where repo_path is the Path to the cloned repo
-        and repo is the git.repo.Repo object
-    """
-
-    def is_git_repo(repo_path: str) -> bool:
-        is_repo = False
-        try:
-            _ = git.repo.Repo(repo_path)
-            is_repo = True
-        except InvalidGitRepositoryError:
-            is_repo = False
-
-        return is_repo
-
-    repo_path = _get_local_repo_path(repo_name)
-
-    if repo_path.exists() and repo_path.is_dir():
-        if is_git_repo(str(repo_path)):
-            repo = git.repo.Repo(repo_path)
-        else:
-            raise ValueError(f"A path {repo_path} exists but is not a git repo")
-    else:
-        repo = git.repo.Repo.clone_from(git_url, repo_path)
-    repo.remotes.origin.fetch(tags=True)
-    repo.git.checkout(git_tag)
-
-    return repo_path, repo
-
-
-def _clone_fvdb_test_data() -> tuple[Path, git.repo.Repo]:
-    """Clone the fvdb-test-data repository for unit tests."""
-    global git_tag_for_data
-    git_url = "https://github.com/voxel-foundation/fvdb-test-data.git"
-    return _clone_git_repo(git_url, git_tag_for_data, "fvdb_test_data")
-
-
-def _clone_fvdb_example_data() -> tuple[Path, git.repo.Repo]:
-    """Clone the fvdb-example-data repository for examples and documentation."""
-    git_tag = "613c3a4e220eb45b9ae0271dca4808ab484ee134"
-    git_url = "https://github.com/voxel-foundation/fvdb-example-data.git"
-    return _clone_git_repo(git_url, git_tag, "fvdb_example_data")
-
-
 def get_fvdb_test_data_path() -> Path:
-    repo_path, _ = _clone_fvdb_test_data()
+    """Get the path to the unit test data in the downloaded fvdb-test-data snapshot."""
+    repo_path = fetch_data_repo("voxel-foundation/fvdb-test-data", git_tag_for_data, "fvdb_test_data")
     return repo_path / "unit_tests"
-
-
-def get_fvdb_example_data_path() -> Path:
-    """Get the path to the cloned fvdb-example-data repository."""
-    repo_path, _ = _clone_fvdb_example_data()
-    return repo_path
 
 
 # Hack parameterized to use the function name and the expand parameters as the test name
@@ -904,7 +811,6 @@ from .timer import ScopedTimer
 __all__ = [
     "set_testing_git_tag",
     "get_fvdb_test_data_path",
-    "get_fvdb_example_data_path",
     "make_dense_grid_and_point_data",
     "make_dense_grid_batch_and_jagged_point_data",
     "make_grid_and_point_data",
