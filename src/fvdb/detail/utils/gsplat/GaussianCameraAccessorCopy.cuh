@@ -18,14 +18,15 @@ template <typename ScalarType, typename Acc33>
 inline __device__ void
 copyMat3Accessor(const int64_t C,
                  nanovdb::math::Mat3<ScalarType> *__restrict__ out,
-                 const Acc33 &acc /* [C,3,3] */) {
+                 const Acc33 &acc, /* [C,3,3] */
+                 const int64_t cameraOffset = 0) {
     constexpr int64_t kElementsPerMat3 = 9;
     for (int64_t i = threadIdx.x; i < C * kElementsPerMat3; i += blockDim.x) {
-        const int64_t camId      = i / kElementsPerMat3;
-        const int64_t entryId    = i % kElementsPerMat3;
-        const int64_t rowId      = entryId / 3;
-        const int64_t colId      = entryId % 3;
-        out[camId][rowId][colId] = acc[camId][rowId][colId];
+        const int64_t localCamId      = i / kElementsPerMat3;
+        const int64_t entryId         = i % kElementsPerMat3;
+        const int64_t rowId           = entryId / 3;
+        const int64_t colId           = entryId % 3;
+        out[localCamId][rowId][colId] = acc[cameraOffset + localCamId][rowId][colId];
     }
 }
 
@@ -36,12 +37,13 @@ template <typename ScalarType, typename Acc44>
 inline __device__ void
 copyWorldToCamTranslation(const int64_t C,
                           nanovdb::math::Vec3<ScalarType> *__restrict__ out,
-                          const Acc44 &acc /* [C,4,4] */) {
+                          const Acc44 &acc, /* [C,4,4] */
+                          const int64_t cameraOffset = 0) {
     constexpr int64_t kElementsPerVec3 = 3;
     for (int64_t i = threadIdx.x; i < C * kElementsPerVec3; i += blockDim.x) {
-        const int64_t camId   = i / kElementsPerVec3;
-        const int64_t entryId = i % kElementsPerVec3;
-        out[camId][entryId]   = acc[camId][entryId][3];
+        const int64_t localCamId = i / kElementsPerVec3;
+        const int64_t entryId    = i % kElementsPerVec3;
+        out[localCamId][entryId] = acc[cameraOffset + localCamId][entryId][3];
     }
 }
 
@@ -51,12 +53,13 @@ inline __device__ void
 copyDistortionCoeffs(const int64_t C,
                      const int64_t K,
                      ScalarType *__restrict__ out /* [C*K] */,
-                     const AccCk &acc /* [C,K] */) {
+                     const AccCk &acc, /* [C,K] */
+                     const int64_t cameraOffset = 0) {
     const int64_t total = C * K;
     for (int64_t i = threadIdx.x; i < total; i += blockDim.x) {
-        const int64_t camId      = i / K;
-        const int64_t entryId    = i % K;
-        out[camId * K + entryId] = acc[camId][entryId];
+        const int64_t localCamId      = i / K;
+        const int64_t entryId         = i % K;
+        out[localCamId * K + entryId] = acc[cameraOffset + localCamId][entryId];
     }
 }
 
