@@ -10,6 +10,7 @@ convolution, or transposed convolution, but can represent either.
 
 import warnings
 from dataclasses import dataclass
+from threading import Lock
 from typing import Any, overload
 
 import torch
@@ -259,20 +260,20 @@ def _coverage_report(
         )
     elif isinstance(backend, _GatherScatterBackend):
         input_degrees = torch.bincount(
-            backend.topology.gather_indices.to(dtype=torch.int64),
+            backend.topology.gather_indices,
             minlength=backend.topology.feature_total_voxels,
         )
         output_degrees = torch.bincount(
-            backend.topology.scatter_indices.to(dtype=torch.int64),
+            backend.topology.scatter_indices,
             minlength=backend.topology.output_total_voxels,
         )
     elif isinstance(backend, _PredGatherIGemmBackend):
         input_degrees = torch.bincount(
-            backend.gs_topology.gather_indices.to(dtype=torch.int64),
+            backend.gs_topology.gather_indices,
             minlength=backend.gs_topology.feature_total_voxels,
         )
         output_degrees = torch.bincount(
-            backend.gs_topology.scatter_indices.to(dtype=torch.int64),
+            backend.gs_topology.scatter_indices,
             minlength=backend.gs_topology.output_total_voxels,
         )
     else:
@@ -296,19 +297,52 @@ def _coverage_report(
     )
 
 
-def _validate_coverage_policy(
-    coverage_report: ConvolutionCoverageReport | None, topology_policy: str, strict_output_coverage: bool
-) -> None:
-    if coverage_report is None:
+def _swap_coverage_report(report: ConvolutionCoverageReport) -> ConvolutionCoverageReport:
+    """Reverse input/output degree diagnostics without revisiting the rulebook."""
+    return ConvolutionCoverageReport(
+        input_row_count=report.output_row_count,
+        output_row_count=report.input_row_count,
+        input_zero_count=report.output_zero_count,
+        input_zero_fraction=report.output_zero_fraction,
+        input_degree_min=report.output_degree_min,
+        input_degree_max=report.output_degree_max,
+        input_degree_histogram=report.output_degree_histogram,
+        output_zero_count=report.input_zero_count,
+        output_zero_fraction=report.input_zero_fraction,
+        output_degree_min=report.input_degree_min,
+        output_degree_max=report.input_degree_max,
+        output_degree_histogram=report.input_degree_histogram,
+    )
+
+
+def _output_zero_count(backend: "_Backend") -> int | None:
+    """Return the output zero-degree count without constructing full diagnostics."""
+    if isinstance(backend, _MatmulBackend):
+        return 0
+    if isinstance(backend, _GatherScatterBackend):
+        topology = backend.topology
+    elif isinstance(backend, _PredGatherIGemmBackend):
+        topology = backend.gs_topology
+    else:
+        return None
+
+    output_degrees = torch.bincount(
+        topology.scatter_indices,
+        minlength=topology.output_total_voxels,
+    )
+    return int((output_degrees == 0).sum().item())
+
+
+def _validate_coverage_policy(backend: "_Backend", topology_policy: str, strict_output_coverage: bool) -> None:
+    if topology_policy != "full_support" and not strict_output_coverage:
         return
-    if topology_policy == "full_support" and coverage_report.output_zero_count:
-        raise RuntimeError(
-            "Generated full-support topology contains " f"{coverage_report.output_zero_count} zero-degree output rows."
-        )
-    if topology_policy == "restricted" and strict_output_coverage and coverage_report.output_zero_count:
-        raise ValueError(
-            "Restricted topology contains " f"{coverage_report.output_zero_count} zero-degree output rows."
-        )
+    output_zero_count = _output_zero_count(backend)
+    if output_zero_count is None:
+        return
+    if topology_policy == "full_support" and output_zero_count:
+        raise RuntimeError("Generated full-support topology contains " f"{output_zero_count} zero-degree output rows.")
+    if topology_policy == "restricted" and strict_output_coverage and output_zero_count:
+        raise ValueError("Restricted topology contains " f"{output_zero_count} zero-degree output rows.")
 
 
 def _vec_is_all(v: torch.Tensor, i: int | float) -> bool:
@@ -473,6 +507,39 @@ class _PredGatherIGemmBackend:
 _Backend = _MatmulBackend | _GatherScatterBackend | _PredGatherIGemmBackend
 
 
+class _CoverageReportCache:
+    """Thread-safe lazy coverage diagnostics shared by exact transposes."""
+
+    def __init__(self, backend: _Backend, source_grid: GridBatch, target_grid: GridBatch):
+        self._backend = backend
+        self._source_grid = source_grid
+        self._target_grid = target_grid
+        self._report: ConvolutionCoverageReport | None = None
+        self._swapped_report: ConvolutionCoverageReport | None = None
+        self._lock = Lock()
+
+    def get(self, swapped: bool) -> ConvolutionCoverageReport | None:
+        report = self._report
+        if report is None:
+            with self._lock:
+                report = self._report
+                if report is None:
+                    report = _coverage_report(self._backend, self._source_grid, self._target_grid)
+                    self._report = report
+
+        if not swapped or report is None:
+            return report
+
+        swapped_report = self._swapped_report
+        if swapped_report is None:
+            with self._lock:
+                swapped_report = self._swapped_report
+                if swapped_report is None:
+                    swapped_report = _swap_coverage_report(report)
+                    self._swapped_report = swapped_report
+        return swapped_report
+
+
 @dataclass(frozen=True)
 class ConvolutionPlan:
     """
@@ -537,7 +604,8 @@ class ConvolutionPlan:
     _transform_compatibility: ConvolutionTransformCompatibility
     _topology_policy: str
     _topology_provenance: str
-    _coverage_report: ConvolutionCoverageReport | None
+    _coverage_report_cache: _CoverageReportCache
+    _coverage_report_swapped: bool
 
     # ============================================================
     #                 Factory methods
@@ -627,8 +695,7 @@ class ConvolutionPlan:
         _validate_transform_compatibility(compatibility)
         _warn_if_incomplete_residue_coverage(geometry, acknowledge_incomplete_coverage)
         backend = cls._build_backend(source_grid, target_grid, kernel_size, stride, channel_pairs, expert_config)
-        coverage_report = _coverage_report(backend, source_grid, target_grid)
-        _validate_coverage_policy(coverage_report, resolved_policy, strict_output_coverage)
+        _validate_coverage_policy(backend, resolved_policy, strict_output_coverage)
         return cls(
             source_grid,
             target_grid,
@@ -639,7 +706,8 @@ class ConvolutionPlan:
             compatibility,
             resolved_policy,
             topology_provenance,
-            coverage_report,
+            _CoverageReportCache(backend, source_grid, target_grid),
+            False,
         )
 
     @classmethod
@@ -716,8 +784,7 @@ class ConvolutionPlan:
         backend = cls._build_backend(
             source_grid, target_grid, kernel_size, stride, channel_pairs, expert_config, transposed=True
         )
-        coverage_report = _coverage_report(backend, source_grid, target_grid)
-        _validate_coverage_policy(coverage_report, resolved_policy, strict_output_coverage)
+        _validate_coverage_policy(backend, resolved_policy, strict_output_coverage)
         return cls(
             source_grid,
             target_grid,
@@ -728,7 +795,8 @@ class ConvolutionPlan:
             compatibility,
             resolved_policy,
             topology_provenance,
-            coverage_report,
+            _CoverageReportCache(backend, source_grid, target_grid),
+            False,
         )
 
     @classmethod
@@ -791,8 +859,6 @@ class ConvolutionPlan:
         else:
             raise TypeError(f"Cannot transpose unknown convolution backend: {type(plan._backend)}")
 
-        coverage_report = _coverage_report(backend, source_grid, target_grid)
-        _validate_coverage_policy(coverage_report, "restricted", False)
         return cls(
             source_grid,
             target_grid,
@@ -803,7 +869,8 @@ class ConvolutionPlan:
             compatibility,
             "restricted",
             "exact_transpose",
-            coverage_report,
+            plan._coverage_report_cache,
+            not plan._coverage_report_swapped,
         )
 
     # ============================================================
@@ -1042,7 +1109,7 @@ class ConvolutionPlan:
     @property
     def coverage_report(self) -> ConvolutionCoverageReport | None:
         """Exact input/output rulebook degree diagnostics, when the backend has a rulebook."""
-        return self._coverage_report
+        return self._coverage_report_cache.get(self._coverage_report_swapped)
 
     @property
     def has_fixed_topology(self) -> bool:
