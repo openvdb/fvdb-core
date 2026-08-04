@@ -4,6 +4,8 @@
 #include <fvdb/detail/ops/gsplat/RasterizeWorldSpaceGaussiansForward.h>
 #include <fvdb/detail/utils/Nvtx.h>
 #include <fvdb/detail/utils/Utils.h>
+#include <fvdb/detail/utils/cuda/Prefetch.h>
+#include <fvdb/detail/utils/cuda/Utils.cuh>
 #include <fvdb/detail/utils/gsplat/GaussianRasterizeFromWorld.cuh>
 #include <fvdb/detail/utils/gsplat/GaussianRasterizeOptionalInputs.h>
 
@@ -14,6 +16,7 @@
 #include <cooperative_groups.h>
 
 #include <cstdint>
+#include <vector>
 
 namespace fvdb::detail::ops {
 namespace cg = cooperative_groups;
@@ -30,6 +33,7 @@ template <uint32_t NUM_CHANNELS> struct SharedGaussian {
 template <uint32_t NUM_CHANNELS, typename Camera> struct RasterizeFromWorldForwardArgs {
     RasterizeFromWorldCommonArgs commonArgs;
     Camera camera;
+    uint32_t blockOffset;
     fvdb::TorchRAcc64<float, 4> outFeatures;  // [C,H,W,D]
     fvdb::TorchRAcc64<float, 4> outAlphas;    // [C,H,W,1]
     fvdb::TorchRAcc64<int32_t, 3> outLastIds; // [C,H,W]
@@ -41,7 +45,7 @@ template <uint32_t NUM_CHANNELS, typename Camera> struct RasterizeFromWorldForwa
         const auto &common       = commonArgs;
 
         uint32_t camId, tileRow, tileCol, row, col;
-        common.denseCoordinates(camId, tileRow, tileCol, row, col);
+        common.denseCoordinates(camId, tileRow, tileCol, row, col, blockOffset);
         const bool inside     = (row < common.imageHeight && col < common.imageWidth);
         float *outFeaturesPtr = outFeatures.data() + camId * outFeatures.stride(0) +
                                 row * outFeatures.stride(1) + col * outFeatures.stride(2);
@@ -212,36 +216,34 @@ rasterizeGaussiansFromWorld(const RasterizeFromWorldForwardArgs<NUM_CHANNELS, Ca
 }
 
 template <uint32_t NUM_CHANNELS, typename Camera>
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
-launchForward(const torch::Tensor &means,
-              const torch::Tensor &quats,
-              const torch::Tensor &logScales,
-              const torch::Tensor &features,
-              const torch::Tensor &opacities,
-              const Camera &camera,
-              const uint32_t imageWidth,
-              const uint32_t imageHeight,
-              const uint32_t imageOriginW,
-              const uint32_t imageOriginH,
-              const uint32_t tileSize,
-              const torch::Tensor &tileOffsets,
-              const torch::Tensor &tileGaussianIds,
-              const at::optional<torch::Tensor> &backgrounds,
-              const at::optional<torch::Tensor> &masks) {
+void
+launchForwardKernel(const torch::Tensor &means,
+                    const torch::Tensor &quats,
+                    const torch::Tensor &logScales,
+                    const torch::Tensor &features,
+                    const torch::Tensor &opacities,
+                    const Camera &camera,
+                    const uint32_t imageWidth,
+                    const uint32_t imageHeight,
+                    const uint32_t imageOriginW,
+                    const uint32_t imageOriginH,
+                    const uint32_t tileSize,
+                    const torch::Tensor &tileOffsets,
+                    const torch::Tensor &tileGaussianIds,
+                    const at::optional<torch::Tensor> &backgrounds,
+                    const at::optional<torch::Tensor> &masks,
+                    const torch::Tensor &outFeatures,
+                    const torch::Tensor &outAlphas,
+                    const torch::Tensor &outLastIds,
+                    const uint32_t blockOffset,
+                    const uint32_t blockCount,
+                    const cudaStream_t stream) {
     const int64_t C = features.size(0);
-
-    auto opts = features.options();
-    torch::Tensor outFeatures =
-        torch::zeros({C, (int64_t)imageHeight, (int64_t)imageWidth, (int64_t)NUM_CHANNELS}, opts);
-    torch::Tensor outAlphas = torch::zeros({C, (int64_t)imageHeight, (int64_t)imageWidth, 1}, opts);
-    torch::Tensor outLastIds =
-        torch::zeros({C, (int64_t)imageHeight, (int64_t)imageWidth},
-                     torch::TensorOptions().dtype(torch::kInt32).device(features.device()));
 
     const uint32_t tileExtentW = (imageWidth + tileSize - 1) / tileSize;
     const uint32_t tileExtentH = (imageHeight + tileSize - 1) / tileSize;
     const dim3 blockDim(tileSize, tileSize, 1);
-    const dim3 gridDim(C * tileExtentH * tileExtentW, 1, 1);
+    const dim3 gridDim(blockCount, 1, 1);
 
     const int64_t totalIntersections = tileGaussianIds.size(0);
 
@@ -273,6 +275,7 @@ launchForward(const torch::Tensor &means,
     RasterizeFromWorldForwardArgs<NUM_CHANNELS, Camera> args{
         commonArgs,
         camera,
+        blockOffset,
         outFeatures.packed_accessor64<float, 4, torch::RestrictPtrTraits>(),
         outAlphas.packed_accessor64<float, 4, torch::RestrictPtrTraits>(),
         outLastIds.packed_accessor64<int32_t, 3, torch::RestrictPtrTraits>()};
@@ -283,11 +286,202 @@ launchForward(const torch::Tensor &means,
     sharedMem += (alignof(SharedGaussian<NUM_CHANNELS>) - 1) +
                  blockSize * sizeof(SharedGaussian<NUM_CHANNELS>);
 
-    auto stream = at::cuda::getCurrentCUDAStream(means.device().index());
+    if (cudaFuncSetAttribute(rasterizeGaussiansFromWorld<NUM_CHANNELS, Camera>,
+                             cudaFuncAttributeMaxDynamicSharedMemorySize,
+                             sharedMem) != cudaSuccess) {
+        AT_ERROR("Failed to set maximum shared memory size (requested ",
+                 sharedMem,
+                 " bytes), try lowering tile size or camera batch size.");
+    }
+
     rasterizeGaussiansFromWorld<NUM_CHANNELS, Camera>
         <<<gridDim, blockDim, sharedMem, stream>>>(args);
-
     C10_CUDA_KERNEL_LAUNCH_CHECK();
+}
+
+template <uint32_t NUM_CHANNELS, typename Camera>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
+launchForwardCUDA(const torch::Tensor &means,
+                  const torch::Tensor &quats,
+                  const torch::Tensor &logScales,
+                  const torch::Tensor &features,
+                  const torch::Tensor &opacities,
+                  const Camera &camera,
+                  const uint32_t imageWidth,
+                  const uint32_t imageHeight,
+                  const uint32_t imageOriginW,
+                  const uint32_t imageOriginH,
+                  const uint32_t tileSize,
+                  const torch::Tensor &tileOffsets,
+                  const torch::Tensor &tileGaussianIds,
+                  const at::optional<torch::Tensor> &backgrounds,
+                  const at::optional<torch::Tensor> &masks) {
+    const int64_t C = features.size(0);
+    const auto opts = features.options();
+    torch::Tensor outFeatures =
+        torch::zeros({C, (int64_t)imageHeight, (int64_t)imageWidth, (int64_t)NUM_CHANNELS}, opts);
+    torch::Tensor outAlphas = torch::zeros({C, (int64_t)imageHeight, (int64_t)imageWidth, 1}, opts);
+    torch::Tensor outLastIds =
+        torch::zeros({C, (int64_t)imageHeight, (int64_t)imageWidth},
+                     torch::TensorOptions().dtype(torch::kInt32).device(features.device()));
+
+    const uint32_t tileExtentW = (imageWidth + tileSize - 1) / tileSize;
+    const uint32_t tileExtentH = (imageHeight + tileSize - 1) / tileSize;
+    const uint32_t blockCount  = C * tileExtentH * tileExtentW;
+    if (blockCount > 0) {
+        auto stream = at::cuda::getCurrentCUDAStream(means.device().index());
+        launchForwardKernel<NUM_CHANNELS, Camera>(means,
+                                                  quats,
+                                                  logScales,
+                                                  features,
+                                                  opacities,
+                                                  camera,
+                                                  imageWidth,
+                                                  imageHeight,
+                                                  imageOriginW,
+                                                  imageOriginH,
+                                                  tileSize,
+                                                  tileOffsets,
+                                                  tileGaussianIds,
+                                                  backgrounds,
+                                                  masks,
+                                                  outFeatures,
+                                                  outAlphas,
+                                                  outLastIds,
+                                                  0,
+                                                  blockCount,
+                                                  stream);
+    }
+    return {outFeatures, outAlphas, outLastIds};
+}
+
+template <uint32_t NUM_CHANNELS, typename Camera>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
+launchForwardPrivateUse1(const torch::Tensor &means,
+                         const torch::Tensor &quats,
+                         const torch::Tensor &logScales,
+                         const torch::Tensor &features,
+                         const torch::Tensor &opacities,
+                         const Camera &camera,
+                         const uint32_t imageWidth,
+                         const uint32_t imageHeight,
+                         const uint32_t imageOriginW,
+                         const uint32_t imageOriginH,
+                         const uint32_t tileSize,
+                         const torch::Tensor &tileOffsets,
+                         const torch::Tensor &tileGaussianIds,
+                         const at::optional<torch::Tensor> &backgrounds,
+                         const at::optional<torch::Tensor> &masks) {
+    TORCH_CHECK(tileSize > 0, "Tile size must be greater than 0");
+
+    const int64_t C               = features.size(0);
+    const uint32_t tileExtentW    = (imageWidth + tileSize - 1) / tileSize;
+    const uint32_t tileExtentH    = (imageHeight + tileSize - 1) / tileSize;
+    const uint32_t tilesPerCamera = tileExtentH * tileExtentW;
+    const uint32_t tileCount      = C * tilesPerCamera;
+
+    // Every in-bounds pixel is written by exactly one tile, including masked tiles and tiles with
+    // no intersections, so the managed outputs do not need a separate initialization kernel.
+    const auto opts = features.options();
+    torch::Tensor outFeatures =
+        torch::empty({C, (int64_t)imageHeight, (int64_t)imageWidth, (int64_t)NUM_CHANNELS}, opts);
+    torch::Tensor outAlphas = torch::empty({C, (int64_t)imageHeight, (int64_t)imageWidth, 1}, opts);
+    torch::Tensor outLastIds =
+        torch::empty({C, (int64_t)imageHeight, (int64_t)imageWidth}, opts.dtype(torch::kInt32));
+
+    if (tileCount == 0) {
+        return {outFeatures, outAlphas, outLastIds};
+    }
+
+    const at::optional<torch::Tensor> contiguousBackgrounds =
+        backgrounds.has_value() ? std::make_optional(backgrounds.value().contiguous())
+                                : std::nullopt;
+    const at::optional<torch::Tensor> contiguousMasks =
+        masks.has_value() ? std::make_optional(masks.value().contiguous()) : std::nullopt;
+    const torch::Tensor contiguousTileOffsets     = tileOffsets.contiguous();
+    const torch::Tensor contiguousTileGaussianIds = tileGaussianIds.contiguous();
+
+    const auto deviceCount = c10::cuda::device_count();
+    std::vector<cudaEvent_t> events(deviceCount);
+    for (const auto deviceId: c10::irange(deviceCount)) {
+        C10_CUDA_CHECK(cudaSetDevice(deviceId));
+        auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+        C10_CUDA_CHECK(cudaEventCreateWithFlags(&events[deviceId], cudaEventDisableTiming));
+        C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
+    }
+
+    std::vector<torch::Tensor> tileTensors = {
+        contiguousTileOffsets, outFeatures, outAlphas, outLastIds};
+    if (contiguousMasks.has_value()) {
+        tileTensors.emplace_back(contiguousMasks.value());
+    }
+    std::vector<torch::Tensor> cameraTensors = {features, opacities};
+    if (contiguousBackgrounds.has_value()) {
+        cameraTensors.emplace_back(contiguousBackgrounds.value());
+    }
+
+    for (const auto deviceId: c10::irange(deviceCount)) {
+        C10_CUDA_CHECK(cudaSetDevice(deviceId));
+        auto stream = c10::cuda::getStreamFromPool(false, deviceId);
+        C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
+
+        const auto [deviceTileOffset, deviceTileCount] = deviceChunk(tileCount, deviceId);
+        if (deviceTileCount > 0) {
+            std::vector<void *> prefetchPointers;
+            std::vector<size_t> prefetchSizes;
+            const TilePrefetchRange tileRange{static_cast<uint32_t>(deviceTileOffset),
+                                              static_cast<uint32_t>(deviceTileCount),
+                                              tileExtentH,
+                                              tileExtentW,
+                                              imageHeight,
+                                              imageWidth,
+                                              tileSize};
+            appendPerTilePrefetchRanges(prefetchPointers, prefetchSizes, tileTensors, tileRange);
+            const uint32_t cameraOffset = static_cast<uint32_t>(deviceTileOffset) / tilesPerCamera;
+            const uint32_t cameraCount =
+                cuda::ceil_div(static_cast<uint32_t>(deviceTileOffset + deviceTileCount),
+                               tilesPerCamera) -
+                cameraOffset;
+            appendPerCameraPrefetchRanges(
+                prefetchPointers, prefetchSizes, cameraTensors, cameraOffset, cameraCount);
+            memPrefetchBatchAsync(prefetchPointers, prefetchSizes, deviceId, stream);
+        }
+        C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
+    }
+
+    for (const auto deviceId: c10::irange(deviceCount)) {
+        C10_CUDA_CHECK(cudaSetDevice(deviceId));
+        auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+        C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
+        C10_CUDA_CHECK(cudaEventDestroy(events[deviceId]));
+
+        const auto [deviceTileOffset, deviceTileCount] = deviceChunk(tileCount, deviceId);
+        if (deviceTileCount > 0) {
+            launchForwardKernel<NUM_CHANNELS, Camera>(means,
+                                                      quats,
+                                                      logScales,
+                                                      features,
+                                                      opacities,
+                                                      camera,
+                                                      imageWidth,
+                                                      imageHeight,
+                                                      imageOriginW,
+                                                      imageOriginH,
+                                                      tileSize,
+                                                      contiguousTileOffsets,
+                                                      contiguousTileGaussianIds,
+                                                      contiguousBackgrounds,
+                                                      contiguousMasks,
+                                                      outFeatures,
+                                                      outAlphas,
+                                                      outLastIds,
+                                                      static_cast<uint32_t>(deviceTileOffset),
+                                                      static_cast<uint32_t>(deviceTileCount),
+                                                      stream);
+        }
+    }
+
+    mergeStreams();
     return {outFeatures, outAlphas, outLastIds};
 }
 
@@ -341,10 +535,17 @@ dispatchGaussianRasterizeFromWorld3DGSForward<torch::kCUDA>(
     const at::optional<torch::Tensor> &masks) {
     FVDB_FUNC_RANGE();
 
-    const at::cuda::OptionalCUDAGuard device_guard(device_of(means));
+    const at::cuda::OptionalCUDAGuard deviceGuard(device_of(means));
 
     TORCH_CHECK_VALUE(means.is_cuda(), "means must be CUDA");
+    TORCH_CHECK_VALUE(quats.is_cuda(), "quats must be CUDA");
+    TORCH_CHECK_VALUE(logScales.is_cuda(), "logScales must be CUDA");
     TORCH_CHECK_VALUE(features.is_cuda(), "features must be CUDA");
+    TORCH_CHECK_VALUE(opacities.is_cuda(), "opacities must be CUDA");
+    TORCH_CHECK_VALUE(worldToCamMatricesStart.is_cuda(), "worldToCamMatricesStart must be CUDA");
+    TORCH_CHECK_VALUE(worldToCamMatricesEnd.is_cuda(), "worldToCamMatricesEnd must be CUDA");
+    TORCH_CHECK_VALUE(projectionMatrices.is_cuda(), "projectionMatrices must be CUDA");
+    TORCH_CHECK_VALUE(distortionCoeffs.is_cuda(), "distortionCoeffs must be CUDA");
     TORCH_CHECK_VALUE(tileOffsets.is_cuda(), "tileOffsets must be CUDA");
     TORCH_CHECK_VALUE(tileGaussianIds.is_cuda(), "tileGaussianIds must be CUDA");
     TORCH_CHECK_VALUE(tileOffsets.scalar_type() == torch::kInt64,
@@ -359,7 +560,6 @@ dispatchGaussianRasterizeFromWorld3DGSForward<torch::kCUDA>(
     const int64_t C = features.size(0);
     const int64_t N = means.size(0);
     TORCH_CHECK_VALUE(features.size(1) == N, "features must have shape [C,N,D] matching N");
-    TORCH_CHECK_VALUE(opacities.is_cuda(), "opacities must be CUDA");
 
     TORCH_CHECK_VALUE(opacities.dim() == 2, "opacities must have shape [C,N]");
     TORCH_CHECK_VALUE(opacities.size(0) == C && opacities.size(1) == N,
@@ -385,23 +585,23 @@ dispatchGaussianRasterizeFromWorld3DGSForward<torch::kCUDA>(
 
     const uint32_t channels = (uint32_t)features.size(2);
 
-#define CALL_FWD_WITH_OP(NCH, OP_TYPE, OP_VAL)              \
-    case NCH:                                               \
-        return launchForward<NCH, OP_TYPE>(means,           \
-                                           quats,           \
-                                           logScales,       \
-                                           features,        \
-                                           opacities,       \
-                                           OP_VAL,          \
-                                           imageWidth,      \
-                                           imageHeight,     \
-                                           imageOriginW,    \
-                                           imageOriginH,    \
-                                           tileSize,        \
-                                           tileOffsets,     \
-                                           tileGaussianIds, \
-                                           backgrounds,     \
-                                           masks);
+#define CALL_FWD_WITH_OP(NCH, OP_TYPE, OP_VAL)                  \
+    case NCH:                                                   \
+        return launchForwardCUDA<NCH, OP_TYPE>(means,           \
+                                               quats,           \
+                                               logScales,       \
+                                               features,        \
+                                               opacities,       \
+                                               OP_VAL,          \
+                                               imageWidth,      \
+                                               imageHeight,     \
+                                               imageOriginW,    \
+                                               imageOriginH,    \
+                                               tileSize,        \
+                                               tileOffsets,     \
+                                               tileGaussianIds, \
+                                               backgrounds,     \
+                                               masks);
 
     if (cameraModel == DistortionModel::ORTHOGRAPHIC) {
         const OrthographicWithDistortionCamera<float> camera{worldToCamMatricesStart,
@@ -415,26 +615,26 @@ dispatchGaussianRasterizeFromWorld3DGSForward<torch::kCUDA>(
                                                              rollingShutterType};
         switch (channels) {
             CALL_FWD_WITH_OP(1, OrthographicWithDistortionCamera<float>, camera)
-            CALL_FWD_WITH_OP(2, OrthographicWithDistortionCamera<float>, camera)
+            // CALL_FWD_WITH_OP(2, OrthographicWithDistortionCamera<float>, camera)
             CALL_FWD_WITH_OP(3, OrthographicWithDistortionCamera<float>, camera)
             CALL_FWD_WITH_OP(4, OrthographicWithDistortionCamera<float>, camera)
-            CALL_FWD_WITH_OP(5, OrthographicWithDistortionCamera<float>, camera)
-            CALL_FWD_WITH_OP(8, OrthographicWithDistortionCamera<float>, camera)
-            CALL_FWD_WITH_OP(9, OrthographicWithDistortionCamera<float>, camera)
-            CALL_FWD_WITH_OP(16, OrthographicWithDistortionCamera<float>, camera)
-            CALL_FWD_WITH_OP(17, OrthographicWithDistortionCamera<float>, camera)
-            CALL_FWD_WITH_OP(32, OrthographicWithDistortionCamera<float>, camera)
-            CALL_FWD_WITH_OP(33, OrthographicWithDistortionCamera<float>, camera)
-            CALL_FWD_WITH_OP(64, OrthographicWithDistortionCamera<float>, camera)
-            CALL_FWD_WITH_OP(65, OrthographicWithDistortionCamera<float>, camera)
-            CALL_FWD_WITH_OP(128, OrthographicWithDistortionCamera<float>, camera)
-            CALL_FWD_WITH_OP(129, OrthographicWithDistortionCamera<float>, camera)
-            CALL_FWD_WITH_OP(192, OrthographicWithDistortionCamera<float>, camera)
-            CALL_FWD_WITH_OP(193, OrthographicWithDistortionCamera<float>, camera)
-            CALL_FWD_WITH_OP(256, OrthographicWithDistortionCamera<float>, camera)
-            CALL_FWD_WITH_OP(257, OrthographicWithDistortionCamera<float>, camera)
-            CALL_FWD_WITH_OP(512, OrthographicWithDistortionCamera<float>, camera)
-            CALL_FWD_WITH_OP(513, OrthographicWithDistortionCamera<float>, camera)
+            // CALL_FWD_WITH_OP(5, OrthographicWithDistortionCamera<float>, camera)
+            // CALL_FWD_WITH_OP(8, OrthographicWithDistortionCamera<float>, camera)
+            // CALL_FWD_WITH_OP(9, OrthographicWithDistortionCamera<float>, camera)
+            // CALL_FWD_WITH_OP(16, OrthographicWithDistortionCamera<float>, camera)
+            // CALL_FWD_WITH_OP(17, OrthographicWithDistortionCamera<float>, camera)
+            // CALL_FWD_WITH_OP(32, OrthographicWithDistortionCamera<float>, camera)
+            // CALL_FWD_WITH_OP(33, OrthographicWithDistortionCamera<float>, camera)
+            // CALL_FWD_WITH_OP(64, OrthographicWithDistortionCamera<float>, camera)
+            // CALL_FWD_WITH_OP(65, OrthographicWithDistortionCamera<float>, camera)
+            // CALL_FWD_WITH_OP(128, OrthographicWithDistortionCamera<float>, camera)
+            // CALL_FWD_WITH_OP(129, OrthographicWithDistortionCamera<float>, camera)
+            // CALL_FWD_WITH_OP(192, OrthographicWithDistortionCamera<float>, camera)
+            // CALL_FWD_WITH_OP(193, OrthographicWithDistortionCamera<float>, camera)
+            // CALL_FWD_WITH_OP(256, OrthographicWithDistortionCamera<float>, camera)
+            // CALL_FWD_WITH_OP(257, OrthographicWithDistortionCamera<float>, camera)
+            // CALL_FWD_WITH_OP(512, OrthographicWithDistortionCamera<float>, camera)
+            // CALL_FWD_WITH_OP(513, OrthographicWithDistortionCamera<float>, camera)
         default:
             TORCH_CHECK_VALUE(
                 false, "Unsupported channels for rasterize-from-world-3dgs: ", channels);
@@ -454,26 +654,26 @@ dispatchGaussianRasterizeFromWorld3DGSForward<torch::kCUDA>(
                                                             cameraModel};
         switch (channels) {
             CALL_FWD_WITH_OP(1, PerspectiveWithDistortionCamera<float>, camera)
-            CALL_FWD_WITH_OP(2, PerspectiveWithDistortionCamera<float>, camera)
+            // CALL_FWD_WITH_OP(2, PerspectiveWithDistortionCamera<float>, camera)
             CALL_FWD_WITH_OP(3, PerspectiveWithDistortionCamera<float>, camera)
             CALL_FWD_WITH_OP(4, PerspectiveWithDistortionCamera<float>, camera)
-            CALL_FWD_WITH_OP(5, PerspectiveWithDistortionCamera<float>, camera)
-            CALL_FWD_WITH_OP(8, PerspectiveWithDistortionCamera<float>, camera)
-            CALL_FWD_WITH_OP(9, PerspectiveWithDistortionCamera<float>, camera)
-            CALL_FWD_WITH_OP(16, PerspectiveWithDistortionCamera<float>, camera)
-            CALL_FWD_WITH_OP(17, PerspectiveWithDistortionCamera<float>, camera)
-            CALL_FWD_WITH_OP(32, PerspectiveWithDistortionCamera<float>, camera)
-            CALL_FWD_WITH_OP(33, PerspectiveWithDistortionCamera<float>, camera)
-            CALL_FWD_WITH_OP(64, PerspectiveWithDistortionCamera<float>, camera)
-            CALL_FWD_WITH_OP(65, PerspectiveWithDistortionCamera<float>, camera)
-            CALL_FWD_WITH_OP(128, PerspectiveWithDistortionCamera<float>, camera)
-            CALL_FWD_WITH_OP(129, PerspectiveWithDistortionCamera<float>, camera)
-            CALL_FWD_WITH_OP(192, PerspectiveWithDistortionCamera<float>, camera)
-            CALL_FWD_WITH_OP(193, PerspectiveWithDistortionCamera<float>, camera)
-            CALL_FWD_WITH_OP(256, PerspectiveWithDistortionCamera<float>, camera)
-            CALL_FWD_WITH_OP(257, PerspectiveWithDistortionCamera<float>, camera)
-            CALL_FWD_WITH_OP(512, PerspectiveWithDistortionCamera<float>, camera)
-            CALL_FWD_WITH_OP(513, PerspectiveWithDistortionCamera<float>, camera)
+            // CALL_FWD_WITH_OP(5, PerspectiveWithDistortionCamera<float>, camera)
+            // CALL_FWD_WITH_OP(8, PerspectiveWithDistortionCamera<float>, camera)
+            // CALL_FWD_WITH_OP(9, PerspectiveWithDistortionCamera<float>, camera)
+            // CALL_FWD_WITH_OP(16, PerspectiveWithDistortionCamera<float>, camera)
+            // CALL_FWD_WITH_OP(17, PerspectiveWithDistortionCamera<float>, camera)
+            // CALL_FWD_WITH_OP(32, PerspectiveWithDistortionCamera<float>, camera)
+            // CALL_FWD_WITH_OP(33, PerspectiveWithDistortionCamera<float>, camera)
+            // CALL_FWD_WITH_OP(64, PerspectiveWithDistortionCamera<float>, camera)
+            // CALL_FWD_WITH_OP(65, PerspectiveWithDistortionCamera<float>, camera)
+            // CALL_FWD_WITH_OP(128, PerspectiveWithDistortionCamera<float>, camera)
+            // CALL_FWD_WITH_OP(129, PerspectiveWithDistortionCamera<float>, camera)
+            // CALL_FWD_WITH_OP(192, PerspectiveWithDistortionCamera<float>, camera)
+            // CALL_FWD_WITH_OP(193, PerspectiveWithDistortionCamera<float>, camera)
+            // CALL_FWD_WITH_OP(256, PerspectiveWithDistortionCamera<float>, camera)
+            // CALL_FWD_WITH_OP(257, PerspectiveWithDistortionCamera<float>, camera)
+            // CALL_FWD_WITH_OP(512, PerspectiveWithDistortionCamera<float>, camera)
+            // CALL_FWD_WITH_OP(513, PerspectiveWithDistortionCamera<float>, camera)
         default:
             TORCH_CHECK_VALUE(
                 false, "Unsupported channels for rasterize-from-world-3dgs: ", channels);
@@ -481,6 +681,144 @@ dispatchGaussianRasterizeFromWorld3DGSForward<torch::kCUDA>(
     }
 
 #undef CALL_FWD_WITH_OP
+}
+
+template <>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
+dispatchGaussianRasterizeFromWorld3DGSForward<torch::kPrivateUse1>(
+    const torch::Tensor &means,
+    const torch::Tensor &quats,
+    const torch::Tensor &logScales,
+    const torch::Tensor &features,
+    const torch::Tensor &opacities,
+    const torch::Tensor &worldToCamMatricesStart,
+    const torch::Tensor &worldToCamMatricesEnd,
+    const torch::Tensor &projectionMatrices,
+    const torch::Tensor &distortionCoeffs,
+    const RollingShutterType rollingShutterType,
+    const DistortionModel cameraModel,
+    const uint32_t imageWidth,
+    const uint32_t imageHeight,
+    const uint32_t imageOriginW,
+    const uint32_t imageOriginH,
+    const uint32_t tileSize,
+    const torch::Tensor &tileOffsets,
+    const torch::Tensor &tileGaussianIds,
+    const at::optional<torch::Tensor> &backgrounds,
+    const at::optional<torch::Tensor> &masks) {
+    FVDB_FUNC_RANGE();
+
+    TORCH_CHECK_VALUE(means.is_privateuseone(), "means must be PrivateUse1");
+    TORCH_CHECK_VALUE(quats.is_privateuseone(), "quats must be PrivateUse1");
+    TORCH_CHECK_VALUE(logScales.is_privateuseone(), "logScales must be PrivateUse1");
+    TORCH_CHECK_VALUE(features.is_privateuseone(), "features must be PrivateUse1");
+    TORCH_CHECK_VALUE(opacities.is_privateuseone(), "opacities must be PrivateUse1");
+    TORCH_CHECK_VALUE(worldToCamMatricesStart.is_privateuseone(),
+                      "worldToCamMatricesStart must be PrivateUse1");
+    TORCH_CHECK_VALUE(worldToCamMatricesEnd.is_privateuseone(),
+                      "worldToCamMatricesEnd must be PrivateUse1");
+    TORCH_CHECK_VALUE(projectionMatrices.is_privateuseone(),
+                      "projectionMatrices must be PrivateUse1");
+    TORCH_CHECK_VALUE(distortionCoeffs.is_privateuseone(), "distortionCoeffs must be PrivateUse1");
+    TORCH_CHECK_VALUE(tileOffsets.is_privateuseone(), "tileOffsets must be PrivateUse1");
+    TORCH_CHECK_VALUE(tileGaussianIds.is_privateuseone(), "tileGaussianIds must be PrivateUse1");
+    TORCH_CHECK_VALUE(tileOffsets.scalar_type() == torch::kInt64,
+                      "tileOffsets must have dtype int64");
+
+    TORCH_CHECK_VALUE(means.dim() == 2 && means.size(1) == 3, "means must have shape [N,3]");
+    TORCH_CHECK_VALUE(quats.dim() == 2 && quats.size(1) == 4, "quats must have shape [N,4]");
+    TORCH_CHECK_VALUE(logScales.dim() == 2 && logScales.size(1) == 3,
+                      "logScales must have shape [N,3]");
+    TORCH_CHECK_VALUE(features.dim() == 3, "features must have shape [C,N,D]");
+
+    const int64_t C = features.size(0);
+    const int64_t N = means.size(0);
+    TORCH_CHECK_VALUE(features.size(1) == N, "features must have shape [C,N,D] matching N");
+
+    TORCH_CHECK_VALUE(opacities.dim() == 2, "opacities must have shape [C,N]");
+    TORCH_CHECK_VALUE(opacities.size(0) == C && opacities.size(1) == N,
+                      "opacities must have shape [C,N] matching features and N");
+
+    TORCH_CHECK_VALUE(worldToCamMatricesStart.sizes() == torch::IntArrayRef({C, 4, 4}),
+                      "worldToCamMatricesStart must have shape [C,4,4]");
+    TORCH_CHECK_VALUE(worldToCamMatricesEnd.sizes() == torch::IntArrayRef({C, 4, 4}),
+                      "worldToCamMatricesEnd must have shape [C,4,4]");
+    TORCH_CHECK_VALUE(projectionMatrices.sizes() == torch::IntArrayRef({C, 3, 3}),
+                      "projectionMatrices must have shape [C,3,3]");
+
+    const int64_t numDistCoeffs = distortionCoeffs.size(1);
+    TORCH_CHECK_VALUE(distortionCoeffs.dim() == 2 && distortionCoeffs.size(0) == C,
+                      "distortionCoeffs must have shape [C,K]");
+    if (cameraModel == DistortionModel::OPENCV_RADTAN_5 ||
+        cameraModel == DistortionModel::OPENCV_RATIONAL_8 ||
+        cameraModel == DistortionModel::OPENCV_RADTAN_THIN_PRISM_9 ||
+        cameraModel == DistortionModel::OPENCV_THIN_PRISM_12) {
+        TORCH_CHECK_VALUE(numDistCoeffs == 12,
+                          "For DistortionModel::OPENCV_* distortionCoeffs must be [C,12]");
+    }
+
+    const uint32_t channels = (uint32_t)features.size(2);
+
+#define CALL_FWD_PRIVATEUSE1_WITH_OP(NCH, OP_TYPE, OP_VAL)             \
+    case NCH:                                                          \
+        return launchForwardPrivateUse1<NCH, OP_TYPE>(means,           \
+                                                      quats,           \
+                                                      logScales,       \
+                                                      features,        \
+                                                      opacities,       \
+                                                      OP_VAL,          \
+                                                      imageWidth,      \
+                                                      imageHeight,     \
+                                                      imageOriginW,    \
+                                                      imageOriginH,    \
+                                                      tileSize,        \
+                                                      tileOffsets,     \
+                                                      tileGaussianIds, \
+                                                      backgrounds,     \
+                                                      masks);
+
+    if (cameraModel == DistortionModel::ORTHOGRAPHIC) {
+        const OrthographicWithDistortionCamera<float> camera{worldToCamMatricesStart,
+                                                             worldToCamMatricesEnd,
+                                                             projectionMatrices,
+                                                             static_cast<uint32_t>(C),
+                                                             (int32_t)imageWidth,
+                                                             (int32_t)imageHeight,
+                                                             (int32_t)imageOriginW,
+                                                             (int32_t)imageOriginH,
+                                                             rollingShutterType};
+        switch (channels) {
+            CALL_FWD_PRIVATEUSE1_WITH_OP(1, OrthographicWithDistortionCamera<float>, camera)
+            CALL_FWD_PRIVATEUSE1_WITH_OP(3, OrthographicWithDistortionCamera<float>, camera)
+            CALL_FWD_PRIVATEUSE1_WITH_OP(4, OrthographicWithDistortionCamera<float>, camera)
+        default:
+            TORCH_CHECK_VALUE(
+                false, "Unsupported channels for rasterize-from-world-3dgs: ", channels);
+        }
+    } else {
+        const PerspectiveWithDistortionCamera<float> camera{worldToCamMatricesStart,
+                                                            worldToCamMatricesEnd,
+                                                            projectionMatrices,
+                                                            distortionCoeffs,
+                                                            static_cast<uint32_t>(C),
+                                                            distortionCoeffs.size(1),
+                                                            (int32_t)imageWidth,
+                                                            (int32_t)imageHeight,
+                                                            (int32_t)imageOriginW,
+                                                            (int32_t)imageOriginH,
+                                                            rollingShutterType,
+                                                            cameraModel};
+        switch (channels) {
+            CALL_FWD_PRIVATEUSE1_WITH_OP(1, PerspectiveWithDistortionCamera<float>, camera)
+            CALL_FWD_PRIVATEUSE1_WITH_OP(3, PerspectiveWithDistortionCamera<float>, camera)
+            CALL_FWD_PRIVATEUSE1_WITH_OP(4, PerspectiveWithDistortionCamera<float>, camera)
+        default:
+            TORCH_CHECK_VALUE(
+                false, "Unsupported channels for rasterize-from-world-3dgs: ", channels);
+        }
+    }
+
+#undef CALL_FWD_PRIVATEUSE1_WITH_OP
 }
 
 template <>
@@ -505,7 +843,7 @@ dispatchGaussianRasterizeFromWorld3DGSForward<torch::kCPU>(const torch::Tensor &
                                                            const torch::Tensor &,
                                                            const at::optional<torch::Tensor> &,
                                                            const at::optional<torch::Tensor> &) {
-    TORCH_CHECK_VALUE(false, "dispatchGaussianRasterizeFromWorld3DGSForward is CUDA-only");
+    TORCH_CHECK_VALUE(false, "dispatchGaussianRasterizeFromWorld3DGSForward is GPU-only");
 }
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
@@ -529,7 +867,7 @@ rasterizeWorldSpaceGaussiansFwd(const torch::Tensor &means,
                                 const torch::Tensor &tileGaussianIds,
                                 const at::optional<torch::Tensor> &backgrounds,
                                 const at::optional<torch::Tensor> &masks) {
-    return FVDB_DISPATCH_KERNEL_DEVICE(means.device(), [&]() {
+    return FVDB_DISPATCH_KERNEL(means.device(), [&]() {
         return dispatchGaussianRasterizeFromWorld3DGSForward<DeviceTag>(means,
                                                                         quats,
                                                                         logScales,

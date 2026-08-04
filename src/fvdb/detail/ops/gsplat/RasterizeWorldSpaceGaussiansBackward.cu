@@ -4,18 +4,25 @@
 #include <fvdb/detail/ops/gsplat/RasterizeWorldSpaceGaussiansBackward.h>
 #include <fvdb/detail/utils/Nvtx.h>
 #include <fvdb/detail/utils/Utils.h>
+#include <fvdb/detail/utils/cuda/Prefetch.h>
+#include <fvdb/detail/utils/cuda/Utils.cuh>
 #include <fvdb/detail/utils/cuda/WarpReduce.cuh>
 #include <fvdb/detail/utils/gsplat/GaussianRasterizeFromWorld.cuh>
 #include <fvdb/detail/utils/gsplat/GaussianRasterizeOptionalInputs.h>
 
+#include <nanovdb/util/cuda/Util.h>
+
 #include <ATen/cuda/Atomic.cuh>
 #include <ATen/cuda/CUDAContext.h>
+#include <ATen/ops/from_blob.h>
 #include <c10/cuda/CUDAGuard.h>
 #include <c10/util/Exception.h>
+#include <torch/csrc/cuda/nccl.h>
 
 #include <cooperative_groups.h>
 
 #include <cstdint>
+#include <vector>
 
 namespace fvdb::detail::ops {
 namespace cg = cooperative_groups;
@@ -34,6 +41,7 @@ template <uint32_t NUM_CHANNELS> struct SharedGaussian {
 template <uint32_t NUM_CHANNELS, typename Camera> struct RasterizeFromWorldBackwardArgs {
     RasterizeFromWorldCommonArgs commonArgs;
     Camera camera;
+    uint32_t blockOffset;
     // Forward outputs
     fvdb::TorchRAcc64<float, 4> renderedAlphas; // [C,H,W,1]
     fvdb::TorchRAcc64<int32_t, 3> lastIds;      // [C,H,W]
@@ -57,7 +65,7 @@ rasterizeFromWorld3DGSBackwardKernel(
     const auto &common       = args.commonArgs;
 
     uint32_t camId, tileRow, tileCol, row, col;
-    common.denseCoordinates(camId, tileRow, tileCol, row, col);
+    common.denseCoordinates(camId, tileRow, tileCol, row, col, args.blockOffset);
     const bool inside = (row < common.imageHeight && col < common.imageWidth);
 
     // Parity with classic rasterizer: masked tiles contribute nothing.
@@ -346,72 +354,69 @@ rasterizeFromWorld3DGSBackwardKernel(
                                               gid * args.dFeatures.stride(1);
 #pragma unroll
                 for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
-                    atomicAdd_system(dFeaturesGaussianPtr + k * args.dFeatures.stride(2),
-                                     v_feat_local[k]);
+                    atomicAdd(dFeaturesGaussianPtr + k * args.dFeatures.stride(2), v_feat_local[k]);
                 }
                 float *dOpacityGaussianPtr = args.dOpacities.data() +
                                              cid * args.dOpacities.stride(0) +
                                              gid * args.dOpacities.stride(1);
-                atomicAdd_system(dOpacityGaussianPtr, v_opacity_local);
+                atomicAdd(dOpacityGaussianPtr, v_opacity_local);
 
                 // Geometry grads (shared across cameras)
                 float *dMeansPtr = args.dMeans.data() + gid * args.dMeans.stride(0);
-                atomicAdd_system(dMeansPtr + 0 * args.dMeans.stride(1), v_mean_local[0]);
-                atomicAdd_system(dMeansPtr + 1 * args.dMeans.stride(1), v_mean_local[1]);
-                atomicAdd_system(dMeansPtr + 2 * args.dMeans.stride(1), v_mean_local[2]);
+                atomicAdd(dMeansPtr + 0 * args.dMeans.stride(1), v_mean_local[0]);
+                atomicAdd(dMeansPtr + 1 * args.dMeans.stride(1), v_mean_local[1]);
+                atomicAdd(dMeansPtr + 2 * args.dMeans.stride(1), v_mean_local[2]);
 
                 float *dQuatsPtr = args.dQuats.data() + gid * args.dQuats.stride(0);
-                atomicAdd_system(dQuatsPtr + 0 * args.dQuats.stride(1), v_quat_local[0]);
-                atomicAdd_system(dQuatsPtr + 1 * args.dQuats.stride(1), v_quat_local[1]);
-                atomicAdd_system(dQuatsPtr + 2 * args.dQuats.stride(1), v_quat_local[2]);
-                atomicAdd_system(dQuatsPtr + 3 * args.dQuats.stride(1), v_quat_local[3]);
+                atomicAdd(dQuatsPtr + 0 * args.dQuats.stride(1), v_quat_local[0]);
+                atomicAdd(dQuatsPtr + 1 * args.dQuats.stride(1), v_quat_local[1]);
+                atomicAdd(dQuatsPtr + 2 * args.dQuats.stride(1), v_quat_local[2]);
+                atomicAdd(dQuatsPtr + 3 * args.dQuats.stride(1), v_quat_local[3]);
 
                 float *dLogScalesPtr = args.dLogScales.data() + gid * args.dLogScales.stride(0);
-                atomicAdd_system(dLogScalesPtr + 0 * args.dLogScales.stride(1),
-                                 v_logscale_local[0]);
-                atomicAdd_system(dLogScalesPtr + 1 * args.dLogScales.stride(1),
-                                 v_logscale_local[1]);
-                atomicAdd_system(dLogScalesPtr + 2 * args.dLogScales.stride(1),
-                                 v_logscale_local[2]);
+                atomicAdd(dLogScalesPtr + 0 * args.dLogScales.stride(1), v_logscale_local[0]);
+                atomicAdd(dLogScalesPtr + 1 * args.dLogScales.stride(1), v_logscale_local[1]);
+                atomicAdd(dLogScalesPtr + 2 * args.dLogScales.stride(1), v_logscale_local[2]);
             }
         }
     }
 }
 
 template <uint32_t NUM_CHANNELS, typename Camera>
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
-launchBackward(const torch::Tensor &means,
-               const torch::Tensor &quats,
-               const torch::Tensor &logScales,
-               const torch::Tensor &features,
-               const torch::Tensor &opacities,
-               const Camera &camera,
-               const uint32_t imageWidth,
-               const uint32_t imageHeight,
-               const uint32_t imageOriginW,
-               const uint32_t imageOriginH,
-               const uint32_t tileSize,
-               const torch::Tensor &tileOffsets,
-               const torch::Tensor &tileGaussianIds,
-               const torch::Tensor &renderedAlphas,
-               const torch::Tensor &lastIds,
-               const torch::Tensor &dLossDRenderedFeatures,
-               const torch::Tensor &dLossDRenderedAlphas,
-               const at::optional<torch::Tensor> &backgrounds,
-               const at::optional<torch::Tensor> &masks) {
+void
+launchBackwardKernel(const torch::Tensor &means,
+                     const torch::Tensor &quats,
+                     const torch::Tensor &logScales,
+                     const torch::Tensor &features,
+                     const torch::Tensor &opacities,
+                     const Camera &camera,
+                     const uint32_t imageWidth,
+                     const uint32_t imageHeight,
+                     const uint32_t imageOriginW,
+                     const uint32_t imageOriginH,
+                     const uint32_t tileSize,
+                     const torch::Tensor &tileOffsets,
+                     const torch::Tensor &tileGaussianIds,
+                     const torch::Tensor &renderedAlphas,
+                     const torch::Tensor &lastIds,
+                     const torch::Tensor &dLossDRenderedFeatures,
+                     const torch::Tensor &dLossDRenderedAlphas,
+                     const at::optional<torch::Tensor> &backgrounds,
+                     const at::optional<torch::Tensor> &masks,
+                     const torch::Tensor &dMeans,
+                     const torch::Tensor &dQuats,
+                     const torch::Tensor &dLogScales,
+                     const torch::Tensor &dFeatures,
+                     const torch::Tensor &dOpacities,
+                     const uint32_t blockOffset,
+                     const uint32_t blockCount,
+                     const cudaStream_t stream) {
     const int64_t C = features.size(0);
-    const int64_t N = means.size(0);
-
-    torch::Tensor dMeans     = torch::zeros_like(means);
-    torch::Tensor dQuats     = torch::zeros_like(quats);
-    torch::Tensor dLogScales = torch::zeros_like(logScales);
-    torch::Tensor dFeatures  = torch::zeros_like(features);
-    torch::Tensor dOpacities = torch::zeros_like(opacities);
 
     const uint32_t tileExtentW = (imageWidth + tileSize - 1) / tileSize;
     const uint32_t tileExtentH = (imageHeight + tileSize - 1) / tileSize;
     const dim3 blockDim(tileSize, tileSize, 1);
-    const dim3 gridDim(C * tileExtentH * tileExtentW, 1, 1);
+    const dim3 gridDim(blockCount, 1, 1);
     const int64_t totalIntersections = tileGaussianIds.size(0);
 
     RasterizeFromWorldCommonArgs args{
@@ -448,6 +453,7 @@ launchBackward(const torch::Tensor &means,
     RasterizeFromWorldBackwardArgs<NUM_CHANNELS, Camera> kernelArgs{
         args,
         camera,
+        blockOffset,
         renderedAlphas.packed_accessor64<float, 4, torch::RestrictPtrTraits>(),
         lastIds.packed_accessor64<int32_t, 3, torch::RestrictPtrTraits>(),
         dLossDRenderedFeatures.packed_accessor64<float, 4, torch::RestrictPtrTraits>(),
@@ -458,10 +464,308 @@ launchBackward(const torch::Tensor &means,
         dFeatures.packed_accessor64<float, 3, torch::RestrictPtrTraits>(),
         dOpacities.packed_accessor64<float, 2, torch::RestrictPtrTraits>()};
 
-    auto stream = at::cuda::getCurrentCUDAStream(means.device().index());
+    if (cudaFuncSetAttribute(rasterizeFromWorld3DGSBackwardKernel<NUM_CHANNELS, Camera>,
+                             cudaFuncAttributeMaxDynamicSharedMemorySize,
+                             sharedMem) != cudaSuccess) {
+        AT_ERROR("Failed to set maximum shared memory size (requested ",
+                 sharedMem,
+                 " bytes), try lowering tile size or camera batch size.");
+    }
+
     rasterizeFromWorld3DGSBackwardKernel<NUM_CHANNELS, Camera>
         <<<gridDim, blockDim, sharedMem, stream>>>(kernelArgs);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
+}
+
+template <uint32_t NUM_CHANNELS, typename Camera>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+launchBackwardCUDA(const torch::Tensor &means,
+                   const torch::Tensor &quats,
+                   const torch::Tensor &logScales,
+                   const torch::Tensor &features,
+                   const torch::Tensor &opacities,
+                   const Camera &camera,
+                   const uint32_t imageWidth,
+                   const uint32_t imageHeight,
+                   const uint32_t imageOriginW,
+                   const uint32_t imageOriginH,
+                   const uint32_t tileSize,
+                   const torch::Tensor &tileOffsets,
+                   const torch::Tensor &tileGaussianIds,
+                   const torch::Tensor &renderedAlphas,
+                   const torch::Tensor &lastIds,
+                   const torch::Tensor &dLossDRenderedFeatures,
+                   const torch::Tensor &dLossDRenderedAlphas,
+                   const at::optional<torch::Tensor> &backgrounds,
+                   const at::optional<torch::Tensor> &masks) {
+    torch::Tensor dMeans     = torch::zeros_like(means);
+    torch::Tensor dQuats     = torch::zeros_like(quats);
+    torch::Tensor dLogScales = torch::zeros_like(logScales);
+    torch::Tensor dFeatures  = torch::zeros_like(features);
+    torch::Tensor dOpacities = torch::zeros_like(opacities);
+
+    const uint32_t tileExtentW = (imageWidth + tileSize - 1) / tileSize;
+    const uint32_t tileExtentH = (imageHeight + tileSize - 1) / tileSize;
+    const uint32_t blockCount  = features.size(0) * tileExtentH * tileExtentW;
+    if (blockCount > 0) {
+        auto stream = at::cuda::getCurrentCUDAStream(means.device().index());
+        launchBackwardKernel<NUM_CHANNELS, Camera>(means,
+                                                   quats,
+                                                   logScales,
+                                                   features,
+                                                   opacities,
+                                                   camera,
+                                                   imageWidth,
+                                                   imageHeight,
+                                                   imageOriginW,
+                                                   imageOriginH,
+                                                   tileSize,
+                                                   tileOffsets,
+                                                   tileGaussianIds,
+                                                   renderedAlphas,
+                                                   lastIds,
+                                                   dLossDRenderedFeatures,
+                                                   dLossDRenderedAlphas,
+                                                   backgrounds,
+                                                   masks,
+                                                   dMeans,
+                                                   dQuats,
+                                                   dLogScales,
+                                                   dFeatures,
+                                                   dOpacities,
+                                                   0,
+                                                   blockCount,
+                                                   stream);
+    }
+    return {dMeans, dQuats, dLogScales, dFeatures, dOpacities};
+}
+
+template <typename ScalarType>
+void
+reduceGradientShards(std::vector<torch::Tensor> &localGradients, torch::Tensor &outputGradient) {
+    const int64_t numElements = localGradients.front().numel();
+    std::vector<torch::Tensor> reducedShards(c10::cuda::device_count());
+    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+        const auto [shardOffset, shardSize] = deviceChunk(numElements, deviceId);
+        if (shardSize == 0) {
+            continue;
+        }
+
+        reducedShards[deviceId] =
+            localGradients[deviceId].view({-1}).narrow(0, shardOffset, shardSize);
+    }
+
+    if (numElements % c10::cuda::device_count() == 0) {
+        torch::cuda::nccl::reduce_scatter(localGradients, reducedShards);
+    } else {
+        // NCCL reduce-scatter requires equally sized shards. For an uneven tensor, reduce each
+        // ceil-divided shard into its owning device's local receive slice.
+        for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+            const auto [shardOffset, shardSize] = deviceChunk(numElements, deviceId);
+            if (shardSize == 0) {
+                continue;
+            }
+
+            std::vector<torch::Tensor> inputShards;
+            inputShards.reserve(c10::cuda::device_count());
+            for (const auto sourceDeviceId: c10::irange(c10::cuda::device_count())) {
+                inputShards.emplace_back(
+                    localGradients[sourceDeviceId].view({-1}).narrow(0, shardOffset, shardSize));
+            }
+            torch::cuda::nccl::reduce(
+                inputShards, reducedShards[deviceId], static_cast<int32_t>(deviceId));
+        }
+    }
+
+    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+        const auto [shardOffset, shardSize] = deviceChunk(numElements, deviceId);
+        if (shardSize == 0) {
+            continue;
+        }
+
+        C10_CUDA_CHECK(cudaSetDevice(deviceId));
+        auto stream          = c10::cuda::getCurrentCUDAStream(deviceId);
+        auto *outputShardPtr = outputGradient.data_ptr<ScalarType>() + shardOffset;
+        C10_CUDA_CHECK(nanovdb::util::cuda::memPrefetchAsync(
+            outputShardPtr, shardSize * sizeof(ScalarType), deviceId, stream));
+        C10_CUDA_CHECK(cudaMemcpyAsync(outputShardPtr,
+                                       reducedShards[deviceId].data_ptr<ScalarType>(),
+                                       shardSize * sizeof(ScalarType),
+                                       cudaMemcpyDeviceToDevice,
+                                       stream));
+    }
+}
+
+template <uint32_t NUM_CHANNELS, typename Camera>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+launchBackwardPrivateUse1(const torch::Tensor &means,
+                          const torch::Tensor &quats,
+                          const torch::Tensor &logScales,
+                          const torch::Tensor &features,
+                          const torch::Tensor &opacities,
+                          const Camera &camera,
+                          const uint32_t imageWidth,
+                          const uint32_t imageHeight,
+                          const uint32_t imageOriginW,
+                          const uint32_t imageOriginH,
+                          const uint32_t tileSize,
+                          const torch::Tensor &tileOffsets,
+                          const torch::Tensor &tileGaussianIds,
+                          const torch::Tensor &renderedAlphas,
+                          const torch::Tensor &lastIds,
+                          const torch::Tensor &dLossDRenderedFeatures,
+                          const torch::Tensor &dLossDRenderedAlphas,
+                          const at::optional<torch::Tensor> &backgrounds,
+                          const at::optional<torch::Tensor> &masks) {
+    TORCH_CHECK(tileSize > 0, "Tile size must be greater than 0");
+
+    const uint32_t tileExtentW = (imageWidth + tileSize - 1) / tileSize;
+    const uint32_t tileExtentH = (imageHeight + tileSize - 1) / tileSize;
+    const uint32_t tileCount   = features.size(0) * tileExtentH * tileExtentW;
+    if (means.numel() == 0 || tileGaussianIds.numel() == 0 || tileCount == 0) {
+        return {torch::zeros_like(means),
+                torch::zeros_like(quats),
+                torch::zeros_like(logScales),
+                torch::zeros_like(features),
+                torch::zeros_like(opacities)};
+    }
+
+    // Each GPU accumulates into device-local buffers. The managed outputs are populated after the
+    // local gradients have been reduced across devices.
+    torch::Tensor dMeans     = torch::empty(means.sizes(), means.options());
+    torch::Tensor dQuats     = torch::empty(quats.sizes(), quats.options());
+    torch::Tensor dLogScales = torch::empty(logScales.sizes(), logScales.options());
+    torch::Tensor dFeatures  = torch::empty(features.sizes(), features.options());
+    torch::Tensor dOpacities = torch::empty(opacities.sizes(), opacities.options());
+
+    const at::optional<torch::Tensor> contiguousBackgrounds =
+        backgrounds.has_value() ? std::make_optional(backgrounds.value().contiguous())
+                                : std::nullopt;
+    const at::optional<torch::Tensor> contiguousMasks =
+        masks.has_value() ? std::make_optional(masks.value().contiguous()) : std::nullopt;
+
+    const auto deviceCount = c10::cuda::device_count();
+    TORCH_CHECK(deviceCount > 0, "PrivateUse1 rasterization requires at least one CUDA device");
+    std::vector<cudaEvent_t> events(deviceCount);
+    std::vector<float *> dMeansLocalPtrs(deviceCount, nullptr);
+    std::vector<float *> dQuatsLocalPtrs(deviceCount, nullptr);
+    std::vector<float *> dLogScalesLocalPtrs(deviceCount, nullptr);
+    std::vector<float *> dFeaturesLocalPtrs(deviceCount, nullptr);
+    std::vector<float *> dOpacitiesLocalPtrs(deviceCount, nullptr);
+    std::vector<torch::Tensor> dMeansLocals(deviceCount);
+    std::vector<torch::Tensor> dQuatsLocals(deviceCount);
+    std::vector<torch::Tensor> dLogScalesLocals(deviceCount);
+    std::vector<torch::Tensor> dFeaturesLocals(deviceCount);
+    std::vector<torch::Tensor> dOpacitiesLocals(deviceCount);
+
+    for (const auto deviceId: c10::irange(deviceCount)) {
+        C10_CUDA_CHECK(cudaSetDevice(deviceId));
+        auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+        C10_CUDA_CHECK(cudaEventCreateWithFlags(&events[deviceId], cudaEventDisableTiming));
+        C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
+    }
+
+    std::vector<torch::Tensor> tileTensors = {
+        renderedAlphas, lastIds, dLossDRenderedFeatures, dLossDRenderedAlphas};
+    if (contiguousMasks.has_value()) {
+        tileTensors.emplace_back(contiguousMasks.value());
+    }
+
+    for (const auto deviceId: c10::irange(deviceCount)) {
+        C10_CUDA_CHECK(cudaSetDevice(deviceId));
+        auto stream = c10::cuda::getStreamFromPool(false, deviceId);
+        C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
+
+        const auto [deviceTileOffset, deviceTileCount] = deviceChunk(tileCount, deviceId);
+        if (deviceTileCount > 0) {
+            std::vector<void *> prefetchPointers;
+            std::vector<size_t> prefetchSizes;
+            const TilePrefetchRange tileRange{static_cast<uint32_t>(deviceTileOffset),
+                                              static_cast<uint32_t>(deviceTileCount),
+                                              tileExtentH,
+                                              tileExtentW,
+                                              imageHeight,
+                                              imageWidth,
+                                              tileSize};
+            appendPerTilePrefetchRanges(prefetchPointers, prefetchSizes, tileTensors, tileRange);
+            memPrefetchBatchAsync(prefetchPointers, prefetchSizes, deviceId, stream);
+        }
+        C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
+    }
+
+    for (const auto deviceId: c10::irange(deviceCount)) {
+        C10_CUDA_CHECK(cudaSetDevice(deviceId));
+        auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+        C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
+        C10_CUDA_CHECK(cudaEventDestroy(events[deviceId]));
+
+        const auto [deviceTileOffset, deviceTileCount] = deviceChunk(tileCount, deviceId);
+        const auto localTensorOptions =
+            at::TensorOptions().dtype(means.scalar_type()).device(at::kCUDA, deviceId);
+
+        const auto allocateLocalGradient = [&](const torch::Tensor &like, float *&ptr) {
+            const size_t numBytes = like.numel() * like.element_size();
+            C10_CUDA_CHECK(cudaMallocAsync(&ptr, numBytes, stream));
+            C10_CUDA_CHECK(cudaMemsetAsync(ptr, 0, numBytes, stream));
+            return at::from_blob(ptr, like.sizes(), localTensorOptions);
+        };
+
+        dMeansLocals[deviceId] = allocateLocalGradient(means, dMeansLocalPtrs[deviceId]);
+        dQuatsLocals[deviceId] = allocateLocalGradient(quats, dQuatsLocalPtrs[deviceId]);
+        dLogScalesLocals[deviceId] =
+            allocateLocalGradient(logScales, dLogScalesLocalPtrs[deviceId]);
+        dFeaturesLocals[deviceId] = allocateLocalGradient(features, dFeaturesLocalPtrs[deviceId]);
+        dOpacitiesLocals[deviceId] =
+            allocateLocalGradient(opacities, dOpacitiesLocalPtrs[deviceId]);
+
+        if (deviceTileCount > 0) {
+            launchBackwardKernel<NUM_CHANNELS, Camera>(means,
+                                                       quats,
+                                                       logScales,
+                                                       features,
+                                                       opacities,
+                                                       camera,
+                                                       imageWidth,
+                                                       imageHeight,
+                                                       imageOriginW,
+                                                       imageOriginH,
+                                                       tileSize,
+                                                       tileOffsets,
+                                                       tileGaussianIds,
+                                                       renderedAlphas,
+                                                       lastIds,
+                                                       dLossDRenderedFeatures,
+                                                       dLossDRenderedAlphas,
+                                                       contiguousBackgrounds,
+                                                       contiguousMasks,
+                                                       dMeansLocals[deviceId],
+                                                       dQuatsLocals[deviceId],
+                                                       dLogScalesLocals[deviceId],
+                                                       dFeaturesLocals[deviceId],
+                                                       dOpacitiesLocals[deviceId],
+                                                       static_cast<uint32_t>(deviceTileOffset),
+                                                       static_cast<uint32_t>(deviceTileCount),
+                                                       stream);
+        }
+    }
+
+    reduceGradientShards<float>(dMeansLocals, dMeans);
+    reduceGradientShards<float>(dQuatsLocals, dQuats);
+    reduceGradientShards<float>(dLogScalesLocals, dLogScales);
+    reduceGradientShards<float>(dFeaturesLocals, dFeatures);
+    reduceGradientShards<float>(dOpacitiesLocals, dOpacities);
+
+    for (const auto deviceId: c10::irange(deviceCount)) {
+        C10_CUDA_CHECK(cudaSetDevice(deviceId));
+        auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+        C10_CUDA_CHECK(cudaFreeAsync(dMeansLocalPtrs[deviceId], stream));
+        C10_CUDA_CHECK(cudaFreeAsync(dQuatsLocalPtrs[deviceId], stream));
+        C10_CUDA_CHECK(cudaFreeAsync(dLogScalesLocalPtrs[deviceId], stream));
+        C10_CUDA_CHECK(cudaFreeAsync(dFeaturesLocalPtrs[deviceId], stream));
+        C10_CUDA_CHECK(cudaFreeAsync(dOpacitiesLocalPtrs[deviceId], stream));
+    }
+
+    mergeStreams();
     return {dMeans, dQuats, dLogScales, dFeatures, dOpacities};
 }
 
@@ -534,6 +838,23 @@ dispatchGaussianRasterizeFromWorld3DGSBackward<torch::kCUDA>(
                       "tileOffsets must have dtype int64");
     TORCH_CHECK_VALUE(lastIds.scalar_type() == torch::kInt32, "lastIds must have dtype int32");
 
+    const auto checkFloat32 = [](const torch::Tensor &tensor, const char *name) {
+        TORCH_CHECK_VALUE(
+            tensor.scalar_type() == torch::kFloat32, name, " must have dtype float32");
+    };
+    checkFloat32(means, "means");
+    checkFloat32(quats, "quats");
+    checkFloat32(logScales, "logScales");
+    checkFloat32(features, "features");
+    checkFloat32(opacities, "opacities");
+    checkFloat32(worldToCamMatricesStart, "worldToCamMatricesStart");
+    checkFloat32(worldToCamMatricesEnd, "worldToCamMatricesEnd");
+    checkFloat32(projectionMatrices, "projectionMatrices");
+    checkFloat32(distortionCoeffs, "distortionCoeffs");
+    checkFloat32(renderedAlphas, "renderedAlphas");
+    checkFloat32(dLossDRenderedFeatures, "dLossDRenderedFeatures");
+    checkFloat32(dLossDRenderedAlphas, "dLossDRenderedAlphas");
+
     const int64_t C = features.size(0);
     const int64_t N = means.size(0);
 
@@ -543,27 +864,27 @@ dispatchGaussianRasterizeFromWorld3DGSBackward<torch::kCUDA>(
 
     const uint32_t channels = (uint32_t)features.size(2);
 
-#define CALL_BWD_WITH_OP(NCH, OP_TYPE, OP_VAL)                      \
-    case NCH:                                                       \
-        return launchBackward<NCH, OP_TYPE>(means,                  \
-                                            quats,                  \
-                                            logScales,              \
-                                            features,               \
-                                            opacities,              \
-                                            OP_VAL,                 \
-                                            imageWidth,             \
-                                            imageHeight,            \
-                                            imageOriginW,           \
-                                            imageOriginH,           \
-                                            tileSize,               \
-                                            tileOffsets,            \
-                                            tileGaussianIds,        \
-                                            renderedAlphas,         \
-                                            lastIds,                \
-                                            dLossDRenderedFeatures, \
-                                            dLossDRenderedAlphas,   \
-                                            backgrounds,            \
-                                            masks);
+#define CALL_BWD_WITH_OP(NCH, OP_TYPE, OP_VAL)                          \
+    case NCH:                                                           \
+        return launchBackwardCUDA<NCH, OP_TYPE>(means,                  \
+                                                quats,                  \
+                                                logScales,              \
+                                                features,               \
+                                                opacities,              \
+                                                OP_VAL,                 \
+                                                imageWidth,             \
+                                                imageHeight,            \
+                                                imageOriginW,           \
+                                                imageOriginH,           \
+                                                tileSize,               \
+                                                tileOffsets,            \
+                                                tileGaussianIds,        \
+                                                renderedAlphas,         \
+                                                lastIds,                \
+                                                dLossDRenderedFeatures, \
+                                                dLossDRenderedAlphas,   \
+                                                backgrounds,            \
+                                                masks);
 
     if (cameraModel == DistortionModel::ORTHOGRAPHIC) {
         const OrthographicWithDistortionCamera<float> camera{worldToCamMatricesStart,
@@ -577,26 +898,26 @@ dispatchGaussianRasterizeFromWorld3DGSBackward<torch::kCUDA>(
                                                              rollingShutterType};
         switch (channels) {
             CALL_BWD_WITH_OP(1, OrthographicWithDistortionCamera<float>, camera)
-            CALL_BWD_WITH_OP(2, OrthographicWithDistortionCamera<float>, camera)
+            // CALL_BWD_WITH_OP(2, OrthographicWithDistortionCamera<float>, camera)
             CALL_BWD_WITH_OP(3, OrthographicWithDistortionCamera<float>, camera)
             CALL_BWD_WITH_OP(4, OrthographicWithDistortionCamera<float>, camera)
-            CALL_BWD_WITH_OP(5, OrthographicWithDistortionCamera<float>, camera)
-            CALL_BWD_WITH_OP(8, OrthographicWithDistortionCamera<float>, camera)
-            CALL_BWD_WITH_OP(9, OrthographicWithDistortionCamera<float>, camera)
-            CALL_BWD_WITH_OP(16, OrthographicWithDistortionCamera<float>, camera)
-            CALL_BWD_WITH_OP(17, OrthographicWithDistortionCamera<float>, camera)
-            CALL_BWD_WITH_OP(32, OrthographicWithDistortionCamera<float>, camera)
-            CALL_BWD_WITH_OP(33, OrthographicWithDistortionCamera<float>, camera)
-            CALL_BWD_WITH_OP(64, OrthographicWithDistortionCamera<float>, camera)
-            CALL_BWD_WITH_OP(65, OrthographicWithDistortionCamera<float>, camera)
-            CALL_BWD_WITH_OP(128, OrthographicWithDistortionCamera<float>, camera)
-            CALL_BWD_WITH_OP(129, OrthographicWithDistortionCamera<float>, camera)
-            CALL_BWD_WITH_OP(192, OrthographicWithDistortionCamera<float>, camera)
-            CALL_BWD_WITH_OP(193, OrthographicWithDistortionCamera<float>, camera)
-            CALL_BWD_WITH_OP(256, OrthographicWithDistortionCamera<float>, camera)
-            CALL_BWD_WITH_OP(257, OrthographicWithDistortionCamera<float>, camera)
-            CALL_BWD_WITH_OP(512, OrthographicWithDistortionCamera<float>, camera)
-            CALL_BWD_WITH_OP(513, OrthographicWithDistortionCamera<float>, camera)
+            // CALL_BWD_WITH_OP(5, OrthographicWithDistortionCamera<float>, camera)
+            // CALL_BWD_WITH_OP(8, OrthographicWithDistortionCamera<float>, camera)
+            // CALL_BWD_WITH_OP(9, OrthographicWithDistortionCamera<float>, camera)
+            // CALL_BWD_WITH_OP(16, OrthographicWithDistortionCamera<float>, camera)
+            // CALL_BWD_WITH_OP(17, OrthographicWithDistortionCamera<float>, camera)
+            // CALL_BWD_WITH_OP(32, OrthographicWithDistortionCamera<float>, camera)
+            // CALL_BWD_WITH_OP(33, OrthographicWithDistortionCamera<float>, camera)
+            // CALL_BWD_WITH_OP(64, OrthographicWithDistortionCamera<float>, camera)
+            // CALL_BWD_WITH_OP(65, OrthographicWithDistortionCamera<float>, camera)
+            // CALL_BWD_WITH_OP(128, OrthographicWithDistortionCamera<float>, camera)
+            // CALL_BWD_WITH_OP(129, OrthographicWithDistortionCamera<float>, camera)
+            // CALL_BWD_WITH_OP(192, OrthographicWithDistortionCamera<float>, camera)
+            // CALL_BWD_WITH_OP(193, OrthographicWithDistortionCamera<float>, camera)
+            // CALL_BWD_WITH_OP(256, OrthographicWithDistortionCamera<float>, camera)
+            // CALL_BWD_WITH_OP(257, OrthographicWithDistortionCamera<float>, camera)
+            // CALL_BWD_WITH_OP(512, OrthographicWithDistortionCamera<float>, camera)
+            // CALL_BWD_WITH_OP(513, OrthographicWithDistortionCamera<float>, camera)
         default:
             TORCH_CHECK_VALUE(
                 false, "Unsupported channels for rasterize-from-world-3dgs backward: ", channels);
@@ -616,26 +937,26 @@ dispatchGaussianRasterizeFromWorld3DGSBackward<torch::kCUDA>(
                                                             cameraModel};
         switch (channels) {
             CALL_BWD_WITH_OP(1, PerspectiveWithDistortionCamera<float>, camera)
-            CALL_BWD_WITH_OP(2, PerspectiveWithDistortionCamera<float>, camera)
+            // CALL_BWD_WITH_OP(2, PerspectiveWithDistortionCamera<float>, camera)
             CALL_BWD_WITH_OP(3, PerspectiveWithDistortionCamera<float>, camera)
             CALL_BWD_WITH_OP(4, PerspectiveWithDistortionCamera<float>, camera)
-            CALL_BWD_WITH_OP(5, PerspectiveWithDistortionCamera<float>, camera)
-            CALL_BWD_WITH_OP(8, PerspectiveWithDistortionCamera<float>, camera)
-            CALL_BWD_WITH_OP(9, PerspectiveWithDistortionCamera<float>, camera)
-            CALL_BWD_WITH_OP(16, PerspectiveWithDistortionCamera<float>, camera)
-            CALL_BWD_WITH_OP(17, PerspectiveWithDistortionCamera<float>, camera)
-            CALL_BWD_WITH_OP(32, PerspectiveWithDistortionCamera<float>, camera)
-            CALL_BWD_WITH_OP(33, PerspectiveWithDistortionCamera<float>, camera)
-            CALL_BWD_WITH_OP(64, PerspectiveWithDistortionCamera<float>, camera)
-            CALL_BWD_WITH_OP(65, PerspectiveWithDistortionCamera<float>, camera)
-            CALL_BWD_WITH_OP(128, PerspectiveWithDistortionCamera<float>, camera)
-            CALL_BWD_WITH_OP(129, PerspectiveWithDistortionCamera<float>, camera)
-            CALL_BWD_WITH_OP(192, PerspectiveWithDistortionCamera<float>, camera)
-            CALL_BWD_WITH_OP(193, PerspectiveWithDistortionCamera<float>, camera)
-            CALL_BWD_WITH_OP(256, PerspectiveWithDistortionCamera<float>, camera)
-            CALL_BWD_WITH_OP(257, PerspectiveWithDistortionCamera<float>, camera)
-            CALL_BWD_WITH_OP(512, PerspectiveWithDistortionCamera<float>, camera)
-            CALL_BWD_WITH_OP(513, PerspectiveWithDistortionCamera<float>, camera)
+            // CALL_BWD_WITH_OP(5, PerspectiveWithDistortionCamera<float>, camera)
+            // CALL_BWD_WITH_OP(8, PerspectiveWithDistortionCamera<float>, camera)
+            // CALL_BWD_WITH_OP(9, PerspectiveWithDistortionCamera<float>, camera)
+            // CALL_BWD_WITH_OP(16, PerspectiveWithDistortionCamera<float>, camera)
+            // CALL_BWD_WITH_OP(17, PerspectiveWithDistortionCamera<float>, camera)
+            // CALL_BWD_WITH_OP(32, PerspectiveWithDistortionCamera<float>, camera)
+            // CALL_BWD_WITH_OP(33, PerspectiveWithDistortionCamera<float>, camera)
+            // CALL_BWD_WITH_OP(64, PerspectiveWithDistortionCamera<float>, camera)
+            // CALL_BWD_WITH_OP(65, PerspectiveWithDistortionCamera<float>, camera)
+            // CALL_BWD_WITH_OP(128, PerspectiveWithDistortionCamera<float>, camera)
+            // CALL_BWD_WITH_OP(129, PerspectiveWithDistortionCamera<float>, camera)
+            // CALL_BWD_WITH_OP(192, PerspectiveWithDistortionCamera<float>, camera)
+            // CALL_BWD_WITH_OP(193, PerspectiveWithDistortionCamera<float>, camera)
+            // CALL_BWD_WITH_OP(256, PerspectiveWithDistortionCamera<float>, camera)
+            // CALL_BWD_WITH_OP(257, PerspectiveWithDistortionCamera<float>, camera)
+            // CALL_BWD_WITH_OP(512, PerspectiveWithDistortionCamera<float>, camera)
+            // CALL_BWD_WITH_OP(513, PerspectiveWithDistortionCamera<float>, camera)
         default:
             TORCH_CHECK_VALUE(
                 false, "Unsupported channels for rasterize-from-world-3dgs backward: ", channels);
@@ -643,6 +964,174 @@ dispatchGaussianRasterizeFromWorld3DGSBackward<torch::kCUDA>(
     }
 
 #undef CALL_BWD_WITH_OP
+}
+
+template <>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+dispatchGaussianRasterizeFromWorld3DGSBackward<torch::kPrivateUse1>(
+    const torch::Tensor &means,
+    const torch::Tensor &quats,
+    const torch::Tensor &logScales,
+    const torch::Tensor &features,
+    const torch::Tensor &opacities,
+    const torch::Tensor &worldToCamMatricesStart,
+    const torch::Tensor &worldToCamMatricesEnd,
+    const torch::Tensor &projectionMatrices,
+    const torch::Tensor &distortionCoeffs,
+    const RollingShutterType rollingShutterType,
+    const DistortionModel cameraModel,
+    const uint32_t imageWidth,
+    const uint32_t imageHeight,
+    const uint32_t imageOriginW,
+    const uint32_t imageOriginH,
+    const uint32_t tileSize,
+    const torch::Tensor &tileOffsets,
+    const torch::Tensor &tileGaussianIds,
+    const torch::Tensor &renderedAlphas,
+    const torch::Tensor &lastIds,
+    const torch::Tensor &dLossDRenderedFeatures,
+    const torch::Tensor &dLossDRenderedAlphas,
+    const at::optional<torch::Tensor> &backgrounds,
+    const at::optional<torch::Tensor> &masks) {
+    FVDB_FUNC_RANGE();
+
+    TORCH_CHECK_VALUE(means.is_privateuseone(), "means must be a PrivateUse1 tensor");
+    TORCH_CHECK_VALUE(quats.is_privateuseone(), "quats must be a PrivateUse1 tensor");
+    TORCH_CHECK_VALUE(logScales.is_privateuseone(), "logScales must be a PrivateUse1 tensor");
+    TORCH_CHECK_VALUE(features.is_privateuseone(), "features must be a PrivateUse1 tensor");
+    TORCH_CHECK_VALUE(opacities.is_privateuseone(), "opacities must be a PrivateUse1 tensor");
+    TORCH_CHECK_VALUE(worldToCamMatricesStart.is_privateuseone(),
+                      "worldToCamMatricesStart must be a PrivateUse1 tensor");
+    TORCH_CHECK_VALUE(worldToCamMatricesEnd.is_privateuseone(),
+                      "worldToCamMatricesEnd must be a PrivateUse1 tensor");
+    TORCH_CHECK_VALUE(projectionMatrices.is_privateuseone(),
+                      "projectionMatrices must be a PrivateUse1 tensor");
+    TORCH_CHECK_VALUE(distortionCoeffs.is_privateuseone(),
+                      "distortionCoeffs must be a PrivateUse1 tensor");
+    TORCH_CHECK_VALUE(tileOffsets.is_privateuseone(), "tileOffsets must be a PrivateUse1 tensor");
+    TORCH_CHECK_VALUE(tileGaussianIds.is_privateuseone(),
+                      "tileGaussianIds must be a PrivateUse1 tensor");
+    TORCH_CHECK_VALUE(renderedAlphas.is_privateuseone(),
+                      "renderedAlphas must be a PrivateUse1 tensor");
+    TORCH_CHECK_VALUE(lastIds.is_privateuseone(), "lastIds must be a PrivateUse1 tensor");
+    TORCH_CHECK_VALUE(dLossDRenderedFeatures.is_privateuseone(),
+                      "dLossDRenderedFeatures must be a PrivateUse1 tensor");
+    TORCH_CHECK_VALUE(dLossDRenderedAlphas.is_privateuseone(),
+                      "dLossDRenderedAlphas must be a PrivateUse1 tensor");
+    TORCH_CHECK_VALUE(tileOffsets.scalar_type() == torch::kInt64,
+                      "tileOffsets must have dtype int64");
+    TORCH_CHECK_VALUE(tileGaussianIds.scalar_type() == torch::kInt32,
+                      "tileGaussianIds must have dtype int32");
+    TORCH_CHECK_VALUE(lastIds.scalar_type() == torch::kInt32, "lastIds must have dtype int32");
+
+    const int64_t C = features.size(0);
+    const int64_t N = means.size(0);
+    TORCH_CHECK_VALUE(opacities.dim() == 2, "opacities must have shape [C,N]");
+    TORCH_CHECK_VALUE(opacities.size(0) == C && opacities.size(1) == N,
+                      "opacities must have shape [C,N] matching features and N");
+
+    const uint32_t channels = static_cast<uint32_t>(features.size(2));
+
+#define CALL_BWD_PRIVATEUSE1_WITH_OP(NCH, OP_TYPE, OP_VAL)                     \
+    case NCH:                                                                  \
+        return launchBackwardPrivateUse1<NCH, OP_TYPE>(means,                  \
+                                                       quats,                  \
+                                                       logScales,              \
+                                                       features,               \
+                                                       opacities,              \
+                                                       OP_VAL,                 \
+                                                       imageWidth,             \
+                                                       imageHeight,            \
+                                                       imageOriginW,           \
+                                                       imageOriginH,           \
+                                                       tileSize,               \
+                                                       tileOffsets,            \
+                                                       tileGaussianIds,        \
+                                                       renderedAlphas,         \
+                                                       lastIds,                \
+                                                       dLossDRenderedFeatures, \
+                                                       dLossDRenderedAlphas,   \
+                                                       backgrounds,            \
+                                                       masks);
+
+    if (cameraModel == DistortionModel::ORTHOGRAPHIC) {
+        const OrthographicWithDistortionCamera<float> camera{worldToCamMatricesStart,
+                                                             worldToCamMatricesEnd,
+                                                             projectionMatrices,
+                                                             static_cast<uint32_t>(C),
+                                                             static_cast<int32_t>(imageWidth),
+                                                             static_cast<int32_t>(imageHeight),
+                                                             static_cast<int32_t>(imageOriginW),
+                                                             static_cast<int32_t>(imageOriginH),
+                                                             rollingShutterType};
+        switch (channels) {
+            CALL_BWD_PRIVATEUSE1_WITH_OP(1, OrthographicWithDistortionCamera<float>, camera)
+            // CALL_BWD_PRIVATEUSE1_WITH_OP(2, OrthographicWithDistortionCamera<float>, camera)
+            CALL_BWD_PRIVATEUSE1_WITH_OP(3, OrthographicWithDistortionCamera<float>, camera)
+            CALL_BWD_PRIVATEUSE1_WITH_OP(4, OrthographicWithDistortionCamera<float>, camera)
+            // CALL_BWD_PRIVATEUSE1_WITH_OP(5, OrthographicWithDistortionCamera<float>, camera)
+            // CALL_BWD_PRIVATEUSE1_WITH_OP(8, OrthographicWithDistortionCamera<float>, camera)
+            // CALL_BWD_PRIVATEUSE1_WITH_OP(9, OrthographicWithDistortionCamera<float>, camera)
+            // CALL_BWD_PRIVATEUSE1_WITH_OP(16, OrthographicWithDistortionCamera<float>, camera)
+            // CALL_BWD_PRIVATEUSE1_WITH_OP(17, OrthographicWithDistortionCamera<float>, camera)
+            // CALL_BWD_PRIVATEUSE1_WITH_OP(32, OrthographicWithDistortionCamera<float>, camera)
+            // CALL_BWD_PRIVATEUSE1_WITH_OP(33, OrthographicWithDistortionCamera<float>, camera)
+            // CALL_BWD_PRIVATEUSE1_WITH_OP(64, OrthographicWithDistortionCamera<float>, camera)
+            // CALL_BWD_PRIVATEUSE1_WITH_OP(65, OrthographicWithDistortionCamera<float>, camera)
+            // CALL_BWD_PRIVATEUSE1_WITH_OP(128, OrthographicWithDistortionCamera<float>, camera)
+            // CALL_BWD_PRIVATEUSE1_WITH_OP(129, OrthographicWithDistortionCamera<float>, camera)
+            // CALL_BWD_PRIVATEUSE1_WITH_OP(192, OrthographicWithDistortionCamera<float>, camera)
+            // CALL_BWD_PRIVATEUSE1_WITH_OP(193, OrthographicWithDistortionCamera<float>, camera)
+            // CALL_BWD_PRIVATEUSE1_WITH_OP(256, OrthographicWithDistortionCamera<float>, camera)
+            // CALL_BWD_PRIVATEUSE1_WITH_OP(257, OrthographicWithDistortionCamera<float>, camera)
+            // CALL_BWD_PRIVATEUSE1_WITH_OP(512, OrthographicWithDistortionCamera<float>, camera)
+            // CALL_BWD_PRIVATEUSE1_WITH_OP(513, OrthographicWithDistortionCamera<float>, camera)
+        default:
+            TORCH_CHECK_VALUE(
+                false, "Unsupported channels for rasterize-from-world-3dgs backward: ", channels);
+        }
+    } else {
+        const PerspectiveWithDistortionCamera<float> camera{worldToCamMatricesStart,
+                                                            worldToCamMatricesEnd,
+                                                            projectionMatrices,
+                                                            distortionCoeffs,
+                                                            static_cast<uint32_t>(C),
+                                                            distortionCoeffs.size(1),
+                                                            static_cast<int32_t>(imageWidth),
+                                                            static_cast<int32_t>(imageHeight),
+                                                            static_cast<int32_t>(imageOriginW),
+                                                            static_cast<int32_t>(imageOriginH),
+                                                            rollingShutterType,
+                                                            cameraModel};
+        switch (channels) {
+            CALL_BWD_PRIVATEUSE1_WITH_OP(1, PerspectiveWithDistortionCamera<float>, camera)
+            // CALL_BWD_PRIVATEUSE1_WITH_OP(2, PerspectiveWithDistortionCamera<float>, camera)
+            CALL_BWD_PRIVATEUSE1_WITH_OP(3, PerspectiveWithDistortionCamera<float>, camera)
+            CALL_BWD_PRIVATEUSE1_WITH_OP(4, PerspectiveWithDistortionCamera<float>, camera)
+            // CALL_BWD_PRIVATEUSE1_WITH_OP(5, PerspectiveWithDistortionCamera<float>, camera)
+            // CALL_BWD_PRIVATEUSE1_WITH_OP(8, PerspectiveWithDistortionCamera<float>, camera)
+            // CALL_BWD_PRIVATEUSE1_WITH_OP(9, PerspectiveWithDistortionCamera<float>, camera)
+            // CALL_BWD_PRIVATEUSE1_WITH_OP(16, PerspectiveWithDistortionCamera<float>, camera)
+            // CALL_BWD_PRIVATEUSE1_WITH_OP(17, PerspectiveWithDistortionCamera<float>, camera)
+            // CALL_BWD_PRIVATEUSE1_WITH_OP(32, PerspectiveWithDistortionCamera<float>, camera)
+            // CALL_BWD_PRIVATEUSE1_WITH_OP(33, PerspectiveWithDistortionCamera<float>, camera)
+            // CALL_BWD_PRIVATEUSE1_WITH_OP(64, PerspectiveWithDistortionCamera<float>, camera)
+            // CALL_BWD_PRIVATEUSE1_WITH_OP(65, PerspectiveWithDistortionCamera<float>, camera)
+            // CALL_BWD_PRIVATEUSE1_WITH_OP(128, PerspectiveWithDistortionCamera<float>, camera)
+            // CALL_BWD_PRIVATEUSE1_WITH_OP(129, PerspectiveWithDistortionCamera<float>, camera)
+            // CALL_BWD_PRIVATEUSE1_WITH_OP(192, PerspectiveWithDistortionCamera<float>, camera)
+            // CALL_BWD_PRIVATEUSE1_WITH_OP(193, PerspectiveWithDistortionCamera<float>, camera)
+            // CALL_BWD_PRIVATEUSE1_WITH_OP(256, PerspectiveWithDistortionCamera<float>, camera)
+            // CALL_BWD_PRIVATEUSE1_WITH_OP(257, PerspectiveWithDistortionCamera<float>, camera)
+            // CALL_BWD_PRIVATEUSE1_WITH_OP(512, PerspectiveWithDistortionCamera<float>, camera)
+            // CALL_BWD_PRIVATEUSE1_WITH_OP(513, PerspectiveWithDistortionCamera<float>, camera)
+        default:
+            TORCH_CHECK_VALUE(
+                false, "Unsupported channels for rasterize-from-world-3dgs backward: ", channels);
+        }
+    }
+
+#undef CALL_BWD_PRIVATEUSE1_WITH_OP
 }
 
 template <>
@@ -671,7 +1160,7 @@ dispatchGaussianRasterizeFromWorld3DGSBackward<torch::kCPU>(const torch::Tensor 
                                                             const torch::Tensor &,
                                                             const at::optional<torch::Tensor> &,
                                                             const at::optional<torch::Tensor> &) {
-    TORCH_CHECK_VALUE(false, "dispatchGaussianRasterizeFromWorld3DGSBackward is CUDA-only");
+    TORCH_CHECK_VALUE(false, "dispatchGaussianRasterizeFromWorld3DGSBackward does not support CPU");
 }
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
@@ -699,7 +1188,7 @@ rasterizeWorldSpaceGaussiansBwd(const torch::Tensor &means,
                                 const torch::Tensor &dLossDRenderedAlphas,
                                 const at::optional<torch::Tensor> &backgrounds,
                                 const at::optional<torch::Tensor> &masks) {
-    return FVDB_DISPATCH_KERNEL_DEVICE(means.device(), [&]() {
+    return FVDB_DISPATCH_KERNEL(means.device(), [&]() {
         return dispatchGaussianRasterizeFromWorld3DGSBackward<DeviceTag>(means,
                                                                          quats,
                                                                          logScales,
