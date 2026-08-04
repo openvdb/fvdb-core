@@ -125,6 +125,8 @@ algorithms for 3D reconstruction from sensor data, including the high-level Gaus
 
    release-process
    markdown/clangd
+   markdown/convolution_semantics_unification_plan
+   markdown/convolution_semantics_resource_report
 
 .. raw:: html
 
