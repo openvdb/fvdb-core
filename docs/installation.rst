@@ -30,7 +30,7 @@ The following table specifies the minimum NVIDIA driver versions and GPU archite
 | Linux Only       | 550.0 or later | Ampere or later  | 8.0 or greater      |
 +------------------+----------------+------------------+---------------------+
 
-While fVDB operators run on the CPU and CUDA-accelerated GPUs, the `NanoVDB <https://www.openvdb.org/documentation/doxygen/NanoVDB_FAQ.html>`_ library which underlies fVDB is hardware agnostic.  fVDB is a community project and we welcome any contributors and collaborators interested in working on extending fVDB to other hardware platforms; please reach out by opening an issue on the `fvdb-core repository <https://github.com/openvdb/fvdb-core/issues>`_.
+While fVDB operators run on the CPU and CUDA-accelerated GPUs and is currently only built and tested on Linux, the `NanoVDB <https://www.openvdb.org/documentation/doxygen/NanoVDB_FAQ.html>`_ library which underlies fVDB is hardware and operating system agnostic.  fVDB is a community project and we welcome any contributors and collaborators interested in working on extending fVDB to other hardware platforms and operating systems; please reach out by opening an issue on the `fvdb-core repository <https://github.com/openvdb/fvdb-core/issues>`_.
 
 Installation from conda-forge
 ------------------------------
