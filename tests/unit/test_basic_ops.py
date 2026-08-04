@@ -8,7 +8,7 @@ import unittest
 import fvdb.nn as fvnn
 import numpy as np
 import torch
-from fvdb_test_utils import (
+from fvdb.utils.tests import (
     dtype_to_atol,
     expand_tests,
     make_dense_grid_batch_and_jagged_point_data,

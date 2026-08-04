@@ -6,7 +6,7 @@ import unittest
 
 import numpy as np
 import torch
-from fvdb_test_utils import (
+from fvdb.utils.tests import (
     dtype_to_atol,
     get_fvdb_test_data_path,
     make_dense_grid_batch_and_jagged_point_data,

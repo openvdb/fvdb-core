@@ -20,12 +20,12 @@ import unittest
 import torch
 from fvdb.convolution_plan import _GatherScatterBackend, _GatherScatterConvFn
 from fvdb.types import DeviceIdentifier, resolve_device
-from fvdb_test_utils import (
+from fvdb.utils.tests import (
     fourier_anti_symmetric_kernel,
     generate_hermit_impulses_dense,
     has_any_symmetry,
 )
-from fvdb_test_utils.convolution_utils import (
+from fvdb.utils.tests.convolution_utils import (
     ALL_DEVICE_DTYPE_COMBOS,
     REDUCED_DEVICE_DTYPE_COMBOS,
     DisableTF32Mixin,
