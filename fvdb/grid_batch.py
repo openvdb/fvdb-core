@@ -601,7 +601,7 @@ class GridBatch:
 
         Each active coarse coordinate spreads through every canonical tap. The result has voxel
         size ``h / stride`` and the same canonical origin. This is generated structural support,
-        not a value inverse of a forward convolution.
+        not a value inverse of a forward convolution. ``kernel_size=stride=1`` returns this object.
 
         Args:
             kernel_size (NumericMaxRank1): Convolution kernel size, broadcastable to shape ``(3,)``, integer dtype.

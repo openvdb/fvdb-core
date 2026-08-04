@@ -872,6 +872,7 @@ class Grid:
 
         Each active coarse coordinate spreads through all canonical taps. This generated support
         is adjoint connectivity, not a value inverse of a forward convolution.
+        ``kernel_size=stride=1`` returns this object.
 
         Args:
             kernel_size (NumericMaxRank1): Size of the convolution kernel,
@@ -880,8 +881,7 @@ class Grid:
                 shape ``(3,)``, integer dtype.
 
         Returns:
-            conv_transpose_grid (Grid): A new :class:`Grid` representing the
-                transposed convolution output topology.
+            conv_transpose_grid (Grid): The transposed-convolution output topology.
         """
         from . import functional
 

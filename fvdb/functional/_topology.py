@@ -486,7 +486,7 @@ def conv_transpose_grid_batch(
     """Return the complete structural-support grid for a transposed convolution on a grid batch.
 
     Each active input coordinate spreads through all canonical Torch-phase taps. This generated
-    support is not a value inverse of a forward convolution.
+    support is not a value inverse of a forward convolution. ``K=S=1`` returns ``grid`` itself.
 
     Args:
         grid (GridBatch): The input grid batch.
@@ -500,6 +500,8 @@ def conv_transpose_grid_batch(
     """
     ks = to_Vec3i(kernel_size, value_constraint=ValueConstraint.POSITIVE).tolist()
     st = to_Vec3i(stride, value_constraint=ValueConstraint.POSITIVE).tolist()
+    if ks == [1, 1, 1] and st == [1, 1, 1]:
+        return grid
     return _wrap_grid(_fvdb_cpp.conv_transpose_grid(grid.data, ks, st))
 
 
@@ -511,7 +513,7 @@ def conv_transpose_grid_single(
     """Return the complete structural-support grid for a transposed convolution on a single grid.
 
     Each active input coordinate spreads through all canonical Torch-phase taps; this does not
-    imply value inversion.
+    imply value inversion. ``K=S=1`` returns ``grid`` itself.
 
     Args:
         grid (Grid): The input single grid.
@@ -525,6 +527,8 @@ def conv_transpose_grid_single(
     """
     ks = to_Vec3i(kernel_size, value_constraint=ValueConstraint.POSITIVE).tolist()
     st = to_Vec3i(stride, value_constraint=ValueConstraint.POSITIVE).tolist()
+    if ks == [1, 1, 1] and st == [1, 1, 1]:
+        return grid
     return _wrap_single_grid(_fvdb_cpp.conv_transpose_grid(grid.data, ks, st))
 
 
