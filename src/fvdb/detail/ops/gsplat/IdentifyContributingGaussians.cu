@@ -584,9 +584,11 @@ launchRasterizeContributingGaussianIdsForwardKernel(
             const auto W = denseIds.size(2);
             const auto K = denseIds.size(3);
 
-            // Reshape to [C*H*W, K] for easier processing
-            denseIds     = denseIds.reshape({C * H * W, K});
-            denseWeights = denseWeights.reshape({C * H * W, K});
+            // Flatten to [C*H*W, K] for easier processing. Use view() rather than reshape():
+            // the dense dispatch above returns contiguous kernel outputs, so view() cannot
+            // copy. If that ever stops being true, view() throws instead of silently copying.
+            denseIds     = denseIds.view({C * H * W, K});
+            denseWeights = denseWeights.view({C * H * W, K});
 
             // Create JaggedTensor with fixed K samples per pixel
             std::vector<torch::Tensor> idsVec, weightsVec;
