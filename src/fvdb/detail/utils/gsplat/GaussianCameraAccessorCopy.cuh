@@ -10,6 +10,20 @@
 
 namespace fvdb::detail::ops {
 
+inline __device__ int64_t
+linearBlockThreadRank() {
+    return static_cast<int64_t>(threadIdx.x) +
+           static_cast<int64_t>(blockDim.x) *
+               (static_cast<int64_t>(threadIdx.y) +
+                static_cast<int64_t>(blockDim.y) * static_cast<int64_t>(threadIdx.z));
+}
+
+inline __device__ int64_t
+linearBlockThreadCount() {
+    return static_cast<int64_t>(blockDim.x) * static_cast<int64_t>(blockDim.y) *
+           static_cast<int64_t>(blockDim.z);
+}
+
 /// @brief Copy per-camera 3x3 matrices from accessor storage into contiguous Mat3 output.
 ///
 /// The accessor is expected to be shaped [C,3,3]. Copies are striped across threads in
@@ -21,7 +35,8 @@ copyMat3Accessor(const int64_t C,
                  const Acc33 &acc, /* [C,3,3] */
                  const int64_t cameraOffset = 0) {
     constexpr int64_t kElementsPerMat3 = 9;
-    for (int64_t i = threadIdx.x; i < C * kElementsPerMat3; i += blockDim.x) {
+    for (int64_t i = linearBlockThreadRank(); i < C * kElementsPerMat3;
+         i += linearBlockThreadCount()) {
         const int64_t localCamId      = i / kElementsPerMat3;
         const int64_t entryId         = i % kElementsPerMat3;
         const int64_t rowId           = entryId / 3;
@@ -40,7 +55,8 @@ copyWorldToCamTranslation(const int64_t C,
                           const Acc44 &acc, /* [C,4,4] */
                           const int64_t cameraOffset = 0) {
     constexpr int64_t kElementsPerVec3 = 3;
-    for (int64_t i = threadIdx.x; i < C * kElementsPerVec3; i += blockDim.x) {
+    for (int64_t i = linearBlockThreadRank(); i < C * kElementsPerVec3;
+         i += linearBlockThreadCount()) {
         const int64_t localCamId = i / kElementsPerVec3;
         const int64_t entryId    = i % kElementsPerVec3;
         out[localCamId][entryId] = acc[cameraOffset + localCamId][entryId][3];
@@ -56,7 +72,7 @@ copyDistortionCoeffs(const int64_t C,
                      const AccCk &acc, /* [C,K] */
                      const int64_t cameraOffset = 0) {
     const int64_t total = C * K;
-    for (int64_t i = threadIdx.x; i < total; i += blockDim.x) {
+    for (int64_t i = linearBlockThreadRank(); i < total; i += linearBlockThreadCount()) {
         const int64_t localCamId      = i / K;
         const int64_t entryId         = i % K;
         out[localCamId * K + entryId] = acc[cameraOffset + localCamId][entryId];

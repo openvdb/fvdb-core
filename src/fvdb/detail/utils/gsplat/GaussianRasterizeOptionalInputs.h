@@ -29,7 +29,8 @@ prepareRasterOptionalInputs(const torch::Tensor &features,
     PreparedRasterOptionalInputs out;
 
     if (backgrounds.has_value()) {
-        TORCH_CHECK(backgrounds.value().is_cuda(), "backgrounds must be CUDA");
+        TORCH_CHECK(backgrounds.value().is_cuda() || backgrounds.value().is_privateuseone(),
+                    "backgrounds must be CUDA or PrivateUse1");
         TORCH_CHECK(backgrounds.value().device() == features.device(),
                     "backgrounds must be on the same device as features");
         TORCH_CHECK(backgrounds.value().scalar_type() == torch::kFloat32,
@@ -41,7 +42,8 @@ prepareRasterOptionalInputs(const torch::Tensor &features,
     }
 
     if (masks.has_value()) {
-        TORCH_CHECK(masks.value().is_cuda(), "masks must be CUDA");
+        TORCH_CHECK(masks.value().is_cuda() || masks.value().is_privateuseone(),
+                    "masks must be CUDA or PrivateUse1");
         TORCH_CHECK(masks.value().device() == features.device(),
                     "masks must be on the same device as features");
         TORCH_CHECK(masks.value().scalar_type() == torch::kBool, "masks must have dtype=bool");
