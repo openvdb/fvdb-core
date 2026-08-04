@@ -12,10 +12,12 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-/// @brief Allocation accounting for the most recent generated forward topology.
+/// @brief Explicit staging accounting for the most recent generated forward topology.
 ///
-/// The values are produced from the same count/prefix/fill inputs used to
-/// allocate staging, so the accounting cannot describe a different algorithm.
+/// The byte fields cover coordinate, count, and prefix arrays requested by the
+/// builder. They are zero when NanoVDB leaf-mask morphology builds the same
+/// topology without explicit coordinate staging; complete allocator peaks are
+/// measured externally.
 struct BuildGridForConvResourceStats {
     int64_t inputVoxelCount{0};
     int64_t kernelVolume{0};

@@ -9,7 +9,7 @@ import unittest
 
 import pytest
 import torch
-from fvdb.utils.tests import (
+from fvdb_test_utils import (
     ScopedTimer,
     fourier_anti_symmetric_kernel,
     generate_chebyshev_spaced_ijk,

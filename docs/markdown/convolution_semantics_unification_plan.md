@@ -1732,7 +1732,7 @@ operation.
 - [`BuildGridForConvTranspose.cu`](../../src/fvdb/detail/ops/BuildGridForConvTranspose.cu)
 - [`PredGatherIGemm.cu`](../../src/fvdb/detail/ops/convolution/PredGatherIGemm.cu)
 - [`VoxelSizeUtils.h`](../../src/fvdb/detail/utils/VoxelSizeUtils.h)
-- [`convolution_utils.py`](../../fvdb/utils/tests/convolution_utils.py)
+- [`convolution_utils.py`](../../tests/fvdb_test_utils/convolution_utils.py)
 - [`simple_unet.py`](../../fvdb/nn/simple_unet.py)
 - [`test_conv_ground_truth.py`](../../tests/unit/test_conv_ground_truth.py)
 - [`test_conv_transpose_ground_truth.py`](../../tests/unit/test_conv_transpose_ground_truth.py)

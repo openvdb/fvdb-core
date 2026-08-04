@@ -46,6 +46,15 @@ JaggedTensor::joffsets_from_jidx_and_jdata(torch::Tensor jidx,
 
 torch::Tensor
 JaggedTensor::jidx_from_joffsets(torch::Tensor joffsets, int64_t num_elements) {
+    // A JaggedTensor with a single list stores an empty jidx by convention (every element maps to
+    // batch index 0, and consumers treat an empty jidx as all-zeros). joffsets.size(0) <= 2 means
+    // zero or one list, so skip materializing a full array of zeros -- this mirrors the
+    // single-tensor constructors and JIdxForGrid.cu, and avoids the redundant 4 B/element array
+    // (plus a binary-search kernel) that every batchSize==1 op output was paying.
+    if (joffsets.size(0) <= 2) {
+        return torch::empty({0},
+                            torch::TensorOptions().dtype(JIdxScalarType).device(joffsets.device()));
+    }
     return detail::ops::jIdxForJOffsets(joffsets, num_elements);
 }
 

@@ -5,7 +5,6 @@ ninja
 tqdm
 numpy
 torch
-GitPython
 pandas
 pytest
 pytest-markdown-docs

@@ -140,8 +140,11 @@ def _run_worker(args: argparse.Namespace) -> Sample:
             raise AssertionError(f"{name} did not use the required direct projection path")
         if int(stats["valid_emission_count"]) != grid.total_voxels:
             raise AssertionError(f"{name} must emit exactly one canonical row per input voxel")
-        if int(stats["peak_requested_bytes"]) != 16 * grid.total_voxels:
-            raise AssertionError(f"{name} direct staging must remain exactly one 16-byte row per input voxel")
+        expected_staging = 0 if name == "ks2_direct" and device.type == "cuda" else 16 * grid.total_voxels
+        if int(stats["peak_requested_bytes"]) != expected_staging:
+            raise AssertionError(
+                f"{name} direct staging must match its exact coordinate realization: {expected_staging} bytes"
+            )
     if "count_fill" in name:
         if stats is None or bool(stats["used_direct_projection"]):
             raise AssertionError(f"{name} did not use count-then-fill staging")

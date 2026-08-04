@@ -15,9 +15,16 @@ cloneGrid(const GridBatchData &grid, const torch::Device &device, bool blocking)
         return makeEmptyGridBatchData(device);
     }
 
-    TorchDeviceBuffer guide(0, device);
-    nanovdb::GridHandle<TorchDeviceBuffer> clonedHdl =
-        grid.nanoGridHandle().copy<TorchDeviceBuffer>(guide);
+    // Compact the (possibly sliced/non-contiguous) selected grids into a fresh contiguous handle.
+    // nanoGridHandle().copy() would copy *every physical grid* in the shared handle -- wrong (and a
+    // voxelSizes/gridCount mismatch) for an indexed batch, where gridCount() > batchSize().
+    nanovdb::GridHandle<TorchDeviceBuffer> clonedHdl = contiguousGridHandle(grid);
+    if (clonedHdl.buffer().device() != device) {
+        // Requested a different target device: the handle is now contiguous, so a whole-handle copy
+        // to `device` moves exactly the selected grids.
+        TorchDeviceBuffer guide(0, device);
+        clonedHdl = clonedHdl.copy<TorchDeviceBuffer>(guide);
+    }
 
     std::vector<nanovdb::Vec3d> voxelSizes, voxelOrigins;
     grid.gridVoxelSizesAndOrigins(voxelSizes, voxelOrigins);

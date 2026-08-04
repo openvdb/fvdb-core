@@ -46,7 +46,10 @@ dispatchPruneGrid<torch::kCUDA>(const GridBatchData &gridBatch, const JaggedTens
     std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> handles;
     for (int i = 0; i < gridBatch.batchSize(); i += 1) {
         nanovdb::GridHandle<TorchDeviceBuffer> handle;
-        nanovdb::OnIndexGrid *grid = gridBatch.mGridHdl->deviceGrid<nanovdb::ValueOnIndex>(i);
+
+        // This also keeps the grid aligned with numLeavesAt(i)/mask.index(i), which are
+        // item-indexed.
+        nanovdb::OnIndexGrid *grid = gridBatch.deviceGridPtrAt(i);
         TORCH_CHECK(grid, "Grid is null");
 
         const torch::Tensor maskI = mask.index(i).jdata();
@@ -106,8 +109,8 @@ dispatchPruneGrid<torch::kCPU>(const GridBatchData &gridBatch, const JaggedTenso
 
     std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> gridHandles;
     gridHandles.reserve(gridHdl.gridCount());
-    for (uint32_t bidx = 0; bidx < gridHdl.gridCount(); bidx += 1) {
-        const nanovdb::OnIndexGrid *grid = gridHdl.template grid<GridT>(bidx);
+    for (int64_t bidx = 0; bidx < gridBatch.batchSize(); bidx += 1) {
+        const nanovdb::OnIndexGrid *grid = gridBatch.hostGridPtrAt(bidx);
         if (!grid) {
             throw std::runtime_error("Failed to get pointer to nanovdb index grid");
         }
@@ -117,7 +120,7 @@ dispatchPruneGrid<torch::kCPU>(const GridBatchData &gridBatch, const JaggedTenso
         auto proxyGrid         = std::make_shared<ProxyGridT>(-1.0f);
         auto proxyGridAccessor = proxyGrid->getWriteAccessor();
 
-        const torch::Tensor maskI = mask.index(bidx).jdata().squeeze();
+        const torch::Tensor maskI = mask.index(bidx).jdata().reshape({-1});
         const int64_t joffset     = gridBatch.cumVoxelsAt(bidx);
         const auto maskIacc       = maskI.accessor<bool, 1>();
         for (auto it = ActiveVoxelIterator<-1>(tree); it.isValid(); it++) {

@@ -15,7 +15,7 @@ import torch
 import fvdb.convolution_plan as convolution_plan_module
 from fvdb import ConvolutionPlan, Grid, GridBatch, JaggedTensor, _fvdb_cpp
 from fvdb.convolution_plan import _GatherScatterBackend, _MatmulBackend, _PredGatherIGemmBackend
-from fvdb.utils.tests.convolution_semantics_oracle import (
+from fvdb_test_utils.convolution_semantics_oracle import (
     ConvolutionRelation,
     dense_forward_oracle,
     dense_transpose_oracle,
@@ -284,6 +284,42 @@ def test_generated_cuda_topology_matches_independent_relation_for_multi_grid_bat
         assert {tuple(coordinate) for coordinate in generated_fine.ijk[batch_index].jdata.cpu().tolist()} == expected
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
+@pytest.mark.parametrize(
+    "kernel_size,stride",
+    [
+        ((4, 4, 4), (1, 1, 1)),
+        ((2, 2, 2), (2, 2, 2)),
+        ((3, 3, 3), (2, 2, 2)),
+    ],
+)
+def test_generated_cuda_nanovdb_paths_match_independent_relation_for_empty_batch_item(kernel_size, stride) -> None:
+    relation = ConvolutionRelation(kernel_size, stride)
+    coordinate_batches = [
+        [(-5, -2, 0), (-1, 0, 1), (3, 4, -2)],
+        [],
+        [(-4, -3, -2), (0, 0, 0), (2, 5, 3)],
+    ]
+    fine = GridBatch.from_ijk(
+        JaggedTensor(
+            [
+                torch.tensor(coordinates, dtype=torch.int32, device="cuda").reshape(-1, 3)
+                for coordinates in coordinate_batches
+            ]
+        )
+    )
+
+    coarse = fine.conv_grid(kernel_size=kernel_size, stride=stride)
+    expected_coarse_batches = [forward_support(coordinates, relation) for coordinates in coordinate_batches]
+    for batch_index, expected in enumerate(expected_coarse_batches):
+        assert {tuple(coordinate) for coordinate in coarse.ijk[batch_index].jdata.cpu().tolist()} == expected
+
+    generated_fine = coarse.conv_transpose_grid(kernel_size=kernel_size, stride=stride)
+    for batch_index, coarse_coordinates in enumerate(expected_coarse_batches):
+        expected = transpose_support(coarse_coordinates, relation)
+        assert {tuple(coordinate) for coordinate in generated_fine.ijk[batch_index].jdata.cpu().tolist()} == expected
+
+
 def test_k1_s1_generated_grid_preserves_public_and_data_identity() -> None:
     fine = _grid([(-1, 0, 0), (0, 0, 0), (1, 0, 0)])
     generated_forward = fine.conv_grid(kernel_size=1, stride=1)
@@ -460,6 +496,27 @@ def test_forward_builder_exposes_exact_staging_accounting() -> None:
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
+def test_forward_builder_reports_nanovdb_paths_without_coordinate_staging() -> None:
+    coordinates = [(-4, 0, 0), (-1, 0, 0), (0, 0, 0), (3, 0, 0), (4, 0, 0)]
+    fine = _grid(coordinates, device="cuda")
+
+    fine.conv_grid(kernel_size=2, stride=2)
+    coarsened = _fvdb_cpp.last_conv_grid_resource_stats()
+    assert coarsened["used_direct_projection"] is True
+    assert coarsened["valid_emission_count"] == len(coordinates)
+    assert coarsened["peak_requested_bytes"] == coarsened["emission_requested_bytes"] == 0
+
+    fine.conv_grid(kernel_size=4, stride=1)
+    padded = _fvdb_cpp.last_conv_grid_resource_stats()
+    assert padded["input_voxel_count"] == len(coordinates)
+    assert padded["kernel_volume"] == 64
+    assert padded["valid_emission_count"] == 64 * len(coordinates)
+    assert padded["used_direct_projection"] is False
+    assert padded["count_requested_bytes"] == padded["prefix_requested_bytes"] == 0
+    assert padded["peak_requested_bytes"] == padded["emission_requested_bytes"] == 0
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
 def test_generated_transpose_reports_allocation_failure_with_staging_context() -> None:
     source = _grid([(0, 0, 0)], device="cuda")
     with pytest.raises(
@@ -535,7 +592,7 @@ def test_generated_transpose_uses_inactive_split_cuda_cache() -> None:
             )
             raise SystemExit(77)
 
-        result = source.conv_transpose_grid(kernel_size=kernel_size, stride=1)
+        result = source.conv_transpose_grid(kernel_size=kernel_size, stride=2)
         torch.cuda.synchronize()
         assert result.total_voxels == kernel_size**3
         assert live_block.numel() == 64 * MiB

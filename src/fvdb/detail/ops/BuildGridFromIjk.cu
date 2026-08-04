@@ -20,12 +20,33 @@
 #include <c10/cuda/CUDAMathCompat.h>
 #include <torch/types.h>
 
+#include <limits>
+
 namespace fvdb {
 namespace detail {
 namespace ops {
 
 template <torch::DeviceType>
 nanovdb::GridHandle<TorchDeviceBuffer> dispatchCreateNanoGridFromIJK(const JaggedTensor &ijk);
+
+// NanoVDB's PointsToGrid / DistributedPointsToGrid radix sort casts the per-grid coordinate count
+// to int32 (PointsToGrid.cuh:645), which silently corrupts the grid above 2^31 candidates. Reject
+// that here rather than return a garbage grid. Takes an already-on-host joffsets accessor so each
+// dispatch reuses the host copy it makes anyway -- no extra device sync.
+static void
+checkCandidateCountsFitInt32(const torch::TensorAccessor<fvdb::JOffsetsType, 1> &joffsetsAcc) {
+    for (int64_t gi = 0; gi + 1 < joffsetsAcc.size(0); gi += 1) {
+        const int64_t nCoords = joffsetsAcc[gi + 1] - joffsetsAcc[gi];
+        TORCH_CHECK(nCoords <= std::numeric_limits<int32_t>::max(),
+                    "Grid ",
+                    gi,
+                    " would be built from ",
+                    nCoords,
+                    " candidate coordinates, which exceeds the ",
+                    std::numeric_limits<int32_t>::max(),
+                    "-coordinate limit of the NanoVDB grid builder. Reduce the grid size.");
+    }
+}
 
 template <>
 nanovdb::GridHandle<TorchDeviceBuffer>
@@ -52,7 +73,8 @@ dispatchCreateNanoGridFromIJK<torch::kCUDA>(const JaggedTensor &ijk) {
     // grids. Ideally we want to do this in a single invocation.
     torch::Tensor ijkBOffsetTensor = ijk.joffsets().cpu();
     auto ijkBOffset                = ijkBOffsetTensor.accessor<fvdb::JOffsetsType, 1>();
-    torch::Tensor ijkData          = ijk.jdata();
+    checkCandidateCountsFitInt32(ijkBOffset);
+    torch::Tensor ijkData = ijk.jdata();
     if (ijkData.scalar_type() != torch::kInt32) {
         ijkData = ijkData.to(torch::kInt32);
     }
@@ -109,7 +131,8 @@ dispatchCreateNanoGridFromIJK<torch::kPrivateUse1>(const JaggedTensor &ijk) {
     // grids. Ideally we want to do this in a single invocation.
     torch::Tensor ijkBOffsetTensor = ijk.joffsets().cpu();
     auto ijkBOffset                = ijkBOffsetTensor.accessor<fvdb::JOffsetsType, 1>();
-    torch::Tensor ijkData          = ijk.jdata();
+    checkCandidateCountsFitInt32(ijkBOffset);
+    torch::Tensor ijkData = ijk.jdata();
     TORCH_CHECK(ijkData.is_contiguous(), "ijk must be contiguous");
     TORCH_CHECK(ijkData.dim() == 2, "ijk must have shape (N, 3)");
     TORCH_CHECK(ijkData.size(1) == 3, "ijk must have shape (N, 3)");
@@ -179,6 +202,7 @@ dispatchCreateNanoGridFromIJK<torch::kCPU>(const JaggedTensor &jaggedCoords) {
                 jaggedCoords.jdata().accessor<ScalarT, 2>();
             const torch::TensorAccessor<fvdb::JOffsetsType, 1> &coordsBOffsetsAcc =
                 jaggedCoords.joffsets().accessor<fvdb::JOffsetsType, 1>();
+            checkCandidateCountsFitInt32(coordsBOffsetsAcc);
 
             std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> batchHandles;
             batchHandles.reserve(coordsBOffsetsAcc.size(0) - 1);
@@ -236,6 +260,9 @@ _createNanoGridFromIJK(const JaggedTensor &ijk) {
     const int64_t numGrids = ijk.joffsets().size(0) - 1;
     TORCH_CHECK(numGrids == ijk.num_outer_lists(),
                 "If this happens, Francis' paranoia was justified. File a bug");
+
+    // The >2^31-candidate overflow guard runs inside each dispatch (checkCandidateCountsFitInt32),
+    // reusing the host joffsets copy those paths already make -- no extra device sync here.
     return FVDB_DISPATCH_KERNEL(ijk.device(),
                                 [&]() { return dispatchCreateNanoGridFromIJK<DeviceTag>(ijk); });
 }

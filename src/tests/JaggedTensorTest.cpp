@@ -896,11 +896,13 @@ TEST_F(JaggedTensorTest, StaticUtilityFunctions) {
     auto round_trip_jidx = JaggedTensor::jidx_from_joffsets(computed_offsets, data.size(0));
     EXPECT_TRUE(torch::equal(round_trip_jidx, jidx));
 
-    // Test edge case with single tensor
-    auto single_offsets       = torch::tensor({0, 5}, torch::kInt64);
-    auto single_jidx          = JaggedTensor::jidx_from_joffsets(single_offsets, 5);
-    auto expected_single_jidx = torch::tensor({0, 0, 0, 0, 0}, torch::kInt32);
-    EXPECT_TRUE(torch::equal(single_jidx, expected_single_jidx));
+    // Test edge case with single tensor: by convention a single-list JaggedTensor stores an
+    // empty jidx (the single-tensor constructors and JIdxForGrid do the same), and consumers
+    // treat an empty jidx as every element mapping to batch 0. jidx_from_joffsets therefore
+    // short-circuits to an empty tensor rather than materializing a full array of zeros.
+    auto single_offsets = torch::tensor({0, 5}, torch::kInt64);
+    auto single_jidx    = JaggedTensor::jidx_from_joffsets(single_offsets, 5);
+    EXPECT_EQ(single_jidx.size(0), 0);
 
     // Test edge case with empty tensor
     auto empty_offsets = torch::tensor({0, 0}, torch::kInt64);

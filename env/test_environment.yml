@@ -9,7 +9,6 @@ dependencies:
   - cmake
   - cuda-version=13.0
   - git
-  - gitpython
   - ipython
   - libpng
   - linkify-it-py

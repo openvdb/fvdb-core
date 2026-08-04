@@ -135,7 +135,7 @@ jobs:
         env:
           MATRIX_PYTHON_VERSION: ${{ matrix.python-version }}
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@254c19bd240aabef8777f48595e9d2d7b972184b # v6.2.1
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
         with:
           role-to-assume: ${{ needs.versions.outputs.aws-role }}
           aws-region: ${{ needs.versions.outputs.aws-region }}
@@ -395,7 +395,7 @@ jobs:
       SIMPLE_PREFIX: ${{ needs.pr-flags.outputs.release == 'true' && 'simple' || 'simple-staging' }}
     steps:
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@254c19bd240aabef8777f48595e9d2d7b972184b # v6.2.1
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
         with:
           role-to-assume: ${{ needs.versions.outputs.aws-role }}
           aws-region: ${{ needs.versions.outputs.aws-region }}
@@ -631,7 +631,7 @@ jobs:
         env:
           MATRIX_PYTHON_VERSION: ${{ matrix.python-version }}
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@254c19bd240aabef8777f48595e9d2d7b972184b # v6.2.1
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
         with:
           role-to-assume: ${{ needs.versions.outputs.aws-role }}
           aws-region: ${{ needs.versions.outputs.aws-region }}
@@ -793,7 +793,7 @@ jobs:
       matrix: ${{ fromJSON(needs.versions.outputs.publish-matrix) }}
     steps:
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@254c19bd240aabef8777f48595e9d2d7b972184b # v6.2.1
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
         with:
           role-to-assume: ${{ needs.versions.outputs.aws-role }}
           aws-region: ${{ needs.versions.outputs.aws-region }}
@@ -844,7 +844,7 @@ jobs:
       matrix: ${{ fromJSON(needs.versions.outputs.publish-matrix) }}
     steps:
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@254c19bd240aabef8777f48595e9d2d7b972184b # v6.2.1
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
         with:
           role-to-assume: ${{ needs.versions.outputs.aws-role }}
           aws-region: ${{ needs.versions.outputs.aws-region }}

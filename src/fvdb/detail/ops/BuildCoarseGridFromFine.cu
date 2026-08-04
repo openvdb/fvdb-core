@@ -6,13 +6,16 @@
 #include <fvdb/detail/ops/BuildCoarseGridFromFine.h>
 #include <fvdb/detail/ops/BuildGridFromIjk.h>
 #include <fvdb/detail/ops/CoarseIjkForFineGrid.h>
+#include <fvdb/detail/ops/MakeContiguous.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/VoxelSizeUtils.h>
+#include <fvdb/detail/utils/nanovdb/CreateEmptyGridHandle.h>
 
 #include <nanovdb/NanoVDB.h>
 #include <nanovdb/tools/CreateNanoGrid.h>
 #include <nanovdb/tools/GridBuilder.h>
+#include <nanovdb/tools/cuda/CoarsenGrid.cuh>
 
 #include <c10/cuda/CUDACachingAllocator.h>
 #include <c10/cuda/CUDAGuard.h>
@@ -21,17 +24,85 @@
 
 namespace fvdb::detail::ops {
 
+// If `factor` is a uniform power of two (2,4,8,... in every axis), returns log2(factor) -- the
+// number of unit CoarsenGrid passes needed. Returns -1 otherwise (non-uniform or non-power-of-two
+// factors have no leaf-mask coarsening tool and keep the coordinate-list path). Factor 1 -> 0.
+static int
+uniformPowerOfTwoLog2(const nanovdb::Coord &factor) {
+    if (factor[0] != factor[1] || factor[1] != factor[2] || factor[0] < 1) {
+        return -1;
+    }
+    int v = factor[0];
+    if ((v & (v - 1)) != 0) {
+        return -1; // not a power of two
+    }
+    int log2 = 0;
+    while (v > 1) {
+        v >>= 1;
+        log2 += 1;
+    }
+    return log2;
+}
+
 template <torch::DeviceType>
 nanovdb::GridHandle<TorchDeviceBuffer>
 dispatchBuildCoarseGridFromFine(const GridBatchData &fineGridBatch,
                                 const nanovdb::Coord branchingFactor);
 
+nanovdb::GridHandle<TorchDeviceBuffer>
+coarseGridHandleFromFineCUDA(const GridBatchData &fineGridBatch,
+                             const nanovdb::Coord &branchingFactor) {
+    // fvdb coarsening maps fine voxel f to floor(f / factor); NanoVDB's CoarsenGrid maps f to
+    // floor(f / 2) per pass (its coarsenComponent is exactly floor(n/2) for all n, and it unions
+    // each 2^3 fine block). So a uniform power-of-two factor is that many CoarsenGrid passes -- no
+    // coordinate list, no radix sort. Non-power-of-two / non-uniform factors keep the coord path.
+    const int nPasses = uniformPowerOfTwoLog2(branchingFactor);
+    if (nPasses < 0) {
+        JaggedTensor coords = ops::coarseIJKForFineGrid(fineGridBatch, branchingFactor);
+        return ops::_createNanoGridFromIJK(coords);
+    }
+
+    c10::cuda::CUDAGuard deviceGuard(fineGridBatch.device());
+    at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream(fineGridBatch.device().index());
+    TorchDeviceBuffer guide(0, fineGridBatch.device());
+
+    if (nPasses == 0) {
+        // Coarsening factor 1 is the identity: the coarse grid == the fine grid. Compact the
+        // (possibly sliced) selected grids into a fresh contiguous handle.
+        return ops::contiguousGridHandle(fineGridBatch);
+    }
+
+    std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> handles;
+    handles.reserve(fineGridBatch.batchSize());
+    for (int64_t i = 0; i < fineGridBatch.batchSize(); i += 1) {
+        if (fineGridBatch.numVoxelsAt(i) == 0) {
+            handles.push_back(createEmptyGridHandle(fineGridBatch.device()));
+            continue;
+        }
+
+        nanovdb::OnIndexGrid *grid = fineGridBatch.deviceGridPtrAt(i);
+        TORCH_CHECK(grid, "Grid is null");
+        nanovdb::GridHandle<TorchDeviceBuffer> handle;
+        for (int p = 0; p < nPasses; p += 1) {
+            nanovdb::tools::cuda::CoarsenGrid<nanovdb::ValueOnIndex> op(grid, stream.stream());
+            op.setChecksum(nanovdb::CheckMode::Default);
+            op.setVerbose(0);
+            handle = op.getHandle(guide);
+            C10_CUDA_KERNEL_LAUNCH_CHECK();
+            grid = handle.deviceGrid<nanovdb::ValueOnIndex>();
+        }
+        handles.push_back(std::move(handle));
+    }
+
+    return handles.size() == 1 ? std::move(handles[0])
+                               : nanovdb::cuda::mergeGridHandles(handles, &guide);
+}
+
 template <>
 nanovdb::GridHandle<TorchDeviceBuffer>
 dispatchBuildCoarseGridFromFine<torch::kCUDA>(const GridBatchData &fineGridBatch,
                                               const nanovdb::Coord branchingFactor) {
-    JaggedTensor coords = ops::coarseIJKForFineGrid(fineGridBatch, branchingFactor);
-    return ops::_createNanoGridFromIJK(coords);
+    return coarseGridHandleFromFineCUDA(fineGridBatch, branchingFactor);
 }
 
 template <>
@@ -53,8 +124,8 @@ dispatchBuildCoarseGridFromFine<torch::kCPU>(const GridBatchData &fineBatchHdl,
 
     std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> batchHandles;
     batchHandles.reserve(fineGridHdl.gridCount());
-    for (uint32_t bidx = 0; bidx < fineGridHdl.gridCount(); bidx += 1) {
-        const nanovdb::OnIndexGrid *fineGrid = fineGridHdl.template grid<GridT>(bidx);
+    for (int64_t bidx = 0; bidx < fineBatchHdl.batchSize(); bidx += 1) {
+        const nanovdb::OnIndexGrid *fineGrid = fineBatchHdl.hostGridPtrAt(bidx);
         if (!fineGrid) {
             throw std::runtime_error("Failed to get pointer to nanovdb index grid");
         }

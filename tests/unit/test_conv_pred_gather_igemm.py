@@ -21,12 +21,12 @@ import unittest
 
 import torch
 from fvdb.convolution_plan import _PredGatherIGemmBackend
-from fvdb.utils.tests import (
+from fvdb_test_utils import (
     fourier_anti_symmetric_kernel,
     generate_hermit_impulses_dense,
     has_any_symmetry,
 )
-from fvdb.utils.tests.convolution_utils import (
+from fvdb_test_utils.convolution_utils import (
     conv_ground_truth_strided,
     create_grid_from_coords,
     diagnose_tensor_mismatch,

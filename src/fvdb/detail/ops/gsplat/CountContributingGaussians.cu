@@ -423,9 +423,12 @@ dispatchCountContributingGaussians<torch::kCUDA>(
                                tileSize);
             // Get C from tileOffsets for dense mode
             const auto C = tileOffsets.size(0);
+            // Use view() rather than reshape() here: these tensors are allocated contiguous by
+            // the kernel launch above, so view() cannot copy. If that ever stops being true,
+            // view() throws instead of silently making a copy.
             return std::make_tuple(
-                numContributingGaussians.jdata().reshape({C, imageHeight, imageWidth}),
-                alphas.jdata().reshape({C, imageHeight, imageWidth}));
+                numContributingGaussians.jdata().view({C, imageHeight, imageWidth}),
+                alphas.jdata().view({C, imageHeight, imageWidth}));
         }),
         AT_EXPAND(AT_FLOATING_TYPES),
         c10::kHalf);
