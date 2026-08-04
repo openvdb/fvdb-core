@@ -282,18 +282,15 @@ template <typename ScalarType, typename Camera> struct ProjectionForwardUT {
           mOutCompensationsAcc(outCompensations.defined() ? outCompensations.data_ptr<ScalarType>()
                                                           : nullptr) {}
 
-    /// @brief Project one gaussian for one camera.
+    /// @brief Project one Gaussian for one camera.
     ///
-    /// @param[in] idx Flattened index in \([0, C*N)\) mapping to (camId, gaussianId).
-    /// @return true if the gaussian is projected successfully, false otherwise.
+    /// @param[in] camId Camera index.
+    /// @param[in] gaussianId Gaussian index.
     inline __device__ void
-    projectionForward(int64_t idx) {
-        if (idx >= C * N) {
+    projectionForward(const int64_t camId, const int64_t gaussianId) {
+        if (gaussianId >= N) {
             return;
         }
-
-        const int64_t camId      = idx / N;
-        const int64_t gaussianId = idx % N;
 
         // Get Gaussian parameters
         const Vec3 meanWorldSpace(
@@ -428,27 +425,34 @@ template <typename ScalarType, typename Camera> struct ProjectionForwardUT {
         mOutConicsAcc[camId][gaussianId][1] = covar2dInverse[0][1];
         mOutConicsAcc[camId][gaussianId][2] = covar2dInverse[1][1];
         if (mOutCompensationsAcc != nullptr) {
-            mOutCompensationsAcc[idx] = compensation;
+            mOutCompensationsAcc[camId * N + gaussianId] = compensation;
         }
+    }
+
+    /// @brief Stage one camera's poses, intrinsics, and distortion into shared memory.
+    inline __device__ void
+    loadCameraIntoSharedMemory(const int64_t camId) {
+        alignas(Mat3) extern __shared__ char sharedMemory[];
+        mCamera.loadSharedMemory(camId, sharedMemory);
     }
 };
 
 /// @brief CUDA kernel wrapper for `ProjectionForwardUT`.
 ///
-/// Each thread processes multiple (camera, gaussian) pairs in a grid-stride loop.
+/// The grid Y axis selects the camera, while each thread processes Gaussians in a grid-stride loop.
 template <typename ScalarType, typename Camera>
 __global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
 projectionForwardUTKernel(int64_t offset,
                           int64_t count,
                           ProjectionForwardUT<ScalarType, Camera> projectionForward) {
-    alignas(nanovdb::math::Mat3<ScalarType>) extern __shared__ char sharedMemory[];
-    projectionForward.mCamera.loadSharedMemory(sharedMemory);
+    const int64_t camId = blockIdx.y;
+    projectionForward.loadCameraIntoSharedMemory(camId);
     __syncthreads();
 
-    // parallelize over C * N
-    for (auto idx = blockIdx.x * blockDim.x + threadIdx.x; idx < count;
-         idx += blockDim.x * gridDim.x) {
-        projectionForward.projectionForward(idx + offset);
+    // Parallelize over N.
+    for (auto gaussianId = blockIdx.x * blockDim.x + threadIdx.x; gaussianId < count;
+         gaussianId += blockDim.x * gridDim.x) {
+        projectionForward.projectionForward(camId, gaussianId + offset);
     }
 }
 
@@ -566,7 +570,7 @@ dispatchProjectGaussiansUnscentedFwd<torch::kCUDA>(
 
     using scalar_t = float;
 
-    const size_t NUM_BLOCKS = GET_BLOCKS(C * N, DEFAULT_BLOCK_DIM);
+    const dim3 NUM_BLOCKS(GET_BLOCKS(N, DEFAULT_BLOCK_DIM), C);
     if (cameraModel == DistortionModel::ORTHOGRAPHIC) {
         OrthographicWithDistortionCamera<scalar_t> camera(worldToCamMatricesStart,
                                                           worldToCamMatricesEnd,
@@ -577,7 +581,7 @@ dispatchProjectGaussiansUnscentedFwd<torch::kCUDA>(
                                                           0,
                                                           0,
                                                           rollingShutterType);
-        const size_t SHARED_MEM_SIZE = camera.numSharedMemBytes();
+        const size_t SHARED_MEM_SIZE = camera.numSharedMemBytesPerCamera();
         ProjectionForwardUT<scalar_t, OrthographicWithDistortionCamera<scalar_t>> projectionForward(
             eps2d,
             nearPlane,
@@ -599,8 +603,7 @@ dispatchProjectGaussiansUnscentedFwd<torch::kCUDA>(
             outConics,
             outCompensations);
         projectionForwardUTKernel<scalar_t, OrthographicWithDistortionCamera<scalar_t>>
-            <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, SHARED_MEM_SIZE, stream>>>(
-                0, C * N, projectionForward);
+            <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, SHARED_MEM_SIZE, stream>>>(0, N, projectionForward);
     } else {
         PerspectiveWithDistortionCamera<scalar_t> camera(worldToCamMatricesStart,
                                                          worldToCamMatricesEnd,
@@ -614,7 +617,7 @@ dispatchProjectGaussiansUnscentedFwd<torch::kCUDA>(
                                                          0,
                                                          rollingShutterType,
                                                          cameraModel);
-        const size_t SHARED_MEM_SIZE = camera.numSharedMemBytes();
+        const size_t SHARED_MEM_SIZE = camera.numSharedMemBytesPerCamera();
         ProjectionForwardUT<scalar_t, PerspectiveWithDistortionCamera<scalar_t>> projectionForward(
             eps2d,
             nearPlane,
@@ -636,8 +639,7 @@ dispatchProjectGaussiansUnscentedFwd<torch::kCUDA>(
             outConics,
             outCompensations);
         projectionForwardUTKernel<scalar_t, PerspectiveWithDistortionCamera<scalar_t>>
-            <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, SHARED_MEM_SIZE, stream>>>(
-                0, C * N, projectionForward);
+            <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, SHARED_MEM_SIZE, stream>>>(0, N, projectionForward);
     }
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 
