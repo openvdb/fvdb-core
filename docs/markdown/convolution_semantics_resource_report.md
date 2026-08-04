@@ -86,11 +86,13 @@ generated-transpose sweep: CPU build time is 7.519, 31.489, and 88.014 ms for
 `N=4,096`, `32,768`, and `110,592`; CUDA is 174.674, 171.061, and 180.815 ms.
 The measurement harness rejects cases over 8,000,000 exact candidate rows by
 default so the sweep cannot accidentally consume the machine. The library does
-not use that fixed benchmark limit: before allocating CUDA emission tensors it
-checks the exact `16*N*kernel_volume` staging request against reusable allocator
-cache plus new reservations allowed by current device memory and PyTorch's
-per-process memory fraction, while preserving bounded headroom for the output
-grid and live application data.
+not use that fixed benchmark limit: it checks the exact
+`16*N*kernel_volume` staging size with overflow-safe arithmetic before
+allocation, then lets PyTorch's allocator decide whether the construction fits.
+If allocation fails, fVDB preserves the `OutOfMemoryError` type and reports the
+exact coordinate-staging requirement with actionable context. A predictive
+capacity gate is intentionally avoided because inactive split cache is reusable
+by the allocator even though it cannot be released to the CUDA driver.
 
 ## Lazy plan-coverage follow-up
 
@@ -151,8 +153,9 @@ that it includes every allocator or final-grid byte.
   fields are the exact allocation-contract evidence for forward topology.
 - Generated transpose legitimately emits all taps and therefore scales with its
   full output population. The harness's 8,000,000-row cap is an intentional
-  measurement guard; the library's allocation preflight instead follows the
-  live CUDA memory budget and rejects unsafe staging before allocation.
+  measurement guard; the library instead validates the exact staging size and
+  contextualizes an allocator-authoritative out-of-memory failure. This avoids
+  false rejection when a request fits reusable split cache.
 - The original sweep tables were collected against the installed implementation
   at the commit recorded above. The lazy-coverage follow-up was collected from
   the later installed post-review worktree described in its section. Re-run the

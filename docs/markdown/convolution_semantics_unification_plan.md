@@ -900,8 +900,14 @@ work and staging rather than paying 64 tap checks per input.
 Generative transpose has `M=N*K_volume` because every tap is a real emission;
 its current subdivision/general paths already stage that order of data, so
 correcting the shortcut's phase does not create the same asymptotic regression.
-It still requires an allocation preflight, and a chunked fill is an allowed
-fallback for genuinely large `M`.
+It still requires overflow-safe calculation and validation of the exact staging
+size before allocation, and a chunked fill is an allowed fallback for genuinely
+large `M`. Live allocator capacity must not be predicted from aggregate CUDA
+cache statistics: inactive split blocks cannot be returned to the driver but
+remain reusable by PyTorch, so excluding them can reject allocations that the
+allocator can serve. The allocator's result is authoritative; catch only its
+out-of-memory exception and add the exact staging requirement and remediation
+without changing the exception type.
 
 The relation-derived componentwise `K=S` specializations from Section 11 bypass
 general enumeration. Forward computes the phase-aware quotient directly;

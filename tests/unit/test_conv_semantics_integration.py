@@ -3,7 +3,11 @@
 #
 """Production-facing issue #668 assertions carried across implementation slices."""
 
+import subprocess
+import sys
+import textwrap
 import warnings
+from pathlib import Path
 
 import pytest
 import torch
@@ -456,10 +460,105 @@ def test_forward_builder_exposes_exact_staging_accounting() -> None:
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
-def test_generated_transpose_rejects_unsafe_staging_before_allocation() -> None:
+def test_generated_transpose_reports_allocation_failure_with_staging_context() -> None:
     source = _grid([(0, 0, 0)], device="cuda")
-    with pytest.raises(RuntimeError, match=r"would stage .* safely available bytes"):
-        source.conv_transpose_grid(kernel_size=(1_000_000_000, 1_000_000_000, 1), stride=1)
+    with pytest.raises(
+        torch.OutOfMemoryError,
+        match=r"Coordinate staging alone requires .* input voxels \* .* kernel taps",
+    ):
+        source.conv_transpose_grid(kernel_size=(1_000_000_000, 100_000_000, 1), stride=1)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
+def test_generated_transpose_uses_inactive_split_cuda_cache() -> None:
+    script = textwrap.dedent(
+        """
+        import gc
+
+        import torch
+
+        import fvdb
+
+        MiB = 1024**2
+        GiB = 1024**3
+        if torch.cuda.memory.get_allocator_backend() != "native":
+            print("requires the native CUDA caching allocator")
+            raise SystemExit(77)
+
+        source = fvdb.GridBatch.from_ijk(
+            fvdb.JaggedTensor([torch.zeros((1, 3), dtype=torch.int32, device="cuda")])
+        )
+        torch.cuda.synchronize()
+        torch.cuda.empty_cache()
+        baseline = torch.cuda.memory_stats()
+        total_bytes = torch.cuda.get_device_properties(torch.cuda.current_device()).total_memory
+        target_limit_bytes = baseline["reserved_bytes.all.current"] + 196 * MiB
+        if target_limit_bytes >= total_bytes:
+            print("device is too small for the isolated split-cache witness")
+            raise SystemExit(77)
+
+        memory_fraction = target_limit_bytes / total_bytes
+        torch.cuda.set_per_process_memory_fraction(memory_fraction)
+        whole_block = torch.empty(128 * MiB, dtype=torch.uint8, device="cuda")
+        del whole_block
+        gc.collect()
+        torch.cuda.synchronize()
+        live_block = torch.empty(64 * MiB, dtype=torch.uint8, device="cuda")
+
+        stats = torch.cuda.memory_stats()
+        reserved_bytes = stats["reserved_bytes.all.current"]
+        active_bytes = stats["active_bytes.all.current"]
+        inactive_split_bytes = stats["inactive_split_bytes.all.current"]
+        driver_free_bytes, _ = torch.cuda.mem_get_info()
+        allocator_limit_bytes = int(total_bytes * memory_fraction)
+        reservation_allowance_bytes = max(allocator_limit_bytes - reserved_bytes, 0)
+        new_reservation_bytes = min(driver_free_bytes, reservation_allowance_bytes)
+        desired_headroom_bytes = min(GiB, max(64 * MiB, allocator_limit_bytes // 20))
+        headroom_bytes = min(desired_headroom_bytes, allocator_limit_bytes // 2)
+        old_cache_bytes = max(reserved_bytes - active_bytes - inactive_split_bytes, 0)
+        old_available_bytes = min(total_bytes, old_cache_bytes + new_reservation_bytes)
+        old_safe_bytes = max(old_available_bytes - headroom_bytes, 0)
+        reusable_cache_bytes = max(reserved_bytes - active_bytes, 0)
+        allocator_available_bytes = min(total_bytes, reusable_cache_bytes + new_reservation_bytes)
+        allocator_safe_bytes = max(allocator_available_bytes - headroom_bytes, 0)
+
+        kernel_size = 80
+        staging_bytes = 16 * kernel_size**3
+        if not (
+            inactive_split_bytes >= staging_bytes
+            and old_safe_bytes < staging_bytes <= allocator_safe_bytes
+        ):
+            print(
+                "allocator did not form the required witness: "
+                f"inactive_split={inactive_split_bytes}, old_safe={old_safe_bytes}, "
+                f"allocator_safe={allocator_safe_bytes}, request={staging_bytes}"
+            )
+            raise SystemExit(77)
+
+        result = source.conv_transpose_grid(kernel_size=kernel_size, stride=1)
+        torch.cuda.synchronize()
+        assert result.total_voxels == kernel_size**3
+        assert live_block.numel() == 64 * MiB
+        print(
+            "split cache reused: "
+            f"inactive_split={inactive_split_bytes}, old_safe={old_safe_bytes}, request={staging_bytes}"
+        )
+        """
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    if completed.returncode == 77:
+        pytest.skip(completed.stdout.strip())
+    assert (
+        completed.returncode == 0
+    ), f"split-cache subprocess failed\nstdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
+    assert "split cache reused" in completed.stdout
 
 
 def test_generated_forward_grid_uses_convolution_lattice_transform() -> None:

@@ -13,12 +13,9 @@
 
 #include <nanovdb/tools/CreateNanoGrid.h>
 
-#include <c10/cuda/CUDACachingAllocator.h>
-#include <c10/cuda/CUDAException.h>
-#include <c10/cuda/CUDAGuard.h>
+#include <c10/util/Exception.h>
 #include <torch/types.h>
 
-#include <algorithm>
 #include <limits>
 
 namespace fvdb {
@@ -45,94 +42,6 @@ checkedBytes(int64_t count, uint64_t bytesPerElement, const char *description) {
                       description,
                       " byte count overflows uint64");
     return unsignedCount * bytesPerElement;
-}
-
-uint64_t
-inactiveCudaCacheBytes(c10::CachingDeviceAllocator::DeviceStats const &stats) {
-    constexpr auto aggregate = static_cast<size_t>(c10::CachingAllocator::StatType::AGGREGATE);
-    const int64_t reserved   = stats.reserved_bytes[aggregate].current;
-    const int64_t active     = stats.active_bytes[aggregate].current;
-    const int64_t fragmented = stats.inactive_split_bytes[aggregate].current;
-    if (reserved <= 0 || active >= reserved) {
-        return 0;
-    }
-
-    // Do not count inactive split blocks as generally reusable: their aggregate byte count can
-    // overstate what is available for either of the two large staging allocations.
-    const int64_t inactive = reserved - std::max<int64_t>(active, 0);
-    return static_cast<uint64_t>(inactive - std::min(std::max<int64_t>(fragmented, 0), inactive));
-}
-
-uint64_t
-cudaReservedBytes(c10::CachingDeviceAllocator::DeviceStats const &stats) {
-    constexpr auto aggregate = static_cast<size_t>(c10::CachingAllocator::StatType::AGGREGATE);
-    return static_cast<uint64_t>(std::max<int64_t>(stats.reserved_bytes[aggregate].current, 0));
-}
-
-void
-checkCudaTransposeStaging(const torch::Device &device,
-                          int64_t inputVoxelCount,
-                          int64_t kernelVolume,
-                          uint64_t requestedBytes) {
-    if (requestedBytes == 0) {
-        return;
-    }
-
-    const c10::DeviceIndex deviceIndex = device.index();
-    const at::cuda::CUDAGuard deviceGuard(device);
-    size_t driverFreeBytes = 0;
-    size_t totalBytes      = 0;
-    C10_CUDA_CHECK(cudaMemGetInfo(&driverFreeBytes, &totalBytes));
-    auto *allocator           = c10::cuda::CUDACachingAllocator::get();
-    const auto allocatorStats = c10::cuda::CUDACachingAllocator::getDeviceStats(deviceIndex);
-    const uint64_t inactiveCacheBytes  = inactiveCudaCacheBytes(allocatorStats);
-    const uint64_t reservedBytes       = cudaReservedBytes(allocatorStats);
-    const double memoryFraction        = allocator->getMemoryFraction(deviceIndex);
-    const uint64_t allocatorLimitBytes = static_cast<uint64_t>(
-        std::min<long double>(totalBytes, static_cast<long double>(totalBytes) * memoryFraction));
-    const uint64_t reservationAllowanceBytes =
-        allocatorLimitBytes > reservedBytes ? allocatorLimitBytes - reservedBytes : 0;
-    const uint64_t newReservationBytes =
-        std::min<uint64_t>(driverFreeBytes, reservationAllowanceBytes);
-    const uint64_t allocatorAvailableBytes =
-        inactiveCacheBytes > totalBytes - std::min<uint64_t>(totalBytes, newReservationBytes)
-            ? totalBytes
-            : inactiveCacheBytes + newReservationBytes;
-
-    // Preserve enough space for allocator rounding, the output NanoVDB, and ordinary live
-    // application tensors. The cap avoids withholding an excessive fraction on large devices.
-    constexpr uint64_t minimumHeadroomBytes = UINT64_C(64) * 1024 * 1024;
-    constexpr uint64_t maximumHeadroomBytes = UINT64_C(1024) * 1024 * 1024;
-    const uint64_t desiredHeadroomBytes =
-        std::min(maximumHeadroomBytes, std::max(minimumHeadroomBytes, allocatorLimitBytes / 20));
-    const uint64_t headroomBytes = std::min(desiredHeadroomBytes, allocatorLimitBytes / 2);
-    const uint64_t safeAvailableBytes =
-        allocatorAvailableBytes > headroomBytes ? allocatorAvailableBytes - headroomBytes : 0;
-
-    TORCH_CHECK(
-        requestedBytes <= safeAvailableBytes,
-        "Generative transposed convolution would stage ",
-        requestedBytes,
-        " bytes for ",
-        inputVoxelCount,
-        " input voxels * ",
-        kernelVolume,
-        " kernel taps, but CUDA device ",
-        static_cast<int>(deviceIndex),
-        " has only ",
-        safeAvailableBytes,
-        " safely available bytes (",
-        driverFreeBytes,
-        " driver-free; ",
-        inactiveCacheBytes,
-        " reusable PyTorch cache + ",
-        newReservationBytes,
-        " new-allocation allowance under PyTorch memory fraction ",
-        memoryFraction,
-        " - ",
-        headroomBytes,
-        " reserved headroom). Reduce the input or kernel size, provide an explicit target grid "
-        "for restricted transposed convolution, or release CUDA memory before retrying.");
 }
 
 bool
@@ -258,13 +167,28 @@ dispatchBuildGridForConvTranspose<torch::kCUDA>(const GridBatchData &baseGridHdl
                                                 const nanovdb::Coord &stride) {
     ConvolutionGeometry const geometry(kernelSize, stride);
     const uint64_t stagingBytes = checkTransposeInputAndKernel(baseGridHdl.totalVoxels(), geometry);
-    checkCudaTransposeStaging(
-        baseGridHdl.device(), baseGridHdl.totalVoxels(), geometry.kernelVolume(), stagingBytes);
-    if (isUnshiftedSubdivision(geometry)) {
-        return ops::_createNanoGridFromIJK(
-            fineIJKForCoarseGrid(baseGridHdl, geometry.stride(), std::nullopt));
+    try {
+        if (isUnshiftedSubdivision(geometry)) {
+            return ops::_createNanoGridFromIJK(
+                fineIJKForCoarseGrid(baseGridHdl, geometry.stride(), std::nullopt));
+        }
+        return ops::_createNanoGridFromIJK(convTransposeIJKForGrid(baseGridHdl, geometry));
+    } catch (const c10::OutOfMemoryError &error) {
+        TORCH_CHECK_WITH(
+            OutOfMemoryError,
+            false,
+            "Generative transposed-convolution topology construction ran out of CUDA memory. "
+            "Coordinate staging alone requires ",
+            stagingBytes,
+            " bytes for ",
+            baseGridHdl.totalVoxels(),
+            " input voxels * ",
+            geometry.kernelVolume(),
+            " kernel taps. Reduce the input or kernel size, provide an explicit target grid for "
+            "restricted transposed convolution, or release CUDA memory before retrying. "
+            "Original allocator error: ",
+            error.what_without_backtrace());
     }
-    return ops::_createNanoGridFromIJK(convTransposeIJKForGrid(baseGridHdl, geometry));
 }
 
 template <>

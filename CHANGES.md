@@ -22,7 +22,8 @@ fVDB Version History
   had zero linear degree before bias, but a model with bias can observe their removal.
 - Full coverage histograms are computed only when `ConvolutionPlan.coverage_report` is requested and are shared
   with exact plan transposes; generated-support and strict-target zero-row checks remain eager. Generative CUDA
-  transpose checks its exact emission-staging request against the live allocator budget before allocation.
+  transpose checks its exact emission-staging size before allocation and adds that context if PyTorch's allocator
+  reports an out-of-memory failure; allocator capacity is not predicted from aggregate cache statistics.
 - **Migration:** Invalidate serialized or in-memory topology/plan caches when upgrading: cache keys must include
   the convolution-semantics version. Weight spatial ordering is unchanged, but affected checkpoints can produce
   different topologies and world registration. No legacy geometry mode is shipped in 0.6.0; migrate model
