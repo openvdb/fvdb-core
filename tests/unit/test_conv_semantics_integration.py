@@ -8,10 +8,13 @@ import warnings
 import pytest
 import torch
 
-from fvdb import ConvolutionPlan, GridBatch, JaggedTensor, _fvdb_cpp
+import fvdb.convolution_plan as convolution_plan_module
+from fvdb import ConvolutionPlan, Grid, GridBatch, JaggedTensor, _fvdb_cpp
 from fvdb.convolution_plan import _GatherScatterBackend, _MatmulBackend, _PredGatherIGemmBackend
 from fvdb.utils.tests.convolution_semantics_oracle import (
     ConvolutionRelation,
+    dense_forward_oracle,
+    dense_transpose_oracle,
     forward_degrees,
     forward_support,
     relation_edges,
@@ -26,6 +29,10 @@ def _grid(coordinates, *, voxel_sizes=1.0, origins=(0.0, 0.0, 0.0), device="cpu"
 
 def _coordinate_set(grid: GridBatch) -> set[tuple[int, int, int]]:
     return {tuple(coordinate) for coordinate in grid.ijk.jdata.cpu().tolist()}
+
+
+def _dense_rows(result, coordinates) -> torch.Tensor:
+    return torch.stack([result.value_at(tuple(coordinate)) for coordinate in coordinates])
 
 
 def _gather_scatter_topology(plan: ConvolutionPlan) -> _fvdb_cpp.GatherScatterDefaultTopology:
@@ -141,6 +148,70 @@ def test_generated_forward_all_one_values_equal_independent_degrees_cpu(kernel_s
     torch.testing.assert_close(values, expected.to(dtype=values.dtype), rtol=0, atol=0)
 
 
+@pytest.mark.parametrize(
+    "device",
+    [
+        "cpu",
+        pytest.param("cuda", marks=pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")),
+    ],
+)
+@pytest.mark.parametrize("transposed", [False, True], ids=["forward", "transpose"])
+@pytest.mark.parametrize(
+    ("kernel_size", "stride"),
+    [
+        pytest.param((4, 2, 2), (4, 2, 2), id="phase-aware-even-k-equals-s"),
+        pytest.param((2, 3, 4), (1, 2, 3), id="mixed-axis"),
+        pytest.param((2, 1, 3), (3, 2, 4), id="kernel-smaller-than-stride"),
+    ],
+)
+def test_generated_values_and_gradients_match_dense_oracle(device, transposed, kernel_size, stride) -> None:
+    relation = ConvolutionRelation(kernel_size, stride)
+    coordinates = sorted(
+        {relation.fine_from_coarse(coarse, tap) for coarse in ((0, 0, 0), (-2, 1, -1)) for tap in relation.taps()}
+    )
+    assert {edge.tap for edge in relation_edges(coordinates, relation)} == set(relation.taps())
+    source = _grid(coordinates, device=device)
+    source_coordinates = [tuple(coordinate) for coordinate in source.ijk.jdata.cpu().tolist()]
+    factory = ConvolutionPlan.from_grid_batch_transposed if transposed else ConvolutionPlan.from_grid_batch
+    plan = factory(
+        kernel_size=kernel_size,
+        stride=stride,
+        source_grid=source,
+        acknowledge_incomplete_coverage=True,
+    )
+    target_coordinates = [tuple(coordinate) for coordinate in plan.target_grid_batch.ijk.jdata.cpu().tolist()]
+
+    generator = torch.Generator().manual_seed(668 + int(transposed))
+    base_features = torch.randn((source.total_voxels, 2), generator=generator, dtype=torch.float64).to(device)
+    weight_count = 3 * 2 * kernel_size[0] * kernel_size[1] * kernel_size[2]
+    base_weights = (
+        torch.arange(1, weight_count + 1, dtype=torch.float64).reshape(3, 2, *kernel_size).div(weight_count).to(device)
+    )
+    production_features = base_features.detach().clone().requires_grad_()
+    production_weights = base_weights.detach().clone().requires_grad_()
+    oracle_features = base_features.detach().clone().requires_grad_()
+    oracle_weights = base_weights.detach().clone().requires_grad_()
+
+    production_values = plan.execute(production_features, production_weights)
+    oracle = (
+        dense_transpose_oracle(source_coordinates, oracle_features, oracle_weights, relation)
+        if transposed
+        else dense_forward_oracle(source_coordinates, oracle_features, oracle_weights, relation)
+    )
+    oracle_values = _dense_rows(oracle, target_coordinates)
+    torch.testing.assert_close(production_values, oracle_values, rtol=1.0e-11, atol=1.0e-11)
+
+    probe = torch.arange(1, production_values.numel() + 1, dtype=torch.float64, device=device).reshape_as(
+        production_values
+    )
+    production_gradients = torch.autograd.grad(
+        torch.sum(production_values * probe), (production_features, production_weights)
+    )
+    oracle_gradients = torch.autograd.grad(torch.sum(oracle_values * probe), (oracle_features, oracle_weights))
+    torch.testing.assert_close(production_gradients[0], oracle_gradients[0], rtol=1.0e-11, atol=1.0e-11)
+    torch.testing.assert_close(production_gradients[1], oracle_gradients[1], rtol=1.0e-11, atol=1.0e-11)
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
 @pytest.mark.parametrize(
     ("kernel_size", "stride"),
@@ -183,11 +254,59 @@ def test_generated_topology_and_all_one_degrees_cuda(kernel_size, stride) -> Non
     torch.testing.assert_close(generated_fine.origins.cpu(), fine.origins.cpu())
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
+def test_generated_cuda_topology_matches_independent_relation_for_multi_grid_batch() -> None:
+    relation = ConvolutionRelation((1, 1, 1), (2, 3, 4))
+    coordinate_batches = [
+        [(-4, -3, 0), (0, 0, 0), (2, 3, 4)],
+        [(-1, 0, 0), (0, 1, 0), (0, 0, 2)],
+        [(-2, -3, -4), (1, 3, 4), (4, 6, 8)],
+    ]
+    fine = GridBatch.from_ijk(
+        JaggedTensor(
+            [torch.tensor(coordinates, dtype=torch.int32, device="cuda") for coordinates in coordinate_batches]
+        )
+    )
+
+    coarse = fine.conv_grid(kernel_size=relation.kernel_size, stride=relation.stride)
+    expected_coarse_batches = [forward_support(coordinates, relation) for coordinates in coordinate_batches]
+    assert expected_coarse_batches[1] == set()
+    for batch_index, expected in enumerate(expected_coarse_batches):
+        assert {tuple(coordinate) for coordinate in coarse.ijk[batch_index].jdata.cpu().tolist()} == expected
+
+    generated_fine = coarse.conv_transpose_grid(kernel_size=relation.kernel_size, stride=relation.stride)
+    for batch_index, coarse_coordinates in enumerate(expected_coarse_batches):
+        expected = transpose_support(coarse_coordinates, relation)
+        assert {tuple(coordinate) for coordinate in generated_fine.ijk[batch_index].jdata.cpu().tolist()} == expected
+
+
 def test_k1_s1_generated_grid_preserves_public_and_data_identity() -> None:
     fine = _grid([(-1, 0, 0), (0, 0, 0), (1, 0, 0)])
-    generated = fine.conv_grid(kernel_size=1, stride=1)
-    assert generated is fine
-    assert generated.is_same(fine)
+    generated_forward = fine.conv_grid(kernel_size=1, stride=1)
+    generated_transpose = fine.conv_transpose_grid(kernel_size=1, stride=1)
+    assert generated_forward is fine
+    assert generated_transpose is fine
+    assert generated_forward.is_same(fine)
+
+    single = Grid.from_ijk(torch.tensor([[-1, 0, 0], [0, 0, 0], [1, 0, 0]], dtype=torch.int32))
+    assert single.conv_grid(kernel_size=1, stride=1) is single
+    assert single.conv_transpose_grid(kernel_size=1, stride=1) is single
+
+
+def test_generated_transpose_k1_s1_uses_matmul_and_compact_weights() -> None:
+    source = _grid([(-1, 0, 0), (0, 0, 0), (3, 0, 0)])
+    plan = ConvolutionPlan.from_grid_batch_transposed(
+        kernel_size=1,
+        stride=1,
+        source_grid=source,
+        channel_pairs=((2, 3),),
+    )
+    assert plan.target_grid_batch is source
+    assert isinstance(plan._backend, _MatmulBackend)
+
+    features = torch.tensor([[2.0, -1.0], [0.5, 3.0], [-4.0, 2.0]], dtype=torch.float64)
+    weights = torch.tensor([[1.0, 2.0], [-3.0, 0.5], [4.0, -2.0]], dtype=torch.float64)
+    torch.testing.assert_close(plan.execute(features, weights), features @ weights.transpose(0, 1))
 
 
 def test_k1_strided_forward_is_residue_sampling_not_floor_coarsening() -> None:
@@ -236,6 +355,34 @@ def test_topology_policy_is_symmetric_and_reports_exact_output_coverage() -> Non
     assert _coordinate_set(transposed.target_grid_batch) == {(0, 0, 0), (1, 0, 0)}
     assert transposed.coverage_report is not None
     assert transposed.coverage_report.output_zero_count == 0
+
+
+def test_coverage_report_is_lazy_and_shared_by_exact_transposes(monkeypatch) -> None:
+    coverage_calls = 0
+    original_coverage_report = convolution_plan_module._coverage_report
+
+    def counted_coverage_report(*args, **kwargs):
+        nonlocal coverage_calls
+        coverage_calls += 1
+        return original_coverage_report(*args, **kwargs)
+
+    monkeypatch.setattr(convolution_plan_module, "_coverage_report", counted_coverage_report)
+    source = _grid([(-4, 0, 0), (-1, 0, 0), (0, 0, 0), (3, 0, 0), (8, 0, 0)])
+    plan = ConvolutionPlan.from_grid_batch(kernel_size=(4, 1, 1), stride=(2, 1, 1), source_grid=source)
+    transposed = ConvolutionPlan.from_plan_transposed(plan)
+    twice_transposed = ConvolutionPlan.from_plan_transposed(transposed)
+    assert coverage_calls == 0
+
+    transposed_report = transposed.coverage_report
+    assert transposed_report is not None
+    assert coverage_calls == 1
+    report = plan.coverage_report
+    assert report is not None
+    assert coverage_calls == 1
+    assert transposed_report.input_degree_histogram == report.output_degree_histogram
+    assert transposed_report.output_degree_histogram == report.input_degree_histogram
+    assert twice_transposed.coverage_report is report
+    assert coverage_calls == 1
 
 
 def test_topology_policy_rejects_inconsistent_factory_arguments() -> None:
@@ -306,6 +453,13 @@ def test_forward_builder_exposes_exact_staging_accounting() -> None:
         staged["count_requested_bytes"] + staged["prefix_requested_bytes"],
         staged["prefix_requested_bytes"] + staged["emission_requested_bytes"],
     )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
+def test_generated_transpose_rejects_unsafe_staging_before_allocation() -> None:
+    source = _grid([(0, 0, 0)], device="cuda")
+    with pytest.raises(RuntimeError, match=r"would stage .* safely available bytes"):
+        source.conv_transpose_grid(kernel_size=(1_000_000_000, 1_000_000_000, 1), stride=1)
 
 
 def test_generated_forward_grid_uses_convolution_lattice_transform() -> None:

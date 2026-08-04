@@ -84,7 +84,32 @@ forward emission count; the count-fill cases assert `!used_direct_projection`,
 The raw JSON includes every case at all three geometric sizes, including the
 generated-transpose sweep: CPU build time is 7.519, 31.489, and 88.014 ms for
 `N=4,096`, `32,768`, and `110,592`; CUDA is 174.674, 171.061, and 180.815 ms.
-The transpose preflight rejects any case over 8,000,000 exact candidate rows.
+The measurement harness rejects cases over 8,000,000 exact candidate rows by
+default so the sweep cannot accidentally consume the machine. The library does
+not use that fixed benchmark limit: before allocating CUDA emission tensors it
+checks the exact `16*N*kernel_volume` staging request against reusable allocator
+cache plus new reservations allowed by current device memory and PyTorch's
+per-process memory fraction, while preserving bounded headroom for the output
+grid and live application data.
+
+## Lazy plan-coverage follow-up
+
+On 2026-08-03, after the original recorded sweep commit, the post-review
+worktree was installed and the CUDA plan path was measured again on the same
+machine with a prebuilt full-support target for a dense `128^3` source and
+`K=3,S=1`. The rulebook has 56,623,104 pairs between 2,097,152 input rows and
+2,197,000 output rows. Three synchronized plan constructions took 62.395,
+63.996, and 62.483 ms (62.483 ms median), with 432.001 MiB peak allocation above
+the source/target baseline for the retained int32 rulebook indices.
+
+Full degree histograms are no longer part of that construction path. Their
+first explicit access took 72.327 ms and 32.762 MiB peak allocation above the
+completed plan, exactly the scale of the two int64 degree vectors rather than
+either 56.6-million-element index cast. Cached access took 0.007 ms. Constructing
+the exact plan transpose took 0.296 ms, and accessing its swapped cached report
+took 0.013 ms without scanning the reversed rulebook. These are synchronized
+single-run diagnostic timings except for the three-sample construction median;
+they characterize allocation and latency boundaries rather than throughput.
 
 ## Execution sanity timing
 
@@ -125,6 +150,10 @@ that it includes every allocator or final-grid byte.
 - CPU HWM deltas may undercount as described above; the native requested-staging
   fields are the exact allocation-contract evidence for forward topology.
 - Generated transpose legitimately emits all taps and therefore scales with its
-  full output population; its 8,000,000-row safety cap is intentional.
-- These data were collected against the installed, verified implementation at
-  the recorded commit. Re-run the command after compiler/runtime changes.
+  full output population. The harness's 8,000,000-row cap is an intentional
+  measurement guard; the library's allocation preflight instead follows the
+  live CUDA memory budget and rejects unsafe staging before allocation.
+- The original sweep tables were collected against the installed implementation
+  at the commit recorded above. The lazy-coverage follow-up was collected from
+  the later installed post-review worktree described in its section. Re-run the
+  measurements after compiler/runtime changes.

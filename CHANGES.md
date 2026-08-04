@@ -16,9 +16,13 @@ fVDB Version History
   A saved decoder target is an explicit restriction and may have zero-degree rows; transposed convolution is
   adjoint connectivity, not a value inverse. `ConvolutionPlan.from_plan_transposed` reverses a plan's exact
   finite edges; a tied weighted adjoint uses `weight.transpose(0, 1).contiguous()`.
-- `Grid.conv_grid(1, 1)` and `GridBatch.conv_grid(1, 1)` now return the source object. One-tap convolutions with
-  larger stride sample stride-aligned residues rather than coarsening all blocks. Removed rows had zero linear
-  degree before bias, but a model with bias can observe their removal.
+- `Grid.conv_grid(1, 1)`, `GridBatch.conv_grid(1, 1)`, and their transposed-grid counterparts now return the
+  source object, preserving the identity matmul path and its compact two-dimensional weight layout. One-tap
+  convolutions with larger stride sample stride-aligned residues rather than coarsening all blocks. Removed rows
+  had zero linear degree before bias, but a model with bias can observe their removal.
+- Full coverage histograms are computed only when `ConvolutionPlan.coverage_report` is requested and are shared
+  with exact plan transposes; generated-support and strict-target zero-row checks remain eager. Generative CUDA
+  transpose checks its exact emission-staging request against the live allocator budget before allocation.
 - **Migration:** Invalidate serialized or in-memory topology/plan caches when upgrading: cache keys must include
   the convolution-semantics version. Weight spatial ordering is unchanged, but affected checkpoints can produce
   different topologies and world registration. No legacy geometry mode is shipped in 0.6.0; migrate model
