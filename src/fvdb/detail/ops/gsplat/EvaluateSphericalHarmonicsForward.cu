@@ -472,36 +472,38 @@ dispatchEvaluateSphericalHarmonicsFwd<torch::kPrivateUse1>(const int64_t shDegre
         int64_t elementOffset, elementCount;
         std::tie(elementOffset, elementCount) = deviceChunk(N, deviceId);
 
-        const auto NUM_BLOCKS = GET_BLOCKS(C * elementCount * D, DEFAULT_BLOCK_DIM);
+        if (elementCount > 0) {
+            const auto NUM_BLOCKS = GET_BLOCKS(C * elementCount * D, DEFAULT_BLOCK_DIM);
 
-        if (hasShNCoeffs && shDegreeToUse > 0) {
-            computeSh<scalar_t><<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
-                elementOffset,
-                elementCount,
-                C,
-                N,
-                D,
-                shDegreeToUse,
-                means.data_ptr<scalar_t>(),
-                worldToCamMatrices.data_ptr<scalar_t>(),
-                nullptr,
-                nullptr,
-                sh0Coeffs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
-                shNCoeffs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
-                radiiPtr,
-                renderQuantities.data_ptr<scalar_t>());
-            C10_CUDA_KERNEL_LAUNCH_CHECK();
-        } else {
-            computeShDiffuseOnly<scalar_t><<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
-                elementOffset,
-                elementCount,
-                C,
-                N,
-                D,
-                sh0Coeffs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
-                radiiPtr,
-                renderQuantities.data_ptr<scalar_t>());
-            C10_CUDA_KERNEL_LAUNCH_CHECK();
+            if (hasShNCoeffs && shDegreeToUse > 0) {
+                computeSh<scalar_t><<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
+                    elementOffset,
+                    elementCount,
+                    C,
+                    N,
+                    D,
+                    shDegreeToUse,
+                    means.data_ptr<scalar_t>(),
+                    worldToCamMatrices.data_ptr<scalar_t>(),
+                    nullptr,
+                    nullptr,
+                    sh0Coeffs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
+                    shNCoeffs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
+                    radiiPtr,
+                    renderQuantities.data_ptr<scalar_t>());
+                C10_CUDA_KERNEL_LAUNCH_CHECK();
+            } else {
+                computeShDiffuseOnly<scalar_t><<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
+                    elementOffset,
+                    elementCount,
+                    C,
+                    N,
+                    D,
+                    sh0Coeffs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
+                    radiiPtr,
+                    renderQuantities.data_ptr<scalar_t>());
+                C10_CUDA_KERNEL_LAUNCH_CHECK();
+            }
         }
     }
 

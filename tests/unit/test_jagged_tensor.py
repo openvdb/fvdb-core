@@ -22,10 +22,12 @@ from fvdb.types import (
     is_LShapeSpec,
     is_RShapeSpec,
 )
-from fvdb_test_utils import get_fvdb_test_data_path, probabilistic_test
+from fvdb.utils.tests import get_fvdb_test_data_path, probabilistic_test
 from parameterized import parameterized
 
 import fvdb
+
+from . import expand_tests
 
 
 def _scatter_reduce_ref(src, index, dim_size, reduce):
@@ -119,7 +121,7 @@ class TestJaggedTensor(unittest.TestCase):
         else:
             assert False, "jagged tensor ldim should be 1 or 2"
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_jsqueeze_noop(self, device, dtype):
         tensor_list = [torch.rand(100 + np.random.randint(10), 3, device=device, dtype=dtype) for _ in range(7)]
         jt = fvdb.JaggedTensor(tensor_list)
@@ -138,7 +140,7 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertEqual(jt_squeezed.ldim, jt.ldim)
         self.assertEqual(jt_squeezed.eshape, jt.eshape)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_jsqueeze_noop_list_of_lists(self, device, dtype):
         tensor_list = [torch.rand(100 + np.random.randint(10), 3, device=device, dtype=dtype) for _ in range(7)]
         jt = fvdb.JaggedTensor([tensor_list, tensor_list])
@@ -157,7 +159,7 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertEqual(jt_squeezed.ldim, jt.ldim)
         self.assertEqual(jt_squeezed.eshape, jt.eshape)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_jsqueeze_empty_list(self, device, dtype):
         tensor_list = [torch.rand(0, 1, 3, device=device, dtype=dtype) for _ in range(7)]
         jt = fvdb.JaggedTensor(tensor_list)
@@ -177,7 +179,7 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertEqual(jt_squeezed.ldim, jt.ldim)
         self.assertNotEqual(jt_squeezed.eshape, jt.eshape)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_jsqueeze_empty_list_of_lists(self, device, dtype):
         tensor_list = [torch.rand(0, 1, 3, device=device, dtype=dtype) for _ in range(7)]
         jt = fvdb.JaggedTensor([tensor_list, tensor_list])
@@ -197,7 +199,7 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertEqual(jt_squeezed.ldim, jt.ldim)
         self.assertNotEqual(jt_squeezed.eshape, jt.eshape)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_jsqueeze_simple(self, device, dtype):
         tensor_list = [torch.rand(100 + np.random.randint(10), 1, 3, device=device, dtype=dtype) for _ in range(7)]
         jt = fvdb.JaggedTensor(tensor_list)
@@ -217,7 +219,7 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertEqual(jt_squeezed.ldim, jt.ldim)
         self.assertNotEqual(jt_squeezed.eshape, jt.eshape)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_jsqueeze_simple_list_of_lists(self, device, dtype):
         tensor_list = [torch.rand(100 + np.random.randint(10), 1, 3, device=device, dtype=dtype) for _ in range(7)]
         jt = fvdb.JaggedTensor([tensor_list, tensor_list])
@@ -237,7 +239,7 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertEqual(jt_squeezed.ldim, jt.ldim)
         self.assertNotEqual(jt_squeezed.eshape, jt.eshape)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_jsqueeze_empty_tensors(self, device, dtype):
         tensor_list = [torch.rand(100 + np.random.randint(10), 1, 3, device=device, dtype=dtype) for _ in range(3)]
         tensor_list += [torch.empty(0, 1, 3, device=device, dtype=dtype) for _ in range(4)]
@@ -266,7 +268,7 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertEqual(jt_squeezed.ldim, jt.ldim)
         self.assertNotEqual(jt_squeezed.eshape, jt.eshape)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_jsqueeze_empty_tensors_list_of_lists(self, device, dtype):
         tensor_list = [torch.rand(100 + np.random.randint(10), 1, 3, device=device, dtype=dtype) for _ in range(3)]
         tensor_list += [torch.empty(0, 1, 3, device=device, dtype=dtype) for _ in range(4)]
@@ -295,7 +297,7 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertEqual(jt_squeezed.ldim, jt.ldim)
         self.assertNotEqual(jt_squeezed.eshape, jt.eshape)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_jcat_along_dim_0_with_one_tensor(self, device, dtype):
         batch_size = 1
 
@@ -324,7 +326,7 @@ class TestJaggedTensor(unittest.TestCase):
 
         self.assertTrue(torch.equal(jagged_from_concat_list.jdata, jcat_result.jdata))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_pickle(self, device, dtype):
         jt, _ = self.mklol(7, 4, 8, device, dtype)
         with tempfile.NamedTemporaryFile() as tmp:
@@ -359,7 +361,7 @@ class TestJaggedTensor(unittest.TestCase):
             self.assertTrue(jt.dtype == jt2.dtype)
             self.assertEqual(jt.lshape, jt2.lshape)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_jflatten_list_of_lists(self, device, dtype):
         jt1, l1 = self.mklol(7, 4, 8, device, dtype)
         jt2, l2 = self.mklol(3, 7, 11, device, dtype)
@@ -421,7 +423,7 @@ class TestJaggedTensor(unittest.TestCase):
         with self.assertRaises(IndexError):
             jt4 = jt2.jflatten(dim=-3)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_jflatten_list(self, device, dtype):
         jt1 = fvdb.JaggedTensor.from_rand([100, 200, 300, 400, 500, 600, 700, 800], [2, 3, 4])
 
@@ -448,7 +450,7 @@ class TestJaggedTensor(unittest.TestCase):
         with self.assertRaises(IndexError):
             jt3 = jt1.jflatten(dim=2)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_concatenation(self, device, dtype):
         jt1, l1 = self.mklol(
             7,
@@ -543,7 +545,7 @@ class TestJaggedTensor(unittest.TestCase):
         with self.assertRaises(IndexError):
             jtcat = fvdb.jcat([jt1, jt1], dim=3)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_jagged_concatenation(self, device, dtype):
         jt1, list1 = self.mklol(7, 4, 8, device, dtype)
         jt2, list2 = self.mklol(3, 7, 11, device, dtype)
@@ -616,7 +618,7 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertEqual(randpts.dtype, from_dtype)
         self.assertEqual(randfeats.dtype, to_dtype)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_rmask(self, device, dtype):
         num_grids = np.random.randint(1, 128)
         nvox_per_grid = NVOX if device == "cuda" else 100
@@ -638,7 +640,7 @@ class TestJaggedTensor(unittest.TestCase):
         self.check_lshape(masked_randpts, masked_list)
         self.assertEqual(masked_randpts.jdata.shape[0], mask.sum().item())
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_jagged_tensor_one_element(self, device, dtype):
         if dtype == torch.bfloat16:
             self.skipTest("GridBatch.from_points does not support bfloat16")
@@ -663,7 +665,7 @@ class TestJaggedTensor(unittest.TestCase):
         self.check_lshape(ray_dir, [ray_d])
         grid.voxels_along_rays(ray_orig, ray_dir, 1)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_indexing(self, device, dtype):
         if dtype == torch.bfloat16:
             self.skipTest("GridBatch.from_points does not support bfloat16")
@@ -752,7 +754,7 @@ class TestJaggedTensor(unittest.TestCase):
         with self.assertRaises(Exception):
             print(gridbatch.ijk[::-3])
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_arithmetic_operators(self, device, dtype):
         pts_list = []
         while len(pts_list) == 0:
@@ -1053,7 +1055,7 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertTrue(torch.allclose(res.jdata, randpts.jdata != 3.14))
         self.check_lshape(res, pts_list)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_jreshape(self, device, dtype):
         pts_list_a = []
         for _ in range(4):
@@ -1087,7 +1089,7 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertEqual(randpts_c.lshape, lshape_b)
         self.assertTrue(torch.all(randpts_c.jdata == randpts_a.jdata))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_arithmetic_operators_list_of_lists(self, device, dtype):
         pts_list = []
         for _ in range(4):
@@ -1335,7 +1337,7 @@ class TestJaggedTensor(unittest.TestCase):
                 self.assertTrue(torch.allclose((randpts != 2)[i][j].jdata, pts_list[i][j] != 2))
                 self.assertTrue(torch.allclose((randpts != 3.14)[i][j].jdata, pts_list[i][j] != 3.14))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_to_devices(self, device, dtype):
         create_device = "cpu" if device == "cuda" else "cuda"
         pts_list = [torch.rand(1000 + np.random.randint(10), 3, device=create_device, dtype=dtype) for _ in range(17)]
@@ -1347,7 +1349,7 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertTrue(randpts.to(randpts.device).device, randpts.device)
         self.check_lshape(randpts.to(randpts.device), pts_list)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_batch_size_one(self, device, dtype):
         # Check for issue #181 fixes
         jlist = [torch.Tensor([1.0, 2.0, 3.0]).to(device=device, dtype=dtype)]
@@ -1357,7 +1359,7 @@ class TestJaggedTensor(unittest.TestCase):
         self.check_lshape(jt, jlist)
         self.assertEqual(jt.joffsets.shape, torch.Size([2]))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     @probabilistic_test(
         iterations=20,
         pass_percentage=80,
@@ -1430,7 +1432,7 @@ class TestJaggedTensor(unittest.TestCase):
         with self.assertRaises(IndexError):
             sum_res_ours = jt.jsum(dim=4)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_jmin(self, device, dtype):
         if dtype in (torch.float16, torch.bfloat16):
             min_num = 100
@@ -1491,7 +1493,7 @@ class TestJaggedTensor(unittest.TestCase):
         with self.assertRaises(IndexError):
             _ = jt.jmin(dim=4)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_jmax(self, device, dtype):
         if dtype in (torch.float16, torch.bfloat16):
             min_num = 100
@@ -1548,7 +1550,7 @@ class TestJaggedTensor(unittest.TestCase):
         with self.assertRaises(IndexError):
             _ = jt.jmax(dim=4)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_jmin_list_of_lists(self, device, dtype):
         if dtype in (torch.float16, torch.bfloat16):
             min_num = 100
@@ -1628,7 +1630,7 @@ class TestJaggedTensor(unittest.TestCase):
             if zgours.shape == zgcmp.shape:
                 self.assertTrue(torch.allclose(zgours, zgcmp))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_jmax_list_of_lists(self, device, dtype):
         if dtype in (torch.float16, torch.bfloat16):
             min_num = 100
@@ -1696,7 +1698,7 @@ class TestJaggedTensor(unittest.TestCase):
             if zgours.shape == zgcmp.shape:
                 self.assertTrue(torch.allclose(zgours, zgcmp))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     @probabilistic_test(
         iterations=20,
         pass_percentage=80,
@@ -2515,7 +2517,7 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertEqual(jt.edim, 0)
         self.assertEqual(len(jt.eshape), 0)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_empty_tensors_and_scalars(self, device, dtype):
         tscalar = torch.tensor([54]).to(device).to(dtype)
         jt1 = fvdb.JaggedTensor([tscalar])
@@ -2560,7 +2562,7 @@ class TestJaggedTensor(unittest.TestCase):
         self.check_lshape(jt6, [ts2])
         self.assertEqual(jt6.eshape, [1])
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_jagged_create(self, device, dtype):
         def buildit1(lsizes, eshape):
             ts = []
@@ -2629,7 +2631,7 @@ class TestJaggedTensor(unittest.TestCase):
             with self.assertRaises(Exception):
                 jt = fvdb.JaggedTensor.from_rand(lsizes, eshape, device=device, dtype=dtype)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_assignment(self, device, dtype):
         if dtype == torch.bfloat16 and device == "cpu":
             self.skipTest("PyTorch in-place division not truly in-place for bfloat16 on CPU")
@@ -2793,7 +2795,7 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertTrue(torch.all(jt1.jdata == jt2.jdata).item())
         self.assertTrue(not torch.all(jt1.jdata == jt3.jdata).item())
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_sqrt(self, device, dtype):
         jt1 = fvdb.JaggedTensor.from_randn(
             [[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype
@@ -2810,7 +2812,7 @@ class TestJaggedTensor(unittest.TestCase):
         jt1.sqrt_()
         self.assertTrue(torch.allclose(jt2.jdata, jt1.jdata))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_floor(self, device, dtype):
         jt1 = fvdb.JaggedTensor.from_randn(
             [[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype
@@ -2826,7 +2828,7 @@ class TestJaggedTensor(unittest.TestCase):
         jt1.floor_()
         self.assertTrue(torch.allclose(jt2.jdata, jt1.jdata))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_ceil(self, device, dtype):
         jt1 = fvdb.JaggedTensor.from_randn(
             [[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype
@@ -2842,7 +2844,7 @@ class TestJaggedTensor(unittest.TestCase):
         jt1.ceil_()
         self.assertTrue(torch.allclose(jt2.jdata, jt1.jdata))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_abs(self, device, dtype):
         jt1 = fvdb.JaggedTensor.from_randn(
             [[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype
@@ -2857,7 +2859,7 @@ class TestJaggedTensor(unittest.TestCase):
         jt1.abs_()
         self.assertTrue(torch.allclose(jt2.jdata, jt1.jdata))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_round(self, device, dtype):
         jt1 = fvdb.JaggedTensor.from_randn(
             [[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype
@@ -2872,7 +2874,7 @@ class TestJaggedTensor(unittest.TestCase):
         jt1.round_()
         self.assertTrue(torch.allclose(jt2.jdata, jt1.jdata))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_jidxforjoffsets(self, device, dtype):
         jt1 = fvdb.JaggedTensor.from_randn(
             [[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype
@@ -2890,7 +2892,7 @@ class TestJaggedTensor(unittest.TestCase):
         torch_jidx = torch_jidx.repeat_interleave(joffsets[1:] - joffsets[:-1])
         self.assertTrue(torch.allclose(jidx, torch_jidx))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_from_data_offsets_and_list_ids(self, device, dtype):
         # Regression test for https://github.com/openvdb/fvdb-core/issues/356
         for ldim in [1, 2]:
@@ -2933,7 +2935,7 @@ class TestJaggedTensor(unittest.TestCase):
             self.assertTrue(torch.equal(jt_offsets.joffsets, jt.joffsets))
             self.assertTrue(torch.equal(jt_offsets.jlidx, jt.jlidx))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_from_data_indices_and_list_ids(self, device, dtype):
         # Regression test for https://github.com/openvdb/fvdb-core/issues/356
         for ldim in [1, 2]:

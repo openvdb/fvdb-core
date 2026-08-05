@@ -467,84 +467,89 @@ dispatchProjectGaussiansAnalyticBwd<torch::kPrivateUse1>(
             int64_t elementOffset, elementCount;
             std::tie(elementOffset, elementCount) = deviceChunk(N, deviceId);
 
+            if (elementCount > 0) {
 #if (CUDART_VERSION < 13000)
-            nanovdb::util::cuda::memPrefetchAsync(
-                dLossDMeans.data_ptr<float>() + elementOffset * dLossDMeans.stride(0),
-                elementCount * dLossDMeans.stride(0) * sizeof(float),
-                deviceId,
-                stream);
-            if (covars.has_value()) {
                 nanovdb::util::cuda::memPrefetchAsync(
-                    dLossDCovars.data_ptr<float>() + elementOffset * dLossDCovars.stride(0),
-                    elementCount * dLossDCovars.stride(0) * sizeof(float),
+                    dLossDMeans.data_ptr<float>() + elementOffset * dLossDMeans.stride(0),
+                    elementCount * dLossDMeans.stride(0) * sizeof(float),
                     deviceId,
                     stream);
-            } else {
-                nanovdb::util::cuda::memPrefetchAsync(
-                    dLossDQuats.data_ptr<float>() + elementOffset * dLossDQuats.stride(0),
-                    elementCount * dLossDQuats.stride(0) * sizeof(float),
-                    deviceId,
-                    stream);
-                nanovdb::util::cuda::memPrefetchAsync(
-                    dLossDScales.data_ptr<float>() + elementOffset * dLossDScales.stride(0),
-                    elementCount * dLossDScales.stride(0) * sizeof(float),
-                    deviceId,
-                    stream);
-            }
+                if (covars.has_value()) {
+                    nanovdb::util::cuda::memPrefetchAsync(
+                        dLossDCovars.data_ptr<float>() + elementOffset * dLossDCovars.stride(0),
+                        elementCount * dLossDCovars.stride(0) * sizeof(float),
+                        deviceId,
+                        stream);
+                } else {
+                    nanovdb::util::cuda::memPrefetchAsync(
+                        dLossDQuats.data_ptr<float>() + elementOffset * dLossDQuats.stride(0),
+                        elementCount * dLossDQuats.stride(0) * sizeof(float),
+                        deviceId,
+                        stream);
+                    nanovdb::util::cuda::memPrefetchAsync(
+                        dLossDScales.data_ptr<float>() + elementOffset * dLossDScales.stride(0),
+                        elementCount * dLossDScales.stride(0) * sizeof(float),
+                        deviceId,
+                        stream);
+                }
 #else
-            std::vector<void *> prefetchPtrs;
-            std::vector<size_t> prefetchSizes;
-            const cudaMemLocation location                 = {cudaMemLocationTypeDevice, deviceId};
-            std::vector<cudaMemLocation> prefetchLocations = {location};
-            std::vector<size_t> prefetchLocationIndices    = {0};
+                std::vector<void *> prefetchPtrs;
+                std::vector<size_t> prefetchSizes;
+                const cudaMemLocation location = {cudaMemLocationTypeDevice, deviceId};
+                std::vector<cudaMemLocation> prefetchLocations = {location};
+                std::vector<size_t> prefetchLocationIndices    = {0};
 
-            prefetchPtrs.emplace_back(dLossDMeans.data_ptr<float>() +
-                                      elementOffset * dLossDMeans.stride(0));
-            prefetchSizes.emplace_back(elementCount * dLossDMeans.stride(0) * sizeof(float));
-            if (covars.has_value()) {
-                prefetchPtrs.emplace_back(dLossDCovars.data_ptr<float>() +
-                                          elementOffset * dLossDCovars.stride(0));
-                prefetchSizes.emplace_back(elementCount * dLossDCovars.stride(0) * sizeof(float));
-            } else {
-                prefetchPtrs.emplace_back(dLossDQuats.data_ptr<float>() +
-                                          elementOffset * dLossDQuats.stride(0));
-                prefetchSizes.emplace_back(elementCount * dLossDQuats.stride(0) * sizeof(float));
-                prefetchPtrs.emplace_back(dLossDScales.data_ptr<float>() +
-                                          elementOffset * dLossDScales.stride(0));
-                prefetchSizes.emplace_back(elementCount * dLossDScales.stride(0) * sizeof(float));
-            }
+                prefetchPtrs.emplace_back(dLossDMeans.data_ptr<float>() +
+                                          elementOffset * dLossDMeans.stride(0));
+                prefetchSizes.emplace_back(elementCount * dLossDMeans.stride(0) * sizeof(float));
+                if (covars.has_value()) {
+                    prefetchPtrs.emplace_back(dLossDCovars.data_ptr<float>() +
+                                              elementOffset * dLossDCovars.stride(0));
+                    prefetchSizes.emplace_back(elementCount * dLossDCovars.stride(0) *
+                                               sizeof(float));
+                } else {
+                    prefetchPtrs.emplace_back(dLossDQuats.data_ptr<float>() +
+                                              elementOffset * dLossDQuats.stride(0));
+                    prefetchSizes.emplace_back(elementCount * dLossDQuats.stride(0) *
+                                               sizeof(float));
+                    prefetchPtrs.emplace_back(dLossDScales.data_ptr<float>() +
+                                              elementOffset * dLossDScales.stride(0));
+                    prefetchSizes.emplace_back(elementCount * dLossDScales.stride(0) *
+                                               sizeof(float));
+                }
 
-            C10_CUDA_CHECK(cudaMemPrefetchBatchAsync(prefetchPtrs.data(),
-                                                     prefetchSizes.data(),
-                                                     prefetchPtrs.size(),
-                                                     prefetchLocations.data(),
-                                                     prefetchLocationIndices.data(),
-                                                     prefetchLocations.size(),
-                                                     0,
-                                                     stream));
+                C10_CUDA_CHECK(cudaMemPrefetchBatchAsync(prefetchPtrs.data(),
+                                                         prefetchSizes.data(),
+                                                         prefetchPtrs.size(),
+                                                         prefetchLocations.data(),
+                                                         prefetchLocationIndices.data(),
+                                                         prefetchLocations.size(),
+                                                         0,
+                                                         stream));
 #endif
-            C10_CUDA_CHECK(cudaMemsetAsync(dLossDMeans.data_ptr<float>() +
-                                               elementOffset * dLossDMeans.stride(0),
-                                           0,
-                                           elementCount * dLossDMeans.stride(0) * sizeof(float),
-                                           stream));
-            if (covars.has_value()) {
-                C10_CUDA_CHECK(cudaMemsetAsync(
-                    dLossDCovars.data_ptr<float>() + elementOffset * dLossDCovars.stride(0),
-                    0,
-                    elementCount * dLossDCovars.stride(0) * sizeof(float),
-                    stream));
-            } else {
-                C10_CUDA_CHECK(cudaMemsetAsync(dLossDQuats.data_ptr<float>() +
-                                                   elementOffset * dLossDQuats.stride(0),
+                C10_CUDA_CHECK(cudaMemsetAsync(dLossDMeans.data_ptr<float>() +
+                                                   elementOffset * dLossDMeans.stride(0),
                                                0,
-                                               elementCount * dLossDQuats.stride(0) * sizeof(float),
+                                               elementCount * dLossDMeans.stride(0) * sizeof(float),
                                                stream));
-                C10_CUDA_CHECK(cudaMemsetAsync(
-                    dLossDScales.data_ptr<float>() + elementOffset * dLossDScales.stride(0),
-                    0,
-                    elementCount * dLossDScales.stride(0) * sizeof(float),
-                    stream));
+                if (covars.has_value()) {
+                    C10_CUDA_CHECK(cudaMemsetAsync(
+                        dLossDCovars.data_ptr<float>() + elementOffset * dLossDCovars.stride(0),
+                        0,
+                        elementCount * dLossDCovars.stride(0) * sizeof(float),
+                        stream));
+                } else {
+                    C10_CUDA_CHECK(cudaMemsetAsync(
+                        dLossDQuats.data_ptr<float>() + elementOffset * dLossDQuats.stride(0),
+                        0,
+                        elementCount * dLossDQuats.stride(0) * sizeof(float),
+                        stream));
+                    C10_CUDA_CHECK(cudaMemsetAsync(
+                        dLossDScales.data_ptr<float>() + elementOffset * dLossDScales.stride(0),
+                        0,
+                        elementCount * dLossDScales.stride(0) * sizeof(float),
+                        stream));
+                }
             }
             C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
         }
@@ -557,102 +562,107 @@ dispatchProjectGaussiansAnalyticBwd<torch::kPrivateUse1>(
 
             int64_t deviceProblemOffset, deviceProblemSize;
             std::tie(deviceProblemOffset, deviceProblemSize) = deviceChunk(N, deviceId);
-            const dim3 NUM_BLOCKS(GET_BLOCKS(deviceProblemSize, DEFAULT_BLOCK_DIM), C);
 
-            if (ortho) {
-                const auto camera = OrthographicCamera<float>{projectionMatrices,
-                                                              worldToCamMatrices,
-                                                              static_cast<int32_t>(imageWidth),
-                                                              static_cast<int32_t>(imageHeight),
-                                                              kBackwardProjectionNearPlane,
-                                                              kBackwardProjectionFarPlane};
-                projectionBackwardKernel<float, OrthographicCamera<float>>
-                    <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, camera.numSharedMemBytes(), stream>>>(
-                        deviceProblemOffset,
-                        deviceProblemSize,
-                        C,
-                        N,
-                        means.data_ptr<float>(),
-                        covars.has_value() ? covars.value().data_ptr<float>() : nullptr,
-                        covars.has_value() ? nullptr : quats.data_ptr<float>(),
-                        covars.has_value() ? nullptr : logScales.data_ptr<float>(),
-                        camera,
-                        eps2d,
-                        radii.data_ptr<int32_t>(),
-                        conics.data_ptr<float>(),
-                        compensations.has_value() ? compensations.value().data_ptr<float>()
-                                                  : nullptr,
-                        dLossDMeans2d.data_ptr<float>(),
-                        dLossDDepths.data_ptr<float>(),
-                        dLossDConics.data_ptr<float>(),
-                        dLossDCompensations.has_value()
-                            ? dLossDCompensations.value().data_ptr<float>()
-                            : nullptr,
-                        dLossDMeans.data_ptr<float>(),
-                        covars.has_value() ? dLossDCovars.data_ptr<float>() : nullptr,
-                        covars.has_value() ? nullptr : dLossDQuats.data_ptr<float>(),
-                        covars.has_value() ? nullptr : dLossDScales.data_ptr<float>(),
-                        worldToCamMatricesRequiresGrad ? dLossDWorldToCamMatrices.data_ptr<float>()
-                                                       : nullptr,
-                        static_cast<int32_t>(imageWidth),
-                        static_cast<int32_t>(imageHeight),
-                        outNormalizeddLossdMeans2dNormAccum.has_value()
-                            ? outNormalizeddLossdMeans2dNormAccum.value().data_ptr<float>()
-                            : nullptr,
-                        outNormalizedMaxRadiiAccum.has_value()
-                            ? outNormalizedMaxRadiiAccum.value().data_ptr<int32_t>()
-                            : nullptr,
-                        outGradientStepCounts.has_value()
-                            ? outGradientStepCounts.value().data_ptr<int32_t>()
-                            : nullptr);
-            } else {
-                const auto camera = PerspectiveCamera<float>{projectionMatrices,
-                                                             worldToCamMatrices,
-                                                             static_cast<int32_t>(imageWidth),
-                                                             static_cast<int32_t>(imageHeight),
-                                                             kBackwardProjectionNearPlane,
-                                                             kBackwardProjectionFarPlane};
-                projectionBackwardKernel<float, PerspectiveCamera<float>>
-                    <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, camera.numSharedMemBytes(), stream>>>(
-                        deviceProblemOffset,
-                        deviceProblemSize,
-                        C,
-                        N,
-                        means.data_ptr<float>(),
-                        covars.has_value() ? covars.value().data_ptr<float>() : nullptr,
-                        covars.has_value() ? nullptr : quats.data_ptr<float>(),
-                        covars.has_value() ? nullptr : logScales.data_ptr<float>(),
-                        camera,
-                        eps2d,
-                        radii.data_ptr<int32_t>(),
-                        conics.data_ptr<float>(),
-                        compensations.has_value() ? compensations.value().data_ptr<float>()
-                                                  : nullptr,
-                        dLossDMeans2d.data_ptr<float>(),
-                        dLossDDepths.data_ptr<float>(),
-                        dLossDConics.data_ptr<float>(),
-                        dLossDCompensations.has_value()
-                            ? dLossDCompensations.value().data_ptr<float>()
-                            : nullptr,
-                        dLossDMeans.data_ptr<float>(),
-                        covars.has_value() ? dLossDCovars.data_ptr<float>() : nullptr,
-                        covars.has_value() ? nullptr : dLossDQuats.data_ptr<float>(),
-                        covars.has_value() ? nullptr : dLossDScales.data_ptr<float>(),
-                        worldToCamMatricesRequiresGrad ? dLossDWorldToCamMatrices.data_ptr<float>()
-                                                       : nullptr,
-                        static_cast<int32_t>(imageWidth),
-                        static_cast<int32_t>(imageHeight),
-                        outNormalizeddLossdMeans2dNormAccum.has_value()
-                            ? outNormalizeddLossdMeans2dNormAccum.value().data_ptr<float>()
-                            : nullptr,
-                        outNormalizedMaxRadiiAccum.has_value()
-                            ? outNormalizedMaxRadiiAccum.value().data_ptr<int32_t>()
-                            : nullptr,
-                        outGradientStepCounts.has_value()
-                            ? outGradientStepCounts.value().data_ptr<int32_t>()
-                            : nullptr);
+            if (deviceProblemSize > 0) {
+                const dim3 NUM_BLOCKS(GET_BLOCKS(deviceProblemSize, DEFAULT_BLOCK_DIM), C);
+
+                if (ortho) {
+                    const auto camera = OrthographicCamera<float>{projectionMatrices,
+                                                                  worldToCamMatrices,
+                                                                  static_cast<int32_t>(imageWidth),
+                                                                  static_cast<int32_t>(imageHeight),
+                                                                  kBackwardProjectionNearPlane,
+                                                                  kBackwardProjectionFarPlane};
+                    projectionBackwardKernel<float, OrthographicCamera<float>>
+                        <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, camera.numSharedMemBytes(), stream>>>(
+                            deviceProblemOffset,
+                            deviceProblemSize,
+                            C,
+                            N,
+                            means.data_ptr<float>(),
+                            covars.has_value() ? covars.value().data_ptr<float>() : nullptr,
+                            covars.has_value() ? nullptr : quats.data_ptr<float>(),
+                            covars.has_value() ? nullptr : logScales.data_ptr<float>(),
+                            camera,
+                            eps2d,
+                            radii.data_ptr<int32_t>(),
+                            conics.data_ptr<float>(),
+                            compensations.has_value() ? compensations.value().data_ptr<float>()
+                                                      : nullptr,
+                            dLossDMeans2d.data_ptr<float>(),
+                            dLossDDepths.data_ptr<float>(),
+                            dLossDConics.data_ptr<float>(),
+                            dLossDCompensations.has_value()
+                                ? dLossDCompensations.value().data_ptr<float>()
+                                : nullptr,
+                            dLossDMeans.data_ptr<float>(),
+                            covars.has_value() ? dLossDCovars.data_ptr<float>() : nullptr,
+                            covars.has_value() ? nullptr : dLossDQuats.data_ptr<float>(),
+                            covars.has_value() ? nullptr : dLossDScales.data_ptr<float>(),
+                            worldToCamMatricesRequiresGrad
+                                ? dLossDWorldToCamMatrices.data_ptr<float>()
+                                : nullptr,
+                            static_cast<int32_t>(imageWidth),
+                            static_cast<int32_t>(imageHeight),
+                            outNormalizeddLossdMeans2dNormAccum.has_value()
+                                ? outNormalizeddLossdMeans2dNormAccum.value().data_ptr<float>()
+                                : nullptr,
+                            outNormalizedMaxRadiiAccum.has_value()
+                                ? outNormalizedMaxRadiiAccum.value().data_ptr<int32_t>()
+                                : nullptr,
+                            outGradientStepCounts.has_value()
+                                ? outGradientStepCounts.value().data_ptr<int32_t>()
+                                : nullptr);
+                } else {
+                    const auto camera = PerspectiveCamera<float>{projectionMatrices,
+                                                                 worldToCamMatrices,
+                                                                 static_cast<int32_t>(imageWidth),
+                                                                 static_cast<int32_t>(imageHeight),
+                                                                 kBackwardProjectionNearPlane,
+                                                                 kBackwardProjectionFarPlane};
+                    projectionBackwardKernel<float, PerspectiveCamera<float>>
+                        <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, camera.numSharedMemBytes(), stream>>>(
+                            deviceProblemOffset,
+                            deviceProblemSize,
+                            C,
+                            N,
+                            means.data_ptr<float>(),
+                            covars.has_value() ? covars.value().data_ptr<float>() : nullptr,
+                            covars.has_value() ? nullptr : quats.data_ptr<float>(),
+                            covars.has_value() ? nullptr : logScales.data_ptr<float>(),
+                            camera,
+                            eps2d,
+                            radii.data_ptr<int32_t>(),
+                            conics.data_ptr<float>(),
+                            compensations.has_value() ? compensations.value().data_ptr<float>()
+                                                      : nullptr,
+                            dLossDMeans2d.data_ptr<float>(),
+                            dLossDDepths.data_ptr<float>(),
+                            dLossDConics.data_ptr<float>(),
+                            dLossDCompensations.has_value()
+                                ? dLossDCompensations.value().data_ptr<float>()
+                                : nullptr,
+                            dLossDMeans.data_ptr<float>(),
+                            covars.has_value() ? dLossDCovars.data_ptr<float>() : nullptr,
+                            covars.has_value() ? nullptr : dLossDQuats.data_ptr<float>(),
+                            covars.has_value() ? nullptr : dLossDScales.data_ptr<float>(),
+                            worldToCamMatricesRequiresGrad
+                                ? dLossDWorldToCamMatrices.data_ptr<float>()
+                                : nullptr,
+                            static_cast<int32_t>(imageWidth),
+                            static_cast<int32_t>(imageHeight),
+                            outNormalizeddLossdMeans2dNormAccum.has_value()
+                                ? outNormalizeddLossdMeans2dNormAccum.value().data_ptr<float>()
+                                : nullptr,
+                            outNormalizedMaxRadiiAccum.has_value()
+                                ? outNormalizedMaxRadiiAccum.value().data_ptr<int32_t>()
+                                : nullptr,
+                            outGradientStepCounts.has_value()
+                                ? outGradientStepCounts.value().data_ptr<int32_t>()
+                                : nullptr);
+                }
+                C10_CUDA_KERNEL_LAUNCH_CHECK();
             }
-            C10_CUDA_KERNEL_LAUNCH_CHECK();
         }
 
         mergeStreams();

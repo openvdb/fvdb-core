@@ -5,12 +5,10 @@ import itertools
 import pickle
 import unittest
 
-import fvdb.nn as fvnn
 import numpy as np
 import torch
-from fvdb_test_utils import (
+from fvdb.utils.tests import (
     dtype_to_atol,
-    expand_tests,
     make_dense_grid_batch_and_jagged_point_data,
     make_grid_batch_and_jagged_point_data,
 )
@@ -18,6 +16,8 @@ from parameterized import parameterized
 
 import fvdb
 from fvdb import GridBatch, JaggedTensor
+
+from . import expand_tests
 
 all_device_dtype_combos = [
     ["cuda", torch.float16],
@@ -246,7 +246,7 @@ class TestBasicOps(unittest.TestCase):
         )
         self.assertTrue(torch.equal(pruned_grid_batch.ijk.jdata, expected_grid.ijk.jdata))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_refine_1x_with_mask(self, device, dtype):
         def get_point_list(npc: list, device: torch.device | str) -> list[torch.Tensor]:
             batch_size = len(npc)
@@ -295,7 +295,7 @@ class TestBasicOps(unittest.TestCase):
         self.assertFalse(grid.is_same(grid2))
         self.assertNotEqual(grid.address, grid2.address)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_voxel_neighborhood(self, device, dtype):
         randvox = torch.randint(0, 256, size=(10_000, 3), dtype=torch.int32).to(device)
         randvox = torch.cat(
@@ -318,7 +318,7 @@ class TestBasicOps(unittest.TestCase):
 
         self.assertTrue(torch.equal(nhood, gt_nhood))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_world_to_dual(self, device, dtype):
         vox_size = np.random.rand() * 0.1 + 0.05
         vox_origin = torch.rand(3).to(device).to(dtype)
@@ -337,7 +337,7 @@ class TestBasicOps(unittest.TestCase):
             f"max_diff = {torch.abs(pred_dual_coordinates - target_dual_coordinates).max()}",
         )
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_world_to_primal(self, device, dtype):
         vox_size = np.random.rand() * 0.1 + 0.05
         vox_origin = torch.rand(3).to(device).to(dtype)
@@ -352,7 +352,7 @@ class TestBasicOps(unittest.TestCase):
 
         self.assertTrue(torch.allclose(target_primal_coordinates, pred_primal_coordinates, atol=dtype_to_atol(dtype)))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_world_to_dual_grad(self, device, dtype):
         vox_size = np.random.rand() * 0.1 + 0.05
         vox_origin = torch.rand(3).to(device).to(dtype)
@@ -381,7 +381,7 @@ class TestBasicOps(unittest.TestCase):
         self.assertTrue(torch.allclose(pred_dual_coordinates, target_dual_coordinates, atol=dtype_to_atol(dtype)))
         self.assertTrue(torch.allclose(pts.grad, pred_grad, atol=dtype_to_atol(dtype)))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_world_to_primal_grad(self, device, dtype):
         vox_size = np.random.rand() * 0.1 + 0.05
         vox_origin = torch.rand(3).to(device).to(dtype)
@@ -410,7 +410,7 @@ class TestBasicOps(unittest.TestCase):
         # diff_idxs = torch.where(~torch.isclose(pts.grad, pred_grad, atol=dtype_to_atol(dtype)))
         self.assertTrue(torch.allclose(pts.grad, pred_grad, atol=dtype_to_atol(dtype)))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_to_primal_to_world(self, device, dtype):
         vox_size = np.random.rand() * 0.1 + 0.05
         vox_origin = torch.rand(3).to(device).to(dtype)
@@ -426,7 +426,7 @@ class TestBasicOps(unittest.TestCase):
 
         self.assertTrue(torch.allclose(target_world_pts, pred_world_pts, atol=dtype_to_atol(dtype)))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_to_dual_to_world(self, device, dtype):
         vox_size = np.random.rand() * 0.1 + 0.05
         vox_origin = torch.rand(3).to(device).to(dtype)
@@ -443,7 +443,7 @@ class TestBasicOps(unittest.TestCase):
 
         self.assertTrue(torch.allclose(target_world_pts, pred_world_pts, atol=dtype_to_atol(dtype)))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_to_primal_to_world_grad(self, device, dtype):
         vox_size = np.random.rand() * 0.1 + 0.05
         vox_origin = torch.rand(3).to(device).to(dtype)
@@ -472,7 +472,7 @@ class TestBasicOps(unittest.TestCase):
         self.assertTrue(torch.allclose(target_world_pts, pred_world_pts, atol=dtype_to_atol(dtype)))
         self.assertTrue(torch.allclose(grid_pts.grad, pred_grad, atol=dtype_to_atol(dtype)))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_to_dual_to_world_grad(self, device, dtype):
         vox_size = np.random.rand() * 0.1 + 0.05
         vox_origin = torch.rand(3).to(device).to(dtype)
@@ -502,7 +502,7 @@ class TestBasicOps(unittest.TestCase):
         self.assertTrue(torch.allclose(target_world_pts, pred_world_pts, atol=dtype_to_atol(dtype)))
         self.assertTrue(torch.allclose(grid_pts.grad, pred_grad, atol=dtype_to_atol(dtype)))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_dual_of_dual_is_primal(self, device, dtype):
         torch.random.manual_seed(0)
         vox_size = np.random.rand() * 0.1 + 0.05
@@ -539,7 +539,7 @@ class TestBasicOps(unittest.TestCase):
             torch.allclose(target_primal_coordinates, pred_primal_coordinates_dd, atol=dtype_to_atol(dtype))
         )
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_ijk_to_index(self, device, dtype):
         gsize = 7
 
@@ -570,7 +570,7 @@ class TestBasicOps(unittest.TestCase):
             self.assertTrue(torch.all(pidx == target_pidx[ppmt]))
             self.assertTrue(torch.all(didx == target_didx[dpmt]))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_ijk_to_index_batched(self, device, dtype):
         gsize = 7
 
@@ -614,7 +614,7 @@ class TestBasicOps(unittest.TestCase):
             self.assertTrue(torch.all(pidx.jdata == target_pidx[ppmt].jdata))
             self.assertTrue(torch.all(didx.jdata == target_didx[dpmt].jdata))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_coords_in_grid(self, device, _):
         num_inside = 1000 if device == "cpu" else 100_000
         random_coords = torch.randint(-1024, 1024, (num_inside, 3), dtype=torch.int32).to(device)
@@ -634,7 +634,7 @@ class TestBasicOps(unittest.TestCase):
 
         self.assertTrue(torch.all(pred_mask == target_mask))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_points_in_grid(self, device, dtype):
         num_inside = 1000 if device == "cpu" else 100_000
         random_coords = torch.randint(-1024, 1024, (num_inside, 3), dtype=torch.int32).to(device)
@@ -655,7 +655,7 @@ class TestBasicOps(unittest.TestCase):
 
         self.assertTrue(torch.all(pred_mask == target_mask))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_cubes_intersect_grid(self, device, dtype):
         # TODO: (@Caenorst) tests are a bit too light, should test on more variety of range
         # import random
@@ -731,7 +731,7 @@ class TestBasicOps(unittest.TestCase):
         if device == "cuda":
             torch.cuda.synchronize()
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_build_from_pointcloud_nearest_voxels(self, device, dtype):
         p = torch.randn((100, 3), device=device, dtype=dtype)
 
@@ -1284,7 +1284,7 @@ class TestBasicOps(unittest.TestCase):
 
                 self.assertEqual(torch.abs(grid_vals_grad_t_flat - grid_vals_grad).max().item(), 0.0)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_pickle(self, device, dtype):
         grid, _, _ = make_grid_batch_and_jagged_point_data(device, dtype)
         pkl_str = pickle.dumps(grid)
@@ -1294,7 +1294,7 @@ class TestBasicOps(unittest.TestCase):
         self.assertTrue(torch.all(grid.voxel_sizes[0] == grid_2.voxel_sizes[0]))
         self.assertTrue(torch.all(grid.origins[0] == grid_2.origins[0]))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_to_device(self, device, dtype):
         vox_size = np.random.rand() * 0.1 + 0.05
         vox_origin = torch.rand(3).to(device).to(dtype)
@@ -1333,7 +1333,7 @@ class TestBasicOps(unittest.TestCase):
         )
         self.assertEqual(grid2.device, to_device)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_grid_construction(self, device, dtype):
         rand_ijk = torch.randint(-100, 100, (1000, 3), device=device)
         rand_pts = torch.randn(1000, 3, device=device, dtype=dtype)
@@ -1382,7 +1382,7 @@ class TestBasicOps(unittest.TestCase):
             with self.assertRaises(ValueError):
                 grid = builder(vox_size, [0.01] * 2)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_inverting_grid_indices(self, device, dtype):
         vox_size = 0.1
 
@@ -1446,7 +1446,7 @@ class TestBasicOps(unittest.TestCase):
             # ensure output of inverse_index appears in ascending order in ijks
             assert check_order(grid.ijk.jdata[grid.ijk.jidx == i], inv_ijks.jdata)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_inverting_grid_indices_batched(self, device, dtype):
         vox_size = 0.1
 
@@ -1520,7 +1520,7 @@ class TestBasicOps(unittest.TestCase):
             # ensure output of inverse_index appears in ascending order in ijks
             assert check_order(grid.ijk.jdata[grid.ijk.jidx == i], inv_ijks.jdata)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_invert_grid_indices_batched_noncumulative(self, device, dtype):
         batch_size = 5
 
@@ -1541,7 +1541,7 @@ class TestBasicOps(unittest.TestCase):
         d_inv_idx = gridbatch.inject_from_ijk(double_ijks, unsorted_idxs, default_value=-1)
         assert torch.equal(double_ijks[d_inv_idx].jdata, gridbatch.ijk.jdata)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_ijk_to_index_batched_noncumulative(self, device, dtype):
         batch_size = 5
 
@@ -1561,7 +1561,7 @@ class TestBasicOps(unittest.TestCase):
         d_idx = gridbatch.ijk_to_index(double_ijks, cumulative=False)
         assert torch.equal(double_ijks.jdata, gridbatch.ijk[d_idx].jdata)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_no_use_after_free_on_backward(self, device, dtype):
 
         grid, grid_d, p = make_grid_batch_and_jagged_point_data(device, dtype)
@@ -1574,7 +1574,7 @@ class TestBasicOps(unittest.TestCase):
         del grid, grid_d
         fv.backward(grad_out)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_ray_implicit_intersection(self, device, dtype):
         # Generate the SDF for a sphere on a grid
         N = 32
@@ -1634,7 +1634,7 @@ class TestBasicOps(unittest.TestCase):
         # ps.register_point_cloud("hits", hit_pts.cpu().numpy())
         # ps.show()
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_ray_implicit_intersection_starts_inside_surface(self, device, dtype):
         # Regression test: a ray whose origin is INSIDE the surface should
         # report a hit at the EXIT crossing (where SDF flips back from
@@ -1696,7 +1696,7 @@ class TestBasicOps(unittest.TestCase):
         voxel_diag = torch.norm(grid.voxel_sizes[0]).item()
         self.assertLess(abs(sdf_samp).max().item(), voxel_diag)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_ray_implicit_intersection_two_disjoint_regions(self, device, dtype):
         # Regression test: when a ray crosses two disjoint narrow-band
         # regions (here two separate spheres along +x), the reported hit
@@ -1752,7 +1752,7 @@ class TestBasicOps(unittest.TestCase):
         self.assertLess(abs(isect.item() - expected_t), 2.0 * voxel_size)
         self.assertGreater(abs(isect.item() - gap_t), 5.0 * voxel_size)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_ray_implicit_intersection_sign_of_zero(self, device, dtype):
         # Regression test (cf. nanovdb HDDA's "+-0" issue exercised in
         # TestNanoVDB.cc:1520-1552 and the paired-direction cases in
@@ -1809,7 +1809,7 @@ class TestBasicOps(unittest.TestCase):
                 f"isect {isect_pos.tolist()} vs {isect_neg.tolist()}",
             )
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_ray_implicit_intersection_axis_aligned_analytic(self, device, dtype):
         # Adapted from TestLevelSetRayIntersector.cc:43-247: axis-aligned
         # rays through the sphere centre should report a hit time within
@@ -1863,7 +1863,7 @@ class TestBasicOps(unittest.TestCase):
                 f"for o={ray_o.tolist()} d={ray_d.tolist()}",
             )
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_ray_implicit_intersection_diagonal_analytic(self, device, dtype):
         # Adapted from TestLevelSetRayIntersector.cc:249-278: a diagonal
         # ray hitting the sphere surface should report a hit time within
@@ -1905,7 +1905,7 @@ class TestBasicOps(unittest.TestCase):
             f"hit-time {isect.item()} expected {analytic_t0} (err {err}), voxel_diag {voxel_diag}",
         )
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_ray_implicit_intersection_explicit_misses(self, device, dtype):
         # Adapted from TestLevelSetRayIntersector.cc:311-389
         # (testMissedIntersections): rays that miss the surface must
@@ -1952,7 +1952,7 @@ class TestBasicOps(unittest.TestCase):
                 f"expected miss (-1), got {isect.item()} for o={ray_o.tolist()} d={ray_d.tolist()}",
             )
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_ray_implicit_intersection_non_trivial_transform(self, device, dtype):
         # Adapted from TestLevelSetRayIntersector.cc:99-216 (which uses
         # `s = 0.5, 1.5, 1.0` voxel sizes and sphere centres at
@@ -2006,7 +2006,7 @@ class TestBasicOps(unittest.TestCase):
             f"hit-time {isect.item()} expected {expected_t}, voxel_diag {voxel_diag}",
         )
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_ray_implicit_intersection_high_resolution_sweep(self, device, dtype):
         # Stress test adapted from TestLevelSetRayIntersector.cc:280-308:
         # fire a 2-D grid of axis-aligned rays at an SDF sphere and
@@ -2084,7 +2084,7 @@ class TestBasicOps(unittest.TestCase):
             f"over {hit_mask.sum().item()} hits",
         )
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_ray_implicit_intersection_single_voxel_bracket_entry(self, device, dtype):
         # Pin down the linear-interpolation branch on
         # RayImplicitIntersection.cu:121-136.
@@ -2134,7 +2134,7 @@ class TestBasicOps(unittest.TestCase):
             f"hit-time {isect.item()} expected ~4.5 (linear-interp zero crossing) within quarter voxel",
         )
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_ray_implicit_intersection_no_data_zero_prefix(self, device, dtype):
         # Regression test for issue #692: a ray that starts far from the
         # surface band must report the FIRST genuine sign change, not a
@@ -2370,7 +2370,7 @@ class TestBasicOps(unittest.TestCase):
         self.assertTrue(values.rshape[0] == 0)
         self.assertTrue(values.rshape[1] == 17)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_bbox_attrs(self, device, dtype):
         grid = GridBatch.from_zero_voxels(device=device)
         self.assertTrue(torch.equal(grid.bboxes, torch.tensor([[[0, 0, 0], [0, 0, 0]]], device=device)))
@@ -2380,7 +2380,7 @@ class TestBasicOps(unittest.TestCase):
         self.assertTrue(torch.equal(grid.dual_bboxes, torch.tensor([[[0, 0, 0], [32, 32, 32]]], device=device)))
         self.assertTrue(torch.equal(grid.total_bbox, torch.tensor([[0, 0, 0], [31, 31, 31]], device=device)))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_clip_grid(self, device, dtype):
 
         grid = GridBatch.from_dense(1, [32, 32, 32], [0, 0, 0], voxel_sizes=1.0 / 32, origins=[0, 0, 0], device=device)
@@ -2485,7 +2485,7 @@ class TestBasicOps(unittest.TestCase):
             s_cuda = set(map(tuple, g_cuda.conv_transpose_grid(ksize, stride).ijk.jdata.cpu().tolist()))
             self.assertEqual(s_cpu, s_cuda, f"conv_transpose_grid mismatch kernel={ksize} stride={stride}")
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_dual_without_border(self, device, dtype):
         vox_size = np.random.rand() * 0.1 + 0.05
         vox_origin = torch.rand(3).to(dtype).to(device)

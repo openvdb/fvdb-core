@@ -8,11 +8,11 @@ from itertools import product
 import pytest
 import torch
 
-from fvdb_test_utils.convolution_utils import (
+from fvdb.utils.tests.convolution_utils import (
     compute_conv_grid_topology_ground_truth,
     compute_conv_transpose_topology_ground_truth,
 )
-from fvdb_test_utils.convolution_semantics_oracle import (
+from fvdb.utils.tests.convolution_semantics_oracle import (
     MAX_DENSE_ORACLE_SPATIAL_SITES,
     ConvolutionRelation,
     DenseOraclePreflightError,

@@ -15,7 +15,7 @@ import torch
 import fvdb.convolution_plan as convolution_plan_module
 from fvdb import ConvolutionPlan, Grid, GridBatch, JaggedTensor, _fvdb_cpp
 from fvdb.convolution_plan import _GatherScatterBackend, _MatmulBackend, _PredGatherIGemmBackend
-from fvdb_test_utils.convolution_semantics_oracle import (
+from fvdb.utils.tests.convolution_semantics_oracle import (
     ConvolutionRelation,
     dense_forward_oracle,
     dense_transpose_oracle,

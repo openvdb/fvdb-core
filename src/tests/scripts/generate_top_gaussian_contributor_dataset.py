@@ -3,16 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
-import sys
-from pathlib import Path
-
-# fvdb_test_utils lives under tests/ (it is not shipped in the wheel). Pytest picks it up
-# via the `pythonpath` ini option; this script is run standalone, so add it explicitly.
-sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tests"))
 
 import torch
 import tyro
-from fvdb_test_utils import (
+from fvdb.utils.tests import (
     generate_center_frame_point_at_depth,
     generate_random_4x4_xform,
 )

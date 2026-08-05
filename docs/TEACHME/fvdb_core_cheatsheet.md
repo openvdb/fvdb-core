@@ -233,7 +233,7 @@ feat_fine = up(feat_coarse, plan_up)         # JaggedTensor on fine_grid
 head = fvnn.SparseConv3d(in_channels, out_channels, kernel_size=1).cuda()
 ```
 
-### Convolution semantics and migration
+### Convolution semantics
 
 For the default registration, a fine coordinate ``p`` and coarse coordinate ``q`` are connected by
 tap ``u`` when ``p = stride * q + u - floor((kernel_size - 1) / 2)`` componentwise. ``target_grid=None``

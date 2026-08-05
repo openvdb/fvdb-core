@@ -65,18 +65,20 @@ import unittest
 
 import torch
 from fvdb.types import DeviceIdentifier, resolve_device
-from fvdb_test_utils import (
+from fvdb.utils.tests import (
     fourier_anti_symmetric_kernel,
     generate_hermit_impulses_dense,
     has_any_symmetry,
 )
-from fvdb_test_utils.convolution_utils import (
+from fvdb.utils.tests.convolution_utils import (
     ALL_DEVICE_DTYPE_COMBOS,
     REDUCED_DEVICE_DTYPE_COMBOS,
     disable_tf32,
     get_tolerances,
 )
 from parameterized import parameterized
+
+from . import expand_tests
 
 
 def _validate_impulse_conv_transpose(
@@ -161,7 +163,7 @@ class TestConvTransposeGroundTruth(unittest.TestCase):
     # Forward Pass Tests
     # =========================================================================
 
-    @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
+    @expand_tests(ALL_DEVICE_DTYPE_COMBOS)
     def test_single_impulse(self, device: DeviceIdentifier, dtype: torch.dtype):
         """
         Test that conv_transpose3d of an impulse produces the original kernel.
@@ -313,7 +315,7 @@ class TestConvTransposeGroundTruth(unittest.TestCase):
                 check_bounds=False,
             )
 
-    @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
+    @expand_tests(ALL_DEVICE_DTYPE_COMBOS)
     def test_conv_transpose_is_adjoint_of_conv(self, device: DeviceIdentifier, dtype: torch.dtype):
         """
         Verify that conv_transpose3d is the adjoint of conv3d.
@@ -359,7 +361,7 @@ class TestConvTransposeGroundTruth(unittest.TestCase):
     # Since conv_transpose is the adjoint of conv, its backward w.r.t. input
     # is the forward conv! This creates a nice symmetry.
 
-    @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
+    @expand_tests(ALL_DEVICE_DTYPE_COMBOS)
     def test_single_impulse_backward_input_grad(self, device: DeviceIdentifier, dtype: torch.dtype):
         """
         Test that backward pass w.r.t. input produces expected gradients.
@@ -422,7 +424,7 @@ class TestConvTransposeGroundTruth(unittest.TestCase):
             input_grad_region, flipped_kernel, rtol=tols["input_grad"][0], atol=tols["input_grad"][1]
         )
 
-    @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
+    @expand_tests(ALL_DEVICE_DTYPE_COMBOS)
     def test_single_impulse_backward_weight_grad(self, device: DeviceIdentifier, dtype: torch.dtype):
         """
         Test that backward pass w.r.t. weights produces expected gradients.
@@ -469,7 +471,7 @@ class TestConvTransposeGroundTruth(unittest.TestCase):
         tols = get_tolerances(dtype)
         torch.testing.assert_close(weight_grad, expected_grad, rtol=tols["kernel_grad"][0], atol=tols["kernel_grad"][1])
 
-    @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
+    @expand_tests(ALL_DEVICE_DTYPE_COMBOS)
     def test_single_impulse_backward_weight_grad_offset(self, device: DeviceIdentifier, dtype: torch.dtype):
         """
         Test weight gradient when input and output gradient impulses are at different coords.

@@ -5,9 +5,10 @@ import unittest
 
 import numpy as np
 import torch
-from parameterized import parameterized
 
 import fvdb
+
+from . import expand_tests
 
 all_device_dtype_combos = [
     ["cpu", torch.float16],
@@ -25,7 +26,7 @@ class TestBatching(unittest.TestCase):
         np.random.seed(32)
         pass
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_getting_subgrids(self, device, dtype):
         num_grids = np.random.randint(32, 64)
         idx = np.random.randint(num_grids)
@@ -60,7 +61,7 @@ class TestBatching(unittest.TestCase):
         self.assertFalse(gridbatch[idx].is_contiguous())
         self.assertTrue(gridbatch.is_contiguous())
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_getting_subgrids_slice(self, device, dtype):
         num_grids = np.random.randint(32, 64)
         idx = np.random.randint(num_grids)
@@ -121,7 +122,7 @@ class TestBatching(unittest.TestCase):
         self.assertFalse(gridbatch[idx : idx + 20 : step].is_contiguous())
         self.assertTrue(gridbatch.is_contiguous())
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_getting_subgrids_integer_array(self, device, dtype):
         num_grids = np.random.randint(32, 64)
         nvox_per_grid = NVOX if device == "cuda" else 100
@@ -185,7 +186,7 @@ class TestBatching(unittest.TestCase):
         self.assertFalse(gridbatch[pmt].is_contiguous())
         self.assertTrue(gridbatch.is_contiguous())
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_getting_subgrids_integer_array_list(self, device, dtype):
 
         def listify(t_):
@@ -254,7 +255,7 @@ class TestBatching(unittest.TestCase):
         self.assertTrue(gridbatch.is_contiguous())
         self.assertFalse(gridbatch[pmt].is_contiguous())
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_getting_subgrids_boolean_array(self, device, dtype):
         num_grids = np.random.randint(32, 64)
         nvox_per_grid = NVOX if device == "cuda" else 100
@@ -282,7 +283,7 @@ class TestBatching(unittest.TestCase):
         self.assertFalse(gridbatch[mask].is_contiguous())
         self.assertTrue(gridbatch.is_contiguous())
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_getting_subgrids_boolean_list(self, device, dtype):
         num_grids = np.random.randint(32, 64)
         nvox_per_grid = NVOX if device == "cuda" else 100
@@ -311,7 +312,7 @@ class TestBatching(unittest.TestCase):
         self.assertTrue(gridbatch.is_contiguous())
         self.assertFalse(gridbatch[mask].is_contiguous())
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_zero_voxels_grid(self, device, dtype):
         num_grids = np.random.randint(32, 64)
         nvox_per_grid = NVOX if device == "cuda" else 100
@@ -347,7 +348,7 @@ class TestBatching(unittest.TestCase):
         self.assertEqual(gridbatch[empty_mask].ijk.jdata.numel(), 0)
         self.assertTrue(gridbatch[empty_mask].is_contiguous())
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_grid_cat(self, device, dtype):
         num_grids = np.random.randint(64, 128)
         nvox_per_grid = NVOX if device == "cuda" else 100
@@ -434,7 +435,7 @@ class TestBatching(unittest.TestCase):
         self.assertTrue(torch.equal(gridbatch_cat_4.ijk.jdata, target_grid.ijk.jdata))
         self.assertTrue(gridbatch_cat_4.is_contiguous())
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_jagged_tensor_cat(self, device, dtype):
         num_grids = np.random.randint(32, 64)
         nvox_per_grid = NVOX if device == "cuda" else 100
@@ -478,7 +479,7 @@ class TestBatching(unittest.TestCase):
                 torch.equal(pts_cat2[g].jdata, torch.cat([pts1[g].jdata, pts4[g].jdata, pts5[g].jdata], dim=1))
             )
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_contiguous(self, device, dtype):
         num_grids = np.random.randint(32, 64)
         nvox_per_grid = NVOX if device == "cuda" else 100
@@ -518,7 +519,7 @@ class TestBatching(unittest.TestCase):
             self.assertTrue(torch.equal(contig_version.ijk.jdata, grids_to_cat[-1].ijk.jdata))
             self.assertTrue(torch.equal(contig_version.num_voxels, grids_to_cat[-1].num_voxels))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_views_of_views(self, device, dtype):
         num_grids = 64
         nvox_per_grid = NVOX if device == "cuda" else 100
@@ -556,7 +557,7 @@ class TestBatching(unittest.TestCase):
 
             self.assertTrue(torch.equal(last_grid.ijk.jdata, gridbatch[global_indices].ijk.jdata))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_reverse_steps(self, device, dtype):
         num_grids = 64
         nvox_per_grid = NVOX if device == "cuda" else 100
@@ -620,7 +621,7 @@ class TestBatching(unittest.TestCase):
         self.assertTrue(gridbatch.is_contiguous())
         self.assertFalse(gb2.is_contiguous())
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_negative_grid_indexing(self, device, dtype):
         num_grids = 64
         nvox_per_grid = NVOX if device == "cuda" else 100
@@ -643,7 +644,7 @@ class TestBatching(unittest.TestCase):
             self.assertTrue(torch.equal(gridbatch.bbox_at(-n), gridbatch.bbox_at(gridbatch.grid_count - n)))
             self.assertEqual(gridbatch.num_voxels_at(-n), gridbatch.num_voxels_at(num_grids - n))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_from_cat_edge_cases(self, device, dtype):
         """Test edge cases and error handling in jcat function"""
         num_grids = np.random.randint(8, 16)

@@ -4,8 +4,8 @@
 """Shared machinery for fetching auxiliary data repositories (example data, test data).
 
 The example data lives in the shipped ``fvdb.utils.examples`` module and the test data
-lives in the unshipped ``fvdb_test_utils`` package under ``tests/``, so the fetch logic
-they both need lives here rather than in either one.
+lives in ``fvdb.utils.tests``, so the fetch logic they both need lives here rather than
+in either one.
 
 We only ever need a read-only snapshot of a repository at a pinned revision, so this
 downloads GitHub's source tarball with the standard library rather than depending on
