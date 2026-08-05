@@ -235,11 +235,14 @@ head = fvnn.SparseConv3d(in_channels, out_channels, kernel_size=1).cuda()
 
 ### Convolution semantics
 
-For the default registration, a fine coordinate ``p`` and coarse coordinate ``q`` are connected by
-tap ``u`` when ``p = stride * q + u - floor((kernel_size - 1) / 2)`` componentwise. ``target_grid=None``
-means ``full_support``: generate every output coordinate with a positive structural degree. A supplied
-target means ``restricted``: evaluate that same relation only at its rows, which may include zero-degree
-rows. A transposed convolution uses the graph in the opposite direction; it is not a value inverse.
+For the default registration, an integer fine-lattice coordinate ``fine_ijk`` and an integer coarse-lattice
+coordinate ``coarse_ijk`` are connected by the zero-based kernel tap ``tap_ijk`` when
+``fine_ijk = stride * coarse_ijk + tap_ijk - padding_before`` componentwise. Here
+``padding_before = floor((kernel_size - 1) / 2)`` and
+``0 <= tap_ijk[axis] < kernel_size[axis]``. ``target_grid=None`` means ``full_support``: generate every output
+coordinate with a positive structural degree. A supplied target means ``restricted``: evaluate that same relation
+only at its rows, which may include zero-degree rows. A transposed convolution uses the graph in the opposite
+direction; it is not a value inverse.
 
 For a generated strided forward grid, voxel size is multiplied by stride and origin is unchanged; the
 generated transpose applies the inverse scale. ``coarsened_grid`` groups physical cells at a block centroid,

@@ -3,11 +3,13 @@ fVDB Version History
 
 ## Version 0.6.0 - In Development
 
-- **Breaking:** Unified sparse convolution and transposed-convolution geometry around the Torch-phase relation
-  ``p = stride * q + u - floor((kernel_size - 1) / 2)`` (issue #668). Generated topology is now complete
-  structural support (`full_support`); an explicit target is a `restricted` evaluation domain, not a different
-  kernel rule. This changes generated topology for affected even kernels, `kernel_size == stride >= 3`, and
-  `kernel_size=1, stride>1`; the proved `kernel_size=stride=2` path is retained.
+- **Breaking:** Unified sparse convolution and transposed-convolution geometry around the componentwise Torch-phase
+  relation ``fine_ijk = stride * coarse_ijk + tap_ijk - padding_before``, where
+  ``padding_before = floor((kernel_size - 1) / 2)`` and each zero-based tap component satisfies
+  ``0 <= tap_ijk[axis] < kernel_size[axis]`` (issue #668). Generated topology is now complete structural support
+  (`full_support`); an explicit target is a `restricted` evaluation domain, not a different kernel rule. This changes
+  generated topology for affected even kernels, `kernel_size == stride >= 3`, and `kernel_size=1, stride>1`; the
+  proved `kernel_size=stride=2` path is retained.
 - **Breaking:** Generated strided convolution grids now have voxel size `stride * h` and the canonical input
   origin; generated transposed grids apply the inverse scale. Explicit convolution grid pairs with incompatible
   scale or origin registration now fail instead of being silently interpreted in index space. `coarsened_grid`

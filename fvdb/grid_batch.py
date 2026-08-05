@@ -582,11 +582,13 @@ class GridBatch:
     def conv_grid(self, kernel_size: NumericMaxRank1, stride: NumericMaxRank1 = 1) -> "GridBatch":
         """Return the full-support output grid for a convolution applied to this grid batch.
 
-        The generated coordinates are the positive structural support of
-        ``p = stride * q + u - floor((kernel_size - 1) / 2)`` componentwise.
-        A strided result has voxel size ``stride * h`` and the same canonical origin. It is not a
-        coarsened cell grid. ``kernel_size=stride=1`` returns this object itself; ``kernel_size=1``
-        with a larger stride samples stride-aligned residues.
+        The generated coordinates are the positive structural support of the componentwise relation
+        ``fine_ijk = stride * coarse_ijk + tap_ijk - padding_before``. Here ``fine_ijk`` and
+        ``coarse_ijk`` are integer coordinates on the fine and strided lattices,
+        ``padding_before = floor((kernel_size - 1) / 2)``, and the zero-based kernel tap satisfies
+        ``0 <= tap_ijk[axis] < kernel_size[axis]``. A strided result has voxel size ``stride * h`` and the
+        same canonical origin. It is not a coarsened cell grid. ``kernel_size=stride=1`` returns this object
+        itself; ``kernel_size=1`` with a larger stride samples stride-aligned residues.
 
         Args:
             kernel_size (NumericMaxRank1): Convolution kernel size, broadcastable to shape ``(3,)``, integer dtype.

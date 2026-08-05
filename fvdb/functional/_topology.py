@@ -430,9 +430,12 @@ def conv_grid_batch(
 ) -> GridBatch:
     """Return the complete structural-support grid for a convolution on a grid batch.
 
-    It uses the canonical Torch phase ``p = stride * q + u - floor((K - 1) / 2)`` per axis.
-    The result is a convolution lattice (voxel size scaled by ``stride``, canonical origin), not a
-    block-coarsened grid. ``K=S=1`` returns ``grid`` itself.
+    It uses the canonical componentwise Torch phase
+    ``fine_ijk = stride * coarse_ijk + tap_ijk - padding_before``, where ``fine_ijk`` and
+    ``coarse_ijk`` are integer coordinates on the fine and strided lattices,
+    ``padding_before = floor((kernel_size - 1) / 2)``, and the zero-based kernel tap satisfies
+    ``0 <= tap_ijk[axis] < kernel_size[axis]``. The result is a convolution lattice (voxel size scaled by
+    ``stride``, canonical origin), not a block-coarsened grid. ``K=S=1`` returns ``grid`` itself.
 
     Args:
         grid (GridBatch): The input grid batch.

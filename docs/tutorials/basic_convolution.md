@@ -56,7 +56,13 @@ output = conv(vox_normals, plan)
 Let's visualize the original grid with normals visualized as colours alongside the result of these features after a convolution initialized with random weights:
 ![](../imgs/fig/simple_conv.png)
 
-For stride values greater than 1, the output is a sampled convolution lattice: its voxel size is multiplied by the stride while its origin is preserved. It is not a pooling or block-coarsening grid. For the default registration, a fine coordinate `p` and coarse coordinate `q` are connected by tap `u` when `p = stride * q + u - floor((kernel_size - 1) / 2)` (componentwise). Generated output topology is the positive structural support of that relation.
+For stride values greater than 1, the output is a sampled convolution lattice: its voxel size is multiplied by the
+stride while its origin is preserved. It is not a pooling or block-coarsening grid. For the default registration, an
+integer fine-lattice coordinate `fine_ijk` and an integer coarse-lattice coordinate `coarse_ijk` are connected by the
+zero-based kernel tap `tap_ijk` when `fine_ijk = stride * coarse_ijk + tap_ijk - padding_before` (componentwise),
+where `padding_before = floor((kernel_size - 1) / 2)` and
+`0 <= tap_ijk[axis] < kernel_size[axis]`. Generated output topology is the positive structural support of that
+relation.
 
 ```python continuation
 # Stride=2: output grid has half the resolution (twice the world-space voxel size)

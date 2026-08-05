@@ -4,8 +4,10 @@
 """Independent scalar and dense references for sparse-convolution semantics.
 
 This module deliberately does not import fVDB grids, plans, or topology helpers.
-It is test-only authority for the integer relation
-``p = S * q + D * u - P_before`` at the canonical registration ``a = 0``.
+It is test-only authority for the componentwise integer relation
+``fine_ijk = stride * coarse_ijk + dilation * tap_ijk - padding_before`` at the canonical registration
+``a = 0``, where ``padding_before = floor(dilation * (kernel_size - 1) / 2)`` and each tap coordinate is
+zero-based: ``0 <= tap_ijk[axis] < kernel_size[axis]``.
 """
 
 from __future__ import annotations

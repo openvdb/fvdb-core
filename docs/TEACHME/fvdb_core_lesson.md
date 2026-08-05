@@ -590,8 +590,10 @@ out_feat = plan_same.execute(feat, weights)
 Sparse 3D networks need multi-scale representations, just like 2D CNNs. In fVDB, the "resolution" of a grid is determined by its `voxel_sizes`. A coarser grid has larger voxels and fewer of them; a finer grid has smaller voxels and more.
 
 **Strided convolution generates a sampled convolution lattice.** At canonical registration its edges obey
-``p = stride * q + u - floor((kernel_size - 1) / 2)`` componentwise. A stride-2 result has twice the
-voxel size and the same origin, but it is not a partition into 2×2×2 physical cells.
+``fine_ijk = stride * coarse_ijk + tap_ijk - padding_before`` componentwise, where ``fine_ijk`` and ``coarse_ijk``
+are integer coordinates on the fine and strided lattices. The kernel coordinate ``tap_ijk`` is zero-based,
+``0 <= tap_ijk[axis] < kernel_size[axis]``, and ``padding_before = floor((kernel_size - 1) / 2)``. A stride-2 result
+has twice the voxel size and the same origin, but it is not a partition into 2×2×2 physical cells.
 
 ### Explicit Coarsening and Refinement
 
