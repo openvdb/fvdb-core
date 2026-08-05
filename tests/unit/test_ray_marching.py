@@ -6,7 +6,7 @@ import unittest
 
 import numpy as np
 import torch
-from fvdb_test_utils import (
+from fvdb.utils.tests import (
     dtype_to_atol,
     get_fvdb_test_data_path,
     make_dense_grid_batch_and_jagged_point_data,
@@ -15,6 +15,8 @@ from parameterized import parameterized, parameterized_class
 
 import fvdb
 from fvdb import GridBatch, JaggedTensor, volume_render
+
+from . import expand_tests
 
 all_device_combos = [
     ["cpu", True],
@@ -968,7 +970,7 @@ class TestRayMarching(unittest.TestCase):
         assert torch.allclose(t_ends, t_targets[1:])
         assert torch.allclose(intervals.jidx, torch.zeros_like(intervals.jidx))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_uniform_step_size_first_step_is_multiple_of_step_size(self, device, dtype):
         gsize = 8
         grid, _, _ = make_dense_grid_batch_and_jagged_point_data(gsize, device, dtype)
@@ -1014,7 +1016,7 @@ class TestRayMarching(unittest.TestCase):
         nsteps_outside = (ray_times_inside - tmin[ray_idx, None]) / step_size
         self.assertTrue(torch.allclose(nsteps_outside, torch.round(nsteps_outside), atol=dtype_to_atol(dtype)))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_uniform_ray_samples_cone_tracing_count_matches_generate(self, device, dtype):
         """Regression test for the floor/ceil mismatch in ``SampleRaysUniform.cu``.
 
@@ -1144,7 +1146,7 @@ class TestRayMarching(unittest.TestCase):
         self.assertGreaterEqual(float(t_starts.min().item()), t_enter - tol)
         self.assertLessEqual(float(t_ends.max().item()), t_exit + tol)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_segments_along_rays_bug(self, device, dtype):
         data_path = get_fvdb_test_data_path()
         data = torch.load(str(data_path / "ray_marching" / "repro_bug.pth"))
@@ -1158,7 +1160,7 @@ class TestRayMarching(unittest.TestCase):
 
         self.assertEqual(segments[0][0].jdata.shape[0], 52)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_segments_along_rays_always_sorted(self, device, dtype):
         for eps in [0.0, 1e-5]:
             pts = torch.rand(10000, 3).to(device=device, dtype=dtype)
@@ -1182,7 +1184,7 @@ class TestRayMarching(unittest.TestCase):
                 )
                 self.assertTrue(torch.all(segments_i[1:, 1] - segments_i[:-1, 1] >= eps))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_segments_along_rays_always_sorted_batched(self, device, dtype):
         for eps in [0.0, 1e-5]:
             pts = JaggedTensor([torch.rand(10000, 3).to(device=device, dtype=dtype)] * 2)
@@ -1209,7 +1211,7 @@ class TestRayMarching(unittest.TestCase):
                     )
                     self.assertTrue(torch.all(segments_i[1:, 1] - segments_i[:-1, 1] >= eps))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_segments_along_rays_batch_size_mismatch_throws(self, device, dtype):
         pts = torch.rand(10000, 3).to(device=device, dtype=dtype)
         # pts = fvdb.JaggedTensor([torch.rand(10000, 3).to(device=device, dtype=dtype)]*2)
@@ -1225,7 +1227,7 @@ class TestRayMarching(unittest.TestCase):
         with self.assertRaises(Exception):
             segments = grid.segments_along_rays(rays_o, rays_d, 100, eps=1e-4)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_voxels_along_rays_always_sorted(self, device, dtype):
         for i in range(3):
             pts = torch.rand(10000, 3, device=device, dtype=dtype)
@@ -1262,7 +1264,7 @@ class TestRayMarching(unittest.TestCase):
                     f"Max diff = {max_diff, voxels_i.cpu().numpy(), times_i.cpu().numpy()}",
                 )
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_voxels_along_rays_batch_size_mismatch_throws(self, device, dtype):
         pts = torch.rand(10000, 3, device=device, dtype=dtype)
         # pts = fvdb.JaggedTensor([torch.rand(10000, 3).to(device=device, dtype=dtype)]*2)
@@ -1278,7 +1280,7 @@ class TestRayMarching(unittest.TestCase):
         with self.assertRaises(Exception):
             out_voxels, out_times = grid.voxels_along_rays(rays_o, rays_d, 100, 1.0e-5)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_voxels_along_rays_always_sorted_batched(self, device, dtype):
         for i in range(3):
             # pts = torch.rand(10000, 3).to(device=device, dtype=dtype)

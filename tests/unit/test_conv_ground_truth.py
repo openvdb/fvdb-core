@@ -19,18 +19,20 @@ import unittest
 
 import torch
 from fvdb.types import DeviceIdentifier, resolve_device
-from fvdb_test_utils import (
+from fvdb.utils.tests import (
     fourier_anti_symmetric_kernel,
     generate_hermit_impulses_dense,
     has_any_symmetry,
 )
-from fvdb_test_utils.convolution_utils import (
+from fvdb.utils.tests.convolution_utils import (
     ALL_DEVICE_DTYPE_COMBOS,
     REDUCED_DEVICE_DTYPE_COMBOS,
     disable_tf32,
     get_tolerances,
 )
 from parameterized import parameterized
+
+from . import expand_tests
 
 
 def _validate_impulse_convolution(
@@ -107,7 +109,7 @@ class TestConvGroundTruth(unittest.TestCase):
     # Forward Pass Tests
     # =========================================================================
 
-    @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
+    @expand_tests(ALL_DEVICE_DTYPE_COMBOS)
     def test_single_impulse(self, device: DeviceIdentifier, dtype: torch.dtype):
         device = resolve_device(device)
 
@@ -256,7 +258,7 @@ class TestConvGroundTruth(unittest.TestCase):
     # Since forward is cross-correlation (not true convolution), the input
     # gradient pattern is the original kernel (not flipped).
 
-    @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
+    @expand_tests(ALL_DEVICE_DTYPE_COMBOS)
     def test_single_impulse_backward_input_grad(self, device: DeviceIdentifier, dtype: torch.dtype):
         """
         Test that backward pass w.r.t. input produces expected gradients.
@@ -307,7 +309,7 @@ class TestConvGroundTruth(unittest.TestCase):
         tols = get_tolerances(dtype)
         torch.testing.assert_close(input_grad_region, kernel, rtol=tols["input_grad"][0], atol=tols["input_grad"][1])
 
-    @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
+    @expand_tests(ALL_DEVICE_DTYPE_COMBOS)
     def test_single_impulse_backward_weight_grad(self, device: DeviceIdentifier, dtype: torch.dtype):
         """
         Test that backward pass w.r.t. weights produces expected gradients.
@@ -354,7 +356,7 @@ class TestConvGroundTruth(unittest.TestCase):
         tols = get_tolerances(dtype)
         torch.testing.assert_close(weight_grad, expected_grad, rtol=tols["kernel_grad"][0], atol=tols["kernel_grad"][1])
 
-    @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
+    @expand_tests(ALL_DEVICE_DTYPE_COMBOS)
     def test_single_impulse_backward_weight_grad_offset(self, device: DeviceIdentifier, dtype: torch.dtype):
         """
         Test weight gradient when input and output gradient impulses are at different coords.

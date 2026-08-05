@@ -58,12 +58,12 @@ import unittest
 
 import torch
 from fvdb.types import DeviceIdentifier, resolve_device
-from fvdb_test_utils import (
+from fvdb.utils.tests import (
     fourier_anti_symmetric_kernel,
     generate_hermit_impulses_dense,
     has_any_symmetry,
 )
-from fvdb_test_utils.convolution_utils import (
+from fvdb.utils.tests.convolution_utils import (
     ALL_DEVICE_DTYPE_COMBOS,
     REDUCED_DEVICE_DTYPE_COMBOS,
     DisableTF32Mixin,
@@ -82,6 +82,8 @@ from fvdb_test_utils.convolution_utils import (
 from parameterized import parameterized
 
 from fvdb import ConvolutionPlan, GridBatch, JaggedTensor
+
+from . import expand_tests
 
 # =============================================================================
 # Test Classes
@@ -317,7 +319,7 @@ class TestConvTransposeValues(DisableTF32Mixin, unittest.TestCase):
                     )
                     self.assertEqual(got_coord, expected_coord)
 
-    @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
+    @expand_tests(ALL_DEVICE_DTYPE_COMBOS)
     def test_single_impulse_forward(self, device: DeviceIdentifier, dtype: torch.dtype):
         """
         Test forward transposed convolution of a single impulse against dense ground truth.
@@ -389,7 +391,7 @@ class TestConvTransposeValues(DisableTF32Mixin, unittest.TestCase):
         )
         torch.testing.assert_close(gt_convolved, dense_output, rtol=tols["forward"][0], atol=tols["forward"][1])
 
-    @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
+    @expand_tests(ALL_DEVICE_DTYPE_COMBOS)
     def test_multiple_impulses_forward(self, device: DeviceIdentifier, dtype: torch.dtype):
         """
         Test forward transposed convolution of multiple isolated impulses.
@@ -457,7 +459,7 @@ class TestConvTransposeValues(DisableTF32Mixin, unittest.TestCase):
             sparse_values_sorted, dense_values_sorted, rtol=tols["forward"][0], atol=tols["forward"][1]
         )
 
-    @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
+    @expand_tests(ALL_DEVICE_DTYPE_COMBOS)
     def test_conv_vs_conv_transpose_flipped_kernel(self, device: DeviceIdentifier, dtype: torch.dtype):
         """
         Verify that conv_transpose(x, W) == conv(x, flip(W)) for stride=1.
@@ -667,7 +669,7 @@ class TestConvTransposeValues(DisableTF32Mixin, unittest.TestCase):
             device, dtype, stride=(1, 2, 3), cluster_coords=cluster_coords
         )
 
-    @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
+    @expand_tests(ALL_DEVICE_DTYPE_COMBOS)
     def test_strided_conv_transpose_large_stride(self, device: DeviceIdentifier, dtype: torch.dtype):
         """Strided transposed convolution forward+backward, stride (3,3,3), full device/dtype coverage."""
         device_resolved = resolve_device(device)
@@ -702,7 +704,7 @@ class TestConvTransposeBackward(DisableTF32Mixin, unittest.TestCase):
     SINGLE_VOLUME_SHAPE = (5, 7, 9)
     SINGLE_COORD = (2, 3, 4)
 
-    @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
+    @expand_tests(ALL_DEVICE_DTYPE_COMBOS)
     def test_single_impulse_backward(self, device: DeviceIdentifier, dtype: torch.dtype):
         """
         Test backward pass of sparse transposed convolution against dense ground truth.
@@ -796,7 +798,7 @@ class TestConvTransposeBackward(DisableTF32Mixin, unittest.TestCase):
             sparse_kernel_grad, dense_kernel_grad, rtol=tols["kernel_grad"][0], atol=tols["kernel_grad"][1]
         )
 
-    @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
+    @expand_tests(ALL_DEVICE_DTYPE_COMBOS)
     def test_multiple_inputs_backward(self, device: DeviceIdentifier, dtype: torch.dtype):
         """
         Test backward pass with multiple input voxels and random gradients.

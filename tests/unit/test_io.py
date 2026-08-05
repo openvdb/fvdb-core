@@ -9,7 +9,7 @@ from pathlib import Path
 import fvdb.functional
 import numpy as np
 import torch
-from fvdb_test_utils import get_fvdb_test_data_path
+from fvdb.utils.tests import get_fvdb_test_data_path
 from parameterized import parameterized
 
 import fvdb
