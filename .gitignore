@@ -75,6 +75,3 @@ scratch/
 *_benchmark.json
 *_results.json
 comparison_*.png
-
-# Repository-local linked worktrees
-.worktrees/

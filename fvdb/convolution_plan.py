@@ -58,7 +58,7 @@ class ConvolutionCoverageReport:
 class ConvolutionTransformCompatibility:
     """Compatibility of a plan's normalized fine and coarse lattices.
 
-    The first unified-semantics release requires matching batch/device metadata,
+    Compatibility requires matching batch/device metadata,
     ``h_coarse == stride * h_fine``, and the canonical uniform registration
     ``a == 0``. Comparisons use ``atol=rtol=1e-6``.
     """
@@ -77,7 +77,7 @@ class ConvolutionTransformCompatibility:
 def _transform_compatibility(
     fine_grid: GridBatch, coarse_grid: GridBatch, geometry: _fvdb_cpp.ConvolutionGeometry
 ) -> ConvolutionTransformCompatibility:
-    """Compute the first-release lattice-registration diagnostic."""
+    """Compute the canonical lattice-registration diagnostic."""
     same_batch_size = fine_grid.grid_count == coarse_grid.grid_count
     same_device = fine_grid.device == coarse_grid.device
     if not same_batch_size or not same_device:
@@ -167,12 +167,12 @@ def _validate_transform_compatibility(compatibility: ConvolutionTransformCompati
     if not compatibility.registration_integer:
         raise ValueError(
             "Convolution grids have a fractional lattice registration offset. "
-            f"The first release supports only a=0. {migration_hint}"
+            f"Convolution currently supports only a=0. {migration_hint}"
         )
     if not compatibility.registration_zero:
         raise ValueError(
             "Convolution grids have a nonzero integer lattice registration offset. "
-            f"The first release supports only a=0. {migration_hint}"
+            f"Convolution currently supports only a=0. {migration_hint}"
         )
     if not compatibility.compatible:
         raise RuntimeError("Convolution transform compatibility validation reached an inconsistent state")
@@ -1088,7 +1088,7 @@ class ConvolutionPlan:
 
     @property
     def transform_compatibility(self) -> ConvolutionTransformCompatibility:
-        """Validated first-release fine/coarse transform compatibility diagnostic."""
+        """Validated fine/coarse transform compatibility diagnostic."""
         return self._transform_compatibility
 
     @property

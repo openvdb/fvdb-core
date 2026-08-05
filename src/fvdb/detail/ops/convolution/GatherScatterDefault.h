@@ -93,7 +93,7 @@ reverseGatherScatterDefaultTopology(GatherScatterDefaultTopology const &topology
 ///
 /// This explicit test/debug utility checks tensor metadata, index ranges,
 /// tap-grouped offsets, uniqueness, and equality with the complete canonical
-/// fine/coarse relation. It is intentionally not called from release execution.
+/// fine/coarse relation. It is intentionally not called from production execution.
 /// @param fine_grid Fine-lattice domain, independent of execution direction.
 /// @param coarse_grid Coarse-lattice domain, independent of execution direction.
 /// @param topology Execution-oriented topology to validate.

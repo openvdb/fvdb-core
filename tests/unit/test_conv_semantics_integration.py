@@ -1,7 +1,7 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 #
-"""Production-facing issue #668 assertions carried across implementation slices."""
+"""Integration tests for canonical sparse-convolution semantics."""
 
 import subprocess
 import sys

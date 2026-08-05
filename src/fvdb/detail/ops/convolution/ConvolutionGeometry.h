@@ -18,10 +18,10 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-/// @brief Immutable convolution geometry for the first unified-semantics release.
+/// @brief Immutable geometry for the canonical sparse-convolution relation.
 ///
-/// The first release fixes dilation and lattice registration to one and zero,
-/// respectively. The relation represented here is therefore
+/// Dilation and lattice registration are fixed to one and zero, respectively.
+/// The relation represented here is therefore
 /// @code
 /// fine = stride * coarse + tap - paddingBefore
 /// @endcode

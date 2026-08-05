@@ -1,7 +1,7 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 #
-"""Standalone regression tests for the ratified sparse-convolution relation."""
+"""Regression tests for canonical sparse-convolution semantics."""
 
 from itertools import product
 
