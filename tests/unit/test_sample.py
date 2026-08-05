@@ -14,6 +14,8 @@ from parameterized import parameterized
 
 from fvdb import GridBatch, JaggedTensor
 
+from . import expand_tests
+
 all_device_dtype_combos = [
     ["cuda", torch.float16],
     ["cpu", torch.float32],
@@ -298,7 +300,7 @@ class TestSample(unittest.TestCase):
             f"Max grad error is {torch.max(torch.abs(gv - gp))}",
         )
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_upsample_dense_vs_pytorch(self, device, dtype):
         if dtype == torch.half:
             atol = 1e-2
@@ -659,7 +661,7 @@ class TestSample(unittest.TestCase):
             f"Max grad error is {torch.max(torch.abs(gv - gp))}",
         )
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_bezier_sparse_vs_brute(self, device, dtype):
         if dtype == torch.half:
             atol = 1e-1
@@ -717,7 +719,7 @@ class TestSample(unittest.TestCase):
             f"Max grad error is {torch.max(torch.abs(gv - gp))}",
         )
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_bezier_with_grad_sparse_vs_brute(self, device, dtype):
         if dtype == torch.half:
             atol = 1e-1
@@ -777,7 +779,7 @@ class TestSample(unittest.TestCase):
             f"Max grad error is {torch.max(torch.abs(gv - gp))}",
         )
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_bezier_sparse_onbound_vs_brute(self, device, dtype):
         if dtype == torch.half:
             f_atol = 1e-2
@@ -839,7 +841,7 @@ class TestSample(unittest.TestCase):
             f"Max grad error is {torch.max(torch.abs(gv - gp))}",
         )
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_bezier_with_grad_sparse_onbound_vs_brute(self, device, dtype):
         if dtype == torch.half:
             f_atol = 1e-2
@@ -940,7 +942,7 @@ class TestSample(unittest.TestCase):
             f"Max error is {torch.max(torch.abs(gv - gp))}",
         )
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_splat_bezier_vs_brute(self, device, dtype):
         if dtype == torch.half:
             fatol = 1e-3
@@ -1063,7 +1065,7 @@ class TestSample(unittest.TestCase):
             f"At voxel centers max error is {torch.max(torch.abs(result - features))}",
         )
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_nearest_all_inactive(self, device, dtype):
         """Points far outside the grid must return zero."""
         grid, _, _ = make_grid_batch_and_jagged_point_data(device, dtype)

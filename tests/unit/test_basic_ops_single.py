@@ -5,19 +5,18 @@ import itertools
 import pickle
 import unittest
 
-import fvdb.nn as fvnn
 import numpy as np
 import torch
 from fvdb.utils.tests import (
     dtype_to_atol,
-    expand_tests,
     make_dense_grid_and_point_data,
     make_grid_and_point_data,
 )
 from parameterized import parameterized
 
-import fvdb
-from fvdb import Grid, JaggedTensor
+from fvdb import Grid
+
+from . import expand_tests
 
 all_device_dtype_combos = [
     ["cuda", torch.float16],
@@ -295,7 +294,7 @@ class TestBasicOpsSingle(unittest.TestCase):
     #     grid_batch23.inject_from(grid_batch3, sidecar3, sidecar23)
     #     self.assertTrue(torch.equal(sidecar23.jdata, sidecar23_ref.jdata))
 
-    # @parameterized.expand(all_device_dtype_combos)
+    # @expand_tests(all_device_dtype_combos)
     # def test_refine_1x_with_mask(self, device, dtype):
     #     def get_point_list(npc: list, device: torch.device | str) -> list[torch.Tensor]:
     #         batch_size = len(npc)
@@ -339,7 +338,7 @@ class TestBasicOpsSingle(unittest.TestCase):
         grid2 = Grid.from_dense([16, 16, 16], [0, 0, 0], voxel_size=1.0 / 16, origin=[0, 0, 0])
         self.assertFalse(grid.is_same(grid2))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_voxel_neighborhood(self, device, dtype):
         randvox = torch.randint(0, 256, size=(10_000, 3), dtype=torch.int32).to(device)
         randvox = torch.cat(
@@ -362,7 +361,7 @@ class TestBasicOpsSingle(unittest.TestCase):
 
         self.assertTrue(torch.equal(nhood, gt_nhood))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_world_to_dual(self, device, dtype):
         vox_size = np.random.rand() * 0.1 + 0.05
         vox_origin = torch.rand(3).to(device).to(dtype)
@@ -383,7 +382,7 @@ class TestBasicOpsSingle(unittest.TestCase):
             f"max_diff = {torch.abs(pred_dual_coordinates - target_dual_coordinates).max()}",
         )
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_world_to_primal(self, device, dtype):
         vox_size = np.random.rand() * 0.1 + 0.05
         vox_origin = torch.rand(3).to(device).to(dtype)
@@ -403,7 +402,7 @@ class TestBasicOpsSingle(unittest.TestCase):
             )
         )
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_world_to_dual_grad(self, device, dtype):
         vox_size = np.random.rand() * 0.1 + 0.05
         vox_origin = torch.rand(3).to(device).to(dtype)
@@ -436,7 +435,7 @@ class TestBasicOpsSingle(unittest.TestCase):
         )
         self.assertTrue(torch.allclose(pts.grad, pred_grad, atol=dtype_to_atol(dtype)))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_world_to_primal_grad(self, device, dtype):
         vox_size = np.random.rand() * 0.1 + 0.05
         vox_origin = torch.rand(3).to(device).to(dtype)
@@ -470,7 +469,7 @@ class TestBasicOpsSingle(unittest.TestCase):
         # diff_idxs = torch.where(~torch.isclose(pts.grad, pred_grad, atol=dtype_to_atol(dtype)))
         self.assertTrue(torch.allclose(pts.grad, pred_grad, atol=dtype_to_atol(dtype)))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_to_primal_to_world(self, device, dtype):
         vox_size = np.random.rand() * 0.1 + 0.05
         vox_origin = torch.rand(3).to(device).to(dtype)
@@ -485,7 +484,7 @@ class TestBasicOpsSingle(unittest.TestCase):
 
         self.assertTrue(torch.allclose(target_world_pts, pred_world_pts, atol=dtype_to_atol(dtype)))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_to_dual_to_world(self, device, dtype):
         vox_size = np.random.rand() * 0.1 + 0.05
         vox_origin = torch.rand(3).to(device).to(dtype)
@@ -500,7 +499,7 @@ class TestBasicOpsSingle(unittest.TestCase):
 
         self.assertTrue(torch.allclose(target_world_pts, pred_world_pts, atol=dtype_to_atol(dtype)))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_to_primal_to_world_grad(self, device, dtype):
         vox_size = np.random.rand() * 0.1 + 0.05
         vox_origin = torch.rand(3).to(device).to(dtype)
@@ -528,7 +527,7 @@ class TestBasicOpsSingle(unittest.TestCase):
         self.assertTrue(torch.allclose(target_world_pts, pred_world_pts, atol=dtype_to_atol(dtype)))
         self.assertTrue(torch.allclose(grid_pts.grad, pred_grad, atol=dtype_to_atol(dtype)))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_to_dual_to_world_grad(self, device, dtype):
         vox_size = np.random.rand() * 0.1 + 0.05
         vox_origin = torch.rand(3).to(device).to(dtype)
@@ -556,7 +555,7 @@ class TestBasicOpsSingle(unittest.TestCase):
         self.assertTrue(torch.allclose(target_world_pts, pred_world_pts, atol=dtype_to_atol(dtype)))
         self.assertTrue(torch.allclose(grid_pts.grad, pred_grad, atol=dtype_to_atol(dtype)))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_dual_of_dual_is_primal(self, device, dtype):
         torch.random.manual_seed(0)
         vox_size = np.random.rand() * 0.1 + 0.05
@@ -606,7 +605,7 @@ class TestBasicOpsSingle(unittest.TestCase):
             )
         )
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_ijk_to_index(self, device, dtype):
         gsize = 7
 
@@ -637,7 +636,7 @@ class TestBasicOpsSingle(unittest.TestCase):
             self.assertTrue(torch.all(pidx == target_pidx[ppmt]))
             self.assertTrue(torch.all(didx == target_didx[dpmt]))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_coords_in_grid(self, device, _):
         num_inside = 1000 if device == "cpu" else 100_000
         random_coords = torch.randint(-1024, 1024, (num_inside, 3), dtype=torch.int32).to(device)
@@ -657,7 +656,7 @@ class TestBasicOpsSingle(unittest.TestCase):
 
         self.assertTrue(torch.all(pred_mask == target_mask))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_points_in_grid(self, device, dtype):
         num_inside = 1000 if device == "cpu" else 100_000
         random_coords = torch.randint(-1024, 1024, (num_inside, 3), dtype=torch.int32).to(device)
@@ -678,7 +677,7 @@ class TestBasicOpsSingle(unittest.TestCase):
 
         self.assertTrue(torch.all(pred_mask == target_mask))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_cubes_intersect_grid(self, device, dtype):
         torch.random.manual_seed(0)
 
@@ -717,7 +716,7 @@ class TestBasicOpsSingle(unittest.TestCase):
         if device == "cuda":
             torch.cuda.synchronize()
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_build_from_pointcloud_nearest_voxels(self, device, dtype):
         p = torch.randn((100, 3), device=device, dtype=dtype)
 
@@ -1088,7 +1087,7 @@ class TestBasicOpsSingle(unittest.TestCase):
 
     #         self.assertEqual(torch.abs(grid_vals_grad_t_flat - grid_vals_grad).max().item(), 0.0)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_pickle(self, device, dtype):
         grid, _, _ = make_grid_and_point_data(device, dtype)
         pkl_str = pickle.dumps(grid)
@@ -1098,7 +1097,7 @@ class TestBasicOpsSingle(unittest.TestCase):
         self.assertTrue(torch.all(grid.voxel_size == grid_2.voxel_size))
         self.assertTrue(torch.all(grid.origin == grid_2.origin))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_grid_construction(self, device, dtype):
         rand_ijk = torch.randint(-100, 100, (1000, 3), device=device)
         rand_pts = torch.randn(1000, 3, device=device, dtype=dtype)
@@ -1161,7 +1160,7 @@ class TestBasicOpsSingle(unittest.TestCase):
             grid = builder(vox_size, [0.01] * 3)
             grid = builder(vox_size, [0.01] * 1)
 
-    # @parameterized.expand(all_device_dtype_combos)
+    # @expand_tests(all_device_dtype_combos)
     # def test_ijk_to_inv_index(self, device, dtype):
     #     vox_size = 0.1
 
@@ -1217,7 +1216,7 @@ class TestBasicOpsSingle(unittest.TestCase):
     #         # ensure output of ijk_to_inv_index appears in ascending order in ijks
     #         assert check_order(grid.ijk, inv_ijks)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_no_use_after_free_on_backward(self, device, dtype):
         grid, grid_d, p = make_grid_and_point_data(device, dtype)
 
@@ -1248,7 +1247,7 @@ class TestBasicOpsSingle(unittest.TestCase):
         self.assertTrue(values.shape[0] == 0)
         self.assertTrue(values.shape[1] == 17)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_zero_voxels_grid_construction(self, device, dtype):
         """Test Grid.from_empty() creates an empty grid with correct properties"""
         # Test with default device
@@ -1269,7 +1268,7 @@ class TestBasicOpsSingle(unittest.TestCase):
         self.assertEqual(grid.device.type, device)
         self.assertEqual(grid.num_voxels, 0)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_bbox_attrs(self, device, dtype):
         grid = Grid.from_zero_voxels(device=device)
         print(f"Empty grid bbox: {grid.bbox}")
@@ -1285,7 +1284,7 @@ class TestBasicOpsSingle(unittest.TestCase):
         self.assertTrue(torch.equal(grid.bbox, torch.tensor([[0, 0, 0], [31, 31, 31]], device=device)))
         self.assertTrue(torch.equal(grid.dual_bbox, torch.tensor([[0, 0, 0], [32, 32, 32]], device=device)))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_clip_grid(self, device, dtype):
         grid = Grid.from_dense(
             [32, 32, 32],
@@ -1346,7 +1345,7 @@ class TestBasicOpsSingle(unittest.TestCase):
         loss.backward()
         self.assertTrue(torch.equal(clipped_features_grad, features.grad))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_dual_without_border(self, device, dtype):
         vox_size = np.random.rand() * 0.1 + 0.05
         vox_origin = torch.rand(3).to(dtype).to(device)

@@ -11,10 +11,11 @@ import torch
 import torch.distributed
 import torch.multiprocessing
 import torch.nn as nn
-from parameterized import parameterized
 
 import fvdb
 from fvdb import ConvolutionPlan, GridBatch, JaggedTensor
+
+from . import expand_tests
 
 all_device_dtype_combos = [
     ["cpu", torch.float32],
@@ -49,7 +50,7 @@ class TestNNModules(unittest.TestCase):
         self.assertIn("kernel_size", pool.extra_repr())
         self.assertIn("stride", pool.extra_repr())
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_avg_pool_forward(self, device, dtype):
         grid = self._make_dense_grid(device)
         features = self._make_features(grid, 4, device, dtype)
@@ -64,7 +65,7 @@ class TestNNModules(unittest.TestCase):
             self.assertTrue(torch.equal(pooled_data.jdata, expected_data.jdata))
             self.assertEqual(coarse_grid.total_voxels, expected_grid.total_voxels)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_avg_pool_with_coarse_grid(self, device, dtype):
         grid = self._make_dense_grid(device)
         features = self._make_features(grid, 4, device, dtype)
@@ -92,7 +93,7 @@ class TestNNModules(unittest.TestCase):
 
         self.assertIn("kernel_size", pool.extra_repr())
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_max_pool_forward(self, device, dtype):
         grid = self._make_dense_grid(device)
         features = self._make_features(grid, 4, device, dtype)
@@ -106,7 +107,7 @@ class TestNNModules(unittest.TestCase):
             self.assertGreater(coarse_grid.total_voxels, 0)
             self.assertFalse(torch.any(torch.isinf(pooled_data.jdata)), "MaxPool output should not contain inf values")
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_max_pool_inf_zeroing(self, device, dtype):
         """Verify MaxPool zeros out inf values that grid.max_pool produces for uncovered voxels."""
         fine_ijk = torch.tensor([[0, 0, 0], [1, 0, 0], [0, 1, 0]], dtype=torch.int32, device=device)
@@ -139,7 +140,7 @@ class TestNNModules(unittest.TestCase):
         up = fvnn.UpsamplingNearest(scale_factor=(2, 3, 4))
         self.assertTrue(torch.equal(up.scale_factor, torch.tensor([2, 3, 4])))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_upsampling_forward(self, device, dtype):
         coarse_grid = self._make_dense_grid(device, shape=(5, 5, 5))
         coarse_features = self._make_features(coarse_grid, 4, device, dtype)
@@ -178,7 +179,7 @@ class TestNNModules(unittest.TestCase):
         self.assertEqual(conv.kernel_volume, 1)
         self.assertEqual(conv.weight.shape, (16, 8))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_sparse_conv3d_forward(self, device, dtype):
         grid = self._make_dense_grid(device, shape=(8, 8, 8))
         features = self._make_features(grid, 16, device, dtype)
@@ -190,7 +191,7 @@ class TestNNModules(unittest.TestCase):
         self.assertIsInstance(output, JaggedTensor)
         self.assertEqual(output.jdata.shape[1], 32)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_sparse_conv3d_kernel_size_1_forward(self, device, dtype):
         grid = self._make_dense_grid(device, shape=(8, 8, 8))
         features = self._make_features(grid, 8, device, dtype)
@@ -225,7 +226,7 @@ class TestNNModules(unittest.TestCase):
         self.assertEqual(conv.weight.shape, (16, 32, 3, 3, 3))
         self.assertIsNotNone(conv.bias)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_sparse_conv_transpose3d_forward(self, device, dtype):
         grid = self._make_dense_grid(device, shape=(8, 8, 8))
         features = self._make_features(grid, 32, device, dtype)
@@ -256,7 +257,7 @@ class TestNNModules(unittest.TestCase):
     # GroupNorm
     # =========================================================================
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_group_norm_forward(self, device, dtype):
         num_channels, num_groups = 16, 4
         grid = self._make_dense_grid(device, batch_size=2, shape=(8, 8, 8))
@@ -268,7 +269,7 @@ class TestNNModules(unittest.TestCase):
         self.assertIsInstance(output, JaggedTensor)
         self.assertEqual(output.jdata.shape, features.jdata.shape)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_group_norm_against_pytorch(self, device, dtype):
         num_channels, num_groups = 16, 4
         grid = self._make_dense_grid(device, batch_size=1, shape=(8, 8, 8))
@@ -313,7 +314,7 @@ class TestNNModules(unittest.TestCase):
     # BatchNorm
     # =========================================================================
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_batch_norm_forward(self, device, dtype):
         num_features = 16
         grid = self._make_dense_grid(device)
@@ -326,7 +327,7 @@ class TestNNModules(unittest.TestCase):
         self.assertIsInstance(output, JaggedTensor)
         self.assertEqual(output.jdata.shape, features.jdata.shape)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_batch_norm_against_pytorch(self, device, dtype):
         num_features = 16
         grid = self._make_dense_grid(device)
@@ -369,7 +370,7 @@ class TestNNModules(unittest.TestCase):
     # SyncBatchNorm
     # =========================================================================
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_sync_batch_norm_forward(self, device, dtype):
         num_features = 16
         grid = self._make_dense_grid(device)

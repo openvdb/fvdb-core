@@ -5,25 +5,21 @@ import functools
 import itertools
 import math
 from pathlib import Path
-from typing import Any, Sequence, overload
+from typing import Any, Sequence
 
 import torch
 from fvdb.types import (
     DeviceIdentifier,
     NumericMaxRank1,
     NumericMaxRank2,
-    NumericScalar,
     ValueConstraint,
     resolve_device,
-    to_GenericScalar,
     to_Vec3i,
-    to_Vec3iBatch,
     to_Vec3iBatchBroadcastable,
 )
-from parameterized import parameterized
+from fvdb.utils._data_repo import fetch_data_repo
 
 from fvdb import JaggedTensor
-from fvdb.utils._data_repo import fetch_data_repo
 
 from .grid_utils import (
     make_dense_grid_and_point_data,
@@ -49,13 +45,6 @@ def get_fvdb_test_data_path() -> Path:
     """Get the path to the unit test data in the downloaded fvdb-test-data snapshot."""
     repo_path = fetch_data_repo("voxel-foundation/fvdb-test-data", git_tag_for_data, "fvdb_test_data")
     return repo_path / "unit_tests"
-
-
-# Hack parameterized to use the function name and the expand parameters as the test name
-expand_tests = functools.partial(
-    parameterized.expand,
-    name_func=lambda f, n, p: f'{f.__name__}_{parameterized.to_safe_name("_".join(str(x) for x in p.args))}',
-)
 
 
 def probabilistic_test(
@@ -819,7 +808,6 @@ __all__ = [
     "create_uniform_grid_points_at_depth",
     "generate_center_frame_point_at_depth",
     "dtype_to_atol",
-    "expand_tests",
     "ScopedTimer",
     "generate_chebyshev_spaced_ijk_batch",
     "generate_chebyshev_spaced_ijk",
