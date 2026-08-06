@@ -67,7 +67,7 @@ PyTorch 2.11.0 + CUDA 12.8
 Installation from nightly builds
 -------------------------------------
 
-Nightly wheels are built from the latest ``main`` branch and published daily.
+Wheels are built from the latest ``main`` branch and published on a nightly basis.
 Each nightly version is anchored to the next upcoming release recorded in
 ``pyproject.toml`` (currently |fvdb_core_nightly_base|) and carries a date
 stamp plus PyTorch/CUDA build identifiers, for example
@@ -118,41 +118,30 @@ To list all available nightly versions:
     Replace ``20260428`` with the desired nightly date. Nightly builds are retained for 30 days.
 
 
-Installation from source
------------------------------
+Build and install a custom wheel from source
+---------------------------------------------
+
+If you need a production wheel for a specific Python/PyTorch/CUDA combination
+(or a custom set of CUDA architectures) that is not distribute in any of our
+pre-built wheels, the repository provides a script that automates this process.
+This script reproduces the official release build process inside a Docker
+container — this is the same script our publish workflows use. It builds from
+your local checkout (including any uncommitted changes) and copies the finished wheel to ``./dist/``.
+
+The only host requirements are Docker (with BuildKit) and ``python3``; no GPU or CUDA toolkit is needed on the host unless you use ``--cuda-arch-list native``, which detects your GPU's compute capability via ``nvidia-smi``.
 
 .. note::
 
-    For more complete instructions including setting up a build environment and obtaining the
-    necessary dependencies, see the fVDB `README <https://github.com/openvdb/fvdb-core/blob/main/README.md>`_.
-
+    This script is to help produce a one-off installable wheel.  If you plan on doing active
+    development on fVDB, we recommend seeing the `Development Process section below <#development-process>`_.
 
 Clone the `fvdb-core repository <https://github.com/openvdb/fvdb-core>`_.
 
 .. code-block:: bash
 
    git clone git@github.com:openvdb/fvdb-core.git
+   cd fvdb-core
 
-Next build and install the fVDB library
-
-.. code-block:: bash
-
-   pushd fvdb-core
-   ./build.sh install verbose
-   popd
-
-Building a custom wheel with Docker
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-If you need a production wheel for a specific Python/PyTorch/CUDA combination
-(or a custom set of CUDA architectures), the repository provides a script that
-reproduces the official release build inside a Docker container — this is the
-same script our publish workflows use. It builds from your local checkout
-(including any uncommitted changes) and copies the finished wheel to ``./dist/``.
-
-The only host requirements are Docker (with BuildKit) and ``python3``; no GPU
-or CUDA toolkit is needed on the host unless you use ``--cuda-arch-list native``,
-which detects your GPU's compute capability via ``nvidia-smi``.
 
 Build a wheel with the default versions (recorded in ``.github/versions.json``):
 
@@ -160,12 +149,12 @@ Build a wheel with the default versions (recorded in ``.github/versions.json``):
 
    ./docker/build_wheel.py
 
-Or pick specific versions — for example Python 3.11 with CUDA 12.8, targeting
+Or pick specific versions — for example Python 3.11, PyTorch 2.11.0, with CUDA 13.0, targeting
 only the GPU architecture present on this machine:
 
 .. code-block:: bash
 
-   ./docker/build_wheel.py --python 3.11 --cuda 12.8 --cuda-arch-list native
+   ./docker/build_wheel.py --python 3.11 --torch 2.11.0 --cuda 13.0 --cuda-arch-list native
 
 Run ``./docker/build_wheel.py --help`` for all options. The resulting wheel
 carries a ``+pt<torch>.cu<cuda>`` local version suffix (for example
@@ -175,3 +164,10 @@ carries a ``+pt<torch>.cu<cuda>`` local version suffix (for example
 
    pip install torch==\ |torch_full_version| --extra-index-url https://download.pytorch.org/whl/|cu130_tag|
    pip install dist/fvdb_core-\*.whl
+
+
+Development Process
+---------------------
+
+For more information about the development process, including instructions for setting up a build environment and obtaining the
+necessary dependencies we recommend for development, see the fVDB `README <https://github.com/openvdb/fvdb-core/blob/main/README.md>`_.
