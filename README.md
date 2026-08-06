@@ -112,7 +112,11 @@ pip install -r env/build_requirements.txt
 ./build.sh install --cuda-arch-list="7.5;8.0;9.0;10.0;12.0+PTX" -v
 ```
 
-In order to extract an artifact from the container such as the Python wheel, query the container ID using `docker ps` and copy the artifact using `docker cp`.
+If your goal is a distributable wheel rather than an interactive development environment, use [`docker/build_wheel.py`](docker/build_wheel.py) instead. It runs the same build recipe as our publish workflows inside a Docker container (no GPU required on the host) and copies the finished wheel to `./dist/`:
+```shell
+./docker/build_wheel.py --python 3.12 --cuda 13.0 --cuda-arch-list native
+```
+Run `./docker/build_wheel.py --help` for all options; defaults come from [`.github/versions.json`](.github/versions.json).
 
 ---
 
