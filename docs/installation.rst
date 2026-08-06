@@ -7,7 +7,7 @@ supported software and hardware configurations.
 Software Requirements
 ------------------------
 
-The following is a compatibility matrix of the versions of software compatible with each minor release of fVDB.  These are the versions of software fVDB was built and tested against that are officially supported:
+The following is a matrix of the versions of software that we `test and distribute pre-built wheels for <#notes-on-testing-and-distribution>`_ with each minor release of fVDB.
 
 +--------------+------------------+-----------------+-----------------+----------------+------------------------------------------+
 | fVDB Version | Operating System | PyTorch Version | Python Version  | CUDA Version   | Vulkan Version (only for visualization)  |
@@ -171,3 +171,15 @@ Development Process
 
 For more information about the development process, including instructions for setting up a build environment and obtaining the
 necessary dependencies we recommend for development, see the fVDB `README <https://github.com/openvdb/fvdb-core/blob/main/README.md>`_.
+
+
+Notes on Testing, Compatibility, and Distribution
+--------------------------------------------------
+An fvdb-core minor release is tested against the current stable minor version of PyTorch at the time of release and the latest two minor versions of CUDA compatible with that release from `PyTorch's release compatibility matrix <https://github.com/pytorch/pytorch/blob/main/RELEASE.md#release-compatibility-matrix>`_. fvdb-core minor releases will be distributed as a set of wheels built across a matrix of that same current, stable version of PyTorch; the latest two CUDA versions supported by the stable PyTorch version; and all Python minor versions supported by the stable PyTorch version[*]_. Any fvdb-core patch releases made for that minor version will maintain the same compatibility as the minor release.
+
+Additionally, we test fvdb-core (on a weekly schedule) with the oldest PyTorch version that supports the lowest CUDA version which our 'stable PyTorch's latest two CUDA versions' policy above would imply.  For example, by PyTorch's matrix, for 2.13, the latest two supported CUDA versions are 13.2 and 13.0 and the lowest PyTorch version to have support for CUDA 13.0 is PyTorch 2.9.
+
+Inside of the version ranges of our testing regime, the maintainers will review submitted fixes and work to fix reported issues. However, for compatibility issues outside that range, the maintainers will endeavor to assist but may not be able to resolve issues outside this scope. Generally, fixes and new features are targeted for the current in-development minor release and compatibility range.
+
+
+.. [*] Builds of other combinations can be built `with this process <#build-and-install-a-custom-wheel-from-source>`_.
