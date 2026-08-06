@@ -174,4 +174,4 @@ carries a ``+pt<torch>.cu<cuda>`` local version suffix (for example
 .. parsed-literal::
 
    pip install torch==\ |torch_full_version| --extra-index-url https://download.pytorch.org/whl/|cu130_tag|
-   pip install dist/fvdb_core-*.whl
+   pip install dist/fvdb_core-\*.whl
