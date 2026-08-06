@@ -189,7 +189,7 @@ jobs:
 
       - name: Build wheel
         run: |
-          # docker/build_wheel.sh holds the shared production wheel recipe
+          # docker/build_wheel.py holds the shared production wheel recipe
           # (toolchain image, torch pin, build, version stamp, auditwheel).
           EXTRA_ARGS=()
           if [ "${PR_FLAGS_S3}" = "false" ]; then
@@ -204,7 +204,7 @@ jobs:
           if [ "${PR_FLAGS_S3}" = "true" ] && [ "${PR_FLAGS_RELEASE_PUSH}" != "true" ] && [ "${PR_FLAGS_RELEASE}" != "true" ]; then
             EXTRA_ARGS+=(--skip-auditwheel)
           fi
-          ./docker/build_wheel.sh \
+          ./docker/build_wheel.py \
             --python "${MATRIX_PYTHON_VERSION}" \
             --torch "${NEEDS_VERSIONS_OUTPUTS_TORCH_FULL_VERSION}" \
             --cuda "${MATRIX_CUDA_VERSION}" \

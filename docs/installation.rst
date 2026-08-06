@@ -158,16 +158,16 @@ Build a wheel with the default versions (recorded in ``.github/versions.json``):
 
 .. code-block:: bash
 
-   ./docker/build_wheel.sh
+   ./docker/build_wheel.py
 
 Or pick specific versions — for example Python 3.11 with CUDA 12.8, targeting
 only the GPU architecture present on this machine:
 
 .. code-block:: bash
 
-   ./docker/build_wheel.sh --python 3.11 --cuda 12.8 --cuda-arch-list native
+   ./docker/build_wheel.py --python 3.11 --cuda 12.8 --cuda-arch-list native
 
-Run ``./docker/build_wheel.sh --help`` for all options. The resulting wheel
+Run ``./docker/build_wheel.py --help`` for all options. The resulting wheel
 carries a ``+pt<torch>.cu<cuda>`` local version suffix (for example
 ``+pt211.cu130``) and must be installed alongside the matching PyTorch build:
 
