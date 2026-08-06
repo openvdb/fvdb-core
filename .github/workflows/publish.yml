@@ -193,10 +193,18 @@ jobs:
           # (toolchain image, torch pin, build, version stamp, auditwheel).
           EXTRA_ARGS=()
           if [ "${PR_FLAGS_S3}" = "false" ]; then
-            # TestPyPI testing path: no local version suffix; add .postN on re-runs
+            # TestPyPI testing path: no local version suffix, but make the
+            # version unique per run since TestPyPI uploads are immutable.
+            # PEP 440 requires .post before .dev, so for dev versions replace
+            # the dev number with the run number instead of appending .postN.
             if [ "${GITHUB_RUN_NUMBER}" -gt 1 ]; then
               VERSION=$(grep '^version *= *"' pyproject.toml | head -n1 | sed -E 's/^version *= *"([^"]+)".*/\1/')
-              EXTRA_ARGS+=(--version "${VERSION}.post${GITHUB_RUN_NUMBER}")
+              if [[ "${VERSION}" == *.dev* ]]; then
+                NEW_VERSION=$(echo "${VERSION}" | sed -E "s/\.dev[0-9]+/.dev${GITHUB_RUN_NUMBER}/")
+              else
+                NEW_VERSION="${VERSION}.post${GITHUB_RUN_NUMBER}"
+              fi
+              EXTRA_ARGS+=(--version "${NEW_VERSION}")
             else
               EXTRA_ARGS+=(--version-mode none)
             fi
@@ -265,7 +273,14 @@ jobs:
           VERSION_LINE=$(grep '^version *= *"' pyproject.toml)
           VERSION=$(echo "$VERSION_LINE" | sed -E 's/^version *= *"([^"]+)".*/\1/')
           if [ "${GITHUB_RUN_NUMBER:-${{ github.run_number }}}" -gt 1 ]; then
-            NEW_VERSION="${VERSION}.post${GITHUB_RUN_NUMBER:-${{ github.run_number }}}"
+            # Make the version unique per run (TestPyPI uploads are immutable).
+            # PEP 440 requires .post before .dev, so for dev versions replace
+            # the dev number with the run number instead of appending .postN.
+            if [[ "${VERSION}" == *.dev* ]]; then
+              NEW_VERSION=$(echo "${VERSION}" | sed -E "s/\.dev[0-9]+/.dev${GITHUB_RUN_NUMBER:-${{ github.run_number }}}/")
+            else
+              NEW_VERSION="${VERSION}.post${GITHUB_RUN_NUMBER:-${{ github.run_number }}}"
+            fi
             sed -i -E "s/^version *= *\"[^\"]+\"/version = \"${NEW_VERSION}\"/" pyproject.toml
             echo "Updated version to $NEW_VERSION"
           else

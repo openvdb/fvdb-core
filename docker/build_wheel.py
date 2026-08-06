@@ -134,6 +134,19 @@ def detect_native_arch_list():
     return arch_list
 
 
+# PEP 440 version in normalized form (see the "Appendix: Parsing version
+# strings with regular expressions" section of the spec). Segment order
+# matters: .post must precede .dev.
+PEP440_RE = re.compile(
+    r"^([1-9][0-9]*!)?"
+    r"(0|[1-9][0-9]*)(\.(0|[1-9][0-9]*))*"
+    r"((a|b|rc)(0|[1-9][0-9]*))?"
+    r"(\.post(0|[1-9][0-9]*))?"
+    r"(\.dev(0|[1-9][0-9]*))?"
+    r"(\+[a-z0-9]+(\.[a-z0-9]+)*)?$"
+)
+
+
 def read_pyproject_version():
     for line in (REPO_ROOT / "pyproject.toml").read_text().splitlines():
         match = re.match(r'^version\s*=\s*"([^"]+)"', line)
@@ -196,6 +209,12 @@ def main():
     auditwheel_excludes += [f"--exclude {lib}.{cuda_major}" for lib in versions["auditwheel_excludes_cuda_major"]]
 
     current_version, wheel_version = compute_wheel_version(args, local_suffix)
+    if wheel_version and not PEP440_RE.match(wheel_version):
+        die(
+            f"'{wheel_version}' is not a valid normalized PEP 440 version; "
+            "the build would fail when scikit-build-core parses pyproject.toml "
+            "(note PEP 440 puts .post before .dev, e.g. 1.2.3.post1.dev0)"
+        )
 
     print("Building fvdb-core wheel with:")
     print(f"  Python:          {args.python_version}")
