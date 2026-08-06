@@ -140,3 +140,38 @@ Next build and install the fVDB library
    pushd fvdb-core
    ./build.sh install verbose
    popd
+
+Building a custom wheel with Docker
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+If you need a production wheel for a specific Python/PyTorch/CUDA combination
+(or a custom set of CUDA architectures), the repository provides a script that
+reproduces the official release build inside a Docker container — this is the
+same script our publish workflows use. It builds from your local checkout
+(including any uncommitted changes) and copies the finished wheel to ``./dist/``.
+
+The only host requirements are Docker (with BuildKit) and ``python3``; no GPU
+or CUDA toolkit is needed on the host unless you use ``--cuda-arch-list native``,
+which detects your GPU's compute capability via ``nvidia-smi``.
+
+Build a wheel with the default versions (recorded in ``.github/versions.json``):
+
+.. code-block:: bash
+
+   ./docker/build_wheel.sh
+
+Or pick specific versions — for example Python 3.11 with CUDA 12.8, targeting
+only the GPU architecture present on this machine:
+
+.. code-block:: bash
+
+   ./docker/build_wheel.sh --python 3.11 --cuda 12.8 --cuda-arch-list native
+
+Run ``./docker/build_wheel.sh --help`` for all options. The resulting wheel
+carries a ``+pt<torch>.cu<cuda>`` local version suffix (for example
+``+pt211.cu130``) and must be installed alongside the matching PyTorch build:
+
+.. parsed-literal::
+
+   pip install torch==\ |torch_full_version| --extra-index-url https://download.pytorch.org/whl/|cu130_tag|
+   pip install dist/fvdb_core-*.whl
