@@ -153,9 +153,7 @@ def compute_wheel_version(args, local_suffix):
         # Anchor the nightly at the upcoming release recorded in pyproject.toml
         # (e.g. 0.6.0.dev0 -> 0.6.0) so PEP 440 ordering puts nightlies between
         # the previous final release and the next one.
-        base = re.sub(
-            r"(\.dev[0-9]+|\.post[0-9]+|(a|b|c|rc)[0-9]+)+$", "", current.split("+")[0]
-        )
+        base = re.sub(r"(\.dev[0-9]+|\.post[0-9]+|(a|b|c|rc)[0-9]+)+$", "", current.split("+")[0])
         if not base:
             die(f"failed to parse base version from pyproject.toml (got '{current}')")
         date_stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d")
@@ -171,10 +169,7 @@ def main():
         die("docker is required but not found")
     buildx = subprocess.run(["docker", "buildx", "version"], capture_output=True)
     if buildx.returncode != 0:
-        die(
-            "docker with BuildKit (buildx) is required; "
-            "upgrade Docker or install the buildx plugin"
-        )
+        die("docker with BuildKit (buildx) is required; " "upgrade Docker or install the buildx plugin")
 
     known_cuda = versions["cuda"]["versions"].get(args.cuda_version)
     if known_cuda is not None:
@@ -198,23 +193,14 @@ def main():
         cuda_arch_list = detect_native_arch_list()
 
     auditwheel_excludes = [f"--exclude {lib}" for lib in versions["auditwheel_excludes"]]
-    auditwheel_excludes += [
-        f"--exclude {lib}.{cuda_major}"
-        for lib in versions["auditwheel_excludes_cuda_major"]
-    ]
+    auditwheel_excludes += [f"--exclude {lib}.{cuda_major}" for lib in versions["auditwheel_excludes_cuda_major"]]
 
     current_version, wheel_version = compute_wheel_version(args, local_suffix)
 
     print("Building fvdb-core wheel with:")
     print(f"  Python:          {args.python_version}")
-    print(
-        f"  PyTorch:         {args.torch_version} "
-        f"(index: https://download.pytorch.org/whl/{cuda_tag})"
-    )
-    print(
-        f"  CUDA:            {args.cuda_version} "
-        f"(image: nvidia/cuda:{cuda_image_tag}-cudnn-devel-rockylinux8)"
-    )
+    print(f"  PyTorch:         {args.torch_version} " f"(index: https://download.pytorch.org/whl/{cuda_tag})")
+    print(f"  CUDA:            {args.cuda_version} " f"(image: nvidia/cuda:{cuda_image_tag}-cudnn-devel-rockylinux8)")
     print(f"  CUDA archs:      {cuda_arch_list}")
     print(f"  Wheel version:   {wheel_version or f'{current_version} (unchanged)'}")
     print(f"  auditwheel:      {'skipped' if args.skip_auditwheel else 'enabled'}")
@@ -262,8 +248,7 @@ def main():
     print()
     print("Install with the matching PyTorch build, e.g.:")
     print(
-        f"  pip install torch=={args.torch_version} "
-        f"--extra-index-url https://download.pytorch.org/whl/{cuda_tag}"
+        f"  pip install torch=={args.torch_version} " f"--extra-index-url https://download.pytorch.org/whl/{cuda_tag}"
     )
     print(f"  pip install {args.output_dir}/fvdb_core-*.whl")
 
