@@ -50,6 +50,7 @@
 #include <fvdb/detail/ops/VoxelsAlongRays.h>
 
 // Meshing / TSDF
+#include <fvdb/detail/ops/DualContour.h>
 #include <fvdb/detail/ops/IntegrateTSDF.h>
 #include <fvdb/detail/ops/MarchingCubes.h>
 #include <fvdb/detail/ops/ReinitializeSdf.h>
@@ -458,6 +459,14 @@ bind_grid_batch_ops(py::module &m) {
 
     m.def(
         "marching_cubes", &ops::marchingCubes, py::arg("grid"), py::arg("field"), py::arg("level"));
+
+    m.def("dual_contour",
+          &ops::dualContour,
+          py::arg("grid"),
+          py::arg("field"),
+          py::arg("iso"),
+          py::arg("reduce"),
+          py::arg("adaptivity"));
 
     m.def("reinitialize_sdf",
           &ops::reinitializeSdf,
