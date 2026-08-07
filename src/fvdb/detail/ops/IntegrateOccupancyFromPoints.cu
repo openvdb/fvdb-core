@@ -139,7 +139,7 @@ rayWalkLogOddsKernel(const fvdb::BatchGridAccessor unionGridAcc,
     auto acc                             = grid->getAccessor();
     const int64_t voxelOffsetBase        = unionGridAcc.voxelOffset(batchIdx);
 
-    fvdb::HDDAVoxelIterator<decltype(acc), MathT> it(rayVox, acc);
+    fvdb::HDDALeafVoxelIterator<decltype(acc), MathT> it(rayVox, acc);
     while (it.isValid()) {
         const nanovdb::Coord voxIjk = it->first;
         ++it;

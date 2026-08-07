@@ -49,6 +49,7 @@
 #include <nanovdb/NanoVDB.h>
 #include <nanovdb/tools/cuda/VoxelBlockManager.cuh>
 #include <nanovdb/util/cuda/DeviceGridTraits.cuh>
+#include <nanovdb/util/cuda/Util.h>
 
 #include <c10/cuda/CUDAException.h>
 #include <c10/cuda/CUDAGuard.h>
@@ -271,17 +272,17 @@ esdfSweepVBMKernel(nanovdb::NanoGrid<nanovdb::ValueOnIndex> *__restrict__ esdfGr
 
     const uint64_t blockFirstOffset = static_cast<uint64_t>(blockIdx.x) * BW + 1;
 
-    nanovdb::tools::cuda::VoxelBlockManager<BW>::template decodeInverseMaps<nanovdb::ValueOnIndex>(
-        esdfGrid,
-        firstLeafID[blockIdx.x],
-        jumpMap + static_cast<uint64_t>(blockIdx.x) * JML,
-        blockFirstOffset,
-        smem_leafIndex,
-        smem_voxelOffset);
+    nanovdb::tools::cuda::VoxelBlockManager<ESDF_BLOCK_WIDTH_LOG2>::template decodeInverseMaps<
+        nanovdb::ValueOnIndex>(esdfGrid,
+                               firstLeafID[blockIdx.x],
+                               jumpMap + static_cast<uint64_t>(blockIdx.x) * JML,
+                               blockFirstOffset,
+                               smem_leafIndex,
+                               smem_voxelOffset);
     // __syncthreads() is issued inside decodeInverseMaps.
 
     const uint32_t leafID = smem_leafIndex[threadIdx.x];
-    if (leafID == nanovdb::tools::cuda::VoxelBlockManager<BW>::UnusedLeafIndex) {
+    if (leafID == nanovdb::tools::cuda::VoxelBlockManager<ESDF_BLOCK_WIDTH_LOG2>::UnusedLeafIndex) {
         return;
     }
     const uint16_t voxOff = smem_voxelOffset[threadIdx.x];
@@ -395,8 +396,6 @@ runEsdfSweepsAndFinalize(const c10::intrusive_ptr<GridBatchData> &esdfGrid,
                          bool use_vbm,
                          at::cuda::CUDAStream stream) {
     const int64_t esdfVoxels = esdfGrid->totalVoxels();
-    auto u32Opts = torch::TensorOptions().dtype(torch::kInt32).device(esdfInit.device());
-    auto u64Opts = torch::TensorOptions().dtype(torch::kInt64).device(esdfInit.device());
     auto i32Opts = torch::TensorOptions().dtype(torch::kInt32).device(esdfInit.device());
 
     auto *esdfDeviceGrid = esdfGrid->mGridHdl->deviceGrid<nanovdb::ValueOnIndex>(0);
@@ -433,20 +432,33 @@ runEsdfSweepsAndFinalize(const c10::intrusive_ptr<GridBatchData> &esdfGrid,
         const int nBlocks =
             static_cast<int>((esdfVoxels + ESDF_BLOCK_WIDTH - 1) / ESDF_BLOCK_WIDTH);
 
+        // firstLeafID / jumpMap live in torch tensors so they come from the
+        // same caching-allocator pool as every other fvdb allocation.
+        // nanovdb's VoxelBlockManagerHandle can't own them (its accessors
+        // static_cast from deviceData(), which TorchDeviceBuffer types as
+        // uint8_t*), so launch the public build functor directly — the same
+        // launch buildVoxelBlockManager performs on a handle it owns. The
+        // functor expects a zeroed jumpMap, which torch::zeros provides.
+        auto u32Opts = torch::TensorOptions().dtype(torch::kInt32).device(esdfInit.device());
+        auto u64Opts = torch::TensorOptions().dtype(torch::kInt64).device(esdfInit.device());
         torch::Tensor firstLeafID = torch::zeros({nBlocks}, u32Opts);
         torch::Tensor jumpMap     = torch::zeros({nBlocks * ESDF_JUMP_MAP_LENGTH}, u64Opts);
+        uint32_t *vbmFirstLeafID  = reinterpret_cast<uint32_t *>(firstLeafID.data_ptr<int32_t>());
+        uint64_t *vbmJumpMap      = reinterpret_cast<uint64_t *>(jumpMap.data_ptr<int64_t>());
 
-        nanovdb::tools::cuda::buildVoxelBlockManager<ESDF_BLOCK_WIDTH_LOG2, 128>(
-            /*firstOffset=*/1,
-            /*lastOffset=*/static_cast<uint64_t>(esdfVoxels),
-            /*nBlocks=*/nBlocks,
-            /*lowerCount=*/lowerCount,
-            /*grid=*/esdfDeviceGrid,
-            /*firstLeafID=*/
-            reinterpret_cast<uint32_t *>(firstLeafID.data_ptr<int32_t>()),
-            /*jumpMap=*/
-            reinterpret_cast<uint64_t *>(jumpMap.data_ptr<int64_t>()),
-            /*stream=*/stream.stream());
+        using VbmBuildOp =
+            nanovdb::tools::cuda::BuildVoxelBlockManagerFunctor<ESDF_BLOCK_WIDTH_LOG2>;
+        nanovdb::util::cuda::operatorKernel<VbmBuildOp>
+            <<<dim3(lowerCount, VbmBuildOp::SlicesPerLowerNode, 1),
+               VbmBuildOp::MaxThreadsPerBlock,
+               0,
+               stream.stream()>>>(
+                /*firstOffset=*/static_cast<uint64_t>(1),
+                /*lastOffset=*/static_cast<uint64_t>(esdfVoxels),
+                /*nBlocks=*/nBlocks,
+                esdfDeviceGrid,
+                vbmFirstLeafID,
+                vbmJumpMap);
         C10_CUDA_KERNEL_LAUNCH_CHECK();
 
         for (int sweep = 0; sweep < numSweepsMax; ++sweep) {
@@ -454,15 +466,14 @@ runEsdfSweepsAndFinalize(const c10::intrusive_ptr<GridBatchData> &esdfGrid,
             esdfSweepVBMKernel<<<static_cast<unsigned int>(nBlocks),
                                  static_cast<unsigned int>(ESDF_BLOCK_WIDTH),
                                  0,
-                                 stream.stream()>>>(
-                esdfDeviceGrid,
-                reinterpret_cast<uint32_t *>(firstLeafID.data_ptr<int32_t>()),
-                reinterpret_cast<uint64_t *>(jumpMap.data_ptr<int64_t>()),
-                esdfIn->data_ptr<float>(),
-                esdfOut->data_ptr<float>(),
-                voxelSizeF,
-                maxDistF,
-                changedFlag.data_ptr<int32_t>());
+                                 stream.stream()>>>(esdfDeviceGrid,
+                                                    vbmFirstLeafID,
+                                                    vbmJumpMap,
+                                                    esdfIn->data_ptr<float>(),
+                                                    esdfOut->data_ptr<float>(),
+                                                    voxelSizeF,
+                                                    maxDistF,
+                                                    changedFlag.data_ptr<int32_t>());
             C10_CUDA_KERNEL_LAUNCH_CHECK();
             std::swap(esdfIn, esdfOut);
             // .item() is a sync + host-device copy (~30 us). Each
