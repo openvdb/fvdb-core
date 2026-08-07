@@ -30,6 +30,8 @@ on:
         value: ${{ jobs.load.outputs.cuda-128-patch }}
       cuda-130-patch:
         value: ${{ jobs.load.outputs.cuda-130-patch }}
+      cuda-default-patch:
+        value: ${{ jobs.load.outputs.cuda-default-patch }}
       cuda-conda-override:
         value: ${{ jobs.load.outputs.cuda-conda-override }}
       cuda-arch-pr:
@@ -50,10 +52,14 @@ on:
         value: ${{ jobs.load.outputs.aws-cpu-ami }}
       aws-gpu-ami:
         value: ${{ jobs.load.outputs.aws-gpu-ami }}
+      aws-fgpu-ami:
+        value: ${{ jobs.load.outputs.aws-fgpu-ami }}
       aws-cpu-az-config:
         value: ${{ jobs.load.outputs.aws-cpu-az-config }}
       aws-gpu-az-config:
         value: ${{ jobs.load.outputs.aws-gpu-az-config }}
+      aws-fgpu-az-config:
+        value: ${{ jobs.load.outputs.aws-fgpu-az-config }}
       aws-security-group:
         value: ${{ jobs.load.outputs.aws-security-group }}
       aws-cloudfront-distribution-domain:
@@ -79,6 +85,7 @@ jobs:
       cuda-default: ${{ steps.parse.outputs.cuda-default }}
       cuda-128-patch: ${{ steps.parse.outputs.cuda-128-patch }}
       cuda-130-patch: ${{ steps.parse.outputs.cuda-130-patch }}
+      cuda-default-patch: ${{ steps.parse.outputs.cuda-default-patch }}
       cuda-conda-override: ${{ steps.parse.outputs.cuda-conda-override }}
       cuda-arch-pr: ${{ steps.parse.outputs.cuda-arch-pr }}
       cuda-arch-publish: ${{ steps.parse.outputs.cuda-arch-publish }}
@@ -89,8 +96,10 @@ jobs:
       aws-region: ${{ steps.parse.outputs.aws-region }}
       aws-cpu-ami: ${{ steps.parse.outputs.aws-cpu-ami }}
       aws-gpu-ami: ${{ steps.parse.outputs.aws-gpu-ami }}
+      aws-fgpu-ami: ${{ steps.parse.outputs.aws-fgpu-ami }}
       aws-cpu-az-config: ${{ steps.parse.outputs.aws-cpu-az-config }}
       aws-gpu-az-config: ${{ steps.parse.outputs.aws-gpu-az-config }}
+      aws-fgpu-az-config: ${{ steps.parse.outputs.aws-fgpu-az-config }}
       aws-security-group: ${{ steps.parse.outputs.aws-security-group }}
       aws-cloudfront-distribution-domain: ${{ steps.parse.outputs.aws-cloudfront-distribution-domain }}
       publish-matrix: ${{ steps.parse.outputs.publish-matrix }}
@@ -118,6 +127,7 @@ jobs:
             echo "cuda-default=$(jq -r '.cuda.default' $CFG)"
             echo "cuda-128-patch=$(jq -r '.cuda.versions["12.8"].patch' $CFG)"
             echo "cuda-130-patch=$(jq -r '.cuda.versions["13.0"].patch' $CFG)"
+            echo "cuda-default-patch=$(jq -r '.cuda.versions[.cuda.default].patch' $CFG)"
             echo "cuda-conda-override=$(jq -r '.cuda.conda_override' $CFG)"
             echo "cuda-arch-pr=$(jq -r '.cuda.arch_list_pr' $CFG)"
             echo "cuda-arch-publish=$(jq -r '.cuda.arch_list_publish' $CFG)"
@@ -128,8 +138,10 @@ jobs:
             echo "aws-region=$(jq -r '.aws.region' $CFG)"
             echo "aws-cpu-ami=$(jq -r '.aws.cpu_ami' $CFG)"
             echo "aws-gpu-ami=$(jq -r '.aws.gpu_ami' $CFG)"
+            echo "aws-fgpu-ami=$(jq -r '.aws.fgpu_ami' $CFG)"
             echo "aws-cpu-az-config=$(jq -c '.aws as $a | [$a.subnets[] | {imageId: $a.cpu_ami, subnetId: .id, securityGroupId: $a.security_group}]' $CFG)"
             echo "aws-gpu-az-config=$(jq -c '.aws as $a | [$a.subnets[] | {imageId: $a.gpu_ami, subnetId: .id, securityGroupId: $a.security_group}]' $CFG)"
+            echo "aws-fgpu-az-config=$(jq -c '.aws as $a | [$a.subnets[] | {imageId: $a.fgpu_ami, subnetId: .id, securityGroupId: $a.security_group}]' $CFG)"
             echo "aws-security-group=$(jq -r '.aws.security_group' $CFG)"
             echo "aws-cloudfront-distribution-domain=$(jq -r '.aws.cloudfront_distribution_domain // ""' $CFG)"
             echo "publish-matrix=$(jq -c '.publish_matrix' $CFG)"

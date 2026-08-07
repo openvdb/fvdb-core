@@ -35,6 +35,7 @@
     "region": "us-east-2",
     "cpu_ami": "ami-0e14a711dad782a70",
     "gpu_ami": "ami-0f5c0b65fde08ae43",
+    "fgpu_ami": "ami-0b5dca767eafff9d8",
     "subnets": [
       { "az": "us-east-2a", "id": "subnet-0b75bb13b6048a2f1" },
       { "az": "us-east-2b", "id": "subnet-03f2320d6e6e0005b" },

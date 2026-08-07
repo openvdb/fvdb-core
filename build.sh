@@ -26,6 +26,8 @@ usage() {
   echo "  debug          Build in debug mode with full debug symbols and no optimizations."
   echo "  lineinfo       Enable CUDA lineinfo (sets FVDB_LINEINFO=ON)."
   echo "  strip_symbols  Strip symbols from the build (will be ignored if debug is enabled)."
+  echo "  sync_cuda_malloc  Compile with -DNANOVDB_USE_SYNC_CUDA_MALLOC so NanoVDB uses"
+  echo "                    synchronous cudaMalloc/cudaFree (required on vGPU slices)."
   echo "  verbose        Enable verbose build output for pip and CMake."
   echo "  trace          Enable CMake trace output for debugging configuration."
   echo ""
@@ -316,6 +318,10 @@ while (( "$#" )); do
       echo "Enabling strip symbols build"
       CONFIG_SETTINGS+=" --config-settings=cmake.define.FVDB_STRIP_SYMBOLS=ON"
       is_config_arg_handled=true
+    elif [[ "$1" == "sync_cuda_malloc" ]]; then
+      echo "Enabling synchronous NanoVDB CUDA allocation (-DNANOVDB_USE_SYNC_CUDA_MALLOC)"
+      CONFIG_SETTINGS+=" --config-settings=cmake.define.FVDB_USE_SYNC_CUDA_MALLOC=ON"
+      is_config_arg_handled=true
     fi
   fi
 
@@ -422,22 +428,32 @@ elif [ "$BUILD_TYPE" == "ctest" ]; then
 
     # --- Find and Run Tests ---
     echo "Searching for test build directory..."
-    # Find CMakeCache.txt to locate the build root
-    CMAKE_CACHE=$(find build -name CMakeCache.txt -type f -print -quit 2>/dev/null)
+    # Find CMakeCache.txt to locate the build root. Every vendored dependency that
+    # CPM/FetchContent configures leaves a CMakeCache.txt of its own under _deps, so
+    # that subtree is pruned; otherwise find can return a dependency's cache first,
+    # since it walks directories in filesystem order rather than a defined one.
+    FOUND_CMAKE_CACHE=false
+    BUILD_DIR=""
+    while IFS= read -r cmake_cache; do
+        FOUND_CMAKE_CACHE=true
+        # Construct the test directory path (where CTestTestfile.cmake is generated)
+        # This discovers all tests from both src/tests/ and src/dispatch/
+        candidate_dir="$(dirname "$cmake_cache")/src"
+        if [ -f "$candidate_dir/CTestTestfile.cmake" ]; then
+            BUILD_DIR="$candidate_dir"
+            break
+        fi
+    done < <(find build -type d -name _deps -prune -o -name CMakeCache.txt -type f -print 2>/dev/null)
 
-    if [ -z "$CMAKE_CACHE" ]; then
+    if [ "$FOUND_CMAKE_CACHE" = false ]; then
         echo "Error: Could not find CMakeCache.txt in build directory"
         echo "Please build the project first with tests enabled:"
         echo "pip install . -C cmake.define.FVDB_BUILD_TESTS=ON"
         exit 1
     fi
 
-    # Construct the test directory path (where CTestTestfile.cmake is generated)
-    # This discovers all tests from both src/tests/ and src/dispatch/
-    BUILD_DIR="$(dirname "$CMAKE_CACHE")/src"
-
-    if [ ! -f "$BUILD_DIR/CTestTestfile.cmake" ]; then
-        echo "Error: No CTestTestfile.cmake found in $BUILD_DIR"
+    if [ -z "$BUILD_DIR" ]; then
+        echo "Error: No CTestTestfile.cmake found under build/*/src"
         echo "Please enable tests by building with:"
         echo "pip install . -C cmake.define.FVDB_BUILD_TESTS=ON"
         exit 1
