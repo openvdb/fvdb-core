@@ -47,26 +47,45 @@ namespace {
 /// This replaces a `torch::empty({N, 3}, kInt32)` coordinate tensor (12 B per input point) that
 /// was written once and read once.
 ///
+/// The class supports both memory layouts of an (N, 3) tensor so that non-contiguous views --
+/// e.g. the xyz columns of an (N, 6) point cloud, `cloud[:, :3]` -- are read in place rather
+/// than copied. `IsContiguous` selects between compile-time strides (3, 1) and runtime strides
+/// taken from the tensor, so the packed fast path pays nothing for the generality.
+///
 /// @tparam ScalarT Scalar type of the input points (floating point or half)
-template <typename ScalarT> class TransformedPointPtr {
+/// @tparam IsContiguous Whether the points are a packed (N, 3) array; when false, element
+///         strides are supplied at construction
+template <typename ScalarT, bool IsContiguous> class TransformedPointPtr {
   public:
     using MathT = typename at::opmath_type<ScalarT>;
 
-    /// @param points Pointer to contiguous world-space points with shape (N, 3)
+    /// @param points Pointer to the first component of the first point
     /// @param transform World-space to index-space transform for this batch item
+    /// @param rowStride Distance in elements between consecutive points (3 if packed)
+    /// @param colStride Distance in elements between a point's components (1 if packed)
     __hostdev__
-    TransformedPointPtr(const ScalarT *points, const VoxelCoordTransform &transform)
-        : mPoints(points), mTransform(transform) {}
+    TransformedPointPtr(const ScalarT *points,
+                        const VoxelCoordTransform &transform,
+                        int64_t rowStride = 3,
+                        int64_t colStride = 1)
+        : mPoints(points), mTransform(transform), mRowStride(rowStride), mColStride(colStride) {}
 
     /// @brief Return the index-space voxel coordinate of the i'th point. Required by PointsToGrid.
     __hostdev__ inline nanovdb::Coord
     operator[](size_t i) const {
-        const ScalarT *point = mPoints + 3 * i;
-        return mTransform
-            .apply(static_cast<MathT>(point[0]),
-                   static_cast<MathT>(point[1]),
-                   static_cast<MathT>(point[2]))
-            .round();
+        MathT x, y, z;
+        if constexpr (IsContiguous) {
+            const ScalarT *point = mPoints + 3 * i;
+            x                    = static_cast<MathT>(point[0]);
+            y                    = static_cast<MathT>(point[1]);
+            z                    = static_cast<MathT>(point[2]);
+        } else {
+            const ScalarT *point = mPoints + static_cast<int64_t>(i) * mRowStride;
+            x                    = static_cast<MathT>(point[0]);
+            y                    = static_cast<MathT>(point[mColStride]);
+            z                    = static_cast<MathT>(point[2 * mColStride]);
+        }
+        return mTransform.apply(x, y, z).round();
     }
 
     /// @brief Required by `pointer_traits` to deduce `element_type` -- only the return *type* is
@@ -81,6 +100,8 @@ template <typename ScalarT> class TransformedPointPtr {
   private:
     const ScalarT *mPoints;
     VoxelCoordTransform mTransform;
+    int64_t mRowStride;
+    int64_t mColStride;
 };
 
 } // namespace
@@ -140,16 +161,18 @@ dispatchBuildGridFromPoints<torch::kCUDA>(const JaggedTensor &points,
                 pointsBOffset.size(0) - 1,
                 " batch items");
 
-    // TransformedPointPtr indexes the points as a flat (N, 3) array, so it needs the standard
-    // contiguous layout. This is a no-op for the contiguous inputs we expect in practice.
-    const torch::Tensor pointsData = points.jdata().contiguous();
+    // TransformedPointPtr reads the points in place for both layouts: compile-time strides for
+    // a packed (N, 3) array, runtime strides otherwise (e.g. the xyz columns of an (N, 6)
+    // tensor). Neither path copies the point data.
+    const torch::Tensor pointsData = points.jdata();
+    const bool pointsAreContiguous = pointsData.is_contiguous();
+    const int64_t rowStride        = pointsData.stride(0);
+    const int64_t colStride        = pointsData.stride(1);
 
     return AT_DISPATCH_V2(
         points.scalar_type(),
         "buildGridFromPoints",
         AT_WRAP([&]() -> nanovdb::GridHandle<TorchDeviceBuffer> {
-            using PointPtrT = TransformedPointPtr<scalar_t>;
-
             const scalar_t *pointsPtr = pointsData.data_ptr<scalar_t>();
 
             // Create a grid for each batch item and store the handles
@@ -168,11 +191,23 @@ dispatchBuildGridFromPoints<torch::kCUDA>(const JaggedTensor &points,
                             std::numeric_limits<int32_t>::max(),
                             ")");
 
-                handles.push_back(
-                    nPoints == 0
-                        ? createEmptyGridHandle(guide.device())
-                        : nanovdb::tools::cuda::voxelsToGrid<GridT, PointPtrT, TorchDeviceBuffer>(
-                              PointPtrT(pointsPtr + 3 * startIdx, txs[i]), nPoints, 1.0, guide));
+                if (nPoints == 0) {
+                    handles.push_back(createEmptyGridHandle(guide.device()));
+                } else if (pointsAreContiguous) {
+                    using PointPtrT = TransformedPointPtr<scalar_t, true>;
+                    handles.push_back(
+                        nanovdb::tools::cuda::voxelsToGrid<GridT, PointPtrT, TorchDeviceBuffer>(
+                            PointPtrT(pointsPtr + 3 * startIdx, txs[i]), nPoints, 1.0, guide));
+                } else {
+                    using PointPtrT = TransformedPointPtr<scalar_t, false>;
+                    handles.push_back(
+                        nanovdb::tools::cuda::voxelsToGrid<GridT, PointPtrT, TorchDeviceBuffer>(
+                            PointPtrT(
+                                pointsPtr + startIdx * rowStride, txs[i], rowStride, colStride),
+                            nPoints,
+                            1.0,
+                            guide));
+                }
                 C10_CUDA_KERNEL_LAUNCH_CHECK();
             }
 
