@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/GridBatchData.h>
+#include <fvdb/TorchResource.h>
 #include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/BuildCoarseGridFromFine.h>
 #include <fvdb/detail/ops/BuildGridFromIjk.h>
@@ -84,7 +85,8 @@ coarseGridHandleFromFineCUDA(const GridBatchData &fineGridBatch,
         TORCH_CHECK(grid, "Grid is null");
         nanovdb::GridHandle<TorchDeviceBuffer> handle;
         for (int p = 0; p < nPasses; p += 1) {
-            nanovdb::tools::cuda::CoarsenGrid<nanovdb::ValueOnIndex> op(grid, stream.stream());
+            nanovdb::tools::cuda::CoarsenGrid<nanovdb::ValueOnIndex, TorchResource> op(
+                grid, stream.stream());
             op.setChecksum(nanovdb::CheckMode::Default);
             op.setVerbose(0);
             handle = op.getHandle(guide);

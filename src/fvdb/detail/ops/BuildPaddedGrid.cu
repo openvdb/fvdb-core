@@ -3,6 +3,7 @@
 //
 #include <fvdb/GridBatchData.h>
 #include <fvdb/TorchDeviceBuffer.h>
+#include <fvdb/TorchResource.h>
 #include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/BuildGridFromIjk.h>
 #include <fvdb/detail/ops/BuildPaddedGrid.h>
@@ -301,7 +302,8 @@ erodeOncePass(nanovdb::OnIndexGrid *grid,
         return createEmptyGridHandle(device);
     }
 
-    nanovdb::tools::cuda::PruneGrid<nanovdb::ValueOnIndex> pruneOp(grid, keepMasks, stream);
+    nanovdb::tools::cuda::PruneGrid<nanovdb::ValueOnIndex, TorchResource> pruneOp(
+        grid, keepMasks, stream);
     pruneOp.setChecksum(nanovdb::CheckMode::Default);
     pruneOp.setVerbose(0);
     auto handle = pruneOp.getHandle(guide);
