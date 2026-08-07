@@ -51,10 +51,13 @@ struct TorchResource : nanovdb::cuda::SyncFromAsync<TorchResource> {
     void *
     allocate_async(size_t bytes, size_t /*alignment*/, cudaStream_t stream) {
         if (const char *env = std::getenv("FVDB_NANOVDB_TRACE_ALLOCS")) {
-            const size_t cutoff = (env[0] == '2') ? 0 : (1ull << 18); // '2' = trace all, else >= 256 KiB
+            const size_t cutoff =
+                (env[0] == '2') ? 0 : (1ull << 18); // '2' = trace all, else >= 256 KiB
             if (bytes >= cutoff) {
-                std::fprintf(stderr, "[fvdb/nanovdb] TorchResource alloc %12zu bytes (%.3f MB)\n",
-                             bytes, double(bytes) / 1e6);
+                std::fprintf(stderr,
+                             "[fvdb/nanovdb] TorchResource alloc %12zu bytes (%.3f MB)\n",
+                             bytes,
+                             double(bytes) / 1e6);
             }
         }
         void *p = c10::cuda::CUDACachingAllocator::raw_alloc_with_stream(bytes, stream);
