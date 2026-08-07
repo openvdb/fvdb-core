@@ -55,9 +55,7 @@ namespace ops {
 ///   - float64 or CPU: forwarded to `marchingCubesLegacy`, which is
 ///     fully templated and handles every floating-point dtype.
 std::vector<JaggedTensor>
-marchingCubesFast(const GridBatchData &batchHdl,
-                  const JaggedTensor &field,
-                  double level);
+marchingCubesFast(const GridBatchData &batchHdl, const JaggedTensor &field, double level);
 
 } // namespace ops
 } // namespace detail

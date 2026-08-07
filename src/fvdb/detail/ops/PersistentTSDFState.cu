@@ -87,12 +87,10 @@ PersistentTSDFState::PersistentTSDFState(c10::intrusive_ptr<GridBatchData> grid,
                      ") must match tsdf dtype (",
                      mTsdf.scalar_type(),
                      ")");
-    if (features.has_value() && features.value().defined() &&
-        features.value().numel() > 0) {
+    if (features.has_value() && features.value().defined() && features.value().numel() > 0) {
         mHasFeatures = true;
         mFeatures    = features.value();
-        TORCH_CHECK_VALUE(mFeatures.dim() == 2,
-                          "features must be 2-D [totalVoxels, featureDim]");
+        TORCH_CHECK_VALUE(mFeatures.dim() == 2, "features must be 2-D [totalVoxels, featureDim]");
         TORCH_CHECK_VALUE(mFeatures.size(0) == mGrid->totalVoxels(),
                           "features size(0) (",
                           mFeatures.size(0),
@@ -200,8 +198,8 @@ PersistentTSDFState::growFromGrid(const GridBatchData &shellGrid) {
         return;
     }
 
-    const int64_t newTotal    = mergedGrid->totalVoxels();
-    const int64_t featureDim  = mHasFeatures ? mFeatures.size(1) : 0;
+    const int64_t newTotal   = mergedGrid->totalVoxels();
+    const int64_t featureDim = mHasFeatures ? mFeatures.size(1) : 0;
 
     torch::Tensor newTsdf    = allocateZeroSidecar(newTotal, 0, mTsdf);
     torch::Tensor newWeights = allocateZeroSidecar(newTotal, 0, mWeights);

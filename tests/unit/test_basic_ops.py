@@ -2487,14 +2487,18 @@ class TestBasicOps(unittest.TestCase):
         theta = torch.linspace(0, math.pi, n_theta, device=device)
         phi = torch.linspace(0, 2 * math.pi, n_phi + 1, device=device)[:-1]
         tt, pp = torch.meshgrid(theta, phi, indexing="ij")
-        pts = torch.stack(
-            [
-                R * torch.sin(tt) * torch.cos(pp),
-                R * torch.sin(tt) * torch.sin(pp),
-                R * torch.cos(tt),
-            ],
-            -1,
-        ).reshape(-1, 3).float()
+        pts = (
+            torch.stack(
+                [
+                    R * torch.sin(tt) * torch.cos(pp),
+                    R * torch.sin(tt) * torch.sin(pp),
+                    R * torch.cos(tt),
+                ],
+                -1,
+            )
+            .reshape(-1, 3)
+            .float()
+        )
         sensor_origin = torch.zeros(3, device=device, dtype=torch.float32)
 
         grid = fv.Grid.from_dense(
@@ -2558,9 +2562,7 @@ class TestBasicOps(unittest.TestCase):
         voxel_size = 0.05
         trunc = 0.1
 
-        grid = fv.Grid.from_dense(
-            [32, 32, 32], [-16, -16, -16], voxel_size=voxel_size, device=device
-        )
+        grid = fv.Grid.from_dense([32, 32, 32], [-16, -16, -16], voxel_size=voxel_size, device=device)
         tsdf0 = torch.zeros(grid.num_voxels, device=device)
         weights0 = torch.zeros(grid.num_voxels, device=device)
 
@@ -2640,29 +2642,29 @@ class TestBasicOps(unittest.TestCase):
         trunc = 0.6
 
         grid = fv.Grid.from_dense(
-            [10, 10, 10], [-5, -5, -5],
-            voxel_size=voxel_size, origin=[0, 0, 0], device=device,
+            [10, 10, 10],
+            [-5, -5, -5],
+            voxel_size=voxel_size,
+            origin=[0, 0, 0],
+            device=device,
         )
         tsdf0 = torch.zeros(grid.num_voxels, device=device)
         weights0 = torch.zeros(grid.num_voxels, device=device)
 
         torch.manual_seed(0)
         pts_per_frame = [
-            torch.randn(1000, 3, device=device)
-                 + torch.tensor([float(i) * 0.5, 0.0, 0.0], device=device)
+            torch.randn(1000, 3, device=device) + torch.tensor([float(i) * 0.5, 0.0, 0.0], device=device)
             for i in range(N)
         ]
-        sensor_origins = torch.stack([
-            torch.tensor([float(i) * 0.5, 0.0, 0.0], device=device)
-            for i in range(N)
-        ])
+        sensor_origins = torch.stack([torch.tensor([float(i) * 0.5, 0.0, 0.0], device=device) for i in range(N)])
 
         # --- Batched path ---
         g_bat, t_bat, w_bat = grid.integrate_tsdf_from_points_frames(
             truncation_distance=trunc,
             points_per_frame=pts_per_frame,
             sensor_origins=sensor_origins,
-            tsdf=tsdf0, weights=weights0,
+            tsdf=tsdf0,
+            weights=weights0,
             carve_free_space=True,
         )
 
@@ -2720,8 +2722,10 @@ class TestBasicOps(unittest.TestCase):
         outputs = {}
         for dtype in (torch.float32, torch.float16):
             grid = fv.Grid.from_dense(
-                [24, 24, 24], [-12, -12, -12],
-                voxel_size=voxel_size, device=device,
+                [24, 24, 24],
+                [-12, -12, -12],
+                voxel_size=voxel_size,
+                device=device,
             )
             t0 = torch.zeros(grid.num_voxels, device=device, dtype=dtype)
             w0 = torch.zeros(grid.num_voxels, device=device, dtype=dtype)
@@ -2729,7 +2733,8 @@ class TestBasicOps(unittest.TestCase):
                 truncation_distance=trunc,
                 projection_matrices=K.to(dtype),
                 cam_to_world_matrices=E.to(dtype),
-                tsdf=t0, weights=w0,
+                tsdf=t0,
+                weights=w0,
                 depth_images=depth.to(dtype),
             )
             outputs[dtype] = (g, t, w)
@@ -2863,14 +2868,18 @@ class TestBasicOps(unittest.TestCase):
         theta = torch.linspace(0, math.pi, n_theta, device=device)
         phi = torch.linspace(0, 2 * math.pi, n_phi + 1, device=device)[:-1]
         tt, pp = torch.meshgrid(theta, phi, indexing="ij")
-        pts = torch.stack(
-            [
-                R * torch.sin(tt) * torch.cos(pp),
-                R * torch.sin(tt) * torch.sin(pp),
-                R * torch.cos(tt),
-            ],
-            -1,
-        ).reshape(-1, 3).float()
+        pts = (
+            torch.stack(
+                [
+                    R * torch.sin(tt) * torch.cos(pp),
+                    R * torch.sin(tt) * torch.sin(pp),
+                    R * torch.cos(tt),
+                ],
+                -1,
+            )
+            .reshape(-1, 3)
+            .float()
+        )
         # Hemisphere split by sign of x:
         red = torch.tensor([255, 0, 0], device=device, dtype=torch.uint8)
         blue = torch.tensor([0, 0, 255], device=device, dtype=torch.uint8)
