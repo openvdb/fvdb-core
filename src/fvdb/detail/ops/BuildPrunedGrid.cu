@@ -4,6 +4,7 @@
 #include <fvdb/GridBatchData.h>
 #include <fvdb/JaggedTensor.h>
 #include <fvdb/TorchDeviceBuffer.h>
+#include <fvdb/TorchResource.h>
 #include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/BuildPrunedGrid.h>
 #include <fvdb/detail/utils/Utils.h>
@@ -73,7 +74,8 @@ dispatchPruneGrid<torch::kCUDA>(const GridBatchData &gridBatch, const JaggedTens
                 maskI.data_ptr<bool>(),
                 reinterpret_cast<nanovdb::Mask<3> *>(maskBuffer.deviceData()));
         C10_CUDA_KERNEL_LAUNCH_CHECK();
-        nanovdb::tools::cuda::PruneGrid<nanovdb::ValueOnIndex> pruneOp(grid, leafMask);
+        nanovdb::tools::cuda::PruneGrid<nanovdb::ValueOnIndex, TorchResource> pruneOp(grid,
+                                                                                      leafMask);
         pruneOp.setChecksum(nanovdb::CheckMode::Default);
         pruneOp.setVerbose(0);
 

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/GridBatchData.h>
+#include <fvdb/TorchResource.h>
 #include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/BuildFineGridFromCoarse.h>
 #include <fvdb/detail/ops/BuildGridForConvTranspose.h>
@@ -232,8 +233,8 @@ dispatchBuildGridForConvTranspose<torch::kCUDA>(const GridBatchData &baseGridHdl
             nanovdb::GridHandle<TorchDeviceBuffer> handle;
             if (k % 2 == 1) {
                 for (int p = 0; p < (k - 1) / 2; p += 1) {
-                    nanovdb::tools::cuda::DilateGrid<nanovdb::ValueOnIndex> op(grid,
-                                                                               stream.stream());
+                    nanovdb::tools::cuda::DilateGrid<nanovdb::ValueOnIndex, TorchResource> op(
+                        grid, stream.stream());
                     op.setOperation(nanovdb::tools::morphology::NN_FACE_EDGE_VERTEX);
                     op.setChecksum(nanovdb::CheckMode::Default);
                     op.setVerbose(0);
@@ -260,7 +261,8 @@ dispatchBuildGridForConvTranspose<torch::kCUDA>(const GridBatchData &baseGridHdl
     // 2S (+) {0,1}^3, and one negative pad pass adds (+) {-1,0}^3, composing to (+) [-1,1]^3.
     if (stride == nanovdb::Coord(2) && uniformKernel && kernelSize[0] == 3) {
         return perItemGridHandle(baseGridHdl, guide, [&](nanovdb::OnIndexGrid *grid) {
-            nanovdb::tools::cuda::RefineGrid<nanovdb::ValueOnIndex> refineOp(grid, stream.stream());
+            nanovdb::tools::cuda::RefineGrid<nanovdb::ValueOnIndex, TorchResource> refineOp(
+                grid, stream.stream());
             refineOp.setChecksum(nanovdb::CheckMode::Default);
             refineOp.setVerbose(0);
             nanovdb::GridHandle<TorchDeviceBuffer> refined = refineOp.getHandle(guide);

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/GridBatchData.h>
+#include <fvdb/TorchResource.h>
 #include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/BuildGridFromIjk.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
@@ -93,8 +94,9 @@ dispatchCreateNanoGridFromIJK<torch::kCUDA>(const JaggedTensor &ijk) {
         handles.push_back(
             nVoxels == 0
                 ? createEmptyGridHandle(guide.device())
-                : nanovdb::tools::cuda::voxelsToGrid<GridT, nanovdb::Coord *, TorchDeviceBuffer>(
-                      (nanovdb::Coord *)dataPtr, nVoxels, 1.0, guide));
+                : nanovdb::tools::cuda::
+                      voxelsToGrid<GridT, nanovdb::Coord *, TorchDeviceBuffer, TorchResource>(
+                          (nanovdb::Coord *)dataPtr, nVoxels, 1.0, guide));
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     }
 

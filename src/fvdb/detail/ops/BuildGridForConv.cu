@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/GridBatchData.h>
+#include <fvdb/TorchResource.h>
 #include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/BuildCoarseGridFromFine.h>
 #include <fvdb/detail/ops/BuildGridForConv.h>
@@ -225,8 +226,8 @@ dispatchBuildGridForConv<torch::kCUDA>(const GridBatchData &baseGridHdl,
             nanovdb::GridHandle<TorchDeviceBuffer> handle;
             if (k % 2 == 1) {
                 for (int p = 0; p < (k - 1) / 2; p += 1) {
-                    nanovdb::tools::cuda::DilateGrid<nanovdb::ValueOnIndex> op(grid,
-                                                                               stream.stream());
+                    nanovdb::tools::cuda::DilateGrid<nanovdb::ValueOnIndex, TorchResource> op(
+                        grid, stream.stream());
                     op.setOperation(nanovdb::tools::morphology::NN_FACE_EDGE_VERTEX);
                     op.setChecksum(nanovdb::CheckMode::Default);
                     op.setVerbose(0);

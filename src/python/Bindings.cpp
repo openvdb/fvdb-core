@@ -25,6 +25,7 @@ void bind_grid_batch_ops(py::module &m);
 void bind_jagged_tensor(py::module &m);
 void bind_gaussian_splat_ops(py::module &m);
 void bind_viewer(py::module &m);
+void bind_persistent_tsdf_state(py::module &m);
 
 #define __FVDB__BUILDER_INNER(FUNC_NAME, FUNC_STR, LSHAPE_TYPE)                           \
     m.def(                                                                                \
@@ -137,6 +138,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     bind_jagged_tensor(m);
     bind_gaussian_splat_ops(m);
     bind_viewer(m);
+    bind_persistent_tsdf_state(m);
 
     //
     // Utility functions
