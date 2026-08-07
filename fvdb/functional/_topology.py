@@ -8,13 +8,19 @@ from typing import TYPE_CHECKING
 
 import torch
 
-from ..jagged_tensor import JaggedTensor
 from .. import _fvdb_cpp
-from ..types import NumericMaxRank1, NumericMaxRank2, ValueConstraint, to_Vec3i, to_Vec3iBatchBroadcastable
+from ..jagged_tensor import JaggedTensor
+from ..types import (
+    NumericMaxRank1,
+    NumericMaxRank2,
+    ValueConstraint,
+    to_Vec3i,
+    to_Vec3iBatchBroadcastable,
+)
 
 if TYPE_CHECKING:
-    from ..grid_batch import GridBatch
     from ..grid import Grid
+    from ..grid_batch import GridBatch
 
 
 def _wrap_grid(cpp_impl):
@@ -81,8 +87,10 @@ def dirty_mask_from_sidecars_single(
         on the same device as ``new_sidecar``.
     """
     return _fvdb_cpp.dirty_mask_from_sidecars(
-        new_grid.data, new_sidecar,
-        old_grid.data, old_sidecar,
+        new_grid.data,
+        new_sidecar,
+        old_grid.data,
+        old_sidecar,
     )
 
 

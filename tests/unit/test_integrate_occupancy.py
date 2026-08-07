@@ -33,7 +33,10 @@ import fvdb
 
 
 def _make_sphere_shell_points(
-    radius: float, n_points: int, device: str, seed: int = 0,
+    radius: float,
+    n_points: int,
+    device: str,
+    seed: int = 0,
 ) -> torch.Tensor:
     """`n_points` points uniformly sampled on a sphere of the given
     radius, centred at the origin. Deterministic via `seed`."""
@@ -52,8 +55,11 @@ def _seed_empty_grid(voxel_size: float, device: str = "cuda"):
     """1-voxel metadata-only seed — the integrator grows it via the
     shell allocator as rays come in."""
     g = fvdb.Grid.from_dense(
-        dense_dims=[1, 1, 1], ijk_min=[0, 0, 0],
-        voxel_size=voxel_size, origin=[0, 0, 0], device=device,
+        dense_dims=[1, 1, 1],
+        ijk_min=[0, 0, 0],
+        voxel_size=voxel_size,
+        origin=[0, 0, 0],
+        device=device,
     )
     log_odds = torch.zeros(g.num_voxels, device=device, dtype=torch.float32)
     return g, log_odds
@@ -79,7 +85,8 @@ def test_sphere_shell_hits_are_positive(device):
     g, log_odds = _seed_empty_grid(vs, device=device)
     g2, log_odds2 = g.integrate_occupancy_from_points(
         truncation_distance=trunc,
-        points=points, sensor_origin=sensor_origin,
+        points=points,
+        sensor_origin=sensor_origin,
         log_odds=log_odds,
     )
 
@@ -102,8 +109,7 @@ def test_sphere_shell_hits_are_positive(device):
     # (edge of the shell); the statistical invariant is still clean.
     hit_mean = log_odds2[hit_mask].mean().item()
     free_mean = log_odds2[free_mask].mean().item()
-    assert hit_mean > free_mean, \
-        f"hit-band mean {hit_mean:.3f} should exceed free-band mean {free_mean:.3f}"
+    assert hit_mean > free_mean, f"hit-band mean {hit_mean:.3f} should exceed free-band mean {free_mean:.3f}"
 
 
 @pytest.mark.parametrize("device", ["cuda"])
@@ -119,10 +125,13 @@ def test_log_odds_clamped_to_bounds(device):
     lo_min, lo_max = -3.5, 2.5
     _, log_odds2 = g.integrate_occupancy_from_points(
         truncation_distance=trunc,
-        points=points, sensor_origin=sensor_origin,
+        points=points,
+        sensor_origin=sensor_origin,
         log_odds=log_odds,
-        log_odds_hit=0.85, log_odds_miss=-0.40,
-        log_odds_min=lo_min, log_odds_max=lo_max,
+        log_odds_hit=0.85,
+        log_odds_miss=-0.40,
+        log_odds_min=lo_min,
+        log_odds_max=lo_max,
     )
     assert log_odds2.min().item() >= lo_min - 1e-6
     assert log_odds2.max().item() <= lo_max + 1e-6
@@ -147,7 +156,8 @@ def test_empty_pointcloud_is_noop(device):
 
     g2, log_odds2 = g.integrate_occupancy_from_points(
         truncation_distance=0.1,
-        points=empty_pts, sensor_origin=sensor_origin,
+        points=empty_pts,
+        sensor_origin=sensor_origin,
         log_odds=log_odds,
     )
     # Grid topology preserved.
@@ -198,8 +208,9 @@ def test_frames_matches_sequential(device):
         log_odds=lo_batched,
     )
 
-    assert g_seq.num_voxels == g_batched.num_voxels, \
-        f"grid size mismatch: seq {g_seq.num_voxels}, batched {g_batched.num_voxels}"
+    assert (
+        g_seq.num_voxels == g_batched.num_voxels
+    ), f"grid size mismatch: seq {g_seq.num_voxels}, batched {g_batched.num_voxels}"
     # Same ijk ordering by construction (both built the same union
     # sequence). Values should match to within atomic-add rounding
     # (1 ULP on a small fraction of voxels under heavy ray overlap).
@@ -208,8 +219,7 @@ def test_frames_matches_sequential(device):
     # parity test uses (atol=2e-6, rtol=1e-5). At log-odds magnitudes
     # around 4 this is effectively a 5e-5 abs tolerance.
     tol = 2e-6 + 1e-5 * lo_seq.abs().max().item()
-    assert diff.max().item() <= tol, \
-        f"seq vs batched max diff {diff.max().item()} exceeds tol {tol}"
+    assert diff.max().item() <= tol, f"seq vs batched max diff {diff.max().item()} exceeds tol {tol}"
 
 
 # ---------------------------------------------------------------------------
@@ -227,7 +237,8 @@ def test_output_sidecar_size_matches_grid(device):
 
     g2, log_odds2 = g.integrate_occupancy_from_points(
         truncation_distance=trunc,
-        points=points, sensor_origin=sensor_origin,
+        points=points,
+        sensor_origin=sensor_origin,
         log_odds=log_odds,
     )
     # Output sidecar must match output grid's voxel count.
@@ -251,7 +262,8 @@ def test_mismatched_log_odds_size_raises(device):
     with pytest.raises((RuntimeError, ValueError)):
         g.integrate_occupancy_from_points(
             truncation_distance=0.1,
-            points=points, sensor_origin=origin,
+            points=points,
+            sensor_origin=origin,
             log_odds=bad_log_odds,
         )
 
@@ -265,6 +277,9 @@ def test_inverted_clamp_bounds_raises(device):
     with pytest.raises((RuntimeError, ValueError)):
         g.integrate_occupancy_from_points(
             truncation_distance=0.1,
-            points=points, sensor_origin=origin, log_odds=log_odds,
-            log_odds_min=2.0, log_odds_max=-2.0,   # inverted
+            points=points,
+            sensor_origin=origin,
+            log_odds=log_odds,
+            log_odds_min=2.0,
+            log_odds_max=-2.0,  # inverted
         )

@@ -40,10 +40,9 @@ namespace ops {
 /// is responsible for ensuring it's positive and fits within the
 /// `MAX_PAD_VOXELS = 16` dilation cap; both are enforced via
 /// TORCH_CHECK inside.
-c10::intrusive_ptr<GridBatchData>
-buildPointTruncationShell(const JaggedTensor &points,
-                          const GridBatchData &grid,
-                          double truncationMargin);
+c10::intrusive_ptr<GridBatchData> buildPointTruncationShell(const JaggedTensor &points,
+                                                            const GridBatchData &grid,
+                                                            double truncationMargin);
 
 } // namespace ops
 } // namespace detail

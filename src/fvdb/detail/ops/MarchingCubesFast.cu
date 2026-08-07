@@ -23,14 +23,14 @@
 #include <fvdb/detail/utils/MarchingCubesData.h>
 #include <fvdb/detail/utils/cuda/GridDim.h>
 
+#include <nanovdb/NanoVDB.h>
+
 #include <c10/cuda/CUDAException.h>
 #include <c10/cuda/CUDAGuard.h>
 #include <c10/cuda/CUDAStream.h>
-
-#include <nanovdb/NanoVDB.h>
+#include <torch/types.h>
 
 #include <cuda_runtime.h>
-#include <torch/types.h>
 
 namespace fvdb {
 namespace detail {
@@ -58,9 +58,8 @@ constexpr int64_t MCF_BATCH_MAX = int64_t{1} << (64 - MCF_BATCH_SHIFT);
 
 __host__ __device__ __forceinline__ int64_t
 mcf_pack_key(int32_t batchIdx, int64_t vid0, int64_t vid1) {
-    return (static_cast<int64_t>(batchIdx) << MCF_BATCH_SHIFT)
-         | ((vid0 & MCF_VID_MASK) << MCF_VID0_SHIFT)
-         | ((vid1 & MCF_VID_MASK) << MCF_VID1_SHIFT);
+    return (static_cast<int64_t>(batchIdx) << MCF_BATCH_SHIFT) |
+           ((vid0 & MCF_VID_MASK) << MCF_VID0_SHIFT) | ((vid1 & MCF_VID_MASK) << MCF_VID1_SHIFT);
 }
 
 // -------------------------------------------------------------------------
@@ -78,14 +77,12 @@ mcf_pack_key(int32_t batchIdx, int64_t vid0, int64_t vid1) {
 template <typename InputT>
 __global__ void
 mcfClassifyKernel(fvdb::GridBatchData::Accessor batchAcc,
-                   const InputT *__restrict__ sdfData,
-                   const float level,
-                   uint8_t *__restrict__ nVertsPerLv) {
-    constexpr uint64_t VOXELS_PER_LEAF =
-        nanovdb::OnIndexTree::LeafNodeType::NUM_VALUES;
+                  const InputT *__restrict__ sdfData,
+                  const float level,
+                  uint8_t *__restrict__ nVertsPerLv) {
+    constexpr uint64_t VOXELS_PER_LEAF = nanovdb::OnIndexTree::LeafNodeType::NUM_VALUES;
 
-    const uint64_t lvIdx = (static_cast<uint64_t>(blockIdx.x) * blockDim.x) +
-                           threadIdx.x;
+    const uint64_t lvIdx = (static_cast<uint64_t>(blockIdx.x) * blockDim.x) + threadIdx.x;
     const uint64_t totalLeafVoxels =
         static_cast<uint64_t>(batchAcc.totalLeaves()) * VOXELS_PER_LEAF;
     if (lvIdx >= totalLeafVoxels) {
@@ -98,24 +95,22 @@ mcfClassifyKernel(fvdb::GridBatchData::Accessor batchAcc,
     const int64_t leafIdx      = cumLeafIdx - batchAcc.leafOffset(batchIdx);
 
     const nanovdb::OnIndexGrid *grid = batchAcc.grid(batchIdx);
-    const auto &leaf = grid->tree().template getFirstNode<0>()[leafIdx];
-    const nanovdb::Coord ijk = leaf.offsetToGlobalCoord(leafVoxelIdx);
+    const auto &leaf                 = grid->tree().template getFirstNode<0>()[leafIdx];
+    const nanovdb::Coord ijk         = leaf.offsetToGlobalCoord(leafVoxelIdx);
 
     auto acc                  = grid->getAccessor();
     const int64_t voxelOffset = batchAcc.voxelOffset(batchIdx);
 
     float sdf_0, sdf_1, sdf_2, sdf_3, sdf_4, sdf_5, sdf_6, sdf_7;
 
-#define MCF_LOAD_CORNER(IDX, DX, DY, DZ)                                     \
-    {                                                                         \
-        const nanovdb::Coord c = ijk + nanovdb::Coord((DX), (DY), (DZ));      \
-        if (!acc.isActive(c)) {                                               \
-            nVertsPerLv[lvIdx] = 0;                                           \
-            return;                                                           \
-        }                                                                     \
-        sdf_##IDX = static_cast<float>(                                       \
-                        sdfData[voxelOffset + acc.getValue(c) - 1]) -         \
-                    level;                                                    \
+#define MCF_LOAD_CORNER(IDX, DX, DY, DZ)                                                    \
+    {                                                                                       \
+        const nanovdb::Coord c = ijk + nanovdb::Coord((DX), (DY), (DZ));                    \
+        if (!acc.isActive(c)) {                                                             \
+            nVertsPerLv[lvIdx] = 0;                                                         \
+            return;                                                                         \
+        }                                                                                   \
+        sdf_##IDX = static_cast<float>(sdfData[voxelOffset + acc.getValue(c) - 1]) - level; \
     }
 
     MCF_LOAD_CORNER(0, 0, 0, 0)
@@ -130,17 +125,24 @@ mcfClassifyKernel(fvdb::GridBatchData::Accessor batchAcc,
 #undef MCF_LOAD_CORNER
 
     int cubeType = 0;
-    if (sdf_0 < 0.0f) cubeType |= 1;
-    if (sdf_1 < 0.0f) cubeType |= 2;
-    if (sdf_2 < 0.0f) cubeType |= 4;
-    if (sdf_3 < 0.0f) cubeType |= 8;
-    if (sdf_4 < 0.0f) cubeType |= 16;
-    if (sdf_5 < 0.0f) cubeType |= 32;
-    if (sdf_6 < 0.0f) cubeType |= 64;
-    if (sdf_7 < 0.0f) cubeType |= 128;
+    if (sdf_0 < 0.0f)
+        cubeType |= 1;
+    if (sdf_1 < 0.0f)
+        cubeType |= 2;
+    if (sdf_2 < 0.0f)
+        cubeType |= 4;
+    if (sdf_3 < 0.0f)
+        cubeType |= 8;
+    if (sdf_4 < 0.0f)
+        cubeType |= 16;
+    if (sdf_5 < 0.0f)
+        cubeType |= 32;
+    if (sdf_6 < 0.0f)
+        cubeType |= 64;
+    if (sdf_7 < 0.0f)
+        cubeType |= 128;
 
-    nVertsPerLv[lvIdx] = static_cast<uint8_t>(
-        fvdb::detail::marchingCubesNumVertsTable[cubeType]);
+    nVertsPerLv[lvIdx] = static_cast<uint8_t>(fvdb::detail::marchingCubesNumVertsTable[cubeType]);
 }
 
 // -------------------------------------------------------------------------
@@ -158,21 +160,17 @@ mcfClassifyKernel(fvdb::GridBatchData::Accessor batchAcc,
 
 template <typename InputT>
 __global__ void
-mcfEmitCompactKernel(
-    fvdb::GridBatchData::Accessor batchAcc,
-    const InputT *__restrict__ sdfData,
-    const float level,
-    const int64_t *__restrict__ surfaceLvIdx,
-    const int64_t surfaceCount,
-    const int64_t *__restrict__ csumCompact,
-    torch::PackedTensorAccessor64<float, 3, torch::RestrictPtrTraits>
-        trianglesAcc,
-    int64_t *__restrict__ flatKeys) {
-    constexpr uint64_t VOXELS_PER_LEAF =
-        nanovdb::OnIndexTree::LeafNodeType::NUM_VALUES;
+mcfEmitCompactKernel(fvdb::GridBatchData::Accessor batchAcc,
+                     const InputT *__restrict__ sdfData,
+                     const float level,
+                     const int64_t *__restrict__ surfaceLvIdx,
+                     const int64_t surfaceCount,
+                     const int64_t *__restrict__ csumCompact,
+                     torch::PackedTensorAccessor64<float, 3, torch::RestrictPtrTraits> trianglesAcc,
+                     int64_t *__restrict__ flatKeys) {
+    constexpr uint64_t VOXELS_PER_LEAF = nanovdb::OnIndexTree::LeafNodeType::NUM_VALUES;
 
-    const int64_t tid = (static_cast<int64_t>(blockIdx.x) * blockDim.x) +
-                        threadIdx.x;
+    const int64_t tid = (static_cast<int64_t>(blockIdx.x) * blockDim.x) + threadIdx.x;
     if (tid >= surfaceCount) {
         return;
     }
@@ -183,9 +181,9 @@ mcfEmitCompactKernel(
     const JIdxType batchIdx    = batchAcc.leafBatchIndex(cumLeafIdx);
     const int64_t leafIdx      = cumLeafIdx - batchAcc.leafOffset(batchIdx);
 
-    const nanovdb::OnIndexGrid *grid = batchAcc.grid(batchIdx);
-    const auto &leaf = grid->tree().template getFirstNode<0>()[leafIdx];
-    const nanovdb::Coord ijk = leaf.offsetToGlobalCoord(leafVoxelIdx);
+    const nanovdb::OnIndexGrid *grid    = batchAcc.grid(batchIdx);
+    const auto &leaf                    = grid->tree().template getFirstNode<0>()[leafIdx];
+    const nanovdb::Coord ijk            = leaf.offsetToGlobalCoord(leafVoxelIdx);
     const VoxelCoordTransform transform = batchAcc.primalTransform(batchIdx);
 
     auto acc                  = grid->getAccessor();
@@ -202,20 +200,19 @@ mcfEmitCompactKernel(
     float p_6_x, p_6_y, p_6_z;
     float p_7_x, p_7_y, p_7_z;
 
-#define MCF_EMIT_LOAD_CORNER(IDX, DX, DY, DZ)                                \
-    {                                                                         \
-        const nanovdb::Coord c = ijk + nanovdb::Coord((DX), (DY), (DZ));      \
-        if (!acc.isActive(c)) {                                               \
-            return;                                                           \
-        }                                                                     \
-        pid_##IDX = voxelOffset + acc.getValue(c) - 1;                        \
-        sdf_##IDX = static_cast<float>(sdfData[pid_##IDX]) - level;           \
-        const auto worldP = transform.applyInv(static_cast<float>(c[0]),      \
-                                               static_cast<float>(c[1]),      \
-                                               static_cast<float>(c[2]));     \
-        p_##IDX##_x = static_cast<float>(worldP[0]);                          \
-        p_##IDX##_y = static_cast<float>(worldP[1]);                          \
-        p_##IDX##_z = static_cast<float>(worldP[2]);                          \
+#define MCF_EMIT_LOAD_CORNER(IDX, DX, DY, DZ)                                              \
+    {                                                                                      \
+        const nanovdb::Coord c = ijk + nanovdb::Coord((DX), (DY), (DZ));                   \
+        if (!acc.isActive(c)) {                                                            \
+            return;                                                                        \
+        }                                                                                  \
+        pid_##IDX         = voxelOffset + acc.getValue(c) - 1;                             \
+        sdf_##IDX         = static_cast<float>(sdfData[pid_##IDX]) - level;                \
+        const auto worldP = transform.applyInv(                                            \
+            static_cast<float>(c[0]), static_cast<float>(c[1]), static_cast<float>(c[2])); \
+        p_##IDX##_x = static_cast<float>(worldP[0]);                                       \
+        p_##IDX##_y = static_cast<float>(worldP[1]);                                       \
+        p_##IDX##_z = static_cast<float>(worldP[2]);                                       \
     }
 
     MCF_EMIT_LOAD_CORNER(0, 0, 0, 0)
@@ -230,14 +227,22 @@ mcfEmitCompactKernel(
 #undef MCF_EMIT_LOAD_CORNER
 
     int cubeType = 0;
-    if (sdf_0 < 0.0f) cubeType |= 1;
-    if (sdf_1 < 0.0f) cubeType |= 2;
-    if (sdf_2 < 0.0f) cubeType |= 4;
-    if (sdf_3 < 0.0f) cubeType |= 8;
-    if (sdf_4 < 0.0f) cubeType |= 16;
-    if (sdf_5 < 0.0f) cubeType |= 32;
-    if (sdf_6 < 0.0f) cubeType |= 64;
-    if (sdf_7 < 0.0f) cubeType |= 128;
+    if (sdf_0 < 0.0f)
+        cubeType |= 1;
+    if (sdf_1 < 0.0f)
+        cubeType |= 2;
+    if (sdf_2 < 0.0f)
+        cubeType |= 4;
+    if (sdf_3 < 0.0f)
+        cubeType |= 8;
+    if (sdf_4 < 0.0f)
+        cubeType |= 16;
+    if (sdf_5 < 0.0f)
+        cubeType |= 32;
+    if (sdf_6 < 0.0f)
+        cubeType |= 64;
+    if (sdf_7 < 0.0f)
+        cubeType |= 128;
 
     const int edgeConfig = fvdb::detail::marchingCubesEdgeTable[cubeType];
     if (edgeConfig == 0) {
@@ -257,38 +262,44 @@ mcfEmitCompactKernel(
     float vert_10_x = 0.0f, vert_10_y = 0.0f, vert_10_z = 0.0f;
     float vert_11_x = 0.0f, vert_11_y = 0.0f, vert_11_z = 0.0f;
 
-#define MCF_INTERP_EDGE(IDX, IA, IB)                                         \
-    if (edgeConfig & (1 << (IDX))) {                                          \
-        const float va = sdf_##IA;                                            \
-        const float vb = sdf_##IB;                                            \
-        const float ax = p_##IA##_x, ay = p_##IA##_y, az = p_##IA##_z;        \
-        const float bx = p_##IB##_x, by = p_##IB##_y, bz = p_##IB##_z;        \
-        constexpr float MC_EPS = 1.0e-5f;                                     \
-        if (fabsf(va) < MC_EPS) {                                             \
-            vert_##IDX##_x = ax; vert_##IDX##_y = ay; vert_##IDX##_z = az;    \
-        } else if (fabsf(vb) < MC_EPS) {                                      \
-            vert_##IDX##_x = bx; vert_##IDX##_y = by; vert_##IDX##_z = bz;    \
-        } else if (fabsf(va - vb) < MC_EPS) {                                 \
-            vert_##IDX##_x = ax; vert_##IDX##_y = ay; vert_##IDX##_z = az;    \
-        } else {                                                              \
-            const float w2 = (0.0f - va) / (vb - va);                         \
-            const float w1 = 1.0f - w2;                                       \
-            vert_##IDX##_x = ax * w1 + bx * w2;                               \
-            vert_##IDX##_y = ay * w1 + by * w2;                               \
-            vert_##IDX##_z = az * w1 + bz * w2;                               \
-        }                                                                     \
+#define MCF_INTERP_EDGE(IDX, IA, IB)                                   \
+    if (edgeConfig & (1 << (IDX))) {                                   \
+        const float va = sdf_##IA;                                     \
+        const float vb = sdf_##IB;                                     \
+        const float ax = p_##IA##_x, ay = p_##IA##_y, az = p_##IA##_z; \
+        const float bx = p_##IB##_x, by = p_##IB##_y, bz = p_##IB##_z; \
+        constexpr float MC_EPS = 1.0e-5f;                              \
+        if (fabsf(va) < MC_EPS) {                                      \
+            vert_##IDX##_x = ax;                                       \
+            vert_##IDX##_y = ay;                                       \
+            vert_##IDX##_z = az;                                       \
+        } else if (fabsf(vb) < MC_EPS) {                               \
+            vert_##IDX##_x = bx;                                       \
+            vert_##IDX##_y = by;                                       \
+            vert_##IDX##_z = bz;                                       \
+        } else if (fabsf(va - vb) < MC_EPS) {                          \
+            vert_##IDX##_x = ax;                                       \
+            vert_##IDX##_y = ay;                                       \
+            vert_##IDX##_z = az;                                       \
+        } else {                                                       \
+            const float w2 = (0.0f - va) / (vb - va);                  \
+            const float w1 = 1.0f - w2;                                \
+            vert_##IDX##_x = ax * w1 + bx * w2;                        \
+            vert_##IDX##_y = ay * w1 + by * w2;                        \
+            vert_##IDX##_z = az * w1 + bz * w2;                        \
+        }                                                              \
     }
 
-    MCF_INTERP_EDGE(0,  0, 1)
-    MCF_INTERP_EDGE(1,  1, 2)
-    MCF_INTERP_EDGE(2,  2, 3)
-    MCF_INTERP_EDGE(3,  0, 3)
-    MCF_INTERP_EDGE(4,  4, 5)
-    MCF_INTERP_EDGE(5,  5, 6)
-    MCF_INTERP_EDGE(6,  6, 7)
-    MCF_INTERP_EDGE(7,  7, 4)
-    MCF_INTERP_EDGE(8,  0, 4)
-    MCF_INTERP_EDGE(9,  1, 5)
+    MCF_INTERP_EDGE(0, 0, 1)
+    MCF_INTERP_EDGE(1, 1, 2)
+    MCF_INTERP_EDGE(2, 2, 3)
+    MCF_INTERP_EDGE(3, 0, 3)
+    MCF_INTERP_EDGE(4, 4, 5)
+    MCF_INTERP_EDGE(5, 5, 6)
+    MCF_INTERP_EDGE(6, 6, 7)
+    MCF_INTERP_EDGE(7, 7, 4)
+    MCF_INTERP_EDGE(8, 0, 4)
+    MCF_INTERP_EDGE(9, 1, 5)
     MCF_INTERP_EDGE(10, 6, 2)
     MCF_INTERP_EDGE(11, 3, 7)
 
@@ -296,35 +307,56 @@ mcfEmitCompactKernel(
 
     const int64_t triangleBase = csumCompact[tid] / 3;
 
-#define MCF_PICK_VERT_X(vlid)                                                \
-    ((vlid) == 0  ? vert_0_x  : (vlid) == 1  ? vert_1_x  :                    \
-     (vlid) == 2  ? vert_2_x  : (vlid) == 3  ? vert_3_x  :                    \
-     (vlid) == 4  ? vert_4_x  : (vlid) == 5  ? vert_5_x  :                    \
-     (vlid) == 6  ? vert_6_x  : (vlid) == 7  ? vert_7_x  :                    \
-     (vlid) == 8  ? vert_8_x  : (vlid) == 9  ? vert_9_x  :                    \
-     (vlid) == 10 ? vert_10_x : vert_11_x)
-#define MCF_PICK_VERT_Y(vlid)                                                \
-    ((vlid) == 0  ? vert_0_y  : (vlid) == 1  ? vert_1_y  :                    \
-     (vlid) == 2  ? vert_2_y  : (vlid) == 3  ? vert_3_y  :                    \
-     (vlid) == 4  ? vert_4_y  : (vlid) == 5  ? vert_5_y  :                    \
-     (vlid) == 6  ? vert_6_y  : (vlid) == 7  ? vert_7_y  :                    \
-     (vlid) == 8  ? vert_8_y  : (vlid) == 9  ? vert_9_y  :                    \
-     (vlid) == 10 ? vert_10_y : vert_11_y)
-#define MCF_PICK_VERT_Z(vlid)                                                \
-    ((vlid) == 0  ? vert_0_z  : (vlid) == 1  ? vert_1_z  :                    \
-     (vlid) == 2  ? vert_2_z  : (vlid) == 3  ? vert_3_z  :                    \
-     (vlid) == 4  ? vert_4_z  : (vlid) == 5  ? vert_5_z  :                    \
-     (vlid) == 6  ? vert_6_z  : (vlid) == 7  ? vert_7_z  :                    \
-     (vlid) == 8  ? vert_8_z  : (vlid) == 9  ? vert_9_z  :                    \
-     (vlid) == 10 ? vert_10_z : vert_11_z)
-#define MCF_PICK_PID(cid)                                                    \
-    ((cid) == 0 ? pid_0 : (cid) == 1 ? pid_1 :                                \
-     (cid) == 2 ? pid_2 : (cid) == 3 ? pid_3 :                                \
-     (cid) == 4 ? pid_4 : (cid) == 5 ? pid_5 :                                \
-     (cid) == 6 ? pid_6 : pid_7)
+#define MCF_PICK_VERT_X(vlid)   \
+    ((vlid) == 0    ? vert_0_x  \
+     : (vlid) == 1  ? vert_1_x  \
+     : (vlid) == 2  ? vert_2_x  \
+     : (vlid) == 3  ? vert_3_x  \
+     : (vlid) == 4  ? vert_4_x  \
+     : (vlid) == 5  ? vert_5_x  \
+     : (vlid) == 6  ? vert_6_x  \
+     : (vlid) == 7  ? vert_7_x  \
+     : (vlid) == 8  ? vert_8_x  \
+     : (vlid) == 9  ? vert_9_x  \
+     : (vlid) == 10 ? vert_10_x \
+                    : vert_11_x)
+#define MCF_PICK_VERT_Y(vlid)   \
+    ((vlid) == 0    ? vert_0_y  \
+     : (vlid) == 1  ? vert_1_y  \
+     : (vlid) == 2  ? vert_2_y  \
+     : (vlid) == 3  ? vert_3_y  \
+     : (vlid) == 4  ? vert_4_y  \
+     : (vlid) == 5  ? vert_5_y  \
+     : (vlid) == 6  ? vert_6_y  \
+     : (vlid) == 7  ? vert_7_y  \
+     : (vlid) == 8  ? vert_8_y  \
+     : (vlid) == 9  ? vert_9_y  \
+     : (vlid) == 10 ? vert_10_y \
+                    : vert_11_y)
+#define MCF_PICK_VERT_Z(vlid)   \
+    ((vlid) == 0    ? vert_0_z  \
+     : (vlid) == 1  ? vert_1_z  \
+     : (vlid) == 2  ? vert_2_z  \
+     : (vlid) == 3  ? vert_3_z  \
+     : (vlid) == 4  ? vert_4_z  \
+     : (vlid) == 5  ? vert_5_z  \
+     : (vlid) == 6  ? vert_6_z  \
+     : (vlid) == 7  ? vert_7_z  \
+     : (vlid) == 8  ? vert_8_z  \
+     : (vlid) == 9  ? vert_9_z  \
+     : (vlid) == 10 ? vert_10_z \
+                    : vert_11_z)
+#define MCF_PICK_PID(cid) \
+    ((cid) == 0   ? pid_0 \
+     : (cid) == 1 ? pid_1 \
+     : (cid) == 2 ? pid_2 \
+     : (cid) == 3 ? pid_3 \
+     : (cid) == 4 ? pid_4 \
+     : (cid) == 5 ? pid_5 \
+     : (cid) == 6 ? pid_6 \
+                  : pid_7)
 
-    for (int i = 0; fvdb::detail::marchingCubesTriTable[cubeType][i] != -1;
-         i += 3) {
+    for (int i = 0; fvdb::detail::marchingCubesTriTable[cubeType][i] != -1; i += 3) {
         const int64_t triangleIdx = triangleBase + i / 3;
 #pragma unroll
         for (int vi = 0; vi < 3; ++vi) {
@@ -360,85 +392,71 @@ mcfEmitCompactKernel(
 
 template <typename InputT>
 std::vector<JaggedTensor>
-marchingCubesFastImpl(const GridBatchData &batchHdl,
-                    const torch::Tensor &sdf,
-                    double level) {
+marchingCubesFastImpl(const GridBatchData &batchHdl, const torch::Tensor &sdf, double level) {
     batchHdl.checkDevice(sdf);
-    TORCH_CHECK_TYPE(sdf.is_floating_point(),
-                     "field must have a floating point type");
-    TORCH_CHECK(sdf.dim() == 1,
-                "Expected field to have 1 dimension but got ", sdf.dim());
+    TORCH_CHECK_TYPE(sdf.is_floating_point(), "field must have a floating point type");
+    TORCH_CHECK(sdf.dim() == 1, "Expected field to have 1 dimension but got ", sdf.dim());
 
     // Guard against silent pid / batch overflow in the packed key. The
     // 30-bit vid field covers up to 1B active voxels per batch; batch
     // field at bits 60..63 supports up to 16 batches.
     TORCH_CHECK_VALUE(batchHdl.batchSize() < MCF_BATCH_MAX,
-                      "marchingCubesFast: batch size ", batchHdl.batchSize(),
-                      " exceeds packed-key capacity ", MCF_BATCH_MAX);
+                      "marchingCubesFast: batch size ",
+                      batchHdl.batchSize(),
+                      " exceeds packed-key capacity ",
+                      MCF_BATCH_MAX);
     TORCH_CHECK_VALUE(batchHdl.totalVoxels() <= (int64_t{1} << MCF_VID_BITS),
-                      "marchingCubesFast: totalVoxels ", batchHdl.totalVoxels(),
+                      "marchingCubesFast: totalVoxels ",
+                      batchHdl.totalVoxels(),
                       " exceeds packed-key vid capacity ",
                       int64_t{1} << MCF_VID_BITS,
                       " — widen MCF_VID_BITS or fall back to legacy MC.");
 
     c10::cuda::CUDAGuard guard(sdf.device());
-    at::cuda::CUDAStream stream =
-        at::cuda::getCurrentCUDAStream(sdf.device().index());
+    at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream(sdf.device().index());
 
-    const int64_t totalLeaves = batchHdl.totalLeaves();
-    constexpr int64_t VOXELS_PER_LEAF =
-        nanovdb::OnIndexTree::LeafNodeType::NUM_VALUES;
-    const int64_t totalLeafVoxels = totalLeaves * VOXELS_PER_LEAF;
+    const int64_t totalLeaves         = batchHdl.totalLeaves();
+    constexpr int64_t VOXELS_PER_LEAF = nanovdb::OnIndexTree::LeafNodeType::NUM_VALUES;
+    const int64_t totalLeafVoxels     = totalLeaves * VOXELS_PER_LEAF;
 
-    auto longOpts =
-        torch::TensorOptions().dtype(torch::kLong).device(sdf.device());
-    auto floatOpts =
-        torch::TensorOptions().dtype(torch::kFloat32).device(sdf.device());
-    auto byteOpts =
-        torch::TensorOptions().dtype(torch::kUInt8).device(sdf.device());
+    auto longOpts  = torch::TensorOptions().dtype(torch::kLong).device(sdf.device());
+    auto floatOpts = torch::TensorOptions().dtype(torch::kFloat32).device(sdf.device());
+    auto byteOpts  = torch::TensorOptions().dtype(torch::kUInt8).device(sdf.device());
 
     if (totalLeaves == 0) {
-        return marchingCubesLegacy(batchHdl,
-                                   JaggedTensor::from_data_indices_and_list_ids(
-                                       sdf,
-                                       torch::zeros({0},
-                                                    torch::TensorOptions()
-                                                        .dtype(fvdb::JIdxScalarType)
-                                                        .device(sdf.device())),
-                                       torch::empty({0, 1},
-                                                    torch::TensorOptions()
-                                                        .dtype(fvdb::JIdxScalarType)
-                                                        .device(sdf.device())),
-                                       batchHdl.batchSize()),
-                                   level);
+        return marchingCubesLegacy(
+            batchHdl,
+            JaggedTensor::from_data_indices_and_list_ids(
+                sdf,
+                torch::zeros(
+                    {0}, torch::TensorOptions().dtype(fvdb::JIdxScalarType).device(sdf.device())),
+                torch::empty(
+                    {0, 1},
+                    torch::TensorOptions().dtype(fvdb::JIdxScalarType).device(sdf.device())),
+                batchHdl.batchSize()),
+            level);
     }
 
     // --- Step 1: classify ---
-    torch::Tensor nVertsPerLv = torch::empty({totalLeafVoxels}, byteOpts);
-    const int64_t classifyBlocks =
-        GET_BLOCKS(totalLeafVoxels, MCF_BLOCK_SIZE);
-    mcfClassifyKernel<InputT>
-        <<<static_cast<unsigned int>(classifyBlocks),
-           static_cast<unsigned int>(MCF_BLOCK_SIZE),
-           0, stream.stream()>>>(
-        batchHdl.deviceAccessor(),
-        sdf.data_ptr<InputT>(),
-        static_cast<float>(level),
-        nVertsPerLv.data_ptr<uint8_t>());
+    torch::Tensor nVertsPerLv    = torch::empty({totalLeafVoxels}, byteOpts);
+    const int64_t classifyBlocks = GET_BLOCKS(totalLeafVoxels, MCF_BLOCK_SIZE);
+    mcfClassifyKernel<InputT><<<static_cast<unsigned int>(classifyBlocks),
+                                static_cast<unsigned int>(MCF_BLOCK_SIZE),
+                                0,
+                                stream.stream()>>>(batchHdl.deviceAccessor(),
+                                                   sdf.data_ptr<InputT>(),
+                                                   static_cast<float>(level),
+                                                   nVertsPerLv.data_ptr<uint8_t>());
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 
     // --- Step 2: compact ---
-    torch::Tensor surfaceLvIdx =
-        nVertsPerLv.nonzero().squeeze(-1).contiguous();
+    torch::Tensor surfaceLvIdx = nVertsPerLv.nonzero().squeeze(-1).contiguous();
     const int64_t surfaceCount = surfaceLvIdx.size(0);
 
-    torch::Tensor nVertsCompact =
-        nVertsPerLv.index_select(0, surfaceLvIdx).to(torch::kLong);
+    torch::Tensor nVertsCompact = nVertsPerLv.index_select(0, surfaceLvIdx).to(torch::kLong);
     torch::Tensor csumInclusive = torch::cumsum(nVertsCompact, 0);
     const int64_t nTriangles =
-        surfaceCount > 0
-            ? (csumInclusive.index({-1}).item<int64_t>() / 3)
-            : 0;
+        surfaceCount > 0 ? (csumInclusive.index({-1}).item<int64_t>() / 3) : 0;
     torch::Tensor csumCompact = torch::roll(csumInclusive, {1});
     if (surfaceCount > 0) {
         csumCompact.index_put_({0}, 0);
@@ -446,32 +464,31 @@ marchingCubesFastImpl(const GridBatchData &batchHdl,
 
     torch::Tensor triangles = torch::empty({nTriangles, 3, 3}, floatOpts);
     // Single-column packed-key tensor (replaces legacy's [nTri, 3, 3] int64).
-    torch::Tensor flatKeys =
-        torch::empty({nTriangles * 3}, longOpts);
+    torch::Tensor flatKeys = torch::empty({nTriangles * 3}, longOpts);
 
     if (nTriangles > 0) {
-        const int64_t emitBlocks =
-            GET_BLOCKS(surfaceCount, MCF_BLOCK_SIZE);
+        const int64_t emitBlocks = GET_BLOCKS(surfaceCount, MCF_BLOCK_SIZE);
         mcfEmitCompactKernel<InputT>
             <<<static_cast<unsigned int>(emitBlocks),
                static_cast<unsigned int>(MCF_BLOCK_SIZE),
-               0, stream.stream()>>>(
-            batchHdl.deviceAccessor(),
-            sdf.data_ptr<InputT>(),
-            static_cast<float>(level),
-            surfaceLvIdx.data_ptr<int64_t>(),
-            surfaceCount,
-            csumCompact.data_ptr<int64_t>(),
-            triangles.packed_accessor64<float, 3, torch::RestrictPtrTraits>(),
-            flatKeys.data_ptr<int64_t>());
+               0,
+               stream.stream()>>>(batchHdl.deviceAccessor(),
+                                  sdf.data_ptr<InputT>(),
+                                  static_cast<float>(level),
+                                  surfaceLvIdx.data_ptr<int64_t>(),
+                                  surfaceCount,
+                                  csumCompact.data_ptr<int64_t>(),
+                                  triangles.packed_accessor64<float, 3, torch::RestrictPtrTraits>(),
+                                  flatKeys.data_ptr<int64_t>());
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     }
 
     // --- Step 3: 1-D dedup via torch::_unique (replaces unique_dim) ---
     // at::_unique returns (unique_values, inverse_indices). Smaller input
     // footprint: 8 B/elem vs 24 B/elem for the legacy 3-col key.
-    auto unqRet                = at::_unique(flatKeys, /*sorted=*/true,
-                                             /*return_inverse=*/true);
+    auto unqRet                = at::_unique(flatKeys,
+                              /*sorted=*/true,
+                              /*return_inverse=*/true);
     torch::Tensor unqKeys      = std::get<0>(unqRet);
     torch::Tensor unqTriangles = std::get<1>(unqRet);
 
@@ -482,42 +499,37 @@ marchingCubesFastImpl(const GridBatchData &batchHdl,
     const int64_t nV = unqKeys.size(0);
     torch::Tensor unqVertIdx;
     if (nV > 0) {
-        const torch::Tensor vidMaskT =
-            torch::full({}, MCF_VID_MASK, unqKeys.options());
-        const torch::Tensor batchMaskT =
-            torch::full({}, MCF_BATCH_MAX - 1, unqKeys.options());
+        const torch::Tensor vidMaskT   = torch::full({}, MCF_VID_MASK, unqKeys.options());
+        const torch::Tensor batchMaskT = torch::full({}, MCF_BATCH_MAX - 1, unqKeys.options());
 
         torch::Tensor vid1 = torch::bitwise_and(unqKeys, vidMaskT);
-        torch::Tensor vid0 = torch::bitwise_and(
-            torch::bitwise_right_shift(unqKeys, MCF_VID_BITS), vidMaskT);
-        torch::Tensor bidx = torch::bitwise_and(
-            torch::bitwise_right_shift(unqKeys, MCF_BATCH_SHIFT), batchMaskT);
+        torch::Tensor vid0 =
+            torch::bitwise_and(torch::bitwise_right_shift(unqKeys, MCF_VID_BITS), vidMaskT);
+        torch::Tensor bidx =
+            torch::bitwise_and(torch::bitwise_right_shift(unqKeys, MCF_BATCH_SHIFT), batchMaskT);
         unqVertIdx = torch::stack({bidx, vid0, vid1}, /*dim=*/1).contiguous();
     } else {
         unqVertIdx = torch::empty({0, 3}, longOpts);
     }
 
-    auto flatTriangles = triangles.view({-1, 3});
-    torch::Tensor vertices =
-        torch::zeros({nV, 3}, floatOpts);
+    auto flatTriangles     = triangles.view({-1, 3});
+    torch::Tensor vertices = torch::zeros({nV, 3}, floatOpts);
     if (nV > 0) {
         vertices.index_put_({unqTriangles}, flatTriangles);
     }
 
-    unqTriangles            = unqTriangles.view({-1, 3});
-    torch::Tensor vBatchIdx = unqVertIdx.index({torch::indexing::Slice(), 0})
+    unqTriangles = unqTriangles.view({-1, 3});
+    torch::Tensor vBatchIdx =
+        unqVertIdx.index({torch::indexing::Slice(), 0}).to(fvdb::JIdxScalarType);
+    torch::Tensor tBatchIdx = vBatchIdx.index({unqTriangles.index({torch::indexing::Slice(), 0})})
                                   .to(fvdb::JIdxScalarType);
-    torch::Tensor tBatchIdx =
-        vBatchIdx.index({unqTriangles.index({torch::indexing::Slice(), 0})})
-            .to(fvdb::JIdxScalarType);
 
     JaggedTensor retVertices = JaggedTensor::from_data_indices_and_list_ids(
         vertices, vBatchIdx, batchHdl.jlidx(), batchHdl.batchSize());
     JaggedTensor retTriangles = JaggedTensor::from_data_indices_and_list_ids(
         unqTriangles, tBatchIdx, batchHdl.jlidx(), batchHdl.batchSize());
-    JaggedTensor retUniqueVertices =
-        JaggedTensor::from_data_indices_and_list_ids(
-            unqVertIdx, vBatchIdx, batchHdl.jlidx(), batchHdl.batchSize());
+    JaggedTensor retUniqueVertices = JaggedTensor::from_data_indices_and_list_ids(
+        unqVertIdx, vBatchIdx, batchHdl.jlidx(), batchHdl.batchSize());
 
     int64_t cumNumVerts = 0;
     for (int i = 1; i < batchHdl.batchSize(); i += 1) {
@@ -531,18 +543,12 @@ marchingCubesFastImpl(const GridBatchData &batchHdl,
 } // anonymous namespace
 
 std::vector<JaggedTensor>
-marchingCubesFast(const GridBatchData &batchHdl,
-                const JaggedTensor &field,
-                double level) {
-    TORCH_CHECK_VALUE(field.ldim() == 1,
-                      "Expected field to have 1 list dimension, got ",
-                      field.ldim());
-    TORCH_CHECK_TYPE(field.is_floating_point(),
-                     "field must have a floating point type");
-    TORCH_CHECK_VALUE(field.numel() == batchHdl.totalVoxels(),
-                      "Value count not match!");
-    TORCH_CHECK_VALUE(field.num_outer_lists() == batchHdl.batchSize(),
-                      "Batch size not match!");
+marchingCubesFast(const GridBatchData &batchHdl, const JaggedTensor &field, double level) {
+    TORCH_CHECK_VALUE(
+        field.ldim() == 1, "Expected field to have 1 list dimension, got ", field.ldim());
+    TORCH_CHECK_TYPE(field.is_floating_point(), "field must have a floating point type");
+    TORCH_CHECK_VALUE(field.numel() == batchHdl.totalVoxels(), "Value count not match!");
+    TORCH_CHECK_VALUE(field.num_outer_lists() == batchHdl.batchSize(), "Batch size not match!");
 
     torch::Tensor fieldJdata = field.jdata();
     if (fieldJdata.dim() == 0) {
@@ -572,10 +578,9 @@ marchingCubesFast(const GridBatchData &batchHdl,
     //     fp16 to preserve legacy's output-dtype contract.
     // This matters for fvdb-reality-capture's 500M+ voxel hero runs
     // where a 2 GB fp32 upcast would be painful.
-    const bool isCuda = field.device().is_cuda();
-    const auto origDtype = fieldJdata.scalar_type();
-    const bool supportedDtype =
-        (origDtype == torch::kFloat32 || origDtype == torch::kHalf);
+    const bool isCuda         = field.device().is_cuda();
+    const auto origDtype      = fieldJdata.scalar_type();
+    const bool supportedDtype = (origDtype == torch::kFloat32 || origDtype == torch::kHalf);
 
     if (!isCuda || !supportedDtype) {
         return marchingCubesLegacy(batchHdl, field, level);
@@ -592,11 +597,8 @@ marchingCubesFast(const GridBatchData &batchHdl,
         // so this cast is negligible. Triangles (face indices) and
         // unqVertIdx are int64 regardless.
         JaggedTensor &verts = outputs[0];
-        verts = JaggedTensor::from_data_indices_and_list_ids(
-            verts.jdata().to(origDtype),
-            verts.jidx(),
-            verts.jlidx(),
-            verts.num_outer_lists());
+        verts               = JaggedTensor::from_data_indices_and_list_ids(
+            verts.jdata().to(origDtype), verts.jidx(), verts.jlidx(), verts.num_outer_lists());
     }
     return outputs;
 }

@@ -31,7 +31,6 @@ import torch
 
 import fvdb
 
-
 # ---------------------------------------------------------------------------
 #  Helpers
 # ---------------------------------------------------------------------------
@@ -53,7 +52,9 @@ def _sphere_tsdf(
     g = fvdb.Grid.from_dense(
         dense_dims=[dense_dims, dense_dims, dense_dims],
         ijk_min=[ijk_min, ijk_min, ijk_min],
-        voxel_size=voxel_size, origin=[0, 0, 0], device=device,
+        voxel_size=voxel_size,
+        origin=[0, 0, 0],
+        device=device,
     )
     xyz = (g.ijk.float() + 0.5) * voxel_size
     d_world = xyz.norm(dim=1) - radius
@@ -75,12 +76,18 @@ def test_output_shape_matches_dilated_topology(device):
     trunc = 0.1
     max_dist = 0.2
     g, tsdf, weights = _sphere_tsdf(
-        voxel_size=vs, dense_dims=16, ijk_min=-8,
-        radius=0.15, truncation_distance=trunc, device=device,
+        voxel_size=vs,
+        dense_dims=16,
+        ijk_min=-8,
+        radius=0.15,
+        truncation_distance=trunc,
+        device=device,
     )
     esdf_grid, esdf = g.compute_esdf(
-        tsdf, weights,
-        truncation_distance=trunc, max_distance=max_dist,
+        tsdf,
+        weights,
+        truncation_distance=trunc,
+        max_distance=max_dist,
         prune_unreached=False,
     )
     assert esdf.shape == (esdf_grid.num_voxels,)
@@ -94,8 +101,7 @@ def test_output_shape_matches_dilated_topology(device):
 def test_output_dtype_is_float32(device):
     vs, trunc, max_dist = 0.05, 0.1, 0.2
     g, tsdf, weights = _sphere_tsdf(vs, 16, -8, 0.15, trunc, device)
-    _, esdf = g.compute_esdf(
-        tsdf, weights, truncation_distance=trunc, max_distance=max_dist)
+    _, esdf = g.compute_esdf(tsdf, weights, truncation_distance=trunc, max_distance=max_dist)
     assert esdf.dtype == torch.float32
     assert esdf.device.type == "cuda"
 
@@ -124,12 +130,18 @@ def test_spherical_analytic_accuracy(device):
     max_dist = 0.2
     radius = 0.25
     g, tsdf, weights = _sphere_tsdf(
-        voxel_size=vs, dense_dims=40, ijk_min=-20,
-        radius=radius, truncation_distance=trunc, device=device,
+        voxel_size=vs,
+        dense_dims=40,
+        ijk_min=-20,
+        radius=radius,
+        truncation_distance=trunc,
+        device=device,
     )
     esdf_grid, esdf = g.compute_esdf(
-        tsdf, weights,
-        truncation_distance=trunc, max_distance=max_dist,
+        tsdf,
+        weights,
+        truncation_distance=trunc,
+        max_distance=max_dist,
         prune_unreached=False,
     )
 
@@ -149,12 +161,12 @@ def test_spherical_analytic_accuracy(device):
 
     err_reached = err[reached]
     # 26-neighbour chamfer envelope: half a voxel worst case.
-    assert err_reached.median().item() < vs, \
-        f"Median err on reached voxels {err_reached.median().item()} " \
-        f"exceeds voxel_size {vs}"
-    assert err_reached.max().item() < vs, \
-        f"Max err on reached voxels {err_reached.max().item()} " \
-        f"exceeds voxel_size {vs}"
+    assert err_reached.median().item() < vs, (
+        f"Median err on reached voxels {err_reached.median().item()} " f"exceeds voxel_size {vs}"
+    )
+    assert err_reached.max().item() < vs, (
+        f"Max err on reached voxels {err_reached.max().item()} " f"exceeds voxel_size {vs}"
+    )
 
 
 @pytest.mark.parametrize("device", ["cuda"])
@@ -170,12 +182,18 @@ def test_spherical_inside_outside_signs(device):
     max_dist = 0.15
     radius = 0.20
     g, tsdf, weights = _sphere_tsdf(
-        voxel_size=vs, dense_dims=32, ijk_min=-16,
-        radius=radius, truncation_distance=trunc, device=device,
+        voxel_size=vs,
+        dense_dims=32,
+        ijk_min=-16,
+        radius=radius,
+        truncation_distance=trunc,
+        device=device,
     )
     esdf_grid, esdf = g.compute_esdf(
-        tsdf, weights,
-        truncation_distance=trunc, max_distance=max_dist,
+        tsdf,
+        weights,
+        truncation_distance=trunc,
+        max_distance=max_dist,
         prune_unreached=False,
     )
     xyz = (esdf_grid.ijk.float() + 0.5) * vs
@@ -188,14 +206,15 @@ def test_spherical_inside_outside_signs(device):
     # within the reachable horizon: these should have d > 0.
     outside_reached = (r > radius + vs) & (r < radius + max_dist - vs)
 
-    assert inside_reached.sum().item() > 0 and outside_reached.sum().item() > 0, \
-        "sanity: should have inside+outside reached voxels"
-    assert (esdf[inside_reached] <= 0.0).all(), \
-        f"Inside-reached voxels with positive ESDF: " \
-        f"{(esdf[inside_reached] > 0).sum().item()}"
-    assert (esdf[outside_reached] >= 0.0).all(), \
-        f"Outside-reached voxels with negative ESDF: " \
-        f"{(esdf[outside_reached] < 0).sum().item()}"
+    assert (
+        inside_reached.sum().item() > 0 and outside_reached.sum().item() > 0
+    ), "sanity: should have inside+outside reached voxels"
+    assert (esdf[inside_reached] <= 0.0).all(), (
+        f"Inside-reached voxels with positive ESDF: " f"{(esdf[inside_reached] > 0).sum().item()}"
+    )
+    assert (esdf[outside_reached] >= 0.0).all(), (
+        f"Outside-reached voxels with negative ESDF: " f"{(esdf[outside_reached] < 0).sum().item()}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -210,8 +229,10 @@ def test_magnitude_bounded_by_max_distance(device):
     vs, trunc, max_dist = 0.025, 0.1, 0.15
     g, tsdf, weights = _sphere_tsdf(vs, 40, -20, 0.25, trunc, device)
     _, esdf = g.compute_esdf(
-        tsdf, weights,
-        truncation_distance=trunc, max_distance=max_dist,
+        tsdf,
+        weights,
+        truncation_distance=trunc,
+        max_distance=max_dist,
     )
     assert esdf.abs().max().item() <= max_dist + 1e-5
 
@@ -231,17 +252,22 @@ def test_vbm_and_per_leaf_outputs_are_identical(device):
     g, tsdf, weights = _sphere_tsdf(vs, 40, -20, 0.25, trunc, device)
 
     _, esdf_vbm = g.compute_esdf(
-        tsdf, weights,
-        truncation_distance=trunc, max_distance=max_dist, use_vbm=True,
+        tsdf,
+        weights,
+        truncation_distance=trunc,
+        max_distance=max_dist,
+        use_vbm=True,
     )
     _, esdf_pl = g.compute_esdf(
-        tsdf, weights,
-        truncation_distance=trunc, max_distance=max_dist, use_vbm=False,
+        tsdf,
+        weights,
+        truncation_distance=trunc,
+        max_distance=max_dist,
+        use_vbm=False,
     )
     # Bit-identical — both kernels read from the same input buffers,
     # execute the same scalar body in the same order per voxel.
-    assert torch.equal(esdf_vbm, esdf_pl), \
-        f"Max diff = {(esdf_vbm - esdf_pl).abs().max().item()}"
+    assert torch.equal(esdf_vbm, esdf_pl), f"Max diff = {(esdf_vbm - esdf_pl).abs().max().item()}"
 
 
 # ---------------------------------------------------------------------------
@@ -258,11 +284,17 @@ def test_prune_drops_only_unreached_voxels(device):
     g, tsdf, weights = _sphere_tsdf(vs, 24, -12, 0.2, trunc, device)
 
     full_grid, esdf_full = g.compute_esdf(
-        tsdf, weights, truncation_distance=trunc, max_distance=max_dist,
+        tsdf,
+        weights,
+        truncation_distance=trunc,
+        max_distance=max_dist,
         prune_unreached=False,
     )
     pruned_grid, esdf_pruned = g.compute_esdf(
-        tsdf, weights, truncation_distance=trunc, max_distance=max_dist,
+        tsdf,
+        weights,
+        truncation_distance=trunc,
+        max_distance=max_dist,
         prune_unreached=True,
     )
 
@@ -275,8 +307,9 @@ def test_prune_drops_only_unreached_voxels(device):
 
     # Count matches the naive predicate on the full output.
     expected_survivors = (esdf_full.abs() < max_dist).sum().item()
-    assert pruned_grid.num_voxels == expected_survivors, \
-        f"Pruned={pruned_grid.num_voxels} vs expected={expected_survivors}"
+    assert (
+        pruned_grid.num_voxels == expected_survivors
+    ), f"Pruned={pruned_grid.num_voxels} vs expected={expected_survivors}"
 
 
 # ---------------------------------------------------------------------------
@@ -289,12 +322,17 @@ def test_empty_input_grid_returns_empty_esdf(device):
     """Zero-voxel input should gracefully return a zero-voxel ESDF
     without launching kernels that would crash."""
     g = fvdb.Grid.from_zero_voxels(
-        voxel_size=0.05, origin=[0, 0, 0], device=device,
+        voxel_size=0.05,
+        origin=[0, 0, 0],
+        device=device,
     )
     tsdf = torch.zeros(0, device=device, dtype=torch.float32)
     weights = torch.zeros(0, device=device, dtype=torch.float32)
     esdf_grid, esdf = g.compute_esdf(
-        tsdf, weights, truncation_distance=0.1, max_distance=0.2,
+        tsdf,
+        weights,
+        truncation_distance=0.1,
+        max_distance=0.2,
     )
     assert esdf_grid.num_voxels == 0
     assert esdf.shape == (0,)
@@ -309,13 +347,16 @@ def test_all_zero_weights_produces_no_seeds(device):
     g, tsdf, _ = _sphere_tsdf(vs, 16, -8, 0.15, trunc, device)
     zero_w = torch.zeros(g.num_voxels, device=device, dtype=torch.float32)
     _, esdf = g.compute_esdf(
-        tsdf, zero_w,
-        truncation_distance=trunc, max_distance=max_dist,
+        tsdf,
+        zero_w,
+        truncation_distance=trunc,
+        max_distance=max_dist,
         weight_threshold=1e-6,
     )
     # Every voxel should be at +max_distance (clamped sentinel).
-    assert torch.allclose(esdf, torch.full_like(esdf, max_dist)), \
-        f"Unseeded ESDF range: {esdf.min().item()} .. {esdf.max().item()}"
+    assert torch.allclose(
+        esdf, torch.full_like(esdf, max_dist)
+    ), f"Unseeded ESDF range: {esdf.min().item()} .. {esdf.max().item()}"
 
 
 @pytest.mark.parametrize("device", ["cuda"])
@@ -327,18 +368,24 @@ def test_saturated_tsdf_voxels_are_not_used_as_seeds(device):
     all-``+max_distance`` output."""
     vs, trunc, max_dist = 0.05, 0.1, 0.15
     g = fvdb.Grid.from_dense(
-        dense_dims=[16, 16, 16], ijk_min=[-8, -8, -8],
-        voxel_size=vs, origin=[0, 0, 0], device=device,
+        dense_dims=[16, 16, 16],
+        ijk_min=[-8, -8, -8],
+        voxel_size=vs,
+        origin=[0, 0, 0],
+        device=device,
     )
     # All voxels saturated at +1 (far-in-front-of-surface).
     tsdf = torch.ones(g.num_voxels, device=device, dtype=torch.float32)
     weights = torch.ones(g.num_voxels, device=device, dtype=torch.float32)
     _, esdf = g.compute_esdf(
-        tsdf, weights, truncation_distance=trunc, max_distance=max_dist,
+        tsdf,
+        weights,
+        truncation_distance=trunc,
+        max_distance=max_dist,
     )
-    assert torch.allclose(esdf, torch.full_like(esdf, max_dist)), \
-        f"Saturated-only TSDF should produce no seeds; got range " \
-        f"[{esdf.min().item()}, {esdf.max().item()}]"
+    assert torch.allclose(esdf, torch.full_like(esdf, max_dist)), (
+        f"Saturated-only TSDF should produce no seeds; got range " f"[{esdf.min().item()}, {esdf.max().item()}]"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -353,8 +400,10 @@ def test_mismatched_tsdf_size_raises(device):
     bad_tsdf = torch.zeros(g.num_voxels + 1, device=device, dtype=torch.float32)
     with pytest.raises((RuntimeError, ValueError)):
         g.compute_esdf(
-            bad_tsdf, weights,
-            truncation_distance=trunc, max_distance=max_dist,
+            bad_tsdf,
+            weights,
+            truncation_distance=trunc,
+            max_distance=max_dist,
         )
 
 
@@ -366,8 +415,10 @@ def test_non_float32_tsdf_raises(device):
     g, tsdf, weights = _sphere_tsdf(vs, 16, -8, 0.15, trunc, device)
     with pytest.raises((RuntimeError, TypeError)):
         g.compute_esdf(
-            tsdf.to(torch.float64), weights,
-            truncation_distance=trunc, max_distance=max_dist,
+            tsdf.to(torch.float64),
+            weights,
+            truncation_distance=trunc,
+            max_distance=max_dist,
         )
 
 
@@ -377,8 +428,10 @@ def test_non_positive_max_distance_raises(device):
     g, tsdf, weights = _sphere_tsdf(vs, 16, -8, 0.15, trunc, device)
     with pytest.raises((RuntimeError, ValueError)):
         g.compute_esdf(
-            tsdf, weights,
-            truncation_distance=trunc, max_distance=0.0,
+            tsdf,
+            weights,
+            truncation_distance=trunc,
+            max_distance=0.0,
         )
 
 
@@ -395,15 +448,20 @@ def test_incremental_idempotent_with_same_inputs(device):
     vs, trunc, max_dist = 0.025, 0.1, 0.2
     g, tsdf, weights = _sphere_tsdf(vs, 40, -20, 0.25, trunc, device)
     esdf_grid, esdf = g.compute_esdf(
-        tsdf, weights,
-        truncation_distance=trunc, max_distance=max_dist,
+        tsdf,
+        weights,
+        truncation_distance=trunc,
+        max_distance=max_dist,
     )
     esdf_grid2, esdf2 = g.compute_esdf_incremental(
-        tsdf, weights, esdf_grid, esdf,
-        truncation_distance=trunc, max_distance=max_dist,
+        tsdf,
+        weights,
+        esdf_grid,
+        esdf,
+        truncation_distance=trunc,
+        max_distance=max_dist,
     )
-    assert torch.equal(esdf, esdf2), \
-        f"Max diff: {(esdf - esdf2).abs().max().item()}"
+    assert torch.equal(esdf, esdf2), f"Max diff: {(esdf - esdf2).abs().max().item()}"
 
 
 @pytest.mark.parametrize("device", ["cuda"])
@@ -414,20 +472,27 @@ def test_incremental_empty_prev_falls_through_to_one_shot(device):
     g, tsdf, weights = _sphere_tsdf(vs, 40, -20, 0.25, trunc, device)
 
     empty_grid = fvdb.Grid.from_zero_voxels(
-        voxel_size=vs, origin=[0, 0, 0], device=device,
+        voxel_size=vs,
+        origin=[0, 0, 0],
+        device=device,
     )
     empty_esdf = torch.zeros(0, device=device, dtype=torch.float32)
 
     _, esdf_one_shot = g.compute_esdf(
-        tsdf, weights,
-        truncation_distance=trunc, max_distance=max_dist,
+        tsdf,
+        weights,
+        truncation_distance=trunc,
+        max_distance=max_dist,
     )
     _, esdf_incr = g.compute_esdf_incremental(
-        tsdf, weights, empty_grid, empty_esdf,
-        truncation_distance=trunc, max_distance=max_dist,
+        tsdf,
+        weights,
+        empty_grid,
+        empty_esdf,
+        truncation_distance=trunc,
+        max_distance=max_dist,
     )
-    assert torch.equal(esdf_one_shot, esdf_incr), \
-        f"Max diff: {(esdf_one_shot - esdf_incr).abs().max().item()}"
+    assert torch.equal(esdf_one_shot, esdf_incr), f"Max diff: {(esdf_one_shot - esdf_incr).abs().max().item()}"
 
 
 @pytest.mark.parametrize("device", ["cuda"])
@@ -454,13 +519,19 @@ def test_warm_reuse_terminates_early(device):
     max_dist = 0.4  # = 20 * vs -> ~20 sweeps cold, 1 sweep warm
     radius = 0.3
     g, tsdf, weights = _sphere_tsdf(
-        voxel_size=vs, dense_dims=96, ijk_min=-48,
-        radius=radius, truncation_distance=trunc, device=device,
+        voxel_size=vs,
+        dense_dims=96,
+        ijk_min=-48,
+        radius=radius,
+        truncation_distance=trunc,
+        device=device,
     )
     # Warm up CUDA caches + torch JIT with a throwaway call.
     _ = g.compute_esdf(
-        tsdf, weights,
-        truncation_distance=trunc, max_distance=max_dist,
+        tsdf,
+        weights,
+        truncation_distance=trunc,
+        max_distance=max_dist,
     )
     torch.cuda.synchronize()
 
@@ -470,8 +541,10 @@ def test_warm_reuse_terminates_early(device):
         torch.cuda.synchronize()
         t0 = time.perf_counter()
         esdf_grid, esdf = g.compute_esdf(
-            tsdf, weights,
-            truncation_distance=trunc, max_distance=max_dist,
+            tsdf,
+            weights,
+            truncation_distance=trunc,
+            max_distance=max_dist,
         )
         torch.cuda.synchronize()
         cold_samples.append((time.perf_counter() - t0) * 1000.0)
@@ -479,8 +552,12 @@ def test_warm_reuse_terminates_early(device):
 
     # Warm incremental with same inputs (idempotent).
     _ = g.compute_esdf_incremental(
-        tsdf, weights, esdf_grid, esdf,
-        truncation_distance=trunc, max_distance=max_dist,
+        tsdf,
+        weights,
+        esdf_grid,
+        esdf,
+        truncation_distance=trunc,
+        max_distance=max_dist,
     )
     torch.cuda.synchronize()
     warm_samples = []
@@ -488,8 +565,12 @@ def test_warm_reuse_terminates_early(device):
         torch.cuda.synchronize()
         t0 = time.perf_counter()
         _ = g.compute_esdf_incremental(
-            tsdf, weights, esdf_grid, esdf,
-            truncation_distance=trunc, max_distance=max_dist,
+            tsdf,
+            weights,
+            esdf_grid,
+            esdf,
+            truncation_distance=trunc,
+            max_distance=max_dist,
         )
         torch.cuda.synchronize()
         warm_samples.append((time.perf_counter() - t0) * 1000.0)
@@ -502,9 +583,10 @@ def test_warm_reuse_terminates_early(device):
     # workloads like Mai City the ratio is 3-5x. If early termination
     # breaks, warm becomes SLOWER than cold (extra inject overhead
     # with no sweep-count offset) and this test trips immediately.
-    assert warm_ms < cold_ms * 0.85, \
-        f"Warm reuse ({warm_ms:.2f} ms) should be > 1.15x faster than " \
+    assert warm_ms < cold_ms * 0.85, (
+        f"Warm reuse ({warm_ms:.2f} ms) should be > 1.15x faster than "
         f"cold ({cold_ms:.2f} ms); early termination likely broken."
+    )
 
 
 @pytest.mark.parametrize("device", ["cuda"])
@@ -528,28 +610,43 @@ def test_incremental_partial_observation_converges_to_full(device):
     radius = 0.2
 
     g, tsdf, w_full = _sphere_tsdf(
-        vs, 40, -20, radius=radius, truncation_distance=trunc, device=device,
+        vs,
+        40,
+        -20,
+        radius=radius,
+        truncation_distance=trunc,
+        device=device,
     )
     # Frame 0: only voxels with y > 0 have weight 1; others have
     # weight 0 (unobserved). This simulates e.g. a sensor that has
     # only scanned one hemisphere.
     xyz = (g.ijk.float() + 0.5) * vs
     w_half = torch.where(
-        xyz[:, 1] > 0, torch.ones_like(w_full), torch.zeros_like(w_full),
+        xyz[:, 1] > 0,
+        torch.ones_like(w_full),
+        torch.zeros_like(w_full),
     )
     esdf_grid_f0, esdf_f0 = g.compute_esdf(
-        tsdf, w_half,
-        truncation_distance=trunc, max_distance=max_dist,
+        tsdf,
+        w_half,
+        truncation_distance=trunc,
+        max_distance=max_dist,
     )
     # Frame 1: full observation.
     esdf_grid_inc, esdf_inc = g.compute_esdf_incremental(
-        tsdf, w_full, esdf_grid_f0, esdf_f0,
-        truncation_distance=trunc, max_distance=max_dist,
+        tsdf,
+        w_full,
+        esdf_grid_f0,
+        esdf_f0,
+        truncation_distance=trunc,
+        max_distance=max_dist,
     )
     # Reference: one-shot on full observation directly.
     esdf_grid_ref, esdf_ref = g.compute_esdf(
-        tsdf, w_full,
-        truncation_distance=trunc, max_distance=max_dist,
+        tsdf,
+        w_full,
+        truncation_distance=trunc,
+        max_distance=max_dist,
     )
 
     assert esdf_grid_inc.num_voxels == esdf_grid_ref.num_voxels
@@ -565,11 +662,10 @@ def test_incremental_partial_observation_converges_to_full(device):
     # undefined" convention. Clamping is correct either way in that
     # the magnitude is bounded.
     reached_by_ref = esdf_ref.abs() < max_dist - 1e-5
-    diff_reached = (esdf_ref[reached_by_ref] -
-                    esdf_inc[reached_by_ref]).abs()
-    assert diff_reached.max().item() < vs, \
-        f"Incremental vs one-shot on reached voxels: max diff " \
-        f"{diff_reached.max().item()} > vs={vs}"
+    diff_reached = (esdf_ref[reached_by_ref] - esdf_inc[reached_by_ref]).abs()
+    assert diff_reached.max().item() < vs, (
+        f"Incremental vs one-shot on reached voxels: max diff " f"{diff_reached.max().item()} > vs={vs}"
+    )
 
     # Magnitude bound must hold EVERYWHERE for both.
     assert esdf_inc.abs().max().item() <= max_dist + 1e-5

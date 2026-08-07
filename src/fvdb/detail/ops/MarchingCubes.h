@@ -36,9 +36,7 @@ marchingCubes(const GridBatchData &batchHdl, const JaggedTensor &field, double l
 /// should call `marchingCubes` instead — it picks the fast path when
 /// eligible and falls back here automatically otherwise.
 std::vector<JaggedTensor>
-marchingCubesLegacy(const GridBatchData &batchHdl,
-                    const JaggedTensor &field,
-                    double level);
+marchingCubesLegacy(const GridBatchData &batchHdl, const JaggedTensor &field, double level);
 
 } // namespace ops
 } // namespace detail

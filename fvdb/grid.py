@@ -25,19 +25,15 @@ Class-methods for creating Grid objects from various sources:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, overload
-
 import pathlib
+from typing import TYPE_CHECKING, Any, overload
 
 import torch
 
 from ._fvdb_cpp import GridBatchData
 from .enums import SmoothingMode
 from .jagged_tensor import JaggedTensor
-from .types import (
-    DeviceIdentifier,
-    NumericMaxRank1,
-)
+from .types import DeviceIdentifier, NumericMaxRank1
 
 if TYPE_CHECKING:
     from .grid_batch import GridBatch
@@ -864,8 +860,9 @@ class Grid:
         if decayed.dim() == 1:
             magnitude = decayed.abs()
         else:
-            magnitude = decayed.norm(dim=1) if decayed.shape[1] > 0 \
-                else decayed.abs().sum(dim=tuple(range(1, decayed.dim())))
+            magnitude = (
+                decayed.norm(dim=1) if decayed.shape[1] > 0 else decayed.abs().sum(dim=tuple(range(1, decayed.dim())))
+            )
 
         if prune_threshold <= 0.0:
             return self, decayed, list(extra_sidecars)
@@ -1946,9 +1943,7 @@ class Grid:
 
         if features is not None or feature_images is not None:
             if features is None or feature_images is None:
-                raise ValueError(
-                    "features and feature_images must be provided together"
-                )
+                raise ValueError("features and feature_images must be provided together")
             return functional.integrate_tsdf_frames_with_features_single(
                 self,
                 truncation_distance,
@@ -2021,9 +2016,7 @@ class Grid:
 
         if point_features is not None or features is not None:
             if point_features is None or features is None:
-                raise ValueError(
-                    "point_features and features must be provided together"
-                )
+                raise ValueError("point_features and features must be provided together")
             return functional.integrate_tsdf_from_points_with_features_single(
                 self,
                 truncation_distance,

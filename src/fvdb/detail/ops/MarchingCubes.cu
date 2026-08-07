@@ -389,9 +389,7 @@ MarchingCubes(const GridBatchData &batchHdl, const torch::Tensor &sdf, double le
 } // anonymous namespace
 
 std::vector<JaggedTensor>
-marchingCubesLegacy(const GridBatchData &batchHdl,
-                    const JaggedTensor &field,
-                    double level) {
+marchingCubesLegacy(const GridBatchData &batchHdl, const JaggedTensor &field, double level) {
     TORCH_CHECK_VALUE(
         field.ldim() == 1,
         "Expected field to have 1 list dimension, i.e. be a single list of coordinate values, but got",
@@ -424,9 +422,7 @@ marchingCubesLegacy(const GridBatchData &batchHdl,
 // Other dtypes (fp64) and non-CUDA devices are handled by the legacy
 // path, which `marchingCubesFast` forwards to internally.
 std::vector<JaggedTensor>
-marchingCubes(const GridBatchData &batchHdl,
-              const JaggedTensor &field,
-              double level) {
+marchingCubes(const GridBatchData &batchHdl, const JaggedTensor &field, double level) {
     return marchingCubesFast(batchHdl, field, level);
 }
 
