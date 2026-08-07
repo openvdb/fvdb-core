@@ -82,8 +82,10 @@ def dirty_mask_from_sidecars_single(
         on the same device as ``new_sidecar``.
     """
     return _fvdb_cpp.dirty_mask_from_sidecars(
-        new_grid.data, new_sidecar,
-        old_grid.data, old_sidecar,
+        new_grid.data,
+        new_sidecar,
+        old_grid.data,
+        old_sidecar,
     )
 
 

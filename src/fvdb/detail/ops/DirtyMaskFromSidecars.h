@@ -49,11 +49,10 @@ namespace ops {
 ///
 /// @return Bool tensor of shape `[newGrid.totalVoxels]` on the same
 ///         device as `newSidecar`.
-torch::Tensor
-dirtyMaskFromSidecars(const GridBatchData &newGrid,
-                      const torch::Tensor &newSidecar,
-                      const GridBatchData &oldGrid,
-                      const torch::Tensor &oldSidecar);
+torch::Tensor dirtyMaskFromSidecars(const GridBatchData &newGrid,
+                                    const torch::Tensor &newSidecar,
+                                    const GridBatchData &oldGrid,
+                                    const torch::Tensor &oldSidecar);
 
 } // namespace ops
 } // namespace detail

@@ -34,15 +34,19 @@ import fvdb
 def _make_grid_with_sidecars(device: str = "cuda"):
     """Small dense grid of 27 voxels with TSDF + weights + features."""
     g = fvdb.Grid.from_dense(
-        dense_dims=[3, 3, 3], ijk_min=[-1, -1, -1],
-        voxel_size=0.1, origin=[0, 0, 0], device=device,
+        dense_dims=[3, 3, 3],
+        ijk_min=[-1, -1, -1],
+        voxel_size=0.1,
+        origin=[0, 0, 0],
+        device=device,
     )
     # Weights: monotonic 1.0 ... 27.0 so we can predict which voxels
     # survive each threshold.
     weights = torch.arange(1, g.num_voxels + 1, device=device, dtype=torch.float32)
     tsdf = torch.linspace(-1.0, 1.0, g.num_voxels, device=device, dtype=torch.float32)
-    features = torch.randn(g.num_voxels, 3, device=device, dtype=torch.float32,
-                           generator=torch.Generator(device=device).manual_seed(42))
+    features = torch.randn(
+        g.num_voxels, 3, device=device, dtype=torch.float32, generator=torch.Generator(device=device).manual_seed(42)
+    )
     return g, tsdf, weights, features
 
 
@@ -58,7 +62,9 @@ def test_decay_only_is_tensor_multiply(device):
     g, tsdf, weights, features = _make_grid_with_sidecars(device=device)
 
     g2, w2, extras = g.decay_and_prune(
-        weights, decay_factor=0.5, prune_threshold=0.0,
+        weights,
+        decay_factor=0.5,
+        prune_threshold=0.0,
         extra_sidecars=[tsdf, features],
     )
     # Grid unchanged.
@@ -76,7 +82,9 @@ def test_decay_factor_1_is_noop(device):
     sidecars are returned as-is (up to tensor identity/allclose)."""
     g, tsdf, weights, _ = _make_grid_with_sidecars(device=device)
     g2, w2, extras = g.decay_and_prune(
-        weights, decay_factor=1.0, prune_threshold=0.0,
+        weights,
+        decay_factor=1.0,
+        prune_threshold=0.0,
         extra_sidecars=[tsdf],
     )
     assert g2.num_voxels == g.num_voxels
@@ -97,7 +105,9 @@ def test_prune_drops_below_threshold(device):
     weight > 10.0. So voxels with weight >= 11 survive = 17 voxels."""
     g, tsdf, weights, features = _make_grid_with_sidecars(device=device)
     g2, w2, extras = g.decay_and_prune(
-        weights, decay_factor=0.5, prune_threshold=5.0,
+        weights,
+        decay_factor=0.5,
+        prune_threshold=5.0,
         extra_sidecars=[tsdf, features],
     )
     # 27 original voxels; those with decayed weight > 5 survive.
@@ -124,7 +134,9 @@ def test_extra_sidecars_stay_in_sync(device):
     expected_features = features[mask]
 
     _, w2, extras = g.decay_and_prune(
-        weights, decay_factor=0.7, prune_threshold=3.0,
+        weights,
+        decay_factor=0.7,
+        prune_threshold=3.0,
         extra_sidecars=[tsdf, features],
     )
     assert torch.equal(w2, expected_weights[mask])
@@ -138,7 +150,9 @@ def test_threshold_above_max_prunes_everything(device):
     and produces a zero-voxel grid."""
     g, _, weights, _ = _make_grid_with_sidecars(device=device)
     g2, w2, _ = g.decay_and_prune(
-        weights, decay_factor=0.5, prune_threshold=100.0,
+        weights,
+        decay_factor=0.5,
+        prune_threshold=100.0,
     )
     assert g2.num_voxels == 0
     assert w2.shape == (0,)
@@ -160,7 +174,9 @@ def test_multichannel_sidecar_uses_l2_magnitude(device):
     thresh = l2.median().item()  # prunes ~half the voxels
 
     g2, feat2, _ = g.decay_and_prune(
-        features, decay_factor=0.8, prune_threshold=thresh,
+        features,
+        decay_factor=0.8,
+        prune_threshold=thresh,
     )
     # Sanity: we dropped some voxels.
     assert 0 < g2.num_voxels < g.num_voxels
@@ -185,12 +201,14 @@ def test_repeated_decay_composes(device):
     cur_grid, cur_w, extras = g, weights.clone(), [tsdf.clone()]
     for _ in range(5):
         cur_grid, cur_w, extras = cur_grid.decay_and_prune(
-            cur_w, decay_factor=0.9, prune_threshold=0.0,
+            cur_w,
+            decay_factor=0.9,
+            prune_threshold=0.0,
             extra_sidecars=extras,
         )
 
     # Reference: single decay with compound factor.
-    expected = weights * (0.9 ** 5)
+    expected = weights * (0.9**5)
     # fp32 associativity: compare with a small tolerance.
     assert torch.allclose(cur_w, expected, atol=1e-5, rtol=1e-5)
     # Topology unchanged (no pruning happened).
@@ -219,7 +237,9 @@ def test_per_field_decay_is_independent(device):
     # Decay weights only. Features pass through extra_sidecars
     # unchanged (except for any pruning that the grid shrinks).
     _, w2, extras = g.decay_and_prune(
-        weights, decay_factor=0.5, prune_threshold=0.0,
+        weights,
+        decay_factor=0.5,
+        prune_threshold=0.0,
         extra_sidecars=[tsdf, features],
     )
     tsdf2, features2 = extras

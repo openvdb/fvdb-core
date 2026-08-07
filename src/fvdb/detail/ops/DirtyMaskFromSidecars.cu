@@ -22,9 +22,9 @@
 
 #include <ATen/TensorOperators.h>
 #include <c10/cuda/CUDAGuard.h>
+#include <torch/types.h>
 
 #include <cmath>
-#include <torch/types.h>
 
 namespace fvdb::detail::ops {
 
@@ -38,8 +38,10 @@ dirtyMaskFromSidecars(const GridBatchData &newGrid,
                       "floating-point (NaN-sentinel trick requires it)");
     TORCH_CHECK_VALUE(oldSidecar.scalar_type() == newSidecar.scalar_type(),
                       "dirtyMaskFromSidecars: newSidecar and oldSidecar "
-                      "must share dtype; got ", newSidecar.scalar_type(),
-                      " and ", oldSidecar.scalar_type());
+                      "must share dtype; got ",
+                      newSidecar.scalar_type(),
+                      " and ",
+                      oldSidecar.scalar_type());
     TORCH_CHECK_VALUE(newGrid.device() == oldGrid.device(),
                       "dirtyMaskFromSidecars: newGrid and oldGrid must "
                       "be on the same device");
@@ -53,18 +55,19 @@ dirtyMaskFromSidecars(const GridBatchData &newGrid,
                       "dirtyMaskFromSidecars: newSidecar size(0) (",
                       newSidecar.size(0),
                       ") must match newGrid totalVoxels (",
-                      newGrid.totalVoxels(), ")");
+                      newGrid.totalVoxels(),
+                      ")");
     TORCH_CHECK_VALUE(oldSidecar.size(0) == oldGrid.totalVoxels(),
                       "dirtyMaskFromSidecars: oldSidecar size(0) (",
                       oldSidecar.size(0),
                       ") must match oldGrid totalVoxels (",
-                      oldGrid.totalVoxels(), ")");
+                      oldGrid.totalVoxels(),
+                      ")");
     TORCH_CHECK_VALUE(newSidecar.dim() == oldSidecar.dim(),
                       "dirtyMaskFromSidecars: newSidecar and oldSidecar "
                       "must have the same number of dimensions");
     if (newSidecar.dim() > 1) {
-        TORCH_CHECK_VALUE(newSidecar.sizes().slice(1) ==
-                              oldSidecar.sizes().slice(1),
+        TORCH_CHECK_VALUE(newSidecar.sizes().slice(1) == oldSidecar.sizes().slice(1),
                           "dirtyMaskFromSidecars: feature dims must match");
     }
 
@@ -74,19 +77,14 @@ dirtyMaskFromSidecars(const GridBatchData &newGrid,
     // entirely dirty. Avoids calling inject with a zero-voxel source.
     if (oldGrid.totalVoxels() == 0) {
         return torch::ones({newGrid.totalVoxels()},
-                           torch::TensorOptions()
-                               .dtype(torch::kBool)
-                               .device(newSidecar.device()));
+                           torch::TensorOptions().dtype(torch::kBool).device(newSidecar.device()));
     }
 
     // NaN-init the projection target. `ops::inject` writes only
     // ijk-overlap slots, so non-overlap slots keep their NaN — and
     // NaN comparison with anything returns True, giving us "not in
     // old grid" ⇒ dirty automatically.
-    torch::Tensor projected = torch::full(
-        newSidecar.sizes(),
-        std::nan(""),
-        newSidecar.options());
+    torch::Tensor projected = torch::full(newSidecar.sizes(), std::nan(""), newSidecar.options());
 
     JaggedTensor projectedJt = newGrid.jaggedTensor(projected);
     JaggedTensor oldJt       = oldGrid.jaggedTensor(oldSidecar);

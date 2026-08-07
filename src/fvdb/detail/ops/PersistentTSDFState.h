@@ -172,7 +172,7 @@ class PersistentTSDFState {
     c10::intrusive_ptr<GridBatchData> mGrid;
     torch::Tensor mTsdf;
     torch::Tensor mWeights;
-    torch::Tensor mFeatures;    // shape `[totalVoxels, 0]` when no features
+    torch::Tensor mFeatures; // shape `[totalVoxels, 0]` when no features
     bool mHasFeatures = false;
 };
 

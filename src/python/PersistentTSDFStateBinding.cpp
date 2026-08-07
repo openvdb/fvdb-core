@@ -26,19 +26,14 @@ bind_persistent_tsdf_state(py::module &m) {
     // through all references). `PersistentTSDFState` is move-only in C++
     // (to avoid accidental sidecar aliasing on the C++ side), so pybind
     // must use a wrapping smart pointer here.
-    py::class_<PersistentTSDFState, std::shared_ptr<PersistentTSDFState>>(
-        m, "PersistentTSDFState")
-        .def(py::init(
-                 [](c10::intrusive_ptr<GridBatchData> grid,
-                    torch::Tensor tsdf,
-                    torch::Tensor weights,
-                    std::optional<torch::Tensor> features) {
-                     return std::make_shared<PersistentTSDFState>(
-                         std::move(grid),
-                         std::move(tsdf),
-                         std::move(weights),
-                         std::move(features));
-                 }),
+    py::class_<PersistentTSDFState, std::shared_ptr<PersistentTSDFState>>(m, "PersistentTSDFState")
+        .def(py::init([](c10::intrusive_ptr<GridBatchData> grid,
+                         torch::Tensor tsdf,
+                         torch::Tensor weights,
+                         std::optional<torch::Tensor> features) {
+                 return std::make_shared<PersistentTSDFState>(
+                     std::move(grid), std::move(tsdf), std::move(weights), std::move(features));
+             }),
              py::arg("grid"),
              py::arg("tsdf"),
              py::arg("weights"),
@@ -55,17 +50,12 @@ bind_persistent_tsdf_state(py::module &m) {
             py::arg("shell_grid"))
         .def("reset", &PersistentTSDFState::reset)
         .def_property_readonly("active_voxel_count", &PersistentTSDFState::activeVoxelCount)
-        .def_property_readonly(
-            "grid",
-            [](const PersistentTSDFState &self) { return self.gridPtr(); })
-        .def_property_readonly(
-            "tsdf",
-            [](const PersistentTSDFState &self) { return self.tsdf(); })
-        .def_property_readonly(
-            "weights",
-            [](const PersistentTSDFState &self) { return self.weights(); })
+        .def_property_readonly("grid",
+                               [](const PersistentTSDFState &self) { return self.gridPtr(); })
+        .def_property_readonly("tsdf", [](const PersistentTSDFState &self) { return self.tsdf(); })
+        .def_property_readonly("weights",
+                               [](const PersistentTSDFState &self) { return self.weights(); })
         .def_property_readonly("has_features", &PersistentTSDFState::hasFeatures)
-        .def_property_readonly(
-            "features",
-            [](const PersistentTSDFState &self) { return self.features(); });
+        .def_property_readonly("features",
+                               [](const PersistentTSDFState &self) { return self.features(); });
 }

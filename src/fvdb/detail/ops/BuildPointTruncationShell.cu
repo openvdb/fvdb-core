@@ -32,12 +32,10 @@ namespace {
 // potential CPU fallback paths.
 [[maybe_unused]] torch::Tensor
 makeStencilOffsets(int64_t numPad, torch::Device device) {
-    const torch::TensorOptions optI32 =
-        torch::TensorOptions().dtype(torch::kInt32).device(device);
-    const torch::Tensor axis = torch::arange(-numPad, numPad + 1, optI32);
-    const auto grid          = at::meshgrid({axis, axis, axis}, "ij");
-    return torch::stack(
-               {grid[0].flatten(), grid[1].flatten(), grid[2].flatten()}, 1)
+    const torch::TensorOptions optI32 = torch::TensorOptions().dtype(torch::kInt32).device(device);
+    const torch::Tensor axis          = torch::arange(-numPad, numPad + 1, optI32);
+    const auto grid                   = at::meshgrid({axis, axis, axis}, "ij");
+    return torch::stack({grid[0].flatten(), grid[1].flatten(), grid[2].flatten()}, 1)
         .contiguous(); // [(2k+1)^3, 3]
 }
 
@@ -45,7 +43,9 @@ makeStencilOffsets(int64_t numPad, torch::Device device) {
 torch::Tensor
 uniqueIjk(const torch::Tensor &ijk) {
     TORCH_CHECK(ijk.dim() == 2 && ijk.size(1) == 3, "uniqueIjk expects [N, 3]");
-    const auto uniq = at::unique_dim(ijk, /*dim=*/0, /*sorted=*/false,
+    const auto uniq = at::unique_dim(ijk,
+                                     /*dim=*/0,
+                                     /*sorted=*/false,
                                      /*return_inverse=*/false,
                                      /*return_counts=*/false);
     return std::get<0>(uniq).contiguous();
@@ -64,8 +64,7 @@ treeMergeUniqueIjk(std::vector<torch::Tensor> shards) {
         std::vector<torch::Tensor> next;
         next.reserve((shards.size() + 1) / 2);
         for (size_t i = 0; i + 1 < shards.size(); i += 2) {
-            next.push_back(uniqueIjk(
-                torch::cat({shards[i], shards[i + 1]}, /*dim=*/0)));
+            next.push_back(uniqueIjk(torch::cat({shards[i], shards[i + 1]}, /*dim=*/0)));
             // Eagerly release input tensors now that they've been merged
             // so torch's caching allocator can reuse their blocks for the
             // next round. Without this the allocator holds the shard
@@ -118,7 +117,7 @@ treeMergeUniqueIjk(std::vector<torch::Tensor> shards) {
 //   - The hard floor (4 m) handles tiny scenes / initialisation edge
 //     cases so we never clamp below the plausible scene extent.
 constexpr double kAdaptiveClampHeadroom = 8.0;
-constexpr double kMinAdaptiveClamp      = 4.0;       // never clamp below 4 m
+constexpr double kMinAdaptiveClamp      = 4.0; // never clamp below 4 m
 // Raised from the room-scale default (300 m) so outdoor LiDAR
 // datasets (Mai City, KITTI, etc.) with trajectories that wander
 // far from the world origin don't get their entire per-frame point
@@ -130,7 +129,7 @@ constexpr double kMinAdaptiveClamp      = 4.0;       // never clamp below 4 m
 // practice (their inputs are raw Velodyne-style fp32 readings, not
 // unprojected from fp32 matrix math), so the cap only matters to
 // prevent accidental rejection of legitimate far-from-origin points.
-constexpr double kMaxAdaptiveClamp      = 100000.0;
+constexpr double kMaxAdaptiveClamp = 100000.0;
 
 torch::Tensor
 filterValidPoints(const torch::Tensor &points) {
@@ -140,9 +139,8 @@ filterValidPoints(const torch::Tensor &points) {
     //
     // Stage A: reject non-finite (NaN / Inf) so the quantile stage
     // only looks at real-valued finite coordinates.
-    const torch::Tensor finite_mask =
-        at::isfinite(points).all(/*dim=*/1);
-    const torch::Tensor finite_pts = points.index({finite_mask});
+    const torch::Tensor finite_mask = at::isfinite(points).all(/*dim=*/1);
+    const torch::Tensor finite_pts  = points.index({finite_mask});
     if (finite_pts.size(0) == 0) {
         return points.new_empty({0, 3});
     }
@@ -157,17 +155,13 @@ filterValidPoints(const torch::Tensor &points) {
     // subsample large inputs. 1 M samples pins the median to within a
     // centimetre for any realistic point distribution, for ~20 ms of
     // extra work.
-    const torch::Tensor max_abs =
-        std::get<0>(finite_pts.abs().max(/*dim=*/1)); // [N_fin]
-    constexpr int64_t kPctSampleCap = 1 << 20; // 1 M
+    const torch::Tensor max_abs     = std::get<0>(finite_pts.abs().max(/*dim=*/1)); // [N_fin]
+    constexpr int64_t kPctSampleCap = 1 << 20;                                      // 1 M
     torch::Tensor max_abs_for_quantile;
     if (max_abs.size(0) > kPctSampleCap) {
-        const int64_t stride = (max_abs.size(0) + kPctSampleCap - 1) /
-                               kPctSampleCap;
+        const int64_t stride = (max_abs.size(0) + kPctSampleCap - 1) / kPctSampleCap;
         max_abs_for_quantile =
-            max_abs.index({torch::indexing::Slice(0, torch::indexing::None,
-                                                   stride)})
-                .contiguous();
+            max_abs.index({torch::indexing::Slice(0, torch::indexing::None, stride)}).contiguous();
     } else {
         max_abs_for_quantile = max_abs;
     }
@@ -175,23 +169,21 @@ filterValidPoints(const torch::Tensor &points) {
     // (it requires float or double). Promote to fp32 for the single
     // median call -- this is a ~1 M-element tensor at most so the
     // promotion cost is trivial.
-    const torch::Tensor max_abs_f32 =
-        max_abs_for_quantile.scalar_type() == torch::kHalf
-            ? max_abs_for_quantile.to(torch::kFloat32)
-            : max_abs_for_quantile;
-    const double median =
-        at::quantile(max_abs_f32, 0.50).item<double>();
-    const double clamp = std::min(
-        kMaxAdaptiveClamp,
-        std::max(kMinAdaptiveClamp, kAdaptiveClampHeadroom * median));
-    const torch::Tensor bounded_mask =
-        (finite_pts.abs() < clamp).all(/*dim=*/1);
+    const torch::Tensor max_abs_f32 = max_abs_for_quantile.scalar_type() == torch::kHalf
+                                          ? max_abs_for_quantile.to(torch::kFloat32)
+                                          : max_abs_for_quantile;
+    const double median             = at::quantile(max_abs_f32, 0.50).item<double>();
+    const double clamp =
+        std::min(kMaxAdaptiveClamp, std::max(kMinAdaptiveClamp, kAdaptiveClampHeadroom * median));
+    const torch::Tensor bounded_mask = (finite_pts.abs() < clamp).all(/*dim=*/1);
 
     if (std::getenv("FVDB_NANOVDB_TRACE_ALLOCS")) {
         std::fprintf(
             stderr,
             "[fvdb] filterValidPoints median=%.3f m -> clamp=%.3f m (finite=%lld -> bounded=%lld)\n",
-            median, clamp, (long long)finite_pts.size(0),
+            median,
+            clamp,
+            (long long)finite_pts.size(0),
             (long long)bounded_mask.sum().item<int64_t>());
     }
 
@@ -211,10 +203,8 @@ pointsToIjk(const torch::Tensor &points,
             const nanovdb::Vec3d &origin) {
     const torch::TensorOptions optSame =
         torch::TensorOptions().dtype(points.scalar_type()).device(points.device());
-    const torch::Tensor vs =
-        torch::tensor({voxelSize[0], voxelSize[1], voxelSize[2]}, optSame);
-    const torch::Tensor og =
-        torch::tensor({origin[0], origin[1], origin[2]}, optSame);
+    const torch::Tensor vs = torch::tensor({voxelSize[0], voxelSize[1], voxelSize[2]}, optSame);
+    const torch::Tensor og = torch::tensor({origin[0], origin[1], origin[2]}, optSame);
     const torch::Tensor ijk_same = ((points - og) / vs).round();
     return ijk_same.to(torch::kInt32).contiguous(); // [N, 3]
 }
@@ -249,13 +239,10 @@ pointsToIjk(const torch::Tensor &points,
 // Returns `[U_leaves * 512, 3]` int32 voxel ijk tensor ready to hand
 // to `_createNanoGridFromIJK`.
 torch::Tensor
-leafGranularityShell(const torch::Tensor &ijk,
-                     int64_t numPad) {
-    TORCH_CHECK(ijk.dim() == 2 && ijk.size(1) == 3,
-                "leafGranularityShell expects ijk [N, 3]");
-    const torch::Device device = ijk.device();
-    const torch::TensorOptions optI32 =
-        torch::TensorOptions().dtype(torch::kInt32).device(device);
+leafGranularityShell(const torch::Tensor &ijk, int64_t numPad) {
+    TORCH_CHECK(ijk.dim() == 2 && ijk.size(1) == 3, "leafGranularityShell expects ijk [N, 3]");
+    const torch::Device device        = ijk.device();
+    const torch::TensorOptions optI32 = torch::TensorOptions().dtype(torch::kInt32).device(device);
 
     // Step 1: map each ijk to its LEAF key (ijk >> 3 in floor-arithmetic),
     // then dedupe to UNIQUE LEAVES.
@@ -265,8 +252,7 @@ leafGranularityShell(const torch::Tensor &ijk,
     // to ~1-2 K unique 8-voxel leaves (a 500x collapse), so the
     // downstream dilate-and-dedupe pass works on a tiny set. The
     // ~2-3 ms dedupe dominates; everything after it is sub-ms.
-    const torch::Tensor leaf_key =
-        at::div(ijk, 8, /*rounding_mode=*/"floor");
+    const torch::Tensor leaf_key    = at::div(ijk, 8, /*rounding_mode=*/"floor");
     torch::Tensor unique_leaves_raw = uniqueIjk(leaf_key);
     if (unique_leaves_raw.size(0) == 0) {
         return at::empty({0, 3}, optI32);
@@ -278,26 +264,19 @@ leafGranularityShell(const torch::Tensor &ijk,
     // leaves away, so the leaf stencil is `(2 * half + 1)^3`. For the
     // typical numPad = 3 case that is 3^3 = 27 (vs the voxel path's
     // 7^3 = 343).
-    const int64_t leaf_half = (numPad + 7 + 7) / 8; // ceil((numPad+7)/8)
-    const torch::Tensor leaf_axis =
-        torch::arange(-leaf_half, leaf_half + 1, optI32);
-    const auto leaf_grid =
-        at::meshgrid({leaf_axis, leaf_axis, leaf_axis}, "ij");
+    const int64_t leaf_half       = (numPad + 7 + 7) / 8; // ceil((numPad+7)/8)
+    const torch::Tensor leaf_axis = torch::arange(-leaf_half, leaf_half + 1, optI32);
+    const auto leaf_grid          = at::meshgrid({leaf_axis, leaf_axis, leaf_axis}, "ij");
     const torch::Tensor leaf_stencil =
-        torch::stack({leaf_grid[0].flatten(),
-                      leaf_grid[1].flatten(),
-                      leaf_grid[2].flatten()},
-                     1)
+        torch::stack({leaf_grid[0].flatten(), leaf_grid[1].flatten(), leaf_grid[2].flatten()}, 1)
             .contiguous();
 
     // [U_raw, 1, 3] + [1, S_leaf, 3] -> [U_raw * S_leaf, 3]. At typical
     // Replica scale U_raw ~ 1-2 K and S_leaf = 27 so this is ~30-50 K
     // rows, trivial to dedupe.
     const torch::Tensor leaf_expanded =
-        (unique_leaves_raw.unsqueeze(1) + leaf_stencil.unsqueeze(0))
-            .reshape({-1, 3})
-            .contiguous();
-    unique_leaves_raw = torch::Tensor(); // free
+        (unique_leaves_raw.unsqueeze(1) + leaf_stencil.unsqueeze(0)).reshape({-1, 3}).contiguous();
+    unique_leaves_raw                 = torch::Tensor(); // free
     const torch::Tensor unique_leaves = uniqueIjk(leaf_expanded);
     if (unique_leaves.size(0) == 0) {
         return at::empty({0, 3}, optI32);
@@ -307,28 +286,23 @@ leafGranularityShell(const torch::Tensor &ijk,
     // voxel in the leaf is leaf_origin + (i, j, k) for (i,j,k) in
     // [0, 8)^3.
     const torch::Tensor local_axis = torch::arange(0, 8, optI32);
-    const auto local_grid = at::meshgrid({local_axis, local_axis, local_axis}, "ij");
+    const auto local_grid          = at::meshgrid({local_axis, local_axis, local_axis}, "ij");
     const torch::Tensor local_offsets =
-        torch::stack({local_grid[0].flatten(),
-                      local_grid[1].flatten(),
-                      local_grid[2].flatten()},
+        torch::stack({local_grid[0].flatten(), local_grid[1].flatten(), local_grid[2].flatten()},
                      1)
-            .contiguous();  // [512, 3]
+            .contiguous();                                // [512, 3]
 
-    const torch::Tensor leaf_origins = unique_leaves * 8;  // [U_leaves, 3]
+    const torch::Tensor leaf_origins = unique_leaves * 8; // [U_leaves, 3]
     // [U, 1, 3] + [1, 512, 3] -> [U, 512, 3] -> [U*512, 3]
     const torch::Tensor shell =
-        (leaf_origins.unsqueeze(1) + local_offsets.unsqueeze(0))
-            .reshape({-1, 3})
-            .contiguous();
+        (leaf_origins.unsqueeze(1) + local_offsets.unsqueeze(0)).reshape({-1, 3}).contiguous();
 
     if (std::getenv("FVDB_NANOVDB_TRACE_ALLOCS")) {
-        std::fprintf(
-            stderr,
-            "[fvdb] leafGranularityShell input_ijks=%lld leaves=%lld shell_voxels=%lld\n",
-            (long long)ijk.size(0),
-            (long long)unique_leaves.size(0),
-            (long long)shell.size(0));
+        std::fprintf(stderr,
+                     "[fvdb] leafGranularityShell input_ijks=%lld leaves=%lld shell_voxels=%lld\n",
+                     (long long)ijk.size(0),
+                     (long long)unique_leaves.size(0),
+                     (long long)shell.size(0));
     }
     return shell;
 }
@@ -351,10 +325,8 @@ buildSingleBatchShell(const torch::Tensor &points_b,
                       const nanovdb::Vec3d &voxelSize,
                       const nanovdb::Vec3d &origin,
                       int64_t numPad) {
-    TORCH_CHECK(points_b.dim() == 2 && points_b.size(1) == 3,
-                "points must be [N, 3]");
-    TORCH_CHECK(points_b.device().is_cuda(),
-                "fast shell builder is CUDA-only");
+    TORCH_CHECK(points_b.dim() == 2 && points_b.size(1) == 3, "points must be [N, 3]");
+    TORCH_CHECK(points_b.device().is_cuda(), "fast shell builder is CUDA-only");
 
     const torch::Device device = points_b.device();
 
@@ -363,8 +335,7 @@ buildSingleBatchShell(const torch::Tensor &points_b,
     // expand+merge, createGrid). Use to identify which stage to attack
     // next in the shell-build speedup track. One line per frame to
     // stderr.
-    const bool phaseProfile =
-        std::getenv("FVDB_SHELL_PHASE_PROFILE") != nullptr;
+    const bool phaseProfile = std::getenv("FVDB_SHELL_PHASE_PROFILE") != nullptr;
     cudaEvent_t evA{}, evB{}, evC{}, evD{}, evE{};
     auto phaseMark = [&](cudaEvent_t &ev) {
         if (phaseProfile) {
@@ -425,9 +396,8 @@ buildSingleBatchShell(const torch::Tensor &points_b,
     }();
 
     if (force_leaf_shell) {
-        const torch::Tensor leaf_shell =
-            leafGranularityShell(ijk_i32, numPad);
-        ijk_i32 = torch::Tensor();
+        const torch::Tensor leaf_shell = leafGranularityShell(ijk_i32, numPad);
+        ijk_i32                        = torch::Tensor();
         if (leaf_shell.size(0) == 0) {
             TorchDeviceBuffer emptyBuf(0, device);
             return nanovdb::GridHandle<TorchDeviceBuffer>(std::move(emptyBuf));
@@ -471,29 +441,18 @@ buildSingleBatchShell(const torch::Tensor &points_b,
     // ~10 M unique voxels, which is ~10 ms to turn into a grid.
     constexpr int64_t kPackBias = 1ll << 20;
     constexpr int64_t kPackMask = (1ll << 21) - 1;
-    auto packIjk = [&](const torch::Tensor &ijk_i32) -> torch::Tensor {
+    auto packIjk                = [&](const torch::Tensor &ijk_i32) -> torch::Tensor {
         const torch::Tensor ijk_i64 = ijk_i32.to(torch::kInt64);
-        const torch::Tensor i =
-            ijk_i64.select(1, 0).add(kPackBias);
-        const torch::Tensor j =
-            ijk_i64.select(1, 1).add(kPackBias);
-        const torch::Tensor k =
-            ijk_i64.select(1, 2).add(kPackBias);
-        return (i.bitwise_left_shift(42))
-            .bitwise_or(j.bitwise_left_shift(21))
-            .bitwise_or(k);
+        const torch::Tensor i       = ijk_i64.select(1, 0).add(kPackBias);
+        const torch::Tensor j       = ijk_i64.select(1, 1).add(kPackBias);
+        const torch::Tensor k       = ijk_i64.select(1, 2).add(kPackBias);
+        return (i.bitwise_left_shift(42)).bitwise_or(j.bitwise_left_shift(21)).bitwise_or(k);
     };
     auto unpackKeys = [&](const torch::Tensor &keys) -> torch::Tensor {
-        const torch::Tensor i =
-            keys.bitwise_right_shift(42).bitwise_and(kPackMask)
-                .sub(kPackBias);
-        const torch::Tensor j =
-            keys.bitwise_right_shift(21).bitwise_and(kPackMask)
-                .sub(kPackBias);
-        const torch::Tensor k =
-            keys.bitwise_and(kPackMask).sub(kPackBias);
-        return torch::stack({i, j, k}, /*dim=*/1)
-            .to(torch::kInt32).contiguous();
+        const torch::Tensor i = keys.bitwise_right_shift(42).bitwise_and(kPackMask).sub(kPackBias);
+        const torch::Tensor j = keys.bitwise_right_shift(21).bitwise_and(kPackMask).sub(kPackBias);
+        const torch::Tensor k = keys.bitwise_and(kPackMask).sub(kPackBias);
+        return torch::stack({i, j, k}, /*dim=*/1).to(torch::kInt32).contiguous();
     };
 
     // Pack and dedup the base ijks once. Raw N includes substantial
@@ -504,55 +463,49 @@ buildSingleBatchShell(const torch::Tensor &points_b,
     // unique because `_unique` already calls into CUB under the hood
     // and the per-call allocation overhead is absorbed by torch's
     // caching allocator.
-    torch::Tensor keys = std::get<0>(
-        at::_unique(packIjk(ijk_i32), /*sorted=*/false,
-                    /*return_inverse=*/false));
-    ijk_i32 = torch::Tensor();
+    torch::Tensor keys = std::get<0>(at::_unique(packIjk(ijk_i32),
+                                                 /*sorted=*/false,
+                                                 /*return_inverse=*/false));
+    ijk_i32            = torch::Tensor();
     phaseMark(evC);
 
     // Per-axis 1-D stencils of length `2r+1`, pre-packed as int64 so
     // broadcast-add composes directly with the packed base keys. Shift
     // factors (42, 21, 0) mirror the axis-to-bit assignment above.
-    const torch::TensorOptions optI64 =
-        torch::TensorOptions().dtype(torch::kInt64).device(device);
-    const torch::Tensor axisOffsets =
-        torch::arange(-numPad, numPad + 1, optI64); // [2r+1] signed
-    const torch::Tensor stencil_x =
-        axisOffsets.bitwise_left_shift(42);
-    const torch::Tensor stencil_y =
-        axisOffsets.bitwise_left_shift(21);
-    const torch::Tensor stencil_z = axisOffsets;
+    const torch::TensorOptions optI64 = torch::TensorOptions().dtype(torch::kInt64).device(device);
+    const torch::Tensor axisOffsets   = torch::arange(-numPad, numPad + 1, optI64); // [2r+1] signed
+    const torch::Tensor stencil_x     = axisOffsets.bitwise_left_shift(42);
+    const torch::Tensor stencil_y     = axisOffsets.bitwise_left_shift(21);
+    const torch::Tensor stencil_z     = axisOffsets;
 
-    auto applyAxis = [&](torch::Tensor keys_in,
-                         const torch::Tensor &axisStencil) {
+    auto applyAxis = [&](torch::Tensor keys_in, const torch::Tensor &axisStencil) {
         // [U, 1] + [1, 2r+1] -> [U * (2r+1)] -> unique.
         torch::Tensor expanded =
-            (keys_in.unsqueeze(1) + axisStencil.unsqueeze(0))
-                .flatten().contiguous();
+            (keys_in.unsqueeze(1) + axisStencil.unsqueeze(0)).flatten().contiguous();
         keys_in = torch::Tensor();
-        return std::get<0>(
-            at::_unique(expanded, /*sorted=*/false,
-                        /*return_inverse=*/false));
+        return std::get<0>(at::_unique(expanded,
+                                       /*sorted=*/false,
+                                       /*return_inverse=*/false));
     };
 
-    keys = applyAxis(std::move(keys), stencil_x);
-    keys = applyAxis(std::move(keys), stencil_y);
-    keys = applyAxis(std::move(keys), stencil_z);
+    keys            = applyAxis(std::move(keys), stencil_x);
+    keys            = applyAxis(std::move(keys), stencil_y);
+    keys            = applyAxis(std::move(keys), stencil_z);
     const int64_t F = keys.size(0);
     if (F == 0) {
         TorchDeviceBuffer emptyBuf(0, device);
         return nanovdb::GridHandle<TorchDeviceBuffer>(std::move(emptyBuf));
     }
     const torch::Tensor shell = unpackKeys(keys);
-    keys = torch::Tensor();
+    keys                      = torch::Tensor();
     phaseMark(evD);
 
     if (std::getenv("FVDB_NANOVDB_TRACE_ALLOCS")) {
-        std::fprintf(
-            stderr,
-            "[fvdb] buildSingleBatchShell (voxel path, separable) "
-            "numPad=%lld shell=%lld\n",
-            (long long)numPad, (long long)F);
+        std::fprintf(stderr,
+                     "[fvdb] buildSingleBatchShell (voxel path, separable) "
+                     "numPad=%lld shell=%lld\n",
+                     (long long)numPad,
+                     (long long)F);
     }
 
     const JaggedTensor shellJT(shell);
@@ -566,14 +519,17 @@ buildSingleBatchShell(const torch::Tensor &points_b,
         cudaEventElapsedTime(&t_base, evB, evC);
         cudaEventElapsedTime(&t_sep, evC, evD);
         cudaEventElapsedTime(&t_grid, evD, evE);
-        std::fprintf(
-            stderr,
-            "[fvdb/shell_phase] filter+ijk=%.2f ms  base_dedup=%.2f ms "
-            " separable_xyz=%.2f ms  createGrid=%.2f ms  total=%.2f "
-            "ms  numPad=%lld shell=%lld\n",
-            t_filter, t_base, t_sep, t_grid,
-            t_filter + t_base + t_sep + t_grid,
-            (long long)numPad, (long long)F);
+        std::fprintf(stderr,
+                     "[fvdb/shell_phase] filter+ijk=%.2f ms  base_dedup=%.2f ms "
+                     " separable_xyz=%.2f ms  createGrid=%.2f ms  total=%.2f "
+                     "ms  numPad=%lld shell=%lld\n",
+                     t_filter,
+                     t_base,
+                     t_sep,
+                     t_grid,
+                     t_filter + t_base + t_sep + t_grid,
+                     (long long)numPad,
+                     (long long)F);
         cudaEventDestroy(evA);
         cudaEventDestroy(evB);
         cudaEventDestroy(evC);
@@ -589,12 +545,14 @@ c10::intrusive_ptr<GridBatchData>
 buildPointTruncationShell(const JaggedTensor &points,
                           const GridBatchData &grid,
                           double truncationMargin) {
-    TORCH_CHECK_VALUE(truncationMargin > 0.0,
-                      "truncationMargin must be > 0, got ",
-                      truncationMargin);
+    TORCH_CHECK_VALUE(
+        truncationMargin > 0.0, "truncationMargin must be > 0, got ", truncationMargin);
     TORCH_CHECK_VALUE(points.num_outer_lists() == grid.batchSize(),
-                      "points batch size (", points.num_outer_lists(),
-                      ") must equal grid batch size (", grid.batchSize(), ")");
+                      "points batch size (",
+                      points.num_outer_lists(),
+                      ") must equal grid batch size (",
+                      grid.batchSize(),
+                      ")");
 
     // Per-batch voxel sizes and origins define the world-to-index
     // transform for the new grid.
@@ -632,23 +590,27 @@ buildPointTruncationShell(const JaggedTensor &points,
         // ceil case is untouched.
         const double ratio        = truncationMargin / minVoxLengthI;
         const double ratioRounded = std::round(ratio);
-        const double tol = 4.0 * static_cast<double>(
-            std::numeric_limits<float>::epsilon()) * std::max(1.0, ratio);
-        const double ceilRatio = (std::abs(ratio - ratioRounded) <= tol)
-                                     ? ratioRounded
-                                     : std::ceil(ratio);
+        const double tol =
+            4.0 * static_cast<double>(std::numeric_limits<float>::epsilon()) * std::max(1.0, ratio);
+        const double ceilRatio =
+            (std::abs(ratio - ratioRounded) <= tol) ? ratioRounded : std::ceil(ratio);
         const auto numPadVoxelsI = static_cast<int32_t>(ceilRatio);
         TORCH_CHECK_VALUE(numPadVoxelsI > 0,
                           "Number of padding voxels must be positive, got ",
                           numPadVoxelsI,
-                          " (truncationMargin=", truncationMargin,
-                          ", voxelSize=", minVoxLengthI, ")");
+                          " (truncationMargin=",
+                          truncationMargin,
+                          ", voxelSize=",
+                          minVoxLengthI,
+                          ")");
         TORCH_CHECK_VALUE(numPadVoxelsI < MAX_PAD_VOXELS,
-                          "Truncation margin (", truncationMargin,
+                          "Truncation margin (",
+                          truncationMargin,
                           ") is too large for grid with voxel size ",
                           minVoxLengthI,
                           ", resulting in too many padding voxels (",
-                          numPadVoxelsI, ") which cannot exceed ",
+                          numPadVoxelsI,
+                          ") which cannot exceed ",
                           MAX_PAD_VOXELS,
                           ". Use a larger voxel size or a smaller truncation margin.");
         numPadVoxels.push_back(numPadVoxelsI);
@@ -659,9 +621,8 @@ buildPointTruncationShell(const JaggedTensor &points,
     // sidesteps it because `dilateGrid` scratch blows up on
     // room-scale scenes.
     const bool isCuda = points.device().is_cuda();
-    if (!isCuda ||
-        (std::getenv("FVDB_NANOVDB_LEGACY_SHELL") != nullptr &&
-         std::getenv("FVDB_NANOVDB_LEGACY_SHELL")[0] == '1')) {
+    if (!isCuda || (std::getenv("FVDB_NANOVDB_LEGACY_SHELL") != nullptr &&
+                    std::getenv("FVDB_NANOVDB_LEGACY_SHELL")[0] == '1')) {
         auto pointGrid = buildGridFromPoints(points, voxelSizes, origins);
         return dilateGrid(*pointGrid, numPadVoxels);
     }
@@ -689,7 +650,9 @@ buildPointTruncationShell(const JaggedTensor &points,
     const auto offsets             = offsetsCpu.accessor<JOffsetsType, 1>();
     TORCH_CHECK(offsets.size(0) == grid.batchSize() + 1,
                 "joffsets length mismatch: expected ",
-                grid.batchSize() + 1, " got ", offsets.size(0));
+                grid.batchSize() + 1,
+                " got ",
+                offsets.size(0));
 
     const torch::Tensor data = points.jdata();
     for (int64_t i = 0; i < grid.batchSize(); ++i) {
@@ -697,15 +660,13 @@ buildPointTruncationShell(const JaggedTensor &points,
         const int64_t count = offsets[i + 1] - start;
         if (count == 0) {
             TorchDeviceBuffer emptyBuf(0, points.device());
-            handles.emplace_back(
-                nanovdb::GridHandle<TorchDeviceBuffer>(std::move(emptyBuf)));
+            handles.emplace_back(nanovdb::GridHandle<TorchDeviceBuffer>(std::move(emptyBuf)));
             continue;
         }
 
-        const torch::Tensor points_i =
-            data.narrow(0, start, count).contiguous();
-        handles.push_back(buildSingleBatchShell(
-            points_i, voxelSizes[i], origins[i], numPadVoxels[i]));
+        const torch::Tensor points_i = data.narrow(0, start, count).contiguous();
+        handles.push_back(
+            buildSingleBatchShell(points_i, voxelSizes[i], origins[i], numPadVoxels[i]));
     }
 
     nanovdb::GridHandle<TorchDeviceBuffer> mergedHandle;
