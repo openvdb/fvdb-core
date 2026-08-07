@@ -46,16 +46,16 @@
 #include <fvdb/detail/ops/ComputeESDF.h>
 #include <fvdb/detail/ops/Inject.h>
 
-#include <c10/cuda/CUDAException.h>
-#include <c10/cuda/CUDAGuard.h>
-#include <c10/cuda/CUDAStream.h>
-
 #include <nanovdb/NanoVDB.h>
 #include <nanovdb/tools/cuda/VoxelBlockManager.cuh>
 #include <nanovdb/util/cuda/DeviceGridTraits.cuh>
 
-#include <cuda_runtime.h>
+#include <c10/cuda/CUDAException.h>
+#include <c10/cuda/CUDAGuard.h>
+#include <c10/cuda/CUDAStream.h>
 #include <torch/types.h>
+
+#include <cuda_runtime.h>
 
 #include <cmath>
 
@@ -70,9 +70,9 @@ namespace {
 // -----------------------------------------------------------------------
 
 constexpr int ESDF_BLOCK_WIDTH_LOG2 = 7;
-constexpr int ESDF_BLOCK_WIDTH      = 1 << ESDF_BLOCK_WIDTH_LOG2;  // 128
-constexpr int ESDF_JUMP_MAP_LENGTH  = ESDF_BLOCK_WIDTH / 64;       // 2
-constexpr int ESDF_PERLEAF_THREADS  = 128;                         // per-leaf ablation
+constexpr int ESDF_BLOCK_WIDTH      = 1 << ESDF_BLOCK_WIDTH_LOG2; // 128
+constexpr int ESDF_JUMP_MAP_LENGTH  = ESDF_BLOCK_WIDTH / 64;      // 2
+constexpr int ESDF_PERLEAF_THREADS  = 128;                        // per-leaf ablation
 
 // Sentinel used for "never-reached" voxels. Must be LARGE ENOUGH that
 // it is unambiguously identifiable after propagation: the wavefront
@@ -96,26 +96,39 @@ constexpr float kEsdfSentinelCheck = 0.5e30f;
 
 struct EsdfOffset {
     int dx, dy, dz;
-    float weight;  // ||offset||, in units of voxel_size
+    float weight; // ||offset||, in units of voxel_size
 };
 
 __device__ __constant__ EsdfOffset kEsdfOffsets[26] = {
     // 6 face neighbours (axis-aligned, weight = 1)
-    {-1,  0,  0, 1.0f}, { 1,  0,  0, 1.0f},
-    { 0, -1,  0, 1.0f}, { 0,  1,  0, 1.0f},
-    { 0,  0, -1, 1.0f}, { 0,  0,  1, 1.0f},
+    {-1, 0, 0, 1.0f},
+    {1, 0, 0, 1.0f},
+    {0, -1, 0, 1.0f},
+    {0, 1, 0, 1.0f},
+    {0, 0, -1, 1.0f},
+    {0, 0, 1, 1.0f},
     // 12 edge neighbours (face-diagonal, weight = sqrt(2) ~ 1.41421356)
-    {-1, -1,  0, 1.41421356f}, { 1, -1,  0, 1.41421356f},
-    {-1,  1,  0, 1.41421356f}, { 1,  1,  0, 1.41421356f},
-    {-1,  0, -1, 1.41421356f}, { 1,  0, -1, 1.41421356f},
-    {-1,  0,  1, 1.41421356f}, { 1,  0,  1, 1.41421356f},
-    { 0, -1, -1, 1.41421356f}, { 0,  1, -1, 1.41421356f},
-    { 0, -1,  1, 1.41421356f}, { 0,  1,  1, 1.41421356f},
+    {-1, -1, 0, 1.41421356f},
+    {1, -1, 0, 1.41421356f},
+    {-1, 1, 0, 1.41421356f},
+    {1, 1, 0, 1.41421356f},
+    {-1, 0, -1, 1.41421356f},
+    {1, 0, -1, 1.41421356f},
+    {-1, 0, 1, 1.41421356f},
+    {1, 0, 1, 1.41421356f},
+    {0, -1, -1, 1.41421356f},
+    {0, 1, -1, 1.41421356f},
+    {0, -1, 1, 1.41421356f},
+    {0, 1, 1, 1.41421356f},
     // 8 corner neighbours (vertex-diagonal, weight = sqrt(3) ~ 1.73205081)
-    {-1, -1, -1, 1.73205081f}, { 1, -1, -1, 1.73205081f},
-    {-1,  1, -1, 1.73205081f}, { 1,  1, -1, 1.73205081f},
-    {-1, -1,  1, 1.73205081f}, { 1, -1,  1, 1.73205081f},
-    {-1,  1,  1, 1.73205081f}, { 1,  1,  1, 1.73205081f},
+    {-1, -1, -1, 1.73205081f},
+    {1, -1, -1, 1.73205081f},
+    {-1, 1, -1, 1.73205081f},
+    {1, 1, -1, 1.73205081f},
+    {-1, -1, 1, 1.73205081f},
+    {1, -1, 1, 1.73205081f},
+    {-1, 1, 1, 1.73205081f},
+    {1, 1, 1, 1.73205081f},
 };
 
 // -----------------------------------------------------------------------
@@ -129,8 +142,7 @@ __device__ __constant__ EsdfOffset kEsdfOffsets[26] = {
 
 template <typename ReadNeighbourFn>
 __device__ __forceinline__ float
-esdfSweepBody(float dSelf, float voxelSize, float maxDistance,
-              ReadNeighbourFn readNeighbour) {
+esdfSweepBody(float dSelf, float voxelSize, float maxDistance, ReadNeighbourFn readNeighbour) {
     float d = dSelf;
 #pragma unroll
     for (int i = 0; i < 26; ++i) {
@@ -138,9 +150,11 @@ esdfSweepBody(float dSelf, float voxelSize, float maxDistance,
         float dN;
         bool active;
         readNeighbour(off.dx, off.dy, off.dz, dN, active);
-        if (!active) continue;
+        if (!active)
+            continue;
         const float dNAbs = fabsf(dN);
-        if (dNAbs >= kEsdfSentinelCheck) continue;  // neighbour not yet reached
+        if (dNAbs >= kEsdfSentinelCheck)
+            continue; // neighbour not yet reached
         const float step    = off.weight * voxelSize;
         const float candAbs = dNAbs + step;
         // Cap propagation at `maxDistance` so wavefronts can't smear
@@ -154,7 +168,8 @@ esdfSweepBody(float dSelf, float voxelSize, float maxDistance,
         // ANY seed stay at sentinel -> clamped to +maxDistance at the
         // end (the "unknown, free space" convention). This matches
         // nvblox / FIESTA defaults.
-        if (candAbs >= maxDistance) continue;
+        if (candAbs >= maxDistance)
+            continue;
         if (candAbs < fabsf(d)) {
             // Preserve the sign of the witness neighbour.
             d = (dN < 0.0f) ? -candAbs : candAbs;
@@ -178,26 +193,26 @@ esdfSweepBody(float dSelf, float voxelSize, float maxDistance,
 // -----------------------------------------------------------------------
 
 __global__ void
-esdfSeedKernel(
-    const nanovdb::NanoGrid<nanovdb::ValueOnIndex> *__restrict__ inputGrid,
-    const nanovdb::NanoGrid<nanovdb::ValueOnIndex> *__restrict__ esdfGrid,
-    const float *__restrict__ tsdf,       // [inputGrid->totalActiveVoxels]
-    const float *__restrict__ weights,    // [inputGrid->totalActiveVoxels]
-    const bool *__restrict__ dirtyMask,   // nullable; when non-null,
-                                          // only dirty voxels seed
-    float *__restrict__ esdf,             // [esdfGrid->totalActiveVoxels]
-    float truncationDistance,
-    float weightThreshold,
-    float saturationEps) {
-    constexpr uint64_t VPL =
-        nanovdb::OnIndexTree::LeafNodeType::NUM_VALUES;
+esdfSeedKernel(const nanovdb::NanoGrid<nanovdb::ValueOnIndex> *__restrict__ inputGrid,
+               const nanovdb::NanoGrid<nanovdb::ValueOnIndex> *__restrict__ esdfGrid,
+               const float *__restrict__ tsdf,     // [inputGrid->totalActiveVoxels]
+               const float *__restrict__ weights,  // [inputGrid->totalActiveVoxels]
+               const bool *__restrict__ dirtyMask, // nullable; when non-null,
+                                                   // only dirty voxels seed
+               float *__restrict__ esdf,           // [esdfGrid->totalActiveVoxels]
+               float truncationDistance,
+               float weightThreshold,
+               float saturationEps) {
+    constexpr uint64_t VPL = nanovdb::OnIndexTree::LeafNodeType::NUM_VALUES;
 
     const int64_t leafIdx = blockIdx.x;
     const int64_t voxOff  = threadIdx.x;
-    if (voxOff >= static_cast<int64_t>(VPL)) return;
+    if (voxOff >= static_cast<int64_t>(VPL))
+        return;
 
     const auto &leaf = inputGrid->tree().template getFirstNode<0>()[leafIdx];
-    if (!leaf.isActive(voxOff)) return;
+    if (!leaf.isActive(voxOff))
+        return;
 
     // 1-indexed pid; subtract one for torch tensor offset.
     const int64_t inputPid = static_cast<int64_t>(leaf.getValue(voxOff)) - 1;
@@ -208,20 +223,24 @@ esdfSeedKernel(
     // `compute_esdf_incremental` nvblox-style dirty-region update
     // scaling. When `dirtyMask == nullptr` (the default), behaves
     // as before -- seed from every near-surface voxel.
-    if (dirtyMask != nullptr && !dirtyMask[inputPid]) return;
+    if (dirtyMask != nullptr && !dirtyMask[inputPid])
+        return;
 
-    const float w  = weights[inputPid];
-    if (!(w > weightThreshold)) return;
+    const float w = weights[inputPid];
+    if (!(w > weightThreshold))
+        return;
 
     const float t = tsdf[inputPid];
-    if (!(fabsf(t) < 1.0f - saturationEps)) return;
+    if (!(fabsf(t) < 1.0f - saturationEps))
+        return;
 
     const nanovdb::Coord ijk = leaf.offsetToGlobalCoord(voxOff);
     auto esdfAcc             = esdfGrid->getAccessor();
     // By construction (dilateGrid superset), ijk is always active in
     // esdfGrid; assert defensively in debug builds.
     const uint64_t esdfRaw = esdfAcc.getValue(ijk);
-    if (esdfRaw == 0) return;
+    if (esdfRaw == 0)
+        return;
     const int64_t esdfPid = static_cast<int64_t>(esdfRaw) - 1;
 
     esdf[esdfPid] = t * truncationDistance;
@@ -235,28 +254,24 @@ esdfSeedKernel(
 // -----------------------------------------------------------------------
 
 __global__ void
-esdfSweepVBMKernel(
-    nanovdb::NanoGrid<nanovdb::ValueOnIndex> *__restrict__ esdfGrid,
-    const uint32_t *__restrict__ firstLeafID,
-    const uint64_t *__restrict__ jumpMap,
-    const float *__restrict__ esdfIn,
-    float *__restrict__ esdfOut,
-    float voxelSize,
-    float maxDistance,
-    int *__restrict__ dChanged) {
+esdfSweepVBMKernel(nanovdb::NanoGrid<nanovdb::ValueOnIndex> *__restrict__ esdfGrid,
+                   const uint32_t *__restrict__ firstLeafID,
+                   const uint64_t *__restrict__ jumpMap,
+                   const float *__restrict__ esdfIn,
+                   float *__restrict__ esdfOut,
+                   float voxelSize,
+                   float maxDistance,
+                   int *__restrict__ dChanged) {
     constexpr int BW       = ESDF_BLOCK_WIDTH;
     constexpr int JML      = ESDF_JUMP_MAP_LENGTH;
-    constexpr uint64_t VPL =
-        nanovdb::OnIndexTree::LeafNodeType::NUM_VALUES;
+    constexpr uint64_t VPL = nanovdb::OnIndexTree::LeafNodeType::NUM_VALUES;
 
     __shared__ uint32_t smem_leafIndex[BW];
     __shared__ uint16_t smem_voxelOffset[BW];
 
-    const uint64_t blockFirstOffset =
-        static_cast<uint64_t>(blockIdx.x) * BW + 1;
+    const uint64_t blockFirstOffset = static_cast<uint64_t>(blockIdx.x) * BW + 1;
 
-    nanovdb::tools::cuda::VoxelBlockManager<BW>::template decodeInverseMaps<
-        nanovdb::ValueOnIndex>(
+    nanovdb::tools::cuda::VoxelBlockManager<BW>::template decodeInverseMaps<nanovdb::ValueOnIndex>(
         esdfGrid,
         firstLeafID[blockIdx.x],
         jumpMap + static_cast<uint64_t>(blockIdx.x) * JML,
@@ -266,8 +281,7 @@ esdfSweepVBMKernel(
     // __syncthreads() is issued inside decodeInverseMaps.
 
     const uint32_t leafID = smem_leafIndex[threadIdx.x];
-    if (leafID ==
-        nanovdb::tools::cuda::VoxelBlockManager<BW>::UnusedLeafIndex) {
+    if (leafID == nanovdb::tools::cuda::VoxelBlockManager<BW>::UnusedLeafIndex) {
         return;
     }
     const uint16_t voxOff = smem_voxelOffset[threadIdx.x];
@@ -275,22 +289,20 @@ esdfSweepVBMKernel(
     const auto &leaf         = esdfGrid->tree().template getFirstNode<0>()[leafID];
     const nanovdb::Coord ijk = leaf.offsetToGlobalCoord(voxOff);
     auto acc                 = esdfGrid->getAccessor();
-    const int64_t selfPid    =
-        static_cast<int64_t>(leaf.getValue(voxOff)) - 1;
+    const int64_t selfPid    = static_cast<int64_t>(leaf.getValue(voxOff)) - 1;
 
     const float dSelf = esdfIn[selfPid];
 
     const float dNew = esdfSweepBody(
-        dSelf, voxelSize, maxDistance,
-        [&](int dx, int dy, int dz, float &dOut, bool &activeOut) {
+        dSelf, voxelSize, maxDistance, [&](int dx, int dy, int dz, float &dOut, bool &activeOut) {
             const nanovdb::Coord c = ijk + nanovdb::Coord(dx, dy, dz);
             if (!acc.isActive(c)) {
                 activeOut = false;
                 return;
             }
             const int64_t pid = static_cast<int64_t>(acc.getValue(c)) - 1;
-            dOut      = esdfIn[pid];
-            activeOut = true;
+            dOut              = esdfIn[pid];
+            activeOut         = true;
         });
 
     esdfOut[selfPid] = dNew;
@@ -316,43 +328,41 @@ esdfSweepVBMKernel(
 // -----------------------------------------------------------------------
 
 __global__ void
-esdfSweepPerLeafKernel(
-    nanovdb::NanoGrid<nanovdb::ValueOnIndex> *__restrict__ esdfGrid,
-    const float *__restrict__ esdfIn,
-    float *__restrict__ esdfOut,
-    float voxelSize,
-    float maxDistance,
-    int *__restrict__ dChanged) {
-    constexpr uint64_t VPL =
-        nanovdb::OnIndexTree::LeafNodeType::NUM_VALUES;
+esdfSweepPerLeafKernel(nanovdb::NanoGrid<nanovdb::ValueOnIndex> *__restrict__ esdfGrid,
+                       const float *__restrict__ esdfIn,
+                       float *__restrict__ esdfOut,
+                       float voxelSize,
+                       float maxDistance,
+                       int *__restrict__ dChanged) {
+    constexpr uint64_t VPL = nanovdb::OnIndexTree::LeafNodeType::NUM_VALUES;
 
     const int64_t leafIdx = blockIdx.x;
     // Each thread handles VPL / blockDim.x slots if VPL > blockDim.x.
     // For VPL = 512 and ESDF_PERLEAF_THREADS = 128, that's 4 slots/thread.
-    for (int64_t voxOff = threadIdx.x; voxOff < static_cast<int64_t>(VPL);
-         voxOff += blockDim.x) {
-        const auto &leaf =
-            esdfGrid->tree().template getFirstNode<0>()[leafIdx];
-        if (!leaf.isActive(voxOff)) continue;
+    for (int64_t voxOff = threadIdx.x; voxOff < static_cast<int64_t>(VPL); voxOff += blockDim.x) {
+        const auto &leaf = esdfGrid->tree().template getFirstNode<0>()[leafIdx];
+        if (!leaf.isActive(voxOff))
+            continue;
 
-        const int64_t selfPid =
-            static_cast<int64_t>(leaf.getValue(voxOff)) - 1;
+        const int64_t selfPid    = static_cast<int64_t>(leaf.getValue(voxOff)) - 1;
         const nanovdb::Coord ijk = leaf.offsetToGlobalCoord(voxOff);
         auto acc                 = esdfGrid->getAccessor();
 
         const float dSelf = esdfIn[selfPid];
-        const float dNew  = esdfSweepBody(
-             dSelf, voxelSize, maxDistance,
-             [&](int dx, int dy, int dz, float &dOut, bool &activeOut) {
-                 const nanovdb::Coord c = ijk + nanovdb::Coord(dx, dy, dz);
-                 if (!acc.isActive(c)) {
-                     activeOut = false;
-                     return;
-                 }
-                 const int64_t pid = static_cast<int64_t>(acc.getValue(c)) - 1;
-                 dOut      = esdfIn[pid];
-                 activeOut = true;
-             });
+        const float dNew =
+            esdfSweepBody(dSelf,
+                          voxelSize,
+                          maxDistance,
+                          [&](int dx, int dy, int dz, float &dOut, bool &activeOut) {
+                              const nanovdb::Coord c = ijk + nanovdb::Coord(dx, dy, dz);
+                              if (!acc.isActive(c)) {
+                                  activeOut = false;
+                                  return;
+                              }
+                              const int64_t pid = static_cast<int64_t>(acc.getValue(c)) - 1;
+                              dOut              = esdfIn[pid];
+                              activeOut         = true;
+                          });
         esdfOut[selfPid] = dNew;
         if (dNew != dSelf) {
             dChanged[0] = 1;
@@ -376,30 +386,25 @@ esdfSweepPerLeafKernel(
 // -----------------------------------------------------------------------
 
 std::tuple<c10::intrusive_ptr<GridBatchData>, torch::Tensor>
-runEsdfSweepsAndFinalize(
-    const c10::intrusive_ptr<GridBatchData> &esdfGrid,
-    torch::Tensor esdfInit,
-    float voxelSizeF,
-    int64_t dilateAmount,
-    float maxDistF,
-    bool prune_unreached,
-    bool use_vbm,
-    at::cuda::CUDAStream stream) {
+runEsdfSweepsAndFinalize(const c10::intrusive_ptr<GridBatchData> &esdfGrid,
+                         torch::Tensor esdfInit,
+                         float voxelSizeF,
+                         int64_t dilateAmount,
+                         float maxDistF,
+                         bool prune_unreached,
+                         bool use_vbm,
+                         at::cuda::CUDAStream stream) {
     const int64_t esdfVoxels = esdfGrid->totalVoxels();
-    auto u32Opts =
-        torch::TensorOptions().dtype(torch::kInt32).device(esdfInit.device());
-    auto u64Opts =
-        torch::TensorOptions().dtype(torch::kInt64).device(esdfInit.device());
-    auto i32Opts =
-        torch::TensorOptions().dtype(torch::kInt32).device(esdfInit.device());
+    auto u32Opts = torch::TensorOptions().dtype(torch::kInt32).device(esdfInit.device());
+    auto u64Opts = torch::TensorOptions().dtype(torch::kInt64).device(esdfInit.device());
+    auto i32Opts = torch::TensorOptions().dtype(torch::kInt32).device(esdfInit.device());
 
-    auto *esdfDeviceGrid =
-        esdfGrid->mGridHdl->deviceGrid<nanovdb::ValueOnIndex>(0);
+    auto *esdfDeviceGrid = esdfGrid->mGridHdl->deviceGrid<nanovdb::ValueOnIndex>(0);
     TORCH_CHECK(esdfDeviceGrid != nullptr, "computeESDF: null esdf grid");
 
     // Double-buffered Jacobi. `esdfInit` is the first read; `esdfB`
     // receives the first write; they swap each sweep.
-    torch::Tensor esdfB = esdfInit.clone();  // same content so reads are safe
+    torch::Tensor esdfB    = esdfInit.clone(); // same content so reads are safe
     torch::Tensor *esdfIn  = &esdfInit;
     torch::Tensor *esdfOut = &esdfB;
 
@@ -421,19 +426,17 @@ runEsdfSweepsAndFinalize(
 
     if (use_vbm) {
         const auto treeData =
-            nanovdb::util::cuda::DeviceGridTraits<nanovdb::ValueOnIndex>::
-                getTreeData(esdfDeviceGrid);
+            nanovdb::util::cuda::DeviceGridTraits<nanovdb::ValueOnIndex>::getTreeData(
+                esdfDeviceGrid);
         const int lowerCount = static_cast<int>(treeData.mNodeCount[1]);
 
-        const int nBlocks = static_cast<int>(
-            (esdfVoxels + ESDF_BLOCK_WIDTH - 1) / ESDF_BLOCK_WIDTH);
+        const int nBlocks =
+            static_cast<int>((esdfVoxels + ESDF_BLOCK_WIDTH - 1) / ESDF_BLOCK_WIDTH);
 
         torch::Tensor firstLeafID = torch::zeros({nBlocks}, u32Opts);
-        torch::Tensor jumpMap     =
-            torch::zeros({nBlocks * ESDF_JUMP_MAP_LENGTH}, u64Opts);
+        torch::Tensor jumpMap     = torch::zeros({nBlocks * ESDF_JUMP_MAP_LENGTH}, u64Opts);
 
-        nanovdb::tools::cuda::buildVoxelBlockManager<
-            ESDF_BLOCK_WIDTH_LOG2, 128>(
+        nanovdb::tools::cuda::buildVoxelBlockManager<ESDF_BLOCK_WIDTH_LOG2, 128>(
             /*firstOffset=*/1,
             /*lastOffset=*/static_cast<uint64_t>(esdfVoxels),
             /*nBlocks=*/nBlocks,
@@ -450,13 +453,15 @@ runEsdfSweepsAndFinalize(
             changedFlag.zero_();
             esdfSweepVBMKernel<<<static_cast<unsigned int>(nBlocks),
                                  static_cast<unsigned int>(ESDF_BLOCK_WIDTH),
-                                 0, stream.stream()>>>(
+                                 0,
+                                 stream.stream()>>>(
                 esdfDeviceGrid,
                 reinterpret_cast<uint32_t *>(firstLeafID.data_ptr<int32_t>()),
                 reinterpret_cast<uint64_t *>(jumpMap.data_ptr<int64_t>()),
                 esdfIn->data_ptr<float>(),
                 esdfOut->data_ptr<float>(),
-                voxelSizeF, maxDistF,
+                voxelSizeF,
+                maxDistF,
                 changedFlag.data_ptr<int32_t>());
             C10_CUDA_KERNEL_LAUNCH_CHECK();
             std::swap(esdfIn, esdfOut);
@@ -471,15 +476,15 @@ runEsdfSweepsAndFinalize(
         const int64_t esdfLeaves = esdfGrid->totalLeaves();
         for (int sweep = 0; sweep < numSweepsMax; ++sweep) {
             changedFlag.zero_();
-            esdfSweepPerLeafKernel<<<
-                static_cast<unsigned int>(esdfLeaves),
-                static_cast<unsigned int>(ESDF_PERLEAF_THREADS),
-                0, stream.stream()>>>(
-                esdfDeviceGrid,
-                esdfIn->data_ptr<float>(),
-                esdfOut->data_ptr<float>(),
-                voxelSizeF, maxDistF,
-                changedFlag.data_ptr<int32_t>());
+            esdfSweepPerLeafKernel<<<static_cast<unsigned int>(esdfLeaves),
+                                     static_cast<unsigned int>(ESDF_PERLEAF_THREADS),
+                                     0,
+                                     stream.stream()>>>(esdfDeviceGrid,
+                                                        esdfIn->data_ptr<float>(),
+                                                        esdfOut->data_ptr<float>(),
+                                                        voxelSizeF,
+                                                        maxDistF,
+                                                        changedFlag.data_ptr<int32_t>());
             C10_CUDA_KERNEL_LAUNCH_CHECK();
             std::swap(esdfIn, esdfOut);
             if (changedFlag.item<int32_t>() == 0) {
@@ -488,22 +493,19 @@ runEsdfSweepsAndFinalize(
         }
     }
 
-    torch::Tensor esdfFinal =
-        esdfIn->clamp(-maxDistF, maxDistF).contiguous();
+    torch::Tensor esdfFinal = esdfIn->clamp(-maxDistF, maxDistF).contiguous();
 
     if (!prune_unreached) {
         return {esdfGrid, esdfFinal};
     }
 
     torch::Tensor keepMask = esdfFinal.abs() < maxDistF;
-    auto idxOpts = torch::TensorOptions()
-                       .dtype(fvdb::JIdxScalarType)
-                       .device(esdfInit.device());
-    auto jidx  = torch::zeros({keepMask.size(0)}, idxOpts);
-    auto jlidx = torch::empty({0, 1}, idxOpts);
-    auto keepMaskJagged = JaggedTensor::from_data_indices_and_list_ids(
-        keepMask, jidx, jlidx, /*num_tensors=*/1);
-    auto prunedGrid = pruneGrid(*esdfGrid, keepMaskJagged);
+    auto idxOpts = torch::TensorOptions().dtype(fvdb::JIdxScalarType).device(esdfInit.device());
+    auto jidx    = torch::zeros({keepMask.size(0)}, idxOpts);
+    auto jlidx   = torch::empty({0, 1}, idxOpts);
+    auto keepMaskJagged =
+        JaggedTensor::from_data_indices_and_list_ids(keepMask, jidx, jlidx, /*num_tensors=*/1);
+    auto prunedGrid          = pruneGrid(*esdfGrid, keepMaskJagged);
     torch::Tensor prunedEsdf = esdfFinal.masked_select(keepMask);
     return {prunedGrid, prunedEsdf};
 }
@@ -535,12 +537,18 @@ computeESDF(const GridBatchData &gridBatch,
 
     TORCH_CHECK_VALUE(tsdf.dim() == 1 && weights.dim() == 1,
                       "computeESDF: tsdf and weights must be 1-D, got dims (",
-                      tsdf.dim(), ",", weights.dim(), ")");
+                      tsdf.dim(),
+                      ",",
+                      weights.dim(),
+                      ")");
     TORCH_CHECK_VALUE(tsdf.size(0) == gridBatch.totalVoxels() &&
-                      weights.size(0) == gridBatch.totalVoxels(),
+                          weights.size(0) == gridBatch.totalVoxels(),
                       "computeESDF: tsdf/weights size must match totalVoxels (",
-                      gridBatch.totalVoxels(), "), got tsdf=", tsdf.size(0),
-                      " weights=", weights.size(0));
+                      gridBatch.totalVoxels(),
+                      "), got tsdf=",
+                      tsdf.size(0),
+                      " weights=",
+                      weights.size(0));
 
     TORCH_CHECK_TYPE(tsdf.scalar_type() == torch::kFloat32,
                      "computeESDF: only float32 tsdf is supported in M5");
@@ -550,45 +558,43 @@ computeESDF(const GridBatchData &gridBatch,
     TORCH_CHECK_VALUE(truncation_distance > 0.0,
                       "computeESDF: truncation_distance must be > 0, got ",
                       truncation_distance);
-    TORCH_CHECK_VALUE(max_distance > 0.0,
-                      "computeESDF: max_distance must be > 0, got ",
-                      max_distance);
+    TORCH_CHECK_VALUE(
+        max_distance > 0.0, "computeESDF: max_distance must be > 0, got ", max_distance);
 
     c10::cuda::CUDAGuard guard(tsdf.device());
-    at::cuda::CUDAStream stream =
-        at::cuda::getCurrentCUDAStream(tsdf.device().index());
+    at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream(tsdf.device().index());
 
     // Cast configuration to fp32 for kernel use.
-    const float truncF    = static_cast<float>(truncation_distance);
-    const float maxDistF  = static_cast<float>(max_distance);
-    const float threshF   = static_cast<float>(weight_threshold);
-    const float saturEps  = 1.0e-5f;  // "|tsdf| < 1" margin for float stability
+    const float truncF   = static_cast<float>(truncation_distance);
+    const float maxDistF = static_cast<float>(max_distance);
+    const float threshF  = static_cast<float>(weight_threshold);
+    const float saturEps = 1.0e-5f; // "|tsdf| < 1" margin for float stability
 
     // Voxel size: single-batch, isotropic expected. Use the minimum axis
     // to drive chamfer step length; TSDF convention assumes isotropic.
     std::vector<nanovdb::Vec3d> voxSizes, origins;
     gridBatch.gridVoxelSizesAndOrigins(voxSizes, origins);
-    TORCH_CHECK_VALUE(voxSizes.size() == 1,
-                      "computeESDF: expected single-batch voxel size");
+    TORCH_CHECK_VALUE(voxSizes.size() == 1, "computeESDF: expected single-batch voxel size");
     const double vsX = voxSizes[0][0];
     const double vsY = voxSizes[0][1];
     const double vsZ = voxSizes[0][2];
-    TORCH_CHECK_VALUE(std::fabs(vsX - vsY) < 1e-9 &&
-                      std::fabs(vsX - vsZ) < 1e-9,
+    TORCH_CHECK_VALUE(std::fabs(vsX - vsY) < 1e-9 && std::fabs(vsX - vsZ) < 1e-9,
                       "computeESDF: anisotropic voxels not supported in M5 (",
-                      vsX, ", ", vsY, ", ", vsZ, ")");
+                      vsX,
+                      ", ",
+                      vsY,
+                      ", ",
+                      vsZ,
+                      ")");
     const float voxelSizeF = static_cast<float>(vsX);
 
-    auto floatOpts =
-        torch::TensorOptions().dtype(torch::kFloat32).device(tsdf.device());
+    auto floatOpts = torch::TensorOptions().dtype(torch::kFloat32).device(tsdf.device());
 
     // ------------------ Step 1: build ESDF support topology ------------------
 
-    const int64_t dilateAmount =
-        static_cast<int64_t>(std::ceil(max_distance / vsX)) + 1;
-    auto esdfGrid = dilateGrid(gridBatch,
-                               std::vector<int64_t>{dilateAmount});
-    const int64_t esdfVoxels = esdfGrid->totalVoxels();
+    const int64_t dilateAmount = static_cast<int64_t>(std::ceil(max_distance / vsX)) + 1;
+    auto esdfGrid              = dilateGrid(gridBatch, std::vector<int64_t>{dilateAmount});
+    const int64_t esdfVoxels   = esdfGrid->totalVoxels();
 
     if (esdfVoxels == 0) {
         // Input grid was empty; return empty ESDF.
@@ -602,10 +608,8 @@ computeESDF(const GridBatchData &gridBatch,
 
     // ------------------ Step 3: seed from input TSDF ------------------------
 
-    auto *inputDeviceGrid =
-        gridBatch.mGridHdl->deviceGrid<nanovdb::ValueOnIndex>(0);
-    auto *esdfDeviceGrid =
-        esdfGrid->mGridHdl->deviceGrid<nanovdb::ValueOnIndex>(0);
+    auto *inputDeviceGrid = gridBatch.mGridHdl->deviceGrid<nanovdb::ValueOnIndex>(0);
+    auto *esdfDeviceGrid  = esdfGrid->mGridHdl->deviceGrid<nanovdb::ValueOnIndex>(0);
     TORCH_CHECK(inputDeviceGrid != nullptr, "computeESDF: null input grid");
     TORCH_CHECK(esdfDeviceGrid != nullptr, "computeESDF: null esdf grid");
 
@@ -618,12 +622,16 @@ computeESDF(const GridBatchData &gridBatch,
             esdfSeedKernel<<<static_cast<unsigned int>(inputLeaves),
                              static_cast<unsigned int>(
                                  nanovdb::OnIndexTree::LeafNodeType::NUM_VALUES),
-                             0, stream.stream()>>>(
-                inputDeviceGrid, esdfDeviceGrid,
-                tsdf.data_ptr<float>(), weights.data_ptr<float>(),
-                /*dirtyMask=*/nullptr,
-                esdfA.data_ptr<float>(),
-                truncF, threshF, saturEps);
+                             0,
+                             stream.stream()>>>(inputDeviceGrid,
+                                                esdfDeviceGrid,
+                                                tsdf.data_ptr<float>(),
+                                                weights.data_ptr<float>(),
+                                                /*dirtyMask=*/nullptr,
+                                                esdfA.data_ptr<float>(),
+                                                truncF,
+                                                threshF,
+                                                saturEps);
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         }
     }
@@ -631,8 +639,7 @@ computeESDF(const GridBatchData &gridBatch,
     // ------------------ Step 4-5: sweeps + clamp + prune ---------------------
 
     return runEsdfSweepsAndFinalize(
-        esdfGrid, esdfA, voxelSizeF, dilateAmount, maxDistF,
-        prune_unreached, use_vbm, stream);
+        esdfGrid, esdfA, voxelSizeF, dilateAmount, maxDistF, prune_unreached, use_vbm, stream);
 }
 
 // -----------------------------------------------------------------------
@@ -653,8 +660,7 @@ computeESDFIncremental(const GridBatchData &gridBatch,
                        const torch::Tensor &dirtyMask) {
     // ------------------ Shape / dtype / scope checks ------------------
 
-    TORCH_CHECK_VALUE(gridBatch.batchSize() == 1 &&
-                          prevEsdfGrid.batchSize() <= 1,
+    TORCH_CHECK_VALUE(gridBatch.batchSize() == 1 && prevEsdfGrid.batchSize() <= 1,
                       "computeESDFIncremental: batchSize must be 1 in M5");
     TORCH_CHECK(tsdf.is_cuda() && weights.is_cuda() && prevEsdf.is_cuda(),
                 "computeESDFIncremental: all tensors must be CUDA");
@@ -666,20 +672,21 @@ computeESDFIncremental(const GridBatchData &gridBatch,
                           weights.size(0) == gridBatch.totalVoxels(),
                       "computeESDFIncremental: tsdf/weights size must match "
                       "current grid.totalVoxels (",
-                      gridBatch.totalVoxels(), ")");
+                      gridBatch.totalVoxels(),
+                      ")");
     TORCH_CHECK_VALUE(prevEsdf.size(0) == prevEsdfGrid.totalVoxels(),
                       "computeESDFIncremental: prevEsdf size (",
                       prevEsdf.size(0),
                       ") must match prevEsdfGrid.totalVoxels (",
-                      prevEsdfGrid.totalVoxels(), ")");
+                      prevEsdfGrid.totalVoxels(),
+                      ")");
     TORCH_CHECK_TYPE(tsdf.scalar_type() == torch::kFloat32 &&
                          weights.scalar_type() == torch::kFloat32 &&
                          prevEsdf.scalar_type() == torch::kFloat32,
                      "computeESDFIncremental: only float32 is supported in M5");
     TORCH_CHECK_VALUE(truncation_distance > 0.0,
                       "computeESDFIncremental: truncation_distance must be > 0");
-    TORCH_CHECK_VALUE(max_distance > 0.0,
-                      "computeESDFIncremental: max_distance must be > 0");
+    TORCH_CHECK_VALUE(max_distance > 0.0, "computeESDFIncremental: max_distance must be > 0");
 
     const bool hasDirtyMask = dirtyMask.defined() && dirtyMask.numel() > 0;
     if (hasDirtyMask) {
@@ -689,7 +696,8 @@ computeESDFIncremental(const GridBatchData &gridBatch,
                           "computeESDFIncremental: dirty_mask size (",
                           dirtyMask.size(0),
                           ") must equal gridBatch.totalVoxels (",
-                          gridBatch.totalVoxels(), ")");
+                          gridBatch.totalVoxels(),
+                          ")");
         TORCH_CHECK(dirtyMask.device() == tsdf.device(),
                     "computeESDFIncremental: dirty_mask must be on same "
                     "device as tsdf");
@@ -703,14 +711,18 @@ computeESDFIncremental(const GridBatchData &gridBatch,
     // Fall through to one-shot when there's no previous state. Keeps
     // the first-frame-of-a-session code path trivial.
     if (prevEsdfGrid.totalVoxels() == 0) {
-        return computeESDF(gridBatch, tsdf, weights,
-                           truncation_distance, max_distance,
-                           weight_threshold, prune_unreached, use_vbm);
+        return computeESDF(gridBatch,
+                           tsdf,
+                           weights,
+                           truncation_distance,
+                           max_distance,
+                           weight_threshold,
+                           prune_unreached,
+                           use_vbm);
     }
 
     c10::cuda::CUDAGuard guard(tsdf.device());
-    at::cuda::CUDAStream stream =
-        at::cuda::getCurrentCUDAStream(tsdf.device().index());
+    at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream(tsdf.device().index());
 
     const float truncF   = static_cast<float>(truncation_distance);
     const float maxDistF = static_cast<float>(max_distance);
@@ -730,28 +742,26 @@ computeESDFIncremental(const GridBatchData &gridBatch,
     // witness semantics; users in that case should reset to one-shot.
     std::vector<nanovdb::Vec3d> prevVoxSizes, prevOrigins;
     prevEsdfGrid.gridVoxelSizesAndOrigins(prevVoxSizes, prevOrigins);
-    TORCH_CHECK_VALUE(!prevVoxSizes.empty() &&
-                          std::fabs(prevVoxSizes[0][0] - vsX) < 1e-9,
+    TORCH_CHECK_VALUE(!prevVoxSizes.empty() && std::fabs(prevVoxSizes[0][0] - vsX) < 1e-9,
                       "computeESDFIncremental: prevEsdfGrid voxel_size (",
                       prevVoxSizes.empty() ? 0.0 : prevVoxSizes[0][0],
-                      ") must match current grid voxel_size (", vsX, ")");
+                      ") must match current grid voxel_size (",
+                      vsX,
+                      ")");
     const float voxelSizeF = static_cast<float>(vsX);
 
-    auto floatOpts =
-        torch::TensorOptions().dtype(torch::kFloat32).device(tsdf.device());
+    auto floatOpts = torch::TensorOptions().dtype(torch::kFloat32).device(tsdf.device());
 
     // ------------------ Step 1: build union ESDF support topology ------------
 
-    const int64_t dilateAmount =
-        static_cast<int64_t>(std::ceil(max_distance / vsX)) + 1;
-    auto dilated = dilateGrid(gridBatch,
-                              std::vector<int64_t>{dilateAmount});
+    const int64_t dilateAmount = static_cast<int64_t>(std::ceil(max_distance / vsX)) + 1;
+    auto dilated               = dilateGrid(gridBatch, std::vector<int64_t>{dilateAmount});
     // Merge with the previous ESDF grid so voxels that were in the
     // previous support but fall outside the current TSDF's dilation
     // are still carried over (monotone scene assumption: previously-
     // known ESDF values shouldn't disappear just because the TSDF
     // shell shifted in this frame).
-    auto esdfGrid = mergeGrids(*dilated, prevEsdfGrid);
+    auto esdfGrid            = mergeGrids(*dilated, prevEsdfGrid);
     const int64_t esdfVoxels = esdfGrid->totalVoxels();
 
     if (esdfVoxels == 0) {
@@ -804,10 +814,8 @@ computeESDFIncremental(const GridBatchData &gridBatch,
 
     // ------------------ Step 3: seed from current TSDF ----------------------
 
-    auto *inputDeviceGrid =
-        gridBatch.mGridHdl->deviceGrid<nanovdb::ValueOnIndex>(0);
-    auto *esdfDeviceGrid =
-        esdfGrid->mGridHdl->deviceGrid<nanovdb::ValueOnIndex>(0);
+    auto *inputDeviceGrid = gridBatch.mGridHdl->deviceGrid<nanovdb::ValueOnIndex>(0);
+    auto *esdfDeviceGrid  = esdfGrid->mGridHdl->deviceGrid<nanovdb::ValueOnIndex>(0);
     TORCH_CHECK(inputDeviceGrid != nullptr && esdfDeviceGrid != nullptr,
                 "computeESDFIncremental: null device grid");
 
@@ -820,26 +828,26 @@ computeESDFIncremental(const GridBatchData &gridBatch,
         // whatever they had in `prevEsdf` (via the inject+restore
         // above). Monotone-min correctness is preserved under the
         // existing "distances can decrease but not grow" assumption.
-        const bool *dirtyMaskPtr = hasDirtyMask
-            ? dirtyMask.data_ptr<bool>()
-            : nullptr;
+        const bool *dirtyMaskPtr = hasDirtyMask ? dirtyMask.data_ptr<bool>() : nullptr;
         esdfSeedKernel<<<static_cast<unsigned int>(inputLeaves),
-                         static_cast<unsigned int>(
-                             nanovdb::OnIndexTree::LeafNodeType::NUM_VALUES),
-                         0, stream.stream()>>>(
-            inputDeviceGrid, esdfDeviceGrid,
-            tsdf.data_ptr<float>(), weights.data_ptr<float>(),
-            dirtyMaskPtr,
-            esdfInit.data_ptr<float>(),
-            truncF, threshF, saturEps);
+                         static_cast<unsigned int>(nanovdb::OnIndexTree::LeafNodeType::NUM_VALUES),
+                         0,
+                         stream.stream()>>>(inputDeviceGrid,
+                                            esdfDeviceGrid,
+                                            tsdf.data_ptr<float>(),
+                                            weights.data_ptr<float>(),
+                                            dirtyMaskPtr,
+                                            esdfInit.data_ptr<float>(),
+                                            truncF,
+                                            threshF,
+                                            saturEps);
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     }
 
     // ------------------ Step 4-5: sweeps + clamp + prune --------------------
 
     return runEsdfSweepsAndFinalize(
-        esdfGrid, esdfInit, voxelSizeF, dilateAmount, maxDistF,
-        prune_unreached, use_vbm, stream);
+        esdfGrid, esdfInit, voxelSizeF, dilateAmount, maxDistF, prune_unreached, use_vbm, stream);
 }
 
 } // namespace ops
