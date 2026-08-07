@@ -45,19 +45,20 @@
 #include <fvdb/detail/utils/cuda/GridDim.h>
 #include <fvdb/detail/utils/nanovdb/HDDAIterators.h>
 
+#include <nanovdb/NanoVDB.h>
+#include <nanovdb/math/Ray.h>
+
 #include <ATen/OpMathType.h>
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/core/ScalarType.h>
 #include <c10/cuda/CUDAException.h>
 #include <c10/cuda/CUDAGuard.h>
 #include <c10/cuda/CUDAStream.h>
+#include <torch/types.h>
 
-#include <nanovdb/NanoVDB.h>
-#include <nanovdb/math/Ray.h>
+#include <cuda_runtime.h>
 
 #include <cmath>
-#include <cuda_runtime.h>
-#include <torch/types.h>
 
 namespace fvdb::detail::ops {
 
@@ -90,35 +91,34 @@ using GridT = nanovdb::ValueOnIndex;
 
 template <typename ScalarT>
 __global__ void
-rayWalkLogOddsKernel(
-    const fvdb::BatchGridAccessor unionGridAcc,
-    const fvdb::JaggedRAcc64<ScalarT, 2> pointsAcc,
-    const fvdb::TorchRAcc64<ScalarT, 2> sensorOriginsAcc,
-    const float truncationMargin,
-    const float logOddsHit,
-    const float logOddsMiss,
-    fvdb::TorchRAcc64<ScalarT, 1> outLogOddsAcc) {
+rayWalkLogOddsKernel(const fvdb::BatchGridAccessor unionGridAcc,
+                     const fvdb::JaggedRAcc64<ScalarT, 2> pointsAcc,
+                     const fvdb::TorchRAcc64<ScalarT, 2> sensorOriginsAcc,
+                     const float truncationMargin,
+                     const float logOddsHit,
+                     const float logOddsMiss,
+                     fvdb::TorchRAcc64<ScalarT, 1> outLogOddsAcc) {
     using MathT = at::opmath_type<ScalarT>;
     using Vec3T = nanovdb::math::Vec3<MathT>;
     using RayT  = nanovdb::math::Ray<MathT>;
 
     const int64_t totalPoints = pointsAcc.elementCount();
     const int64_t pointIdx    = blockIdx.x * blockDim.x + threadIdx.x;
-    if (pointIdx >= totalPoints) return;
+    if (pointIdx >= totalPoints)
+        return;
 
     const fvdb::JIdxType batchIdx = pointsAcc.batchIdx(pointIdx);
 
-    const Vec3T originWorld(
-        static_cast<MathT>(sensorOriginsAcc[batchIdx][0]),
-        static_cast<MathT>(sensorOriginsAcc[batchIdx][1]),
-        static_cast<MathT>(sensorOriginsAcc[batchIdx][2]));
-    const Vec3T endpointWorld(
-        static_cast<MathT>(pointsAcc.data()[pointIdx][0]),
-        static_cast<MathT>(pointsAcc.data()[pointIdx][1]),
-        static_cast<MathT>(pointsAcc.data()[pointIdx][2]));
+    const Vec3T originWorld(static_cast<MathT>(sensorOriginsAcc[batchIdx][0]),
+                            static_cast<MathT>(sensorOriginsAcc[batchIdx][1]),
+                            static_cast<MathT>(sensorOriginsAcc[batchIdx][2]));
+    const Vec3T endpointWorld(static_cast<MathT>(pointsAcc.data()[pointIdx][0]),
+                              static_cast<MathT>(pointsAcc.data()[pointIdx][1]),
+                              static_cast<MathT>(pointsAcc.data()[pointIdx][2]));
     Vec3T dirWorld         = endpointWorld - originWorld;
     const MathT rangeWorld = dirWorld.length();
-    if (rangeWorld < MathT(1e-8)) return;
+    if (rangeWorld < MathT(1e-8))
+        return;
     dirWorld = dirWorld / rangeWorld;
 
     // Walk from the sensor origin through the hit band. We always
@@ -127,17 +127,17 @@ rayWalkLogOddsKernel(
     // log-odds formulation needs.
     const MathT tWalkStart = MathT(0);
     const MathT tWalkEnd   = rangeWorld + MathT(truncationMargin);
-    if (tWalkEnd <= tWalkStart) return;
+    if (tWalkEnd <= tWalkStart)
+        return;
 
     const RayT rayWorld(originWorld, dirWorld, tWalkStart, tWalkEnd);
 
-    const VoxelCoordTransform transform =
-        unionGridAcc.primalTransform(batchIdx);
-    const RayT rayVox = transform.applyToRay(rayWorld);
+    const VoxelCoordTransform transform = unionGridAcc.primalTransform(batchIdx);
+    const RayT rayVox                   = transform.applyToRay(rayWorld);
 
     const nanovdb::NanoGrid<GridT> *grid = unionGridAcc.grid(batchIdx);
     auto acc                             = grid->getAccessor();
-    const int64_t voxelOffsetBase = unionGridAcc.voxelOffset(batchIdx);
+    const int64_t voxelOffsetBase        = unionGridAcc.voxelOffset(batchIdx);
 
     fvdb::HDDAVoxelIterator<decltype(acc), MathT> it(rayVox, acc);
     while (it.isValid()) {
@@ -148,10 +148,9 @@ rayWalkLogOddsKernel(
         // positive = voxel is on the sensor side of the endpoint
         // (free space); negative = voxel is beyond the endpoint
         // (unknown region behind the observed surface).
-        const Vec3T voxPosWorld = transform.applyInv<MathT>(
-            static_cast<MathT>(voxIjk[0]),
-            static_cast<MathT>(voxIjk[1]),
-            static_cast<MathT>(voxIjk[2]));
+        const Vec3T voxPosWorld = transform.applyInv<MathT>(static_cast<MathT>(voxIjk[0]),
+                                                            static_cast<MathT>(voxIjk[1]),
+                                                            static_cast<MathT>(voxIjk[2]));
         const Vec3T toVox       = voxPosWorld - originWorld;
         const MathT rangeToVox  = toVox.length();
         const MathT sdfWorld    = rangeWorld - rangeToVox;
@@ -199,8 +198,7 @@ doIntegrateOccupancyFromPoints(const float truncationMargin,
     // the merged grid. New voxels default to zero (log-odds = 0 =>
     // p = 0.5 = unknown), which is the standard Bayesian prior for
     // an unobserved cell.
-    torch::Tensor outLogOdds =
-        torch::zeros({totalOutVoxels}, logOddsIn.jdata().options());
+    torch::Tensor outLogOdds = torch::zeros({totalOutVoxels}, logOddsIn.jdata().options());
     {
         JaggedTensor dstJt = unionGrid.jaggedTensor(outLogOdds);
         // inject(dstGrid, srcGrid, dst, src): copies ijk-overlapping
@@ -218,27 +216,21 @@ doIntegrateOccupancyFromPoints(const float truncationMargin,
         AT_WRAP([&] {
             const auto stream = at::cuda::getCurrentCUDAStream();
             auto outLogOddsAcc =
-                outLogOdds.packed_accessor64<scalar_t, 1,
-                                             torch::RestrictPtrTraits>();
-            auto pointsAcc =
-                points.packed_accessor64<scalar_t, 2,
-                                         torch::RestrictPtrTraits>();
+                outLogOdds.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>();
+            auto pointsAcc = points.packed_accessor64<scalar_t, 2, torch::RestrictPtrTraits>();
             auto sensorAcc =
-                sensorOrigins.packed_accessor64<scalar_t, 2,
-                                                torch::RestrictPtrTraits>();
+                sensorOrigins.packed_accessor64<scalar_t, 2, torch::RestrictPtrTraits>();
             const int64_t totalPoints = points.jdata().size(0);
             if (totalPoints > 0) {
-                const int64_t blocks =
-                    GET_BLOCKS(totalPoints, DEFAULT_BLOCK_DIM);
+                const int64_t blocks = GET_BLOCKS(totalPoints, DEFAULT_BLOCK_DIM);
                 rayWalkLogOddsKernel<scalar_t>
-                    <<<blocks, DEFAULT_BLOCK_DIM, 0, stream.stream()>>>(
-                        unionGrid.deviceAccessor(),
-                        pointsAcc,
-                        sensorAcc,
-                        truncationMargin,
-                        logOddsHit,
-                        logOddsMiss,
-                        outLogOddsAcc);
+                    <<<blocks, DEFAULT_BLOCK_DIM, 0, stream.stream()>>>(unionGrid.deviceAccessor(),
+                                                                        pointsAcc,
+                                                                        sensorAcc,
+                                                                        truncationMargin,
+                                                                        logOddsHit,
+                                                                        logOddsMiss,
+                                                                        outLogOddsAcc);
                 C10_CUDA_KERNEL_LAUNCH_CHECK();
             }
         }),
@@ -277,25 +269,31 @@ checkCommonInputs(const c10::intrusive_ptr<GridBatchData> &grid,
     TORCH_CHECK_VALUE(sensorOrigins.dim() == 2 && sensorOrigins.size(1) == 3,
                       "sensorOrigins must have shape [B, 3]");
     TORCH_CHECK_VALUE(sensorOrigins.size(0) == grid->batchSize(),
-                      "sensorOrigins batch size (", sensorOrigins.size(0),
-                      ") must match grid batch size (", grid->batchSize(), ")");
-    TORCH_CHECK_VALUE(points.num_outer_lists() == grid->batchSize(),
-                      "points batch size mismatch");
+                      "sensorOrigins batch size (",
+                      sensorOrigins.size(0),
+                      ") must match grid batch size (",
+                      grid->batchSize(),
+                      ")");
+    TORCH_CHECK_VALUE(points.num_outer_lists() == grid->batchSize(), "points batch size mismatch");
     TORCH_CHECK_VALUE(logOdds.num_outer_lists() == grid->batchSize(),
                       "logOdds batch size mismatch");
-    TORCH_CHECK_TYPE(logOdds.is_floating_point(),
-                     "logOdds must be a floating-point dtype");
+    TORCH_CHECK_TYPE(logOdds.is_floating_point(), "logOdds must be a floating-point dtype");
     TORCH_CHECK_TYPE(points.scalar_type() == logOdds.scalar_type(),
                      "points dtype must match logOdds dtype");
     TORCH_CHECK_TYPE(sensorOrigins.scalar_type() == logOdds.scalar_type(),
                      "sensorOrigins dtype must match logOdds dtype");
     TORCH_CHECK_VALUE(logOdds.numel() == grid->totalVoxels(),
-                      "logOdds size (", logOdds.numel(),
-                      ") must equal grid totalVoxels (", grid->totalVoxels(), ")");
+                      "logOdds size (",
+                      logOdds.numel(),
+                      ") must equal grid totalVoxels (",
+                      grid->totalVoxels(),
+                      ")");
     TORCH_CHECK_VALUE(logOddsMax > logOddsMin,
-                      "logOddsMax (", logOddsMax,
+                      "logOddsMax (",
+                      logOddsMax,
                       ") must be strictly greater than logOddsMin (",
-                      logOddsMin, ")");
+                      logOddsMin,
+                      ")");
 }
 
 } // anonymous namespace
@@ -325,37 +323,38 @@ integrateOccupancyFromPoints(const c10::intrusive_ptr<GridBatchData> grid,
         return {grid, logOdds};
     }
 
-    auto unionGrid = buildUnionGrid(grid, points, truncationMargin);
-    auto newLogOdds = doIntegrateOccupancyFromPoints(
-        static_cast<float>(truncationMargin),
-        points, sensorOrigins,
-        *unionGrid, *grid,
-        logOdds,
-        static_cast<float>(logOddsHit),
-        static_cast<float>(logOddsMiss),
-        static_cast<float>(logOddsMin),
-        static_cast<float>(logOddsMax));
+    auto unionGrid  = buildUnionGrid(grid, points, truncationMargin);
+    auto newLogOdds = doIntegrateOccupancyFromPoints(static_cast<float>(truncationMargin),
+                                                     points,
+                                                     sensorOrigins,
+                                                     *unionGrid,
+                                                     *grid,
+                                                     logOdds,
+                                                     static_cast<float>(logOddsHit),
+                                                     static_cast<float>(logOddsMiss),
+                                                     static_cast<float>(logOddsMin),
+                                                     static_cast<float>(logOddsMax));
     return {unionGrid, newLogOdds};
 }
 
 std::tuple<c10::intrusive_ptr<GridBatchData>, JaggedTensor>
-integrateOccupancyFromPointsFrames(
-    const c10::intrusive_ptr<GridBatchData> grid,
-    const double truncationMargin,
-    const std::vector<torch::Tensor> &pointsPerFrame,
-    const torch::Tensor &sensorOrigins,
-    const JaggedTensor &logOdds,
-    const double logOddsHit,
-    const double logOddsMiss,
-    const double logOddsMin,
-    const double logOddsMax) {
+integrateOccupancyFromPointsFrames(const c10::intrusive_ptr<GridBatchData> grid,
+                                   const double truncationMargin,
+                                   const std::vector<torch::Tensor> &pointsPerFrame,
+                                   const torch::Tensor &sensorOrigins,
+                                   const JaggedTensor &logOdds,
+                                   const double logOddsHit,
+                                   const double logOddsMiss,
+                                   const double logOddsMin,
+                                   const double logOddsMax) {
     const int64_t N = static_cast<int64_t>(pointsPerFrame.size());
     TORCH_CHECK_VALUE(N > 0, "pointsPerFrame must have at least one frame");
-    TORCH_CHECK_VALUE(
-        sensorOrigins.dim() == 2 && sensorOrigins.size(0) == N &&
-            sensorOrigins.size(1) == 3,
-        "sensorOrigins must have shape [N=", N, ", 3]; got ",
-        sensorOrigins.sizes());
+    TORCH_CHECK_VALUE(sensorOrigins.dim() == 2 && sensorOrigins.size(0) == N &&
+                          sensorOrigins.size(1) == 3,
+                      "sensorOrigins must have shape [N=",
+                      N,
+                      ", 3]; got ",
+                      sensorOrigins.sizes());
     TORCH_CHECK_VALUE(grid->batchSize() == 1,
                       "integrateOccupancyFromPointsFrames supports "
                       "single-scene grids only (batchSize = 1); got ",
@@ -371,37 +370,40 @@ integrateOccupancyFromPointsFrames(
     // drop out of scope each iteration; the caching allocator
     // reclaims memory.
     c10::intrusive_ptr<GridBatchData> accumGrid = grid;
-    JaggedTensor accumLogOdds = logOdds;
+    JaggedTensor accumLogOdds                   = logOdds;
 
     for (int64_t i = 0; i < N; ++i) {
         const torch::Tensor &ptsTensor = pointsPerFrame[i];
         TORCH_CHECK_VALUE(ptsTensor.dim() == 2 && ptsTensor.size(1) == 3,
-                          "pointsPerFrame[", i, "] must be [N_i, 3]");
+                          "pointsPerFrame[",
+                          i,
+                          "] must be [N_i, 3]");
         TORCH_CHECK_VALUE(ptsTensor.device() == logOdds.device(),
-                          "pointsPerFrame[", i,
+                          "pointsPerFrame[",
+                          i,
                           "] must be on the same device as logOdds");
         TORCH_CHECK_TYPE(ptsTensor.scalar_type() == logOdds.scalar_type(),
-                         "pointsPerFrame[", i,
+                         "pointsPerFrame[",
+                         i,
                          "] dtype must match logOdds dtype");
 
-        JaggedTensor ptsJagged =
-            JaggedTensor(std::vector<torch::Tensor>{ptsTensor});
-        torch::Tensor originI = sensorOrigins.narrow(0, i, 1).contiguous();
+        JaggedTensor ptsJagged = JaggedTensor(std::vector<torch::Tensor>{ptsTensor});
+        torch::Tensor originI  = sensorOrigins.narrow(0, i, 1).contiguous();
 
-        auto unionGrid =
-            buildUnionGrid(accumGrid, ptsJagged, truncationMargin);
-        auto newLogOdds = doIntegrateOccupancyFromPoints(
-            static_cast<float>(truncationMargin),
-            ptsJagged, originI,
-            *unionGrid, *accumGrid,
-            accumLogOdds,
-            static_cast<float>(logOddsHit),
-            static_cast<float>(logOddsMiss),
-            static_cast<float>(logOddsMin),
-            static_cast<float>(logOddsMax));
+        auto unionGrid  = buildUnionGrid(accumGrid, ptsJagged, truncationMargin);
+        auto newLogOdds = doIntegrateOccupancyFromPoints(static_cast<float>(truncationMargin),
+                                                         ptsJagged,
+                                                         originI,
+                                                         *unionGrid,
+                                                         *accumGrid,
+                                                         accumLogOdds,
+                                                         static_cast<float>(logOddsHit),
+                                                         static_cast<float>(logOddsMiss),
+                                                         static_cast<float>(logOddsMin),
+                                                         static_cast<float>(logOddsMax));
 
-        accumGrid     = unionGrid;
-        accumLogOdds  = newLogOdds;
+        accumGrid    = unionGrid;
+        accumLogOdds = newLogOdds;
     }
 
     return {accumGrid, accumLogOdds};
