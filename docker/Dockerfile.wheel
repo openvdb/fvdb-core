@@ -1,0 +1,100 @@
+# syntax=docker/dockerfile:1
+
+# Copyright Contributors to the OpenVDB Project
+# SPDX-License-Identifier: Apache-2.0
+
+# Builds a production fvdb-core wheel from the local checkout, mirroring the
+# recipe used by the publish workflows. Driven by docker/build_wheel.sh, which
+# computes every ARG below from .github/versions.json and its CLI flags.
+
+ARG CUDA_IMAGE_TAG=13.0.2
+ARG UV_VERSION=0.11.26
+
+FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
+
+FROM nvidia/cuda:${CUDA_IMAGE_TAG}-cudnn-devel-rockylinux8 AS builder
+SHELL ["/bin/bash", "-c"]
+
+ARG PYTHON_VERSION=3.12
+ARG TORCH_VERSION=2.11.0
+# Tag for the PyTorch wheel index, e.g. cu130
+ARG CUDA_TAG=cu130
+ARG CUDA_ARCH_LIST="7.5;8.0;8.6;9.0;10.0;12.0+PTX"
+ARG GCC_TOOLSET=14
+ARG CMAKE_VERSION=4.0.3
+# Full version string stamped into pyproject.toml; empty keeps it unchanged
+ARG WHEEL_VERSION=""
+ARG RUN_AUDITWHEEL=1
+# Pre-rendered "--exclude libfoo.so ..." string from versions.json
+ARG AUDITWHEEL_EXCLUDES=""
+# Optional CMAKE_BUILD_PARALLEL_LEVEL override; build.sh's auto-detection reads
+# host RAM via free -g, which overshoots under container memory limits
+ARG BUILD_JOBS=""
+
+ENV PYTHONPATH=""
+ENV CPM_SOURCE_CACHE=/cpm_cache
+ENV FORCE_CUDA=1
+
+RUN dnf install -y \
+        gcc-toolset-${GCC_TOOLSET} \
+        git \
+        findutils \
+        libpng-devel \
+        pkgconfig \
+        procps-ng \
+        unzip \
+        wget \
+        zlib-devel \
+    && dnf clean all
+
+RUN wget -nv https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-x86_64.sh \
+    && sh cmake-${CMAKE_VERSION}-linux-x86_64.sh --prefix=/usr/local --skip-license \
+    && rm cmake-${CMAKE_VERSION}-linux-x86_64.sh \
+    && cmake --version
+
+COPY --from=uv /uv /uvx /usr/local/bin/
+
+RUN uv python install ${PYTHON_VERSION} \
+    && uv venv /opt/venv --python ${PYTHON_VERSION}
+
+WORKDIR /workspace/fvdb-core
+
+# Dependency-only layer: pin the tested PyTorch via a constraints file so the
+# unbounded torch in build_requirements.txt resolves to the requested version.
+COPY env/build_requirements.txt env/build_requirements.txt
+RUN --mount=type=cache,target=/root/.cache/uv \
+    echo "torch==${TORCH_VERSION}" > /tmp/torch-constraints.txt \
+    && source /opt/venv/bin/activate \
+    && uv pip install -c /tmp/torch-constraints.txt -r env/build_requirements.txt \
+        --extra-index-url https://download.pytorch.org/whl/${CUDA_TAG}
+
+COPY . /workspace/fvdb-core
+
+RUN if [ -n "${WHEEL_VERSION}" ]; then \
+        sed -i -E "s/^version\s*=\s*\"[^\"]+\"/version = \"${WHEEL_VERSION}\"/" pyproject.toml; \
+    fi \
+    && grep '^version' pyproject.toml
+
+RUN --mount=type=cache,target=/cpm_cache \
+    --mount=type=cache,target=/root/.cache/uv \
+    source /opt/rh/gcc-toolset-${GCC_TOOLSET}/enable \
+    && source /opt/venv/bin/activate \
+    && if [ -n "${BUILD_JOBS}" ]; then export CMAKE_BUILD_PARALLEL_LEVEL="${BUILD_JOBS}"; fi \
+    && ./build.sh wheel strip_symbols verbose --cuda-arch-list "${CUDA_ARCH_LIST}"
+
+# Repair to manylinux, excluding CUDA/PyTorch/system libraries to keep the
+# wheel size down. If repair fails the original linux_x86_64 wheel is kept.
+RUN if [ "${RUN_AUDITWHEEL}" = "1" ]; then \
+        source /opt/venv/bin/activate \
+        && uv pip install auditwheel patchelf \
+        && ldd --version | head -n1 \
+        && (auditwheel repair dist/fvdb_core-*.whl -w dist/ ${AUDITWHEEL_EXCLUDES} \
+            || echo "auditwheel failed, keeping original wheel") \
+        && if ls dist/fvdb_core-*-manylinux*.whl >/dev/null 2>&1; then \
+            rm -f dist/fvdb_core-*-linux_x86_64.whl; \
+        fi; \
+    fi \
+    && ls -lh dist/
+
+FROM scratch AS export
+COPY --from=builder /workspace/fvdb-core/dist/ /
