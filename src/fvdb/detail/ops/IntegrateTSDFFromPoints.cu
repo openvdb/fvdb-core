@@ -136,7 +136,7 @@ seedAccumulatorsFromBaseGridKernel(const fvdb::BatchGridAccessor baseGridAcc,
 // M2: ray-walk kernel.
 //
 // One thread per input point. Walks active voxels along the ray from
-// sensor origin to (point + truncation along ray) via HDDAVoxelIterator
+// sensor origin to (point + truncation along ray) via HDDALeafVoxelIterator
 // over the union grid. For each active voxel, computes the signed
 // distance along the ray from voxel centre to endpoint and decides
 // whether to update it:
@@ -217,13 +217,13 @@ rayWalkIntegrateKernel(const fvdb::BatchGridAccessor unionGridAcc,
     auto acc                             = grid->getAccessor();
     const int64_t voxelOffsetBase        = unionGridAcc.voxelOffset(batchIdx);
 
-    // HDDAVoxelIterator walks active voxels of the sparse grid along the
+    // HDDALeafVoxelIterator walks active leaf voxels of the sparse grid along the
     // ray, automatically skipping inactive regions. This is the sparse-
     // native "ray-walk" primitive fvdb exposes; the per-ray thread hits
     // only voxels that exist in the endpoint-shell topology (see plan.md
     // D2 — free-space carving fills topology gaps only within the
     // existing union grid, does not extend it).
-    fvdb::HDDAVoxelIterator<decltype(acc), MathT> it(rayVox, acc);
+    fvdb::HDDALeafVoxelIterator<decltype(acc), MathT> it(rayVox, acc);
     while (it.isValid()) {
         const nanovdb::Coord voxIjk = it->first;
         ++it;
