@@ -759,6 +759,20 @@ bind_grid_batch_ops(py::module &m) {
         py::arg("kernel_size"),
         py::arg("stride"));
 
+    m.def("last_conv_grid_resource_stats", []() {
+        auto const stats = ops::lastBuildGridForConvResourceStats();
+        py::dict result;
+        result["input_voxel_count"]        = stats.inputVoxelCount;
+        result["kernel_volume"]            = stats.kernelVolume;
+        result["valid_emission_count"]     = stats.validEmissionCount;
+        result["count_requested_bytes"]    = stats.countRequestedBytes;
+        result["prefix_requested_bytes"]   = stats.prefixRequestedBytes;
+        result["emission_requested_bytes"] = stats.emissionRequestedBytes;
+        result["peak_requested_bytes"]     = stats.peakRequestedBytes;
+        result["used_direct_projection"]   = stats.usedDirectProjection;
+        return result;
+    });
+
     m.def(
         "conv_transpose_grid",
         [](const GBI &grid,

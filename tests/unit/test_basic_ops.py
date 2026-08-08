@@ -2453,14 +2453,14 @@ class TestBasicOps(unittest.TestCase):
     @unittest.skipUnless(torch.cuda.is_available(), "CUDA required")
     def test_conv_grid_fast_path_parity(self):
         # conv_grid uses leaf-mask morphology on CUDA for the fast paths: stride-1 uniform odd
-        # kernels (symmetric dilation), stride-1 uniform even kernels (positive pad), and the
-        # stride == kernel_size / kernel_size == 1 coarsening short circuit. Verify the output
-        # topology matches the CPU coordinate-list reference across those combos (and one fallback).
+        # kernels (symmetric dilation), stride-1 uniform even kernels (phase-aware one-sided pads),
+        # and the unshifted K=S={1,2} coarsening short circuit. Verify the output topology matches
+        # the CPU geometry reference across those combos and the shifted/fallback cases.
         torch.manual_seed(0)
         ijk = torch.randint(-20, 20, (4000, 3), dtype=torch.int32)
-        # (kernel, stride): 3^3 s1 -> 1 dilate; 5^3 s1 -> 2 dilates; 2^3 s1 -> 1 pad;
-        # 2^3 s2 & 4^3 s4 -> coarsen (pow2); 1 s1 -> identity; 3^3 s2 -> coord fallback.
-        combos = [(3, 1), (5, 1), (2, 1), (2, 2), (4, 4), (1, 1), (3, 2)]
+        # (kernel, stride): 3/5 s1 -> dilate; 2/4 s1 -> phase-aware pads; 2 s2 ->
+        # leaf coarsen; 4 s4 -> shifted quotient; 1 s1 -> identity; 1 s3 and 3 s2 -> fallback.
+        combos = [(3, 1), (5, 1), (2, 1), (4, 1), (2, 2), (4, 4), (1, 1), (1, 3), (3, 2)]
         for ksize, stride in combos:
             g_cpu = GridBatch.from_ijk(JaggedTensor([ijk]))
             g_cuda = GridBatch.from_ijk(JaggedTensor([ijk.cuda()]))
@@ -2470,15 +2470,14 @@ class TestBasicOps(unittest.TestCase):
 
     @unittest.skipUnless(torch.cuda.is_available(), "CUDA required")
     def test_conv_transpose_grid_fast_path_parity(self):
-        # conv_transpose_grid uses leaf-mask morphology on CUDA: the stride == kernel_size /
-        # kernel_size == 1 subdivision short circuit (RefineGrid), stride-1 uniform kernels
-        # (dilate/pad), and stride-2 kernel-3 upsampling (RefineGrid + negative pad). Verify the
-        # topology matches the CPU coordinate-list reference across those combos (and fallbacks).
+        # conv_transpose_grid uses leaf-mask morphology on CUDA for unshifted K=S={1,2}, stride-1
+        # uniform kernels, and stride-2 kernel-3 upsampling. Verify those and the shifted/fallback
+        # cases against the CPU geometry reference.
         torch.manual_seed(0)
         ijk = torch.randint(-16, 16, (3000, 3), dtype=torch.int32)
-        # (kernel, stride): 1 s1 & 2 s2 & 4 s4 -> subdivide (RefineGrid); 3 s3 -> subdivide fallback;
-        # 3 s1 -> dilate; 2 s1 -> pad; 3 s2 -> refine+negpad; 5 s2 -> coord fallback.
-        combos = [(1, 1), (2, 2), (4, 4), (3, 3), (3, 1), (2, 1), (3, 2), (5, 2)]
+        # (kernel, stride): 1 s1 & 2 s2 -> leaf subdivision; 3 s3 & 4 s4 -> shifted fallback;
+        # 3 s1 -> dilate; 2/4 s1 -> phase-aware pads; 3 s2 -> refine+negpad; 1/5 s2 -> fallback.
+        combos = [(1, 1), (2, 2), (4, 4), (3, 3), (3, 1), (2, 1), (4, 1), (3, 2), (1, 2), (5, 2)]
         for ksize, stride in combos:
             g_cpu = GridBatch.from_ijk(JaggedTensor([ijk]))
             g_cuda = GridBatch.from_ijk(JaggedTensor([ijk.cuda()]))
