@@ -199,7 +199,7 @@ def _preflight(dtype: torch.dtype, shapes: Iterable[Sequence[int]]) -> None:
 def dense_forward_oracle(
     fine_coordinates: Sequence[Coord], features: torch.Tensor, weights: torch.Tensor, relation: ConvolutionRelation
 ) -> DenseOracleResult:
-    """Run full-support Torch cross-correlation on a global-coordinate canvas."""
+    """Run complete-topology Torch cross-correlation on a global-coordinate canvas."""
     if features.ndim != 2 or weights.ndim != 5 or len(fine_coordinates) != features.shape[0]:
         raise ValueError("expected coordinates [N,3], features [N,C], and fVDB weights [Cout,Cin,K0,K1,K2]")
     if tuple(weights.shape[2:]) != relation.kernel_size or weights.shape[1] != features.shape[1]:
@@ -238,7 +238,7 @@ def dense_forward_oracle(
 def dense_transpose_oracle(
     coarse_coordinates: Sequence[Coord], features: torch.Tensor, weights: torch.Tensor, relation: ConvolutionRelation
 ) -> DenseOracleResult:
-    """Run full-support Torch transposed convolution on a global-coordinate canvas."""
+    """Run complete-topology Torch transposed convolution on a global-coordinate canvas."""
     if features.ndim != 2 or weights.ndim != 5 or len(coarse_coordinates) != features.shape[0]:
         raise ValueError("expected coordinates [N,3], features [N,C], and fVDB weights [Cout,Cin,K0,K1,K2]")
     if tuple(weights.shape[2:]) != relation.kernel_size or weights.shape[1] != features.shape[1]:

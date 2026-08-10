@@ -277,13 +277,14 @@ dispatchBuildGridForConvTranspose<torch::kCUDA>(const GridBatchData &baseGridHdl
         });
     }
 
+    if (isUnshiftedSubdivision(geometry)) {
+        return fineGridHandleFromCoarseCUDA(baseGridHdl, geometry.stride(), std::nullopt);
+    }
+
     // Coordinate fallback: preserve exact phase and let the CUDA allocator decide whether the
     // checked request is serviceable. Only this path advertises coordinate-staging context.
     const uint64_t stagingBytes = checkTransposeInputAndKernel(baseGridHdl.totalVoxels(), geometry);
     try {
-        if (isUnshiftedSubdivision(geometry)) {
-            return fineGridHandleFromCoarseCUDA(baseGridHdl, geometry.stride(), std::nullopt);
-        }
         return ops::_createNanoGridFromIJK(convTransposeIJKForGrid(baseGridHdl, geometry));
     } catch (const c10::OutOfMemoryError &error) {
         TORCH_CHECK_WITH(

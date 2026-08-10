@@ -31,6 +31,8 @@ namespace ops {
 
 namespace {
 
+// Set by the last dispatchBuildGridForConv call on this thread. Read it on the same thread
+// before any subsequent build; this diagnostic intentionally has last-call-wins semantics.
 thread_local BuildGridForConvResourceStats gLastBuildGridForConvResourceStats;
 
 int64_t
@@ -319,7 +321,7 @@ JaggedTensor
 countThenFillConvIJKForGrid(const GridBatchData &batchHdl, ConvolutionGeometry const &geometry) {
     const int64_t inputVoxelCount = batchHdl.totalVoxels();
     const auto countOptions = torch::TensorOptions().dtype(torch::kInt32).device(batchHdl.device());
-    torch::Tensor counts    = torch::zeros({inputVoxelCount}, countOptions);
+    torch::Tensor counts    = torch::empty({inputVoxelCount}, countOptions);
     auto countAcc           = counts.packed_accessor64<int32_t, 1, torch::RestrictPtrTraits>();
     auto countCallback      = [=] __device__(int32_t bidx,
                                         int32_t lidx,

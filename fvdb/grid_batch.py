@@ -580,7 +580,7 @@ class GridBatch:
         return functional.contiguous_batch(self)
 
     def conv_grid(self, kernel_size: NumericMaxRank1, stride: NumericMaxRank1 = 1) -> "GridBatch":
-        """Return the full-support output grid for a convolution applied to this grid batch.
+        """Return the complete structural output grid for a convolution applied to this grid batch.
 
         The generated coordinates are the positive structural support of the componentwise relation
         ``fine_ijk = stride * coarse_ijk + tap_ijk - padding_before``. Here ``fine_ijk`` and
@@ -604,7 +604,7 @@ class GridBatch:
         return functional.conv_grid_batch(self, kernel_size, stride)
 
     def conv_transpose_grid(self, kernel_size: NumericMaxRank1, stride: NumericMaxRank1 = 1) -> "GridBatch":
-        """Return the complete full-support output grid for transposed convolution.
+        """Return the complete structural output grid for transposed convolution.
 
         Each active coarse coordinate spreads through every canonical tap. The result has voxel
         size ``h / stride`` and the same canonical origin. This is generated structural support,

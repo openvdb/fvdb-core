@@ -239,7 +239,7 @@ For the default registration, an integer fine-lattice coordinate ``fine_ijk`` an
 coordinate ``coarse_ijk`` are connected by the zero-based kernel tap ``tap_ijk`` when
 ``fine_ijk = stride * coarse_ijk + tap_ijk - padding_before`` componentwise. Here
 ``padding_before = floor((kernel_size - 1) / 2)`` and
-``0 <= tap_ijk[axis] < kernel_size[axis]``. ``target_grid=None`` means ``full_support``: generate every output
+``0 <= tap_ijk[axis] < kernel_size[axis]``. ``target_grid=None`` selects the ``complete`` policy: generate every output
 coordinate with a positive structural degree. A supplied target means ``restricted``: evaluate that same relation
 only at its rows, which may include zero-degree rows. A transposed convolution uses the graph in the opposite
 direction; it is not a value inverse.
@@ -248,7 +248,7 @@ For a generated strided forward grid, voxel size is multiplied by stride and ori
 generated transpose applies the inverse scale. ``coarsened_grid`` groups physical cells at a block centroid,
 so it is not a substitute for a convolution grid. ``kernel_size=1, stride=1`` returns the original grid
 object; with a larger stride, a one-tap convolution samples only stride-aligned residues. The #668 example
-``kernel_size=stride=4`` maps a full ``16^3`` cube to a ``5^3`` full-support grid, not a ``4^3`` block grid.
+``kernel_size=stride=4`` maps a full ``16^3`` cube to a ``5^3`` complete grid, not a ``4^3`` block grid.
 
 Use ``ConvolutionPlan.from_plan_transposed(plan)`` for an exact finite plan transpose. It reverses the
 stored edges; tied adjoint weights are ``weight.transpose(0, 1).contiguous()``. An independently learned

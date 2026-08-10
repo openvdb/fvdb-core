@@ -20,6 +20,7 @@ from fvdb import GridBatch, JaggedTensor
 from fvdb.functional._dispatch import _get_grid_data
 
 from . import _fvdb_cpp
+from .enums import ConvolutionPhasePolicy, ConvolutionTopologyPolicy, ConvolutionTopologyProvenance
 
 _DEFAULT_CONFIG: dict[str, Any] = {
     "backend": "default",
@@ -34,6 +35,15 @@ _DENSE_BACKEND_DISABLED_MESSAGE = (
     "The dense convolution backend is disabled because it does not yet implement the canonical sparse geometry "
     "and public transposed-weight layout; use backend='default' or backend='gather_scatter'."
 )
+
+
+class ConvolutionCoverageWarning(UserWarning):
+    """A convolution geometry leaves some stride residues structurally uncovered.
+
+    The warning is emitted once per ``(kernel_size, stride)`` geometry for the
+    lifetime of the process. Pass ``acknowledge_incomplete_coverage=True`` when
+    constructing a plan to acknowledge and suppress it explicitly.
+    """
 
 
 @dataclass(frozen=True)
@@ -178,15 +188,17 @@ def _validate_transform_compatibility(compatibility: ConvolutionTransformCompati
         raise RuntimeError("Convolution transform compatibility validation reached an inconsistent state")
 
 
-def _resolve_topology_policy(target_grid: GridBatch | None, topology_policy: str | None) -> str:
+def _resolve_topology_policy(
+    target_grid: GridBatch | None, topology_policy: ConvolutionTopologyPolicy | None
+) -> ConvolutionTopologyPolicy:
     if topology_policy is None:
-        return "full_support" if target_grid is None else "restricted"
-    if topology_policy not in ("full_support", "restricted"):
-        raise ValueError("topology_policy must be 'full_support' or 'restricted'")
-    if topology_policy == "full_support" and target_grid is not None:
-        raise ValueError("topology_policy='full_support' requires target_grid=None")
-    if topology_policy == "restricted" and target_grid is None:
-        raise ValueError("topology_policy='restricted' requires an explicit target_grid")
+        return ConvolutionTopologyPolicy.COMPLETE if target_grid is None else ConvolutionTopologyPolicy.RESTRICTED
+    if not isinstance(topology_policy, ConvolutionTopologyPolicy):
+        raise TypeError("topology_policy must be a ConvolutionTopologyPolicy value")
+    if topology_policy is ConvolutionTopologyPolicy.COMPLETE and target_grid is not None:
+        raise ValueError("topology_policy=ConvolutionTopologyPolicy.COMPLETE requires target_grid=None")
+    if topology_policy is ConvolutionTopologyPolicy.RESTRICTED and target_grid is None:
+        raise ValueError("topology_policy=ConvolutionTopologyPolicy.RESTRICTED requires an explicit target_grid")
     return topology_policy
 
 
@@ -214,7 +226,7 @@ def _warn_if_incomplete_residue_coverage(
         "This convolution geometry leaves uncovered stride residues on axes "
         f"{uncovered_axes}; some active fine coordinates can have zero rulebook degree. "
         "This matches dense Torch sampling. Pass acknowledge_incomplete_coverage=True to suppress this warning.",
-        UserWarning,
+        ConvolutionCoverageWarning,
         stacklevel=3,
     )
 
@@ -333,15 +345,17 @@ def _output_zero_count(backend: "_Backend") -> int | None:
     return int((output_degrees == 0).sum().item())
 
 
-def _validate_coverage_policy(backend: "_Backend", topology_policy: str, strict_output_coverage: bool) -> None:
-    if topology_policy != "full_support" and not strict_output_coverage:
+def _validate_coverage_policy(
+    backend: "_Backend", topology_policy: ConvolutionTopologyPolicy, strict_output_coverage: bool
+) -> None:
+    if topology_policy is not ConvolutionTopologyPolicy.COMPLETE and not strict_output_coverage:
         return
     output_zero_count = _output_zero_count(backend)
     if output_zero_count is None:
         return
-    if topology_policy == "full_support" and output_zero_count:
-        raise RuntimeError("Generated full-support topology contains " f"{output_zero_count} zero-degree output rows.")
-    if topology_policy == "restricted" and strict_output_coverage and output_zero_count:
+    if topology_policy is ConvolutionTopologyPolicy.COMPLETE and output_zero_count:
+        raise RuntimeError("Generated complete topology contains " f"{output_zero_count} zero-degree output rows.")
+    if topology_policy is ConvolutionTopologyPolicy.RESTRICTED and strict_output_coverage and output_zero_count:
         raise ValueError("Restricted topology contains " f"{output_zero_count} zero-degree output rows.")
 
 
@@ -554,10 +568,21 @@ class ConvolutionPlan:
     allowing users to focus on the core convolution parameters: input/output channels,
     kernel size, stride, and the grid structure.
 
-    A plan stores one finite convolution relation. Generated plans use complete structural support;
-    an explicit target restricts that relation. A transposed plan evaluates the same fine/coarse
-    connectivity in the opposite direction and is not a value inverse. For an exact finite adjoint,
-    use :meth:`from_plan_transposed` rather than reconstructing a plan from grids.
+    A plan stores one finite convolution relation. Componentwise, that relation is
+    ``fine_ijk = stride * coarse_ijk + tap_ijk - padding_before``, where
+    ``padding_before = floor((kernel_size - 1) / 2)`` and each zero-based tap satisfies
+    ``0 <= tap_ijk[axis] < kernel_size[axis]``. Generated plans use complete structural
+    support; an explicit target restricts that relation. A transposed plan evaluates the
+    same fine/coarse connectivity in the opposite direction and is not a value inverse.
+    For an exact finite adjoint, use :meth:`from_plan_transposed` rather than reconstructing
+    a plan from grids.
+
+    For framework portability, this index relation matches spconv and TorchSparse when
+    they use ``padding=(kernel_size - 1) // 2``. MinkowskiEngine corner-anchors even
+    kernels on ``[0, kernel_size)``, so porting an even-kernel topology from
+    MinkowskiEngine shifts it by ``floor((kernel_size - 1) / 2)``. fVDB's complete policy
+    also materializes uncropped boundary support: a full ``16^3`` input with
+    ``kernel_size=stride=4`` produces a ``5^3`` coarse topology rather than ``4^3``.
 
     Usage Pattern:
 
@@ -602,8 +627,8 @@ class ConvolutionPlan:
     _transposed: bool
     _backend: _Backend
     _transform_compatibility: ConvolutionTransformCompatibility
-    _topology_policy: str
-    _topology_provenance: str
+    _topology_policy: ConvolutionTopologyPolicy
+    _topology_provenance: ConvolutionTopologyProvenance
     _coverage_report_cache: _CoverageReportCache
     _coverage_report_swapped: bool
 
@@ -621,7 +646,7 @@ class ConvolutionPlan:
         *,
         expert_config: dict[str, Any] = _DEFAULT_CONFIG,
         channel_pairs: tuple[tuple[int, int], ...] = _ANY_CHANNEL_PAIRS,
-        topology_policy: str | None = None,
+        topology_policy: ConvolutionTopologyPolicy | None = None,
         strict_output_coverage: bool = False,
         acknowledge_incomplete_coverage: bool = False,
     ) -> "ConvolutionPlan":
@@ -645,8 +670,8 @@ class ConvolutionPlan:
                 Each tuple represents (input_channels, output_channels).
                 *e.g*: ``((32, 64), (64, 128))`` supports 32->64 and 64->128 convolutions.
                 Defaults to ``_ANY_CHANNEL_PAIRS``, which means any channel pairs are supported.
-            topology_policy (str | None): ``"full_support"`` generates the complete structural support;
-                ``"restricted"`` requires ``target_grid`` and restricts the relation to it. When omitted,
+            topology_policy (ConvolutionTopologyPolicy | None): ``COMPLETE`` generates the complete structural
+                support; ``RESTRICTED`` requires ``target_grid`` and restricts the relation to it. When omitted,
                 the policy is inferred from ``target_grid``.
             strict_output_coverage (bool): Reject explicit targets with degree-zero output rows.
             acknowledge_incomplete_coverage (bool): Suppress the once-per-geometry warning for
@@ -679,7 +704,11 @@ class ConvolutionPlan:
         stride = to_Vec3i(stride, value_constraint=ValueConstraint.POSITIVE)
 
         resolved_policy = _resolve_topology_policy(target_grid, topology_policy)
-        topology_provenance = "generated" if resolved_policy == "full_support" else "explicit_target"
+        topology_provenance = (
+            ConvolutionTopologyProvenance.GENERATED
+            if resolved_policy is ConvolutionTopologyPolicy.COMPLETE
+            else ConvolutionTopologyProvenance.EXPLICIT_TARGET
+        )
         backend_name = expert_config.get("backend", "default")
 
         if backend_name == "dense":
@@ -720,7 +749,7 @@ class ConvolutionPlan:
         *,
         expert_config: dict[str, Any] = _DEFAULT_CONFIG,
         channel_pairs: tuple[tuple[int, int], ...] = _ANY_CHANNEL_PAIRS,
-        topology_policy: str | None = None,
+        topology_policy: ConvolutionTopologyPolicy | None = None,
         strict_output_coverage: bool = False,
         acknowledge_incomplete_coverage: bool = False,
     ) -> "ConvolutionPlan":
@@ -735,8 +764,9 @@ class ConvolutionPlan:
 
         .. note::
 
-            ``target_grid=None`` selects ``"full_support"`` and generates the complete uncropped
-            transposed support. An explicit target selects ``"restricted"`` and may contain
+            ``target_grid=None`` selects :attr:`~fvdb.ConvolutionTopologyPolicy.COMPLETE` and generates the
+            complete uncropped transposed support. An explicit target selects
+            :attr:`~fvdb.ConvolutionTopologyPolicy.RESTRICTED` and may contain
             zero-degree rows. This factory supports independently learned transpose weights; for
             the exact weighted adjoint of a particular plan, use :meth:`from_plan_transposed` and
             pass ``weight.transpose(0, 1).contiguous()`` at execution.
@@ -752,8 +782,8 @@ class ConvolutionPlan:
             expert_config (dict[str, Any]): Advanced configuration options (rarely needed by typical users).
             channel_pairs (tuple[tuple[int, int], ...]): Supported input/output channel combinations as tuples.
                 Defaults to ``_ANY_CHANNEL_PAIRS``, which means any channel pairs are supported.
-            topology_policy (str | None): ``"full_support"`` generates the complete structural support;
-                ``"restricted"`` requires ``target_grid``. When omitted, the policy is inferred from
+            topology_policy (ConvolutionTopologyPolicy | None): ``COMPLETE`` generates the complete structural
+                support; ``RESTRICTED`` requires ``target_grid``. When omitted, the policy is inferred from
                 ``target_grid``.
             strict_output_coverage (bool): Reject explicit targets with degree-zero output rows.
             acknowledge_incomplete_coverage (bool): Suppress the once-per-geometry warning for
@@ -766,7 +796,11 @@ class ConvolutionPlan:
         stride = to_Vec3i(stride, value_constraint=ValueConstraint.POSITIVE)
 
         resolved_policy = _resolve_topology_policy(target_grid, topology_policy)
-        topology_provenance = "generated" if resolved_policy == "full_support" else "explicit_target"
+        topology_provenance = (
+            ConvolutionTopologyProvenance.GENERATED
+            if resolved_policy is ConvolutionTopologyPolicy.COMPLETE
+            else ConvolutionTopologyProvenance.EXPLICIT_TARGET
+        )
         backend_name = expert_config.get("backend", "default")
 
         if backend_name == "dense":
@@ -867,8 +901,8 @@ class ConvolutionPlan:
             transposed,
             backend,
             compatibility,
-            "restricted",
-            "exact_transpose",
+            ConvolutionTopologyPolicy.RESTRICTED,
+            ConvolutionTopologyProvenance.EXACT_TRANSPOSE,
             plan._coverage_report_cache,
             not plan._coverage_report_swapped,
         )
@@ -1092,17 +1126,21 @@ class ConvolutionPlan:
         return self._transform_compatibility
 
     @property
-    def topology_policy(self) -> str:
-        """Resolved ``"full_support"`` or ``"restricted"`` topology policy."""
+    def phase_policy(self) -> ConvolutionPhasePolicy:
+        """Kernel phase convention used by this plan."""
+        return ConvolutionPhasePolicy(self._geometry.phase_policy)
+
+    @property
+    def topology_policy(self) -> ConvolutionTopologyPolicy:
+        """Resolved complete or restricted topology policy."""
         return self._topology_policy
 
     @property
-    def topology_provenance(self) -> str:
+    def topology_provenance(self) -> ConvolutionTopologyProvenance:
         """How this plan's finite topology was obtained.
 
-        Values are ``"generated"``, ``"explicit_target"``, or
-        ``"exact_transpose"``. Exact transposes always use the stored finite
-        edge set of their source plan and therefore have restricted policy.
+        Exact transposes always use the stored finite edge set of their source
+        plan and therefore have restricted policy.
         """
         return self._topology_provenance
 

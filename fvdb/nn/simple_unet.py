@@ -428,6 +428,8 @@ class SimpleUNetDownUp(nn.Module):
         self.conv_out.reset_parameters()
 
     def forward(self, data: JaggedTensor, fine_grid: GridBatch) -> JaggedTensor:
+        # This block-centroid grid is used only by stride-1 convolution plans. Resolution changes
+        # remain explicit max-pool/refine operations, so it is deliberately not a strided-convolution target.
         coarse_grid = fine_grid.coarsened_grid(coarsening_factor=2).conv_grid(kernel_size=self.kernel_size, stride=1)
         conv_plan = ConvolutionPlan.from_grid_batch(
             kernel_size=self.kernel_size, stride=1, source_grid=fine_grid, target_grid=fine_grid

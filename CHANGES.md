@@ -6,8 +6,8 @@ fVDB Version History
 - **Breaking:** Unified sparse convolution and transposed-convolution geometry around the componentwise Torch-phase
   relation ``fine_ijk = stride * coarse_ijk + tap_ijk - padding_before``, where
   ``padding_before = floor((kernel_size - 1) / 2)`` and each zero-based tap component satisfies
-  ``0 <= tap_ijk[axis] < kernel_size[axis]`` (issue #668). Generated topology is now complete structural support
-  (`full_support`); an explicit target is a `restricted` evaluation domain, not a different kernel rule. This changes
+  ``0 <= tap_ijk[axis] < kernel_size[axis]`` (issue #668). Generated topology now uses the `complete` policy; an
+  explicit target uses the `restricted` policy and is an evaluation domain, not a different kernel rule. This changes
   generated topology for affected even kernels, `kernel_size == stride >= 3`, and `kernel_size=1, stride>1`; the
   proved `kernel_size=stride=2` path is retained.
 - **Breaking:** Generated strided convolution grids now have voxel size `stride * h` and the canonical input
@@ -29,7 +29,8 @@ fVDB Version History
 - **Migration:** Invalidate serialized or in-memory topology/plan caches when upgrading: cache keys must include
   the convolution-semantics version. Weight spatial ordering is unchanged, but affected checkpoints can produce
   different topologies and world registration. No legacy geometry mode is shipped in 0.6.0; migrate model
-  configuration and cached plans to the canonical relation.
+  configuration and cached plans to the canonical relation. The incorrect legacy coordinate division and duplicated
+  phase rules are intentionally not retained behind a compatibility mode.
 - The dense convolution expert backend is disabled until it can realize this contract exactly. PredGatherIGemm
   remains limited to its supported odd kernels and strides; unsupported combinations fail at plan construction.
 

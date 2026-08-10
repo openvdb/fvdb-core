@@ -245,7 +245,7 @@ def compute_conv_grid_topology_ground_truth(
     dtype: torch.dtype,
 ) -> torch.Tensor:
     """
-    Compute full-support convolution topology from the canonical Torch-phase relation.
+    Compute complete convolution topology from the canonical Torch-phase relation.
 
     This legacy test helper remains independent of production topology code. For every
     active fine-lattice coordinate ``fine_ijk`` and zero-based kernel tap ``tap_ijk``, it
@@ -678,7 +678,7 @@ def conv_transpose_ground_truth_stride_1(
     and returns both the dense activation and the convolved result.
 
     This is a finite, cropped helper for stride one. It uses canonical
-    ``padding=padding_before``; it is not the full-support topology definition.
+    ``padding=padding_before``; it is not the complete-topology definition.
 
     Args:
         grid_batch: Input GridBatch containing voxel coordinates

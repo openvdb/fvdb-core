@@ -81,7 +81,7 @@ The following animations illustrate strided sparse convolution and transposed co
 
 ![Strided transposed sparse convolution animation](../imgs/fig/strided_transposed_sparse_conv.gif)
 
-Strided transposed convolution can be performed with `fvdb.nn.SparseConvTranspose3d` (a separate class). With `target_grid=None` it generates the complete, uncropped structural support (`topology_policy="full_support"`). Supplying a target chooses the symmetric `"restricted"` policy: the same relation is evaluated only on those requested rows, which may include unreachable zero-degree rows. An encoder-decoder commonly uses a saved fine grid as a restricted target, but this does not make the operation an inverse or guarantee that every saved coordinate is reachable.
+Strided transposed convolution can be performed with `fvdb.nn.SparseConvTranspose3d` (a separate class). With `target_grid=None` it generates the complete, uncropped structural topology (`ConvolutionTopologyPolicy.COMPLETE`). Supplying a target chooses the symmetric `ConvolutionTopologyPolicy.RESTRICTED` policy: the same relation is evaluated only on those requested rows, which may include unreachable zero-degree rows. An encoder-decoder commonly uses a saved fine grid as a restricted target, but this does not make the operation an inverse or guarantee that every saved coordinate is reachable.
 
 ```python continuation
 # Strided transposed convolution operator, stride=2
@@ -91,9 +91,12 @@ transposed_conv = fvdbnn.SparseConvTranspose3d(in_channels=3, out_channels=3, ke
 plan_up = ConvolutionPlan.from_grid_batch_transposed(kernel_size=3, stride=2, source_grid=coarse_grid, target_grid=grid)
 transposed_output = transposed_conv(output, plan_up)
 
-# Or generate the full transposed support without a saved target.
-plan_up_full = ConvolutionPlan.from_grid_batch_transposed(
-    kernel_size=3, stride=2, source_grid=coarse_grid, topology_policy="full_support"
+# Or generate the complete transposed topology without a saved target.
+plan_up_complete = ConvolutionPlan.from_grid_batch_transposed(
+    kernel_size=3,
+    stride=2,
+    source_grid=coarse_grid,
+    topology_policy=fvdb.ConvolutionTopologyPolicy.COMPLETE,
 )
 ```
 
@@ -103,7 +106,7 @@ Here we visualize the original grid, the grid after strided convolution, and a t
 
 For the exact finite adjoint of an existing plan, use `ConvolutionPlan.from_plan_transposed(plan_down)` rather than rebuilding from grids. It reverses that plan's stored edges exactly. With tied weights, pass `weight.transpose(0, 1).contiguous()` to the transposed execution. An independently learned `SparseConvTranspose3d` instead has its own weights and uses transposed connectivity without an adjoint claim.
 
-`grid.coarsened_grid(stride)` serves pooling and cell aggregation: it has a block-centroid transform and is not interchangeable with `conv_grid(kernel_size, stride)`. In particular, it is not a valid shortcut for convolution targets. The special `kernel_size=1, stride=1` generated forward grid is the source object itself; `kernel_size=1, stride>1` samples only the stride-aligned residues rather than coarsening every block. Issue #668 is the motivating even-kernel example: a full-support `kernel_size=stride=4` convolution of a `16^3` cube produces a `5^3` coarse support, not `4^3`.
+`grid.coarsened_grid(stride)` serves pooling and cell aggregation: it has a block-centroid transform and is not interchangeable with `conv_grid(kernel_size, stride)`. In particular, it is not a valid shortcut for convolution targets. The special `kernel_size=1, stride=1` generated forward grid is the source object itself; `kernel_size=1, stride>1` samples only the stride-aligned residues rather than coarsening every block. Issue #668 is the motivating even-kernel example: a complete `kernel_size=stride=4` convolution of a `16^3` cube produces a `5^3` coarse support, not `4^3`.
 
 
 ## Low-level Usage with `GridBatch`
