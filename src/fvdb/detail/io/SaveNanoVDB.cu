@@ -956,7 +956,9 @@ saveIndexGridWithBlindData(const std::string &path,
         paddedPayloadBytes.push_back(nanovdb::math::AlignUp<32UL>(blindDataSize));
     }
 
-    const std::string fvdbBlindName = "fvdb_jdata" + TorchScalarTypeToStr(cpuData.scalar_type());
+    const std::string_view dtypeName = c10::getDtypeNames(cpuData.scalar_type()).first;
+    std::string fvdbBlindName        = "fvdb_jdata";
+    fvdbBlindName.append(dtypeName.data(), dtypeName.size());
 
     // Pointer to the start of jdata for slicing per-batch values without allocating fresh
     // JaggedTensor objects each iteration.

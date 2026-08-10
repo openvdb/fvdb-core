@@ -126,7 +126,7 @@ isFvdbBlindData(const nanovdb::GridBlindMetaData &blindMetadata) {
 
     // Get the dtype of the blind data tensor
     const std::string blindDtypeName = std::string(blindMetadata.mName + 10);
-    const torch::Dtype blindDtype    = StringToTorchScalarType(blindDtypeName);
+    const torch::Dtype blindDtype    = c10::getStringToDtypeMap().at(blindDtypeName);
     return std::make_tuple(true, std::optional<torch::Dtype>(blindDtype));
 }
 
