@@ -188,9 +188,7 @@ def check_torch_wheel_available(torch_version, cuda_tag, python_version):
             f"available versions for {cuda_tag}: {', '.join(available_versions)}"
         )
     cp_tag = python_version.replace(".", "")
-    available_pythons = sorted(
-        {cp for version, cp in wheels if version == torch_version}, key=int
-    )
+    available_pythons = sorted({cp for version, cp in wheels if version == torch_version}, key=int)
     if cp_tag not in available_pythons:
         pythons = ", ".join(f"{cp[0]}.{cp[1:]}" for cp in available_pythons)
         die(
