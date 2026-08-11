@@ -3,6 +3,7 @@ fVDB Version History
 
 ## Version 0.6.0 - In Development
 
+- **PyTorch 2.13** fVDB updated to build, test and publish with PyTorch 2.13, CUDA 13.0/13.2 and Python 3.10-3.15 support.
 - **Breaking:** Moved the high-level Gaussian splatting Python API to fVDB Reality Capture and removed its former
   `fvdb` entry points. Use `fvdb_reality_capture.GaussianSplat3d`,
   `fvdb_reality_capture.ProjectedGaussianSplats`, `fvdb_reality_capture.gaussian_render_jagged`, and

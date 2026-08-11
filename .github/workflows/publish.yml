@@ -103,6 +103,7 @@ jobs:
             12.4) CUDA_IMAGE_TAG="12.4.1" ;;
             12.8) CUDA_IMAGE_TAG="12.8.1" ;;
             13.0) CUDA_IMAGE_TAG="13.0.2" ;;
+            13.2) CUDA_IMAGE_TAG="13.2.1" ;;
             *)    echo "WARNING: Unknown CUDA version $CUDA_VER" >&2; CUDA_IMAGE_TAG="${CUDA_VER}.0" ;;
           esac
           echo "python_version=$PY_VER" >> $GITHUB_OUTPUT
@@ -230,7 +231,7 @@ jobs:
 
       - name: Install pip dependencies
         run: |
-          # Convert CUDA version from 12.8 to cu128 format for PyTorch index
+          # Convert CUDA version to cuXX format for PyTorch index
           CUDA_TAG="cu$(echo "${MATRIX_CUDA_VERSION}" | tr -d '.')"
           TORCH_VERSION="${MATRIX_TORCH_VERSION}"
           echo "Installing PyTorch ${TORCH_VERSION} for ${CUDA_TAG}"

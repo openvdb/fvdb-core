@@ -1,4 +1,4 @@
-name: fVDB pip CUDA 12.8 Build and Test
+name: fVDB pip CUDA 13.2 Build and Test
 
 on:
   # zizmor: ignore[dangerous-triggers] pull_request_target is required to provision AWS runners; privileged credentials are scoped to runner lifecycle jobs.
@@ -61,11 +61,11 @@ jobs:
   # BUILD FVDB
   ##############################################################################
   fvdb-build:
-    name: fVDB Build (pip CUDA 12.8)
+    name: fVDB Build (pip CUDA 13.2)
     needs: [start-build-runner, versions]
     runs-on: ${{ needs.start-build-runner.outputs.label }}
     container:
-      image: nvidia/cuda:${{ needs.versions.outputs.cuda-128-patch }}-cudnn-devel-${{ needs.versions.outputs.docker-os-ubuntu }}
+      image: nvidia/cuda:${{ needs.versions.outputs.cuda-132-patch }}-cudnn-devel-${{ needs.versions.outputs.docker-os-ubuntu }}
       env:
         PYTHONPATH: ""
         CPM_SOURCE_CACHE: "/__w/cpm_cache"
@@ -157,7 +157,7 @@ jobs:
         run: |
           uv venv
           echo "torch==${NEEDS_VERSIONS_OUTPUTS_TORCH_FULL_VERSION}" > "${RUNNER_TEMP}/torch-constraints.txt"
-          uv pip install --no-cache-dir -c "${RUNNER_TEMP}/torch-constraints.txt" -r env/build_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu128
+          uv pip install --no-cache-dir -c "${RUNNER_TEMP}/torch-constraints.txt" -r env/build_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu132
         env:
           NEEDS_VERSIONS_OUTPUTS_TORCH_FULL_VERSION: ${{ needs.versions.outputs.torch-full-version }}
 
@@ -209,7 +209,7 @@ jobs:
     permissions:
       id-token: write  # Required for AWS OIDC
     # required to stop the runner even if the error happened in the previous jobs
-    # but only if the start-tests-gpu-runner job was not skipped
+    # but only if the start-build-runner job was not skipped
     if: ${{ always() && needs.start-build-runner.result != 'skipped' }}
     steps:
       - name: Configure AWS credentials
@@ -257,10 +257,10 @@ jobs:
   ##############################################################################
   fvdb-gtests:
     needs: [start-tests-gpu-runner, versions] # required to start the main job when the runner is ready
-    name: fVDB GTests (pip CUDA 12.8)
+    name: fVDB GTests (pip CUDA 13.2)
     runs-on: ${{ needs.start-tests-gpu-runner.outputs.label }} # run the job on the newly created runner
     container:
-      image: nvidia/cuda:${{ needs.versions.outputs.cuda-128-patch }}-cudnn-runtime-${{ needs.versions.outputs.docker-os-ubuntu }}
+      image: nvidia/cuda:${{ needs.versions.outputs.cuda-132-patch }}-cudnn-runtime-${{ needs.versions.outputs.docker-os-ubuntu }}
       env:
         PYTHONPATH: ""
         CPM_SOURCE_CACHE: "/__w/cpm_cache"
@@ -331,7 +331,7 @@ jobs:
         run: |
           uv venv
           echo "torch==${NEEDS_VERSIONS_OUTPUTS_TORCH_FULL_VERSION}" > "${RUNNER_TEMP}/torch-constraints.txt"
-          uv pip install --no-cache-dir -c "${RUNNER_TEMP}/torch-constraints.txt" -r env/build_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu128
+          uv pip install --no-cache-dir -c "${RUNNER_TEMP}/torch-constraints.txt" -r env/build_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu132
         env:
           NEEDS_VERSIONS_OUTPUTS_TORCH_FULL_VERSION: ${{ needs.versions.outputs.torch-full-version }}
 
@@ -363,10 +363,10 @@ jobs:
   ##############################################################################
   fvdb-unit-test:
     needs: [start-tests-gpu-runner, versions] # required to start the main job when the runner is ready
-    name: fVDB Unit Tests (pip CUDA 12.8)
+    name: fVDB Unit Tests (pip CUDA 13.2)
     runs-on: ${{ needs.start-tests-gpu-runner.outputs.label }} # run the job on the newly created runner
     container:
-      image: nvidia/cuda:${{ needs.versions.outputs.cuda-128-patch }}-cudnn-devel-${{ needs.versions.outputs.docker-os-ubuntu }}
+      image: nvidia/cuda:${{ needs.versions.outputs.cuda-132-patch }}-cudnn-devel-${{ needs.versions.outputs.docker-os-ubuntu }}
       env:
         PYTHONPATH: ""
       options: --rm
@@ -428,7 +428,7 @@ jobs:
         run: |
           uv venv
           echo "torch==${NEEDS_VERSIONS_OUTPUTS_TORCH_FULL_VERSION}" > "${RUNNER_TEMP}/torch-constraints.txt"
-          uv pip install --no-cache-dir -c "${RUNNER_TEMP}/torch-constraints.txt" -r env/test_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu128
+          uv pip install --no-cache-dir -c "${RUNNER_TEMP}/torch-constraints.txt" -r env/test_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu132 --index-strategy unsafe-best-match
           uv pip install --no-cache-dir setuptools
         env:
           NEEDS_VERSIONS_OUTPUTS_TORCH_FULL_VERSION: ${{ needs.versions.outputs.torch-full-version }}
@@ -472,10 +472,10 @@ jobs:
   ##############################################################################
   fvdb-docs-test:
     needs: [start-tests-gpu-runner, versions] # required to start the main job when the runner is ready
-    name: fVDB Doc Tests (pip CUDA 12.8)
+    name: fVDB Doc Tests (pip CUDA 13.2)
     runs-on: ${{ needs.start-tests-gpu-runner.outputs.label }} # run the job on the newly created runner
     container:
-      image: nvidia/cuda:${{ needs.versions.outputs.cuda-128-patch }}-cudnn-runtime-${{ needs.versions.outputs.docker-os-ubuntu }}
+      image: nvidia/cuda:${{ needs.versions.outputs.cuda-132-patch }}-cudnn-runtime-${{ needs.versions.outputs.docker-os-ubuntu }}
       env:
         PYTHONPATH: ""
       options: --rm
@@ -535,7 +535,7 @@ jobs:
         run: |
           uv venv
           echo "torch==${NEEDS_VERSIONS_OUTPUTS_TORCH_FULL_VERSION}" > "${RUNNER_TEMP}/torch-constraints.txt"
-          uv pip install --no-cache-dir -c "${RUNNER_TEMP}/torch-constraints.txt" -r env/test_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu128
+          uv pip install --no-cache-dir -c "${RUNNER_TEMP}/torch-constraints.txt" -r env/test_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu132 --index-strategy unsafe-best-match
         env:
           NEEDS_VERSIONS_OUTPUTS_TORCH_FULL_VERSION: ${{ needs.versions.outputs.torch-full-version }}
 

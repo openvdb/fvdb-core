@@ -1,8 +1,8 @@
 {
   "cuda": {
     "versions": {
-      "12.8": { "patch": "12.8.1" },
-      "13.0": { "patch": "13.0.2" }
+      "13.0": { "patch": "13.0.2" },
+      "13.2": { "patch": "13.2.1" }
     },
     "default": "13.0",
     "conda_override": "13.0",
@@ -44,12 +44,12 @@
     "cloudfront_distribution_domain": "d36m13axqqhiit.cloudfront.net"
   },
   "publish_matrix": {
-    "python-version": ["3.10", "3.11", "3.12", "3.13", "3.14"],
-    "torch-version": ["2.11"],
-    "cuda-version": ["12.8", "13.0"],
+    "python-version": ["3.10", "3.11", "3.12", "3.13", "3.14", "3.15"],
+    "torch-version": ["2.13"],
+    "cuda-version": ["13.0", "13.2"],
     "include": [
-      { "cuda-version": "12.8", "cuda-image-tag": "12.8.1" },
-      { "cuda-version": "13.0", "cuda-image-tag": "13.0.2" }
+      { "cuda-version": "13.0", "cuda-image-tag": "13.0.2" },
+      { "cuda-version": "13.2", "cuda-image-tag": "13.2.1" }
     ]
   },
   "auditwheel_excludes": [

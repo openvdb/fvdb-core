@@ -12,7 +12,9 @@ The following is a compatibility matrix of the versions of software compatible w
 +--------------+------------------+-----------------+-----------------+----------------+------------------------------------------+
 | fVDB Version | Operating System | PyTorch Version | Python Version  | CUDA Version   | Vulkan Version (only for visualization)  |
 +--------------+------------------+-----------------+-----------------+----------------+------------------------------------------+
-| 0.5          | Linux Only       | 2.11.0          | 3.10 - 3.14     | 12.8, 13.0     | 1.3.275.0                                |
+| 0.6          | Linux Only       | 2.13.0          | 3.10 - 3.15     | 13.0, 13.2     | 1.3.275.0                                |
++--------------+------------------+-----------------+-----------------+----------------+------------------------------------------+
+| 0.5          | Linux Only       | 2.11.0          | 3.10 - 3.14     | 13.0, 13.2     | 1.3.275.0                                |
 +--------------+------------------+-----------------+-----------------+----------------+------------------------------------------+
 | 0.4          | Linux Only       | 2.10.0          | 3.10 - 3.13     | 12.8, 13.0     | 1.3.275.0                                |
 +--------------+------------------+-----------------+-----------------+----------------+------------------------------------------+
@@ -46,19 +48,18 @@ To install ``fvdb-core`` using pip, run the appropriate pip install command for 
 the correct version of ``fvdb-core`` if it is not already installed.
 
 
-PyTorch 2.11.0 + CUDA 13.0
+PyTorch 2.13.0 + CUDA 13.2
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. parsed-literal::
 
-    pip install fvdb-core==\ |fvdb_core_version_pt211_cu130| --extra-index-url="https://d36m13axqqhiit.cloudfront.net/simple" torch==\ |torch_full_version| --extra-index-url https://download.pytorch.org/whl/|cu130_tag|
+    pip install fvdb-core==\ |fvdb_core_version_pt213_cu132| --extra-index-url="https://d36m13axqqhiit.cloudfront.net/simple" torch==\ |torch_full_version| --extra-index-url https://download.pytorch.org/whl/|cu132_tag|
 
-PyTorch 2.11.0 + CUDA 12.8
+PyTorch 2.13.0 + CUDA 13.0
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. parsed-literal::
-
-    pip install fvdb-core==\ |fvdb_core_version_pt211_cu128| --extra-index-url="https://d36m13axqqhiit.cloudfront.net/simple" torch==\ |torch_full_version| --extra-index-url https://download.pytorch.org/whl/|cu128_tag|
+    pip install fvdb-core==\ |fvdb_core_version_pt213_cu130| --extra-index-url="https://d36m13axqqhiit.cloudfront.net/simple" torch==\ |torch_full_version| --extra-index-url https://download.pytorch.org/whl/|cu130_tag|
 
 .. note::
    Visualization and viewer features additionally require the ``nanovdb_editor`` Python package. Install it using the optional 'viewer' dependencies, by adding ``[viewer]`` to the ``fvdb-core`` package name, for example: ``pip install fvdb-core[viewer]==…``.
@@ -93,19 +94,19 @@ Latest nightly (any supported PyTorch/CUDA build)
     target a different build (for example, CUDA 12.8) or pin a specific date
     for reproducibility, use one of the explicit commands below.
 
-PyTorch 2.11.0 + CUDA 13.0
+PyTorch 2.13.0 + CUDA 13.2
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. parsed-literal::
+
+    pip install fvdb-core==\ |fvdb_core_nightly_base|\ .dev20260428+pt\ |torch_short|\ .\ |cu132_tag| --extra-index-url="https://d36m13axqqhiit.cloudfront.net/simple-nightly" torch==\ |torch_full_version| --extra-index-url https://download.pytorch.org/whl/|cu132_tag|
+
+PyTorch 2.13.0 + CUDA 13.0
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. parsed-literal::
 
     pip install fvdb-core==\ |fvdb_core_nightly_base|\ .dev20260428+pt\ |torch_short|\ .\ |cu130_tag| --extra-index-url="https://d36m13axqqhiit.cloudfront.net/simple-nightly" torch==\ |torch_full_version| --extra-index-url https://download.pytorch.org/whl/|cu130_tag|
-
-PyTorch 2.11.0 + CUDA 12.8
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. parsed-literal::
-
-    pip install fvdb-core==\ |fvdb_core_nightly_base|\ .dev20260428+pt\ |torch_short|\ .\ |cu128_tag| --extra-index-url="https://d36m13axqqhiit.cloudfront.net/simple-nightly" torch==\ |torch_full_version| --extra-index-url https://download.pytorch.org/whl/|cu128_tag|
 
 To list all available nightly versions:
 
