@@ -7,26 +7,158 @@
 #include <fvdb/detail/ops/BuildGridForConv.h>
 #include <fvdb/detail/ops/BuildGridFromIjk.h>
 #include <fvdb/detail/ops/CoarseIjkForFineGrid.h>
+#include <fvdb/detail/ops/convolution/ConvolutionGeometry.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
-#include <fvdb/detail/utils/cuda/GridDim.h>
 #include <fvdb/detail/utils/nanovdb/CreateEmptyGridHandle.h>
 #include <fvdb/detail/utils/nanovdb/PadGrid.cuh>
 
 #include <nanovdb/tools/CreateNanoGrid.h>
 #include <nanovdb/tools/cuda/DilateGrid.cuh>
-#include <nanovdb/tools/cuda/PointsToGrid.cuh>
 #include <nanovdb/util/MorphologyHelpers.h>
 
-#include <c10/cuda/CUDACachingAllocator.h>
+#include <c10/cuda/CUDAException.h>
 #include <c10/cuda/CUDAGuard.h>
-#include <c10/cuda/CUDAMathCompat.h>
 #include <torch/types.h>
+
+#include <algorithm>
+#include <limits>
 
 namespace fvdb {
 namespace detail {
 namespace ops {
+
+namespace {
+
+// Set by the last dispatchBuildGridForConv call on this thread. Read it on the same thread
+// before any subsequent build; this diagnostic intentionally has last-call-wins semantics.
+thread_local BuildGridForConvResourceStats gLastBuildGridForConvResourceStats;
+
+int64_t
+checkedAddInt64(int64_t lhs, int64_t rhs, const char *description) {
+    TORCH_CHECK_VALUE(lhs >= 0 && rhs >= 0, description, " must be nonnegative");
+    TORCH_CHECK_VALUE(
+        rhs <= std::numeric_limits<int64_t>::max() - lhs, description, " overflows int64");
+    return lhs + rhs;
+}
+
+int64_t
+checkedMultiplyInt64(int64_t lhs, int64_t rhs, const char *description) {
+    TORCH_CHECK_VALUE(lhs >= 0 && rhs >= 0, description, " must be nonnegative");
+    TORCH_CHECK_VALUE(lhs == 0 || rhs <= std::numeric_limits<int64_t>::max() / lhs,
+                      description,
+                      " overflows int64");
+    return lhs * rhs;
+}
+
+uint64_t
+checkedBytes(int64_t count, uint64_t bytesPerElement, const char *description) {
+    TORCH_CHECK_VALUE(count >= 0, description, " count must be nonnegative");
+    const uint64_t unsignedCount = static_cast<uint64_t>(count);
+    TORCH_CHECK_VALUE(unsignedCount == 0 ||
+                          bytesPerElement <= std::numeric_limits<uint64_t>::max() / unsignedCount,
+                      description,
+                      " byte count overflows uint64");
+    return unsignedCount * bytesPerElement;
+}
+
+uint64_t
+checkedAdd(uint64_t lhs, uint64_t rhs, const char *description) {
+    TORCH_CHECK_VALUE(rhs <= std::numeric_limits<uint64_t>::max() - lhs,
+                      description,
+                      " byte count overflows uint64");
+    return lhs + rhs;
+}
+
+bool
+isDirectProjection(ConvolutionGeometry const &geometry) {
+    return geometry.kernelSize() == geometry.stride();
+}
+
+bool
+isUnshiftedDirectProjection(ConvolutionGeometry const &geometry) {
+    return isDirectProjection(geometry) && geometry.paddingBefore() == nanovdb::Coord(0);
+}
+
+BuildGridForConvResourceStats
+directProjectionStats(int64_t inputVoxelCount,
+                      int64_t kernelVolume,
+                      bool usesCoordinateStaging = true) {
+    BuildGridForConvResourceStats stats;
+    stats.inputVoxelCount        = inputVoxelCount;
+    stats.kernelVolume           = kernelVolume;
+    stats.validEmissionCount     = inputVoxelCount;
+    stats.emissionRequestedBytes = usesCoordinateStaging
+                                       ? checkedBytes(inputVoxelCount,
+                                                      3 * sizeof(int32_t) + sizeof(fvdb::JIdxType),
+                                                      "direct projection staging")
+                                       : 0;
+    stats.peakRequestedBytes     = stats.emissionRequestedBytes;
+    stats.usedDirectProjection   = true;
+    return stats;
+}
+
+BuildGridForConvResourceStats
+morphologyStats(int64_t inputVoxelCount, int64_t kernelVolume) {
+    BuildGridForConvResourceStats stats;
+    stats.inputVoxelCount = inputVoxelCount;
+    stats.kernelVolume    = kernelVolume;
+    stats.validEmissionCount =
+        checkedMultiplyInt64(inputVoxelCount, kernelVolume, "morphology emission count");
+    return stats;
+}
+
+bool
+isUniformKernel(ConvolutionGeometry const &geometry) {
+    nanovdb::Coord const &kernelSize = geometry.kernelSize();
+    return kernelSize[0] == kernelSize[1] && kernelSize[1] == kernelSize[2];
+}
+
+bool
+supportsLeafMaskDirectProjection(ConvolutionGeometry const &geometry) {
+    return isUnshiftedDirectProjection(geometry) && isUniformKernel(geometry);
+}
+
+BuildGridForConvResourceStats
+countThenFillStats(int64_t inputVoxelCount, int64_t kernelVolume, int64_t validEmissionCount) {
+    BuildGridForConvResourceStats stats;
+    stats.inputVoxelCount    = inputVoxelCount;
+    stats.kernelVolume       = kernelVolume;
+    stats.validEmissionCount = validEmissionCount;
+    stats.countRequestedBytes =
+        checkedBytes(inputVoxelCount, sizeof(int32_t), "forward count staging");
+    stats.prefixRequestedBytes =
+        checkedBytes(inputVoxelCount + 1, sizeof(int64_t), "forward prefix staging");
+    stats.emissionRequestedBytes = checkedBytes(validEmissionCount,
+                                                3 * sizeof(int32_t) + sizeof(fvdb::JIdxType),
+                                                "forward emission staging");
+    stats.peakRequestedBytes     = std::max(checkedAdd(stats.countRequestedBytes,
+                                                   stats.prefixRequestedBytes,
+                                                   "forward count/prefix staging"),
+                                        checkedAdd(stats.prefixRequestedBytes,
+                                                   stats.emissionRequestedBytes,
+                                                   "forward prefix/emission staging"));
+    return stats;
+}
+
+void
+checkForwardInputAndKernel(int64_t inputVoxelCount, ConvolutionGeometry const &geometry) {
+    TORCH_CHECK_VALUE(inputVoxelCount >= 0, "input voxel count must be nonnegative");
+    TORCH_CHECK_VALUE(inputVoxelCount < std::numeric_limits<int64_t>::max(),
+                      "input voxel count is too large for a prefix array");
+    TORCH_CHECK_VALUE(geometry.kernelVolume() <= std::numeric_limits<int32_t>::max(),
+                      "kernel volume exceeds int32 count capacity");
+    (void)checkedBytes(inputVoxelCount, sizeof(int32_t), "forward count staging");
+    (void)checkedBytes(inputVoxelCount + 1, sizeof(int64_t), "forward prefix staging");
+}
+
+} // namespace
+
+BuildGridForConvResourceStats
+lastBuildGridForConvResourceStats() {
+    return gLastBuildGridForConvResourceStats;
+}
 
 template <torch::DeviceType>
 nanovdb::GridHandle<TorchDeviceBuffer> dispatchBuildGridForConv(const GridBatchData &baseBatchHdl,
@@ -39,10 +171,8 @@ buildCoarseGridFromFineGridCPU(const GridBatchData &fineBatchHdl,
     using GridT     = nanovdb::ValueOnIndex;
     using IndexTree = nanovdb::NanoTree<GridT>;
 
-    const nanovdb::GridHandle<TorchDeviceBuffer> &fineGridHdl = fineBatchHdl.nanoGridHandle();
-
     std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> batchHandles;
-    batchHandles.reserve(fineGridHdl.gridCount());
+    batchHandles.reserve(fineBatchHdl.batchSize());
     for (int64_t bidx = 0; bidx < fineBatchHdl.batchSize(); bidx += 1) {
         const nanovdb::OnIndexGrid *fineGrid = fineBatchHdl.hostGridPtrAt(bidx);
         if (!fineGrid) {
@@ -53,140 +183,208 @@ buildCoarseGridFromFineGridCPU(const GridBatchData &fineBatchHdl,
         using ProxyGridT       = nanovdb::tools::build::Grid<float>;
         auto proxyGrid         = std::make_shared<ProxyGridT>(-1.0f);
         auto proxyGridAccessor = proxyGrid->getWriteAccessor();
-
         for (auto it = ActiveVoxelIterator(fineTree); it.isValid(); it++) {
             const nanovdb::Coord coarseIjk =
                 (it->first.asVec3d() / branchingFactor.asVec3d()).floor();
             proxyGridAccessor.setValue(coarseIjk, 1.0f);
         }
-
         proxyGridAccessor.merge();
         auto ret = nanovdb::tools::createNanoGrid<ProxyGridT, GridT, TorchDeviceBuffer>(
             *proxyGrid, 0u, false, false);
         ret.buffer().to(torch::kCPU);
         batchHandles.push_back(std::move(ret));
     }
+    return batchHandles.size() == 1 ? std::move(batchHandles[0])
+                                    : nanovdb::mergeGrids(batchHandles);
+}
 
-    if (batchHandles.size() == 1) {
-        return std::move(batchHandles[0]);
-    } else {
-        return nanovdb::mergeGrids(batchHandles);
+__device__ void
+countConvIJKForGridCallback(int32_t bidx,
+                            int32_t lidx,
+                            int32_t vidx,
+                            int32_t,
+                            GridBatchData::Accessor batchAcc,
+                            ConvolutionGeometry geometry,
+                            TorchRAcc64<int32_t, 1> counts) {
+    const nanovdb::OnIndexGrid *gridPtr = batchAcc.grid(bidx);
+    const typename nanovdb::OnIndexGrid::LeafNodeType &leaf =
+        gridPtr->tree().template getFirstNode<0>()[lidx];
+    if (!leaf.isActive(vidx)) {
+        return;
+    }
+
+    const nanovdb::Coord srcIjk = leaf.offsetToGlobalCoord(vidx);
+    const int64_t sourceIndex =
+        batchAcc.voxelOffset(bidx) + static_cast<int64_t>(leaf.getValue(vidx)) - 1;
+    int32_t count = 0;
+    for (int64_t tapIndex = 0; tapIndex < geometry.kernelVolume(); ++tapIndex) {
+        nanovdb::Coord coarse;
+        if (geometry.coarseFromFine(srcIjk, geometry.tapCoord(tapIndex), coarse)) {
+            count += 1;
+        }
+    }
+    counts[sourceIndex] = count;
+}
+
+__device__ void
+fillConvIJKForGridCallback(int32_t bidx,
+                           int32_t lidx,
+                           int32_t vidx,
+                           int32_t,
+                           GridBatchData::Accessor batchAcc,
+                           ConvolutionGeometry geometry,
+                           TorchRAcc64<int64_t, 1> prefix,
+                           TorchRAcc64<int32_t, 2> outIJK,
+                           TorchRAcc64<fvdb::JIdxType, 1> outIJKBIdx) {
+    const nanovdb::OnIndexGrid *gridPtr = batchAcc.grid(bidx);
+    const typename nanovdb::OnIndexGrid::LeafNodeType &leaf =
+        gridPtr->tree().template getFirstNode<0>()[lidx];
+    if (!leaf.isActive(vidx)) {
+        return;
+    }
+
+    const nanovdb::Coord srcIjk = leaf.offsetToGlobalCoord(vidx);
+    const int64_t sourceIndex =
+        batchAcc.voxelOffset(bidx) + static_cast<int64_t>(leaf.getValue(vidx)) - 1;
+    int64_t writeIndex = prefix[sourceIndex];
+    for (int64_t tapIndex = 0; tapIndex < geometry.kernelVolume(); ++tapIndex) {
+        nanovdb::Coord coarse;
+        if (!geometry.coarseFromFine(srcIjk, geometry.tapCoord(tapIndex), coarse)) {
+            continue;
+        }
+        outIJK[writeIndex][0]  = coarse[0];
+        outIJK[writeIndex][1]  = coarse[1];
+        outIJK[writeIndex][2]  = coarse[2];
+        outIJKBIdx[writeIndex] = bidx;
+        writeIndex += 1;
     }
 }
 
 __device__ void
-convIjkForGridCallback(int32_t bidx,
-                       int32_t lidx,
-                       int32_t vidx,
-                       int32_t cidx,
-                       const GridBatchData::Accessor batchAcc,
-                       const nanovdb::Coord &kernelSize,
-                       const nanovdb::Coord &stride,
-                       int kernelVolume,
-                       TorchRAcc64<int32_t, 2> outIJKData,
-                       TorchRAcc64<fvdb::JIdxType, 1> outIJKBIdx,
-                       TorchRAcc64<bool, 1> outMask) {
+directConvIJKForGridCallback(int32_t bidx,
+                             int32_t lidx,
+                             int32_t vidx,
+                             int32_t,
+                             GridBatchData::Accessor batchAcc,
+                             ConvolutionGeometry geometry,
+                             TorchRAcc64<int32_t, 2> outIJK,
+                             TorchRAcc64<fvdb::JIdxType, 1> outIJKBIdx) {
     const nanovdb::OnIndexGrid *gridPtr = batchAcc.grid(bidx);
     const typename nanovdb::OnIndexGrid::LeafNodeType &leaf =
         gridPtr->tree().template getFirstNode<0>()[lidx];
-    if (!leaf.isActive(vidx))
+    if (!leaf.isActive(vidx)) {
         return;
-
-    const nanovdb::Coord &srcIjk = leaf.offsetToGlobalCoord(vidx);
-    const int64_t index          = ((int64_t)leaf.getValue(vidx)) - 1;
-    const int64_t baseOffset     = batchAcc.voxelOffset(bidx);
-
-    int lower[3], upper[3];
-    for (int i = 0; i < 3; ++i) {
-        if (kernelSize[i] % 2 == 0) {
-            lower[i] = 0;
-            upper[i] = kernelSize[i] - 1;
-        } else {
-            lower[i] = -(kernelSize[i] - 1) / 2;
-            upper[i] = (kernelSize[i] - 1) / 2;
-        }
     }
 
-    int64_t count = 0;
-    for (int di = lower[0]; di <= upper[0]; di += 1) {
-        for (int dj = lower[1]; dj <= upper[1]; dj += 1) {
-            for (int dk = lower[2]; dk <= upper[2]; dk += 1, count += 1) {
-                const nanovdb::Coord dstIjk = srcIjk + nanovdb::Coord(di, dj, dk);
-                if (dstIjk[0] % stride[0] != 0 || dstIjk[1] % stride[1] != 0 ||
-                    dstIjk[2] % stride[2] != 0)
-                    continue;
-                //  The original torchsparse implementation has a weird bug that checks the
-                //  coordsMin. if (dstIjk[0] < coordsMin[0] || dstIjk[1] < coordsMin[1] || dstIjk[2]
-                //  < coordsMin[2])
-                //      continue;
-                // if (dstIjk[0] > coordsMax[0] || dstIjk[1] > coordsMax[1] || dstIjk[2] >
-                // coordsMax[2])
-                //     continue;
-
-                const int64_t base  = (baseOffset + index) * kernelVolume + count;
-                outIJKData[base][0] = dstIjk[0] / stride[0];
-                outIJKData[base][1] = dstIjk[1] / stride[1];
-                outIJKData[base][2] = dstIjk[2] / stride[2];
-                outIJKBIdx[base]    = bidx;
-                outMask[base]       = true;
-            }
-        }
-    }
+    const nanovdb::Coord srcIjk = leaf.offsetToGlobalCoord(vidx);
+    const int64_t sourceIndex =
+        batchAcc.voxelOffset(bidx) + static_cast<int64_t>(leaf.getValue(vidx)) - 1;
+    const nanovdb::Coord &paddingBefore = geometry.paddingBefore();
+    const nanovdb::Coord &stride        = geometry.stride();
+    outIJK[sourceIndex][0]              = static_cast<int32_t>(ConvolutionGeometry::floorDiv(
+        static_cast<int64_t>(srcIjk[0]) + paddingBefore[0], stride[0]));
+    outIJK[sourceIndex][1]              = static_cast<int32_t>(ConvolutionGeometry::floorDiv(
+        static_cast<int64_t>(srcIjk[1]) + paddingBefore[1], stride[1]));
+    outIJK[sourceIndex][2]              = static_cast<int32_t>(ConvolutionGeometry::floorDiv(
+        static_cast<int64_t>(srcIjk[2]) + paddingBefore[2], stride[2]));
+    outIJKBIdx[sourceIndex]             = bidx;
 }
 
 JaggedTensor
-convIJKForGrid(const GridBatchData &batchHdl,
-               const nanovdb::Coord &kernelSize,
-               const nanovdb::Coord &stride) {
-    TORCH_CHECK(batchHdl.device().is_cuda(), "GridBatchData must be on CUDA device");
-    TORCH_CHECK(batchHdl.device().has_index(), "GridBatchData must have a valid index");
+directConvIJKForGrid(const GridBatchData &batchHdl, ConvolutionGeometry const &geometry) {
+    const int64_t inputVoxelCount = batchHdl.totalVoxels();
+    gLastBuildGridForConvResourceStats =
+        directProjectionStats(inputVoxelCount, geometry.kernelVolume());
 
-    if (kernelSize == nanovdb::Coord(1) || stride == kernelSize) {
-        return coarseIJKForFineGrid(batchHdl, nanovdb::Coord(stride));
-    }
-
-    const int32_t kernelVolume = kernelSize.x() * kernelSize.y() * kernelSize.z();
-
-    const torch::TensorOptions optsData =
-        torch::TensorOptions().dtype(torch::kInt32).device(batchHdl.device());
-    const torch::TensorOptions optsBIdx =
+    const auto dataOptions = torch::TensorOptions().dtype(torch::kInt32).device(batchHdl.device());
+    const auto batchOptions =
         torch::TensorOptions().dtype(fvdb::JIdxScalarType).device(batchHdl.device());
-    const torch::TensorOptions optsMask =
-        torch::TensorOptions().dtype(torch::kBool).device(batchHdl.device());
-    torch::Tensor outIJK     = torch::empty({batchHdl.totalVoxels() * kernelVolume, 3}, optsData);
-    torch::Tensor outIJKBIdx = torch::empty({batchHdl.totalVoxels() * kernelVolume}, optsBIdx);
-    torch::Tensor outMask    = torch::zeros({batchHdl.totalVoxels() * kernelVolume}, optsMask);
-
-    // For each voxel in source grid, compute possible voxels in target grid that affect them
-    auto outIJKAcc = outIJK.packed_accessor64<int32_t, 2, torch::RestrictPtrTraits>();
+    torch::Tensor outIJK     = torch::empty({inputVoxelCount, 3}, dataOptions);
+    torch::Tensor outIJKBIdx = torch::empty({inputVoxelCount}, batchOptions);
+    auto outIJKAcc           = outIJK.packed_accessor64<int32_t, 2, torch::RestrictPtrTraits>();
     auto outIJKBIdxAcc =
         outIJKBIdx.packed_accessor64<fvdb::JIdxType, 1, torch::RestrictPtrTraits>();
-    auto outMaskAcc = outMask.packed_accessor64<bool, 1, torch::RestrictPtrTraits>();
-
-    auto cb = [=] __device__(int32_t bidx,
-                             int32_t lidx,
-                             int32_t vidx,
-                             int32_t cidx,
-                             GridBatchData::Accessor bacc) {
-        convIjkForGridCallback(bidx,
-                               lidx,
-                               vidx,
-                               cidx,
-                               bacc,
-                               kernelSize,
-                               stride,
-                               kernelVolume,
-                               outIJKAcc,
-                               outIJKBIdxAcc,
-                               outMaskAcc);
+    auto callback = [=] __device__(int32_t bidx,
+                                   int32_t lidx,
+                                   int32_t vidx,
+                                   int32_t cidx,
+                                   GridBatchData::Accessor batchAcc) {
+        directConvIJKForGridCallback(
+            bidx, lidx, vidx, cidx, batchAcc, geometry, outIJKAcc, outIJKBIdxAcc);
     };
-    forEachVoxelCUDA(1, batchHdl, cb);
-
-    outIJK     = outIJK.index({outMask});
-    outIJKBIdx = outIJKBIdx.index({outMask});
-
+    forEachVoxelCUDA(1, batchHdl, callback);
     return JaggedTensor::from_data_indices_and_list_ids(
         outIJK, outIJKBIdx, batchHdl.jlidx(), batchHdl.batchSize());
+}
+
+JaggedTensor
+countThenFillConvIJKForGrid(const GridBatchData &batchHdl, ConvolutionGeometry const &geometry) {
+    const int64_t inputVoxelCount = batchHdl.totalVoxels();
+    const auto countOptions = torch::TensorOptions().dtype(torch::kInt32).device(batchHdl.device());
+    torch::Tensor counts    = torch::empty({inputVoxelCount}, countOptions);
+    auto countAcc           = counts.packed_accessor64<int32_t, 1, torch::RestrictPtrTraits>();
+    auto countCallback      = [=] __device__(int32_t bidx,
+                                        int32_t lidx,
+                                        int32_t vidx,
+                                        int32_t cidx,
+                                        GridBatchData::Accessor batchAcc) {
+        countConvIJKForGridCallback(bidx, lidx, vidx, cidx, batchAcc, geometry, countAcc);
+    };
+    forEachVoxelCUDA(1, batchHdl, countCallback);
+
+    torch::Tensor prefix =
+        torch::zeros({inputVoxelCount + 1},
+                     torch::TensorOptions().dtype(torch::kInt64).device(batchHdl.device()));
+    prefix.slice(0, 1, inputVoxelCount + 1).copy_(torch::cumsum(counts, 0, torch::kInt64));
+    const int64_t validEmissionCount = prefix[-1].item<int64_t>();
+    TORCH_CHECK_VALUE(validEmissionCount >= 0, "forward valid emission count must be nonnegative");
+    gLastBuildGridForConvResourceStats =
+        countThenFillStats(inputVoxelCount, geometry.kernelVolume(), validEmissionCount);
+
+    counts = torch::Tensor();
+
+    const auto dataOptions = torch::TensorOptions().dtype(torch::kInt32).device(batchHdl.device());
+    const auto batchOptions =
+        torch::TensorOptions().dtype(fvdb::JIdxScalarType).device(batchHdl.device());
+    torch::Tensor outIJK     = torch::empty({validEmissionCount, 3}, dataOptions);
+    torch::Tensor outIJKBIdx = torch::empty({validEmissionCount}, batchOptions);
+    auto prefixAcc           = prefix.packed_accessor64<int64_t, 1, torch::RestrictPtrTraits>();
+    auto outIJKAcc           = outIJK.packed_accessor64<int32_t, 2, torch::RestrictPtrTraits>();
+    auto outIJKBIdxAcc =
+        outIJKBIdx.packed_accessor64<fvdb::JIdxType, 1, torch::RestrictPtrTraits>();
+    auto fillCallback = [=] __device__(int32_t bidx,
+                                       int32_t lidx,
+                                       int32_t vidx,
+                                       int32_t cidx,
+                                       GridBatchData::Accessor batchAcc) {
+        fillConvIJKForGridCallback(
+            bidx, lidx, vidx, cidx, batchAcc, geometry, prefixAcc, outIJKAcc, outIJKBIdxAcc);
+    };
+    forEachVoxelCUDA(1, batchHdl, fillCallback);
+
+    prefix = torch::Tensor();
+    return JaggedTensor::from_data_indices_and_list_ids(
+        outIJK, outIJKBIdx, batchHdl.jlidx(), batchHdl.batchSize());
+}
+
+// Applies fn(grid) -> handle to each logical non-empty batch item, preserves empties, then merges.
+template <typename PerGridFn>
+nanovdb::GridHandle<TorchDeviceBuffer>
+perItemGridHandle(const GridBatchData &base, const TorchDeviceBuffer &guide, PerGridFn &&fn) {
+    std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> handles;
+    handles.reserve(base.batchSize());
+    for (int64_t i = 0; i < base.batchSize(); i += 1) {
+        if (base.numVoxelsAt(i) == 0) {
+            handles.push_back(createEmptyGridHandle(base.device()));
+            continue;
+        }
+
+        nanovdb::OnIndexGrid *grid = base.deviceGridPtrAt(i);
+        TORCH_CHECK(grid, "Grid is null");
+        handles.push_back(fn(grid));
+    }
+    return handles.size() == 1 ? std::move(handles[0])
+                               : nanovdb::cuda::mergeGridHandles(handles, &guide);
 }
 
 template <>
@@ -194,37 +392,37 @@ nanovdb::GridHandle<TorchDeviceBuffer>
 dispatchBuildGridForConv<torch::kCUDA>(const GridBatchData &baseGridHdl,
                                        const nanovdb::Coord &kernelSize,
                                        const nanovdb::Coord &stride) {
-    // Fast path 1: (kernel_size == 1 || stride == kernel_size) is pure coarsening by stride --
-    // exactly the coordinate short circuit in convIJKForGrid -- so reuse the leaf-mask coarsen
-    // builder (CoarsenGrid for uniform power-of-two stride, coordinate fallback otherwise).
-    if (kernelSize == nanovdb::Coord(1) || stride == kernelSize) {
-        return coarseGridHandleFromFineCUDA(baseGridHdl, stride);
+    ConvolutionGeometry const geometry(kernelSize, stride);
+    checkForwardInputAndKernel(baseGridHdl.totalVoxels(), geometry);
+
+    // NanoVDB can perform the unshifted K=S={1,2} projection directly on leaf masks.
+    // Larger K=S geometries have a nonzero canonical phase and use the exact quotient below.
+    if (supportsLeafMaskDirectProjection(geometry)) {
+        gLastBuildGridForConvResourceStats =
+            directProjectionStats(baseGridHdl.totalVoxels(), geometry.kernelVolume(), false);
+        return coarseGridHandleFromFineCUDA(baseGridHdl, geometry.stride());
+    }
+    if (isUnshiftedDirectProjection(geometry)) {
+        gLastBuildGridForConvResourceStats =
+            directProjectionStats(baseGridHdl.totalVoxels(), geometry.kernelVolume());
+        return ops::_createNanoGridFromIJK(coarseIJKForFineGrid(baseGridHdl, geometry.stride()));
     }
 
-    // Fast path 2: stride 1 with a uniform kernel builds S (+) window, where window is the kernel's
-    // offset box. For an odd kernel k the window is [-(k-1)/2, (k-1)/2]^3 == (k-1)/2 symmetric unit
-    // dilations; for an even kernel k it is [0, k-1]^3 == (k-1) positive unit pad passes. No
-    // coordinate list, no radix sort.
-    const bool uniformKernel = (kernelSize[0] == kernelSize[1] && kernelSize[1] == kernelSize[2]);
-    if (stride == nanovdb::Coord(1) && uniformKernel && kernelSize[0] > 1) {
+    // At stride one the canonical forward support is source (+)
+    // [-paddingAfter, paddingBefore]^3. Realize that box with NanoVDB morphology.
+    if (geometry.stride() == nanovdb::Coord(1) && isUniformKernel(geometry) &&
+        geometry.kernelSize()[0] > 1) {
+        gLastBuildGridForConvResourceStats =
+            morphologyStats(baseGridHdl.totalVoxels(), geometry.kernelVolume());
         c10::cuda::CUDAGuard deviceGuard(baseGridHdl.device());
         at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream(baseGridHdl.device().index());
         TorchDeviceBuffer guide(0, baseGridHdl.device());
-        const int k = kernelSize[0];
+        const int k = geometry.kernelSize()[0];
 
-        std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> handles;
-        handles.reserve(baseGridHdl.batchSize());
-        for (int64_t i = 0; i < baseGridHdl.batchSize(); i += 1) {
-            if (baseGridHdl.numVoxelsAt(i) == 0) {
-                handles.push_back(createEmptyGridHandle(baseGridHdl.device()));
-                continue;
-            }
-
-            nanovdb::OnIndexGrid *grid = baseGridHdl.deviceGridPtrAt(i);
-            TORCH_CHECK(grid, "Grid is null");
+        return perItemGridHandle(baseGridHdl, guide, [&](nanovdb::OnIndexGrid *grid) {
             nanovdb::GridHandle<TorchDeviceBuffer> handle;
             if (k % 2 == 1) {
-                for (int p = 0; p < (k - 1) / 2; p += 1) {
+                for (int p = 0; p < geometry.paddingBefore()[0]; p += 1) {
                     nanovdb::tools::cuda::DilateGrid<nanovdb::ValueOnIndex> op(grid,
                                                                                stream.stream());
                     op.setOperation(nanovdb::tools::morphology::NN_FACE_EDGE_VERTEX);
@@ -235,7 +433,15 @@ dispatchBuildGridForConv<torch::kCUDA>(const GridBatchData &baseGridHdl,
                     grid = handle.deviceGrid<nanovdb::ValueOnIndex>();
                 }
             } else {
-                for (int p = 0; p < k - 1; p += 1) {
+                for (int p = 0; p < geometry.paddingAfter()[0]; p += 1) {
+                    morphology::PadGrid<nanovdb::ValueOnIndex> op(
+                        grid, /*positiveOctant=*/false, stream.stream());
+                    op.setChecksum(nanovdb::CheckMode::Default);
+                    handle = op.getHandle(guide);
+                    C10_CUDA_KERNEL_LAUNCH_CHECK();
+                    grid = handle.deviceGrid<nanovdb::ValueOnIndex>();
+                }
+                for (int p = 0; p < geometry.paddingBefore()[0]; p += 1) {
                     morphology::PadGrid<nanovdb::ValueOnIndex> op(
                         grid, /*positiveOctant=*/true, stream.stream());
                     op.setChecksum(nanovdb::CheckMode::Default);
@@ -244,14 +450,14 @@ dispatchBuildGridForConv<torch::kCUDA>(const GridBatchData &baseGridHdl,
                     grid = handle.deviceGrid<nanovdb::ValueOnIndex>();
                 }
             }
-            handles.push_back(std::move(handle));
-        }
-        return handles.size() == 1 ? std::move(handles[0])
-                                   : nanovdb::cuda::mergeGridHandles(handles, &guide);
+            return handle;
+        });
     }
 
-    // Fallback: general coordinate-list path (non-uniform kernels, general strides > 1).
-    JaggedTensor coords = convIJKForGrid(baseGridHdl, kernelSize, stride);
+    // Shifted K=S uses one exact quotient per input. Other geometries use exact-M count/fill.
+    JaggedTensor coords = isDirectProjection(geometry)
+                              ? directConvIJKForGrid(baseGridHdl, geometry)
+                              : countThenFillConvIJKForGrid(baseGridHdl, geometry);
     return ops::_createNanoGridFromIJK(coords);
 }
 
@@ -261,77 +467,77 @@ dispatchBuildGridForConv<torch::kCPU>(const GridBatchData &baseBatchHdl,
                                       const nanovdb::Coord &kernelSize,
                                       const nanovdb::Coord &stride) {
     using GridT = nanovdb::ValueOnIndex;
-    if (kernelSize == nanovdb::Coord(1) || stride == kernelSize) {
-        return buildCoarseGridFromFineGridCPU(baseBatchHdl, stride);
+    ConvolutionGeometry const geometry(kernelSize, stride);
+    checkForwardInputAndKernel(baseBatchHdl.totalVoxels(), geometry);
+    if (isUnshiftedDirectProjection(geometry)) {
+        gLastBuildGridForConvResourceStats =
+            directProjectionStats(baseBatchHdl.totalVoxels(), geometry.kernelVolume());
+        return buildCoarseGridFromFineGridCPU(baseBatchHdl, geometry.stride());
     }
 
-    const nanovdb::GridHandle<TorchDeviceBuffer> &baseGridHdl = baseBatchHdl.nanoGridHandle();
     std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> batchHandles;
-    batchHandles.reserve(baseGridHdl.gridCount());
-
-    int lower[3], upper[3];
-    for (int i = 0; i < 3; i += 1) {
-        if (kernelSize[i] % 2 == 0) {
-            lower[i] = 0;
-            upper[i] = kernelSize[i] - 1;
-        } else {
-            lower[i] = -(kernelSize[i] - 1) / 2;
-            upper[i] = (kernelSize[i] - 1) / 2;
-        }
-    }
-
+    batchHandles.reserve(baseBatchHdl.batchSize());
+    const bool directProjection = isDirectProjection(geometry);
+    int64_t validEmissionCount  = 0;
     for (int64_t bidx = 0; bidx < baseBatchHdl.batchSize(); bidx += 1) {
         const nanovdb::OnIndexGrid *baseGrid = baseBatchHdl.hostGridPtrAt(bidx);
-        if (!baseGrid) {
-            throw std::runtime_error("Failed to get pointer to nanovdb index grid");
-        }
-
+        TORCH_CHECK(baseGrid != nullptr, "Failed to get pointer to nanovdb index grid");
         using ProxyGridT       = nanovdb::tools::build::Grid<float>;
         auto proxyGrid         = std::make_shared<ProxyGridT>(-1.0f);
         auto proxyGridAccessor = proxyGrid->getWriteAccessor();
-
         for (auto it = ActiveVoxelIterator(baseGrid->tree()); it.isValid(); it++) {
-            const nanovdb::Coord &ijk0 = it->first;
-
-            for (int di = lower[0]; di <= upper[0]; di += 1) {
-                for (int dj = lower[1]; dj <= upper[1]; dj += 1) {
-                    for (int dk = lower[2]; dk <= upper[2]; dk += 1) {
-                        const nanovdb::Coord dstIjk = ijk0 + nanovdb::Coord(di, dj, dk);
-                        if (dstIjk[0] % stride[0] != 0 || dstIjk[1] % stride[1] != 0 ||
-                            dstIjk[2] % stride[2] != 0)
-                            continue;
-                        proxyGridAccessor.setValue(nanovdb::Coord(dstIjk[0] / stride[0],
-                                                                  dstIjk[1] / stride[1],
-                                                                  dstIjk[2] / stride[2]),
-                                                   1.0f);
-                    }
+            const nanovdb::Coord fine = it->first;
+            if (directProjection) {
+                const nanovdb::Coord &paddingBefore = geometry.paddingBefore();
+                const nanovdb::Coord &strideValue   = geometry.stride();
+                proxyGridAccessor.setValue(
+                    nanovdb::Coord(
+                        static_cast<int32_t>(ConvolutionGeometry::floorDiv(
+                            static_cast<int64_t>(fine[0]) + paddingBefore[0], strideValue[0])),
+                        static_cast<int32_t>(ConvolutionGeometry::floorDiv(
+                            static_cast<int64_t>(fine[1]) + paddingBefore[1], strideValue[1])),
+                        static_cast<int32_t>(ConvolutionGeometry::floorDiv(
+                            static_cast<int64_t>(fine[2]) + paddingBefore[2], strideValue[2]))),
+                    1.0f);
+                continue;
+            }
+            for (int64_t tapIndex = 0; tapIndex < geometry.kernelVolume(); ++tapIndex) {
+                nanovdb::Coord coarse;
+                if (geometry.coarseFromFine(fine, geometry.tapCoord(tapIndex), coarse)) {
+                    proxyGridAccessor.setValue(coarse, 1.0f);
+                    validEmissionCount =
+                        checkedAddInt64(validEmissionCount, 1, "CPU emission count");
                 }
             }
         }
-
         proxyGridAccessor.merge();
-        auto ret = nanovdb::tools::createNanoGrid<ProxyGridT, GridT, TorchDeviceBuffer>(
-            *proxyGrid, 0u, false, false);
-        batchHandles.push_back(std::move(ret));
+        batchHandles.push_back(nanovdb::tools::createNanoGrid<ProxyGridT, GridT, TorchDeviceBuffer>(
+            *proxyGrid, 0u, false, false));
     }
-
-    if (batchHandles.size() == 1) {
-        return std::move(batchHandles[0]);
-    } else {
-        return nanovdb::mergeGrids(batchHandles);
-    }
+    gLastBuildGridForConvResourceStats =
+        directProjection
+            ? directProjectionStats(baseBatchHdl.totalVoxels(), geometry.kernelVolume())
+            : countThenFillStats(
+                  baseBatchHdl.totalVoxels(), geometry.kernelVolume(), validEmissionCount);
+    return batchHandles.size() == 1 ? std::move(batchHandles[0])
+                                    : nanovdb::mergeGrids(batchHandles);
 }
 
 c10::intrusive_ptr<GridBatchData>
 buildGridForConv(const GridBatchData &baseBatchHdl,
                  const nanovdb::Coord &kernelSize,
                  const nanovdb::Coord &stride) {
-    TORCH_CHECK_VALUE(nanovdb::Coord(0) < kernelSize, "kernel_size must be strictly positive.");
-    TORCH_CHECK_VALUE(nanovdb::Coord(0) < stride, "stride must be strictly positive.");
+    ConvolutionGeometry const geometry(kernelSize, stride);
     std::vector<nanovdb::Vec3d> voxS, voxO;
     baseBatchHdl.gridVoxelSizesAndOrigins(voxS, voxO);
+    for (auto &voxelSize: voxS) {
+        for (int axis = 0; axis < 3; ++axis) {
+            voxelSize[axis] *= geometry.stride()[axis];
+        }
+    }
     auto hdl = FVDB_DISPATCH_KERNEL_DEVICE(baseBatchHdl.device(), [&]() {
-        return dispatchBuildGridForConv<DeviceTag>(baseBatchHdl, kernelSize, stride);
+        return dispatchBuildGridForConv<DeviceTag>(
+            baseBatchHdl, geometry.kernelSize(), geometry.stride());
     });
     return makeGridBatchData(std::move(hdl), voxS, voxO);
 }

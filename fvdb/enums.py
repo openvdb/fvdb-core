@@ -2,7 +2,37 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 
-from enum import IntEnum
+from enum import IntEnum, StrEnum
+
+
+class ConvolutionTopologyPolicy(StrEnum):
+    """Policy controlling the finite output topology of a convolution plan."""
+
+    COMPLETE = "complete"
+    """Generate the complete, uncropped structural topology."""
+
+    RESTRICTED = "restricted"
+    """Evaluate the convolution relation only on an explicit target grid."""
+
+
+class ConvolutionTopologyProvenance(StrEnum):
+    """How a convolution plan's finite topology was obtained."""
+
+    GENERATED = "generated"
+    """Generated from the source grid using the canonical convolution relation."""
+
+    EXPLICIT_TARGET = "explicit_target"
+    """Restricted to a target grid supplied by the caller."""
+
+    EXACT_TRANSPOSE = "exact_transpose"
+    """Reversed directly from another plan's stored finite edge set."""
+
+
+class ConvolutionPhasePolicy(StrEnum):
+    """Kernel phase convention used by a convolution plan."""
+
+    TORCH_SAME_PHASE = "torch_same_phase"
+    """Use PyTorch ``padding=floor((kernel_size - 1) / 2)`` phase."""
 
 
 class SmoothingMode(IntEnum):

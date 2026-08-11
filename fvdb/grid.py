@@ -702,7 +702,10 @@ class Grid:
     # ============================================================
 
     def coarsened_grid(self, coarsening_factor: NumericMaxRank1) -> Grid:
-        """Return a coarsened version of this :class:`Grid`.
+        """Return a block-coarsened cell grid for pooling and aggregation.
+
+        It has a block-centroid transform and is not a convolution lattice; use :meth:`conv_grid`
+        for generated convolution support.
 
         Args:
             coarsening_factor (NumericMaxRank1): Factor by which to coarsen,
@@ -845,7 +848,10 @@ class Grid:
         return functional.contiguous_single(self)
 
     def conv_grid(self, kernel_size: NumericMaxRank1, stride: NumericMaxRank1 = 1) -> Grid:
-        """Return the output :class:`Grid` for a convolution with the given kernel.
+        """Return the complete structural-support grid for a convolution.
+
+        The result uses the canonical Torch-phase relation and convolution-lattice transform;
+        it is not a block-coarsened cell grid. ``kernel_size=stride=1`` returns this object.
 
         Args:
             kernel_size (NumericMaxRank1): Size of the convolution kernel,
@@ -862,7 +868,11 @@ class Grid:
         return functional.conv_grid_single(self, kernel_size, stride)
 
     def conv_transpose_grid(self, kernel_size: NumericMaxRank1, stride: NumericMaxRank1 = 1) -> Grid:
-        """Return the output :class:`Grid` for a transposed convolution.
+        """Return the complete structural-support grid for transposed convolution.
+
+        Each active coarse coordinate spreads through all canonical taps. This generated support
+        is adjoint connectivity, not a value inverse of a forward convolution.
+        ``kernel_size=stride=1`` returns this object.
 
         Args:
             kernel_size (NumericMaxRank1): Size of the convolution kernel,
@@ -871,8 +881,7 @@ class Grid:
                 shape ``(3,)``, integer dtype.
 
         Returns:
-            conv_transpose_grid (Grid): A new :class:`Grid` representing the
-                transposed convolution output topology.
+            conv_transpose_grid (Grid): The transposed-convolution output topology.
         """
         from . import functional
 
