@@ -16,7 +16,7 @@ FROM nvidia/cuda:${CUDA_IMAGE_TAG}-cudnn-devel-rockylinux8 AS builder
 SHELL ["/bin/bash", "-c"]
 
 ARG PYTHON_VERSION=3.12
-ARG TORCH_VERSION=2.11.0
+ARG TORCH_VERSION=2.13.0
 # Tag for the PyTorch wheel index, e.g. cu130
 ARG CUDA_TAG=cu130
 ARG CUDA_ARCH_LIST="7.5;8.0;8.6;9.0;10.0;12.0+PTX"

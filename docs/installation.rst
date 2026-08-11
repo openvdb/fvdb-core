@@ -90,8 +90,8 @@ Latest nightly (any supported PyTorch/CUDA build)
 
     The nightly index hosts wheels for every supported PyTorch/CUDA combination
     in a single project listing. Without an explicit local-version pin, ``pip``
-    selects the highest local version, which today is the CUDA 13.0 build. To
-    target a different build (for example, CUDA 12.8) or pin a specific date
+    selects the highest local version, which today is the CUDA 13.2 build. To
+    target a different build (for example, CUDA 13.0) or pin a specific date
     for reproducibility, use one of the explicit commands below.
 
 PyTorch 2.13.0 + CUDA 13.2

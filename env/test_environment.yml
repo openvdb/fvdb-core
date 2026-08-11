@@ -27,7 +27,7 @@ dependencies:
   - py-openimageio
   - pytest-benchmark
   - python=3.12
-  - pytorch-gpu=2.11.0
+  - pytorch-gpu=2.13.0
   - rich
   - scikit-learn
   - sphinx_rtd_theme
