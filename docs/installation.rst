@@ -156,6 +156,18 @@ only the GPU architecture present on this machine:
 
    ./docker/build_wheel.py --python 3.11 --torch 2.11.0 --cuda 13.0 --cuda-arch-list native
 
+The set of valid PyTorch/CUDA/Python combinations is determined by which wheels
+PyTorch publishes on `download.pytorch.org <https://download.pytorch.org/whl/>`_
+(the human-readable summary is on the `PyTorch get-started page
+<https://pytorch.org/get-started/locally/>`_). Before starting the Docker build,
+the script consults that package index and exits early with the list of
+available alternatives if no PyTorch wheel exists for the requested
+combination — for example, requesting ``--torch 2.13.0 --cuda 12.8`` will
+report the PyTorch versions actually published for CUDA 12.8. If the index
+cannot be reached (for example, when building offline), the check is skipped
+with a warning and an invalid combination will instead fail during the build's
+dependency-installation step.
+
 Run ``./docker/build_wheel.py --help`` for all options. The resulting wheel
 carries a ``+pt<torch>.cu<cuda>`` local version suffix (for example
 ``+pt211.cu130``) and must be installed alongside the matching PyTorch build:

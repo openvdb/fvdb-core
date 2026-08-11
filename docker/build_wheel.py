@@ -16,6 +16,8 @@ import re
 import shutil
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -147,6 +149,56 @@ PEP440_RE = re.compile(
 )
 
 
+def version_sort_key(version):
+    return [int(part) for part in re.findall(r"\d+", version)]
+
+
+def check_torch_wheel_available(torch_version, cuda_tag, python_version):
+    """Fail fast if PyTorch does not publish a wheel for the requested
+    torch/CUDA/Python combination, by consulting the same package index the
+    build will resolve against. On network failure, warn and continue (the
+    docker build will still fail naturally if the combination is invalid)."""
+    index_url = f"https://download.pytorch.org/whl/{cuda_tag}/torch/"
+    try:
+        with urllib.request.urlopen(index_url, timeout=15) as response:
+            index = response.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as error:
+        if error.code in (403, 404):
+            die(
+                f"{cuda_tag} is not a published PyTorch CUDA variant "
+                f"(no index at {index_url}). See "
+                "https://pytorch.org/get-started/locally/ for available variants."
+            )
+        print(f"Warning: could not query {index_url} ({error}); skipping PyTorch wheel check")
+        return
+    except (urllib.error.URLError, OSError, TimeoutError) as error:
+        print(f"Warning: could not query {index_url} ({error}); skipping PyTorch wheel check")
+        return
+
+    # Index entries look like torch-2.11.0+cu130-cp312-cp312-manylinux_2_28_x86_64.whl
+    # ('+' may appear URL-encoded as %2B in hrefs).
+    wheels = re.findall(
+        rf"torch-([0-9][0-9.a-z]*)(?:%2B|\+){cuda_tag}-cp([0-9]+)-[^\s\"']*linux[^\s\"']*x86_64",
+        index,
+    )
+    available_versions = sorted({version for version, _ in wheels}, key=version_sort_key)
+    if torch_version not in available_versions:
+        die(
+            f"PyTorch does not publish a torch=={torch_version} wheel for {cuda_tag}; "
+            f"available versions for {cuda_tag}: {', '.join(available_versions)}"
+        )
+    cp_tag = python_version.replace(".", "")
+    available_pythons = sorted(
+        {cp for version, cp in wheels if version == torch_version}, key=int
+    )
+    if cp_tag not in available_pythons:
+        pythons = ", ".join(f"{cp[0]}.{cp[1:]}" for cp in available_pythons)
+        die(
+            f"PyTorch does not publish a torch=={torch_version}+{cuda_tag} wheel "
+            f"for Python {python_version}; available Python versions: {pythons}"
+        )
+
+
 def read_pyproject_version():
     for line in (REPO_ROOT / "pyproject.toml").read_text().splitlines():
         match = re.match(r'^version\s*=\s*"([^"]+)"', line)
@@ -200,6 +252,8 @@ def main():
     cuda_major = cuda_components[0]
     torch_tag = "".join(args.torch_version.split(".")[:2])
     local_suffix = f"+pt{torch_tag}.{cuda_tag}"
+
+    check_torch_wheel_available(args.torch_version, cuda_tag, args.python_version)
 
     cuda_arch_list = args.cuda_arch_list
     if cuda_arch_list == "native":
@@ -255,6 +309,9 @@ def main():
         command += ["--build-arg", f"{name}={value}"]
     command.append(str(REPO_ROOT))
 
+    # Flush our own output before docker starts writing to the same stream,
+    # so the configuration summary precedes the build log when piped (e.g. CI).
+    sys.stdout.flush()
     result = subprocess.run(command, env={**os.environ, "DOCKER_BUILDKIT": "1"})
     if result.returncode != 0:
         sys.exit(result.returncode)
