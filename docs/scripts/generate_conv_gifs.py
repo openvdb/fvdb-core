@@ -237,13 +237,13 @@ def _compute_strided_output(input_active, kernel_size, stride):
 
 
 def _compute_transposed_output(coarse_active, fine_active, kernel_size, stride):
-    """Return a bool mask of target voxels that receive any contribution.
+    """Return a bool mask of restricted-target voxels that receive a contribution.
 
-    In fVDB, the output topology of a strided transposed convolution is the
-    full `target_grid` — voxels with no contributing source neighbors simply
-    receive zero.  For the tutorial visualisation we compute which target
-    voxels actually receive a contribution, so the animation can show them
-    filling in as each coarse input cell is processed.
+    This tutorial intentionally supplies the saved fine topology as a
+    ``restricted`` target. Its rows remain in the output even when they have
+    zero degree. With ``target_grid=None``, fVDB instead generates complete
+    transposed structural support. Here we compute which restricted rows
+    actually receive a contribution so the animation can show them filling in.
     """
     coarse_rows, coarse_cols = coarse_active.shape
     fine_rows, fine_cols = fine_active.shape
@@ -463,10 +463,10 @@ def _build_transposed_conv_animation(save_path, coarse_output):
         cell_fine,
         fine_origin,
         COLOR_ACTIVE_OUT,
-        label="Output (fine grid, guided by target_grid)",
+        label="Output (restricted saved fine grid)",
         label_y_offset=0,
     )
-    # Dashed outlines showing the full target_grid topology (padded display)
+    # Dashed outlines show the explicitly restricted target (padded display).
     _draw_target_outlines(ax, fine_padded, cell_fine, fine_origin)
 
     # Legend (below the coarse input grid label)

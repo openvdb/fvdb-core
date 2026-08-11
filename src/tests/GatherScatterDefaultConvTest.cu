@@ -55,14 +55,18 @@
 #include <fvdb/JaggedTensor.h>
 #include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/BuildGridForConv.h>
+#include <fvdb/detail/ops/BuildGridForConvTranspose.h>
 #include <fvdb/detail/ops/BuildGridFromIjk.h>
+#include <fvdb/detail/ops/convolution/ConvolutionGeometry.h>
 #include <fvdb/detail/ops/convolution/GatherScatterDefault.h>
 
 #include <torch/types.h>
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <cmath>
+#include <limits>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -178,6 +182,135 @@ makeStridedTestGrid(torch::Device device) {
         ijk[i][2] = coords[i][2];
     }
     return makeGrid(ijk, device);
+}
+
+// =============================================================================
+// Canonical geometry
+// =============================================================================
+
+TEST(ConvolutionGeometry, StoresCanonicalPhaseAndTapLayout) {
+    ops::ConvolutionGeometry const geometry(nanovdb::Coord(4, 3, 6), nanovdb::Coord(2, 3, 4));
+
+    EXPECT_EQ(geometry.semanticsVersion(), 1);
+    EXPECT_EQ(geometry.kernelVolume(), 72);
+    EXPECT_EQ(geometry.paddingBefore(), nanovdb::Coord(1, 1, 2));
+    EXPECT_EQ(geometry.paddingAfter(), nanovdb::Coord(2, 1, 3));
+    EXPECT_EQ(geometry.tapCoord(23), nanovdb::Coord(1, 0, 5));
+    EXPECT_EQ(geometry.tapOffset(geometry.tapCoord(23)), nanovdb::Coord(0, -1, 3));
+    EXPECT_EQ(geometry.fineFromCoarse(nanovdb::Coord(3, -2, 1), nanovdb::Coord(0, 0, 0)),
+              nanovdb::Coord(5, -7, 2));
+}
+
+TEST(ConvolutionGeometry, UsesEuclideanDivisionForNegativeCoordinates) {
+    EXPECT_EQ(ops::ConvolutionGeometry::floorDiv(-5, 4), -2);
+    EXPECT_EQ(ops::ConvolutionGeometry::floorMod(-5, 4), 3);
+    EXPECT_TRUE(ops::ConvolutionGeometry::isDivisible(-4, 4));
+    EXPECT_FALSE(ops::ConvolutionGeometry::isDivisible(-3, 4));
+
+    ops::ConvolutionGeometry const geometry(nanovdb::Coord(4), nanovdb::Coord(4));
+    nanovdb::Coord coarse;
+    EXPECT_TRUE(geometry.coarseFromFine(nanovdb::Coord(-2), nanovdb::Coord(3), coarse));
+    EXPECT_EQ(coarse, nanovdb::Coord(-1));
+    EXPECT_EQ(geometry.fineFromCoarse(coarse, nanovdb::Coord(3)), nanovdb::Coord(-2));
+    EXPECT_FALSE(geometry.coarseFromFine(nanovdb::Coord(-2), nanovdb::Coord(2), coarse));
+}
+
+TEST(ConvolutionGeometry, DirectProjectionQuotientAndBlockArePhaseAwareForSizesOneThroughSix) {
+    std::array<nanovdb::Coord, 5> const fineCoords = {
+        nanovdb::Coord(-7, -5, -3),
+        nanovdb::Coord(-2, -1, 0),
+        nanovdb::Coord(0, 1, 2),
+        nanovdb::Coord(3, 4, 5),
+        nanovdb::Coord(8, 7, 6),
+    };
+    for (int32_t k = 1; k <= 6; ++k) {
+        ops::ConvolutionGeometry const geometry{nanovdb::Coord(k), nanovdb::Coord(k)};
+        for (nanovdb::Coord const &fine: fineCoords) {
+            nanovdb::Coord const shifted = fine + geometry.paddingBefore();
+            nanovdb::Coord const coarse(ops::ConvolutionGeometry::floorDiv(shifted[0], k),
+                                        ops::ConvolutionGeometry::floorDiv(shifted[1], k),
+                                        ops::ConvolutionGeometry::floorDiv(shifted[2], k));
+            nanovdb::Coord const tap(ops::ConvolutionGeometry::floorMod(shifted[0], k),
+                                     ops::ConvolutionGeometry::floorMod(shifted[1], k),
+                                     ops::ConvolutionGeometry::floorMod(shifted[2], k));
+            nanovdb::Coord rebuilt;
+            EXPECT_TRUE(geometry.coarseFromFine(fine, tap, rebuilt)) << "K=" << k;
+            EXPECT_EQ(rebuilt, coarse) << "K=" << k;
+            EXPECT_EQ(geometry.fineFromCoarse(coarse, tap), fine) << "K=" << k;
+        }
+    }
+
+    ops::ConvolutionGeometry const mixed(nanovdb::Coord(2, 3, 4), nanovdb::Coord(2, 3, 4));
+    nanovdb::Coord const mixedFine(-3, -4, 6);
+    nanovdb::Coord const mixedShifted = mixedFine + mixed.paddingBefore();
+    nanovdb::Coord const mixedCoarse(ops::ConvolutionGeometry::floorDiv(mixedShifted[0], 2),
+                                     ops::ConvolutionGeometry::floorDiv(mixedShifted[1], 3),
+                                     ops::ConvolutionGeometry::floorDiv(mixedShifted[2], 4));
+    nanovdb::Coord const mixedTap(ops::ConvolutionGeometry::floorMod(mixedShifted[0], 2),
+                                  ops::ConvolutionGeometry::floorMod(mixedShifted[1], 3),
+                                  ops::ConvolutionGeometry::floorMod(mixedShifted[2], 4));
+    EXPECT_EQ(mixed.fineFromCoarse(mixedCoarse, mixedTap), mixedFine);
+    EXPECT_EQ(ops::ConvolutionGeometry(nanovdb::Coord(2), nanovdb::Coord(2)).paddingBefore(),
+              nanovdb::Coord(0));
+}
+
+TEST(BuildGridForConv, DirectProjectionUsesOneEmissionPerInputForKEqualsS) {
+    auto const device = torch::Device(torch::kCPU);
+    auto ijk          = torch::tensor({{-7, -3, -1}, {-2, -1, 0}, {0, 1, 2}, {3, 4, 5}, {8, 7, 6}},
+                             torch::dtype(torch::kInt32));
+    auto grid         = makeGrid(ijk, device);
+    for (int32_t k = 1; k <= 6; ++k) {
+        auto output      = ops::buildGridForConv(*grid, nanovdb::Coord(k), nanovdb::Coord(k));
+        auto const stats = ops::lastBuildGridForConvResourceStats();
+        EXPECT_EQ(stats.inputVoxelCount, grid->totalVoxels()) << "K=" << k;
+        EXPECT_EQ(stats.kernelVolume, static_cast<int64_t>(k) * k * k) << "K=" << k;
+        EXPECT_EQ(stats.validEmissionCount, grid->totalVoxels()) << "K=" << k;
+        EXPECT_TRUE(stats.usedDirectProjection) << "K=" << k;
+        EXPECT_EQ(stats.countRequestedBytes, 0u) << "K=" << k;
+        EXPECT_EQ(stats.prefixRequestedBytes, 0u) << "K=" << k;
+        EXPECT_EQ(stats.peakRequestedBytes, stats.emissionRequestedBytes) << "K=" << k;
+        EXPECT_LE(output->totalVoxels(), grid->totalVoxels()) << "K=" << k;
+    }
+
+    auto coarse = makeGrid(torch::tensor({{-2, 1, 0}}, torch::dtype(torch::kInt32)), device);
+    auto fine =
+        ops::buildGridForConvTranspose(*coarse, nanovdb::Coord(2, 3, 4), nanovdb::Coord(2, 3, 4));
+    EXPECT_EQ(fine->totalVoxels(), 2 * 3 * 4);
+}
+
+TEST(BuildGridForConv, CountThenFillReportsExactSparseEmissionCount) {
+    auto const device = torch::Device(torch::kCPU);
+    auto ijk          = torch::tensor({{-4, 0, 0}, {-1, 0, 0}, {0, 0, 0}, {3, 0, 0}, {4, 0, 0}},
+                             torch::dtype(torch::kInt32));
+    auto grid         = makeGrid(ijk, device);
+    ops::ConvolutionGeometry const geometry(nanovdb::Coord(3, 1, 1), nanovdb::Coord(4, 1, 1));
+    int64_t expectedM = 0;
+    for (int64_t index = 0; index < ijk.size(0); ++index) {
+        nanovdb::Coord const fine(ijk[index][0].item<int32_t>(), 0, 0);
+        for (int64_t tap = 0; tap < geometry.kernelVolume(); ++tap) {
+            nanovdb::Coord ignored;
+            expectedM += geometry.coarseFromFine(fine, geometry.tapCoord(tap), ignored) ? 1 : 0;
+        }
+    }
+    (void)ops::buildGridForConv(*grid, geometry.kernelSize(), geometry.stride());
+    auto const stats = ops::lastBuildGridForConvResourceStats();
+    EXPECT_FALSE(stats.usedDirectProjection);
+    EXPECT_EQ(stats.validEmissionCount, expectedM);
+    EXPECT_LT(stats.validEmissionCount, stats.inputVoxelCount * stats.kernelVolume);
+    EXPECT_EQ(stats.emissionRequestedBytes,
+              static_cast<uint64_t>(expectedM) * (3 * sizeof(int32_t) + sizeof(fvdb::JIdxType)));
+    EXPECT_GT(stats.countRequestedBytes, 0u);
+    EXPECT_GT(stats.prefixRequestedBytes, 0u);
+}
+
+TEST(ConvolutionGeometry, RejectsInvalidAndOverflowingVolumes) {
+    EXPECT_THROW((void)ops::ConvolutionGeometry(nanovdb::Coord(0, 1, 1), nanovdb::Coord(1)),
+                 c10::Error);
+    EXPECT_THROW((void)ops::ConvolutionGeometry(nanovdb::Coord(1), nanovdb::Coord(0, 1, 1)),
+                 c10::Error);
+    EXPECT_THROW((void)ops::ConvolutionGeometry(nanovdb::Coord(std::numeric_limits<int32_t>::max()),
+                                                nanovdb::Coord(1)),
+                 c10::Error);
 }
 
 static torch::TensorOptions
@@ -692,6 +825,75 @@ TEST(GatherScatterDefaultTopology, SanityChecks) {
             EXPECT_LT(si.max().item<int32_t>(), topo.outputTotalVoxels);
         }
     }
+}
+
+TEST(GatherScatterDefaultTopology, ReverseIsConstantTimeExactAndInvolutive) {
+    for (auto devType: {torch::kCPU, torch::kCUDA}) {
+        skipIfCudaUnavailable(devType);
+        auto const device = makeDevice(devType);
+        auto fine =
+            makeGrid(torch::tensor({{-5, -2, 0}, {-1, 0, 2}, {0, 1, 2}, {3, 4, 5}, {7, 2, -3}},
+                                   torch::dtype(torch::kInt32)),
+                     device);
+        nanovdb::Coord const kernelSize(4, 3, 2);
+        nanovdb::Coord const stride(3, 2, 4);
+        auto coarse = ops::buildGridForConv(*fine, kernelSize, stride);
+        auto forward =
+            ops::gatherScatterDefaultSparseConvTopology(*fine, *coarse, kernelSize, stride);
+
+        EXPECT_NO_THROW(ops::validateGatherScatterDefaultTopology(*fine, *coarse, forward));
+        auto reversed = ops::reverseGatherScatterDefaultTopology(forward);
+
+        EXPECT_TRUE(reversed.gatherIndices.is_same(forward.scatterIndices));
+        EXPECT_TRUE(reversed.scatterIndices.is_same(forward.gatherIndices));
+        EXPECT_TRUE(reversed.offsets.is_same(forward.offsets));
+        EXPECT_EQ(reversed.featureTotalVoxels, forward.outputTotalVoxels);
+        EXPECT_EQ(reversed.outputTotalVoxels, forward.featureTotalVoxels);
+        EXPECT_EQ(reversed.kernelVolume, forward.kernelVolume);
+        EXPECT_EQ(reversed.totalPairs, forward.totalPairs);
+        EXPECT_EQ(reversed.kernelSize, forward.kernelSize);
+        EXPECT_EQ(reversed.stride, forward.stride);
+        EXPECT_EQ(reversed.direction, ops::ConvDirection::Transposed);
+        EXPECT_NO_THROW(ops::validateGatherScatterDefaultTopology(*fine, *coarse, reversed));
+
+        auto roundTrip = ops::reverseGatherScatterDefaultTopology(reversed);
+        EXPECT_TRUE(roundTrip.gatherIndices.is_same(forward.gatherIndices));
+        EXPECT_TRUE(roundTrip.scatterIndices.is_same(forward.scatterIndices));
+        EXPECT_TRUE(roundTrip.offsets.is_same(forward.offsets));
+        EXPECT_EQ(roundTrip.featureTotalVoxels, forward.featureTotalVoxels);
+        EXPECT_EQ(roundTrip.outputTotalVoxels, forward.outputTotalVoxels);
+        EXPECT_EQ(roundTrip.direction, ops::ConvDirection::Forward);
+        EXPECT_NO_THROW(ops::validateGatherScatterDefaultTopology(*fine, *coarse, roundTrip));
+    }
+}
+
+TEST(GatherScatterDefaultTopology, ValidatorRejectsMetadataRangesAndNoncanonicalEdges) {
+    auto const device = torch::Device(torch::kCPU);
+    auto grid         = makeDenseTestGrid(2, device);
+    nanovdb::Coord const kernelSize(1, 1, 1);
+    nanovdb::Coord const stride(1, 1, 1);
+    auto topology = ops::gatherScatterDefaultSparseConvTopology(*grid, *grid, kernelSize, stride);
+    ASSERT_GT(topology.totalPairs, 1);
+    EXPECT_NO_THROW(ops::validateGatherScatterDefaultTopology(*grid, *grid, topology));
+
+    auto badMetadata = topology;
+    ++badMetadata.featureTotalVoxels;
+    EXPECT_THROW(ops::validateGatherScatterDefaultTopology(*grid, *grid, badMetadata), c10::Error);
+
+    auto badOffsets    = topology;
+    badOffsets.offsets = topology.offsets.clone();
+    badOffsets.offsets.index_put_({0}, 1);
+    EXPECT_THROW(ops::validateGatherScatterDefaultTopology(*grid, *grid, badOffsets), c10::Error);
+
+    auto badRange          = topology;
+    badRange.gatherIndices = torch::full_like(topology.gatherIndices, topology.featureTotalVoxels);
+    EXPECT_THROW(ops::validateGatherScatterDefaultTopology(*grid, *grid, badRange), c10::Error);
+
+    auto badEdge             = topology;
+    badEdge.gatherIndices    = topology.gatherIndices.clone();
+    int32_t const firstIndex = topology.gatherIndices[0].item<int32_t>();
+    badEdge.gatherIndices.index_put_({0}, (firstIndex + 1) % topology.featureTotalVoxels);
+    EXPECT_THROW(ops::validateGatherScatterDefaultTopology(*grid, *grid, badEdge), c10::Error);
 }
 
 TEST(GatherScatterDefaultBackward, IdentityGradients) {
@@ -1389,6 +1591,40 @@ TEST(GatherScatterDefaultError, WrongTopologyDirection) {
     EXPECT_THROW(
         ops::gatherScatterDefaultSparseConvTransposeBackward(grad_out, features, weights, fwd_topo),
         c10::Error);
+}
+
+TEST(GatherScatterDefaultBackward, DirectionIsEndpointMetadataOnly) {
+    auto const device = torch::Device(torch::kCPU);
+    auto fine         = makeDenseTestGrid(4, device);
+    nanovdb::Coord const kernelSize(3, 3, 3);
+    nanovdb::Coord const stride(2, 2, 2);
+    auto coarse  = ops::buildGridForConv(*fine, kernelSize, stride);
+    auto forward = ops::gatherScatterDefaultSparseConvTopology(*fine, *coarse, kernelSize, stride);
+
+    int64_t constexpr inputChannels  = 3;
+    int64_t constexpr outputChannels = 5;
+    torch::manual_seed(668);
+    auto features = torch::randn({fine->totalVoxels(), inputChannels}, torch::kFloat64);
+    auto weights =
+        torch::randn({outputChannels, inputChannels, kernelSize[0], kernelSize[1], kernelSize[2]},
+                     torch::kFloat64);
+    auto gradOutput = torch::randn({coarse->totalVoxels(), outputChannels}, torch::kFloat64);
+
+    auto [forwardGradFeatures, forwardGradWeights] =
+        ops::gatherScatterDefaultSparseConvBackward(gradOutput, features, weights, forward);
+    auto [referenceGradFeatures, referenceGradWeights] =
+        naiveConvBackward(gradOutput, features, weights, forward);
+
+    auto transposedMetadata      = forward;
+    transposedMetadata.direction = ops::ConvDirection::Transposed;
+    auto [transposedGradFeatures, transposedGradWeights] =
+        ops::gatherScatterDefaultSparseConvTransposeBackward(
+            gradOutput, features, weights, transposedMetadata);
+
+    EXPECT_TRUE(torch::allclose(forwardGradFeatures, referenceGradFeatures, 1e-8, 1e-8));
+    EXPECT_TRUE(torch::allclose(forwardGradWeights, referenceGradWeights, 1e-8, 1e-8));
+    EXPECT_TRUE(torch::equal(transposedGradFeatures, forwardGradFeatures));
+    EXPECT_TRUE(torch::equal(transposedGradWeights, forwardGradWeights));
 }
 
 TEST(GatherScatterDefaultError, FeaturesNot2D) {

@@ -4,6 +4,37 @@ fVDB Version History
 ## Version 0.6.0 - In Development
 
 - **PyTorch 2.13** fVDB updated to build, test and publish with PyTorch 2.13, CUDA 13.0/13.2 and Python 3.10-3.15 support.
+- **Breaking:** Unified sparse convolution and transposed-convolution geometry around the componentwise Torch-phase
+  relation ``fine_ijk = stride * coarse_ijk + tap_ijk - padding_before``, where
+  ``padding_before = floor((kernel_size - 1) / 2)`` and each zero-based tap component satisfies
+  ``0 <= tap_ijk[axis] < kernel_size[axis]`` (issue #668). Generated topology now uses the `complete` policy; an
+  explicit target uses the `restricted` policy and is an evaluation domain, not a different kernel rule. This changes
+  generated topology for affected even kernels, `kernel_size == stride >= 3`, and `kernel_size=1, stride>1`; the
+  proved `kernel_size=stride=2` path is retained.
+- **Breaking:** Generated strided convolution grids now have voxel size `stride * h` and the canonical input
+  origin; generated transposed grids apply the inverse scale. Explicit convolution grid pairs with incompatible
+  scale or origin registration now fail instead of being silently interpreted in index space. `coarsened_grid`
+  remains a block-centroid cell grid and must not be used as a convolution target.
+- `ConvolutionPlan.from_grid_batch_transposed(..., target_grid=None)` now generates full transposed support.
+  A saved decoder target is an explicit restriction and may have zero-degree rows; transposed convolution is
+  adjoint connectivity, not a value inverse. `ConvolutionPlan.from_plan_transposed` reverses a plan's exact
+  finite edges; a tied weighted adjoint uses `weight.transpose(0, 1).contiguous()`.
+- `Grid.conv_grid(1, 1)`, `GridBatch.conv_grid(1, 1)`, and their transposed-grid counterparts now return the
+  source object, preserving the identity matmul path and its compact two-dimensional weight layout. One-tap
+  convolutions with larger stride sample stride-aligned residues rather than coarsening all blocks. Removed rows
+  had zero linear degree before bias, but a model with bias can observe their removal.
+- Full coverage histograms are computed only when `ConvolutionPlan.coverage_report` is requested and are shared
+  with exact plan transposes; generated-support and strict-target zero-row checks remain eager. Generative CUDA
+  transpose checks its exact emission-staging size before allocation and adds that context if PyTorch's allocator
+  reports an out-of-memory failure; allocator capacity is not predicted from aggregate cache statistics.
+- **Migration:** Invalidate serialized or in-memory topology/plan caches when upgrading: cache keys must include
+  the convolution-semantics version. Weight spatial ordering is unchanged, but affected checkpoints can produce
+  different topologies and world registration. No legacy geometry mode is shipped in 0.6.0; migrate model
+  configuration and cached plans to the canonical relation. The incorrect legacy coordinate division and duplicated
+  phase rules are intentionally not retained behind a compatibility mode.
+- The dense convolution expert backend is disabled until it can realize this contract exactly. PredGatherIGemm
+  remains limited to its supported odd kernels and strides; unsupported combinations fail at plan construction.
+
 - **Breaking:** Moved the high-level Gaussian splatting Python API to fVDB Reality Capture and removed its former
   `fvdb` entry points. Use `fvdb_reality_capture.GaussianSplat3d`,
   `fvdb_reality_capture.ProjectedGaussianSplats`, `fvdb_reality_capture.gaussian_render_jagged`, and

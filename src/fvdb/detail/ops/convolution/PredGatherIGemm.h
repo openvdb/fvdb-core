@@ -44,6 +44,13 @@ torch::Tensor predGatherIGemmSparseConv(torch::Tensor features,
                                         int kernel_size,
                                         int stride);
 
+/// @brief Check the complete geometry subset admitted by PredGatherIGemm.
+///
+/// The scalar arguments make the kernel and stride uniform on all three axes.
+/// This pins the backend to dilation one, canonical odd-kernel phase, kernel
+/// sizes 3/5/7, and strides 1/2 without expanding its execution support.
+void checkPredGatherIGemmGeometry(int kernel_size, int stride);
+
 } // namespace ops
 } // namespace detail
 } // namespace fvdb

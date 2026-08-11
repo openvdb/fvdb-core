@@ -12,6 +12,11 @@ to verify correctness of:
   - Strided convolution behavior
 
 Ground truth computation uses utilities from convolution_utils.py.
+
+This legacy suite deliberately uses odd kernel extents, where
+``K // 2 == P_before = floor((K - 1) / 2)``. The canonical even and mixed-axis
+matrix is covered by ``test_conv_semantics.py`` and
+``test_conv_semantics_integration.py``.
 """
 
 import math

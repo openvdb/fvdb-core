@@ -19,6 +19,20 @@ spatial intelligence research and applications.
 
 [The paper](https://research.nvidia.com/labs/prl/publication/williams2024fvdb/) is available for more details, kindly consider [citing it in your work](#references) if you find it useful.
 
+## Installing *f*VDB
+
+Simplified Two-Step Guide:
+1. [Install conda-forge](https://conda-forge.org/download/)
+2. Install the `fvdb-core` conda package:
+```shell
+conda install -c conda-forge fvdb-core
+```
+
+The `fvdb-core` Python package can also be installed using published packages with pip or it can be built from source.
+
+For the most up-to-date information on installing these packages, please see the
+[installation documentation](https://fvdb-core.readthedocs.io/latest/installation.html).
+
 ## Learning to Use *f*VDB
 
 After [installing *f*VDB](#installing-fvdb), we recommend starting with our [documentation](https://fvdb-core.readthedocs.io/).
@@ -28,26 +42,14 @@ You can also try our [TEACHME](docs/TEACHME) interactive lessons, designed to be
 Beyond the [documentation](https://fvdb-core.readthedocs.io/), the walk-through [notebooks](notebooks) in this repository
 can provide an illustrated introduction to the main concepts in *f*VDB.
 
-
-## Installing *f*VDB
-
-The `fvdb-core` Python package can be installed either using published packages with pip or built
-from source.
-
-For the most up-to-date information on installing *f*VDB's pip packages, please see the
-[installation documentation](https://fvdb-core.readthedocs.io/latest/installation.html).
-
-
-## Building *f*VDB from Source
-
-If the [pre-built packages](https://fvdb-core.readthedocs.io/latest/installation.html) do not meet your needs, you can build *f*VDB from source in this repository.
+## Development Process
 
 ### Environment Management
 
 ƒVDB is a Python library implemented as a C++ PyTorch extension. We provide three paths to
-constructing reliable environments for building and running ƒVDB. These are separate options not
-intended to be used together (however with modification you can of course use, for example, a conda
-or pip environment inside a docker container).
+constructing reliable environments for getting the tools you need to build, test and run ƒVDB. These
+are separate options not intended to be used together (however with modification you can of course
+use, for example, a conda or pip environment inside a docker container).
 
 1. **RECOMMENDED** [conda](#option-1-setting-up-a-conda-environment-recommended)
 2. Using [docker](#option-2-setting-up-a-docker-container)
@@ -112,7 +114,12 @@ pip install -r env/build_requirements.txt
 ./build.sh install --cuda-arch-list="7.5;8.0;9.0;10.0;12.0+PTX" -v
 ```
 
-In order to extract an artifact from the container such as the Python wheel, query the container ID using `docker ps` and copy the artifact using `docker cp`.
+> [!NOTE]
+> As mentioned in the [installation documentation,](https://fvdb-core.readthedocs.io/latest/installation.html) if your goal is not ongoing development but just to produce a custom installable wheel rather than an interactive development environment, use [`docker/build_wheel.py`](docker/build_wheel.py) instead. It runs the same build recipe as our publish workflows inside a Docker container (no GPU required on the host) and copies the finished wheel to `./dist/`:
+```shell
+./docker/build_wheel.py --python 3.12 --cuda 13.0 --cuda-arch-list native
+```
+> Run `./docker/build_wheel.py --help` for all options; defaults come from [`.github/versions.json`](.github/versions.json).
 
 ---
 

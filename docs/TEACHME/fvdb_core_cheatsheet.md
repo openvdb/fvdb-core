@@ -168,7 +168,7 @@ mask = grid.coords_in_grid(grid.ijk)        # JaggedTensor of bool — is each i
 ### Topology Operations
 
 ```python continuation
-grid2 = grid.coarsened_grid(2)         # merge 2×2×2 blocks; voxel_sizes × factor
+grid2 = grid.coarsened_grid(2)         # merge 2×2×2 physical cells; block-centroid transform
 grid2 = grid.refined_grid(2)          # split each voxel; voxel_sizes / factor
 grid2 = grid.dilated_grid(1)          # add all voxels within Chebyshev distance (26-neighbors per shell)
 grid2 = grid.dual_grid()              # voxels at corners of primal voxels — useful for SDF
@@ -193,14 +193,14 @@ plan_same = ConvolutionPlan.from_grid_batch(
     source_grid=fine_grid, target_grid=fine_grid
 )
 
-# Stride=2 downsampling: target_grid=None auto-computes coarser grid
+# Stride=2: target_grid=None generates full convolution support (voxel sizes × 2).
 plan_down = ConvolutionPlan.from_grid_batch(
     kernel_size=2, stride=2,
     source_grid=fine_grid, target_grid=None
 )
 coarse_grid = plan_down.target_grid_batch   # retrieve auto-computed topology
 
-# Transposed conv (upsampling): separate factory, supply fine target grid
+# Restricted decoder: supply saved fine grid to limit output rows.
 plan_up = ConvolutionPlan.from_grid_batch_transposed(
     kernel_size=2, stride=2,
     source_grid=coarse_grid, target_grid=fine_grid
@@ -221,7 +221,7 @@ feat_JT = fine_grid.jagged_like(torch.randn(fine_grid.total_voxels, in_channels,
 conv = fvnn.SparseConv3d(in_channels, out_channels, kernel_size=3, stride=1, bias=True).cuda()
 feat_out = conv(feat_JT, plan_same)          # JaggedTensor
 
-# Stride=2 downsampling: output grid is coarser (~1/8 voxels)
+# Stride=2: output is sampled on the stride-scaled convolution lattice.
 down = fvnn.SparseConv3d(in_channels, out_channels, kernel_size=2, stride=2).cuda()
 feat_coarse = down(feat_JT, plan_down)       # JaggedTensor on coarser grid
 
@@ -232,6 +232,28 @@ feat_fine = up(feat_coarse, plan_up)         # JaggedTensor on fine_grid
 # 1×1×1 conv: per-voxel feature projection, no spatial context
 head = fvnn.SparseConv3d(in_channels, out_channels, kernel_size=1).cuda()
 ```
+
+### Convolution semantics
+
+For the default registration, an integer fine-lattice coordinate ``fine_ijk`` and an integer coarse-lattice
+coordinate ``coarse_ijk`` are connected by the zero-based kernel tap ``tap_ijk`` when
+``fine_ijk = stride * coarse_ijk + tap_ijk - padding_before`` componentwise. Here
+``padding_before = floor((kernel_size - 1) / 2)`` and
+``0 <= tap_ijk[axis] < kernel_size[axis]``. ``target_grid=None`` selects the ``complete`` policy: generate every output
+coordinate with a positive structural degree. A supplied target means ``restricted``: evaluate that same relation
+only at its rows, which may include zero-degree rows. A transposed convolution uses the graph in the opposite
+direction; it is not a value inverse.
+
+For a generated strided forward grid, voxel size is multiplied by stride and origin is unchanged; the
+generated transpose applies the inverse scale. ``coarsened_grid`` groups physical cells at a block centroid,
+so it is not a substitute for a convolution grid. ``kernel_size=1, stride=1`` returns the original grid
+object; with a larger stride, a one-tap convolution samples only stride-aligned residues. The #668 example
+``kernel_size=stride=4`` maps a full ``16^3`` cube to a ``5^3`` complete grid, not a ``4^3`` block grid.
+
+Use ``ConvolutionPlan.from_plan_transposed(plan)`` for an exact finite plan transpose. It reverses the
+stored edges; tied adjoint weights are ``weight.transpose(0, 1).contiguous()``. An independently learned
+``SparseConvTranspose3d`` has distinct weights. The dense expert backend is disabled pending a fully exact
+implementation; PredGatherIGemm remains limited to its documented odd kernels and strides.
 
 ### Normalization and Activation
 

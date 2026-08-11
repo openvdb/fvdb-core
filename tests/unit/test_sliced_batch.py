@@ -55,7 +55,11 @@ class TestSlicedBatchTopology(unittest.TestCase):
         ops = [
             ("conv_grid k3s1", lambda g: g.conv_grid(kernel_size=3, stride=1)),
             ("conv_grid k2s1", lambda g: g.conv_grid(kernel_size=2, stride=1)),
+            ("conv_grid k4s1", lambda g: g.conv_grid(kernel_size=4, stride=1)),
+            ("conv_grid k2s2", lambda g: g.conv_grid(kernel_size=2, stride=2)),
             ("conv_transpose_grid k3s1", lambda g: g.conv_transpose_grid(kernel_size=3, stride=1)),
+            ("conv_transpose_grid k4s1", lambda g: g.conv_transpose_grid(kernel_size=4, stride=1)),
+            ("conv_transpose_grid k2s2", lambda g: g.conv_transpose_grid(kernel_size=2, stride=2)),
             ("coarsened_grid x2", lambda g: g.coarsened_grid(2)),
             ("coarsened_grid x1 (identity)", lambda g: g.coarsened_grid(1)),
             ("refined_grid x2", lambda g: g.refined_grid(2)),

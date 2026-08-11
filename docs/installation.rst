@@ -7,7 +7,7 @@ supported software and hardware configurations.
 Software Requirements
 ------------------------
 
-The following is a compatibility matrix of the versions of software compatible with each minor release of fVDB.  These are the versions of software fVDB was built and tested against that are officially supported:
+The following is a matrix of the versions of software that we `test and distribute pre-built wheels for <#notes-on-testing-and-distribution>`_ with each minor release of fVDB.
 
 +--------------+------------------+-----------------+-----------------+----------------+------------------------------------------+
 | fVDB Version | Operating System | PyTorch Version | Python Version  | CUDA Version   | Vulkan Version (only for visualization)  |
@@ -68,7 +68,7 @@ PyTorch 2.13.0 + CUDA 13.0
 Installation from nightly builds
 -------------------------------------
 
-Nightly wheels are built from the latest ``main`` branch and published daily.
+Wheels are built from the latest ``main`` branch and published on a nightly basis.
 Each nightly version is anchored to the next upcoming release recorded in
 ``pyproject.toml`` (currently |fvdb_core_nightly_base|) and carries a date
 stamp plus PyTorch/CUDA build identifiers, for example
@@ -119,25 +119,80 @@ To list all available nightly versions:
     Replace ``20260428`` with the desired nightly date. Nightly builds are retained for 30 days.
 
 
-Installation from source
------------------------------
+Build and install a custom wheel from source
+---------------------------------------------
+
+If you need a production wheel for a specific Python/PyTorch/CUDA combination
+(or a custom set of CUDA architectures) that is not distribute in any of our
+pre-built wheels, the repository provides a script that automates this process.
+This script reproduces the official release build process inside a Docker
+container — this is the same script our publish workflows use. It builds from
+your local checkout (including any uncommitted changes) and copies the finished wheel to ``./dist/``.
+
+The only host requirements are Docker (with BuildKit) and ``python3``; no GPU or CUDA toolkit is needed on the host unless you use ``--cuda-arch-list native``, which detects your GPU's compute capability via ``nvidia-smi``.
 
 .. note::
 
-    For more complete instructions including setting up a build environment and obtaining the
-    necessary dependencies, see the fVDB `README <https://github.com/openvdb/fvdb-core/blob/main/README.md>`_.
-
+    This script is to help produce a one-off installable wheel.  If you plan on doing active
+    development on fVDB, we recommend seeing the `Development Process section below <#development-process>`_.
 
 Clone the `fvdb-core repository <https://github.com/openvdb/fvdb-core>`_.
 
 .. code-block:: bash
 
    git clone git@github.com:openvdb/fvdb-core.git
+   cd fvdb-core
 
-Next build and install the fVDB library
+
+Build a wheel with the default versions (recorded in ``.github/versions.json``):
 
 .. code-block:: bash
 
-   pushd fvdb-core
-   ./build.sh install verbose
-   popd
+   ./docker/build_wheel.py
+
+Or pick specific versions — for example Python 3.11, PyTorch 2.11.0, with CUDA 13.0, targeting
+only the GPU architecture present on this machine:
+
+.. code-block:: bash
+
+   ./docker/build_wheel.py --python 3.11 --torch 2.11.0 --cuda 13.0 --cuda-arch-list native
+
+The set of valid PyTorch/CUDA/Python combinations is determined by which wheels
+PyTorch publishes on `download.pytorch.org <https://download.pytorch.org/whl/>`_
+(the human-readable summary is on the `PyTorch get-started page
+<https://pytorch.org/get-started/locally/>`_). Before starting the Docker build,
+the script consults that package index and exits early with the list of
+available alternatives if no PyTorch wheel exists for the requested
+combination — for example, requesting ``--torch 2.13.0 --cuda 12.8`` will
+report the PyTorch versions actually published for CUDA 12.8. If the index
+cannot be reached (for example, when building offline), the check is skipped
+with a warning and an invalid combination will instead fail during the build's
+dependency-installation step.
+
+Run ``./docker/build_wheel.py --help`` for all options. The resulting wheel
+carries a ``+pt<torch>.cu<cuda>`` local version suffix (for example
+``+pt211.cu130``) and must be installed alongside the matching PyTorch build:
+
+.. parsed-literal::
+
+   pip install torch==\ |torch_full_version| --extra-index-url https://download.pytorch.org/whl/|cu130_tag|
+   pip install dist/fvdb_core-\*.whl
+
+
+Development Process
+---------------------
+
+For more information about the development process, including instructions for setting up a build environment and obtaining the
+necessary dependencies we recommend for development, see the fVDB `README <https://github.com/openvdb/fvdb-core/blob/main/README.md>`_.
+
+
+Notes on Testing, Compatibility, and Distribution
+--------------------------------------------------
+An fvdb-core minor release is tested against the current stable minor version of PyTorch at the time of release and the latest two minor versions of CUDA compatible with that release from `PyTorch's release compatibility matrix <https://github.com/pytorch/pytorch/blob/main/RELEASE.md#release-compatibility-matrix>`_. fvdb-core minor releases will be distributed as a set of wheels built across a matrix of that same current, stable version of PyTorch; the latest two CUDA versions supported by the stable PyTorch version; and all Python minor versions supported by the stable PyTorch version\ [*]_. Any fvdb-core patch releases made for that minor version will maintain the same compatibility as the minor release.
+
+Additionally, we test fvdb-core (on a weekly schedule) with the oldest PyTorch version that supports the lowest CUDA version which our 'stable PyTorch's latest two CUDA versions' policy above would imply.  For example, by PyTorch's matrix, for 2.13, the latest two supported CUDA versions are 13.2 and 13.0 and the lowest PyTorch version to have support for CUDA 13.0 is PyTorch 2.9.
+
+Inside of the version ranges of our testing regime, the maintainers will review submitted fixes and work to fix reported issues. However, for compatibility issues outside that range, the maintainers will endeavor to assist but may not be able to resolve issues outside this scope. Generally, fixes and new features are targeted for the current in-development minor release and compatibility range.
+
+
+.. [*] Builds of other combinations can be built `with this process <#build-and-install-a-custom-wheel-from-source>`_.

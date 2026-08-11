@@ -71,8 +71,18 @@ from .grid import Grid
 from .attention import scaled_dot_product_attention
 
 
-from .convolution_plan import ConvolutionPlan
-from .enums import SmoothingMode
+from .convolution_plan import (
+    ConvolutionCoverageReport,
+    ConvolutionCoverageWarning,
+    ConvolutionPlan,
+    ConvolutionTransformCompatibility,
+)
+from .enums import (
+    ConvolutionPhasePolicy,
+    ConvolutionTopologyPolicy,
+    ConvolutionTopologyProvenance,
+    SmoothingMode,
+)
 
 
 # Import torch-compatible functions that work with both Tensor and JaggedTensor
@@ -137,6 +147,12 @@ __all__ = [
     "JaggedTensor",
     "SmoothingMode",
     "ConvolutionPlan",
+    "ConvolutionCoverageReport",
+    "ConvolutionCoverageWarning",
+    "ConvolutionTransformCompatibility",
+    "ConvolutionPhasePolicy",
+    "ConvolutionTopologyPolicy",
+    "ConvolutionTopologyProvenance",
     "NanoVDBGridMetadata",
     # Concatenation of jagged tensors or grid/grid batches
     "jcat",
