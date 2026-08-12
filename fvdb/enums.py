@@ -2,7 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 
-from enum import IntEnum, StrEnum
+try:
+    from enum import IntEnum, StrEnum
+except ImportError:  # Python 3.10 does not provide enum.StrEnum.
+    from enum import Enum, IntEnum
+
+    class StrEnum(str, Enum):
+        """Compatibility implementation of :class:`enum.StrEnum` for Python 3.10."""
+
+        __str__ = str.__str__
 
 
 class ConvolutionTopologyPolicy(StrEnum):
