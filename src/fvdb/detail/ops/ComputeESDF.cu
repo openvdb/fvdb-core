@@ -398,12 +398,15 @@ runEsdfSweepsAndFinalize(const c10::intrusive_ptr<GridBatchData> &esdfGrid,
     const int64_t esdfVoxels = esdfGrid->totalVoxels();
     auto i32Opts = torch::TensorOptions().dtype(torch::kInt32).device(esdfInit.device());
 
-    auto *esdfDeviceGrid = esdfGrid->mGridHdl->deviceGrid<nanovdb::ValueOnIndex>(0);
+    auto *esdfDeviceGrid = esdfGrid->deviceGridPtrAt(0);
     TORCH_CHECK(esdfDeviceGrid != nullptr, "computeESDF: null esdf grid");
 
     // Double-buffered Jacobi. `esdfInit` is the first read; `esdfB`
-    // receives the first write; they swap each sweep.
-    torch::Tensor esdfB    = esdfInit.clone(); // same content so reads are safe
+    // receives the first write; they swap each sweep. `esdfB` can be
+    // uninitialized: every sweep writes `esdfOut[selfPid]` for every
+    // active voxel before the buffers swap, so no sweep ever reads a
+    // slot the previous sweep didn't write.
+    torch::Tensor esdfB    = torch::empty_like(esdfInit);
     torch::Tensor *esdfIn  = &esdfInit;
     torch::Tensor *esdfOut = &esdfB;
 
@@ -504,7 +507,11 @@ runEsdfSweepsAndFinalize(const c10::intrusive_ptr<GridBatchData> &esdfGrid,
         }
     }
 
-    torch::Tensor esdfFinal = esdfIn->clamp(-maxDistF, maxDistF).contiguous();
+    // In-place clamp: allocating a third sidecar here (while both
+    // ping-pong buffers are still alive) was the ESDF-phase memory
+    // peak. `esdfIn` is one of the two function-local buffers, so
+    // clamping in place is safe; both were born contiguous.
+    torch::Tensor esdfFinal = esdfIn->clamp_(-maxDistF, maxDistF);
 
     if (!prune_unreached) {
         return {esdfGrid, esdfFinal};
@@ -512,7 +519,7 @@ runEsdfSweepsAndFinalize(const c10::intrusive_ptr<GridBatchData> &esdfGrid,
 
     torch::Tensor keepMask = esdfFinal.abs() < maxDistF;
     auto idxOpts = torch::TensorOptions().dtype(fvdb::JIdxScalarType).device(esdfInit.device());
-    auto jidx    = torch::zeros({keepMask.size(0)}, idxOpts);
+    auto jidx    = torch::empty({0}, idxOpts);
     auto jlidx   = torch::empty({0, 1}, idxOpts);
     auto keepMaskJagged =
         JaggedTensor::from_data_indices_and_list_ids(keepMask, jidx, jlidx, /*num_tensors=*/1);
@@ -619,8 +626,8 @@ computeESDF(const GridBatchData &gridBatch,
 
     // ------------------ Step 3: seed from input TSDF ------------------------
 
-    auto *inputDeviceGrid = gridBatch.mGridHdl->deviceGrid<nanovdb::ValueOnIndex>(0);
-    auto *esdfDeviceGrid  = esdfGrid->mGridHdl->deviceGrid<nanovdb::ValueOnIndex>(0);
+    auto *inputDeviceGrid = gridBatch.deviceGridPtrAt(0);
+    auto *esdfDeviceGrid  = esdfGrid->deviceGridPtrAt(0);
     TORCH_CHECK(inputDeviceGrid != nullptr, "computeESDF: null input grid");
     TORCH_CHECK(esdfDeviceGrid != nullptr, "computeESDF: null esdf grid");
 
@@ -772,7 +779,11 @@ computeESDFIncremental(const GridBatchData &gridBatch,
     // are still carried over (monotone scene assumption: previously-
     // known ESDF values shouldn't disappear just because the TSDF
     // shell shifted in this frame).
-    auto esdfGrid            = mergeGrids(*dilated, prevEsdfGrid);
+    auto esdfGrid = mergeGrids(*dilated, prevEsdfGrid);
+    // The dilated grid is only an input to the merge; release it now
+    // so it doesn't coexist with the merged grid and both fp32
+    // sidecars for the whole sweep phase.
+    dilated.reset();
     const int64_t esdfVoxels = esdfGrid->totalVoxels();
 
     if (esdfVoxels == 0) {
@@ -819,14 +830,20 @@ computeESDFIncremental(const GridBatchData &gridBatch,
     // wavefront from neighbouring seeded voxels with the same accuracy
     // as a one-shot call.
     {
-        auto resetMask = esdfInit.abs().ge(maxDistF);
-        esdfInit.masked_fill_(resetMask, kEsdfSentinel);
+        // Two sign-aware comparisons instead of `abs().ge(...)`: the
+        // abs() would materialize a full fp32 temp over the merged
+        // support band; each comparison only allocates a 1-byte bool
+        // mask (sequentially, so they don't stack). The sentinel
+        // itself is >= maxDistF, so already-sentinel voxels are a
+        // harmless self-assignment.
+        esdfInit.masked_fill_(esdfInit.ge(maxDistF), kEsdfSentinel);
+        esdfInit.masked_fill_(esdfInit.le(-maxDistF), kEsdfSentinel);
     }
 
     // ------------------ Step 3: seed from current TSDF ----------------------
 
-    auto *inputDeviceGrid = gridBatch.mGridHdl->deviceGrid<nanovdb::ValueOnIndex>(0);
-    auto *esdfDeviceGrid  = esdfGrid->mGridHdl->deviceGrid<nanovdb::ValueOnIndex>(0);
+    auto *inputDeviceGrid = gridBatch.deviceGridPtrAt(0);
+    auto *esdfDeviceGrid  = esdfGrid->deviceGridPtrAt(0);
     TORCH_CHECK(inputDeviceGrid != nullptr && esdfDeviceGrid != nullptr,
                 "computeESDFIncremental: null device grid");
 

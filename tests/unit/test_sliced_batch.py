@@ -81,6 +81,39 @@ class TestSlicedBatchTopology(unittest.TestCase):
                 self.assertEqual(len(got), len(sel), f"{name} sel={sel}: result grid_count")
                 self.assertEqual(got, exp, f"{name} sel={sel}: voxel sets differ")
 
+    @parameterized.expand(all_device_combos)
+    def test_merge_and_inject_on_sliced_views(self, device):
+        coords_a = [
+            torch.tensor([[0, 0, 0], [1, 0, 0]], dtype=torch.int32),
+            torch.tensor([[10, 0, 0], [11, 0, 0]], dtype=torch.int32),
+            torch.tensor([[20, 0, 0], [21, 0, 0]], dtype=torch.int32),
+        ]
+        coords_b = [
+            torch.tensor([[1, 0, 0], [2, 0, 0]], dtype=torch.int32),
+            torch.tensor([[11, 0, 0], [12, 0, 0]], dtype=torch.int32),
+            torch.tensor([[21, 0, 0], [22, 0, 0]], dtype=torch.int32),
+        ]
+        full_a = _build(coords_a, device)
+        full_b = _build(coords_b, device)
+
+        # Reverse and skip items so logical batch indices differ from physical handle indices.
+        sel = [2, 0]
+        view_a = full_a[sel]
+        view_b = full_b[sel]
+        ref_a = _build([coords_a[i] for i in sel], device)
+        ref_b = _build([coords_b[i] for i in sel], device)
+
+        self.assertEqual(_ijk_sets(view_a.merged_grid(view_b)), _ijk_sets(ref_a.merged_grid(ref_b)))
+
+        def coordinate_values(grid):
+            ijk = grid.ijk
+            values = (100 * ijk.jdata[:, 0] + 10 * ijk.jdata[:, 1] + ijk.jdata[:, 2]).float()
+            return grid.jagged_like(values)
+
+        got = view_b.inject_from(view_a, coordinate_values(view_a), default_value=-1)
+        expected = ref_b.inject_from(ref_a, coordinate_values(ref_a), default_value=-1)
+        self.assertTrue(torch.equal(got.jdata, expected.jdata))
+
 
 if __name__ == "__main__":
     unittest.main()

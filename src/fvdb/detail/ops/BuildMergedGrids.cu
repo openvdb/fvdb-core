@@ -41,9 +41,9 @@ dispatchMergeGrids<torch::kCUDA>(const GridBatchData &gridBatch1, const GridBatc
     // Create a grid for each batch item and store the handles
     std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> handles;
     for (int i = 0; i < gridBatch1.batchSize(); i += 1) {
-        nanovdb::OnIndexGrid *grid1 = gridBatch1.mGridHdl->deviceGrid<nanovdb::ValueOnIndex>(i);
+        nanovdb::OnIndexGrid *grid1 = gridBatch1.deviceGridPtrAt(i);
         TORCH_CHECK(grid1, "First Grid is null");
-        nanovdb::OnIndexGrid *grid2 = gridBatch2.mGridHdl->deviceGrid<nanovdb::ValueOnIndex>(i);
+        nanovdb::OnIndexGrid *grid2 = gridBatch2.deviceGridPtrAt(i);
         TORCH_CHECK(grid2, "Second Grid is null");
 
         nanovdb::tools::cuda::MergeGrids<nanovdb::ValueOnIndex, TorchResource> mergeOp(
@@ -77,14 +77,11 @@ dispatchMergeGrids<torch::kCPU>(const GridBatchData &gridBatch1, const GridBatch
     TORCH_CHECK_VALUE(gridBatch1.batchSize() == gridBatch2.batchSize(),
                       "GridBatches to merge should have the same batch size");
 
-    const nanovdb::GridHandle<TorchDeviceBuffer> &gridHdl1 = gridBatch1.nanoGridHandle();
-    const nanovdb::GridHandle<TorchDeviceBuffer> &gridHdl2 = gridBatch2.nanoGridHandle();
-
     std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> gridHandles;
-    gridHandles.reserve(gridHdl1.gridCount());
-    for (uint32_t bidx = 0; bidx < gridHdl1.gridCount(); bidx += 1) {
-        const nanovdb::OnIndexGrid *grid1 = gridHdl1.template grid<GridT>(bidx);
-        const nanovdb::OnIndexGrid *grid2 = gridHdl2.template grid<GridT>(bidx);
+    gridHandles.reserve(gridBatch1.batchSize());
+    for (int64_t bidx = 0; bidx < gridBatch1.batchSize(); bidx += 1) {
+        const nanovdb::OnIndexGrid *grid1 = gridBatch1.hostGridPtrAt(bidx);
+        const nanovdb::OnIndexGrid *grid2 = gridBatch2.hostGridPtrAt(bidx);
         TORCH_CHECK(grid1, "Failed to get pointer to nanovdb index grid (first argument to merge)");
         TORCH_CHECK(grid2,
                     "Failed to get pointer to nanovdb index grid (second argument to merge)");
