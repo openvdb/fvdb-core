@@ -20,6 +20,8 @@
 
 #include <cuda_runtime.h>
 
+#include <type_traits>
+
 #define FVDB_CUB_WRAPPER(func, ...)                                             \
     do {                                                                        \
         size_t tempStorageBytes = 0;                                            \
@@ -112,73 +114,109 @@ clampTileCoordinate(
     return min(max(tile, lower), upper);
 }
 
-class Quadratic {
+class GaussianQuadratic {
   public:
     __device__
-    Quadratic(float a, float b, float c)
-        : mA(a), mB(b), mC(c), mNumRoots(0), mFirstRoot(0.0f), mSecondRoot(0.0f) {}
+    GaussianQuadratic(float coefficient,
+                      float crossCoefficient,
+                      float otherCoefficient,
+                      float threshold,
+                      float fixedCoordinate)
+        : mCoefficient(coefficient), mCrossCoefficient(crossCoefficient),
+          mOtherCoefficient(otherCoefficient), mThreshold(threshold),
+          mFixedCoordinate(fixedCoordinate), mLowerRoot(0.0f), mUpperRoot(0.0f) {}
 
     __device__ float
-    discriminant() const {
-        return mB * mB - 4.0f * mA * mC;
-    }
-
-    __device__ int32_t
-    numRoots() const {
-        return mNumRoots;
-    }
-
-    __device__ float
-    firstRoot() const {
-        return mFirstRoot;
+    lowerRoot() const {
+        return mLowerRoot;
     }
 
     __device__ float
-    secondRoot() const {
-        return mSecondRoot;
+    upperRoot() const {
+        return mUpperRoot;
     }
 
-    __device__ void
+    __device__ bool
     computeRoots() {
-        if (mA == 0.0f) {
-            if (mB == 0.0f) {
-                mNumRoots = mC == 0.0f ? -1 : 0;
-            } else {
-                mNumRoots  = 1;
-                mFirstRoot = -mC / mB;
-            }
-            return;
+        const float fixedCoordinateSquared = mFixedCoordinate * mFixedCoordinate;
+        const float crossTerm              = mCrossCoefficient * mFixedCoordinate;
+        const float constantTerm = ::fmaf(mOtherCoefficient, fixedCoordinateSquared, -mThreshold);
+        // Evaluate the reduced discriminant from the original coefficients. Rewriting it using
+        // a precomputed determinant loses significant relative precision for eccentric conics.
+        const float radicand = ::fmaf(-mCoefficient, constantTerm, crossTerm * crossTerm);
+        if (!::isfinite(radicand)) {
+            return false;
         }
 
-        const float discriminantValue = discriminant();
-        if (discriminantValue < 0.0f) {
-            mNumRoots = 0;
-        } else if (discriminantValue == 0.0f) {
-            mNumRoots  = 1;
-            mFirstRoot = -mB / (2.0f * mA);
-        } else {
-            const float radical =
-                mB > 0.0f ? -mB - ::sqrtf(discriminantValue) : -mB + ::sqrtf(discriminantValue);
-            mNumRoots   = 2;
-            mFirstRoot  = radical / (2.0f * mA);
-            mSecondRoot = 2.0f * mC / radical;
-            if (mFirstRoot > mSecondRoot) {
-                cuda::std::swap(mFirstRoot, mSecondRoot);
+        // Lines are limited to the ellipse's bounding box, so a negative radicand can only be
+        // roundoff near tangency. Clamping keeps the intersection conservative.
+        const float sqrtRadicand    = ::sqrtf(max(0.0f, radicand));
+        const float centerNumerator = -crossTerm;
+        if (sqrtRadicand == 0.0f) {
+            mLowerRoot = mUpperRoot = centerNumerator / mCoefficient;
+            if (!::isfinite(mLowerRoot)) {
+                return false;
             }
+            expandRootsOutward();
+            return true;
         }
+
+        // Choose the numerator that cannot cancel, then recover the other root from their
+        // product. This retains the stable form of the general quadratic solve without forming
+        // its larger, less accurate discriminant.
+        const float stableNumerator = centerNumerator >= 0.0f ? centerNumerator + sqrtRadicand
+                                                              : centerNumerator - sqrtRadicand;
+        mLowerRoot                  = stableNumerator / mCoefficient;
+        mUpperRoot                  = constantTerm / stableNumerator;
+        if (!::isfinite(mLowerRoot) || !::isfinite(mUpperRoot)) {
+            return false;
+        }
+        if (mLowerRoot > mUpperRoot) {
+            cuda::std::swap(mLowerRoot, mUpperRoot);
+        }
+        expandRootsOutward();
+        return true;
     }
 
   private:
-    float mA;
-    float mB;
-    float mC;
-    int32_t mNumRoots;
-    float mFirstRoot;
-    float mSecondRoot;
+    // `computeRoots` validates the roots before calling these finite-float helpers.
+    __device__ static float
+    nextFloatDown(float value) {
+        if (value == 0.0f) {
+            constexpr uint32_t kNegativeMinSubnormalBits = 0x80000001u;
+            return __uint_as_float(kNegativeMinSubnormalBits);
+        }
+        const uint32_t bits = __float_as_uint(value);
+        return __uint_as_float(value > 0.0f ? bits - 1u : bits + 1u);
+    }
+
+    __device__ static float
+    nextFloatUp(float value) {
+        if (value == 0.0f) {
+            constexpr uint32_t kPositiveMinSubnormalBits = 0x00000001u;
+            return __uint_as_float(kPositiveMinSubnormalBits);
+        }
+        const uint32_t bits = __float_as_uint(value);
+        return __uint_as_float(value > 0.0f ? bits + 1u : bits - 1u);
+    }
+
+    __device__ void
+    expandRootsOutward() {
+        mLowerRoot = nextFloatDown(mLowerRoot);
+        mUpperRoot = nextFloatUp(mUpperRoot);
+    }
+
+    float mCoefficient;
+    float mCrossCoefficient;
+    float mOtherCoefficient;
+    float mThreshold;
+    float mFixedCoordinate;
+    float mLowerRoot;
+    float mUpperRoot;
 };
 
 // Iterate over the rows of the legacy axis-aligned Gaussian extent. Keeping this as an iterator
-// lets the count and emit kernels share exactly the same traversal as AccuTile below.
+// lets the count and emit kernels share exactly the same traversal as EllipseTileIterator below.
 struct AABBTileIterator {
     uint2 mTileMin;
     uint2 mTileMax;
@@ -221,15 +259,15 @@ struct AABBTileIterator {
     }
 };
 
-// AccuTile iterator for the opacity isocontour
+// Iterator for the opacity isocontour
 //
 //   a*x^2 + 2*b*x*y + c*y^2 = 2*log(255*opacity),
 //
 // where x/y are relative to the projected mean and [a, b, c] is the packed inverse covariance.
-// SnugBox supplies the tight AABB. AccuTile then walks the shorter side of its tile rectangle and
+// SnugBox supplies the tight AABB. The iterator walks the shorter side of its tile rectangle and
 // emits the contiguous range of tiles touched within each row or column. The intersections at one
 // strip's upper boundary are reused as the next strip's lower-boundary intersections.
-struct AccuTileIterator {
+struct EllipseTileIterator {
     float2 mMean;
     float mA;
     float mB;
@@ -249,22 +287,33 @@ struct AccuTileIterator {
     uint32_t mCurrentStrip;
     uint32_t mStripEnd;
     float mCurrentLine;
-    bool mIterateRows;
-    bool mValid;
+    bool mIsRowTraversal;
+    bool mIsBoundingBoxSpan;
+    bool mIsValid;
 
     __device__
-    AccuTileIterator(float2 mean,
-                     const float *conic,
-                     float opacity,
-                     uint32_t tileSize,
-                     uint32_t numTilesW,
-                     uint32_t numTilesH)
-        : mMean(mean), mA(conic[0]), mB(conic[1]), mC(conic[2]), mDeterminant(mA * mC - mB * mB),
-          mThreshold(0.0f), mTileSize(static_cast<float>(tileSize)), mValid(false) {
-        mThreshold = 2.0f * __logf(255.0f * opacity);
-        if (!(mA > 0.0f && mC > 0.0f && mDeterminant > 0.0f && mThreshold >= 0.0f) ||
+    EllipseTileIterator(float2 mean,
+                        const float *conic,
+                        float opacity,
+                        uint32_t tileSize,
+                        uint32_t numTilesW,
+                        uint32_t numTilesH)
+        : mMean(mean), mA(conic[0]), mB(conic[1]), mC(conic[2]),
+          mDeterminant(::fmaf(mA, mC, -mB * mB)), mThreshold(0.0f),
+          mTileSize(static_cast<float>(tileSize)), mIsRowTraversal(false),
+          mIsBoundingBoxSpan(false), mIsValid(false) {
+        constexpr float kRasterAlphaThreshold           = 1.0f / 255.0f;
+        constexpr float kTileCullingAlphaThresholdScale = 0.97f;
+        if (!(mA > 0.0f && mC > 0.0f && mDeterminant > 0.0f && opacity >= kRasterAlphaThreshold) ||
             !::isfinite(mA) || !::isfinite(mB) || !::isfinite(mC) || !::isfinite(mDeterminant) ||
-            !::isfinite(mThreshold)) {
+            !::isfinite(opacity)) {
+            return;
+        }
+
+        // Cull against an alpha threshold 3% below the rasterizer's cutoff. The guard band absorbs
+        // float cancellation in highly eccentric conics without changing rasterized contributions.
+        mThreshold = 2.0f * __logf(255.0f * opacity / kTileCullingAlphaThresholdScale);
+        if (!::isfinite(mThreshold)) {
             return;
         }
 
@@ -279,11 +328,6 @@ struct AccuTileIterator {
         mBBoxMin = make_float2(mean.x - radiusX, mean.y - radiusY);
         mBBoxMax = make_float2(mean.x + radiusX, mean.y + radiusY);
 
-        const float yAtXMin = mean.y + mB * radiusX / mC;
-        const float yAtXMax = mean.y - mB * radiusX / mC;
-        const float xAtYMin = mean.x + mB * radiusY / mA;
-        const float xAtYMax = mean.x - mB * radiusY / mA;
-
         mTileMin.x = static_cast<uint32_t>(
             clampTileCoordinate(mBBoxMin.x, mTileSize, 0, static_cast<int32_t>(numTilesW)));
         mTileMin.y = static_cast<uint32_t>(
@@ -293,14 +337,35 @@ struct AccuTileIterator {
         mTileMax.y = static_cast<uint32_t>(
             clampTileCoordinate(mBBoxMax.y, mTileSize, 0, static_cast<int32_t>(numTilesH), true));
 
-        const uint32_t rowSpan = mTileMax.y - mTileMin.y;
-        const uint32_t colSpan = mTileMax.x - mTileMin.x;
-        if (rowSpan == 0 || colSpan == 0) {
+        const uint32_t rowSpan    = mTileMax.y - mTileMin.y;
+        const uint32_t columnSpan = mTileMax.x - mTileMin.x;
+        if (rowSpan == 0 || columnSpan == 0) {
             return;
         }
 
-        mIterateRows = rowSpan < colSpan;
-        if (mIterateRows) {
+        mIsRowTraversal        = rowSpan < columnSpan;
+        const bool isSingleRow = rowSpan == 1 && mBBoxMin.y >= 0.0f &&
+                                 mBBoxMax.y <= static_cast<float>(numTilesH) * mTileSize;
+        const bool isSingleColumn = columnSpan == 1 && mBBoxMin.x >= 0.0f &&
+                                    mBBoxMax.x <= static_cast<float>(numTilesW) * mTileSize;
+        if (isSingleRow || isSingleColumn) {
+            // A convex ellipse whose tight tile bounds have a single row or column intersects the
+            // entire bound along the other dimension. Require that short bound to be unclipped;
+            // otherwise the ellipse may not reach every tile in the clipped bounding box.
+            mIsRowTraversal    = isSingleRow;
+            mCurrentStrip      = mIsRowTraversal ? mTileMin.y : mTileMin.x;
+            mStripEnd          = mCurrentStrip + 1;
+            mIsBoundingBoxSpan = true;
+            mIsValid           = true;
+            return;
+        }
+
+        const float yAtXMin = mean.y + mB * radiusX / mC;
+        const float yAtXMax = mean.y - mB * radiusX / mC;
+        const float xAtYMin = mean.x + mB * radiusY / mA;
+        const float xAtYMax = mean.x - mB * radiusY / mA;
+
+        if (mIsRowTraversal) {
             mCurrentStrip        = mTileMin.y;
             mStripEnd            = mTileMax.y;
             mLineAtTransverseMin = yAtXMin;
@@ -313,52 +378,59 @@ struct AccuTileIterator {
         }
 
         mCurrentLine            = static_cast<float>(mCurrentStrip) * mTileSize;
-        const float bboxLineMin = mIterateRows ? mBBoxMin.y : mBBoxMin.x;
+        const float bboxLineMin = mIsRowTraversal ? mBBoxMin.y : mBBoxMin.x;
         if (bboxLineMin <= mCurrentLine) {
             mCurrentLineIntersections = lineIntersections(mCurrentLine);
         } else {
             mCurrentLineIntersections = intersectionSentinel();
         }
-        mValid = true;
+        mIsValid = true;
     }
 
     __device__ float2
     intersectionSentinel() const {
-        return mIterateRows ? make_float2(mBBoxMax.x, mBBoxMin.x)
-                            : make_float2(mBBoxMax.y, mBBoxMin.y);
+        return mIsRowTraversal ? make_float2(mBBoxMax.x, mBBoxMin.x)
+                               : make_float2(mBBoxMax.y, mBBoxMin.y);
     }
 
     __device__ float2
     lineIntersections(float coordinate) const {
-        const float relativeCoordinate = coordinate - (mIterateRows ? mMean.y : mMean.x);
-        Quadratic quadratic(mIterateRows ? mA : mC,
-                            2.0f * mB * relativeCoordinate,
-                            (mIterateRows ? mC : mA) * relativeCoordinate * relativeCoordinate -
-                                mThreshold);
-        quadratic.computeRoots();
-        if (quadratic.numRoots() <= 0) {
+        const float relativeCoordinate = coordinate - (mIsRowTraversal ? mMean.y : mMean.x);
+        GaussianQuadratic quadratic(mIsRowTraversal ? mA : mC,
+                                    mB,
+                                    mIsRowTraversal ? mC : mA,
+                                    mThreshold,
+                                    relativeCoordinate);
+        if (!quadratic.computeRoots()) {
             return intersectionSentinel();
         }
 
-        const float transverseMean = mIterateRows ? mMean.x : mMean.y;
-        const float secondRoot =
-            quadratic.numRoots() == 1 ? quadratic.firstRoot() : quadratic.secondRoot();
-        return make_float2(quadratic.firstRoot() + transverseMean, secondRoot + transverseMean);
+        const float transverseMean = mIsRowTraversal ? mMean.x : mMean.y;
+        return make_float2(__fadd_rd(quadratic.lowerRoot(), transverseMean),
+                           __fadd_ru(quadratic.upperRoot(), transverseMean));
     }
 
     __device__ bool
     next(TileSpan &span) {
-        if (!mValid || mCurrentStrip >= mStripEnd) {
+        if (!mIsValid || mCurrentStrip >= mStripEnd) {
             return false;
         }
 
+        if (mIsBoundingBoxSpan) {
+            span.tileMin  = mTileMin;
+            span.tileMax  = mTileMax;
+            span.isRow    = mIsRowTraversal;
+            mCurrentStrip = mStripEnd;
+            return true;
+        }
+
         const float nextLine    = mCurrentLine + mTileSize;
-        const float bboxLineMax = mIterateRows ? mBBoxMax.y : mBBoxMax.x;
+        const float bboxLineMax = mIsRowTraversal ? mBBoxMax.y : mBBoxMax.x;
         const float2 nextLineIntersections =
             nextLine <= bboxLineMax ? lineIntersections(nextLine) : intersectionSentinel();
 
-        const float transverseMin = mIterateRows ? mBBoxMin.x : mBBoxMin.y;
-        const float transverseMax = mIterateRows ? mBBoxMax.x : mBBoxMax.y;
+        const float transverseMin = mIsRowTraversal ? mBBoxMin.x : mBBoxMin.y;
+        const float transverseMax = mIsRowTraversal ? mBBoxMax.x : mBBoxMax.y;
         const float ellipseMin =
             mCurrentLine <= mLineAtTransverseMin && mLineAtTransverseMin < nextLine
                 ? transverseMin
@@ -368,7 +440,7 @@ struct AccuTileIterator {
                 ? transverseMax
                 : max(mCurrentLineIntersections.y, nextLineIntersections.y);
 
-        if (mIterateRows) {
+        if (mIsRowTraversal) {
             span.tileMin.x = static_cast<uint32_t>(
                 clampTileCoordinate(ellipseMin, mTileSize, mTileMin.x, mTileMax.x));
             span.tileMax.x = static_cast<uint32_t>(
@@ -393,9 +465,29 @@ struct AccuTileIterator {
     }
 };
 
-template <typename IteratorT, typename CountT>
+template <typename TileIteratorT, typename T>
+__device__ TileIteratorT
+makeTileIterator(float2 mean,
+                 int32_t radiusU,
+                 int32_t radiusV,
+                 const T *conics,
+                 const T *opacities,
+                 uint32_t gidx,
+                 uint32_t tileSize,
+                 uint32_t numTilesW,
+                 uint32_t numTilesH) {
+    if constexpr (std::is_same_v<TileIteratorT, EllipseTileIterator>) {
+        return EllipseTileIterator(
+            mean, conics + gidx * 3, opacities[gidx], tileSize, numTilesW, numTilesH);
+    } else {
+        static_assert(std::is_same_v<TileIteratorT, AABBTileIterator>);
+        return AABBTileIterator(mean, radiusU, radiusV, tileSize, numTilesW, numTilesH);
+    }
+}
+
+template <typename TileIteratorT, typename CountT>
 __device__ CountT
-countTiles(IteratorT iterator,
+countTiles(TileIteratorT iterator,
            int32_t cidx,
            uint32_t numTilesW,
            uint32_t numTilesH,
@@ -460,7 +552,7 @@ countTiles(IteratorT iterator,
 //
 // The output is a set of counts of the number of tiles each Gaussian intersects.
 //
-template <typename T, typename CountT>
+template <typename TileIteratorT, typename T, typename CountT>
 __global__ __launch_bounds__(NUM_THREADS) void
 countTilesPerGaussian(const uint32_t gaussianOffset,
                       const uint32_t gaussianCount,
@@ -491,28 +583,23 @@ countTilesPerGaussian(const uint32_t gaussianOffset,
             const int32_t cidx  = (cameraJIdx == nullptr)
                                       ? static_cast<int32_t>(gidx / numGaussiansPerCamera)
                                       : cameraJIdx[gidx];
-            if (conics != nullptr) {
-                outNumTilesPerGaussian[gidx] = countTiles<AccuTileIterator, CountT>(
-                    AccuTileIterator(
-                        mean2d, conics + gidx * 3, opacities[gidx], tileSize, numTilesW, numTilesH),
-                    cidx,
-                    numTilesW,
-                    numTilesH,
-                    totalTiles,
-                    keyStart,
-                    keyEnd,
-                    tileMask);
-            } else {
-                outNumTilesPerGaussian[gidx] = countTiles<AABBTileIterator, CountT>(
-                    AABBTileIterator(mean2d, radiusU, radiusV, tileSize, numTilesW, numTilesH),
-                    cidx,
-                    numTilesW,
-                    numTilesH,
-                    totalTiles,
-                    keyStart,
-                    keyEnd,
-                    tileMask);
-            }
+            outNumTilesPerGaussian[gidx] =
+                countTiles<TileIteratorT, CountT>(makeTileIterator<TileIteratorT>(mean2d,
+                                                                                  radiusU,
+                                                                                  radiusV,
+                                                                                  conics,
+                                                                                  opacities,
+                                                                                  gidx,
+                                                                                  tileSize,
+                                                                                  numTilesW,
+                                                                                  numTilesH),
+                                                  cidx,
+                                                  numTilesW,
+                                                  numTilesH,
+                                                  totalTiles,
+                                                  keyStart,
+                                                  keyEnd,
+                                                  tileMask);
         }
     }
 }
@@ -549,9 +636,9 @@ decodeCamTileKey(int64_t packedCamTileDepthKey, int32_t tileIdBits) {
     return {cidxEnc, tileIdx};
 }
 
-template <typename IteratorT>
+template <typename TileIteratorT>
 __device__ void
-emitTiles(IteratorT iterator,
+emitTiles(TileIteratorT iterator,
           int32_t cidx,
           int32_t gidx,
           uint32_t numTilesW,
@@ -632,7 +719,7 @@ emitTiles(IteratorT iterator,
 // (we'll use this to sort the intersections into tiles and by depth).
 // The value is the index of the Gaussian in the input arrays.
 //
-template <typename T>
+template <typename TileIteratorT, typename T>
 __global__ __launch_bounds__(NUM_THREADS) void
 computeGaussianTileIntersections(
     const uint32_t numCameras,
@@ -687,40 +774,28 @@ computeGaussianTileIntersections(
             // intersectionValues are already offset to the start of that slice), and matches the
             // per-device count computed by countTilesPerGaussian.
             int64_t curIsect = (gidx == 0) ? 0 : cumTilesPerGaussian[gidx - 1];
-            if (conics != nullptr) {
-                emitTiles(
-                    AccuTileIterator(
-                        mean2d, conics + gidx * 3, opacities[gidx], tileSize, numTilesW, numTilesH),
-                    cidx,
-                    gidx,
-                    numTilesW,
-                    numTilesH,
-                    tileIdBits,
-                    totalTiles,
-                    keyStart,
-                    keyEnd,
-                    depthEnc,
-                    tileMask,
-                    curIsect,
-                    intersectionKeys,
-                    intersectionValues);
-            } else {
-                emitTiles(
-                    AABBTileIterator(mean2d, radiusU, radiusV, tileSize, numTilesW, numTilesH),
-                    cidx,
-                    gidx,
-                    numTilesW,
-                    numTilesH,
-                    tileIdBits,
-                    totalTiles,
-                    keyStart,
-                    keyEnd,
-                    depthEnc,
-                    tileMask,
-                    curIsect,
-                    intersectionKeys,
-                    intersectionValues);
-            }
+            emitTiles(makeTileIterator<TileIteratorT>(mean2d,
+                                                      radiusU,
+                                                      radiusV,
+                                                      conics,
+                                                      opacities,
+                                                      gidx,
+                                                      tileSize,
+                                                      numTilesW,
+                                                      numTilesH),
+                      cidx,
+                      gidx,
+                      numTilesW,
+                      numTilesH,
+                      tileIdBits,
+                      totalTiles,
+                      keyStart,
+                      keyEnd,
+                      depthEnc,
+                      tileMask,
+                      curIsect,
+                      intersectionKeys,
+                      intersectionValues);
         }
     }
 }
@@ -989,24 +1064,31 @@ intersectGaussianTilesCudaImpl(
         opacities.has_value() ? opacities.value().const_data_ptr<scalar_t>() : nullptr;
 
     // Count the number of tiles each Gaussian intersects, store in tiles_per_gaussian_cumsum
-    const int NUM_BLOCKS = (totalGaussians + NUM_THREADS - 1) / NUM_THREADS;
-    countTilesPerGaussian<scalar_t, int64_t>
-        <<<NUM_BLOCKS, NUM_THREADS, 0, stream>>>(0,
-                                                 totalGaussians,
-                                                 numGaussians,
-                                                 tileSize,
-                                                 numTilesW,
-                                                 numTilesH,
-                                                 totalTiles,
-                                                 0,
-                                                 static_cast<int64_t>(numCameras) * totalTiles,
-                                                 means2d.const_data_ptr<scalar_t>(),
-                                                 radii.const_data_ptr<int32_t>(),
-                                                 conicsPtr,
-                                                 opacitiesPtr,
-                                                 tileMaskPtr,
-                                                 cameraJIdxPtr,
-                                                 tilesPerGaussianCumsum.data_ptr<int64_t>());
+    const int NUM_BLOCKS                   = (totalGaussians + NUM_THREADS - 1) / NUM_THREADS;
+    const auto launchCountTilesPerGaussian = [&]<typename TileIteratorT>() {
+        countTilesPerGaussian<TileIteratorT, scalar_t, int64_t>
+            <<<NUM_BLOCKS, NUM_THREADS, 0, stream>>>(0,
+                                                     totalGaussians,
+                                                     numGaussians,
+                                                     tileSize,
+                                                     numTilesW,
+                                                     numTilesH,
+                                                     totalTiles,
+                                                     0,
+                                                     static_cast<int64_t>(numCameras) * totalTiles,
+                                                     means2d.const_data_ptr<scalar_t>(),
+                                                     radii.const_data_ptr<int32_t>(),
+                                                     conicsPtr,
+                                                     opacitiesPtr,
+                                                     tileMaskPtr,
+                                                     cameraJIdxPtr,
+                                                     tilesPerGaussianCumsum.data_ptr<int64_t>());
+    };
+    if (conics.has_value()) {
+        launchCountTilesPerGaussian.operator()<EllipseTileIterator>();
+    } else {
+        launchCountTilesPerGaussian.operator()<AABBTileIterator>();
+    }
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 
     // cumulative sum to get the total number of intersections
@@ -1027,28 +1109,36 @@ intersectGaussianTilesCudaImpl(
         // store them in intersection_keys and intersection_values
         // where intersection_keys encodes (camera_id, tile_id, depth) and intersection_values
         // encodes the index of the Gaussian in the input arrays.
-        computeGaussianTileIntersections<scalar_t><<<NUM_BLOCKS, NUM_THREADS, 0, stream>>>(
-            numCameras,
-            numGaussians,
-            0,
-            totalGaussians,
-            tileSize,
-            numTilesW,
-            numTilesH,
-            numTileIdBits,
-            totalTiles,
-            0,
-            static_cast<int64_t>(numCameras) * totalTiles,
-            means2d.const_data_ptr<scalar_t>(),
-            radii.const_data_ptr<int32_t>(),
-            conicsPtr,
-            opacitiesPtr,
-            depths.const_data_ptr<scalar_t>(),
-            tilesPerGaussianCumsum.const_data_ptr<int64_t>(),
-            tileMaskPtr,
-            cameraJIdxPtr,
-            intersectionKeys.data_ptr<int64_t>(),
-            intersectionValues.data_ptr<int32_t>());
+        const auto launchComputeGaussianTileIntersections = [&]<typename TileIteratorT>() {
+            computeGaussianTileIntersections<TileIteratorT, scalar_t>
+                <<<NUM_BLOCKS, NUM_THREADS, 0, stream>>>(
+                    numCameras,
+                    numGaussians,
+                    0,
+                    totalGaussians,
+                    tileSize,
+                    numTilesW,
+                    numTilesH,
+                    numTileIdBits,
+                    totalTiles,
+                    0,
+                    static_cast<int64_t>(numCameras) * totalTiles,
+                    means2d.const_data_ptr<scalar_t>(),
+                    radii.const_data_ptr<int32_t>(),
+                    conicsPtr,
+                    opacitiesPtr,
+                    depths.const_data_ptr<scalar_t>(),
+                    tilesPerGaussianCumsum.const_data_ptr<int64_t>(),
+                    tileMaskPtr,
+                    cameraJIdxPtr,
+                    intersectionKeys.data_ptr<int64_t>(),
+                    intersectionValues.data_ptr<int32_t>());
+        };
+        if (conics.has_value()) {
+            launchComputeGaussianTileIntersections.operator()<EllipseTileIterator>();
+        } else {
+            launchComputeGaussianTileIntersections.operator()<AABBTileIterator>();
+        }
         C10_CUDA_KERNEL_LAUNCH_CHECK();
 
         // Sort the intersections by their key so intersections within the same tile are grouped
@@ -1297,24 +1387,31 @@ intersectGaussianTilesPrivateUse1Impl(
 
         // Every device scans all Gaussians but counts only the tiles that fall in its tile-key
         // range.
-        const int NUM_BLOCKS = (totalGaussians + NUM_THREADS - 1) / NUM_THREADS;
-        countTilesPerGaussian<scalar_t, int64_t>
-            <<<NUM_BLOCKS, NUM_THREADS, 0, stream>>>(0,
-                                                     totalGaussians,
-                                                     numGaussians,
-                                                     tileSize,
-                                                     numTilesW,
-                                                     numTilesH,
-                                                     totalTiles,
-                                                     keyStart,
-                                                     keyEnd,
-                                                     means2d.const_data_ptr<scalar_t>(),
-                                                     radii.const_data_ptr<int32_t>(),
-                                                     conicsPtr,
-                                                     opacitiesPtr,
-                                                     tileMaskPtr,
-                                                     cameraJIdxPtr,
-                                                     deviceTilesPerGaussianCumsum[deviceId]);
+        const int NUM_BLOCKS                   = (totalGaussians + NUM_THREADS - 1) / NUM_THREADS;
+        const auto launchCountTilesPerGaussian = [&]<typename TileIteratorT>() {
+            countTilesPerGaussian<TileIteratorT, scalar_t, int64_t>
+                <<<NUM_BLOCKS, NUM_THREADS, 0, stream>>>(0,
+                                                         totalGaussians,
+                                                         numGaussians,
+                                                         tileSize,
+                                                         numTilesW,
+                                                         numTilesH,
+                                                         totalTiles,
+                                                         keyStart,
+                                                         keyEnd,
+                                                         means2d.const_data_ptr<scalar_t>(),
+                                                         radii.const_data_ptr<int32_t>(),
+                                                         conicsPtr,
+                                                         opacitiesPtr,
+                                                         tileMaskPtr,
+                                                         cameraJIdxPtr,
+                                                         deviceTilesPerGaussianCumsum[deviceId]);
+        };
+        if (conics.has_value()) {
+            launchCountTilesPerGaussian.operator()<EllipseTileIterator>();
+        } else {
+            launchCountTilesPerGaussian.operator()<AABBTileIterator>();
+        }
         C10_CUDA_KERNEL_LAUNCH_CHECK();
 
         // Inclusive scan of the counts in place to get the per-Gaussian write offsets.
@@ -1430,28 +1527,36 @@ intersectGaussianTilesPrivateUse1Impl(
             const int64_t intersectionOffset = deviceIntersectionOffset[deviceId];
 
             const int NUM_BLOCKS = (totalGaussians + NUM_THREADS - 1) / NUM_THREADS;
-            computeGaussianTileIntersections<scalar_t><<<NUM_BLOCKS, NUM_THREADS, 0, stream>>>(
-                numCameras,
-                numGaussians,
-                0,
-                totalGaussians,
-                tileSize,
-                numTilesW,
-                numTilesH,
-                numTileIdBits,
-                totalTiles,
-                keyStart,
-                keyEnd,
-                means2d.const_data_ptr<scalar_t>(),
-                radii.const_data_ptr<int32_t>(),
-                conicsPtr,
-                opacitiesPtr,
-                depths.const_data_ptr<scalar_t>(),
-                deviceTilesPerGaussianCumsum[deviceId],
-                tileMaskPtr,
-                cameraJIdxPtr,
-                deviceIntersectionKeys[deviceId],
-                intersectionValues.data_ptr<int32_t>() + intersectionOffset);
+            const auto launchComputeGaussianTileIntersections = [&]<typename TileIteratorT>() {
+                computeGaussianTileIntersections<TileIteratorT, scalar_t>
+                    <<<NUM_BLOCKS, NUM_THREADS, 0, stream>>>(
+                        numCameras,
+                        numGaussians,
+                        0,
+                        totalGaussians,
+                        tileSize,
+                        numTilesW,
+                        numTilesH,
+                        numTileIdBits,
+                        totalTiles,
+                        keyStart,
+                        keyEnd,
+                        means2d.const_data_ptr<scalar_t>(),
+                        radii.const_data_ptr<int32_t>(),
+                        conicsPtr,
+                        opacitiesPtr,
+                        depths.const_data_ptr<scalar_t>(),
+                        deviceTilesPerGaussianCumsum[deviceId],
+                        tileMaskPtr,
+                        cameraJIdxPtr,
+                        deviceIntersectionKeys[deviceId],
+                        intersectionValues.data_ptr<int32_t>() + intersectionOffset);
+            };
+            if (conics.has_value()) {
+                launchComputeGaussianTileIntersections.operator()<EllipseTileIterator>();
+            } else {
+                launchComputeGaussianTileIntersections.operator()<AABBTileIterator>();
+            }
             C10_CUDA_KERNEL_LAUNCH_CHECK();
 
             // The emit kernel is the last reader of this device's cumulative-count buffer; free it
