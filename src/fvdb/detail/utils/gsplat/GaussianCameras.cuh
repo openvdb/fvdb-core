@@ -729,28 +729,29 @@ template <typename T> struct PerspectiveWithDistortionCamera {
     DistortionModel cameraModel           = DistortionModel::PINHOLE;
     int64_t sharedCameraOffset            = 0;
 
-    Mat3 *__restrict__ worldToCamStartRotShared   = nullptr;
-    Vec3 *__restrict__ worldToCamStartTransShared = nullptr;
-    Mat3 *__restrict__ worldToCamEndRotShared     = nullptr;
-    Vec3 *__restrict__ worldToCamEndTransShared   = nullptr;
-    Mat3 *__restrict__ projectionMatsShared       = nullptr;
-    T *__restrict__ distortionShared              = nullptr;
+    Mat3 *__restrict__ worldToCamStartRotShared   = nullptr; // [C,3,3], optional
+    Vec3 *__restrict__ worldToCamStartTransShared = nullptr; // [C,3], optional
+    Mat3 *__restrict__ worldToCamEndRotShared     = nullptr; // [C,3,3], optional
+    Vec3 *__restrict__ worldToCamEndTransShared   = nullptr; // [C,3], optional
+    Mat3 *__restrict__ projectionMatsShared       = nullptr; // [C,3,3], optional
+    T *__restrict__ distortionShared              = nullptr; // [C,K], optional
 
-    inline __host__ __device__ size_t
-    sharedMemoryBytesForCameraCount(const uint32_t cameraCount) const {
+    inline static __host__ __device__ size_t
+    sharedMemoryBytesForCameraCount(const uint32_t cameraCount, const int64_t numDistCoeffs) {
         size_t bytes = 0;
         bytes        = alignUpBytes(bytes, alignof(Mat3));
-        bytes += static_cast<size_t>(cameraCount) * sizeof(Mat3);
+        bytes += static_cast<size_t>(cameraCount) * sizeof(Mat3); // worldToCamStartRotShared
         bytes = alignUpBytes(bytes, alignof(Vec3));
-        bytes += static_cast<size_t>(cameraCount) * sizeof(Vec3);
+        bytes += static_cast<size_t>(cameraCount) * sizeof(Vec3); // worldToCamStartTransShared
         bytes = alignUpBytes(bytes, alignof(Mat3));
-        bytes += static_cast<size_t>(cameraCount) * sizeof(Mat3);
+        bytes += static_cast<size_t>(cameraCount) * sizeof(Mat3); // worldToCamEndRotShared
         bytes = alignUpBytes(bytes, alignof(Vec3));
-        bytes += static_cast<size_t>(cameraCount) * sizeof(Vec3);
+        bytes += static_cast<size_t>(cameraCount) * sizeof(Vec3); // worldToCamEndTransShared
         bytes = alignUpBytes(bytes, alignof(Mat3));
-        bytes += static_cast<size_t>(cameraCount) * sizeof(Mat3);
+        bytes += static_cast<size_t>(cameraCount) * sizeof(Mat3); // projectionMatsShared
         bytes = alignUpBytes(bytes, alignof(T));
-        bytes += static_cast<size_t>(cameraCount) * static_cast<size_t>(numDistCoeffs) * sizeof(T);
+        bytes += static_cast<size_t>(cameraCount) * static_cast<size_t>(numDistCoeffs) *
+                 sizeof(T);                                       // distortionShared
         return bytes;
     }
 
@@ -780,13 +781,13 @@ template <typename T> struct PerspectiveWithDistortionCamera {
     /// @brief Returns dynamic shared-memory bytes required to cache camera state.
     inline __host__ __device__ size_t
     numSharedMemBytes() const {
-        return sharedMemoryBytesForCameraCount(numCameras);
+        return sharedMemoryBytesForCameraCount(numCameras, numDistCoeffs);
     }
 
     /// @brief Returns dynamic shared-memory bytes required to cache one camera.
     inline __host__ __device__ size_t
     numSharedMemBytesPerCamera() const {
-        return sharedMemoryBytesForCameraCount(1);
+        return sharedMemoryBytesForCameraCount(1, numDistCoeffs);
     }
 
     /// @brief Loads per-camera state (poses, intrinsics, distortion) into shared memory.
@@ -1167,25 +1168,25 @@ template <typename T> struct OrthographicWithDistortionCamera {
     RollingShutterType rollingShutterType = RollingShutterType::NONE;
     int64_t sharedCameraOffset            = 0;
 
-    Mat3 *__restrict__ worldToCamStartRotShared   = nullptr;
-    Vec3 *__restrict__ worldToCamStartTransShared = nullptr;
-    Mat3 *__restrict__ worldToCamEndRotShared     = nullptr;
-    Vec3 *__restrict__ worldToCamEndTransShared   = nullptr;
-    Mat3 *__restrict__ projectionMatsShared       = nullptr;
+    Mat3 *__restrict__ worldToCamStartRotShared   = nullptr; // [C,3,3], optional
+    Vec3 *__restrict__ worldToCamStartTransShared = nullptr; // [C,3], optional
+    Mat3 *__restrict__ worldToCamEndRotShared     = nullptr; // [C,3,3], optional
+    Vec3 *__restrict__ worldToCamEndTransShared   = nullptr; // [C,3], optional
+    Mat3 *__restrict__ projectionMatsShared       = nullptr; // [C,3,3], optional
 
-    inline __host__ __device__ size_t
-    sharedMemoryBytesForCameraCount(const uint32_t cameraCount) const {
+    inline static __host__ __device__ size_t
+    sharedMemoryBytesForCameraCount(const uint32_t cameraCount) {
         size_t bytes = 0;
         bytes        = alignUpBytes(bytes, alignof(Mat3));
-        bytes += static_cast<size_t>(cameraCount) * sizeof(Mat3);
+        bytes += static_cast<size_t>(cameraCount) * sizeof(Mat3); // worldToCamStartRotShared
         bytes = alignUpBytes(bytes, alignof(Vec3));
-        bytes += static_cast<size_t>(cameraCount) * sizeof(Vec3);
+        bytes += static_cast<size_t>(cameraCount) * sizeof(Vec3); // worldToCamStartTransShared
         bytes = alignUpBytes(bytes, alignof(Mat3));
-        bytes += static_cast<size_t>(cameraCount) * sizeof(Mat3);
+        bytes += static_cast<size_t>(cameraCount) * sizeof(Mat3); // worldToCamEndRotShared
         bytes = alignUpBytes(bytes, alignof(Vec3));
-        bytes += static_cast<size_t>(cameraCount) * sizeof(Vec3);
+        bytes += static_cast<size_t>(cameraCount) * sizeof(Vec3); // worldToCamEndTransShared
         bytes = alignUpBytes(bytes, alignof(Mat3));
-        bytes += static_cast<size_t>(cameraCount) * sizeof(Mat3);
+        bytes += static_cast<size_t>(cameraCount) * sizeof(Mat3); // projectionMatsShared
         return bytes;
     }
 
