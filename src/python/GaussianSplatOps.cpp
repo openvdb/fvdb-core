@@ -434,9 +434,19 @@ bind_gaussian_splat_ops(py::module &m) {
            const uint32_t tileSize,
            const uint32_t numTilesH,
            const uint32_t numTilesW,
-           const at::optional<torch::Tensor> &cameraIds) {
-            return ops::intersectGaussianTiles(
-                means2d, radii, depths, cameraIds, numCameras, tileSize, numTilesH, numTilesW);
+           const at::optional<torch::Tensor> &cameraIds,
+           const at::optional<torch::Tensor> &conics,
+           const at::optional<torch::Tensor> &opacities) {
+            return ops::intersectGaussianTiles(means2d,
+                                               radii,
+                                               depths,
+                                               cameraIds,
+                                               numCameras,
+                                               tileSize,
+                                               numTilesH,
+                                               numTilesW,
+                                               conics,
+                                               opacities);
         },
         py::arg("means2d"),
         py::arg("radii"),
@@ -445,7 +455,9 @@ bind_gaussian_splat_ops(py::module &m) {
         py::arg("tile_size"),
         py::arg("num_tiles_h"),
         py::arg("num_tiles_w"),
-        py::arg("camera_ids") = py::none());
+        py::arg("camera_ids") = py::none(),
+        py::arg("conics")     = py::none(),
+        py::arg("opacities")  = py::none());
 
     // ------- Sparse tile intersection (non-differentiable) -------
 
@@ -460,7 +472,9 @@ bind_gaussian_splat_ops(py::module &m) {
            const uint32_t tileSize,
            const uint32_t numTilesH,
            const uint32_t numTilesW,
-           const at::optional<torch::Tensor> &cameraIds) {
+           const at::optional<torch::Tensor> &cameraIds,
+           const at::optional<torch::Tensor> &conics,
+           const at::optional<torch::Tensor> &opacities) {
             return ops::intersectGaussianTilesSparse(means2d,
                                                      radii,
                                                      depths,
@@ -470,7 +484,9 @@ bind_gaussian_splat_ops(py::module &m) {
                                                      numCameras,
                                                      tileSize,
                                                      numTilesH,
-                                                     numTilesW);
+                                                     numTilesW,
+                                                     conics,
+                                                     opacities);
         },
         py::arg("means2d"),
         py::arg("radii"),
@@ -481,7 +497,9 @@ bind_gaussian_splat_ops(py::module &m) {
         py::arg("tile_size"),
         py::arg("num_tiles_h"),
         py::arg("num_tiles_w"),
-        py::arg("camera_ids") = py::none());
+        py::arg("camera_ids") = py::none(),
+        py::arg("conics")     = py::none(),
+        py::arg("opacities")  = py::none());
 
     // ------- Sparse tile layout (non-differentiable) -------
 
