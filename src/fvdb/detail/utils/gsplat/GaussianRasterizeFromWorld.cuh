@@ -58,8 +58,9 @@ struct RasterizeFromWorldCommonArgs {
                      uint32_t &tileRow,
                      uint32_t &tileCol,
                      uint32_t &row,
-                     uint32_t &col) const {
-        const uint32_t globalLinearBlockIdx = blockIdx.x;
+                     uint32_t &col,
+                     const uint32_t blockOffset = 0) const {
+        const uint32_t globalLinearBlockIdx = blockOffset + blockIdx.x;
         const uint32_t tileExtentW          = numTilesW;
         const uint32_t tileExtentH          = numTilesH;
 

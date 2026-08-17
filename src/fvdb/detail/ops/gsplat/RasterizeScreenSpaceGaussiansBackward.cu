@@ -5,6 +5,7 @@
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Nvtx.h>
 #include <fvdb/detail/utils/Utils.h>
+#include <fvdb/detail/utils/cuda/GradientReduction.h>
 #include <fvdb/detail/utils/cuda/Prefetch.h>
 #include <fvdb/detail/utils/cuda/Utils.cuh>
 #include <fvdb/detail/utils/cuda/WarpReduce.cuh>
@@ -15,7 +16,6 @@
 #include <ATen/ops/from_blob.h>
 #include <c10/core/DeviceType.h>
 #include <c10/cuda/CUDAGuard.h>
-#include <torch/csrc/cuda/nccl.h>
 
 #include <cooperative_groups.h>
 
@@ -1148,62 +1148,6 @@ callRasterizeBackwardWithCorrectSharedChannels(
             }
         }
         AT_ERROR("Failed to set maximum shared memory size");
-    }
-}
-
-template <typename ScalarType>
-void
-reduceGradientShards(std::vector<torch::Tensor> &localGradients, torch::Tensor &outputGradient) {
-    const int64_t numElements = localGradients.front().numel();
-    std::vector<torch::Tensor> reducedShards(c10::cuda::device_count());
-    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-        const auto [shardOffset, shardSize] = deviceChunk(numElements, deviceId);
-        if (shardSize == 0) {
-            continue;
-        }
-
-        reducedShards[deviceId] =
-            localGradients[deviceId].view({-1}).narrow(0, shardOffset, shardSize);
-    }
-
-    if (numElements % c10::cuda::device_count() == 0) {
-        torch::cuda::nccl::reduce_scatter(localGradients, reducedShards);
-    } else {
-        // NCCL reduce-scatter requires equally sized shards. For an uneven tensor, reduce each
-        // ceil-divided shard into its owning device's local receive slice.
-        for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-            const auto [shardOffset, shardSize] = deviceChunk(numElements, deviceId);
-            if (shardSize == 0) {
-                continue;
-            }
-
-            std::vector<torch::Tensor> inputShards;
-            inputShards.reserve(c10::cuda::device_count());
-            for (const auto sourceDeviceId: c10::irange(c10::cuda::device_count())) {
-                inputShards.emplace_back(
-                    localGradients[sourceDeviceId].view({-1}).narrow(0, shardOffset, shardSize));
-            }
-            torch::cuda::nccl::reduce(
-                inputShards, reducedShards[deviceId], static_cast<int32_t>(deviceId));
-        }
-    }
-
-    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-        const auto [shardOffset, shardSize] = deviceChunk(numElements, deviceId);
-        if (shardSize == 0) {
-            continue;
-        }
-
-        C10_CUDA_CHECK(cudaSetDevice(deviceId));
-        auto stream          = c10::cuda::getCurrentCUDAStream(deviceId);
-        auto *outputShardPtr = outputGradient.data_ptr<ScalarType>() + shardOffset;
-        C10_CUDA_CHECK(nanovdb::util::cuda::memPrefetchAsync(
-            outputShardPtr, shardSize * sizeof(ScalarType), deviceId, stream));
-        C10_CUDA_CHECK(cudaMemcpyAsync(outputShardPtr,
-                                       reducedShards[deviceId].data_ptr<ScalarType>(),
-                                       shardSize * sizeof(ScalarType),
-                                       cudaMemcpyDeviceToDevice,
-                                       stream));
     }
 }
 
