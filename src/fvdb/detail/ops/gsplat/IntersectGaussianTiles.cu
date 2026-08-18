@@ -952,6 +952,8 @@ intersectGaussianTilesCudaImpl(
                           "conics must have the same dtype as means2d");
         TORCH_CHECK_VALUE(opacities.value().scalar_type() == means2d.scalar_type(),
                           "opacities must have the same dtype as means2d");
+        TORCH_CHECK_VALUE(conics.value().is_contiguous() && opacities.value().is_contiguous(),
+                          "conics and opacities must be contiguous");
     }
 
     if (isPacked) {
@@ -1252,6 +1254,8 @@ intersectGaussianTilesPrivateUse1Impl(
                           "conics must have the same dtype as means2d");
         TORCH_CHECK_VALUE(opacities.value().scalar_type() == means2d.scalar_type(),
                           "opacities must have the same dtype as means2d");
+        TORCH_CHECK_VALUE(conics.value().is_contiguous() && opacities.value().is_contiguous(),
+                          "conics and opacities must be contiguous");
     }
 
     if (isPacked) {
