@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/GridBatchData.h>
+#include <fvdb/TorchResource.h>
 #include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/BuildGridFromIjk.h>
 #include <fvdb/detail/ops/BuildGridFromNearestVoxelsToPoints.h>
@@ -114,7 +115,7 @@ dispatchBuildGridFromNearestVoxelsToPoints<torch::kCUDA>(
         }
         nanovdb::OnIndexGrid *grid = baseHdl.deviceGrid<nanovdb::ValueOnIndex>(i);
         TORCH_CHECK(grid, "Grid is null");
-        morphology::PadGrid<nanovdb::ValueOnIndex> op(
+        morphology::PadGrid<nanovdb::ValueOnIndex, TorchResource> op(
             grid, /*positiveOctant=*/true, stream.stream());
         op.setChecksum(nanovdb::CheckMode::Default);
         handles.push_back(op.getHandle(guide));

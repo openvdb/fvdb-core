@@ -435,7 +435,7 @@ dispatchBuildGridForConv<torch::kCUDA>(const GridBatchData &baseGridHdl,
                 }
             } else {
                 for (int p = 0; p < geometry.paddingAfter()[0]; p += 1) {
-                    morphology::PadGrid<nanovdb::ValueOnIndex> op(
+                    morphology::PadGrid<nanovdb::ValueOnIndex, TorchResource> op(
                         grid, /*positiveOctant=*/false, stream.stream());
                     op.setChecksum(nanovdb::CheckMode::Default);
                     handle = op.getHandle(guide);
@@ -443,7 +443,7 @@ dispatchBuildGridForConv<torch::kCUDA>(const GridBatchData &baseGridHdl,
                     grid = handle.deviceGrid<nanovdb::ValueOnIndex>();
                 }
                 for (int p = 0; p < geometry.paddingBefore()[0]; p += 1) {
-                    morphology::PadGrid<nanovdb::ValueOnIndex> op(
+                    morphology::PadGrid<nanovdb::ValueOnIndex, TorchResource> op(
                         grid, /*positiveOctant=*/true, stream.stream());
                     op.setChecksum(nanovdb::CheckMode::Default);
                     handle = op.getHandle(guide);

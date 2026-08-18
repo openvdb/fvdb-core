@@ -306,24 +306,35 @@ dispatchFineIJKForCoarseGrid<torch::kPrivateUse1>(const GridBatchData &batchHdl,
 
             void *dTempStorage      = nullptr;
             size_t tempStorageBytes = 0;
-            cub::DeviceSegmentedReduce::Sum(dTempStorage,
-                                            tempStorageBytes,
-                                            mask.value().jdata().const_data_ptr<bool>(),
-                                            maskCounts,
-                                            deviceNumSegments,
-                                            beginOffsets,
-                                            endOffsets,
-                                            stream);
-            cudaMallocAsync(&dTempStorage, tempStorageBytes, stream);
-            cub::DeviceSegmentedReduce::Sum(dTempStorage,
-                                            tempStorageBytes,
-                                            mask.value().jdata().const_data_ptr<bool>(),
-                                            maskCounts,
-                                            deviceNumSegments,
-                                            beginOffsets,
-                                            endOffsets,
-                                            stream);
-            cudaFreeAsync(dTempStorage, stream);
+            C10_CUDA_CHECK(
+                cub::DeviceSegmentedReduce::Sum(dTempStorage,
+                                                tempStorageBytes,
+                                                mask.value().jdata().const_data_ptr<bool>(),
+                                                maskCounts,
+                                                deviceNumSegments,
+                                                beginOffsets,
+                                                endOffsets,
+                                                stream));
+
+            // Route the CUB scratch through torch's caching allocator rather than
+            // cudaMallocAsync, so it shares torch's pool instead of partitioning VRAM against
+            // it (same rationale as the nanoVDB builders -- see fvdb/TorchResource.h).
+            auto &resource = nanovdb::cuda::default_resource<TorchResource>();
+            dTempStorage =
+                resource.allocate_async(tempStorageBytes, TorchResource::DEFAULT_ALIGNMENT, stream);
+
+            C10_CUDA_CHECK(
+                cub::DeviceSegmentedReduce::Sum(dTempStorage,
+                                                tempStorageBytes,
+                                                mask.value().jdata().const_data_ptr<bool>(),
+                                                maskCounts,
+                                                deviceNumSegments,
+                                                beginOffsets,
+                                                endOffsets,
+                                                stream));
+
+            resource.deallocate_async(
+                dTempStorage, tempStorageBytes, TorchResource::DEFAULT_ALIGNMENT, stream);
         }
 
         for (const auto deviceId: c10::irange(c10::cuda::device_count())) {

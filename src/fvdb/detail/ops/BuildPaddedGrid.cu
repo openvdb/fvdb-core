@@ -249,7 +249,8 @@ padOncePass(nanovdb::OnIndexGrid *grid,
             bool positive,
             const TorchDeviceBuffer &guide,
             cudaStream_t stream) {
-    fvdb::detail::morphology::PadGrid<nanovdb::ValueOnIndex> op(grid, positive, stream);
+    fvdb::detail::morphology::PadGrid<nanovdb::ValueOnIndex, TorchResource> op(
+        grid, positive, stream);
     op.setChecksum(nanovdb::CheckMode::Default);
     auto handle = op.getHandle(guide);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
