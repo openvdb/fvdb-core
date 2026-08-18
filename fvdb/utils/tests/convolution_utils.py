@@ -245,19 +245,15 @@ def compute_conv_grid_topology_ground_truth(
     dtype: torch.dtype,
 ) -> torch.Tensor:
     """
-    Compute the expected output coordinates for conv_grid using dense convolution.
+    Compute complete convolution topology from the canonical Torch-phase relation.
 
-    This function computes which output coordinates would be non-zero after
-    convolving sparse input with an all-ones kernel. This is useful for validating
-    the topology (coordinate set) produced by sparse convolution operations.
-
-    For stride=1:
-        Uses dense convolution with 'same' padding and finds non-zero locations.
-
-    For stride>1:
-        Computes output coordinates analytically based on receptive field overlap.
-        The output at coordinate o receives contributions from input coordinates
-        in the range [o*stride - kernel_half, o*stride + kernel_half].
+    This legacy test helper remains independent of production topology code. For every
+    active fine-lattice coordinate ``fine_ijk`` and zero-based kernel tap ``tap_ijk``, it
+    emits ``coarse_ijk`` when solving the componentwise relation
+    ``fine_ijk = stride * coarse_ijk + tap_ijk - padding_before`` gives integer components,
+    where ``padding_before = floor((kernel_size - 1) / 2)`` and
+    ``0 <= tap_ijk[axis] < kernel_size[axis]``. It deliberately does not use a symmetric
+    ``K // 2`` interval, which is wrong for even kernels.
 
     Args:
         input_coords: Tensor of shape (N, 3) with input ijk coordinates
@@ -269,70 +265,22 @@ def compute_conv_grid_topology_ground_truth(
     Returns:
         Tensor of shape (M, 3) with expected output ijk coordinates
     """
-    kernel_half = tuple(k // 2 for k in kernel_size)
-
-    # Compute coordinate ranges
-    input_min = input_coords.min(dim=0).values.tolist()
-    input_max = input_coords.max(dim=0).values.tolist()
-
-    if stride == (1, 1, 1):
-        # Stride 1: output extends by half-kernel beyond input
-        output_min = tuple(input_min[i] - kernel_half[i] for i in range(3))
-        output_max = tuple(input_max[i] + kernel_half[i] for i in range(3))
-        coord_offset = output_min
-        dense_shape = tuple(output_max[i] - output_min[i] + 1 for i in range(3))
-
-        # Create dense input
-        dense_input = torch.zeros((1, 1) + dense_shape, device=device, dtype=dtype)
-        for coord in input_coords:
-            idx = tuple(coord[i].item() - coord_offset[i] for i in range(3))
-            dense_input[0, 0, idx[0], idx[1], idx[2]] = 1
-
-        # All-ones kernel
-        kernel = torch.ones((1, 1) + kernel_size, device=device, dtype=dtype)
-
-        # Dense convolution with 'same' padding
-        with disable_tf32():
-            dense_output = torch.nn.functional.conv3d(input=dense_input, weight=kernel, padding="same")
-
-        # Find non-zero coordinates and convert back to grid coordinates
-        nonzero_indices = torch.nonzero(dense_output[0, 0] != 0)
-        offset_tensor = torch.tensor(coord_offset, device=device, dtype=torch.int32)
-        expected_coords = nonzero_indices.to(torch.int32) + offset_tensor
-
-    else:
-        # For stride > 1, compute analytically based on receptive field overlap
-        # For an input at coord c, it contributes to outputs at:
-        #   o where o*stride - kernel_half <= c <= o*stride + kernel_half
-        #   i.e., (c - kernel_half) / stride <= o <= (c + kernel_half) / stride
-        # Using ceiling/floor for the bounds:
-        #   o_min = ceil((c - kernel_half) / stride)
-        #   o_max = floor((c + kernel_half) / stride)
-
-        output_coords_set: set[tuple[int, int, int]] = set()
-
-        for coord in input_coords:
-            c = coord.tolist()
-
-            # For each input coordinate, find all output coordinates it contributes to
-            o_ranges = []
-            for dim in range(3):
-                c_val = c[dim]
-                kh = kernel_half[dim]
-                s = stride[dim]
-                o_min = math.ceil((c_val - kh) / s)
-                o_max = math.floor((c_val + kh) / s)
-                o_ranges.append(range(o_min, o_max + 1))
-
-            # Add all combinations
-            for o0 in o_ranges[0]:
-                for o1 in o_ranges[1]:
-                    for o2 in o_ranges[2]:
-                        output_coords_set.add((o0, o1, o2))
-
-        expected_coords = torch.tensor(list(output_coords_set), device=device, dtype=torch.int32)
-
-    return expected_coords
+    p_before = tuple((k - 1) // 2 for k in kernel_size)
+    output_coords_set: set[tuple[int, int, int]] = set()
+    for coord in input_coords.tolist():
+        for u0 in range(kernel_size[0]):
+            for u1 in range(kernel_size[1]):
+                for u2 in range(kernel_size[2]):
+                    numerators = (
+                        coord[0] - u0 + p_before[0],
+                        coord[1] - u1 + p_before[1],
+                        coord[2] - u2 + p_before[2],
+                    )
+                    if all(numerators[axis] % stride[axis] == 0 for axis in range(3)):
+                        output_coords_set.add(tuple(numerators[axis] // stride[axis] for axis in range(3)))
+    if not output_coords_set:
+        return torch.empty((0, 3), device=device, dtype=torch.int32)
+    return torch.tensor(sorted(output_coords_set), device=device, dtype=torch.int32)
 
 
 # =============================================================================
@@ -375,21 +323,22 @@ def conv_ground_truth_strided(
     dst_coords = dst_grid.ijk.jdata
 
     kernel_size = weights.shape[2:]
-    kernel_half = tuple(k // 2 for k in kernel_size)
+    p_before = tuple((k - 1) // 2 for k in kernel_size)
 
     device = activation.jdata.device
     dtype = activation.jdata.dtype
     in_channels = weights.shape[1]
     out_channels = weights.shape[0]
 
-    # Compute the input coordinate ranges needed to cover all output coordinates
-    # For output coord o, we need input coords in [o*stride - kernel_half, o*stride + kernel_half]
+    # Compute the input coordinate ranges needed to cover all output coordinates.
+    # For each coarse-lattice coordinate, zero-based taps read fine-lattice coordinates
+    # ``stride * coarse_ijk + tap_ijk - padding_before``.
     dst_min = dst_coords.min(dim=0).values.tolist()
     dst_max = dst_coords.max(dim=0).values.tolist()
 
     # Input range needed for these outputs
-    input_min_needed = tuple(dst_min[i] * stride[i] - kernel_half[i] for i in range(3))
-    input_max_needed = tuple(dst_max[i] * stride[i] + kernel_half[i] for i in range(3))
+    input_min_needed = tuple(dst_min[i] * stride[i] - p_before[i] for i in range(3))
+    input_max_needed = tuple(dst_max[i] * stride[i] + kernel_size[i] - 1 - p_before[i] for i in range(3))
 
     # Also include actual source coordinates in case they extend beyond
     src_min = src_coords.min(dim=0).values.tolist()
@@ -403,10 +352,11 @@ def conv_ground_truth_strided(
     # in the local coordinate system. This means dense_min must be aligned such that
     # local output index 0 corresponds to a known global output coordinate.
     #
-    # With padding=kernel_half, local output[o] sees local input centered at o*stride.
-    # For global output O to map to local output o, we need:
-    #   O * stride = o * stride + dense_min
-    #   O = o + dense_min / stride
+    # With canonical padding, a local coarse-lattice coordinate reads local fine-lattice
+    # coordinates through the same tap relation. For a global coarse-lattice coordinate
+    # to map to a local one, their stride-scaled coordinates differ by ``dense_min``:
+    #   global_coarse_ijk * stride = local_coarse_ijk * stride + dense_min
+    #   global_coarse_ijk = local_coarse_ijk + dense_min / stride
     #
     # For this mapping to work with integer indices, dense_min must be divisible by stride.
     # We round DOWN to ensure we include all needed input coordinates.
@@ -421,9 +371,8 @@ def conv_ground_truth_strided(
 
     # Compute padding to get outputs at the right coordinates
     # PyTorch strided conv: output_size = floor((input_size + 2*padding - kernel_size) / stride) + 1
-    # We want output coord o to correspond to input region starting at o*stride - kernel_half
-    # Padding = kernel_half ensures the first output sees input starting at -kernel_half
-    padding = kernel_half
+    # ``padding=p_before`` gives the canonical Torch tap phase.
+    padding = p_before
 
     # Run convolution
     if allow_tf32:
@@ -433,11 +382,8 @@ def conv_ground_truth_strided(
             dense_output = torch.nn.functional.conv3d(input=dense_input, weight=weights, padding=padding, stride=stride)
 
     # Compute output coordinate offset
-    # With padding=kernel_half and dense_min aligned to stride:
-    # Local output[o] has center at local input o*stride, which is global input o*stride + dense_min
-    # Global output O has center at global input O*stride
-    # So: O*stride = o*stride + dense_min
-    #     O = o + dense_min/stride
+    # With canonical padding and ``dense_min`` aligned to stride, a local coarse-lattice
+    # coordinate maps to ``global_coarse_ijk = local_coarse_ijk + dense_min / stride``.
     # Since dense_min is now aligned, dense_min/stride is an integer.
     output_offset = tuple(dense_min[i] // stride[i] for i in range(3))
 
@@ -645,11 +591,11 @@ def get_cluster_edge_aligned(
     """
     Get a sparse cluster positioned so outputs stay non-negative.
 
-    The minimum coordinate is offset by (half_kernel + 1) to ensure
+    The minimum coordinate is offset by ``padding_before + 1`` to ensure
     all output coordinates are non-negative.
     """
-    kernel_half = tuple(k // 2 for k in kernel_size)
-    base = tuple(k + 1 for k in kernel_half)  # Extra margin
+    p_before = tuple((k - 1) // 2 for k in kernel_size)
+    base = tuple(k + 1 for k in p_before)  # Extra margin
 
     return torch.tensor(
         [
@@ -678,11 +624,11 @@ def compute_conv_transpose_topology_ground_truth(
     """
     Compute the expected output coordinates for transposed convolution.
 
-    For transposed convolution, each input at coordinate c contributes to
-    outputs at coordinates: c*S + (k - K//2) for each kernel position k.
-
-    This means the output range for input c is:
-        [c*S - K//2, c*S + K//2]
+    For transposed convolution, each input at coarse-lattice coordinate ``coarse_ijk``
+    contributes to fine-lattice outputs at
+    ``fine_ijk = stride * coarse_ijk + tap_ijk - padding_before`` for each zero-based
+    kernel tap, where ``padding_before = floor((kernel_size - 1) / 2)`` and
+    ``0 <= tap_ijk[axis] < kernel_size[axis]``. This is the full uncropped support.
 
     Args:
         input_coords: Tensor of shape (N, 3) with input ijk coordinates
@@ -693,26 +639,27 @@ def compute_conv_transpose_topology_ground_truth(
     Returns:
         Tensor of shape (M, 3) with expected output ijk coordinates
     """
-    kernel_half = tuple(k // 2 for k in kernel_size)
+    p_before = tuple((k - 1) // 2 for k in kernel_size)
 
     output_coords_set: set[tuple[int, int, int]] = set()
 
     for coord in input_coords:
-        c = coord.tolist()
+        coarse_ijk = coord.tolist()
 
-        # For transposed convolution, input at c produces outputs at
-        # c*S + (k - K//2) for each kernel position k
+        # Apply the canonical relation for every zero-based kernel tap.
         for k0 in range(kernel_size[0]):
             for k1 in range(kernel_size[1]):
                 for k2 in range(kernel_size[2]):
                     out_coord = (
-                        c[0] * stride[0] + (k0 - kernel_half[0]),
-                        c[1] * stride[1] + (k1 - kernel_half[1]),
-                        c[2] * stride[2] + (k2 - kernel_half[2]),
+                        coarse_ijk[0] * stride[0] + (k0 - p_before[0]),
+                        coarse_ijk[1] * stride[1] + (k1 - p_before[1]),
+                        coarse_ijk[2] * stride[2] + (k2 - p_before[2]),
                     )
                     output_coords_set.add(out_coord)
 
-    return torch.tensor(list(output_coords_set), device=device, dtype=torch.int32)
+    if not output_coords_set:
+        return torch.empty((0, 3), device=device, dtype=torch.int32)
+    return torch.tensor(sorted(output_coords_set), device=device, dtype=torch.int32)
 
 
 def conv_transpose_ground_truth_stride_1(
@@ -730,8 +677,8 @@ def conv_transpose_ground_truth_stride_1(
     This function densifies the sparse input, runs PyTorch's conv_transpose3d,
     and returns both the dense activation and the convolved result.
 
-    For transposed convolution with stride=1 and padding=K//2, the output
-    has the same shape as the input (same as conv3d with padding="same").
+    This is a finite, cropped helper for stride one. It uses canonical
+    ``padding=padding_before``; it is not the complete-topology definition.
 
     Args:
         grid_batch: Input GridBatch containing voxel coordinates
@@ -749,7 +696,7 @@ def conv_transpose_ground_truth_stride_1(
     device = activation.jdata.device
     dtype = activation.jdata.dtype
     kernel_size = weights.shape[2:]
-    kernel_half = tuple(k // 2 for k in kernel_size)
+    p_before = tuple((k - 1) // 2 for k in kernel_size)
     in_channels = weights.shape[1]
 
     # Create dense input
@@ -766,12 +713,12 @@ def conv_transpose_ground_truth_stride_1(
     # but our convention is [out_channels, in_channels, K].  Transpose channel dims.
     weights_torch = weights.transpose(0, 1).contiguous()
 
-    # For stride=1, padding=K//2 gives same output size as input
+    # This finite helper intentionally crops with canonical ``padding_before``.
     if allow_tf32:
         convolved = torch.nn.functional.conv_transpose3d(
             input=dense_activation,
             weight=weights_torch,
-            padding=kernel_half,
+            padding=p_before,
             stride=1,
         )
     else:
@@ -779,7 +726,7 @@ def conv_transpose_ground_truth_stride_1(
             convolved = torch.nn.functional.conv_transpose3d(
                 input=dense_activation,
                 weight=weights_torch,
-                padding=kernel_half,
+                padding=p_before,
                 stride=1,
             )
 
@@ -825,7 +772,7 @@ def conv_transpose_ground_truth_strided(
     dst_coords = dst_grid.ijk.jdata
 
     kernel_size = weights.shape[2:]
-    kernel_half = tuple(k // 2 for k in kernel_size)
+    p_before = tuple((k - 1) // 2 for k in kernel_size)
 
     device = activation.jdata.device
     dtype = activation.jdata.dtype
@@ -853,10 +800,10 @@ def conv_transpose_ground_truth_strided(
                 input=dense_input, weight=weights_torch, padding=0, stride=stride
             )
 
-    # With padding=0 the full unpadded output is produced.  Local output o
-    # for input c and kernel position k is o = c*S + k.  In global coords
-    # (k centered): global = (src_min + c)*S + (k - K//2) = src_min*S - K//2 + o.
-    output_origin = tuple(src_min[i] * stride[i] - kernel_half[i] for i in range(3))
+    # With padding zero, PyTorch produces the full local output. Converting that local
+    # fine-lattice coordinate to the canonical global relation adds
+    # ``src_min * stride - padding_before``.
+    output_origin = tuple(src_min[i] * stride[i] - p_before[i] for i in range(3))
 
     sparse_output_values = torch.zeros((len(dst_coords), out_channels), device=device, dtype=dtype)
     for idx, coord in enumerate(dst_coords):

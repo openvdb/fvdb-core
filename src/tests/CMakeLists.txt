@@ -33,7 +33,6 @@ target_include_directories(fvdb_test_utils PUBLIC
 )
 target_include_directories(fvdb_test_utils PRIVATE
   ${PNG_INCLUDE_DIRS}
-  ${NANOVDB_EDITOR_INCLUDE_DIR}
 )
 
 target_link_libraries(fvdb_test_utils
@@ -67,7 +66,6 @@ function(ConfigureTest CMAKE_TEST_NAME)
     ${CMAKE_SOURCE_DIR}/src # Include src for finding <tests/utils/...>
     ${CUDAToolkit_INCLUDE_DIRS}
     ${CUDAToolkit_INCLUDE_DIRS}/cccl
-    ${NANOVDB_EDITOR_INCLUDE_DIR}
   )
 
   # Propagate usage requirements (include dirs, defines, SYSTEM marker) from

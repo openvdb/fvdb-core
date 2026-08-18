@@ -17,8 +17,18 @@ from . import nn, utils, viz
 from ._fvdb_cpp import NanoVDBGridMetadata, config, hilbert, morton
 from ._volume_render import volume_render
 from .attention import scaled_dot_product_attention
-from .convolution_plan import ConvolutionPlan
-from .enums import SmoothingMode
+from .convolution_plan import (
+    ConvolutionCoverageReport,
+    ConvolutionCoverageWarning,
+    ConvolutionPlan,
+    ConvolutionTransformCompatibility,
+)
+from .enums import (
+    ConvolutionPhasePolicy,
+    ConvolutionTopologyPolicy,
+    ConvolutionTopologyProvenance,
+    SmoothingMode,
+)
 from .grid import Grid
 from .grid_batch import GridBatch, gcat
 from .jagged_tensor import JaggedTensor, jcat
@@ -70,6 +80,12 @@ __all__ = [
     "Grid",
     "JaggedTensor",
     "ConvolutionPlan",
+    "ConvolutionCoverageReport",
+    "ConvolutionCoverageWarning",
+    "ConvolutionTransformCompatibility",
+    "ConvolutionPhasePolicy",
+    "ConvolutionTopologyPolicy",
+    "ConvolutionTopologyProvenance",
     "SmoothingMode",
     "Grid",
     "NanoVDBGridMetadata",

@@ -454,8 +454,7 @@ plan_same = ConvolutionPlan.from_grid_batch(
     target_grid=grid        # same grid in and out
 )
 
-# Stride=2 downsampling: pass target_grid=None so the coarser output topology
-# is computed automatically from the stride.
+# Stride=2: target_grid=None generates full convolution support on the coarse lattice.
 plan_down = ConvolutionPlan.from_grid_batch(
     kernel_size=2, stride=2,
     source_grid=fine_grid,
@@ -463,12 +462,11 @@ plan_down = ConvolutionPlan.from_grid_batch(
 )
 coarse_grid = plan_down.target_grid_batch   # the auto-computed coarse grid
 
-# Transposed conv (upsampling): use from_grid_batch_transposed.
-# source_grid is the coarse grid; target_grid is the fine grid from the encoder.
+# Restricted decoder: source_grid is coarse and the saved fine grid limits output rows.
 plan_up = ConvolutionPlan.from_grid_batch_transposed(
     kernel_size=2, stride=2,
     source_grid=coarse_grid,
-    target_grid=fine_grid   # must supply the fine-resolution target topology
+    target_grid=fine_grid   # restricted target; zero-degree rows are allowed unless made strict
 )
 ```
 
@@ -591,7 +589,11 @@ out_feat = plan_same.execute(feat, weights)
 
 Sparse 3D networks need multi-scale representations, just like 2D CNNs. In fVDB, the "resolution" of a grid is determined by its `voxel_sizes`. A coarser grid has larger voxels and fewer of them; a finer grid has smaller voxels and more.
 
-**Strided convolution changes the grid topology automatically.** A `stride=2` conv produces a new grid where each output voxel covers a 2×2×2 block of input voxels.
+**Strided convolution generates a sampled convolution lattice.** At canonical registration its edges obey
+``fine_ijk = stride * coarse_ijk + tap_ijk - padding_before`` componentwise, where ``fine_ijk`` and ``coarse_ijk``
+are integer coordinates on the fine and strided lattices. The kernel coordinate ``tap_ijk`` is zero-based,
+``0 <= tap_ijk[axis] < kernel_size[axis]``, and ``padding_before = floor((kernel_size - 1) / 2)``. A stride-2 result
+has twice the voxel size and the same origin, but it is not a partition into 2×2×2 physical cells.
 
 ### Explicit Coarsening and Refinement
 
@@ -797,13 +799,13 @@ The backbone doesn't change. Only the head and the loss do.
 - (c) Gradients flow through the interpolation weights back to the **voxel features** (`vox_feat`). The operation supports backpropagation (see also `sample_trilinear_with_grad` for explicit spatial gradients w.r.t. query points).
 
 **Quiz 5**
-- (a) `stride=1` → output grid has the same topology as input. `stride=2` → output grid is coarser; roughly 1/8 the voxels (each output voxel covers a 2×2×2 block).
-- (b) Use the separate `SparseConvTranspose3d` class (not a `transposed=True` flag) and build the plan with `ConvolutionPlan.from_grid_batch_transposed(kernel_size, stride, source_grid=coarse_grid, target_grid=fine_grid)`. The `target_grid` argument on the plan pins the output topology to the encoder-side fine grid, because without it there is no unambiguous definition of which voxels should receive output.
+- (a) A stride-1 plan has the input topology only when it explicitly restricts to `target_grid=source_grid`. With `target_grid=None`, both stride-1 and strided plans generate the complete positive structural support. Stride changes voxel size by its factor; output count depends on active coordinates and kernel support, not a fixed 1/8 rule.
+- (b) Use the separate `SparseConvTranspose3d` class (not a `transposed=True` flag). `target_grid=None` generates full transposed support. `target_grid=fine_grid` is a restricted decoder target, not an inverse guarantee: saved fine rows can be unreachable. For the exact finite adjoint of an existing plan, use `ConvolutionPlan.from_plan_transposed(plan)` and tied weights `weight.transpose(0, 1).contiguous()`.
 - (c) 3 grids (one per downsampling stage), retrieved from `plan.target_grid_batch` after each stride-2 `ConvolutionPlan.from_grid_batch` call, before building the transposed plans in the decoder.
 
 **Quiz 6**
 - (a) `0.05 × 4 = 0.20`
-- (b) They are **not** the same in general. `coarsened_grid(2)` creates a topology derived from the original voxels by grouping. `SparseConv3d(stride=2)` creates a topology determined by the kernel map computation in the convolution. The resulting voxel sets may differ depending on the grid structure.
+- (b) They are **not** the same in general. `coarsened_grid(2)` groups physical cells and uses a block-centroid transform. `SparseConv3d(stride=2)` projects the Torch-phase convolution relation onto a sampled lattice with the original origin. The resulting voxel sets and transforms can differ.
 - (c) When you want convolutions to "see" the neighborhood outside the immediate surface — e.g., encoding free-space voxels adjacent to the surface, or when your network's first layer needs context from the empty voxels surrounding the shape.
 
 **Capstone — head input channels**
@@ -829,7 +831,7 @@ The backbone doesn't change. Only the head and the loss do.
 | Refine topology | `grid.refined_grid(factor)` |
 | Dilate topology | `grid.dilated_grid(radius)` |
 | Conv plan (same/down) | `ConvolutionPlan.from_grid_batch(kernel_size, stride, source_grid, target_grid=)` |
-| Conv plan (transposed) | `ConvolutionPlan.from_grid_batch_transposed(kernel_size, stride, source_grid, target_grid)` |
+| Conv plan (transposed) | `ConvolutionPlan.from_grid_batch_transposed(kernel_size, stride, source_grid, target_grid=None)` |
 | Output grid from plan | `plan.target_grid_batch` |
 | Sparse conv | `fvnn.SparseConv3d(in, out, kernel_size, stride)(feat_JT, plan)` |
 | Transposed sparse conv | `fvnn.SparseConvTranspose3d(in, out, kernel_size, stride)(feat_JT, plan)` |

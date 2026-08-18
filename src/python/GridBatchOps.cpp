@@ -130,6 +130,22 @@ bind_grid_batch_ops(py::module &m) {
         .value("TAUBIN", ops::SmoothingMode::TAUBIN)
         .export_values();
 
+    py::class_<ops::BuildGridForConvResourceStats>(m, "BuildGridForConvResourceStats")
+        .def_readonly("input_voxel_count", &ops::BuildGridForConvResourceStats::inputVoxelCount)
+        .def_readonly("kernel_volume", &ops::BuildGridForConvResourceStats::kernelVolume)
+        .def_readonly("valid_emission_count",
+                      &ops::BuildGridForConvResourceStats::validEmissionCount)
+        .def_readonly("count_requested_bytes",
+                      &ops::BuildGridForConvResourceStats::countRequestedBytes)
+        .def_readonly("prefix_requested_bytes",
+                      &ops::BuildGridForConvResourceStats::prefixRequestedBytes)
+        .def_readonly("emission_requested_bytes",
+                      &ops::BuildGridForConvResourceStats::emissionRequestedBytes)
+        .def_readonly("peak_requested_bytes",
+                      &ops::BuildGridForConvResourceStats::peakRequestedBytes)
+        .def_readonly("used_direct_projection",
+                      &ops::BuildGridForConvResourceStats::usedDirectProjection);
+
     // -----------------------------------------------------------------------
     // Interpolation: forward
     // -----------------------------------------------------------------------
@@ -758,6 +774,8 @@ bind_grid_batch_ops(py::module &m) {
         py::arg("grid"),
         py::arg("kernel_size"),
         py::arg("stride"));
+
+    m.def("last_conv_grid_resource_stats", &ops::lastBuildGridForConvResourceStats);
 
     m.def(
         "conv_transpose_grid",

@@ -17,6 +17,7 @@
 #include "dispatch/dispatch_table.h"
 #include "dispatch/with_value.h"
 
+#include <fvdb/detail/ops/convolution/ConvolutionGeometry.h>
 #include <fvdb/detail/ops/convolution/PredGatherIGemm.h>
 
 #include <nanovdb/NanoVDB.h>
@@ -1000,6 +1001,47 @@ using kernel_size_axis =
 using stride_axis     = dispatch::axis<conv_stride::s1, conv_stride::s2>;
 using kout_denom_axis = dispatch::axis<conv_kout_denom::K32, conv_kout_denom::K128>;
 
+struct PredGatherIGemmDispatchGeometry {
+    conv_kernel_size kernelSize;
+    conv_stride stride;
+};
+
+static PredGatherIGemmDispatchGeometry
+checkedPredGatherIGemmGeometry(int kernelSize, int stride) {
+    conv_kernel_size checkedKernelSize = conv_kernel_size::k3;
+    switch (kernelSize) {
+    case static_cast<int>(conv_kernel_size::k3): checkedKernelSize = conv_kernel_size::k3; break;
+    case static_cast<int>(conv_kernel_size::k5): checkedKernelSize = conv_kernel_size::k5; break;
+    case static_cast<int>(conv_kernel_size::k7): checkedKernelSize = conv_kernel_size::k7; break;
+    default:
+        TORCH_CHECK(
+            false, "PredGatherIGemm supports uniform kernel sizes 3, 5, 7; got ", kernelSize);
+    }
+
+    conv_stride checkedStride = conv_stride::s1;
+    switch (stride) {
+    case static_cast<int>(conv_stride::s1): checkedStride = conv_stride::s1; break;
+    case static_cast<int>(conv_stride::s2): checkedStride = conv_stride::s2; break;
+    default: TORCH_CHECK(false, "PredGatherIGemm supports uniform strides 1, 2; got ", stride);
+    }
+
+    ConvolutionGeometry const geometry{nanovdb::Coord(kernelSize), nanovdb::Coord(stride)};
+    TORCH_CHECK(ConvolutionGeometry::dilation() == nanovdb::Coord(1),
+                "PredGatherIGemm requires dilation one");
+    TORCH_CHECK(ConvolutionGeometry::registrationOffset() == nanovdb::Coord(0),
+                "PredGatherIGemm requires zero registration offset");
+    TORCH_CHECK(geometry.paddingBefore() == nanovdb::Coord(kernelSize / 2) &&
+                    geometry.tapOffset(nanovdb::Coord(0)) == nanovdb::Coord(-(kernelSize / 2)),
+                "PredGatherIGemm's admitted odd-kernel phase must match ConvolutionGeometry");
+
+    return {checkedKernelSize, checkedStride};
+}
+
+void
+checkPredGatherIGemmGeometry(int kernelSize, int stride) {
+    (void)checkedPredGatherIGemmGeometry(kernelSize, stride);
+}
+
 struct pred_gather_igemm_op {
     template <typename Tag>
     static torch::Tensor
@@ -1083,6 +1125,9 @@ predGatherIGemmSparseConv(torch::Tensor features,
                           GridBatchData const &output_grid,
                           int kernel_size,
                           int stride) {
+    PredGatherIGemmDispatchGeometry const dispatchGeometry =
+        checkedPredGatherIGemmGeometry(kernel_size, stride);
+
     TORCH_CHECK(features.is_cuda(), "features must be a CUDA tensor");
     TORCH_CHECK(weights.is_cuda(), "weights must be a CUDA tensor");
     TORCH_CHECK(features.scalar_type() == torch::kFloat32, "features must be float32");
@@ -1090,11 +1135,6 @@ predGatherIGemmSparseConv(torch::Tensor features,
     TORCH_CHECK(features.dim() == 2, "features must be 2-D [N_in, C]");
     TORCH_CHECK(weights.dim() == 5, "weights must be 5-D [K, C, T, R, S]");
     TORCH_CHECK(features.is_contiguous(), "features must be contiguous");
-
-    TORCH_CHECK(kernel_size == 3 || kernel_size == 5 || kernel_size == 7,
-                "PredGatherIGemm supports kernel sizes 3, 5, 7; got ",
-                kernel_size);
-    TORCH_CHECK(stride == 1 || stride == 2, "PredGatherIGemm supports strides 1, 2; got ", stride);
 
     const int64_t C = features.size(1);
     const int64_t K = weights.size(0);
@@ -1127,8 +1167,8 @@ predGatherIGemmSparseConv(torch::Tensor features,
     // if it is a multiple of 128, we can use that instead.
     conv_kout_denom kout_denom = (K % 128 == 0) ? conv_kout_denom::K128 : conv_kout_denom::K32;
 
-    return table.select(dispatch::dispatch_set{
-        static_cast<conv_kernel_size>(kernel_size), static_cast<conv_stride>(stride), kout_denom})(
+    return table.select(
+        dispatch::dispatch_set{dispatchGeometry.kernelSize, dispatchGeometry.stride, kout_denom})(
         features, weights, feature_grid, output_grid);
 }
 

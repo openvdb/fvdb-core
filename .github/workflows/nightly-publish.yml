@@ -104,136 +104,33 @@ jobs:
     needs: [start-build-runner, check-new-commits, versions]
     if: needs.check-new-commits.outputs.should_build == 'true'
     runs-on: nightly-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
-    container:
-      image: nvidia/cuda:${{ matrix.cuda-image-tag }}-cudnn-devel-rockylinux8
-      env:
-        PYTHONPATH: ""
-        CPM_SOURCE_CACHE: "/__w/cpm_cache"
-        FORCE_CUDA: 1
-      options: --rm
-    defaults:
-      run:
-        shell: bash -el {0}
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.versions.outputs.publish-matrix) }}
     steps:
-      - name: Install prerequisites
-        run: |
-          dnf install -y git wget procps-ng findutils gcc-toolset-${NEEDS_VERSIONS_OUTPUTS_GCC_TOOLSET}
-          echo "source /opt/rh/gcc-toolset-${NEEDS_VERSIONS_OUTPUTS_GCC_TOOLSET}/enable" > /etc/profile.d/gcc-toolset-${NEEDS_VERSIONS_OUTPUTS_GCC_TOOLSET}.sh
-        env:
-          NEEDS_VERSIONS_OUTPUTS_GCC_TOOLSET: ${{ needs.versions.outputs.gcc-toolset }}
-
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: main
           persist-credentials: false
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
-        with:
-          version: "${{ needs.versions.outputs.uv-version }}"
-
-      - name: Set up Python
+      - name: Build wheel
         run: |
-          uv python install ${MATRIX_PYTHON_VERSION}
-          uv venv
+          # docker/build_wheel.py holds the shared production wheel recipe
+          # (toolchain image, torch pin, build, nightly version stamp, auditwheel).
+          ./docker/build_wheel.py \
+            --python "${MATRIX_PYTHON_VERSION}" \
+            --torch "${NEEDS_VERSIONS_OUTPUTS_TORCH_FULL_VERSION}" \
+            --cuda "${MATRIX_CUDA_VERSION}" \
+            --cuda-arch-list "${NEEDS_VERSIONS_OUTPUTS_CUDA_ARCH_PUBLISH}" \
+            --version-mode nightly
         env:
           MATRIX_PYTHON_VERSION: ${{ matrix.python-version }}
-
-      - name: Install CMake
-        run: >
-          wget -nv https://github.com/Kitware/CMake/releases/download/v${NEEDS_VERSIONS_OUTPUTS_CMAKE_VERSION}/cmake-${NEEDS_VERSIONS_OUTPUTS_CMAKE_VERSION}-linux-x86_64.sh &&
-          mkdir /opt/cmake &&
-          sh cmake-${NEEDS_VERSIONS_OUTPUTS_CMAKE_VERSION}-linux-x86_64.sh --prefix=/usr/local --skip-license &&
-          cmake --version
-        env:
-          NEEDS_VERSIONS_OUTPUTS_CMAKE_VERSION: ${{ needs.versions.outputs.cmake-version }}
-
-      - name: Install system dependencies
-        run: dnf install -y zlib-devel libpng-devel pkgconfig unzip procps-ng findutils
-
-      - name: Install pip dependencies
-        run: |
-          CUDA_TAG="cu$(echo "${MATRIX_CUDA_VERSION}" | tr -d '.')"
-          TORCH_VERSION="${MATRIX_TORCH_VERSION}"
-          echo "Installing PyTorch ${TORCH_VERSION} for ${CUDA_TAG}"
-          # Pin the tested PyTorch via a constraints file so the unbounded torch in
-          # build_requirements.txt resolves to the version recorded in versions.json.
-          echo "torch==${NEEDS_VERSIONS_OUTPUTS_TORCH_FULL_VERSION}" > "${RUNNER_TEMP}/torch-constraints.txt"
-          uv pip install --no-cache -c "${RUNNER_TEMP}/torch-constraints.txt" -r env/build_requirements.txt --extra-index-url https://download.pytorch.org/whl/${CUDA_TAG}
-        env:
           MATRIX_CUDA_VERSION: ${{ matrix.cuda-version }}
-          MATRIX_TORCH_VERSION: ${{ matrix.torch-version }}
           NEEDS_VERSIONS_OUTPUTS_TORCH_FULL_VERSION: ${{ needs.versions.outputs.torch-full-version }}
-
-      - name: Set nightly version
-        run: |
-          TORCH_TAG="$(echo "${MATRIX_TORCH_VERSION}" | tr -d '.')"
-          CUDA_TAG="$(echo "${MATRIX_CUDA_VERSION}" | tr -d '.')"
-          # Anchor the nightly at the upcoming release recorded in pyproject.toml
-          # (e.g. 0.5.0.dev0 -> 0.5.0) so PEP 440 ordering puts nightlies between
-          # the previous final release and the next one.
-          CURRENT_VERSION=$(grep -E '^version *=' pyproject.toml | head -n1 | sed -E 's/^version *= *"([^"]+)".*/\1/')
-          BASE_VERSION=$(echo "${CURRENT_VERSION%%+*}" | sed -E 's/(\.dev[0-9]+|\.post[0-9]+|(a|b|c|rc)[0-9]+)+$//')
-          if [ -z "$BASE_VERSION" ]; then
-            echo "Failed to parse base version from pyproject.toml (got '$CURRENT_VERSION')" >&2
-            exit 1
-          fi
-          NIGHTLY_VERSION="${BASE_VERSION}.dev$(date -u '+%Y%m%d')+pt${TORCH_TAG}.cu${CUDA_TAG}"
-          sed -i -E "s/^version *= *\"[^\"]+\"/version = \"${NIGHTLY_VERSION}\"/" pyproject.toml
-          echo "Nightly version: $NIGHTLY_VERSION"
-          grep '^version' pyproject.toml
-        env:
-          MATRIX_TORCH_VERSION: ${{ matrix.torch-version }}
-          MATRIX_CUDA_VERSION: ${{ matrix.cuda-version }}
-
-      - name: Build fvdb
-        run: |
-          source .venv/bin/activate
-          ./build.sh wheel strip_symbols verbose --cuda-arch-list "${NEEDS_VERSIONS_OUTPUTS_CUDA_ARCH_PUBLISH}"
-        env:
           NEEDS_VERSIONS_OUTPUTS_CUDA_ARCH_PUBLISH: ${{ needs.versions.outputs.cuda-arch-publish }}
 
-      - name: Repair wheel for manylinux
-        run: |
-          source .venv/bin/activate
-          pip install auditwheel patchelf
-          ldd --version | head -n1
-          CUDA_MAJOR=$(echo "${MATRIX_CUDA_VERSION}" | cut -d. -f1)
-          auditwheel repair dist/fvdb_core-*.whl -w dist/ \
-            --exclude libcuda.so.1 \
-            --exclude libcudart.so.${CUDA_MAJOR} \
-            --exclude libcufile.so.1 \
-            --exclude libnvrtc.so.${CUDA_MAJOR} \
-            --exclude libnvToolsExt.so.1 \
-            --exclude libcublas.so.${CUDA_MAJOR} \
-            --exclude libcublasLt.so.${CUDA_MAJOR} \
-            --exclude libcudnn.so.9 \
-            --exclude libcufft.so.11 \
-            --exclude libcurand.so.10 \
-            --exclude libcusolver.so.11 \
-            --exclude libcusparse.so.${CUDA_MAJOR} \
-            --exclude libnvJitLink.so.${CUDA_MAJOR} \
-            --exclude libtorch.so \
-            --exclude libtorch_cpu.so \
-            --exclude libtorch_cuda.so \
-            --exclude libtorch_python.so \
-            --exclude libc10.so \
-            --exclude libc10_cuda.so \
-            --exclude libmkl_core.so.2 \
-            --exclude libmkl_intel_lp64.so.2 \
-            --exclude libmkl_intel_thread.so.2 \
-            --exclude libomp.so \
-            --exclude libprotobuf.so.31 \
-            || echo "auditwheel failed, keeping original wheel"
-          if ls dist/fvdb_core-*-manylinux*.whl 1> /dev/null 2>&1; then
-            rm dist/fvdb_core-*-linux_x86_64.whl
-          fi
-          ls -lh dist/
-        env:
-          MATRIX_CUDA_VERSION: ${{ matrix.cuda-version }}
+      - name: Show built wheel
+        run: ls -lh dist/
 
       - name: Upload wheel
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
