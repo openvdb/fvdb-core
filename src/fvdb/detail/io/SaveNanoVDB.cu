@@ -1,6 +1,8 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <fvdb/TorchDeviceBuffer.h>
+#include <fvdb/TorchResource.h>
 #include <fvdb/detail/io/SaveNanoVDB.h>
 #include <fvdb/detail/utils/Utils.h>
 
@@ -618,7 +620,7 @@ fvdbToNanovdbGridWithValues(const GridBatchData &gridBatchData,
     }
 
     using HostGridHandle   = nanovdb::GridHandle<nanovdb::HostBuffer>;
-    using DeviceGridHandle = nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer>;
+    using DeviceGridHandle = nanovdb::GridHandle<TorchDeviceBuffer>;
     using ValueT           = typename nanovdb::BuildToValueMap<OutBuildT>::type;
 
     // Hoist tensor shape info out of the per-batch loop. The data tensor has shape
@@ -647,7 +649,7 @@ fvdbToNanovdbGridWithValues(const GridBatchData &gridBatchData,
     // Determine the device pointer to the source index grid buffer. CPU-resident grids normally
     // return through the host path above; the upload branch is kept as a defensive fallback if
     // this helper is reused without that dispatch.
-    nanovdb::cuda::DeviceBuffer tmpDevBuf; // empty unless we need to upload
+    TorchDeviceBuffer tmpDevBuf; // empty unless we need to upload
     const torch::Device gridDevice = gridBatchData.device();
     const torch::Device cudaDevice = gridDevice.is_cuda()
                                          ? gridDevice
@@ -662,7 +664,7 @@ fvdbToNanovdbGridWithValues(const GridBatchData &gridBatchData,
         const uint64_t srcBufferSize = gridBatchData.nanoGridHandle().buffer().size();
         const uint8_t *srcHostData =
             static_cast<const uint8_t *>(gridBatchData.nanoGridHandle().buffer().data());
-        tmpDevBuf = nanovdb::cuda::DeviceBuffer(srcBufferSize, cudaDevice.index(), stream.stream());
+        tmpDevBuf = TorchDeviceBuffer(srcBufferSize, cudaDevice);
         cudaCheck(cudaMemcpyAsync(tmpDevBuf.deviceData(),
                                   srcHostData,
                                   srcBufferSize,
@@ -685,7 +687,7 @@ fvdbToNanovdbGridWithValues(const GridBatchData &gridBatchData,
     // on the same stream as the indexToGrid kernels so the GPU can run them back-to-back.
 
     std::vector<DeviceGridHandle> deviceHandles;
-    std::vector<nanovdb::cuda::DeviceBuffer> perBatchValueBufs;
+    std::vector<TorchDeviceBuffer> perBatchValueBufs;
     std::vector<nanovdb::HostBuffer> hostBuffers;
     std::vector<uint64_t> origGridBytesPerBi;
     deviceHandles.reserve(gridBatchData.batchSize());
@@ -708,9 +710,8 @@ fvdbToNanovdbGridWithValues(const GridBatchData &gridBatchData,
             dSrcBufferStart + gridBatchData.cumBytesAt(bi));
 
         const uint64_t valueBufElems = static_cast<uint64_t>(numVoxelsBi) + 1u;
-        nanovdb::cuda::DeviceBuffer valueBuf(
-            valueBufElems * sizeof(ValueT), cudaDevice.index(), stream.stream());
-        ValueT *dValuesBufBase = static_cast<ValueT *>(valueBuf.deviceData());
+        TorchDeviceBuffer valueBuf(valueBufElems * sizeof(ValueT), cudaDevice);
+        ValueT *dValuesBufBase = reinterpret_cast<ValueT *>(valueBuf.deviceData());
         cudaCheck(cudaMemsetAsync(dValuesBufBase, 0, sizeof(ValueT), stream.stream()));
         if (numVoxelsBi > 0) {
             cudaCheck(cudaMemcpyAsync(dValuesBufBase + 1,
@@ -720,8 +721,11 @@ fvdbToNanovdbGridWithValues(const GridBatchData &gridBatchData,
                                       stream.stream()));
         }
 
-        DeviceGridHandle dh = nanovdb::tools::cuda::indexToGrid<OutBuildT>(
-            dSrcGrid, dValuesBufBase, nanovdb::cuda::DeviceBuffer(), stream.stream());
+        // The guide buffer only communicates the target device; the output grid buffer and the
+        // builder's internal scratch both come from torch's caching allocator.
+        DeviceGridHandle dh = nanovdb::tools::cuda::
+            indexToGrid<OutBuildT, nanovdb::ValueOnIndex, TorchDeviceBuffer, TorchResource>(
+                dSrcGrid, dValuesBufBase, TorchDeviceBuffer(0, cudaDevice), stream.stream());
 
         const uint64_t origGridBytes = dh.buffer().size();
         const uint64_t totalBytes    = origGridBytes + blindOverhead;
