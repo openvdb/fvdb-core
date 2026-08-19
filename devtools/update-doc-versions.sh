@@ -27,6 +27,11 @@ Arguments:
   <fvdb-core-version>   Version in MAJOR.MINOR.PATCH format (e.g. 0.4.0)
 
 Options:
+  --versions-json PATH  Path to the released tag's .github/versions.json; when
+                        given, also snapshot its torch/cuda/python versions
+                        into the stable-release block in docs/conf.py and drop
+                        the pre-release marker for this minor version from
+                        docs/installation.rst
   --dry-run             Print what would change without modifying files
   -h, --help            Show this help message
 EOF
@@ -39,10 +44,14 @@ warn() { echo "WARNING: $*" >&2; }
 
 # --- argument parsing ---------------------------------------------------------
 VERSION=""
+VERSIONS_JSON=""
 DRY_RUN=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --versions-json)
+            [[ $# -ge 2 ]] || die "--versions-json requires a path argument"
+            VERSIONS_JSON="$2"; shift 2 ;;
         --dry-run)  DRY_RUN=true; shift ;;
         -h|--help)  usage; exit 0 ;;
         -*)         die "unknown option: $1" ;;
@@ -73,6 +82,45 @@ if [[ -f "$CONF_PY" ]]; then
     fi
 else
     warn "docs/conf.py not found at $CONF_PY"
+fi
+
+# --- snapshot released torch/cuda/python into docs/conf.py stable block --------
+if [[ -n "$VERSIONS_JSON" ]]; then
+    [[ -f "$VERSIONS_JSON" ]] || die "versions json not found: $VERSIONS_JSON"
+
+    TORCH_FULL="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["torch"]["full_version"])' "$VERSIONS_JSON")"
+    CUDA_LIST="$(python3 -c 'import json,sys; print(", ".join(f"\"{v}\"" for v in json.load(open(sys.argv[1]))["cuda"]["versions"]))' "$VERSIONS_JSON")"
+    PYTHON_RANGE="$(python3 -c 'import json,sys; m=json.load(open(sys.argv[1]))["python"]["matrix"]; print(f"{m[0]} - {m[-1]}")' "$VERSIONS_JSON")"
+
+    if [[ -f "$CONF_PY" ]] && grep -q 'fvdb_core_stable_torch_version' "$CONF_PY"; then
+        log "Updating stable release metadata in docs/conf.py:" \
+            "torch=$TORCH_FULL cuda=[$CUDA_LIST] python=\"$PYTHON_RANGE\""
+        if ! $DRY_RUN; then
+            sed -i "s/^fvdb_core_stable_torch_version = \".*\"/fvdb_core_stable_torch_version = \"${TORCH_FULL}\"/" "$CONF_PY"
+            sed -i "s/^fvdb_core_stable_cuda_versions = .*/fvdb_core_stable_cuda_versions = [${CUDA_LIST}]/" "$CONF_PY"
+            sed -i "s/^fvdb_core_stable_python_range = \".*\"/fvdb_core_stable_python_range = \"${PYTHON_RANGE}\"/" "$CONF_PY"
+            grep -q "^fvdb_core_stable_torch_version = \"${TORCH_FULL}\"" "$CONF_PY" \
+                || warn "docs/conf.py stable metadata replacement did not match -- check variable format"
+        fi
+    else
+        warn "docs/conf.py has no stable release metadata block (skipping snapshot)"
+    fi
+
+    # Drop the pre-release marker from this minor version's row in the docs
+    # version matrix, now that its wheels are published. The marker is only
+    # stripped from the row matching the released minor version so a patch
+    # release of an older series does not un-mark the in-development row.
+    INSTALL_RST="$REPO_ROOT/docs/installation.rst"
+    MINOR="${VERSION%.*}"
+    MARKER=" (pre-release, nightly wheels only)"
+    if [[ -f "$INSTALL_RST" ]] && grep -q "^\s*\* - ${MINOR//./\\.}${MARKER}" "$INSTALL_RST"; then
+        log "Removing pre-release marker for ${MINOR} from docs/installation.rst"
+        if ! $DRY_RUN; then
+            sed -i "/^\s*\* - ${MINOR//./\\.} (pre-release/s/${MARKER}//" "$INSTALL_RST"
+        fi
+    else
+        log "No pre-release marker for ${MINOR} in docs/installation.rst (skipping)"
+    fi
 fi
 
 # --- update fvdb-core dependency floor in pyproject.toml ----------------------

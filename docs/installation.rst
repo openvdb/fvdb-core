@@ -9,17 +9,49 @@ Software Requirements
 
 The following is a matrix of the versions of software that we `test and distribute pre-built wheels for <#notes-on-testing-and-distribution>`_ with each minor release of fVDB.
 
-+--------------+------------------+-----------------+-----------------+----------------+------------------------------------------+
-| fVDB Version | Operating System | PyTorch Version | Python Version  | CUDA Version   | Vulkan Version (only for visualization)  |
-+--------------+------------------+-----------------+-----------------+----------------+------------------------------------------+
-| 0.6          | Linux Only       | 2.13.0          | 3.10 - 3.15     | 13.0, 13.2     | 1.3.275.0                                |
-+--------------+------------------+-----------------+-----------------+----------------+------------------------------------------+
-| 0.5          | Linux Only       | 2.11.0          | 3.10 - 3.14     | 13.0, 13.2     | 1.3.275.0                                |
-+--------------+------------------+-----------------+-----------------+----------------+------------------------------------------+
-| 0.4          | Linux Only       | 2.10.0          | 3.10 - 3.13     | 12.8, 13.0     | 1.3.275.0                                |
-+--------------+------------------+-----------------+-----------------+----------------+------------------------------------------+
-| 0.3          | Linux Only       | 2.8.0           | 3.10 - 3.13     | 12.8           | 1.3.275.0                                |
-+--------------+------------------+-----------------+-----------------+----------------+------------------------------------------+
+..
+   Maintenance notes for this table:
+   - The top (in-development) row is filled in from .github/versions.json via
+     substitutions defined in conf.py, so it tracks main automatically. The
+     "(pre-release, nightly wheels only)" marker is removed automatically by
+     devtools/update-doc-versions.sh when that release is published.
+   - When main moves on to the next development cycle, freeze the previous
+     top row to literal values and add a new substitution-driven top row with
+     the pre-release marker.
+
+.. list-table::
+   :header-rows: 1
+
+   * - fVDB Version
+     - Operating System
+     - PyTorch Version
+     - Python Version
+     - CUDA Version
+     - Vulkan Version (only for visualization)
+   * - 0.6 (pre-release, nightly wheels only)
+     - Linux Only
+     - |torch_full_version|
+     - |python_range|
+     - |cuda_versions|
+     - 1.3.275.0
+   * - 0.5
+     - Linux Only
+     - 2.11.0
+     - 3.10 - 3.14
+     - 13.0, 13.2
+     - 1.3.275.0
+   * - 0.4
+     - Linux Only
+     - 2.10.0
+     - 3.10 - 3.13
+     - 12.8, 13.0
+     - 1.3.275.0
+   * - 0.3
+     - Linux Only
+     - 2.8.0
+     - 3.10 - 3.13
+     - 12.8
+     - 1.3.275.0
 
 Driver and Hardware Requirements
 -----------------------------------
@@ -44,22 +76,27 @@ To install ``fvdb-core`` in a conda environment, run the following command to in
 
 Installation from pre-built wheels
 -------------------------------------
-To install ``fvdb-core`` using pip, run the appropriate pip install command for your Pytorch/CUDA versions. These commands will install
-the correct version of ``fvdb-core`` if it is not already installed.
+To install the latest stable release of ``fvdb-core`` (currently |fvdb_core_stable_version|, built
+against PyTorch |stable_torch_full_version| for CUDA |stable_cuda_versions| and Python
+|stable_python_range|) using pip, run the appropriate pip install command for your CUDA version.
+These commands will install the correct version of ``fvdb-core`` if it is not already installed.
 
+..
+   The version numbers below come from the stable release metadata in
+   conf.py, NOT from .github/versions.json, so that these commands keep
+   matching published wheels while main targets the next release.
 
-PyTorch 2.13.0 + CUDA 13.2
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+.. rubric:: PyTorch |stable_torch_full_version| + CUDA |stable_cu132_ver|
+
+.. parsed-literal::
+
+    pip install fvdb-core==\ |fvdb_core_stable_version_cu132| --extra-index-url="https://d36m13axqqhiit.cloudfront.net/simple" torch==\ |stable_torch_full_version| --extra-index-url https://download.pytorch.org/whl/cu132
+
+.. rubric:: PyTorch |stable_torch_full_version| + CUDA |stable_cu130_ver|
 
 .. parsed-literal::
 
-    pip install fvdb-core==\ |fvdb_core_version_pt213_cu132| --extra-index-url="https://d36m13axqqhiit.cloudfront.net/simple" torch==\ |torch_full_version| --extra-index-url https://download.pytorch.org/whl/|cu132_tag|
-
-PyTorch 2.13.0 + CUDA 13.0
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. parsed-literal::
-    pip install fvdb-core==\ |fvdb_core_version_pt213_cu130| --extra-index-url="https://d36m13axqqhiit.cloudfront.net/simple" torch==\ |torch_full_version| --extra-index-url https://download.pytorch.org/whl/|cu130_tag|
+    pip install fvdb-core==\ |fvdb_core_stable_version_cu130| --extra-index-url="https://d36m13axqqhiit.cloudfront.net/simple" torch==\ |stable_torch_full_version| --extra-index-url https://download.pytorch.org/whl/cu130
 
 .. note::
    Visualization and viewer features additionally require the ``nanovdb_editor`` Python package. Install it using the optional 'viewer' dependencies, by adding ``[viewer]`` to the ``fvdb-core`` package name, for example: ``pip install fvdb-core[viewer]==…``.
@@ -79,8 +116,7 @@ on ``main`` and the corresponding final release, so passing ``--pre`` together
 with the nightly index URL will track the latest nightly until that release
 ships, then prefer the final release once it is tagged.
 
-Latest nightly (any supported PyTorch/CUDA build)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+.. rubric:: Latest nightly (any supported PyTorch/CUDA build)
 
 .. parsed-literal::
 
@@ -90,19 +126,17 @@ Latest nightly (any supported PyTorch/CUDA build)
 
     The nightly index hosts wheels for every supported PyTorch/CUDA combination
     in a single project listing. Without an explicit local-version pin, ``pip``
-    selects the highest local version, which today is the CUDA 13.2 build. To
-    target a different build (for example, CUDA 13.0) or pin a specific date
-    for reproducibility, use one of the explicit commands below.
+    selects the highest local version, which today is the CUDA |cu132_ver| build.
+    To target a different build (for example, CUDA |cu130_ver|) or pin a specific
+    date for reproducibility, use one of the explicit commands below.
 
-PyTorch 2.13.0 + CUDA 13.2
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+.. rubric:: PyTorch |torch_full_version| + CUDA |cu132_ver|
 
 .. parsed-literal::
 
     pip install fvdb-core==\ |fvdb_core_nightly_base|\ .dev20260428+pt\ |torch_short|\ .\ |cu132_tag| --extra-index-url="https://d36m13axqqhiit.cloudfront.net/simple-nightly" torch==\ |torch_full_version| --extra-index-url https://download.pytorch.org/whl/|cu132_tag|
 
-PyTorch 2.13.0 + CUDA 13.0
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+.. rubric:: PyTorch |torch_full_version| + CUDA |cu130_ver|
 
 .. parsed-literal::
 
