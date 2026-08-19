@@ -4,9 +4,8 @@
 CPMAddPackage(
     NAME tinyply
     GITHUB_REPOSITORY ddiakopoulos/tinyply
-    PATCH_COMMAND git apply --ignore-space-change --ignore-whitespace ${CMAKE_CURRENT_SOURCE_DIR}/../env/tinyply.patch || exit 0
-    GIT_TAG 2.4
-    VERSION 2.4
+    GIT_TAG c9bb690dfe5e9105961e9e28120c48c9ae084bc6
+    VERSION 3.0
     DOWNLOAD_ONLY YES
 )
 
