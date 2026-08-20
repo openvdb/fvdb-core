@@ -85,20 +85,14 @@ from ._io import (
 
 # Meshing / TSDF
 from ._meshing import (
+    dual_contour_batch,
+    dual_contour_single,
     integrate_tsdf_batch,
     integrate_tsdf_single,
     integrate_tsdf_with_features_batch,
     integrate_tsdf_with_features_single,
     marching_cubes_batch,
     marching_cubes_single,
-)
-
-# Signed distance fields
-from ._sdf import (
-    reinitialize_sdf_batch,
-    reinitialize_sdf_single,
-    retopologize_sdf_batch,
-    retopologize_sdf_single,
 )
 
 # Pooling / refinement
@@ -143,6 +137,14 @@ from ._ray import (
     uniform_ray_samples_single,
     voxels_along_rays_batch,
     voxels_along_rays_single,
+)
+
+# Signed distance fields
+from ._sdf import (
+    reinitialize_sdf_batch,
+    reinitialize_sdf_single,
+    retopologize_sdf_batch,
+    retopologize_sdf_single,
 )
 
 # Grid topology
@@ -264,6 +266,8 @@ __all__ = [
     # Meshing
     "marching_cubes_batch",
     "marching_cubes_single",
+    "dual_contour_batch",
+    "dual_contour_single",
     "integrate_tsdf_batch",
     "integrate_tsdf_single",
     "integrate_tsdf_with_features_batch",
