@@ -17,6 +17,14 @@
     "version": "2.13",
     "full_version": "2.13.0"
   },
+  "weekly_compat": {
+    "comment": "Oldest PyTorch that publishes wheels for the lowest CUDA version in cuda.versions; exercised by the weekly-compat workflow per the compatibility policy in docs/installation.rst",
+    "torch": {
+      "version": "2.9",
+      "full_version": "2.9.1"
+    },
+    "cuda": "13.0"
+  },
   "gcc": {
     "toolset": "14",
     "conda_version": "14.3"

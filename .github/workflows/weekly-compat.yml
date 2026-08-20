@@ -1,0 +1,417 @@
+# Copyright Contributors to the OpenVDB Project
+# SPDX-License-Identifier: Apache-2.0
+#
+# Weekly compatibility tests, per the policy in docs/installation.rst
+# ("Notes on Testing, Compatibility, and Distribution"): build and test main
+# against the oldest PyTorch version that publishes wheels for the lowest
+# CUDA version our stable-PyTorch policy implies. The tested versions are
+# recorded in .github/versions.json under "weekly_compat".
+
+name: fVDB Weekly Compatibility Build and Test (oldest tested PyTorch)
+
+on:
+  schedule:
+    - cron: "0 8 * * 6"  # weekly, Saturday 8am UTC
+  workflow_dispatch:
+
+concurrency:
+  group: weekly-compat
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  versions:
+    if: github.repository == 'openvdb/fvdb-core'
+    uses: ./.github/workflows/load-versions.yml
+
+  ##############################################################################
+  # START FVDB BUILD RUNNER
+  ##############################################################################
+  start-build-runner:
+    name: Start CPU-only EC2 runner for build
+    needs: versions
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write  # Required for AWS OIDC
+    outputs:
+      label: ${{ steps.start-build-runner.outputs.label }}
+      ec2-instance-id: ${{ steps.start-build-runner.outputs.ec2-instance-id }}
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          role-to-assume: ${{ needs.versions.outputs.aws-role }}
+          aws-region: ${{ needs.versions.outputs.aws-region }}
+      - name: Start EC2 runner
+        id: start-build-runner
+        uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
+        with:
+          mode: start
+          github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
+          ec2-instance-type: m6a.8xlarge
+          availability-zones-config: ${{ needs.versions.outputs.aws-cpu-az-config }}
+
+  ##############################################################################
+  # BUILD FVDB
+  ##############################################################################
+  fvdb-build:
+    name: fVDB Build (pip PyTorch ${{ needs.versions.outputs.compat-torch-full-version }} CUDA ${{ needs.versions.outputs.compat-cuda-version }})
+    needs: [start-build-runner, versions]
+    runs-on: ${{ needs.start-build-runner.outputs.label }}
+    container:
+      image: nvidia/cuda:${{ needs.versions.outputs.compat-cuda-patch }}-cudnn-devel-${{ needs.versions.outputs.docker-os-ubuntu }}
+      env:
+        PYTHONPATH: ""
+        CPM_SOURCE_CACHE: "/__w/cpm_cache"
+        FORCE_CUDA: 1
+      options: --rm
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - name: Apt update and install git and wget
+        run: apt update && apt install -y git wget
+
+      - name: Install GCC ${{ needs.versions.outputs.gcc-toolset }}
+        run: |
+          apt-get install -y software-properties-common
+          add-apt-repository -y ppa:ubuntu-toolchain-r/test
+          apt-get update
+          apt-get install -y gcc-${NEEDS_VERSIONS_OUTPUTS_GCC_TOOLSET} g++-${NEEDS_VERSIONS_OUTPUTS_GCC_TOOLSET}
+          update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-${NEEDS_VERSIONS_OUTPUTS_GCC_TOOLSET} 100
+          update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-${NEEDS_VERSIONS_OUTPUTS_GCC_TOOLSET} 100
+        env:
+          NEEDS_VERSIONS_OUTPUTS_GCC_TOOLSET: ${{ needs.versions.outputs.gcc-toolset }}
+
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
+        with:
+          version: "${{ needs.versions.outputs.uv-version }}"
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '${{ needs.versions.outputs.python-default }}'
+        env:
+          AGENT_TOOLSDIRECTORY: "/opt/hostedtoolcache"
+
+      - name: Install CMake
+        run: >
+          wget -nv https://github.com/Kitware/CMake/releases/download/v${NEEDS_VERSIONS_OUTPUTS_CMAKE_VERSION}/cmake-${NEEDS_VERSIONS_OUTPUTS_CMAKE_VERSION}-linux-x86_64.sh &&
+          mkdir /opt/cmake &&
+          sh cmake-${NEEDS_VERSIONS_OUTPUTS_CMAKE_VERSION}-linux-x86_64.sh --prefix=/usr/local --skip-license &&
+          cmake --version
+        env:
+          NEEDS_VERSIONS_OUTPUTS_CMAKE_VERSION: ${{ needs.versions.outputs.cmake-version }}
+
+      - name: Install apt dependencies
+        run: apt install -y zlib1g-dev libpng-dev pkg-config
+
+      - name: Install pip dependencies
+        run: |
+          uv venv
+          echo "torch==${NEEDS_VERSIONS_OUTPUTS_COMPAT_TORCH_FULL_VERSION}" > "${RUNNER_TEMP}/torch-constraints.txt"
+          uv pip install --no-cache-dir -c "${RUNNER_TEMP}/torch-constraints.txt" -r env/build_requirements.txt --extra-index-url https://download.pytorch.org/whl/${NEEDS_VERSIONS_OUTPUTS_COMPAT_CUDA_TAG}
+        env:
+          NEEDS_VERSIONS_OUTPUTS_COMPAT_TORCH_FULL_VERSION: ${{ needs.versions.outputs.compat-torch-full-version }}
+          NEEDS_VERSIONS_OUTPUTS_COMPAT_CUDA_TAG: ${{ needs.versions.outputs.compat-cuda-tag }}
+
+      - name: Build fvdb
+        run: |
+          source .venv/bin/activate
+          NANOVDB_EDITOR_SPEC=$(python .github/scripts/get_viewer_dependency.py)
+          pip install "$NANOVDB_EDITOR_SPEC"
+          ./build.sh wheel verbose gtests benchmarks --cuda-arch-list "${NEEDS_VERSIONS_OUTPUTS_CUDA_ARCH_PR}"
+        env:
+          NEEDS_VERSIONS_OUTPUTS_CUDA_ARCH_PR: ${{ needs.versions.outputs.cuda-arch-pr }}
+
+      - name: Upload wheel
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+            name: fvdb-compat-test-package
+            path: dist/*.whl
+            retention-days: 2
+
+      #NOTE: This tar step is here because directly uploading the build directory
+      #      wasn't working due to losing executable permissions on the files.
+      - name: Tar build directory
+        run: tar -cvf fvdb-gtest.tar build/
+
+      - name: Upload gtests
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+            name: fvdb-compat-gtest
+            path: fvdb-gtest.tar
+            retention-days: 2
+
+      - name: Cleanup
+        if: always()
+        run: |
+          echo "Cleaning up /__w/_temp directory"
+          rm -rf /__w/_temp/*
+          echo "Cleanup completed"
+
+  ##############################################################################
+  # STOP FVDB BUILD RUNNER
+  ##############################################################################
+  fvdb-build-stop-runner:
+    name: Stop CPU-only EC2 runner for build
+    needs:
+      - start-build-runner # required to get output from the start-build-runner job
+      - fvdb-build # required to wait when the main job is done
+      - versions
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write  # Required for AWS OIDC
+    # required to stop the runner even if the error happened in the previous jobs
+    # but only if the start-build-runner job was not skipped
+    if: ${{ always() && needs.start-build-runner.result != 'skipped' }}
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          role-to-assume: ${{ needs.versions.outputs.aws-role }}
+          aws-region: ${{ needs.versions.outputs.aws-region }}
+      - name: Stop EC2 runner
+        uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
+        with:
+          mode: stop
+          github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
+          label: ${{ needs.start-build-runner.outputs.label }}
+          ec2-instance-id: ${{ needs.start-build-runner.outputs.ec2-instance-id }}
+
+  ##############################################################################
+  # START FVDB TESTS GPU RUNNER
+  ##############################################################################
+  start-tests-gpu-runner:
+    name: Start EC2 GPU runner for tests
+    needs: [fvdb-build, versions]
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write  # Required for AWS OIDC
+    outputs:
+      label: ${{ steps.start-tests-gpu-runner.outputs.label }}
+      ec2-instance-id: ${{ steps.start-tests-gpu-runner.outputs.ec2-instance-id }}
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          role-to-assume: ${{ needs.versions.outputs.aws-role }}
+          aws-region: ${{ needs.versions.outputs.aws-region }}
+      - name: Start EC2 GPU runner
+        id: start-tests-gpu-runner
+        uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
+        with:
+          mode: start
+          github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
+          ec2-instance-type: g6.xlarge # 4 CPU-core, L4 GPU
+          availability-zones-config: ${{ needs.versions.outputs.aws-gpu-az-config }}
+
+  ##############################################################################
+  # RUN FVDB GTESTS
+  ##############################################################################
+  fvdb-gtests:
+    needs: [start-tests-gpu-runner, versions] # required to start the main job when the runner is ready
+    name: fVDB GTests (pip PyTorch ${{ needs.versions.outputs.compat-torch-full-version }} CUDA ${{ needs.versions.outputs.compat-cuda-version }})
+    runs-on: ${{ needs.start-tests-gpu-runner.outputs.label }} # run the job on the newly created runner
+    container:
+      image: nvidia/cuda:${{ needs.versions.outputs.compat-cuda-patch }}-cudnn-runtime-${{ needs.versions.outputs.docker-os-ubuntu }}
+      env:
+        PYTHONPATH: ""
+        CPM_SOURCE_CACHE: "/__w/cpm_cache"
+      options: --rm
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - name: Apt update and install git and wget
+        run: apt update && apt install -y git wget
+
+      - name: Install GCC ${{ needs.versions.outputs.gcc-toolset }} runtime
+        run: |
+          apt-get install -y software-properties-common
+          add-apt-repository -y ppa:ubuntu-toolchain-r/test
+          apt-get update
+          apt-get install -y libstdc++6
+
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
+        with:
+          version: "${{ needs.versions.outputs.uv-version }}"
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '${{ needs.versions.outputs.python-default }}'
+        env:
+          AGENT_TOOLSDIRECTORY: "/opt/hostedtoolcache"
+
+      - name: Install CMake
+        run: >
+          wget -nv https://github.com/Kitware/CMake/releases/download/v${NEEDS_VERSIONS_OUTPUTS_CMAKE_VERSION}/cmake-${NEEDS_VERSIONS_OUTPUTS_CMAKE_VERSION}-linux-x86_64.sh &&
+          mkdir /opt/cmake &&
+          sh cmake-${NEEDS_VERSIONS_OUTPUTS_CMAKE_VERSION}-linux-x86_64.sh --prefix=/usr/local --skip-license &&
+          cmake --version
+        env:
+          NEEDS_VERSIONS_OUTPUTS_CMAKE_VERSION: ${{ needs.versions.outputs.cmake-version }}
+
+      - name: Install apt dependencies
+        run: apt install -y zlib1g-dev libpng-dev mesa-vulkan-drivers vulkan-tools make
+
+      - name: Install pip dependencies
+        run: |
+          uv venv
+          echo "torch==${NEEDS_VERSIONS_OUTPUTS_COMPAT_TORCH_FULL_VERSION}" > "${RUNNER_TEMP}/torch-constraints.txt"
+          uv pip install --no-cache-dir -c "${RUNNER_TEMP}/torch-constraints.txt" -r env/build_requirements.txt --extra-index-url https://download.pytorch.org/whl/${NEEDS_VERSIONS_OUTPUTS_COMPAT_CUDA_TAG}
+        env:
+          NEEDS_VERSIONS_OUTPUTS_COMPAT_TORCH_FULL_VERSION: ${{ needs.versions.outputs.compat-torch-full-version }}
+          NEEDS_VERSIONS_OUTPUTS_COMPAT_CUDA_TAG: ${{ needs.versions.outputs.compat-cuda-tag }}
+
+      - name: Download gtests
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+            name: fvdb-compat-gtest
+            path: .
+
+      - name: Extract tar
+        run: |
+            tar -xvf fvdb-gtest.tar
+
+      - name: Run tests
+        run: |
+          source .venv/bin/activate
+          ./build.sh ctest
+
+      - name: Cleanup
+        if: always()
+        run: |
+          echo "Cleaning up /__w/_temp directory"
+          rm -rf /__w/_temp/*
+          echo "Cleanup completed"
+
+  ##############################################################################
+  # RUN FVDB UNIT TESTS
+  ##############################################################################
+  fvdb-unit-test:
+    needs: [start-tests-gpu-runner, versions] # required to start the main job when the runner is ready
+    name: fVDB Unit Tests (pip PyTorch ${{ needs.versions.outputs.compat-torch-full-version }} CUDA ${{ needs.versions.outputs.compat-cuda-version }})
+    runs-on: ${{ needs.start-tests-gpu-runner.outputs.label }} # run the job on the newly created runner
+    container:
+      image: nvidia/cuda:${{ needs.versions.outputs.compat-cuda-patch }}-cudnn-devel-${{ needs.versions.outputs.docker-os-ubuntu }}
+      env:
+        PYTHONPATH: ""
+      options: --rm
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - name: Apt update and install git and wget
+        run: apt update && apt install -y git wget
+
+      - name: Install GCC ${{ needs.versions.outputs.gcc-toolset }} runtime
+        run: |
+          apt-get install -y software-properties-common
+          add-apt-repository -y ppa:ubuntu-toolchain-r/test
+          apt-get update
+          apt-get install -y libstdc++6
+
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
+        with:
+          version: "${{ needs.versions.outputs.uv-version }}"
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        id: setup-python
+        with:
+          python-version: '${{ needs.versions.outputs.python-default }}'
+        env:
+          AGENT_TOOLSDIRECTORY: "/opt/hostedtoolcache"
+
+      - name: Install apt dependencies
+        run: apt install -y zlib1g-dev libpng-dev
+
+      - name: Install pip dependencies
+        run: |
+          uv venv
+          echo "torch==${NEEDS_VERSIONS_OUTPUTS_COMPAT_TORCH_FULL_VERSION}" > "${RUNNER_TEMP}/torch-constraints.txt"
+          uv pip install --no-cache-dir -c "${RUNNER_TEMP}/torch-constraints.txt" -r env/test_requirements.txt --extra-index-url https://download.pytorch.org/whl/${NEEDS_VERSIONS_OUTPUTS_COMPAT_CUDA_TAG} --index-strategy unsafe-best-match
+          uv pip install --no-cache-dir setuptools
+        env:
+          NEEDS_VERSIONS_OUTPUTS_COMPAT_TORCH_FULL_VERSION: ${{ needs.versions.outputs.compat-torch-full-version }}
+          NEEDS_VERSIONS_OUTPUTS_COMPAT_CUDA_TAG: ${{ needs.versions.outputs.compat-cuda-tag }}
+
+      - name: Download package
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+            name: fvdb-compat-test-package
+            path: ./dist
+
+      - name: Install package
+        run: |
+          source .venv/bin/activate
+          pip install ./dist/*.whl
+
+      - name: Run tests
+        env:
+          # The whole parametrized matrix shares one process, so the caching allocator's
+          # reserved pool only ever grows and its high-water mark ends up far above any
+          # single test's live footprint. Freeing straight back to the driver keeps the
+          # suite within the runner's VRAM, at the cost of a cudaMalloc/cudaFree per
+          # allocation. See
+          # https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-alloc-conf
+          PYTORCH_NO_CUDA_MEMORY_CACHING: 1
+        run: |
+          source .venv/bin/activate
+          NANOVDB_EDITOR_SPEC=$(python .github/scripts/get_viewer_dependency.py)
+          pip install "$NANOVDB_EDITOR_SPEC"
+          cd tests;
+          pytest -v unit
+
+      - name: Cleanup
+        if: always()
+        run: |
+          echo "Cleaning up /__w/_temp directory"
+          rm -rf /__w/_temp/*
+          echo "Cleanup completed"
+
+  ##############################################################################
+  # STOP FVDB TESTS GPU RUNNER
+  ##############################################################################
+  fvdb-tests-stop-gpu-runner:
+    name: Stop GPU EC2 runner for tests
+    needs:
+      - start-tests-gpu-runner # required to get output from the start-tests-gpu-runner job
+      - fvdb-gtests # required to wait when the main job is done
+      - fvdb-unit-test # required to wait when the main job is done
+      - versions
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write  # Required for AWS OIDC
+    # required to stop the runner even if the error happened in the previous jobs
+    # but only if the start-tests-gpu-runner job was not skipped
+    if: ${{ always() && needs.start-tests-gpu-runner.result != 'skipped' }}
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          role-to-assume: ${{ needs.versions.outputs.aws-role }}
+          aws-region: ${{ needs.versions.outputs.aws-region }}
+      - name: Stop EC2 runner
+        uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
+        with:
+          mode: stop
+          github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
+          label: ${{ needs.start-tests-gpu-runner.outputs.label }}
+          ec2-instance-id: ${{ needs.start-tests-gpu-runner.outputs.ec2-instance-id }}
