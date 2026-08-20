@@ -102,57 +102,6 @@ These commands will install the correct version of ``fvdb-core`` if it is not al
    Visualization and viewer features additionally require the ``nanovdb_editor`` Python package. Install it using the optional 'viewer' dependencies, by adding ``[viewer]`` to the ``fvdb-core`` package name, for example: ``pip install fvdb-core[viewer]==…``.
 
 
-Installation from nightly builds
--------------------------------------
-
-Wheels are built from the latest ``main`` branch and published on a nightly basis.
-Each nightly version is anchored to the next upcoming release recorded in
-``pyproject.toml`` (currently |fvdb_core_nightly_base|) and carries a date
-stamp plus PyTorch/CUDA build identifiers, for example
-|fvdb_core_nightly_base|\ .dev20260428+pt\ |torch_short|\ .\ |cu130_tag|.
-
-Under PEP 440 ordering, each nightly sorts between the in-development version
-on ``main`` and the corresponding final release, so passing ``--pre`` together
-with the nightly index URL will track the latest nightly until that release
-ships, then prefer the final release once it is tagged.
-
-.. rubric:: Latest nightly (any supported PyTorch/CUDA build)
-
-.. parsed-literal::
-
-    pip install --pre fvdb-core --extra-index-url="https://d36m13axqqhiit.cloudfront.net/simple-nightly" torch==\ |torch_full_version| --extra-index-url https://download.pytorch.org/whl/|cu130_tag|
-
-.. note::
-
-    The nightly index hosts wheels for every supported PyTorch/CUDA combination
-    in a single project listing. Without an explicit local-version pin, ``pip``
-    selects the highest local version, which today is the CUDA |cu132_ver| build.
-    To target a different build (for example, CUDA |cu130_ver|) or pin a specific
-    date for reproducibility, use one of the explicit commands below.
-
-.. rubric:: PyTorch |torch_full_version| + CUDA |cu132_ver|
-
-.. parsed-literal::
-
-    pip install fvdb-core==\ |fvdb_core_nightly_base|\ .dev20260428+pt\ |torch_short|\ .\ |cu132_tag| --extra-index-url="https://d36m13axqqhiit.cloudfront.net/simple-nightly" torch==\ |torch_full_version| --extra-index-url https://download.pytorch.org/whl/|cu132_tag|
-
-.. rubric:: PyTorch |torch_full_version| + CUDA |cu130_ver|
-
-.. parsed-literal::
-
-    pip install fvdb-core==\ |fvdb_core_nightly_base|\ .dev20260428+pt\ |torch_short|\ .\ |cu130_tag| --extra-index-url="https://d36m13axqqhiit.cloudfront.net/simple-nightly" torch==\ |torch_full_version| --extra-index-url https://download.pytorch.org/whl/|cu130_tag|
-
-To list all available nightly versions:
-
-.. code-block:: bash
-
-    pip index versions fvdb-core --index-url="https://d36m13axqqhiit.cloudfront.net/simple-nightly" --pre
-
-.. note::
-
-    Replace ``20260428`` with the desired nightly date. Nightly builds are retained for 30 days.
-
-
 .. _build-custom-wheel:
 
 Build and install a custom wheel from source
@@ -213,6 +162,57 @@ carries a ``+pt<torch>.cu<cuda>`` local version suffix (for example
 
    pip install torch==\ |torch_full_version| --extra-index-url https://download.pytorch.org/whl/|cu130_tag|
    pip install dist/fvdb_core-\*.whl
+
+
+Installation from nightly builds
+-------------------------------------
+
+Wheels are built from the latest ``main`` branch and published on a nightly basis.
+Each nightly version is anchored to the next upcoming release recorded in
+``pyproject.toml`` (currently |fvdb_core_nightly_base|) and carries a date
+stamp plus PyTorch/CUDA build identifiers, for example
+|fvdb_core_nightly_base|\ .dev20260428+pt\ |torch_short|\ .\ |cu130_tag|.
+
+Under PEP 440 ordering, each nightly sorts between the in-development version
+on ``main`` and the corresponding final release, so passing ``--pre`` together
+with the nightly index URL will track the latest nightly until that release
+ships, then prefer the final release once it is tagged.
+
+.. rubric:: Latest nightly (any supported PyTorch/CUDA build)
+
+.. parsed-literal::
+
+    pip install --pre fvdb-core --extra-index-url="https://d36m13axqqhiit.cloudfront.net/simple-nightly" torch==\ |torch_full_version| --extra-index-url https://download.pytorch.org/whl/|cu130_tag|
+
+.. note::
+
+    The nightly index hosts wheels for every supported PyTorch/CUDA combination
+    in a single project listing. Without an explicit local-version pin, ``pip``
+    selects the highest local version, which today is the CUDA |cu132_ver| build.
+    To target a different build (for example, CUDA |cu130_ver|) or pin a specific
+    date for reproducibility, use one of the explicit commands below.
+
+.. rubric:: PyTorch |torch_full_version| + CUDA |cu132_ver|
+
+.. parsed-literal::
+
+    pip install fvdb-core==\ |fvdb_core_nightly_base|\ .dev20260428+pt\ |torch_short|\ .\ |cu132_tag| --extra-index-url="https://d36m13axqqhiit.cloudfront.net/simple-nightly" torch==\ |torch_full_version| --extra-index-url https://download.pytorch.org/whl/|cu132_tag|
+
+.. rubric:: PyTorch |torch_full_version| + CUDA |cu130_ver|
+
+.. parsed-literal::
+
+    pip install fvdb-core==\ |fvdb_core_nightly_base|\ .dev20260428+pt\ |torch_short|\ .\ |cu130_tag| --extra-index-url="https://d36m13axqqhiit.cloudfront.net/simple-nightly" torch==\ |torch_full_version| --extra-index-url https://download.pytorch.org/whl/|cu130_tag|
+
+To list all available nightly versions:
+
+.. code-block:: bash
+
+    pip index versions fvdb-core --index-url="https://d36m13axqqhiit.cloudfront.net/simple-nightly" --pre
+
+.. note::
+
+    Replace ``20260428`` with the desired nightly date. Nightly builds are retained for 30 days.
 
 
 .. _development-process:
