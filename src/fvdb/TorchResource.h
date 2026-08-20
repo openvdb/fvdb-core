@@ -14,8 +14,18 @@
 
 namespace fvdb {
 
-/// @brief NanoVDB stream-ordered memory resource backed by PyTorch's CUDA caching
-///        allocator (c10::cuda::CUDACachingAllocator).
+/// @brief NanoVDB stream-ordered memory resource backed by PyTorch's currently
+///        active CUDA allocator.
+///
+///        c10::cuda::CUDACachingAllocator is a namespace, not a concrete
+///        allocator: its free functions raw_alloc_with_stream / raw_delete
+///        dispatch through CUDACachingAllocator::get(), the runtime-swappable
+///        c10::cuda::CUDAAllocator* Torch itself allocates tensors from. This
+///        resource therefore follows whatever allocator the user has installed —
+///        the native caching allocator (including PYTORCH_CUDA_ALLOC_CONF knobs),
+///        the cudaMallocAsync backend (PYTORCH_CUDA_ALLOC_CONF=backend:cudaMallocAsync),
+///        or a user-provided allocator installed via
+///        torch.cuda.memory.change_current_allocator(CUDAPluggableAllocator(...)).
 ///
 ///        Passed as the ResourceT template parameter of NanoVDB's CUDA builders
 ///        (PointsToGrid / DilateGrid / MergeGrids / PruneGrid / RefineGrid /
@@ -37,17 +47,21 @@ namespace fvdb {
 ///        allocation). Useful for diagnosing topology-op memory blowup on large
 ///        scenes.
 struct TorchResource : nanovdb::cuda::SyncFromAsync<TorchResource> {
-    /// Alignment guaranteed by every allocation. The caching allocator returns
-    /// blocks aligned to at least 512 bytes, so advertising nanoVDB's
-    /// conventional 256 (matching cuda::DeviceResource) is always satisfied and
-    /// the alignment parameter below can be ignored.
+    /// Alignment guaranteed by every allocation. Torch's native caching
+    /// allocator returns blocks aligned to at least 512 bytes and the
+    /// cudaMallocAsync backend to at least 256, so advertising nanoVDB's
+    /// conventional 256 (matching cuda::DeviceResource) is satisfied and the
+    /// alignment parameter below can be ignored. A pluggable allocator wrapping
+    /// any cudaMalloc-family call satisfies 256 as well.
     static constexpr size_t DEFAULT_ALIGNMENT = 256;
 
-    /// @brief Stream-ordered allocation from torch's caching allocator.
+    /// @brief Stream-ordered allocation from torch's active CUDA allocator.
     /// @note raw_alloc_with_stream records @p stream against the block so torch
     ///       defers reuse until work on it completes, matching the stream-ordered
     ///       semantics of the cudaMallocAsync call it replaces. Allocation
-    ///       happens on the current device, like cudaMallocAsync.
+    ///       happens on the current device, like cudaMallocAsync. The call
+    ///       dispatches to CUDACachingAllocator::get(), so a swapped-in backend
+    ///       or pluggable allocator is honored.
     void *
     allocate_async(size_t bytes, size_t /*alignment*/, cudaStream_t stream) {
         if (const char *env = std::getenv("FVDB_NANOVDB_TRACE_ALLOCS")) {
@@ -67,11 +81,13 @@ struct TorchResource : nanovdb::cuda::SyncFromAsync<TorchResource> {
         return p;
     }
 
-    /// @brief Free through torch's caching allocator.
+    /// @brief Free through torch's active CUDA allocator.
     /// @note The stream argument is deliberately ignored: raw_delete relies on
-    ///       the stream recorded at allocation time plus torch's per-stream event
-    ///       tracking, so the free is safe without ordering on the caller's
-    ///       stream.
+    ///       the stream recorded at allocation time — the native backend's
+    ///       per-stream event tracking, or the alloc-time stream Torch hands a
+    ///       pluggable allocator's free function — so the free is safe without
+    ///       ordering on the caller's stream. This is the same contract Torch's
+    ///       own tensor frees rely on.
     void
     deallocate_async(void *p, size_t /*bytes*/, size_t /*alignment*/, cudaStream_t /*stream*/) {
         if (p == nullptr) {
