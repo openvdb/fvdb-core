@@ -24,6 +24,16 @@ on:
         value: ${{ jobs.load.outputs.torch-version }}
       torch-full-version:
         value: ${{ jobs.load.outputs.torch-full-version }}
+      compat-torch-version:
+        value: ${{ jobs.load.outputs.compat-torch-version }}
+      compat-torch-full-version:
+        value: ${{ jobs.load.outputs.compat-torch-full-version }}
+      compat-cuda-version:
+        value: ${{ jobs.load.outputs.compat-cuda-version }}
+      compat-cuda-tag:
+        value: ${{ jobs.load.outputs.compat-cuda-tag }}
+      compat-cuda-patch:
+        value: ${{ jobs.load.outputs.compat-cuda-patch }}
       cuda-default:
         value: ${{ jobs.load.outputs.cuda-default }}
       cuda-130-patch:
@@ -76,6 +86,11 @@ jobs:
       python-default: ${{ steps.parse.outputs.python-default }}
       torch-version: ${{ steps.parse.outputs.torch-version }}
       torch-full-version: ${{ steps.parse.outputs.torch-full-version }}
+      compat-torch-version: ${{ steps.parse.outputs.compat-torch-version }}
+      compat-torch-full-version: ${{ steps.parse.outputs.compat-torch-full-version }}
+      compat-cuda-version: ${{ steps.parse.outputs.compat-cuda-version }}
+      compat-cuda-tag: ${{ steps.parse.outputs.compat-cuda-tag }}
+      compat-cuda-patch: ${{ steps.parse.outputs.compat-cuda-patch }}
       cuda-default: ${{ steps.parse.outputs.cuda-default }}
       cuda-130-patch: ${{ steps.parse.outputs.cuda-130-patch }}
       cuda-132-patch: ${{ steps.parse.outputs.cuda-132-patch }}
@@ -115,6 +130,11 @@ jobs:
             echo "python-default=$(jq -r '.python.default' $CFG)"
             echo "torch-version=$(jq -r '.torch.version' $CFG)"
             echo "torch-full-version=$(jq -r '.torch.full_version' $CFG)"
+            echo "compat-torch-version=$(jq -r '.weekly_compat.torch.version' $CFG)"
+            echo "compat-torch-full-version=$(jq -r '.weekly_compat.torch.full_version' $CFG)"
+            echo "compat-cuda-version=$(jq -r '.weekly_compat.cuda' $CFG)"
+            echo "compat-cuda-tag=cu$(jq -r '.weekly_compat.cuda' $CFG | tr -d '.')"
+            echo "compat-cuda-patch=$(jq -r '.cuda.versions[.weekly_compat.cuda].patch' $CFG)"
             echo "cuda-default=$(jq -r '.cuda.default' $CFG)"
             echo "cuda-130-patch=$(jq -r '.cuda.versions["13.0"].patch' $CFG)"
             echo "cuda-132-patch=$(jq -r '.cuda.versions["13.2"].patch' $CFG)"

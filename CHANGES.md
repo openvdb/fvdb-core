@@ -4,6 +4,10 @@ fVDB Version History
 ## Version 0.6.0 - In Development
 
 - **PyTorch 2.13** fVDB updated to build, test and publish with PyTorch 2.13, CUDA 13.0/13.2 and Python 3.10-3.15 support.
+- **Weekly compatibility testing** New scheduled CI workflow (`weekly-compat.yml`) implementing the compatibility
+  policy documented in the installation guide: main is built and tested weekly against the oldest PyTorch version
+  (currently 2.9.1) that publishes wheels for the lowest supported CUDA version (currently 13.0). The tested
+  versions are recorded in `.github/versions.json` under `weekly_compat`.
 - **Breaking:** Unified sparse convolution and transposed-convolution geometry around the componentwise Torch-phase
   relation ``fine_ijk = stride * coarse_ijk + tap_ijk - padding_before``, where
   ``padding_before = floor((kernel_size - 1) / 2)`` and each zero-based tap component satisfies
