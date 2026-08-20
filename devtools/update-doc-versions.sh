@@ -88,9 +88,25 @@ fi
 if [[ -n "$VERSIONS_JSON" ]]; then
     [[ -f "$VERSIONS_JSON" ]] || die "versions json not found: $VERSIONS_JSON"
 
-    TORCH_FULL="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["torch"]["full_version"])' "$VERSIONS_JSON")"
-    CUDA_LIST="$(python3 -c 'import json,sys; print(", ".join(f"\"{v}\"" for v in json.load(open(sys.argv[1]))["cuda"]["versions"]))' "$VERSIONS_JSON")"
-    PYTHON_RANGE="$(python3 -c 'import json,sys; m=json.load(open(sys.argv[1]))["python"]["matrix"]; print(f"{m[0]} - {m[-1]}")' "$VERSIONS_JSON")"
+    # One python3 invocation emits all three values, one per line, in the order
+    # read out below.
+    mapfile -t STABLE_META < <(python3 - "$VERSIONS_JSON" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1]) as f:
+    versions = json.load(f)
+
+print(versions["torch"]["full_version"])
+print(", ".join(f'"{v}"' for v in versions["cuda"]["versions"]))
+matrix = versions["python"]["matrix"]
+print(f"{matrix[0]} - {matrix[-1]}")
+PY
+)
+    [[ ${#STABLE_META[@]} -eq 3 ]] || die "could not read torch/cuda/python versions from $VERSIONS_JSON"
+    TORCH_FULL="${STABLE_META[0]}"
+    CUDA_LIST="${STABLE_META[1]}"
+    PYTHON_RANGE="${STABLE_META[2]}"
 
     if [[ -f "$CONF_PY" ]] && grep -q 'fvdb_core_stable_torch_version' "$CONF_PY"; then
         log "Updating stable release metadata in docs/conf.py:" \
