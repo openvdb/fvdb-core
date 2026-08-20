@@ -479,6 +479,8 @@ def intersect_gaussian_tiles(
     num_tiles_h: int,
     num_tiles_w: int,
     camera_ids: Optional[torch.Tensor] = ...,
+    conics: Optional[torch.Tensor] = ...,
+    opacities: Optional[torch.Tensor] = ...,
 ) -> tuple[torch.Tensor, torch.Tensor]: ...
 def intersect_gaussian_tiles_sparse(
     means2d: torch.Tensor,
@@ -491,6 +493,8 @@ def intersect_gaussian_tiles_sparse(
     num_tiles_h: int,
     num_tiles_w: int,
     camera_ids: Optional[torch.Tensor] = ...,
+    conics: Optional[torch.Tensor] = ...,
+    opacities: Optional[torch.Tensor] = ...,
 ) -> tuple[torch.Tensor, torch.Tensor]: ...
 def build_sparse_gaussian_tile_layout(
     tile_side_length: int,
