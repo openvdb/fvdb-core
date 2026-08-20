@@ -7,7 +7,7 @@ supported software and hardware configurations.
 Software Requirements
 ------------------------
 
-The following is a matrix of the versions of software that we `test and distribute pre-built wheels for <#notes-on-testing-and-distribution>`_ with each minor release of fVDB.
+The following is a matrix of the versions of software that we :ref:`test and distribute pre-built wheels for <notes-on-testing>` with each minor release of fVDB.
 
 ..
    Maintenance notes for this table:
@@ -153,6 +153,8 @@ To list all available nightly versions:
     Replace ``20260428`` with the desired nightly date. Nightly builds are retained for 30 days.
 
 
+.. _build-custom-wheel:
+
 Build and install a custom wheel from source
 ---------------------------------------------
 
@@ -168,7 +170,7 @@ The only host requirements are Docker (with BuildKit) and ``python3``; no GPU or
 .. note::
 
     This script is to help produce a one-off installable wheel.  If you plan on doing active
-    development on fVDB, we recommend seeing the `Development Process section below <#development-process>`_.
+    development on fVDB, we recommend seeing the :ref:`Development Process section below <development-process>`.
 
 Clone the `fvdb-core repository <https://github.com/openvdb/fvdb-core>`_.
 
@@ -213,12 +215,16 @@ carries a ``+pt<torch>.cu<cuda>`` local version suffix (for example
    pip install dist/fvdb_core-\*.whl
 
 
+.. _development-process:
+
 Development Process
 ---------------------
 
 For more information about the development process, including instructions for setting up a build environment and obtaining the
 necessary dependencies we recommend for development, see the fVDB `README <https://github.com/openvdb/fvdb-core/blob/main/README.md>`_.
 
+
+.. _notes-on-testing:
 
 Notes on Testing, Compatibility, and Distribution
 --------------------------------------------------
@@ -229,4 +235,4 @@ Additionally, we test fvdb-core (on a weekly schedule) with the oldest PyTorch v
 Inside of the version ranges of our testing regime, the maintainers will review submitted fixes and work to fix reported issues. However, for compatibility issues outside that range, the maintainers will endeavor to assist but may not be able to resolve issues outside this scope. Generally, fixes and new features are targeted for the current in-development minor release and compatibility range.
 
 
-.. [*] Builds of other combinations can be built `with this process <#build-and-install-a-custom-wheel-from-source>`_.
+.. [*] Builds of other combinations can be built :ref:`with this process <build-custom-wheel>`.
