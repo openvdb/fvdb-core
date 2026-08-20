@@ -5,14 +5,10 @@ ninja
 tqdm
 numpy
 torch
-pandas
 pytest
 pytest-markdown-docs
 point-cloud-utils
-oiio-static-python
 matplotlib
-opencv-python-headless
-rich
 pytest_benchmark
 parameterized
 polyscope
