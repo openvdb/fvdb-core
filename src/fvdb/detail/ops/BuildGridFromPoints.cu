@@ -1,8 +1,8 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <fvdb/BuilderResource.h>
 #include <fvdb/GridBatchData.h>
-#include <fvdb/TorchResource.h>
 #include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/BuildGridFromIjk.h>
 #include <fvdb/detail/ops/BuildGridFromPoints.h>
@@ -198,13 +198,13 @@ dispatchBuildGridFromPoints<torch::kCUDA>(const JaggedTensor &points,
                     using PointPtrT = TransformedPointPtr<scalar_t, true>;
                     handles.push_back(
                         nanovdb::tools::cuda::
-                            voxelsToGrid<GridT, PointPtrT, TorchDeviceBuffer, TorchResource>(
+                            voxelsToGrid<GridT, PointPtrT, TorchDeviceBuffer, BuilderResource>(
                                 PointPtrT(pointsPtr + 3 * startIdx, txs[i]), nPoints, 1.0, guide));
                 } else {
                     using PointPtrT = TransformedPointPtr<scalar_t, false>;
                     handles.push_back(
                         nanovdb::tools::cuda::
-                            voxelsToGrid<GridT, PointPtrT, TorchDeviceBuffer, TorchResource>(
+                            voxelsToGrid<GridT, PointPtrT, TorchDeviceBuffer, BuilderResource>(
                                 PointPtrT(
                                     pointsPtr + startIdx * rowStride, txs[i], rowStride, colStride),
                                 nPoints,

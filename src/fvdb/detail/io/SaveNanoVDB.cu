@@ -1,8 +1,8 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <fvdb/BuilderResource.h>
 #include <fvdb/TorchDeviceBuffer.h>
-#include <fvdb/TorchResource.h>
 #include <fvdb/detail/io/SaveNanoVDB.h>
 #include <fvdb/detail/utils/Utils.h>
 
@@ -724,7 +724,7 @@ fvdbToNanovdbGridWithValues(const GridBatchData &gridBatchData,
         // The guide buffer only communicates the target device; the output grid buffer and the
         // builder's internal scratch both come from torch's caching allocator.
         DeviceGridHandle dh = nanovdb::tools::cuda::
-            indexToGrid<OutBuildT, nanovdb::ValueOnIndex, TorchDeviceBuffer, TorchResource>(
+            indexToGrid<OutBuildT, nanovdb::ValueOnIndex, TorchDeviceBuffer, BuilderResource>(
                 dSrcGrid, dValuesBufBase, TorchDeviceBuffer(0, cudaDevice), stream.stream());
 
         const uint64_t origGridBytes = dh.buffer().size();

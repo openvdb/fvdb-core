@@ -1,8 +1,8 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <fvdb/BuilderResource.h>
 #include <fvdb/GridBatchData.h>
-#include <fvdb/TorchResource.h>
 #include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/BuildDenseGrid.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
@@ -145,7 +145,7 @@ dispatchCreateNanoGridFromDense<torch::kCUDA>(int64_t batchSize,
         } else if (i == 0) {
             handles.push_back(
                 nanovdb::tools::cuda::
-                    voxelsToGrid<GridT, nanovdb::Coord *, TorchDeviceBuffer, TorchResource>(
+                    voxelsToGrid<GridT, nanovdb::Coord *, TorchDeviceBuffer, BuilderResource>(
                         (nanovdb::Coord *)ijkData.data_ptr(), nVoxels, 1.0, guide));
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         } else {

@@ -1,8 +1,8 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <fvdb/BuilderResource.h>
 #include <fvdb/TorchDeviceBuffer.h>
-#include <fvdb/TorchResource.h>
 #include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/BuildMergedGrids.h>
 #include <fvdb/detail/utils/Utils.h>
@@ -46,7 +46,7 @@ dispatchMergeGrids<torch::kCUDA>(const GridBatchData &gridBatch1, const GridBatc
         nanovdb::OnIndexGrid *grid2 = gridBatch2.mGridHdl->deviceGrid<nanovdb::ValueOnIndex>(i);
         TORCH_CHECK(grid2, "Second Grid is null");
 
-        nanovdb::tools::cuda::MergeGrids<nanovdb::ValueOnIndex, TorchResource> mergeOp(
+        nanovdb::tools::cuda::MergeGrids<nanovdb::ValueOnIndex, BuilderResource> mergeOp(
             grid1, grid2, stream);
         mergeOp.setChecksum(nanovdb::CheckMode::Default);
         mergeOp.setVerbose(0);

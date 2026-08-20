@@ -1,8 +1,8 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <fvdb/BuilderResource.h>
 #include <fvdb/GridBatchData.h>
-#include <fvdb/TorchResource.h>
 #include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/BuildFineGridFromCoarse.h>
 #include <fvdb/detail/ops/BuildGridFromIjk.h>
@@ -316,12 +316,12 @@ dispatchFineIJKForCoarseGrid<torch::kPrivateUse1>(const GridBatchData &batchHdl,
                                                 endOffsets,
                                                 stream));
 
-            // Route the CUB scratch through torch's caching allocator rather than
+            // Route the CUB scratch through the builder resource rather than bare
             // cudaMallocAsync, so it shares torch's pool instead of partitioning VRAM against
-            // it (same rationale as the nanoVDB builders -- see fvdb/TorchResource.h).
-            auto &resource = nanovdb::cuda::default_resource<TorchResource>();
-            dTempStorage =
-                resource.allocate_async(tempStorageBytes, TorchResource::DEFAULT_ALIGNMENT, stream);
+            // it (same rationale as the nanoVDB builders -- see fvdb/BuilderResource.h).
+            auto &resource = nanovdb::cuda::default_resource<BuilderResource>();
+            dTempStorage   = resource.allocate_async(
+                tempStorageBytes, BuilderResource::DEFAULT_ALIGNMENT, stream);
 
             C10_CUDA_CHECK(
                 cub::DeviceSegmentedReduce::Sum(dTempStorage,
@@ -334,7 +334,7 @@ dispatchFineIJKForCoarseGrid<torch::kPrivateUse1>(const GridBatchData &batchHdl,
                                                 stream));
 
             resource.deallocate_async(
-                dTempStorage, tempStorageBytes, TorchResource::DEFAULT_ALIGNMENT, stream);
+                dTempStorage, tempStorageBytes, BuilderResource::DEFAULT_ALIGNMENT, stream);
         }
 
         for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
@@ -436,7 +436,7 @@ fineGridHandleFromCoarseCUDA(const GridBatchData &coarseBatchHdl,
         TORCH_CHECK(grid, "Grid is null");
         nanovdb::GridHandle<TorchDeviceBuffer> handle;
         for (int p = 0; p < nPasses; p += 1) {
-            nanovdb::tools::cuda::RefineGrid<nanovdb::ValueOnIndex, TorchResource> op(
+            nanovdb::tools::cuda::RefineGrid<nanovdb::ValueOnIndex, BuilderResource> op(
                 grid, stream.stream());
             op.setChecksum(nanovdb::CheckMode::Default);
             op.setVerbose(0);

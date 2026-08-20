@@ -1,8 +1,8 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <fvdb/BuilderResource.h>
 #include <fvdb/TorchDeviceBuffer.h>
-#include <fvdb/TorchResource.h>
 #include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/BuildDilatedGrid.h>
 #include <fvdb/detail/ops/CloneGrid.h>
@@ -55,7 +55,7 @@ dispatchDilateGrid<torch::kCUDA>(const GridBatchData &gridBatch,
             TORCH_CHECK(grid, "Grid is null");
 
             for (auto j = 0; j < dilationAmount[i]; j += 1) {
-                nanovdb::tools::cuda::DilateGrid<nanovdb::ValueOnIndex, TorchResource> dilateOp(
+                nanovdb::tools::cuda::DilateGrid<nanovdb::ValueOnIndex, BuilderResource> dilateOp(
                     grid, stream);
                 dilateOp.setOperation(nanovdb::tools::morphology::NN_FACE_EDGE_VERTEX);
                 dilateOp.setChecksum(nanovdb::CheckMode::Default);

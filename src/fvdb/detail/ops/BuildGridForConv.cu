@@ -1,8 +1,8 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <fvdb/BuilderResource.h>
 #include <fvdb/GridBatchData.h>
-#include <fvdb/TorchResource.h>
 #include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/BuildCoarseGridFromFine.h>
 #include <fvdb/detail/ops/BuildGridForConv.h>
@@ -424,7 +424,7 @@ dispatchBuildGridForConv<torch::kCUDA>(const GridBatchData &baseGridHdl,
             nanovdb::GridHandle<TorchDeviceBuffer> handle;
             if (k % 2 == 1) {
                 for (int p = 0; p < geometry.paddingBefore()[0]; p += 1) {
-                    nanovdb::tools::cuda::DilateGrid<nanovdb::ValueOnIndex, TorchResource> op(
+                    nanovdb::tools::cuda::DilateGrid<nanovdb::ValueOnIndex, BuilderResource> op(
                         grid, stream.stream());
                     op.setOperation(nanovdb::tools::morphology::NN_FACE_EDGE_VERTEX);
                     op.setChecksum(nanovdb::CheckMode::Default);
@@ -435,7 +435,7 @@ dispatchBuildGridForConv<torch::kCUDA>(const GridBatchData &baseGridHdl,
                 }
             } else {
                 for (int p = 0; p < geometry.paddingAfter()[0]; p += 1) {
-                    morphology::PadGrid<nanovdb::ValueOnIndex, TorchResource> op(
+                    morphology::PadGrid<nanovdb::ValueOnIndex, BuilderResource> op(
                         grid, /*positiveOctant=*/false, stream.stream());
                     op.setChecksum(nanovdb::CheckMode::Default);
                     handle = op.getHandle(guide);
@@ -443,7 +443,7 @@ dispatchBuildGridForConv<torch::kCUDA>(const GridBatchData &baseGridHdl,
                     grid = handle.deviceGrid<nanovdb::ValueOnIndex>();
                 }
                 for (int p = 0; p < geometry.paddingBefore()[0]; p += 1) {
-                    morphology::PadGrid<nanovdb::ValueOnIndex, TorchResource> op(
+                    morphology::PadGrid<nanovdb::ValueOnIndex, BuilderResource> op(
                         grid, /*positiveOctant=*/true, stream.stream());
                     op.setChecksum(nanovdb::CheckMode::Default);
                     handle = op.getHandle(guide);

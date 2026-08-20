@@ -29,7 +29,9 @@ namespace fvdb {
 ///
 ///        Passed as the ResourceT template parameter of NanoVDB's CUDA builders
 ///        (PointsToGrid / DilateGrid / MergeGrids / PruneGrid / RefineGrid /
-///        CoarsenGrid), it routes their internal device scratch — O(N-points) sort
+///        CoarsenGrid) — always via the fvdb::BuilderResource alias
+///        (BuilderResource.h), never named directly at call sites — it routes
+///        their internal device scratch — O(N-points) sort
 ///        keys, CUB temp storage, topology mask buffers — through the same pool
 ///        that fvdb / PyTorch tensors use. Without this, nanoVDB's default
 ///        DeviceResource allocates from a second cudaMallocAsync pool that
