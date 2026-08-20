@@ -8,10 +8,13 @@ dependencies:
   - certifi
   - cmake
   - cuda-version=13.0
-  # A host C compiler is a runtime requirement, not a build one: torch 2.13
-  # dispatches ops such as bmm_outer_product (MATH SDPA backward) to Triton,
-  # whose JIT compiles its cuda_utils shim on first use. Activating the env
-  # sets CC, which is what Triton looks for first.
+  # A host C compiler and cuda.h are runtime requirements, not build ones: torch
+  # 2.13 dispatches ops such as bmm_outer_product (MATH SDPA backward) to Triton,
+  # whose JIT compiles its cuda_utils shim on first use. Activating the env sets
+  # CC, which is what Triton looks for first. conda-forge's triton unbundles the
+  # vendored CUDA headers that the pip wheels carry and instead searches
+  # $CONDA_PREFIX/targets/x86_64-linux/include, which cuda-cudart-dev populates.
+  - cuda-cudart-dev
   - gcc_linux-64=14.3
   - libpng
   - ninja
