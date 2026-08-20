@@ -1,6 +1,7 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <fvdb/BuilderResource.h>
 #include <fvdb/GridBatchData.h>
 #include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/BuildGridFromIjk.h>
@@ -93,8 +94,9 @@ dispatchCreateNanoGridFromIJK<torch::kCUDA>(const JaggedTensor &ijk) {
         handles.push_back(
             nVoxels == 0
                 ? createEmptyGridHandle(guide.device())
-                : nanovdb::tools::cuda::voxelsToGrid<GridT, nanovdb::Coord *, TorchDeviceBuffer>(
-                      (nanovdb::Coord *)dataPtr, nVoxels, 1.0, guide));
+                : nanovdb::tools::cuda::
+                      voxelsToGrid<GridT, nanovdb::Coord *, TorchDeviceBuffer, BuilderResource>(
+                          (nanovdb::Coord *)dataPtr, nVoxels, 1.0, guide));
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     }
 

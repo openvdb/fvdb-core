@@ -793,10 +793,17 @@ class TestBasicOps(unittest.TestCase):
         peak_extra = torch.cuda.max_memory_allocated() - base
         # The old path peaked at > 300 MiB of torch tensors for 2M points (8N int32 coords + two
         # 8N int32 jidx arrays); the mask path allocates ~one N-coord list plus the output grid.
+        #
+        # The threshold accounts for nanoVDB builder scratch being torch-visible: PadGrid now
+        # routes its TopologyBuilder scratch through TorchResource (torch's caching allocator)
+        # rather than nanoVDB's separate cudaMallocAsync pool, so ~78 MiB that this measurement
+        # previously could not see is now counted here. Total device consumption is unchanged --
+        # only the accounting moved -- so the bound is raised rather than the routing reverted.
+        # Measured ~159 MiB; 200 MiB keeps the guard against a return to the >300 MiB path.
         self.assertGreater(grid.total_voxels, 0)
         self.assertLess(
             peak_extra,
-            150 * 1024 * 1024,
+            200 * 1024 * 1024,
             f"from_nearest_voxels_to_points torch peak {peak_extra / 1024 / 1024:.1f} MiB too large",
         )
 

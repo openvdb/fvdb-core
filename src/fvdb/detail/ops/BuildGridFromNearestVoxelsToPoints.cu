@@ -1,6 +1,7 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <fvdb/BuilderResource.h>
 #include <fvdb/GridBatchData.h>
 #include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/BuildGridFromIjk.h>
@@ -114,7 +115,7 @@ dispatchBuildGridFromNearestVoxelsToPoints<torch::kCUDA>(
         }
         nanovdb::OnIndexGrid *grid = baseHdl.deviceGrid<nanovdb::ValueOnIndex>(i);
         TORCH_CHECK(grid, "Grid is null");
-        morphology::PadGrid<nanovdb::ValueOnIndex> op(
+        morphology::PadGrid<nanovdb::ValueOnIndex, BuilderResource> op(
             grid, /*positiveOctant=*/true, stream.stream());
         op.setChecksum(nanovdb::CheckMode::Default);
         handles.push_back(op.getHandle(guide));

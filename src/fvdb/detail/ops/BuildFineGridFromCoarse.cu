@@ -1,6 +1,7 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <fvdb/BuilderResource.h>
 #include <fvdb/GridBatchData.h>
 #include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/BuildFineGridFromCoarse.h>
@@ -305,24 +306,35 @@ dispatchFineIJKForCoarseGrid<torch::kPrivateUse1>(const GridBatchData &batchHdl,
 
             void *dTempStorage      = nullptr;
             size_t tempStorageBytes = 0;
-            cub::DeviceSegmentedReduce::Sum(dTempStorage,
-                                            tempStorageBytes,
-                                            mask.value().jdata().const_data_ptr<bool>(),
-                                            maskCounts,
-                                            deviceNumSegments,
-                                            beginOffsets,
-                                            endOffsets,
-                                            stream);
-            cudaMallocAsync(&dTempStorage, tempStorageBytes, stream);
-            cub::DeviceSegmentedReduce::Sum(dTempStorage,
-                                            tempStorageBytes,
-                                            mask.value().jdata().const_data_ptr<bool>(),
-                                            maskCounts,
-                                            deviceNumSegments,
-                                            beginOffsets,
-                                            endOffsets,
-                                            stream);
-            cudaFreeAsync(dTempStorage, stream);
+            C10_CUDA_CHECK(
+                cub::DeviceSegmentedReduce::Sum(dTempStorage,
+                                                tempStorageBytes,
+                                                mask.value().jdata().const_data_ptr<bool>(),
+                                                maskCounts,
+                                                deviceNumSegments,
+                                                beginOffsets,
+                                                endOffsets,
+                                                stream));
+
+            // Route the CUB scratch through the builder resource rather than bare
+            // cudaMallocAsync, so it shares torch's pool instead of partitioning VRAM against
+            // it (same rationale as the nanoVDB builders -- see fvdb/BuilderResource.h).
+            auto &resource = nanovdb::cuda::default_resource<BuilderResource>();
+            dTempStorage   = resource.allocate_async(
+                tempStorageBytes, BuilderResource::DEFAULT_ALIGNMENT, stream);
+
+            C10_CUDA_CHECK(
+                cub::DeviceSegmentedReduce::Sum(dTempStorage,
+                                                tempStorageBytes,
+                                                mask.value().jdata().const_data_ptr<bool>(),
+                                                maskCounts,
+                                                deviceNumSegments,
+                                                beginOffsets,
+                                                endOffsets,
+                                                stream));
+
+            resource.deallocate_async(
+                dTempStorage, tempStorageBytes, BuilderResource::DEFAULT_ALIGNMENT, stream);
         }
 
         for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
@@ -424,7 +436,8 @@ fineGridHandleFromCoarseCUDA(const GridBatchData &coarseBatchHdl,
         TORCH_CHECK(grid, "Grid is null");
         nanovdb::GridHandle<TorchDeviceBuffer> handle;
         for (int p = 0; p < nPasses; p += 1) {
-            nanovdb::tools::cuda::RefineGrid<nanovdb::ValueOnIndex> op(grid, stream.stream());
+            nanovdb::tools::cuda::RefineGrid<nanovdb::ValueOnIndex, BuilderResource> op(
+                grid, stream.stream());
             op.setChecksum(nanovdb::CheckMode::Default);
             op.setVerbose(0);
             handle = op.getHandle(guide);

@@ -612,7 +612,10 @@ template <typename BuildT, bool Positive> struct ErodeKeepMaskFunctor {
 ///        Modeled on `nanovdb::tools::cuda::DilateGrid`; the driver, root speculation and
 ///        the TopologyBuilder pipeline are reused as-is, with the internal-node and
 ///        leaf-node stages swapped for their one-sided (`Positive`-selected) variants.
-template <typename BuildT> class PadGrid {
+template <typename BuildT, typename ResourceT = nanovdb::cuda::DeviceResource> class PadGrid {
+    static_assert(nanovdb::cuda::is_async_resource<ResourceT>::value,
+                  "PadGrid allocates stream-ordered scratch and requires an AsyncResource");
+
     using GridT  = NanoGrid<BuildT>;
     using TreeT  = NanoTree<BuildT>;
     using RootT  = NanoRoot<BuildT>;
@@ -622,8 +625,15 @@ template <typename BuildT> class PadGrid {
     /// @param d_srcGrid      source device grid to be padded
     /// @param positiveOctant true -> pad by {0,1}^3, false -> pad by {-1,0}^3
     /// @param stream         optional CUDA stream
-    PadGrid(const GridT *d_srcGrid, bool positiveOctant, cudaStream_t stream = 0)
-        : mBuilder(stream), mStream(stream), mDeviceSrcGrid(d_srcGrid), mPositive(positiveOctant) {}
+    /// @param resource       resource instance all device scratch is allocated from;
+    ///                       must outlive this operator (defaults to the per-type default
+    ///                       resource)
+    PadGrid(const GridT *d_srcGrid,
+            bool positiveOctant,
+            cudaStream_t stream = 0,
+            ResourceT &resource = nanovdb::cuda::default_resource<ResourceT>())
+        : mBuilder(stream, resource), mStream(stream), mDeviceSrcGrid(d_srcGrid),
+          mPositive(positiveOctant) {}
 
     void
     setChecksum(CheckMode mode = CheckMode::Disable) {
@@ -639,17 +649,17 @@ template <typename BuildT> class PadGrid {
     void processGridTreeRoot();
     void padLeafNodes();
 
-    tools::cuda::TopologyBuilder<BuildT> mBuilder;
+    tools::cuda::TopologyBuilder<BuildT, ResourceT> mBuilder;
     cudaStream_t mStream{0};
     const GridT *mDeviceSrcGrid;
     bool mPositive;
     TreeData mSrcTreeData;
-};
+}; // morphology::PadGrid<BuildT, ResourceT>
 
-template <typename BuildT>
+template <typename BuildT, typename ResourceT>
 template <typename BufferT>
 GridHandle<BufferT>
-PadGrid<BuildT>::getHandle(const BufferT &pool) {
+PadGrid<BuildT, ResourceT>::getHandle(const BufferT &pool) {
     // Copy TreeData from GPU -> CPU
     cudaStreamSynchronize(mStream);
     mSrcTreeData = util::cuda::DeviceGridTraits<BuildT>::getTreeData(mDeviceSrcGrid);
@@ -683,9 +693,9 @@ PadGrid<BuildT>::getHandle(const BufferT &pool) {
     return GridHandle<BufferT>(std::move(buffer));
 }
 
-template <typename BuildT>
+template <typename BuildT, typename ResourceT>
 void
-PadGrid<BuildT>::padRoot() {
+PadGrid<BuildT, ResourceT>::padRoot() {
     // Conservatively and speculatively expands the root tile table to accommodate any new
     // root nodes introduced by the padding. This mirrors `DilateGrid::dilateRoot` verbatim
     // (a symmetric 26-connected speculation): although a one-sided pass only spills into
@@ -755,9 +765,9 @@ PadGrid<BuildT>::padRoot() {
     mBuilder.mProcessedRoot.deviceUpload(device, mStream, false);
 }
 
-template <typename BuildT>
+template <typename BuildT, typename ResourceT>
 void
-PadGrid<BuildT>::padInternalNodes() {
+PadGrid<BuildT, ResourceT>::padInternalNodes() {
     if (mSrcTreeData.mNodeCount[1]) { // Unless it's an empty grid
         if (mPositive) {
             using Op = PadInternalNodesFunctor<BuildT, true>;
@@ -783,9 +793,9 @@ PadGrid<BuildT>::padInternalNodes() {
     }
 }
 
-template <typename BuildT>
+template <typename BuildT, typename ResourceT>
 void
-PadGrid<BuildT>::processGridTreeRoot() {
+PadGrid<BuildT, ResourceT>::processGridTreeRoot() {
     // Copy GridData from source grid (duplicates grid name and map; others reset later)
     cudaCheck(cudaMemcpyAsync(&mBuilder.data()->getGrid(),
                               mDeviceSrcGrid->data(),
@@ -799,9 +809,9 @@ PadGrid<BuildT>::processGridTreeRoot() {
     cudaCheckError();
 }
 
-template <typename BuildT>
+template <typename BuildT, typename ResourceT>
 void
-PadGrid<BuildT>::padLeafNodes() {
+PadGrid<BuildT, ResourceT>::padLeafNodes() {
     if (mBuilder.data()->nodeCount[1]) { // Unless output grid is empty
         if (mPositive) {
             using Op = PadLeafNodesFunctor<BuildT, true>;

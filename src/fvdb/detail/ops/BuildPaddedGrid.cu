@@ -1,6 +1,7 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <fvdb/BuilderResource.h>
 #include <fvdb/GridBatchData.h>
 #include <fvdb/TorchDeviceBuffer.h>
 #include <fvdb/detail/GridBatchDataFactory.h>
@@ -248,7 +249,8 @@ padOncePass(nanovdb::OnIndexGrid *grid,
             bool positive,
             const TorchDeviceBuffer &guide,
             cudaStream_t stream) {
-    fvdb::detail::morphology::PadGrid<nanovdb::ValueOnIndex> op(grid, positive, stream);
+    fvdb::detail::morphology::PadGrid<nanovdb::ValueOnIndex, BuilderResource> op(
+        grid, positive, stream);
     op.setChecksum(nanovdb::CheckMode::Default);
     auto handle = op.getHandle(guide);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
@@ -301,7 +303,8 @@ erodeOncePass(nanovdb::OnIndexGrid *grid,
         return createEmptyGridHandle(device);
     }
 
-    nanovdb::tools::cuda::PruneGrid<nanovdb::ValueOnIndex> pruneOp(grid, keepMasks, stream);
+    nanovdb::tools::cuda::PruneGrid<nanovdb::ValueOnIndex, BuilderResource> pruneOp(
+        grid, keepMasks, stream);
     pruneOp.setChecksum(nanovdb::CheckMode::Default);
     pruneOp.setVerbose(0);
     auto handle = pruneOp.getHandle(guide);
