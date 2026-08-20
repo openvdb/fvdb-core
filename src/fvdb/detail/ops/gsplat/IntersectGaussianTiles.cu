@@ -544,11 +544,11 @@ countTiles(TileIteratorT iterator,
 
 // Compute the number of 2d image tiles intersected by a set of 2D projected Gaussians.
 //
-// The input is a set of 2D ellipses (axis-aligned bounding boxes) with depths approximating the
-// projection of 3D gaussians onto the image plane. Each input is encoded as a tuple:
-// (mean_u, mean_v, radius_u, radius_v, depth)
-// where (mean_u, mean_v) are the image-space center, (radius_u, radius_v) are the per-axis
-// pixel radii of the AABB, and depth is the (world-space) depth of the Gaussian.
+// When conics and opacities are null, intersection uses each Gaussian's axis-aligned bounding box,
+// encoded by (mean_u, mean_v, radius_u, radius_v, depth). When both are provided, intersection uses
+// the opacity isocontour ellipse encoded by the mean, packed inverse covariance [a, b, c], and
+// opacity. In both cases, the 2D shape and depth approximate the projection of a 3D Gaussian onto
+// the image plane, and depth is the (world-space) depth of the Gaussian.
 //
 // The output is a set of counts of the number of tiles each Gaussian intersects.
 //
