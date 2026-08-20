@@ -292,8 +292,11 @@ jobs:
       run:
         shell: bash -el {0}
     steps:
+      # gcc: torch 2.13 routes some ops (e.g. bmm_outer_product in the MATH
+      # SDPA backward) through Triton, whose JIT shells out to a host C compiler
+      # at runtime. The -base- CUDA images ship without one.
       - name: Install system dependencies
-        run: dnf install -y git procps-ng findutils
+        run: dnf install -y git procps-ng findutils gcc
 
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
@@ -370,8 +373,11 @@ jobs:
       run:
         shell: bash -el {0}
     steps:
+      # gcc: torch 2.13 routes some ops (e.g. bmm_outer_product in the MATH
+      # SDPA backward) through Triton, whose JIT shells out to a host C compiler
+      # at runtime. The -base- CUDA images ship without one.
       - name: Install system dependencies
-        run: dnf install -y git procps-ng findutils
+        run: dnf install -y git procps-ng findutils gcc
 
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
