@@ -53,19 +53,37 @@ project = "ƒVDB"
 copyright = "Contributors to the OpenVDB Project"
 author = "Contributors to the OpenVDB Project"
 
-# Stable fvdb-core version shown in installation examples.
-# Updated automatically by devtools/update-doc-versions.sh during release.
+# -- Stable release metadata ---------------------------------------------------
+# The values below describe the most recent fvdb-core release and drive the
+# "Installation from pre-built wheels" examples. They intentionally lag the
+# in-development versions in .github/versions.json (which drive the nightly
+# install examples) while main targets the next release.
+# Updated automatically by devtools/update-doc-versions.sh when a release is
+# published (see .github/workflows/sync-doc-version.yml).
 fvdb_core_stable_version = "0.5.1"
+fvdb_core_stable_torch_version = "2.11.0"
+fvdb_core_stable_cuda_versions = ["13.0", "13.2"]
+fvdb_core_stable_python_range = "3.10 - 3.14"
 
 version = fvdb_core_stable_version
 release = fvdb_core_stable_version
 
+_stable_torch_short = "".join(fvdb_core_stable_torch_version.split(".")[:2])
+
 _subs = []
-for _cv in _cuda_versions:
+# Substitutions for the stable (released) install examples.
+_subs.append(f".. |fvdb_core_stable_version| replace:: {fvdb_core_stable_version}")
+_subs.append(f".. |stable_torch_full_version| replace:: {fvdb_core_stable_torch_version}")
+_subs.append(f".. |stable_python_range| replace:: {fvdb_core_stable_python_range}")
+_subs.append(f".. |stable_cuda_versions| replace:: {', '.join(fvdb_core_stable_cuda_versions)}")
+for _cv in fvdb_core_stable_cuda_versions:
     _tag = f"cu{_cv.replace('.', '')}"
+    _subs.append(f".. |stable_{_tag}_ver| replace:: {_cv}")
     _subs.append(
-        f".. |fvdb_core_version_pt{_torch_short}_{_tag}| replace:: {fvdb_core_stable_version}+pt{_torch_short}.{_tag}"
+        f".. |fvdb_core_stable_version_{_tag}| replace:: {fvdb_core_stable_version}+pt{_stable_torch_short}.{_tag}"
     )
+# Substitutions for the in-development (nightly) install examples, sourced
+# from .github/versions.json on this branch.
 _subs.append(f".. |torch_full_version| replace:: {_torch_full}")
 _subs.append(f".. |torch_short| replace:: {_torch_short}")
 _subs.append(f".. |fvdb_core_nightly_base| replace:: {_fvdb_core_nightly_base}")

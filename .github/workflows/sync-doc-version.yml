@@ -37,7 +37,18 @@ jobs:
           fi
           VERSION="${TAG#v}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "Latest release: $TAG (version $VERSION)"
+
+      - name: Extract versions.json from the release tag
+        if: steps.release.outputs.skip != 'true'
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          # Read the released torch/cuda/python versions from the tag itself
+          # (not from main, which may already target the next release).
+          git fetch --depth 1 origin "refs/tags/${TAG}:refs/tags/${TAG}"
+          git show "${TAG}:.github/versions.json" > "${RUNNER_TEMP}/release-versions.json"
 
       - name: Get current doc version
         if: steps.release.outputs.skip != 'true'
@@ -54,7 +65,8 @@ jobs:
           steps.release.outputs.version != steps.current.outputs.version
         run: |
           echo "Updating doc version from ${STEPS_CURRENT_OUTPUTS_VERSION} to ${STEPS_RELEASE_OUTPUTS_VERSION}"
-          ./devtools/update-doc-versions.sh "${STEPS_RELEASE_OUTPUTS_VERSION}"
+          ./devtools/update-doc-versions.sh "${STEPS_RELEASE_OUTPUTS_VERSION}" \
+            --versions-json "${RUNNER_TEMP}/release-versions.json"
         env:
           STEPS_CURRENT_OUTPUTS_VERSION: ${{ steps.current.outputs.version }}
           STEPS_RELEASE_OUTPUTS_VERSION: ${{ steps.release.outputs.version }}
@@ -70,8 +82,16 @@ jobs:
           branch: auto/sync-doc-version
           title: "Update doc stable version to ${{ steps.release.outputs.version }}"
           body: |
-            Automated PR to update `fvdb_core_stable_version` in `docs/conf.py`
-            to match the latest GitHub Release (`v${{ steps.release.outputs.version }}`).
+            Automated PR to update the stable release metadata in `docs/conf.py`
+            (`fvdb_core_stable_version` plus the released PyTorch/CUDA/Python
+            versions) to match the latest GitHub Release
+            (`v${{ steps.release.outputs.version }}`), and to remove the
+            pre-release marker for this minor version from
+            `docs/installation.rst` if present.
+
+            If the set of supported CUDA versions changed in this release,
+            check that `docs/installation.rst` has a wheel-install example for
+            each entry in `fvdb_core_stable_cuda_versions`.
 
             When merged, a docs rebuild will be triggered automatically.
           labels: automation

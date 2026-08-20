@@ -8,30 +8,27 @@ dependencies:
   - certifi
   - cmake
   - cuda-version=13.0
-  - git
-  - gitpython
-  - ipython
+  # A host C compiler and cuda.h are runtime requirements, not build ones: torch
+  # 2.13 dispatches ops such as bmm_outer_product (MATH SDPA backward) to Triton,
+  # whose JIT compiles its cuda_utils shim on first use. Activating the env sets
+  # CC, which is what Triton looks for first. conda-forge's triton unbundles the
+  # vendored CUDA headers that the pip wheels carry and instead searches
+  # $CONDA_PREFIX/targets/x86_64-linux/include, which cuda-cudart-dev populates.
+  - cuda-cudart-dev
+  - gcc_linux-64=14.3
   - libpng
-  - linkify-it-py
   - ninja
   - matplotlib
-  - myst-parser
   - numpy
   - openssl
-  - pandas
   - parameterized
   - pip>=23.3.1
   - pkg-config
   - polyscope
-  - py-opencv>=4.10[build=headless*]
-  - py-openimageio
+  - pytest
   - pytest-benchmark
   - python=3.12
-  - pytorch-gpu=2.11.0
-  - rich
-  - scikit-learn
-  - sphinx_rtd_theme
-  - sphinx>=7.0.0
+  - pytorch-gpu=2.13.0
   - tqdm
   - zlib
   - ipykernel

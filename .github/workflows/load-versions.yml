@@ -26,10 +26,10 @@ on:
         value: ${{ jobs.load.outputs.torch-full-version }}
       cuda-default:
         value: ${{ jobs.load.outputs.cuda-default }}
-      cuda-128-patch:
-        value: ${{ jobs.load.outputs.cuda-128-patch }}
       cuda-130-patch:
         value: ${{ jobs.load.outputs.cuda-130-patch }}
+      cuda-132-patch:
+        value: ${{ jobs.load.outputs.cuda-132-patch }}
       cuda-conda-override:
         value: ${{ jobs.load.outputs.cuda-conda-override }}
       cuda-arch-pr:
@@ -77,8 +77,8 @@ jobs:
       torch-version: ${{ steps.parse.outputs.torch-version }}
       torch-full-version: ${{ steps.parse.outputs.torch-full-version }}
       cuda-default: ${{ steps.parse.outputs.cuda-default }}
-      cuda-128-patch: ${{ steps.parse.outputs.cuda-128-patch }}
       cuda-130-patch: ${{ steps.parse.outputs.cuda-130-patch }}
+      cuda-132-patch: ${{ steps.parse.outputs.cuda-132-patch }}
       cuda-conda-override: ${{ steps.parse.outputs.cuda-conda-override }}
       cuda-arch-pr: ${{ steps.parse.outputs.cuda-arch-pr }}
       cuda-arch-publish: ${{ steps.parse.outputs.cuda-arch-publish }}
@@ -116,8 +116,8 @@ jobs:
             echo "torch-version=$(jq -r '.torch.version' $CFG)"
             echo "torch-full-version=$(jq -r '.torch.full_version' $CFG)"
             echo "cuda-default=$(jq -r '.cuda.default' $CFG)"
-            echo "cuda-128-patch=$(jq -r '.cuda.versions["12.8"].patch' $CFG)"
             echo "cuda-130-patch=$(jq -r '.cuda.versions["13.0"].patch' $CFG)"
+            echo "cuda-132-patch=$(jq -r '.cuda.versions["13.2"].patch' $CFG)"
             echo "cuda-conda-override=$(jq -r '.cuda.conda_override' $CFG)"
             echo "cuda-arch-pr=$(jq -r '.cuda.arch_list_pr' $CFG)"
             echo "cuda-arch-publish=$(jq -r '.cuda.arch_list_publish' $CFG)"

@@ -56,7 +56,7 @@ dependencies:
   - pyrender
   - pytest-benchmark
   - python=3.12
-  - pytorch-gpu=2.11.0
+  - pytorch-gpu=2.13.0
   - rich
   - sam2
   - scikit-build-core
