@@ -14,6 +14,7 @@
 #include <ATen/core/TensorBody.h>
 #include <torch/types.h>
 
+#include <memory>
 #include <vector>
 
 #if !defined(__CUDACC__) && !defined(__restrict__)
@@ -21,6 +22,10 @@
 #endif
 
 namespace fvdb {
+
+namespace detail {
+class VbmCache;
+} // namespace detail
 
 struct GridBatchData : public torch::CustomClassHolder {
     static constexpr int64_t MAX_GRIDS_PER_BATCH = 1024; // Maximum number of grids in a batch
@@ -89,10 +94,20 @@ struct GridBatchData : public torch::CustomClassHolder {
     torch::Tensor mBatchOffsets;     // Batch indices for grid
     torch::Tensor mListIndices;      // List indices for grid (same as JaggedTensor)
 
+    // Lazily-built per-grid VoxelBlockManager handles (pure derived state; never serialized).
+    // Shared with sliced/indexed views of this batch, which alias the same grid buffer. Grid
+    // topology is immutable after construction, so cached entries never need invalidation.
+    std::shared_ptr<detail::VbmCache> mVbmCache;
+
     // -----------------------------------------------------------------------
     // Single constructor: bundles pre-computed fields (takes ownership of
     // metadata pointers). All computation happens outside, in factory
-    // functions, before this constructor is called.
+    // functions, before this constructor is called. Defined in GridBatchData.cu
+    // (requires the complete detail::VbmCache type).
+    //
+    // vbmCache is passed only by views that share this batch's grid buffer (so the
+    // parent's cached VBMs are reused); everyone else leaves it null and gets a
+    // fresh, empty cache.
     // -----------------------------------------------------------------------
     GridBatchData(std::shared_ptr<nanovdb::GridHandle<TorchDeviceBuffer>> gridHdl,
                   GridMetadata *hostGridMetadata,
@@ -101,11 +116,8 @@ struct GridBatchData : public torch::CustomClassHolder {
                   GridBatchMetadata batchMetadata,
                   torch::Tensor leafBatchIndices,
                   torch::Tensor batchOffsets,
-                  torch::Tensor listIndices)
-        : mHostGridMetadata(hostGridMetadata), mDeviceGridMetadata(deviceGridMetadata),
-          mBatchSize(batchSize), mBatchMetadata(std::move(batchMetadata)),
-          mGridHdl(std::move(gridHdl)), mLeafBatchIndices(std::move(leafBatchIndices)),
-          mBatchOffsets(std::move(batchOffsets)), mListIndices(std::move(listIndices)) {}
+                  torch::Tensor listIndices,
+                  std::shared_ptr<detail::VbmCache> vbmCache = nullptr);
 
     ~GridBatchData();
 
@@ -334,6 +346,10 @@ struct GridBatchData : public torch::CustomClassHolder {
     // TopologyBuilder), `hostGridPtrAt` a host pointer (CPU proxy-grid paths).
     nanovdb::OnIndexGrid *deviceGridPtrAt(int64_t bi) const;
     nanovdb::OnIndexGrid *hostGridPtrAt(int64_t bi) const;
+
+    // The batch's lazily-built per-grid VoxelBlockManager cache (see detail/VbmCache.h).
+    // Defined in GridBatchData.cu (requires the complete detail::VbmCache type).
+    detail::VbmCache &vbmCache() const;
 
     const VoxelCoordTransform &
     primalTransformAt(int64_t bi) const {
