@@ -9,6 +9,7 @@
 #include <fvdb/detail/utils/ForEachCPU.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 #include <fvdb/detail/utils/cuda/ForEachPrivateUse1.cuh>
+#include <fvdb/detail/utils/cuda/ForEachVbmCUDA.cuh>
 
 #include <c10/cuda/CUDAException.h>
 
@@ -219,8 +220,10 @@ struct BasePerActiveVoxelProcessor {
             makeOutTensorFromGridBatch<DeviceTag, OutElementType>(grid_batch, out_element);
         auto out_accessor = makeAccessor<DeviceTag, OutElementType>(out_tensor);
         if constexpr (DeviceTag == torch::kCUDA) {
-            forEachVoxelCUDA<NumThreads>(
-                1, grid_batch, *static_cast<Derived const *>(this), out_accessor);
+            // VBM-backed iteration: one thread per active voxel via the cached per-grid
+            // VoxelBlockManager decode, instead of one thread per 512-slot leaf position.
+            forEachActiveVoxelVbmCUDA(
+                grid_batch, *static_cast<Derived const *>(this), out_accessor);
         } else if constexpr (DeviceTag == torch::kPrivateUse1) {
             forEachVoxelPrivateUse1(
                 1, grid_batch, *static_cast<Derived const *>(this), out_accessor);
