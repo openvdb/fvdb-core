@@ -116,30 +116,81 @@ jobs:
         persist-credentials: false
     - name: Compare pins against fvdb-reality-capture benchmark env
       env:
+        GH_TOKEN: ${{ github.token }}
         ALLOW_DRIFT: ${{ contains(github.event.pull_request.labels.*.name, 'allow-downstream-drift') }}
-        DOWNSTREAM_URL: https://raw.githubusercontent.com/openvdb/fvdb-reality-capture/main/tests/benchmarks/comparative/docker/benchmark_environment.yml
+        DOWNSTREAM_REPO: openvdb/fvdb-reality-capture
+        ENV_PATH: tests/benchmarks/comparative/docker/benchmark_environment.yml
+        CORE_ENV: env/build_environment.yml
       run: |
         set -euo pipefail
-        curl -fsSL "${DOWNSTREAM_URL}" -o downstream_env.yml
-        rc=0
+
+        read_pin() { grep -oP "^\\s*-\\s*${2}=\\K\\S+" "$1" || true; }
+
+        curl -fsSL "https://raw.githubusercontent.com/${DOWNSTREAM_REPO}/main/${ENV_PATH}" \
+          -o downstream_main.yml
+
+        unreadable=0
+        : > drifted.txt
         for key in pytorch-gpu cuda-version python; do
-          core=$(grep -oP "^\s*-\s*${key}=\K\S+" env/build_environment.yml || true)
-          downstream=$(grep -oP "^\s*-\s*${key}=\K\S+" downstream_env.yml || true)
+          core=$(read_pin "${CORE_ENV}" "${key}")
+          down=$(read_pin downstream_main.yml "${key}")
           # An unreadable pin is a failure: a renamed or reformatted line would
           # otherwise compare empty-to-empty and let this check pass silently.
-          if [ -z "${core}" ] || [ -z "${downstream}" ]; then
-            echo "::error::Could not read '${key}' from both environments (fvdb-core='${core}', downstream='${downstream}'). Update this check if the pin format changed."
-            rc=1
+          if [ -z "${core}" ] || [ -z "${down}" ]; then
+            echo "::error::Could not read '${key}' from both environments (fvdb-core='${core}', downstream='${down}'). Update this check if the pin format changed."
+            unreadable=1
             continue
           fi
-          printf '%-14s fvdb-core=%-10s fvdb-reality-capture=%s\n' "${key}" "${core}" "${downstream}"
-          if [ "${core}" != "${downstream}" ]; then
-            echo "::error::${key} drift: this branch pins ${core}, fvdb-reality-capture's benchmark env pins ${downstream}. Merging breaks their nightly benchmarks at 'import fvdb'. Land a companion PR there, or apply the 'allow-downstream-drift' label if this bump is intentional and sequenced."
-            rc=1
-          fi
+          printf '%-14s fvdb-core=%-10s downstream@main=%s\n' "${key}" "${core}" "${down}"
+          [ "${core}" = "${down}" ] || printf '%s=%s\n' "${key}" "${core}" >> drifted.txt
         done
-        if [ "${rc}" -ne 0 ] && [ "${ALLOW_DRIFT}" = "true" ]; then
-          echo "::notice::Downstream drift acknowledged via the 'allow-downstream-drift' label."
-          rc=0
+        [ "${unreadable}" -eq 0 ] || { echo "::error::Refusing to pass with an unreadable pin."; exit 1; }
+
+        if [ ! -s drifted.txt ]; then
+          echo "All pins match ${DOWNSTREAM_REPO}@main."
+          exit 0
         fi
-        exit "${rc}"
+        echo "Pin drift vs ${DOWNSTREAM_REPO}@main:"; sed 's/^/  /' drifted.txt
+
+        # A companion PR that already sets every drifted pin to this branch's
+        # value is a valid unblock: it is self-service (fork contributors cannot
+        # apply labels) and it is the change they must make anyway. The hard
+        # backstop stays downstream, where their nightly refuses to run on drift.
+        companion=""; drafts=""; checked=""
+        if ! gh api "repos/${DOWNSTREAM_REPO}/pulls?state=open&per_page=100" \
+              --jq '.[] | [.number, .draft, .head.sha, .title] | @tsv' > open_prs.tsv 2> api_err.txt; then
+          # Fail closed: an API hiccup must not look like an acknowledged bump.
+          echo "::warning::Could not list open PRs in ${DOWNSTREAM_REPO}; not treating that as an unblock. $(tr '\n' ' ' < api_err.txt)"
+        else
+          while IFS=$'\t' read -r num draft sha title; do
+            [ -n "${num:-}" ] || continue
+            checked="${checked} #${num}"
+            if ! gh api "repos/${DOWNSTREAM_REPO}/contents/${ENV_PATH}?ref=${sha}" --jq '.content' 2>/dev/null \
+                 | base64 -d > pr_env.yml 2>/dev/null; then
+              continue
+            fi
+            ok=1
+            while IFS='=' read -r key want; do
+              [ "$(read_pin pr_env.yml "${key}")" = "${want}" ] || ok=0
+            done < drifted.txt
+            [ "${ok}" -eq 1 ] || continue
+            if [ "${draft}" = "true" ]; then
+              drafts="${drafts} #${num}"
+            else
+              companion="#${num} ${title}"
+              break
+            fi
+          done < open_prs.tsv
+        fi
+
+        if [ -n "${companion}" ]; then
+          echo "::notice::Companion PR in ${DOWNSTREAM_REPO} sets the drifted pins to match this branch: ${companion}. Merge it alongside this PR."
+          exit 0
+        fi
+        [ -z "${drafts}" ] || echo "::warning::Draft PR(s) match the drifted pins, but a draft is not accepted as a companion:${drafts}. Mark it ready for review."
+        if [ "${ALLOW_DRIFT}" = "true" ]; then
+          echo "::notice::Drift acknowledged via the 'allow-downstream-drift' label."
+          exit 0
+        fi
+        echo "::error::Pin drift vs ${DOWNSTREAM_REPO}@main with no companion PR. Merging breaks their nightly benchmarks at 'import fvdb'. Open a PR there updating ${ENV_PATH} to match, or apply the 'allow-downstream-drift' label. Open PRs checked:${checked:- none}"
+        exit 1
