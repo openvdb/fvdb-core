@@ -150,6 +150,32 @@ class ReinitializeSdfTests(unittest.TestCase):
         ii, jj, kk = torch.meshgrid(rng, rng, rng, indexing="ij")
         return torch.stack([ii, jj, kk], dim=-1).reshape(-1, 3) * vx
 
+    def test_sliced_batch_matches_standalone(self):
+        """reinitialize_sdf on a sliced GridBatch view must read the view's grids, not the
+        physical grids of the underlying batch (regression test for a physical-vs-logical
+        grid indexing bug)."""
+        vx = self.vx
+        halves = [12, 10, 8]
+        gb = fvdb.GridBatch.from_points(
+            fvdb.JaggedTensor([self._cube_points(vx, h) for h in halves]),
+            voxel_sizes=vx,
+        )
+        view = gb[1:3]
+        analytic = (view.ijk.jdata.float() * vx).norm(dim=1) - self.R
+        field = view.jagged_like(analytic.clamp(-self.bw, self.bw))
+        phi_view = view.reinitialize_sdf(field, band=self.band, order=3)
+
+        standalone = fvdb.GridBatch.from_points(
+            fvdb.JaggedTensor([self._cube_points(vx, h) for h in halves[1:]]),
+            voxel_sizes=vx,
+        )
+        analytic_sa = (standalone.ijk.jdata.float() * vx).norm(dim=1) - self.R
+        field_sa = standalone.jagged_like(analytic_sa.clamp(-self.bw, self.bw))
+        phi_sa = standalone.reinitialize_sdf(field_sa, band=self.band, order=3)
+
+        self.assertTrue(torch.equal(view.ijk.jdata, standalone.ijk.jdata))
+        self.assertTrue(torch.allclose(phi_view.jdata, phi_sa.jdata, atol=1e-5))
+
 
 if __name__ == "__main__":
     unittest.main()
