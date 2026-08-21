@@ -3,6 +3,11 @@ on:
     pull_request:
       branches:
         - '**'
+      # labeled/unlabeled are needed by downstream-env-drift: its
+      # 'allow-downstream-drift' escape hatch is only honoured on a fresh run,
+      # so without these the label would neither unblock a red check nor
+      # re-block a green one when removed.
+      types: [opened, synchronize, reopened, labeled, unlabeled]
 
 # Allow subsequent pushes to the same PR or REF to cancel any previous jobs.
 concurrency:
@@ -131,6 +136,7 @@ jobs:
 
         unreadable=0
         : > drifted.txt
+        : > core_pins.txt
         for key in pytorch-gpu cuda-version python; do
           core=$(read_pin "${CORE_ENV}" "${key}")
           down=$(read_pin downstream_main.yml "${key}")
@@ -142,6 +148,7 @@ jobs:
             continue
           fi
           printf '%-14s fvdb-core=%-10s downstream@main=%s\n' "${key}" "${core}" "${down}"
+          printf '%s=%s\n' "${key}" "${core}" >> core_pins.txt
           [ "${core}" = "${down}" ] || printf '%s=%s\n' "${key}" "${core}" >> drifted.txt
         done
         [ "${unreadable}" -eq 0 ] || { echo "::error::Refusing to pass with an unreadable pin."; exit 1; }
@@ -157,22 +164,30 @@ jobs:
         # apply labels) and it is the change they must make anyway. The hard
         # backstop stays downstream, where their nightly refuses to run on drift.
         companion=""; drafts=""; checked=""
-        if ! gh api "repos/${DOWNSTREAM_REPO}/pulls?state=open&per_page=100" \
-              --jq '.[] | [.number, .draft, .head.sha, .title] | @tsv' > open_prs.tsv 2> api_err.txt; then
+        # base=main so a PR onto some temporary branch cannot unblock this gate;
+        # --paginate so a companion beyond the first page is not missed.
+        if ! gh api --paginate "repos/${DOWNSTREAM_REPO}/pulls?state=open&base=main&per_page=100" \
+              --jq '.[] | [.number, .draft, .head.sha, .base.ref, .title] | @tsv' > open_prs.tsv 2> api_err.txt; then
           # Fail closed: an API hiccup must not look like an acknowledged bump.
           echo "::warning::Could not list open PRs in ${DOWNSTREAM_REPO}; not treating that as an unblock. $(tr '\n' ' ' < api_err.txt)"
         else
-          while IFS=$'\t' read -r num draft sha title; do
+          while IFS=$'\t' read -r num draft sha baseref title; do
             [ -n "${num:-}" ] || continue
+            # Defensive: the query already filters base=main.
+            [ "${baseref}" = "main" ] || continue
             checked="${checked} #${num}"
             if ! gh api "repos/${DOWNSTREAM_REPO}/contents/${ENV_PATH}?ref=${sha}" --jq '.content' 2>/dev/null \
                  | base64 -d > pr_env.yml 2>/dev/null; then
               continue
             fi
+            # Compare every pin, not just the drifted ones: a PR that fixes the
+            # drifted key while moving an already-aligned key away from fvdb-core
+            # would otherwise be accepted and simply relocate the drift.
             ok=1
             while IFS='=' read -r key want; do
-              [ "$(read_pin pr_env.yml "${key}")" = "${want}" ] || ok=0
-            done < drifted.txt
+              got=$(read_pin pr_env.yml "${key}")
+              [ -n "${got}" ] && [ "${got}" = "${want}" ] || ok=0
+            done < core_pins.txt
             [ "${ok}" -eq 1 ] || continue
             if [ "${draft}" = "true" ]; then
               drafts="${drafts} #${num}"
