@@ -5,6 +5,7 @@
 #include <fvdb/detail/utils/Nvtx.h>
 #include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/BinSearch.cuh>
+#include <fvdb/detail/utils/cuda/GradientReduction.h>
 #include <fvdb/detail/utils/cuda/GridDim.h>
 #include <fvdb/detail/utils/cuda/Utils.cuh>
 #include <fvdb/detail/utils/cuda/WarpReduce.cuh>
@@ -16,6 +17,7 @@
 #include <nanovdb/math/Math.h>
 
 #include <ATen/cuda/Atomic.cuh>
+#include <ATen/ops/from_blob.h>
 #include <c10/cuda/CUDAGuard.h>
 
 #include <cooperative_groups.h>
@@ -176,9 +178,9 @@ projectionBackwardKernel(const int32_t offset,
             for (uint32_t i = 0; i < 3; i++) {     // rows
 #pragma unroll
                 for (uint32_t j = 0; j < 3; j++) { // cols
-                    atomicAdd_system(outDLossDWorldToCamMatrices + i * 4 + j, dLossDRotation[i][j]);
+                    gpuAtomicAdd(outDLossDWorldToCamMatrices + i * 4 + j, dLossDRotation[i][j]);
                 }
-                atomicAdd_system(outDLossDWorldToCamMatrices + i * 4 + 3, dLossDTranslation[i]);
+                gpuAtomicAdd(outDLossDWorldToCamMatrices + i * 4 + 3, dLossDTranslation[i]);
             }
         }
     }
@@ -452,6 +454,8 @@ dispatchProjectGaussiansAnalyticBwd<torch::kPrivateUse1>(
     }
     if (C && N) {
         std::vector<cudaEvent_t> events(c10::cuda::device_count());
+        std::vector<float *> dLossDWorldToCamMatricesLocalPtrs(c10::cuda::device_count(), nullptr);
+        std::vector<torch::Tensor> dLossDWorldToCamMatricesLocals(c10::cuda::device_count());
         for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
             C10_CUDA_CHECK(cudaSetDevice(deviceId));
             auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
@@ -563,6 +567,18 @@ dispatchProjectGaussiansAnalyticBwd<torch::kPrivateUse1>(
             int64_t deviceProblemOffset, deviceProblemSize;
             std::tie(deviceProblemOffset, deviceProblemSize) = deviceChunk(N, deviceId);
 
+            if (worldToCamMatricesRequiresGrad) {
+                const auto localTensorOptions =
+                    at::TensorOptions().dtype(means.scalar_type()).device(at::kCUDA, deviceId);
+                const size_t numBytes =
+                    dLossDWorldToCamMatrices.numel() * dLossDWorldToCamMatrices.element_size();
+                float *&localPtr = dLossDWorldToCamMatricesLocalPtrs[deviceId];
+                C10_CUDA_CHECK(cudaMallocAsync(&localPtr, numBytes, stream));
+                C10_CUDA_CHECK(cudaMemsetAsync(localPtr, 0, numBytes, stream));
+                dLossDWorldToCamMatricesLocals[deviceId] =
+                    at::from_blob(localPtr, dLossDWorldToCamMatrices.sizes(), localTensorOptions);
+            }
+
             if (deviceProblemSize > 0) {
                 const dim3 NUM_BLOCKS(GET_BLOCKS(deviceProblemSize, DEFAULT_BLOCK_DIM), C);
 
@@ -600,7 +616,7 @@ dispatchProjectGaussiansAnalyticBwd<torch::kPrivateUse1>(
                             covars.has_value() ? nullptr : dLossDQuats.data_ptr<float>(),
                             covars.has_value() ? nullptr : dLossDScales.data_ptr<float>(),
                             worldToCamMatricesRequiresGrad
-                                ? dLossDWorldToCamMatrices.data_ptr<float>()
+                                ? dLossDWorldToCamMatricesLocals[deviceId].data_ptr<float>()
                                 : nullptr,
                             static_cast<int32_t>(imageWidth),
                             static_cast<int32_t>(imageHeight),
@@ -647,7 +663,7 @@ dispatchProjectGaussiansAnalyticBwd<torch::kPrivateUse1>(
                             covars.has_value() ? nullptr : dLossDQuats.data_ptr<float>(),
                             covars.has_value() ? nullptr : dLossDScales.data_ptr<float>(),
                             worldToCamMatricesRequiresGrad
-                                ? dLossDWorldToCamMatrices.data_ptr<float>()
+                                ? dLossDWorldToCamMatricesLocals[deviceId].data_ptr<float>()
                                 : nullptr,
                             static_cast<int32_t>(imageWidth),
                             static_cast<int32_t>(imageHeight),
@@ -662,6 +678,15 @@ dispatchProjectGaussiansAnalyticBwd<torch::kPrivateUse1>(
                                 : nullptr);
                 }
                 C10_CUDA_KERNEL_LAUNCH_CHECK();
+            }
+        }
+
+        if (worldToCamMatricesRequiresGrad) {
+            reduceGradientShards<float>(dLossDWorldToCamMatricesLocals, dLossDWorldToCamMatrices);
+            for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+                C10_CUDA_CHECK(cudaSetDevice(deviceId));
+                auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+                C10_CUDA_CHECK(cudaFreeAsync(dLossDWorldToCamMatricesLocalPtrs[deviceId], stream));
             }
         }
 
