@@ -26,16 +26,17 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/detail/ops/gsplat/FusedSSIM.h>
+#include <fvdb/detail/utils/cuda/Prefetch.h>
 #include <fvdb/detail/utils/cuda/Utils.cuh>
 
-#include <nanovdb/util/cuda/Util.h>
-
+#include <c10/core/ScalarType.h>
 #include <c10/cuda/CUDAGuard.h>
 #include <torch/types.h>
 
 #include <cooperative_groups.h>
 
 #include <algorithm>
+#include <cstdint>
 
 namespace fvdb {
 
@@ -589,11 +590,6 @@ struct ImageBlockChunk {
     int blockCount;
 };
 
-struct ImagePrefetchRange {
-    void *pointer;
-    size_t byteCount;
-};
-
 ImageBlockChunk
 imageBlockChunk(int B, int H, int W, int deviceId) {
     // Blocks are flattened with x varying fastest. Split only at full-width tile-row
@@ -612,7 +608,8 @@ imageBlockChunk(int B, int H, int W, int deviceId) {
 }
 
 void
-appendImagePrefetchRanges(std::vector<ImagePrefetchRange> &ranges,
+appendImagePrefetchRanges(std::vector<void *> &prefetchPointers,
+                          std::vector<size_t> &prefetchSizes,
                           const torch::TensorList &tensors,
                           size_t tileRowOffset,
                           size_t tileRowCount,
@@ -635,8 +632,9 @@ appendImagePrefetchRanges(std::vector<ImagePrefetchRange> &ranges,
                         tensor.size(2) == H && tensor.size(3) == W,
                     "Tensor to prefetch does not match the input image shape");
 
-        const size_t firstTensorRange = ranges.size();
-        auto *tensorData              = tensor.data_ptr<float>();
+        const size_t firstTensorRange = prefetchPointers.size();
+        const size_t scalarSize       = c10::elementSize(tensor.scalar_type());
+        auto *tensorData              = static_cast<uint8_t *>(tensor.data_ptr());
 
         const size_t firstBatch = tileRowOffset / tileRowsPerImage;
         const size_t lastBatch  = (tileRowEnd - 1) / tileRowsPerImage;
@@ -649,66 +647,28 @@ appendImagePrefetchRanges(std::vector<ImagePrefetchRange> &ranges,
 
             // Prefetch only the rows owned by this device. Halo reads remain demand-driven so
             // adjacent devices never issue prefetches for overlapping logical ranges.
-            const size_t firstRow     = firstTileRow * BLOCK_Y;
-            const size_t lastRow      = std::min(lastTileRow * BLOCK_Y, static_cast<size_t>(H));
-            const size_t elementCount = (lastRow - firstRow) * W;
+            const size_t firstRow = firstTileRow * BLOCK_Y;
+            const size_t lastRow  = std::min(lastTileRow * BLOCK_Y, static_cast<size_t>(H));
 
             for (int channel = 0; channel < CH; ++channel) {
-                const size_t elementOffset = ((batch * CH + channel) * H + firstRow) * W;
-                auto *pointer              = tensorData + elementOffset;
-                const size_t byteCount     = elementCount * sizeof(float);
+                const size_t elementOffset = batch * tensor.stride(0) + channel * tensor.stride(1) +
+                                             firstRow * tensor.stride(2);
+                auto *pointer          = tensorData + elementOffset * scalarSize;
+                const size_t byteCount = (lastRow - firstRow) * tensor.stride(2) * scalarSize;
 
-                if (ranges.size() > firstTensorRange) {
-                    auto &previousRange = ranges.back();
+                if (prefetchPointers.size() > firstTensorRange) {
                     auto *previousEnd =
-                        static_cast<char *>(previousRange.pointer) + previousRange.byteCount;
-                    if (previousEnd == reinterpret_cast<char *>(pointer)) {
-                        previousRange.byteCount += byteCount;
+                        static_cast<uint8_t *>(prefetchPointers.back()) + prefetchSizes.back();
+                    if (previousEnd == pointer) {
+                        prefetchSizes.back() += byteCount;
                         continue;
                     }
                 }
-                ranges.emplace_back(ImagePrefetchRange{pointer, byteCount});
+                prefetchPointers.emplace_back(pointer);
+                prefetchSizes.emplace_back(byteCount);
             }
         }
     }
-}
-
-void
-imagePrefetchBatchAsync(const std::vector<ImagePrefetchRange> &ranges,
-                        int deviceId,
-                        cudaStream_t stream) {
-    if (ranges.empty()) {
-        return;
-    }
-
-    TORCH_CHECK(stream, "cudaMemPrefetchBatchAsync does not support the default stream");
-#if (CUDART_VERSION < 13000)
-    for (const auto &range: ranges) {
-        C10_CUDA_CHECK(nanovdb::util::cuda::memPrefetchAsync(
-            range.pointer, range.byteCount, deviceId, stream));
-    }
-#else
-    std::vector<void *> prefetchPointers;
-    std::vector<size_t> prefetchSizes;
-    cudaMemLocation location                       = {cudaMemLocationTypeDevice, deviceId};
-    std::vector<cudaMemLocation> prefetchLocations = {location};
-    std::vector<size_t> prefetchLocationIndices    = {0};
-
-    prefetchPointers.reserve(ranges.size());
-    prefetchSizes.reserve(ranges.size());
-    for (const auto &range: ranges) {
-        prefetchPointers.emplace_back(range.pointer);
-        prefetchSizes.emplace_back(range.byteCount);
-    }
-    C10_CUDA_CHECK(cudaMemPrefetchBatchAsync(prefetchPointers.data(),
-                                             prefetchSizes.data(),
-                                             prefetchPointers.size(),
-                                             prefetchLocations.data(),
-                                             prefetchLocationIndices.data(),
-                                             prefetchLocations.size(),
-                                             0,
-                                             stream));
-#endif
 }
 
 } // namespace
@@ -742,6 +702,13 @@ fusedSSIMPrivateUse1(
     auto img1_ = img1.contiguous();
     auto img2_ = img2.contiguous();
 
+    std::vector<torch::Tensor> imageTensors = {img1_, img2_, ssim_map};
+    if (train) {
+        imageTensors.emplace_back(dm_dmu1);
+        imageTensors.emplace_back(dm_dsigma1_sq);
+        imageTensors.emplace_back(dm_dsigma12);
+    }
+
     std::vector<cudaEvent_t> events(c10::cuda::device_count());
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
@@ -757,20 +724,18 @@ fusedSSIMPrivateUse1(
 
         const auto chunk = imageBlockChunk(B, H, W, deviceId);
         if (chunk.blockCount) {
-            std::vector<ImagePrefetchRange> ranges;
-            std::vector<torch::Tensor> inputTensors = {img1_, img2_};
-            appendImagePrefetchRanges(
-                ranges, inputTensors, chunk.tileRowOffset, chunk.tileRowCount, B, CH, H, W);
-
-            std::vector<torch::Tensor> outputTensors = {ssim_map};
-            if (train) {
-                outputTensors.emplace_back(dm_dmu1);
-                outputTensors.emplace_back(dm_dsigma1_sq);
-                outputTensors.emplace_back(dm_dsigma12);
-            }
-            appendImagePrefetchRanges(
-                ranges, outputTensors, chunk.tileRowOffset, chunk.tileRowCount, B, CH, H, W);
-            imagePrefetchBatchAsync(ranges, deviceId, stream);
+            std::vector<void *> prefetchPointers;
+            std::vector<size_t> prefetchSizes;
+            appendImagePrefetchRanges(prefetchPointers,
+                                      prefetchSizes,
+                                      imageTensors,
+                                      chunk.tileRowOffset,
+                                      chunk.tileRowCount,
+                                      B,
+                                      CH,
+                                      H,
+                                      W);
+            memPrefetchBatchAsync(prefetchPointers, prefetchSizes, deviceId, stream);
         }
         C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
     }
@@ -845,6 +810,9 @@ fusedSSIMBackwardPrivateUse1(double C1,
     auto dm_dsigma1_sq_ = dm_dsigma1_sq.contiguous();
     auto dm_dsigma12_   = dm_dsigma12.contiguous();
 
+    std::vector<torch::Tensor> imageTensors = {
+        img1_, img2_, dL_dmap_, dm_dmu1_, dm_dsigma1_sq_, dm_dsigma12_, dL_dimg1};
+
     std::vector<cudaEvent_t> events(c10::cuda::device_count());
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
@@ -860,21 +828,18 @@ fusedSSIMBackwardPrivateUse1(double C1,
 
         const auto chunk = imageBlockChunk(B, H, W, deviceId);
         if (chunk.blockCount) {
-            std::vector<ImagePrefetchRange> ranges;
-
-            std::vector<torch::Tensor> imageTensors = {img1_, img2_};
-            appendImagePrefetchRanges(
-                ranges, imageTensors, chunk.tileRowOffset, chunk.tileRowCount, B, CH, H, W);
-
-            std::vector<torch::Tensor> derivativeTensors = {
-                dL_dmap_, dm_dmu1_, dm_dsigma1_sq_, dm_dsigma12_};
-            appendImagePrefetchRanges(
-                ranges, derivativeTensors, chunk.tileRowOffset, chunk.tileRowCount, B, CH, H, W);
-
-            std::vector<torch::Tensor> outputTensors = {dL_dimg1};
-            appendImagePrefetchRanges(
-                ranges, outputTensors, chunk.tileRowOffset, chunk.tileRowCount, B, CH, H, W);
-            imagePrefetchBatchAsync(ranges, deviceId, stream);
+            std::vector<void *> prefetchPointers;
+            std::vector<size_t> prefetchSizes;
+            appendImagePrefetchRanges(prefetchPointers,
+                                      prefetchSizes,
+                                      imageTensors,
+                                      chunk.tileRowOffset,
+                                      chunk.tileRowCount,
+                                      B,
+                                      CH,
+                                      H,
+                                      W);
+            memPrefetchBatchAsync(prefetchPointers, prefetchSizes, deviceId, stream);
         }
         C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
     }
