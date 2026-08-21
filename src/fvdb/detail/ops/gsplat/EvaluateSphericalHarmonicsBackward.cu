@@ -298,7 +298,6 @@ __global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
 computeShBackward(
     const int64_t offset,
     const int64_t count,
-    const int64_t C,
     const int64_t N,
     const int64_t K,
     const int64_t D,
@@ -316,16 +315,16 @@ computeShBackward(
     T *__restrict__ outDLossDMeans,   // [N, 3] optional
     T *__restrict__ outDLossDViewDirs // [C, N, 3] optional
 ) {
-    // parallelize over C * N * D
-    auto idx = blockIdx.x * blockDim.x + threadIdx.x; // cidx * N * D + gidx * D + c
-    if (idx >= count * C * D) {
+    // Each block handles one camera and parallelizes over count * D.
+    const auto idx = blockIdx.x * blockDim.x + threadIdx.x; // gidx * D + c
+    if (idx >= count * D) {
         return;
     }
 
-    const auto eid = idx / D;              // cid * N + gid
-    const auto cid = eid / count;          // camera index
-    const auto gid = eid % count + offset; // gaussian index
-    const auto c   = idx % D;              // render channel
+    auto cid        = blockIdx.y;    // camera index
+    const auto gidx = idx / D;
+    const auto gid  = gidx + offset; // gaussian index
+    const auto c    = idx % D;       // render channel
     if (radii != nullptr &&
         (radii[(cid * N + gid) * 2 + 0] <= 0 || radii[(cid * N + gid) * 2 + 1] <= 0)) {
         return;
@@ -360,7 +359,7 @@ computeShBackward(
     if (dLossDViewDirPtr != nullptr) {
         auto activeThreads = cooperative_groups::coalesced_threads();
         auto pairThreads =
-            cooperative_groups::labeled_partition(activeThreads, static_cast<int>(eid));
+            cooperative_groups::labeled_partition(activeThreads, static_cast<int>(gidx));
         dLossDViewDir.x =
             cooperative_groups::reduce(pairThreads, dLossDViewDir.x, cooperative_groups::plus<T>());
         dLossDViewDir.y =
@@ -704,10 +703,10 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kCUDA>(
                 dLossDSh0Coeffs, dLossDShNCoeffs, dLossDMeans, dLossDWorldToCamMatrices);
         }
 
-        computeShBackward<scalar_t><<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
+        const dim3 shGrid(GET_BLOCKS(N * D, DEFAULT_BLOCK_DIM), C);
+        computeShBackward<scalar_t><<<shGrid, DEFAULT_BLOCK_DIM, 0, stream>>>(
             0,
             N,
-            C,
             N,
             K,
             D,
@@ -1029,12 +1028,11 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
             std::tie(elementOffset, elementCount) = deviceChunk(N, deviceId);
 
             if (elementCount > 0) {
-                const auto NUM_BLOCKS = GET_BLOCKS(C * elementCount * D, DEFAULT_BLOCK_DIM);
+                const dim3 shGrid(GET_BLOCKS(elementCount * D, DEFAULT_BLOCK_DIM), C);
 
-                computeShBackward<scalar_t><<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
+                computeShBackward<scalar_t><<<shGrid, DEFAULT_BLOCK_DIM, 0, stream>>>(
                     elementOffset,
                     elementCount,
-                    C,
                     N,
                     K,
                     D,
