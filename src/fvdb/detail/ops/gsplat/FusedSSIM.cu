@@ -619,8 +619,7 @@ appendImagePrefetchRanges(std::vector<ImagePrefetchRange> &ranges,
                           int B,
                           int CH,
                           int H,
-                          int W,
-                          int halo) {
+                          int W) {
     if (!tileRowCount) {
         return;
     }
@@ -648,11 +647,10 @@ appendImagePrefetchRanges(std::vector<ImagePrefetchRange> &ranges,
             const size_t lastTileRow =
                 std::min(tileRowEnd, batchTileRowOffset + tileRowsPerImage) - batchTileRowOffset;
 
-            // A chunk owns every x tile in these rows, so only the y extent needs halo expansion.
-            const size_t firstRow = firstTileRow * BLOCK_Y > static_cast<size_t>(halo)
-                                        ? firstTileRow * BLOCK_Y - halo
-                                        : 0;
-            const size_t lastRow  = std::min(lastTileRow * BLOCK_Y + halo, static_cast<size_t>(H));
+            // Prefetch only the rows owned by this device. Halo reads remain demand-driven so
+            // adjacent devices never issue prefetches for overlapping logical ranges.
+            const size_t firstRow     = firstTileRow * BLOCK_Y;
+            const size_t lastRow      = std::min(lastTileRow * BLOCK_Y, static_cast<size_t>(H));
             const size_t elementCount = (lastRow - firstRow) * W;
 
             for (int channel = 0; channel < CH; ++channel) {
@@ -762,7 +760,7 @@ fusedSSIMPrivateUse1(
             std::vector<ImagePrefetchRange> ranges;
             std::vector<torch::Tensor> inputTensors = {img1_, img2_};
             appendImagePrefetchRanges(
-                ranges, inputTensors, chunk.tileRowOffset, chunk.tileRowCount, B, CH, H, W, HALO);
+                ranges, inputTensors, chunk.tileRowOffset, chunk.tileRowCount, B, CH, H, W);
 
             std::vector<torch::Tensor> outputTensors = {ssim_map};
             if (train) {
@@ -771,7 +769,7 @@ fusedSSIMPrivateUse1(
                 outputTensors.emplace_back(dm_dsigma12);
             }
             appendImagePrefetchRanges(
-                ranges, outputTensors, chunk.tileRowOffset, chunk.tileRowCount, B, CH, H, W, 0);
+                ranges, outputTensors, chunk.tileRowOffset, chunk.tileRowCount, B, CH, H, W);
             imagePrefetchBatchAsync(ranges, deviceId, stream);
         }
         C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
@@ -866,23 +864,16 @@ fusedSSIMBackwardPrivateUse1(double C1,
 
             std::vector<torch::Tensor> imageTensors = {img1_, img2_};
             appendImagePrefetchRanges(
-                ranges, imageTensors, chunk.tileRowOffset, chunk.tileRowCount, B, CH, H, W, 0);
+                ranges, imageTensors, chunk.tileRowOffset, chunk.tileRowCount, B, CH, H, W);
 
             std::vector<torch::Tensor> derivativeTensors = {
                 dL_dmap_, dm_dmu1_, dm_dsigma1_sq_, dm_dsigma12_};
-            appendImagePrefetchRanges(ranges,
-                                      derivativeTensors,
-                                      chunk.tileRowOffset,
-                                      chunk.tileRowCount,
-                                      B,
-                                      CH,
-                                      H,
-                                      W,
-                                      HALO);
+            appendImagePrefetchRanges(
+                ranges, derivativeTensors, chunk.tileRowOffset, chunk.tileRowCount, B, CH, H, W);
 
             std::vector<torch::Tensor> outputTensors = {dL_dimg1};
             appendImagePrefetchRanges(
-                ranges, outputTensors, chunk.tileRowOffset, chunk.tileRowCount, B, CH, H, W, 0);
+                ranges, outputTensors, chunk.tileRowOffset, chunk.tileRowCount, B, CH, H, W);
             imagePrefetchBatchAsync(ranges, deviceId, stream);
         }
         C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
