@@ -92,3 +92,54 @@ jobs:
           set +e
           git grep -n "	" -- ':!*/codestyle.yml' ':!*.svg' ':!*.webp' ':!*.cmd' ':!*.png' ':!*.wlt' ':!*.jpg' ':!*.gif' ':!*.mp4' ':!*.pt' ':!*.pth' ':!*.nvdb' ':!*.npz' ':!*.gitmodules' ':!*/wip/*'
           test $? -eq 1
+
+  # The nightly benchmarks in openvdb/fvdb-reality-capture build the fvdb-core
+  # wheel from THIS repo's env/build_environment.yml and install it into their
+  # own benchmark environment. If the pins disagree, that wheel is compiled
+  # against one libtorch and loaded against another, and their nightly dies at
+  # `import fvdb` with an undefined-symbol ImportError. This has happened three
+  # times; a comment in the env file did not prevent the third.
+  #
+  # This gate blocks rather than warns: a GitHub `::warning::` is an annotation,
+  # so a passing (green) check hides it and the drift lands anyway.
+  #
+  # Intentional bumps are expected to fail here, because the companion change
+  # lives in another repository and cannot merge simultaneously. Apply the
+  # 'allow-downstream-drift' label to acknowledge and proceed, then land the
+  # matching update in fvdb-reality-capture.
+  downstream-env-drift:
+    name: Downstream env pins (fvdb-reality-capture)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      with:
+        persist-credentials: false
+    - name: Compare pins against fvdb-reality-capture benchmark env
+      env:
+        ALLOW_DRIFT: ${{ contains(github.event.pull_request.labels.*.name, 'allow-downstream-drift') }}
+        DOWNSTREAM_URL: https://raw.githubusercontent.com/openvdb/fvdb-reality-capture/main/tests/benchmarks/comparative/docker/benchmark_environment.yml
+      run: |
+        set -euo pipefail
+        curl -fsSL "${DOWNSTREAM_URL}" -o downstream_env.yml
+        rc=0
+        for key in pytorch-gpu cuda-version python; do
+          core=$(grep -oP "^\s*-\s*${key}=\K\S+" env/build_environment.yml || true)
+          downstream=$(grep -oP "^\s*-\s*${key}=\K\S+" downstream_env.yml || true)
+          # An unreadable pin is a failure: a renamed or reformatted line would
+          # otherwise compare empty-to-empty and let this check pass silently.
+          if [ -z "${core}" ] || [ -z "${downstream}" ]; then
+            echo "::error::Could not read '${key}' from both environments (fvdb-core='${core}', downstream='${downstream}'). Update this check if the pin format changed."
+            rc=1
+            continue
+          fi
+          printf '%-14s fvdb-core=%-10s fvdb-reality-capture=%s\n' "${key}" "${core}" "${downstream}"
+          if [ "${core}" != "${downstream}" ]; then
+            echo "::error::${key} drift: this branch pins ${core}, fvdb-reality-capture's benchmark env pins ${downstream}. Merging breaks their nightly benchmarks at 'import fvdb'. Land a companion PR there, or apply the 'allow-downstream-drift' label if this bump is intentional and sequenced."
+            rc=1
+          fi
+        done
+        if [ "${rc}" -ne 0 ] && [ "${ALLOW_DRIFT}" = "true" ]; then
+          echo "::notice::Downstream drift acknowledged via the 'allow-downstream-drift' label."
+          rc=0
+        fi
+        exit "${rc}"
