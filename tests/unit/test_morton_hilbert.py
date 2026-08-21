@@ -300,5 +300,33 @@ class TestMortonHilbert(unittest.TestCase):
         self.assertEqual(len(ijks_flat), len(hilbert_codes))
 
 
+class TestDefaultOffsetUsesBBoxMin(unittest.TestCase):
+    """The default (offset=None) encoding offset comes from the batch bbox min, which must be
+    exactly equivalent to the componentwise min over all active voxel coordinates (the previous
+    implementation materialized every coordinate just to take that min)."""
+
+    def setUp(self):
+        torch.manual_seed(42)
+
+    @parameterized.expand(all_device_combos)
+    def test_default_offset_matches_explicit_coord_min(self, device):
+        device = resolve_device(device)
+        import fvdb.functional as F
+        from fvdb import Grid
+
+        ijks = [torch.randint(-20, 32, (n, 3), dtype=torch.int32, device=device) for n in (4000, 3000, 2000)]
+        gb = GridBatch.from_ijk(JaggedTensor(ijks))
+
+        for batch in (gb, gb[1:3]):  # sliced views must recompute their bbox
+            offset = -torch.min(batch.ijk.jdata, dim=0).values
+            for fn in (F.morton_batch, F.morton_zyx_batch, F.hilbert_batch, F.hilbert_zyx_batch):
+                self.assertTrue(torch.equal(fn(batch).jdata, fn(batch, offset=offset).jdata))
+
+        g = Grid.from_ijk(ijks[0])
+        offset = -torch.min(g.ijk, dim=0).values
+        for fn in (F.morton_single, F.morton_zyx_single, F.hilbert_single, F.hilbert_zyx_single):
+            self.assertTrue(torch.equal(fn(g), fn(g, offset=offset)))
+
+
 if __name__ == "__main__":
     unittest.main()
