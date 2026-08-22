@@ -649,12 +649,13 @@ appendImagePrefetchRanges(std::vector<void *> &prefetchPointers,
             // adjacent devices never issue prefetches for overlapping logical ranges.
             const size_t firstRow = firstTileRow * BLOCK_Y;
             const size_t lastRow  = std::min(lastTileRow * BLOCK_Y, static_cast<size_t>(H));
+            const size_t rowCount = lastRow - firstRow;
 
             for (int channel = 0; channel < CH; ++channel) {
                 const size_t elementOffset = batch * tensor.stride(0) + channel * tensor.stride(1) +
                                              firstRow * tensor.stride(2);
                 auto *pointer          = tensorData + elementOffset * scalarSize;
-                const size_t byteCount = (lastRow - firstRow) * tensor.stride(2) * scalarSize;
+                const size_t byteCount = rowCount * static_cast<size_t>(W) * scalarSize;
 
                 if (prefetchPointers.size() > firstTensorRange) {
                     auto *previousEnd =
