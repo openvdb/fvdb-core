@@ -137,6 +137,16 @@ ConfigureDispatchBench(for_each_benchmark
     dispatch/for_each_benchmark.cu
 )
 
+# Active-voxel iteration benchmark — legacy leaf-scan vs cached-VBM decode across occupancies
+ConfigureDispatchBench(active_voxel_iteration_benchmark
+    dispatch/active_voxel_iteration_benchmark.cu
+)
+# NanoVDB's host-side VoxelBlockManager uses `#pragma omp simd`, unknown to the host compiler
+# when OpenMP is off (the fvdb library build suppresses it the same way).
+target_compile_options(active_voxel_iteration_benchmark PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-Wno-unknown-pragmas>
+    $<$<COMPILE_LANGUAGE:CXX>:-Wno-unknown-pragmas>)
+
 # GatherScatterDefault sparse convolution benchmark
 ConfigureDispatchBench(gather_scatter_conv_benchmark
     convolution/gather_scatter_conv_benchmark.cu

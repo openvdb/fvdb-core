@@ -3,9 +3,30 @@
 //
 #include <fvdb/GridBatchData.h>
 #include <fvdb/detail/GridBatchDataFactory.h>
+#include <fvdb/detail/VbmCache.h>
 #include <fvdb/detail/ops/JIdxForGrid.h>
 
 namespace fvdb {
+
+GridBatchData::GridBatchData(std::shared_ptr<nanovdb::GridHandle<TorchDeviceBuffer>> gridHdl,
+                             GridMetadata *hostGridMetadata,
+                             GridMetadata *deviceGridMetadata,
+                             int64_t batchSize,
+                             GridBatchMetadata batchMetadata,
+                             torch::Tensor leafBatchIndices,
+                             torch::Tensor batchOffsets,
+                             torch::Tensor listIndices,
+                             std::shared_ptr<detail::VbmCache> vbmCache)
+    : mHostGridMetadata(hostGridMetadata), mDeviceGridMetadata(deviceGridMetadata),
+      mBatchSize(batchSize), mBatchMetadata(std::move(batchMetadata)), mGridHdl(std::move(gridHdl)),
+      mLeafBatchIndices(std::move(leafBatchIndices)), mBatchOffsets(std::move(batchOffsets)),
+      mListIndices(std::move(listIndices)),
+      mVbmCache(vbmCache ? std::move(vbmCache) : std::make_shared<detail::VbmCache>()) {}
+
+detail::VbmCache &
+GridBatchData::vbmCache() const {
+    return *mVbmCache;
+}
 
 // -----------------------------------------------------------------------
 // Methods that dereference mGridHdl (require complete TorchDeviceBuffer)

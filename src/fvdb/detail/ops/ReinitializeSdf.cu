@@ -1,11 +1,11 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <fvdb/detail/VbmCache.h>
 #include <fvdb/detail/ops/ReinitializeSdf.h>
 #include <fvdb/detail/utils/cuda/GridDim.h>
 
 #include <nanovdb/NanoVDB.h>
-#include <nanovdb/cuda/DeviceBuffer.h>
 #include <nanovdb/math/Math.h>
 #include <nanovdb/tools/VoxelBlockManager.h>
 #include <nanovdb/tools/cuda/VoxelBlockManager.cuh>
@@ -24,40 +24,44 @@ namespace ops {
 namespace {
 
 using OnIndexGridT = nanovdb::NanoGrid<nanovdb::ValueOnIndex>;
-using VbmBuffer    = nanovdb::cuda::DeviceBuffer;
 
 // log2 of the VoxelBlockManager block width: each VBM block spans 2^9 = 512 active voxels.
-static constexpr int kLog2BlockWidth = 9;
+static constexpr int kLog2BlockWidth = VbmCache::kLog2BlockWidth;
 
 // ------------------------- VBM fused 6-face stencil preamble -------------------------
-// The VBM decode gives the centre coord / value-index for free; we then read just the 6 FACE
-// neighbours through a cached ReadAccessor. Yields `centerIndex` (the centre voxel's value index)
-// and `faceIndex[6]` (the 6 face-neighbour value indices, -x,+x,-y,+y,-z,+z; 0 =
-// inactive/background). Kernels using it take the grid/firstLeafID/jumpMap/firstOffset parameters
-// by these exact names.
-#define VBM_FACES_BEGIN()                                                                        \
-    constexpr int blockWidth = 1 << kLog2BlockWidth, jumpMapWordCount = blockWidth / 64;         \
-    using VoxelBlockManagerT = nanovdb::tools::cuda::VoxelBlockManager<kLog2BlockWidth>;         \
-    __shared__ uint32_t sharedLeafIndex[blockWidth];                                             \
-    __shared__ uint16_t sharedVoxelOffset[blockWidth];                                           \
-    VoxelBlockManagerT::template decodeInverseMaps<nanovdb::ValueOnIndex>(                       \
-        grid,                                                                                    \
-        firstLeafID[blockIdx.x],                                                                 \
-        &jumpMap[uint64_t(blockIdx.x) * jumpMapWordCount],                                       \
-        firstOffset + uint64_t(blockIdx.x) * blockWidth,                                         \
-        sharedLeafIndex,                                                                         \
-        sharedVoxelOffset);                                                                      \
-    if (sharedLeafIndex[threadIdx.x] == VoxelBlockManagerT::UnusedLeafIndex)                     \
-        return;                                                                                  \
-    const auto &leaf = grid->tree().template getFirstNode<0>()[sharedLeafIndex[threadIdx.x]];    \
-    const nanovdb::Coord centerCoord = leaf.offsetToGlobalCoord(sharedVoxelOffset[threadIdx.x]); \
-    const uint64_t centerIndex       = leaf.getValue(sharedVoxelOffset[threadIdx.x]);            \
-    auto accessor                    = grid->getAccessor();                                      \
-    const uint64_t faceIndex[6]      = {accessor.getValue(centerCoord.offsetBy(-1, 0, 0)),       \
-                                        accessor.getValue(centerCoord.offsetBy(1, 0, 0)),        \
-                                        accessor.getValue(centerCoord.offsetBy(0, -1, 0)),       \
-                                        accessor.getValue(centerCoord.offsetBy(0, 1, 0)),        \
-                                        accessor.getValue(centerCoord.offsetBy(0, 0, -1)),       \
+// The register-only VBM decode gives the centre coord / value-index for free (no shared memory,
+// no barrier); we then read just the 6 FACE neighbours through a cached ReadAccessor. Yields
+// `centerIndex` (the centre voxel's value index) and `faceIndex[6]` (the 6 face-neighbour value
+// indices, -x,+x,-y,+y,-z,+z; 0 = inactive/background). Kernels using it take the
+// grid/firstLeafID/jumpMap/firstOffset/lastOffset parameters by these exact names and launch as
+// <<<blockCount, blockWidth>>> (blockWidth = the VBM block width, 1 << kLog2BlockWidth).
+#define VBM_FACES_BEGIN()                                                                         \
+    constexpr int blockWidth = 1 << kLog2BlockWidth, jumpMapWordCount = blockWidth / 64;          \
+    using VoxelBlockManagerT        = nanovdb::tools::cuda::VoxelBlockManager<kLog2BlockWidth>;   \
+    const uint64_t blockFirstOffset = firstOffset + uint64_t(blockIdx.x) * blockWidth;            \
+    if (blockFirstOffset + threadIdx.x > lastOffset)                                              \
+        return;                                                                                   \
+    uint32_t decodedLeafIndex;                                                                    \
+    uint16_t decodedVoxelOffset;                                                                  \
+    VoxelBlockManagerT::template decodeInverseMap<nanovdb::ValueOnIndex>(                         \
+        grid,                                                                                     \
+        firstLeafID[blockIdx.x],                                                                  \
+        &jumpMap[uint64_t(blockIdx.x) * jumpMapWordCount],                                        \
+        blockFirstOffset,                                                                         \
+        int(threadIdx.x),                                                                         \
+        decodedLeafIndex,                                                                         \
+        decodedVoxelOffset);                                                                      \
+    if (decodedLeafIndex == VoxelBlockManagerT::UnusedLeafIndex)                                  \
+        return; /* defensive; the lastOffset guard above makes this unreachable */                \
+    const auto &leaf                 = grid->tree().template getFirstNode<0>()[decodedLeafIndex]; \
+    const nanovdb::Coord centerCoord = leaf.offsetToGlobalCoord(decodedVoxelOffset);              \
+    const uint64_t centerIndex       = leaf.getValue(decodedVoxelOffset);                         \
+    auto accessor                    = grid->getAccessor();                                       \
+    const uint64_t faceIndex[6]      = {accessor.getValue(centerCoord.offsetBy(-1, 0, 0)),        \
+                                        accessor.getValue(centerCoord.offsetBy(1, 0, 0)),         \
+                                        accessor.getValue(centerCoord.offsetBy(0, -1, 0)),        \
+                                        accessor.getValue(centerCoord.offsetBy(0, 1, 0)),         \
+                                        accessor.getValue(centerCoord.offsetBy(0, 0, -1)),        \
                                         accessor.getValue(centerCoord.offsetBy(0, 0, 1))};
 
 // =====================  fused stencil kernels ====================================================
@@ -68,6 +72,7 @@ signFusedKernel(const OnIndexGridT *grid,
                 const uint32_t *firstLeafID,
                 const uint64_t *jumpMap,
                 uint64_t firstOffset,
+                uint64_t lastOffset,
                 const ScalarT *field,
                 ScalarT voxelSize,
                 ScalarT *sign) {
@@ -105,6 +110,7 @@ godunovFusedKernel(const OnIndexGridT *grid,
                    const uint32_t *firstLeafID,
                    const uint64_t *jumpMap,
                    uint64_t firstOffset,
+                   uint64_t lastOffset,
                    const ScalarT *field,
                    const ScalarT *sign,
                    ScalarT voxelSize,
@@ -128,6 +134,7 @@ smoothFusedKernel(const OnIndexGridT *grid,
                   const uint32_t *firstLeafID,
                   const uint64_t *jumpMap,
                   uint64_t firstOffset,
+                  uint64_t lastOffset,
                   const ScalarT *in,
                   ScalarT weight,
                   ScalarT *out) {
@@ -189,28 +196,6 @@ heunKernel(ScalarT *out,
     out[i]        = nanovdb::math::Min(nanovdb::math::Max(value, -bandWidth), bandWidth);
 }
 
-// small VBM helper: build once, expose the block count + the firstLeafID/jumpMap device pointers.
-struct VBMHelper {
-    nanovdb::tools::VoxelBlockManagerHandle<VbmBuffer> handle;
-    uint32_t blockCount{0};
-    uint64_t firstOffset{0}, valueCount{1};
-    VBMHelper(OnIndexGridT *grid, cudaStream_t stream) {
-        handle = nanovdb::tools::cuda::buildVoxelBlockManager<kLog2BlockWidth, VbmBuffer>(
-            grid, 0, 0, 0, stream);
-        blockCount  = (uint32_t)handle.blockCount();
-        firstOffset = handle.firstOffset();
-        valueCount  = handle.lastOffset() + 1;
-    }
-    const uint32_t *
-    firstLeafID() const {
-        return handle.deviceFirstLeafID();
-    }
-    const uint64_t *
-    jumpMap() const {
-        return handle.deviceJumpMap();
-    }
-};
-
 // Redistance (|grad phi| = 1) + optional de-staircase one grid's value-indexed buffer, in place.
 // `phi`/scratch are length `valueCount` with slot 0 holding the +bandWidth background; the
 // stencil/combiner kernels never write slot 0 (so inactive-neighbour reads always see the boundary
@@ -218,7 +203,7 @@ struct VBMHelper {
 template <typename ScalarT>
 void
 runReinit(OnIndexGridT *grid,
-          const VBMHelper &vbm,
+          const VbmCache::GridVbm &vbm,
           ScalarT *phi,
           ScalarT *sign,
           ScalarT *phiBase,
@@ -236,22 +221,23 @@ runReinit(OnIndexGridT *grid,
           cudaStream_t stream) {
     const uint32_t blockCount   = vbm.blockCount;
     constexpr int blockWidth    = 1 << kLog2BlockWidth;
-    const uint32_t *firstLeafID = vbm.firstLeafID();
-    const uint64_t *jumpMap     = vbm.jumpMap();
+    const uint32_t *firstLeafID = vbm.firstLeafID;
+    const uint64_t *jumpMap     = vbm.jumpMap;
     const uint64_t firstOffset  = vbm.firstOffset;
+    const uint64_t lastOffset   = vbm.lastOffset;
     const ScalarT timeStep      = ScalarT(0.4) * voxelSize;
 
     auto godunov = [&](const ScalarT *field, ScalarT *out) {
         if (blockCount) {
             godunovFusedKernel<ScalarT><<<blockCount, blockWidth, 0, stream>>>(
-                grid, firstLeafID, jumpMap, firstOffset, field, sign, voxelSize, out);
+                grid, firstLeafID, jumpMap, firstOffset, lastOffset, field, sign, voxelSize, out);
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         }
     };
     auto redistance = [&](int iters) {
         if (blockCount) {
             signFusedKernel<ScalarT><<<blockCount, blockWidth, 0, stream>>>(
-                grid, firstLeafID, jumpMap, firstOffset, phi, voxelSize, sign);
+                grid, firstLeafID, jumpMap, firstOffset, lastOffset, phi, voxelSize, sign);
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         }
         for (int it = 0; it < iters; ++it) {
@@ -320,7 +306,7 @@ runReinit(OnIndexGridT *grid,
         auto pass = [&](ScalarT weight) {
             if (blockCount) {
                 smoothFusedKernel<ScalarT><<<blockCount, blockWidth, 0, stream>>>(
-                    grid, firstLeafID, jumpMap, firstOffset, cur, weight, other);
+                    grid, firstLeafID, jumpMap, firstOffset, lastOffset, cur, weight, other);
                 C10_CUDA_KERNEL_LAUNCH_CHECK();
             }
             std::swap(cur, other);
@@ -361,14 +347,16 @@ reinitializeSdfCuda(const GridBatchData &batchHdl,
         const int64_t numVoxels = batchHdl.numVoxelsAt(batchIdx);
         if (numVoxels == 0)
             continue;
-        OnIndexGridT *grid =
-            batchHdl.mGridHdl->deviceGrid<nanovdb::ValueOnIndex>((uint32_t)batchIdx);
+        // deviceGridPtrAt resolves the *logical* grid by byte offset, which is correct for
+        // sliced/indexed views (mGridHdl->deviceGrid(i) indexes physically and reads the wrong
+        // grid for a view).
+        OnIndexGridT *grid        = batchHdl.deviceGridPtrAt(batchIdx);
         const int64_t voxelOffset = batchHdl.cumVoxelsAt(batchIdx);
         const ScalarT voxelSize   = (ScalarT)batchHdl.voxelSizeAt(batchIdx)[0];
         const ScalarT bandWidth = (ScalarT)band * voxelSize; // narrow-band half-width, world units
 
-        VBMHelper vbm(grid, stream);
-        const int64_t valueCount = (int64_t)vbm.valueCount;  // numVoxels + 1 (slot 0 = background)
+        const VbmCache::GridVbm vbm = batchHdl.vbmCache().get(batchHdl, batchIdx);
+        const int64_t valueCount    = int64_t(vbm.lastOffset) + 1; // numVoxels + 1 (slot 0 = bg)
 
         torch::Tensor phiBuf     = torch::empty({valueCount}, opts);
         torch::Tensor signBuf    = torch::empty({valueCount}, opts);

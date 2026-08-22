@@ -96,6 +96,8 @@ indexGridInternal(const fvdb::GridBatchData &grid, const Indexable &idx, int64_t
         listIndices = grid.mListIndices;
     }
 
+    // The view shares the parent's grid buffer, so it also shares the parent's VBM cache
+    // (entries are keyed by byte offset into the shared buffer, which is view-stable).
     return c10::make_intrusive<fvdb::GridBatchData>(grid.mGridHdl,
                                                     hostMeta,
                                                     deviceMeta,
@@ -103,7 +105,8 @@ indexGridInternal(const fvdb::GridBatchData &grid, const Indexable &idx, int64_t
                                                     std::move(batchMeta),
                                                     std::move(leafBatchIndices),
                                                     std::move(batchOffsets),
-                                                    std::move(listIndices));
+                                                    std::move(listIndices),
+                                                    grid.mVbmCache);
 }
 
 struct RangeAccessor {

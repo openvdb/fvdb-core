@@ -167,6 +167,12 @@ ConfigureTest(GaussianMCMCAddNoiseTest "GaussianMCMCAddNoiseTest.cpp")
 ConfigureTest(GaussianMCMCRelocationTest "GaussianMCMCRelocationTest.cpp")
 ConfigureTest(GatherScatterDefaultConvTest "GatherScatterDefaultConvTest.cu")
 ConfigureTest(PredGatherIGemmTest "PredGatherIGemmTest.cu")
+ConfigureTest(VbmCacheTest "VbmCacheTest.cu")
+# NanoVDB's host-side VoxelBlockManager uses `#pragma omp simd`, which -Wall -Werror rejects
+# as an unknown pragma when OpenMP is off (the fvdb library build suppresses it the same way).
+target_compile_options(VbmCacheTest_obj PRIVATE
+  $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-Wno-unknown-pragmas>
+  $<$<COMPILE_LANGUAGE:CXX>:-Wno-unknown-pragmas>)
 if(NANOVDB_EDITOR_INSTALLED)
   #ConfigureTest(ViewerTest "ViewerTest.cpp")
 endif()
