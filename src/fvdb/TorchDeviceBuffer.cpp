@@ -60,7 +60,8 @@ GridHandle<fvdb::TorchDeviceBuffer>::copy(const fvdb::TorchDeviceBuffer &guide) 
 namespace fvdb {
 
 TorchDeviceBuffer::TorchDeviceBuffer(uint64_t size /* = 0*/,
-                                     const torch::Device &device /* = torch::kCPU*/)
+                                     const torch::Device &device /* = torch::kCPU*/,
+                                     void *stream /* = nullptr*/)
     : mSize(size), mData(nullptr), mDevice(device) {
     if (!mSize) {
         return;
@@ -70,9 +71,15 @@ TorchDeviceBuffer::TorchDeviceBuffer(uint64_t size /* = 0*/,
         // Initalize on the host
         mData = reinterpret_cast<uint8_t *>(malloc(size));
     } else if (mDevice.is_cuda()) {
-        // Initalize on the device
+        // Initalize on the device. With an explicit stream the allocation is associated with
+        // that stream in the caching allocator (the stream nanovdb builders order their work
+        // on); raw_alloc would silently associate it with the device's current torch stream
+        // instead, which is only correct when the two coincide.
         c10::cuda::CUDAGuard deviceGuard(mDevice);
-        mData = reinterpret_cast<uint8_t *>(c10::cuda::CUDACachingAllocator::raw_alloc(size));
+        mData = reinterpret_cast<uint8_t *>(
+            stream ? c10::cuda::CUDACachingAllocator::raw_alloc_with_stream(
+                         size, static_cast<cudaStream_t>(stream))
+                   : c10::cuda::CUDACachingAllocator::raw_alloc(size));
         checkPtr(mData, "failed to allocate device data");
     } else if (mDevice.is_privateuseone()) {
         auto allocator = c10::GetAllocator(c10::DeviceType::PrivateUse1);
@@ -204,15 +211,17 @@ TorchDeviceBuffer::clear() {
 
 TorchDeviceBuffer
 TorchDeviceBuffer::create(uint64_t size, const TorchDeviceBuffer *proto, int device, void *stream) {
+    // The stream a nanovdb builder passes here is the one it orders its writes into the buffer
+    // on; forward it so the allocation is associated with that stream (see the constructor).
     if (proto) {
         // This is a hack to pass in the device index when creating grids from nanovdb. Since we
         // can't pass arguments through nanovdb creation functions, we use a prototype grid to pass
         // in the device index.
-        return TorchDeviceBuffer(size, proto->device());
+        return TorchDeviceBuffer(size, proto->device(), stream);
     } else if (device == cudaCpuDeviceId) {
         return TorchDeviceBuffer(size, torch::kCPU);
     } else if (device > cudaCpuDeviceId) {
-        return TorchDeviceBuffer(size, torch::Device(torch::kCUDA, device));
+        return TorchDeviceBuffer(size, torch::Device(torch::kCUDA, device), stream);
     } else {
         TORCH_CHECK(false, "Invalid parameters specified for TorchDeviceBuffer::create");
     }
