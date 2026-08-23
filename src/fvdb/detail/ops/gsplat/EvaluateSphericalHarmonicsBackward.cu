@@ -5,10 +5,12 @@
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Nvtx.h>
 #include <fvdb/detail/utils/Utils.h>
+#include <fvdb/detail/utils/cuda/GradientReduction.h>
 #include <fvdb/detail/utils/cuda/GridDim.h>
 #include <fvdb/detail/utils/cuda/Utils.cuh>
 
 #include <ATen/cuda/Atomic.cuh>
+#include <ATen/ops/from_blob.h>
 #include <c10/cuda/CUDAGuard.h>
 
 #include <cub/block/block_reduce.cuh>
@@ -458,23 +460,7 @@ computeShBackward(
     }
 }
 
-struct AssignOutput {
-    template <typename T>
-    __device__ static void
-    update(T *__restrict__ output, const T value) {
-        *output = value;
-    }
-};
-
-struct SystemAtomicAddOutput {
-    template <typename T>
-    __device__ static void
-    update(T *__restrict__ output, const T value) {
-        atomicAdd_system(output, value);
-    }
-};
-
-template <typename OutputUpdatePolicy, typename T>
+template <typename T>
 __device__ inline void
 writeWorldToCamMatrixGradient(const T *__restrict__ worldToCamMatrix,
                               const ViewDirectionGradient<T> &gradient,
@@ -482,24 +468,21 @@ writeWorldToCamMatrixGradient(const T *__restrict__ worldToCamMatrix,
     const T tx = worldToCamMatrix[3];
     const T ty = worldToCamMatrix[7];
     const T tz = worldToCamMatrix[11];
-    OutputUpdatePolicy::update(output, tx * gradient.x);
-    OutputUpdatePolicy::update(output + 1, tx * gradient.y);
-    OutputUpdatePolicy::update(output + 2, tx * gradient.z);
-    OutputUpdatePolicy::update(output + 3,
-                               worldToCamMatrix[0] * gradient.x + worldToCamMatrix[1] * gradient.y +
-                                   worldToCamMatrix[2] * gradient.z);
-    OutputUpdatePolicy::update(output + 4, ty * gradient.x);
-    OutputUpdatePolicy::update(output + 5, ty * gradient.y);
-    OutputUpdatePolicy::update(output + 6, ty * gradient.z);
-    OutputUpdatePolicy::update(output + 7,
-                               worldToCamMatrix[4] * gradient.x + worldToCamMatrix[5] * gradient.y +
-                                   worldToCamMatrix[6] * gradient.z);
-    OutputUpdatePolicy::update(output + 8, tz * gradient.x);
-    OutputUpdatePolicy::update(output + 9, tz * gradient.y);
-    OutputUpdatePolicy::update(output + 10, tz * gradient.z);
-    OutputUpdatePolicy::update(output + 11,
-                               worldToCamMatrix[8] * gradient.x + worldToCamMatrix[9] * gradient.y +
-                                   worldToCamMatrix[10] * gradient.z);
+    output[0]  = tx * gradient.x;
+    output[1]  = tx * gradient.y;
+    output[2]  = tx * gradient.z;
+    output[3]  = worldToCamMatrix[0] * gradient.x + worldToCamMatrix[1] * gradient.y +
+                worldToCamMatrix[2] * gradient.z;
+    output[4] = ty * gradient.x;
+    output[5] = ty * gradient.y;
+    output[6] = ty * gradient.z;
+    output[7] = worldToCamMatrix[4] * gradient.x + worldToCamMatrix[5] * gradient.y +
+                worldToCamMatrix[6] * gradient.z;
+    output[8]  = tz * gradient.x;
+    output[9]  = tz * gradient.y;
+    output[10] = tz * gradient.z;
+    output[11] = worldToCamMatrix[8] * gradient.x + worldToCamMatrix[9] * gradient.y +
+                 worldToCamMatrix[10] * gradient.z;
 }
 
 template <typename T>
@@ -530,7 +513,7 @@ reducePackedViewDirectionGradients(const int64_t N,
     }
 }
 
-template <typename OutputUpdatePolicy, typename T>
+template <typename T>
 __global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
 viewDirectionGradientsToWorldToCamMatrices(const int64_t cameraOffset,
                                            const int64_t cameraCount,
@@ -546,10 +529,9 @@ viewDirectionGradientsToWorldToCamMatrices(const int64_t cameraOffset,
     const T *worldToCamMatrix    = worldToCamMatrices + cameraId * 16;
     const T *reducedGradient     = reducedViewDirectionGradients + localCameraId * 3;
     T *outDLossDWorldToCamMatrix = outDLossDWorldToCamMatrices + cameraId * 16;
-    writeWorldToCamMatrixGradient<OutputUpdatePolicy>(
-        worldToCamMatrix,
-        {reducedGradient[0], reducedGradient[1], reducedGradient[2]},
-        outDLossDWorldToCamMatrix);
+    writeWorldToCamMatrixGradient(worldToCamMatrix,
+                                  {reducedGradient[0], reducedGradient[1], reducedGradient[2]},
+                                  outDLossDWorldToCamMatrix);
 }
 
 template <typename T>
@@ -780,7 +762,7 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kCUDA>(
                 C10_CUDA_KERNEL_LAUNCH_CHECK();
 
                 const auto viewMatrixBlocks = GET_BLOCKS(numWorldToCamMatrices, DEFAULT_BLOCK_DIM);
-                viewDirectionGradientsToWorldToCamMatrices<AssignOutput, scalar_t>
+                viewDirectionGradientsToWorldToCamMatrices<scalar_t>
                     <<<viewMatrixBlocks, DEFAULT_BLOCK_DIM, 0, stream>>>(
                         0,
                         numWorldToCamMatrices,
@@ -811,7 +793,7 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kCUDA>(
                 C10_CUDA_CHECK(cudaFreeAsync(tempStorage, stream));
 
                 const auto viewMatrixBlocks = GET_BLOCKS(C, DEFAULT_BLOCK_DIM);
-                viewDirectionGradientsToWorldToCamMatrices<AssignOutput, scalar_t>
+                viewDirectionGradientsToWorldToCamMatrices<scalar_t>
                     <<<viewMatrixBlocks, DEFAULT_BLOCK_DIM, 0, stream>>>(
                         0,
                         C,
@@ -942,6 +924,9 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
         }
 
         std::vector<cudaEvent_t> events(c10::cuda::device_count());
+        std::vector<scalar_t *> dLossDWorldToCamMatricesLocalPtrs(c10::cuda::device_count(),
+                                                                  nullptr);
+        std::vector<torch::Tensor> dLossDWorldToCamMatricesLocals(c10::cuda::device_count());
         for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
             C10_CUDA_CHECK(cudaSetDevice(deviceId));
             auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
@@ -956,6 +941,19 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
 
             int64_t elementOffset, elementCount;
             std::tie(elementOffset, elementCount) = deviceChunk(N, deviceId);
+
+            if (computeDLossDWorldToCamMatrices) {
+                const auto localTensorOptions = at::TensorOptions()
+                                                    .dtype(worldToCamMatrices.scalar_type())
+                                                    .device(at::kCUDA, deviceId);
+                const size_t numBytes =
+                    dLossDWorldToCamMatrices.numel() * dLossDWorldToCamMatrices.element_size();
+                scalar_t *&localPtr = dLossDWorldToCamMatricesLocalPtrs[deviceId];
+                C10_CUDA_CHECK(cudaMallocAsync(&localPtr, numBytes, stream));
+                C10_CUDA_CHECK(cudaMemsetAsync(localPtr, 0, numBytes, stream));
+                dLossDWorldToCamMatricesLocals[deviceId] =
+                    at::from_blob(localPtr, dLossDWorldToCamMatrices.sizes(), localTensorOptions);
+            }
 
             if (elementCount > 0) {
 #if (CUDART_VERSION < 13000)
@@ -1116,16 +1114,26 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
                     C10_CUDA_CHECK(cudaFreeAsync(tempStorage, stream));
 
                     const auto viewMatrixBlocks = GET_BLOCKS(C, DEFAULT_BLOCK_DIM);
-                    viewDirectionGradientsToWorldToCamMatrices<SystemAtomicAddOutput, scalar_t>
+                    viewDirectionGradientsToWorldToCamMatrices<scalar_t>
                         <<<viewMatrixBlocks, DEFAULT_BLOCK_DIM, 0, stream>>>(
                             0,
                             C,
                             worldToCamMatrices.data_ptr<scalar_t>(),
                             reducedViewDirectionGradients,
-                            dLossDWorldToCamMatrices.data_ptr<scalar_t>());
+                            dLossDWorldToCamMatricesLocals[deviceId].data_ptr<scalar_t>());
                     C10_CUDA_KERNEL_LAUNCH_CHECK();
                     C10_CUDA_CHECK(cudaFreeAsync(dLossDViewDirBlockSums, stream));
                 }
+            }
+        }
+
+        if (computeDLossDWorldToCamMatrices) {
+            reduceGradientShards<scalar_t>(dLossDWorldToCamMatricesLocals,
+                                           dLossDWorldToCamMatrices);
+            for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+                C10_CUDA_CHECK(cudaSetDevice(deviceId));
+                auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+                C10_CUDA_CHECK(cudaFreeAsync(dLossDWorldToCamMatricesLocalPtrs[deviceId], stream));
             }
         }
         mergeStreams();
