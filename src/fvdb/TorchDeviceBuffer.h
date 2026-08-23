@@ -29,7 +29,14 @@ class TorchDeviceBuffer {
     /// nanovdb::HostBuffer
     /// @param size The size (in bytes to allocate for this buffer)
     /// @param device Specifies the device to use for the buffer
-    TorchDeviceBuffer(uint64_t size = 0, const torch::Device &device = torch::kCPU);
+    /// @param stream For a CUDA device, the stream the allocation is associated with in torch's
+    /// caching allocator (raw_alloc_with_stream): torch defers reusing the block until work queued
+    /// on that stream at free time completes, so pass the stream the buffer is used on. Null (the
+    /// default, indistinguishable from the legacy default stream) associates the allocation with
+    /// the device's current torch stream. Ignored for CPU and PrivateUse1 devices.
+    TorchDeviceBuffer(uint64_t size               = 0,
+                      const torch::Device &device = torch::kCPU,
+                      void *stream                = nullptr);
 
     /// @brief Disallow copy-construction
     TorchDeviceBuffer(const TorchDeviceBuffer &) = delete;

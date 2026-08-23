@@ -1,11 +1,12 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <fvdb/BuilderResource.h>
 #include <fvdb/detail/ops/ReinitializeSdf.h>
 #include <fvdb/detail/utils/cuda/GridDim.h>
 
 #include <nanovdb/NanoVDB.h>
-#include <nanovdb/cuda/DeviceBuffer.h>
+#include <nanovdb/cuda/Buffer.h>
 #include <nanovdb/math/Math.h>
 #include <nanovdb/tools/VoxelBlockManager.h>
 #include <nanovdb/tools/cuda/VoxelBlockManager.cuh>
@@ -21,10 +22,89 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
+/// @brief Device-only buffer backing the VoxelBlockManagerHandle, allocating
+///        through the same resource as the nanovdb builders (BuilderResource,
+///        i.e. torch's active CUDA allocator) instead of DeviceBuffer's
+///        separate cudaMallocAsync pool.
+///
+///        VoxelBlockManagerHandle's device accessors are gated on
+///        BufferTraits<BufferT>::hasDeviceDual and static_cast their pointers
+///        from a void*-returning deviceData(), and buildVoxelBlockManager
+///        allocates via the legacy BufferT::create(bytes, guide, device,
+///        stream) static interface -- so the single-space nanovdb::cuda::Buffer
+///        cannot be plugged in directly until the VBM handle joins the
+///        single-space GridHandle work upstream (openvdb #2232/#2288). This
+///        wrapper adapts it: there is no host side, and the device allocation
+///        is stream-ordered on create()'s stream and freed on it.
+class TorchVbmBuffer {
+    nanovdb::cuda::Buffer<std::byte, BuilderResource> mBuffer;
+
+  public:
+    TorchVbmBuffer()                             = default;
+    TorchVbmBuffer(TorchVbmBuffer &&)            = default;
+    TorchVbmBuffer &operator=(TorchVbmBuffer &&) = default;
+
+    void *
+    deviceData() const {
+        return const_cast<std::byte *>(mBuffer.data());
+    }
+    void *
+    data() const {
+        return nullptr; // no host-side allocation
+    }
+    uint64_t
+    size() const {
+        return mBuffer.size_bytes();
+    }
+    bool
+    empty() const {
+        return mBuffer.empty();
+    }
+    bool
+    isEmpty() const {
+        return this->empty();
+    }
+    void
+    clear() {
+        mBuffer.destroy();
+    }
+
+    /// @brief Matches the signature buildVoxelBlockManager allocates through.
+    ///        The device argument is ignored: like cudaMallocAsync, the torch
+    ///        allocator allocates on the current device, which is what the
+    ///        caller passes anyway (it reads it back from cudaGetDevice).
+    static TorchVbmBuffer
+    create(uint64_t bytes,
+           const TorchVbmBuffer * /*guide*/ = nullptr,
+           int /*device*/                   = -1,
+           cudaStream_t stream              = 0) {
+        TorchVbmBuffer buf;
+        buf.mBuffer =
+            nanovdb::cuda::Buffer<std::byte, BuilderResource>(stream, bytes, nanovdb::cuda::noInit);
+        return buf;
+    }
+}; // TorchVbmBuffer
+
+} // namespace ops
+} // namespace detail
+} // namespace fvdb
+
+namespace nanovdb {
+// Device-only in practice (data() reports no host side); the dual trait is what
+// VoxelBlockManagerHandle's device accessors are gated on -- see TorchVbmBuffer.
+template <> struct BufferTraits<fvdb::detail::ops::TorchVbmBuffer> {
+    static const bool hasDeviceDual = true;
+};
+} // namespace nanovdb
+
+namespace fvdb {
+namespace detail {
+namespace ops {
+
 namespace {
 
 using OnIndexGridT = nanovdb::NanoGrid<nanovdb::ValueOnIndex>;
-using VbmBuffer    = nanovdb::cuda::DeviceBuffer;
+using VbmBuffer    = TorchVbmBuffer;
 
 // log2 of the VoxelBlockManager block width: each VBM block spans 2^9 = 512 active voxels.
 static constexpr int kLog2BlockWidth = 9;
