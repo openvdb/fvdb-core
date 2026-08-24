@@ -10,42 +10,16 @@
 
 #include <nanovdb/util/cuda/Util.h>
 
-#include <c10/cuda/CUDACachingAllocator.h>
-#include <c10/cuda/CUDAException.h>
 #include <c10/cuda/CUDAGuard.h>
 
 #include <cub/cub.cuh>
 #include <cuda/std/functional>
 #include <cuda/std/utility>
+#include <thrust/binary_search.h>
 
 #include <cuda_runtime.h>
 
 #include <type_traits>
-
-#define FVDB_CUB_WRAPPER(func, ...)                                             \
-    do {                                                                        \
-        size_t tempStorageBytes = 0;                                            \
-        C10_CUDA_CHECK(func(nullptr, tempStorageBytes, __VA_ARGS__));           \
-        auto &cachingAllocator = *::c10::cuda::CUDACachingAllocator::get();     \
-        auto tempStorage       = cachingAllocator.allocate(tempStorageBytes);   \
-        C10_CUDA_CHECK(func(tempStorage.get(), tempStorageBytes, __VA_ARGS__)); \
-    } while (false)
-
-// Like FVDB_CUB_WRAPPER but allocates the scratch with cudaMallocAsync/cudaFreeAsync on `stream`
-// rather than the caching allocator, so it is stream-ordered and resident on the current device.
-// Used by the multi-GPU path. `stream` is appended to the CUB call automatically, so __VA_ARGS__
-// holds only the CUB arguments before the stream.
-#define FVDB_CUB_WRAPPER_ASYNC(stream, func, ...)                                 \
-    do {                                                                          \
-        size_t tempStorageBytes = 0;                                              \
-        void *tempStorage       = nullptr;                                        \
-        C10_CUDA_CHECK(func(tempStorage, tempStorageBytes, __VA_ARGS__, stream)); \
-        C10_CUDA_CHECK(cudaMallocAsync(&tempStorage, tempStorageBytes, stream));  \
-        C10_CUDA_CHECK(func(tempStorage, tempStorageBytes, __VA_ARGS__, stream)); \
-        C10_CUDA_CHECK(cudaFreeAsync(tempStorage, stream));                       \
-    } while (false)
-
-#include <thrust/binary_search.h>
 
 namespace fvdb {
 namespace detail {

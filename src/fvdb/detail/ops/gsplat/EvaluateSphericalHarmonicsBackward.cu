@@ -373,8 +373,8 @@ computeShBackward(
     T *__restrict__ outDLossDViewDirBlockSums // [C, gridDim.x, 3] optional, unpacked only
 ) {
     // Each block handles one camera and parallelizes over count * D.
-    const auto idx = blockIdx.x * blockDim.x + threadIdx.x; // gidx * D + c
-    const auto cid = blockIdx.y;                            // camera index
+    const int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x; // gidx * D + c
+    const auto cid    = blockIdx.y;                                                  // camera index
 
     int64_t gidx       = 0;
     int64_t gid        = 0;
@@ -548,7 +548,8 @@ computeShDiffuseOnlyBackward(
     torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits> outDLossDSh0Coeffs // [N, 1, D]
 ) {
     // parallelize over C * N * D
-    auto idx = blockIdx.x * blockDim.x + threadIdx.x; // cidx * N * D + gidx * D + c
+    const int64_t idx =
+        static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x; // cidx * N * D + gidx * D + c
     if (idx >= count * C * D) {
         return;
     }
@@ -645,7 +646,7 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kCUDA>(
          (means.size(0) != N || worldToCamMatrices.size(0) != C));
 
     // View directions are computed in the kernel from the means and world-to-camera matrices.
-    if (hasShNCoeffs && K > 1 && shDegreeToUse > 0) {
+    if (hasShNCoeffs && K > 1) {
         TORCH_CHECK_VALUE(means.is_cuda() && means.scalar_type() == torch::kFloat32,
                           "means must be a float32 CUDA tensor");
         TORCH_CHECK_VALUE(means.dim() == 2 && means.size(1) == 3 && means.is_contiguous(),
@@ -771,26 +772,12 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kCUDA>(
                         dLossDWorldToCamMatrices.data_ptr<scalar_t>());
                 C10_CUDA_KERNEL_LAUNCH_CHECK();
             } else {
-                size_t tempStorageBytes = 0;
-                C10_CUDA_CHECK(reduceViewDirectionGradientBlockSums<scalar_t>(
-                    nullptr,
-                    tempStorageBytes,
-                    dLossDViewDirBlockSums.data_ptr<scalar_t>(),
-                    reducedViewDirectionGradients.data_ptr<scalar_t>(),
-                    C,
-                    NUM_BLOCKS.x,
-                    stream));
-                void *tempStorage = nullptr;
-                C10_CUDA_CHECK(cudaMallocAsync(&tempStorage, tempStorageBytes, stream));
-                C10_CUDA_CHECK(reduceViewDirectionGradientBlockSums<scalar_t>(
-                    tempStorage,
-                    tempStorageBytes,
-                    dLossDViewDirBlockSums.data_ptr<scalar_t>(),
-                    reducedViewDirectionGradients.data_ptr<scalar_t>(),
-                    C,
-                    NUM_BLOCKS.x,
-                    stream));
-                C10_CUDA_CHECK(cudaFreeAsync(tempStorage, stream));
+                FVDB_CUB_WRAPPER(reduceViewDirectionGradientBlockSums<scalar_t>,
+                                 dLossDViewDirBlockSums.data_ptr<scalar_t>(),
+                                 reducedViewDirectionGradients.data_ptr<scalar_t>(),
+                                 C,
+                                 NUM_BLOCKS.x,
+                                 stream);
 
                 const auto viewMatrixBlocks = GET_BLOCKS(C, DEFAULT_BLOCK_DIM);
                 viewDirectionGradientsToWorldToCamMatrices<scalar_t>
@@ -883,7 +870,7 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
     const int64_t D = dLossDRenderQuantities.size(2);
 
     // View directions are computed in the kernel from the means and world-to-camera matrices.
-    if (hasShNCoeffs && K > 1 && shDegreeToUse > 0) {
+    if (hasShNCoeffs && K > 1) {
         const bool hasCameraIds   = cameraIds.defined() && cameraIds.numel() > 0;
         const bool hasGaussianIds = gaussianIds.defined() && gaussianIds.numel() > 0;
         TORCH_CHECK_VALUE(!hasCameraIds && !hasGaussianIds,
@@ -1092,26 +1079,12 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
                 C10_CUDA_KERNEL_LAUNCH_CHECK();
 
                 if (computeDLossDWorldToCamMatrices) {
-                    size_t tempStorageBytes = 0;
-                    C10_CUDA_CHECK(reduceViewDirectionGradientBlockSums<scalar_t>(
-                        nullptr,
-                        tempStorageBytes,
-                        dLossDViewDirBlockSums,
-                        reducedViewDirectionGradients,
-                        C,
-                        NUM_BLOCKS.x,
-                        stream));
-                    void *tempStorage = nullptr;
-                    C10_CUDA_CHECK(cudaMallocAsync(&tempStorage, tempStorageBytes, stream));
-                    C10_CUDA_CHECK(reduceViewDirectionGradientBlockSums<scalar_t>(
-                        tempStorage,
-                        tempStorageBytes,
-                        dLossDViewDirBlockSums,
-                        reducedViewDirectionGradients,
-                        C,
-                        NUM_BLOCKS.x,
-                        stream));
-                    C10_CUDA_CHECK(cudaFreeAsync(tempStorage, stream));
+                    FVDB_CUB_WRAPPER_ASYNC(stream,
+                                           reduceViewDirectionGradientBlockSums<scalar_t>,
+                                           dLossDViewDirBlockSums,
+                                           reducedViewDirectionGradients,
+                                           C,
+                                           NUM_BLOCKS.x);
 
                     const auto viewMatrixBlocks = GET_BLOCKS(C, DEFAULT_BLOCK_DIM);
                     viewDirectionGradientsToWorldToCamMatrices<scalar_t>

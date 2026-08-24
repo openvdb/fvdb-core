@@ -6,26 +6,15 @@
 #include <fvdb/detail/utils/Nvtx.h>
 #include <fvdb/detail/utils/cuda/BinSearch.cuh>
 #include <fvdb/detail/utils/cuda/GridDim.h>
+#include <fvdb/detail/utils/cuda/Utils.cuh>
 #include <fvdb/detail/utils/cuda/math/AffineTransform.cuh>
 #include <fvdb/detail/utils/cuda/math/Rotation.cuh>
 #include <fvdb/detail/utils/gsplat/GaussianMath.cuh>
 
 #include <ATen/Dispatch_v2.h>
-#include <c10/cuda/CUDACachingAllocator.h>
-#include <c10/cuda/CUDAException.h>
 #include <c10/cuda/CUDAGuard.h>
 
 #include <cub/cub.cuh>
-
-#define FVDB_CUB_WRAPPER(func, ...)                                             \
-    do {                                                                        \
-        size_t tempStorageBytes = 0;                                            \
-        C10_CUDA_CHECK(func(nullptr, tempStorageBytes, __VA_ARGS__));           \
-        auto &cachingAllocator = *::c10::cuda::CUDACachingAllocator::get();     \
-        auto tempStorage       = cachingAllocator.allocate(tempStorageBytes);   \
-        C10_CUDA_CHECK(func(tempStorage.get(), tempStorageBytes, __VA_ARGS__)); \
-    } while (false)
-
 #include <cuda/std/atomic>
 #include <thrust/sort.h>
 
