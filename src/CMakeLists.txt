@@ -61,6 +61,7 @@ set(FVDB_CPP_FILES
 set(FVDB_CU_FILES
     fvdb/GridBatchData.cu
     fvdb/detail/GridBatchDataFactory.cu
+    fvdb/detail/VbmCache.cu
     fvdb/detail/io/SaveNanoVDB.cu
     fvdb/detail/ops/ActiveGridCoords.cu
     fvdb/detail/ops/ActiveVoxelsInBoundsMask.cu
