@@ -21,9 +21,10 @@ namespace fvdb {
 ///        build-time switch guarding the TorchResource include — instead of
 ///        touching every op.
 ///
-///        The alias covers the builders' scratch only. Buffer allocations that
-///        are torch tensors by design (TorchDeviceBuffer, the SaveNanoVDB
-///        staging buffers) name their types directly.
+///        The alias covers the builders' scratch and the device staging
+///        buffers feeding them (nanovdb::cuda::Buffer<..., BuilderResource> in
+///        SaveNanoVDB and ReinitializeSdf). Grid buffers that are torch-device
+///        aware by design (TorchDeviceBuffer) name their allocator directly.
 ///
 ///        Note the seam is compile-time and relies on the resource being
 ///        stateless: builders bind the shared instance from
