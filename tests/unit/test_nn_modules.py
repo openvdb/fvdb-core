@@ -155,6 +155,73 @@ class TestNNModules(unittest.TestCase):
         self.assertEqual(fine_grid.total_voxels, expected_grid.total_voxels)
 
     # =========================================================================
+    # Prune
+    # =========================================================================
+
+    def test_prune_construction(self):
+        prune = fvnn.Prune()
+        self.assertEqual(len(list(prune.parameters())), 0)
+        self.assertIn("Prune", repr(prune))
+
+    @expand_tests(all_device_dtype_combos)
+    def test_prune_forward(self, device, dtype):
+        grid = self._make_dense_grid(device, batch_size=2, shape=(6, 6, 6))
+        features = self._make_features(grid, 4, device, dtype)
+        mask = torch.rand(grid.total_voxels, device=device) > 0.5
+        jmask = grid.jagged_like(mask)
+
+        prune = fvnn.Prune()
+        pruned_data, pruned_grid = prune(features, grid, jmask)
+
+        # Topology matches the underlying pruned_grid op and preserves canonical voxel order.
+        self.assertEqual(pruned_grid.total_voxels, int(mask.sum().item()))
+        self.assertTrue(torch.equal(pruned_grid.ijk.jdata, grid.ijk.jdata[mask]))
+
+        # Features are the kept rows, aligned with the pruned grid.
+        self.assertTrue(torch.equal(pruned_data.jdata, features.jdata[mask]))
+
+        # Per-batch row counts are consistent with per-batch mask sums.
+        for b in range(grid.grid_count):
+            kept_b = int(mask[grid.ijk.jidx == b].sum().item())
+            self.assertEqual(pruned_grid.num_voxels_at(b), kept_b)
+            self.assertEqual(pruned_data[b].jdata.shape[0], kept_b)
+
+    @expand_tests(all_device_dtype_combos)
+    def test_prune_forward_all_false_all_true(self, device, dtype):
+        grid = self._make_dense_grid(device, batch_size=2, shape=(4, 4, 4))
+        features = self._make_features(grid, 3, device, dtype)
+        prune = fvnn.Prune()
+
+        all_false = grid.jagged_like(torch.zeros(grid.total_voxels, dtype=torch.bool, device=device))
+        pruned_data, pruned_grid = prune(features, grid, all_false)
+        self.assertEqual(pruned_grid.total_voxels, 0)
+        # The batch still contains grid_count grids; they just have no active voxels.
+        self.assertEqual(pruned_grid.grid_count, grid.grid_count)
+        for b in range(pruned_grid.grid_count):
+            self.assertEqual(pruned_grid.num_voxels_at(b), 0)
+        self.assertEqual(pruned_data.jdata.shape[0], 0)
+
+        all_true = grid.jagged_like(torch.ones(grid.total_voxels, dtype=torch.bool, device=device))
+        pruned_data, pruned_grid = prune(features, grid, all_true)
+        self.assertTrue(torch.equal(pruned_grid.ijk.jdata, grid.ijk.jdata))
+        self.assertTrue(torch.equal(pruned_data.jdata, features.jdata))
+
+    @expand_tests(all_device_dtype_combos)
+    def test_prune_gradient(self, device, dtype):
+        grid = self._make_dense_grid(device, batch_size=2, shape=(4, 4, 4))
+        data = torch.randn(grid.total_voxels, 3, device=device, dtype=dtype, requires_grad=True)
+        features = grid.jagged_like(data)
+        mask = torch.rand(grid.total_voxels, device=device) > 0.5
+
+        pruned_data, _ = fvnn.Prune()(features, grid, grid.jagged_like(mask))
+        pruned_data.jdata.sum().backward()
+
+        assert data.grad is not None
+        expected_grad = torch.zeros_like(data)
+        expected_grad[mask] = 1.0
+        self.assertTrue(torch.equal(data.grad, expected_grad))
+
+    # =========================================================================
     # SparseConv3d
     # =========================================================================
 
