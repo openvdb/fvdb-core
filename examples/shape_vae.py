@@ -30,10 +30,14 @@ decoder pattern and lattice/anchoring notes):
   the decoder could not tell neck positions apart). The first decoder level then
   learns which neck children to keep.
 
-Deviations from MinkowskiEngine, chosen so the example trains in minutes on the
-bundled meshes instead of hours on ModelNet40: a 6-shape dataset (4 cars, dragon,
-happy Buddha), Adam instead of SGD, and a down-weighted KL term (``KLD_WEIGHT``)
-since a 6-shape "dataset" is an overfit regime.
+The dataset is the 254-shoe "Shoe" category of Scanned Objects by Google Research
+(CC-BY 4.0), bundled with fvdb-example-data — a single object category with real
+intra-class variation (runners, boat shoes, ballet flats, cleats, boots), which is
+the same role ModelNet40's chair class plays in MinkowskiEngine's example. Training
+runs small random minibatches over the pre-voxelized dataset. Deviations from
+MinkowskiEngine, chosen so the example trains in minutes: Adam instead of SGD, a
+down-weighted KL term (``KLD_WEIGHT``), and a compressed iteration budget — crank
+up ``NUM_ITERATIONS`` for better samples.
 """
 
 import logging
@@ -43,14 +47,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import tqdm
-from fvdb.utils.examples import (
-    load_car_1_mesh,
-    load_car_2_mesh,
-    load_car_3_mesh,
-    load_car_4_mesh,
-    load_dragon_mesh,
-    load_happy_mesh,
-)
+from fvdb.utils.examples import load_gso_shoes
 
 import fvdb
 import fvdb.nn as fvnn
@@ -61,10 +58,12 @@ NUM_LEVELS = 4  # stride-2 pyramid depth; the decoder neck lattice is (RESOLUTIO
 CHANNELS = [16, 32, 64, 128, 256]  # CHANNELS[0] = full resolution, CHANNELS[NUM_LEVELS] = coarsest
 LATENT_DIM = 128
 KLD_WEIGHT = 1e-2
-NUM_ITERATIONS = 1000
+NUM_ITERATIONS = 1500
+BATCH_SIZE = 16
 LEARNING_RATE = 1e-3
-LOG_EVERY = 50
+LOG_EVERY = 100
 NUM_PRIOR_SAMPLES = 4
+NUM_EVAL_SHAPES = 8  # reconstruction / visualization subset
 
 
 def normalize_vertices(vertices: torch.Tensor) -> torch.Tensor:
@@ -75,16 +74,8 @@ def normalize_vertices(vertices: torch.Tensor) -> torch.Tensor:
 
 
 def prepare_shapes(device: torch.device) -> GridBatch:
-    """Voxelize the six bundled triangle meshes into a single GridBatch 'dataset'."""
-    loaders = (
-        load_car_1_mesh,
-        load_car_2_mesh,
-        load_car_3_mesh,
-        load_car_4_mesh,
-        load_dragon_mesh,
-        load_happy_mesh,
-    )
-    meshes = [loader(mode="vf", device=device) for loader in loaders]
+    """Voxelize the GSO shoe meshes (CC-BY 4.0) into a single GridBatch 'dataset'."""
+    meshes = load_gso_shoes(device=device)
     vertices = JaggedTensor([normalize_vertices(v) for v, _ in meshes])
     faces = JaggedTensor([f.int() for _, f in meshes])
     return GridBatch.from_mesh(vertices, faces, voxel_sizes=1.0 / RESOLUTION, origins=0.0)
@@ -273,8 +264,9 @@ def main() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     gt_grid = prepare_shapes(device)
+    # Build the ground-truth pyramid ONCE for the whole dataset; minibatches sub-index each
+    # level (GridBatch indexing is cheap, rebuilding conv_grid pyramids per iteration is not).
     gt_pyramid = build_gt_pyramid(gt_grid)
-    input_features = gt_grid.jagged_like(torch.ones(gt_grid.total_voxels, 1, device=device))
     logging.info(f"dataset: {gt_grid.grid_count} shapes, {gt_grid.total_voxels} voxels total")
 
     model = ShapeVAE().to(device)
@@ -282,7 +274,12 @@ def main() -> None:
 
     model.train()
     for iteration in tqdm.trange(NUM_ITERATIONS, desc="training"):
-        logits, targets, _, _, mu, logvar = model(input_features, gt_grid, gt_pyramid)
+        idx = torch.randperm(gt_grid.grid_count)[:BATCH_SIZE]
+        batch_gt = gt_grid[idx]
+        batch_pyramid = [level[idx] for level in gt_pyramid]
+        batch_features = batch_gt.jagged_like(torch.ones(batch_gt.total_voxels, 1, device=device))
+
+        logits, targets, _, _, mu, logvar = model(batch_features, batch_gt, batch_pyramid)
         loss, bce, kld = vae_loss(logits, targets, mu, logvar)
         optimizer.zero_grad()
         loss.backward()
@@ -294,15 +291,17 @@ def main() -> None:
 
     model.eval()
     with torch.no_grad():
-        # Reconstructions: encode each training shape and decode from z = mu.
-        _, _, _, recon_grid, _, _ = model(input_features, gt_grid, None)
-        logging.info(f"reconstruction IoU vs ground truth: {grid_iou(recon_grid, gt_grid):.3f}")
+        # Reconstructions: encode a fixed subset of shapes and decode from z = mu.
+        eval_gt = gt_grid[list(range(NUM_EVAL_SHAPES))]
+        eval_features = eval_gt.jagged_like(torch.ones(eval_gt.total_voxels, 1, device=device))
+        _, _, _, recon_grid, _, _ = model(eval_features, eval_gt, None)
+        logging.info(f"reconstruction IoU on {NUM_EVAL_SHAPES} shapes: {grid_iou(recon_grid, eval_gt):.3f}")
 
         # Generation: decode novel shapes from the prior.
         z = torch.randn(NUM_PRIOR_SAMPLES, LATENT_DIM, device=device)
         _, _, _, sample_grid = model.decoder(z, None)
         logging.info(f"prior samples decoded to {sample_grid.num_voxels.tolist()} voxels")
-    visualize(gt_grid, recon_grid, sample_grid)
+    visualize(eval_gt, recon_grid, sample_grid)
 
 
 if __name__ == "__main__":
