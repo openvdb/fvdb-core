@@ -716,6 +716,19 @@ class ConvolutionPlan:
         if backend_name == "pred_gather_igemm":
             _validate_pred_gather_igemm_admission(kernel_size, stride, channel_pairs, transposed=False)
             _validate_pred_gather_igemm_grid_admission(source_grid, target_grid)
+        elif backend_name in ("default", "gather_scatter"):
+            identity_plan = cls._identity_matmul_plan(
+                kernel_size,
+                stride,
+                source_grid,
+                target_grid,
+                channel_pairs,
+                resolved_policy,
+                topology_provenance,
+                transposed=False,
+            )
+            if identity_plan is not None:
+                return identity_plan
         if target_grid is None:
             target_grid = source_grid.conv_grid(kernel_size, stride)
 
@@ -808,6 +821,19 @@ class ConvolutionPlan:
         if backend_name == "pred_gather_igemm":
             _validate_pred_gather_igemm_admission(kernel_size, stride, channel_pairs, transposed=True)
             _validate_pred_gather_igemm_grid_admission(source_grid, target_grid)
+        elif backend_name in ("default", "gather_scatter"):
+            identity_plan = cls._identity_matmul_plan(
+                kernel_size,
+                stride,
+                source_grid,
+                target_grid,
+                channel_pairs,
+                resolved_policy,
+                topology_provenance,
+                transposed=True,
+            )
+            if identity_plan is not None:
+                return identity_plan
         if target_grid is None:
             target_grid = source_grid.conv_transpose_grid(kernel_size, stride)
 
@@ -1163,6 +1189,66 @@ class ConvolutionPlan:
     # ============================================================
     #                 Private methods
     # ============================================================
+
+    @classmethod
+    def _identity_matmul_plan(
+        cls,
+        kernel_size: torch.Tensor,
+        stride: torch.Tensor,
+        source_grid: GridBatch,
+        target_grid: GridBatch | None,
+        channel_pairs: tuple[tuple[int, int], ...],
+        resolved_policy: ConvolutionTopologyPolicy,
+        topology_provenance: ConvolutionTopologyProvenance,
+        transposed: bool,
+    ) -> "ConvolutionPlan | None":
+        """Identity (K == S == 1, shared grid data) short circuit to the matmul backend.
+
+        Per-iteration classifier heads rebuild identity plans constantly (issue #755); the general
+        path spends ~1 ms per call building tensor-valued transform diagnostics that are trivially
+        satisfied when source and target share their GridBatchData. Returns None when the fast
+        path does not apply (the caller then follows the general path, keeping full validation
+        for distinct-but-equal-looking grids and incompatible transforms).
+        """
+        if kernel_size.tolist() != [1, 1, 1] or stride.tolist() != [1, 1, 1]:
+            return None
+        if target_grid is None:
+            # conv_grid / conv_transpose_grid are the identity at K == S == 1: the generated
+            # target is the source grid itself, preserving public and data identity.
+            target_grid = source_grid
+        elif not _get_grid_data(source_grid).is_same(_get_grid_data(target_grid)):
+            return None
+        # Preserve the general path's construction-time channel-pair validation.
+        for channel_pair in channel_pairs:
+            if len(channel_pair) != 2 or channel_pair[0] <= 0 or channel_pair[1] <= 0:
+                raise ValueError("channel_pair must be a tuple of two positive integers")
+        geometry = _fvdb_cpp.ConvolutionGeometry(kernel_size, stride)
+        # Shared grid data makes every registration diagnostic exact by construction.
+        compatibility = ConvolutionTransformCompatibility(
+            fine_grid_count=source_grid.grid_count,
+            coarse_grid_count=source_grid.grid_count,
+            same_batch_size=True,
+            same_device=True,
+            scale_compatible=True,
+            registration_integer=True,
+            registration_zero=True,
+            compatible=True,
+            registration_offset=torch.zeros((source_grid.grid_count, 3), dtype=torch.float64),
+        )
+        backend = _MatmulBackend()
+        return cls(
+            source_grid,
+            target_grid,
+            geometry,
+            channel_pairs,
+            transposed,
+            backend,
+            compatibility,
+            resolved_policy,
+            topology_provenance,
+            _CoverageReportCache(backend, source_grid, target_grid),
+            False,
+        )
 
     @staticmethod
     def _build_backend(
