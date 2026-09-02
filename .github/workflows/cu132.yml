@@ -40,22 +40,58 @@ jobs:
       needs.check-changes.outputs.should_test == 'true'
       && (github.event.pull_request.draft == false || github.event_name != 'pull_request_target')
     outputs:
-      label: ${{ steps.start-build-runner.outputs.label }}
-      ec2-instance-id: ${{ steps.start-build-runner.outputs.ec2-instance-id }}
+      label: ${{ steps.start-build-runner-a1.outputs.label || steps.start-build-runner-a2.outputs.label || steps.start-build-runner-a3.outputs.label }}
+      ec2-instance-id: ${{ steps.start-build-runner-a1.outputs.ec2-instance-id || steps.start-build-runner-a2.outputs.ec2-instance-id || steps.start-build-runner-a3.outputs.ec2-instance-id }}
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
         with:
           role-to-assume: ${{ needs.versions.outputs.aws-role }}
           aws-region: ${{ needs.versions.outputs.aws-region }}
-      - name: Start EC2 runner
-        id: start-build-runner
+      - name: Start EC2 runner (attempt 1)
+        id: start-build-runner-a1
+        continue-on-error: true
         uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
         with:
           mode: start
           github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
           ec2-instance-type: m6a.8xlarge
           availability-zones-config: ${{ needs.versions.outputs.aws-cpu-az-config }}
+      - name: Back off before attempt 2
+        if: steps.start-build-runner-a1.outcome == 'failure'
+        run: |
+          echo "::warning::Runner start attempt 1 found no capacity; retrying in 90s."
+          sleep 90
+      - name: Start EC2 runner (attempt 2)
+        id: start-build-runner-a2
+        if: steps.start-build-runner-a1.outcome == 'failure'
+        continue-on-error: true
+        uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
+        with:
+          mode: start
+          github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
+          ec2-instance-type: m6a.8xlarge
+          availability-zones-config: ${{ needs.versions.outputs.aws-cpu-az-config }}
+      - name: Back off before attempt 3
+        if: steps.start-build-runner-a1.outcome == 'failure' && steps.start-build-runner-a2.outcome == 'failure'
+        run: |
+          echo "::warning::Runner start attempt 2 found no capacity; retrying in 180s."
+          sleep 180
+      - name: Start EC2 runner (attempt 3)
+        id: start-build-runner-a3
+        if: steps.start-build-runner-a1.outcome == 'failure' && steps.start-build-runner-a2.outcome == 'failure'
+        continue-on-error: true
+        uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
+        with:
+          mode: start
+          github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
+          ec2-instance-type: m6a.8xlarge
+          availability-zones-config: ${{ needs.versions.outputs.aws-cpu-az-config }}
+      - name: Fail if no attempt obtained capacity
+        if: steps.start-build-runner-a1.outcome == 'failure' && steps.start-build-runner-a2.outcome == 'failure' && steps.start-build-runner-a3.outcome == 'failure'
+        run: |
+          echo "::error::Could not obtain an instance after 3 attempts across every configured availability zone; the region is likely out of this instance type."
+          exit 1
 
   ##############################################################################
   # BUILD FVDB
@@ -235,22 +271,58 @@ jobs:
     permissions:
       id-token: write  # Required for AWS OIDC
     outputs:
-      label: ${{ steps.start-tests-gpu-runner.outputs.label }}
-      ec2-instance-id: ${{ steps.start-tests-gpu-runner.outputs.ec2-instance-id }}
+      label: ${{ steps.start-tests-gpu-runner-a1.outputs.label || steps.start-tests-gpu-runner-a2.outputs.label || steps.start-tests-gpu-runner-a3.outputs.label }}
+      ec2-instance-id: ${{ steps.start-tests-gpu-runner-a1.outputs.ec2-instance-id || steps.start-tests-gpu-runner-a2.outputs.ec2-instance-id || steps.start-tests-gpu-runner-a3.outputs.ec2-instance-id }}
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
         with:
           role-to-assume: ${{ needs.versions.outputs.aws-role }}
           aws-region: ${{ needs.versions.outputs.aws-region }}
-      - name: Start EC2 GPU runner
-        id: start-tests-gpu-runner
+      - name: Start EC2 GPU runner (attempt 1)
+        id: start-tests-gpu-runner-a1
+        continue-on-error: true
         uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
         with:
           mode: start
           github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
           ec2-instance-type: g6.xlarge # 4 CPU-core, L4 GPU
           availability-zones-config: ${{ needs.versions.outputs.aws-gpu-az-config }}
+      - name: Back off before attempt 2
+        if: steps.start-tests-gpu-runner-a1.outcome == 'failure'
+        run: |
+          echo "::warning::Runner start attempt 1 found no capacity; retrying in 90s."
+          sleep 90
+      - name: Start EC2 GPU runner (attempt 2)
+        id: start-tests-gpu-runner-a2
+        if: steps.start-tests-gpu-runner-a1.outcome == 'failure'
+        continue-on-error: true
+        uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
+        with:
+          mode: start
+          github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
+          ec2-instance-type: g6.xlarge # 4 CPU-core, L4 GPU
+          availability-zones-config: ${{ needs.versions.outputs.aws-gpu-az-config }}
+      - name: Back off before attempt 3
+        if: steps.start-tests-gpu-runner-a1.outcome == 'failure' && steps.start-tests-gpu-runner-a2.outcome == 'failure'
+        run: |
+          echo "::warning::Runner start attempt 2 found no capacity; retrying in 180s."
+          sleep 180
+      - name: Start EC2 GPU runner (attempt 3)
+        id: start-tests-gpu-runner-a3
+        if: steps.start-tests-gpu-runner-a1.outcome == 'failure' && steps.start-tests-gpu-runner-a2.outcome == 'failure'
+        continue-on-error: true
+        uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
+        with:
+          mode: start
+          github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
+          ec2-instance-type: g6.xlarge # 4 CPU-core, L4 GPU
+          availability-zones-config: ${{ needs.versions.outputs.aws-gpu-az-config }}
+      - name: Fail if no attempt obtained capacity
+        if: steps.start-tests-gpu-runner-a1.outcome == 'failure' && steps.start-tests-gpu-runner-a2.outcome == 'failure' && steps.start-tests-gpu-runner-a3.outcome == 'failure'
+        run: |
+          echo "::error::Could not obtain an instance after 3 attempts across every configured availability zone; the region is likely out of this instance type."
+          exit 1
 
   ##############################################################################
   # RUN FVDB GTESTS

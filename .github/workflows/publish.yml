@@ -140,8 +140,9 @@ jobs:
         with:
           role-to-assume: ${{ needs.versions.outputs.aws-role }}
           aws-region: ${{ needs.versions.outputs.aws-region }}
-      - name: Start EC2 runner
-        id: start-build-runner
+      - name: Start EC2 runner (attempt 1)
+        id: start-build-runner-a1
+        continue-on-error: true
         uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
         with:
           mode: start
@@ -157,6 +158,59 @@ jobs:
               {"Key": "CudaVersion", "Value": "${{ matrix.cuda-version }}"},
               {"Key": "GitHubRunId", "Value": "${{ github.run_id }}"}
             ]
+      - name: Back off before attempt 2
+        if: steps.start-build-runner-a1.outcome == 'failure'
+        run: |
+          echo "::warning::Runner start attempt 1 found no capacity; retrying in 90s."
+          sleep 90
+      - name: Start EC2 runner (attempt 2)
+        id: start-build-runner-a2
+        if: steps.start-build-runner-a1.outcome == 'failure'
+        continue-on-error: true
+        uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
+        with:
+          mode: start
+          github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
+          ec2-instance-type: m6a.8xlarge
+          availability-zones-config: ${{ needs.versions.outputs.aws-cpu-az-config }}
+          label: ec2-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
+          aws-resource-tags: >
+            [
+              {"Key": "RunnerLabel", "Value": "ec2-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}"},
+              {"Key": "PythonVersion", "Value": "${{ matrix.python-version }}"},
+              {"Key": "TorchVersion", "Value": "${{ matrix.torch-version }}"},
+              {"Key": "CudaVersion", "Value": "${{ matrix.cuda-version }}"},
+              {"Key": "GitHubRunId", "Value": "${{ github.run_id }}"}
+            ]
+      - name: Back off before attempt 3
+        if: steps.start-build-runner-a1.outcome == 'failure' && steps.start-build-runner-a2.outcome == 'failure'
+        run: |
+          echo "::warning::Runner start attempt 2 found no capacity; retrying in 180s."
+          sleep 180
+      - name: Start EC2 runner (attempt 3)
+        id: start-build-runner-a3
+        if: steps.start-build-runner-a1.outcome == 'failure' && steps.start-build-runner-a2.outcome == 'failure'
+        continue-on-error: true
+        uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
+        with:
+          mode: start
+          github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
+          ec2-instance-type: m6a.8xlarge
+          availability-zones-config: ${{ needs.versions.outputs.aws-cpu-az-config }}
+          label: ec2-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
+          aws-resource-tags: >
+            [
+              {"Key": "RunnerLabel", "Value": "ec2-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}"},
+              {"Key": "PythonVersion", "Value": "${{ matrix.python-version }}"},
+              {"Key": "TorchVersion", "Value": "${{ matrix.torch-version }}"},
+              {"Key": "CudaVersion", "Value": "${{ matrix.cuda-version }}"},
+              {"Key": "GitHubRunId", "Value": "${{ github.run_id }}"}
+            ]
+      - name: Fail if no attempt obtained capacity
+        if: steps.start-build-runner-a1.outcome == 'failure' && steps.start-build-runner-a2.outcome == 'failure' && steps.start-build-runner-a3.outcome == 'failure'
+        run: |
+          echo "::error::Could not obtain an instance after 3 attempts across every configured availability zone; the region is likely out of this instance type."
+          exit 1
 
   fvdb-build:
     name: fVDB Build
@@ -552,8 +606,9 @@ jobs:
         with:
           role-to-assume: ${{ needs.versions.outputs.aws-role }}
           aws-region: ${{ needs.versions.outputs.aws-region }}
-      - name: Start EC2 GPU runner
-        id: start-validation-runner
+      - name: Start EC2 GPU runner (attempt 1)
+        id: start-validation-runner-a1
+        continue-on-error: true
         uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
         with:
           mode: start
@@ -569,6 +624,59 @@ jobs:
               {"Key": "CudaVersion", "Value": "${{ matrix.cuda-version }}"},
               {"Key": "GitHubRunId", "Value": "${{ github.run_id }}"}
             ]
+      - name: Back off before attempt 2
+        if: steps.start-validation-runner-a1.outcome == 'failure'
+        run: |
+          echo "::warning::Runner start attempt 1 found no capacity; retrying in 90s."
+          sleep 90
+      - name: Start EC2 GPU runner (attempt 2)
+        id: start-validation-runner-a2
+        if: steps.start-validation-runner-a1.outcome == 'failure'
+        continue-on-error: true
+        uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
+        with:
+          mode: start
+          github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
+          ec2-instance-type: g6.xlarge
+          availability-zones-config: ${{ needs.versions.outputs.aws-gpu-az-config }}
+          label: val-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
+          aws-resource-tags: >
+            [
+              {"Key": "RunnerLabel", "Value": "val-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}"},
+              {"Key": "PythonVersion", "Value": "${{ matrix.python-version }}"},
+              {"Key": "TorchVersion", "Value": "${{ matrix.torch-version }}"},
+              {"Key": "CudaVersion", "Value": "${{ matrix.cuda-version }}"},
+              {"Key": "GitHubRunId", "Value": "${{ github.run_id }}"}
+            ]
+      - name: Back off before attempt 3
+        if: steps.start-validation-runner-a1.outcome == 'failure' && steps.start-validation-runner-a2.outcome == 'failure'
+        run: |
+          echo "::warning::Runner start attempt 2 found no capacity; retrying in 180s."
+          sleep 180
+      - name: Start EC2 GPU runner (attempt 3)
+        id: start-validation-runner-a3
+        if: steps.start-validation-runner-a1.outcome == 'failure' && steps.start-validation-runner-a2.outcome == 'failure'
+        continue-on-error: true
+        uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
+        with:
+          mode: start
+          github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
+          ec2-instance-type: g6.xlarge
+          availability-zones-config: ${{ needs.versions.outputs.aws-gpu-az-config }}
+          label: val-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
+          aws-resource-tags: >
+            [
+              {"Key": "RunnerLabel", "Value": "val-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}"},
+              {"Key": "PythonVersion", "Value": "${{ matrix.python-version }}"},
+              {"Key": "TorchVersion", "Value": "${{ matrix.torch-version }}"},
+              {"Key": "CudaVersion", "Value": "${{ matrix.cuda-version }}"},
+              {"Key": "GitHubRunId", "Value": "${{ github.run_id }}"}
+            ]
+      - name: Fail if no attempt obtained capacity
+        if: steps.start-validation-runner-a1.outcome == 'failure' && steps.start-validation-runner-a2.outcome == 'failure' && steps.start-validation-runner-a3.outcome == 'failure'
+        run: |
+          echo "::error::Could not obtain an instance after 3 attempts across every configured availability zone; the region is likely out of this instance type."
+          exit 1
 
   validate-smoke-test:
     name: Smoke test built wheel
