@@ -3,43 +3,15 @@
 #
 """Sparse 3D shape completion with generative transposed convolutions.
 
-This example is the fvdb analog of MinkowskiEngine's ``examples/completion.py``.
 A sparse encoder-decoder network is given a partial shape (a slab cropped along x)
 and learns to generate the voxel topology of the complete shape. The decoder grows
 topology with *generative* transposed convolutions and trims it with per-level
-occupancy classifiers, exactly like MinkowskiEngine's completion network.
-
-MinkowskiEngine to fvdb mapping:
-
-- ``MinkowskiGenerativeConvolutionTranspose`` ->
-  :class:`fvdb.nn.SparseConvTranspose3d` executed with a plan from
-  :meth:`fvdb.ConvolutionPlan.from_grid_batch_transposed` with ``target_grid=None``,
-  which generates the complete (uncropped) transposed support.
-- ``MinkowskiPruning`` -> :class:`fvdb.nn.Prune`.
-- ``get_target`` (per-level occupancy labels via strided coordinate keys) ->
-  a ground-truth pyramid built with :meth:`fvdb.GridBatch.conv_grid` (kernel 2,
-  stride 2) queried with :meth:`fvdb.GridBatch.coords_in_grid`. ``conv_grid(2, 2)``
-  maps ``coarse = floor(fine / 2)``, the same lattice relation MinkowskiEngine uses
-  for its stride-2 pyramid (do NOT use ``coarsened_grid`` here - it has different,
-  block-centroid semantics).
-- Teacher forcing (``keep += target`` while training) is reproduced verbatim.
-
-Kernel-anchoring note: MinkowskiEngine anchors even kernels at the corner of the
-``[0, K)`` window, while fvdb centers kernels via ``padding = floor((K - 1) / 2)``
-(see fvdb-core PR #726). MinkowskiEngine's completion decoder relies on a
-kernel-size-4 first transpose to reach coordinates beyond the partial input's
-coarse support. Here shapes are normalized into ``[0, 1)`` (all-positive ijk, like
-MinkowskiEngine's quantized coordinates) and the crop keeps enough of the shape
-that its coarsest support matches the full shape's, so completion is structurally
-reachable; we keep a kernel-size-4 first transpose to mirror MinkowskiEngine.
-
-Unlike the MinkowskiEngine example (ModelNet40, 30k iterations), this example
-overfits two bundled meshes for a few hundred iterations so it runs in a couple of
-minutes; crank up the constants below for a real experiment.
+occupancy classifiers.
 """
 
 import logging
 
+import fvdb.nn as fvnn
 import polyscope as ps
 import torch
 import torch.nn as nn
@@ -48,7 +20,6 @@ import tqdm
 from fvdb.utils.examples import load_dragon_mesh, load_happy_mesh
 
 import fvdb
-import fvdb.nn as fvnn
 from fvdb import ConvolutionPlan, GridBatch, JaggedTensor
 
 RESOLUTION = 64  # voxels along the longest axis of each shape
@@ -130,8 +101,7 @@ class GenerativeUpBlock(nn.Module):
         self.kernel_size = kernel_size
 
     def forward(self, data: JaggedTensor, grid: GridBatch) -> tuple[JaggedTensor, GridBatch]:
-        # target_grid=None -> COMPLETE topology policy: the plan *generates* new coordinates,
-        # the fvdb equivalent of MinkowskiGenerativeConvolutionTranspose.
+        # target_grid=None -> COMPLETE topology policy: the plan *generates* new coordinates
         plan = ConvolutionPlan.from_grid_batch_transposed(self.kernel_size, 2, grid)
         data = self.up(data, plan)
         out_grid = plan.target_grid_batch
@@ -140,7 +110,7 @@ class GenerativeUpBlock(nn.Module):
 
 
 class CompletionNet(nn.Module):
-    """Sparse encoder-decoder that completes a partial shape, mirroring MinkowskiEngine's CompletionNet."""
+    """Sparse encoder-decoder that completes a partial shape."""
 
     def __init__(self):
         super().__init__()
@@ -152,7 +122,7 @@ class CompletionNet(nn.Module):
             ConvBnElu(CHANNELS[i + 1], CHANNELS[i + 1], kernel_size=3, stride=1) for i in range(NUM_LEVELS)
         )
         # Decoder level i produces the level-i grid from level i+1. The coarsest transpose
-        # uses kernel size 4 (as in MinkowskiEngine); the rest use kernel size 2.
+        # uses kernel size 4; the rest use kernel size 2.
         self.dec_up = nn.ModuleList(
             GenerativeUpBlock(CHANNELS[i + 1], CHANNELS[i], kernel_size=4 if i == NUM_LEVELS - 1 else 2)
             for i in range(NUM_LEVELS)
@@ -182,7 +152,7 @@ class CompletionNet(nn.Module):
                 break  # everything was pruned (possible when not teacher-forced)
             data, grid = self.dec_up[i](data, grid)
             # Additive skip: gather encoder features onto the generated decoder topology
-            # (voxels absent from the encoder grid contribute zero) - MinkowskiEngine's `dec + enc`.
+            # (voxels absent from the encoder grid contribute zero)
             skip_data, skip_grid = skips[i]
             data = grid.jagged_like(data.jdata + grid.inject_from(skip_grid, skip_data).jdata)
 
@@ -194,7 +164,7 @@ class CompletionNet(nn.Module):
 
             keep = logits.jdata.squeeze(-1) > 0
             if self.training:
-                keep |= target.jdata  # teacher forcing, as in MinkowskiEngine
+                keep |= target.jdata  # teacher forcing
             data, grid = self.prune(data, grid, grid.jagged_like(keep))
         return logits_per_level, targets_per_level, data, grid
 

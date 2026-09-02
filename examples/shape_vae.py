@@ -3,45 +3,23 @@
 #
 """Sparse 3D shape variational autoencoder with generative transposed convolutions.
 
-This example is the fvdb analog of MinkowskiEngine's ``examples/vae.py``. An
-encoder compresses each sparse voxelized shape into a single latent vector; the
+An encoder compresses each sparse voxelized shape into a single latent vector; the
 decoder generates the shape's voxel topology back from the latent alone, growing
 coordinates with *generative* transposed convolutions and trimming them with
 per-level occupancy classifiers and :class:`fvdb.nn.Prune`. Because the decoder
 sees only the latent (no skip connections), sampling ``z ~ N(0, I)`` generates
 novel shapes - demonstrated at the end of the script.
 
-MinkowskiEngine to fvdb mapping (see ``shape_completion.py`` for the shared
-decoder pattern and lattice/anchoring notes):
-
-- ``MinkowskiGenerativeConvolutionTranspose`` ->
-  :meth:`fvdb.ConvolutionPlan.from_grid_batch_transposed` with ``target_grid=None``.
-- ``MinkowskiPruning`` -> :class:`fvdb.nn.Prune`.
-- ``MinkowskiGlobalPooling`` -> a jagged global average pool
-  (:meth:`fvdb.JaggedTensor.jsum` divided by voxel counts). MinkowskiEngine
-  instead strides all the way down to a single voxel per shape at
-  ``tensor_stride = resolution``; global pooling over the jagged batch is the
-  idiomatic fvdb equivalent.
-- MinkowskiEngine seeds its decoder with one voxel per shape at the coarsest
-  stride; here the decoder starts from a small dense "neck" grid (4^3 voxels at
-  stride 16) built with :meth:`fvdb.GridBatch.from_dense`. The latent vector is
-  broadcast to every neck voxel and combined with a learned per-voxel positional
-  embedding (without it the broadcast features would be spatially identical and
-  the decoder could not tell neck positions apart). The first decoder level then
-  learns which neck children to keep.
 
 The dataset is the 254-shoe "Shoe" category of Scanned Objects by Google Research
 (CC-BY 4.0), bundled with fvdb-example-data — a single object category with real
-intra-class variation (runners, boat shoes, ballet flats, cleats, boots), which is
-the same role ModelNet40's chair class plays in MinkowskiEngine's example. Training
-runs small random minibatches over the pre-voxelized dataset. Deviations from
-MinkowskiEngine, chosen so the example trains in minutes: Adam instead of SGD, a
-down-weighted KL term (``KLD_WEIGHT``), and a compressed iteration budget — crank
-up ``NUM_ITERATIONS`` for better samples.
+intra-class variation (runners, boat shoes, ballet flats, cleats, boots). Training
+runs small random minibatches over the pre-voxelized dataset.
 """
 
 import logging
 
+import fvdb.nn as fvnn
 import polyscope as ps
 import torch
 import torch.nn as nn
@@ -50,7 +28,6 @@ import tqdm
 from fvdb.utils.examples import load_gso_shoes
 
 import fvdb
-import fvdb.nn as fvnn
 from fvdb import ConvolutionPlan, GridBatch, JaggedTensor
 
 RESOLUTION = 64  # voxels along the longest axis of each shape
@@ -119,8 +96,7 @@ class GenerativeUpBlock(nn.Module):
         self.conv = ConvBnElu(out_channels, out_channels, kernel_size=3, stride=1)
 
     def forward(self, data: JaggedTensor, grid: GridBatch) -> tuple[JaggedTensor, GridBatch]:
-        # target_grid=None -> COMPLETE topology policy: the plan *generates* new coordinates,
-        # the fvdb equivalent of MinkowskiGenerativeConvolutionTranspose.
+        # target_grid=None -> COMPLETE topology policy: the plan *generates* new coordinates
         plan = ConvolutionPlan.from_grid_batch_transposed(2, 2, grid)
         data = self.up(data, plan)
         out_grid = plan.target_grid_batch
@@ -148,7 +124,7 @@ class Encoder(nn.Module):
         for i in range(NUM_LEVELS):
             data, grid = self.down[i](data, grid)
             data, grid = self.conv[i](data, grid)
-        # Global average pool over each grid's voxels (MinkowskiGlobalPooling analog).
+        # Global average pool over each grid's voxels.
         counts = grid.num_voxels.to(data.jdata.dtype).clamp_min(1).unsqueeze(1)
         pooled = data.jsum(0).jdata / counts
         return self.fc_mu(pooled), self.fc_logvar(pooled)
@@ -163,9 +139,7 @@ class Decoder(nn.Module):
         self.fc_seed = nn.Linear(LATENT_DIM, CHANNELS[NUM_LEVELS])
         # Learned per-voxel positional embedding for the dense neck. This breaks spatial
         # symmetry: with only the broadcast latent, every neck voxel would carry identical
-        # features and the decoder could not distinguish positions. (MinkowskiEngine's
-        # single-voxel seed gets this for free - every descendant has a unique kernel-tap
-        # path from the root.)
+        # features and the decoder could not distinguish positions.
         self.neck_position = nn.Parameter(0.02 * torch.randn(neck_extent**3, CHANNELS[NUM_LEVELS]))
         self.up = nn.ModuleList(GenerativeUpBlock(CHANNELS[i + 1], CHANNELS[i]) for i in range(NUM_LEVELS))
         self.head = nn.ModuleList(fvnn.SparseConv3d(CHANNELS[i], 1, kernel_size=1, stride=1) for i in range(NUM_LEVELS))
@@ -202,7 +176,7 @@ class Decoder(nn.Module):
                 logits_per_level.append(logits)
                 targets_per_level.append(target)
                 if self.training:
-                    keep |= target.jdata  # teacher forcing, as in MinkowskiEngine
+                    keep |= target.jdata  # teacher forcing
             data, grid = self.prune(data, grid, grid.jagged_like(keep))
         return logits_per_level, targets_per_level, data, grid
 

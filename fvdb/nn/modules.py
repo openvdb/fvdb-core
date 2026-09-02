@@ -270,8 +270,7 @@ class Prune(nn.Module):
     removed from the output features.
 
     This module prunes *grid topology* (voxels), not network parameters — it is unrelated to
-    weight pruning as in :mod:`torch.nn.utils.prune`. It is the fvdb analog of
-    ``MinkowskiPruning`` from the MinkowskiEngine library and is typically used in generative
+    weight pruning as in :mod:`torch.nn.utils.prune`. It is typically used in generative
     sparse decoders, where a classifier predicts which voxels of a generated topology to keep
     (*e.g.* after a generative transposed convolution built with
     :meth:`fvdb.ConvolutionPlan.from_grid_batch_transposed`).
