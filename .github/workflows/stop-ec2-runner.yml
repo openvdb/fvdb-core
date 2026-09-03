@@ -1,0 +1,90 @@
+# Copyright Contributors to the OpenVDB Project
+# SPDX-License-Identifier: Apache-2.0
+#
+# De-register and terminate a self-hosted EC2 runner started by
+# start-ec2-runner.yml. Callers keep their own `needs:` and
+# `if: always() && needs.<start-job>.result != 'skipped'` guards; this workflow
+# is only the teardown itself.
+#
+# Two call shapes, matching the two ways the repo provisions runners:
+#   * pass `ec2-instance-id` straight from the start job's output (tests.yml,
+#     cu130.yml, cu132.yml, nightly-publish.yml);
+#   * leave it empty and the instance is looked up by its `RunnerLabel` tag
+#     (publish.yml, whose start job fans out over a matrix, so there is no
+#     single job output to read).
+#
+# Security note: like its start counterpart, this workflow holds the
+# admin-scoped runner token and therefore never checks out code or runs a
+# local action -- see .github/scripts/check_runner_token_policy.py.
+name: Stop EC2 Runner
+
+on:
+  workflow_call:
+    inputs:
+      label:
+        description: Runner label, as emitted or as given to start-ec2-runner.yml.
+        type: string
+        required: true
+      ec2-instance-id:
+        description: >-
+          Instance id emitted by start-ec2-runner.yml. Leave empty to resolve it
+          from the instance's RunnerLabel tag instead.
+        type: string
+        required: false
+        default: ''
+      aws-role:
+        description: IAM role to assume via OIDC.
+        type: string
+        required: true
+      aws-region:
+        description: AWS region the instance is running in.
+        type: string
+        required: true
+    secrets:
+      EC2_RUNNER_TOKEN:
+        description: Admin-scoped token used to de-register the runner.
+        required: true
+
+permissions:
+  id-token: write # Required for AWS OIDC
+
+jobs:
+  stop:
+    name: Stop EC2 runner
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          role-to-assume: ${{ inputs.aws-role }}
+          aws-region: ${{ inputs.aws-region }}
+
+      - name: Find EC2 instance ID by label
+        id: find-instance
+        if: inputs.ec2-instance-id == ''
+        env:
+          LABEL: ${{ inputs.label }}
+        run: |
+          echo "Looking for instance with RunnerLabel: $LABEL"
+          INSTANCE_ID=$(aws ec2 describe-instances \
+            --filters "Name=tag:RunnerLabel,Values=$LABEL" "Name=instance-state-name,Values=running,pending,stopping,stopped" \
+            --query 'Reservations[0].Instances[0].InstanceId' \
+            --output text)
+
+          if [ "$INSTANCE_ID" == "None" ] || [ -z "$INSTANCE_ID" ]; then
+            echo "ERROR: No instance found with RunnerLabel=$LABEL"
+            echo "instance-id=" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          echo "Found instance: $INSTANCE_ID"
+          echo "instance-id=$INSTANCE_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Stop EC2 runner
+        # The lookup step is skipped when the caller supplied an id, so its
+        # output is empty then; `||` picks whichever of the two we actually have.
+        uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
+        with:
+          mode: stop
+          github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
+          label: ${{ inputs.label }}
+          ec2-instance-id: ${{ inputs.ec2-instance-id || steps.find-instance.outputs.instance-id }}

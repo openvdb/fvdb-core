@@ -39,29 +39,19 @@ jobs:
   start-build-runner:
     name: Start CPU-only EC2 runner for build
     needs: [check-changes, versions]
-    runs-on: ubuntu-latest
     permissions:
       id-token: write  # Required for AWS OIDC
     if: >-
       needs.check-changes.outputs.should_test == 'true'
       && (github.event.pull_request.draft == false || github.event_name != 'pull_request_target')
-    outputs:
-      label: ${{ steps.start-build-runner.outputs.label }}
-      ec2-instance-id: ${{ steps.start-build-runner.outputs.ec2-instance-id }}
-    steps:
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
-        with:
-          role-to-assume: ${{ needs.versions.outputs.aws-role }}
-          aws-region: ${{ needs.versions.outputs.aws-region }}
-      - name: Start EC2 runner
-        id: start-build-runner
-        uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
-        with:
-          mode: start
-          github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
-          ec2-instance-type: m6a.8xlarge
-          availability-zones-config: ${{ needs.versions.outputs.aws-cpu-az-config }}
+    uses: ./.github/workflows/start-ec2-runner.yml
+    with:
+      instance-type: m6a.8xlarge
+      az-config: ${{ needs.versions.outputs.aws-cpu-az-config }}
+      aws-role: ${{ needs.versions.outputs.aws-role }}
+      aws-region: ${{ needs.versions.outputs.aws-region }}
+    secrets:
+      EC2_RUNNER_TOKEN: ${{ secrets.EC2_RUNNER_TOKEN }}
   fvdb-build:
     name: fVDB Build (Conda)
     needs: [start-build-runner, versions] # required to start the main job when the runner is ready
@@ -159,25 +149,19 @@ jobs:
       - start-build-runner # required to get output from the start-build-runner job
       - fvdb-build # required to wait when the main job is done
       - versions
-    runs-on: ubuntu-latest
     permissions:
       id-token: write  # Required for AWS OIDC
     # required to stop the runner even if the error happened in the previous jobs, but only if the
     # start-build-runner job was not skipped
     if: ${{ always() && needs.start-build-runner.result != 'skipped' }}
-    steps:
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
-        with:
-          role-to-assume: ${{ needs.versions.outputs.aws-role }}
-          aws-region: ${{ needs.versions.outputs.aws-region }}
-      - name: Stop EC2 runner
-        uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
-        with:
-          mode: stop
-          github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
-          label: ${{ needs.start-build-runner.outputs.label }}
-          ec2-instance-id: ${{ needs.start-build-runner.outputs.ec2-instance-id }}
+    uses: ./.github/workflows/stop-ec2-runner.yml
+    with:
+      label: ${{ needs.start-build-runner.outputs.label }}
+      ec2-instance-id: ${{ needs.start-build-runner.outputs.ec2-instance-id }}
+      aws-role: ${{ needs.versions.outputs.aws-role }}
+      aws-region: ${{ needs.versions.outputs.aws-region }}
+    secrets:
+      EC2_RUNNER_TOKEN: ${{ secrets.EC2_RUNNER_TOKEN }}
 
 
   ##############################################################################
@@ -186,26 +170,16 @@ jobs:
   start-tests-gpu-runner:
     name: Start EC2 GPU runner for tests
     needs: [fvdb-build, versions]
-    runs-on: ubuntu-latest
     permissions:
       id-token: write  # Required for AWS OIDC
-    outputs:
-      label: ${{ steps.start-tests-gpu-runner.outputs.label }}
-      ec2-instance-id: ${{ steps.start-tests-gpu-runner.outputs.ec2-instance-id }}
-    steps:
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
-        with:
-          role-to-assume: ${{ needs.versions.outputs.aws-role }}
-          aws-region: ${{ needs.versions.outputs.aws-region }}
-      - name: Start EC2 GPU runner
-        id: start-tests-gpu-runner
-        uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
-        with:
-          mode: start
-          github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
-          ec2-instance-type: g6.xlarge # 4 CPU-core, L4 GPU
-          availability-zones-config: ${{ needs.versions.outputs.aws-gpu-az-config }}
+    uses: ./.github/workflows/start-ec2-runner.yml
+    with:
+      instance-type: g6.xlarge # 4 CPU-core, L4 GPU
+      az-config: ${{ needs.versions.outputs.aws-gpu-az-config }}
+      aws-role: ${{ needs.versions.outputs.aws-role }}
+      aws-region: ${{ needs.versions.outputs.aws-region }}
+    secrets:
+      EC2_RUNNER_TOKEN: ${{ secrets.EC2_RUNNER_TOKEN }}
 
   ##############################################################################
   # RUN FVDB GTESTS
@@ -446,22 +420,16 @@ jobs:
       - fvdb-unit-tests # required to wait when the main job is done
       - fvdb-docs-test # required to wait when the main job is done
       - versions
-    runs-on: ubuntu-latest
     permissions:
       id-token: write  # Required for AWS OIDC
     # required to stop the runner even if the error happened in the previous jobs
     # but only if the start-tests-gpu-runner job was not skipped
     if: ${{ always() && needs.start-tests-gpu-runner.result != 'skipped' }}
-    steps:
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
-        with:
-          role-to-assume: ${{ needs.versions.outputs.aws-role }}
-          aws-region: ${{ needs.versions.outputs.aws-region }}
-      - name: Stop EC2 runner
-        uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
-        with:
-          mode: stop
-          github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
-          label: ${{ needs.start-tests-gpu-runner.outputs.label }}
-          ec2-instance-id: ${{ needs.start-tests-gpu-runner.outputs.ec2-instance-id }}
+    uses: ./.github/workflows/stop-ec2-runner.yml
+    with:
+      label: ${{ needs.start-tests-gpu-runner.outputs.label }}
+      ec2-instance-id: ${{ needs.start-tests-gpu-runner.outputs.ec2-instance-id }}
+      aws-role: ${{ needs.versions.outputs.aws-role }}
+      aws-region: ${{ needs.versions.outputs.aws-region }}
+    secrets:
+      EC2_RUNNER_TOKEN: ${{ secrets.EC2_RUNNER_TOKEN }}

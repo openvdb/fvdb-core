@@ -1,0 +1,183 @@
+# Copyright Contributors to the OpenVDB Project
+# SPDX-License-Identifier: Apache-2.0
+#
+# Start a self-hosted EC2 runner, retrying with backoff when the region has no
+# capacity for the requested instance type.
+#
+# Every workflow that needs an EC2 runner calls this instead of inlining the
+# machulav action, so the retry policy (attempt count, backoff, the AZ sweep,
+# the pinned action SHA) lives in exactly one place and cannot drift between
+# tests.yml, cu130.yml, cu132.yml, publish.yml and nightly-publish.yml.
+#
+# Security note: this workflow holds the admin-scoped runner token, so it
+# deliberately has no `actions/checkout` and no local actions -- see
+# .github/scripts/check_runner_token_policy.py, which enforces that and which
+# also covers this file, because it is a *local* reusable workflow. Callers must
+# forward that one secret explicitly by name; `secrets: inherit` is rejected by
+# the same check. (The token's name is deliberately not spelled in this comment:
+# the policy allows it to appear only in the three positions it documents, so a
+# single grep for the name enumerates every place it can actually reach.)
+name: Start EC2 Runner
+
+on:
+  workflow_call:
+    inputs:
+      instance-type:
+        description: EC2 instance type to launch, e.g. m6a.8xlarge or g6.xlarge.
+        type: string
+        required: true
+      az-config:
+        description: >-
+          JSON array of availability-zone configs, tried in order by the action
+          within a single attempt. Usually needs.versions.outputs.aws-*-az-config.
+        type: string
+        required: true
+      aws-role:
+        description: IAM role to assume via OIDC.
+        type: string
+        required: true
+      aws-region:
+        description: AWS region to launch in.
+        type: string
+        required: true
+      runner-label:
+        description: >-
+          Explicit runner label. Leave empty to let the action generate one --
+          only the publish workflows need a predictable label, because they find
+          the instance again by tag at teardown.
+        type: string
+        required: false
+        default: ''
+      aws-resource-tags:
+        description: >-
+          JSON array of EC2 tags to apply to the instance. The publish workflows
+          set a RunnerLabel tag here so stop-ec2-runner.yml can find the instance
+          again without a job output.
+        type: string
+        required: false
+        default: ''
+      stagger-seconds:
+        description: >-
+          Upper bound (inclusive) on a random delay before the first attempt.
+          Matrix fan-outs set this so N simultaneous registrations do not hit the
+          GitHub API rate limit at the same instant. 0 disables the delay.
+        type: number
+        required: false
+        default: 0
+      backoff-seconds:
+        description: >-
+          Seconds to wait after the first failed attempt. The second wait is
+          twice this, so the default gives 90s then 180s between three attempts.
+        type: number
+        required: false
+        default: 90
+    secrets:
+      EC2_RUNNER_TOKEN:
+        description: Admin-scoped token used to register the runner with this repo.
+        required: true
+    outputs:
+      label:
+        description: Runner label to pass as `runs-on` in the job being provisioned.
+        value: ${{ jobs.start.outputs.label }}
+      ec2-instance-id:
+        description: Instance id, to be handed back to stop-ec2-runner.yml.
+        value: ${{ jobs.start.outputs.ec2-instance-id }}
+
+permissions:
+  id-token: write # Required for AWS OIDC
+
+jobs:
+  start:
+    name: Start EC2 runner
+    runs-on: ubuntu-latest
+    # Exactly one attempt can succeed: each is skipped unless every earlier one
+    # failed, so at most one of these outputs is non-empty and `||` picks it.
+    outputs:
+      label: ${{ steps.a1.outputs.label || steps.a2.outputs.label || steps.a3.outputs.label }}
+      ec2-instance-id: ${{ steps.a1.outputs.ec2-instance-id || steps.a2.outputs.ec2-instance-id || steps.a3.outputs.ec2-instance-id }}
+    steps:
+      - name: Stagger job start to avoid API rate limits
+        if: inputs.stagger-seconds > 0
+        env:
+          STAGGER: ${{ inputs.stagger-seconds }}
+        run: |
+          DELAY=$((RANDOM % (STAGGER + 1)))
+          echo "Delaying start by ${DELAY}s to spread out runner registrations."
+          sleep "${DELAY}"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          role-to-assume: ${{ inputs.aws-role }}
+          aws-region: ${{ inputs.aws-region }}
+
+      - name: Start EC2 runner (attempt 1)
+        id: a1
+        continue-on-error: true
+        uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
+        with:
+          mode: start
+          github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
+          ec2-instance-type: ${{ inputs.instance-type }}
+          availability-zones-config: ${{ inputs.az-config }}
+          # Empty label => the action generates a unique one (its documented
+          # behaviour). aws-resource-tags is NOT so forgiving: the action does a
+          # bare JSON.parse() on it, which throws on '', so default to '[]'.
+          label: ${{ inputs.runner-label }}
+          aws-resource-tags: ${{ inputs.aws-resource-tags || '[]' }}
+
+      - name: Back off before attempt 2
+        if: steps.a1.outcome == 'failure'
+        env:
+          BACKOFF: ${{ inputs.backoff-seconds }}
+        run: |
+          echo "::warning::Runner start attempt 1 found no capacity; retrying in ${BACKOFF}s."
+          sleep "${BACKOFF}"
+
+      - name: Start EC2 runner (attempt 2)
+        id: a2
+        if: steps.a1.outcome == 'failure'
+        continue-on-error: true
+        uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
+        with:
+          mode: start
+          github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
+          ec2-instance-type: ${{ inputs.instance-type }}
+          availability-zones-config: ${{ inputs.az-config }}
+          # Empty label => the action generates a unique one (its documented
+          # behaviour). aws-resource-tags is NOT so forgiving: the action does a
+          # bare JSON.parse() on it, which throws on '', so default to '[]'.
+          label: ${{ inputs.runner-label }}
+          aws-resource-tags: ${{ inputs.aws-resource-tags || '[]' }}
+
+      - name: Back off before attempt 3
+        if: steps.a1.outcome == 'failure' && steps.a2.outcome == 'failure'
+        env:
+          BACKOFF: ${{ inputs.backoff-seconds }}
+        run: |
+          echo "::warning::Runner start attempt 2 found no capacity; retrying in $((BACKOFF * 2))s."
+          sleep "$((BACKOFF * 2))"
+
+      - name: Start EC2 runner (attempt 3)
+        id: a3
+        if: steps.a1.outcome == 'failure' && steps.a2.outcome == 'failure'
+        continue-on-error: true
+        uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
+        with:
+          mode: start
+          github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
+          ec2-instance-type: ${{ inputs.instance-type }}
+          availability-zones-config: ${{ inputs.az-config }}
+          # Empty label => the action generates a unique one (its documented
+          # behaviour). aws-resource-tags is NOT so forgiving: the action does a
+          # bare JSON.parse() on it, which throws on '', so default to '[]'.
+          label: ${{ inputs.runner-label }}
+          aws-resource-tags: ${{ inputs.aws-resource-tags || '[]' }}
+
+      - name: Fail if no attempt obtained capacity
+        if: steps.a1.outcome == 'failure' && steps.a2.outcome == 'failure' && steps.a3.outcome == 'failure'
+        env:
+          INSTANCE_TYPE: ${{ inputs.instance-type }}
+        run: |
+          echo "::error::Could not obtain a ${INSTANCE_TYPE} instance after 3 attempts across every configured availability zone; the region is likely out of this instance type."
+          exit 1
