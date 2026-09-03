@@ -59,42 +59,29 @@ jobs:
     name: Start CPU-only EC2 runner for nightly build
     needs: [check-new-commits, versions]
     if: needs.check-new-commits.outputs.should_build == 'true'
-    runs-on: ubuntu-latest
     permissions:
       id-token: write  # Required for AWS OIDC
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.versions.outputs.publish-matrix) }}
-    steps:
-      - name: Stagger job starts to avoid API rate limits
-        run: |
-          DELAY=$((RANDOM % 16))
-          echo "Delaying start by ${DELAY} seconds for Python ${MATRIX_PYTHON_VERSION}"
-          sleep $DELAY
-        env:
-          MATRIX_PYTHON_VERSION: ${{ matrix.python-version }}
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
-        with:
-          role-to-assume: ${{ needs.versions.outputs.aws-role }}
-          aws-region: ${{ needs.versions.outputs.aws-region }}
-      - name: Start EC2 runner
-        id: start-build-runner
-        uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
-        with:
-          mode: start
-          github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
-          ec2-instance-type: m6a.xlarge
-          availability-zones-config: ${{ needs.versions.outputs.aws-cpu-az-config }}
-          label: nightly-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
-          aws-resource-tags: >
-            [
-              {"Key": "RunnerLabel", "Value": "nightly-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}"},
-              {"Key": "PythonVersion", "Value": "${{ matrix.python-version }}"},
-              {"Key": "TorchVersion", "Value": "${{ matrix.torch-version }}"},
-              {"Key": "CudaVersion", "Value": "${{ matrix.cuda-version }}"},
-              {"Key": "GitHubRunId", "Value": "${{ github.run_id }}"}
-            ]
+    uses: ./.github/workflows/start-ec2-runner.yml
+    with:
+      instance-type: m6a.xlarge
+      az-config: ${{ needs.versions.outputs.aws-cpu-az-config }}
+      runner-label: nightly-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
+      aws-resource-tags: >
+        [
+          {"Key": "RunnerLabel", "Value": "nightly-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}"},
+          {"Key": "PythonVersion", "Value": "${{ matrix.python-version }}"},
+          {"Key": "TorchVersion", "Value": "${{ matrix.torch-version }}"},
+          {"Key": "CudaVersion", "Value": "${{ matrix.cuda-version }}"},
+          {"Key": "GitHubRunId", "Value": "${{ github.run_id }}"}
+        ]
+      stagger-seconds: 15
+      aws-role: ${{ needs.versions.outputs.aws-role }}
+      aws-region: ${{ needs.versions.outputs.aws-region }}
+    secrets:
+      EC2_RUNNER_TOKEN: ${{ secrets.EC2_RUNNER_TOKEN }}
 
   ##############################################################################
   # BUILD NIGHTLY WHEELS
@@ -360,47 +347,16 @@ jobs:
       - start-build-runner
       - nightly-build
       - versions
-    runs-on: ubuntu-latest
     if: ${{ always() && needs.start-build-runner.result != 'skipped' }}
     permissions:
       id-token: write  # Required for AWS OIDC
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.versions.outputs.publish-matrix) }}
-    steps:
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
-        with:
-          role-to-assume: ${{ needs.versions.outputs.aws-role }}
-          aws-region: ${{ needs.versions.outputs.aws-region }}
-      - name: Find EC2 instance ID by label
-        id: find-instance
-        run: |
-          LABEL="nightly-${MATRIX_PYTHON_VERSION}-pt${MATRIX_TORCH_VERSION}-cu${MATRIX_CUDA_VERSION}-${{ github.run_id }}"
-          echo "Looking for instance with RunnerLabel: $LABEL"
-
-          INSTANCE_ID=$(aws ec2 describe-instances \
-            --filters "Name=tag:RunnerLabel,Values=$LABEL" "Name=instance-state-name,Values=running,pending,stopping,stopped" \
-            --query 'Reservations[0].Instances[0].InstanceId' \
-            --output text)
-
-          if [ "$INSTANCE_ID" == "None" ] || [ -z "$INSTANCE_ID" ]; then
-            echo "ERROR: No instance found with RunnerLabel=$LABEL"
-            echo "instance-id=" >> $GITHUB_OUTPUT
-            exit 1
-          else
-            echo "Found instance: $INSTANCE_ID"
-            echo "instance-id=$INSTANCE_ID" >> $GITHUB_OUTPUT
-          fi
-        env:
-          MATRIX_PYTHON_VERSION: ${{ matrix.python-version }}
-          MATRIX_TORCH_VERSION: ${{ matrix.torch-version }}
-          MATRIX_CUDA_VERSION: ${{ matrix.cuda-version }}
-      - name: Stop EC2 runner
-        if: steps.find-instance.outputs.instance-id != ''
-        uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
-        with:
-          mode: stop
-          github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
-          label: nightly-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
-          ec2-instance-id: ${{ steps.find-instance.outputs.instance-id }}
+    uses: ./.github/workflows/stop-ec2-runner.yml
+    with:
+      label: nightly-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
+      aws-role: ${{ needs.versions.outputs.aws-role }}
+      aws-region: ${{ needs.versions.outputs.aws-region }}
+    secrets:
+      EC2_RUNNER_TOKEN: ${{ secrets.EC2_RUNNER_TOKEN }}
