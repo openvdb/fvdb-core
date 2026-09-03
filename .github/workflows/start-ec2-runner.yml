@@ -90,11 +90,11 @@ jobs:
   start:
     name: Start EC2 runner
     runs-on: ubuntu-latest
-    # Exactly one attempt can succeed: each is skipped unless every earlier one
-    # failed, so at most one of these outputs is non-empty and `||` picks it.
+    # Taken from the attempt that actually SUCCEEDED -- see the select step
+    # below for why "first non-empty" is not the same thing.
     outputs:
-      label: ${{ steps.a1.outputs.label || steps.a2.outputs.label || steps.a3.outputs.label }}
-      ec2-instance-id: ${{ steps.a1.outputs.ec2-instance-id || steps.a2.outputs.ec2-instance-id || steps.a3.outputs.ec2-instance-id }}
+      label: ${{ steps.select.outputs.label }}
+      ec2-instance-id: ${{ steps.select.outputs.ec2-instance-id }}
     steps:
       - name: Stagger job start to avoid API rate limits
         if: inputs.stagger-seconds > 0
@@ -126,6 +126,19 @@ jobs:
           label: ${{ inputs.runner-label }}
           aws-resource-tags: ${{ inputs.aws-resource-tags || '[]' }}
 
+      # The action publishes its outputs as soon as the instance launches, i.e.
+      # BEFORE it waits for the runner to register. So a failed attempt can still
+      # have left an instance running -- terminate it rather than leak it.
+      - name: Clean up the instance left behind by attempt 1
+        if: steps.a1.outcome == 'failure' && steps.a1.outputs.ec2-instance-id != ''
+        continue-on-error: true
+        uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
+        with:
+          mode: stop
+          github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
+          label: ${{ steps.a1.outputs.label }}
+          ec2-instance-id: ${{ steps.a1.outputs.ec2-instance-id }}
+
       - name: Back off before attempt 2
         if: steps.a1.outcome == 'failure'
         env:
@@ -149,6 +162,19 @@ jobs:
           # bare JSON.parse() on it, which throws on '', so default to '[]'.
           label: ${{ inputs.runner-label }}
           aws-resource-tags: ${{ inputs.aws-resource-tags || '[]' }}
+
+      # The action publishes its outputs as soon as the instance launches, i.e.
+      # BEFORE it waits for the runner to register. So a failed attempt can still
+      # have left an instance running -- terminate it rather than leak it.
+      - name: Clean up the instance left behind by attempt 2
+        if: steps.a2.outcome == 'failure' && steps.a2.outputs.ec2-instance-id != ''
+        continue-on-error: true
+        uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
+        with:
+          mode: stop
+          github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
+          label: ${{ steps.a2.outputs.label }}
+          ec2-instance-id: ${{ steps.a2.outputs.ec2-instance-id }}
 
       - name: Back off before attempt 3
         if: steps.a1.outcome == 'failure' && steps.a2.outcome == 'failure'
@@ -174,10 +200,49 @@ jobs:
           label: ${{ inputs.runner-label }}
           aws-resource-tags: ${{ inputs.aws-resource-tags || '[]' }}
 
-      - name: Fail if no attempt obtained capacity
-        if: steps.a1.outcome == 'failure' && steps.a2.outcome == 'failure' && steps.a3.outcome == 'failure'
+      # The action publishes its outputs as soon as the instance launches, i.e.
+      # BEFORE it waits for the runner to register. So a failed attempt can still
+      # have left an instance running -- terminate it rather than leak it.
+      - name: Clean up the instance left behind by attempt 3
+        if: steps.a3.outcome == 'failure' && steps.a3.outputs.ec2-instance-id != ''
+        continue-on-error: true
+        uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
+        with:
+          mode: stop
+          github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
+          label: ${{ steps.a3.outputs.label }}
+          ec2-instance-id: ${{ steps.a3.outputs.ec2-instance-id }}
+
+      # Pick the outputs of the attempt that succeeded. This must key on the
+      # step OUTCOME, not on which output is non-empty: an attempt whose
+      # instance launched but never registered a runner fails with its outputs
+      # already populated, so "first non-empty" would hand back a dead label --
+      # the dependent job would then queue against a runner that never appears
+      # instead of failing fast.
+      - name: Select the successful attempt
+        id: select
         env:
           INSTANCE_TYPE: ${{ inputs.instance-type }}
+          A1_OUTCOME: ${{ steps.a1.outcome }}
+          A1_LABEL: ${{ steps.a1.outputs.label }}
+          A1_ID: ${{ steps.a1.outputs.ec2-instance-id }}
+          A2_OUTCOME: ${{ steps.a2.outcome }}
+          A2_LABEL: ${{ steps.a2.outputs.label }}
+          A2_ID: ${{ steps.a2.outputs.ec2-instance-id }}
+          A3_OUTCOME: ${{ steps.a3.outcome }}
+          A3_LABEL: ${{ steps.a3.outputs.label }}
+          A3_ID: ${{ steps.a3.outputs.ec2-instance-id }}
         run: |
-          echo "::error::Could not obtain a ${INSTANCE_TYPE} instance after 3 attempts across every configured availability zone; the region is likely out of this instance type."
-          exit 1
+          if [ "${A1_OUTCOME}" = "success" ]; then
+            LABEL="${A1_LABEL}"; ID="${A1_ID}"; WON=1
+          elif [ "${A2_OUTCOME}" = "success" ]; then
+            LABEL="${A2_LABEL}"; ID="${A2_ID}"; WON=2
+          elif [ "${A3_OUTCOME}" = "success" ]; then
+            LABEL="${A3_LABEL}"; ID="${A3_ID}"; WON=3
+          else
+            echo "::error::Could not obtain a ${INSTANCE_TYPE} instance after 3 attempts across every configured availability zone; the region is likely out of this instance type."
+            exit 1
+          fi
+          echo "Runner provisioned on attempt ${WON}: ${LABEL} (${ID})"
+          echo "label=${LABEL}" >> "$GITHUB_OUTPUT"
+          echo "ec2-instance-id=${ID}" >> "$GITHUB_OUTPUT"
