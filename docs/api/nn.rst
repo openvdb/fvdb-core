@@ -4,6 +4,7 @@ Neural Network Layers and Blocks
 .. autoclass:: fvdb.nn.MaxPool
 .. autoclass:: fvdb.nn.AvgPool
 .. autoclass:: fvdb.nn.UpsamplingNearest
+.. autoclass:: fvdb.nn.Prune
 .. autoclass:: fvdb.nn.SparseConv3d
 .. autoclass:: fvdb.nn.SparseConvTranspose3d
 .. autoclass:: fvdb.nn.BatchNorm

@@ -261,6 +261,58 @@ class UpsamplingNearest(nn.Module):
         return coarse_grid.refine(self.scale_factor, coarse_data, mask, fine_grid=fine_grid)
 
 
+@_trace_fvdb_nn_forward
+class Prune(nn.Module):
+    """
+    Prunes the topology of a :class:`fvdb.GridBatch` and its associated :class:`JaggedTensor`
+    features according to a boolean keep-mask with one entry per active voxel. Voxels where the
+    mask is ``False`` are removed from the output grid, and the corresponding feature rows are
+    removed from the output features.
+
+    This module prunes *grid topology* (voxels), not network parameters — it is unrelated to
+    weight pruning as in :mod:`torch.nn.utils.prune`. It is typically used in generative
+    sparse decoders, where a classifier predicts which voxels of a generated topology to keep
+    (*e.g.* after a generative transposed convolution built with
+    :meth:`fvdb.ConvolutionPlan.from_grid_batch_transposed`).
+
+    .. note::
+
+        Pruning preserves the canonical voxel order of the surviving voxels, so the returned
+        features remain aligned with the returned grid. Feature selection is differentiable
+        (gradients flow to the kept rows of ``data``); the mask itself is not differentiable.
+
+    .. seealso::
+
+        :meth:`fvdb.GridBatch.pruned_grid` and :meth:`fvdb.JaggedTensor.rmask` for the
+        underlying operations.
+    """
+
+    def forward(
+        self,
+        data: JaggedTensor,
+        grid: GridBatch,
+        mask: JaggedTensor,
+    ) -> tuple[JaggedTensor, GridBatch]:
+        """
+        Prune ``grid`` and ``data`` down to the voxels where ``mask`` is ``True``.
+
+        Args:
+            data (JaggedTensor): Input features associated with ``grid``.
+                Shape: ``(batch_size, num_voxels_b, channels)``.
+            grid (GridBatch): The grid batch corresponding to ``data``.
+            mask (JaggedTensor): Boolean keep-mask with one entry per active voxel of ``grid``.
+                Shape: ``(batch_size, num_voxels_b)``.
+
+        Returns:
+            pruned_data (JaggedTensor): Features of the surviving voxels, aligned with ``pruned_grid``.
+            pruned_grid (GridBatch): A new :class:`fvdb.GridBatch` containing only the voxels
+                where ``mask`` is ``True``.
+        """
+        pruned_grid = grid.pruned_grid(mask)
+        pruned_data = data.rmask(mask.jdata)
+        return pruned_data, pruned_grid
+
+
 class _SparseConv3dBase(nn.Module):
     def __init__(
         self,
