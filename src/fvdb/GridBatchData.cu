@@ -176,11 +176,14 @@ const torch::Tensor
 GridBatchData::voxelSizesTensor() const {
     torch::Tensor retTorch =
         torch::empty({batchSize(), 3}, torch::TensorOptions().dtype(torch::kFloat64));
+    // Direct accessor fill: per-element tensor indexing costs 6 ATen dispatches per grid, which
+    // dominates plan-construction-time transform validation (issue #755).
+    auto acc = retTorch.accessor<double, 2>();
     for (int64_t bi = 0; bi < batchSize(); bi += 1) {
         const auto voxSize = voxelSizeAt(bi);
-        retTorch[bi][0]    = voxSize[0];
-        retTorch[bi][1]    = voxSize[1];
-        retTorch[bi][2]    = voxSize[2];
+        acc[bi][0]         = voxSize[0];
+        acc[bi][1]         = voxSize[1];
+        acc[bi][2]         = voxSize[2];
     }
     return retTorch;
 }
@@ -189,11 +192,12 @@ const torch::Tensor
 GridBatchData::voxelOriginsTensor() const {
     torch::Tensor retTorch =
         torch::empty({batchSize(), 3}, torch::TensorOptions().dtype(torch::kFloat64));
+    auto acc = retTorch.accessor<double, 2>();
     for (int64_t bi = 0; bi < batchSize(); bi += 1) {
         const auto voxOrigin = voxelOriginAt(bi);
-        retTorch[bi][0]      = voxOrigin[0];
-        retTorch[bi][1]      = voxOrigin[1];
-        retTorch[bi][2]      = voxOrigin[2];
+        acc[bi][0]           = voxOrigin[0];
+        acc[bi][1]           = voxOrigin[1];
+        acc[bi][2]           = voxOrigin[2];
     }
     return retTorch;
 }

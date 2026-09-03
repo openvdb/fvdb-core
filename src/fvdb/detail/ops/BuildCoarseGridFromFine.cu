@@ -11,12 +11,11 @@
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/VoxelSizeUtils.h>
-#include <fvdb/detail/utils/nanovdb/CreateEmptyGridHandle.h>
+#include <fvdb/detail/utils/nanovdb/BatchedTopologyBuilder.cuh>
 
 #include <nanovdb/NanoVDB.h>
 #include <nanovdb/tools/CreateNanoGrid.h>
 #include <nanovdb/tools/GridBuilder.h>
-#include <nanovdb/tools/cuda/CoarsenGrid.cuh>
 
 #include <c10/cuda/CUDACachingAllocator.h>
 #include <c10/cuda/CUDAGuard.h>
@@ -53,10 +52,11 @@ dispatchBuildCoarseGridFromFine(const GridBatchData &fineGridBatch,
 nanovdb::GridHandle<TorchDeviceBuffer>
 coarseGridHandleFromFineCUDA(const GridBatchData &fineGridBatch,
                              const nanovdb::Coord &branchingFactor) {
-    // fvdb coarsening maps fine voxel f to floor(f / factor); NanoVDB's CoarsenGrid maps f to
-    // floor(f / 2) per pass (its coarsenComponent is exactly floor(n/2) for all n, and it unions
-    // each 2^3 fine block). So a uniform power-of-two factor is that many CoarsenGrid passes -- no
-    // coordinate list, no radix sort. Non-power-of-two / non-uniform factors keep the coord path.
+    // fvdb coarsening maps fine voxel f to floor(f / factor); a factor-2 coarsen pass maps f to
+    // floor(f / 2) (coarsenCoord is exactly floor(n/2) for all n, and each 2^3 fine block is
+    // unioned). So a uniform power-of-two factor is that many batched leaf-mask coarsen passes
+    // over the whole batch (BatchedTopologyBuilder) -- no coordinate list, no per-member builds.
+    // Non-power-of-two / non-uniform factors keep the coordinate path.
     const int nPasses = uniformPowerOfTwoLog2(branchingFactor);
     if (nPasses < 0) {
         JaggedTensor coords = ops::coarseIJKForFineGrid(fineGridBatch, branchingFactor);
@@ -65,7 +65,6 @@ coarseGridHandleFromFineCUDA(const GridBatchData &fineGridBatch,
 
     c10::cuda::CUDAGuard deviceGuard(fineGridBatch.device());
     at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream(fineGridBatch.device().index());
-    TorchDeviceBuffer guide(0, fineGridBatch.device());
 
     if (nPasses == 0) {
         // Coarsening factor 1 is the identity: the coarse grid == the fine grid. Compact the
@@ -73,31 +72,12 @@ coarseGridHandleFromFineCUDA(const GridBatchData &fineGridBatch,
         return ops::contiguousGridHandle(fineGridBatch);
     }
 
-    std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> handles;
-    handles.reserve(fineGridBatch.batchSize());
-    for (int64_t i = 0; i < fineGridBatch.batchSize(); i += 1) {
-        if (fineGridBatch.numVoxelsAt(i) == 0) {
-            handles.push_back(createEmptyGridHandle(fineGridBatch.device()));
-            continue;
-        }
-
-        nanovdb::OnIndexGrid *grid = fineGridBatch.deviceGridPtrAt(i);
-        TORCH_CHECK(grid, "Grid is null");
-        nanovdb::GridHandle<TorchDeviceBuffer> handle;
-        for (int p = 0; p < nPasses; p += 1) {
-            nanovdb::tools::cuda::CoarsenGrid<nanovdb::ValueOnIndex, BuilderResource> op(
-                grid, stream.stream());
-            op.setChecksum(nanovdb::CheckMode::Default);
-            op.setVerbose(0);
-            handle = op.getHandle(guide);
-            C10_CUDA_KERNEL_LAUNCH_CHECK();
-            grid = handle.deviceGrid<nanovdb::ValueOnIndex>();
-        }
-        handles.push_back(std::move(handle));
-    }
-
-    return handles.size() == 1 ? std::move(handles[0])
-                               : nanovdb::cuda::mergeGridHandles(handles, &guide);
+    // All batch members are coarsened together, one batched pass per factor of 2: a single output
+    // buffer, one stream synchronization per pass, no per-member builds or handle merging
+    // (issue #755). Empty members become valid empty grids inline.
+    const std::vector<batched::TopologyPassSpec> passes(nPasses,
+                                                        batched::TopologyPassSpec::coarsen());
+    return batched::batchedTopologyHandle(fineGridBatch, passes, stream.stream());
 }
 
 template <>

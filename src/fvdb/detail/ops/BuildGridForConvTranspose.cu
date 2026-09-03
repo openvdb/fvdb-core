@@ -11,12 +11,9 @@
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
-#include <fvdb/detail/utils/nanovdb/CreateEmptyGridHandle.h>
-#include <fvdb/detail/utils/nanovdb/PadGrid.cuh>
+#include <fvdb/detail/utils/nanovdb/BatchedTopologyBuilder.cuh>
 
 #include <nanovdb/tools/CreateNanoGrid.h>
-#include <nanovdb/tools/cuda/DilateGrid.cuh>
-#include <nanovdb/tools/cuda/RefineGrid.cuh>
 #include <nanovdb/util/MorphologyHelpers.h>
 
 #include <c10/cuda/CUDAException.h>
@@ -178,34 +175,15 @@ convTransposeIJKForGrid(const GridBatchData &batchHdl, ConvolutionGeometry const
         outIJK, outIJKBIdx, batchHdl.jlidx(), batchHdl.batchSize());
 }
 
-// Applies fn(grid) -> handle to each non-empty batch item, empties -> empty grid, then merges.
-template <typename PerGridFn>
-static nanovdb::GridHandle<TorchDeviceBuffer>
-perItemGridHandle(const GridBatchData &base, const TorchDeviceBuffer &guide, PerGridFn &&fn) {
-    std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> handles;
-    handles.reserve(base.batchSize());
-    for (int64_t i = 0; i < base.batchSize(); i += 1) {
-        if (base.numVoxelsAt(i) == 0) {
-            handles.push_back(createEmptyGridHandle(base.device()));
-            continue;
-        }
-
-        nanovdb::OnIndexGrid *grid = base.deviceGridPtrAt(i);
-        TORCH_CHECK(grid, "Grid is null");
-        handles.push_back(fn(grid));
-    }
-    return handles.size() == 1 ? std::move(handles[0])
-                               : nanovdb::cuda::mergeGridHandles(handles, &guide);
-}
-
 template <>
 nanovdb::GridHandle<TorchDeviceBuffer>
 dispatchBuildGridForConvTranspose<torch::kCUDA>(const GridBatchData &baseGridHdl,
                                                 const nanovdb::Coord &kernelSize,
                                                 const nanovdb::Coord &stride) {
+    using PassSpec = batched::TopologyPassSpec;
     ConvolutionGeometry const geometry(kernelSize, stride);
 
-    // NanoVDB realizes the unshifted K=S={1,2} subdivision directly on leaf masks.
+    // The unshifted K=S={1,2} subdivision is realized directly on leaf masks (batched).
     // Shifted K=S geometries retain the canonical -paddingBefore phase in the fallback below.
     if (supportsLeafMaskSubdivision(geometry)) {
         return fineGridHandleFromCoarseCUDA(baseGridHdl, geometry.stride(), std::nullopt);
@@ -213,70 +191,36 @@ dispatchBuildGridForConvTranspose<torch::kCUDA>(const GridBatchData &baseGridHdl
 
     c10::cuda::CUDAGuard deviceGuard(baseGridHdl.device());
     at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream(baseGridHdl.device().index());
-    TorchDeviceBuffer guide(0, baseGridHdl.device());
 
     // At stride one the canonical transpose support is source (+)
-    // [-paddingBefore, paddingAfter]^3. Realize that box with NanoVDB morphology.
+    // [-paddingBefore, paddingAfter]^3. Realize that box with batched leaf-mask morphology
+    // (Minkowski sums by boxes compose: odd K = symmetric [-1,1]^3 passes, even K = one-sided
+    // {-1,0}^3 / {0,1}^3 passes), all batch members per pass at once (issue #755).
     if (geometry.stride() == nanovdb::Coord(1) && isUniformKernel(geometry) &&
         geometry.kernelSize()[0] > 1) {
         const int k = geometry.kernelSize()[0];
-        return perItemGridHandle(baseGridHdl, guide, [&](nanovdb::OnIndexGrid *grid) {
-            nanovdb::GridHandle<TorchDeviceBuffer> handle;
-            if (k % 2 == 1) {
-                for (int p = 0; p < geometry.paddingBefore()[0]; p += 1) {
-                    nanovdb::tools::cuda::DilateGrid<nanovdb::ValueOnIndex, BuilderResource> op(
-                        grid, stream.stream());
-                    op.setOperation(nanovdb::tools::morphology::NN_FACE_EDGE_VERTEX);
-                    op.setChecksum(nanovdb::CheckMode::Default);
-                    op.setVerbose(0);
-                    handle = op.getHandle(guide);
-                    C10_CUDA_KERNEL_LAUNCH_CHECK();
-                    grid = handle.deviceGrid<nanovdb::ValueOnIndex>();
-                }
-            } else {
-                for (int p = 0; p < geometry.paddingBefore()[0]; p += 1) {
-                    morphology::PadGrid<nanovdb::ValueOnIndex, BuilderResource> op(
-                        grid, /*positiveOctant=*/false, stream.stream());
-                    op.setChecksum(nanovdb::CheckMode::Default);
-                    handle = op.getHandle(guide);
-                    C10_CUDA_KERNEL_LAUNCH_CHECK();
-                    grid = handle.deviceGrid<nanovdb::ValueOnIndex>();
-                }
-                for (int p = 0; p < geometry.paddingAfter()[0]; p += 1) {
-                    morphology::PadGrid<nanovdb::ValueOnIndex, BuilderResource> op(
-                        grid, /*positiveOctant=*/true, stream.stream());
-                    op.setChecksum(nanovdb::CheckMode::Default);
-                    handle = op.getHandle(guide);
-                    C10_CUDA_KERNEL_LAUNCH_CHECK();
-                    grid = handle.deviceGrid<nanovdb::ValueOnIndex>();
-                }
-            }
-            return handle;
-        });
+        std::vector<PassSpec> passes;
+        if (k % 2 == 1) {
+            passes.assign(geometry.paddingBefore()[0],
+                          PassSpec::boxDilate(nanovdb::Coord(-1), nanovdb::Coord(1)));
+        } else {
+            passes.assign(geometry.paddingBefore()[0],
+                          PassSpec::boxDilate(nanovdb::Coord(-1), nanovdb::Coord(0)));
+            passes.insert(passes.end(),
+                          geometry.paddingAfter()[0],
+                          PassSpec::boxDilate(nanovdb::Coord(0), nanovdb::Coord(1)));
+        }
+        return batched::batchedTopologyHandle(baseGridHdl, passes, stream.stream());
     }
 
     // Fast path 3: stride 2, kernel 3 (the classic upsampling conv-transpose). The output is
-    // 2S (+) [-1,1]^3 (dstIjk = 2*srcIjk + offset, offset in [-1,1]^3). RefineGrid gives
+    // 2S (+) [-1,1]^3 (dstIjk = 2*srcIjk + offset, offset in [-1,1]^3). The refine pass gives
     // 2S (+) {0,1}^3, and one negative pad pass adds (+) {-1,0}^3, composing to (+) [-1,1]^3.
     if (geometry.stride() == nanovdb::Coord(2) && isUniformKernel(geometry) &&
         geometry.kernelSize()[0] == 3) {
-        return perItemGridHandle(baseGridHdl, guide, [&](nanovdb::OnIndexGrid *grid) {
-            nanovdb::tools::cuda::RefineGrid<nanovdb::ValueOnIndex, BuilderResource> refineOp(
-                grid, stream.stream());
-            refineOp.setChecksum(nanovdb::CheckMode::Default);
-            refineOp.setVerbose(0);
-            nanovdb::GridHandle<TorchDeviceBuffer> refined = refineOp.getHandle(guide);
-            C10_CUDA_KERNEL_LAUNCH_CHECK();
-
-            morphology::PadGrid<nanovdb::ValueOnIndex, BuilderResource> padOp(
-                refined.deviceGrid<nanovdb::ValueOnIndex>(),
-                /*positiveOctant=*/false,
-                stream.stream());
-            padOp.setChecksum(nanovdb::CheckMode::Default);
-            nanovdb::GridHandle<TorchDeviceBuffer> handle = padOp.getHandle(guide);
-            C10_CUDA_KERNEL_LAUNCH_CHECK();
-            return handle;
-        });
+        const std::vector<PassSpec> passes = {
+            PassSpec::refine(), PassSpec::boxDilate(nanovdb::Coord(-1), nanovdb::Coord(0))};
+        return batched::batchedTopologyHandle(baseGridHdl, passes, stream.stream());
     }
 
     if (isUnshiftedSubdivision(geometry)) {

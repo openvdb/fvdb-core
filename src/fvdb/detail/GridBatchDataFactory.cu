@@ -178,15 +178,18 @@ makeGridBatchData(nanovdb::GridHandle<TorchDeviceBuffer> &&gridHdl,
     TORCH_CHECK(listIndices.numel() == 0 || listIndices.size(0) == (batchOffsets.size(0) - 1),
                 "Invalid list indices when building grid");
 
-    std::vector<torch::Tensor> leafBatchIdxs;
-    leafBatchIdxs.reserve(batchSize);
+    // One repeat_interleave instead of a torch::full + torch::cat per member: the per-member
+    // version costs B+1 kernel dispatches on every grid construction (issue #755). Leaf counts
+    // are already host-side in hostMeta.
+    torch::Tensor leafCounts =
+        torch::empty({batchSize}, torch::TensorOptions().dtype(torch::kInt64));
+    auto leafCountsAcc = leafCounts.accessor<int64_t, 1>();
     for (int64_t i = 0; i < batchSize; i += 1) {
-        leafBatchIdxs.push_back(
-            torch::full({hostMeta[i].mNumLeaves},
-                        static_cast<fvdb::JIdxType>(i),
-                        torch::TensorOptions().dtype(fvdb::JIdxScalarType).device(device)));
+        leafCountsAcc[i] = hostMeta[i].mNumLeaves;
     }
-    torch::Tensor leafBatchIndices = torch::cat(leafBatchIdxs, 0);
+    torch::Tensor leafBatchIndices = torch::repeat_interleave(
+        torch::arange(batchSize, torch::TensorOptions().dtype(fvdb::JIdxScalarType).device(device)),
+        leafCounts.to(device));
 
     auto gridHdlPtr = std::make_shared<nanovdb::GridHandle<TorchDeviceBuffer>>(std::move(gridHdl));
 

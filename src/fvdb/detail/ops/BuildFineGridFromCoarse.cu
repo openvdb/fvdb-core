@@ -14,12 +14,11 @@
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 #include <fvdb/detail/utils/cuda/ForEachPrivateUse1.cuh>
 #include <fvdb/detail/utils/cuda/GridDim.h>
-#include <fvdb/detail/utils/nanovdb/CreateEmptyGridHandle.h>
+#include <fvdb/detail/utils/nanovdb/BatchedTopologyBuilder.cuh>
 
 #include <nanovdb/NanoVDB.h>
 #include <nanovdb/tools/CreateNanoGrid.h>
 #include <nanovdb/tools/GridBuilder.h>
-#include <nanovdb/tools/cuda/RefineGrid.cuh>
 
 #include <c10/cuda/CUDACachingAllocator.h>
 #include <c10/cuda/CUDAGuard.h>
@@ -391,11 +390,11 @@ nanovdb::GridHandle<TorchDeviceBuffer>
 fineGridHandleFromCoarseCUDA(const GridBatchData &coarseBatchHdl,
                              const nanovdb::Coord &factor,
                              const std::optional<JaggedTensor> &mask) {
-    // fvdb subdivision maps coarse voxel c to the fine block c*factor + [0, factor-1]^3; NanoVDB's
-    // RefineGrid maps c to 2c + {0,1}^3 per pass. So a uniform power-of-two factor is that many
-    // RefineGrid passes -- leaf-mask morphology, no coordinate list, no radix sort. A per-coarse
-    // -voxel mask is applied by pruning the coarse grid to it first (PruneGrid), then refining.
-    // Non-power-of-two / non-uniform factors keep the coordinate path.
+    // fvdb subdivision maps coarse voxel c to the fine block c*factor + [0, factor-1]^3; a factor-2
+    // refine pass maps c to 2c + {0,1}^3. So a uniform power-of-two factor is that many batched
+    // leaf-mask refine passes over the whole batch (BatchedTopologyBuilder) -- no coordinate list,
+    // no per-member builds. A per-coarse-voxel mask is applied by pruning the coarse grid to it
+    // first (PruneGrid), then refining. Non-power-of-two / non-uniform factors keep the coord path.
     const int nPasses = subdivUniformPowerOfTwoLog2(factor);
     if (nPasses < 0) {
         JaggedTensor coords =
@@ -405,7 +404,6 @@ fineGridHandleFromCoarseCUDA(const GridBatchData &coarseBatchHdl,
 
     c10::cuda::CUDAGuard deviceGuard(coarseBatchHdl.device());
     at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream(coarseBatchHdl.device().index());
-    TorchDeviceBuffer guide(0, coarseBatchHdl.device());
 
     // The grid to refine is the coarse grid, or -- for masked subdivision -- the coarse grid pruned
     // to the selected voxels. pruneGrid keeps the coarse transform and canonical order; only its
@@ -424,31 +422,12 @@ fineGridHandleFromCoarseCUDA(const GridBatchData &coarseBatchHdl,
         return ops::contiguousGridHandle(*src);
     }
 
-    std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> handles;
-    handles.reserve(src->batchSize());
-    for (int64_t i = 0; i < src->batchSize(); i += 1) {
-        if (src->numVoxelsAt(i) == 0) {
-            handles.push_back(createEmptyGridHandle(coarseBatchHdl.device()));
-            continue;
-        }
-
-        nanovdb::OnIndexGrid *grid = src->deviceGridPtrAt(i);
-        TORCH_CHECK(grid, "Grid is null");
-        nanovdb::GridHandle<TorchDeviceBuffer> handle;
-        for (int p = 0; p < nPasses; p += 1) {
-            nanovdb::tools::cuda::RefineGrid<nanovdb::ValueOnIndex, BuilderResource> op(
-                grid, stream.stream());
-            op.setChecksum(nanovdb::CheckMode::Default);
-            op.setVerbose(0);
-            handle = op.getHandle(guide);
-            C10_CUDA_KERNEL_LAUNCH_CHECK();
-            grid = handle.deviceGrid<nanovdb::ValueOnIndex>();
-        }
-        handles.push_back(std::move(handle));
-    }
-
-    return handles.size() == 1 ? std::move(handles[0])
-                               : nanovdb::cuda::mergeGridHandles(handles, &guide);
+    // All batch members are refined together, one batched pass per factor of 2: a single output
+    // buffer, one stream synchronization per pass, no per-member builds or handle merging
+    // (issue #755). Empty members become valid empty grids inline.
+    const std::vector<batched::TopologyPassSpec> passes(nPasses,
+                                                        batched::TopologyPassSpec::refine());
+    return batched::batchedTopologyHandle(*src, passes, stream.stream());
 }
 
 template <>
