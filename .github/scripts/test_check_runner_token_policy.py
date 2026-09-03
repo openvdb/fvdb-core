@@ -3,9 +3,11 @@
 """Unit tests for the EC2 runner-token CI policy.
 
 Exercises check_runner_token_policy.py -- the security gate that enforces that
-``secrets.EC2_RUNNER_TOKEN`` is only ever used as the ``github-token`` input to
-``machulav/ec2-github-runner``. Run by .github/workflows/workflow-security.yml
-on every PR (it needs only pyyaml + pytest, no fvdb build).
+``secrets.EC2_RUNNER_TOKEN`` only ever reaches ``machulav/ec2-github-runner``,
+either as that action's ``github-token`` input or forwarded by name to a *local*
+reusable workflow that this same scan covers. Run by
+.github/workflows/workflow-security.yml on every PR (it needs only pyyaml +
+pytest, no fvdb build).
 """
 
 from __future__ import annotations
@@ -34,8 +36,15 @@ def _load_policy_module():
 policy = _load_policy_module()
 
 
-def _check(tmp_path: Path, yaml_text: str) -> list[str]:
-    """Write a workflow file and return the policy violations it produces."""
+def _check(tmp_path: Path, yaml_text: str, callees: tuple[str, ...] = ()) -> list[str]:
+    """Write a workflow file and return the policy violations it produces.
+
+    ``callees`` names sibling workflow files to create first, for the rule-3b
+    check that a forwarding target actually exists in this directory (and is
+    therefore covered by the same scan).
+    """
+    for name in callees:
+        (tmp_path / name).write_text("name: callee\n")
     wf = tmp_path / "wf.yml"
     wf.write_text(textwrap.dedent(yaml_text))
     violations: list[str] = []
@@ -272,7 +281,54 @@ def test_local_action_in_token_job_is_rejected(tmp_path):
     assert any("LOCAL action" in v for v in violations)
 
 
-def test_job_level_token_with_no_step_is_rejected(tmp_path):
+# --- rule 3b: forwarding to a local reusable workflow ------------------------
+
+
+def test_forward_to_local_reusable_workflow_is_allowed(tmp_path):
+    """The DRY shape: the callee is a workflow file this same scan covers."""
+    violations = _check(
+        tmp_path,
+        """
+        name: ok
+        on: [push]
+        jobs:
+          call:
+            uses: ./.github/workflows/start-ec2-runner.yml
+            secrets:
+              EC2_RUNNER_TOKEN: ${{ secrets.EC2_RUNNER_TOKEN }}
+        """,
+        callees=("start-ec2-runner.yml",),
+    )
+    assert violations == []
+
+
+def test_callee_declaring_the_token_secret_is_allowed(tmp_path):
+    """The other half of 3b: `on.workflow_call.secrets` naming the token."""
+    violations = _check(
+        tmp_path,
+        """
+        name: ok
+        on:
+          workflow_call:
+            secrets:
+              EC2_RUNNER_TOKEN:
+                required: true
+        jobs:
+          start:
+            runs-on: ubuntu-latest
+            steps:
+              - uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef
+                with:
+                  mode: start
+                  github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
+        """,
+    )
+    assert violations == []
+
+
+def test_forward_to_remote_reusable_workflow_is_rejected(tmp_path):
+    """The hole `secrets: inherit` used to walk through: the token leaves the
+    repo, where no scan of ours can see what the callee does with it."""
     violations = _check(
         tmp_path,
         """
@@ -280,12 +336,120 @@ def test_job_level_token_with_no_step_is_rejected(tmp_path):
         on: [push]
         jobs:
           call:
-            uses: ./.github/workflows/reusable.yml
+            uses: other-org/other-repo/.github/workflows/x.yml@main
+            secrets:
+              EC2_RUNNER_TOKEN: ${{ secrets.EC2_RUNNER_TOKEN }}
+        """,
+    )
+    assert any("only be forwarded to a local reusable workflow" in v for v in violations)
+
+
+def test_forward_to_missing_local_workflow_is_rejected(tmp_path):
+    """A callee that is not in this directory would not be scanned."""
+    violations = _check(
+        tmp_path,
+        """
+        name: bad
+        on: [push]
+        jobs:
+          call:
+            uses: ./.github/workflows/nope.yml
+            secrets:
+              EC2_RUNNER_TOKEN: ${{ secrets.EC2_RUNNER_TOKEN }}
+        """,
+    )
+    assert any("does not exist" in v for v in violations)
+
+
+def test_forward_under_a_different_name_is_rejected(tmp_path):
+    """One name everywhere, so a single grep still enumerates every file."""
+    violations = _check(
+        tmp_path,
+        """
+        name: bad
+        on: [push]
+        jobs:
+          call:
+            uses: ./.github/workflows/start-ec2-runner.yml
             secrets:
               gh-token: ${{ secrets.EC2_RUNNER_TOKEN }}
         """,
+        callees=("start-ec2-runner.yml",),
     )
     assert violations
+
+
+def test_forward_from_a_job_with_no_uses_is_rejected(tmp_path):
+    violations = _check(
+        tmp_path,
+        """
+        name: bad
+        on: [push]
+        jobs:
+          call:
+            runs-on: ubuntu-latest
+            secrets:
+              EC2_RUNNER_TOKEN: ${{ secrets.EC2_RUNNER_TOKEN }}
+            steps:
+              - run: echo hi
+        """,
+    )
+    assert any("no job-level uses" in v for v in violations)
+
+
+def test_workflow_level_env_is_rejected(tmp_path):
+    """Same textual shape as a legitimate forward -- caught structurally."""
+    violations = _check(
+        tmp_path,
+        """
+        name: bad
+        on: [push]
+        env:
+          EC2_RUNNER_TOKEN: ${{ secrets.EC2_RUNNER_TOKEN }}
+        jobs:
+          leak:
+            runs-on: ubuntu-latest
+            steps:
+              - run: env
+        """,
+    )
+    assert any("outside any job" in v for v in violations)
+
+
+# --- rule 6: no blanket secret forwarding ------------------------------------
+
+
+def test_secrets_inherit_is_rejected(tmp_path):
+    """`inherit` forwards the admin token while naming nothing, so no textual
+    check can see where it goes -- including a forward out of the repo."""
+    violations = _check(
+        tmp_path,
+        """
+        name: bad
+        on: [push]
+        jobs:
+          call:
+            uses: ./.github/workflows/start-ec2-runner.yml
+            secrets: inherit
+        """,
+        callees=("start-ec2-runner.yml",),
+    )
+    assert any("secrets: inherit" in v for v in violations)
+
+
+def test_secrets_inherit_is_rejected_even_to_a_remote_workflow(tmp_path):
+    violations = _check(
+        tmp_path,
+        """
+        name: bad
+        on: [push]
+        jobs:
+          call:
+            uses: other-org/other-repo/.github/workflows/x.yml@main
+            secrets: inherit
+        """,
+    )
+    assert any("secrets: inherit" in v for v in violations)
 
 
 # --- the real fvdb workflows must all pass -----------------------------------
