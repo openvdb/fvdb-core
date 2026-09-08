@@ -6,7 +6,7 @@
     },
     "default": "13.0",
     "conda_override": "13.0",
-    "arch_list_pr": "8.9+PTX",
+    "arch_list_pr": "8.6+PTX",
     "arch_list_publish": "7.5;8.0;8.6;9.0;10.0;12.0+PTX"
   },
   "python": {

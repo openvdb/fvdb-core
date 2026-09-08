@@ -527,6 +527,7 @@ jobs:
     uses: ./.github/workflows/start-ec2-runner.yml
     with:
       instance-type: g6.xlarge
+      fallback-instance-type: g5.xlarge # A10G, SM 8.6 -- different capacity pool
       az-config: ${{ needs.versions.outputs.aws-gpu-az-config }}
       runner-label: val-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
       aws-resource-tags: >

@@ -64,6 +64,15 @@ on:
         type: number
         required: false
         default: 0
+      fallback-instance-type:
+        description: >-
+          Second instance type to try when the primary is out of capacity in
+          every AZ. Draws on a different capacity pool, so attempt 2 uses it
+          immediately rather than waiting out a backoff. Leave empty to retry
+          the primary type on every attempt (the previous behaviour).
+        type: string
+        required: false
+        default: ''
       backoff-seconds:
         description: >-
           Seconds to wait after the first failed attempt. The second wait is
@@ -139,8 +148,10 @@ jobs:
           label: ${{ steps.a1.outputs.label }}
           ec2-instance-id: ${{ steps.a1.outputs.ec2-instance-id }}
 
+      # Only wait when attempt 2 will re-ask the SAME pool. With a fallback type
+      # configured it targets a different one, so waiting buys nothing.
       - name: Back off before attempt 2
-        if: steps.a1.outcome == 'failure'
+        if: steps.a1.outcome == 'failure' && inputs.fallback-instance-type == ''
         env:
           BACKOFF: ${{ inputs.backoff-seconds }}
         run: |
@@ -155,7 +166,9 @@ jobs:
         with:
           mode: start
           github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
-          ec2-instance-type: ${{ inputs.instance-type }}
+          # The fallback type when one is configured, so this attempt draws on a
+          # different capacity pool rather than re-asking the pool that just said no.
+          ec2-instance-type: ${{ inputs.fallback-instance-type || inputs.instance-type }}
           availability-zones-config: ${{ inputs.az-config }}
           # Empty label => the action generates a unique one (its documented
           # behaviour). aws-resource-tags is NOT so forgiving: the action does a
@@ -223,6 +236,7 @@ jobs:
         id: select
         env:
           INSTANCE_TYPE: ${{ inputs.instance-type }}
+          FALLBACK_TYPE: ${{ inputs.fallback-instance-type }}
           A1_OUTCOME: ${{ steps.a1.outcome }}
           A1_LABEL: ${{ steps.a1.outputs.label }}
           A1_ID: ${{ steps.a1.outputs.ec2-instance-id }}
@@ -240,9 +254,14 @@ jobs:
           elif [ "${A3_OUTCOME}" = "success" ]; then
             LABEL="${A3_LABEL}"; ID="${A3_ID}"; WON=3
           else
-            echo "::error::Could not obtain a ${INSTANCE_TYPE} instance after 3 attempts across every configured availability zone; the region is likely out of this instance type."
+            TRIED="${INSTANCE_TYPE}"
+            [ -n "${FALLBACK_TYPE}" ] && TRIED="${INSTANCE_TYPE} and ${FALLBACK_TYPE}"
+            echo "::error::Could not obtain ${TRIED} after 3 attempts across every configured availability zone; the region is likely out of capacity for these instance types."
             exit 1
           fi
           echo "Runner provisioned on attempt ${WON}: ${LABEL} (${ID})"
+          if [ "${WON}" = "2" ] && [ -n "${FALLBACK_TYPE}" ]; then
+            echo "::notice::Primary ${INSTANCE_TYPE} was unavailable in every AZ; used fallback ${FALLBACK_TYPE}."
+          fi
           echo "label=${LABEL}" >> "$GITHUB_OUTPUT"
           echo "ec2-instance-id=${ID}" >> "$GITHUB_OUTPUT"

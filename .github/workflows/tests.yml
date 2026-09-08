@@ -175,6 +175,7 @@ jobs:
     uses: ./.github/workflows/start-ec2-runner.yml
     with:
       instance-type: g6.xlarge # 4 CPU-core, L4 GPU
+      fallback-instance-type: g5.xlarge # A10G, SM 8.6 -- different capacity pool
       az-config: ${{ needs.versions.outputs.aws-gpu-az-config }}
       aws-role: ${{ needs.versions.outputs.aws-role }}
       aws-region: ${{ needs.versions.outputs.aws-region }}
