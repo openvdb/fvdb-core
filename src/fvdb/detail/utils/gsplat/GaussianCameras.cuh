@@ -829,6 +829,49 @@ template <typename T> struct PerspectiveWithDistortionCamera {
         return isOutsideImageWithRadius(mean2d, radiusX, radiusY, imageWidth, imageHeight);
     }
 
+    /// @brief Returns the distortion model this camera was constructed with. Public so backward
+    /// kernels that are not themselves members of this struct (e.g.
+    /// `projectionUnscentedBackwardKernel` in ProjectGaussiansUnscentedBackward.cu) can select
+    /// the matching VJP without needing their own copy of this value threaded through.
+    inline __device__ DistortionModel
+    distortionModel() const {
+        return cameraModel;
+    }
+
+    /// @brief Returns the number of packed distortion coefficients this camera was constructed
+    /// with (0 for PINHOLE/ORTHOGRAPHIC, 12 for the OPENCV_* models). See `distortionModel()`.
+    inline __device__ int64_t
+    numDistortionCoeffs() const {
+        return numDistCoeffs;
+    }
+
+    /// @brief Public accessor for the RollingShutterType::NONE start-pose world-to-camera
+    /// rotation and translation for camera `cid`. See `distortionModel()`'s docstring for why
+    /// this is exposed publicly. Only the start pose is exposed -- callers relying on this must
+    /// already be scoped to RollingShutterType::NONE, where start == end.
+    inline __device__ std::tuple<Mat3, Vec3>
+    worldToCamStartRt(const int64_t cid) const {
+        const auto [R_wc_start, t_wc_start, R_wc_end, t_wc_end] = worldToCamRtStartEnd(cid);
+        (void)R_wc_end;
+        (void)t_wc_end;
+        return {R_wc_start, t_wc_start};
+    }
+
+    /// @brief Public accessor for this camera's [3,3] intrinsics matrix. See
+    /// `distortionModel()`'s docstring for why this is exposed publicly.
+    inline __device__ Mat3
+    projectionMatrixPublic(const int64_t cid) const {
+        return projectionMatrix(cid);
+    }
+
+    /// @brief Public accessor for this camera's packed distortion coefficients pointer (or
+    /// nullptr for PINHOLE/ORTHOGRAPHIC). See `distortionModel()`'s docstring for why this is
+    /// exposed publicly.
+    inline __device__ const T *
+    distortionCoeffsPtr(const int64_t cid) const {
+        return distortionPtr(cid);
+    }
+
     /// @brief Returns camera-space depth at a given rolling-shutter time.
     inline __device__ T
     cameraDepthAtTime(const int64_t cid,
@@ -1011,6 +1054,7 @@ template <typename T> struct PerspectiveWithDistortionCamera {
         return clamp01(u);
     }
 
+  public:
     /// @brief Applies OpenCV-style distortion to normalized camera coordinates.
     inline static __device__ nanovdb::math::Vec2<T>
     applyOpenCVDistortion(const DistortionModel model,
@@ -1063,6 +1107,46 @@ template <typename T> struct PerspectiveWithDistortionCamera {
         return nanovdb::math::Vec2<T>(xDist, yDist);
     }
 
+    /// @brief VJP for `applyOpenCVDistortion`, restricted to `OPENCV_RADTAN_5` (radial k1,k2,k3 +
+    /// tangential p1,p2 -- i.e. exactly what COLMAP's SIMPLE_RADIAL/RADIAL/OPENCV camera models
+    /// need). Callers must ensure `model == DistortionModel::OPENCV_RADTAN_5` before calling this
+    /// -- unlike the forward function, this does not branch on `model`, since the
+    /// `OPENCV_RATIONAL_8`/`*_THIN_PRISM_*` variants' extra terms (rational denominator, s1-s4)
+    /// have not been derived/validated here yet. See `ProjectGaussiansUnscentedBackward.h` for
+    /// the validation this derivation *was* checked against.
+    ///
+    /// @param[in] x, y Normalized (pre-distortion) camera-plane coordinates (forward-pass input;
+    /// already clamped to the same range the forward pass used).
+    /// @param[in] distCoeffs Packed distortion coefficients (only k1,k2,k3,p1,p2 are read).
+    /// @param[in] dLossDXDist, dLossDYDist Upstream gradient w.r.t. the distorted coordinates.
+    /// @param[out] outDLossDX, outDLossDY Gradient w.r.t. the normalized input coordinates.
+    inline static __device__ void
+    applyOpenCVDistortionVJP(const nanovdb::math::Vec2<T> &pNormalized,
+                             const T *distCoeffs,
+                             const T dLossDXDist,
+                             const T dLossDYDist,
+                             T &outDLossDX,
+                             T &outDLossDY) {
+        const T x = pNormalized[0];
+        const T y = pNormalized[1];
+        const T x2 = x * x, y2 = y * y, xy = x * y;
+        const T r2 = x2 + y2;
+        const T k1 = distCoeffs[0], k2 = distCoeffs[1], k3 = distCoeffs[2];
+        const T p1 = distCoeffs[6], p2 = distCoeffs[7];
+        const T radial = T(1) + k1 * r2 + k2 * r2 * r2 + k3 * r2 * r2 * r2;
+
+        const T dRadial = dLossDXDist * x + dLossDYDist * y;
+        T dR2 = dRadial * (k1 + T(2) * k2 * r2 + T(3) * k3 * r2 * r2) + dLossDXDist * p2 +
+               dLossDYDist * p1;
+        const T dXy = dLossDXDist * T(2) * p1 + dLossDYDist * T(2) * p2;
+        const T dX2 = dLossDXDist * T(2) * p2 + dR2;
+        const T dY2 = dLossDYDist * T(2) * p1 + dR2;
+
+        outDLossDX = dLossDXDist * radial + dX2 * T(2) * x + dXy * y;
+        outDLossDY = dLossDYDist * radial + dY2 * T(2) * y + dXy * x;
+    }
+
+  private:
     /// @brief Iteratively inverts OpenCV-style distortion on normalized coordinates.
     inline static __device__ nanovdb::math::Vec2<T>
     undistortOpenCV(const DistortionModel model,
