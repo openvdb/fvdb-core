@@ -54,8 +54,9 @@ struct GaussianData {
 };
 
 GaussianData
-makeGaussianData(const int64_t numHigherOrderBases = 3) {
-    const auto options = torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA);
+makeGaussianData(const int64_t numHigherOrderBases = 3,
+                 const torch::DeviceType device    = torch::kCUDA) {
+    const auto options = torch::TensorOptions().dtype(torch::kFloat32).device(device);
     return {
         torch::tensor({{0.1f, -0.2f, 2.0f}, {0.5f, 0.25f, 3.0f}}, options),
         torch::tensor({{1.0f, 0.0f, 0.0f, 0.0f}, {0.9f, 0.1f, 0.2f, 0.3f}}, options),
@@ -102,35 +103,38 @@ save(const TemporaryPlyFile &file,
 } // namespace
 
 TEST(GaussianPlyIOTest, StandardAndEmptyShNRoundTrips) {
-    for (const int64_t numHigherOrderBases: {3, 0}) {
-        const GaussianData expected = makeGaussianData(numHigherOrderBases);
-        TemporaryPlyFile file;
+    for (auto device: {torch::kCPU, torch::kCUDA}) {
+        for (const int64_t numHigherOrderBases: {3, 0}) {
+            const GaussianData expected = makeGaussianData(numHigherOrderBases, device);
+            TemporaryPlyFile file;
 
-        save(file, expected);
-        const auto loaded =
-            fvdb::detail::io::loadGaussianPly(file.string(), torch::Device(torch::kCUDA));
+            save(file, expected);
+            const auto loaded = fvdb::detail::io::loadGaussianPly(file.string(), device);
 
-        expectGaussianDataEqual(expected, loaded);
-        EXPECT_TRUE(std::get<6>(loaded).empty());
-        EXPECT_TRUE(std::get<5>(loaded).sizes() == expected.shN.sizes());
+            expectGaussianDataEqual(expected, loaded);
+            EXPECT_TRUE(std::get<6>(loaded).empty());
+            EXPECT_TRUE(std::get<5>(loaded).sizes() == expected.shN.sizes());
+        }
     }
 }
 
 TEST(GaussianPlyIOTest, FiltersGaussiansContainingNan) {
-    GaussianData input = makeGaussianData();
-    input.means.index_put_({0, 0}, std::numeric_limits<float>::quiet_NaN());
-    TemporaryPlyFile file;
+    for (auto device: {torch::kCPU, torch::kCUDA}) {
+        GaussianData input = makeGaussianData(3, device);
+        input.means.index_put_({0, 0}, std::numeric_limits<float>::quiet_NaN());
+        TemporaryPlyFile file;
 
-    save(file, input);
-    const auto loaded =
-        fvdb::detail::io::loadGaussianPly(file.string(), torch::Device(torch::kCUDA));
+        save(file, input);
+        const auto loaded = fvdb::detail::io::loadGaussianPly(file.string(), device);
 
-    EXPECT_EQ(std::get<0>(loaded).size(0), 1);
-    EXPECT_TRUE(
-        torch::allclose(std::get<0>(loaded), input.means.index({torch::indexing::Slice(1)})));
-    EXPECT_TRUE(
-        torch::allclose(std::get<1>(loaded), input.quats.index({torch::indexing::Slice(1)})));
-    EXPECT_TRUE(torch::allclose(std::get<5>(loaded), input.shN.index({torch::indexing::Slice(1)})));
+        EXPECT_EQ(std::get<0>(loaded).size(0), 1);
+        EXPECT_TRUE(
+            torch::allclose(std::get<0>(loaded), input.means.index({torch::indexing::Slice(1)})));
+        EXPECT_TRUE(
+            torch::allclose(std::get<1>(loaded), input.quats.index({torch::indexing::Slice(1)})));
+        EXPECT_TRUE(
+            torch::allclose(std::get<5>(loaded), input.shN.index({torch::indexing::Slice(1)})));
+    }
 }
 
 TEST(GaussianPlyIOTest, MetadataTypesAndNonContiguousTensorsRoundTrip) {

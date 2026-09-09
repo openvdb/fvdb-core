@@ -17,26 +17,26 @@ class NanInfMaskTestFixture : public ::testing::TestWithParam<int> {};
 TEST(NanInfMaskTests, TestEmptyGaussians) {
     int64_t const numGaussians = 0;
 
-    auto const floatOptsCUDA = fvdb::test::tensorOpts<float>(torch::kCUDA);
+    for (auto device: {torch::kCPU, torch::kCUDA}) {
+        auto const floatOpts = fvdb::test::tensorOpts<float>(device);
 
-    // means, quats, scales, opacities, sh0, shN
-    auto const means     = torch::rand({numGaussians, 3}, floatOptsCUDA);
-    auto const quats     = torch::rand({numGaussians, 4}, floatOptsCUDA);
-    auto const scales    = torch::rand({numGaussians, 3}, floatOptsCUDA);
-    auto const opacities = torch::rand({numGaussians}, floatOptsCUDA);
-    auto const sh0       = torch::rand({numGaussians, 1, 3}, floatOptsCUDA);
-    auto const shN       = torch::rand({numGaussians, 26, 3}, floatOptsCUDA);
+        // means, quats, scales, opacities, sh0, shN
+        auto const means     = torch::rand({numGaussians, 3}, floatOpts);
+        auto const quats     = torch::rand({numGaussians, 4}, floatOpts);
+        auto const scales    = torch::rand({numGaussians, 3}, floatOpts);
+        auto const opacities = torch::rand({numGaussians}, floatOpts);
+        auto const sh0       = torch::rand({numGaussians, 1, 3}, floatOpts);
+        auto const shN       = torch::rand({numGaussians, 26, 3}, floatOpts);
 
-    auto mask =
-        fvdb::detail::ops::computeGaussianNanInfMask(means, quats, scales, opacities, sh0, shN);
+        auto mask =
+            fvdb::detail::ops::computeGaussianNanInfMask(means, quats, scales, opacities, sh0, shN);
 
-    EXPECT_TRUE(mask.jdata().numel() == 0);
-    EXPECT_TRUE(mask.jdata().is_cuda());
+        EXPECT_EQ(mask.jdata().numel(), 0);
+        EXPECT_EQ(mask.jdata().device().type(), device);
+    }
 }
 
 TEST(NanInfMaskTests, TestExceptionForInconsistentGaussians) {
-    auto const floatOptsCUDA = fvdb::test::tensorOpts<float>(torch::kCUDA);
-
     // number of gaussians for means, quats, scales, opacities, sh0, shN
     int64_t const ng = 10; // base number of gaussians
     std::vector<std::vector<int>> const configs{{ng - 2, ng, ng, ng, ng, ng},
@@ -46,17 +46,21 @@ TEST(NanInfMaskTests, TestExceptionForInconsistentGaussians) {
                                                 {ng, ng, ng, ng, ng + 1, ng},
                                                 {ng, ng, ng, ng, ng, ng + 1}};
 
-    for (auto const &config: configs) {
-        auto const means     = torch::rand({config[0], 3}, floatOptsCUDA);
-        auto const quats     = torch::rand({config[1], 4}, floatOptsCUDA);
-        auto const scales    = torch::rand({config[2], 3}, floatOptsCUDA);
-        auto const opacities = torch::rand({config[3]}, floatOptsCUDA);
-        auto const sh0       = torch::rand({config[4], 1, 3}, floatOptsCUDA);
-        auto const shN       = torch::rand({config[5], 26, 3}, floatOptsCUDA);
+    for (auto device: {torch::kCPU, torch::kCUDA}) {
+        auto const floatOpts = fvdb::test::tensorOpts<float>(device);
 
-        EXPECT_THROW(
-            fvdb::detail::ops::computeGaussianNanInfMask(means, quats, scales, opacities, sh0, shN),
-            c10::ValueError);
+        for (auto const &config: configs) {
+            auto const means     = torch::rand({config[0], 3}, floatOpts);
+            auto const quats     = torch::rand({config[1], 4}, floatOpts);
+            auto const scales    = torch::rand({config[2], 3}, floatOpts);
+            auto const opacities = torch::rand({config[3]}, floatOpts);
+            auto const sh0       = torch::rand({config[4], 1, 3}, floatOpts);
+            auto const shN       = torch::rand({config[5], 26, 3}, floatOpts);
+
+            EXPECT_THROW(fvdb::detail::ops::computeGaussianNanInfMask(
+                             means, quats, scales, opacities, sh0, shN),
+                         c10::ValueError);
+        }
     }
 }
 
