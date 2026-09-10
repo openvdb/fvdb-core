@@ -80,6 +80,7 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/ClipGrid.cu
     fvdb/detail/ops/CloneGrid.cu
     fvdb/detail/ops/ConcatenateGrids.cu
+    fvdb/detail/ops/DualContour.cu
     fvdb/detail/ops/IndexGrid.cu
     fvdb/detail/ops/MakeContiguous.cu
     fvdb/detail/ops/SerializeGrid.cu

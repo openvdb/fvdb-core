@@ -3,6 +3,7 @@
 //
 #include <fvdb/detail/ops/ReinitializeSdf.h>
 #include <fvdb/detail/utils/cuda/GridDim.h>
+#include <fvdb/detail/utils/cuda/VoxelBlockManagerHelper.h>
 
 #include <nanovdb/NanoVDB.h>
 #include <nanovdb/cuda/DeviceBuffer.h>
@@ -23,43 +24,6 @@ namespace ops {
 
 namespace {
 
-using OnIndexGridT = nanovdb::NanoGrid<nanovdb::ValueOnIndex>;
-using VbmBuffer    = nanovdb::cuda::DeviceBuffer;
-
-// log2 of the VoxelBlockManager block width: each VBM block spans 2^9 = 512 active voxels.
-static constexpr int kLog2BlockWidth = 9;
-
-// ------------------------- VBM fused 6-face stencil preamble -------------------------
-// The VBM decode gives the centre coord / value-index for free; we then read just the 6 FACE
-// neighbours through a cached ReadAccessor. Yields `centerIndex` (the centre voxel's value index)
-// and `faceIndex[6]` (the 6 face-neighbour value indices, -x,+x,-y,+y,-z,+z; 0 =
-// inactive/background). Kernels using it take the grid/firstLeafID/jumpMap/firstOffset parameters
-// by these exact names.
-#define VBM_FACES_BEGIN()                                                                        \
-    constexpr int blockWidth = 1 << kLog2BlockWidth, jumpMapWordCount = blockWidth / 64;         \
-    using VoxelBlockManagerT = nanovdb::tools::cuda::VoxelBlockManager<kLog2BlockWidth>;         \
-    __shared__ uint32_t sharedLeafIndex[blockWidth];                                             \
-    __shared__ uint16_t sharedVoxelOffset[blockWidth];                                           \
-    VoxelBlockManagerT::template decodeInverseMaps<nanovdb::ValueOnIndex>(                       \
-        grid,                                                                                    \
-        firstLeafID[blockIdx.x],                                                                 \
-        &jumpMap[uint64_t(blockIdx.x) * jumpMapWordCount],                                       \
-        firstOffset + uint64_t(blockIdx.x) * blockWidth,                                         \
-        sharedLeafIndex,                                                                         \
-        sharedVoxelOffset);                                                                      \
-    if (sharedLeafIndex[threadIdx.x] == VoxelBlockManagerT::UnusedLeafIndex)                     \
-        return;                                                                                  \
-    const auto &leaf = grid->tree().template getFirstNode<0>()[sharedLeafIndex[threadIdx.x]];    \
-    const nanovdb::Coord centerCoord = leaf.offsetToGlobalCoord(sharedVoxelOffset[threadIdx.x]); \
-    const uint64_t centerIndex       = leaf.getValue(sharedVoxelOffset[threadIdx.x]);            \
-    auto accessor                    = grid->getAccessor();                                      \
-    const uint64_t faceIndex[6]      = {accessor.getValue(centerCoord.offsetBy(-1, 0, 0)),       \
-                                        accessor.getValue(centerCoord.offsetBy(1, 0, 0)),        \
-                                        accessor.getValue(centerCoord.offsetBy(0, -1, 0)),       \
-                                        accessor.getValue(centerCoord.offsetBy(0, 1, 0)),        \
-                                        accessor.getValue(centerCoord.offsetBy(0, 0, -1)),       \
-                                        accessor.getValue(centerCoord.offsetBy(0, 0, 1))};
-
 // =====================  fused stencil kernels ====================================================
 // frozen Peng smoothed sign from a field's value + central-difference gradient.
 template <typename ScalarT>
@@ -71,7 +35,11 @@ signFusedKernel(const OnIndexGridT *grid,
                 const ScalarT *field,
                 ScalarT voxelSize,
                 ScalarT *sign) {
-    VBM_FACES_BEGIN();
+    VbmFaceStencil faces;
+    if (!vbmDecodeFaceStencil<kLog2BlockWidth>(grid, firstLeafID, jumpMap, firstOffset, faces))
+        return;
+    const uint64_t centerIndex = faces.centerIndex;
+    const uint64_t *faceIndex  = faces.faceIndex;
     ScalarT xm = field[faceIndex[0]], xp = field[faceIndex[1]], ym = field[faceIndex[2]],
             yp = field[faceIndex[3]], zm = field[faceIndex[4]], zp = field[faceIndex[5]];
     ScalarT gradX = (xp - xm) / (2 * voxelSize), gradY = (yp - ym) / (2 * voxelSize),
@@ -109,7 +77,11 @@ godunovFusedKernel(const OnIndexGridT *grid,
                    const ScalarT *sign,
                    ScalarT voxelSize,
                    ScalarT *rhs) {
-    VBM_FACES_BEGIN();
+    VbmFaceStencil faces;
+    if (!vbmDecodeFaceStencil<kLog2BlockWidth>(grid, firstLeafID, jumpMap, firstOffset, faces))
+        return;
+    const uint64_t centerIndex = faces.centerIndex;
+    const uint64_t *faceIndex  = faces.faceIndex;
     ScalarT center = field[centerIndex], sgn = sign[centerIndex];
     ScalarT xm = field[faceIndex[0]], xp = field[faceIndex[1]], ym = field[faceIndex[2]],
             yp = field[faceIndex[3]], zm = field[faceIndex[4]], zp = field[faceIndex[5]];
@@ -131,8 +103,12 @@ smoothFusedKernel(const OnIndexGridT *grid,
                   const ScalarT *in,
                   ScalarT weight,
                   ScalarT *out) {
-    VBM_FACES_BEGIN();
-    ScalarT center   = in[centerIndex];
+    VbmFaceStencil faces;
+    if (!vbmDecodeFaceStencil<kLog2BlockWidth>(grid, firstLeafID, jumpMap, firstOffset, faces))
+        return;
+    const uint64_t centerIndex = faces.centerIndex;
+    const uint64_t *faceIndex  = faces.faceIndex;
+    ScalarT center             = in[centerIndex];
     ScalarT faceMean = (in[faceIndex[0]] + in[faceIndex[1]] + in[faceIndex[2]] + in[faceIndex[3]] +
                         in[faceIndex[4]] + in[faceIndex[5]]) *
                        (ScalarT(1) / ScalarT(6));
@@ -188,28 +164,6 @@ heunKernel(ScalarT *out,
     ScalarT value = phiBase[i] + ScalarT(0.5) * timeStep * (rhs0[i] + rhs1[i]);
     out[i]        = nanovdb::math::Min(nanovdb::math::Max(value, -bandWidth), bandWidth);
 }
-
-// small VBM helper: build once, expose the block count + the firstLeafID/jumpMap device pointers.
-struct VBMHelper {
-    nanovdb::tools::VoxelBlockManagerHandle<VbmBuffer> handle;
-    uint32_t blockCount{0};
-    uint64_t firstOffset{0}, valueCount{1};
-    VBMHelper(OnIndexGridT *grid, cudaStream_t stream) {
-        handle = nanovdb::tools::cuda::buildVoxelBlockManager<kLog2BlockWidth, VbmBuffer>(
-            grid, 0, 0, 0, stream);
-        blockCount  = (uint32_t)handle.blockCount();
-        firstOffset = handle.firstOffset();
-        valueCount  = handle.lastOffset() + 1;
-    }
-    const uint32_t *
-    firstLeafID() const {
-        return handle.deviceFirstLeafID();
-    }
-    const uint64_t *
-    jumpMap() const {
-        return handle.deviceJumpMap();
-    }
-};
 
 // Redistance (|grad phi| = 1) + optional de-staircase one grid's value-indexed buffer, in place.
 // `phi`/scratch are length `valueCount` with slot 0 holding the +bandWidth background; the

@@ -903,6 +903,13 @@ def marching_cubes(
     field: JaggedTensor,
     level: float,
 ) -> list[JaggedTensor]: ...
+def dual_contour(
+    grid: GridBatchData,
+    field: JaggedTensor,
+    iso: float,
+    reduce: int,
+    adaptivity: float,
+) -> tuple[JaggedTensor, JaggedTensor, JaggedTensor]: ...
 def integrate_tsdf(
     grid: GridBatchData,
     truncation_margin: float,
