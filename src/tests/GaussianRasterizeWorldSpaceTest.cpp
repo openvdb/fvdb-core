@@ -186,6 +186,27 @@ TEST(GaussianRasterizeWorldSpaceTest, BackwardMatchesFiniteDifference) {
     EXPECT_TRUE(torch::isfinite(std::get<4>(backward)).all().item<bool>());
 }
 
+TEST(GaussianRasterizeWorldSpaceTest, BackwardSupportsLargeChannelCounts) {
+    const WorldSpaceInputs inputs = makeInputs();
+
+    for (const int64_t channels: {33, 513}) {
+        const auto features = torch::full({1, 1, channels}, 0.25f, inputs.means.options());
+        for (const DistortionModel cameraModel:
+             {DistortionModel::PINHOLE, DistortionModel::ORTHOGRAPHIC}) {
+            const auto forward  = rasterize(inputs, features, cameraModel);
+            const auto backward = rasterizeBackward(inputs, features, forward, cameraModel);
+
+            EXPECT_TRUE(std::get<3>(backward).sizes() == features.sizes());
+            EXPECT_TRUE(torch::isfinite(std::get<0>(backward)).all().item<bool>());
+            EXPECT_TRUE(torch::isfinite(std::get<1>(backward)).all().item<bool>());
+            EXPECT_TRUE(torch::isfinite(std::get<2>(backward)).all().item<bool>());
+            EXPECT_TRUE(torch::isfinite(std::get<3>(backward)).all().item<bool>());
+            EXPECT_TRUE(torch::isfinite(std::get<4>(backward)).all().item<bool>());
+            EXPECT_GT(std::get<3>(backward).abs().sum().item<float>(), 0.0f);
+        }
+    }
+}
+
 TEST(GaussianRasterizeWorldSpaceTest, MasksBackgroundsAndNoIntersections) {
     const WorldSpaceInputs inputs = makeInputs();
     const auto background         = torch::tensor({{0.1f, -0.2f, 0.3f}}, inputs.means.options());
