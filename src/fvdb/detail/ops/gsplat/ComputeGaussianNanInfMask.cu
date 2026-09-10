@@ -231,6 +231,11 @@ dispatchComputeGaussianNanInfMask<torch::kCPU>(const fvdb::JaggedTensor &means,
     auto outValid =
         torch::empty({N}, torch::TensorOptions().dtype(torch::kBool).device(means.device()));
 
+    TORCH_CHECK_VALUE(means.device().is_cpu() && quats.device().is_cpu() &&
+                          logScales.device().is_cpu() && logitOpacities.device().is_cpu() &&
+                          sh0.device().is_cpu() && shN.device().is_cpu(),
+                      "All inputs must be on the CPU");
+
     AT_DISPATCH_V2(means.scalar_type(),
                    "computeGaussianNanInfMaskCPU",
                    AT_WRAP([&] {
