@@ -336,6 +336,12 @@ indexToGridHost(const nanovdb::NanoGrid<nanovdb::ValueOnIndex> *srcGrid,
     *dstGrid->data()   = *srcGrid->data();
     dstGrid->mGridType = nanovdb::toGridType<DstBuildT>();
     dstGrid->mData1    = 0u;
+    // The source header describes its place in the batch and the size of the index grid. This
+    // buffer holds exactly one typed grid, and GridHandle validates that at construction
+    // (matches what tools::cuda::indexToGrid does to its output).
+    dstGrid->mGridIndex = 0u;
+    dstGrid->mGridCount = 1u;
+    dstGrid->mGridSize  = totalSize;
 
     *dstTree->data() = *srcTree.data();
     dstTree->setRoot(dstRoot);
