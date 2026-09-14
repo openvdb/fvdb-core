@@ -7,6 +7,7 @@
 #include <fvdb/detail/utils/cuda/BinSearch.cuh>
 #include <fvdb/detail/utils/cuda/GradientReduction.h>
 #include <fvdb/detail/utils/cuda/GridDim.h>
+#include <fvdb/detail/utils/cuda/LocalGradient.h>
 #include <fvdb/detail/utils/cuda/Prefetch.h>
 #include <fvdb/detail/utils/cuda/Utils.cuh>
 #include <fvdb/detail/utils/cuda/WarpReduce.cuh>
@@ -18,7 +19,6 @@
 #include <nanovdb/math/Math.h>
 
 #include <ATen/cuda/Atomic.cuh>
-#include <ATen/ops/from_blob.h>
 #include <c10/cuda/CUDAGuard.h>
 
 #include <cooperative_groups.h>
@@ -455,7 +455,6 @@ dispatchProjectGaussiansAnalyticBwd<torch::kPrivateUse1>(
     }
     if (C && N) {
         std::vector<cudaStream_t> prefetchStreams(c10::cuda::device_count());
-        std::vector<float *> dLossDWorldToCamMatricesLocalPtrs(c10::cuda::device_count(), nullptr);
         std::vector<torch::Tensor> dLossDWorldToCamMatricesLocals(c10::cuda::device_count());
 
         // Prepare gradients after prior work, then make the current streams wait for preparation.
@@ -571,15 +570,8 @@ dispatchProjectGaussiansAnalyticBwd<torch::kPrivateUse1>(
             std::tie(deviceProblemOffset, deviceProblemSize) = deviceChunk(N, deviceId);
 
             if (worldToCamMatricesRequiresGrad) {
-                const auto localTensorOptions =
-                    at::TensorOptions().dtype(means.scalar_type()).device(at::kCUDA, deviceId);
-                const size_t numBytes =
-                    dLossDWorldToCamMatrices.numel() * dLossDWorldToCamMatrices.element_size();
-                float *&localPtr = dLossDWorldToCamMatricesLocalPtrs[deviceId];
-                C10_CUDA_CHECK(cudaMallocAsync(&localPtr, numBytes, stream));
-                C10_CUDA_CHECK(cudaMemsetAsync(localPtr, 0, numBytes, stream));
                 dLossDWorldToCamMatricesLocals[deviceId] =
-                    at::from_blob(localPtr, dLossDWorldToCamMatrices.sizes(), localTensorOptions);
+                    makeLocalGradient(dLossDWorldToCamMatrices, deviceId, stream);
             }
 
             if (deviceProblemSize > 0) {
@@ -711,11 +703,8 @@ dispatchProjectGaussiansAnalyticBwd<torch::kPrivateUse1>(
             }
 
             reduceGradientShards<float>(dLossDWorldToCamMatricesLocals, dLossDWorldToCamMatrices);
-            for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-                C10_CUDA_CHECK(cudaSetDevice(deviceId));
-                auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
-                C10_CUDA_CHECK(cudaFreeAsync(dLossDWorldToCamMatricesLocalPtrs[deviceId], stream));
-            }
+            // Enqueue frees after reduction and output copies, before merging the compute streams.
+            dLossDWorldToCamMatricesLocals.clear();
         }
 
         mergeStreams();

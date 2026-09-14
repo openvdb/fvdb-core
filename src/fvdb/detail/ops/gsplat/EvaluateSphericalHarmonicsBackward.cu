@@ -7,11 +7,11 @@
 #include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/GradientReduction.h>
 #include <fvdb/detail/utils/cuda/GridDim.h>
+#include <fvdb/detail/utils/cuda/LocalGradient.h>
 #include <fvdb/detail/utils/cuda/Prefetch.h>
 #include <fvdb/detail/utils/cuda/Utils.cuh>
 
 #include <ATen/cuda/Atomic.cuh>
-#include <ATen/ops/from_blob.h>
 #include <c10/cuda/CUDAGuard.h>
 
 #include <cub/block/block_reduce.cuh>
@@ -912,8 +912,6 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
         }
 
         std::vector<cudaStream_t> prefetchStreams(c10::cuda::device_count());
-        std::vector<scalar_t *> dLossDWorldToCamMatricesLocalPtrs(c10::cuda::device_count(),
-                                                                  nullptr);
         std::vector<torch::Tensor> dLossDWorldToCamMatricesLocals(c10::cuda::device_count());
 
         // Prefetch and initialize after prior work, then wait for preparation on current streams.
@@ -932,16 +930,10 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
             std::tie(elementOffset, elementCount) = deviceChunk(N, deviceId);
 
             if (computeDLossDWorldToCamMatrices) {
-                const auto localTensorOptions = at::TensorOptions()
-                                                    .dtype(worldToCamMatrices.scalar_type())
-                                                    .device(at::kCUDA, deviceId);
-                const size_t numBytes =
-                    dLossDWorldToCamMatrices.numel() * dLossDWorldToCamMatrices.element_size();
-                scalar_t *&localPtr = dLossDWorldToCamMatricesLocalPtrs[deviceId];
-                C10_CUDA_CHECK(cudaMallocAsync(&localPtr, numBytes, stream));
-                C10_CUDA_CHECK(cudaMemsetAsync(localPtr, 0, numBytes, stream));
+                // Use the compute stream so the captured cleanup stream follows the kernels and
+                // reduction. Zeroing can overlap prefetching on the preparation stream.
                 dLossDWorldToCamMatricesLocals[deviceId] =
-                    at::from_blob(localPtr, dLossDWorldToCamMatrices.sizes(), localTensorOptions);
+                    makeLocalGradient(dLossDWorldToCamMatrices, deviceId, currentStream);
             }
 
             if (elementCount > 0) {
@@ -1131,11 +1123,8 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
 
             reduceGradientShards<scalar_t>(dLossDWorldToCamMatricesLocals,
                                            dLossDWorldToCamMatrices);
-            for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-                C10_CUDA_CHECK(cudaSetDevice(deviceId));
-                auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
-                C10_CUDA_CHECK(cudaFreeAsync(dLossDWorldToCamMatricesLocalPtrs[deviceId], stream));
-            }
+            // Enqueue frees after reduction and output copies, before merging the compute streams.
+            dLossDWorldToCamMatricesLocals.clear();
         }
         mergeStreams();
 

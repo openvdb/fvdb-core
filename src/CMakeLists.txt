@@ -49,6 +49,7 @@ set(FVDB_CPP_FILES
     fvdb/Config.cpp
     fvdb/detail/io/GaussianPlyIO.cpp
     fvdb/detail/io/LoadNanovdb.cpp
+    fvdb/detail/utils/cuda/LocalGradient.cpp
     fvdb/detail/utils/cuda/Prefetch.cpp
     fvdb/detail/ops/jagged/JaggedReductions.cpp
     fvdb/TorchDeviceBuffer.cpp

@@ -5,6 +5,7 @@
 #include <fvdb/detail/utils/Nvtx.h>
 #include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/GradientReduction.h>
+#include <fvdb/detail/utils/cuda/LocalGradient.h>
 #include <fvdb/detail/utils/cuda/Prefetch.h>
 #include <fvdb/detail/utils/cuda/Utils.cuh>
 #include <fvdb/detail/utils/cuda/WarpReduce.cuh>
@@ -15,7 +16,6 @@
 
 #include <ATen/cuda/Atomic.cuh>
 #include <ATen/cuda/CUDAContext.h>
-#include <ATen/ops/from_blob.h>
 #include <c10/cuda/CUDAGuard.h>
 #include <c10/util/Exception.h>
 
@@ -591,11 +591,8 @@ launchBackwardPrivateUse1(const torch::Tensor &means,
     const auto deviceCount = c10::cuda::device_count();
     TORCH_CHECK(deviceCount > 0, "PrivateUse1 rasterization requires at least one CUDA device");
     std::vector<cudaStream_t> prefetchStreams(deviceCount);
-    std::vector<float *> dMeansLocalPtrs(deviceCount, nullptr);
-    std::vector<float *> dQuatsLocalPtrs(deviceCount, nullptr);
-    std::vector<float *> dLogScalesLocalPtrs(deviceCount, nullptr);
-    std::vector<float *> dFeaturesLocalPtrs(deviceCount, nullptr);
-    std::vector<float *> dOpacitiesLocalPtrs(deviceCount, nullptr);
+    // Keep each device's current compute stream unchanged through allocation, rasterization,
+    // reduction, and release: the owning tensors enqueue their frees on their allocation streams.
     std::vector<torch::Tensor> dMeansLocals(deviceCount);
     std::vector<torch::Tensor> dQuatsLocals(deviceCount);
     std::vector<torch::Tensor> dLogScalesLocals(deviceCount);
@@ -645,23 +642,12 @@ launchBackwardPrivateUse1(const torch::Tensor &means,
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
 
         const auto [deviceTileOffset, deviceTileCount] = deviceChunk(tileCount, deviceId);
-        const auto localTensorOptions =
-            at::TensorOptions().dtype(means.scalar_type()).device(at::kCUDA, deviceId);
 
-        const auto allocateLocalGradient = [&](const torch::Tensor &like, float *&ptr) {
-            const size_t numBytes = like.numel() * like.element_size();
-            C10_CUDA_CHECK(cudaMallocAsync(&ptr, numBytes, stream));
-            C10_CUDA_CHECK(cudaMemsetAsync(ptr, 0, numBytes, stream));
-            return at::from_blob(ptr, like.sizes(), localTensorOptions);
-        };
-
-        dMeansLocals[deviceId] = allocateLocalGradient(means, dMeansLocalPtrs[deviceId]);
-        dQuatsLocals[deviceId] = allocateLocalGradient(quats, dQuatsLocalPtrs[deviceId]);
-        dLogScalesLocals[deviceId] =
-            allocateLocalGradient(logScales, dLogScalesLocalPtrs[deviceId]);
-        dFeaturesLocals[deviceId] = allocateLocalGradient(features, dFeaturesLocalPtrs[deviceId]);
-        dOpacitiesLocals[deviceId] =
-            allocateLocalGradient(opacities, dOpacitiesLocalPtrs[deviceId]);
+        dMeansLocals[deviceId]     = makeLocalGradient(means, deviceId, stream);
+        dQuatsLocals[deviceId]     = makeLocalGradient(quats, deviceId, stream);
+        dLogScalesLocals[deviceId] = makeLocalGradient(logScales, deviceId, stream);
+        dFeaturesLocals[deviceId]  = makeLocalGradient(features, deviceId, stream);
+        dOpacitiesLocals[deviceId] = makeLocalGradient(opacities, deviceId, stream);
 
         if (deviceTileCount > 0) {
             launchBackwardKernel<NUM_CHANNELS, Camera>(means,
@@ -727,15 +713,12 @@ launchBackwardPrivateUse1(const torch::Tensor &means,
     reduceGradientShards<float>(dFeaturesLocals, dFeatures);
     reduceGradientShards<float>(dOpacitiesLocals, dOpacities);
 
-    for (const auto deviceId: c10::irange(deviceCount)) {
-        C10_CUDA_CHECK(cudaSetDevice(deviceId));
-        auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
-        C10_CUDA_CHECK(cudaFreeAsync(dMeansLocalPtrs[deviceId], stream));
-        C10_CUDA_CHECK(cudaFreeAsync(dQuatsLocalPtrs[deviceId], stream));
-        C10_CUDA_CHECK(cudaFreeAsync(dLogScalesLocalPtrs[deviceId], stream));
-        C10_CUDA_CHECK(cudaFreeAsync(dFeaturesLocalPtrs[deviceId], stream));
-        C10_CUDA_CHECK(cudaFreeAsync(dOpacitiesLocalPtrs[deviceId], stream));
-    }
+    // Enqueue frees after the reductions and output copies, before merging the compute streams.
+    dMeansLocals.clear();
+    dQuatsLocals.clear();
+    dLogScalesLocals.clear();
+    dFeaturesLocals.clear();
+    dOpacitiesLocals.clear();
 
     mergeStreams();
     return {dMeans, dQuats, dLogScales, dFeatures, dOpacities};
