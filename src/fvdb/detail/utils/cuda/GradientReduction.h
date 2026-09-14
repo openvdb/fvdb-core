@@ -59,11 +59,8 @@ reduceGradientShards(std::vector<torch::Tensor> &localGradients, torch::Tensor &
         }
 
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
-        auto stream          = c10::cuda::getCurrentCUDAStream(deviceId);
-        auto *outputShardPtr = outputGradient.data_ptr<ScalarType>() + shardOffset;
-        C10_CUDA_CHECK(nanovdb::util::cuda::memPrefetchAsync(
-            outputShardPtr, shardSize * sizeof(ScalarType), deviceId, stream));
-        C10_CUDA_CHECK(cudaMemcpyAsync(outputShardPtr,
+        auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+        C10_CUDA_CHECK(cudaMemcpyAsync(outputGradient.data_ptr<ScalarType>() + shardOffset,
                                        reducedShards[deviceId].data_ptr<ScalarType>(),
                                        shardSize * sizeof(ScalarType),
                                        cudaMemcpyDeviceToDevice,
