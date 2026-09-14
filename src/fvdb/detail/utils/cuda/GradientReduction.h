@@ -15,9 +15,9 @@
 
 namespace fvdb::detail {
 
-template <typename ScalarType>
-void
-reduceGradientShards(std::vector<torch::Tensor> &localGradients, torch::Tensor &outputGradient) {
+// Reduce in place into each device's owned slice of its local gradient buffer.
+inline void
+reduceGradientShards(const std::vector<torch::Tensor> &localGradients) {
     const int64_t numElements = localGradients.front().numel();
     std::vector<torch::Tensor> reducedShards(c10::cuda::device_count());
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
@@ -51,7 +51,15 @@ reduceGradientShards(std::vector<torch::Tensor> &localGradients, torch::Tensor &
                 inputShards, reducedShards[deviceId], static_cast<int32_t>(deviceId));
         }
     }
+}
 
+// Call after queuing the reductions and waiting for output prefetching on the current streams.
+// Keep the local gradient buffers alive until all output copies have been queued.
+template <typename ScalarType>
+void
+copyGradientShards(const std::vector<torch::Tensor> &localGradients,
+                   torch::Tensor &outputGradient) {
+    const int64_t numElements = localGradients.front().numel();
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         const auto [shardOffset, shardSize] = deviceChunk(numElements, deviceId);
         if (shardSize == 0) {
@@ -60,11 +68,12 @@ reduceGradientShards(std::vector<torch::Tensor> &localGradients, torch::Tensor &
 
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
-        C10_CUDA_CHECK(cudaMemcpyAsync(outputGradient.data_ptr<ScalarType>() + shardOffset,
-                                       reducedShards[deviceId].data_ptr<ScalarType>(),
-                                       shardSize * sizeof(ScalarType),
-                                       cudaMemcpyDeviceToDevice,
-                                       stream));
+        C10_CUDA_CHECK(
+            cudaMemcpyAsync(outputGradient.data_ptr<ScalarType>() + shardOffset,
+                            localGradients[deviceId].data_ptr<ScalarType>() + shardOffset,
+                            shardSize * sizeof(ScalarType),
+                            cudaMemcpyDeviceToDevice,
+                            stream));
     }
 }
 

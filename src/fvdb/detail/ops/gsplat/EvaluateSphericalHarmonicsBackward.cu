@@ -1098,6 +1098,7 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
         if (computeDLossDWorldToCamMatrices) {
             // Kernels write camera gradients to device-local buffers, allowing output prefetching
             // to overlap. Reuse the preparation streams to preserve their waits and ordering.
+            std::vector<cudaEvent_t> outputPrefetchEvents(c10::cuda::device_count(), nullptr);
             for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
                 const auto [elementOffset, elementCount] =
                     deviceChunk(dLossDWorldToCamMatrices.numel(), deviceId);
@@ -1106,23 +1107,29 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
                 }
 
                 C10_CUDA_CHECK(cudaSetDevice(deviceId));
-                auto currentStream                   = c10::cuda::getCurrentCUDAStream(deviceId);
                 auto prefetchStream                  = prefetchStreams[deviceId];
                 std::vector<void *> prefetchPointers = {
                     dLossDWorldToCamMatrices.data_ptr<scalar_t>() + elementOffset};
                 std::vector<size_t> prefetchSizes = {elementCount * sizeof(scalar_t)};
                 memPrefetchBatchAsync(prefetchPointers, prefetchSizes, deviceId, prefetchStream);
 
-                // Wait for output prefetching before reducing the local camera gradients.
-                cudaEvent_t prefetchEvent;
-                C10_CUDA_CHECK(cudaEventCreateWithFlags(&prefetchEvent, cudaEventDisableTiming));
-                C10_CUDA_CHECK(cudaEventRecord(prefetchEvent, prefetchStream));
-                C10_CUDA_CHECK(cudaStreamWaitEvent(currentStream, prefetchEvent));
-                C10_CUDA_CHECK(cudaEventDestroy(prefetchEvent));
+                // The output copy waits on these events after the reduction has been queued.
+                C10_CUDA_CHECK(cudaEventCreateWithFlags(&outputPrefetchEvents[deviceId],
+                                                        cudaEventDisableTiming));
+                C10_CUDA_CHECK(cudaEventRecord(outputPrefetchEvents[deviceId], prefetchStream));
             }
 
-            reduceGradientShards<scalar_t>(dLossDWorldToCamMatricesLocals,
-                                           dLossDWorldToCamMatrices);
+            reduceGradientShards(dLossDWorldToCamMatricesLocals);
+            for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+                if (outputPrefetchEvents[deviceId]) {
+                    C10_CUDA_CHECK(cudaSetDevice(deviceId));
+                    auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+                    C10_CUDA_CHECK(cudaStreamWaitEvent(stream, outputPrefetchEvents[deviceId]));
+                    C10_CUDA_CHECK(cudaEventDestroy(outputPrefetchEvents[deviceId]));
+                }
+            }
+            copyGradientShards<scalar_t>(dLossDWorldToCamMatricesLocals, dLossDWorldToCamMatrices);
+
             // Enqueue frees after reduction and output copies, before merging the compute streams.
             dLossDWorldToCamMatricesLocals.clear();
         }

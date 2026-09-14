@@ -1267,7 +1267,8 @@ callRasterizeBackwardPrivateUse1(
                                               tileSize};
             appendPerTilePrefetchRanges(prefetchPointers, prefetchSizes, tileTensors, tileRange);
 
-            memPrefetchBatchAsync(prefetchPointers, prefetchSizes, deviceId, prefetchStreams[deviceId]);
+            memPrefetchBatchAsync(
+                prefetchPointers, prefetchSizes, deviceId, prefetchStreams[deviceId]);
         }
         C10_CUDA_CHECK(cudaEventRecord(prefetchEvent, prefetchStreams[deviceId]));
         C10_CUDA_CHECK(cudaStreamWaitEvent(currentStream, prefetchEvent));
@@ -1345,9 +1346,9 @@ callRasterizeBackwardPrivateUse1(
     // Rasterization writes to device-local buffers prior to the cross-device reduction so it
     // can be overlapped with output prefetching.
     // Reuse the input prefetch streams to preserve their waits and ordering.
+    std::vector<cudaEvent_t> outputPrefetchEvents(c10::cuda::device_count());
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
-        auto currentStream  = c10::cuda::getCurrentCUDAStream(deviceId);
         auto prefetchStream = prefetchStreams[deviceId];
         std::vector<void *> prefetchPointers;
         std::vector<size_t> prefetchSizes;
@@ -1361,20 +1362,33 @@ callRasterizeBackwardPrivateUse1(
         }
         memPrefetchBatchAsync(prefetchPointers, prefetchSizes, deviceId, prefetchStream);
 
-        // Wait for output prefetching before reducing the local gradients into their destination.
-        cudaEvent_t prefetchEvent;
-        C10_CUDA_CHECK(cudaEventCreateWithFlags(&prefetchEvent, cudaEventDisableTiming));
-        C10_CUDA_CHECK(cudaEventRecord(prefetchEvent, prefetchStream));
-        C10_CUDA_CHECK(cudaStreamWaitEvent(currentStream, prefetchEvent));
-        C10_CUDA_CHECK(cudaEventDestroy(prefetchEvent));
+        // Output copies wait on these events after all reductions have been queued.
+        C10_CUDA_CHECK(
+            cudaEventCreateWithFlags(&outputPrefetchEvents[deviceId], cudaEventDisableTiming));
+        C10_CUDA_CHECK(cudaEventRecord(outputPrefetchEvents[deviceId], prefetchStream));
     }
 
-    reduceGradientShards<ScalarType>(outDLossDMeans2DLocals, outDLossDMeans2d);
-    reduceGradientShards<ScalarType>(outDLossDConicsLocals, outDLossDConics);
-    reduceGradientShards<ScalarType>(outDLossDFeaturesLocals, outDLossDFeatures);
-    reduceGradientShards<ScalarType>(outDLossDOpacitiesLocals, outDLossDOpacities);
+    // Queue every reduction before waiting so they can all overlap with output prefetching.
+    reduceGradientShards(outDLossDMeans2DLocals);
+    reduceGradientShards(outDLossDConicsLocals);
+    reduceGradientShards(outDLossDFeaturesLocals);
+    reduceGradientShards(outDLossDOpacitiesLocals);
     if (absGrad) {
-        reduceGradientShards<ScalarType>(outDLossDMeans2DAbsLocals, outDLossDMeans2dAbs);
+        reduceGradientShards(outDLossDMeans2DAbsLocals);
+    }
+    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+        C10_CUDA_CHECK(cudaSetDevice(deviceId));
+        auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+        C10_CUDA_CHECK(cudaStreamWaitEvent(stream, outputPrefetchEvents[deviceId]));
+        C10_CUDA_CHECK(cudaEventDestroy(outputPrefetchEvents[deviceId]));
+    }
+
+    copyGradientShards<ScalarType>(outDLossDMeans2DLocals, outDLossDMeans2d);
+    copyGradientShards<ScalarType>(outDLossDConicsLocals, outDLossDConics);
+    copyGradientShards<ScalarType>(outDLossDFeaturesLocals, outDLossDFeatures);
+    copyGradientShards<ScalarType>(outDLossDOpacitiesLocals, outDLossDOpacities);
+    if (absGrad) {
+        copyGradientShards<ScalarType>(outDLossDMeans2DAbsLocals, outDLossDMeans2dAbs);
     }
 
     // Enqueue frees after the reductions and output copies, before merging the compute streams.

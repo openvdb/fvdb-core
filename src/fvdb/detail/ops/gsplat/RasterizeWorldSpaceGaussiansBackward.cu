@@ -684,9 +684,9 @@ launchBackwardPrivateUse1(const torch::Tensor &means,
     // Reuse the input prefetch streams to preserve their waits and ordering.
     const std::vector<torch::Tensor> outTensors = {
         dMeans, dQuats, dLogScales, dFeatures, dOpacities};
+    std::vector<cudaEvent_t> outputPrefetchEvents(deviceCount);
     for (const auto deviceId: c10::irange(deviceCount)) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
-        auto currentStream  = c10::cuda::getCurrentCUDAStream(deviceId);
         auto prefetchStream = prefetchStreams[deviceId];
         std::vector<void *> prefetchPointers;
         std::vector<size_t> prefetchSizes;
@@ -699,19 +699,30 @@ launchBackwardPrivateUse1(const torch::Tensor &means,
         }
         memPrefetchBatchAsync(prefetchPointers, prefetchSizes, deviceId, prefetchStream);
 
-        // Wait for output prefetching before reducing the local gradients into their destination.
-        cudaEvent_t prefetchEvent;
-        C10_CUDA_CHECK(cudaEventCreateWithFlags(&prefetchEvent, cudaEventDisableTiming));
-        C10_CUDA_CHECK(cudaEventRecord(prefetchEvent, prefetchStream));
-        C10_CUDA_CHECK(cudaStreamWaitEvent(currentStream, prefetchEvent));
-        C10_CUDA_CHECK(cudaEventDestroy(prefetchEvent));
+        // Output copies wait on these events after all reductions have been queued.
+        C10_CUDA_CHECK(
+            cudaEventCreateWithFlags(&outputPrefetchEvents[deviceId], cudaEventDisableTiming));
+        C10_CUDA_CHECK(cudaEventRecord(outputPrefetchEvents[deviceId], prefetchStream));
     }
 
-    reduceGradientShards<float>(dMeansLocals, dMeans);
-    reduceGradientShards<float>(dQuatsLocals, dQuats);
-    reduceGradientShards<float>(dLogScalesLocals, dLogScales);
-    reduceGradientShards<float>(dFeaturesLocals, dFeatures);
-    reduceGradientShards<float>(dOpacitiesLocals, dOpacities);
+    // Queue every reduction before waiting so they can all overlap with output prefetching.
+    reduceGradientShards(dMeansLocals);
+    reduceGradientShards(dQuatsLocals);
+    reduceGradientShards(dLogScalesLocals);
+    reduceGradientShards(dFeaturesLocals);
+    reduceGradientShards(dOpacitiesLocals);
+    for (const auto deviceId: c10::irange(deviceCount)) {
+        C10_CUDA_CHECK(cudaSetDevice(deviceId));
+        auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+        C10_CUDA_CHECK(cudaStreamWaitEvent(stream, outputPrefetchEvents[deviceId]));
+        C10_CUDA_CHECK(cudaEventDestroy(outputPrefetchEvents[deviceId]));
+    }
+
+    copyGradientShards<float>(dMeansLocals, dMeans);
+    copyGradientShards<float>(dQuatsLocals, dQuats);
+    copyGradientShards<float>(dLogScalesLocals, dLogScales);
+    copyGradientShards<float>(dFeaturesLocals, dFeatures);
+    copyGradientShards<float>(dOpacitiesLocals, dOpacities);
 
     // Enqueue frees after the reductions and output copies, before merging the compute streams.
     dMeansLocals.clear();
