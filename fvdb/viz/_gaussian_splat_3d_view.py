@@ -11,6 +11,14 @@ from ._viewer_server import _get_viewer_server_cpp
 
 
 class GaussianSplat3dView:
+    """A handle for Gaussian splats displayed in a scene.
+
+    Obtain this handle from :meth:`fvdb.viz.Scene.add_gaussian_splat_3d` or
+    :meth:`fvdb.viz.Scene.add_gaussian_splat_tensors`. Its properties control
+    rendering settings, including spherical harmonic degree and screen-space
+    filtering, for the registered view.
+    """
+
     __PRIVATE__ = object()
 
     def _get_view(self) -> GaussianSplat3dViewCpp:

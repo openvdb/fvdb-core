@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 import math
+from functools import wraps
 from typing import Any
 
 import torch
@@ -22,6 +23,7 @@ def _trace_fvdb_nn_forward(module):
     """
     old_forward = module.forward
 
+    @wraps(old_forward)
     def _forward(self, *args, **kwargs):
         with record_function(repr(self)):
             return old_forward(self, *args, **kwargs)
