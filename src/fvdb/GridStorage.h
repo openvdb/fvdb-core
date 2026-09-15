@@ -111,11 +111,16 @@ class GridStorage {
 
     //@{
     /// @brief Host pointer to the @p i'th grid, or nullptr if the bytes are not host-accessible,
-    ///        @p i is out of range, or the grid's value type is not @p ValueT.
+    ///        @p i is out of range, or the grid's value type is not @p ValueT. PrivateUse1 storage
+    ///        is unified memory, so its device pointer serves.
     template <typename ValueT>
     const nanovdb::NanoGrid<ValueT> *
     hostGridAt(uint32_t i) const {
-        return gridAt<ValueT>(hostBytes(), i);
+        if (isHost()) {
+            return std::get<0>(mHandle).template grid<ValueT>(i);
+        }
+        return mDevice.is_privateuseone() ? std::get<1>(mHandle).template deviceGrid<ValueT>(i)
+                                          : nullptr;
     }
     template <typename ValueT>
     nanovdb::NanoGrid<ValueT> *
@@ -130,7 +135,7 @@ class GridStorage {
     template <typename ValueT>
     const nanovdb::NanoGrid<ValueT> *
     deviceGridAt(uint32_t i) const {
-        return gridAt<ValueT>(deviceBytes(), i);
+        return isDevice() ? std::get<1>(mHandle).template deviceGrid<ValueT>(i) : nullptr;
     }
     template <typename ValueT>
     nanovdb::NanoGrid<ValueT> *
@@ -169,14 +174,7 @@ class GridStorage {
     const std::vector<nanovdb::GridHandleMetaData> &metadata() const;
 
   private:
-    template <typename ValueT>
-    const nanovdb::NanoGrid<ValueT> *
-    gridAt(const void *base, uint32_t i) const {
-        if (base == nullptr || i >= gridCount() || gridType(i) != nanovdb::toGridType<ValueT>()) {
-            return nullptr;
-        }
-        return nanovdb::util::PtrAdd<nanovdb::NanoGrid<ValueT>>(base, gridOffset(i));
-    }
+    const nanovdb::GridHandleMetaData &metaAt(uint32_t i) const;
 
     std::variant<HostHandle, DeviceHandle> mHandle;
     torch::Device mDevice;

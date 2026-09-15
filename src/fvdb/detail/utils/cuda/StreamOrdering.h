@@ -37,8 +37,10 @@ synchronizeStream(cudaStream_t stream, const torch::Device &device) {
 ///        streams belong to the given devices. A no-op when they are the same stream on the same
 ///        device (two null handles on different devices are different streams). The event is
 ///        created, recorded and destroyed under @p signalerDevice, which CUDA requires for the
-///        record, and the wait is enqueued under @p waiterDevice, so that a null waiter names the
-///        right device's default stream.
+///        record, and the wait is enqueued under @p waiterDevice, so that a null handle names the
+///        right device's default stream. Raw CUDA calls rather than c10::cuda::CUDAEvent so that
+///        the cudaStreamLegacy and cudaStreamPerThread sentinels, which c10's stream conversion
+///        rejects, work like any other handle.
 ///
 ///        PrivateUse1 storage is unified memory whose stream has no CUDA device to record an event
 ///        under; when either side is PrivateUse1 the signaler is synchronized instead.

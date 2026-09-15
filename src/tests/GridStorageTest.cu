@@ -11,6 +11,7 @@
 #include <nanovdb/tools/CreateNanoGrid.h>
 #include <nanovdb/tools/GridBuilder.h>
 
+#include <c10/cuda/CUDACachingAllocator.h>
 #include <c10/cuda/CUDAGuard.h>
 #include <c10/cuda/CUDAStream.h>
 #include <torch/types.h>
@@ -282,6 +283,9 @@ TEST(GridStorageTest, SourceMayBeDestroyedRightAfterAsyncCopy) {
 // The block is keyed to the buffer's retained stream: a buffer freed on stream B is handed back to
 // the next allocation on B, not to one on torch's current stream.
 TEST(GridStorageTest, StorageBlockReturnsToItsRetainedStream) {
+    if (c10::cuda::CUDACachingAllocator::name() != "native") {
+        GTEST_SKIP() << "only the native caching allocator keys free blocks by stream";
+    }
     for (const char *name: {"PYTORCH_NO_CUDA_MEMORY_CACHING", "PYTORCH_NO_HIP_MEMORY_CACHING"}) {
         if (const char *env = std::getenv(name); env && *env && *env != '0') {
             GTEST_SKIP()
@@ -384,6 +388,16 @@ TEST(GridStorageTest, MakeDeviceHandleFromLayoutChecksExtent) {
     EXPECT_THROW(
         fvdb::detail::makeDeviceHandleFromLayout(dev.deviceHandle().buffer().copy(stream), meta),
         c10::Error);
+
+    meta = dev.metadata();
+    meta[1].offset += NANOVDB_DATA_ALIGNMENT; // a gap: the chain parse would not find grid 1
+    EXPECT_THROW(
+        fvdb::detail::makeDeviceHandleFromLayout(dev.deviceHandle().buffer().copy(stream), meta),
+        c10::Error);
+
+    auto packed = dev.deviceHandle().buffer().copy(stream);
+    EXPECT_THROW(fvdb::detail::makeDeviceHandleFromLayout(std::move(packed), {}), c10::Error)
+        << "no metadata over a non-empty buffer";
 }
 
 TEST(GridStorageTest, NormalizeStandaloneGridHeaderMakesAGridWrappable) {

@@ -33,19 +33,23 @@ updateGridCountAndZeroChecksum(nanovdb::GridData *d_data, uint32_t gridIndex, ui
 }
 
 /// @brief Wraps device bytes whose layout is already known in a GridHandle without parsing them:
-///        @p meta must list every grid in order with the offsets and sizes the caller laid them
-///        out at. Checked against the buffer's extent; the grid types are taken on trust, as they
-///        are when copyTo adopts metadata.
+///        @p meta must list every grid in order, packed end to end from offset 0 at NanoVDB's data
+///        alignment, which is the only layout the rest of the stack (the chain parse, the typed
+///        accessors) can consume. That and the buffer's extent are checked; the grid types are
+///        taken on trust, as they are when copyTo adopts metadata.
 inline GridStorage::DeviceHandle
 makeDeviceHandleFromLayout(DeviceGridBuffer &&buffer,
                            std::vector<nanovdb::GridHandleMetaData> meta) {
     const uint64_t extent = buffer.size_bytes();
-    uint64_t end          = 0;
+    TORCH_CHECK(meta.empty() == (extent == 0),
+                "makeDeviceHandleFromLayout: metadata and buffer disagree about emptiness");
+    uint64_t end = 0;
     for (const auto &m: meta) {
         // Checked without forming offset + size, which can wrap.
-        TORCH_CHECK(m.offset >= end && m.offset <= extent && m.size >= sizeof(nanovdb::GridData) &&
-                        m.size <= extent - m.offset,
-                    "makeDeviceHandleFromLayout: grid layout does not fit the buffer");
+        TORCH_CHECK(
+            m.offset == end && m.offset % NANOVDB_DATA_ALIGNMENT == 0 &&
+                m.size >= sizeof(nanovdb::GridData) && m.size <= extent - m.offset,
+            "makeDeviceHandleFromLayout: grids must be packed, aligned and inside the buffer");
         end = m.offset + m.size;
     }
     return nanovdb::cuda::detail::HandleFactory::make(std::move(buffer), std::move(meta));
@@ -57,7 +61,11 @@ makeDeviceHandleFromLayout(DeviceGridBuffer &&buffer,
 ///        metadata is assembled on the host from the sources'. All sources must live on the
 ///        prototype's device. Each source's retained stream is ordered before its copy and after
 ///        it, so sources may be destroyed as soon as this returns. Checksums are disabled, as the
-///        other fvdb merge paths leave them.
+///        CUDA MakeContiguous and ConcatenateGrids kernel above leaves them; the host paths
+///        (nanovdb::mergeGrids and the CPU sides of those two ops, through tools::updateGridCount)
+///        and the replaced nanovdb::cuda::mergeGridHandles update an existing checksum instead, so
+///        a builder that computes one before merging loses it here (see #770 for whether step 5
+///        recomputes or stops computing it).
 inline GridStorage::DeviceHandle
 mergeDeviceGridHandles(const std::vector<GridStorage::DeviceHandle> &handles,
                        const DeviceGridBuffer &proto,

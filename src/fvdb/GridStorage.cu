@@ -68,8 +68,17 @@ GridStorage::GridStorage(DeviceHandle &&handle, const torch::Device &device)
     : mHandle(std::in_place_index<1>, std::move(handle)), mDevice(device) {
     checkStorageDevice(device);
     TORCH_CHECK(isDeviceKind(device), "GridStorage: a device handle cannot live on ", device);
-    const auto &h = std::get<1>(mHandle);
-    TORCH_CHECK(h.isEmpty() || h.buffer().resource().device() == device,
+    auto &h = std::get<1>(mHandle);
+    if (h.isEmpty()) {
+        // An empty handle carries whatever resource it was default-constructed with (the current
+        // CUDA device, e.g. cuda::copyTo's result for a zero-byte source); re-home it so the
+        // buffer agrees with device() for anyone who re-wraps it or uses it as a prototype.
+        if (h.buffer().resource().device() != device) {
+            h = emptyDeviceHandle(device, h.buffer().stream());
+        }
+        return;
+    }
+    TORCH_CHECK(h.buffer().resource().device() == device,
                 "GridStorage: handle is on ",
                 h.buffer().resource().device(),
                 " but the storage was declared on ",
@@ -123,22 +132,26 @@ GridStorage::gridCount() const {
     return static_cast<uint32_t>(metadata().size());
 }
 
+const nanovdb::GridHandleMetaData &
+GridStorage::metaAt(uint32_t i) const {
+    const auto &meta = metadata();
+    TORCH_CHECK(i < meta.size(), "GridStorage: grid index ", i, " out of range ", meta.size());
+    return meta[i];
+}
+
 uint64_t
 GridStorage::gridSize(uint32_t i) const {
-    TORCH_CHECK(i < gridCount(), "GridStorage: grid index ", i, " out of range ", gridCount());
-    return metadata()[i].size;
+    return metaAt(i).size;
 }
 
 uint64_t
 GridStorage::gridOffset(uint32_t i) const {
-    TORCH_CHECK(i < gridCount(), "GridStorage: grid index ", i, " out of range ", gridCount());
-    return metadata()[i].offset;
+    return metaAt(i).offset;
 }
 
 nanovdb::GridType
 GridStorage::gridType(uint32_t i) const {
-    TORCH_CHECK(i < gridCount(), "GridStorage: grid index ", i, " out of range ", gridCount());
-    return metadata()[i].gridType;
+    return metaAt(i).gridType;
 }
 
 const void *
@@ -216,12 +229,19 @@ GridStorage::to(const torch::Device &device, cudaStream_t stream) const {
         if (device.is_cpu()) {
             return GridStorage(src.copy<nanovdb::HostBuffer>());
         }
-        // Host to device: the pageable source makes the copy synchronous on the host side, and
-        // the destination retains `stream`; nothing to order.
+        // Host to device: the pageable source makes the copy synchronous on the source side (the
+        // bytes are staged before the call returns) and the destination retains `stream`, so a
+        // CUDA destination needs no ordering. copyTo does not synchronize for a device
+        // destination, though, and PrivateUse1 storage hands out its unified pointer to the host
+        // immediately, so there the copy must have landed before this returns.
         c10::OptionalDeviceGuard deviceGuard(device.is_cuda() ? std::optional<torch::Device>(device)
                                                               : std::nullopt);
         const DeviceGridBuffer proto = deviceProto(device, stream);
-        return GridStorage(nanovdb::cuda::copyTo<DeviceGridBuffer>(src, stream, &proto), device);
+        auto dst                     = nanovdb::cuda::copyTo<DeviceGridBuffer>(src, stream, &proto);
+        if (device.is_privateuseone()) {
+            detail::synchronizeStream(stream, device);
+        }
+        return GridStorage(std::move(dst), device);
     }
 
     // Device source. Its writers are queued on its retained stream, which is also the stream its
