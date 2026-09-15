@@ -8,6 +8,7 @@
 #include <fvdb/detail/ops/CloneGrid.h>
 #include <fvdb/detail/ops/MakeContiguous.h>
 #include <fvdb/detail/utils/Utils.h>
+#include <fvdb/detail/utils/nanovdb/BatchedTopologyBuilder.cuh>
 
 #include <nanovdb/NanoVDB.h>
 #include <nanovdb/tools/CreateNanoGrid.h>
@@ -26,24 +27,18 @@ template <torch::DeviceType>
 nanovdb::GridHandle<TorchDeviceBuffer>
 dispatchDilateGrid(const GridBatchData &gridBatch, const std::vector<int64_t> &dilationAmount);
 
-template <>
-nanovdb::GridHandle<TorchDeviceBuffer>
-dispatchDilateGrid<torch::kCUDA>(const GridBatchData &gridBatch,
-                                 const std::vector<int64_t> &dilationAmount) {
-    c10::cuda::CUDAGuard deviceGuard(gridBatch.device());
-
-    at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream(gridBatch.device().index());
-
-    // This guide buffer is a hack to pass in a device with an index to the cudaCreateNanoGrid
-    // function. We can't pass in a device directly but we can pass in a buffer which gets
-    // passed to TorchDeviceBuffer::create. The guide buffer holds the device and effectively
-    // passes it to the created buffer.
-    TorchDeviceBuffer guide(0, gridBatch.device());
-
-    // Create a grid for each batch item and store the handles. (An all-zero dilation is handled
-    // upstream in dilateGrid() via cloneGrid, so the 0-branch below only fires for a mixed batch.)
+// Per-member fallback for a NON-uniform dilation vector (reachable only from C++ callers such as
+// IntegrateTSDF, whose per-member pad count derives from each member's voxel size; the Python
+// dilated_grid API broadcasts one scalar). Each member runs nanovdb's DilateGrid dilationAmount[i]
+// times and the single-grid handles are merged -- several stream syncs per member.
+static nanovdb::GridHandle<TorchDeviceBuffer>
+dilatePerMemberCUDA(const GridBatchData &gridBatch,
+                    const std::vector<int64_t> &dilationAmount,
+                    const TorchDeviceBuffer &guide,
+                    cudaStream_t stream) {
     std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> handles;
-    for (int i = 0; i < gridBatch.batchSize(); i += 1) {
+    handles.reserve(gridBatch.batchSize());
+    for (int64_t i = 0; i < gridBatch.batchSize(); i += 1) {
         nanovdb::GridHandle<TorchDeviceBuffer> handle;
 
         if (dilationAmount[i] == 0) {
@@ -54,7 +49,7 @@ dispatchDilateGrid<torch::kCUDA>(const GridBatchData &gridBatch,
             nanovdb::OnIndexGrid *grid = gridBatch.deviceGridPtrAt(i);
             TORCH_CHECK(grid, "Grid is null");
 
-            for (auto j = 0; j < dilationAmount[i]; j += 1) {
+            for (int64_t j = 0; j < dilationAmount[i]; j += 1) {
                 nanovdb::tools::cuda::DilateGrid<nanovdb::ValueOnIndex, BuilderResource> dilateOp(
                     grid, stream);
                 dilateOp.setOperation(nanovdb::tools::morphology::NN_FACE_EDGE_VERTEX);
@@ -72,13 +67,52 @@ dispatchDilateGrid<torch::kCUDA>(const GridBatchData &gridBatch,
     }
 
     if (handles.size() == 1) {
-        // If there's only one handle, just return it
         return std::move(handles[0]);
-    } else {
-        // This copies all the handles into a single handle -- only do it if there are multiple
-        // grids
-        return nanovdb::cuda::mergeGridHandles(handles, &guide);
     }
+    return nanovdb::cuda::mergeGridHandles(handles, &guide);
+}
+
+template <>
+nanovdb::GridHandle<TorchDeviceBuffer>
+dispatchDilateGrid<torch::kCUDA>(const GridBatchData &gridBatch,
+                                 const std::vector<int64_t> &dilationAmount) {
+    c10::cuda::CUDAGuard deviceGuard(gridBatch.device());
+
+    at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream(gridBatch.device().index());
+
+    // This guide buffer is a hack to pass in a device with an index to the cudaCreateNanoGrid
+    // function. We can't pass in a device directly but we can pass in a buffer which gets
+    // passed to TorchDeviceBuffer::create. The guide buffer holds the device and effectively
+    // passes it to the created buffer.
+    TorchDeviceBuffer guide(0, gridBatch.device());
+
+    TORCH_CHECK(!dilationAmount.empty(), "dilationAmount must have one entry per batch member");
+    const int64_t dilation = dilationAmount[0];
+    const bool uniform     = std::all_of(dilationAmount.begin(),
+                                     dilationAmount.end(),
+                                     [dilation](int64_t amount) { return amount == dilation; });
+    if (!uniform) {
+        return dilatePerMemberCUDA(gridBatch, dilationAmount, guide, stream.stream());
+    }
+
+    // Identity (all members dilate by 0). dilateGrid() already short-circuits this via cloneGrid,
+    // so this is defensive: compact the (possibly sliced) selected grids into a fresh contiguous
+    // handle, as BuildPaddedGrid.cu does for its zero-pass case.
+    if (dilation == 0) {
+        if (gridBatch.isContiguous()) {
+            return gridBatch.nanoGridHandle().copy<TorchDeviceBuffer>(guide);
+        }
+        return ops::contiguousGridHandle(gridBatch);
+    }
+
+    // Uniform dilation (the only case the Python API produces): dilating by radius d with the
+    // full 26-neighbor (face+edge+vertex) stencil equals d chained Minkowski sums with [-1,1]^3,
+    // so run d batched BoxDilate(-1,+1) passes over the WHOLE batch -- one output buffer, one
+    // stream synchronization per pass, no per-member builds or handle merging (issue #775).
+    // Empty members become valid empty grids inline.
+    const std::vector<batched::TopologyPassSpec> passes(
+        dilation, batched::TopologyPassSpec::boxDilate(nanovdb::Coord(-1), nanovdb::Coord(1)));
+    return batched::batchedTopologyHandle(gridBatch, passes, stream.stream());
 }
 
 template <>

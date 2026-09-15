@@ -4,8 +4,8 @@
 """Equivalence tests for the batched leaf-mask topology builder (issue #755).
 
 On CUDA, ``refined_grid`` / ``coarsened_grid`` (and through them ``conv_grid`` /
-``conv_transpose_grid`` for K == S) build all batch members in a single batched pass instead of
-one NanoVDB build + merge per member. These tests pin the batched results against:
+``conv_transpose_grid`` for K == S) and ``dilated_grid`` build all batch members in a single
+batched pass instead of one NanoVDB build + merge per member. These tests pin the batched results against:
 
 - ``from_ijk`` (PointsToGrid) grids built from independently computed expected coordinates,
   compared **elementwise** (``torch.equal`` on ``ijk.jdata``), which pins the canonical NanoVDB
@@ -50,6 +50,25 @@ def _expected_coarsen_ijk(ijk: torch.Tensor, factor: int) -> torch.Tensor:
         return ijk.reshape(0, 3)
     coarse = torch.div(ijk.to(torch.int64), factor, rounding_mode="floor")
     return torch.unique(coarse, dim=0).to(torch.int32)
+
+
+def _expected_dilate_ijk(ijk: torch.Tensor, dilation: int) -> torch.Tensor:
+    """Unique coordinates of ``ijk`` dilated ``dilation`` times by the 26-neighbor stencil.
+
+    Each application is the Minkowski sum with {-1,0,1}^3; ``dilation`` chained applications
+    equal the sum with [-d, d]^3, which is what the CPU implementation computes in one shot.
+    """
+    if ijk.numel() == 0:
+        return ijk.reshape(0, 3)
+    offsets = torch.stack(
+        torch.meshgrid(torch.arange(-1, 2), torch.arange(-1, 2), torch.arange(-1, 2), indexing="ij"),
+        dim=-1,
+    ).reshape(-1, 3)
+    out = ijk.to(torch.int64)
+    for _ in range(dilation):
+        out = (out[:, None, :] + offsets[None, :, :].to(out.device)).reshape(-1, 3)
+        out = torch.unique(out, dim=0)
+    return out.to(torch.int32)
 
 
 def _ijk_sets(grid: GridBatch):
@@ -146,6 +165,28 @@ class TestBatchedTopologyBuilder(unittest.TestCase):
             self._check_against_expected(result, expected, f"{name} coarsen x{factor}")
             cpu_result = _build(coords, "cpu").coarsened_grid(factor)
             self._check_against_cpu(result, cpu_result, f"{name} coarsen x{factor} vs CPU")
+
+    @parameterized.expand([(name,) for name in _tricky_batches().keys()])
+    def test_dilated_grid_matches_expected_and_cpu(self, name):
+        # dilated_grid(d) on CUDA runs d chained batched BoxDilate(-1, +1) passes over the whole
+        # batch (issue #775 item 3). Pin against a from_ijk build of the 26-neighbor Minkowski sum
+        # applied d times (elementwise: canonical node order) and against the CPU implementation.
+        coords = _tricky_batches()[name]
+        for dilation in (1, 2):
+            grid = _build(coords, "cuda")
+            result = grid.dilated_grid(dilation)
+            expected = [_expected_dilate_ijk(c, dilation) for c in coords]
+            self._check_against_expected(result, expected, f"{name} dilate {dilation}")
+            cpu_result = _build(coords, "cpu").dilated_grid(dilation)
+            self._check_against_cpu(result, cpu_result, f"{name} dilate {dilation} vs CPU")
+
+    def test_dilated_grid_sliced_view_matches_full(self):
+        # A sliced (non-contiguous) view dilates the same as the equivalent standalone batch.
+        coords = _tricky_batches()["mixed_sizes"]
+        full = _build(coords, "cuda")
+        view = full[1:]
+        standalone = _build(coords[1:], "cuda")
+        self.assertTrue(torch.equal(view.dilated_grid(1).ijk.jdata, standalone.dilated_grid(1).ijk.jdata))
 
     def test_conv_grid_k2s2_multi_grid_matches_per_member(self):
         coords = _tricky_batches()["mixed_sizes"]
