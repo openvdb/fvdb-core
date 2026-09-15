@@ -159,10 +159,20 @@ copyIndexGridToHandle(const nanovdb::NanoGrid<SourceGridT> *sourceGrid) {
     TorchDeviceBuffer buf(gridSize);
     memcpy(buf.data(), sourceGrid, gridSize);
     nanovdb::GridData *data = reinterpret_cast<nanovdb::GridData *>(buf.data());
-    data->mGridCount        = 1;
-    data->mGridSize         = gridSize;
-    data->mGridClass        = nanovdb::GridClass::IndexGrid;
-    data->mGridType         = nanovdb::toGridType<TargetGridT>();
+    // Copied out of a multi-grid file: the header still says "grid i of N". This buffer holds
+    // one grid, and GridHandle validates index/count against the buffer at construction.
+    data->mGridIndex = 0;
+    data->mGridCount = 1;
+    data->mGridSize  = gridSize;
+    // The blind data was not copied (gridSize stops at the first blind-metadata record), so the
+    // header must not claim any; the stale count/offset would point past this buffer.
+    data->mBlindMetadataCount  = 0;
+    data->mBlindMetadataOffset = 0;
+    // The header no longer matches what the file's checksum covered; mark it disabled rather
+    // than leave a stale value, as the other header-fixup sites do (MakeContiguous, Concatenate).
+    data->mChecksum.disable();
+    data->mGridClass = nanovdb::GridClass::IndexGrid;
+    data->mGridType  = nanovdb::toGridType<TargetGridT>();
     return nanovdb::GridHandle<TorchDeviceBuffer>(std::move(buf));
 }
 

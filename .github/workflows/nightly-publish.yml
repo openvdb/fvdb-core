@@ -198,40 +198,44 @@ jobs:
           set -euo pipefail
           DEST="s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${STEPS_PROJ_OUTPUTS_NORMALIZED}/"
           echo "Uploading wheels to $DEST"
-          shopt -s nullglob
-          upload_failed=0
-          for whl in dist/*.whl; do
-            echo "Uploading $whl"
-            if aws s3 cp "$whl" "$DEST"; then
-              echo "Successfully uploaded $whl"
-            else
-              echo "FAILED to upload $whl"
-              upload_failed=1
-            fi
-          done
-          if [ $upload_failed -eq 1 ]; then
-            echo "ERROR: One or more wheel uploads failed"
-            exit 1
-          fi
+          # Recursive cp uploads the wheels concurrently. It exits non-zero
+          # if any single upload fails.
+          aws s3 cp dist/ "$DEST" --recursive --exclude "*" --include "*.whl"
           echo "All wheels uploaded successfully"
-          sleep 2
         env:
           STEPS_PROJ_OUTPUTS_NORMALIZED: ${{ steps.proj.outputs.normalized }}
 
       - name: Generate project index.html
         run: |
           set -euo pipefail
+          S3_PROJECT="s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${STEPS_PROJ_OUTPUTS_NORMALIZED}"
           OUTDIR="dist/index-gen/${STEPS_PROJ_OUTPUTS_NORMALIZED}"
           mkdir -p "$OUTDIR"
           INDEX_FILE="$OUTDIR/index.html"
+          PREV_INDEX="$OUTDIR/prev-index.html"
           TITLE="Links for ${STEPS_PROJ_OUTPUTS_PROJECT_NAME}"
-          wheels=$(aws s3 ls "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${STEPS_PROJ_OUTPUTS_NORMALIZED}/" | { grep -E '\.whl$' || true; } | awk '{print $4}')
+
+          # Wheel hashes never change once uploaded, so the previously
+          # published index doubles as a hash cache. Reusing it avoids
+          # re-downloading the whole 30-day archive every night.
+          declare -A cached_sha
+          if aws s3 cp "$S3_PROJECT/index.html" "$PREV_INDEX" --only-show-errors 2>/dev/null; then
+            while read -r name sha; do
+              cached_sha["$name"]="$sha"
+            done < <(grep -oE 'href="[^"#]+\.whl#sha256=[0-9a-f]{64}"' "$PREV_INDEX" \
+                     | sed -E 's/^href="([^#]+)#sha256=([0-9a-f]+)"$/\1 \2/')
+            echo "Loaded ${#cached_sha[@]} hash(es) from the previous index"
+          else
+            echo "No previous index found; every wheel will be hashed"
+          fi
+
+          wheels=$(aws s3 ls "$S3_PROJECT/" | { grep -E '\.whl$' || true; } | awk '{print $4}')
 
           echo "Found wheels in S3:"
           echo "$wheels"
 
           if [ -z "$wheels" ]; then
-            echo "WARNING: No wheels found in S3 at s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${STEPS_PROJ_OUTPUTS_NORMALIZED}/"
+            echo "WARNING: No wheels found in S3 at $S3_PROJECT/"
             echo "This may indicate an upload failure or timing issue"
           fi
 
@@ -242,21 +246,22 @@ jobs:
             wheel_count=0
             for whl in $wheels; do
               wheel_count=$((wheel_count + 1))
-              echo "Processing wheel ${wheel_count}: $whl" >&2
               if [ -f "dist/$whl" ]; then
                 sha=$(sha256sum "dist/$whl" | awk '{print $1}')
-                echo "  Computed SHA256 from local file: ${sha:0:16}..." >&2
+                source=local
+              elif [ -n "${cached_sha[$whl]:-}" ]; then
+                sha=${cached_sha[$whl]}
+                source=cached
               else
-                echo "  Downloading $whl to compute hash..." >&2
-                if aws s3 cp "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${STEPS_PROJ_OUTPUTS_NORMALIZED}/$whl" "/tmp/$whl" --only-show-errors; then
-                  sha=$(sha256sum "/tmp/$whl" | awk '{print $1}')
-                  rm "/tmp/$whl"
-                  echo "  Computed SHA256 from S3 file: ${sha:0:16}..." >&2
-                else
+                if ! aws s3 cp "$S3_PROJECT/$whl" "/tmp/$whl" --only-show-errors; then
                   echo "  ERROR: Failed to download $whl from S3" >&2
                   exit 1
                 fi
+                sha=$(sha256sum "/tmp/$whl" | awk '{print $1}')
+                rm "/tmp/$whl"
+                source=downloaded
               fi
+              echo "Wheel ${wheel_count}: $whl  sha256=${sha:0:16}... (${source})" >&2
               echo "<a href=\"${whl}#sha256=${sha}\">${whl}</a><br/>";
             done;
             echo "</body></html>";
@@ -266,7 +271,7 @@ jobs:
           echo "Generated index.html:"
           cat "$INDEX_FILE"
 
-          aws s3 cp "$INDEX_FILE" "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${STEPS_PROJ_OUTPUTS_NORMALIZED}/index.html" \
+          aws s3 cp "$INDEX_FILE" "$S3_PROJECT/index.html" \
             --content-type text/html \
             --cache-control "public, max-age=60, must-revalidate" \
             --only-show-errors
