@@ -219,6 +219,35 @@ python -m http.server
 # Open localhost:8000 in browser
 ```
 
+#### Documentation checks
+
+CI checks Python docstrings with Ruff and builds the API reference with Sphinx:
+
+```shell
+python -m pip install "ruff==0.15.7" -r docs/requirements.txt
+ruff check fvdb
+sphinx-build -W --keep-going -a docs build/sphinx
+sphinx-build -W --keep-going -b coverage docs build/sphinx-coverage
+```
+
+Ruff requires class, method, function, and package docstrings and checks parameter
+descriptions in Google-style `Args` sections. It uses its standard public/private
+visibility rules; type stubs and test/example helpers are excluded. It does not
+verify the behavioral accuracy of prose or require an `Args` section in every docstring.
+
+The Sphinx coverage builder checks `__all__` exports from the packages listed in
+`coverage_public_modules` in `docs/conf.py`, plus methods and properties declared
+on exported classes. It includes re-exports from private implementation modules.
+Add new public packages to that list, and add reference entries for new exports.
+Inherited methods and ordinary data attributes are outside this coverage measure.
+
+`coverage_min_percentage` in `docs/conf.py` sets the failing threshold (currently
+100%). For a local experiment, override it with
+`sphinx-build -b coverage -D coverage_min_percentage=95 docs build/sphinx-coverage`.
+An empty inventory fails rather than reporting 100%. Intentional omissions belong
+in `coverage_ignore_pyobjects` with an explanation. The docs workflow uploads
+`python.txt` and `coverage.json`, including missing object names, even when coverage fails.
+
 ### Setting up Intellisense with clangd in Visual Studio Code
 
 Please see the guide [`Clangd for Intellisense in fVDB`](docs/markdown/clangd.md)

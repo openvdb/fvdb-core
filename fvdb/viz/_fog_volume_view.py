@@ -46,10 +46,12 @@ class FogVolumeView:
 
     @property
     def name(self) -> str:
+        """The logical view name shared by all grids in this volume."""
         return self._name
 
     @property
     def scene_name(self) -> str:
+        """The name of the scene containing this volume."""
         return self._scene_name
 
     @torch.no_grad()

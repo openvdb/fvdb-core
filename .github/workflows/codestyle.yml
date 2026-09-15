@@ -13,6 +13,19 @@ permissions:
   contents: read
 
 jobs:
+  test-python-docstrings:
+    name: Python docstrings (Ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - uses: astral-sh/ruff-action@278981a28ce3188b1e39527901f38254bf3aac89 # v4.1.0
+        with:
+          version: "0.15.7"
+          args: "check --output-format=github"
+          src: "fvdb"
+
   test-python-black-lint:
     name: Python code style (black)
     runs-on: ubuntu-latest
@@ -117,4 +130,3 @@ jobs:
         python3 -m pip install --quiet "pytest==9.0.3"
         python3 -m pytest .github/scripts/test_check_env_pin_consistency.py -q
         python3 .github/scripts/check_env_pin_consistency.py env
-

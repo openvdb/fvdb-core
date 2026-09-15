@@ -111,6 +111,7 @@ algorithms for 3D reconstruction from sensor data, including the high-level Gaus
    :caption: Documentation
 
    api/jagged_tensor
+   api/operations
    api/convolution_plan
    api/sparse_grids
    api/functional
