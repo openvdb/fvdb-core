@@ -1,21 +1,24 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <fvdb/BuilderResource.h>
 #include <fvdb/GridBatchData.h>
 #include <fvdb/JaggedTensor.h>
 #include <fvdb/TorchDeviceBuffer.h>
 #include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/BuildPrunedGrid.h>
 #include <fvdb/detail/utils/Utils.h>
-#include <fvdb/detail/utils/nanovdb/BatchedTopologyBuilder.cuh>
 #include <fvdb/detail/utils/nanovdb/CreateEmptyGridHandle.h>
 
 #include <nanovdb/NanoVDB.h>
 #include <nanovdb/tools/CreateNanoGrid.h>
 #include <nanovdb/tools/GridBuilder.h>
+#include <nanovdb/tools/cuda/PruneGrid.cuh>
+#include <nanovdb/util/MorphologyHelpers.h>
+#include <nanovdb/util/cuda/Injection.cuh>
+#include <nanovdb/util/cuda/Util.h>
 
 #include <ATen/core/TensorBody.h>
-#include <ATen/cuda/CUDAContext.h>
 #include <c10/core/ScalarType.h>
 #include <c10/cuda/CUDAGuard.h>
 
@@ -33,30 +36,65 @@ dispatchPruneGrid<torch::kCUDA>(const GridBatchData &gridBatch, const JaggedTens
     TORCH_CHECK_VALUE(mask.rdim() == 1, "Mask must be a one-dimensional boolean tensor");
     TORCH_CHECK_VALUE(mask.scalar_type() == torch::kBool, "Mask must be a boolean tensor");
     TORCH_CHECK_VALUE(gridBatch.device() == mask.device(), "Grid and mask must be on same device");
-    TORCH_CHECK_VALUE(mask.element_count() == gridBatch.totalVoxels(),
-                      "Mask has ",
-                      mask.element_count(),
-                      " entries but the grid batch has ",
-                      gridBatch.totalVoxels(),
-                      " voxels");
 
-    if (gridBatch.batchSize() == 0) {
-        return createEmptyGridHandle(gridBatch.device());
+    // This guide buffer is a hack to pass in a device with an index to the cudaCreateNanoGrid
+    // function. We can't pass in a device directly but we can pass in a buffer which gets
+    // passed to TorchDeviceBuffer::create. The guide buffer holds the device and effectively
+    // passes it to the created buffer.
+    TorchDeviceBuffer guide(0, gridBatch.device());
+
+    // Create a grid for each batch item and store the handles
+    std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> handles;
+    for (int i = 0; i < gridBatch.batchSize(); i += 1) {
+        nanovdb::GridHandle<TorchDeviceBuffer> handle;
+
+        // This also keeps the grid aligned with numLeavesAt(i)/mask.index(i), which are
+        // item-indexed.
+        nanovdb::OnIndexGrid *grid = gridBatch.deviceGridPtrAt(i);
+        TORCH_CHECK(grid, "Grid is null");
+
+        const torch::Tensor maskI = mask.index(i).jdata();
+
+        // FIXME: Handle empty case!!
+        if (maskI.sum().item<int64_t>() == 0) {
+            // If the mask is empty, we can just return an empty grid
+            handles.push_back(std::move(createEmptyGridHandle(gridBatch.device())));
+            continue;
+        }
+
+        const auto leafCount = gridBatch.numLeavesAt(i);
+        TorchDeviceBuffer maskBuffer(sizeof(nanovdb::Mask<3>) * leafCount, gridBatch.device());
+
+        at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream(gridBatch.device().index());
+        using Op = nanovdb::util::cuda::InjectPredicateToMaskFunctor<nanovdb::ValueOnIndex, -1>;
+        auto *leafMask = reinterpret_cast<nanovdb::Mask<3> *>(maskBuffer.deviceData());
+        nanovdb::util::cuda::operatorKernel<Op>
+            <<<leafCount, Op::MaxThreadsPerBlock, 0, stream.stream()>>>(
+                grid,
+                maskI.data_ptr<bool>(),
+                reinterpret_cast<nanovdb::Mask<3> *>(maskBuffer.deviceData()));
+        C10_CUDA_KERNEL_LAUNCH_CHECK();
+        nanovdb::tools::cuda::PruneGrid<nanovdb::ValueOnIndex, BuilderResource> pruneOp(grid,
+                                                                                        leafMask);
+        pruneOp.setChecksum(nanovdb::CheckMode::Default);
+        pruneOp.setVerbose(0);
+
+        handle = pruneOp.getHandle(guide);
+        C10_CUDA_KERNEL_LAUNCH_CHECK();
+
+        grid = handle.deviceGrid<nanovdb::ValueOnIndex>();
+
+        handles.push_back(std::move(handle));
     }
 
-    // All batch members are pruned in one batched leaf-mask pass: a single output buffer and one
-    // stream synchronization, no per-member builds or handle merging. The mask's own joffsets
-    // locate each grid's voxels, so sliced (non-contiguous) batch views work unchanged.
-    const torch::Tensor keep    = mask.jdata().contiguous();
-    const torch::Tensor offsets = mask.joffsets().contiguous();
-    TORCH_CHECK(offsets.scalar_type() == torch::kInt64 &&
-                    offsets.numel() == gridBatch.batchSize() + 1,
-                "Unexpected mask offsets layout");
-
-    at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream(gridBatch.device().index());
-    const std::vector<batched::TopologyPassSpec> passes{
-        batched::TopologyPassSpec::prune(keep.data_ptr<bool>(), offsets.data_ptr<int64_t>())};
-    return batched::batchedTopologyHandle(gridBatch, passes, stream.stream());
+    if (handles.size() == 1) {
+        // If there's only one handle, just return it
+        return std::move(handles[0]);
+    } else {
+        // This copies all the handles into a single handle -- only do it if there are multiple
+        // grids
+        return nanovdb::cuda::mergeGridHandles(handles, &guide);
+    }
 }
 
 template <>
