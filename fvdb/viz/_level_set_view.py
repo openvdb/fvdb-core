@@ -47,10 +47,12 @@ class LevelSetView:
 
     @property
     def name(self) -> str:
+        """The logical view name shared by all grids in this level set."""
         return self._name
 
     @property
     def scene_name(self) -> str:
+        """The name of the scene containing this level set."""
         return self._scene_name
 
     @torch.no_grad()

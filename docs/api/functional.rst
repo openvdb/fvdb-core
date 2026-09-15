@@ -33,6 +33,8 @@ Coordinate Transforms
 Interpolation and Splatting
 ---------------------------
 
+.. autofunction:: sample_nearest_batch
+.. autofunction:: sample_nearest_single
 .. autofunction:: sample_trilinear_batch
 .. autofunction:: sample_trilinear_single
 .. autofunction:: sample_trilinear_with_grad_batch
@@ -127,6 +129,15 @@ Meshing and TSDF Integration
 .. autofunction:: integrate_tsdf_with_features_single
 
 
+Signed Distance Fields
+----------------------
+
+.. autofunction:: reinitialize_sdf_batch
+.. autofunction:: reinitialize_sdf_single
+.. autofunction:: rebuild_narrow_band_batch
+.. autofunction:: rebuild_narrow_band_single
+
+
 Grid Topology
 -------------
 
@@ -215,3 +226,5 @@ I/O
 .. autofunction:: load_nanovdb_single
 .. autofunction:: save_nanovdb
 .. autofunction:: save_nanovdb_single
+.. autofunction:: read_nanovdb_metadata
+.. autofunction:: grid_names_in_nanovdb
