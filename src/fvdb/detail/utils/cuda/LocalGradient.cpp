@@ -4,6 +4,7 @@
 #include <fvdb/detail/utils/cuda/LocalGradient.h>
 
 #include <ATen/ops/from_blob.h>
+#include <c10/cuda/CUDAException.h>
 
 namespace fvdb::detail {
 
@@ -14,10 +15,9 @@ makeLocalGradient(const torch::Tensor &tensor, c10::DeviceIndex deviceId, cudaSt
 
     void *ptr = nullptr;
     if (tensor.numel() != 0) {
-        cudaMallocAsync(&ptr, tensor.numel() * tensor.element_size(), stream);
-        cudaMemsetAsync(ptr, 0, tensor.numel() * tensor.element_size(), stream);
+        C10_CUDA_CHECK(cudaMallocAsync(&ptr, tensor.numel() * tensor.element_size(), stream));
     }
-    return at::from_blob(
+    auto localGradient = at::from_blob(
         ptr,
         tensor.sizes(),
         [deviceId, stream](void *data) noexcept {
@@ -26,11 +26,15 @@ makeLocalGradient(const torch::Tensor &tensor, c10::DeviceIndex deviceId, cudaSt
             }
 
             // Select the correct device context before freeing the allocation.
-            cudaSetDevice(deviceId);
-            cudaFreeAsync(data, stream);
+            C10_CUDA_CHECK(cudaSetDevice(deviceId));
+            C10_CUDA_CHECK(cudaFreeAsync(data, stream));
         },
         options,
         device);
+    if (tensor.numel() != 0) {
+        C10_CUDA_CHECK(cudaMemsetAsync(ptr, 0, tensor.numel() * tensor.element_size(), stream));
+    }
+    return localGradient;
 }
 
 } // namespace fvdb::detail

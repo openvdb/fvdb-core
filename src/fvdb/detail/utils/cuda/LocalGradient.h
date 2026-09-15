@@ -16,7 +16,7 @@ namespace fvdb::detail {
 /// and freeing use the supplied stream; all uses of the tensor must be ordered before its free on
 /// that stream. The last tensor owner must be released while the stream is still valid.
 /// Freeing the allocation leaves deviceId current; callers must select their device for later work.
-/// CUDA API calls are assumed to succeed.
+/// CUDA API calls are checked for errors.
 torch::Tensor
 makeLocalGradient(const torch::Tensor &tensor, c10::DeviceIndex deviceId, cudaStream_t stream);
 
