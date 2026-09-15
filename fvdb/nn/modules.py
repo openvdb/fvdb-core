@@ -1,6 +1,7 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 #
+import functools
 import math
 from typing import Any
 
@@ -22,6 +23,7 @@ def _trace_fvdb_nn_forward(module):
     """
     old_forward = module.forward
 
+    @functools.wraps(old_forward)
     def _forward(self, *args, **kwargs):
         with record_function(repr(self)):
             return old_forward(self, *args, **kwargs)
@@ -259,6 +261,74 @@ class UpsamplingNearest(nn.Module):
             fine_grid (GridBatch): The fine :class:`fvdb.GridBatch` after upsampling.
         """
         return coarse_grid.refine(self.scale_factor, coarse_data, mask, fine_grid=fine_grid)
+
+
+@_trace_fvdb_nn_forward
+class Prune(nn.Module):
+    """
+    Prunes the topology of a :class:`fvdb.GridBatch` and its associated :class:`JaggedTensor`
+    features according to a boolean keep-mask with one entry per active voxel. Voxels where the
+    mask is ``False`` are removed from the output grid, and the corresponding feature rows are
+    removed from the output features.
+
+    This module prunes *grid topology* (voxels), not network parameters — it is unrelated to
+    weight pruning as in :mod:`torch.nn.utils.prune`. It is typically used in generative
+    sparse decoders, where a classifier predicts which voxels of a generated topology to keep
+    (*e.g.* after a generative transposed convolution built with
+    :meth:`fvdb.ConvolutionPlan.from_grid_batch_transposed`).
+
+    The module has no parameters and is called as ``prune(data, grid, mask)``.
+
+    Args:
+        data (JaggedTensor): Input features associated with ``grid``.
+            Shape: ``(batch_size, num_voxels_b, channels)``.
+        grid (GridBatch): The grid batch corresponding to ``data``.
+        mask (JaggedTensor): Boolean keep-mask with one entry per active voxel of ``grid``.
+            Shape: ``(batch_size, num_voxels_b)``.
+
+    Returns:
+        pruned_data (JaggedTensor): Features of the surviving voxels, aligned with ``pruned_grid``.
+        pruned_grid (GridBatch): A new :class:`fvdb.GridBatch` containing only the voxels
+            where ``mask`` is ``True``.
+
+    Raises:
+        ValueError: If ``data`` or ``mask`` is not partitioned per grid exactly like ``grid``,
+            since the underlying operations only check the flat element counts and a
+            mismatch would otherwise silently misalign features across grids.
+
+    .. note::
+
+        Pruning preserves the canonical voxel order of the surviving voxels, so the returned
+        features remain aligned with the returned grid. Feature selection is differentiable
+        (gradients flow to the kept rows of ``data``); the mask itself is not differentiable.
+
+    .. seealso::
+
+        :meth:`fvdb.GridBatch.pruned_grid` and :meth:`fvdb.JaggedTensor.rmask` for the
+        underlying operations.
+    """
+
+    def forward(
+        self,
+        data: JaggedTensor,
+        grid: GridBatch,
+        mask: JaggedTensor,
+    ) -> tuple[JaggedTensor, GridBatch]:
+        """Prune ``grid`` and ``data`` down to the voxels where ``mask`` is ``True``. See :class:`Prune`."""
+        self._check_partitioned_like(grid, data, "data")
+        self._check_partitioned_like(grid, mask, "mask")
+        pruned_grid = grid.pruned_grid(mask)
+        pruned_data = data.rmask(mask.jdata)
+        return pruned_data, pruned_grid
+
+    @staticmethod
+    def _check_partitioned_like(grid: GridBatch, tensor: JaggedTensor, name: str) -> None:
+        if tensor.num_tensors != grid.grid_count:
+            raise ValueError(f"{name} has {tensor.num_tensors} tensors but grid has {grid.grid_count} grids")
+        if tensor.jdata.shape[0] != grid.total_voxels:
+            raise ValueError(f"{name} has {tensor.jdata.shape[0]} rows but grid has {grid.total_voxels} voxels")
+        if grid.grid_count > 0 and not torch.equal(tensor.joffsets, grid.joffsets):
+            raise ValueError(f"{name} and grid must have the same per-grid partitioning")
 
 
 class _SparseConv3dBase(nn.Module):
