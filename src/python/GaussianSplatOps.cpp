@@ -27,6 +27,7 @@
 #include <fvdb/detail/ops/gsplat/ProjectGaussiansAnalyticForward.h>
 #include <fvdb/detail/ops/gsplat/ProjectGaussiansAnalyticJaggedBackward.h>
 #include <fvdb/detail/ops/gsplat/ProjectGaussiansAnalyticJaggedForward.h>
+#include <fvdb/detail/ops/gsplat/ProjectGaussiansUnscentedBackward.h>
 #include <fvdb/detail/ops/gsplat/ProjectGaussiansUnscentedForward.h>
 #include <fvdb/detail/ops/gsplat/RasterizeScreenSpaceGaussiansBackward.h>
 #include <fvdb/detail/ops/gsplat/RasterizeScreenSpaceGaussiansForward.h>
@@ -575,5 +576,77 @@ bind_gaussian_splat_ops(py::module &m) {
         py::arg("ut_beta")                              = 2.0f,
         py::arg("ut_kappa")                             = 0.0f,
         py::arg("ut_in_image_margin")                   = 0.1f,
+        py::arg("ut_require_all_sigma_points_in_image") = true);
+
+    // ------- UT projection backward -------
+    //
+    // Companion to project_gaussians_unscented_fwd above: until this was added, that forward op
+    // was called directly (not through a torch.autograd.Function), so it had no way to
+    // contribute a gradient at all -- the photometric loss produced zero gradient on
+    // means/quats/log_scales for every camera model requiring distortion handling (every COLMAP
+    // camera model except SIMPLE_PINHOLE/PINHOLE). See ProjectGaussiansUnscentedBackward.h for
+    // the derivation, its scope (float32, RollingShutterType::NONE, DistortionModel::
+    // OPENCV_RADTAN_5 only, no camera-pose or distortion-coefficient gradient yet), and the
+    // numerical validation performed before this was written.
+    m.def(
+        "project_gaussians_unscented_bwd",
+        [](const torch::Tensor &means,
+           const torch::Tensor &quats,
+           const torch::Tensor &logScales,
+           const torch::Tensor &worldToCamMatrices,
+           const torch::Tensor &projectionMatrices,
+           const DistortionModel cameraModel,
+           const torch::Tensor &distortionCoeffs,
+           const int64_t imageWidth,
+           const int64_t imageHeight,
+           const float eps2d,
+           const torch::Tensor &radii,
+           const torch::Tensor &conics,
+           const torch::Tensor &dLossDMeans2d,
+           const torch::Tensor &dLossDDepths,
+           const torch::Tensor &dLossDConics,
+           const float utAlpha,
+           const float utBeta,
+           const float utKappa,
+           const float utInImageMargin,
+           const bool utRequireAllSigmaPointsInImage) {
+            ops::UTParams utParams{
+                utAlpha, utBeta, utKappa, utInImageMargin, utRequireAllSigmaPointsInImage};
+            return ops::projectGaussiansUnscentedBwd(means,
+                                                     quats,
+                                                     logScales,
+                                                     worldToCamMatrices,
+                                                     projectionMatrices,
+                                                     cameraModel,
+                                                     distortionCoeffs,
+                                                     imageWidth,
+                                                     imageHeight,
+                                                     eps2d,
+                                                     utParams,
+                                                     radii,
+                                                     conics,
+                                                     dLossDMeans2d,
+                                                     dLossDDepths,
+                                                     dLossDConics);
+        },
+        py::arg("means"),
+        py::arg("quats"),
+        py::arg("log_scales"),
+        py::arg("world_to_cam_matrices"),
+        py::arg("projection_matrices"),
+        py::arg("camera_model"),
+        py::arg("distortion_coeffs"),
+        py::arg("image_width"),
+        py::arg("image_height"),
+        py::arg("eps2d"),
+        py::arg("radii"),
+        py::arg("conics"),
+        py::arg("d_loss_d_means2d"),
+        py::arg("d_loss_d_depths"),
+        py::arg("d_loss_d_conics"),
+        py::arg("ut_alpha")           = 0.1f,
+        py::arg("ut_beta")            = 2.0f,
+        py::arg("ut_kappa")           = 0.0f,
+        py::arg("ut_in_image_margin") = 0.1f,
         py::arg("ut_require_all_sigma_points_in_image") = true);
 }
