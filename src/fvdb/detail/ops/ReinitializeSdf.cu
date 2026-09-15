@@ -29,7 +29,7 @@ using OnIndexGridT = nanovdb::NanoGrid<nanovdb::ValueOnIndex>;
 // over the builders' resource (torch's active CUDA allocator). buildVoxelBlockManager
 // allocates it stream-ordered on the reinit stream via createDeviceStorage, and the handle's
 // single-space accessors (openvdb #2301) hand the pointers back without an adapter.
-using VbmBuffer = nanovdb::cuda::Buffer<std::byte, BuilderResource>;
+using VbmBuffer = BuilderBuffer<std::byte>;
 
 // log2 of the VoxelBlockManager block width: each VBM block spans 2^9 = 512 active voxels.
 static constexpr int kLog2BlockWidth = 9;

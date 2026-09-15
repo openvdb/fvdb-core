@@ -70,7 +70,7 @@ dispatchPruneGrid<torch::kCUDA>(const GridBatchData &gridBatch, const JaggedTens
         // goes through the builders' resource (torch's active CUDA allocator), stream-ordered on
         // the stream the fill kernel and PruneGrid run on. Every word is written by the kernel
         // below, so the allocation is not zero-initialized.
-        nanovdb::cuda::Buffer<nanovdb::Mask<3>, BuilderResource> maskBuffer(
+        BuilderBuffer<nanovdb::Mask<3>> maskBuffer(
             stream.stream(), leafCount, nanovdb::cuda::noInit);
 
         using Op = nanovdb::util::cuda::InjectPredicateToMaskFunctor<nanovdb::ValueOnIndex, -1>;

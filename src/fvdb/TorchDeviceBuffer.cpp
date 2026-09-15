@@ -8,7 +8,6 @@
 #include <nanovdb/cuda/DeviceBuffer.h>
 
 #include <c10/cuda/CUDAGuard.h>
-#include <c10/cuda/CUDAStream.h>
 
 namespace nanovdb {
 
@@ -61,17 +60,11 @@ GridHandle<fvdb::TorchDeviceBuffer>::copy(const fvdb::TorchDeviceBuffer &guide) 
 namespace fvdb {
 
 namespace {
-// Resolve the stream a caller will write a device allocation on: null (and so the legacy
-// default stream, which it cannot be told from) means the current device's current torch stream.
-cudaStream_t
-writeStream(void *stream) {
-    return stream ? static_cast<cudaStream_t>(stream) : c10::cuda::getCurrentCUDAStream().stream();
-}
-
+// Device memory for the synchronous cudaMemcpy paths below, which run on the legacy default
+// stream: TorchResource orders that stream after the allocation like any other.
 void *
 deviceAlloc(uint64_t bytes) {
-    return TorchResource{}.allocate_async(
-        bytes, TorchResource::DEFAULT_ALIGNMENT, writeStream(nullptr));
+    return TorchResource{}.allocate_async(bytes, TorchResource::DEFAULT_ALIGNMENT, cudaStream_t{});
 }
 
 void
@@ -97,7 +90,7 @@ TorchDeviceBuffer::TorchDeviceBuffer(uint64_t size /* = 0*/,
         // caller will write on after it; see TorchResource::allocate_async.
         c10::cuda::CUDAGuard deviceGuard(mDevice);
         mData = reinterpret_cast<uint8_t *>(TorchResource{}.allocate_async(
-            size, TorchResource::DEFAULT_ALIGNMENT, writeStream(stream)));
+            size, TorchResource::DEFAULT_ALIGNMENT, static_cast<cudaStream_t>(stream)));
         checkPtr(mData, "failed to allocate device data");
     } else if (mDevice.is_privateuseone()) {
         auto allocator = c10::GetAllocator(c10::DeviceType::PrivateUse1);

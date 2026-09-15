@@ -338,8 +338,8 @@ indexToGridHost(const nanovdb::NanoGrid<nanovdb::ValueOnIndex> *srcGrid,
     dstGrid->mGridType = nanovdb::toGridType<DstBuildT>();
     dstGrid->mData1    = 0u;
     // The source header describes its place in the batch and the size of the index grid. This
-    // buffer holds exactly one typed grid, and GridHandle validates that at construction
-    // (matches what tools::cuda::indexToGrid does to its output).
+    // buffer holds exactly one typed grid of totalSize bytes, and GridHandle validates index,
+    // count and size against the buffer at construction.
     dstGrid->mGridIndex = 0u;
     dstGrid->mGridCount = 1u;
     dstGrid->mGridSize  = totalSize;
@@ -629,7 +629,7 @@ fvdbToNanovdbGridWithValues(const GridBatchData &gridBatchData,
     using HostGridHandle = nanovdb::GridHandle<nanovdb::HostBuffer>;
     // The typed output grid is device-only and scratch for the D2H copy below, so it lives in a
     // single-space buffer over the builders' resource (torch's active CUDA allocator).
-    using DeviceGridBuffer = nanovdb::cuda::Buffer<std::byte, BuilderResource>;
+    using DeviceGridBuffer = BuilderBuffer<std::byte>;
     using DeviceGridHandle = nanovdb::GridHandle<DeviceGridBuffer>;
     using ValueT           = typename nanovdb::BuildToValueMap<OutBuildT>::type;
 
@@ -661,7 +661,7 @@ fvdbToNanovdbGridWithValues(const GridBatchData &gridBatchData,
     // this helper is reused without that dispatch.
     // Device staging goes through the builders' resource (torch's caching allocator),
     // stream-ordered on the same stream as the copies and kernels that use it.
-    nanovdb::cuda::Buffer<std::byte, BuilderResource> tmpDevBuf; // empty unless we need to upload
+    BuilderBuffer<std::byte> tmpDevBuf; // empty unless we need to upload
     const torch::Device gridDevice = gridBatchData.device();
     const torch::Device cudaDevice = gridDevice.is_cuda()
                                          ? gridDevice
@@ -676,8 +676,7 @@ fvdbToNanovdbGridWithValues(const GridBatchData &gridBatchData,
         const uint64_t srcBufferSize = gridBatchData.nanoGridHandle().buffer().size();
         const uint8_t *srcHostData =
             static_cast<const uint8_t *>(gridBatchData.nanoGridHandle().buffer().data());
-        tmpDevBuf = nanovdb::cuda::Buffer<std::byte, BuilderResource>(
-            stream.stream(), srcBufferSize, nanovdb::cuda::noInit);
+        tmpDevBuf = BuilderBuffer<std::byte>(stream.stream(), srcBufferSize, nanovdb::cuda::noInit);
         cudaCheck(cudaMemcpyAsync(
             tmpDevBuf.data(), srcHostData, srcBufferSize, cudaMemcpyHostToDevice, stream.stream()));
         dSrcBufferStart = reinterpret_cast<const uint8_t *>(tmpDevBuf.data());
@@ -696,7 +695,7 @@ fvdbToNanovdbGridWithValues(const GridBatchData &gridBatchData,
     // to zero, and D2D-copy the data slice into [1..N]. All allocations and copies are queued
     // on the same stream as the indexToGrid kernels so the GPU can run them back-to-back.
 
-    using ValueStagingBuffer = nanovdb::cuda::Buffer<ValueT, BuilderResource>;
+    using ValueStagingBuffer = BuilderBuffer<ValueT>;
     std::vector<DeviceGridHandle> deviceHandles;
     std::vector<ValueStagingBuffer> perBatchValueBufs;
     std::vector<nanovdb::HostBuffer> hostBuffers;

@@ -32,9 +32,8 @@ class TorchDeviceBuffer {
     /// @param stream For a CUDA device, the stream the caller will write the buffer on. The
     /// allocation is made through fvdb::TorchResource, which always takes it on the device's
     /// current torch stream and orders @p stream after that if the two differ (see
-    /// TorchResource::allocate_async for why). Null (the default, indistinguishable from the
-    /// legacy default stream) means the current torch stream. Ignored for CPU and PrivateUse1
-    /// devices.
+    /// TorchResource::allocate_async for why). Null, the default, is the legacy default stream
+    /// and is ordered like any other. Ignored for CPU and PrivateUse1 devices.
     TorchDeviceBuffer(uint64_t size               = 0,
                       const torch::Device &device = torch::kCPU,
                       void *stream                = nullptr);
