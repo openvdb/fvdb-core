@@ -23,12 +23,13 @@ namespace fvdb {
 ///        build-time switch guarding the TorchResource include — instead of
 ///        touching every op.
 ///
-///        The alias covers every device-only allocation whose lifetime is an
-///        op: the builders' internal scratch, and the staging and scratch
-///        buffers fvdb's ops hand them or fill for them, which are declared
-///        as BuilderBuffer<T> below. Grid storage that outlives the op
-///        (TorchDeviceBuffer) is torch-device aware by design and allocates
-///        through TorchResource directly.
+///        The alias covers device-only allocations whose lifetime is an op:
+///        the builders' internal scratch, and the staging and scratch buffers
+///        fvdb's ops declare as BuilderBuffer<T> below. Ops that still take
+///        CUB scratch from c10 directly are outside it until they migrate.
+///        Grid storage that outlives the op (TorchDeviceBuffer) has a
+///        different stream contract and allocates through
+///        TorchStorageResource (TorchResource.h).
 ///
 ///        Note the seam is compile-time and relies on the resource being
 ///        stateless: builders bind the shared instance from
