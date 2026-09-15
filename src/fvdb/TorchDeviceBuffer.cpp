@@ -2,12 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/TorchDeviceBuffer.h>
+#include <fvdb/TorchResource.h>
 
 #include <nanovdb/GridHandle.h>
 #include <nanovdb/cuda/DeviceBuffer.h>
 
-#include <c10/cuda/CUDACachingAllocator.h>
 #include <c10/cuda/CUDAGuard.h>
+#include <c10/cuda/CUDAStream.h>
 
 namespace nanovdb {
 
@@ -59,6 +60,26 @@ GridHandle<fvdb::TorchDeviceBuffer>::copy(const fvdb::TorchDeviceBuffer &guide) 
 
 namespace fvdb {
 
+namespace {
+// Resolve the stream a caller will write a device allocation on: null (and so the legacy
+// default stream, which it cannot be told from) means the current device's current torch stream.
+cudaStream_t
+writeStream(void *stream) {
+    return stream ? static_cast<cudaStream_t>(stream) : c10::cuda::getCurrentCUDAStream().stream();
+}
+
+void *
+deviceAlloc(uint64_t bytes) {
+    return TorchResource{}.allocate_async(
+        bytes, TorchResource::DEFAULT_ALIGNMENT, writeStream(nullptr));
+}
+
+void
+deviceFree(void *p) {
+    TorchResource{}.deallocate_async(p, 0, TorchResource::DEFAULT_ALIGNMENT, nullptr);
+}
+} // namespace
+
 TorchDeviceBuffer::TorchDeviceBuffer(uint64_t size /* = 0*/,
                                      const torch::Device &device /* = torch::kCPU*/,
                                      void *stream /* = nullptr*/)
@@ -71,15 +92,12 @@ TorchDeviceBuffer::TorchDeviceBuffer(uint64_t size /* = 0*/,
         // Initalize on the host
         mData = reinterpret_cast<uint8_t *>(malloc(size));
     } else if (mDevice.is_cuda()) {
-        // Initalize on the device. With an explicit stream the allocation is associated with
-        // that stream in the caching allocator (the stream nanovdb builders order their work
-        // on); raw_alloc would silently associate it with the device's current torch stream
-        // instead, which is only correct when the two coincide.
+        // Initialize on the device through the same memory resource the builders use. It picks
+        // the allocation stream (the device's current torch stream) and orders the stream the
+        // caller will write on after it; see TorchResource::allocate_async.
         c10::cuda::CUDAGuard deviceGuard(mDevice);
-        mData = reinterpret_cast<uint8_t *>(
-            stream ? c10::cuda::CUDACachingAllocator::raw_alloc_with_stream(
-                         size, static_cast<cudaStream_t>(stream))
-                   : c10::cuda::CUDACachingAllocator::raw_alloc(size));
+        mData = reinterpret_cast<uint8_t *>(TorchResource{}.allocate_async(
+            size, TorchResource::DEFAULT_ALIGNMENT, writeStream(stream)));
         checkPtr(mData, "failed to allocate device data");
     } else if (mDevice.is_privateuseone()) {
         auto allocator = c10::GetAllocator(c10::DeviceType::PrivateUse1);
@@ -127,23 +145,23 @@ TorchDeviceBuffer::to(const torch::Device &device) {
     uint8_t *data = nullptr;
     if (mDevice.is_cpu() && device.is_cuda()) { // CPU -> CUDA
         c10::cuda::CUDAGuard deviceGuard(device);
-        data = reinterpret_cast<uint8_t *>(c10::cuda::CUDACachingAllocator::raw_alloc(mSize));
+        data = reinterpret_cast<uint8_t *>(deviceAlloc(mSize));
         cudaMemcpy(data, mData, mSize, cudaMemcpyHostToDevice);
         free(mData);
     } else if (mDevice.is_cuda() && device.is_cpu()) {
         data = reinterpret_cast<uint8_t *>(malloc(mSize));
         c10::cuda::CUDAGuard deviceGuard(mDevice);
         cudaMemcpy(data, mData, mSize, cudaMemcpyDeviceToHost);
-        c10::cuda::CUDACachingAllocator::raw_delete(mData);
+        deviceFree(mData);
     } else if (mDevice.is_cuda() && device.is_cuda()) {
         {
             c10::cuda::CUDAGuard deviceGuard(device);
-            data = reinterpret_cast<uint8_t *>(c10::cuda::CUDACachingAllocator::raw_alloc(mSize));
+            data = reinterpret_cast<uint8_t *>(deviceAlloc(mSize));
             cudaMemcpy(data, mData, mSize, cudaMemcpyDeviceToDevice);
         }
         {
             c10::cuda::CUDAGuard deviceGuard(mDevice);
-            c10::cuda::CUDACachingAllocator::raw_delete(mData);
+            deviceFree(mData);
         }
     } else if (mDevice.is_cpu() && device.is_privateuseone()) {
         auto allocator = c10::GetAllocator(c10::DeviceType::PrivateUse1);
@@ -200,7 +218,7 @@ TorchDeviceBuffer::clear() {
         allocator->raw_deallocate(mData);
     } else if (mDevice.is_cuda()) {
         c10::cuda::CUDAGuard deviceGuard(mDevice);
-        c10::cuda::CUDACachingAllocator::raw_delete(mData);
+        deviceFree(mData);
     } else if (mDevice.is_cpu()) {
         free(mData);
     }
@@ -211,8 +229,8 @@ TorchDeviceBuffer::clear() {
 
 TorchDeviceBuffer
 TorchDeviceBuffer::create(uint64_t size, const TorchDeviceBuffer *proto, int device, void *stream) {
-    // The stream a nanovdb builder passes here is the one it orders its writes into the buffer
-    // on; forward it so the allocation is associated with that stream (see the constructor).
+    // The stream a nanovdb builder passes here is the one it will write the buffer on. It does
+    // not choose the allocation stream; TorchResource orders it after the allocation.
     if (proto) {
         // This is a hack to pass in the device index when creating grids from nanovdb. Since we
         // can't pass arguments through nanovdb creation functions, we use a prototype grid to pass
