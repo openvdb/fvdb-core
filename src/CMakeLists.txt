@@ -60,6 +60,7 @@ set(FVDB_CPP_FILES
 
 set(FVDB_CU_FILES
     fvdb/GridBatchData.cu
+    fvdb/GridStorage.cu
     fvdb/detail/GridBatchDataFactory.cu
     fvdb/detail/io/SaveNanoVDB.cu
     fvdb/detail/ops/ActiveGridCoords.cu

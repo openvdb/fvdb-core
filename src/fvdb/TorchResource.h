@@ -133,7 +133,10 @@ static_assert(nanovdb::cuda::is_async_resource<TorchResource>::value,
 ///        builders fvdb hands TorchDeviceBuffer to (PointsToGrid, DistributedPointsToGrid,
 ///        the topology builders, PadGrid) do so before returning their handle.
 ///
-///        This is the body #770's TorchDeviceResource adopts; TorchDeviceBuffer uses it now.
+///        TorchDeviceBuffer uses this. TorchDeviceResource, the resource behind the single-space
+///        grid storage, deliberately does not: a cuda::Buffer retains the stream it was allocated
+///        on and frees on it, so there the block is keyed to that stream (the TorchResource policy)
+///        and the two ordering models agree without events. See TorchDeviceResource.h.
 struct TorchStorageResource : nanovdb::cuda::SyncFromAsync<TorchStorageResource> {
     static constexpr size_t DEFAULT_ALIGNMENT = TorchResource::DEFAULT_ALIGNMENT;
 
