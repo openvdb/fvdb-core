@@ -88,6 +88,7 @@ class AvgPool(nn.Module):
         return self._stride
 
     def extra_repr(self) -> str:
+        """Return the layer configuration shown in the module representation."""
         return f"kernel_size={self.kernel_size}, stride={self.stride}"
 
     def forward(
@@ -170,6 +171,7 @@ class MaxPool(nn.Module):
         return self._stride
 
     def extra_repr(self) -> str:
+        """Return the layer configuration shown in the module representation."""
         return f"kernel_size={self.kernel_size}, stride={self.stride}"
 
     def forward(
@@ -236,6 +238,7 @@ class UpsamplingNearest(nn.Module):
         return self._scale_factor
 
     def extra_repr(self) -> str:
+        """Return the layer configuration shown in the module representation."""
         return f"scale_factor={self.scale_factor}"
 
     def forward(
@@ -298,6 +301,7 @@ class _SparseConv3dBase(nn.Module):
         self.reset_parameters()
 
     def extra_repr(self) -> str:
+        """Return the layer configuration shown in the module representation."""
         s = f"{self.in_channels}, {self.out_channels}, kernel_size={self.kernel_size}, stride={self.stride}"
         if self.bias is None:
             s += ", bias=False"

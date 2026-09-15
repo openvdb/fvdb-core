@@ -57,6 +57,18 @@ packages = ["fvdb"]
 line-length = 120
 target-version = ["py311"]
 
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+extend-exclude = ["*.pyi", "fvdb/utils/tests", "fvdb/utils/examples"]
+
+[tool.ruff.lint]
+# Enforce API descriptions without changing the existing Black formatting policy.
+select = ["D101", "D102", "D103", "D104", "D417"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]

@@ -1,6 +1,8 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 #
+"""Sparse voxel grids, jagged tensors, and differentiable spatial operations."""
+
 from __future__ import annotations
 
 import ctypes
@@ -20,7 +22,7 @@ def _parse_device_string(device_or_device_string: str | torch.device) -> torch.d
     object, it is returned unmodified.
 
      Args:
-         device_string (str | torch.device):
+         device_or_device_string (str | torch.device):
              A device string (e.g., "cpu", "cuda", "cuda:0") or a torch.device object.
              If a string is provided, it should be a valid device identifier.
 
@@ -83,7 +85,6 @@ from .enums import (
     ConvolutionTopologyProvenance,
     SmoothingMode,
 )
-
 
 # Import torch-compatible functions that work with both Tensor and JaggedTensor
 from .torch_jagged import (

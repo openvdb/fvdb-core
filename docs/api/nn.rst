@@ -5,56 +5,73 @@ Call modules as ``module(...)`` to retain PyTorch hooks. The ``forward`` entries
 below describe their arguments and outputs.
 
 .. autoclass:: fvdb.nn.MaxPool
-   :members: forward
+   :members:
+   :exclude-members: extra_repr
 
 .. autoclass:: fvdb.nn.AvgPool
-   :members: forward
+   :members:
+   :exclude-members: extra_repr
 
 .. autoclass:: fvdb.nn.UpsamplingNearest
-   :members: forward
+   :members:
+   :exclude-members: extra_repr
 
 .. autoclass:: fvdb.nn.SparseConv3d
-   :members: forward, reset_parameters
+   :members:
+   :exclude-members: extra_repr
 
 .. autoclass:: fvdb.nn.SparseConvTranspose3d
-   :members: forward, reset_parameters
+   :members:
+   :exclude-members: extra_repr
 
 .. autoclass:: fvdb.nn.BatchNorm
-   :members: forward, reset_parameters
+   :members:
+   :exclude-members: extra_repr
 
 .. autoclass:: fvdb.nn.GroupNorm
-   :members: forward, reset_parameters
+   :members:
+   :exclude-members: extra_repr
 
 .. autoclass:: fvdb.nn.SyncBatchNorm
-   :members: forward, reset_parameters
+   :members:
+   :exclude-members: extra_repr
 
 
 U-Net Architecture Blocks
 ---------------------------
 
 .. autoclass:: fvdb.nn.SimpleUNet
-   :members: forward, reset_parameters
+   :members:
+   :exclude-members: extra_repr
 
 .. autoclass:: fvdb.nn.SimpleUNetBasicBlock
-   :members: forward, reset_parameters
+   :members:
+   :exclude-members: extra_repr
 
 .. autoclass:: fvdb.nn.SimpleUNetBottleneck
-   :members: forward, reset_parameters
+   :members:
+   :exclude-members: extra_repr
 
 .. autoclass:: fvdb.nn.SimpleUNetConvBlock
-   :members: forward, reset_parameters
+   :members:
+   :exclude-members: extra_repr
 
 .. autoclass:: fvdb.nn.SimpleUNetDown
-   :members: forward, reset_parameters
+   :members:
+   :exclude-members: extra_repr
 
 .. autoclass:: fvdb.nn.SimpleUNetDownUp
-   :members: forward, reset_parameters
+   :members:
+   :exclude-members: extra_repr
 
 .. autoclass:: fvdb.nn.SimpleUNetPad
-   :members: forward, reset_parameters, create_padded_grid
+   :members:
+   :exclude-members: extra_repr
 
 .. autoclass:: fvdb.nn.SimpleUNetUnpad
-   :members: forward, reset_parameters
+   :members:
+   :exclude-members: extra_repr
 
 .. autoclass:: fvdb.nn.SimpleUNetUp
-   :members: forward, reset_parameters
+   :members:
+   :exclude-members: extra_repr
