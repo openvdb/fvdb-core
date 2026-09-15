@@ -4,9 +4,8 @@
 """Equivalence tests for the batched leaf-mask topology builder (issue #755).
 
 On CUDA, ``refined_grid`` / ``coarsened_grid`` (and through them ``conv_grid`` /
-``conv_transpose_grid`` for K == S) and ``pruned_grid`` build all batch members in a single
-batched pass instead of one NanoVDB build + merge per member. These tests pin the batched results
-against:
+``conv_transpose_grid`` for K == S) build all batch members in a single batched pass instead of
+one NanoVDB build + merge per member. These tests pin the batched results against:
 
 - ``from_ijk`` (PointsToGrid) grids built from independently computed expected coordinates,
   compared **elementwise** (``torch.equal`` on ``ijk.jdata``), which pins the canonical NanoVDB
@@ -213,52 +212,6 @@ class TestBatchedTopologyBuilder(unittest.TestCase):
         self.assertEqual(back.grid_count, grid.grid_count)
         self.assertEqual(_ijk_sets(back), _ijk_sets(grid))
         self.assertTrue(torch.equal(back.num_voxels, grid.num_voxels))
-
-    @parameterized.expand([(name,) for name in _tricky_batches().keys()])
-    def test_pruned_grid_matches_expected_and_cpu(self, name):
-        coords = _tricky_batches()[name]
-        grid = _build(coords, "cuda")
-        gen = torch.Generator(device="cuda").manual_seed(7)
-        mask = grid.jagged_like(torch.rand(grid.total_voxels, generator=gen, device="cuda") < 0.6)
-        result = grid.pruned_grid(mask)
-        expected = [ijk[m] for ijk, m in zip(grid.ijk.unbind(), mask.unbind())]
-        self._check_against_expected(result, expected, f"{name} prune vs expected")
-        cpu_grid = _build(coords, "cpu")
-        cpu_mask = JaggedTensor([m.cpu() for m in mask.unbind()])
-        self._check_against_cpu(result, cpu_grid.pruned_grid(cpu_mask), f"{name} prune vs CPU")
-
-    def test_pruned_grid_identity_and_empty_masks(self):
-        grid = _build(_tricky_batches()["mixed_sizes"], "cuda")
-        # All-true mask is the identity.
-        keep_all = grid.jagged_like(torch.ones(grid.total_voxels, dtype=torch.bool, device="cuda"))
-        same = grid.pruned_grid(keep_all)
-        self.assertTrue(torch.equal(same.ijk.jdata, grid.ijk.jdata))
-        self.assertTrue(torch.equal(same.num_voxels, grid.num_voxels))
-        # All-false mask empties every member but keeps the batch shape.
-        drop_all = grid.jagged_like(torch.zeros(grid.total_voxels, dtype=torch.bool, device="cuda"))
-        empty = grid.pruned_grid(drop_all)
-        self.assertEqual(empty.grid_count, grid.grid_count)
-        self.assertEqual(empty.total_voxels, 0)
-        # Emptying only the middle member (and, in the others, whole leaves) mixes empty and
-        # non-empty outputs in one pass.
-        per_member = [torch.ones(n, dtype=torch.bool, device="cuda") for n in grid.num_voxels.tolist()]
-        per_member[1][:] = False
-        per_member[0][: per_member[0].numel() // 2] = False
-        mask = JaggedTensor(per_member)
-        result = grid.pruned_grid(mask)
-        expected = [ijk[m] for ijk, m in zip(grid.ijk.unbind(), mask.unbind())]
-        self._check_against_expected(result, expected, "prune with an emptied member")
-
-    def test_pruned_grid_on_sliced_batch_view(self):
-        # A sliced view's members do not start at voxel offset 0 in the underlying buffer; the
-        # mask's own offsets must locate each member's voxels.
-        full = _build(_tricky_batches()["larger_batch"], "cuda")
-        view = full[3:11]
-        gen = torch.Generator(device="cuda").manual_seed(11)
-        mask = view.jagged_like(torch.rand(view.total_voxels, generator=gen, device="cuda") < 0.5)
-        result = view.pruned_grid(mask)
-        expected = [ijk[m] for ijk, m in zip(view.ijk.unbind(), mask.unbind())]
-        self._check_against_expected(result, expected, "prune on sliced view")
 
 
 if __name__ == "__main__":

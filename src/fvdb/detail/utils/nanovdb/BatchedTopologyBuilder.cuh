@@ -11,8 +11,8 @@
 // workloads that rebuild grids every training iteration (issue #755), that per-member fixed
 // overhead -- not the topology size -- dominates wall clock and serializes the GPU.
 //
-// This header rebuilds the factor-2 refine (subdivision), coarsen, box-dilate, and per-voxel
-// prune passes so one invocation covers the whole batch:
+// This header rebuilds the factor-2 refine (subdivision) and coarsen passes so one invocation
+// covers the whole batch:
 //
 //   emit    one kernel over all source leaves of all members emits candidate output leaves as
 //           (root-tile sort key, in-tile node key, leaf origin, 512-bit activity mask) slots,
@@ -73,15 +73,11 @@ using LeafT  = nanovdb::NanoLeaf<BuildT>;
 /// subdivision / coarsening passes; `BoxDilate` is a Minkowski sum with the axis-aligned box
 /// [boxLo, boxHi] (components in {-1,0,1}), covering NanoVDB's 26-neighbor DilateGrid
 /// (boxLo=-1, boxHi=1) and fvdb's one-sided PadGrid octants ({-1,0}^3 and {0,1}^3). Larger
-/// boxes compose from multiple passes (Minkowski sums by boxes compose). `Prune` keeps the
-/// subset of each grid's active voxels flagged in a flat per-voxel bool mask laid out in
-/// canonical voxel order, with per-grid start offsets into that mask.
+/// boxes compose from multiple passes (Minkowski sums by boxes compose).
 struct TopologyPassSpec {
-    enum class Op { Refine, Coarsen, BoxDilate, Prune };
+    enum class Op { Refine, Coarsen, BoxDilate };
     Op op;
-    nanovdb::Coord boxLo{0}, boxHi{0};    // BoxDilate only
-    const bool *keepMask       = nullptr; // Prune only: [total voxels] device bools
-    const int64_t *keepOffsets = nullptr; // Prune only: [B+1] device voxel offsets per grid
+    nanovdb::Coord boxLo{0}, boxHi{0}; // BoxDilate only
 
     static TopologyPassSpec
     refine() {
@@ -94,13 +90,6 @@ struct TopologyPassSpec {
     static TopologyPassSpec
     boxDilate(const nanovdb::Coord &lo, const nanovdb::Coord &hi) {
         return {Op::BoxDilate, lo, hi};
-    }
-    static TopologyPassSpec
-    prune(const bool *keepMask, const int64_t *keepOffsets) {
-        TopologyPassSpec spec{Op::Prune};
-        spec.keepMask    = keepMask;
-        spec.keepOffsets = keepOffsets;
-        return spec;
     }
 };
 
@@ -438,59 +427,6 @@ emitBoxDilatedLeaves(EmissionArrays em, nanovdb::Coord boxLo, nanovdb::Coord box
         em.origin[originIndex(s)]     = dstLeafOrigin[0];
         em.origin[originIndex(s) + 1] = dstLeafOrigin[1];
         em.origin[originIndex(s) + 2] = dstLeafOrigin[2];
-        for (int i = 0; i < 8; ++i) {
-            em.mask[maskIndex(s) + i] = out[i];
-        }
-    }
-}
-
-/// Prune: slot = source leaf. The output leaf keeps the source origin and the source mask ANDed
-/// with the per-voxel keep flags. Active voxels of a ValueOnIndex leaf are numbered in mask-bit
-/// order starting at the leaf's 1-based mOffset, so voxel i's flag lives at
-/// keepOffsets[g] + mOffset - 1 + rank(i). Injective (one producer per output leaf), so no
-/// deduplication; leaves left with no voxels become dead slots.
-static __global__ void
-emitPrunedLeaves(EmissionArrays em,
-                 const bool *__restrict__ keepMask,
-                 const int64_t *__restrict__ keepOffsets) {
-    for (int32_t s = blockIdx.x * blockDim.x + threadIdx.x; s < em.numSlots;
-         s += gridDim.x * blockDim.x) {
-        const int32_t g         = findSegment(em.segOffsets, em.numSegments, s);
-        const int32_t leafLocal = s - em.segOffsets[g];
-
-        const LeafT &srcLeaf     = em.srcGrids[g]->tree().template getFirstNode<0>()[leafLocal];
-        const uint64_t *srcWords = srcLeaf.valueMask().words();
-        const bool *leafKeep     = keepMask + keepOffsets[g] + int64_t(srcLeaf.data()->mOffset) - 1;
-
-        uint64_t out[8];
-        uint64_t occupied = 0;
-        uint32_t rank     = 0;
-        for (int wi = 0; wi < 8; ++wi) {
-            uint64_t w    = srcWords[wi];
-            uint64_t kept = 0;
-            while (w) {
-                const uint64_t bit = w & (~w + 1); // lowest set bit
-                if (leafKeep[rank]) {
-                    kept |= bit;
-                }
-                ++rank;
-                w ^= bit;
-            }
-            out[wi] = kept;
-            occupied |= kept;
-        }
-        if (!occupied) {
-            em.tileKey[s] = kInvalidTileKey;
-            em.nodeKey[s] = 0; // sort pass 1 reads every slot's node key
-            continue;
-        }
-
-        const nanovdb::Coord origin   = srcLeaf.origin();
-        em.tileKey[s]                 = tileSortKey(origin);
-        em.nodeKey[s]                 = nodeSortKey(origin);
-        em.origin[originIndex(s)]     = origin[0];
-        em.origin[originIndex(s) + 1] = origin[1];
-        em.origin[originIndex(s) + 2] = origin[2];
         for (int i = 0; i < 8; ++i) {
             em.mask[maskIndex(s) + i] = out[i];
         }
@@ -934,12 +870,6 @@ runBatchedTopologyPass(const BatchedTopologySource &src,
             fanout *= (pass.boxHi[a] > 0 ? 1 : 0) - (pass.boxLo[a] < 0 ? -1 : 0) + 1;
         }
         break;
-    case TopologyPassSpec::Op::Prune:
-        // keepMask may be null when the batch has no voxels (an empty tensor's data pointer);
-        // no slots are emitted in that case, so the kernel never dereferences it.
-        TORCH_CHECK(pass.keepOffsets != nullptr, "Prune pass requires per-grid mask offsets");
-        fanout = 1;
-        break;
     }
 
     // Per-grid emission slot ranges (host-known: leaf counts x fanout; no sync needed).
@@ -1022,10 +952,6 @@ runBatchedTopologyPass(const BatchedTopologySource &src,
         case TopologyPassSpec::Op::BoxDilate:
             emitBoxDilatedLeaves<<<numBlocks(numSlots), kThreads, 0, stream>>>(
                 em, pass.boxLo, pass.boxHi);
-            break;
-        case TopologyPassSpec::Op::Prune:
-            emitPrunedLeaves<<<numBlocks(numSlots), kThreads, 0, stream>>>(
-                em, pass.keepMask, pass.keepOffsets);
             break;
         }
         C10_CUDA_KERNEL_LAUNCH_CHECK();
@@ -1143,9 +1069,7 @@ runBatchedTopologyPass(const BatchedTopologySource &src,
                                                                         u32(upperHeadSlot));
         C10_CUDA_KERNEL_LAUNCH_CHECK();
 
-        // Coarsen and dilate have duplicate producers; refine and prune are injective.
-        if (pass.op == TopologyPassSpec::Op::Coarsen ||
-            pass.op == TopologyPassSpec::Op::BoxDilate) {
+        if (pass.op != TopologyPassSpec::Op::Refine) { // coarsen/dilate have duplicate producers
             combineDuplicateMasks<<<numBlocks(numSlots), kThreads, 0, stream>>>(sorted.tileKey,
                                                                                 u32(leafFlag),
                                                                                 u32(leafRank),
