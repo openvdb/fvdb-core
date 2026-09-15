@@ -130,14 +130,22 @@ TorchDeviceBuffer::device() const {
 
 void
 TorchDeviceBuffer::to(const torch::Device &device) {
-    if (mDevice == device) {
-        TORCH_CHECK(
-            mData && (mSize > 0),
-            "Source device matches destination device but existing data pointer is invalid");
+    TORCH_CHECK(!device.is_cuda() || device.has_index(), "CUDA devices must specify an index");
+
+    // An empty buffer has nothing to copy and owns no allocation on any device; moving it is just
+    // a change of device, to the same one included. (The constructor never allocates for size 0,
+    // and the resources treat a null result from a zero-byte request as failure.)
+    if (mSize == 0) {
+        mData   = nullptr;
+        mDevice = device;
         return;
     }
 
-    TORCH_CHECK(!device.is_cuda() || device.has_index(), "CUDA devices must specify an index");
+    if (mDevice == device) {
+        TORCH_CHECK(
+            mData, "Source device matches destination device but existing data pointer is invalid");
+        return;
+    }
 
     // The CUDA copies run on the torch stream of the device they write, which is also the stream
     // the destination block belongs to, and the stream is synchronized before this returns. A
