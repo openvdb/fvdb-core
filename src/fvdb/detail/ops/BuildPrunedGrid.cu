@@ -11,6 +11,7 @@
 #include <fvdb/detail/utils/nanovdb/CreateEmptyGridHandle.h>
 
 #include <nanovdb/NanoVDB.h>
+#include <nanovdb/cuda/Buffer.h>
 #include <nanovdb/tools/CreateNanoGrid.h>
 #include <nanovdb/tools/GridBuilder.h>
 #include <nanovdb/tools/cuda/PruneGrid.cuh>
@@ -62,20 +63,26 @@ dispatchPruneGrid<torch::kCUDA>(const GridBatchData &gridBatch, const JaggedTens
             continue;
         }
 
-        const auto leafCount = gridBatch.numLeavesAt(i);
-        TorchDeviceBuffer maskBuffer(sizeof(nanovdb::Mask<3>) * leafCount, gridBatch.device());
-
+        const auto leafCount        = gridBatch.numLeavesAt(i);
         at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream(gridBatch.device().index());
+
+        // Per-leaf keep masks, one Mask<3> per source leaf. Scratch for the prune pass, so it
+        // goes through the builders' resource (torch's active CUDA allocator), stream-ordered on
+        // the stream the fill kernel and PruneGrid run on. Every word is written by the kernel
+        // below, so the allocation is not zero-initialized.
+        BuilderBuffer<nanovdb::Mask<3>> maskBuffer(
+            stream.stream(), leafCount, nanovdb::cuda::noInit);
+
         using Op = nanovdb::util::cuda::InjectPredicateToMaskFunctor<nanovdb::ValueOnIndex, -1>;
-        auto *leafMask = reinterpret_cast<nanovdb::Mask<3> *>(maskBuffer.deviceData());
+        nanovdb::Mask<3> *leafMask = maskBuffer.data();
         nanovdb::util::cuda::operatorKernel<Op>
             <<<leafCount, Op::MaxThreadsPerBlock, 0, stream.stream()>>>(
-                grid,
-                maskI.data_ptr<bool>(),
-                reinterpret_cast<nanovdb::Mask<3> *>(maskBuffer.deviceData()));
+                grid, maskI.data_ptr<bool>(), leafMask);
         C10_CUDA_KERNEL_LAUNCH_CHECK();
-        nanovdb::tools::cuda::PruneGrid<nanovdb::ValueOnIndex, BuilderResource> pruneOp(grid,
-                                                                                        leafMask);
+        // PruneGrid defaults to the legacy stream 0; run it on the same stream as the mask fill
+        // above, or its reads of leafMask can race the kernel that writes it.
+        nanovdb::tools::cuda::PruneGrid<nanovdb::ValueOnIndex, BuilderResource> pruneOp(
+            grid, leafMask, stream.stream());
         pruneOp.setChecksum(nanovdb::CheckMode::Default);
         pruneOp.setVerbose(0);
 

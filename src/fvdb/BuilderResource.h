@@ -6,6 +6,8 @@
 
 #include <fvdb/TorchResource.h>
 
+#include <nanovdb/cuda/Buffer.h>
+
 namespace fvdb {
 
 /// @brief The memory resource fvdb's ops bind as the ResourceT template
@@ -21,9 +23,13 @@ namespace fvdb {
 ///        build-time switch guarding the TorchResource include — instead of
 ///        touching every op.
 ///
-///        The alias covers the builders' scratch only. Buffer allocations that
-///        are torch tensors by design (TorchDeviceBuffer, the SaveNanoVDB
-///        staging buffers) name their types directly.
+///        The alias covers device-only allocations whose lifetime is an op:
+///        the builders' internal scratch, and the staging and scratch buffers
+///        fvdb's ops declare as BuilderBuffer<T> below. Ops that still take
+///        CUB scratch from c10 directly are outside it until they migrate.
+///        Grid storage that outlives the op (TorchDeviceBuffer) has a
+///        different stream contract and allocates through
+///        TorchStorageResource (TorchResource.h).
 ///
 ///        Note the seam is compile-time and relies on the resource being
 ///        stateless: builders bind the shared instance from
@@ -32,6 +38,11 @@ namespace fvdb {
 ///        holding a per-session allocator handle) additionally needs an
 ///        instance plumbed through the ops' call sites.
 using BuilderResource = TorchResource;
+
+/// @brief A device-only buffer of T over BuilderResource: the type for an op's
+///        own staging and scratch allocations. Retargeting BuilderResource
+///        retargets these too.
+template <class T> using BuilderBuffer = nanovdb::cuda::Buffer<T, BuilderResource>;
 
 } // namespace fvdb
 
