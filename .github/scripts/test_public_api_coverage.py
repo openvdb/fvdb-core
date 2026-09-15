@@ -38,7 +38,7 @@ ENTRIES = [
 ]
 
 
-def build(tmp_path, *, entries=ENTRIES, threshold=100, exports=None, extra_source="", ignore=()):
+def build(tmp_path, *, entries=ENTRIES, threshold=100, exports=None, extra_source="", ignore=(), cli_threshold=None):
     """Build a minimal package's reference using the actual Sphinx coverage builder."""
     package = tmp_path / "sample_api"
     package.mkdir()
@@ -59,8 +59,9 @@ def build(tmp_path, *, entries=ENTRIES, threshold=100, exports=None, extra_sourc
     (docs / "index.rst").write_text("API\n===\n\n" + "\n\n".join(entries) + "\n", encoding="utf-8")
     output = tmp_path / "output"
     env = dict(os.environ, PYTHONPATH=str(tmp_path))
+    overrides = [] if cli_threshold is None else ["-D", f"coverage_min_percentage={cli_threshold}"]
     result = subprocess.run(
-        [sys.executable, "-m", "sphinx", "-W", "-b", "coverage", str(docs), str(output)],
+        [sys.executable, "-m", "sphinx", "-W", "-b", "coverage", *overrides, str(docs), str(output)],
         env=env,
         capture_output=True,
         text=True,
@@ -92,6 +93,14 @@ def test_threshold_boundary(tmp_path, threshold, passes):
     assert report["percentage"] == 75
 
 
+@pytest.mark.parametrize("threshold,passes", [(75, True), (75.01, False), (0, True)])
+def test_cli_threshold_overrides_config(tmp_path, threshold, passes):
+    result, report = build(tmp_path, entries=ENTRIES[:-1], threshold=100, cli_threshold=threshold)
+    assert (result.returncode == 0) == passes, result.stdout + result.stderr
+    assert report["threshold"] == threshold
+    assert report["percentage"] == 75
+
+
 def test_new_export_without_docstring_fails(tmp_path):
     result, report = build(
         tmp_path,
@@ -118,3 +127,25 @@ def test_empty_or_invalid_exports_fail(tmp_path, exports):
 def test_invalid_threshold_fails(tmp_path, threshold):
     result, _ = build(tmp_path, threshold=threshold)
     assert result.returncode != 0
+
+
+def test_pytest_skips_sphinx_extensions(tmp_path):
+    """Keep Python docstring collection out of the Sphinx-only extension directory."""
+    (tmp_path / "pyproject.toml").write_text((EXTENSIONS.parents[1] / "pyproject.toml").read_text(), encoding="utf-8")
+    extension_dir = tmp_path / "docs" / "_ext"
+    extension_dir.mkdir(parents=True)
+    (extension_dir / "extension.py").write_text(
+        'raise RuntimeError("Sphinx extension must not be imported by pytest")\n', encoding="utf-8"
+    )
+    (tmp_path / "docs" / "example.py").write_text('"""\n>>> 1 + 1\n2\n"""\n', encoding="utf-8")
+    test_dir = tmp_path / "tests"
+    test_dir.mkdir()
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "--doctest-modules", "../docs", "-q"],
+        cwd=test_dir,
+        env=dict(os.environ, PYTEST_DISABLE_PLUGIN_AUTOLOAD="1"),
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "1 passed" in result.stdout

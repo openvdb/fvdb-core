@@ -72,4 +72,5 @@ convention = "google"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
-norecursedirs = [".*", "build", "dist"]
+# Sphinx extensions have their own tests in the documentation-build environment.
+norecursedirs = [".*", "build", "dist", "docs/_ext"]

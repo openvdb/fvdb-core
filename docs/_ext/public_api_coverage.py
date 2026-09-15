@@ -100,6 +100,8 @@ def setup(app):
     """Register the export-aware coverage builder and configurable coverage floor."""
     app.setup_extension("sphinx.ext.coverage")
     app.add_config_value("coverage_public_modules", [], "env", types=[list])
-    app.add_config_value("coverage_min_percentage", 100.0, "env", types=[float, int])
+    # Sphinx cannot parse -D overrides for a float default. Accept strings here
+    # and convert/validate in finish(), preserving fractional thresholds.
+    app.add_config_value("coverage_min_percentage", "100", "env", types=[str, float, int])
     app.add_builder(PublicAPICoverageBuilder, override=True)
     return {"version": "1", "parallel_read_safe": True}
