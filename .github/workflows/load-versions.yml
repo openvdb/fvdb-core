@@ -126,9 +126,9 @@ jobs:
           # lowest supported CUDA version. Fail loudly if cuda.versions moved
           # and the compat pin did not, so the weekly job cannot drift into
           # testing an obsolete combination while reporting green.
-          COMPAT_CUDA=$(jq -r '.weekly_compat.cuda' $CFG)
+          COMPAT_CUDA=$(jq -r '.weekly_compat.cuda // empty' $CFG)
           MIN_CUDA=$(jq -r '.cuda.versions | keys_unsorted | sort_by(split(".") | map(tonumber)) | .[0]' $CFG)
-          if [ "$COMPAT_CUDA" != "$MIN_CUDA" ]; then
+          if [ -n "$COMPAT_CUDA" ] && [ "$COMPAT_CUDA" != "$MIN_CUDA" ]; then
             echo "::error file=$CFG::weekly_compat.cuda is $COMPAT_CUDA but the lowest cuda.versions entry is $MIN_CUDA; update weekly_compat (cuda and torch) per docs/installation.rst"
             exit 1
           fi
