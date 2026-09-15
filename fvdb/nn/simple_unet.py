@@ -78,6 +78,7 @@ class SimpleUNetBasicBlock(nn.Module):
         self.batch_norm = fvnn.BatchNorm(out_channels, momentum=momentum)
 
     def extra_repr(self) -> str:
+        """Return the layer configuration shown in the module representation."""
         return (
             f"in_channels={self.in_channels}, out_channels={self.out_channels}, "
             f"kernel_size={self.kernel_size}, momentum={self.momentum}"
@@ -170,6 +171,7 @@ class SimpleUNetConvBlock(nn.Module):
         self.blocks = nn.ModuleList(layers)
 
     def extra_repr(self) -> str:
+        """Return the layer configuration shown in the module representation."""
         return (
             f"in_channels={self.in_channels}, mid_channels={self.mid_channels}, out_channels={self.out_channels}, "
             f"kernel_size={self.kernel_size}, "
@@ -249,6 +251,7 @@ class SimpleUNetDown(nn.Module):
         self.batch_norm = fvnn.BatchNorm(out_channels, momentum=momentum)
 
     def extra_repr(self) -> str:
+        """Return the layer configuration shown in the module representation."""
         return f"in_channels={self.in_channels}, out_channels={self.out_channels}, momentum={self.momentum}"
 
     def reset_parameters(self) -> None:
@@ -311,6 +314,7 @@ class SimpleUNetUp(nn.Module):
         self.batch_norm = fvnn.BatchNorm(out_channels, momentum=momentum)
 
     def extra_repr(self) -> str:
+        """Return the layer configuration shown in the module representation."""
         return f"in_channels={self.in_channels}, out_channels={self.out_channels}, momentum={self.momentum}"
 
     def reset_parameters(self) -> None:
@@ -371,6 +375,7 @@ class SimpleUNetBottleneck(nn.Module):
         self.block = SimpleUNetConvBlock(channels, channels, channels, kernel_size, layer_count, momentum)
 
     def extra_repr(self) -> str:
+        """Return the layer configuration shown in the module representation."""
         return (
             f"channels={self.channels}, kernel_size={self.kernel_size}, "
             f"layer_count={self.layer_count}, momentum={self.momentum}"
@@ -471,6 +476,7 @@ class SimpleUNetDownUp(nn.Module):
         )
 
     def extra_repr(self) -> str:
+        """Return the layer configuration shown in the module representation."""
         return (
             f"in_channels={self.in_channels}, channel_growth_rate={self.channel_growth_rate}, "
             f"kernel_size={self.kernel_size}, downup_layer_count={self.downup_layer_count}, "
@@ -551,6 +557,7 @@ class SimpleUNetPad(nn.Module):
         self.batch_norm = fvnn.BatchNorm(out_channels, momentum=momentum)
 
     def extra_repr(self) -> str:
+        """Return the layer configuration shown in the module representation."""
         return (
             f"in_channels={self.in_channels}, out_channels={self.out_channels}, "
             f"kernel_size={self.kernel_size}, momentum={self.momentum}"
@@ -627,6 +634,7 @@ class SimpleUNetUnpad(nn.Module):
         )
 
     def extra_repr(self) -> str:
+        """Return the layer configuration shown in the module representation."""
         return f"in_channels={self.in_channels}, out_channels={self.out_channels}, " f"kernel_size={self.kernel_size}"
 
     def reset_parameters(self) -> None:
@@ -714,6 +722,7 @@ class SimpleUNet(nn.Module):
         self.unpad = SimpleUNetUnpad(base_channels, out_channels, kernel_size)
 
     def extra_repr(self) -> str:
+        """Return the layer configuration shown in the module representation."""
         return (
             f"in_channels={self.in_channels}, base_channels={self.base_channels}, out_channels={self.out_channels}, "
             f"channel_growth_rate={self.channel_growth_rate}, kernel_size={self.kernel_size}, "
