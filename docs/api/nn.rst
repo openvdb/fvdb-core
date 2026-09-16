@@ -17,14 +17,17 @@ below describe their arguments and outputs.
    :exclude-members: extra_repr
 
 .. autoclass:: fvdb.nn.Prune
-   :members: forward
+   :members:
+   :exclude-members: extra_repr
 
 .. autoclass:: fvdb.nn.SparseConv3d
    :members:
+   :inherited-members: Module
    :exclude-members: extra_repr
 
 .. autoclass:: fvdb.nn.SparseConvTranspose3d
    :members:
+   :inherited-members: Module
    :exclude-members: extra_repr
 
 .. autoclass:: fvdb.nn.BatchNorm

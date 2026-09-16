@@ -809,7 +809,9 @@ def sum(
         input (JaggedTensor | Tensor): Input tensor.
             Can be a regular torch.Tensor or a JaggedTensor.
         dim (int | tuple[int, ...] | None): Dimension(s) along which to reduce.
-            If None, reduces all dimensions. Can be a single dimension or tuple of dimensions.
+            Can be a single dimension or tuple of dimensions. If None, reduces all dimensions
+            (``torch.Tensor`` only; a JaggedTensor must keep its
+            leading dimension, so pass ``dim=-1`` or another trailing dimension).
         keepdim (bool): Whether to keep the reduced dimension(s) with size 1.
             Default is False.
         dtype (torch.dtype | None): Desired output dtype.
@@ -856,7 +858,9 @@ def mean(
         input (JaggedTensor | Tensor): Input tensor.
             Can be a regular torch.Tensor or a JaggedTensor.
         dim (int | tuple[int, ...] | None): Dimension(s) along which to reduce.
-            If None, reduces all dimensions. Can be a single dimension or tuple of dimensions.
+            Can be a single dimension or tuple of dimensions. If None, reduces all dimensions
+            (``torch.Tensor`` only; a JaggedTensor must keep its
+            leading dimension, so pass ``dim=-1`` or another trailing dimension).
         keepdim (bool): Whether to keep the reduced dimension(s) with size 1.
             Default is False.
         dtype (torch.dtype | None): Desired output dtype.
@@ -891,7 +895,9 @@ def amax(
         input (JaggedTensor | Tensor): Input tensor.
             Can be a regular torch.Tensor or a JaggedTensor.
         dim (int | tuple[int, ...] | None): Dimension(s) along which to reduce.
-            If None, reduces all dimensions. Can be a single dimension or tuple of dimensions.
+            Can be a single dimension or tuple of dimensions. If None, reduces all dimensions
+            (``torch.Tensor`` only; a JaggedTensor must keep its
+            leading dimension, so pass ``dim=-1`` or another trailing dimension).
         keepdim (bool): Whether to keep the reduced dimension(s) with size 1.
             Default is False.
 
@@ -922,7 +928,9 @@ def amin(
         input (JaggedTensor | Tensor): Input tensor.
             Can be a regular torch.Tensor or a JaggedTensor.
         dim (int | tuple[int, ...] | None): Dimension(s) along which to reduce.
-            If None, reduces all dimensions. Can be a single dimension or tuple of dimensions.
+            Can be a single dimension or tuple of dimensions. If None, reduces all dimensions
+            (``torch.Tensor`` only; a JaggedTensor must keep its
+            leading dimension, so pass ``dim=-1`` or another trailing dimension).
         keepdim (bool): Whether to keep the reduced dimension(s) with size 1.
             Default is False.
 
@@ -951,7 +959,9 @@ def argmax(input: JaggedTensor | Tensor, dim: int | None = None, keepdim: bool =
         input (JaggedTensor | Tensor): Input tensor.
             Can be a regular torch.Tensor or a JaggedTensor.
         dim (int | None): Dimension along which to find the maximum.
-            If None, returns the index of the maximum value in the flattened tensor.
+            If None, returns the index of the maximum value in the flattened tensor
+            (``torch.Tensor`` only; a JaggedTensor must keep its
+            leading dimension, so pass ``dim=-1`` or another trailing dimension).
         keepdim (bool): Whether to keep the reduced dimension with size 1.
             Default is False.
 
@@ -980,7 +990,9 @@ def argmin(input: JaggedTensor | Tensor, dim: int | None = None, keepdim: bool =
         input (JaggedTensor | Tensor): Input tensor.
             Can be a regular torch.Tensor or a JaggedTensor.
         dim (int | None): Dimension along which to find the minimum.
-            If None, returns the index of the minimum value in the flattened tensor.
+            If None, returns the index of the minimum value in the flattened tensor
+            (``torch.Tensor`` only; a JaggedTensor must keep its
+            leading dimension, so pass ``dim=-1`` or another trailing dimension).
         keepdim (bool): Whether to keep the reduced dimension with size 1.
             Default is False.
 
@@ -1011,7 +1023,8 @@ def all(input: JaggedTensor | Tensor, dim: int | None = None, keepdim: bool = Fa
             Can be a regular torch.Tensor or a JaggedTensor. Typically boolean,
             but numeric types are also supported (0 is False, non-zero is True).
         dim (int | None): Dimension along which to reduce.
-            If None, reduces all dimensions.
+            If None, reduces all dimensions (``torch.Tensor`` only; a JaggedTensor must keep its
+            leading dimension, so pass ``dim=-1`` or another trailing dimension).
         keepdim (bool): Whether to keep the reduced dimension with size 1.
             Default is False.
 
@@ -1042,7 +1055,8 @@ def any(input: JaggedTensor | Tensor, dim: int | None = None, keepdim: bool = Fa
             Can be a regular torch.Tensor or a JaggedTensor. Typically boolean,
             but numeric types are also supported (0 is False, non-zero is True).
         dim (int | None): Dimension along which to reduce.
-            If None, reduces all dimensions.
+            If None, reduces all dimensions (``torch.Tensor`` only; a JaggedTensor must keep its
+            leading dimension, so pass ``dim=-1`` or another trailing dimension).
         keepdim (bool): Whether to keep the reduced dimension with size 1.
             Default is False.
 
@@ -1095,7 +1109,9 @@ def norm(
         p (float | str): The order of the norm. Can be a float or 'fro' (Frobenius),
             'nuc' (nuclear). Default is 2.
         dim (int | tuple[int, ...] | None): Dimension(s) along which to reduce.
-            If None, reduces all dimensions. Can be a single dimension or tuple of dimensions.
+            Can be a single dimension or tuple of dimensions. If None, reduces all dimensions
+            (``torch.Tensor`` only; a JaggedTensor must keep its
+            leading dimension, so pass ``dim=-1`` or another trailing dimension).
         keepdim (bool): Whether to keep the reduced dimension(s) with size 1.
             Default is False.
         dtype (torch.dtype | None): Desired output dtype.
@@ -1135,7 +1151,9 @@ def var(
         input (JaggedTensor | Tensor): Input tensor.
             Can be a regular torch.Tensor or a JaggedTensor.
         dim (int | tuple[int, ...] | None): Dimension(s) along which to reduce.
-            If None, reduces all dimensions. Can be a single dimension or tuple of dimensions.
+            Can be a single dimension or tuple of dimensions. If None, reduces all dimensions
+            (``torch.Tensor`` only; a JaggedTensor must keep its
+            leading dimension, so pass ``dim=-1`` or another trailing dimension).
         unbiased (bool): Whether to use Bessel's correction (divide by N-1 instead of N).
             Default is True.
         keepdim (bool): Whether to keep the reduced dimension(s) with size 1.
@@ -1173,7 +1191,9 @@ def std(
         input (JaggedTensor | Tensor): Input tensor.
             Can be a regular torch.Tensor or a JaggedTensor.
         dim (int | tuple[int, ...] | None): Dimension(s) along which to reduce.
-            If None, reduces all dimensions. Can be a single dimension or tuple of dimensions.
+            Can be a single dimension or tuple of dimensions. If None, reduces all dimensions
+            (``torch.Tensor`` only; a JaggedTensor must keep its
+            leading dimension, so pass ``dim=-1`` or another trailing dimension).
         unbiased (bool): Whether to use Bessel's correction (divide by N-1 instead of N).
             Default is True.
         keepdim (bool): Whether to keep the reduced dimension(s) with size 1.

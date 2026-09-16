@@ -60,6 +60,14 @@ Comparisons
 Reductions
 ----------
 
+A :class:`~fvdb.JaggedTensor` must keep its leading (element) dimension, so pass an
+explicit trailing dimension. ``dim=None`` reduces every dimension and is only valid
+for a :class:`torch.Tensor`::
+
+   feats = fvdb.JaggedTensor([torch.rand(4, 3), torch.rand(2, 3)])
+   fvdb.sum(feats, dim=-1)  # JaggedTensor whose jdata has shape (6,)
+   fvdb.sum(feats)          # RuntimeError: would drop the primary jagged dimension
+
 .. autofunction:: fvdb.sum
 .. autofunction:: fvdb.mean
 .. autofunction:: fvdb.amax

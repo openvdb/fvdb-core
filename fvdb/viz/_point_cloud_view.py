@@ -13,7 +13,7 @@ class PointCloudView:
     """A handle for a colored point cloud displayed in a scene.
 
     Obtain this handle from :meth:`fvdb.viz.Scene.add_point_cloud` and use
-    :attr:`point_size` to adjust the world-space radius of the displayed points.
+    :attr:`point_size` to adjust the on-screen size (in pixels) of the displayed points.
     """
 
     __PRIVATE__ = object()

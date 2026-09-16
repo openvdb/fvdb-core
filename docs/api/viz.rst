@@ -3,6 +3,29 @@ Visualization
 
 .. automodule:: fvdb.viz
     :members:
+    :exclude-members: CheckboxView, NumberView, SliderView, TextView
+
+Widgets
+-------
+
+Widget handles share ``name``, ``scene_name``, ``value``, ``on_update`` and
+``remove_on_update``.
+
+.. autoclass:: fvdb.viz.CheckboxView
+    :members:
+    :inherited-members:
+
+.. autoclass:: fvdb.viz.NumberView
+    :members:
+    :inherited-members:
+
+.. autoclass:: fvdb.viz.SliderView
+    :members:
+    :inherited-members:
+
+.. autoclass:: fvdb.viz.TextView
+    :members:
+    :inherited-members:
 
 Gaussian splats
 ---------------

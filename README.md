@@ -236,10 +236,17 @@ visibility rules; type stubs and test/example helpers are excluded. It does not
 verify the behavioral accuracy of prose or require an `Args` section in every docstring.
 
 The Sphinx coverage builder checks `__all__` exports from the packages listed in
-`coverage_public_modules` in `docs/conf.py`, plus methods and properties declared
-on exported classes. It includes re-exports from private implementation modules.
-Add new public packages to that list, and add reference entries for new exports.
-Inherited methods and ordinary data attributes are outside this coverage measure.
+`coverage_public_modules` in `docs/conf.py`, plus methods, properties, and nested
+classes declared on exported classes or inherited from base classes inside `fvdb`.
+It includes re-exports from private implementation modules. Add new public packages
+to that list, and add reference entries for new exports. Members inherited from
+outside `fvdb` (for example `torch.nn.Module`) and ordinary data attributes are
+outside this coverage measure.
+
+Compiled exports from `_fvdb_cpp` are imported under autodoc's mock, so their
+members cannot be enumerated. Document them with manual `py:class` and
+`py:attribute` entries that match `Bindings.cpp`. The builder fails when a compiled
+class has no documented members, but it cannot detect a missing or stale attribute.
 
 `coverage_min_percentage` in `docs/conf.py` sets the failing threshold (currently
 100%). For a local experiment, override it with

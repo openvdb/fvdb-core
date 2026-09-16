@@ -2,16 +2,48 @@
 # SPDX-License-Identifier: Apache-2.0
 """Adapt Sphinx coverage to re-exported Python APIs and enforce a percentage floor."""
 
+import functools
 import inspect
 import json
 import math
 from importlib import import_module
 
 from sphinx.errors import SphinxError
+from sphinx.ext.autodoc.mock import mock
 from sphinx.ext.coverage import CoverageBuilder
 from sphinx.util import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _in_package(obj, package):
+    return getattr(obj, "__module__", "").split(".")[0] == package
+
+
+def _is_mocked(obj):
+    return getattr(obj, "__sphinx_mock__", False)
+
+
+def _class_members(full_name, cls, package):
+    """Yield public members declared on ``cls`` or inherited from bases in the same package."""
+    shadowed = set()
+    for klass in inspect.getmro(cls):
+        if not _in_package(klass, package):
+            continue
+        for attr_name, attr in vars(klass).items():
+            if attr_name in shadowed:
+                continue
+            shadowed.add(attr_name)
+            if attr_name.startswith("_"):
+                continue
+            if isinstance(attr, (staticmethod, classmethod)):
+                attr = attr.__func__
+            member = f"{full_name}.{attr_name}"
+            if inspect.isfunction(attr) or isinstance(attr, (property, functools.cached_property)):
+                yield member
+            elif inspect.isclass(attr) and _in_package(attr, package):
+                yield member
+                yield from _class_members(member, attr, package)
 
 
 def public_objects(module):
@@ -19,21 +51,15 @@ def public_objects(module):
     exports = getattr(module, "__all__", None)
     if not exports:
         raise SphinxError(f"Coverage module {module.__name__} must declare a nonempty __all__")
+    package = module.__name__.split(".")[0]
     for name in exports:
         obj = getattr(module, name)  # An invalid export must fail the build.
         if inspect.ismodule(obj):
             continue
         full_name = f"{module.__name__}.{name}"
         yield full_name
-        if not inspect.isclass(obj):
-            continue
-        for attr_name, attr in vars(obj).items():
-            if attr_name.startswith("_"):
-                continue
-            if isinstance(attr, (staticmethod, classmethod)):
-                attr = attr.__func__
-            if inspect.isfunction(attr) or isinstance(attr, property):
-                yield f"{full_name}.{attr_name}"
+        if inspect.isclass(obj):
+            yield from _class_members(full_name, obj, package)
 
 
 class PublicAPICoverageBuilder(CoverageBuilder):
@@ -47,10 +73,13 @@ class PublicAPICoverageBuilder(CoverageBuilder):
     def build_py_coverage(self):
         """Compare package exports with objects registered in Sphinx's Python domain."""
         seen = self.env.domaindata["py"]["objects"]
+        mock_imports = getattr(self.config, "autodoc_mock_imports", [])
         for module_name in self.config.coverage_public_modules:
-            module = import_module(module_name)
-            expected = {name for name in public_objects(module) if not self.ignore_pyobj(name)}
-            documented = expected.intersection(seen)
+            with mock(mock_imports):
+                module = import_module(module_name)
+                expected = {name for name in public_objects(module) if not self.ignore_pyobj(name)}
+                documented = expected.intersection(seen)
+                documented -= self._opaque_classes(module, documented, seen)
             missing = expected - documented
             self.py_documented[module_name] = documented
             self.py_undocumented[module_name] = missing
@@ -67,6 +96,27 @@ class PublicAPICoverageBuilder(CoverageBuilder):
                 else:
                     funcs.append(relative)
             self.py_undoc[module_name] = {"funcs": funcs, "classes": classes}
+
+    @staticmethod
+    def _opaque_classes(module, documented, seen):
+        """Return mocked exports documented as classes without any documented member.
+
+        Members of mocked (compiled) exports cannot be enumerated, so their
+        manual reference entries are the only record of the class contents.
+        """
+        opaque = set()
+        for export in module.__all__:
+            name = f"{module.__name__}.{export}"
+            if name not in documented or seen[name].objtype != "class" or not _is_mocked(getattr(module, export)):
+                continue
+            if not any(other.startswith(name + ".") for other in seen):
+                logger.warning(
+                    "%s is a compiled export whose members cannot be enumerated; "
+                    "document them manually below its py:class entry",
+                    name,
+                )
+                opaque.add(name)
+        return opaque
 
     def finish(self):
         """Write the standard reports and fail below the configured coverage threshold."""

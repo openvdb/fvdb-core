@@ -36,9 +36,61 @@ ENTRIES = [
     ".. py:method:: sample_api.Widget.method()",
     ".. py:attribute:: sample_api.Widget.value",
 ]
+INHERITED_SOURCE = '''
+import functools
+
+class _Base:
+    def inherited(self):
+        """Declared on a private base class."""
+
+    def overridden(self):
+        """Replaced by the subclass."""
+
+class Derived(_Base):
+    """Inherits from a private in-package base."""
+
+    class Nested:
+        """A nested public class."""
+
+        def nested_method(self):
+            """A method on the nested class."""
+
+    @functools.cached_property
+    def cached(self):
+        """A cached property."""
+        return 1
+
+    def overridden(self):
+        """Subclass version."""
+'''
+INHERITED_ENTRIES = [
+    ".. py:class:: sample_api.Derived",
+    ".. py:method:: sample_api.Derived.inherited()",
+    ".. py:method:: sample_api.Derived.overridden()",
+    ".. py:attribute:: sample_api.Derived.cached",
+    ".. py:class:: sample_api.Derived.Nested",
+    ".. py:method:: sample_api.Derived.Nested.nested_method()",
+]
+MOCKED_SOURCE = "from ._native import Native, native_function\n"
+MOCKED_ENTRIES = [
+    ".. py:class:: sample_api.Native",
+    ".. py:attribute:: sample_api.Native.field",
+    ".. py:function:: sample_api.native_function(value)",
+]
 
 
-def build(tmp_path, *, entries=ENTRIES, threshold=100, exports=None, extra_source="", ignore=(), cli_threshold=None):
+def build(
+    tmp_path,
+    *,
+    entries=ENTRIES,
+    threshold=100,
+    exports=None,
+    extra_source="",
+    ignore=(),
+    cli_threshold=None,
+    mock_imports=(),
+    runs=1,
+):
     """Build a minimal package's reference using the actual Sphinx coverage builder."""
     package = tmp_path / "sample_api"
     package.mkdir()
@@ -50,7 +102,8 @@ def build(tmp_path, *, entries=ENTRIES, threshold=100, exports=None, extra_sourc
     docs.mkdir()
     (docs / "conf.py").write_text(
         f"import sys\nsys.path.insert(0, {str(EXTENSIONS)!r})\n"
-        "extensions = ['sphinx.ext.coverage', 'public_api_coverage']\n"
+        "extensions = ['sphinx.ext.autodoc', 'sphinx.ext.coverage', 'public_api_coverage']\n"
+        f"autodoc_mock_imports = {list(mock_imports)!r}\n"
         "coverage_public_modules = ['sample_api']\n"
         f"coverage_min_percentage = {threshold!r}\n"
         f"coverage_ignore_pyobjects = {list(ignore)!r}\n",
@@ -60,12 +113,13 @@ def build(tmp_path, *, entries=ENTRIES, threshold=100, exports=None, extra_sourc
     output = tmp_path / "output"
     env = dict(os.environ, PYTHONPATH=str(tmp_path))
     overrides = [] if cli_threshold is None else ["-D", f"coverage_min_percentage={cli_threshold}"]
-    result = subprocess.run(
-        [sys.executable, "-m", "sphinx", "-W", "-b", "coverage", *overrides, str(docs), str(output)],
-        env=env,
-        capture_output=True,
-        text=True,
-    )
+    for _ in range(runs):
+        result = subprocess.run(
+            [sys.executable, "-m", "sphinx", "-W", "-b", "coverage", *overrides, str(docs), str(output)],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
     report = output / "coverage.json"
     return result, json.loads(report.read_text()) if report.exists() else None
 
@@ -84,6 +138,51 @@ def test_removing_any_public_entry_fails(tmp_path, removed):
     assert report["total"] == 4
     assert report["percentage"] == 75
     assert len(report["missing"]) == 1
+
+
+def test_inherited_nested_and_cached_members_are_counted(tmp_path):
+    result, report = build(tmp_path, exports=["Derived"], extra_source=INHERITED_SOURCE, entries=INHERITED_ENTRIES)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert report["total"] == report["documented"] == len(INHERITED_ENTRIES)
+
+
+@pytest.mark.parametrize("removed", INHERITED_ENTRIES[1:])
+def test_removing_inherited_or_nested_entry_fails(tmp_path, removed):
+    result, report = build(
+        tmp_path,
+        exports=["Derived"],
+        extra_source=INHERITED_SOURCE,
+        entries=[entry for entry in INHERITED_ENTRIES if entry != removed],
+    )
+    assert result.returncode != 0
+    assert len(report["missing"]) == 1
+
+
+def test_mocked_imports_are_measured_without_autodoc_directives(tmp_path):
+    """The builder must import under autodoc's mock even when no autodoc directive ran first."""
+    result, report = build(
+        tmp_path,
+        exports=["Native", "native_function"],
+        extra_source=MOCKED_SOURCE,
+        entries=MOCKED_ENTRIES,
+        mock_imports=["sample_api._native"],
+        runs=2,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert report["total"] == report["documented"] == 2
+
+
+def test_mocked_class_without_documented_members_fails(tmp_path):
+    result, report = build(
+        tmp_path,
+        exports=["Native", "native_function"],
+        extra_source=MOCKED_SOURCE,
+        entries=[entry for entry in MOCKED_ENTRIES if "Native.field" not in entry],
+        mock_imports=["sample_api._native"],
+    )
+    assert result.returncode != 0
+    assert "members cannot be enumerated" in result.stderr
+    assert report["missing"] == ["sample_api.Native"]
 
 
 @pytest.mark.parametrize("threshold,passes", [(75, True), (75.01, False), (0, True)])
