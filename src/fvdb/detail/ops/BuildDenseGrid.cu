@@ -22,6 +22,9 @@
 #include <c10/cuda/CUDAMathCompat.h>
 #include <torch/types.h>
 
+#include <algorithm>
+#include <limits>
+
 namespace fvdb {
 namespace detail {
 namespace ops {
@@ -81,6 +84,63 @@ checkInputs(const torch::Device device,
     }
 }
 
+// Header fix-up for a buffer holding `gridCount` back-to-back copies of the same single grid:
+// copy i becomes grid i of the batch. Every copy has the same mGridSize, so no offset table is
+// needed. The checksum is disabled like ConcatenateGrids does (the source grid from PointsToGrid
+// carries a disabled checksum anyway, so this is consistent rather than a downgrade).
+__global__ void
+fixupReplicatedGridHeaders(uint8_t *base, uint64_t gridSize, uint32_t gridCount) {
+    const uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= gridCount) {
+        return;
+    }
+    auto *data = reinterpret_cast<nanovdb::GridData *>(base + static_cast<uint64_t>(i) * gridSize);
+    data->mGridIndex = i;
+    data->mGridCount = gridCount;
+    data->mChecksum.disable();
+}
+
+// Replicate a single-grid device handle `count` times into one buffer laid out the way
+// nanovdb::cuda::mergeGridHandles lays out a multi-grid handle (grids back-to-back, each header's
+// mGridIndex / mGridCount naming its slot), without the per-member allocation, host readback and
+// stream synchronization that mergeGridHandles performs for every grid.
+nanovdb::GridHandle<TorchDeviceBuffer>
+replicateGridHandle(const nanovdb::GridHandle<TorchDeviceBuffer> &single,
+                    int64_t count,
+                    torch::Device device,
+                    cudaStream_t stream) {
+    TORCH_CHECK(single.gridCount() == 1, "replicateGridHandle expects a single-grid handle");
+    TORCH_CHECK(count > 1, "replicateGridHandle expects count > 1");
+    TORCH_CHECK(count <= std::numeric_limits<uint32_t>::max(), "too many grids to replicate");
+    const uint8_t *src = single.buffer().deviceData();
+    TORCH_CHECK(src != nullptr, "replicateGridHandle expects a device-resident handle");
+    const uint64_t gridSize = single.gridSize(0);
+
+    TorchDeviceBuffer buffer(gridSize * static_cast<uint64_t>(count), device);
+    uint8_t *dst = buffer.deviceData();
+
+    // Seed copy 0 from the source, then double the filled prefix: log2(count) device-to-device
+    // memcpys instead of one per member.
+    C10_CUDA_CHECK(cudaMemcpyAsync(dst, src, gridSize, cudaMemcpyDeviceToDevice, stream));
+    for (int64_t filled = 1; filled < count; filled *= 2) {
+        const int64_t n = std::min(filled, count - filled);
+        C10_CUDA_CHECK(cudaMemcpyAsync(dst + static_cast<uint64_t>(filled) * gridSize,
+                                       dst,
+                                       static_cast<uint64_t>(n) * gridSize,
+                                       cudaMemcpyDeviceToDevice,
+                                       stream));
+    }
+
+    const int64_t numBlocks = GET_BLOCKS(count, DEFAULT_BLOCK_DIM);
+    fixupReplicatedGridHeaders<<<numBlocks, DEFAULT_BLOCK_DIM, 0, stream>>>(
+        dst, gridSize, static_cast<uint32_t>(count));
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
+
+    // The GridHandle constructor reads grid 0's header and builds the per-grid metadata table
+    // (offset = i * gridSize) from the device buffer.
+    return nanovdb::GridHandle<TorchDeviceBuffer>(std::move(buffer));
+}
+
 } // namespace
 
 template <torch::DeviceType>
@@ -133,34 +193,30 @@ dispatchCreateNanoGridFromDense<torch::kCUDA>(int64_t batchSize,
 
     TORCH_CHECK(ijkData.is_contiguous(), "ijkData must be contiguous");
 
-    // Every batch item is the same dense box (a mask, if given, is shared across the batch), so
-    // build the grid once and copy it for the remaining items instead of re-running the radix sort
-    // over the identical coordinate list batchSize times.
-    const int64_t nVoxels = ijkData.size(0);
-    std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> handles;
-    handles.reserve(batchSize);
-    for (int64_t i = 0; i < batchSize; i += 1) {
-        if (nVoxels == 0) {
-            handles.push_back(createEmptyGridHandle(guide.device()));
-        } else if (i == 0) {
-            handles.push_back(
-                nanovdb::tools::cuda::
-                    voxelsToGrid<GridT, nanovdb::Coord *, TorchDeviceBuffer, BuilderResource>(
-                        (nanovdb::Coord *)ijkData.data_ptr(), nVoxels, 1.0, guide));
-            C10_CUDA_KERNEL_LAUNCH_CHECK();
-        } else {
-            handles.push_back(handles[0].copy(guide));
-        }
+    if (batchSize == 0) {
+        // Same result as merging zero handles: an empty handle, which makeGridBatchData rejects.
+        return nanovdb::GridHandle<TorchDeviceBuffer>(TorchDeviceBuffer(0, device));
     }
 
-    if (handles.size() == 1) {
-        // If there's only one handle, just return it
-        return std::move(handles[0]);
-    } else {
-        // This copies all the handles into a single handle -- only do it if there are multie
-        // grids
-        return nanovdb::cuda::mergeGridHandles(handles, &guide);
+    // Every batch item is the same dense box (a mask, if given, is shared across the batch), so
+    // build ONE grid and replicate its buffer batchSize times with a header fix-up per copy,
+    // instead of one PointsToGrid (or one handle copy) per member followed by mergeGridHandles,
+    // which allocates, synchronizes and reads back the host once per member.
+    const int64_t nVoxels = ijkData.size(0);
+    if (nVoxels == 0) {
+        // Mask selected nothing: batchSize valid empty grids (built on host, moved to device).
+        return createEmptyGridHandle(device, batchSize);
     }
+
+    nanovdb::GridHandle<TorchDeviceBuffer> single = nanovdb::tools::cuda::
+        voxelsToGrid<GridT, nanovdb::Coord *, TorchDeviceBuffer, BuilderResource>(
+            (nanovdb::Coord *)ijkData.data_ptr(), nVoxels, 1.0, guide);
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
+
+    if (batchSize == 1) {
+        return single;
+    }
+    return replicateGridHandle(single, batchSize, device, stream);
 }
 
 template <>
