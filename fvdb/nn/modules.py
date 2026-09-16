@@ -329,8 +329,12 @@ class Prune(nn.Module):
             raise ValueError(f"{name} has {tensor.num_tensors} tensors but grid has {grid.grid_count} grids")
         if tensor.jdata.shape[0] != grid.total_voxels:
             raise ValueError(f"{name} has {tensor.jdata.shape[0]} rows but grid has {grid.total_voxels} voxels")
-        if grid.grid_count > 0 and not torch.equal(tensor.joffsets, grid.joffsets):
-            raise ValueError(f"{name} and grid must have the same per-grid partitioning")
+        # jagged_like and ConvolutionPlan outputs share the grid's offsets tensor, so an
+        # identity match proves the partitioning without a device-to-host sync. torch.equal
+        # on CUDA offsets syncs, and only runs for tensors built independently of the grid.
+        if grid.grid_count > 0 and tensor.joffsets is not grid.joffsets:
+            if not torch.equal(tensor.joffsets, grid.joffsets):
+                raise ValueError(f"{name} and grid must have the same per-grid partitioning")
 
 
 class _SparseConv3dBase(nn.Module):
