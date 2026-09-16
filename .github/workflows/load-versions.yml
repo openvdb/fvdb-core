@@ -144,7 +144,7 @@ jobs:
             echo "compat-torch-full-version=$(jq -r '.weekly_compat.torch.full_version' $CFG)"
             echo "compat-cuda-version=$(jq -r '.weekly_compat.cuda' $CFG)"
             echo "compat-cuda-tag=cu$(jq -r '.weekly_compat.cuda' $CFG | tr -d '.')"
-            echo "compat-cuda-patch=$(jq -r '.cuda.versions[.weekly_compat.cuda].patch // empty' $CFG)"
+            echo "compat-cuda-patch=$(jq -r '(.weekly_compat.cuda // empty) as $c | .cuda.versions[$c].patch // empty' $CFG)"
             echo "cuda-default=$(jq -r '.cuda.default' $CFG)"
             echo "cuda-130-patch=$(jq -r '.cuda.versions["13.0"].patch' $CFG)"
             echo "cuda-132-patch=$(jq -r '.cuda.versions["13.2"].patch' $CFG)"
