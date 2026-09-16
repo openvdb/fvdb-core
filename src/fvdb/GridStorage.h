@@ -61,7 +61,12 @@ class GridStorage {
     GridStorage(const GridStorage &)                = delete;
     GridStorage &operator=(const GridStorage &)     = delete;
 
-    /// @brief Empty storage on @p device (kCPU, an indexed CUDA device, or PrivateUse1).
+    /// @brief The device a caller means: an index-less CUDA device (`torch::device("cuda")`)
+    ///        resolves to the current CUDA device, as the storage resource defaults to it; anything
+    ///        else is returned as given. Every entry point taking a device applies this first.
+    static torch::Device resolveDevice(const torch::Device &device);
+
+    /// @brief Empty storage on @p device (kCPU, a CUDA device, or PrivateUse1).
     static GridStorage empty(const torch::Device &device);
 
     /// @brief A zero-byte DeviceGridBuffer carrying @p device in its resource and @p stream as its

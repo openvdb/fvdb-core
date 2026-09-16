@@ -91,8 +91,6 @@ concatenateGrids(const std::vector<c10::intrusive_ptr<GridBatchData>> &elements)
             GridStorage(GridStorage::HostHandle(std::move(buffer))), voxelSizes, voxelOrigins);
     }
 
-    TORCH_CHECK(!device.is_cuda() || device.has_index(),
-                "Device must have an index for CUDA operations");
     c10::DeviceGuard deviceGuard(device);
     const cudaStream_t stream = storageStream(device);
     DeviceGridBuffer buffer(

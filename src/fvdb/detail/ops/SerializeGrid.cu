@@ -39,7 +39,7 @@ serializeGrid(const GridBatchData &grid) {
     // An empty batch's storage holds a sentinel grid with no metadata record behind it; it
     // serializes as zero grids and zero grid bytes.
     const int64_t numGrids   = self->batchSize();
-    const int64_t hdlBufSize = numGrids == 0 ? 0 : static_cast<int64_t>(storage.bufferSize());
+    const int64_t hdlBufSize = static_cast<int64_t>(self->totalBytes());
 
     const int64_t headerSize = sizeof(V01Header) + numGrids * sizeof(GridBatchData::GridMetadata) +
                                sizeof(GridBatchData::GridBatchMetadata);

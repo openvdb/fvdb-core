@@ -21,16 +21,18 @@ GridBatchData::device() const {
     return mStorage->device();
 }
 
+// Both return nullptr when the storage is not accessible from that side, so the callers'
+// null checks stay meaningful; the byte offset is only applied to a real base pointer.
 nanovdb::OnIndexGrid *
 GridBatchData::deviceGridPtrAt(int64_t bi) const {
-    return reinterpret_cast<nanovdb::OnIndexGrid *>(
-        static_cast<uint8_t *>(mStorage->deviceBytes()) + cumBytesAt(bi));
+    auto *base = static_cast<uint8_t *>(mStorage->deviceBytes());
+    return base ? reinterpret_cast<nanovdb::OnIndexGrid *>(base + cumBytesAt(bi)) : nullptr;
 }
 
 nanovdb::OnIndexGrid *
 GridBatchData::hostGridPtrAt(int64_t bi) const {
-    return reinterpret_cast<nanovdb::OnIndexGrid *>(static_cast<uint8_t *>(mStorage->hostBytes()) +
-                                                    cumBytesAt(bi));
+    auto *base = static_cast<uint8_t *>(mStorage->hostBytes());
+    return base ? reinterpret_cast<nanovdb::OnIndexGrid *>(base + cumBytesAt(bi)) : nullptr;
 }
 
 bool

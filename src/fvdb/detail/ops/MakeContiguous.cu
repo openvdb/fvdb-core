@@ -57,8 +57,20 @@ struct SourceStreamOrder {
             fvdb::detail::synchronizeStream(mSrcStream, mDevice);
         }
     }
+    // Copies may already be enqueued when a later CUDA call throws, so the source's stream must
+    // be ordered after them on that path too; the destructor does it, swallowing a secondary
+    // error so the original one propagates.
+    ~SourceStreamOrder() {
+        if (mFinished) {
+            return;
+        }
+        try {
+            finish();
+        } catch (...) {}
+    }
     void
     finish() {
+        mFinished = true;
         if (mDevice.is_cuda()) {
             fvdb::detail::orderStreamAfter(mSrcStream, mDevice, mStream, mDevice);
         } else if (mDevice.is_privateuseone()) {
@@ -68,6 +80,7 @@ struct SourceStreamOrder {
     torch::Device mDevice;
     cudaStream_t mSrcStream;
     cudaStream_t mStream;
+    bool mFinished = false;
 };
 
 } // namespace

@@ -1151,6 +1151,16 @@ predGatherIGemmSparseConv(torch::Tensor features,
 
     TORCH_CHECK(feature_grid.batchSize() == 1, "PredGatherIGemm currently supports batch size 1");
     TORCH_CHECK(output_grid.batchSize() == 1, "PredGatherIGemm currently supports batch size 1");
+    TORCH_CHECK(feature_grid.device() == features.device(),
+                "feature grid must be on the same device as features, got ",
+                feature_grid.device(),
+                " and ",
+                features.device());
+    TORCH_CHECK(output_grid.device() == features.device(),
+                "output grid must be on the same device as features, got ",
+                output_grid.device(),
+                " and ",
+                features.device());
     TORCH_CHECK(feature_grid.totalVoxels() == features.size(0),
                 "feature_grid voxel count (",
                 feature_grid.totalVoxels(),

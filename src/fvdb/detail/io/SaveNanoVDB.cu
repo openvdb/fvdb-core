@@ -6,6 +6,8 @@
 #include <fvdb/detail/io/SaveNanoVDB.h>
 #include <fvdb/detail/ops/MakeContiguous.h>
 #include <fvdb/detail/utils/Utils.h>
+#include <fvdb/detail/utils/cuda/StreamOrdering.h>
+#include <fvdb/detail/utils/nanovdb/GridHeaderUtils.h>
 
 #include <nanovdb/NanoVDB.h>
 #include <nanovdb/cuda/Buffer.h>
@@ -100,12 +102,10 @@ patchGridWithBlindShape(uint8_t *gridBuf,
                     origGridBytes + sizeof(nanovdb::GridBlindMetaData) + paddedBlindDataBytes,
                 "Internal error: inconsistent buffer sizes for blind data layout.");
 
-    nanovdb::GridData *gd    = reinterpret_cast<nanovdb::GridData *>(gridBuf);
-    gd->mGridSize            = totalBytes;
-    gd->mGridIndex           = 0;
-    gd->mGridCount           = 1;
-    gd->mBlindMetadataCount  = 1;
-    gd->mBlindMetadataOffset = static_cast<int64_t>(origGridBytes);
+    nanovdb::GridData *gd = reinterpret_cast<nanovdb::GridData *>(gridBuf);
+    // One grid, this size, one blind record at origGridBytes; disables the checksum, which every
+    // header write here and below invalidates (nanovdb_validate rejected the stale one).
+    normalizeStandaloneGridHeader(gd, totalBytes, /*blindMetadataCount=*/1u, origGridBytes);
 
     const double sx           = voxelSize[0];
     const double sy           = voxelSize[1];
@@ -202,6 +202,9 @@ assembleOnIndexBlindBuffer(const GridBatchData &gridBatchData,
                            const std::vector<std::string> &names,
                            const std::vector<uint64_t> &paddedPayloadBytes,
                            WriteBlindFn &&writeBlind) {
+    TORCH_CHECK_VALUE(gridBatchData.batchSize() > 0,
+                      "Cannot export an empty grid batch together with data; save the grid batch "
+                      "without data instead.");
     const GridStorage &storage = gridBatchData.gridStorage();
     const bool isCuda          = storage.device().is_cuda();
 
@@ -229,6 +232,15 @@ assembleOnIndexBlindBuffer(const GridBatchData &gridBatchData,
         gridDst[batchIdx] = writeHead;
         writeHead += gridBatchData.numBytesAt(batchIdx) + sizeof(nanovdb::GridBlindMetaData) +
                      paddedPayloadBytes[batchIdx];
+    }
+
+    // The storage's writers are queued on its retained stream; order the copies after them.
+    if (isCuda) {
+        c10::cuda::CUDAGuard deviceGuard(gridBatchData.device());
+        const cudaStream_t stream =
+            at::cuda::getCurrentCUDAStream(gridBatchData.device().index()).stream();
+        detail::orderStreamAfter(
+            stream, gridBatchData.device(), storage.stream(), gridBatchData.device());
     }
 
     // First the grids' bytes. A device-to-host copy into pageable memory is only *possibly*
@@ -505,8 +517,8 @@ indexToGridHost(const nanovdb::NanoGrid<nanovdb::ValueOnIndex> *srcGrid,
         }
     }
 
-    nanovdb::tools::updateChecksum(dstGrid);
-
+    // No checksum: every consumer patches this header further (patchGridWithBlindShape) and
+    // disables it there.
     return nanovdb::GridHandle<nanovdb::HostBuffer>(std::move(buffer));
 }
 
@@ -690,6 +702,9 @@ fvdbToNanovdbGridWithValues(const GridBatchData &gridBatchData,
     const uint8_t *dSrcBufferStart = nullptr;
     if (gridDevice.is_cuda()) {
         dSrcBufferStart = static_cast<const uint8_t *>(gridBatchData.gridStorage().deviceBytes());
+        // The storage's writers are queued on its retained stream; order this stream after them.
+        detail::orderStreamAfter(
+            stream.stream(), gridDevice, gridBatchData.gridStorage().stream(), gridDevice);
     } else {
         const uint64_t srcBufferSize = gridBatchData.gridStorage().bufferSize();
         const uint8_t *srcHostData =
@@ -736,6 +751,26 @@ fvdbToNanovdbGridWithValues(const GridBatchData &gridBatchData,
 
         const auto *dSrcGrid = reinterpret_cast<const nanovdb::NanoGrid<nanovdb::ValueOnIndex> *>(
             dSrcBufferStart + gridBatchData.cumBytesAt(bi));
+        if (numVoxelsBi == 0) {
+            // Upstream indexToGrid launches processRootTilesKernel<<<0, 1>>> for a grid with no
+            // tiles and its error check exits the process. An empty grid is a header plus an
+            // empty tree, so convert it on the host: copy the index grid down and run the host
+            // port with a single background value.
+            const uint64_t srcBytes = gridBatchData.numBytesAt(bi);
+            std::vector<uint8_t> hSrc(srcBytes);
+            cudaCheck(cudaMemcpyAsync(
+                hSrc.data(), dSrcGrid, srcBytes, cudaMemcpyDeviceToHost, stream.stream()));
+            cudaCheck(cudaStreamSynchronize(stream.stream()));
+            const ValueT background{};
+            HostGridHandle gh = indexToGridHost<OutBuildT>(
+                reinterpret_cast<const nanovdb::NanoGrid<nanovdb::ValueOnIndex> *>(hSrc.data()),
+                &background);
+            const uint64_t origGridBytes = gh.buffer().size();
+            origGridBytesPerBi.push_back(origGridBytes);
+            hostBuffers.emplace_back(origGridBytes + blindOverhead);
+            std::memcpy(hostBuffers.back().data(), gh.buffer().data(), origGridBytes);
+            continue;
+        }
 
         const uint64_t valueBufElems = static_cast<uint64_t>(numVoxelsBi) + 1u;
         ValueStagingBuffer valueBuf(stream.stream(), valueBufElems, nanovdb::cuda::noInit);
@@ -814,6 +849,9 @@ nanovdb::GridHandle<nanovdb::HostBuffer>
 maybeConvertToStandardNanovdbGrid(const GridBatchData &gridBatchData,
                                   const JaggedTensor &data,
                                   const std::vector<std::string> &names) {
+    TORCH_CHECK_VALUE(gridBatchData.batchSize() > 0,
+                      "Cannot export an empty grid batch together with data; save the grid batch "
+                      "without data instead.");
     // Get a squeezed view of the tensor so we can save data with singleton dimensions
     // (e.g. shape (N, 1, 3) can get saved as a Vec3f grid)
     torch::Tensor jdataSqueezed = data.jdata().squeeze();
@@ -894,10 +932,13 @@ getIndexGrid(const GridBatchData &gridBatchData, const std::vector<std::string> 
     // The batch's *logical* grids, compacted and brought to the host: exactly the grids a sliced
     // batch selects, each header already renumbered, so the patch loop below can index the
     // handle by batch position.
-    GridStorage hostStorage = ops::contiguousGridStorage(gridBatchData);
-    if (!hostStorage.device().is_cpu()) {
-        hostStorage = hostStorage.to(torch::kCPU);
-    }
+    // A contiguous batch's storage already holds exactly the logical grids with validated
+    // headers, so it moves in one copy; a view is compacted first, then moved. An empty batch has
+    // no logical grids to compact; its storage holds one valid voxel-less grid, which is what the
+    // file gets (and what loading it yields), as before.
+    GridStorage hostStorage = (gridBatchData.isContiguous() || gridBatchData.batchSize() == 0)
+                                  ? gridBatchData.gridStorage().to(torch::kCPU)
+                                  : ops::contiguousGridStorage(gridBatchData).to(torch::kCPU);
     nanovdb::GridHandle<nanovdb::HostBuffer> retHandle = std::move(hostStorage.hostHandle());
 
     // Write voxelSize and origin information to the output buffer
