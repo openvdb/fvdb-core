@@ -18,6 +18,10 @@ fVDB Version History
   the active-region boundary no longer implicitly defines a surface, so rebuilding an all-negative
   occupancy field yields an empty narrow band. Both SDF operations now require finite scalar values
   with shape `(N,)` or `(N, 1)` and reject other shapes and NaN/Inf values with `ValueError`.
+- **Weekly compatibility testing** New scheduled CI workflow (`weekly-compat.yml`) implementing the compatibility
+  policy documented in the installation guide: main is built and tested weekly against the oldest PyTorch version
+  (currently 2.9.1) that publishes wheels for the lowest supported CUDA version (currently 13.0). The tested
+  versions are recorded in `.github/versions.json` under `weekly_compat`.
 - **Breaking:** Unified sparse convolution and transposed-convolution geometry around the componentwise Torch-phase
   relation ``fine_ijk = stride * coarse_ijk + tap_ijk - padding_before``, where
   ``padding_before = floor((kernel_size - 1) / 2)`` and each zero-based tap component satisfies
