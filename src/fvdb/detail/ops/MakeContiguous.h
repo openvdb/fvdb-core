@@ -6,22 +6,28 @@
 
 #include <fvdb/GridBatchData.h>
 
+#include <optional>
+
 namespace fvdb {
 namespace detail {
 namespace ops {
 
 c10::intrusive_ptr<GridBatchData> makeContiguous(c10::intrusive_ptr<GridBatchData> input);
 
-/// @brief The batch's logical grids compacted end to end into fresh storage on the batch's
-///        device, each header stamped with its new (index, count). Correct for sliced and
-///        non-contiguous views, which share storage holding more grids than they select.
-GridStorage contiguousGridStorage(const GridBatchData &input);
+/// @brief The batch's logical grids compacted end to end into fresh storage on @p device (the
+///        batch's own device by default), each header stamped with its new (index, count), in
+///        one pass: a view over storage on another device is compacted and moved by the same
+///        copies. Correct for sliced and non-contiguous views, which share storage holding more
+///        grids than they select.
+GridStorage contiguousGridStorage(const GridBatchData &input,
+                                  std::optional<torch::Device> device = std::nullopt);
 
-/// @brief The same, as a dual-space TorchDeviceBuffer handle, for the builders that still work
-///        in that type (#770 step 5 removes it).
+/// @brief Logical grid @p i alone, as single-grid storage on the batch's device.
+GridStorage cloneGridStorageAt(const GridBatchData &input, int64_t i);
+
+/// @brief Legacy TorchDeviceBuffer forms of the two above, for the builders that still work in
+///        that type; both go with the builders' conversion (#770 step 5).
 nanovdb::GridHandle<TorchDeviceBuffer> contiguousGridHandle(const GridBatchData &input);
-
-/// @brief Logical grid @p i alone as a single-grid TorchDeviceBuffer handle (same caveat).
 nanovdb::GridHandle<TorchDeviceBuffer> cloneGridHandleAt(const GridBatchData &input, int64_t i);
 
 } // namespace ops

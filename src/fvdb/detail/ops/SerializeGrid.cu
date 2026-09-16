@@ -2,10 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/detail/GridBatchDataFactory.h>
-#include <fvdb/detail/ops/CloneGrid.h>
+#include <fvdb/detail/ops/MakeContiguous.h>
 #include <fvdb/detail/ops/SerializeGrid.h>
 
 #include <nanovdb/HostBuffer.h>
+
+#include <optional>
 
 namespace fvdb {
 namespace detail {
@@ -26,21 +28,19 @@ torch::Tensor
 serializeGrid(const GridBatchData &grid) {
     c10::DeviceGuard guard(grid.device());
 
-    const GridBatchData *self = &grid;
-    c10::intrusive_ptr<GridBatchData> cpuClone;
-    if (!grid.device().is_cpu() || !grid.isContiguous()) {
-        // cloneGrid compacts: the bytes written below must be exactly the batch's logical grids,
-        // and a view shares storage holding more grids than it selects.
-        cpuClone = cloneGrid(grid, torch::kCPU, true);
-        self     = cpuClone.get();
+    // The bytes to write are the batch's logical grids on the host. A contiguous CPU batch has
+    // them already; anything else is compacted straight onto the host in one pass. The per-grid
+    // metadata written below is the batch's own: only its voxel sizes and origins are read back,
+    // and deserialization recomputes the rest from the grids.
+    std::optional<GridStorage> compacted;
+    if (!(grid.device().is_cpu() && grid.isContiguous()) && grid.batchSize() > 0) {
+        compacted = contiguousGridStorage(grid, torch::kCPU);
     }
-
-    const GridStorage &storage = self->gridStorage();
+    const GridStorage &storage = compacted ? *compacted : grid.gridStorage();
+    const int64_t numGrids     = grid.batchSize();
     // An empty batch's storage holds a sentinel grid with no metadata record behind it; it
     // serializes as zero grids and zero grid bytes.
-    const int64_t numGrids   = self->batchSize();
-    const int64_t hdlBufSize = static_cast<int64_t>(self->totalBytes());
-
+    const int64_t hdlBufSize = static_cast<int64_t>(grid.totalBytes());
     const int64_t headerSize = sizeof(V01Header) + numGrids * sizeof(GridBatchData::GridMetadata) +
                                sizeof(GridBatchData::GridBatchMetadata);
     const int64_t totalByteSize = headerSize + hdlBufSize;
@@ -55,11 +55,11 @@ serializeGrid(const GridBatchData &grid) {
     memcpy(retPtr, &header, sizeof(V01Header));
     retPtr += sizeof(V01Header);
 
-    memcpy(retPtr, &self->mBatchMetadata, sizeof(GridBatchData::GridBatchMetadata));
+    memcpy(retPtr, &grid.mBatchMetadata, sizeof(GridBatchData::GridBatchMetadata));
     retPtr += sizeof(GridBatchData::GridBatchMetadata);
 
     if (numGrids > 0) {
-        memcpy(retPtr, self->mHostGridMetadata, numGrids * sizeof(GridBatchData::GridMetadata));
+        memcpy(retPtr, grid.mHostGridMetadata, numGrids * sizeof(GridBatchData::GridMetadata));
         retPtr += numGrids * sizeof(GridBatchData::GridMetadata);
         memcpy(retPtr, storage.hostBytes(), hdlBufSize);
     }

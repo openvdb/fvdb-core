@@ -6,12 +6,13 @@
 #include <fvdb/detail/utils/cuda/StreamOrdering.h>
 #include <fvdb/detail/utils/nanovdb/DeviceGridHandleUtils.cuh>
 
-#include <nanovdb/NanoVDB.h>
 #include <nanovdb/tools/GridChecksum.h>
 
 #include <c10/cuda/CUDAGuard.h>
 #include <c10/cuda/CUDAStream.h>
 
+// Legacy TorchDeviceBuffer helpers for the builders that still merge per-item handles of that
+// type; they go with the builders' conversion (#770 step 5).
 namespace {
 
 // Copy one grid's `nbytes` from src to dst (host or device) and rewrite its (gridIndex, gridCount)
@@ -89,59 +90,6 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-GridStorage
-contiguousGridStorage(const GridBatchData &input) {
-    c10::DeviceGuard guard(input.device());
-    const torch::Device device = input.device();
-    const int64_t totalGrids   = input.batchSize();
-    int64_t totalByteSize      = 0;
-    for (int64_t i = 0; i < totalGrids; i += 1) {
-        totalByteSize += input.numBytesAt(i);
-    }
-    const uint8_t *srcBase = sourceBytes(input);
-
-    if (device.is_cpu()) {
-        nanovdb::HostBuffer buffer(totalByteSize);
-        uint8_t *dstBase    = static_cast<uint8_t *>(buffer.data());
-        int64_t writeOffset = 0;
-        for (int64_t i = 0; i < totalGrids; i += 1) {
-            copyAndFixGrid(reinterpret_cast<nanovdb::GridData *>(dstBase + writeOffset),
-                           srcBase + input.cumBytesAt(i),
-                           input.numBytesAt(i),
-                           static_cast<uint32_t>(i),
-                           static_cast<uint32_t>(totalGrids),
-                           /*isCpu=*/true,
-                           cudaStream_t{});
-            writeOffset += input.numBytesAt(i);
-        }
-        // Parsing the chain validates the headers just written (index, count, size).
-        return GridStorage(GridStorage::HostHandle(std::move(buffer)));
-    }
-
-    const cudaStream_t stream = fvdb::detail::storageStream(device);
-    SourceStreamOrder order(input, stream);
-    DeviceGridBuffer buffer(
-        stream, TorchDeviceResource(device), totalByteSize, nanovdb::cuda::noInit);
-    std::vector<nanovdb::GridHandleMetaData> meta;
-    meta.reserve(totalGrids);
-    int64_t writeOffset = 0;
-    for (int64_t i = 0; i < totalGrids; i += 1) {
-        copyAndFixGrid(reinterpret_cast<nanovdb::GridData *>(buffer.data() + writeOffset),
-                       srcBase + input.cumBytesAt(i),
-                       input.numBytesAt(i),
-                       static_cast<uint32_t>(i),
-                       static_cast<uint32_t>(totalGrids),
-                       /*isCpu=*/false,
-                       stream);
-        meta.push_back(nanovdb::GridHandleMetaData{
-            static_cast<uint64_t>(writeOffset), input.numBytesAt(i), nanovdb::GridType::OnIndex});
-        writeOffset += input.numBytesAt(i);
-    }
-    order.finish();
-    // The layout is known, so the handle adopts it: no parse kernel, no synchronization.
-    return GridStorage(makeDeviceHandleFromLayout(std::move(buffer), std::move(meta)), device);
-}
-
 nanovdb::GridHandle<TorchDeviceBuffer>
 contiguousGridHandle(const GridBatchData &input) {
     c10::DeviceGuard guard(input.device());
@@ -192,6 +140,41 @@ cloneGridHandleAt(const GridBatchData &input, int64_t i) {
                    stream);
     order.finish();
     return nanovdb::GridHandle<TorchDeviceBuffer>(std::move(buffer));
+}
+
+namespace {
+
+// The batch's logical grids as spans of its storage, from the side the copy will read.
+GridSpanSource
+logicalGridSpans(const GridBatchData &input, int64_t first, int64_t count) {
+    const GridStorage &storage = input.gridStorage();
+    const auto *base           = static_cast<const uint8_t *>(
+        input.device().is_cpu() ? storage.hostBytes() : storage.deviceBytes());
+    GridSpanSource source{input.device(), storage.stream(), {}};
+    source.spans.reserve(count);
+    for (int64_t i = first; i < first + count; ++i) {
+        source.spans.push_back(
+            GridSpan{base + input.cumBytesAt(i), input.numBytesAt(i), nanovdb::GridType::OnIndex});
+    }
+    return source;
+}
+
+} // namespace
+
+GridStorage
+contiguousGridStorage(const GridBatchData &input, std::optional<torch::Device> device) {
+    const torch::Device target = GridStorage::resolveDevice(device.value_or(input.device()));
+    const cudaStream_t stream =
+        target.is_cpu() ? input.gridStorage().stream() : storageStream(target);
+    return assembleGridStorage({logicalGridSpans(input, 0, input.batchSize())}, target, stream);
+}
+
+GridStorage
+cloneGridStorageAt(const GridBatchData &input, int64_t i) {
+    const torch::Device device = input.device();
+    const cudaStream_t stream =
+        device.is_cpu() ? input.gridStorage().stream() : storageStream(device);
+    return assembleGridStorage({logicalGridSpans(input, i, 1)}, device, stream);
 }
 
 c10::intrusive_ptr<GridBatchData>

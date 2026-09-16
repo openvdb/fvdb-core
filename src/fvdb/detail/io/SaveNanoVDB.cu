@@ -938,7 +938,7 @@ getIndexGrid(const GridBatchData &gridBatchData, const std::vector<std::string> 
     // file gets (and what loading it yields), as before.
     GridStorage hostStorage = (gridBatchData.isContiguous() || gridBatchData.batchSize() == 0)
                                   ? gridBatchData.gridStorage().to(torch::kCPU)
-                                  : ops::contiguousGridStorage(gridBatchData).to(torch::kCPU);
+                                  : ops::contiguousGridStorage(gridBatchData, torch::kCPU);
     nanovdb::GridHandle<nanovdb::HostBuffer> retHandle = std::move(hostStorage.hostHandle());
 
     // Write voxelSize and origin information to the output buffer

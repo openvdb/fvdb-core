@@ -152,6 +152,22 @@ dispatchPopulateGridMetadata<torch::kCUDA>(
     // Read metadata into device buffers
     TORCH_CHECK(storage.deviceBytes() != nullptr, "GridStorage is empty");
     const nanovdb::OnIndexGrid *grids = (const nanovdb::OnIndexGrid *)storage.deviceBytes();
+
+    // The device records are raw allocations, the kernel writes only the fields it computes, and
+    // the host records are overwritten from the device afterwards. Seed the device records with
+    // the constructed host ones so the fields the kernel leaves alone (the version stamps) come
+    // back with their defaults, as they have on the CPU path all along.
+    const size_t metaDataByteSize = sizeof(GridBatchData::GridMetadata) * storage.gridCount();
+    C10_CUDA_CHECK(cudaMemcpyAsync(outPerGridMetadataDevice,
+                                   outPerGridMetadataHost,
+                                   metaDataByteSize,
+                                   cudaMemcpyHostToDevice,
+                                   stream));
+    C10_CUDA_CHECK(cudaMemcpyAsync(outBatchMetadataDevice,
+                                   outBatchMetadataHost,
+                                   sizeof(GridBatchData::GridBatchMetadata),
+                                   cudaMemcpyHostToDevice,
+                                   stream));
     populateGridMetadataCUDA<TorchRAcc64><<<1, NUM_THREADS, 0, stream>>>(
         storage.gridCount(),
         grids,
@@ -163,13 +179,20 @@ dispatchPopulateGridMetadata<torch::kCUDA>(
 
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 
-    const size_t metaDataByteSize = sizeof(GridBatchData::GridMetadata) * storage.gridCount();
-    cudaMemcpy(
-        outPerGridMetadataHost, outPerGridMetadataDevice, metaDataByteSize, cudaMemcpyDeviceToHost);
-    cudaMemcpy(outBatchMetadataHost,
-               outBatchMetadataDevice,
-               sizeof(GridBatchData::GridBatchMetadata),
-               cudaMemcpyDeviceToHost);
+    // Read back on the kernel's stream and wait for it. A synchronous cudaMemcpy would run on the
+    // legacy default stream, which torch's non-blocking streams do not synchronize with, so under
+    // torch.cuda.stream(s) it could read the records before the kernel had written them.
+    C10_CUDA_CHECK(cudaMemcpyAsync(outPerGridMetadataHost,
+                                   outPerGridMetadataDevice,
+                                   metaDataByteSize,
+                                   cudaMemcpyDeviceToHost,
+                                   stream));
+    C10_CUDA_CHECK(cudaMemcpyAsync(outBatchMetadataHost,
+                                   outBatchMetadataDevice,
+                                   sizeof(GridBatchData::GridBatchMetadata),
+                                   cudaMemcpyDeviceToHost,
+                                   stream));
+    C10_CUDA_CHECK(cudaStreamSynchronize(stream));
 }
 
 template <>
