@@ -323,6 +323,8 @@ class Prune(nn.Module):
 
     @staticmethod
     def _check_partitioned_like(grid: GridBatch, tensor: JaggedTensor, name: str) -> None:
+        if tensor.ldim != 1:
+            raise ValueError(f"{name} must be a flat list of tensors (ldim == 1), got ldim == {tensor.ldim}")
         if tensor.num_tensors != grid.grid_count:
             raise ValueError(f"{name} has {tensor.num_tensors} tensors but grid has {grid.grid_count} grids")
         if tensor.jdata.shape[0] != grid.total_voxels:

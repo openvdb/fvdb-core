@@ -246,6 +246,12 @@ class TestNNModules(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "grids"):
             prune(fvdb.JaggedTensor([features.jdata]), grid, mask)
 
+        # Nested list structure. Leaf count and flat offsets both match the grid, so only
+        # an explicit ldim check catches this.
+        nested = fvdb.JaggedTensor([[features.jdata[:n0], features.jdata[n0:]]])
+        with self.assertRaisesRegex(ValueError, "ldim"):
+            prune(nested, grid, mask)
+
     def test_prune_forward_keeps_docstring(self):
         # The profiler decorator on fvdb.nn modules must not strip forward's docs or name.
         self.assertEqual(fvnn.Prune.forward.__name__, "forward")
