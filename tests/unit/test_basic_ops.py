@@ -1215,6 +1215,18 @@ class TestBasicOps(unittest.TestCase):
 
             self.assertTrue(torch.abs(grid_vals_grad_t_flat - grid_vals_grad).max().item() < dtype_to_atol(dtype))
 
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA required")
+    def test_to_indexless_cuda_device(self):
+        # torch.device("cuda") carries no index; it means the current CUDA device, both when the
+        # batch already lives there (a no-op move) and when it comes from the CPU.
+        grid = GridBatch.from_points(fvdb.JaggedTensor(torch.randn(100, 3, device="cuda:0")), voxel_sizes=0.1)
+        same = grid.to(torch.device("cuda"))
+        self.assertEqual(same.device, torch.device("cuda", torch.cuda.current_device()))
+        self.assertEqual(same.total_voxels, grid.total_voxels)
+        moved = grid.to("cpu").to(torch.device("cuda"))
+        self.assertEqual(moved.device, torch.device("cuda", torch.cuda.current_device()))
+        self.assertEqual(moved.total_voxels, grid.total_voxels)
+
     @parameterized.expand(all_device_dtype_combos + bfloat16_combos)
     def test_strided_max_pool_grad(self, device, dtype):
         vox_size = 0.05

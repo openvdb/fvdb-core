@@ -5,6 +5,8 @@
 #include <fvdb/detail/ops/CloneGrid.h>
 #include <fvdb/detail/ops/SerializeGrid.h>
 
+#include <nanovdb/HostBuffer.h>
+
 namespace fvdb {
 namespace detail {
 namespace ops {
@@ -26,13 +28,18 @@ serializeGrid(const GridBatchData &grid) {
 
     const GridBatchData *self = &grid;
     c10::intrusive_ptr<GridBatchData> cpuClone;
-    if (!grid.device().is_cpu()) {
+    if (!grid.device().is_cpu() || !grid.isContiguous()) {
+        // cloneGrid compacts: the bytes written below must be exactly the batch's logical grids,
+        // and a view shares storage holding more grids than it selects.
         cpuClone = cloneGrid(grid, torch::kCPU, true);
         self     = cpuClone.get();
     }
 
-    int64_t numGrids   = self->nanoGridHandle().gridCount();
-    int64_t hdlBufSize = self->nanoGridHandle().buffer().size();
+    const GridStorage &storage = self->gridStorage();
+    // An empty batch's storage holds a sentinel grid with no metadata record behind it; it
+    // serializes as zero grids and zero grid bytes.
+    const int64_t numGrids   = self->batchSize();
+    const int64_t hdlBufSize = static_cast<int64_t>(self->totalBytes());
 
     const int64_t headerSize = sizeof(V01Header) + numGrids * sizeof(GridBatchData::GridMetadata) +
                                sizeof(GridBatchData::GridBatchMetadata);
@@ -51,10 +58,11 @@ serializeGrid(const GridBatchData &grid) {
     memcpy(retPtr, &self->mBatchMetadata, sizeof(GridBatchData::GridBatchMetadata));
     retPtr += sizeof(GridBatchData::GridBatchMetadata);
 
-    memcpy(retPtr, self->mHostGridMetadata, numGrids * sizeof(GridBatchData::GridMetadata));
-    retPtr += numGrids * sizeof(GridBatchData::GridMetadata);
-
-    memcpy(retPtr, self->nanoGridHandle().buffer().data(), hdlBufSize);
+    if (numGrids > 0) {
+        memcpy(retPtr, self->mHostGridMetadata, numGrids * sizeof(GridBatchData::GridMetadata));
+        retPtr += numGrids * sizeof(GridBatchData::GridMetadata);
+        memcpy(retPtr, storage.hostBytes(), hdlBufSize);
+    }
     retPtr += hdlBufSize;
 
     TORCH_CHECK(retPtr == (ret.data_ptr<int8_t>() + totalByteSize),
@@ -102,11 +110,17 @@ deserializeGrid(const torch::Tensor &serialized) {
     const uint64_t sizeofMetadata = sizeof(V01Header) + sizeof(GridBatchData::GridBatchMetadata) +
                                     numGrids * sizeof(GridBatchData::GridMetadata);
     const uint64_t sizeofGrid = header->totalBytes - sizeofMetadata;
+    if (numGrids == 0) {
+        TORCH_CHECK(sizeofGrid == 0,
+                    "Serialized data is not a valid grid handle. Empty batch with grid bytes.");
+        return makeEmptyGridBatchData(torch::kCPU);
+    }
 
-    auto buf = TorchDeviceBuffer(sizeofGrid, torch::kCPU);
+    nanovdb::HostBuffer buf(sizeofGrid);
     memcpy(buf.data(), gridBuffer, sizeofGrid);
 
-    nanovdb::GridHandle gridHdl = nanovdb::GridHandle<TorchDeviceBuffer>(std::move(buf));
+    // Parsing the chain validates what was read back before anything trusts it.
+    GridStorage storage(GridStorage::HostHandle(std::move(buf)));
 
     std::vector<nanovdb::Vec3d> voxelSizes, voxelOrigins;
     voxelSizes.reserve(numGrids);
@@ -116,7 +130,7 @@ deserializeGrid(const torch::Tensor &serialized) {
         voxelOrigins.emplace_back(gridMetadata[i].voxelOrigin());
     }
 
-    return makeGridBatchData(std::move(gridHdl), voxelSizes, voxelOrigins);
+    return makeGridBatchData(std::move(storage), voxelSizes, voxelOrigins);
 }
 
 } // namespace ops

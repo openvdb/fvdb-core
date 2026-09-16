@@ -15,6 +15,7 @@
 #include <fvdb/detail/utils/cuda/ForEachPrivateUse1.cuh>
 #include <fvdb/detail/utils/cuda/GridDim.h>
 #include <fvdb/detail/utils/nanovdb/CreateEmptyGridHandle.h>
+#include <fvdb/detail/utils/nanovdb/LegacyGridHandle.h>
 #include <fvdb/detail/utils/nanovdb/PadGrid.cuh>
 
 #include <nanovdb/NanoVDB.h>
@@ -144,10 +145,8 @@ buildPaddedGridFromGridWithoutBorderCPU(const GridBatchData &baseBatchHdl, int B
 
     TORCH_CHECK(BMIN <= BMAX, "BMIN must be less than BMAX");
 
-    const nanovdb::GridHandle<TorchDeviceBuffer> &baseGridHdl = baseBatchHdl.nanoGridHandle();
-
     std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> batchHandles;
-    batchHandles.reserve(baseGridHdl.gridCount());
+    batchHandles.reserve(baseBatchHdl.batchSize());
     for (int64_t i = 0; i < baseBatchHdl.batchSize(); i += 1) {
         // View-aware byte-offset accessor: the i-th *logical* grid (correct for sliced/
         // non-contiguous batches, unlike grid<GridT>(i) which indexes physically).
@@ -200,10 +199,8 @@ buildPaddedGridFromGridCPU(const GridBatchData &baseBatchHdl, int BMIN, int BMAX
 
     TORCH_CHECK(BMIN <= BMAX, "BMIN must be less than BMAX");
 
-    const nanovdb::GridHandle<TorchDeviceBuffer> &baseGridHdl = baseBatchHdl.nanoGridHandle();
-
     std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> batchHandles;
-    batchHandles.reserve(baseGridHdl.gridCount());
+    batchHandles.reserve(baseBatchHdl.batchSize());
     for (int64_t i = 0; i < baseBatchHdl.batchSize(); i += 1) {
         // View-aware byte-offset accessor: the i-th *logical* grid (correct for sliced/
         // non-contiguous batches, unlike grid<GridT>(i) which indexes physically).
@@ -333,17 +330,13 @@ dispatchBuildPaddedGrid<torch::kCUDA>(const GridBatchData &baseBatchHdl,
     const int numNegative = -bmin;
     const int totalPasses = numPositive + numNegative;
 
-    // Identity case (bmin == bmax == 0): no morphology passes run. For a *contiguous* batch the
-    // whole underlying handle is exactly the result, so copy it in one shot. A sliced /
-    // non-contiguous batch shares a handle holding MORE grids than batchSize(), so compact just the
-    // selected grids into a fresh contiguous handle -- a byte copy with header fix-up, no radix
-    // sort and no joffsets().cpu() sync. This is rare and degenerate -- only build_padded_grid(0,
-    // 0) reaches it; dual_grid, being (0, 1), never does. The tail then applies the transform
-    // fix-up (dual swap or verbatim copy, per `dualTransform`).
+    // Identity case (bmin == bmax == 0): no morphology passes run, so the result is a copy of the
+    // selected grids: a byte copy with header fix-up, no radix sort and no joffsets().cpu() sync.
+    // (contiguousGridHandle copies by logical grid, so a sliced / non-contiguous batch, whose
+    // storage holds MORE grids than batchSize(), comes out right too.) This is rare and degenerate
+    // -- only build_padded_grid(0, 0) reaches it; dual_grid, being (0, 1), never does. The tail
+    // then applies the transform fix-up (dual swap or verbatim copy, per `dualTransform`).
     if (totalPasses == 0) {
-        if (baseBatchHdl.isContiguous()) {
-            return baseBatchHdl.nanoGridHandle().copy<TorchDeviceBuffer>(guide);
-        }
         return ops::contiguousGridHandle(baseBatchHdl);
     }
 
@@ -356,7 +349,7 @@ dispatchBuildPaddedGrid<torch::kCUDA>(const GridBatchData &baseBatchHdl,
         }
 
         // View-aware byte-offset accessor: the i-th *logical* grid (correct for sliced/
-        // non-contiguous batches, unlike mGridHdl->deviceGrid(i) which indexes physically).
+        // non-contiguous batches, unlike gridStorage().deviceGridAt(i) which indexes physically).
         nanovdb::OnIndexGrid *grid = baseBatchHdl.deviceGridPtrAt(i);
 
         nanovdb::GridHandle<TorchDeviceBuffer> handle;
@@ -446,8 +439,10 @@ buildPaddedGrid(
         return dispatchBuildPaddedGrid<DeviceTag>(baseBatchHdl, bmin, bmax, excludeBorder);
     });
 
-    const int64_t bs           = hdl.gridCount();
-    const torch::Device device = hdl.buffer().device();
+    // The builders still hand back a TorchDeviceBuffer handle; move its grids into storage.
+    auto storage     = std::make_shared<GridStorage>(adoptLegacyGridHandle(std::move(hdl)));
+    const int64_t bs = storage->gridCount();
+    const torch::Device device = storage->device();
 
     GridBatchData::GridMetadata *hostMeta   = nullptr;
     GridBatchData::GridMetadata *deviceMeta = nullptr;
@@ -463,7 +458,7 @@ buildPaddedGrid(
 
     torch::Tensor batchOffsets;
     GridBatchData::GridBatchMetadata batchMeta;
-    ops::populateGridMetadata(hdl, voxS, voxO, batchOffsets, hostMeta, deviceMeta, &batchMeta);
+    ops::populateGridMetadata(*storage, voxS, voxO, batchOffsets, hostMeta, deviceMeta, &batchMeta);
     batchMeta.mIsContiguous = true;
 
     // Fix up the per-grid transforms. populateGridMetadata already recomputed primal/dual
@@ -498,9 +493,7 @@ buildPaddedGrid(
     }
     torch::Tensor leafBatchIndices = torch::cat(leafBatchIdxs, 0);
 
-    auto gridHdlPtr = std::make_shared<nanovdb::GridHandle<TorchDeviceBuffer>>(std::move(hdl));
-
-    return c10::make_intrusive<GridBatchData>(std::move(gridHdlPtr),
+    return c10::make_intrusive<GridBatchData>(std::move(storage),
                                               hostMeta,
                                               deviceMeta,
                                               bs,

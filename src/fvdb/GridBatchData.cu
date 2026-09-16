@@ -8,42 +8,45 @@
 namespace fvdb {
 
 // -----------------------------------------------------------------------
-// Methods that dereference mGridHdl (require complete TorchDeviceBuffer)
+// Methods that dereference mStorage
 // -----------------------------------------------------------------------
 
-const nanovdb::GridHandle<TorchDeviceBuffer> &
-GridBatchData::nanoGridHandle() const {
-    return *mGridHdl;
+const GridStorage &
+GridBatchData::gridStorage() const {
+    return *mStorage;
 }
 
 const c10::Device
 GridBatchData::device() const {
-    return mGridHdl->buffer().device();
+    return mStorage->device();
 }
 
+// Both return nullptr when the storage is not accessible from that side, so the callers'
+// null checks stay meaningful; the byte offset is only applied to a real base pointer.
 nanovdb::OnIndexGrid *
 GridBatchData::deviceGridPtrAt(int64_t bi) const {
-    return reinterpret_cast<nanovdb::OnIndexGrid *>(mGridHdl->buffer().deviceData() +
-                                                    cumBytesAt(bi));
+    auto *base = static_cast<uint8_t *>(mStorage->deviceBytes());
+    return base ? reinterpret_cast<nanovdb::OnIndexGrid *>(base + cumBytesAt(bi)) : nullptr;
 }
 
 nanovdb::OnIndexGrid *
 GridBatchData::hostGridPtrAt(int64_t bi) const {
-    return reinterpret_cast<nanovdb::OnIndexGrid *>(mGridHdl->buffer().data() + cumBytesAt(bi));
+    auto *base = static_cast<uint8_t *>(mStorage->hostBytes());
+    return base ? reinterpret_cast<nanovdb::OnIndexGrid *>(base + cumBytesAt(bi)) : nullptr;
 }
 
 bool
 GridBatchData::isEmpty() const {
-    return mGridHdl->buffer().isEmpty();
+    return mStorage->isEmpty();
 }
 
 GridBatchData::Accessor
 GridBatchData::hostAccessor() const {
     TORCH_CHECK(!isEmpty(), "Cannot access empty grid");
-    TORCH_CHECK(mGridHdl->template grid<nanovdb::ValueOnIndex>(),
-                "Failed to get host grid pointer");
+    const auto *grids = mStorage->hostGridAt<nanovdb::ValueOnIndex>(0);
+    TORCH_CHECK(grids, "Failed to get host grid pointer");
     return Accessor(mHostGridMetadata,
-                    mGridHdl->template grid<nanovdb::ValueOnIndex>(),
+                    grids,
                     mLeafBatchIndices.data_ptr<fvdb::JIdxType>(),
                     mBatchMetadata.mTotalVoxels,
                     mBatchMetadata.mTotalLeaves,
@@ -57,10 +60,10 @@ GridBatchData::deviceAccessor() const {
     TORCH_CHECK(!isEmpty(), "Cannot access empty grid");
     TORCH_CHECK(device().is_cuda() || device().is_privateuseone(),
                 "Cannot access device accessor without a CUDA or PrivateUse1 device");
-    TORCH_CHECK(mGridHdl->template deviceGrid<nanovdb::ValueOnIndex>(),
-                "Failed to get device grid pointer");
+    const auto *grids = mStorage->deviceGridAt<nanovdb::ValueOnIndex>(0);
+    TORCH_CHECK(grids, "Failed to get device grid pointer");
     return Accessor(mDeviceGridMetadata,
-                    mGridHdl->template deviceGrid<nanovdb::ValueOnIndex>(),
+                    grids,
                     mLeafBatchIndices.data_ptr<fvdb::JIdxType>(),
                     mBatchMetadata.mTotalVoxels,
                     mBatchMetadata.mTotalLeaves,
@@ -71,7 +74,7 @@ GridBatchData::deviceAccessor() const {
 
 void
 GridBatchData::checkDevice(const torch::Tensor &t) const {
-    torch::Device hdlDevice = mGridHdl->buffer().device();
+    torch::Device hdlDevice = mStorage->device();
     TORCH_CHECK(hdlDevice == t.device(),
                 "All tensors must be on the same device (" + hdlDevice.str() +
                     ") as index grid but got " + t.device().str());
@@ -79,17 +82,17 @@ GridBatchData::checkDevice(const torch::Tensor &t) const {
 
 void
 GridBatchData::checkDevice(const JaggedTensor &t) const {
-    torch::Device hdlDevice = mGridHdl->buffer().device();
+    torch::Device hdlDevice = mStorage->device();
     TORCH_CHECK(hdlDevice == t.device(),
                 "All tensors must be on the same device (" + hdlDevice.str() +
                     ") as index grid but got " + t.device().str());
 }
 
 GridBatchData::~GridBatchData() {
-    if (!mGridHdl) {
+    if (!mStorage) {
         return;
     }
-    const torch::Device dev = mGridHdl->buffer().device();
+    const torch::Device dev = mStorage->device();
     if (dev.is_cpu() || dev.is_cuda()) {
         fvdb::detail::freeHostGridMetadata(mHostGridMetadata);
         mHostGridMetadata = nullptr;

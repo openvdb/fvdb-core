@@ -14,7 +14,7 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-void populateGridMetadata(const nanovdb::GridHandle<TorchDeviceBuffer> &batchHdl,
+void populateGridMetadata(const GridStorage &storage,
                           const std::vector<nanovdb::Vec3d> &voxelSizes,
                           const std::vector<nanovdb::Vec3d> &voxelOrigins,
                           torch::Tensor &outBatchOffsets,

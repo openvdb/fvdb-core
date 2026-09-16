@@ -31,6 +31,15 @@ torch::Tensor computeBatchOffsets(GridBatchData::GridMetadata *hostMeta,
                                   int64_t batchSize,
                                   torch::Device device);
 
+/// @brief Wraps grid storage (one ValueOnIndex grid per batch item, contiguous) in a
+///        GridBatchData, computing the per-grid and batch metadata.
+c10::intrusive_ptr<GridBatchData>
+makeGridBatchData(GridStorage &&storage,
+                  const std::vector<nanovdb::Vec3d> &voxelSizes,
+                  const std::vector<nanovdb::Vec3d> &voxelOrigins);
+
+/// @brief The same for a dual-space TorchDeviceBuffer handle, which the builders still produce
+///        (#770 step 5 converts them). Copies the bytes into GridStorage; see LegacyGridHandle.h.
 c10::intrusive_ptr<GridBatchData>
 makeGridBatchData(nanovdb::GridHandle<TorchDeviceBuffer> &&gridHdl,
                   const std::vector<nanovdb::Vec3d> &voxelSizes,

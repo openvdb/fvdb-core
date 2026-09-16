@@ -35,16 +35,6 @@ checkStorageDevice(const torch::Device &device) {
                 device);
 }
 
-// The current torch stream of a CUDA device, or the legacy default stream for PrivateUse1, whose
-// unified memory is not stream-ordered.
-cudaStream_t
-currentStreamOf(const torch::Device &device) {
-    if (device.is_cuda()) {
-        return c10::cuda::getCurrentCUDAStream(device.index()).stream();
-    }
-    return cudaStream_t{};
-}
-
 // An empty handle whose buffer already carries the right resource, so anything that reads the
 // device off the buffer (a later GridStorage(DeviceHandle&&), a prototype) agrees with the storage.
 GridStorage::DeviceHandle
@@ -65,28 +55,37 @@ GridStorage::GridStorage(DeviceHandle &&handle)
       mDevice(std::get<1>(mHandle).buffer().resource().device()) {}
 
 GridStorage::GridStorage(DeviceHandle &&handle, const torch::Device &device)
-    : mHandle(std::in_place_index<1>, std::move(handle)), mDevice(device) {
-    checkStorageDevice(device);
-    TORCH_CHECK(isDeviceKind(device), "GridStorage: a device handle cannot live on ", device);
+    : mHandle(std::in_place_index<1>, std::move(handle)), mDevice(resolveDevice(device)) {
+    checkStorageDevice(mDevice);
+    TORCH_CHECK(isDeviceKind(mDevice), "GridStorage: a device handle cannot live on ", mDevice);
     auto &h = std::get<1>(mHandle);
     if (h.isEmpty()) {
         // An empty handle carries whatever resource it was default-constructed with (the current
         // CUDA device, e.g. cuda::copyTo's result for a zero-byte source); re-home it so the
         // buffer agrees with device() for anyone who re-wraps it or uses it as a prototype.
-        if (h.buffer().resource().device() != device) {
-            h = emptyDeviceHandle(device, h.buffer().stream());
+        if (h.buffer().resource().device() != mDevice) {
+            h = emptyDeviceHandle(mDevice, h.buffer().stream());
         }
         return;
     }
-    TORCH_CHECK(h.buffer().resource().device() == device,
+    TORCH_CHECK(h.buffer().resource().device() == mDevice,
                 "GridStorage: handle is on ",
                 h.buffer().resource().device(),
                 " but the storage was declared on ",
-                device);
+                mDevice);
+}
+
+torch::Device
+GridStorage::resolveDevice(const torch::Device &device) {
+    if (device.is_cuda() && !device.has_index()) {
+        return torch::Device(torch::kCUDA, c10::cuda::current_device());
+    }
+    return device;
 }
 
 GridStorage
-GridStorage::empty(const torch::Device &device) {
+GridStorage::empty(const torch::Device &requested) {
+    const torch::Device device = resolveDevice(requested);
     checkStorageDevice(device);
     if (device.is_cpu()) {
         return GridStorage();
@@ -95,7 +94,8 @@ GridStorage::empty(const torch::Device &device) {
 }
 
 DeviceGridBuffer
-GridStorage::deviceProto(const torch::Device &device, cudaStream_t stream) {
+GridStorage::deviceProto(const torch::Device &requested, cudaStream_t stream) {
+    const torch::Device device = resolveDevice(requested);
     checkStorageDevice(device);
     TORCH_CHECK(isDeviceKind(device), "GridStorage::deviceProto: not a device: ", device);
     // Allocations through the proto are device-correct on their own (the resource guards), but
@@ -208,12 +208,14 @@ GridStorage::deviceHandle() {
 }
 
 GridStorage
-GridStorage::to(const torch::Device &device) const {
-    return to(device, device.is_cpu() ? stream() : currentStreamOf(device));
+GridStorage::to(const torch::Device &requested) const {
+    const torch::Device device = resolveDevice(requested);
+    return to(device, device.is_cpu() ? stream() : detail::storageStream(device));
 }
 
 GridStorage
-GridStorage::to(const torch::Device &device, cudaStream_t stream) const {
+GridStorage::to(const torch::Device &requested, cudaStream_t stream) const {
+    const torch::Device device = resolveDevice(requested);
     checkStorageDevice(device);
     if (isEmpty()) {
         // cuda::copyTo would return a default-constructed handle here, whose resource is the
@@ -262,10 +264,13 @@ GridStorage::to(const torch::Device &device, cudaStream_t stream) const {
     {
         c10::OptionalDeviceGuard dstGuard(device.is_cuda() ? std::optional<torch::Device>(device)
                                                            : std::nullopt);
-        if (mDevice.is_cuda() && device.is_cuda() && mDevice != device) {
-            // Across CUDA devices the copy has to be a peer copy: torch's allocator backends
-            // (expandable segments, cudaMallocAsync) do not support a plain memcpy between
-            // devices without peer access, and c10 itself selects cudaMemcpyPeerAsync here.
+        // Only a copy between two different CUDA devices needs the peer path: torch's allocator
+        // backends (expandable segments, cudaMallocAsync) do not support a plain memcpy between
+        // devices without peer access, and c10 itself selects cudaMemcpyPeerAsync there. Every
+        // other pairing (same CUDA device; PrivateUse1 on either side, whose unified memory any
+        // device addresses) is an ordinary copyTo with cudaMemcpyDefault.
+        const bool acrossCudaDevices = mDevice.is_cuda() && device.is_cuda() && mDevice != device;
+        if (acrossCudaDevices) {
             DeviceGridBuffer buf(
                 stream, TorchDeviceResource(device), src.bufferSize(), nanovdb::cuda::noInit);
             C10_CUDA_CHECK(cudaMemcpyPeerAsync(buf.data(),

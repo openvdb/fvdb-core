@@ -3,25 +3,13 @@
 //
 #include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/ConcatenateGrids.h>
+#include <fvdb/detail/utils/cuda/StreamOrdering.h>
+#include <fvdb/detail/utils/nanovdb/DeviceGridHandleUtils.cuh>
 
 #include <nanovdb/NanoVDB.h>
-#include <nanovdb/tools/CreateNanoGrid.h>
+#include <nanovdb/tools/GridChecksum.h>
 
 #include <c10/cuda/CUDAGuard.h>
-
-namespace {
-
-__global__ void
-updateGridCountAndZeroChecksum(nanovdb::GridData *d_data, uint32_t gridIndex, uint32_t gridCount) {
-    NANOVDB_ASSERT(gridIndex < gridCount);
-    if (d_data->mGridIndex != gridIndex || d_data->mGridCount != gridCount) {
-        d_data->mGridIndex = gridIndex;
-        d_data->mGridCount = gridCount;
-    }
-    d_data->mChecksum.disable();
-}
-
-} // namespace
 
 namespace fvdb {
 namespace detail {
@@ -77,57 +65,75 @@ concatenateGrids(const std::vector<c10::intrusive_ptr<GridBatchData>> &elements)
         return makeEmptyGridBatchData(device);
     }
 
-    TorchDeviceBuffer buffer(totalByteSize, device);
-
     int count         = 0;
     int nonEmptyCount = 0;
     if (device.is_cpu()) {
+        nanovdb::HostBuffer buffer(totalByteSize);
         for (size_t i = 0; i < elements.size(); i += 1) {
             if (elements[i]->batchSize() == 0) {
                 continue;
             }
+            const auto *srcBase =
+                static_cast<const uint8_t *>(elements[i]->gridStorage().hostBytes());
             for (int64_t j = 0; j < elements[i]->batchSize(); j += 1) {
                 const int64_t readOffset  = readByteOffsets[nonEmptyCount][j];
                 const int64_t writeOffset = writeByteOffsets[nonEmptyCount][j];
                 const int64_t numBytes    = byteSizes[nonEmptyCount][j];
-
-                nanovdb::GridData *dst =
-                    reinterpret_cast<nanovdb::GridData *>(buffer.data() + writeOffset);
-                const uint8_t *src = elements[i]->nanoGridHandle().buffer().data() + readOffset;
-                memcpy((void *)dst, (void *)src, numBytes);
+                nanovdb::GridData *dst    = reinterpret_cast<nanovdb::GridData *>(
+                    static_cast<uint8_t *>(buffer.data()) + writeOffset);
+                memcpy((void *)dst, (const void *)(srcBase + readOffset), numBytes);
                 nanovdb::tools::updateGridCount(dst, count++, totalGrids);
             }
             nonEmptyCount += 1;
         }
-    } else {
-        TORCH_CHECK(device.has_index(), "Device must have an index for CUDA operations");
-        at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream(device.index());
-
-        for (size_t i = 0; i < elements.size(); i += 1) {
-            if (elements[i]->batchSize() == 0) {
-                continue;
-            }
-            for (int64_t j = 0; j < elements[i]->batchSize(); j += 1) {
-                const int64_t readOffset  = readByteOffsets[nonEmptyCount][j];
-                const int64_t writeOffset = writeByteOffsets[nonEmptyCount][j];
-                const int64_t numBytes    = byteSizes[nonEmptyCount][j];
-
-                c10::cuda::CUDAGuard deviceGuard(device.index());
-                nanovdb::GridData *dst =
-                    reinterpret_cast<nanovdb::GridData *>(buffer.deviceData() + writeOffset);
-                const uint8_t *src =
-                    elements[i]->nanoGridHandle().buffer().deviceData() + readOffset;
-                cudaMemcpyAsync((uint8_t *)dst, src, numBytes, cudaMemcpyDeviceToDevice, stream);
-
-                updateGridCountAndZeroChecksum<<<1, 1, 0, stream>>>(dst, count++, totalGrids);
-                C10_CUDA_KERNEL_LAUNCH_CHECK();
-            }
-            nonEmptyCount += 1;
-        }
+        // Parsing the chain validates the headers just written.
+        return makeGridBatchData(
+            GridStorage(GridStorage::HostHandle(std::move(buffer))), voxelSizes, voxelOrigins);
     }
-    nanovdb::GridHandle<TorchDeviceBuffer> gridHdl =
-        nanovdb::GridHandle<TorchDeviceBuffer>(std::move(buffer));
-    return makeGridBatchData(std::move(gridHdl), voxelSizes, voxelOrigins);
+
+    c10::DeviceGuard deviceGuard(device);
+    const cudaStream_t stream = storageStream(device);
+    DeviceGridBuffer buffer(
+        stream, TorchDeviceResource(device), totalByteSize, nanovdb::cuda::noInit);
+    std::vector<nanovdb::GridHandleMetaData> meta;
+    meta.reserve(totalGrids);
+    for (size_t i = 0; i < elements.size(); i += 1) {
+        if (elements[i]->batchSize() == 0) {
+            continue;
+        }
+        // Order the copies after this element's writers (its storage's retained stream), and that
+        // stream after the copies, so the element may be released as soon as this returns.
+        const cudaStream_t srcStream = elements[i]->gridStorage().stream();
+        orderStreamAfter(stream, device, srcStream, device);
+        const auto *srcBase =
+            static_cast<const uint8_t *>(elements[i]->gridStorage().deviceBytes());
+        for (int64_t j = 0; j < elements[i]->batchSize(); j += 1) {
+            const int64_t readOffset  = readByteOffsets[nonEmptyCount][j];
+            const int64_t writeOffset = writeByteOffsets[nonEmptyCount][j];
+            const int64_t numBytes    = byteSizes[nonEmptyCount][j];
+            nanovdb::GridData *dst =
+                reinterpret_cast<nanovdb::GridData *>(buffer.data() + writeOffset);
+            C10_CUDA_CHECK(cudaMemcpyAsync(
+                (uint8_t *)dst, srcBase + readOffset, numBytes, cudaMemcpyDeviceToDevice, stream));
+            updateGridCountAndZeroChecksum<<<1, 1, 0, stream>>>(dst, count++, totalGrids);
+            C10_CUDA_KERNEL_LAUNCH_CHECK();
+            meta.push_back(nanovdb::GridHandleMetaData{static_cast<uint64_t>(writeOffset),
+                                                       static_cast<uint64_t>(numBytes),
+                                                       nanovdb::GridType::OnIndex});
+        }
+        orderStreamAfter(srcStream, device, stream, device);
+        nonEmptyCount += 1;
+    }
+    if (device.is_privateuseone()) {
+        // Unified memory read by host code straight away (populateGridMetadata runs on the host
+        // for PrivateUse1): the copies and header kernels must have landed.
+        synchronizeStream(stream, device);
+    }
+    // The layout is known, so the handle adopts it: no parse kernel, no synchronization.
+    return makeGridBatchData(
+        GridStorage(makeDeviceHandleFromLayout(std::move(buffer), std::move(meta)), device),
+        voxelSizes,
+        voxelOrigins);
 }
 
 } // namespace ops

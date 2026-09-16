@@ -96,7 +96,7 @@ indexGridInternal(const fvdb::GridBatchData &grid, const Indexable &idx, int64_t
         listIndices = grid.mListIndices;
     }
 
-    return c10::make_intrusive<fvdb::GridBatchData>(grid.mGridHdl,
+    return c10::make_intrusive<fvdb::GridBatchData>(grid.mStorage,
                                                     hostMeta,
                                                     deviceMeta,
                                                     size,

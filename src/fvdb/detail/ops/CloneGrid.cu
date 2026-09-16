@@ -10,26 +10,28 @@ namespace detail {
 namespace ops {
 
 c10::intrusive_ptr<GridBatchData>
-cloneGrid(const GridBatchData &grid, const torch::Device &device, bool blocking) {
+cloneGrid(const GridBatchData &grid, const torch::Device &requested, bool blocking) {
+    // `torch.device("cuda")` arrives index-less; it means the current CUDA device.
+    const torch::Device device = GridStorage::resolveDevice(requested);
     if (grid.batchSize() == 0) {
         return makeEmptyGridBatchData(device);
     }
 
-    // Compact the (possibly sliced/non-contiguous) selected grids into a fresh contiguous handle.
-    // nanoGridHandle().copy() would copy *every physical grid* in the shared handle -- wrong (and a
+    // Compact the (possibly sliced/non-contiguous) selected grids into fresh contiguous storage.
+    // Copying the whole storage would copy *every physical grid* it shares -- wrong (and a
     // voxelSizes/gridCount mismatch) for an indexed batch, where gridCount() > batchSize().
-    nanovdb::GridHandle<TorchDeviceBuffer> clonedHdl = contiguousGridHandle(grid);
-    if (clonedHdl.buffer().device() != device) {
-        // Requested a different target device: the handle is now contiguous, so a whole-handle copy
-        // to `device` moves exactly the selected grids.
-        TorchDeviceBuffer guide(0, device);
-        clonedHdl = clonedHdl.copy<TorchDeviceBuffer>(guide);
+    // A contiguous batch's storage already holds exactly the logical grids, so one GridStorage::to
+    // (a deep copy on the same device, a move otherwise) is the clone. A view is compacted on its
+    // own device first and moved if the target differs: two passes until compaction takes a
+    // destination device.
+    GridStorage cloned =
+        grid.isContiguous() ? grid.gridStorage().to(device) : contiguousGridStorage(grid);
+    if (cloned.device() != device) {
+        cloned = cloned.to(device);
     }
-
     std::vector<nanovdb::Vec3d> voxelSizes, voxelOrigins;
     grid.gridVoxelSizesAndOrigins(voxelSizes, voxelOrigins);
-
-    return makeContiguous(makeGridBatchData(std::move(clonedHdl), voxelSizes, voxelOrigins));
+    return makeGridBatchData(std::move(cloned), voxelSizes, voxelOrigins);
 }
 
 } // namespace ops
