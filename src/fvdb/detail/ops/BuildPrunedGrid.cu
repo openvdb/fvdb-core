@@ -3,13 +3,16 @@
 //
 #include <fvdb/BuilderResource.h>
 #include <fvdb/GridBatchData.h>
+#include <fvdb/GridStorage.h>
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/TorchDeviceBuffer.h>
 #include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/BuildPrunedGrid.h>
 #include <fvdb/detail/utils/Utils.h>
-#include <fvdb/detail/utils/nanovdb/CreateEmptyGridHandle.h>
+#include <fvdb/detail/utils/cuda/StreamOrdering.h>
+#include <fvdb/detail/utils/nanovdb/CreateEmptyGridStorage.h>
+#include <fvdb/detail/utils/nanovdb/DeviceGridHandleUtils.cuh>
 
+#include <nanovdb/HostBuffer.h>
 #include <nanovdb/NanoVDB.h>
 #include <nanovdb/cuda/Buffer.h>
 #include <nanovdb/tools/CreateNanoGrid.h>
@@ -26,29 +29,27 @@
 namespace fvdb::detail::ops {
 
 template <torch::DeviceType>
-nanovdb::GridHandle<TorchDeviceBuffer> dispatchPruneGrid(const GridBatchData &gridBatch,
-                                                         const JaggedTensor &mask);
+GridStorage dispatchPruneGrid(const GridBatchData &gridBatch, const JaggedTensor &mask);
 
 template <>
-nanovdb::GridHandle<TorchDeviceBuffer>
+GridStorage
 dispatchPruneGrid<torch::kCUDA>(const GridBatchData &gridBatch, const JaggedTensor &mask) {
-    c10::cuda::CUDAGuard deviceGuard(gridBatch.device());
+    const torch::Device device = gridBatch.device();
+    c10::cuda::CUDAGuard deviceGuard(device);
 
     TORCH_CHECK_VALUE(mask.rdim() == 1, "Mask must be a one-dimensional boolean tensor");
     TORCH_CHECK_VALUE(mask.scalar_type() == torch::kBool, "Mask must be a boolean tensor");
     TORCH_CHECK_VALUE(gridBatch.device() == mask.device(), "Grid and mask must be on same device");
 
-    // This guide buffer is a hack to pass in a device with an index to the cudaCreateNanoGrid
-    // function. We can't pass in a device directly but we can pass in a buffer which gets
-    // passed to TorchDeviceBuffer::create. The guide buffer holds the device and effectively
-    // passes it to the created buffer.
-    TorchDeviceBuffer guide(0, gridBatch.device());
+    // The grids are built and their storage retained on the device's current torch stream; the
+    // prototype carries that stream and the device into every allocation the builder makes.
+    const cudaStream_t stream    = storageStream(device);
+    const DeviceGridBuffer proto = GridStorage::deviceProto(device, stream);
 
-    // Create a grid for each batch item and store the handles
-    std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> handles;
+    // Build one grid per batch item, then lay them end to end in one storage.
+    std::vector<GridStorage> parts;
+    parts.reserve(gridBatch.batchSize());
     for (int i = 0; i < gridBatch.batchSize(); i += 1) {
-        nanovdb::GridHandle<TorchDeviceBuffer> handle;
-
         // This also keeps the grid aligned with numLeavesAt(i)/mask.index(i), which are
         // item-indexed.
         nanovdb::OnIndexGrid *grid = gridBatch.deviceGridPtrAt(i);
@@ -58,54 +59,41 @@ dispatchPruneGrid<torch::kCUDA>(const GridBatchData &gridBatch, const JaggedTens
 
         // FIXME: Handle empty case!!
         if (maskI.sum().item<int64_t>() == 0) {
-            // If the mask is empty, we can just return an empty grid
-            handles.push_back(std::move(createEmptyGridHandle(gridBatch.device())));
+            // If the mask is empty, we contribute a voxel-less grid
+            parts.emplace_back(createEmptyGridStorage(device));
             continue;
         }
 
-        const auto leafCount        = gridBatch.numLeavesAt(i);
-        at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream(gridBatch.device().index());
+        const auto leafCount = gridBatch.numLeavesAt(i);
 
         // Per-leaf keep masks, one Mask<3> per source leaf. Scratch for the prune pass, so it
         // goes through the builders' resource (torch's active CUDA allocator), stream-ordered on
         // the stream the fill kernel and PruneGrid run on. Every word is written by the kernel
         // below, so the allocation is not zero-initialized.
-        BuilderBuffer<nanovdb::Mask<3>> maskBuffer(
-            stream.stream(), leafCount, nanovdb::cuda::noInit);
+        BuilderBuffer<nanovdb::Mask<3>> maskBuffer(stream, leafCount, nanovdb::cuda::noInit);
 
         using Op = nanovdb::util::cuda::InjectPredicateToMaskFunctor<nanovdb::ValueOnIndex, -1>;
         nanovdb::Mask<3> *leafMask = maskBuffer.data();
-        nanovdb::util::cuda::operatorKernel<Op>
-            <<<leafCount, Op::MaxThreadsPerBlock, 0, stream.stream()>>>(
-                grid, maskI.data_ptr<bool>(), leafMask);
+        nanovdb::util::cuda::operatorKernel<Op><<<leafCount, Op::MaxThreadsPerBlock, 0, stream>>>(
+            grid, maskI.data_ptr<bool>(), leafMask);
         C10_CUDA_KERNEL_LAUNCH_CHECK();
         // PruneGrid defaults to the legacy stream 0; run it on the same stream as the mask fill
         // above, or its reads of leafMask can race the kernel that writes it.
         nanovdb::tools::cuda::PruneGrid<nanovdb::ValueOnIndex, BuilderResource> pruneOp(
-            grid, leafMask, stream.stream());
-        pruneOp.setChecksum(nanovdb::CheckMode::Default);
+            grid, leafMask, stream);
         pruneOp.setVerbose(0);
 
-        handle = pruneOp.getHandle(guide);
+        GridStorage::DeviceHandle handle = pruneOp.getHandle(proto);
         C10_CUDA_KERNEL_LAUNCH_CHECK();
 
-        grid = handle.deviceGrid<nanovdb::ValueOnIndex>();
-
-        handles.push_back(std::move(handle));
+        parts.emplace_back(std::move(handle), device);
     }
 
-    if (handles.size() == 1) {
-        // If there's only one handle, just return it
-        return std::move(handles[0]);
-    } else {
-        // This copies all the handles into a single handle -- only do it if there are multiple
-        // grids
-        return nanovdb::cuda::mergeGridHandles(handles, &guide);
-    }
+    return mergeGridStorages(std::move(parts), device, stream);
 }
 
 template <>
-nanovdb::GridHandle<TorchDeviceBuffer>
+GridStorage
 dispatchPruneGrid<torch::kCPU>(const GridBatchData &gridBatch, const JaggedTensor &mask) {
     using GridT     = nanovdb::ValueOnIndex;
     using IndexTree = nanovdb::NanoTree<GridT>;
@@ -114,7 +102,7 @@ dispatchPruneGrid<torch::kCPU>(const GridBatchData &gridBatch, const JaggedTenso
     TORCH_CHECK_VALUE(mask.scalar_type() == torch::kBool, "Mask must be a boolean tensor");
     TORCH_CHECK_VALUE(gridBatch.device() == mask.device(), "Grid and mask must be on same device");
 
-    std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> gridHandles;
+    std::vector<nanovdb::GridHandle<nanovdb::HostBuffer>> gridHandles;
     gridHandles.reserve(gridBatch.batchSize());
     for (int64_t bidx = 0; bidx < gridBatch.batchSize(); bidx += 1) {
         const nanovdb::OnIndexGrid *grid = gridBatch.hostGridPtrAt(bidx);
@@ -139,17 +127,13 @@ dispatchPruneGrid<torch::kCPU>(const GridBatchData &gridBatch, const JaggedTenso
         }
 
         proxyGridAccessor.merge();
-        auto ret = nanovdb::tools::createNanoGrid<ProxyGridT, GridT, TorchDeviceBuffer>(
-            *proxyGrid, 0u, false, false);
-        ret.buffer().to(torch::kCPU);
-        gridHandles.push_back(std::move(ret));
+        gridHandles.push_back(
+            nanovdb::tools::createNanoGrid<ProxyGridT, GridT, nanovdb::HostBuffer>(
+                *proxyGrid, 0u, false, false));
     }
 
-    if (gridHandles.size() == 1) {
-        return std::move(gridHandles[0]);
-    } else {
-        return nanovdb::mergeGrids(gridHandles);
-    }
+    return GridStorage(gridHandles.size() == 1 ? std::move(gridHandles[0])
+                                               : nanovdb::mergeGrids(gridHandles));
 }
 
 c10::intrusive_ptr<GridBatchData>
@@ -161,9 +145,9 @@ pruneGrid(const GridBatchData &gridBatch, const JaggedTensor &mask) {
                       "GridBatch and mask should be on same device/host");
     std::vector<nanovdb::Vec3d> voxS, voxO;
     gridBatch.gridVoxelSizesAndOrigins(voxS, voxO);
-    auto hdl = FVDB_DISPATCH_KERNEL_DEVICE(
+    GridStorage storage = FVDB_DISPATCH_KERNEL_DEVICE(
         gridBatch.device(), [&]() { return dispatchPruneGrid<DeviceTag>(gridBatch, mask); });
-    return makeGridBatchData(std::move(hdl), voxS, voxO);
+    return makeGridBatchData(std::move(storage), voxS, voxO);
 }
 
 } // namespace fvdb::detail::ops

@@ -3,6 +3,7 @@
 //
 #include <fvdb/BuilderResource.h>
 #include <fvdb/GridBatchData.h>
+#include <fvdb/GridStorage.h>
 #include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/BuildFineGridFromCoarse.h>
 #include <fvdb/detail/ops/BuildGridForConvTranspose.h>
@@ -11,8 +12,10 @@
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
+#include <fvdb/detail/utils/cuda/StreamOrdering.h>
 #include <fvdb/detail/utils/nanovdb/BatchedTopologyBuilder.cuh>
 
+#include <nanovdb/HostBuffer.h>
 #include <nanovdb/tools/CreateNanoGrid.h>
 #include <nanovdb/util/MorphologyHelpers.h>
 
@@ -79,18 +82,17 @@ checkTransposeInputAndKernel(int64_t inputVoxelCount, ConvolutionGeometry const 
 } // namespace
 
 template <torch::DeviceType>
-nanovdb::GridHandle<TorchDeviceBuffer>
-dispatchBuildGridForConvTranspose(const GridBatchData &baseBatchHdl,
-                                  const nanovdb::Coord &kernelSize,
-                                  const nanovdb::Coord &stride);
+GridStorage dispatchBuildGridForConvTranspose(const GridBatchData &baseBatchHdl,
+                                              const nanovdb::Coord &kernelSize,
+                                              const nanovdb::Coord &stride);
 
-nanovdb::GridHandle<TorchDeviceBuffer>
+GridStorage
 buildFineGridFromCoarseGridCPU(const GridBatchData &coarseBatchHdl,
                                const nanovdb::Coord subdivisionFactor) {
     using GridT     = nanovdb::ValueOnIndex;
     using IndexTree = nanovdb::NanoTree<GridT>;
 
-    std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> batchHandles;
+    std::vector<nanovdb::GridHandle<nanovdb::HostBuffer>> batchHandles;
     batchHandles.reserve(coarseBatchHdl.batchSize());
     for (int64_t bidx = 0; bidx < coarseBatchHdl.batchSize(); bidx += 1) {
         const nanovdb::OnIndexGrid *coarseGrid = coarseBatchHdl.hostGridPtrAt(bidx);
@@ -112,13 +114,12 @@ buildFineGridFromCoarseGridCPU(const GridBatchData &coarseBatchHdl,
             }
         }
         proxyGridAccessor.merge();
-        auto ret = nanovdb::tools::createNanoGrid<ProxyGridT, GridT, TorchDeviceBuffer>(
-            *proxyGrid, 0u, false, false);
-        ret.buffer().to(torch::kCPU);
-        batchHandles.push_back(std::move(ret));
+        batchHandles.push_back(
+            nanovdb::tools::createNanoGrid<ProxyGridT, GridT, nanovdb::HostBuffer>(
+                *proxyGrid, 0u, false, false));
     }
-    return batchHandles.size() == 1 ? std::move(batchHandles[0])
-                                    : nanovdb::mergeGrids(batchHandles);
+    return GridStorage(batchHandles.size() == 1 ? std::move(batchHandles[0])
+                                                : nanovdb::mergeGrids(batchHandles));
 }
 
 __device__ void
@@ -176,7 +177,7 @@ convTransposeIJKForGrid(const GridBatchData &batchHdl, ConvolutionGeometry const
 }
 
 template <>
-nanovdb::GridHandle<TorchDeviceBuffer>
+GridStorage
 dispatchBuildGridForConvTranspose<torch::kCUDA>(const GridBatchData &baseGridHdl,
                                                 const nanovdb::Coord &kernelSize,
                                                 const nanovdb::Coord &stride) {
@@ -186,11 +187,11 @@ dispatchBuildGridForConvTranspose<torch::kCUDA>(const GridBatchData &baseGridHdl
     // The unshifted K=S={1,2} subdivision is realized directly on leaf masks (batched).
     // Shifted K=S geometries retain the canonical -paddingBefore phase in the fallback below.
     if (supportsLeafMaskSubdivision(geometry)) {
-        return fineGridHandleFromCoarseCUDA(baseGridHdl, geometry.stride(), std::nullopt);
+        return fineGridStorageFromCoarseCUDA(baseGridHdl, geometry.stride(), std::nullopt);
     }
 
     c10::cuda::CUDAGuard deviceGuard(baseGridHdl.device());
-    at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream(baseGridHdl.device().index());
+    const cudaStream_t stream = storageStream(baseGridHdl.device());
 
     // At stride one the canonical transpose support is source (+)
     // [-paddingBefore, paddingAfter]^3. Realize that box with batched leaf-mask morphology
@@ -210,7 +211,7 @@ dispatchBuildGridForConvTranspose<torch::kCUDA>(const GridBatchData &baseGridHdl
                           geometry.paddingAfter()[0],
                           PassSpec::boxDilate(nanovdb::Coord(0), nanovdb::Coord(1)));
         }
-        return batched::batchedTopologyHandle(baseGridHdl, passes, stream.stream());
+        return batched::batchedTopologyStorage(baseGridHdl, passes, stream);
     }
 
     // Fast path 3: stride 2, kernel 3 (the classic upsampling conv-transpose). The output is
@@ -220,11 +221,11 @@ dispatchBuildGridForConvTranspose<torch::kCUDA>(const GridBatchData &baseGridHdl
         geometry.kernelSize()[0] == 3) {
         const std::vector<PassSpec> passes = {
             PassSpec::refine(), PassSpec::boxDilate(nanovdb::Coord(-1), nanovdb::Coord(0))};
-        return batched::batchedTopologyHandle(baseGridHdl, passes, stream.stream());
+        return batched::batchedTopologyStorage(baseGridHdl, passes, stream);
     }
 
     if (isUnshiftedSubdivision(geometry)) {
-        return fineGridHandleFromCoarseCUDA(baseGridHdl, geometry.stride(), std::nullopt);
+        return fineGridStorageFromCoarseCUDA(baseGridHdl, geometry.stride(), std::nullopt);
     }
 
     // Coordinate fallback: preserve exact phase and let the CUDA allocator decide whether the
@@ -251,7 +252,7 @@ dispatchBuildGridForConvTranspose<torch::kCUDA>(const GridBatchData &baseGridHdl
 }
 
 template <>
-nanovdb::GridHandle<TorchDeviceBuffer>
+GridStorage
 dispatchBuildGridForConvTranspose<torch::kCPU>(const GridBatchData &baseBatchHdl,
                                                const nanovdb::Coord &kernelSize,
                                                const nanovdb::Coord &stride) {
@@ -262,7 +263,7 @@ dispatchBuildGridForConvTranspose<torch::kCPU>(const GridBatchData &baseBatchHdl
         return buildFineGridFromCoarseGridCPU(baseBatchHdl, geometry.stride());
     }
 
-    std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> batchHandles;
+    std::vector<nanovdb::GridHandle<nanovdb::HostBuffer>> batchHandles;
     batchHandles.reserve(baseBatchHdl.batchSize());
     for (int64_t bidx = 0; bidx < baseBatchHdl.batchSize(); bidx += 1) {
         const nanovdb::OnIndexGrid *baseGrid = baseBatchHdl.hostGridPtrAt(bidx);
@@ -278,11 +279,12 @@ dispatchBuildGridForConvTranspose<torch::kCPU>(const GridBatchData &baseBatchHdl
             }
         }
         proxyGridAccessor.merge();
-        batchHandles.push_back(nanovdb::tools::createNanoGrid<ProxyGridT, GridT, TorchDeviceBuffer>(
-            *proxyGrid, 0u, false, false));
+        batchHandles.push_back(
+            nanovdb::tools::createNanoGrid<ProxyGridT, GridT, nanovdb::HostBuffer>(
+                *proxyGrid, 0u, false, false));
     }
-    return batchHandles.size() == 1 ? std::move(batchHandles[0])
-                                    : nanovdb::mergeGrids(batchHandles);
+    return GridStorage(batchHandles.size() == 1 ? std::move(batchHandles[0])
+                                                : nanovdb::mergeGrids(batchHandles));
 }
 
 c10::intrusive_ptr<GridBatchData>

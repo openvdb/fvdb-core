@@ -4,7 +4,6 @@
 
 #include <fvdb/GridBatchData.h>
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/TorchDeviceBuffer.h>
 #include <fvdb/detail/ops/Inject.h>
 #include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/GridDim.h>
@@ -230,7 +229,7 @@ dispatchInject<torch::kCUDA>(const GridBatchData &dstGridBatch,
         featureDim *= dst.rsize(j);
     }
 
-    // Create a grid for each batch item and store the handles
+    // Inject each batch item in turn
     for (int i = 0; i < dstGridBatch.batchSize(); i += 1) {
         const nanovdb::OnIndexGrid *dstGrid = dstGridBatch.deviceGridPtrAt(i);
         const nanovdb::OnIndexGrid *srcGrid = srcGridBatch.deviceGridPtrAt(i);
@@ -306,7 +305,7 @@ dispatchInject<torch::kPrivateUse1>(const GridBatchData &dstGridBatch,
         featureDim *= dst.rsize(j);
     }
 
-    // Create a grid for each batch item and store the handles
+    // Inject each batch item in turn
     for (int i = 0; i < dstGridBatch.batchSize(); i += 1) {
         const nanovdb::OnIndexGrid *dstGrid = dstGridBatch.deviceGridPtrAt(i);
         const nanovdb::OnIndexGrid *srcGrid = srcGridBatch.deviceGridPtrAt(i);

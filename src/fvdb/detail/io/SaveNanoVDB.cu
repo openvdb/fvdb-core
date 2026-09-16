@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/BuilderResource.h>
-#include <fvdb/TorchDeviceBuffer.h>
 #include <fvdb/detail/io/SaveNanoVDB.h>
 #include <fvdb/detail/ops/MakeContiguous.h>
 #include <fvdb/detail/utils/Utils.h>

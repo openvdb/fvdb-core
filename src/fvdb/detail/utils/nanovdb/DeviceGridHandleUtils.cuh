@@ -5,6 +5,7 @@
 #define FVDB_DETAIL_UTILS_NANOVDB_DEVICEGRIDHANDLEUTILS_CUH
 
 #include <fvdb/GridStorage.h>
+#include <fvdb/TorchDeviceResource.h>
 #include <fvdb/detail/utils/cuda/StreamOrdering.h>
 #include <fvdb/detail/utils/nanovdb/GridHeaderUtils.h>
 
@@ -90,47 +91,59 @@ GridStorage assembleGridStorage(const std::vector<GridSpanSource> &sources,
                                 const torch::Device &device,
                                 cudaStream_t stream);
 
-/// @brief Lays the grids of @p handles end to end in one allocation from @p proto's resource, on
-///        @p stream, fixing each header's index/count: the single-space replacement for
-///        nanovdb::cuda::mergeGridHandles, as assembleGridStorage over the handles' spans. All
-///        sources must live on the prototype's device. Sources may be destroyed as soon as this
-///        returns. Checksums are disabled, as the CUDA MakeContiguous and ConcatenateGrids kernel
-///        leaves them; the host paths (nanovdb::mergeGrids and the CPU sides of those two ops,
-///        through tools::updateGridCount) and the replaced nanovdb::cuda::mergeGridHandles update
-///        an existing checksum instead, so a builder that computes one before merging loses it
-///        here (see #770 for whether step 5 recomputes or stops computing it).
-inline GridStorage::DeviceHandle
-mergeDeviceGridHandles(const std::vector<GridStorage::DeviceHandle> &handles,
-                       const DeviceGridBuffer &proto,
-                       cudaStream_t stream) {
-    const torch::Device device = proto.resource().device();
+/// @brief Lays the grids of @p parts end to end in one storage on @p device, made on @p stream:
+///        how a builder that produces one storage per batch item returns the batch. A single part
+///        is returned as is. Empty parts (no bytes) contribute nothing; a part holding a
+///        voxel-less grid (createEmptyGridStorage) contributes that grid. Every part must already
+///        live on @p device. Parts may be released as soon as this returns (see
+///        assembleGridStorage for the ordering that makes that so). Like all assembled storage the
+///        result's checksums are disabled; the builders do not compute one either (NanoVDB's
+///        default), and nothing in fvdb reads them.
+inline GridStorage
+mergeGridStorages(std::vector<GridStorage> &&parts,
+                  const torch::Device &device,
+                  cudaStream_t stream) {
+    if (parts.size() == 1) {
+        TORCH_CHECK(parts[0].device() == device,
+                    "mergeGridStorages: part on ",
+                    parts[0].device(),
+                    " cannot be returned as storage on ",
+                    device);
+        return std::move(parts[0]);
+    }
     std::vector<GridSpanSource> sources;
-    sources.reserve(handles.size());
-    for (const auto &h: handles) {
-        if (h.isEmpty()) {
+    sources.reserve(parts.size());
+    for (const GridStorage &part: parts) {
+        if (part.isEmpty()) {
             continue;
         }
-        TORCH_CHECK(h.buffer().resource().device() == device,
-                    "mergeDeviceGridHandles: source on ",
-                    h.buffer().resource().device(),
+        TORCH_CHECK(part.device() == device,
+                    "mergeGridStorages: part on ",
+                    part.device(),
                     " cannot be merged onto ",
                     device);
-        const auto &meta = nanovdb::cuda::detail::HandleFactory::meta(h);
-        GridSpanSource source{device, h.buffer().stream(), {}};
-        source.spans.reserve(meta.size());
-        const auto *base = static_cast<const std::byte *>(h.deviceData());
-        for (const auto &m: meta) {
-            source.spans.push_back(GridSpan{base + m.offset, m.size, m.gridType});
+        const auto *base =
+            static_cast<const std::byte *>(part.isHost() ? part.hostBytes() : part.deviceBytes());
+        GridSpanSource source{part.device(), part.isHost() ? cudaStream_t{} : part.stream(), {}};
+        source.spans.reserve(part.gridCount());
+        for (uint32_t i = 0; i < part.gridCount(); ++i) {
+            source.spans.push_back(
+                GridSpan{base + part.gridOffset(i), part.gridSize(i), part.gridType(i)});
         }
         sources.push_back(std::move(source));
     }
     if (sources.empty()) {
-        // Keep the prototype's device and stream, as a non-empty result would.
-        return nanovdb::cuda::detail::HandleFactory::make(
-            DeviceGridBuffer(stream, proto.resource(), 0, nanovdb::cuda::noInit),
-            std::vector<nanovdb::GridHandleMetaData>{});
+        // Keep the device and stream a non-empty result would have retained.
+        if (device.is_cpu()) {
+            return GridStorage();
+        }
+        return GridStorage(
+            nanovdb::cuda::detail::HandleFactory::make(
+                DeviceGridBuffer(stream, TorchDeviceResource(device), 0, nanovdb::cuda::noInit),
+                std::vector<nanovdb::GridHandleMetaData>{}),
+            device);
     }
-    return std::move(assembleGridStorage(sources, device, stream).deviceHandle());
+    return assembleGridStorage(sources, device, stream);
 }
 
 } // namespace fvdb::detail

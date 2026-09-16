@@ -324,40 +324,61 @@ TEST(GridStorageTest, SynchronousResourceApiWorksUnderAnyCurrentDevice) {
     r.deallocate(p, 4096, TorchDeviceResource::DEFAULT_ALIGNMENT);
 }
 
-TEST(GridStorageTest, MergeDeviceGridHandlesMatchesHostMerge) {
+TEST(GridStorageTest, MergeGridStoragesMatchesHostMerge) {
     initTorchCudaAllocator();
     const auto stream = c10::cuda::getCurrentCUDAStream(0).stream();
     std::vector<int> sizes{5, 1, 9};
     std::vector<HostHandle> hostParts;
-    std::vector<DeviceHandle> devParts;
+    std::vector<GridStorage> devParts;
+    std::vector<GridStorage> cpuParts;
     for (size_t i = 0; i < sizes.size(); ++i) {
         hostParts.push_back(makeFloatGrid(sizes[i], 10.0f * float(i + 1)));
-        auto part = GridStorage(makeFloatGrid(sizes[i], 10.0f * float(i + 1))).to(kCuda0, stream);
-        devParts.push_back(std::move(part.deviceHandle()));
+        cpuParts.emplace_back(makeFloatGrid(sizes[i], 10.0f * float(i + 1)));
+        devParts.push_back(
+            GridStorage(makeFloatGrid(sizes[i], 10.0f * float(i + 1))).to(kCuda0, stream));
     }
-    // Also an empty handle in the middle, which contributes nothing.
-    devParts.insert(devParts.begin() + 1, DeviceHandle());
+    // Also empty storage in the middle, which contributes nothing.
+    devParts.insert(devParts.begin() + 1, GridStorage::empty(kCuda0));
 
     const HostHandle expected = nanovdb::mergeGrids(hostParts);
-    const auto proto          = GridStorage::deviceProto(kCuda0, stream);
-    GridStorage merged(fvdb::detail::mergeDeviceGridHandles(devParts, proto, stream), kCuda0);
+    std::vector<uint8_t> expectedBytes(expected.bufferSize());
+    std::memcpy(expectedBytes.data(), expected.data(), expected.bufferSize());
 
+    GridStorage merged = fvdb::detail::mergeGridStorages(std::move(devParts), kCuda0, stream);
+    ASSERT_TRUE(merged.isDevice());
+    EXPECT_EQ(merged.device(), kCuda0);
+    EXPECT_EQ(merged.stream(), stream);
     ASSERT_EQ(merged.gridCount(), 3u);
     EXPECT_EQ(merged.bufferSize(), expected.bufferSize());
     for (uint32_t i = 0; i < 3; ++i) {
         EXPECT_EQ(merged.gridSize(i), expected.gridSize(i));
         EXPECT_EQ(merged.gridType(i), expected.gridType(i));
     }
-    std::vector<uint8_t> expectedBytes(expected.bufferSize());
-    std::memcpy(expectedBytes.data(), expected.data(), expected.bufferSize());
     EXPECT_EQ(deviceBytesOf(merged), expectedBytes);
 
-    // All-empty input keeps the prototype's device and stream rather than a default resource.
-    std::vector<DeviceHandle> none(2);
-    auto emptyMerge = fvdb::detail::mergeDeviceGridHandles(none, proto, stream);
+    // The same over host parts onto the host, as the CPU builders could use it.
+    GridStorage mergedCpu =
+        fvdb::detail::mergeGridStorages(std::move(cpuParts), torch::kCPU, cudaStream_t{});
+    ASSERT_TRUE(mergedCpu.isHost());
+    ASSERT_EQ(mergedCpu.gridCount(), 3u);
+    ASSERT_EQ(mergedCpu.bufferSize(), expected.bufferSize());
+    EXPECT_EQ(std::memcmp(mergedCpu.hostBytes(), expectedBytes.data(), expectedBytes.size()), 0);
+
+    // A single part is returned as is, whatever it holds.
+    std::vector<GridStorage> one;
+    one.emplace_back(GridStorage(makeFloatGrid(3, 1.0f)).to(kCuda0, stream));
+    const void *before = one[0].deviceBytes();
+    GridStorage same   = fvdb::detail::mergeGridStorages(std::move(one), kCuda0, stream);
+    EXPECT_EQ(same.deviceBytes(), before);
+
+    // All-empty input keeps the destination device and stream rather than a default resource.
+    std::vector<GridStorage> none;
+    none.emplace_back(GridStorage::empty(kCuda0));
+    none.emplace_back(GridStorage::empty(kCuda0));
+    GridStorage emptyMerge = fvdb::detail::mergeGridStorages(std::move(none), kCuda0, stream);
     EXPECT_TRUE(emptyMerge.isEmpty());
-    EXPECT_EQ(emptyMerge.buffer().resource().device(), kCuda0);
-    EXPECT_EQ(emptyMerge.buffer().stream(), stream);
+    EXPECT_EQ(emptyMerge.device(), kCuda0);
+    EXPECT_EQ(emptyMerge.stream(), stream);
 
     // And it parses: constructing a handle from the raw bytes validates the whole chain.
     auto bytes = merged.deviceHandle().buffer().copy(stream);

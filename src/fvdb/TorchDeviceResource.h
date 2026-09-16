@@ -45,11 +45,14 @@ namespace fvdb {
 ///        block to the stream it was keyed to whatever stream the free names, so
 ///        Buffer::set_stream and Buffer::resize with a different stream would free to a stream the
 ///        new work was never ordered against. GridStorage never does either; a buffer whose work
-///        must move to another stream is copied (GridStorage::to). (TorchStorageResource keys to
-///        torch's current stream instead; that
-///        is the right policy for the dual-space TorchDeviceBuffer, which has no retained stream
-///        and frees unordered, and the wrong one here, where it would let a buffer retained on
-///        another stream be freed to a stream its work was never ordered against.)
+///        must move to another stream is copied (GridStorage::to). PrivateUse1 is the exception
+///        on both counts: its allocator ignores the stream, which is what lets the
+///        DistributedPointsToGrid builders retarget a result allocated on a DeviceMesh stream
+///        (set_stream) onto the storage stream before the mesh is destroyed. (TorchStorageResource
+///        keys to torch's current stream instead; that is the right policy for the dual-space
+///        TorchDeviceBuffer, which has no retained stream and frees unordered, and the wrong one
+///        here, where it would let a buffer retained on another stream be freed to a stream its
+///        work was never ordered against.)
 ///
 ///        PrivateUse1, fvdb's unified-memory device for multi-GPU builds, allocates through the
 ///        allocator registered for it; that memory is not stream-ordered and is host- and

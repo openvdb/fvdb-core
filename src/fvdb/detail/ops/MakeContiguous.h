@@ -5,6 +5,7 @@
 #define FVDB_DETAIL_OPS_MAKECONTIGUOUS_H
 
 #include <fvdb/GridBatchData.h>
+#include <fvdb/GridStorage.h>
 
 #include <optional>
 
@@ -24,11 +25,6 @@ GridStorage contiguousGridStorage(const GridBatchData &input,
 
 /// @brief Logical grid @p i alone, as single-grid storage on the batch's device.
 GridStorage cloneGridStorageAt(const GridBatchData &input, int64_t i);
-
-/// @brief Legacy TorchDeviceBuffer forms of the two above, for the builders that still work in
-///        that type; both go with the builders' conversion (#770 step 5).
-nanovdb::GridHandle<TorchDeviceBuffer> contiguousGridHandle(const GridBatchData &input);
-nanovdb::GridHandle<TorchDeviceBuffer> cloneGridHandleAt(const GridBatchData &input, int64_t i);
 
 } // namespace ops
 } // namespace detail

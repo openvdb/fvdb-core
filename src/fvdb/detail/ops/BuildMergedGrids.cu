@@ -2,11 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/BuilderResource.h>
-#include <fvdb/TorchDeviceBuffer.h>
+#include <fvdb/GridStorage.h>
 #include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/BuildMergedGrids.h>
 #include <fvdb/detail/utils/Utils.h>
+#include <fvdb/detail/utils/cuda/StreamOrdering.h>
+#include <fvdb/detail/utils/nanovdb/DeviceGridHandleUtils.cuh>
 
+#include <nanovdb/HostBuffer.h>
 #include <nanovdb/NanoVDB.h>
 #include <nanovdb/tools/CreateNanoGrid.h>
 #include <nanovdb/tools/GridBuilder.h>
@@ -18,28 +21,26 @@
 namespace fvdb::detail::ops {
 
 template <torch::DeviceType>
-nanovdb::GridHandle<TorchDeviceBuffer> dispatchMergeGrids(const GridBatchData &gridBatch1,
-                                                          const GridBatchData &gridBatch2);
+GridStorage dispatchMergeGrids(const GridBatchData &gridBatch1, const GridBatchData &gridBatch2);
 
 template <>
-nanovdb::GridHandle<TorchDeviceBuffer>
+GridStorage
 dispatchMergeGrids<torch::kCUDA>(const GridBatchData &gridBatch1, const GridBatchData &gridBatch2) {
-    c10::cuda::CUDAGuard deviceGuard(gridBatch1.device());
+    const torch::Device device = gridBatch1.device();
+    c10::cuda::CUDAGuard deviceGuard(device);
     TORCH_CHECK_VALUE(gridBatch1.device() == gridBatch2.device(),
                       "All arguments to MergeGrids must be on the same device");
     TORCH_CHECK_VALUE(gridBatch1.batchSize() == gridBatch2.batchSize(),
                       "GridBatches to merge should have the same batch size");
 
-    at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream(gridBatch1.device().index());
+    // The grids are built and their storage retained on the device's current torch stream; the
+    // prototype carries that stream and the device into every allocation the builder makes.
+    const cudaStream_t stream    = storageStream(device);
+    const DeviceGridBuffer proto = GridStorage::deviceProto(device, stream);
 
-    // This guide buffer is a hack to pass in a device with an index to the cudaCreateNanoGrid
-    // function. We can't pass in a device directly but we can pass in a buffer which gets
-    // passed to TorchDeviceBuffer::create. The guide buffer holds the device and effectively
-    // passes it to the created buffer.
-    TorchDeviceBuffer guide(0, gridBatch1.device());
-
-    // Create a grid for each batch item and store the handles
-    std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> handles;
+    // Build one grid per batch item, then lay them end to end in one storage.
+    std::vector<GridStorage> parts;
+    parts.reserve(gridBatch1.batchSize());
     for (int i = 0; i < gridBatch1.batchSize(); i += 1) {
         // Logical grids by byte offset: correct for sliced views, unlike deviceGrid<>(i).
         nanovdb::OnIndexGrid *grid1 = gridBatch1.deviceGridPtrAt(i);
@@ -49,27 +50,19 @@ dispatchMergeGrids<torch::kCUDA>(const GridBatchData &gridBatch1, const GridBatc
 
         nanovdb::tools::cuda::MergeGrids<nanovdb::ValueOnIndex, BuilderResource> mergeOp(
             grid1, grid2, stream);
-        mergeOp.setChecksum(nanovdb::CheckMode::Default);
         mergeOp.setVerbose(0);
 
-        auto handle = mergeOp.getHandle(guide);
+        GridStorage::DeviceHandle handle = mergeOp.getHandle(proto);
         C10_CUDA_KERNEL_LAUNCH_CHECK();
 
-        handles.push_back(std::move(handle));
+        parts.emplace_back(std::move(handle), device);
     }
 
-    if (handles.size() == 1) {
-        // If there's only one handle, just return it
-        return std::move(handles[0]);
-    } else {
-        // This copies all the handles into a single handle -- only do it if there are multiple
-        // grids
-        return nanovdb::cuda::mergeGridHandles(handles, &guide);
-    }
+    return mergeGridStorages(std::move(parts), device, stream);
 }
 
 template <>
-nanovdb::GridHandle<TorchDeviceBuffer>
+GridStorage
 dispatchMergeGrids<torch::kCPU>(const GridBatchData &gridBatch1, const GridBatchData &gridBatch2) {
     using GridT     = nanovdb::ValueOnIndex;
     using IndexTree = nanovdb::NanoTree<GridT>;
@@ -78,7 +71,7 @@ dispatchMergeGrids<torch::kCPU>(const GridBatchData &gridBatch1, const GridBatch
     TORCH_CHECK_VALUE(gridBatch1.batchSize() == gridBatch2.batchSize(),
                       "GridBatches to merge should have the same batch size");
 
-    std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> gridHandles;
+    std::vector<nanovdb::GridHandle<nanovdb::HostBuffer>> gridHandles;
     gridHandles.reserve(gridBatch1.batchSize());
     for (int64_t bidx = 0; bidx < gridBatch1.batchSize(); bidx += 1) {
         // Logical grids by byte offset: correct for sliced views, unlike grid<GridT>(bidx).
@@ -103,17 +96,13 @@ dispatchMergeGrids<torch::kCPU>(const GridBatchData &gridBatch1, const GridBatch
         }
 
         proxyGridAccessor.merge();
-        auto ret = nanovdb::tools::createNanoGrid<ProxyGridT, GridT, TorchDeviceBuffer>(
-            *proxyGrid, 0u, false, false);
-        ret.buffer().to(torch::kCPU);
-        gridHandles.push_back(std::move(ret));
+        gridHandles.push_back(
+            nanovdb::tools::createNanoGrid<ProxyGridT, GridT, nanovdb::HostBuffer>(
+                *proxyGrid, 0u, false, false));
     }
 
-    if (gridHandles.size() == 1) {
-        return std::move(gridHandles[0]);
-    } else {
-        return nanovdb::mergeGrids(gridHandles);
-    }
+    return GridStorage(gridHandles.size() == 1 ? std::move(gridHandles[0])
+                                               : nanovdb::mergeGrids(gridHandles));
 }
 
 c10::intrusive_ptr<GridBatchData>
@@ -124,10 +113,10 @@ mergeGrids(const GridBatchData &gridBatch1, const GridBatchData &gridBatch2) {
                       "GridBatches to merge should be on same device/host");
     std::vector<nanovdb::Vec3d> voxS, voxO;
     gridBatch1.gridVoxelSizesAndOrigins(voxS, voxO);
-    auto hdl = FVDB_DISPATCH_KERNEL_DEVICE(gridBatch1.device(), [&]() {
+    GridStorage storage = FVDB_DISPATCH_KERNEL_DEVICE(gridBatch1.device(), [&]() {
         return dispatchMergeGrids<DeviceTag>(gridBatch1, gridBatch2);
     });
-    return makeGridBatchData(std::move(hdl), voxS, voxO);
+    return makeGridBatchData(std::move(storage), voxS, voxO);
 }
 
 } // namespace fvdb::detail::ops

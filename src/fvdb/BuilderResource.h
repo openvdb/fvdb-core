@@ -27,9 +27,9 @@ namespace fvdb {
 ///        the builders' internal scratch, and the staging and scratch buffers
 ///        fvdb's ops declare as BuilderBuffer<T> below. Ops that still take
 ///        CUB scratch from c10 directly are outside it until they migrate.
-///        Grid storage that outlives the op (TorchDeviceBuffer) has a
-///        different stream contract and allocates through
-///        TorchStorageResource (TorchResource.h).
+///        Grid storage that outlives the op (GridStorage's DeviceGridBuffer)
+///        has a different stream contract and allocates through
+///        TorchDeviceResource (TorchDeviceResource.h).
 ///
 ///        Note the seam is compile-time and relies on the resource being
 ///        stateless: builders bind the shared instance from

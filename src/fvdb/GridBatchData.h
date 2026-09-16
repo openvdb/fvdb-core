@@ -6,10 +6,8 @@
 
 #include <fvdb/GridStorage.h>
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/TorchDeviceBuffer.h>
 #include <fvdb/VoxelCoordTransform.h>
 
-#include <nanovdb/GridHandle.h>
 #include <nanovdb/NanoVDB.h>
 
 #include <ATen/core/TensorBody.h>
