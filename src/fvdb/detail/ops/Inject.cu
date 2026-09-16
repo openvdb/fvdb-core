@@ -232,10 +232,8 @@ dispatchInject<torch::kCUDA>(const GridBatchData &dstGridBatch,
 
     // Create a grid for each batch item and store the handles
     for (int i = 0; i < dstGridBatch.batchSize(); i += 1) {
-        const nanovdb::OnIndexGrid *dstGrid =
-            dstGridBatch.nanoGridHandle().deviceGrid<nanovdb::ValueOnIndex>(i);
-        const nanovdb::OnIndexGrid *srcGrid =
-            srcGridBatch.nanoGridHandle().deviceGrid<nanovdb::ValueOnIndex>(i);
+        const nanovdb::OnIndexGrid *dstGrid = dstGridBatch.deviceGridPtrAt(i);
+        const nanovdb::OnIndexGrid *srcGrid = srcGridBatch.deviceGridPtrAt(i);
         TORCH_CHECK(dstGrid, "Destination grid is null");
         TORCH_CHECK(srcGrid, "Source grid is null");
 
@@ -310,10 +308,8 @@ dispatchInject<torch::kPrivateUse1>(const GridBatchData &dstGridBatch,
 
     // Create a grid for each batch item and store the handles
     for (int i = 0; i < dstGridBatch.batchSize(); i += 1) {
-        const nanovdb::OnIndexGrid *dstGrid =
-            dstGridBatch.nanoGridHandle().deviceGrid<nanovdb::ValueOnIndex>(i);
-        const nanovdb::OnIndexGrid *srcGrid =
-            srcGridBatch.nanoGridHandle().deviceGrid<nanovdb::ValueOnIndex>(i);
+        const nanovdb::OnIndexGrid *dstGrid = dstGridBatch.deviceGridPtrAt(i);
+        const nanovdb::OnIndexGrid *srcGrid = srcGridBatch.deviceGridPtrAt(i);
         TORCH_CHECK(dstGrid, "Destination grid is null");
         TORCH_CHECK(srcGrid, "Source grid is null");
 
@@ -407,13 +403,11 @@ dispatchInject<torch::kCPU>(const GridBatchData &dstGridBatch,
                        auto dstJDataAccessor       = dstJData.accessor<scalar_t, 2>();
 
                        for (auto i = 0; i < srcGridBatch.batchSize(); i += 1) {
-                           const nanovdb::OnIndexGrid *grid =
-                               srcGridBatch.nanoGridHandle().grid<nanovdb::ValueOnIndex>(i);
-                           const nanovdb::OnIndexGrid *dstGrid =
-                               dstGridBatch.nanoGridHandle().grid<nanovdb::ValueOnIndex>(i);
-                           auto dstAccessor           = dstGrid->getAccessor();
-                           const int64_t baseSrcIndex = srcGridBatch.cumVoxelsAt(i);
-                           const int64_t baseDstIndex = dstGridBatch.cumVoxelsAt(i);
+                           const nanovdb::OnIndexGrid *grid    = srcGridBatch.hostGridPtrAt(i);
+                           const nanovdb::OnIndexGrid *dstGrid = dstGridBatch.hostGridPtrAt(i);
+                           auto dstAccessor                    = dstGrid->getAccessor();
+                           const int64_t baseSrcIndex          = srcGridBatch.cumVoxelsAt(i);
+                           const int64_t baseDstIndex          = dstGridBatch.cumVoxelsAt(i);
                            for (auto it = ActiveVoxelIterator<-1>(grid->tree()); it.isValid();
                                 ++it) {
                                const nanovdb::Coord ijk = it->first;

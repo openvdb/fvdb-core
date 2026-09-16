@@ -12,15 +12,16 @@ namespace ops {
 
 c10::intrusive_ptr<GridBatchData> makeContiguous(c10::intrusive_ptr<GridBatchData> input);
 
-// Compact the selected grids of a (possibly sliced/non-contiguous) batch into a fresh contiguous
-// GridHandle: a per-grid byte copy plus an mGridIndex/mGridCount header fixup (and checksum
-// disable), O(bytes) with no radix sort. This is the cheap, correct way to realize an
-// "identity" / whole-copy result on a view -- unlike nanoGridHandle().copy(), which would pull in
-// the sibling grids a slice excludes.
+/// @brief The batch's logical grids compacted end to end into fresh storage on the batch's
+///        device, each header stamped with its new (index, count). Correct for sliced and
+///        non-contiguous views, which share storage holding more grids than they select.
+GridStorage contiguousGridStorage(const GridBatchData &input);
+
+/// @brief The same, as a dual-space TorchDeviceBuffer handle, for the builders that still work
+///        in that type (#770 step 5 removes it).
 nanovdb::GridHandle<TorchDeviceBuffer> contiguousGridHandle(const GridBatchData &input);
 
-// Copy the i-th *logical* grid (by byte offset) into a standalone single-grid handle with
-// mGridIndex=0 / mGridCount=1, suitable for mergeGridHandles. Correct for sliced views.
+/// @brief Logical grid @p i alone as a single-grid TorchDeviceBuffer handle (same caveat).
 nanovdb::GridHandle<TorchDeviceBuffer> cloneGridHandleAt(const GridBatchData &input, int64_t i);
 
 } // namespace ops

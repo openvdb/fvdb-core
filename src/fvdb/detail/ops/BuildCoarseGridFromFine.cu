@@ -102,10 +102,8 @@ dispatchBuildCoarseGridFromFine<torch::kCPU>(const GridBatchData &fineBatchHdl,
     using GridT     = nanovdb::ValueOnIndex;
     using IndexTree = nanovdb::NanoTree<GridT>;
 
-    const nanovdb::GridHandle<TorchDeviceBuffer> &fineGridHdl = fineBatchHdl.nanoGridHandle();
-
     std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> batchHandles;
-    batchHandles.reserve(fineGridHdl.gridCount());
+    batchHandles.reserve(fineBatchHdl.batchSize());
     for (int64_t bidx = 0; bidx < fineBatchHdl.batchSize(); bidx += 1) {
         const nanovdb::OnIndexGrid *fineGrid = fineBatchHdl.hostGridPtrAt(bidx);
         if (!fineGrid) {

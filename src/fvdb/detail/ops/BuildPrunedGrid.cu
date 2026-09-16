@@ -114,10 +114,8 @@ dispatchPruneGrid<torch::kCPU>(const GridBatchData &gridBatch, const JaggedTenso
     TORCH_CHECK_VALUE(mask.scalar_type() == torch::kBool, "Mask must be a boolean tensor");
     TORCH_CHECK_VALUE(gridBatch.device() == mask.device(), "Grid and mask must be on same device");
 
-    const nanovdb::GridHandle<TorchDeviceBuffer> &gridHdl = gridBatch.nanoGridHandle();
-
     std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> gridHandles;
-    gridHandles.reserve(gridHdl.gridCount());
+    gridHandles.reserve(gridBatch.batchSize());
     for (int64_t bidx = 0; bidx < gridBatch.batchSize(); bidx += 1) {
         const nanovdb::OnIndexGrid *grid = gridBatch.hostGridPtrAt(bidx);
         if (!grid) {

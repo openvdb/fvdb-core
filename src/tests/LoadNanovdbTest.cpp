@@ -103,7 +103,8 @@ makeTensorGridBlindDataHandle(const fvdb::GridBatchData &gridBatchData,
 
     torch::Tensor contiguousData = sourceData.contiguous();
 
-    const nanovdb::GridData *sourceGridData = gridBatchData.nanoGridHandle().gridData(0);
+    const nanovdb::GridData *sourceGridData =
+        gridBatchData.gridStorage().hostGridAt<nanovdb::ValueOnIndex>(0)->data();
     TORCH_CHECK(sourceGridData != nullptr, "Expected a valid source grid.");
 
     constexpr uint64_t metadataBytes = sizeof(nanovdb::GridBlindMetaData);
@@ -118,7 +119,7 @@ makeTensorGridBlindDataHandle(const fvdb::GridBatchData &gridBatchData,
     nanovdb::HostBuffer outBuffer(totalBytes);
     uint8_t *outBytes = static_cast<uint8_t *>(outBuffer.data());
     std::memset(outBytes, 0, totalBytes);
-    std::memcpy(outBytes, gridBatchData.nanoGridHandle().buffer().data(), sourceGridBytes);
+    std::memcpy(outBytes, gridBatchData.gridStorage().hostBytes(), sourceGridBytes);
 
     nanovdb::GridData *outGridData    = reinterpret_cast<nanovdb::GridData *>(outBytes);
     outGridData->mGridSize            = totalBytes;

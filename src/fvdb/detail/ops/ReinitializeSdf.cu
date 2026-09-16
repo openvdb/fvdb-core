@@ -396,8 +396,7 @@ reinitializeSdfCuda(const GridBatchData &batchHdl,
         const int64_t numVoxels = batchHdl.numVoxelsAt(batchIdx);
         if (numVoxels == 0)
             continue;
-        OnIndexGridT *grid =
-            batchHdl.mGridHdl->deviceGrid<nanovdb::ValueOnIndex>((uint32_t)batchIdx);
+        OnIndexGridT *grid        = batchHdl.deviceGridPtrAt(batchIdx);
         const int64_t voxelOffset = batchHdl.cumVoxelsAt(batchIdx);
         const nanovdb::Vec3d &vs  = batchHdl.voxelSizeAt(batchIdx);
         // The eikonal solve uses one voxel size for all three axes; an anisotropic grid would get
