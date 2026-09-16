@@ -7,11 +7,27 @@
 #include <c10/cuda/CUDAException.h>
 #include <c10/cuda/CUDAFunctions.h>
 #include <c10/cuda/CUDAGuard.h>
+#include <c10/cuda/CUDAStream.h>
+#include <c10/util/Exception.h>
 #include <torch/types.h>
 
 #include <cuda_runtime_api.h>
 
 namespace fvdb::detail {
+
+/// @brief The stream grid storage on @p device is created, written and freed on: the device's
+///        current torch stream for CUDA; the legacy default stream for PrivateUse1, whose unified
+///        memory is not stream-ordered. CPU storage has no stream, and asking is an error.
+inline cudaStream_t
+storageStream(const torch::Device &device) {
+    if (device.is_cuda()) {
+        return c10::cuda::getCurrentCUDAStream(device.index()).stream();
+    }
+    if (device.is_privateuseone()) {
+        return cudaStream_t{};
+    }
+    TORCH_CHECK(false, "storageStream: ", device, " storage has no stream");
+}
 
 /// @brief Waits for everything currently enqueued on @p stream of @p device. A null handle names
 ///        that device's default stream, so the synchronize runs under its guard; for PrivateUse1,

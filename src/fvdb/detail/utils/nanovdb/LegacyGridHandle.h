@@ -6,6 +6,7 @@
 
 #include <fvdb/GridStorage.h>
 #include <fvdb/TorchDeviceBuffer.h>
+#include <fvdb/detail/utils/cuda/StreamOrdering.h>
 
 #include <nanovdb/GridHandle.h>
 #include <nanovdb/HostBuffer.h>
@@ -46,9 +47,7 @@ adoptLegacyGridHandle(nanovdb::GridHandle<TorchDeviceBuffer> &&handle) {
     }
     c10::OptionalDeviceGuard deviceGuard(device.is_cuda() ? std::optional<torch::Device>(device)
                                                           : std::nullopt);
-    const cudaStream_t stream = device.is_cuda()
-                                    ? c10::cuda::getCurrentCUDAStream(device.index()).stream()
-                                    : cudaStream_t{};
+    const cudaStream_t stream = detail::storageStream(device);
     DeviceGridBuffer buf(stream, TorchDeviceResource(device), bytes, nanovdb::cuda::noInit);
     C10_CUDA_CHECK(cudaMemcpyAsync(
         buf.data(), handle.buffer().deviceData(), bytes, cudaMemcpyDefault, stream));

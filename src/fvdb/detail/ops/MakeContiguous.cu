@@ -47,22 +47,21 @@ sourceBytes(const fvdb::GridBatchData &input) {
 // (its writers, and where its block returns when it is freed). Order the copy after the writers
 // first, and the storage's stream after the copy last, so the batch may be released as soon as
 // the caller returns. PrivateUse1 storage is not stream-ordered and its bytes are read by host
-// code straight away, so there the copy stream is simply synchronized.
+// code straight away, so there the streams are synchronized instead. CPU storage needs neither.
 struct SourceStreamOrder {
     SourceStreamOrder(const fvdb::GridBatchData &input, cudaStream_t stream)
         : mDevice(input.device()), mSrcStream(input.gridStorage().stream()), mStream(stream) {
-        if (!mDevice.is_cpu()) {
+        if (mDevice.is_cuda()) {
             fvdb::detail::orderStreamAfter(mStream, mDevice, mSrcStream, mDevice);
+        } else if (mDevice.is_privateuseone()) {
+            fvdb::detail::synchronizeStream(mSrcStream, mDevice);
         }
     }
     void
     finish() {
-        if (mDevice.is_cpu()) {
-            return;
-        }
         if (mDevice.is_cuda()) {
             fvdb::detail::orderStreamAfter(mSrcStream, mDevice, mStream, mDevice);
-        } else {
+        } else if (mDevice.is_privateuseone()) {
             fvdb::detail::synchronizeStream(mStream, mDevice);
         }
     }
@@ -106,9 +105,7 @@ contiguousGridStorage(const GridBatchData &input) {
         return GridStorage(GridStorage::HostHandle(std::move(buffer)));
     }
 
-    const cudaStream_t stream = device.is_cuda()
-                                    ? c10::cuda::getCurrentCUDAStream(device.index()).stream()
-                                    : cudaStream_t{};
+    const cudaStream_t stream = fvdb::detail::storageStream(device);
     SourceStreamOrder order(input, stream);
     DeviceGridBuffer buffer(
         stream, TorchDeviceResource(device), totalByteSize, nanovdb::cuda::noInit);

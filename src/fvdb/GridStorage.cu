@@ -35,16 +35,6 @@ checkStorageDevice(const torch::Device &device) {
                 device);
 }
 
-// The current torch stream of a CUDA device, or the legacy default stream for PrivateUse1, whose
-// unified memory is not stream-ordered.
-cudaStream_t
-currentStreamOf(const torch::Device &device) {
-    if (device.is_cuda()) {
-        return c10::cuda::getCurrentCUDAStream(device.index()).stream();
-    }
-    return cudaStream_t{};
-}
-
 // An empty handle whose buffer already carries the right resource, so anything that reads the
 // device off the buffer (a later GridStorage(DeviceHandle&&), a prototype) agrees with the storage.
 GridStorage::DeviceHandle
@@ -209,7 +199,7 @@ GridStorage::deviceHandle() {
 
 GridStorage
 GridStorage::to(const torch::Device &device) const {
-    return to(device, device.is_cpu() ? stream() : currentStreamOf(device));
+    return to(device, device.is_cpu() ? stream() : detail::storageStream(device));
 }
 
 GridStorage
@@ -262,10 +252,13 @@ GridStorage::to(const torch::Device &device, cudaStream_t stream) const {
     {
         c10::OptionalDeviceGuard dstGuard(device.is_cuda() ? std::optional<torch::Device>(device)
                                                            : std::nullopt);
-        if (mDevice.is_cuda() && device.is_cuda() && mDevice != device) {
-            // Across CUDA devices the copy has to be a peer copy: torch's allocator backends
-            // (expandable segments, cudaMallocAsync) do not support a plain memcpy between
-            // devices without peer access, and c10 itself selects cudaMemcpyPeerAsync here.
+        // Only a copy between two different CUDA devices needs the peer path: torch's allocator
+        // backends (expandable segments, cudaMallocAsync) do not support a plain memcpy between
+        // devices without peer access, and c10 itself selects cudaMemcpyPeerAsync there. Every
+        // other pairing (same CUDA device; PrivateUse1 on either side, whose unified memory any
+        // device addresses) is an ordinary copyTo with cudaMemcpyDefault.
+        const bool acrossCudaDevices = mDevice.is_cuda() && device.is_cuda() && mDevice != device;
+        if (acrossCudaDevices) {
             DeviceGridBuffer buf(
                 stream, TorchDeviceResource(device), src.bufferSize(), nanovdb::cuda::noInit);
             C10_CUDA_CHECK(cudaMemcpyPeerAsync(buf.data(),

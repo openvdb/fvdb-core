@@ -94,8 +94,7 @@ concatenateGrids(const std::vector<c10::intrusive_ptr<GridBatchData>> &elements)
     TORCH_CHECK(!device.is_cuda() || device.has_index(),
                 "Device must have an index for CUDA operations");
     c10::DeviceGuard deviceGuard(device);
-    const cudaStream_t stream =
-        device.is_cuda() ? at::cuda::getCurrentCUDAStream(device.index()).stream() : cudaStream_t{};
+    const cudaStream_t stream = storageStream(device);
     DeviceGridBuffer buffer(
         stream, TorchDeviceResource(device), totalByteSize, nanovdb::cuda::noInit);
     std::vector<nanovdb::GridHandleMetaData> meta;
