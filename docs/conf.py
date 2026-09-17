@@ -13,6 +13,7 @@ import re
 import sys
 
 sys.path.insert(0, os.path.abspath(".."))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "_ext"))
 
 _versions_path = os.path.join(os.path.dirname(__file__), "..", ".github", "versions.json")
 try:
@@ -105,6 +106,8 @@ extensions = [
     "sphinx.ext.autodoc",
     "sphinx.ext.viewcode",
     "sphinx.ext.napoleon",
+    "sphinx.ext.coverage",
+    "public_api_coverage",
     "myst_parser",
 ]
 
@@ -145,6 +148,18 @@ autodoc_default_options = {"undoc-members": "forward, extra_repr"}
 # Mock the compiled C++ extension so Sphinx can introspect the Python API
 # on build hosts that lack CUDA (e.g. Read the Docs).
 autodoc_mock_imports = ["_fvdb_cpp", "fvdb._fvdb_cpp"]
+
+# Public aliases must be counted even when implemented in private modules.
+# The extension retains Sphinx's python.txt report and also writes coverage.json.
+coverage_public_modules = ["fvdb", "fvdb.functional", "fvdb.nn", "fvdb.viz", "fvdb.utils", "fvdb.utils.metrics"]
+coverage_min_percentage = 100.0
+coverage_show_missing_items = True
+coverage_statistics_to_stdout = True
+coverage_skip_undoc_in_source = False
+coverage_ignore_pyobjects = [
+    r"^fvdb\.config$",  # Native runtime configuration; no Python API reference contract yet.
+    r"^fvdb\.nn\.[^.]+\.extra_repr$",  # PyTorch's representation hook, not an operation.
+]
 
 # -- Options for HTML output -------------------------------------------------
 

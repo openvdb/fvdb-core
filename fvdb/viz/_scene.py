@@ -48,6 +48,17 @@ def get_scene(name: str = "fVDB Scene") -> "Scene":
 
 
 class Scene:
+    """A named collection of views and interactive widgets in the viewer.
+
+    Use :func:`fvdb.viz.get_scene` to create a scene, then add geometry with
+    methods such as :meth:`add_point_cloud` and :meth:`add_level_set`.
+    Keep the scene alive while displaying its contents: deleting this object
+    removes its scene and views from the viewer.
+
+    Args:
+        name (str): Name identifying the scene in the viewer.
+    """
+
     def __init__(self, name: str):
         self._name = name
         self._logger = logging.getLogger(f"{self.__class__.__module__}.{self.__class__.__name__}")
