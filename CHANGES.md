@@ -103,7 +103,7 @@ pre-change baseline; they are workload-specific and are not cumulative release-t
   unchanged in the reported memory tests (#719).
 - Morton and Hilbert encoders now use the stored batch bounding-box minimum for their default offset instead
   of materializing and reducing every voxel coordinate. `GridBatch.morton()` measured 1.67-1.79x faster on
-  400K-5M voxels on an RTX SM120 GPU (#748).
+  400K-5M voxels on an RTX PRO 6000 Blackwell GPU (#748).
 - Fixed topology operations on sliced/indexed `GridBatch` views selecting physical parent grids instead of the
   requested logical grids; extended the fix to injection, merged grids, PredGatherIGemm convolution, SDF
   reinitialization, and NanoVDB export (#712, #787).
