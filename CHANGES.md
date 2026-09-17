@@ -3,10 +3,26 @@ fVDB Version History
 
 ## Version 0.6.0 - In Development
 
-- **PyTorch 2.13** fVDB updated to build, test and publish with PyTorch 2.13, CUDA 13.0/13.2 and Python 3.10-3.15 support.
+This release unifies sparse convolution geometry, reduces grid-construction memory and batch overhead, moves
+Gaussian splatting's high-level API to fVDB Reality Capture, and adds native volume rendering and interactive
+viewer controls in the Viewer. It also migrates C++ grid storage to NanoVDB's single-space memory-resource API.
+
+### Compatibility & Distribution
+
+- **PyTorch 2.13:** fVDB updated to build, test and publish with PyTorch 2.13, CUDA 13.0/13.2 and Python 3.10-3.15
+  support. CUDA 12.8 is no longer in the wheel build/test matrix (#699, #738).
+- Removed compatibility code for PyTorch versions older than 2.6; package metadata now requires `torch>=2.7`.
+  Prebuilt wheels must still match their advertised PyTorch/CUDA versions (#700).
+- Added a `StrEnum` compatibility wrapper so the convolution enums work on Python 3.10 (#740).
+- **Weekly compatibility testing:** main is built and tested weekly against the oldest PyTorch version
+  (currently 2.9.1) that publishes wheels for the lowest supported CUDA version (currently 13.0). The tested
+  versions are recorded in `.github/versions.json` under `weekly_compat` (#745).
+
+### SDF & Ray Traversal
+
 - **Breaking:** `retopologize_sdf` is renamed `rebuild_narrow_band` (`Grid`, `GridBatch`, and
   `fvdb.functional.rebuild_narrow_band_{single,batch}`); no alias is kept. The old name was mesh-remeshing jargon
-  and did not say that the op produces a *narrow-band* SDF on a rebuilt grid.
+  and did not say that the op produces a *narrow-band* SDF on a rebuilt grid (#762).
 - Fixed `reinitialize_sdf` treating every inactive voxel as exterior. An `IndexGrid` has a single background slot,
   so a narrow band whose interior is inactive (a pruned level set, an imported OpenVDB grid, or
   `rebuild_narrow_band`'s own output) grew a phantom interface one voxel inside the true surface; the zero crossing
@@ -17,11 +33,16 @@ fVDB Version History
   Occupancy inputs must include an explicit positive exterior layer around negative occupied voxels:
   the active-region boundary no longer implicitly defines a surface, so rebuilding an all-negative
   occupancy field yields an empty narrow band. Both SDF operations now require finite scalar values
-  with shape `(N,)` or `(N, 1)` and reject other shapes and NaN/Inf values with `ValueError`.
-- **Weekly compatibility testing** New scheduled CI workflow (`weekly-compat.yml`) implementing the compatibility
-  policy documented in the installation guide: main is built and tested weekly against the oldest PyTorch version
-  (currently 2.9.1) that publishes wheels for the lowest supported CUDA version (currently 13.0). The tested
-  versions are recorded in `.github/versions.json` under `weekly_compat`.
+  with shape `(N,)` or `(N, 1)` and reject other shapes and NaN/Inf values with `ValueError` (#762).
+- Fixed spurious near-origin hits in `ray_implicit_intersection` when active TSDF voxels contain zero-valued
+  no-data samples. Exact zeros now act as gaps instead of seeding or triggering a sign crossing (#698).
+- Accelerated HDDA ray traversal up to 2x with NanoVDB's fused `ReadAccessor::getDimAndActive`, avoiding duplicate tree
+  walks in `voxels_along_rays`, `segments_along_rays`, `uniform_ray_samples`, and `ray_implicit_intersection` (#754).
+
+### Sparse Convolution Semantics & Migration
+
+The following changes implement the canonical convolution contract in PR #726 (issue #668).
+
 - **Breaking:** Unified sparse convolution and transposed-convolution geometry around the componentwise Torch-phase
   relation ``fine_ijk = stride * coarse_ijk + tap_ijk - padding_before``, where
   ``padding_before = floor((kernel_size - 1) / 2)`` and each zero-based tap component satisfies
@@ -45,6 +66,8 @@ fVDB Version History
   with exact plan transposes; generated-support and strict-target zero-row checks remain eager. Generative CUDA
   transpose checks its exact emission-staging size before allocation and adds that context if PyTorch's allocator
   reports an out-of-memory failure; allocator capacity is not predicted from aggregate cache statistics.
+- Added typed convolution topology/phase policies, topology provenance, coverage diagnostics and warnings,
+  and builder resource statistics.
 - **Migration:** Invalidate serialized or in-memory topology/plan caches when upgrading: cache keys must include
   the convolution-semantics version. Weight spatial ordering is unchanged, but affected checkpoints can produce
   different topologies and world registration. No legacy geometry mode is shipped in 0.6.0; migrate model
@@ -53,16 +76,136 @@ fVDB Version History
 - The dense convolution expert backend is disabled until it can realize this contract exactly. PredGatherIGemm
   remains limited to its supported odd kernels and strides; unsupported combinations fail at plan construction.
 
+### Gaussian Splatting API Migration
+
 - **Breaking:** Moved the high-level Gaussian splatting Python API to fVDB Reality Capture and removed its former
   `fvdb` entry points. Use `fvdb_reality_capture.GaussianSplat3d`,
   `fvdb_reality_capture.ProjectedGaussianSplats`, `fvdb_reality_capture.gaussian_render_jagged`, and
   `fvdb_reality_capture.evaluate_spherical_harmonics` instead. The associated `ShOrderingMode`,
   `RollingShutterType`, `CameraModel`, and `ProjectionMethod` enums now also live in `fvdb_reality_capture`. The
-  low-level compiled Gaussian kernels and viewer support remain in fVDB Core.
+  low-level compiled Gaussian kernels and viewer support remain in fVDB Core (#685).
 - Decoupled `fvdb.viz` from application-owned Gaussian model classes. `Scene.add_gaussian_splat_3d` now accepts the
   immutable, core-owned `GaussianSplatViewData` tensor contract and delegates to the new
   `Scene.add_gaussian_splat_tensors` primitive. The legacy six-property model interface remains temporarily available
-  with a deprecation warning.
+  with a deprecation warning (#685).
+
+### Grid Construction & Topology
+
+- Replaced expanded coordinate-list construction with NanoVDB leaf-mask morphology for CUDA dual/padded grids
+  and supported convolution, refinement, coarsening, and merge paths. This substantially reduces temporary
+  memory and avoids the expanded candidate-list int32 overflow on the converted paths (#710, #712).
+- Batched supported CUDA refinement, coarsening, and generated convolution topology passes across grid members,
+  including empty members, reducing per-grid launches and synchronization. Non-power-of-two coordinate
+  fallbacks and CPU/PrivateUse1 paths retain their separate implementations. Added an identity-convolution-plan
+  fast path and reduced metadata construction overhead (#757).
+- CUDA point-grid construction now transforms points to voxel coordinates on demand, eliminating the temporary
+  `(N, 3)` int32 coordinate tensor (12 bytes per input point), including for strided point inputs (#719).
+- Morton and Hilbert encoders now use the stored batch bounding-box minimum for their default offset instead
+  of materializing and reducing every voxel coordinate (#748).
+- Fixed topology operations on sliced/indexed `GridBatch` views selecting physical parent grids instead of the
+  requested logical grids; extended the fix to injection, merged grids, PredGatherIGemm convolution, SDF
+  reinitialization, and NanoVDB export (#712, #787).
+- Fixed CPU `pruned_grid` failing when a batch contains a single-voxel grid (#715), and updated NanoVDB to fix
+  distributed multi-GPU grid building for the single-voxel case (#735).
+- Generic padding now validates `bmin <= 0 <= bmax` and explicitly rejects `exclude_border` on PrivateUse1
+  instead of reaching an unsupported path (#710).
+
+### C++ Grid Storage, Allocation & I/O
+
+- **Breaking (C++):** `GridBatchData` no longer holds a `nanovdb::GridHandle<TorchDeviceBuffer>`; its grids live in
+  `fvdb::GridStorage`, a single-space `nanovdb::HostBuffer` handle on the CPU or a
+  `nanovdb::cuda::Buffer<std::byte, fvdb::TorchDeviceResource>` handle on CUDA and PrivateUse1 devices, following
+  NanoVDB's memory-resource API (openvdb #2232; fvdb #770, PRs #773, #786, #787, #788 and #790). The
+  `nanoGridHandle()` accessor is gone and the storage itself is private: read grids through the logical
+  `hostGridPtrAt` / `deviceGridPtrAt` accessors, order after `storageStream()`, and copy a whole batch with
+  `fvdb::detail::ops::contiguousGridStorage`. Every device grid builder produces `GridStorage` directly through
+  `GridStorage::deviceProto` (the CPU builders through `nanovdb::HostBuffer`), and the builders no longer compute
+  per-grid checksums. `TorchDeviceBuffer` and `TorchStorageResource` are `[[deprecated]]` compatibility
+  shims, unused by fVDB, and `TorchStorageResource` moves from `TorchResource.h` into `TorchDeviceBuffer.h`.
+  The shims are retained for one release, with removal planned at the NanoVDB pin bump past upstream's removal
+  of dual-space buffers.
+- NanoVDB builder scratch now uses PyTorch's active CUDA allocator, sharing its memory pool with tensors and
+  respecting allocator configuration or replacement. Device grid storage uses `TorchDeviceResource`, keyed to
+  its retained stream; scratch uses `TorchResource`, keyed to the operation's stream (#732, #773, #786, #788).
+- Unified compaction, concatenation, serialization, and builder output assembly. Cross-device copies of sliced
+  batches compact directly onto the destination; replicated dense grids and empty batch members reuse source
+  storage during assembly. CUDA builders now run on the current PyTorch stream (#787, #788).
+- Fixed serialization of non-contiguous CPU batches and empty batches, CUDA metadata version initialization,
+  and NanoVDB export patching host headers before device-to-host copies finished. Corrected standalone grid
+  headers extracted from batches, including index/count, blind-data metadata, and stale checksums
+  (#773, #787, #788, #790), including serialization of empty CPU slices.
+- Fixed a host-metadata allocation leak for PrivateUse1 grids (#788).
+
+### Neural Networks & Examples
+
+- Added `fvdb.nn.Prune` to prune grid topology and aligned features with a per-voxel boolean mask, preserving
+  gradients through retained feature rows (#753).
+- Added generative shape-completion and shape-VAE examples using generated transposed convolutions and pruning,
+  a shape-VAE notebook with latent sampling/interpolation, and a `load_gso_shoes()` example-data loader (#753).
+
+### Viewer
+
+- Added `Scene.add_level_set` and `Scene.add_fog_volume` for native SDF isosurface and fog-volume rendering from
+  `Grid`/`GridBatch` values. Multi-grid batches create one view per grid, using ONINDEX blind data without
+  rebuilding a typed NanoVDB tree (#690, #694).
+- Added slider, number, text, and checkbox widgets with Python/C++ value access, callbacks, scene cleanup, and
+  viewer shutdown support (#649).
+- Raised the optional `nanovdb-editor` minimum to 0.1.6 and restricted C++ includes to its public headers
+  (#694, #702, #693).
+
+### Gaussian Kernels, Rendering & PLY I/O
+
+These improvements apply to the low-level kernels retained in fVDB Core and used by fVDB Reality Capture.
+
+- Added multi-GPU Unscented Transform projection and world-space rasterization for 3DGUT-style training with
+  distorted camera models; also reduced single-GPU UT projection shared-memory usage (#729).
+- Replaced bounding-box-only Gaussian/tile intersection tests with ellipse-tile tests, reducing intersection
+  records and subsequent rasterization work (#742).
+- Expanded Gaussian intersection offsets and indices to 64 bits to prevent overflow, invalid memory access,
+  and corrupt training results on large scenes (#708).
+- Fused view-direction computation into spherical harmonics evaluation and reduced backward camera-gradient
+  overhead using device-local block sums and segmented reductions (#687, #697, #751).
+- Reduced multi-GPU traffic and atomic contention with device-local intersection keys, rasterization and
+  projection gradient buffers, and NCCL reductions. Overlapped destination prefetch with gradient computation
+  and reduction (#703, #713, #749, #783).
+- Fixed a multi-GPU backward-rasterization race where one GPU could clear another GPU's accumulated gradients
+  (#706), and guarded SH/projection work on GPUs assigned zero Gaussians (#728).
+- Fixed fused SSIM prefetch using NHWC offsets for NCHW tensors, reducing unnecessary multi-GPU memory traffic
+  (#750), and corrected CUDA event creation to honor the requested flags (#686).
+- Reduced forward-rasterization compile time, stack usage, and generated code size by matching output storage
+  to the channel chunk size (#714). Dense-mode contributing-Gaussian repacks now use `view()` to enforce their
+  no-copy layout assumption (#717).
+- Updated tinyply to 3.0 for faster PLY loading (#744), and added CPU Gaussian NaN/Inf-mask computation so CPU
+  PLY export no longer needs a GPU round trip for validation (#765).
+
+### Build, Packaging, Documentation & CI
+
+- Added `docker/build_wheel.py` for production-style wheels from a local checkout with selectable
+  Python/PyTorch/CUDA versions and GPU architectures; release and nightly publishing share this build recipe
+  (#731).
+- Added an `NVCC_THREADS` environment override to tune compilation parallelism (#704), plus `./build.sh format`
+  and `./build.sh format check` for the repository's C++ and Python formatting rules (#769).
+- Added the `fvdb-core[examples]` extra and lazy loading of optional example dependencies. Test/example data
+  now downloads pinned source snapshots without GitPython; `fvdb.utils.tests` remains available for downstream
+  repositories, and GitPython remains in development/test environments (#718, #727, #730).
+- Completed the public Python API reference and added CI checks for docstrings, parameter descriptions, and
+  100% coverage of the configured public API inventory (#784).
+- Clarified installation and hardware-support guidance, separated stable-release install commands from nightly
+  dependency versions, and automated stable documentation metadata updates from release tags (#724, #731, #738).
+- Enforced matching Python/CUDA/PyTorch pins across conda environments (#756), and reduced unit-test GPU memory
+  requirements (#701).
+- Improved CI runner provisioning with availability-zone fallbacks, shared retry/backoff workflows, SM 8.6
+  fallback support, matching test-wheel architectures, and cleanup after cancellation
+  (#705, #760, #763, #768, #789). Tightened runner-token forwarding policy and updated pinned workflow actions
+  (#696, #723, #759).
+- Fixed nightly publish environment setup and reused published wheel hashes to avoid redundant downloads
+  during index generation (#695, #774).
+
+## Version 0.5.1 - July 16, 2026
+
+**Bug Fixes:**
+
+- Fixed a reference cycle in `_InjectFn` causing a memory leak (#688).
 
 ## Version 0.5.0 - July 1, 2026
 
