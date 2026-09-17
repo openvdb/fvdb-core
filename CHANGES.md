@@ -3,6 +3,19 @@ fVDB Version History
 
 ## Version 0.6.0 - In Development
 
+- **Breaking (C++):** `GridBatchData` no longer holds a `nanovdb::GridHandle<TorchDeviceBuffer>`; its grids live in
+  `fvdb::GridStorage`, a single-space `nanovdb::HostBuffer` handle on the CPU or a
+  `nanovdb::cuda::Buffer<std::byte, fvdb::TorchDeviceResource>` handle on CUDA and PrivateUse1 devices, following
+  NanoVDB's memory-resource API (openvdb #2232; fvdb #770, PRs #773, #786, #787, #788 and #790). The
+  `nanoGridHandle()` accessor is gone and the storage itself is private: read grids through the logical
+  `hostGridPtrAt` / `deviceGridPtrAt` accessors, order after `storageStream()`, and copy a whole batch with
+  `fvdb::detail::ops::contiguousGridStorage`. Every device grid builder produces `GridStorage` directly through
+  `GridStorage::deviceProto` (the CPU builders through `nanovdb::HostBuffer`), and the builders no longer compute
+  per-grid checksums. `TorchDeviceBuffer` and `TorchStorageResource` are `[[deprecated]]` and unused by fvdb, and
+  `TorchStorageResource` moved from `TorchResource.h` into `TorchDeviceBuffer.h` alongside the buffer it served;
+  both are removed with the NanoVDB pin bump past upstream's removal of dual-space buffers. Grid storage and
+  builder scratch now allocate through PyTorch's caching allocator instead of `cudaMallocAsync`: storage keyed to
+  the stream it retains (`TorchDeviceResource`), scratch to the op's stream (`TorchResource`).
 - **PyTorch 2.13** fVDB updated to build, test and publish with PyTorch 2.13, CUDA 13.0/13.2 and Python 3.10-3.15 support.
 - **Breaking:** `retopologize_sdf` is renamed `rebuild_narrow_band` (`Grid`, `GridBatch`, and
   `fvdb.functional.rebuild_narrow_band_{single,batch}`); no alias is kept. The old name was mesh-remeshing jargon

@@ -15,11 +15,12 @@ namespace ops {
 
 c10::intrusive_ptr<GridBatchData> makeContiguous(c10::intrusive_ptr<GridBatchData> input);
 
-/// @brief The batch's logical grids compacted end to end into fresh storage on @p device (the
-///        batch's own device by default), each header stamped with its new (index, count), in
-///        one pass: a view over storage on another device is compacted and moved by the same
-///        copies. Correct for sliced and non-contiguous views, which share storage holding more
-///        grids than they select.
+/// @brief The batch's logical grids as fresh storage on @p device (the batch's own device by
+///        default): a contiguous batch's storage is copied whole (an empty batch's too, so its
+///        one voxel-less grid comes along); anything else has its logical grids compacted end to
+///        end in one pass, each header stamped with its new (index, count), so a view over
+///        storage on another device is compacted and moved by the same copies. The one place
+///        the "is it already contiguous" question is asked for a whole-batch copy.
 GridStorage contiguousGridStorage(const GridBatchData &input,
                                   std::optional<torch::Device> device = std::nullopt);
 

@@ -106,6 +106,23 @@ jobs:
           git grep -n "	" -- ':!*/codestyle.yml' ':!*.svg' ':!*.webp' ':!*.cmd' ':!*.png' ':!*.wlt' ':!*.jpg' ':!*.gif' ':!*.mp4' ':!*.pt' ':!*.pth' ':!*.nvdb' ':!*.npz' ':!*.gitmodules' ':!*/wip/*'
           test $? -eq 1
 
+  # fvdb's grid storage is GridStorage over NanoVDB's single-space cuda::Buffer (#770). The
+  # dual-space buffers NanoVDB is removing (DeviceBuffer, UnifiedBuffer) and fvdb's own
+  # deprecated TorchDeviceBuffer shim must not creep back into the library; the shim's own
+  # files and their build entries are the only places allowed to name them.
+  no-dual-space-buffers:
+    name: No dual-space NanoVDB buffers
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      with:
+        persist-credentials: false
+    - name: test
+      run: |
+          set +e
+          git grep -n -E 'TorchDeviceBuffer|TorchStorageResource|cuda::DeviceBuffer|cuda::UnifiedBuffer|cuda/DeviceBuffer\.h|cuda/UnifiedBuffer\.h|DualDeviceBuffer|DualUnifiedBuffer' -- 'src/' ':!src/fvdb/TorchDeviceBuffer.h' ':!src/fvdb/TorchDeviceBuffer.cu' ':!src/tests/TorchDeviceBufferTest.cu' ':!src/CMakeLists.txt' ':!src/tests/CMakeLists.txt'
+          test $? -eq 1
+
   # env/ holds several conda environments that each pin python, cuda-version and
   # pytorch-gpu independently. build_environment.yml is the environment the wheel
   # is compiled in, so it fixes the ABI; a developer working from a different env

@@ -345,7 +345,7 @@ dispatchBuildPaddedGrid<torch::kCUDA>(const GridBatchData &baseBatchHdl,
         }
 
         // View-aware byte-offset accessor: the i-th *logical* grid (correct for sliced/
-        // non-contiguous batches, unlike gridStorage().deviceGridAt(i) which indexes physically).
+        // non-contiguous batches; the storage's own deviceGridAt indexes physically).
         nanovdb::OnIndexGrid *grid = baseBatchHdl.deviceGridPtrAt(i);
 
         // The passes chain on the device handle; only the final one is wrapped as storage.
