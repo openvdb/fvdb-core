@@ -28,20 +28,20 @@ torch::Tensor
 serializeGrid(const GridBatchData &grid) {
     c10::DeviceGuard guard(grid.device());
 
-    // The bytes to write are the batch's logical grids on the host. A contiguous CPU batch has
-    // them already; a contiguous device batch is one copy of its storage; anything else is
-    // compacted straight onto the host in one pass. The per-grid metadata written below is the
-    // batch's own: only its voxel sizes and origins are read back, and deserialization recomputes
-    // the rest from the grids.
-    std::optional<GridStorage> compacted;
+    // The bytes to write are the batch's logical grids on the host: a contiguous CPU batch's
+    // own storage, or (one copy for a contiguous device batch, one compaction pass otherwise)
+    // contiguousGridStorage on the host. The per-grid metadata written below is the batch's own:
+    // only its voxel sizes and origins are read back, and deserialization recomputes the rest
+    // from the grids.
+    std::optional<GridStorage> onHost;
     if (grid.batchSize() > 0 && !(grid.device().is_cpu() && grid.isContiguous())) {
-        compacted = grid.isContiguous() ? grid.gridStorage().to(torch::kCPU)
-                                        : contiguousGridStorage(grid, torch::kCPU);
+        onHost = contiguousGridStorage(grid, torch::kCPU);
     }
-    const GridStorage &storage = compacted ? *compacted : grid.gridStorage();
-    const int64_t numGrids     = grid.batchSize();
+    const int64_t numGrids = grid.batchSize();
     // An empty batch's storage holds a sentinel grid with no metadata record behind it; it
-    // serializes as zero grids and zero grid bytes.
+    // serializes as zero grids and zero grid bytes, and has no logical grid 0 to point at.
+    const void *gridBytes =
+        numGrids == 0 ? nullptr : (onHost ? onHost->hostBytes() : grid.hostGridPtrAt(0));
     const int64_t hdlBufSize = static_cast<int64_t>(grid.totalBytes());
     const int64_t headerSize = sizeof(V01Header) + numGrids * sizeof(GridBatchData::GridMetadata) +
                                sizeof(GridBatchData::GridBatchMetadata);
@@ -63,7 +63,7 @@ serializeGrid(const GridBatchData &grid) {
     if (numGrids > 0) {
         memcpy(retPtr, grid.mHostGridMetadata, numGrids * sizeof(GridBatchData::GridMetadata));
         retPtr += numGrids * sizeof(GridBatchData::GridMetadata);
-        memcpy(retPtr, storage.hostBytes(), hdlBufSize);
+        memcpy(retPtr, gridBytes, hdlBufSize);
     }
     retPtr += hdlBufSize;
 

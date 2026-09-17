@@ -21,9 +21,9 @@ namespace fvdb {
 /// @brief The bytes of a batch of NanoVDB grids, on one torch device, with the per-grid
 ///        metadata that locates each grid inside them.
 ///
-///        This is the storage behind GridBatchData. It replaces nanovdb::GridHandle over the
-///        dual-space TorchDeviceBuffer with the two single-space handles NanoVDB's memory-resource
-///        API is built around: a HostBuffer handle for CPU storage and a DeviceGridBuffer handle
+///        This is the storage behind GridBatchData. It replaces nanovdb::GridHandle over a
+///        dual-space buffer with the two single-space handles NanoVDB's memory-resource API is
+///        built around: a HostBuffer handle for CPU storage and a DeviceGridBuffer handle
 ///        (nanovdb::cuda::Buffer<std::byte, TorchDeviceResource>) for CUDA and PrivateUse1
 ///        storage, whose device travels in the buffer's resource. Which one is held is a runtime
 ///        fact, device(), exactly as the batch's device is today.
@@ -71,8 +71,7 @@ class GridStorage {
 
     /// @brief A zero-byte DeviceGridBuffer carrying @p device in its resource and @p stream as its
     ///        retained stream: the prototype the NanoVDB builders and cuda::copyTo take the output
-    ///        resource and stream from. Replaces the zero-size TorchDeviceBuffer "guide". @p device
-    ///        must be an indexed CUDA device or PrivateUse1.
+    ///        resource and stream from. @p device must be an indexed CUDA device or PrivateUse1.
     static DeviceGridBuffer deviceProto(const torch::Device &device, cudaStream_t stream);
 
     const torch::Device &

@@ -15,14 +15,12 @@ namespace {
 // The batch's logical grids as spans of its storage, from the side the copy will read.
 GridSpanSource
 logicalGridSpans(const GridBatchData &input, int64_t first, int64_t count) {
-    const GridStorage &storage = input.gridStorage();
-    const auto *base           = static_cast<const uint8_t *>(
-        input.device().is_cpu() ? storage.hostBytes() : storage.deviceBytes());
-    GridSpanSource source{input.device(), storage.stream(), {}};
+    const bool onHost = input.device().is_cpu();
+    GridSpanSource source{input.device(), input.storageStream(), {}};
     source.spans.reserve(count);
     for (int64_t i = first; i < first + count; ++i) {
-        source.spans.push_back(
-            GridSpan{base + input.cumBytesAt(i), input.numBytesAt(i), nanovdb::GridType::OnIndex});
+        const void *grid = onHost ? input.hostGridPtrAt(i) : input.deviceGridPtrAt(i);
+        source.spans.push_back(GridSpan{grid, input.numBytesAt(i), nanovdb::GridType::OnIndex});
     }
     return source;
 }
@@ -32,16 +30,19 @@ logicalGridSpans(const GridBatchData &input, int64_t first, int64_t count) {
 GridStorage
 contiguousGridStorage(const GridBatchData &input, std::optional<torch::Device> device) {
     const torch::Device target = GridStorage::resolveDevice(device.value_or(input.device()));
-    const cudaStream_t stream =
-        target.is_cpu() ? input.gridStorage().stream() : storageStream(target);
+    const cudaStream_t stream  = target.is_cpu() ? input.storageStream() : storageStream(target);
+    if (input.isContiguous() || input.batchSize() == 0) {
+        // The storage holds exactly the logical grids with validated headers (for an empty batch,
+        // its one voxel-less grid): one copy, no header rewrite.
+        return input.gridStorage().to(target, stream);
+    }
     return assembleGridStorage({logicalGridSpans(input, 0, input.batchSize())}, target, stream);
 }
 
 GridStorage
 cloneGridStorageAt(const GridBatchData &input, int64_t i) {
     const torch::Device device = input.device();
-    const cudaStream_t stream =
-        device.is_cpu() ? input.gridStorage().stream() : storageStream(device);
+    const cudaStream_t stream  = device.is_cpu() ? input.storageStream() : storageStream(device);
     return assembleGridStorage({logicalGridSpans(input, i, 1)}, device, stream);
 }
 

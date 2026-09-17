@@ -17,14 +17,10 @@ cloneGrid(const GridBatchData &grid, const torch::Device &requested, bool blocki
         return makeEmptyGridBatchData(device);
     }
 
-    // Compact the (possibly sliced/non-contiguous) selected grids into fresh contiguous storage.
-    // Copying the whole storage would copy *every physical grid* it shares -- wrong (and a
-    // voxelSizes/gridCount mismatch) for an indexed batch, where gridCount() > batchSize().
-    // One pass either way. A contiguous batch's storage already holds exactly the logical grids,
-    // so GridStorage::to (a deep copy on the same device, a move otherwise) is the clone; a view
-    // is compacted straight onto the target device.
-    GridStorage cloned =
-        grid.isContiguous() ? grid.gridStorage().to(device) : contiguousGridStorage(grid, device);
+    // The selected grids as fresh storage on the target device, one pass either way: a
+    // contiguous batch's storage is copied whole, a sliced or non-contiguous view (whose storage
+    // holds more physical grids than the batch selects) is compacted straight onto the device.
+    GridStorage cloned = contiguousGridStorage(grid, device);
     std::vector<nanovdb::Vec3d> voxelSizes, voxelOrigins;
     grid.gridVoxelSizesAndOrigins(voxelSizes, voxelOrigins);
     return makeGridBatchData(std::move(cloned), voxelSizes, voxelOrigins);

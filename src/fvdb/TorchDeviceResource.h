@@ -48,10 +48,9 @@ namespace fvdb {
 ///        must move to another stream is copied (GridStorage::to). PrivateUse1 is the exception
 ///        on both counts: its allocator ignores the stream, which is what lets the
 ///        DistributedPointsToGrid builders retarget a result allocated on a DeviceMesh stream
-///        (set_stream) onto the storage stream before the mesh is destroyed. (TorchStorageResource
-///        keys to torch's current stream instead; that is the right policy for the dual-space
-///        TorchDeviceBuffer, which has no retained stream and frees unordered, and the wrong one
-///        here, where it would let a buffer retained on another stream be freed to a stream its
+///        (set_stream) onto the storage stream before the mesh is destroyed. (Keying to torch's
+///        current stream instead, as the deprecated dual-space buffer's resource does, would be
+///        wrong here: it would let a buffer retained on another stream be freed to a stream its
 ///        work was never ordered against.)
 ///
 ///        PrivateUse1, fvdb's unified-memory device for multi-GPU builds, allocates through the

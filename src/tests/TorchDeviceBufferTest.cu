@@ -1,6 +1,10 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 
+// This translation unit is the deprecated shim itself (or its test); it is the one place the
+// deprecation must not fire.
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+
 #include <fvdb/TorchDeviceBuffer.h>
 #include <fvdb/TorchResource.h>
 

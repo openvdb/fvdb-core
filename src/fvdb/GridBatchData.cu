@@ -16,6 +16,11 @@ GridBatchData::gridStorage() const {
     return *mStorage;
 }
 
+cudaStream_t
+GridBatchData::storageStream() const {
+    return mStorage->stream();
+}
+
 const c10::Device
 GridBatchData::device() const {
     return mStorage->device();

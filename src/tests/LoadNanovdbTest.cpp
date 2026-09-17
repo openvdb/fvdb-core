@@ -119,7 +119,7 @@ makeTensorGridBlindDataHandle(const fvdb::GridBatchData &gridBatchData,
     nanovdb::HostBuffer outBuffer(totalBytes);
     uint8_t *outBytes = static_cast<uint8_t *>(outBuffer.data());
     std::memset(outBytes, 0, totalBytes);
-    std::memcpy(outBytes, gridBatchData.gridStorage().hostBytes(), sourceGridBytes);
+    std::memcpy(outBytes, gridBatchData.hostGridPtrAt(0), sourceGridBytes);
 
     nanovdb::GridData *outGridData    = reinterpret_cast<nanovdb::GridData *>(outBytes);
     outGridData->mGridSize            = totalBytes;

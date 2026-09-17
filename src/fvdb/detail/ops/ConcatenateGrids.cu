@@ -29,16 +29,15 @@ concatenateGrids(const std::vector<c10::intrusive_ptr<GridBatchData>> &elements)
         if (element->batchSize() == 0) {
             continue;
         }
-        const GridStorage &storage = element->gridStorage();
-        const auto *base = static_cast<const uint8_t *>(device.is_cpu() ? storage.hostBytes()
-                                                                        : storage.deviceBytes());
-        GridSpanSource source{device, storage.stream(), {}};
+        GridSpanSource source{device, element->storageStream(), {}};
         source.spans.reserve(element->batchSize());
         for (int64_t j = 0; j < element->batchSize(); j += 1) {
             voxelSizes.push_back(element->voxelSizeAt(j));
             voxelOrigins.push_back(element->voxelOriginAt(j));
-            source.spans.push_back(GridSpan{
-                base + element->cumBytesAt(j), element->numBytesAt(j), nanovdb::GridType::OnIndex});
+            const void *grid =
+                device.is_cpu() ? element->hostGridPtrAt(j) : element->deviceGridPtrAt(j);
+            source.spans.push_back(
+                GridSpan{grid, element->numBytesAt(j), nanovdb::GridType::OnIndex});
         }
         sources.push_back(std::move(source));
     }
@@ -46,7 +45,7 @@ concatenateGrids(const std::vector<c10::intrusive_ptr<GridBatchData>> &elements)
         return makeEmptyGridBatchData(device);
     }
     const cudaStream_t stream =
-        device.is_cpu() ? elements[0]->gridStorage().stream() : storageStream(device);
+        device.is_cpu() ? elements[0]->storageStream() : storageStream(device);
     return makeGridBatchData(
         assembleGridStorage(sources, device, stream), voxelSizes, voxelOrigins);
 }
