@@ -6,7 +6,7 @@ fVDB Version History
 - **Breaking (C++):** `GridBatchData` no longer holds a `nanovdb::GridHandle<TorchDeviceBuffer>`; its grids live in
   `fvdb::GridStorage`, a single-space `nanovdb::HostBuffer` handle on the CPU or a
   `nanovdb::cuda::Buffer<std::byte, fvdb::TorchDeviceResource>` handle on CUDA and PrivateUse1 devices, following
-  NanoVDB's memory-resource API (openvdb #2232; fvdb #770, PRs #773, #786, #787, #788 #790). The
+  NanoVDB's memory-resource API (openvdb #2232; fvdb #770, PRs #773, #786, #787, #788 and #790). The
   `nanoGridHandle()` accessor is gone and the storage itself is private: read grids through the logical
   `hostGridPtrAt` / `deviceGridPtrAt` accessors, order after `storageStream()`, and copy a whole batch with
   `fvdb::detail::ops::contiguousGridStorage`. Every device grid builder produces `GridStorage` directly through
