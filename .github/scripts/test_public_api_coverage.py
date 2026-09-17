@@ -62,6 +62,11 @@ class Derived(_Base):
 
     def overridden(self):
         """Subclass version."""
+
+    Alias = Widget
+    Self = None
+
+Derived.Self = Derived
 '''
 INHERITED_ENTRIES = [
     ".. py:class:: sample_api.Derived",
@@ -183,6 +188,9 @@ def test_mocked_class_without_documented_members_fails(tmp_path):
     assert result.returncode != 0
     assert "members cannot be enumerated" in result.stderr
     assert report["missing"] == ["sample_api.Native"]
+    text = (tmp_path / "output" / "python.txt").read_text()
+    assert "Native" in text.split("Classes:")[1]
+    assert "Functions:" not in text
 
 
 @pytest.mark.parametrize("threshold,passes", [(75, True), (75.01, False), (0, True)])

@@ -41,7 +41,7 @@ def _class_members(full_name, cls, package):
             member = f"{full_name}.{attr_name}"
             if inspect.isfunction(attr) or isinstance(attr, (property, functools.cached_property)):
                 yield member
-            elif inspect.isclass(attr) and _in_package(attr, package):
+            elif inspect.isclass(attr) and attr.__qualname__ == f"{klass.__qualname__}.{attr_name}":
                 yield member
                 yield from _class_members(member, attr, package)
 
@@ -79,7 +79,8 @@ class PublicAPICoverageBuilder(CoverageBuilder):
                 module = import_module(module_name)
                 expected = {name for name in public_objects(module) if not self.ignore_pyobj(name)}
                 documented = expected.intersection(seen)
-                documented -= self._opaque_classes(module, documented, seen)
+                opaque = self._opaque_classes(module, documented, seen)
+                documented -= opaque
             missing = expected - documented
             self.py_documented[module_name] = documented
             self.py_undocumented[module_name] = missing
@@ -91,7 +92,7 @@ class PublicAPICoverageBuilder(CoverageBuilder):
                 if "." in relative:
                     cls_name, method = relative.split(".", 1)
                     classes.setdefault(cls_name, []).append(method)
-                elif inspect.isclass(getattr(module, relative)):
+                elif name in opaque or inspect.isclass(getattr(module, relative)):
                     classes.setdefault(relative, [])
                 else:
                     funcs.append(relative)

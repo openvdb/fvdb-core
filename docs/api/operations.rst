@@ -136,4 +136,3 @@ NanoVDB metadata
    .. py:attribute:: index_bbox_max
 
       Inclusive maximum of the index-space bounding box, as a tuple of three integers.
-
