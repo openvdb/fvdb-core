@@ -10,7 +10,7 @@ namespace detail {
 namespace ops {
 
 c10::intrusive_ptr<GridBatchData>
-cloneGrid(const GridBatchData &grid, const torch::Device &requested, bool blocking) {
+cloneGrid(const GridBatchData &grid, const torch::Device &requested) {
     // `torch.device("cuda")` arrives index-less; it means the current CUDA device.
     const torch::Device device = GridStorage::resolveDevice(requested);
     if (grid.batchSize() == 0) {

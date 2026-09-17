@@ -10,23 +10,6 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-namespace {
-
-// The batch's logical grids as spans of its storage, from the side the copy will read.
-GridSpanSource
-logicalGridSpans(const GridBatchData &input, int64_t first, int64_t count) {
-    const bool onHost = input.device().is_cpu();
-    GridSpanSource source{input.device(), input.storageStream(), {}};
-    source.spans.reserve(count);
-    for (int64_t i = first; i < first + count; ++i) {
-        const void *grid = onHost ? input.hostGridPtrAt(i) : input.deviceGridPtrAt(i);
-        source.spans.push_back(GridSpan{grid, input.numBytesAt(i), nanovdb::GridType::OnIndex});
-    }
-    return source;
-}
-
-} // namespace
-
 GridStorage
 contiguousGridStorage(const GridBatchData &input, std::optional<torch::Device> device) {
     const torch::Device target = GridStorage::resolveDevice(device.value_or(input.device()));
@@ -34,7 +17,7 @@ contiguousGridStorage(const GridBatchData &input, std::optional<torch::Device> d
     if (input.isContiguous() || input.batchSize() == 0) {
         // The storage holds exactly the logical grids with validated headers (for an empty batch,
         // its one voxel-less grid): one copy, no header rewrite.
-        return input.gridStorage().to(target, stream);
+        return input.copyStorage(target, stream);
     }
     return assembleGridStorage({logicalGridSpans(input, 0, input.batchSize())}, target, stream);
 }

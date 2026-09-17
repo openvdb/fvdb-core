@@ -22,11 +22,6 @@
 
 namespace fvdb {
 
-struct GridBatchData;
-namespace detail::ops {
-GridStorage contiguousGridStorage(const GridBatchData &input, std::optional<torch::Device> device);
-} // namespace detail::ops
-
 struct GridBatchData : public torch::CustomClassHolder {
     static constexpr int64_t MAX_GRIDS_PER_BATCH = 1024; // Maximum number of grids in a batch
 
@@ -100,11 +95,8 @@ struct GridBatchData : public torch::CustomClassHolder {
     // indices on it are *physical*: a view over a subset of the batch maps logical items onto them
     // by byte offset (cumBytesAt), which is what deviceGridPtrAt / hostGridPtrAt do. Nothing
     // outside this class reads the storage directly; ops go through those accessors,
-    // storageStream(), and detail::ops::contiguousGridStorage, which copies a whole batch.
+    // storageStream(), and copyStorage().
     std::shared_ptr<GridStorage> mStorage;
-    const GridStorage &gridStorage() const;
-    friend GridStorage detail::ops::contiguousGridStorage(const GridBatchData &input,
-                                                          std::optional<torch::Device> device);
 
   public:
     // -----------------------------------------------------------------------
@@ -307,6 +299,12 @@ struct GridBatchData : public torch::CustomClassHolder {
         }
         return sum;
     }
+
+    /// @brief The storage moved to @p device on @p stream, whole: every physical grid it holds,
+    ///        which is the batch's logical grids only when isContiguous() (or the batch is empty,
+    ///        whose storage holds one voxel-less grid). The caller decides whether that is the
+    ///        batch; detail::ops::contiguousGridStorage does so for a whole-batch copy.
+    GridStorage copyStorage(const torch::Device &device, cudaStream_t stream) const;
 
     /// @brief The stream this batch's device storage was written on, retains, and frees on: what
     ///        a reader of deviceGridPtrAt pointers on another stream orders itself after (see

@@ -228,13 +228,16 @@ assembleOnIndexBlindBuffer(const GridBatchData &gridBatchData,
                      paddedPayloadBytes[batchIdx];
     }
 
-    // The storage's writers are queued on its retained stream; order the copies after them.
+    // The storage's writers are queued on its retained stream; order the copies after them. A
+    // PrivateUse1 batch is read from the host below, so its stream is waited for instead.
     if (isCuda) {
         c10::cuda::CUDAGuard deviceGuard(gridBatchData.device());
         const cudaStream_t stream =
             at::cuda::getCurrentCUDAStream(gridBatchData.device().index()).stream();
         detail::orderStreamAfter(
             stream, gridBatchData.device(), gridBatchData.storageStream(), gridBatchData.device());
+    } else if (gridBatchData.device().is_privateuseone()) {
+        detail::synchronizeStream(gridBatchData.storageStream(), gridBatchData.device());
     }
 
     // First the grids' bytes. A device-to-host copy into pageable memory is only *possibly*
@@ -558,6 +561,12 @@ fvdbToNanovdbGridWithValuesHost(const GridBatchData &gridBatchData,
     std::vector<HostGridHandle> buffers;
     buffers.reserve(gridBatchData.batchSize());
 
+    // The grids are read from the host below; a PrivateUse1 batch's unified memory may still be
+    // being written on its storage stream.
+    if (gridBatchData.device().is_privateuseone()) {
+        detail::synchronizeStream(gridBatchData.storageStream(), gridBatchData.device());
+    }
+
     for (int64_t bi = 0; bi < gridBatchData.batchSize(); ++bi) {
         const std::string name = names.size() > 0 ? names[bi] : "";
         TORCH_CHECK_VALUE(name.size() < nanovdb::GridData::MaxNameSize,
@@ -677,31 +686,17 @@ fvdbToNanovdbGridWithValues(const GridBatchData &gridBatchData,
         cudaData = cudaData.contiguous();
     }
 
-    // Determine the device pointers to the source index grids. CPU-resident grids normally
-    // return through the host path above; the staging branch is kept as a defensive fallback if
-    // this helper is reused without that dispatch.
+    // Every non-CUDA batch returned through the host path above, so the source grids are read
+    // in place from the batch's CUDA storage, on the batch's device, with this stream ordered
+    // after the storage's writers.
     const torch::Device gridDevice = gridBatchData.device();
-    const torch::Device cudaDevice = gridDevice.is_cuda()
-                                         ? gridDevice
-                                         : torch::Device(torch::kCUDA, c10::cuda::current_device());
-    c10::cuda::CUDAGuard deviceGuard(cudaDevice);
-    const at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream(cudaDevice.index());
-
-    // The source grids as device pointers: a CUDA batch's own storage, with this stream ordered
-    // after its writers; a CPU batch's logical grids brought onto this device in one pass
-    // (contiguousGridStorage runs on, and the staged storage retains, this device's current
-    // stream, which is `stream`).
-    std::optional<GridStorage> staged;
-    if (gridDevice.is_cuda()) {
-        detail::orderStreamAfter(
-            stream.stream(), gridDevice, gridBatchData.storageStream(), gridDevice);
-    } else {
-        staged = ops::contiguousGridStorage(gridBatchData, cudaDevice);
-    }
-    const auto dSrcGridAt = [&](int64_t bi) -> const nanovdb::NanoGrid<nanovdb::ValueOnIndex> * {
-        return staged ? staged->deviceGridAt<nanovdb::ValueOnIndex>(static_cast<uint32_t>(bi))
-                      : gridBatchData.deviceGridPtrAt(bi);
-    };
+    TORCH_CHECK(gridDevice.is_cuda(),
+                "fvdbToNanovdbGridWithValues: expected a CUDA batch here, got ",
+                gridDevice);
+    c10::cuda::CUDAGuard deviceGuard(gridDevice);
+    const at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream(gridDevice.index());
+    detail::orderStreamAfter(
+        stream.stream(), gridDevice, gridBatchData.storageStream(), gridDevice);
 
     const ValueT *dDataValuesBase = reinterpret_cast<const ValueT *>(cudaData.jdata().data_ptr());
 
@@ -737,7 +732,8 @@ fvdbToNanovdbGridWithValues(const GridBatchData &gridBatchData,
         TORCH_CHECK_VALUE(
             numVoxelsBi >= 0, "Invalid number of voxels at grid index ", bi, ": ", numVoxelsBi);
 
-        const nanovdb::NanoGrid<nanovdb::ValueOnIndex> *dSrcGrid = dSrcGridAt(bi);
+        const nanovdb::NanoGrid<nanovdb::ValueOnIndex> *dSrcGrid =
+            gridBatchData.deviceGridPtrAt(bi);
         if (numVoxelsBi == 0) {
             // Upstream indexToGrid launches processRootTilesKernel<<<0, 1>>> for a grid with no
             // tiles and its error check exits the process. An empty grid is a header plus an

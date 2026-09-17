@@ -4,6 +4,9 @@
 // This translation unit is the deprecated shim itself (or its test); it is the one place the
 // deprecation must not fire.
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#ifdef __CUDACC__
+#pragma nv_diag_suppress 1215, 1444 // nvcc's own deprecated-entity diagnostics
+#endif
 
 #include <fvdb/TorchDeviceBuffer.h>
 #include <fvdb/TorchResource.h>
