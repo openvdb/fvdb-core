@@ -3,6 +3,7 @@
 
 #include <fvdb/GridStorage.h>
 #include <fvdb/TorchDeviceResource.h>
+#include <fvdb/detail/utils/nanovdb/CreateEmptyGridStorage.h>
 #include <fvdb/detail/utils/nanovdb/DeviceGridHandleUtils.cuh>
 #include <fvdb/detail/utils/nanovdb/GridHeaderUtils.h>
 
@@ -386,6 +387,49 @@ TEST(GridStorageTest, MergeGridStoragesMatchesHostMerge) {
         DeviceHandle reparsed(std::move(bytes));
         EXPECT_EQ(reparsed.gridCount(), 3u);
     });
+}
+
+TEST(GridStorageTest, GridStoragePartsSharesEmptyAndRepeats) {
+    initTorchCudaAllocator();
+    const auto stream = c10::cuda::getCurrentCUDAStream(0).stream();
+    // Expected: [empty, A, A, empty, B] assembled on the host by NanoVDB.
+    std::vector<HostHandle> hostParts;
+    hostParts.push_back(fvdb::detail::createEmptyGridStorage(torch::kCPU).hostHandle().copy());
+    hostParts.push_back(makeFloatGrid(4, 1.0f));
+    hostParts.push_back(makeFloatGrid(4, 1.0f));
+    hostParts.push_back(fvdb::detail::createEmptyGridStorage(torch::kCPU).hostHandle().copy());
+    hostParts.push_back(makeFloatGrid(7, 2.0f));
+    HostHandle expected = nanovdb::mergeGrids(hostParts);
+    // The empty grids carry a checksum from createNanoGrid; assembled storage disables them.
+    for (uint32_t i = 0; i < expected.gridCount(); ++i) {
+        const_cast<nanovdb::GridData *>(expected.gridData(i))->mChecksum.disable();
+    }
+
+    fvdb::detail::GridStorageParts parts(kCuda0, stream, 2);
+    parts.addEmpty();
+    const size_t a = parts.add(GridStorage(makeFloatGrid(4, 1.0f)).to(kCuda0, stream));
+    parts.addRepeat(a);
+    parts.addEmpty();
+    parts.add(GridStorage(makeFloatGrid(7, 2.0f)).to(kCuda0, stream));
+    ASSERT_EQ(parts.size(), 5u);
+    GridStorage merged = parts.merge();
+
+    ASSERT_EQ(merged.gridCount(), 5u);
+    EXPECT_EQ(merged.bufferSize(), expected.bufferSize());
+    for (uint32_t i = 0; i < 5; ++i) {
+        EXPECT_EQ(merged.gridSize(i), expected.gridSize(i));
+        EXPECT_EQ(merged.gridType(i), expected.gridType(i));
+    }
+    std::vector<uint8_t> expectedBytes(expected.bufferSize());
+    std::memcpy(expectedBytes.data(), expected.data(), expected.bufferSize());
+    EXPECT_EQ(deviceBytesOf(merged), expectedBytes);
+
+    // A lone shared empty item is handed out as the batch itself.
+    fvdb::detail::GridStorageParts one(kCuda0, stream, 0);
+    one.addEmpty();
+    GridStorage lone = one.merge();
+    EXPECT_EQ(lone.gridCount(), 1u);
+    EXPECT_EQ(lone.device(), kCuda0);
 }
 
 TEST(GridStorageTest, MakeDeviceHandleFromLayoutChecksExtent) {

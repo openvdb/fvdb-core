@@ -1,6 +1,7 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <fvdb/BuilderResource.h>
 #include <fvdb/detail/utils/cuda/StreamOrdering.h>
 #include <fvdb/detail/utils/nanovdb/DeviceGridHandleUtils.cuh>
 
@@ -198,6 +199,68 @@ assembleGridStorage(const std::vector<GridSpanSource> &sources,
         synchronizeStream(stream, device);
     }
     return GridStorage(makeDeviceHandleFromLayout(std::move(buffer), std::move(meta)), device);
+}
+
+namespace {
+
+// One thread per grid: 0 if the header agrees with the expected (index, count, size), else 1.
+__global__ void
+compareAdoptedHeaders(const std::byte *base,
+                      const nanovdb::GridHandleMetaData *meta,
+                      uint32_t count,
+                      uint32_t *mismatches) {
+    const uint32_t g = blockIdx.x * blockDim.x + threadIdx.x;
+    if (g >= count) {
+        return;
+    }
+    const auto *header = reinterpret_cast<const nanovdb::GridData *>(base + meta[g].offset);
+    mismatches[g]      = (header->mGridIndex != g || header->mGridCount != count ||
+                     header->mGridSize != meta[g].size)
+                             ? 1u
+                             : 0u;
+}
+
+} // namespace
+
+void
+checkAdoptedLayoutDebug(const DeviceGridBuffer &buffer,
+                        const std::vector<nanovdb::GridHandleMetaData> &meta,
+                        cudaStream_t stream) {
+    if (meta.empty()) {
+        return;
+    }
+    const torch::Device device = buffer.resource().device();
+    c10::OptionalDeviceGuard guard(device.is_cuda() ? std::optional<torch::Device>(device)
+                                                    : std::nullopt);
+    const uint32_t count = static_cast<uint32_t>(meta.size());
+    BuilderBuffer<nanovdb::GridHandleMetaData> dMeta(stream, count, nanovdb::cuda::noInit);
+    BuilderBuffer<uint32_t> dMismatch(stream, count, nanovdb::cuda::noInit);
+    C10_CUDA_CHECK(cudaMemcpyAsync(dMeta.data(),
+                                   meta.data(),
+                                   count * sizeof(nanovdb::GridHandleMetaData),
+                                   cudaMemcpyHostToDevice,
+                                   stream));
+    constexpr uint32_t kThreads = 128;
+    compareAdoptedHeaders<<<(count + kThreads - 1) / kThreads, kThreads, 0, stream>>>(
+        static_cast<const std::byte *>(buffer.data()), dMeta.data(), count, dMismatch.data());
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
+    std::vector<uint32_t> mismatches(count);
+    C10_CUDA_CHECK(cudaMemcpyAsync(mismatches.data(),
+                                   dMismatch.data(),
+                                   count * sizeof(uint32_t),
+                                   cudaMemcpyDeviceToHost,
+                                   stream));
+    C10_CUDA_CHECK(cudaStreamSynchronize(stream));
+    for (uint32_t g = 0; g < count; ++g) {
+        TORCH_CHECK(mismatches[g] == 0,
+                    "makeDeviceHandleFromLayout: grid ",
+                    g,
+                    "'s header disagrees with the adopted layout (offset ",
+                    meta[g].offset,
+                    ", size ",
+                    meta[g].size,
+                    ")");
+    }
 }
 
 } // namespace fvdb::detail

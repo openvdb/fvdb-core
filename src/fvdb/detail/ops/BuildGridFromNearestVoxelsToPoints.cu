@@ -12,7 +12,6 @@
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 #include <fvdb/detail/utils/cuda/RAIIRawDeviceBuffer.h>
 #include <fvdb/detail/utils/cuda/StreamOrdering.h>
-#include <fvdb/detail/utils/nanovdb/CreateEmptyGridStorage.h>
 #include <fvdb/detail/utils/nanovdb/DeviceGridHandleUtils.cuh>
 #include <fvdb/detail/utils/nanovdb/PadGrid.cuh>
 
@@ -112,23 +111,22 @@ dispatchBuildGridFromNearestVoxelsToPoints<torch::kCUDA>(
     const auto joffsetsAcc          = joffsetsCpu.accessor<fvdb::JOffsetsType, 1>();
 
     // Pad one grid per batch item, then lay them end to end in one storage.
-    std::vector<GridStorage> parts;
-    parts.reserve(base.gridCount());
+    GridStorageParts parts(device, stream, base.gridCount());
     for (uint32_t i = 0; i < base.gridCount(); i += 1) {
         if (joffsetsAcc[i + 1] - joffsetsAcc[i] == 0) {
             // No points in this batch item -> empty grid (>=1 point always yields >=1 base voxel).
-            parts.emplace_back(createEmptyGridStorage(device));
+            parts.addEmpty();
             continue;
         }
         nanovdb::OnIndexGrid *grid = base.deviceGridAt<nanovdb::ValueOnIndex>(i);
         TORCH_CHECK(grid, "Grid is null");
         morphology::PadGrid<nanovdb::ValueOnIndex, BuilderResource> op(
             grid, /*positiveOctant=*/true, stream);
-        parts.emplace_back(op.getHandle(proto), device);
+        parts.add(GridStorage(op.getHandle(proto), device));
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     }
 
-    return mergeGridStorages(std::move(parts), device, stream);
+    return parts.merge();
 }
 
 template <>

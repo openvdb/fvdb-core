@@ -10,7 +10,6 @@
 #include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/StreamOrdering.h>
 #include <fvdb/detail/utils/cuda/Utils.cuh>
-#include <fvdb/detail/utils/nanovdb/CreateEmptyGridStorage.h>
 #include <fvdb/detail/utils/nanovdb/DeviceGridHandleUtils.cuh>
 
 #if CCCL_DEVICE_MERGE_SUPPORTED
@@ -86,25 +85,24 @@ dispatchCreateNanoGridFromIJK<torch::kCUDA>(const JaggedTensor &ijk) {
     TORCH_CHECK(ijkData.size(1) == 3, "ijk must have shape (N, 3)");
 
     // Build one grid per batch item, then lay them end to end in one storage.
-    std::vector<GridStorage> parts;
-    parts.reserve(ijkBOffset.size(0) - 1);
+    GridStorageParts parts(device, stream, ijkBOffset.size(0) - 1);
     for (int i = 0; i < (ijkBOffset.size(0) - 1); i += 1) {
         const int64_t startIdx = ijkBOffset[i];
         const int64_t nVoxels  = ijkBOffset[i + 1] - startIdx;
         const int32_t *dataPtr = ijkData.data_ptr<int32_t>() + 3 * startIdx;
 
         if (nVoxels == 0) {
-            parts.emplace_back(createEmptyGridStorage(device));
+            parts.addEmpty();
         } else {
-            parts.emplace_back(
+            parts.add(GridStorage(
                 nanovdb::tools::cuda::
                     voxelsToGrid<GridT, nanovdb::Coord *, DeviceGridBuffer, BuilderResource>(
                         (nanovdb::Coord *)dataPtr, nVoxels, 1.0, proto, stream),
-                device);
+                device));
         }
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     }
-    return mergeGridStorages(std::move(parts), device, stream);
+    return parts.merge();
 }
 
 template <>
@@ -143,14 +141,13 @@ dispatchCreateNanoGridFromIJK<torch::kPrivateUse1>(const JaggedTensor &ijk) {
     }
 
     // Build one grid per batch item, then lay them end to end in one storage.
-    std::vector<GridStorage> parts;
-    parts.reserve(ijkBOffset.size(0) - 1);
+    GridStorageParts parts(device, stream, ijkBOffset.size(0) - 1);
     for (int i = 0; i < (ijkBOffset.size(0) - 1); i += 1) {
         const int64_t startIdx = ijkBOffset[i];
         const int64_t nVoxels  = ijkBOffset[i + 1] - startIdx;
 
         if (!nVoxels) {
-            parts.emplace_back(createEmptyGridStorage(device));
+            parts.addEmpty();
         } else {
             int32_t *dataPtr = ijkData.data_ptr<int32_t>() + ijkData.stride(0) * startIdx;
             auto coordPtr    = reinterpret_cast<nanovdb::Coord *>(dataPtr);
@@ -163,11 +160,11 @@ dispatchCreateNanoGridFromIJK<torch::kPrivateUse1>(const JaggedTensor &ijk) {
             // destroyed at the end of this iteration. Retain the storage stream instead so the
             // buffer never names a dead stream.
             handle.buffer().set_stream(stream);
-            parts.emplace_back(std::move(handle), device);
+            parts.add(GridStorage(std::move(handle), device));
         }
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     }
-    return mergeGridStorages(std::move(parts), device, stream);
+    return parts.merge();
 #else
     TORCH_CHECK(false, "Distributed creation of grids requires CUDA 12.8 or later");
     return GridStorage();

@@ -15,7 +15,6 @@
 #include <fvdb/detail/utils/cuda/ForEachPrivateUse1.cuh>
 #include <fvdb/detail/utils/cuda/GridDim.h>
 #include <fvdb/detail/utils/cuda/StreamOrdering.h>
-#include <fvdb/detail/utils/nanovdb/CreateEmptyGridStorage.h>
 #include <fvdb/detail/utils/nanovdb/DeviceGridHandleUtils.cuh>
 #include <fvdb/detail/utils/nanovdb/PadGrid.cuh>
 
@@ -338,11 +337,10 @@ dispatchBuildPaddedGrid<torch::kCUDA>(const GridBatchData &baseBatchHdl,
     }
 
     // Build one grid per batch item, then lay them end to end in one storage.
-    std::vector<GridStorage> parts;
-    parts.reserve(baseBatchHdl.batchSize());
+    GridStorageParts parts(device, stream, baseBatchHdl.batchSize());
     for (int64_t i = 0; i < baseBatchHdl.batchSize(); ++i) {
         if (baseBatchHdl.numVoxelsAt(i) == 0) {
-            parts.emplace_back(createEmptyGridStorage(device));
+            parts.addEmpty();
             continue;
         }
 
@@ -387,13 +385,13 @@ dispatchBuildPaddedGrid<torch::kCUDA>(const GridBatchData &baseBatchHdl,
         }
 
         if (erodedToEmpty) {
-            parts.emplace_back(createEmptyGridStorage(device));
+            parts.addEmpty();
         } else {
-            parts.emplace_back(std::move(handle), device);
+            parts.add(GridStorage(std::move(handle), device));
         }
     }
 
-    return mergeGridStorages(std::move(parts), device, stream);
+    return parts.merge();
 }
 
 template <>

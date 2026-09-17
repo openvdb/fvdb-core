@@ -9,7 +9,6 @@
 #include <fvdb/detail/ops/BuildPrunedGrid.h>
 #include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/StreamOrdering.h>
-#include <fvdb/detail/utils/nanovdb/CreateEmptyGridStorage.h>
 #include <fvdb/detail/utils/nanovdb/DeviceGridHandleUtils.cuh>
 
 #include <nanovdb/HostBuffer.h>
@@ -47,8 +46,7 @@ dispatchPruneGrid<torch::kCUDA>(const GridBatchData &gridBatch, const JaggedTens
     const DeviceGridBuffer proto = GridStorage::deviceProto(device, stream);
 
     // Build one grid per batch item, then lay them end to end in one storage.
-    std::vector<GridStorage> parts;
-    parts.reserve(gridBatch.batchSize());
+    GridStorageParts parts(device, stream, gridBatch.batchSize());
     for (int i = 0; i < gridBatch.batchSize(); i += 1) {
         // This also keeps the grid aligned with numLeavesAt(i)/mask.index(i), which are
         // item-indexed.
@@ -60,7 +58,7 @@ dispatchPruneGrid<torch::kCUDA>(const GridBatchData &gridBatch, const JaggedTens
         // FIXME: Handle empty case!!
         if (maskI.sum().item<int64_t>() == 0) {
             // If the mask is empty, we contribute a voxel-less grid
-            parts.emplace_back(createEmptyGridStorage(device));
+            parts.addEmpty();
             continue;
         }
 
@@ -86,10 +84,10 @@ dispatchPruneGrid<torch::kCUDA>(const GridBatchData &gridBatch, const JaggedTens
         GridStorage::DeviceHandle handle = pruneOp.getHandle(proto);
         C10_CUDA_KERNEL_LAUNCH_CHECK();
 
-        parts.emplace_back(std::move(handle), device);
+        parts.add(GridStorage(std::move(handle), device));
     }
 
-    return mergeGridStorages(std::move(parts), device, stream);
+    return parts.merge();
 }
 
 template <>

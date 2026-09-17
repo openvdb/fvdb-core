@@ -11,7 +11,6 @@
 #include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/ForEachPrivateUse1.cuh>
 #include <fvdb/detail/utils/cuda/StreamOrdering.h>
-#include <fvdb/detail/utils/nanovdb/CreateEmptyGridStorage.h>
 #include <fvdb/detail/utils/nanovdb/DeviceGridHandleUtils.cuh>
 
 #include <nanovdb/HostBuffer.h>
@@ -178,8 +177,7 @@ dispatchBuildGridFromPoints<torch::kCUDA>(const JaggedTensor &points,
             const scalar_t *pointsPtr = pointsData.data_ptr<scalar_t>();
 
             // Build one grid per batch item, then lay them end to end in one storage.
-            std::vector<GridStorage> parts;
-            parts.reserve(pointsBOffset.size(0) - 1);
+            GridStorageParts parts(device, stream, pointsBOffset.size(0) - 1);
             for (int64_t i = 0; i < (pointsBOffset.size(0) - 1); i += 1) {
                 const int64_t startIdx = pointsBOffset[i];
                 const int64_t nPoints  = pointsBOffset[i + 1] - startIdx;
@@ -194,10 +192,10 @@ dispatchBuildGridFromPoints<torch::kCUDA>(const JaggedTensor &points,
                             ")");
 
                 if (nPoints == 0) {
-                    parts.emplace_back(createEmptyGridStorage(device));
+                    parts.addEmpty();
                 } else if (pointsAreContiguous) {
                     using PointPtrT = TransformedPointPtr<scalar_t, true>;
-                    parts.emplace_back(
+                    parts.add(GridStorage(
                         nanovdb::tools::cuda::
                             voxelsToGrid<GridT, PointPtrT, DeviceGridBuffer, BuilderResource>(
                                 PointPtrT(pointsPtr + 3 * startIdx, txs[i]),
@@ -205,10 +203,10 @@ dispatchBuildGridFromPoints<torch::kCUDA>(const JaggedTensor &points,
                                 1.0,
                                 proto,
                                 stream),
-                        device);
+                        device));
                 } else {
                     using PointPtrT = TransformedPointPtr<scalar_t, false>;
-                    parts.emplace_back(
+                    parts.add(GridStorage(
                         nanovdb::tools::cuda::
                             voxelsToGrid<GridT, PointPtrT, DeviceGridBuffer, BuilderResource>(
                                 PointPtrT(
@@ -217,12 +215,12 @@ dispatchBuildGridFromPoints<torch::kCUDA>(const JaggedTensor &points,
                                 1.0,
                                 proto,
                                 stream),
-                        device);
+                        device));
                 }
                 C10_CUDA_KERNEL_LAUNCH_CHECK();
             }
 
-            return mergeGridStorages(std::move(parts), device, stream);
+            return parts.merge();
         }),
         AT_EXPAND(AT_FLOATING_TYPES),
         c10::kHalf);

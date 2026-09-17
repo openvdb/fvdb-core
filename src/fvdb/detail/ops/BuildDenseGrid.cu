@@ -11,7 +11,6 @@
 #include <fvdb/detail/utils/cuda/GridDim.h>
 #include <fvdb/detail/utils/cuda/StreamOrdering.h>
 #include <fvdb/detail/utils/cuda/Utils.cuh>
-#include <fvdb/detail/utils/nanovdb/CreateEmptyGridStorage.h>
 #include <fvdb/detail/utils/nanovdb/DeviceGridHandleUtils.cuh>
 
 #if CCCL_DEVICE_MERGE_SUPPORTED
@@ -134,28 +133,27 @@ dispatchCreateNanoGridFromDense<torch::kCUDA>(int64_t batchSize,
     TORCH_CHECK(ijkData.is_contiguous(), "ijkData must be contiguous");
 
     // Every batch item is the same dense box (a mask, if given, is shared across the batch), so
-    // build the grid once and copy it for the remaining items instead of re-running the radix sort
-    // over the identical coordinate list batchSize times. The parts are then laid end to end in
-    // one storage.
+    // build the grid once and repeat it for the remaining items instead of re-running the radix
+    // sort over the identical coordinate list batchSize times: the merge copies the one grid into
+    // each item's slot.
     const int64_t nVoxels = ijkData.size(0);
-    std::vector<GridStorage> parts;
-    parts.reserve(batchSize);
+    GridStorageParts parts(device, stream, 1);
     for (int64_t i = 0; i < batchSize; i += 1) {
         if (nVoxels == 0) {
-            parts.emplace_back(createEmptyGridStorage(device));
+            parts.addEmpty();
         } else if (i == 0) {
-            parts.emplace_back(
+            parts.add(GridStorage(
                 nanovdb::tools::cuda::
                     voxelsToGrid<GridT, nanovdb::Coord *, DeviceGridBuffer, BuilderResource>(
                         (nanovdb::Coord *)ijkData.data_ptr(), nVoxels, 1.0, proto, stream),
-                device);
+                device));
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         } else {
-            parts.emplace_back(parts[0].to(device, stream));
+            parts.addRepeat(0);
         }
     }
 
-    return mergeGridStorages(std::move(parts), device, stream);
+    return parts.merge();
 }
 
 template <>
@@ -215,14 +213,13 @@ dispatchCreateNanoGridFromDense<torch::kPrivateUse1>(int64_t batchSize,
     const DeviceGridBuffer proto = GridStorage::deviceProto(device, stream);
 
     // Every batch item is the same dense box, so build the grid once and copy it for the remaining
-    // items instead of re-running DistributedPointsToGrid over the identical coordinate list. The
-    // parts are then laid end to end in one storage.
+    // items instead of re-running DistributedPointsToGrid over the identical coordinate list: the
+    // merge copies the one grid into each item's slot.
     const int64_t nVoxels = ijkData.size(0);
-    std::vector<GridStorage> parts;
-    parts.reserve(batchSize);
+    GridStorageParts parts(device, stream, 1);
     for (int64_t i = 0; i < batchSize; i++) {
         if (!nVoxels) {
-            parts.emplace_back(createEmptyGridStorage(device));
+            parts.addEmpty();
         } else if (i == 0) {
             int32_t *dataPtr = ijkData.data_ptr<int32_t>();
             auto coordPtr    = reinterpret_cast<nanovdb::Coord *>(dataPtr);
@@ -235,18 +232,16 @@ dispatchCreateNanoGridFromDense<torch::kPrivateUse1>(int64_t batchSize,
             // destroyed at the end of this iteration. Retain the storage stream instead so the
             // buffer never names a dead stream.
             handle.buffer().set_stream(stream);
-            parts.emplace_back(std::move(handle), device);
+            parts.add(GridStorage(std::move(handle), device));
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         } else {
-            parts.emplace_back(parts[0].to(device, stream));
+            parts.addRepeat(0);
         }
     }
 
-    // The copies above ran on the null stream; wait for them so the unified-memory result is
-    // visible everywhere before it is handed out.
-    synchronizeStream(cudaStream_t{}, device);
-
-    return mergeGridStorages(std::move(parts), device, stream);
+    // A single item is handed out as built (getHandle synchronized its mesh); the assembler
+    // synchronizes for a PrivateUse1 destination itself.
+    return parts.merge();
 #else
     TORCH_CHECK(false, "Distributed creation of grids requires CUDA 12.8 or later");
     return GridStorage();
