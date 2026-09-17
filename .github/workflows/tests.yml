@@ -47,6 +47,7 @@ jobs:
     uses: ./.github/workflows/start-ec2-runner.yml
     with:
       instance-type: m6a.8xlarge
+      runner-label: tests-build-${{ github.run_id }}-${{ github.run_attempt }}
       az-config: ${{ needs.versions.outputs.aws-cpu-az-config }}
       aws-role: ${{ needs.versions.outputs.aws-role }}
       aws-region: ${{ needs.versions.outputs.aws-region }}
@@ -158,7 +159,7 @@ jobs:
     if: ${{ always() && needs.start-build-runner.result != 'skipped' }}
     uses: ./.github/workflows/stop-ec2-runner.yml
     with:
-      label: ${{ needs.start-build-runner.outputs.label }}
+      label: tests-build-${{ github.run_id }}-${{ github.run_attempt }}
       ec2-instance-id: ${{ needs.start-build-runner.outputs.ec2-instance-id }}
       aws-role: ${{ needs.versions.outputs.aws-role }}
       aws-region: ${{ needs.versions.outputs.aws-region }}
@@ -178,6 +179,7 @@ jobs:
     with:
       instance-type: g6.xlarge # 4 CPU-core, L4 GPU
       fallback-instance-type: g5.xlarge # A10G, SM 8.6 -- different capacity pool
+      runner-label: tests-gpu-${{ github.run_id }}-${{ github.run_attempt }}
       az-config: ${{ needs.versions.outputs.aws-gpu-az-config }}
       aws-role: ${{ needs.versions.outputs.aws-role }}
       aws-region: ${{ needs.versions.outputs.aws-region }}
@@ -430,7 +432,7 @@ jobs:
     if: ${{ always() && needs.start-tests-gpu-runner.result != 'skipped' }}
     uses: ./.github/workflows/stop-ec2-runner.yml
     with:
-      label: ${{ needs.start-tests-gpu-runner.outputs.label }}
+      label: tests-gpu-${{ github.run_id }}-${{ github.run_attempt }}
       ec2-instance-id: ${{ needs.start-tests-gpu-runner.outputs.ec2-instance-id }}
       aws-role: ${{ needs.versions.outputs.aws-role }}
       aws-region: ${{ needs.versions.outputs.aws-region }}
