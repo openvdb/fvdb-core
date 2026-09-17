@@ -52,7 +52,6 @@ set(FVDB_CPP_FILES
     fvdb/detail/utils/cuda/LocalGradient.cpp
     fvdb/detail/utils/cuda/Prefetch.cpp
     fvdb/detail/ops/jagged/JaggedReductions.cpp
-    fvdb/TorchDeviceBuffer.cu
     fvdb/detail/viewer/GaussianSplat3dView.cpp
     fvdb/detail/viewer/Viewer.cpp
     fvdb/FVDB.cpp
@@ -62,6 +61,7 @@ set(FVDB_CPP_FILES
 set(FVDB_CU_FILES
     fvdb/GridBatchData.cu
     fvdb/GridStorage.cu
+    fvdb/TorchDeviceBuffer.cu
     fvdb/detail/utils/nanovdb/GridAssembly.cu
     fvdb/detail/GridBatchDataFactory.cu
     fvdb/detail/io/SaveNanoVDB.cu

@@ -26,10 +26,11 @@ struct GridBatchData : public torch::CustomClassHolder {
 
     // Metadata about a single grid in the batch
     struct GridMetadata {
-        uint32_t version = 1;   // Version of this struct
+        static constexpr uint32_t kVersion = 1; // Version of this struct
+        uint32_t version = kVersion; // Stamped by populateGridMetadata for records it fills
 
-        int64_t mCumLeaves = 0; // Cumulative number of leaf nodes in the batch up to this grid
-        int64_t mCumVoxels = 0; // Cumulative number of voxels in the batch up to this grid
+        int64_t mCumLeaves = 0;      // Cumulative number of leaf nodes in the batch up to this grid
+        int64_t mCumVoxels = 0;      // Cumulative number of voxels in the batch up to this grid
         uint64_t mCumBytes = 0; // Cumulative number of bytes in the buffer of grids up to this grid
         VoxelCoordTransform mPrimalTransform; // Primal Transform of this grid (i.e. transform which
                                               // aligns origin with voxel center)
@@ -55,7 +56,8 @@ struct GridBatchData : public torch::CustomClassHolder {
 
     // Metadata about the whole batch
     struct GridBatchMetadata {
-        uint32_t version = 1; // Version of this struct
+        static constexpr uint32_t kVersion = 1; // Version of this struct
+        uint32_t version = kVersion; // Stamped by populateGridMetadata for records it fills
 
         // Total number of leaf nodes across all grids
         int64_t mTotalLeaves = 0;

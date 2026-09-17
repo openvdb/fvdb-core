@@ -29,12 +29,14 @@ serializeGrid(const GridBatchData &grid) {
     c10::DeviceGuard guard(grid.device());
 
     // The bytes to write are the batch's logical grids on the host. A contiguous CPU batch has
-    // them already; anything else is compacted straight onto the host in one pass. The per-grid
-    // metadata written below is the batch's own: only its voxel sizes and origins are read back,
-    // and deserialization recomputes the rest from the grids.
+    // them already; a contiguous device batch is one copy of its storage; anything else is
+    // compacted straight onto the host in one pass. The per-grid metadata written below is the
+    // batch's own: only its voxel sizes and origins are read back, and deserialization recomputes
+    // the rest from the grids.
     std::optional<GridStorage> compacted;
-    if (!(grid.device().is_cpu() && grid.isContiguous()) && grid.batchSize() > 0) {
-        compacted = contiguousGridStorage(grid, torch::kCPU);
+    if (grid.batchSize() > 0 && !(grid.device().is_cpu() && grid.isContiguous())) {
+        compacted = grid.isContiguous() ? grid.gridStorage().to(torch::kCPU)
+                                        : contiguousGridStorage(grid, torch::kCPU);
     }
     const GridStorage &storage = compacted ? *compacted : grid.gridStorage();
     const int64_t numGrids     = grid.batchSize();
@@ -93,14 +95,14 @@ deserializeGrid(const torch::Tensor &serialized) {
     const GridBatchData::GridBatchMetadata *batchMetadata =
         reinterpret_cast<const GridBatchData::GridBatchMetadata *>(serializedPtr +
                                                                    sizeof(V01Header));
-    TORCH_CHECK(batchMetadata->version == 1,
+    TORCH_CHECK(batchMetadata->version == GridBatchData::GridBatchMetadata::kVersion,
                 "Serialized data is not a valid grid handle. Bad batch metadata version.");
 
     const GridBatchData::GridMetadata *gridMetadata =
         reinterpret_cast<const GridBatchData::GridMetadata *>(
             serializedPtr + sizeof(V01Header) + sizeof(GridBatchData::GridBatchMetadata));
     for (uint64_t i = 0; i < numGrids; i += 1) {
-        TORCH_CHECK(gridMetadata[i].version == 1,
+        TORCH_CHECK(gridMetadata[i].version == GridBatchData::GridMetadata::kVersion,
                     "Serialized data is not a valid grid handle. Bad grid metadata version.");
     }
     const int8_t *gridBuffer = serializedPtr + sizeof(V01Header) +

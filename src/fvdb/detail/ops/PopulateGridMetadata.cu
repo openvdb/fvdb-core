@@ -26,6 +26,10 @@ populateGridMetadataKernel(uint32_t numGrids,
                            TensorAccessorT<fvdb::JOffsetsType, 1> gridOffsets,
                            GridBatchData::GridMetadata *perGridMetadata,
                            GridBatchData::GridBatchMetadata *batchMetadata) {
+    // The records may be raw allocations (device memory, or the unified memory PrivateUse1 shares
+    // between host and device), so every field a reader checks is written here, the version
+    // stamps included.
+    batchMetadata->version       = GridBatchData::GridBatchMetadata::kVersion;
     batchMetadata->mMaxVoxels    = 0;
     batchMetadata->mMaxLeafCount = 0;
 
@@ -49,6 +53,7 @@ populateGridMetadataKernel(uint32_t numGrids,
         GridBatchData::GridMetadata &metaCur  = perGridMetadata[i];
         GridBatchData::GridMetadata &metaNext = perGridMetadata[i + 1];
 
+        metaCur.version = GridBatchData::GridMetadata::kVersion;
         metaCur.setTransform(voxelSizes[i], voxelOrigins[i]);
         metaCur.mNumVoxels = voxelCount;
         metaCur.mNumBytes  = byteCount;
@@ -73,6 +78,7 @@ populateGridMetadataKernel(uint32_t numGrids,
         i += 1;
     }
 
+    perGridMetadata[i].version = GridBatchData::GridMetadata::kVersion;
     perGridMetadata[i].setTransform(voxelSizes[i], voxelOrigins[i]);
     perGridMetadata[i].mNumVoxels = currentGrid->tree().activeVoxelCount();
     perGridMetadata[i].mNumBytes  = currentGrid->gridSize();
@@ -153,21 +159,7 @@ dispatchPopulateGridMetadata<torch::kCUDA>(
     TORCH_CHECK(storage.deviceBytes() != nullptr, "GridStorage is empty");
     const nanovdb::OnIndexGrid *grids = (const nanovdb::OnIndexGrid *)storage.deviceBytes();
 
-    // The device records are raw allocations, the kernel writes only the fields it computes, and
-    // the host records are overwritten from the device afterwards. Seed the device records with
-    // the constructed host ones so the fields the kernel leaves alone (the version stamps) come
-    // back with their defaults, as they have on the CPU path all along.
     const size_t metaDataByteSize = sizeof(GridBatchData::GridMetadata) * storage.gridCount();
-    C10_CUDA_CHECK(cudaMemcpyAsync(outPerGridMetadataDevice,
-                                   outPerGridMetadataHost,
-                                   metaDataByteSize,
-                                   cudaMemcpyHostToDevice,
-                                   stream));
-    C10_CUDA_CHECK(cudaMemcpyAsync(outBatchMetadataDevice,
-                                   outBatchMetadataHost,
-                                   sizeof(GridBatchData::GridBatchMetadata),
-                                   cudaMemcpyHostToDevice,
-                                   stream));
     populateGridMetadataCUDA<TorchRAcc64><<<1, NUM_THREADS, 0, stream>>>(
         storage.gridCount(),
         grids,
