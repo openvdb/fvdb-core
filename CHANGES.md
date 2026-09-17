@@ -3,9 +3,13 @@ fVDB Version History
 
 ## Version 0.6.0 - In Development
 
+*91 commits, 259 files changed, 5 contributors.*
+
 This release unifies sparse convolution geometry, reduces grid-construction memory and batch overhead, moves
 Gaussian splatting's high-level API to fVDB Reality Capture, and adds native volume rendering and interactive
 viewer controls in the Viewer. It also migrates C++ grid storage to NanoVDB's single-space memory-resource API.
+
+**Contributors:** @swahtz, @matthewdcong, @harrism, @phapalova, @blackencino
 
 ### Compatibility & Distribution
 
@@ -14,30 +18,23 @@ viewer controls in the Viewer. It also migrates C++ grid storage to NanoVDB's si
 - Removed compatibility code for PyTorch versions older than 2.6; package metadata now requires `torch>=2.7`.
   Prebuilt wheels must still match their advertised PyTorch/CUDA versions (#700).
 - Added a `StrEnum` compatibility wrapper so the convolution enums work on Python 3.10 (#740).
-- **Weekly compatibility testing:** main is built and tested weekly against the oldest PyTorch version
-  (currently 2.9.1) that publishes wheels for the lowest supported CUDA version (currently 13.0). The tested
-  versions are recorded in `.github/versions.json` under `weekly_compat` (#745).
+- Added weekly compatibility testing against the oldest PyTorch supporting the lowest supported CUDA version,
+  currently PyTorch 2.9.1 with CUDA 13.0 (#745).
 
 ### SDF & Ray Traversal
 
-- **Breaking:** `retopologize_sdf` is renamed `rebuild_narrow_band` (`Grid`, `GridBatch`, and
-  `fvdb.functional.rebuild_narrow_band_{single,batch}`); no alias is kept. The old name was mesh-remeshing jargon
-  and did not say that the op produces a *narrow-band* SDF on a rebuilt grid (#762).
-- Fixed `reinitialize_sdf` treating every inactive voxel as exterior. An `IndexGrid` has a single background slot,
-  so a narrow band whose interior is inactive (a pruned level set, an imported OpenVDB grid, or
-  `rebuild_narrow_band`'s own output) grew a phantom interface one voxel inside the true surface; the zero crossing
-  survived, but the inner half of the band was wrong and `rebuild_narrow_band` was not idempotent. Inactive
-  neighbours now continue the sign of the adjacent active voxel, and `pad=True` seeds new voxels from their
-  neighbours' sign instead of as exterior. `reinitialize_sdf` also now raises `ValueError` for anisotropic voxels
-  instead of silently using only `voxel_size[0]`.
-  Occupancy inputs must include an explicit positive exterior layer around negative occupied voxels:
-  the active-region boundary no longer implicitly defines a surface, so rebuilding an all-negative
-  occupancy field yields an empty narrow band. Both SDF operations now require finite scalar values
-  with shape `(N,)` or `(N, 1)` and reject other shapes and NaN/Inf values with `ValueError` (#762).
+- **Breaking:** Renamed `retopologize_sdf` to `rebuild_narrow_band` across `Grid`, `GridBatch`, and
+  `fvdb.functional`; no compatibility alias is provided (#762).
+- Fixed `reinitialize_sdf` creating phantom interior interfaces in narrow-band SDFs. Inactive neighbors and
+  newly padded voxels now inherit the adjacent active voxel's sign (#762).
+- **Input requirements:** Occupancy-to-SDF inputs must include a positive exterior layer; all-negative inputs
+  produce an empty narrow band. Both SDF operations require finite scalar values shaped `(N,)` or `(N, 1)`,
+  and `reinitialize_sdf` rejects anisotropic voxels (#762).
 - Fixed spurious near-origin hits in `ray_implicit_intersection` when active TSDF voxels contain zero-valued
   no-data samples. Exact zeros now act as gaps instead of seeding or triggering a sign crossing (#698).
-- Accelerated HDDA ray traversal up to 2x with NanoVDB's fused `ReadAccessor::getDimAndActive`, avoiding duplicate tree
-  walks in `voxels_along_rays`, `segments_along_rays`, `uniform_ray_samples`, and `ray_implicit_intersection` (#754).
+- Accelerated HDDA ray traversal with NanoVDB's fused `ReadAccessor::getDimAndActive`: `voxels_along_rays`
+  measured 1.36-1.68x faster, and segment, uniform-sampling, and implicit-intersection operations 1.03-1.30x
+  faster, on NanoVDB example grids with 512x512 rays on RTX PRO 6000 Blackwell (#754).
 
 ### Sparse Convolution Semantics & Migration
 
@@ -62,17 +59,14 @@ The following changes implement the canonical convolution contract in PR #726 (i
   source object, preserving the identity matmul path and its compact two-dimensional weight layout. One-tap
   convolutions with larger stride sample stride-aligned residues rather than coarsening all blocks. Removed rows
   had zero linear degree before bias, but a model with bias can observe their removal.
-- Full coverage histograms are computed only when `ConvolutionPlan.coverage_report` is requested and are shared
-  with exact plan transposes; generated-support and strict-target zero-row checks remain eager. Generative CUDA
-  transpose checks its exact emission-staging size before allocation and adds that context if PyTorch's allocator
-  reports an out-of-memory failure; allocator capacity is not predicted from aggregate cache statistics.
+- Coverage histograms are computed lazily and shared with exact plan transposes. Generated-support and
+  strict-target checks remain eager; CUDA transposed-convolution allocation failures now include the required
+  staging size.
 - Added typed convolution topology/phase policies, topology provenance, coverage diagnostics and warnings,
   and builder resource statistics.
-- **Migration:** Invalidate serialized or in-memory topology/plan caches when upgrading: cache keys must include
-  the convolution-semantics version. Weight spatial ordering is unchanged, but affected checkpoints can produce
-  different topologies and world registration. No legacy geometry mode is shipped in 0.6.0; migrate model
-  configuration and cached plans to the canonical relation. The incorrect legacy coordinate division and duplicated
-  phase rules are intentionally not retained behind a compatibility mode.
+- **Migration:** Invalidate topology/plan caches and include the convolution-semantics version in cache keys.
+  Weight ordering is unchanged, but affected checkpoints may produce different topology and world registration.
+  No legacy geometry mode is provided.
 - The dense convolution expert backend is disabled until it can realize this contract exactly. PredGatherIGemm
   remains limited to its supported odd kernels and strides; unsupported combinations fail at plan construction.
 
@@ -91,17 +85,25 @@ The following changes implement the canonical convolution contract in PR #726 (i
 
 ### Grid Construction & Topology
 
+Performance figures below and in the rendering section are PR-reported measurements against each change's
+pre-change baseline; they are workload-specific and are not cumulative release-to-release speedups.
+
 - Replaced expanded coordinate-list construction with NanoVDB leaf-mask morphology for CUDA dual/padded grids
-  and supported convolution, refinement, coarsening, and merge paths. This substantially reduces temporary
-  memory and avoids the expanded candidate-list int32 overflow on the converted paths (#710, #712).
-- Batched supported CUDA refinement, coarsening, and generated convolution topology passes across grid members,
-  including empty members, reducing per-grid launches and synchronization. Non-power-of-two coordinate
-  fallbacks and CPU/PrivateUse1 paths retain their separate implementations. Added an identity-convolution-plan
-  fast path and reduced metadata construction overhead (#757).
+  and supported convolution, refinement, coarsening, and merge paths, avoiding expanded candidate-list int32
+  overflow. On an 11.5M-output-voxel dense-cube benchmark, `conv_grid(k3, s1)` construction fell from 246 to
+  1.85 ms (~133x faster), with temporary memory dropping from 11.23 GB to 8.6 MB on RTX PRO 6000 Blackwell
+  (#710, #712).
+- Batched supported CUDA refinement, coarsening, and generated convolution topology construction to reduce
+  per-grid launches and synchronization. Added an identity-convolution-plan fast path and reduced metadata
+  overhead. For 48 synthetic shell grids, `conv_transpose_grid(k2, s2)` construction fell from 25.6 to 0.94 ms
+  (~27x faster) on RTX PRO 6000 Blackwell (#757).
 - CUDA point-grid construction now transforms points to voxel coordinates on demand, eliminating the temporary
-  `(N, 3)` int32 coordinate tensor (12 bytes per input point), including for strided point inputs (#719).
+  `(N, 3)` int32 coordinate tensor (12 bytes per input point), including for strided point inputs. Seven
+  point-cloud benchmarks on RTX PRO 6000 Blackwell showed 1.7-10.2% lower execution time; peak memory was
+  unchanged in the reported memory tests (#719).
 - Morton and Hilbert encoders now use the stored batch bounding-box minimum for their default offset instead
-  of materializing and reducing every voxel coordinate (#748).
+  of materializing and reducing every voxel coordinate. `GridBatch.morton()` measured 1.67-1.79x faster on
+  400K-5M voxels on an RTX SM120 GPU (#748).
 - Fixed topology operations on sliced/indexed `GridBatch` views selecting physical parent grids instead of the
   requested logical grids; extended the fix to injection, merged grids, PredGatherIGemm convolution, SDF
   reinitialization, and NanoVDB export (#712, #787).
@@ -112,28 +114,19 @@ The following changes implement the canonical convolution contract in PR #726 (i
 
 ### C++ Grid Storage, Allocation & I/O
 
-- **Breaking (C++):** `GridBatchData` no longer holds a `nanovdb::GridHandle<TorchDeviceBuffer>`; its grids live in
-  `fvdb::GridStorage`, a single-space `nanovdb::HostBuffer` handle on the CPU or a
-  `nanovdb::cuda::Buffer<std::byte, fvdb::TorchDeviceResource>` handle on CUDA and PrivateUse1 devices, following
-  NanoVDB's memory-resource API (openvdb #2232; fvdb #770, PRs #773, #786, #787, #788 and #790). The
-  `nanoGridHandle()` accessor is gone and the storage itself is private: read grids through the logical
-  `hostGridPtrAt` / `deviceGridPtrAt` accessors, order after `storageStream()`, and copy a whole batch with
-  `fvdb::detail::ops::contiguousGridStorage`. Every device grid builder produces `GridStorage` directly through
-  `GridStorage::deviceProto` (the CPU builders through `nanovdb::HostBuffer`), and the builders no longer compute
-  per-grid checksums. `TorchDeviceBuffer` and `TorchStorageResource` are `[[deprecated]]` compatibility
-  shims, unused by fVDB, and `TorchStorageResource` moves from `TorchResource.h` into `TorchDeviceBuffer.h`.
-  The shims are retained for one release, with removal planned at the NanoVDB pin bump past upstream's removal
-  of dual-space buffers.
+- **Breaking (C++):** `GridBatchData` now uses private `GridStorage` backed by NanoVDB's single-space buffers.
+  Replace `nanoGridHandle()` with logical `hostGridPtrAt` / `deviceGridPtrAt` accessors, order reads after
+  `storageStream()`, and use `fvdb::detail::ops::contiguousGridStorage` for batch copies. `TorchDeviceBuffer`
+  and `TorchStorageResource` are deprecated for one release; the latter moved to `TorchDeviceBuffer.h`.
+  Builders no longer compute per-grid checksums (#770; PRs #773, #786, #787, #788, #790).
 - NanoVDB builder scratch now uses PyTorch's active CUDA allocator, sharing its memory pool with tensors and
   respecting allocator configuration or replacement. Device grid storage uses `TorchDeviceResource`, keyed to
   its retained stream; scratch uses `TorchResource`, keyed to the operation's stream (#732, #773, #786, #788).
 - Unified compaction, concatenation, serialization, and builder output assembly. Cross-device copies of sliced
   batches compact directly onto the destination; replicated dense grids and empty batch members reuse source
   storage during assembly. CUDA builders now run on the current PyTorch stream (#787, #788).
-- Fixed serialization of non-contiguous CPU batches and empty batches, CUDA metadata version initialization,
-  and NanoVDB export patching host headers before device-to-host copies finished. Corrected standalone grid
-  headers extracted from batches, including index/count, blind-data metadata, and stale checksums
-  (#773, #787, #788, #790), including serialization of empty CPU slices.
+- Fixed serialization of sliced and empty batches, CUDA metadata version initialization, and NanoVDB export
+  synchronization and header consistency (#773, #787, #788, #790).
 - Fixed a host-metadata allocation leak for PrivateUse1 grids (#788).
 
 ### Neural Networks & Examples
@@ -145,9 +138,8 @@ The following changes implement the canonical convolution contract in PR #726 (i
 
 ### Viewer
 
-- Added `Scene.add_level_set` and `Scene.add_fog_volume` for native SDF isosurface and fog-volume rendering from
-  `Grid`/`GridBatch` values. Multi-grid batches create one view per grid, using ONINDEX blind data without
-  rebuilding a typed NanoVDB tree (#690, #694).
+- Added `Scene.add_level_set` and `Scene.add_fog_volume` for native SDF and fog rendering, with one view per grid
+  in a batch (#690, #694).
 - Added slider, number, text, and checkbox widgets with Python/C++ value access, callbacks, scene cleanup, and
   viewer shutdown support (#649).
 - Raised the optional `nanovdb-editor` minimum to 0.1.6 and restricted C++ includes to its public headers
@@ -160,23 +152,28 @@ These improvements apply to the low-level kernels retained in fVDB Core and used
 - Added multi-GPU Unscented Transform projection and world-space rasterization for 3DGUT-style training with
   distorted camera models; also reduced single-GPU UT projection shared-memory usage (#729).
 - Replaced bounding-box-only Gaussian/tile intersection tests with ellipse-tile tests, reducing intersection
-  records and subsequent rasterization work (#742).
+  records by 30-40%, with reported performance improvements of approximately 3% on one GPU and 7% on two GPUs
+  (#742).
 - Expanded Gaussian intersection offsets and indices to 64 bits to prevent overflow, invalid memory access,
   and corrupt training results on large scenes (#708).
 - Fused view-direction computation into spherical harmonics evaluation and reduced backward camera-gradient
-  overhead using device-local block sums and segmented reductions (#687, #697, #751).
+  overhead using device-local block sums and segmented reductions. SH backward operation time fell by
+  23.5-57.5% for 1M-100M Gaussians and 1-4 cameras on dual RTX 3090s (#687, #697, #751).
 - Reduced multi-GPU traffic and atomic contention with device-local intersection keys, rasterization and
   projection gradient buffers, and NCCL reductions. Overlapped destination prefetch with gradient computation
-  and reduction (#703, #713, #749, #783).
+  and reduction. Projection backward measured 1.43-2.18x faster on dual RTX 3090s (#703, #713, #749, #783).
 - Fixed a multi-GPU backward-rasterization race where one GPU could clear another GPU's accumulated gradients
   (#706), and guarded SH/projection work on GPUs assigned zero Gaussians (#728).
-- Fixed fused SSIM prefetch using NHWC offsets for NCHW tensors, reducing unnecessary multi-GPU memory traffic
-  (#750), and corrected CUDA event creation to honor the requested flags (#686).
+- Fixed fused SSIM prefetch using NHWC offsets for NCHW tensors: measured speedups ranged from 1.76-4.67x
+  across 1080p-8K inference, training, and backward benchmarks on dual RTX 3090s (#750). Corrected CUDA event
+  creation to honor the requested flags (#686).
 - Reduced forward-rasterization compile time, stack usage, and generated code size by matching output storage
-  to the channel chunk size (#714). Dense-mode contributing-Gaussian repacks now use `view()` to enforce their
-  no-copy layout assumption (#717).
-- Updated tinyply to 3.0 for faster PLY loading (#744), and added CPU Gaussian NaN/Inf-mask computation so CPU
-  PLY export no longer needs a GPU round trip for validation (#765).
+  to the channel chunk size: compilation fell from 616 to 181 seconds (~71% less time), and generated GPU code
+  shrank from 13.7 to 8.3 MB in the reported build (#714). Dense-mode contributing-Gaussian repacks now use
+  `view()` to enforce their no-copy layout assumption (#717).
+- Updated tinyply to 3.0: a 375M-Gaussian SH3 PLY loaded in 4 minutes instead of 12 (~3x faster) in the reported
+  test (#744). Added CPU Gaussian NaN/Inf-mask computation so CPU PLY export no longer needs a GPU round trip
+  for validation (#765).
 
 ### Build, Packaging, Documentation & CI
 
