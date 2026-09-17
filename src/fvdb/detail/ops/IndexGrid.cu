@@ -19,15 +19,19 @@ indexGridInternal(const fvdb::GridBatchData &grid, const Indexable &idx, int64_t
     TORCH_CHECK(size >= 0,
                 "Indexing with negative size is not supported (this should never happen)");
 
-    fvdb::GridBatchData::GridMetadata *hostMeta   = allocateHostGridMetadata(size);
+    fvdb::GridBatchData::GridMetadata *hostMeta   = nullptr;
     fvdb::GridBatchData::GridMetadata *deviceMeta = nullptr;
 
     const torch::Device device = grid.device();
-    if (device.is_cuda()) {
-        deviceMeta = allocateDeviceGridMetadata(device, size);
-    } else if (device.is_privateuseone()) {
+    if (device.is_privateuseone()) {
+        // One unified-memory block serves both sides.
         deviceMeta = allocateUnifiedMemoryGridMetadata(size);
         hostMeta   = deviceMeta;
+    } else {
+        hostMeta = allocateHostGridMetadata(size);
+        if (device.is_cuda()) {
+            deviceMeta = allocateDeviceGridMetadata(device, size);
+        }
     }
 
     int64_t cumVoxels     = 0;

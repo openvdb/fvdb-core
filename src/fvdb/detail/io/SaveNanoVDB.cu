@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/BuilderResource.h>
-#include <fvdb/TorchDeviceBuffer.h>
 #include <fvdb/detail/io/SaveNanoVDB.h>
 #include <fvdb/detail/ops/MakeContiguous.h>
 #include <fvdb/detail/utils/Utils.h>
@@ -938,7 +937,7 @@ getIndexGrid(const GridBatchData &gridBatchData, const std::vector<std::string> 
     // file gets (and what loading it yields), as before.
     GridStorage hostStorage = (gridBatchData.isContiguous() || gridBatchData.batchSize() == 0)
                                   ? gridBatchData.gridStorage().to(torch::kCPU)
-                                  : ops::contiguousGridStorage(gridBatchData).to(torch::kCPU);
+                                  : ops::contiguousGridStorage(gridBatchData, torch::kCPU);
     nanovdb::GridHandle<nanovdb::HostBuffer> retHandle = std::move(hostStorage.hostHandle());
 
     // Write voxelSize and origin information to the output buffer

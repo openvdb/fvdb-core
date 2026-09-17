@@ -3,7 +3,7 @@
 //
 #include <fvdb/BuilderResource.h>
 #include <fvdb/GridBatchData.h>
-#include <fvdb/TorchDeviceBuffer.h>
+#include <fvdb/GridStorage.h>
 #include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/BuildGridFromIjk.h>
 #include <fvdb/detail/ops/BuildPaddedGrid.h>
@@ -14,10 +14,11 @@
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 #include <fvdb/detail/utils/cuda/ForEachPrivateUse1.cuh>
 #include <fvdb/detail/utils/cuda/GridDim.h>
-#include <fvdb/detail/utils/nanovdb/CreateEmptyGridHandle.h>
-#include <fvdb/detail/utils/nanovdb/LegacyGridHandle.h>
+#include <fvdb/detail/utils/cuda/StreamOrdering.h>
+#include <fvdb/detail/utils/nanovdb/DeviceGridHandleUtils.cuh>
 #include <fvdb/detail/utils/nanovdb/PadGrid.cuh>
 
+#include <nanovdb/HostBuffer.h>
 #include <nanovdb/NanoVDB.h>
 #include <nanovdb/tools/CreateNanoGrid.h>
 #include <nanovdb/tools/cuda/PruneGrid.cuh>
@@ -28,12 +29,14 @@
 #include <c10/cuda/CUDAGuard.h>
 #include <c10/cuda/CUDAMathCompat.h>
 
+#include <optional>
+
 namespace fvdb {
 namespace detail {
 namespace ops {
 
 template <torch::DeviceType>
-nanovdb::GridHandle<TorchDeviceBuffer>
+GridStorage
 dispatchBuildPaddedGrid(const GridBatchData &baseBatchHdl, int bmin, int bmax, bool excludeBorder);
 
 __device__ inline void
@@ -139,13 +142,13 @@ paddedIJKForGrid(const GridBatchData &batchHdl, const nanovdb::CoordBBox &bbox) 
         outIJK, batchHdl.voxelOffsets() * totalPadAmount, batchHdl.jlidx());
 }
 
-nanovdb::GridHandle<TorchDeviceBuffer>
+GridStorage
 buildPaddedGridFromGridWithoutBorderCPU(const GridBatchData &baseBatchHdl, int BMIN, int BMAX) {
     using GridT = nanovdb::ValueOnIndex;
 
     TORCH_CHECK(BMIN <= BMAX, "BMIN must be less than BMAX");
 
-    std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> batchHandles;
+    std::vector<nanovdb::GridHandle<nanovdb::HostBuffer>> batchHandles;
     batchHandles.reserve(baseBatchHdl.batchSize());
     for (int64_t i = 0; i < baseBatchHdl.batchSize(); i += 1) {
         // View-aware byte-offset accessor: the i-th *logical* grid (correct for sliced/
@@ -180,26 +183,22 @@ buildPaddedGridFromGridWithoutBorderCPU(const GridBatchData &baseBatchHdl, int B
         }
 
         proxyGridAccessor.merge();
-        auto ret = nanovdb::tools::createNanoGrid<ProxyGridT, GridT, TorchDeviceBuffer>(
-            *proxyGrid, 0u, false, false);
-        ret.buffer().to(torch::kCPU);
-        batchHandles.push_back(std::move(ret));
+        batchHandles.push_back(
+            nanovdb::tools::createNanoGrid<ProxyGridT, GridT, nanovdb::HostBuffer>(
+                *proxyGrid, 0u, false, false));
     }
 
-    if (batchHandles.size() == 1) {
-        return std::move(batchHandles[0]);
-    } else {
-        return nanovdb::mergeGrids(batchHandles);
-    }
+    return GridStorage(batchHandles.size() == 1 ? std::move(batchHandles[0])
+                                                : nanovdb::mergeGrids(batchHandles));
 }
 
-nanovdb::GridHandle<TorchDeviceBuffer>
+GridStorage
 buildPaddedGridFromGridCPU(const GridBatchData &baseBatchHdl, int BMIN, int BMAX) {
     using GridT = nanovdb::ValueOnIndex;
 
     TORCH_CHECK(BMIN <= BMAX, "BMIN must be less than BMAX");
 
-    std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> batchHandles;
+    std::vector<nanovdb::GridHandle<nanovdb::HostBuffer>> batchHandles;
     batchHandles.reserve(baseBatchHdl.batchSize());
     for (int64_t i = 0; i < baseBatchHdl.batchSize(); i += 1) {
         // View-aware byte-offset accessor: the i-th *logical* grid (correct for sliced/
@@ -226,43 +225,41 @@ buildPaddedGridFromGridCPU(const GridBatchData &baseBatchHdl, int BMIN, int BMAX
         }
 
         proxyGridAccessor.merge();
-        auto ret = nanovdb::tools::createNanoGrid<ProxyGridT, GridT, TorchDeviceBuffer>(
-            *proxyGrid, 0u, false, false);
-        ret.buffer().to(torch::kCPU);
-        batchHandles.push_back(std::move(ret));
+        batchHandles.push_back(
+            nanovdb::tools::createNanoGrid<ProxyGridT, GridT, nanovdb::HostBuffer>(
+                *proxyGrid, 0u, false, false));
     }
 
-    if (batchHandles.size() == 1) {
-        return std::move(batchHandles[0]);
-    } else {
-        return nanovdb::mergeGrids(batchHandles);
-    }
+    return GridStorage(batchHandles.size() == 1 ? std::move(batchHandles[0])
+                                                : nanovdb::mergeGrids(batchHandles));
 }
 
 // One unit padding pass (Minkowski sum by {0,1}^3 if positive, else {-1,0}^3), building the
 // padded topology directly from the source leaf masks via TopologyBuilder (no coordinate list).
-static nanovdb::GridHandle<TorchDeviceBuffer>
+// The result is allocated from `proto`'s resource on `stream`, which must be `proto`'s retained
+// stream.
+static GridStorage::DeviceHandle
 padOncePass(nanovdb::OnIndexGrid *grid,
             bool positive,
-            const TorchDeviceBuffer &guide,
+            const DeviceGridBuffer &proto,
             cudaStream_t stream) {
     fvdb::detail::morphology::PadGrid<nanovdb::ValueOnIndex, BuilderResource> op(
         grid, positive, stream);
-    op.setChecksum(nanovdb::CheckMode::Default);
-    auto handle = op.getHandle(guide);
+    auto handle = op.getHandle(proto);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
     return handle;
 }
 
 // One unit erosion pass (exclude-border padding). Computes a per-leaf "keep" mask sidecar
 // (voxel survives iff its whole octant neighborhood is active) then prunes the source grid to
-// it via PruneGrid. The keep mask is a subset of the source, so the result is exact.
-static nanovdb::GridHandle<TorchDeviceBuffer>
+// it via PruneGrid. The keep mask is a subset of the source, so the result is exact. Returns
+// nullopt when the erosion removes every voxel; the caller substitutes an empty grid.
+static std::optional<GridStorage::DeviceHandle>
 erodeOncePass(nanovdb::OnIndexGrid *grid,
               uint32_t leafCount,
               bool positive,
               const torch::Device &device,
-              const TorchDeviceBuffer &guide,
+              const DeviceGridBuffer &proto,
               cudaStream_t stream) {
     // Allocate the per-leaf keep-mask sidecar as a torch CUDA tensor so its emptiness can be
     // tested reliably with a torch reduction below (a raw device buffer viewed via from_blob does
@@ -293,35 +290,34 @@ erodeOncePass(nanovdb::OnIndexGrid *grid,
 
     // PruneGrid (via TopologyBuilder) dereferences a null d_upperOffsets when the result has no
     // nodes, so it cannot build an empty grid. Detect an all-empty keep mask (erosion removed
-    // everything) and return an explicit empty grid instead -- same guard as BuildPrunedGrid.cu.
+    // everything) and report it so the caller emits an explicit empty grid instead -- same guard
+    // as BuildPrunedGrid.cu.
     // Reduce via (!= 0).any(): any() alone (an `or` reduction) is not implemented for uint64 on
     // CUDA, but the `!=` yields a bool tensor whose reduction is.
     if (!(keepTensor != 0).any().item<bool>()) {
-        return createEmptyGridHandle(device);
+        return std::nullopt;
     }
 
     nanovdb::tools::cuda::PruneGrid<nanovdb::ValueOnIndex, BuilderResource> pruneOp(
         grid, keepMasks, stream);
-    pruneOp.setChecksum(nanovdb::CheckMode::Default);
     pruneOp.setVerbose(0);
-    auto handle = pruneOp.getHandle(guide);
+    auto handle = pruneOp.getHandle(proto);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
     return handle;
 }
 
 template <>
-nanovdb::GridHandle<TorchDeviceBuffer>
+GridStorage
 dispatchBuildPaddedGrid<torch::kCUDA>(const GridBatchData &baseBatchHdl,
                                       int bmin,
                                       int bmax,
                                       bool excludeBorder) {
-    c10::cuda::CUDAGuard deviceGuard(baseBatchHdl.device());
-    at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream(baseBatchHdl.device().index());
-
-    // This guide buffer is a hack to pass a device (with index) into the TopologyBuilder buffer
-    // allocation (see BuildDilatedGrid.cu). The created grid buffers inherit the guide's
-    // device.
-    TorchDeviceBuffer guide(0, baseBatchHdl.device());
+    const torch::Device device = baseBatchHdl.device();
+    c10::cuda::CUDAGuard deviceGuard(device);
+    // The grids are built and their storage retained on the device's current torch stream; the
+    // prototype carries that stream and the device into every allocation the builders make.
+    const cudaStream_t stream    = storageStream(device);
+    const DeviceGridBuffer proto = GridStorage::deviceProto(device, stream);
 
     // Pad by [bmin, bmax]^3 = (bmax positive unit passes) followed by (-bmin negative unit
     // passes). Minkowski sums / erosions by boxes compose, so the order is immaterial.
@@ -332,19 +328,19 @@ dispatchBuildPaddedGrid<torch::kCUDA>(const GridBatchData &baseBatchHdl,
 
     // Identity case (bmin == bmax == 0): no morphology passes run, so the result is a copy of the
     // selected grids: a byte copy with header fix-up, no radix sort and no joffsets().cpu() sync.
-    // (contiguousGridHandle copies by logical grid, so a sliced / non-contiguous batch, whose
+    // (contiguousGridStorage copies by logical grid, so a sliced / non-contiguous batch, whose
     // storage holds MORE grids than batchSize(), comes out right too.) This is rare and degenerate
     // -- only build_padded_grid(0, 0) reaches it; dual_grid, being (0, 1), never does. The tail
     // then applies the transform fix-up (dual swap or verbatim copy, per `dualTransform`).
     if (totalPasses == 0) {
-        return ops::contiguousGridHandle(baseBatchHdl);
+        return ops::contiguousGridStorage(baseBatchHdl);
     }
 
-    std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> handles;
-    handles.reserve(baseBatchHdl.batchSize());
+    // Build one grid per batch item, then lay them end to end in one storage.
+    GridStorageParts parts(device, stream, baseBatchHdl.batchSize());
     for (int64_t i = 0; i < baseBatchHdl.batchSize(); ++i) {
         if (baseBatchHdl.numVoxelsAt(i) == 0) {
-            handles.push_back(createEmptyGridHandle(baseBatchHdl.device()));
+            parts.addEmpty();
             continue;
         }
 
@@ -352,12 +348,15 @@ dispatchBuildPaddedGrid<torch::kCUDA>(const GridBatchData &baseBatchHdl,
         // non-contiguous batches, unlike gridStorage().deviceGridAt(i) which indexes physically).
         nanovdb::OnIndexGrid *grid = baseBatchHdl.deviceGridPtrAt(i);
 
-        nanovdb::GridHandle<TorchDeviceBuffer> handle;
-        bool haveHandle = false;
+        // The passes chain on the device handle; only the final one is wrapped as storage.
+        // `handle` is empty (default-constructed) until the first pass produces a grid.
+        GridStorage::DeviceHandle handle;
+        bool haveHandle    = false;
+        bool erodedToEmpty = false;
         for (int p = 0; p < totalPasses; ++p) {
             const bool positive = (p < numPositive);
             if (!excludeBorder) {
-                handle = padOncePass(grid, positive, guide, stream.stream());
+                handle = padOncePass(grid, positive, proto, stream);
             } else {
                 const uint32_t leafCount =
                     haveHandle
@@ -366,32 +365,37 @@ dispatchBuildPaddedGrid<torch::kCUDA>(const GridBatchData &baseBatchHdl,
                               .mNodeCount[0]
                         : baseBatchHdl.numLeavesAt(i);
                 if (leafCount == 0) {
-                    // No leaves to erode -- already eroded to empty, or (defensively) a
-                    // leaf-free tile grid. Ensure `handle` is a valid empty grid rather than
-                    // the default-constructed one before breaking.
+                    // No leaves to erode -- (defensively) a leaf-free tile grid, or a prior pass
+                    // left a grid without leaves. Without a handle yet, the item is empty.
                     if (!haveHandle) {
-                        handle = createEmptyGridHandle(baseBatchHdl.device());
+                        erodedToEmpty = true;
                     }
                     break;
                 }
-                handle = erodeOncePass(
-                    grid, leafCount, positive, baseBatchHdl.device(), guide, stream.stream());
+                auto eroded = erodeOncePass(grid, leafCount, positive, device, proto, stream);
+                if (!eroded) {
+                    // Erosion removed every voxel; further passes cannot bring anything back.
+                    erodedToEmpty = true;
+                    break;
+                }
+                handle = std::move(*eroded);
             }
             haveHandle = true;
             grid       = handle.deviceGrid<nanovdb::ValueOnIndex>();
         }
 
-        handles.push_back(std::move(handle));
+        if (erodedToEmpty) {
+            parts.addEmpty();
+        } else {
+            parts.add(GridStorage(std::move(handle), device));
+        }
     }
 
-    if (handles.size() == 1) {
-        return std::move(handles[0]);
-    }
-    return nanovdb::cuda::mergeGridHandles(handles, &guide);
+    return parts.merge();
 }
 
 template <>
-nanovdb::GridHandle<TorchDeviceBuffer>
+GridStorage
 dispatchBuildPaddedGrid<torch::kPrivateUse1>(const GridBatchData &baseBatchHdl,
                                              int bmin,
                                              int bmax,
@@ -409,7 +413,7 @@ dispatchBuildPaddedGrid<torch::kPrivateUse1>(const GridBatchData &baseBatchHdl,
 }
 
 template <>
-nanovdb::GridHandle<TorchDeviceBuffer>
+GridStorage
 dispatchBuildPaddedGrid<torch::kCPU>(const GridBatchData &baseBatchHdl,
                                      int bmin,
                                      int bmax,
@@ -435,13 +439,12 @@ buildPaddedGrid(
                       bmax);
     std::vector<nanovdb::Vec3d> voxS, voxO;
     baseBatchHdl.gridVoxelSizesAndOrigins(voxS, voxO);
-    auto hdl = FVDB_DISPATCH_KERNEL(baseBatchHdl.device(), [&]() {
+    GridStorage built = FVDB_DISPATCH_KERNEL(baseBatchHdl.device(), [&]() {
         return dispatchBuildPaddedGrid<DeviceTag>(baseBatchHdl, bmin, bmax, excludeBorder);
     });
 
-    // The builders still hand back a TorchDeviceBuffer handle; move its grids into storage.
-    auto storage     = std::make_shared<GridStorage>(adoptLegacyGridHandle(std::move(hdl)));
-    const int64_t bs = storage->gridCount();
+    auto storage               = std::make_shared<GridStorage>(std::move(built));
+    const int64_t bs           = storage->gridCount();
     const torch::Device device = storage->device();
 
     GridBatchData::GridMetadata *hostMeta   = nullptr;

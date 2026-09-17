@@ -3,8 +3,7 @@
 //
 #include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/PopulateGridMetadata.h>
-#include <fvdb/detail/utils/nanovdb/CreateEmptyGridHandle.h>
-#include <fvdb/detail/utils/nanovdb/LegacyGridHandle.h>
+#include <fvdb/detail/utils/nanovdb/CreateEmptyGridStorage.h>
 
 #include <c10/cuda/CUDACachingAllocator.h>
 #include <c10/cuda/CUDAGuard.h>
@@ -131,18 +130,10 @@ computeBatchOffsets(GridBatchData::GridMetadata *hostMeta,
 }
 
 c10::intrusive_ptr<GridBatchData>
-makeGridBatchData(nanovdb::GridHandle<TorchDeviceBuffer> &&gridHdl,
-                  const std::vector<nanovdb::Vec3d> &voxelSizes,
-                  const std::vector<nanovdb::Vec3d> &voxelOrigins) {
-    return makeGridBatchData(adoptLegacyGridHandle(std::move(gridHdl)), voxelSizes, voxelOrigins);
-}
-
-c10::intrusive_ptr<GridBatchData>
 makeGridBatchData(GridStorage &&storage,
                   const std::vector<nanovdb::Vec3d> &voxelSizes,
                   const std::vector<nanovdb::Vec3d> &voxelOrigins) {
-    TORCH_CHECK(!storage.isEmpty(),
-                "Cannot create a batched grid handle from an empty grid handle");
+    TORCH_CHECK(!storage.isEmpty(), "Cannot create a GridBatchData from empty grid storage");
     for (std::size_t i = 0; i < voxelSizes.size(); i += 1) {
         TORCH_CHECK_VALUE(voxelSizes[i][0] > 0 && voxelSizes[i][1] > 0 && voxelSizes[i][2] > 0,
                           "Voxel size must be greater than 0");

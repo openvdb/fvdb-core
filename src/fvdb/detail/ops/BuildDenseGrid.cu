@@ -3,19 +3,22 @@
 //
 #include <fvdb/BuilderResource.h>
 #include <fvdb/GridBatchData.h>
+#include <fvdb/GridStorage.h>
 #include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/BuildDenseGrid.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/GridDim.h>
+#include <fvdb/detail/utils/cuda/StreamOrdering.h>
 #include <fvdb/detail/utils/cuda/Utils.cuh>
-#include <fvdb/detail/utils/nanovdb/CreateEmptyGridHandle.h>
+#include <fvdb/detail/utils/nanovdb/DeviceGridHandleUtils.cuh>
 
 #if CCCL_DEVICE_MERGE_SUPPORTED
 #include <nanovdb/tools/cuda/DistributedPointsToGrid.cuh>
 #else
 #include <nanovdb/tools/cuda/PointsToGrid.cuh>
 #endif
+#include <nanovdb/HostBuffer.h>
 
 #include <c10/cuda/CUDACachingAllocator.h>
 #include <c10/cuda/CUDAGuard.h>
@@ -84,15 +87,14 @@ checkInputs(const torch::Device device,
 } // namespace
 
 template <torch::DeviceType>
-nanovdb::GridHandle<TorchDeviceBuffer>
-dispatchCreateNanoGridFromDense(int64_t batchSize,
-                                nanovdb::Coord ijkMin,
-                                nanovdb::Coord size,
-                                torch::Device device,
-                                const std::optional<torch::Tensor> &mask);
+GridStorage dispatchCreateNanoGridFromDense(int64_t batchSize,
+                                            nanovdb::Coord ijkMin,
+                                            nanovdb::Coord size,
+                                            torch::Device device,
+                                            const std::optional<torch::Tensor> &mask);
 
 template <>
-nanovdb::GridHandle<TorchDeviceBuffer>
+GridStorage
 dispatchCreateNanoGridFromDense<torch::kCUDA>(int64_t batchSize,
                                               nanovdb::Coord ijkMin,
                                               nanovdb::Coord size,
@@ -104,7 +106,10 @@ dispatchCreateNanoGridFromDense<torch::kCUDA>(int64_t batchSize,
     checkInputs(device, batchSize, size, ijkMin, mask);
 
     c10::cuda::CUDAGuard deviceGuard(device);
-    cudaStream_t stream = c10::cuda::getCurrentCUDAStream(device.index()).stream();
+    // The grids are built and their storage retained on the device's current torch stream; the
+    // prototype carries that stream and the device into every allocation the builder makes.
+    const cudaStream_t stream    = storageStream(device);
+    const DeviceGridBuffer proto = GridStorage::deviceProto(device, stream);
 
     const int64_t gridVolume = static_cast<int64_t>(size[0]) * size[1] * size[2];
 
@@ -125,46 +130,34 @@ dispatchCreateNanoGridFromDense<torch::kCUDA>(int64_t batchSize,
         ijkData = ijkData.index({maskValue});
     }
 
-    // This guide buffer is a hack to pass in a device with an index to the cudaCreateNanoGrid
-    // function. We can't pass in a device directly but we can pass in a buffer which gets
-    // passed to TorchDeviceBuffer::create. The guide buffer holds the device and effectively
-    // passes it to the created buffer.
-    TorchDeviceBuffer guide(0, device);
-
     TORCH_CHECK(ijkData.is_contiguous(), "ijkData must be contiguous");
 
     // Every batch item is the same dense box (a mask, if given, is shared across the batch), so
-    // build the grid once and copy it for the remaining items instead of re-running the radix sort
-    // over the identical coordinate list batchSize times.
+    // build the grid once and repeat it for the remaining items instead of re-running the radix
+    // sort over the identical coordinate list batchSize times: the merge copies the one grid into
+    // each item's slot.
     const int64_t nVoxels = ijkData.size(0);
-    std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> handles;
-    handles.reserve(batchSize);
+    GridStorageParts parts(device, stream, 1);
     for (int64_t i = 0; i < batchSize; i += 1) {
         if (nVoxels == 0) {
-            handles.push_back(createEmptyGridHandle(guide.device()));
+            parts.addEmpty();
         } else if (i == 0) {
-            handles.push_back(
+            parts.add(GridStorage(
                 nanovdb::tools::cuda::
-                    voxelsToGrid<GridT, nanovdb::Coord *, TorchDeviceBuffer, BuilderResource>(
-                        (nanovdb::Coord *)ijkData.data_ptr(), nVoxels, 1.0, guide));
+                    voxelsToGrid<GridT, nanovdb::Coord *, DeviceGridBuffer, BuilderResource>(
+                        (nanovdb::Coord *)ijkData.data_ptr(), nVoxels, 1.0, proto, stream),
+                device));
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         } else {
-            handles.push_back(handles[0].copy(guide));
+            parts.addRepeat(0);
         }
     }
 
-    if (handles.size() == 1) {
-        // If there's only one handle, just return it
-        return std::move(handles[0]);
-    } else {
-        // This copies all the handles into a single handle -- only do it if there are multie
-        // grids
-        return nanovdb::cuda::mergeGridHandles(handles, &guide);
-    }
+    return parts.merge();
 }
 
 template <>
-nanovdb::GridHandle<TorchDeviceBuffer>
+GridStorage
 dispatchCreateNanoGridFromDense<torch::kPrivateUse1>(int64_t batchSize,
                                                      nanovdb::Coord ijkMin,
                                                      nanovdb::Coord size,
@@ -200,6 +193,8 @@ dispatchCreateNanoGridFromDense<torch::kPrivateUse1>(int64_t batchSize,
         }
     }
 
+    // The coordinates were written on each device's current stream; the mesh streams the builder
+    // runs on are not ordered after them.
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         c10::cuda::getCurrentCUDAStream(deviceId).synchronize();
     }
@@ -210,56 +205,51 @@ dispatchCreateNanoGridFromDense<torch::kPrivateUse1>(int64_t batchSize,
         ijkData = ijkData.index({maskValue});
     }
 
-    // This guide buffer is a hack to pass in a device with an index to the cudaCreateNanoGrid
-    // function. We can't pass in a device directly but we can pass in a buffer which gets
-    // passed to TorchDeviceBuffer::create. The guide buffer holds the device and effectively
-    // passes it to the created buffer.
-    TorchDeviceBuffer guide(0, device);
-
     TORCH_CHECK(ijkData.is_contiguous(), "ijkData must be contiguous");
 
+    // Unified-memory storage is not stream-ordered; storageStream(PrivateUse1) is the legacy
+    // default stream, which is what the storage retains and what the assembler orders against.
+    const cudaStream_t stream    = storageStream(device);
+    const DeviceGridBuffer proto = GridStorage::deviceProto(device, stream);
+
     // Every batch item is the same dense box, so build the grid once and copy it for the remaining
-    // items instead of re-running DistributedPointsToGrid over the identical coordinate list.
+    // items instead of re-running DistributedPointsToGrid over the identical coordinate list: the
+    // merge copies the one grid into each item's slot.
     const int64_t nVoxels = ijkData.size(0);
-    std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> handles;
-    handles.reserve(batchSize);
+    GridStorageParts parts(device, stream, 1);
     for (int64_t i = 0; i < batchSize; i++) {
         if (!nVoxels) {
-            handles.emplace_back(createEmptyGridHandle(device));
+            parts.addEmpty();
         } else if (i == 0) {
             int32_t *dataPtr = ijkData.data_ptr<int32_t>();
             auto coordPtr    = reinterpret_cast<nanovdb::Coord *>(dataPtr);
 
             nanovdb::cuda::DeviceMesh mesh;
             nanovdb::tools::cuda::DistributedPointsToGrid<GridT> converter(mesh);
-            handles.emplace_back(
-                converter.getHandle<nanovdb::Coord *, TorchDeviceBuffer>(coordPtr, nVoxels, guide));
+            auto handle =
+                converter.getHandle<nanovdb::Coord *, DeviceGridBuffer>(coordPtr, nVoxels, proto);
+            // getHandle allocated the storage on, and synchronized, a stream of `mesh`, which is
+            // destroyed at the end of this iteration. Retain the storage stream instead so the
+            // buffer never names a dead stream.
+            handle.buffer().set_stream(stream);
+            parts.add(GridStorage(std::move(handle), device));
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         } else {
-            handles.emplace_back(handles[0].copy(guide));
+            parts.addRepeat(0);
         }
     }
 
-    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-        c10::cuda::getCurrentCUDAStream(deviceId).synchronize();
-    }
-
-    if (handles.size() == 1) {
-        // If there's only one handle, just return it
-        return std::move(handles[0]);
-    } else {
-        // This copies all the handles into a single handle -- only do it if there are multie
-        // grids
-        return nanovdb::cuda::mergeGridHandles(handles, &guide);
-    }
+    // A single item is handed out as built (getHandle synchronized its mesh); the assembler
+    // synchronizes for a PrivateUse1 destination itself.
+    return parts.merge();
 #else
     TORCH_CHECK(false, "Distributed creation of grids requires CUDA 12.8 or later");
-    return nanovdb::GridHandle<TorchDeviceBuffer>();
+    return GridStorage();
 #endif
 }
 
 template <>
-nanovdb::GridHandle<TorchDeviceBuffer>
+GridStorage
 dispatchCreateNanoGridFromDense<torch::kCPU>(int64_t batchSize,
                                              nanovdb::Coord ijkMin,
                                              nanovdb::Coord size,
@@ -295,25 +285,20 @@ dispatchCreateNanoGridFromDense<torch::kCPU>(int64_t batchSize,
     }
 
     proxyGridAccessor.merge();
-    nanovdb::GridHandle<TorchDeviceBuffer> ret =
-        nanovdb::tools::createNanoGrid<ProxyGridT, GridT, TorchDeviceBuffer>(
+    nanovdb::GridHandle<nanovdb::HostBuffer> ret =
+        nanovdb::tools::createNanoGrid<ProxyGridT, GridT, nanovdb::HostBuffer>(
             *proxyGrid, 0u, false, false);
-    ret.buffer().to(torch::kCPU);
 
-    TorchDeviceBuffer guide(0, torch::kCPU);
-
-    std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> batchHandles;
+    // Every batch item is the same dense box, so copy the one grid for the remaining items.
+    std::vector<nanovdb::GridHandle<nanovdb::HostBuffer>> batchHandles;
     batchHandles.reserve(batchSize);
     batchHandles.push_back(std::move(ret));
     for (uint32_t i = 1; i < batchSize; i += 1) {
-        batchHandles.push_back(batchHandles[0].copy(guide));
+        batchHandles.push_back(batchHandles[0].copy());
     }
 
-    if (batchHandles.size() == 1) {
-        return std::move(batchHandles[0]);
-    } else {
-        return nanovdb::mergeGrids(batchHandles);
-    }
+    return GridStorage(batchHandles.size() == 1 ? std::move(batchHandles[0])
+                                                : nanovdb::mergeGrids(batchHandles));
 }
 
 c10::intrusive_ptr<GridBatchData>
@@ -345,11 +330,11 @@ createNanoGridFromDense(int64_t batchSize,
                       "You requested ",
                       batchSize,
                       " grids.");
-    auto handle = FVDB_DISPATCH_KERNEL(device, [&]() {
+    GridStorage storage = FVDB_DISPATCH_KERNEL(device, [&]() {
         return dispatchCreateNanoGridFromDense<DeviceTag>(
             batchSize, ijkMin, size, device, maybeMask);
     });
-    return makeGridBatchData(std::move(handle), voxelSizes, origins);
+    return makeGridBatchData(std::move(storage), voxelSizes, origins);
 }
 
 } // namespace ops
