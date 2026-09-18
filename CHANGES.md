@@ -15,9 +15,9 @@ viewer controls in the Viewer. It also migrates C++ grid storage to NanoVDB's si
 - Reworked CUDA grid-topology construction around NanoVDB leaf-mask morphology and batched builders. Reported
   benchmarks showed up to ~309x faster construction with ~1500x less transient memory on a
   24.4M-output-voxel workload, and up to ~27x faster batched transposed-grid construction.
-- Migrated C++ grid storage to NanoVDB's single-space memory-resource API, routed builder scratch through
-  PyTorch's active CUDA allocator, and unified grid assembly, compaction, serialization, and cross-device copies.
-  Now all memory used by the framework is allocated by PyTorch's active CUDA allocator and managed by its memory pool.
+- Migrated C++ grid storage to NanoVDB's single-space memory-resource API and unified grid assembly, compaction,
+  serialization, and cross-device copies.
+  Grid storage and builder scratch now allocate through PyTorch's active CUDA allocator.
 - Moved the high-level Gaussian splatting python API to fVDB Reality Capture while expanding the retained kernels with
   multi-GPU 3DGUT support, up to 2.18x faster projection backward, up to 57.5% faster SH backward, and up to 4.67x
   faster fused SSIM. Large Gaussian PLY loading improvements measured ~3x faster.
@@ -134,7 +134,8 @@ pre-change baseline; they are workload-specific and are not cumulative release-t
 - **Breaking (C++):** `GridBatchData` now uses private `GridStorage` backed by NanoVDB's single-space buffers.
   Replace `nanoGridHandle()` with logical `hostGridPtrAt` / `deviceGridPtrAt` accessors, order reads after
   `storageStream()`, and use `fvdb::detail::ops::contiguousGridStorage` for batch copies. `TorchDeviceBuffer`
-  and `TorchStorageResource` are deprecated for one release; the latter moved to `TorchDeviceBuffer.h`.
+  and `TorchStorageResource` are unused by fVDB and deprecated for one release; the latter moved to
+  `TorchDeviceBuffer.h`. Both will be removed with the NanoVDB pin bump that removes dual-space buffers.
   Builders no longer compute per-grid checksums (#770; PRs #773, #786, #787, #788, #790).
 - NanoVDB builder scratch now uses PyTorch's active CUDA allocator, sharing its memory pool with tensors and
   respecting allocator configuration or replacement. Device grid storage uses `TorchDeviceResource`, keyed to
