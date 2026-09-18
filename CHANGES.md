@@ -9,6 +9,22 @@ This release unifies sparse convolution geometry, reduces grid-construction memo
 Gaussian splatting's high-level API to fVDB Reality Capture, and adds native volume rendering and interactive
 viewer controls in the Viewer. It also migrates C++ grid storage to NanoVDB's single-space memory-resource API.
 
+**Highlights:**
+- Unified sparse convolution and transposed-convolution geometry around a single Torch-style phase relation,
+  including full generated transposed support, stricter grid-registration checks, and new topology diagnostics.
+- Reworked CUDA grid-topology construction around NanoVDB leaf-mask morphology and batched builders. Reported
+  benchmarks showed up to ~309x faster construction with ~1500x less transient memory on a
+  24.4M-output-voxel workload, and up to ~27x faster batched transposed-grid construction.
+- Migrated C++ grid storage to NanoVDB's single-space memory-resource API, routed builder scratch through
+  PyTorch's active CUDA allocator, and unified grid assembly, compaction, serialization, and cross-device copies.
+  Now all memory used by the framework is allocated by PyTorch's active CUDA allocator and managed by its memory pool.
+- Moved the high-level Gaussian splatting python API to fVDB Reality Capture while expanding the retained kernels with
+  multi-GPU 3DGUT support, up to 2.18x faster projection backward, up to 57.5% faster SH backward, and up to 4.67x
+  faster fused SSIM. Large Gaussian PLY loading improvements measured ~3x faster.
+- Added `fvdb.nn.Prune`, generative shape-completion and shape-VAE examples, and native level-set/fog-volume
+  rendering with interactive Viewer widgets.
+- Accelerated HDDA ray traversal; measured up to 1.68x faster for NanoVDB example grids with 512x512 rays.
+
 **Contributors:** @swahtz, @matthewdcong, @harrism, @phapalova, @blackencino
 
 ### Compatibility & Distribution
@@ -38,7 +54,7 @@ viewer controls in the Viewer. It also migrates C++ grid storage to NanoVDB's si
 
 ### Sparse Convolution Semantics & Migration
 
-The following changes implement the canonical convolution contract in PR #726 (issue #668).
+The following changes to transposed sparse convolution semantics were encapsulated in PR #726 (issue #668).
 
 - **Breaking:** Unified sparse convolution and transposed-convolution geometry around the componentwise Torch-phase
   relation ``fine_ijk = stride * coarse_ijk + tap_ijk - padding_before``, where
@@ -92,7 +108,8 @@ pre-change baseline; they are workload-specific and are not cumulative release-t
   and supported convolution, refinement, coarsening, and merge paths, avoiding expanded candidate-list int32
   overflow. On an 11.5M-output-voxel dense-cube benchmark, `conv_grid(k3, s1)` construction fell from 246 to
   1.85 ms (~133x faster), with temporary memory dropping from 11.23 GB to 8.6 MB on RTX PRO 6000 Blackwell
-  (#710, #712).
+  (#710, #712). At 24.4M output voxels, construction fell from 519.7 to 1.68 ms (~309x faster), with temporary
+  memory dropping from 23.87 GB to 15.9 MB (~1502x less).
 - Batched supported CUDA refinement, coarsening, and generated convolution topology construction to reduce
   per-grid launches and synchronization. Added an identity-convolution-plan fast path and reduced metadata
   overhead. For 48 synthetic shell grids, `conv_transpose_grid(k2, s2)` construction fell from 25.6 to 0.94 ms
