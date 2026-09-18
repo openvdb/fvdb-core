@@ -58,6 +58,7 @@ if _spec is not None and _spec.origin is not None:
 
 # isort: off
 from ._fvdb_cpp import (
+    CameraModel,
     NanoVDBGridMetadata,
     config,
     morton,
