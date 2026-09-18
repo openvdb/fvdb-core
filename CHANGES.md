@@ -6,22 +6,22 @@ fVDB Version History
 *91 commits, 260 files changed, 5 contributors.*
 
 This release standardizes sparse convolution and transposed-convolution geometry around a single Torch-style
-phase convention; reduces grid-construction memory and greatly improves grid-batch building performance; moves
-Gaussian splatting's high-level API to fVDB Reality Capture; and adds native volume rendering and interactive
-viewer controls in the Viewer. It also migrates C++ grid storage to NanoVDB's single-space memory-resource API.
+phase convention; reduces grid-construction memory and greatly improves batched grid-construction performance;
+moves Gaussian splatting's high-level API to fVDB Reality Capture; and adds native volume rendering and interactive
+Viewer controls. It also migrates C++ grid storage to NanoVDB's single-space memory-resource API.
 
 **Highlights:**
 - Unified sparse convolution and transposed-convolution geometry around a single Torch-style phase relation,
   including full generated transposed support, stricter grid-registration checks, and new topology diagnostics.
 - Reworked CUDA grid-topology construction around NanoVDB leaf-mask morphology and batched builders. Reported
-  benchmarks showed up to ~309x faster construction with ~1500x less transient memory on a
-  24.4M-output-voxel workload, and up to ~27x faster batched transposed-grid construction.
+  benchmarks showed up to 309x faster construction and a ~1500x reduction in transient memory on a
+  24.4M-output-voxel workload, and up to 27x faster batched transposed-grid construction.
 - Migrated C++ grid storage to NanoVDB's single-space memory-resource API and unified grid assembly, compaction,
   serialization, and cross-device copies.
   Grid storage and builder scratch now allocate through PyTorch's active CUDA allocator.
-- Moved the high-level Gaussian splatting python API to fVDB Reality Capture while expanding the retained kernels with
+- Moved the high-level Gaussian splatting Python API to fVDB Reality Capture while expanding the retained kernels with
   multi-GPU 3DGUT support, up to 2.18x faster projection backward, up to 57.5% faster SH backward, and up to 4.67x
-  faster fused SSIM. Large Gaussian PLY loading improvements measured ~3x faster.
+  faster fused SSIM. Improved large Gaussian PLY loading, measured a 375M-Gaussian PLY load at ~3x faster.
 - Added `fvdb.nn.Prune`, generative shape-completion and shape-VAE examples, and native level-set/fog-volume
   rendering with interactive Viewer widgets.
 - Accelerated HDDA ray traversal; measured up to 1.68x faster for NanoVDB example grids with 512x512 rays.
@@ -35,7 +35,7 @@ viewer controls in the Viewer. It also migrates C++ grid storage to NanoVDB's si
 - Removed compatibility code for PyTorch versions older than 2.6; package metadata now requires `torch>=2.7`.
   Prebuilt wheels must still match their advertised PyTorch/CUDA versions (#700).
 - Added a `StrEnum` compatibility wrapper so the convolution enums work on Python 3.10 (#740).
-- Added weekly compatibility testing against the oldest PyTorch supporting the lowest supported CUDA version,
+- Added weekly compatibility testing against the oldest PyTorch version supporting the lowest supported CUDA version,
   currently PyTorch 2.9.1 with CUDA 13.0 (#745).
 
 ### SDF & Ray Traversal
@@ -44,9 +44,9 @@ viewer controls in the Viewer. It also migrates C++ grid storage to NanoVDB's si
   `fvdb.functional`; no compatibility alias is provided (#762).
 - Fixed `reinitialize_sdf` creating phantom interior interfaces in narrow-band SDFs. Inactive neighbors and
   newly padded voxels now inherit the adjacent active voxel's sign (#762).
-- **Input requirements:** Occupancy-to-SDF inputs must include a positive exterior layer; all-negative inputs
-  produce an empty narrow band. Both SDF operations require finite scalar values shaped `(N,)` or `(N, 1)`,
-  and `reinitialize_sdf` rejects anisotropic voxels (#762).
+- **Input requirements:** Inputs must include a positive exterior layer to define a surface via zero-crossings;
+  all-negative inputs produce an empty narrow band. Both SDF operations require finite scalar values shaped `(N,)`
+  or `(N, 1)`, and `reinitialize_sdf` rejects anisotropic voxels (#762).
 - Fixed spurious near-origin hits in `ray_implicit_intersection` when active TSDF voxels contain zero-valued
   no-data samples. Exact zeros now act as gaps instead of seeding or triggering a sign crossing (#698).
 - Accelerated HDDA ray traversal with NanoVDB's fused `ReadAccessor::getDimAndActive`: `voxels_along_rays`
@@ -55,7 +55,7 @@ viewer controls in the Viewer. It also migrates C++ grid storage to NanoVDB's si
 
 ### Sparse Convolution Semantics & Migration
 
-The following changes to transposed sparse convolution semantics were encapsulated in PR #726 (issue #668).
+The following changes to transposed sparse convolution semantics were implemented in PR #726 (issue #668).
 
 - **Breaking:** Unified sparse convolution and transposed-convolution geometry around the componentwise Torch-phase
   relation ``fine_ijk = stride * coarse_ijk + tap_ijk - padding_before``, where
@@ -110,15 +110,14 @@ pre-change baseline; they are workload-specific and are not cumulative release-t
   overflow. On an 11.5M-output-voxel dense-cube benchmark, `conv_grid(k3, s1)` construction fell from 246 to
   1.85 ms (~133x faster), with temporary memory dropping from 11.23 GB to 8.6 MB on RTX PRO 6000 Blackwell
   (#710, #712). At 24.4M output voxels, construction fell from 519.7 to 1.68 ms (~309x faster), with temporary
-  memory dropping from 23.87 GB to 15.9 MB (~1502x less).
-- Batched supported CUDA refinement, coarsening, and generated convolution topology construction to reduce
+  memory dropping from 23.87 GB to 15.9 MB (a ~1502x reduction).
+- Batched CUDA construction for supported refinement, coarsening, and generated convolution topologies to reduce
   per-grid launches and synchronization. Added an identity-convolution-plan fast path and reduced metadata
   overhead. For 48 synthetic shell grids, `conv_transpose_grid(k2, s2)` construction fell from 25.6 to 0.94 ms
   (~27x faster) on RTX PRO 6000 Blackwell (#757).
 - CUDA point-grid construction now transforms points to voxel coordinates on demand, eliminating the temporary
   `(N, 3)` int32 coordinate tensor (12 bytes per input point), including for strided point inputs. Seven
-  point-cloud benchmarks on RTX PRO 6000 Blackwell showed 1.7-10.2% lower execution time; peak memory was
-  unchanged in the reported memory tests (#719).
+  point-cloud benchmarks on RTX PRO 6000 Blackwell showed 1.7-10.2% lower execution time (#719).
 - Morton and Hilbert encoders now use the stored batch bounding-box minimum for their default offset instead
   of materializing and reducing every voxel coordinate. `GridBatch.morton()` measured 1.67-1.79x faster on
   400K-5M voxels on an RTX PRO 6000 Blackwell GPU (#748).
@@ -136,7 +135,8 @@ pre-change baseline; they are workload-specific and are not cumulative release-t
   Replace `nanoGridHandle()` with logical `hostGridPtrAt` / `deviceGridPtrAt` accessors, order reads after
   `storageStream()`, and use `fvdb::detail::ops::contiguousGridStorage` for batch copies. `TorchDeviceBuffer`
   and `TorchStorageResource` are unused by fVDB and deprecated for one release; the latter moved to
-  `TorchDeviceBuffer.h`. Both will be removed with the NanoVDB pin bump that removes dual-space buffers.
+  `TorchDeviceBuffer.h`. Both will be removed when a future NanoVDB pin bump adopts upstream's removal of
+  dual-space buffers.
   Builders no longer compute per-grid checksums (#770; PRs #773, #786, #787, #788, #790).
 - NanoVDB builder scratch now uses PyTorch's active CUDA allocator, sharing its memory pool with tensors and
   respecting allocator configuration or replacement. Device grid storage uses `TorchDeviceResource`, keyed to
