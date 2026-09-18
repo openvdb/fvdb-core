@@ -3,10 +3,11 @@ fVDB Version History
 
 ## Version 0.6.0 - In Development
 
-*91 commits, 259 files changed, 5 contributors.*
+*91 commits, 260 files changed, 5 contributors.*
 
-This release unifies sparse convolution geometry, reduces grid-construction memory and batch overhead, moves
-Gaussian splatting's high-level API to fVDB Reality Capture, and adds native volume rendering and interactive
+This release standardizes sparse convolution and transposed-convolution geometry around a single Torch-style
+phase convention; reduces grid-construction memory and greatly improves grid-batch building performance; moves
+Gaussian splatting's high-level API to fVDB Reality Capture; and adds native volume rendering and interactive
 viewer controls in the Viewer. It also migrates C++ grid storage to NanoVDB's single-space memory-resource API.
 
 **Highlights:**
