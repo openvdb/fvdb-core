@@ -60,6 +60,11 @@ template <uint32_t NUM_CHANNELS, typename Camera>
 __global__ void
 rasterizeFromWorld3DGSBackwardKernel(
     const RasterizeFromWorldBackwardArgs<NUM_CHANNELS, Camera> args) {
+    // Fully expanding every channel operation makes the 512/513-channel kernels prohibitively
+    // expensive for ptxas to optimize, especially for SM 120. Preserve full unrolling for the
+    // smaller kernels while keeping the generated code bounded for larger channel counts.
+    constexpr uint32_t CHANNEL_UNROLL = NUM_CHANNELS <= 32 ? 32 : 4;
+
     auto block               = cg::this_thread_block();
     const uint32_t blockSize = blockDim.x * blockDim.y;
     const auto &common       = args.commonArgs;
@@ -107,7 +112,7 @@ rasterizeFromWorld3DGSBackwardKernel(
     float T                        = 1.0f;
 
     float v_render_c[NUM_CHANNELS];
-#pragma unroll
+#pragma unroll CHANNEL_UNROLL
     for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
         v_render_c[k] = 0.f;
     }
@@ -120,7 +125,7 @@ rasterizeFromWorld3DGSBackwardKernel(
         T_final                = 1.0f - alphaFinal;
         T                      = T_final;
 
-#pragma unroll
+#pragma unroll CHANNEL_UNROLL
         for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
             v_render_c[k] = args.dLossDRenderedFeatures[camId][row][col][k];
         }
@@ -128,7 +133,7 @@ rasterizeFromWorld3DGSBackwardKernel(
     }
 
     float buffer[NUM_CHANNELS];
-#pragma unroll
+#pragma unroll CHANNEL_UNROLL
     for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
         buffer[k] = 0.f;
     }
@@ -237,7 +242,7 @@ rasterizeFromWorld3DGSBackwardKernel(
             }
 
             float v_feat_local[NUM_CHANNELS];
-#pragma unroll
+#pragma unroll CHANNEL_UNROLL
             for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
                 v_feat_local[k] = 0.f;
             }
@@ -252,7 +257,7 @@ rasterizeFromWorld3DGSBackwardKernel(
                 T *= ra;
 
                 const float fac = alpha * T;
-#pragma unroll
+#pragma unroll CHANNEL_UNROLL
                 for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
                     v_feat_local[k] = fac * v_render_c[k];
                 }
@@ -263,7 +268,7 @@ rasterizeFromWorld3DGSBackwardKernel(
                 const int32_t cid    = flatId / (int32_t)common.means.size(0);
                 const int32_t gid    = flatId % (int32_t)common.means.size(0);
 
-#pragma unroll
+#pragma unroll CHANNEL_UNROLL
                 for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
                     const float c = common.features[cid][gid][k];
                     v_alpha += (c * T - buffer[k] * ra) * v_render_c[k];
@@ -273,7 +278,7 @@ rasterizeFromWorld3DGSBackwardKernel(
 
                 if (common.backgrounds != nullptr) {
                     float accum = 0.f;
-#pragma unroll
+#pragma unroll CHANNEL_UNROLL
                     for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
                         accum += common.backgroundValue(camId, k) * v_render_c[k];
                     }
@@ -327,7 +332,7 @@ rasterizeFromWorld3DGSBackwardKernel(
                 }
 
                 // buffer update
-#pragma unroll
+#pragma unroll CHANNEL_UNROLL
                 for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
                     const int32_t flatId = idBatch[t];
                     const int32_t cid    = flatId / (int32_t)common.means.size(0);
@@ -341,7 +346,11 @@ rasterizeFromWorld3DGSBackwardKernel(
             warpSumMut(v_mean_local, warp);
             warpSumMut<4>(v_quat_local, warp);
             warpSumMut(v_logscale_local, warp);
-            warpSumMut<NUM_CHANNELS>(v_feat_local, warp);
+            if constexpr (NUM_CHANNELS <= 32) {
+                warpSumMut<NUM_CHANNELS>(v_feat_local, warp);
+            } else {
+                warpSumMut(v_feat_local, NUM_CHANNELS, warp);
+            }
 
             if (warp.thread_rank() == 0) {
                 const int32_t flatId = idBatch[t];
@@ -352,7 +361,7 @@ rasterizeFromWorld3DGSBackwardKernel(
                 float *dFeaturesGaussianPtr = args.dFeatures.data() +
                                               cid * args.dFeatures.stride(0) +
                                               gid * args.dFeatures.stride(1);
-#pragma unroll
+#pragma unroll CHANNEL_UNROLL
                 for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
                     atomicAdd(dFeaturesGaussianPtr + k * args.dFeatures.stride(2), v_feat_local[k]);
                 }
