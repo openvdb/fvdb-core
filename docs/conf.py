@@ -62,9 +62,9 @@ author = "Contributors to the OpenVDB Project"
 # Updated automatically by devtools/update-doc-versions.sh when a release is
 # published (see .github/workflows/sync-doc-version.yml).
 fvdb_core_stable_version = "0.6.0"
-fvdb_core_stable_torch_version = "2.11.0"
+fvdb_core_stable_torch_version = "2.13.0"
 fvdb_core_stable_cuda_versions = ["13.0", "13.2"]
-fvdb_core_stable_python_range = "3.10 - 3.14"
+fvdb_core_stable_python_range = "3.10 - 3.15"
 
 version = fvdb_core_stable_version
 release = fvdb_core_stable_version
