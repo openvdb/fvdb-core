@@ -4,6 +4,7 @@
 #ifndef FVDB_DETAIL_UTILS_NANOVDB_DEVICEGRIDHANDLEUTILS_CUH
 #define FVDB_DETAIL_UTILS_NANOVDB_DEVICEGRIDHANDLEUTILS_CUH
 
+#include <fvdb/GridBatchData.h>
 #include <fvdb/GridStorage.h>
 #include <fvdb/TorchDeviceResource.h>
 #include <fvdb/detail/utils/cuda/StreamOrdering.h>
@@ -85,6 +86,23 @@ struct GridSpanSource {
     cudaStream_t stream;
     std::vector<GridSpan> spans;
 };
+
+/// @brief Logical grids [@p first, @p first + @p count) of @p input as spans of its storage, read
+///        from the side the batch lives on, as one source on the batch's storage stream: the one
+///        spelling of "a batch's grids as spans" for compaction, cloning and concatenation.
+///        Correct for sliced and non-contiguous views, whose storage holds more grids than they
+///        select.
+inline GridSpanSource
+logicalGridSpans(const GridBatchData &input, int64_t first, int64_t count) {
+    const bool onHost = input.device().is_cpu();
+    GridSpanSource source{input.device(), input.storageStream(), {}};
+    source.spans.reserve(count);
+    for (int64_t i = first; i < first + count; ++i) {
+        const void *grid = onHost ? input.hostGridPtrAt(i) : input.deviceGridPtrAt(i);
+        source.spans.push_back(GridSpan{grid, input.numBytesAt(i), nanovdb::GridType::OnIndex});
+    }
+    return source;
+}
 
 /// @brief Lays the spans of every source end to end into fresh storage on @p device, made on
 ///        @p stream, each header stamped with its new (index, count) and its checksum disabled,

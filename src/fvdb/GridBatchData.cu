@@ -11,9 +11,14 @@ namespace fvdb {
 // Methods that dereference mStorage
 // -----------------------------------------------------------------------
 
-const GridStorage &
-GridBatchData::gridStorage() const {
-    return *mStorage;
+GridStorage
+GridBatchData::copyStorage(const torch::Device &device, cudaStream_t stream) const {
+    return mStorage->to(device, stream);
+}
+
+cudaStream_t
+GridBatchData::storageStream() const {
+    return mStorage->stream();
 }
 
 const c10::Device

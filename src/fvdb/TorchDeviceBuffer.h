@@ -4,20 +4,98 @@
 #ifndef FVDB_TORCHDEVICEBUFFER_H
 #define FVDB_TORCHDEVICEBUFFER_H
 
+#include <fvdb/TorchResource.h>
+
 #include <nanovdb/GridHandle.h>
 #include <nanovdb/HostBuffer.h> // for BufferTraits
 
+#include <c10/cuda/CUDACachingAllocator.h>
+#include <c10/cuda/CUDAException.h>
+#include <c10/cuda/CUDAStream.h>
 #include <torch/types.h>
+
+// Everything in this header is deprecated. fvdb no longer uses it; it stays for one release as
+// a shim for downstream code that took TorchDeviceBuffer from the public headers (#632), and is
+// deleted with the NanoVDB pin bump past upstream's removal of dual-space buffers (openvdb #2232).
+// The deprecation warnings this header's own definitions would raise are silenced here; a user of
+// the header gets them at every use.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 
 namespace fvdb {
 
-/// @brief Simple memory buffer using un-managed pinned host memory when compiled with NVCC.
-///        Obviously this class is making explicit used of CUDA so replace it with your own memory
-///        allocator if you are not using CUDA.
-/// @note  While CUDA's pinned host memory allows for asynchronous memory copy between host and
-/// device
-///        it is significantly slower then cached (un-pinned) memory on the host.
-class TorchDeviceBuffer {
+/// @brief Torch-allocator resource for device storage that torch owns after the op that
+///        produced it: grid buffers.
+///
+///        The block is always taken on the current device's current torch stream, never on
+///        the caller's, because that is the only stream torch will reuse it from and it is a
+///        stream that outlives the block. A nanovdb builder may write storage on a stream
+///        of its own (DistributedPointsToGrid uses its DeviceMesh stream, which dies with the
+///        mesh); a block keyed to such a stream would never be reused, would make torch
+///        synchronize on a dead handle when releasing an expandable segment, and would be
+///        cudaFreeAsync'd on it under that backend.
+///
+///        @p stream is the stream the caller will write the memory on. When it differs from
+///        the allocation stream it is made to wait on an event recorded right after the
+///        allocation, so the caller's writes are ordered behind the block's previous tenant,
+///        whose work may still be queued on the torch stream. Nothing orders the free: as
+///        for a tensor, the block returns to the torch stream on release, so a caller whose
+///        writer stream differs must synchronize it before releasing the storage. The
+///        NanoVDB builders synchronize before returning a handle over this buffer.
+///
+///        Only TorchDeviceBuffer uses this, and it is deprecated with it. TorchDeviceResource,
+///        the resource behind GridStorage, deliberately keys the block to the buffer's retained
+///        stream instead (see TorchDeviceResource.h).
+struct [[deprecated(
+    "TorchStorageResource served TorchDeviceBuffer; grid storage is GridStorage over "
+    "TorchDeviceResource")]] TorchStorageResource
+    : nanovdb::cuda::SyncFromAsync<TorchStorageResource> {
+    static constexpr size_t DEFAULT_ALIGNMENT = TorchResource::DEFAULT_ALIGNMENT;
+
+    void *
+    allocate_async(size_t bytes, size_t alignment, cudaStream_t stream) {
+        const cudaStream_t allocStream = c10::cuda::getCurrentCUDAStream().stream();
+        void *p = TorchResource{}.allocate_async(bytes, alignment, allocStream);
+        if (stream == allocStream) {
+            return p;
+        }
+        cudaEvent_t ready = nullptr;
+        cudaError_t err   = cudaEventCreateWithFlags(&ready, cudaEventDisableTiming);
+        if (err == cudaSuccess) {
+            err = cudaEventRecord(ready, allocStream);
+        }
+        if (err == cudaSuccess) {
+            err = cudaStreamWaitEvent(stream, ready, 0);
+        }
+        if (ready) {
+            const cudaError_t destroyErr = cudaEventDestroy(ready);
+            if (err == cudaSuccess) {
+                err = destroyErr;
+            }
+        }
+        if (err != cudaSuccess) {
+            c10::cuda::CUDACachingAllocator::raw_delete(p);
+            C10_CUDA_CHECK(err);
+        }
+        return p;
+    }
+
+    void
+    deallocate_async(void *p, size_t bytes, size_t alignment, cudaStream_t stream) {
+        TorchResource{}.deallocate_async(p, bytes, alignment, stream);
+    }
+};
+
+static_assert(nanovdb::cuda::is_async_resource<TorchStorageResource>::value,
+              "TorchStorageResource must model nanoVDB's stream-ordered AsyncResource concept");
+
+/// @brief Deprecated: the dual-space buffer fvdb's grid storage used to be a nanovdb::GridHandle
+///        over. Grid storage is GridStorage (GridStorage.h), a single-space HostBuffer or
+///        nanovdb::cuda::Buffer<std::byte, TorchDeviceResource> handle; the NanoVDB builders take
+///        their output storage from GridStorage::deviceProto. Nothing in fvdb constructs or
+///        accepts a TorchDeviceBuffer any more.
+class [[deprecated("fvdb grid storage is GridStorage; TorchDeviceBuffer is unused and will be "
+                   "removed")]] TorchDeviceBuffer {
     uint64_t mSize; // total number of bytes for the NanoVDB grid.
     uint8_t *mData; // raw buffer for the NanoVDB grid.
     torch::Device mDevice{torch::kCPU};
@@ -110,5 +188,7 @@ GridHandle<fvdb::TorchDeviceBuffer>::copy<fvdb::TorchDeviceBuffer>(
     const fvdb::TorchDeviceBuffer &guide) const;
 
 } // namespace nanovdb
+
+#pragma GCC diagnostic pop
 
 #endif // FVDB_TORCHDEVICEBUFFER_H

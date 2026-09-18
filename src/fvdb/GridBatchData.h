@@ -13,6 +13,7 @@
 #include <ATen/core/TensorBody.h>
 #include <torch/types.h>
 
+#include <optional>
 #include <vector>
 
 #if !defined(__CUDACC__) && !defined(__restrict__)
@@ -79,21 +80,30 @@ struct GridBatchData : public torch::CustomClassHolder {
     };
 
     // -----------------------------------------------------------------------
-    // Data fields (all public, immutable after construction)
+    // Data fields (immutable after construction; the storage is private, below)
     // -----------------------------------------------------------------------
     GridMetadata *mHostGridMetadata{nullptr};   // CPU only
     GridMetadata *mDeviceGridMetadata{nullptr}; // CUDA only
     int64_t mBatchSize{0};
     GridBatchMetadata mBatchMetadata;           // Metadata about the whole batch
-    std::shared_ptr<GridStorage> mStorage;      // the grids' bytes and metadata; shared with views
     torch::Tensor mLeafBatchIndices; // Indices of leaf nodes in the batch shape = [total_leafs]
     torch::Tensor mBatchOffsets;     // Batch indices for grid
     torch::Tensor mListIndices;      // List indices for grid (same as JaggedTensor)
 
+  private:
+    // The grids' bytes and the metadata locating them; shared with views over this batch. Grid
+    // indices on it are *physical*: a view over a subset of the batch maps logical items onto them
+    // by byte offset (cumBytesAt), which is what deviceGridPtrAt / hostGridPtrAt do. Nothing
+    // outside this class reads the storage directly; ops go through those accessors,
+    // storageStream(), and copyStorage().
+    std::shared_ptr<GridStorage> mStorage;
+
+  public:
     // -----------------------------------------------------------------------
-    // Single constructor: bundles pre-computed fields (takes ownership of
-    // metadata pointers). All computation happens outside, in factory
-    // functions, before this constructor is called.
+    // Constructors: bundle pre-computed fields (take ownership of the metadata
+    // pointers). All computation happens outside, in factory functions, before
+    // a constructor is called. The second builds a view sharing another
+    // batch's storage.
     // -----------------------------------------------------------------------
     GridBatchData(std::shared_ptr<GridStorage> storage,
                   GridMetadata *hostGridMetadata,
@@ -105,8 +115,25 @@ struct GridBatchData : public torch::CustomClassHolder {
                   torch::Tensor listIndices)
         : mHostGridMetadata(hostGridMetadata), mDeviceGridMetadata(deviceGridMetadata),
           mBatchSize(batchSize), mBatchMetadata(std::move(batchMetadata)),
-          mStorage(std::move(storage)), mLeafBatchIndices(std::move(leafBatchIndices)),
-          mBatchOffsets(std::move(batchOffsets)), mListIndices(std::move(listIndices)) {}
+          mLeafBatchIndices(std::move(leafBatchIndices)), mBatchOffsets(std::move(batchOffsets)),
+          mListIndices(std::move(listIndices)), mStorage(std::move(storage)) {}
+
+    GridBatchData(const GridBatchData &sharingStorageOf,
+                  GridMetadata *hostGridMetadata,
+                  GridMetadata *deviceGridMetadata,
+                  int64_t batchSize,
+                  GridBatchMetadata batchMetadata,
+                  torch::Tensor leafBatchIndices,
+                  torch::Tensor batchOffsets,
+                  torch::Tensor listIndices)
+        : GridBatchData(sharingStorageOf.mStorage,
+                        hostGridMetadata,
+                        deviceGridMetadata,
+                        batchSize,
+                        std::move(batchMetadata),
+                        std::move(leafBatchIndices),
+                        std::move(batchOffsets),
+                        std::move(listIndices)) {}
 
     ~GridBatchData();
 
@@ -273,10 +300,18 @@ struct GridBatchData : public torch::CustomClassHolder {
         return sum;
     }
 
-    /// @brief The storage this batch's grids live in. Grid indices on it are *physical*; a view
-    ///        over a subset of the batch maps logical items onto them by byte offset (cumBytesAt),
-    ///        which is what deviceGridPtrAt / hostGridPtrAt do. Prefer those.
-    const GridStorage &gridStorage() const;
+    /// @brief The storage moved to @p device on @p stream, whole: every physical grid it holds,
+    ///        which is the batch's logical grids only when isContiguous() (or the batch is empty,
+    ///        whose storage holds one voxel-less grid). The caller decides whether that is the
+    ///        batch; detail::ops::contiguousGridStorage does so for a whole-batch copy.
+    GridStorage copyStorage(const torch::Device &device, cudaStream_t stream) const;
+
+    /// @brief The stream this batch's device storage was written on, retains, and frees on: what
+    ///        a reader of deviceGridPtrAt pointers on another stream orders itself after (see
+    ///        detail::orderStreamAfter). The legacy default stream for CPU storage, unlike the
+    ///        free function detail::storageStream(device), which names the stream *new* storage
+    ///        on a device is made on and rejects the CPU.
+    cudaStream_t storageStream() const;
     const c10::Device device() const;
     bool isEmpty() const;
 
@@ -332,8 +367,8 @@ struct GridBatchData : public torch::CustomClassHolder {
 
     // Pointer to the i-th *logical* grid of this batch, resolved by byte offset (cumBytesAt(i))
     // so it is correct for sliced / indexed / non-contiguous views, where item i is NOT the i-th
-    // physical grid in the underlying storage. Prefer these over gridStorage().deviceGridAt(i) /
-    // hostGridAt(i) (which index the storage physically and read the wrong grid for a view).
+    // physical grid in the underlying storage (the storage's own deviceGridAt / hostGridAt index it
+    // physically and would read the wrong grid for a view).
     // Defined in GridBatchData.cu. `deviceGridPtrAt` returns a device pointer (CUDA kernels /
     // TopologyBuilder), `hostGridPtrAt` a host pointer (CPU proxy-grid paths).
     nanovdb::OnIndexGrid *deviceGridPtrAt(int64_t bi) const;

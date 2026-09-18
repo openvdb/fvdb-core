@@ -640,8 +640,9 @@ template <typename BuildT, typename ResourceT = nanovdb::cuda::DeviceResource> c
         mBuilder.mChecksum = mode;
     }
 
-    template <typename BufferT = nanovdb::cuda::DualDeviceBuffer>
-    GridHandle<BufferT> getHandle(const BufferT &buffer = BufferT());
+    /// @brief The padded grid, allocated from @p buffer's resource on this op's stream (fvdb
+    ///        passes GridStorage::deviceProto). No default: every caller names its storage.
+    template <typename BufferT> GridHandle<BufferT> getHandle(const BufferT &buffer);
 
   private:
     void padRoot();
