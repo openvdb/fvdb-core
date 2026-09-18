@@ -1,7 +1,7 @@
 fVDB Version History
 ====================
 
-## Version 0.6.0 - In Development
+## Version 0.6.0 - September 18, 2026
 
 *91 commits, 260 files changed, 5 contributors.*
 
