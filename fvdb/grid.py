@@ -1511,7 +1511,7 @@ class Grid:
         """Re-initialize a signed per-voxel field into an SDF on this grid (topology unchanged).
 
         Redistances ``field`` to ``|grad phi| = 1`` (TVD-RK Godunov eikonal solve with a frozen
-        Peng sign), then optionally de-staircases it with curvature-based smoothing.
+        Peng sign and a Russo-Smereka subcell fix that anchors the zero crossing), then optionally de-staircases it with curvature-based smoothing.
 
         Args:
             field (torch.Tensor): Per-voxel signed field, shape ``(num_voxels,)`` or ``(num_voxels, 1)``.

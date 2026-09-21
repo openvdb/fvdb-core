@@ -107,7 +107,7 @@ def reinitialize_sdf_batch(
     """Re-initialize a signed per-voxel field into an SDF on the same grid batch.
 
     Redistances ``field`` to satisfy ``|grad phi| = 1`` (TVD-RK Godunov upwind eikonal solve with a
-    frozen Peng sign), then optionally de-staircases it with curvature-based smoothing. The grid
+    frozen Peng sign and a Russo-Smereka subcell fix that anchors the zero crossing), then optionally de-staircases it with curvature-based smoothing. The grid
     topology is unchanged: the returned field has the same per-voxel ordering as ``field``.
 
     Args:

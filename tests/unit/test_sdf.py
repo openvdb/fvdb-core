@@ -160,7 +160,11 @@ class ReinitializeSdfTests(unittest.TestCase):
         self.assertLess(phi.min().item(), -(self.band - 1.25) * self.vx)
 
     def test_rk_boundary_uses_frozen_sign(self):
-        """A stage sign flip must not turn an inactive face into an upwind contribution."""
+        """Pinned value on a 7-voxel cross whose every voxel is an interface cell.
+
+        The centre (+0.1) has five negative neighbours, so it takes the Russo-Smereka subcell update
+        toward its initial distance D = 0.1 / 3.1 instead of a Godunov step. The +x arm relaxes toward
+        its own D. Reference values come from a float64 torch replica of the scheme (RK3, dt=0.4)."""
         ijk = torch.tensor(
             [[0, 0, 0], [1, 0, 0], [0, -1, 0], [0, 1, 0], [0, 0, -1], [0, 0, 1]],
             device=self.device,
@@ -169,18 +173,90 @@ class ReinitializeSdfTests(unittest.TestCase):
         g = fvdb.Grid.from_ijk(ijk, voxel_size=1.0, origin=0.0)
         center = (g.ijk == 0).all(dim=1)
         plus_x = (g.ijk == ijk[1]).all(dim=1)
-        # All inputs are within [-B, B]. Opposing faces cancel in the central gradient,
-        # giving the centre a frozen sign near +1 despite its small value of +0.1.
         field = torch.full((g.num_voxels,), -3.0, device=self.device, dtype=torch.float64)
         field[center] = 0.1
         field[plus_x] = 3.0
         for polarity in (1.0, -1.0):
             with self.subTest(polarity=polarity):
                 phi = g.reinitialize_sdf(polarity * field, band=3, order=3, redistance_iters=1)
-                # Evaluating RK3 with the missing faces excluded from the upwind gradient
-                # gives centre stages -1.253625, -0.279841, -0.842034 for positive polarity.
-                # The live-sign boundary instead flips to -B after stage 1 and ends at -1.103265.
-                self.assertAlmostEqual(phi[center].item(), polarity * -0.842034, delta=1e-6)
+                self.assertAlmostEqual(phi[center].item(), polarity * 0.0776, delta=1e-6)
+                self.assertAlmostEqual(phi[plus_x].item(), polarity * 2.420515705, delta=1e-6)
+
+    # ------------------------------------------------------- thin features
+    @staticmethod
+    def _rod(width_vox: int, device: torch.device, length: int = 16, pad: int = 4):
+        """Dense grid holding an infinite square rod (axis z) of `width_vox` voxels with its exact SDF.
+
+        Voxel size 1. Returns (grid, field, is_interior, half_width)."""
+        n = width_vox + 2 * pad
+        ax = torch.arange(n, device=device, dtype=torch.float32) - (n - 1) / 2
+        half = width_vox / 2
+        X, Y, _ = torch.meshgrid(ax, ax, torch.arange(length, device=device, dtype=torch.float32), indexing="ij")
+        dx, dy = X.abs() - half, Y.abs() - half
+        sdf = torch.sqrt(dx.clamp(min=0) ** 2 + dy.clamp(min=0) ** 2) + torch.maximum(dx, dy).clamp(max=0)
+        grid = fvdb.Grid.from_dense_axis_aligned_bounds([n, n, length], [0, 0, 0], [n, n, length], device=device)
+        ijk = grid.ijk
+        field = sdf[ijk[:, 0], ijk[:, 1], ijk[:, 2]].contiguous().clamp(-3.0, 3.0)
+        return grid, field, field < 0, half
+
+    @staticmethod
+    def _interface_cells(grid: "fvdb.Grid", field: torch.Tensor) -> torch.Tensor:
+        """Voxels whose value changes sign across at least one active face neighbour."""
+        ijk = grid.ijk
+        neg = field < 0
+        out = torch.zeros_like(neg)
+        for o in ([-1, 0, 0], [1, 0, 0], [0, -1, 0], [0, 1, 0], [0, 0, -1], [0, 0, 1]):
+            idx = grid.ijk_to_index(ijk + torch.tensor(o, device=ijk.device, dtype=ijk.dtype))
+            act = idx >= 0
+            out[act] |= neg[idx[act]] != neg[act]
+        return out
+
+    def test_thin_rod_zero_crossing_is_anchored(self):
+        """Rods 1-3 voxels wide must keep their zero crossing under many redistance iterations.
+
+        Interior voxels of a rod are equidistant from two faces, so the Godunov Hamiltonian reads
+        sqrt(2) there and the pure scheme has no steady state: it eroded a 2-voxel rod to nothing in
+        ~20 iterations. The subcell fix pins interface cells to their initial distance, which is exact
+        here. Non-interface cells (e.g. the diagonal exterior corners) keep the usual first-order
+        upwind error and are not checked."""
+        for width in (1, 2, 3):
+            grid, field, interior, half = self._rod(width, self.device)
+            iface = self._interface_cells(grid, field)
+            for iters in (3, 12, 40):
+                with self.subTest(width=width, iters=iters):
+                    phi = grid.reinitialize_sdf(field, band=3, redistance_iters=iters)
+                    self.assertEqual(((phi < 0) != interior).sum().item(), 0)
+                    self.assertLess((phi[iface] - field[iface]).abs().max().item(), 0.05)
+
+    def test_thin_slab_is_fixed_point(self):
+        """A 1- or 2-voxel slab with an exact SDF is unchanged by redistancing (1D-thin is stable)."""
+        n = 12
+        ext = 8
+        for width in (1, 2):
+            ax = torch.arange(n, device=self.device, dtype=torch.float32) - (n - 1) / 2
+            X, _, _ = torch.meshgrid(
+                ax,
+                torch.arange(ext, device=self.device, dtype=torch.float32),
+                torch.arange(ext, device=self.device, dtype=torch.float32),
+                indexing="ij",
+            )
+            sdf = (X.abs() - width / 2).clamp(-3.0, 3.0)
+            grid = fvdb.Grid.from_dense_axis_aligned_bounds([n, ext, ext], [0, 0, 0], [n, ext, ext], device=self.device)
+            ijk = grid.ijk
+            field = sdf[ijk[:, 0], ijk[:, 1], ijk[:, 2]].contiguous()
+            phi = grid.reinitialize_sdf(field, band=3, redistance_iters=40)
+            self.assertLess((phi - field).abs().max().item(), 1e-5, f"width={width}")
+
+    def test_more_iterations_converge(self):
+        """Redistancing must converge with iterations rather than drift: 20 -> 40 iterations changes
+        the sphere field far less than 0 -> 20 does, and no voxel changes sign."""
+        field = self.analytic.clamp(-self.bw, self.bw)
+        phi20 = self.grid.reinitialize_sdf(field, band=self.band, redistance_iters=20)
+        phi40 = self.grid.reinitialize_sdf(field, band=self.band, redistance_iters=40)
+        self.assertEqual(((phi40 < 0) != (field < 0)).sum().item(), 0)
+        self.assertEqual(((phi20 < 0) != (field < 0)).sum().item(), 0)
+        step = (phi40 - phi20).abs().max().item()
+        self.assertLess(step, 0.05 * self.vx)
 
     def test_rebuild_idempotent(self):
         """rebuild_narrow_band applied to its own (interior-pruned) output must reproduce that output."""

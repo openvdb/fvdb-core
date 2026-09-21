@@ -1070,7 +1070,7 @@ class GridBatch:
         """Re-initialize a signed per-voxel field into an SDF on this grid batch (topology unchanged).
 
         Redistances ``field`` to ``|grad phi| = 1`` (TVD-RK Godunov eikonal solve with a frozen
-        Peng sign), then optionally de-staircases it with curvature-based smoothing.
+        Peng sign and a Russo-Smereka subcell fix that anchors the zero crossing), then optionally de-staircases it with curvature-based smoothing.
 
         Args:
             field (JaggedTensor): Per-voxel signed field values.

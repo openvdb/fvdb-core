@@ -1,11 +1,12 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#include <fvdb/detail/VbmCache.h>
+#include <fvdb/BuilderResource.h>
 #include <fvdb/detail/ops/ReinitializeSdf.h>
 #include <fvdb/detail/utils/cuda/GridDim.h>
 
 #include <nanovdb/NanoVDB.h>
+#include <nanovdb/cuda/Buffer.h>
 #include <nanovdb/math/Math.h>
 #include <nanovdb/tools/VoxelBlockManager.h>
 #include <nanovdb/tools/cuda/VoxelBlockManager.cuh>
@@ -13,10 +14,10 @@
 #include <ATen/Dispatch.h>
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAException.h>
-#include <c10/cuda/CUDAGuard.h>
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 
 namespace fvdb {
 namespace detail {
@@ -25,46 +26,45 @@ namespace ops {
 namespace {
 
 using OnIndexGridT = nanovdb::NanoGrid<nanovdb::ValueOnIndex>;
+// VoxelBlockManager metadata (firstLeafID / jumpMap) lives in a single-space device buffer
+// over the builders' resource (torch's active CUDA allocator). buildVoxelBlockManager
+// allocates it stream-ordered on the reinit stream via createDeviceStorage, and the handle's
+// single-space accessors (openvdb #2301) hand the pointers back without an adapter.
+using VbmBuffer = BuilderBuffer<std::byte>;
 
-// log2 of the VoxelBlockManager block width, shared with the batch's cached VBM handles.
-static constexpr int kLog2BlockWidth = VbmCache::kLog2BlockWidth;
+// log2 of the VoxelBlockManager block width: each VBM block spans 2^9 = 512 active voxels.
+static constexpr int kLog2BlockWidth = 9;
 
 // ------------------------- VBM fused 6-face stencil preamble -------------------------
-// The register-only VBM decode gives the centre coord / value-index for free (no shared memory,
-// no barrier); we then read just the 6 FACE neighbours through a cached ReadAccessor. Yields
-// `centerIndex` (the centre voxel's value index) and `faceIndex[6]` (the 6 face-neighbour value
-// indices, -x,+x,-y,+y,-z,+z; 0 = inactive/background). Kernels using it take the
-// grid/firstLeafID/jumpMap/firstOffset/lastOffset parameters by these exact names and launch as
-// <<<blockCount, blockWidth>>> (blockWidth = the VBM block width, 1 << kLog2BlockWidth).
-// Neighbour VALUES must be read through `faceValue` (below), never `field[faceIndex[k]]`
-// directly, so that inactive neighbours get a sign-aware boundary value.
-#define VBM_FACES_BEGIN()                                                                         \
-    constexpr int blockWidth = 1 << kLog2BlockWidth, jumpMapWordCount = blockWidth / 64;          \
-    using VoxelBlockManagerT        = nanovdb::tools::cuda::VoxelBlockManager<kLog2BlockWidth>;   \
-    const uint64_t blockFirstOffset = firstOffset + uint64_t(blockIdx.x) * blockWidth;            \
-    if (blockFirstOffset + threadIdx.x > lastOffset)                                              \
-        return;                                                                                   \
-    uint32_t decodedLeafIndex;                                                                    \
-    uint16_t decodedVoxelOffset;                                                                  \
-    VoxelBlockManagerT::template decodeInverseMap<nanovdb::ValueOnIndex>(                         \
-        grid,                                                                                     \
-        firstLeafID[blockIdx.x],                                                                  \
-        &jumpMap[uint64_t(blockIdx.x) * jumpMapWordCount],                                        \
-        blockFirstOffset,                                                                         \
-        int(threadIdx.x),                                                                         \
-        decodedLeafIndex,                                                                         \
-        decodedVoxelOffset);                                                                      \
-    if (decodedLeafIndex == VoxelBlockManagerT::UnusedLeafIndex)                                  \
-        return; /* defensive; the lastOffset guard above makes this unreachable */                \
-    const auto &leaf                 = grid->tree().template getFirstNode<0>()[decodedLeafIndex]; \
-    const nanovdb::Coord centerCoord = leaf.offsetToGlobalCoord(decodedVoxelOffset);              \
-    const uint64_t centerIndex       = leaf.getValue(decodedVoxelOffset);                         \
-    auto accessor                    = grid->getAccessor();                                       \
-    const uint64_t faceIndex[6]      = {accessor.getValue(centerCoord.offsetBy(-1, 0, 0)),        \
-                                        accessor.getValue(centerCoord.offsetBy(1, 0, 0)),         \
-                                        accessor.getValue(centerCoord.offsetBy(0, -1, 0)),        \
-                                        accessor.getValue(centerCoord.offsetBy(0, 1, 0)),         \
-                                        accessor.getValue(centerCoord.offsetBy(0, 0, -1)),        \
+// The VBM decode gives the centre coord / value-index for free; we then read just the 6 FACE
+// neighbours through a cached ReadAccessor. Yields `centerIndex` (the centre voxel's value index)
+// and `faceIndex[6]` (the 6 face-neighbour value indices, -x,+x,-y,+y,-z,+z; 0 =
+// inactive/background). Kernels using it take the grid/firstLeafID/jumpMap/firstOffset parameters
+// by these exact names. Neighbour VALUES must be read through `faceValue` (below), never
+// `field[faceIndex[k]]` directly, so that inactive neighbours get a sign-aware boundary value.
+#define VBM_FACES_BEGIN()                                                                        \
+    constexpr int blockWidth = 1 << kLog2BlockWidth, jumpMapWordCount = blockWidth / 64;         \
+    using VoxelBlockManagerT = nanovdb::tools::cuda::VoxelBlockManager<kLog2BlockWidth>;         \
+    __shared__ uint32_t sharedLeafIndex[blockWidth];                                             \
+    __shared__ uint16_t sharedVoxelOffset[blockWidth];                                           \
+    VoxelBlockManagerT::template decodeInverseMaps<nanovdb::ValueOnIndex>(                       \
+        grid,                                                                                    \
+        firstLeafID[blockIdx.x],                                                                 \
+        &jumpMap[uint64_t(blockIdx.x) * jumpMapWordCount],                                       \
+        firstOffset + uint64_t(blockIdx.x) * blockWidth,                                         \
+        sharedLeafIndex,                                                                         \
+        sharedVoxelOffset);                                                                      \
+    if (sharedLeafIndex[threadIdx.x] == VoxelBlockManagerT::UnusedLeafIndex)                     \
+        return;                                                                                  \
+    const auto &leaf = grid->tree().template getFirstNode<0>()[sharedLeafIndex[threadIdx.x]];    \
+    const nanovdb::Coord centerCoord = leaf.offsetToGlobalCoord(sharedVoxelOffset[threadIdx.x]); \
+    const uint64_t centerIndex       = leaf.getValue(sharedVoxelOffset[threadIdx.x]);            \
+    auto accessor                    = grid->getAccessor();                                      \
+    const uint64_t faceIndex[6]      = {accessor.getValue(centerCoord.offsetBy(-1, 0, 0)),       \
+                                        accessor.getValue(centerCoord.offsetBy(1, 0, 0)),        \
+                                        accessor.getValue(centerCoord.offsetBy(0, -1, 0)),       \
+                                        accessor.getValue(centerCoord.offsetBy(0, 1, 0)),        \
+                                        accessor.getValue(centerCoord.offsetBy(0, 0, -1)),       \
                                         accessor.getValue(centerCoord.offsetBy(0, 0, 1))};
 
 // Sign-aware read of a face neighbour. An IndexGrid has a single background slot (value index 0),
@@ -90,20 +90,27 @@ faceValue(const ScalarT *field, uint64_t index, ScalarT signSource, ScalarT band
                   zp = faceValue<ScalarT>(field, faceIndex[5], signSource, bandWidth)
 
 // =====================  fused stencil kernels ====================================================
-// frozen Peng smoothed sign from a field's value + central-difference gradient. An exactly-0 centre
-// yields sign 0, so the Godunov RHS vanishes there and such (no-data) voxels are never moved by the
-// redistance; the ray-implicit-intersection op relies on exact 0 surviving as a gap marker.
+// Frozen Peng smoothed sign from a field's value + central-difference gradient, plus the
+// Russo-Smereka interface data: a voxel whose value changes sign across an active face is an
+// interface cell, and `interfaceDist` holds its signed distance to the zero crossing estimated
+// from the largest one-sided slope of the initial field across its active faces. Godunov updates at
+// interface cells are replaced by a relaxation toward that distance, which anchors the zero
+// crossing; without it the pure Godunov scheme has no steady state on features 1-3 voxels thick and
+// erodes them a little more with every iteration. An exactly-0 centre yields sign 0 and distance 0,
+// so the RHS vanishes there and such (no-data) voxels are never moved by the redistance; the
+// ray-implicit-intersection op relies on exact 0 surviving as a gap marker.
 template <typename ScalarT>
 __global__ void
 signFusedKernel(const OnIndexGridT *grid,
                 const uint32_t *firstLeafID,
                 const uint64_t *jumpMap,
                 uint64_t firstOffset,
-                uint64_t lastOffset,
                 const ScalarT *field,
                 ScalarT voxelSize,
                 ScalarT bandWidth,
-                ScalarT *sign) {
+                ScalarT *sign,
+                ScalarT *interfaceDist,
+                uint8_t *interfaceMask) {
     VBM_FACES_BEGIN();
     const ScalarT phiCenter = field[centerIndex];
     VBM_FACE_VALUES(field, phiCenter, bandWidth);
@@ -115,6 +122,28 @@ signFusedKernel(const OnIndexGridT *grid,
                                         (gradX * gradX + gradY * gradY + gradZ * gradZ) *
                                             voxelSize * voxelSize +
                                         ScalarT(1e-12));
+
+    // Inactive faces read with the centre's sign, so they never form an interface.
+    const bool centerNeg   = phiCenter < ScalarT(0);
+    const bool isInterface = ((xm < ScalarT(0)) != centerNeg) || ((xp < ScalarT(0)) != centerNeg) ||
+                             ((ym < ScalarT(0)) != centerNeg) || ((yp < ScalarT(0)) != centerNeg) ||
+                             ((zm < ScalarT(0)) != centerNeg) || ((zp < ScalarT(0)) != centerNeg);
+    interfaceMask[centerIndex] = isInterface ? 1 : 0;
+    if (isInterface) {
+        // Largest one-sided slope over ACTIVE faces only. An inactive face reads as +/-bandWidth
+        // and would inflate the slope, pulling a band-edge interface cell toward zero. The central
+        // difference is bounded by the larger one-sided difference, so it adds nothing.
+        using nanovdb::math::Abs;
+        using nanovdb::math::Max;
+        const ScalarT faceVals[6] = {xm, xp, ym, yp, zm, zp};
+        ScalarT slope             = ScalarT(1e-6) * voxelSize;
+        for (int k = 0; k < 6; ++k)
+            if (faceIndex[k])
+                slope = Max(slope, Abs(faceVals[k] - phiCenter));
+        interfaceDist[centerIndex] = voxelSize * phiCenter / slope;
+    } else {
+        interfaceDist[centerIndex] = ScalarT(0);
+    }
 }
 
 // One-sided upwind selection of the squared one-dimensional derivative for the Godunov scheme.
@@ -132,21 +161,31 @@ upwind(ScalarT backwardDiff, ScalarT forwardDiff, ScalarT sgn) {
     }
 }
 
-// Godunov RHS: d phi/dt = sign * (1 - |grad phi|), one-sided upwind on the 6 faces.
+// Godunov RHS: d phi/dt = sign * (1 - |grad phi|), one-sided upwind on the 6 faces. Interface
+// cells instead use the Russo-Smereka subcell update d phi/dt = -(sgn(phi0) |phi| - D) / dx, which
+// converges to |phi| = D and keeps the zero crossing where the initial field put it.
 template <typename ScalarT>
 __global__ void
 godunovFusedKernel(const OnIndexGridT *grid,
                    const uint32_t *firstLeafID,
                    const uint64_t *jumpMap,
                    uint64_t firstOffset,
-                   uint64_t lastOffset,
                    const ScalarT *field,
                    const ScalarT *sign,
+                   const ScalarT *interfaceDist,
+                   const uint8_t *interfaceMask,
                    ScalarT voxelSize,
                    ScalarT bandWidth,
                    ScalarT *rhs) {
     VBM_FACES_BEGIN();
     const ScalarT center = field[centerIndex], sgn = sign[centerIndex];
+    if (interfaceMask[centerIndex]) {
+        const ScalarT sgn0 =
+            sgn > ScalarT(0) ? ScalarT(1) : (sgn < ScalarT(0) ? ScalarT(-1) : ScalarT(0));
+        rhs[centerIndex] =
+            -(sgn0 * nanovdb::math::Abs(center) - interfaceDist[centerIndex]) / voxelSize;
+        return;
+    }
     // Match upwind's frozen sign even if an RK stage crosses zero. For clamped stage values,
     // inactive faces then remain downwind instead of introducing a spurious boundary slope.
     VBM_FACE_VALUES(field, sgn, bandWidth);
@@ -165,7 +204,6 @@ smoothFusedKernel(const OnIndexGridT *grid,
                   const uint32_t *firstLeafID,
                   const uint64_t *jumpMap,
                   uint64_t firstOffset,
-                  uint64_t lastOffset,
                   const ScalarT *in,
                   ScalarT weight,
                   ScalarT bandWidth,
@@ -227,6 +265,28 @@ heunKernel(ScalarT *out,
     out[i]        = nanovdb::math::Min(nanovdb::math::Max(value, -bandWidth), bandWidth);
 }
 
+// small VBM helper: build once, expose the block count + the firstLeafID/jumpMap device pointers.
+struct VBMHelper {
+    nanovdb::tools::VoxelBlockManagerHandle<VbmBuffer> handle;
+    uint32_t blockCount{0};
+    uint64_t firstOffset{0}, valueCount{1};
+    VBMHelper(OnIndexGridT *grid, cudaStream_t stream) {
+        handle = nanovdb::tools::cuda::buildVoxelBlockManager<kLog2BlockWidth, VbmBuffer>(
+            grid, 0, 0, 0, stream);
+        blockCount  = (uint32_t)handle.blockCount();
+        firstOffset = handle.firstOffset();
+        valueCount  = handle.lastOffset() + 1;
+    }
+    const uint32_t *
+    firstLeafID() const {
+        return handle.deviceFirstLeafID();
+    }
+    const uint64_t *
+    jumpMap() const {
+        return handle.deviceJumpMap();
+    }
+};
+
 // Redistance (|grad phi| = 1) + optional de-staircase one grid's value-indexed buffer, in place.
 // `phi`/scratch are length `valueCount`; slot 0 is the (never written) background slot. Stencil
 // kernels do not read slot 0: inactive neighbours are resolved by `faceValue` to
@@ -235,9 +295,11 @@ heunKernel(ScalarT *out,
 template <typename ScalarT>
 void
 runReinit(OnIndexGridT *grid,
-          const GridVbm &vbm,
+          const VBMHelper &vbm,
           ScalarT *phi,
           ScalarT *sign,
+          ScalarT *interfaceDist,
+          uint8_t *interfaceMask,
           ScalarT *phiBase,
           ScalarT *stage,
           ScalarT *rhs0,
@@ -253,10 +315,9 @@ runReinit(OnIndexGridT *grid,
           cudaStream_t stream) {
     const uint32_t blockCount   = vbm.blockCount;
     constexpr int blockWidth    = 1 << kLog2BlockWidth;
-    const uint32_t *firstLeafID = vbm.firstLeafID;
-    const uint64_t *jumpMap     = vbm.jumpMap;
+    const uint32_t *firstLeafID = vbm.firstLeafID();
+    const uint64_t *jumpMap     = vbm.jumpMap();
     const uint64_t firstOffset  = vbm.firstOffset;
-    const uint64_t lastOffset   = vbm.lastOffset;
     const ScalarT timeStep      = ScalarT(0.4) * voxelSize;
 
     auto godunov = [&](const ScalarT *field, ScalarT *out) {
@@ -265,9 +326,10 @@ runReinit(OnIndexGridT *grid,
                                                                                firstLeafID,
                                                                                jumpMap,
                                                                                firstOffset,
-                                                                               lastOffset,
                                                                                field,
                                                                                sign,
+                                                                               interfaceDist,
+                                                                               interfaceMask,
                                                                                voxelSize,
                                                                                bandWidth,
                                                                                out);
@@ -280,11 +342,12 @@ runReinit(OnIndexGridT *grid,
                                                                             firstLeafID,
                                                                             jumpMap,
                                                                             firstOffset,
-                                                                            lastOffset,
                                                                             phi,
                                                                             voxelSize,
                                                                             bandWidth,
-                                                                            sign);
+                                                                            sign,
+                                                                            interfaceDist,
+                                                                            interfaceMask);
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         }
         for (int it = 0; it < iters; ++it) {
@@ -352,15 +415,8 @@ runReinit(OnIndexGridT *grid,
         ScalarT *cur = phi, *other = stage; // ping-pong; stencil reads do not use slot 0
         auto pass = [&](ScalarT weight) {
             if (blockCount) {
-                smoothFusedKernel<ScalarT><<<blockCount, blockWidth, 0, stream>>>(grid,
-                                                                                  firstLeafID,
-                                                                                  jumpMap,
-                                                                                  firstOffset,
-                                                                                  lastOffset,
-                                                                                  cur,
-                                                                                  weight,
-                                                                                  bandWidth,
-                                                                                  other);
+                smoothFusedKernel<ScalarT><<<blockCount, blockWidth, 0, stream>>>(
+                    grid, firstLeafID, jumpMap, firstOffset, cur, weight, bandWidth, other);
                 C10_CUDA_KERNEL_LAUNCH_CHECK();
             }
             std::swap(cur, other);
@@ -391,7 +447,6 @@ reinitializeSdfCuda(const GridBatchData &batchHdl,
                     int order,
                     int smooth,
                     bool taubin) {
-    c10::cuda::CUDAGuard deviceGuard(batchHdl.device());
     cudaStream_t stream = at::cuda::getCurrentCUDAStream(batchHdl.device().index()).stream();
     auto opts           = torch::TensorOptions().dtype(field.dtype()).device(field.device());
 
@@ -420,25 +475,28 @@ reinitializeSdfCuda(const GridBatchData &batchHdl,
                           ", ",
                           vs[2],
                           ")");
-        const ScalarT voxelSize = static_cast<ScalarT>(vs[0]);
-        const ScalarT bandWidth =
-            static_cast<ScalarT>(band) * voxelSize; // narrow-band half-width, world units
+        const ScalarT voxelSize = (ScalarT)vs[0];
+        const ScalarT bandWidth = (ScalarT)band * voxelSize; // narrow-band half-width, world units
 
-        const GridVbm vbm        = batchHdl.vbmAt(batchIdx);
-        const int64_t valueCount = int64_t(vbm.lastOffset) + 1; // numVoxels + 1 (slot 0 = bg)
+        VBMHelper vbm(grid, stream);
+        const int64_t valueCount = (int64_t)vbm.valueCount;  // numVoxels + 1 (slot 0 = background)
 
         torch::Tensor phiBuf     = torch::empty({valueCount}, opts);
         torch::Tensor signBuf    = torch::empty({valueCount}, opts);
+        torch::Tensor distBuf    = torch::empty({valueCount}, opts);
+        torch::Tensor maskBuf    = torch::zeros({valueCount}, opts.dtype(torch::kUInt8));
         torch::Tensor phiBaseBuf = torch::empty({valueCount}, opts);
         torch::Tensor stageBuf   = torch::empty({valueCount}, opts);
         torch::Tensor rhs0Buf    = torch::empty({valueCount}, opts);
-        torch::Tensor rhs1Buf = (order == 2) ? torch::empty({valueCount}, opts) : torch::Tensor();
-        ScalarT *phi          = phiBuf.data_ptr<ScalarT>();
-        ScalarT *sign         = signBuf.data_ptr<ScalarT>();
-        ScalarT *phiBase      = phiBaseBuf.data_ptr<ScalarT>();
-        ScalarT *stage        = stageBuf.data_ptr<ScalarT>();
-        ScalarT *rhs0         = rhs0Buf.data_ptr<ScalarT>();
-        ScalarT *rhs1         = (order == 2) ? rhs1Buf.data_ptr<ScalarT>() : nullptr;
+        torch::Tensor rhs1Buf  = (order == 2) ? torch::empty({valueCount}, opts) : torch::Tensor();
+        ScalarT *phi           = phiBuf.data_ptr<ScalarT>();
+        ScalarT *sign          = signBuf.data_ptr<ScalarT>();
+        ScalarT *interfaceDist = distBuf.data_ptr<ScalarT>();
+        uint8_t *interfaceMask = maskBuf.data_ptr<uint8_t>();
+        ScalarT *phiBase       = phiBaseBuf.data_ptr<ScalarT>();
+        ScalarT *stage         = stageBuf.data_ptr<ScalarT>();
+        ScalarT *rhs0          = rhs0Buf.data_ptr<ScalarT>();
+        ScalarT *rhs1          = (order == 2) ? rhs1Buf.data_ptr<ScalarT>() : nullptr;
 
         // gather: phi[1..] = field. Slot 0 of phi/stage is the background slot: filled with
         // bandWidth for hygiene but never read by the stencil kernels (see faceValue) nor written.
@@ -460,6 +518,8 @@ reinitializeSdfCuda(const GridBatchData &batchHdl,
                            vbm,
                            phi,
                            sign,
+                           interfaceDist,
+                           interfaceMask,
                            phiBase,
                            stage,
                            rhs0,
