@@ -99,8 +99,8 @@ faceValue(const ScalarT *field, uint64_t index, ScalarT signSource, ScalarT band
 //   * the Peng smoothed sign  phi0 / sqrt(phi0^2 + |grad phi0|^2 dx^2);
 //   * whether the voxel is an interface cell (sign change across an active face);
 //   * the Russo-Smereka signed distance D to the zero crossing, from the largest one-sided slope of
-//     phi0 over its ACTIVE faces. An inactive face reads as +/-bandWidth and would inflate the
-//     slope, pulling a band-edge interface cell toward zero.
+//     phi0 over its ACTIVE faces (see the note in frozenData on why crossing faces alone are not
+//     used).
 // An exactly-0 centre yields sign 0 and D 0, so the RHS vanishes there and such (no-data) voxels
 // are never moved by the redistance; the ray-implicit-intersection op relies on exact 0 surviving
 // as a gap marker.
@@ -126,11 +126,15 @@ frozenData(const ScalarT *phi0,
     const ScalarT gradZ = (f[5] - f[4]) / (2 * voxelSize);
 
     FrozenData<ScalarT> d;
-    d.sign =
-        c / nanovdb::math::Sqrt(
-                c * c + (gradX * gradX + gradY * gradY + gradZ * gradZ) * voxelSize * voxelSize +
-                ScalarT(1e-12));
+    // Both terms under the root scale as dx^2, so the 0/0 guard does too.
+    const ScalarT dx2 = voxelSize * voxelSize;
+    d.sign = c / nanovdb::math::Sqrt(c * c + (gradX * gradX + gradY * gradY + gradZ * gradZ) * dx2 +
+                                     ScalarT(1e-10) * dx2);
 
+    // Largest one-sided slope over ACTIVE faces. An inactive face reads as +/-bandWidth and would
+    // inflate the slope, pulling a band-edge interface cell toward zero. Restricting the max to
+    // crossing faces was tried and rejected: it picks oblique, shallow faces and shifted zero
+    // crossings by up to 0.9 voxels on a real SDF, versus 0.12 with this rule.
     const bool centerNeg = c < ScalarT(0);
     d.isInterface        = false;
     ScalarT slope        = ScalarT(1e-6) * voxelSize;
@@ -349,8 +353,13 @@ runReinit(OnIndexGridT *grid,
         }
     };
 
-    const int defaultIters = std::max(6, (int)std::lround(2.5 * band) + 2);
-    redistance(field, redistanceIters > 0 ? redistanceIters : defaultIters);
+    // Information travels at most 0.4 dx per sweep and the Peng sign roughly halves that near the
+    // interface, so a full band needs about 5*band sweeps; 6*band leaves a convergence margin. The
+    // subcell anchor makes extra sweeps harmless, so this errs long (a step input on a band-3
+    // sphere converges by ~20 sweeps).
+    const int defaultIters = std::max(20, 6 * band);
+    const int iters        = redistanceIters > 0 ? redistanceIters : defaultIters;
+    redistance(field, iters);
 
     if (smooth) {
         ScalarT *cur = phi, *other = scratchA; // ping-pong
@@ -375,7 +384,7 @@ runReinit(OnIndexGridT *grid,
             C10_CUDA_CHECK(cudaMemcpyAsync(phi, cur, bytes, cudaMemcpyDeviceToDevice, stream));
         // The smoothed surface is the new anchor: snapshot it as phi0 for the re-redistance.
         C10_CUDA_CHECK(cudaMemcpyAsync(smoothedPhi0, phi, bytes, cudaMemcpyDeviceToDevice, stream));
-        redistance(smoothedPhi0, std::max(4, smooth));
+        redistance(smoothedPhi0, iters);
     }
 }
 
