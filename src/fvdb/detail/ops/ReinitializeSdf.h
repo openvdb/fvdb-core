@@ -25,9 +25,10 @@ enum class SmoothingMode : int32_t {
 /// @brief Re-initialize a signed per-voxel field into a signed distance field on the *same* grid.
 ///
 /// Redistances the input field to satisfy |grad phi| = 1 (TVD-RK Godunov upwind eikonal solve with
-/// a frozen Peng sign and a Russo-Smereka subcell fix that anchors the zero crossing), then optionally de-staircases it with mean-curvature or volume-preserving
-/// Taubin Laplacian smoothing. The grid topology is unchanged: the returned JaggedTensor has the
-/// same per-voxel ordering as the input.
+/// a frozen Peng sign and a Russo-Smereka subcell fix that anchors the zero crossing), then
+/// optionally de-staircases it with mean-curvature or volume-preserving Taubin Laplacian smoothing.
+/// The grid topology is unchanged: the returned JaggedTensor has the same per-voxel ordering as the
+/// input.
 ///
 /// @param batchHdl    Grid batch defining the sparse topology.
 /// @param field       Per-voxel signed field with finite values and shape (N,) or (N, 1),
