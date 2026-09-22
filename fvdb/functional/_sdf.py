@@ -107,8 +107,9 @@ def reinitialize_sdf_batch(
     """Re-initialize a signed per-voxel field into an SDF on the same grid batch.
 
     Redistances ``field`` to satisfy ``|grad phi| = 1`` (TVD-RK Godunov upwind eikonal solve with a
-    frozen Peng sign and a Russo-Smereka subcell fix that anchors the zero crossing), then optionally de-staircases it with curvature-based smoothing. The grid
-    topology is unchanged: the returned field has the same per-voxel ordering as ``field``.
+    frozen Peng sign and a Russo-Smereka subcell fix that anchors the zero crossing), then
+    optionally de-staircases it with curvature-based smoothing. The grid topology is unchanged: the
+    returned field has the same per-voxel ordering as ``field``.
 
     Args:
         grid (GridBatch): The grid batch defining the sparse topology.
@@ -121,8 +122,10 @@ def reinitialize_sdf_batch(
         smoothing (SmoothingMode): Which Laplacian flow each smoothing pass applies --
             :attr:`~fvdb.SmoothingMode.MEAN_CURVATURE` (default) or
             :attr:`~fvdb.SmoothingMode.TAUBIN` (volume-preserving). Only used when ``smooth > 0``.
-        redistance_iters (int): Number of redistancing sweeps. ``<= 0`` uses the default
-            ``max(20, 6*band)``.
+        redistance_iters (int): Number of redistancing sweeps; ``<= 0`` uses the default
+            ``max(20, 6*band)``. The same count is used for the redistance that follows smoothing,
+            so a small explicit value renormalizes the smoothed field only within about
+            ``0.4*redistance_iters`` voxels of the surface.
 
     Returns:
         sdf (JaggedTensor): The re-initialized SDF, same per-voxel ordering as ``field``.

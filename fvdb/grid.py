@@ -1510,8 +1510,9 @@ class Grid:
     ) -> torch.Tensor:
         """Re-initialize a signed per-voxel field into an SDF on this grid (topology unchanged).
 
-        Redistances ``field`` to ``|grad phi| = 1`` (TVD-RK Godunov eikonal solve with a frozen
-        Peng sign and a Russo-Smereka subcell fix that anchors the zero crossing), then optionally de-staircases it with curvature-based smoothing.
+        Redistances ``field`` to ``|grad phi| = 1`` (TVD-RK Godunov eikonal solve with a frozen Peng
+        sign and a Russo-Smereka subcell fix that anchors the zero crossing), then optionally
+        de-staircases it with curvature-based smoothing.
 
         Args:
             field (torch.Tensor): Per-voxel signed field, shape ``(num_voxels,)`` or ``(num_voxels, 1)``.
@@ -1523,7 +1524,9 @@ class Grid:
                 :attr:`~fvdb.SmoothingMode.MEAN_CURVATURE` (default) or
                 :attr:`~fvdb.SmoothingMode.TAUBIN` (volume-preserving). Only used when ``smooth > 0``.
             redistance_iters (int): Number of redistancing sweeps; ``<= 0`` uses the default
-                ``max(20, 6*band)``.
+                ``max(20, 6*band)``. The same count is used for the redistance that follows smoothing,
+                so a small explicit value renormalizes the smoothed field only within about
+                ``0.4*redistance_iters`` voxels of the surface.
 
         Returns:
             sdf (torch.Tensor): The re-initialized SDF, shape ``(num_voxels,)``.

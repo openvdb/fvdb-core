@@ -188,8 +188,8 @@ upwind(ScalarT backwardDiff, ScalarT forwardDiff, ScalarT sign) {
 // the 6 faces, or, at interface cells, the Russo-Smereka subcell update  -(frozenSign(phi0)
 // |stageField| - D) / dx  that converges to |stageField| = D and keeps the zero crossing where phi0
 // put it. `outField` must not alias `stageField` (neighbours of `stageField` are read) but may
-// alias `baseField` (read at the centre only). Sets *nonFinite if phi0 holds a NaN/Inf at this
-// voxel.
+// alias `baseField` (read at the centre only). When `nonFinite` is non-null, sets it if phi0 holds
+// a NaN/Inf at this voxel; the solver passes it on the first stage only.
 template <typename ScalarT>
 __global__ void
 rkStageFusedKernel(const OnIndexGridT *grid,
@@ -209,7 +209,7 @@ rkStageFusedKernel(const OnIndexGridT *grid,
                    int *nonFinite) {
     VBM_FACES_BEGIN();
     const int64_t bufferIndex = int64_t(centerIndex) - 1;
-    if (!isfinite(phi0[bufferIndex]))
+    if (nonFinite != nullptr && !isfinite(phi0[bufferIndex]))
         *nonFinite = 1;
     const FrozenInterfaceData<ScalarT> frozen =
         computeFrozenInterfaceData<ScalarT>(phi0, bufferIndex, faceIndex, voxelSize, bandWidth);
@@ -239,9 +239,8 @@ rkStageFusedKernel(const OnIndexGridT *grid,
         rhs = frozenSign * (ScalarT(1) - gradientMagnitude);
     }
 
-    ScalarT combined = baseCoeff * baseField[bufferIndex] +
-                       (stageCoeff != ScalarT(0) ? stageCoeff * stageCenter : ScalarT(0)) +
-                       rhsCoeff * timeStep * rhs;
+    ScalarT combined =
+        baseCoeff * baseField[bufferIndex] + stageCoeff * stageCenter + rhsCoeff * timeStep * rhs;
     outField[bufferIndex] = nanovdb::math::Min(nanovdb::math::Max(combined, -bandWidth), bandWidth);
 }
 
@@ -308,6 +307,7 @@ runReinit(OnIndexGridT *grid,
           ScalarT *scratchB,
           ScalarT *smoothedPhi0,
           int *nonFinite,
+          int64_t batchIdx,
           int64_t numVoxels,
           ScalarT voxelSize,
           ScalarT bandWidth,
@@ -325,13 +325,17 @@ runReinit(OnIndexGridT *grid,
     const ScalarT timeStep      = ScalarT(0.4) * voxelSize;
     const size_t fieldBytes     = size_t(numVoxels) * sizeof(ScalarT);
 
-    auto runStage = [&](const ScalarT *phi0,
+    // The input is validated by the first stage only: it reads every voxel of phi0 anyway, and a
+    // sync right after it surfaces a NaN/Inf before the rest of the solve runs.
+    int *finiteFlagForStage = nonFinite;
+    auto runStage           = [&](const ScalarT *phi0,
                         const ScalarT *stageField,
                         const ScalarT *baseField,
                         ScalarT baseCoeff,
                         ScalarT stageCoeff,
                         ScalarT rhsCoeff,
                         ScalarT *outField) {
+        const bool validateInput = finiteFlagForStage != nullptr;
         if (blockCount) {
             rkStageFusedKernel<ScalarT><<<blockCount, blockWidth, 0, stream>>>(grid,
                                                                                firstLeafID,
@@ -347,15 +351,26 @@ runReinit(OnIndexGridT *grid,
                                                                                voxelSize,
                                                                                bandWidth,
                                                                                outField,
-                                                                               nonFinite);
+                                                                               finiteFlagForStage);
             C10_CUDA_KERNEL_LAUNCH_CHECK();
+        }
+        if (validateInput) {
+            finiteFlagForStage = nullptr;
+            int hostFlag       = 0;
+            C10_CUDA_CHECK(
+                cudaMemcpyAsync(&hostFlag, nonFinite, sizeof(int), cudaMemcpyDeviceToHost, stream));
+            C10_CUDA_CHECK(cudaStreamSynchronize(stream));
+            TORCH_CHECK_VALUE(hostFlag == 0,
+                              "field must contain only finite values (grid ",
+                              batchIdx,
+                              "); leave no-data voxels inactive");
         }
     };
 
-    auto redistance = [&](const ScalarT *phi0, int iters) {
+    auto redistance = [&](const ScalarT *phi0, ScalarT *scratch, int iters) {
         const ScalarT one = 1, zero = 0;
-        if (order <= 1) { // forward Euler, ping-pong between phi and scratchA
-            ScalarT *source = phi, *destination = scratchA;
+        if (order <= 1) { // forward Euler, ping-pong between phi and scratch
+            ScalarT *source = phi, *destination = scratch;
             for (int it = 0; it < iters; ++it) {
                 runStage(phi0, source, source, one, zero, one, destination);
                 std::swap(source, destination);
@@ -365,14 +380,13 @@ runReinit(OnIndexGridT *grid,
                     cudaMemcpyAsync(phi, source, fieldBytes, cudaMemcpyDeviceToDevice, stream));
         } else if (order == 2) { // Heun (TVD-RK2) in SSP form: two buffers
             for (int it = 0; it < iters; ++it) {
-                runStage(phi0, phi, phi, one, zero, one, scratchA);
-                runStage(phi0, scratchA, phi, ScalarT(0.5), ScalarT(0.5), ScalarT(0.5), phi);
+                runStage(phi0, phi, phi, one, zero, one, scratch);
+                runStage(phi0, scratch, phi, ScalarT(0.5), ScalarT(0.5), ScalarT(0.5), phi);
             }
         } else { // Shu-Osher TVD-RK3: three buffers
             for (int it = 0; it < iters; ++it) {
-                runStage(phi0, phi, phi, one, zero, one, scratchA);
-                runStage(
-                    phi0, scratchA, phi, ScalarT(0.75), ScalarT(0.25), ScalarT(0.25), scratchB);
+                runStage(phi0, phi, phi, one, zero, one, scratch);
+                runStage(phi0, scratch, phi, ScalarT(0.75), ScalarT(0.25), ScalarT(0.25), scratchB);
                 runStage(phi0,
                          scratchB,
                          phi,
@@ -390,7 +404,7 @@ runReinit(OnIndexGridT *grid,
     // sphere converges by ~20 sweeps).
     const int defaultIters = std::max(20, 6 * band);
     const int iters        = redistanceIters > 0 ? redistanceIters : defaultIters;
-    redistance(field, iters);
+    redistance(field, scratchA, iters);
 
     if (smooth) {
         ScalarT *current = phi, *other = scratchA; // ping-pong
@@ -411,13 +425,23 @@ runReinit(OnIndexGridT *grid,
             for (int i = 0; i < smooth; ++i)
                 pass(ScalarT(1.0)); // mean-curvature
         }
-        if (current != phi)
+        // The smoothed surface is the new anchor. The result must end up in phi (evolving field)
+        // and be kept as phi0; one copy suffices if the buffer it landed in takes one of those
+        // roles and the other spare buffer becomes the scratch.
+        const ScalarT *anchor;
+        ScalarT *scratch;
+        if (current == phi) {
+            C10_CUDA_CHECK(
+                cudaMemcpyAsync(smoothedPhi0, phi, fieldBytes, cudaMemcpyDeviceToDevice, stream));
+            anchor  = smoothedPhi0;
+            scratch = scratchA;
+        } else {
             C10_CUDA_CHECK(
                 cudaMemcpyAsync(phi, current, fieldBytes, cudaMemcpyDeviceToDevice, stream));
-        // The smoothed surface is the new anchor: snapshot it as phi0 for the re-redistance.
-        C10_CUDA_CHECK(
-            cudaMemcpyAsync(smoothedPhi0, phi, fieldBytes, cudaMemcpyDeviceToDevice, stream));
-        redistance(smoothedPhi0, iters);
+            anchor  = current;
+            scratch = smoothedPhi0;
+        }
+        redistance(anchor, scratch, iters);
     }
 }
 
@@ -482,6 +506,7 @@ reinitializeSdfCuda(const GridBatchData &batchHdl,
                            (order >= 3) ? scratchB.data_ptr<ScalarT>() : nullptr,
                            (smooth > 0) ? smoothed.data_ptr<ScalarT>() : nullptr,
                            nonFinite.data_ptr<int>(),
+                           batchIdx,
                            numVoxels,
                            voxelSize,
                            bandWidth,
@@ -492,10 +517,6 @@ reinitializeSdfCuda(const GridBatchData &batchHdl,
                            redistanceIters,
                            stream);
         C10_CUDA_CHECK(cudaStreamSynchronize(stream));
-        TORCH_CHECK_VALUE(nonFinite.item<int>() == 0,
-                          "field must contain only finite values (grid ",
-                          batchIdx,
-                          "); leave no-data voxels inactive");
     }
 }
 

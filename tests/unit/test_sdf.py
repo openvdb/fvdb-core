@@ -159,7 +159,7 @@ class ReinitializeSdfTests(unittest.TestCase):
         # the deepest interior voxels still reach the band clamp
         self.assertLess(phi.min().item(), -(self.band - 1.25) * self.vx)
 
-    def test_rk_boundary_uses_frozen_sign(self):
+    def test_subcell_update_pins_interface_cross(self):
         """Pinned value on a 7-voxel cross whose every voxel is an interface cell.
 
         The centre (+0.1) has five negative neighbours, so it takes the Russo-Smereka subcell update
@@ -181,6 +181,34 @@ class ReinitializeSdfTests(unittest.TestCase):
                 phi = g.reinitialize_sdf(polarity * field, band=3, order=3, redistance_iters=1)
                 self.assertAlmostEqual(phi[center].item(), polarity * 0.0776, delta=1e-6)
                 self.assertAlmostEqual(phi[plus_x].item(), polarity * 2.420515705, delta=1e-6)
+
+    def test_godunov_inactive_faces_continue_frozen_sign(self):
+        """A non-interface cell's Godunov update must read inactive faces with its frozen sign.
+
+        Two active voxels on a line, A = -0.5 and B = -1.5, everything else inactive. Neither is an
+        interface cell, so both take the Godunov update, and every face but the one between them is
+        inactive. Read with the frozen sign those faces are deep interior (-band) and downwind, so A
+        relaxes toward -band. Read as +band (the PR #762 phantom-boundary bug) they would be upwind
+        with a slope of 3.5 and A would rise toward a surface that does not exist. Reference values
+        from a float64 torch replica of the scheme (RK1, dt = 0.4); the mirrored field checks the
+        positive branch of the same rule."""
+        ijk = torch.tensor([[0, 0, 0], [-1, 0, 0]], device=self.device, dtype=torch.int32)
+        g = fvdb.Grid.from_ijk(ijk, voxel_size=1.0, origin=0.0)
+        cell_a = (g.ijk == 0).all(dim=1)
+        cell_b = ~cell_a
+        field = torch.empty(2, device=self.device, dtype=torch.float64)
+        field[cell_a] = -0.5
+        field[cell_b] = -1.5
+        for polarity in (1.0, -1.0):
+            with self.subTest(polarity=polarity):
+                one_sweep = g.reinitialize_sdf(polarity * field, band=3, order=1, redistance_iters=1)
+                self.assertAlmostEqual(one_sweep[cell_a].item(), polarity * -0.721880078, delta=1e-6)
+                self.assertAlmostEqual(one_sweep[cell_b].item(), polarity * -1.5, delta=1e-9)
+                five_sweeps = g.reinitialize_sdf(polarity * field, band=3, order=1, redistance_iters=5)
+                self.assertAlmostEqual(five_sweeps[cell_a].item(), polarity * -1.609400392, delta=1e-6)
+                self.assertAlmostEqual(five_sweeps[cell_b].item(), polarity * -2.002511115, delta=1e-6)
+                # both keep their sign and move deeper, never toward a phantom surface
+                self.assertTrue(((five_sweeps * polarity) < (field * polarity)).all().item())
 
     # ------------------------------------------------------- thin features
     @staticmethod
