@@ -221,12 +221,12 @@ class ReinitializeSdfTests(unittest.TestCase):
         upwind error and are not checked."""
         for width in (1, 2, 3):
             grid, field, interior, half = self._rod(width, self.device)
-            iface = self._interface_cells(grid, field)
+            interface_cells = self._interface_cells(grid, field)
             for iters in (3, 12, 40):
                 with self.subTest(width=width, iters=iters):
                     phi = grid.reinitialize_sdf(field, band=3, redistance_iters=iters)
                     self.assertEqual(((phi < 0) != interior).sum().item(), 0)
-                    self.assertLess((phi[iface] - field[iface]).abs().max().item(), 0.05)
+                    self.assertLess((phi[interface_cells] - field[interface_cells]).abs().max().item(), 0.05)
 
     def test_oblique_plane_interface_distance(self):
         """Interface cells of an oblique plane SDF must keep their exact Euclidean distance.
@@ -237,19 +237,21 @@ class ReinitializeSdfTests(unittest.TestCase):
         well, which is exact for a plane."""
         import math
 
-        n = 12
-        grid = fvdb.Grid.from_dense_axis_aligned_bounds([n, n, n], [0, 0, 0], [n, n, n], device=self.device)
-        p = grid.ijk.float()
-        interior = (p > 1).all(dim=1) & (p < n - 2).all(dim=1)
+        size = 12
+        grid = fvdb.Grid.from_dense_axis_aligned_bounds(
+            [size, size, size], [0, 0, 0], [size, size, size], device=self.device
+        )
+        centers = grid.ijk.float()
+        interior = (centers > 1).all(dim=1) & (centers < size - 2).all(dim=1)
         for normal in ((1.0, 1.0, 1.0), (1.0, 1.0, 0.0), (3.0, 1.0, 0.0)):
-            nv = torch.tensor(normal, device=self.device)
-            nv = nv / nv.norm()
-            analytic = ((p - (n - 1) / 2) @ nv - 0.5 / math.sqrt(3.0)).clamp(-3.0, 3.0)
-            iface = self._interface_cells(grid, analytic) & interior
+            unit_normal = torch.tensor(normal, device=self.device)
+            unit_normal = unit_normal / unit_normal.norm()
+            analytic = ((centers - (size - 1) / 2) @ unit_normal - 0.5 / math.sqrt(3.0)).clamp(-3.0, 3.0)
+            interface_cells = self._interface_cells(grid, analytic) & interior
             for order in (1, 3):
                 with self.subTest(normal=normal, order=order):
                     phi = grid.reinitialize_sdf(analytic, band=3, order=order, redistance_iters=40)
-                    self.assertLess((phi[iface] - analytic[iface]).abs().max().item(), 1e-3)
+                    self.assertLess((phi[interface_cells] - analytic[interface_cells]).abs().max().item(), 1e-3)
                     self.assertEqual(((phi < 0) != (analytic < 0)).sum().item(), 0)
 
     def test_thin_slab_is_fixed_point(self):

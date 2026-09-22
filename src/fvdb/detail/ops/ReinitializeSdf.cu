@@ -91,96 +91,105 @@ faceValue(const ScalarT *field, uint64_t index, ScalarT signSource, ScalarT band
                              faceValue<ScalarT>(field, faceIndex[4], signSource, bandWidth), \
                              faceValue<ScalarT>(field, faceIndex[5], signSource, bandWidth)}
 
-// =====================  frozen interface data
-// ===================================================== Everything the redistance freezes from the
-// initial field phi0, recomputed from phi0's 6-face stencil on every RHS evaluation instead of
-// being stored (phi0 stays resident for the whole solve, so this costs neighbour reads, not
-// memory):
+// =====================  frozen interface data ====================================================
+// Everything the redistance freezes from the initial field phi0, recomputed from phi0's 6-face
+// stencil on every RHS evaluation instead of being stored (phi0 stays resident for the whole solve,
+// so this costs neighbour reads, not memory):
 //   * the Peng smoothed sign  phi0 / sqrt(phi0^2 + |grad phi0|^2 dx^2);
 //   * whether the voxel is an interface cell (sign change across an active face);
 //   * the Russo-Smereka signed distance D to the zero crossing: phi0 * dx over the larger of the
 //     central-difference gradient norm and the largest one-sided slope, active faces only (see the
-//     note in frozenData).
+//     note in computeFrozenInterfaceData).
 // An exactly-0 centre yields sign 0 and D 0, so the RHS vanishes there and such (no-data) voxels
 // are never moved by the redistance; the ray-implicit-intersection op relies on exact 0 surviving
 // as a gap marker.
-template <typename ScalarT> struct FrozenData {
-    ScalarT sign;
-    ScalarT dist;
+template <typename ScalarT> struct FrozenInterfaceData {
+    ScalarT frozenSign;
+    ScalarT interfaceDistance;
     bool isInterface;
 };
 
 template <typename ScalarT>
-__device__ inline FrozenData<ScalarT>
-frozenData(const ScalarT *phi0,
-           int64_t vi,
-           const uint64_t *faceIndex,
-           ScalarT voxelSize,
-           ScalarT bandWidth) {
+__device__ inline FrozenInterfaceData<ScalarT>
+computeFrozenInterfaceData(const ScalarT *phi0,
+                           int64_t bufferIndex,
+                           const uint64_t *faceIndex,
+                           ScalarT voxelSize,
+                           ScalarT bandWidth) {
     using nanovdb::math::Abs;
     using nanovdb::math::Max;
-    const ScalarT c = phi0[vi];
-    VBM_FACE_VALUES(f, phi0, c, bandWidth);
-    const ScalarT gradX = (f[1] - f[0]) / (2 * voxelSize);
-    const ScalarT gradY = (f[3] - f[2]) / (2 * voxelSize);
-    const ScalarT gradZ = (f[5] - f[4]) / (2 * voxelSize);
+    const ScalarT phiCenter = phi0[bufferIndex];
+    VBM_FACE_VALUES(faceValues, phi0, phiCenter, bandWidth);
+    const ScalarT gradX = (faceValues[1] - faceValues[0]) / (2 * voxelSize);
+    const ScalarT gradY = (faceValues[3] - faceValues[2]) / (2 * voxelSize);
+    const ScalarT gradZ = (faceValues[5] - faceValues[4]) / (2 * voxelSize);
 
-    FrozenData<ScalarT> d;
+    FrozenInterfaceData<ScalarT> data;
     // Both terms under the root scale as dx^2, so the 0/0 guard does too.
-    const ScalarT dx2 = voxelSize * voxelSize;
-    d.sign = c / nanovdb::math::Sqrt(c * c + (gradX * gradX + gradY * gradY + gradZ * gradZ) * dx2 +
-                                     ScalarT(1e-10) * dx2);
+    const ScalarT voxelSizeSq = voxelSize * voxelSize;
+    data.frozenSign =
+        phiCenter /
+        nanovdb::math::Sqrt(phiCenter * phiCenter +
+                            (gradX * gradX + gradY * gradY + gradZ * gradZ) * voxelSizeSq +
+                            ScalarT(1e-10) * voxelSizeSq);
 
     // Denominator for D, following Russo-Smereka's 1D max(central, one-sided, eps) in 3D: the
     // Euclidean norm of the central-difference gradient captures oblique surfaces (a single face
     // difference only sees one gradient component and would overestimate D by up to sqrt(3)); the
-    // largest one-sided slope takes over at kinks and thin features, where the central difference
-    // collapses toward zero. Only active faces contribute. An inactive face reads as +/-bandWidth
-    // and would inflate the slope, pulling a band-edge interface cell toward zero. Restricting the
-    // slopes to crossing faces was tried and rejected: it picks oblique, shallow faces and shifted
-    // zero crossings by up to 0.9 voxels on a real SDF.
-    const bool centerNeg = c < ScalarT(0);
-    d.isInterface        = false;
-    ScalarT slope        = ScalarT(1e-6) * voxelSize;
-    ScalarT gradSq       = ScalarT(0);
+    // largest one-sided slope takes over at kinks and thin features, where the central
+    // difference collapses toward zero. Only active faces contribute. An inactive face reads as
+    // +/-bandWidth and would inflate the slope, pulling a band-edge interface cell toward zero.
+    // Restricting the slopes to crossing faces was tried and rejected: it picks oblique, shallow
+    // faces and shifted zero crossings by up to 0.9 voxels on a real SDF.
+    const bool centerIsNegative = phiCenter < ScalarT(0);
+    data.isInterface            = false;
+    ScalarT maxSlope            = ScalarT(1e-6) * voxelSize;
+    ScalarT centralGradientSq   = ScalarT(0);
     for (int axis = 0; axis < 3; ++axis) {
-        const int km = 2 * axis, kp = 2 * axis + 1;
-        d.isInterface |= ((f[km] < ScalarT(0)) != centerNeg) || ((f[kp] < ScalarT(0)) != centerNeg);
-        const bool am = faceIndex[km] != 0, ap = faceIndex[kp] != 0;
-        const ScalarT dm = am ? Abs(c - f[km]) : ScalarT(0), dp = ap ? Abs(f[kp] - c) : ScalarT(0);
-        slope           = Max(slope, Max(dm, dp));
-        const ScalarT g = (am && ap) ? Abs(f[kp] - f[km]) * ScalarT(0.5) : Max(dm, dp);
-        gradSq += g * g;
+        const int minusFace = 2 * axis, plusFace = 2 * axis + 1;
+        data.isInterface |= ((faceValues[minusFace] < ScalarT(0)) != centerIsNegative) ||
+                            ((faceValues[plusFace] < ScalarT(0)) != centerIsNegative);
+        const bool minusActive = faceIndex[minusFace] != 0, plusActive = faceIndex[plusFace] != 0;
+        const ScalarT backwardDiff =
+            minusActive ? Abs(phiCenter - faceValues[minusFace]) : ScalarT(0);
+        const ScalarT forwardDiff = plusActive ? Abs(faceValues[plusFace] - phiCenter) : ScalarT(0);
+        maxSlope                  = Max(maxSlope, Max(backwardDiff, forwardDiff));
+        const ScalarT axisGradient =
+            (minusActive && plusActive)
+                ? Abs(faceValues[plusFace] - faceValues[minusFace]) * ScalarT(0.5)
+                : Max(backwardDiff, forwardDiff);
+        centralGradientSq += axisGradient * axisGradient;
     }
-    slope  = Max(slope, nanovdb::math::Sqrt(gradSq));
-    d.dist = d.isInterface ? voxelSize * c / slope : ScalarT(0);
-    return d;
+    maxSlope               = Max(maxSlope, nanovdb::math::Sqrt(centralGradientSq));
+    data.interfaceDistance = data.isInterface ? voxelSize * phiCenter / maxSlope : ScalarT(0);
+    return data;
 }
 
 // One-sided upwind selection of the squared one-dimensional derivative for the Godunov scheme.
 template <typename ScalarT>
 __device__ inline ScalarT
-upwind(ScalarT backwardDiff, ScalarT forwardDiff, ScalarT sgn) {
-    if (sgn > 0) {
-        ScalarT backTerm = nanovdb::math::Max(backwardDiff, ScalarT(0));
-        ScalarT fwdTerm  = nanovdb::math::Min(forwardDiff, ScalarT(0));
-        return nanovdb::math::Max(backTerm * backTerm, fwdTerm * fwdTerm);
+upwind(ScalarT backwardDiff, ScalarT forwardDiff, ScalarT sign) {
+    if (sign > 0) {
+        ScalarT backwardTerm = nanovdb::math::Max(backwardDiff, ScalarT(0));
+        ScalarT forwardTerm  = nanovdb::math::Min(forwardDiff, ScalarT(0));
+        return nanovdb::math::Max(backwardTerm * backwardTerm, forwardTerm * forwardTerm);
     } else {
-        ScalarT backTerm = nanovdb::math::Min(backwardDiff, ScalarT(0));
-        ScalarT fwdTerm  = nanovdb::math::Max(forwardDiff, ScalarT(0));
-        return nanovdb::math::Max(backTerm * backTerm, fwdTerm * fwdTerm);
+        ScalarT backwardTerm = nanovdb::math::Min(backwardDiff, ScalarT(0));
+        ScalarT forwardTerm  = nanovdb::math::Max(forwardDiff, ScalarT(0));
+        return nanovdb::math::Max(backwardTerm * backwardTerm, forwardTerm * forwardTerm);
     }
 }
 
 // =====================  fused stencil kernels ====================================================
 // One TVD-RK stage, fused with its RHS evaluation:
-//     out = clip(baseCoeff*base + stageCoeff*cur + rhsCoeff*timeStep*rhs(cur), -bandWidth,
-//     bandWidth)
-// rhs(cur) is the Godunov RHS  sign * (1 - |grad cur|)  with one-sided upwinding on the 6 faces,
-// or, at interface cells, the Russo-Smereka subcell update  -(sgn(phi0) |cur| - D) / dx  that
-// converges to |cur| = D and keeps the zero crossing where phi0 put it.
-// `out` must not alias `cur` (neighbours of `cur` are read) but may alias `base` (read at the
-// centre only). Sets *nonFinite if phi0 holds a NaN/Inf at this voxel.
+//     outField = clip(baseCoeff*baseField + stageCoeff*stageField +
+//     rhsCoeff*timeStep*rhs(stageField), -bandWidth, bandWidth)
+// rhs(stageField) is the Godunov RHS  sign * (1 - |grad stageField|)  with one-sided upwinding on
+// the 6 faces, or, at interface cells, the Russo-Smereka subcell update  -(frozenSign(phi0)
+// |stageField| - D) / dx  that converges to |stageField| = D and keeps the zero crossing where phi0
+// put it. `outField` must not alias `stageField` (neighbours of `stageField` are read) but may
+// alias `baseField` (read at the centre only). Sets *nonFinite if phi0 holds a NaN/Inf at this
+// voxel.
 template <typename ScalarT>
 __global__ void
 rkStageFusedKernel(const OnIndexGridT *grid,
@@ -188,64 +197,74 @@ rkStageFusedKernel(const OnIndexGridT *grid,
                    const uint64_t *jumpMap,
                    uint64_t firstOffset,
                    const ScalarT *phi0,
-                   const ScalarT *cur,
-                   const ScalarT *base,
+                   const ScalarT *stageField,
+                   const ScalarT *baseField,
                    ScalarT baseCoeff,
                    ScalarT stageCoeff,
                    ScalarT rhsCoeff,
                    ScalarT timeStep,
                    ScalarT voxelSize,
                    ScalarT bandWidth,
-                   ScalarT *out,
+                   ScalarT *outField,
                    int *nonFinite) {
     VBM_FACES_BEGIN();
-    const int64_t vi = int64_t(centerIndex) - 1;
-    if (!isfinite(phi0[vi]))
+    const int64_t bufferIndex = int64_t(centerIndex) - 1;
+    if (!isfinite(phi0[bufferIndex]))
         *nonFinite = 1;
-    const FrozenData<ScalarT> fz = frozenData<ScalarT>(phi0, vi, faceIndex, voxelSize, bandWidth);
-    const ScalarT sgn            = fz.sign;
-    const ScalarT center         = cur[vi];
+    const FrozenInterfaceData<ScalarT> frozen =
+        computeFrozenInterfaceData<ScalarT>(phi0, bufferIndex, faceIndex, voxelSize, bandWidth);
+    const ScalarT frozenSign  = frozen.frozenSign;
+    const ScalarT stageCenter = stageField[bufferIndex];
 
     ScalarT rhs;
-    if (fz.isInterface) {
-        const ScalarT sgn0 =
-            sgn > ScalarT(0) ? ScalarT(1) : (sgn < ScalarT(0) ? ScalarT(-1) : ScalarT(0));
-        rhs = -(sgn0 * nanovdb::math::Abs(center) - fz.dist) / voxelSize;
+    if (frozen.isInterface) {
+        const ScalarT unitSign = frozenSign > ScalarT(0)
+                                     ? ScalarT(1)
+                                     : (frozenSign < ScalarT(0) ? ScalarT(-1) : ScalarT(0));
+        rhs = -(unitSign * nanovdb::math::Abs(stageCenter) - frozen.interfaceDistance) / voxelSize;
     } else {
         // Match upwind's frozen sign even if an RK stage crosses zero. For clamped stage values,
         // inactive faces then remain downwind instead of introducing a spurious boundary slope.
-        VBM_FACE_VALUES(f, cur, sgn, bandWidth);
-        const ScalarT gradMag = nanovdb::math::Sqrt(
-            upwind<ScalarT>((center - f[0]) / voxelSize, (f[1] - center) / voxelSize, sgn) +
-            upwind<ScalarT>((center - f[2]) / voxelSize, (f[3] - center) / voxelSize, sgn) +
-            upwind<ScalarT>((center - f[4]) / voxelSize, (f[5] - center) / voxelSize, sgn));
-        rhs = sgn * (ScalarT(1) - gradMag);
+        VBM_FACE_VALUES(stageFaces, stageField, frozenSign, bandWidth);
+        const ScalarT gradientMagnitude =
+            nanovdb::math::Sqrt(upwind<ScalarT>((stageCenter - stageFaces[0]) / voxelSize,
+                                                (stageFaces[1] - stageCenter) / voxelSize,
+                                                frozenSign) +
+                                upwind<ScalarT>((stageCenter - stageFaces[2]) / voxelSize,
+                                                (stageFaces[3] - stageCenter) / voxelSize,
+                                                frozenSign) +
+                                upwind<ScalarT>((stageCenter - stageFaces[4]) / voxelSize,
+                                                (stageFaces[5] - stageCenter) / voxelSize,
+                                                frozenSign));
+        rhs = frozenSign * (ScalarT(1) - gradientMagnitude);
     }
 
-    ScalarT value = baseCoeff * base[vi] +
-                    (stageCoeff != ScalarT(0) ? stageCoeff * center : ScalarT(0)) +
-                    rhsCoeff * timeStep * rhs;
-    out[vi] = nanovdb::math::Min(nanovdb::math::Max(value, -bandWidth), bandWidth);
+    ScalarT combined = baseCoeff * baseField[bufferIndex] +
+                       (stageCoeff != ScalarT(0) ? stageCoeff * stageCenter : ScalarT(0)) +
+                       rhsCoeff * timeStep * rhs;
+    outField[bufferIndex] = nanovdb::math::Min(nanovdb::math::Max(combined, -bandWidth), bandWidth);
 }
 
-// one umbrella-Laplacian smoothing pass: out = in + weight*(faceMean - in). Double-buffered
-// (in != out) so neighbour reads see the pre-pass field.
+// one umbrella-Laplacian smoothing pass: outField = inField + weight*(faceMean - inField).
+// Double-buffered (inField != outField) so neighbour reads see the pre-pass field.
 template <typename ScalarT>
 __global__ void
 smoothFusedKernel(const OnIndexGridT *grid,
                   const uint32_t *firstLeafID,
                   const uint64_t *jumpMap,
                   uint64_t firstOffset,
-                  const ScalarT *in,
+                  const ScalarT *inField,
                   ScalarT weight,
                   ScalarT bandWidth,
-                  ScalarT *out) {
+                  ScalarT *outField) {
     VBM_FACES_BEGIN();
-    const int64_t vi     = int64_t(centerIndex) - 1;
-    const ScalarT center = in[vi];
-    VBM_FACE_VALUES(f, in, center, bandWidth);
-    ScalarT faceMean = (f[0] + f[1] + f[2] + f[3] + f[4] + f[5]) * (ScalarT(1) / ScalarT(6));
-    out[vi]          = center + weight * (faceMean - center);
+    const int64_t bufferIndex = int64_t(centerIndex) - 1;
+    const ScalarT center      = inField[bufferIndex];
+    VBM_FACE_VALUES(faceValues, inField, center, bandWidth);
+    ScalarT faceMean = (faceValues[0] + faceValues[1] + faceValues[2] + faceValues[3] +
+                        faceValues[4] + faceValues[5]) *
+                       (ScalarT(1) / ScalarT(6));
+    outField[bufferIndex] = center + weight * (faceMean - center);
 }
 
 // small VBM helper: build once, expose the block count + the firstLeafID/jumpMap device pointers.
@@ -304,30 +323,30 @@ runReinit(OnIndexGridT *grid,
     const uint64_t *jumpMap     = vbm.jumpMap();
     const uint64_t firstOffset  = vbm.firstOffset;
     const ScalarT timeStep      = ScalarT(0.4) * voxelSize;
-    const size_t bytes          = size_t(numVoxels) * sizeof(ScalarT);
+    const size_t fieldBytes     = size_t(numVoxels) * sizeof(ScalarT);
 
-    auto stage = [&](const ScalarT *phi0,
-                     const ScalarT *cur,
-                     const ScalarT *base,
-                     ScalarT baseCoeff,
-                     ScalarT stageCoeff,
-                     ScalarT rhsCoeff,
-                     ScalarT *out) {
+    auto runStage = [&](const ScalarT *phi0,
+                        const ScalarT *stageField,
+                        const ScalarT *baseField,
+                        ScalarT baseCoeff,
+                        ScalarT stageCoeff,
+                        ScalarT rhsCoeff,
+                        ScalarT *outField) {
         if (blockCount) {
             rkStageFusedKernel<ScalarT><<<blockCount, blockWidth, 0, stream>>>(grid,
                                                                                firstLeafID,
                                                                                jumpMap,
                                                                                firstOffset,
                                                                                phi0,
-                                                                               cur,
-                                                                               base,
+                                                                               stageField,
+                                                                               baseField,
                                                                                baseCoeff,
                                                                                stageCoeff,
                                                                                rhsCoeff,
                                                                                timeStep,
                                                                                voxelSize,
                                                                                bandWidth,
-                                                                               out,
+                                                                               outField,
                                                                                nonFinite);
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         }
@@ -336,29 +355,31 @@ runReinit(OnIndexGridT *grid,
     auto redistance = [&](const ScalarT *phi0, int iters) {
         const ScalarT one = 1, zero = 0;
         if (order <= 1) { // forward Euler, ping-pong between phi and scratchA
-            ScalarT *src = phi, *dst = scratchA;
+            ScalarT *source = phi, *destination = scratchA;
             for (int it = 0; it < iters; ++it) {
-                stage(phi0, src, src, one, zero, one, dst);
-                std::swap(src, dst);
+                runStage(phi0, source, source, one, zero, one, destination);
+                std::swap(source, destination);
             }
-            if (src != phi)
-                C10_CUDA_CHECK(cudaMemcpyAsync(phi, src, bytes, cudaMemcpyDeviceToDevice, stream));
+            if (source != phi)
+                C10_CUDA_CHECK(
+                    cudaMemcpyAsync(phi, source, fieldBytes, cudaMemcpyDeviceToDevice, stream));
         } else if (order == 2) { // Heun (TVD-RK2) in SSP form: two buffers
             for (int it = 0; it < iters; ++it) {
-                stage(phi0, phi, phi, one, zero, one, scratchA);
-                stage(phi0, scratchA, phi, ScalarT(0.5), ScalarT(0.5), ScalarT(0.5), phi);
+                runStage(phi0, phi, phi, one, zero, one, scratchA);
+                runStage(phi0, scratchA, phi, ScalarT(0.5), ScalarT(0.5), ScalarT(0.5), phi);
             }
         } else { // Shu-Osher TVD-RK3: three buffers
             for (int it = 0; it < iters; ++it) {
-                stage(phi0, phi, phi, one, zero, one, scratchA);
-                stage(phi0, scratchA, phi, ScalarT(0.75), ScalarT(0.25), ScalarT(0.25), scratchB);
-                stage(phi0,
-                      scratchB,
-                      phi,
-                      ScalarT(1.0 / 3.0),
-                      ScalarT(2.0 / 3.0),
-                      ScalarT(2.0 / 3.0),
-                      phi);
+                runStage(phi0, phi, phi, one, zero, one, scratchA);
+                runStage(
+                    phi0, scratchA, phi, ScalarT(0.75), ScalarT(0.25), ScalarT(0.25), scratchB);
+                runStage(phi0,
+                         scratchB,
+                         phi,
+                         ScalarT(1.0 / 3.0),
+                         ScalarT(2.0 / 3.0),
+                         ScalarT(2.0 / 3.0),
+                         phi);
             }
         }
     };
@@ -372,14 +393,14 @@ runReinit(OnIndexGridT *grid,
     redistance(field, iters);
 
     if (smooth) {
-        ScalarT *cur = phi, *other = scratchA; // ping-pong
+        ScalarT *current = phi, *other = scratchA; // ping-pong
         auto pass = [&](ScalarT weight) {
             if (blockCount) {
                 smoothFusedKernel<ScalarT><<<blockCount, blockWidth, 0, stream>>>(
-                    grid, firstLeafID, jumpMap, firstOffset, cur, weight, bandWidth, other);
+                    grid, firstLeafID, jumpMap, firstOffset, current, weight, bandWidth, other);
                 C10_CUDA_KERNEL_LAUNCH_CHECK();
             }
-            std::swap(cur, other);
+            std::swap(current, other);
         };
         if (taubin) {
             for (int i = 0; i < smooth; ++i) {
@@ -390,10 +411,12 @@ runReinit(OnIndexGridT *grid,
             for (int i = 0; i < smooth; ++i)
                 pass(ScalarT(1.0)); // mean-curvature
         }
-        if (cur != phi)
-            C10_CUDA_CHECK(cudaMemcpyAsync(phi, cur, bytes, cudaMemcpyDeviceToDevice, stream));
+        if (current != phi)
+            C10_CUDA_CHECK(
+                cudaMemcpyAsync(phi, current, fieldBytes, cudaMemcpyDeviceToDevice, stream));
         // The smoothed surface is the new anchor: snapshot it as phi0 for the re-redistance.
-        C10_CUDA_CHECK(cudaMemcpyAsync(smoothedPhi0, phi, bytes, cudaMemcpyDeviceToDevice, stream));
+        C10_CUDA_CHECK(
+            cudaMemcpyAsync(smoothedPhi0, phi, fieldBytes, cudaMemcpyDeviceToDevice, stream));
         redistance(smoothedPhi0, iters);
     }
 }
