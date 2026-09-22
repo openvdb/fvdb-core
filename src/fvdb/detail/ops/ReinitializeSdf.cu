@@ -97,7 +97,8 @@ faceValue(const ScalarT *field, uint64_t index, ScalarT signSource, ScalarT band
 // so this costs neighbour reads, not memory). A voxel is first classified, then only the quantity
 // its branch needs is computed:
 //   * interface cells (a strict sign change across an active face; an exactly-0 neighbour is a
-//     no-data gap and does not make a crossing) get the Russo-Smereka signed distance D;
+//     no-data gap and does not make a crossing) get the Russo-Smereka signed distance D, with a
+//     denominator shared with the steepest crossing neighbour (see interfaceDistance);
 //   * all other cells get the Peng smoothed sign  phi0 / sqrt(phi0^2 + |grad phi0|^2 dx^2).
 // An exactly-0 centre is never an interface cell and has sign 0, so its RHS vanishes and such
 // (no-data) voxels are never moved; the ray-implicit-intersection op relies on exact 0 surviving as
@@ -126,18 +127,37 @@ pengSign(ScalarT phiCenter, const ScalarT *faceValues, ScalarT voxelSize) {
                                ScalarT(1e-10) * voxelSizeSq);
 }
 
-// Signed distance from an interface cell's centre to the zero crossing of phi0: phi0 * dx over the
-// larger of the central-difference gradient norm and the largest one-sided slope, which is
-// Russo-Smereka's 1D max(central, one-sided, eps) taken to 3D. The Euclidean norm captures
-// oblique surfaces (a single face difference only sees one gradient component and would
-// overestimate D by up to sqrt(3)); the largest one-sided slope takes over at kinks and thin
-// features, where the central difference collapses toward zero. Only active faces contribute. An
-// inactive face reads as +/-bandWidth and would inflate the slope, pulling a band-edge interface
-// cell toward zero. Restricting the slopes to crossing faces was tried and rejected: it picks
-// oblique, shallow faces and shifted zero crossings by up to 0.9 voxels on a real SDF.
+// Face-neighbour value indices of `coord` in the (-x,+x,-y,+y,-z,+z) order used throughout.
+template <typename AccessorT>
+__device__ inline void
+faceIndicesAt(AccessorT &accessor, const nanovdb::Coord &coord, uint64_t faceIndexOut[6]) {
+    faceIndexOut[0] = accessor.getValue(coord.offsetBy(-1, 0, 0));
+    faceIndexOut[1] = accessor.getValue(coord.offsetBy(1, 0, 0));
+    faceIndexOut[2] = accessor.getValue(coord.offsetBy(0, -1, 0));
+    faceIndexOut[3] = accessor.getValue(coord.offsetBy(0, 1, 0));
+    faceIndexOut[4] = accessor.getValue(coord.offsetBy(0, 0, -1));
+    faceIndexOut[5] = accessor.getValue(coord.offsetBy(0, 0, 1));
+}
+
+__device__ inline nanovdb::Coord
+faceOffset(int face) {
+    const int axis = face / 2, direction = (face & 1) ? 1 : -1;
+    return nanovdb::Coord(
+        axis == 0 ? direction : 0, axis == 1 ? direction : 0, axis == 2 ? direction : 0);
+}
+
+// Denominator of the Russo-Smereka distance for one cell: the larger of its central-difference
+// gradient norm and its largest one-sided slope, over active faces, which is Russo-Smereka's 1D
+// max(central, one-sided, eps) taken to 3D. The Euclidean norm captures oblique surfaces (a single
+// face difference only sees one gradient component and would overestimate D by up to sqrt(3));
+// the largest one-sided slope takes over at kinks and thin features, where the central difference
+// collapses toward zero. Only active faces contribute. An inactive face reads as +/-bandWidth and
+// would inflate the slope, pulling a band-edge interface cell toward zero. Restricting the slopes
+// to crossing faces was tried and rejected: it picks oblique, shallow faces and shifted zero
+// crossings by up to 0.9 voxels on a real SDF.
 template <typename ScalarT>
 __device__ inline ScalarT
-interfaceDistance(ScalarT phiCenter,
+anchorDenominator(ScalarT phiCenter,
                   const ScalarT *faceValues,
                   const uint64_t *faceIndex,
                   ScalarT voxelSize) {
@@ -158,8 +178,54 @@ interfaceDistance(ScalarT phiCenter,
                 : Max(backwardDiff, forwardDiff);
         centralGradientSq += axisGradient * axisGradient;
     }
-    maxSlope = Max(maxSlope, nanovdb::math::Sqrt(centralGradientSq));
-    return voxelSize * phiCenter / maxSlope;
+    return Max(maxSlope, nanovdb::math::Sqrt(centralGradientSq));
+}
+
+// Signed distance from an interface cell's centre to the zero crossing of phi0. The two ends of a
+// crossing edge must divide by the same denominator or the interpolated crossing moves, and a
+// per-cell denominator cannot guarantee that from six face values alone: the medial cell of a
+// 1-voxel oblique slab and the interior cell of a 1-voxel rod present the same faces up to scale
+// yet need different distances. So each interface cell also evaluates the denominator of its
+// steepest crossing neighbour (a 2-ring read, interface cells only) and uses the larger. On the
+// exact SDF of a (1,1,1) slab one voxel thick the per-cell rule anchored the medial layer at -0.5
+// instead of -0.2887 and the crossing drifted 0.13 voxels per call; with the shared denominator
+// the slab, the 1-3 voxel rods and oblique planes are all fixed points, and five repeated calls on
+// a sphere move crossings 0.0025 voxels instead of 0.09.
+template <typename ScalarT, typename AccessorT>
+__device__ inline ScalarT
+interfaceDistance(const ScalarT *phi0,
+                  ScalarT phiCenter,
+                  const ScalarT *faceValues,
+                  const uint64_t *faceIndex,
+                  AccessorT &accessor,
+                  const nanovdb::Coord &centerCoord,
+                  ScalarT voxelSize,
+                  ScalarT bandWidth) {
+    ScalarT denominator = anchorDenominator<ScalarT>(phiCenter, faceValues, faceIndex, voxelSize);
+
+    int steepestFace      = -1;
+    ScalarT steepestSlope = ScalarT(-1);
+    for (int face = 0; face < 6; ++face) {
+        const ScalarT slope = nanovdb::math::Abs(faceValues[face] - phiCenter);
+        if (faceValues[face] * phiCenter < ScalarT(0) && slope > steepestSlope) {
+            steepestSlope = slope;
+            steepestFace  = face;
+        }
+    }
+    if (steepestFace >= 0) {
+        const ScalarT neighbourCenter = faceValues[steepestFace];
+        uint64_t neighbourFaceIndex[6];
+        faceIndicesAt(accessor, centerCoord + faceOffset(steepestFace), neighbourFaceIndex);
+        ScalarT neighbourFaces[6];
+        for (int face = 0; face < 6; ++face)
+            neighbourFaces[face] =
+                faceValue<ScalarT>(phi0, neighbourFaceIndex[face], neighbourCenter, bandWidth);
+        denominator =
+            nanovdb::math::Max(denominator,
+                               anchorDenominator<ScalarT>(
+                                   neighbourCenter, neighbourFaces, neighbourFaceIndex, voxelSize));
+    }
+    return voxelSize * phiCenter / denominator;
 }
 
 // One-sided upwind selection of the squared one-dimensional derivative for the Godunov scheme.
@@ -210,8 +276,8 @@ rkStageFusedKernel(const OnIndexGridT *grid,
 
     ScalarT rhs;
     if (isInterfaceCell<ScalarT>(phi0Center, phi0Faces)) {
-        const ScalarT distance =
-            interfaceDistance<ScalarT>(phi0Center, phi0Faces, faceIndex, voxelSize);
+        const ScalarT distance = interfaceDistance<ScalarT>(
+            phi0, phi0Center, phi0Faces, faceIndex, accessor, centerCoord, voxelSize, bandWidth);
         rhs = (distance - stageCenter) / voxelSize;
     } else {
         const ScalarT frozenSign = pengSign<ScalarT>(phi0Center, phi0Faces, voxelSize);

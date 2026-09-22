@@ -27,7 +27,7 @@ def reference_redistance(grid: "fvdb.Grid", field: torch.Tensor, band: int, iter
     Mirrors ReinitializeSdf.cu step for step: inactive faces read as +/-band*vx with the sign of the
     voxel doing the reading; interface cells (a strict sign change across an active face in the input)
     relax to the Russo-Smereka distance D with denominator max(central gradient norm, largest
-    one-sided slope, eps); all other cells take the Godunov update with the frozen Peng sign; RK1,
+    one-sided slope, eps), shared with the steepest crossing neighbour; all other cells take the Godunov update with the frozen Peng sign; RK1,
     SSP Heun, and Shu-Osher RK3 with dt = 0.4 vx and a band clamp after every stage."""
     vx = float(grid.voxel_size[0])
     band_width = band * vx
@@ -39,7 +39,9 @@ def reference_redistance(grid: "fvdb.Grid", field: torch.Tensor, band: int, iter
     active = face_index >= 0
 
     def faces(phi: torch.Tensor, sign_source: torch.Tensor) -> torch.Tensor:
-        out = torch.where(sign_source < 0, -band_width, band_width).to(phi.dtype)[:, None].expand(-1, 6).clone()
+        # Build the inactive value in phi's dtype; torch.where on two Python floats would yield float32.
+        inactive = torch.where(sign_source < 0, -1.0, 1.0).to(phi.dtype) * band_width
+        out = inactive[:, None].expand(-1, 6).clone()
         out[active] = phi[face_index[active]]
         return out
 
@@ -55,7 +57,14 @@ def reference_redistance(grid: "fvdb.Grid", field: torch.Tensor, band: int, iter
         both, (phi0_faces[:, 1::2] - phi0_faces[:, 0::2]).abs() / 2, torch.maximum(forward, backward)
     )
     denominator = torch.maximum(torch.maximum(forward, backward).max(dim=1).values, axis_gradient.norm(dim=1))
-    distance = vx * phi0 / denominator.clamp(min=1e-6 * vx)
+    denominator = denominator.clamp(min=1e-6 * vx)
+    # Each interface cell shares the larger denominator with its steepest crossing neighbour so both
+    # ends of a crossing edge scale alike and the interpolated crossing stays put.
+    crossing = phi0_faces * center < 0
+    edge_slope = torch.where(crossing, (phi0_faces - center).abs(), torch.full_like(phi0_faces, -1.0))
+    steepest = face_index.gather(1, edge_slope.argmax(dim=1, keepdim=True)).squeeze(1).clamp(min=0)
+    denominator = torch.where(interface, torch.maximum(denominator, denominator[steepest]), denominator)
+    distance = vx * phi0 / denominator
 
     central = (phi0_faces[:, 1::2] - phi0_faces[:, 0::2]) / (2 * vx)
     frozen_sign = phi0 / torch.sqrt(phi0 * phi0 + central.pow(2).sum(dim=1) * vx * vx + 1e-10 * vx * vx)
@@ -280,7 +289,14 @@ class ReinitializeSdfTests(unittest.TestCase):
     def test_matches_reference_transcription(self):
         """CUDA solve equals the float64 reference on the sphere for all three RK orders and inputs."""
         step = torch.where(self.analytic < 0, -self.bw, self.bw).expand_as(self.analytic).clone()
-        for name, field in (("exact sdf", self.analytic.clamp(-self.bw, self.bw)), ("sign step", step)):
+        slab_layer = (self.grid.ijk.float()).sum(dim=1)
+        slab = ((slab_layer.abs() - 0.5) / math.sqrt(3.0) * self.vx).clamp(-self.bw, self.bw)
+        cases = (
+            ("exact sdf", self.analytic.clamp(-self.bw, self.bw)),
+            ("sign step", step),
+            ("oblique thin slab", slab),
+        )
+        for name, field in cases:
             for order in (1, 2, 3):
                 with self.subTest(field=name, order=order):
                     field64 = field.double()
@@ -333,6 +349,12 @@ class ReinitializeSdfTests(unittest.TestCase):
                     phi = grid.reinitialize_sdf(field, band=3, redistance_iters=iters)
                     self.assertEqual(((phi < 0) != interior).sum().item(), 0)
                     self.assertLess((phi[interface_cells] - field[interface_cells]).abs().max().item(), 0.05)
+            with self.subTest(width=width, repeated_calls=3):
+                phi = field
+                for _ in range(3):
+                    phi = grid.reinitialize_sdf(phi, band=3)
+                self.assertEqual(((phi < 0) != interior).sum().item(), 0)
+                self.assertLess((phi[interface_cells] - field[interface_cells]).abs().max().item(), 0.05)
 
     def test_oblique_plane_interface_distance(self):
         """Interface cells of an oblique plane SDF must keep their exact Euclidean distance.
@@ -350,13 +372,60 @@ class ReinitializeSdfTests(unittest.TestCase):
         for normal in ((1.0, 1.0, 1.0), (1.0, 1.0, 0.0), (3.0, 1.0, 0.0)):
             unit_normal = torch.tensor(normal, device=self.device)
             unit_normal = unit_normal / unit_normal.norm()
-            analytic = ((centers - (size - 1) / 2) @ unit_normal - 0.5 / math.sqrt(3.0)).clamp(-3.0, 3.0)
+            analytic = ((centers - (size - 1) / 2) @ unit_normal - 0.37).clamp(-3.0, 3.0)
+            self.assertTrue((analytic.abs() > 1e-6).all().item(), "offset must not put a voxel centre on the plane")
             interface_cells = self._interface_cells(grid, analytic) & interior
+            self.assertGreater(int(interface_cells.sum()), 0)
             for order in (1, 3):
                 with self.subTest(normal=normal, order=order):
                     phi = grid.reinitialize_sdf(analytic, band=3, order=order, redistance_iters=40)
                     self.assertLess((phi[interface_cells] - analytic[interface_cells]).abs().max().item(), 1e-3)
                     self.assertEqual(((phi < 0) != (analytic < 0)).sum().item(), 0)
+
+    @staticmethod
+    def _axis_crossings(grid: "fvdb.Grid", phi: torch.Tensor, cells: torch.Tensor) -> torch.Tensor:
+        """Interpolated zero-crossing offsets along the +x/+y/+z edges leaving `cells`; NaN where none."""
+        ijk = grid.ijk
+        out = []
+        for o in ((1, 0, 0), (0, 1, 0), (0, 0, 1)):
+            idx = grid.ijk_to_index(ijk + torch.tensor(o, device=ijk.device, dtype=ijk.dtype))
+            neighbour = torch.where(idx >= 0, phi[idx.clamp(min=0)], phi)
+            has = (idx >= 0) & ((neighbour < 0) != (phi < 0)) & cells
+            out.append(torch.where(has, phi / (phi - neighbour), torch.full_like(phi, float("nan"))))
+        return torch.stack(out, dim=1)
+
+    def test_oblique_thin_slab_is_anchored(self):
+        """A one-voxel slab oblique to the axes must keep its zero crossings, also under repeated calls.
+
+        The exact SDF phi = (|i+j+k| - 0.5)/sqrt(3) has a medial layer at -0.2887 whose six
+        neighbours all sit at +0.2887, so its central differences cancel. A per-cell distance
+        estimate falls back to a single one-sided slope there and anchors the layer at -0.5 while
+        the next layer stays at +0.2887, moving the crossing 0.13 voxels per call and compounding.
+        Sharing the denominator with the steepest crossing neighbour makes the slab a fixed point.
+        Interior is kept 3 voxels off the grid boundary, where inactive faces perturb the field."""
+        size = 15
+        grid = fvdb.Grid.from_dense_axis_aligned_bounds(
+            [size, size, size], [0, 0, 0], [size, size, size], device=self.device
+        )
+        centers = grid.ijk.float() - (size - 1) / 2
+        interior = (centers.abs() <= (size - 1) / 2 - 3).all(dim=1)
+        for normal, half_width in (((1.0, 1.0, 1.0), 0.5), ((1.0, 1.0, 0.0), 0.5)):
+            with self.subTest(normal=normal):
+                nv = torch.tensor(normal, device=self.device)
+                layer = centers @ nv  # integer layer index along the normal
+                analytic = ((layer.abs() - half_width) / nv.norm()).clamp(-3.0, 3.0)
+                self.assertTrue((analytic.abs() > 1e-6).all().item())
+                interface_cells = self._interface_cells(grid, analytic) & interior
+                before = self._axis_crossings(grid, analytic, interior)
+
+                phi = grid.reinitialize_sdf(analytic, band=3)
+                self.assertLess((phi[interface_cells] - analytic[interface_cells]).abs().max().item(), 1e-3)
+                for _ in range(2):
+                    phi = grid.reinitialize_sdf(phi, band=3)
+                after = self._axis_crossings(grid, phi, interior)
+                both = ~torch.isnan(before) & ~torch.isnan(after)
+                self.assertLess((after[both] - before[both]).abs().max().item(), 5e-3)
+                self.assertEqual(((phi < 0) != (analytic < 0)).sum().item(), 0)
 
     def test_thin_slab_is_fixed_point(self):
         """A 1- or 2-voxel slab with an exact SDF is unchanged by redistancing (1D-thin is stable)."""
