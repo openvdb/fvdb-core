@@ -51,8 +51,8 @@ enum class SmoothingMode : int32_t {
 ///                    rather than hollow.
 /// @param redistanceIters  Number of TVD-RK redistancing sweeps. Pass <= 0 to use the default
 ///                         max(20, 6*band). The same count is used for the redistance that follows
-///                         smoothing, so a small explicit value renormalizes the smoothed field only
-///                         within about 0.4*redistanceIters voxels of the surface.
+///                         smoothing, so a small explicit value renormalizes the smoothed field
+///                         only within about 0.4*redistanceIters voxels of the surface.
 /// @param order       TVD-RK order: 1 (forward Euler), 2 (Heun), or 3 (Shu-Osher). The redistance
 ///                    marches to a steady state, so the order does not change the converged result;
 ///                    1 is the cheapest in time and scratch memory.
