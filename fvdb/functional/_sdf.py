@@ -30,8 +30,11 @@ def _validated_scalar_field(field: torch.Tensor, num_voxels: int) -> torch.Tenso
         raise ValueError(f"field must be a scalar field with shape (N,) or (N, 1), got {tuple(field.shape)}")
     if field.shape[0] != num_voxels:
         raise ValueError(f"field must have one value per voxel, got {field.shape[0]} values for {num_voxels} voxels")
-    if not torch.isfinite(field).all().item():
-        raise ValueError("field must contain only finite values; leave no-data voxels inactive")
+    # NaN and +/-Inf both propagate to the extrema, so this avoids a per-voxel bool mask.
+    if field.numel() > 0:
+        field_min, field_max = torch.aminmax(field)
+        if not (torch.isfinite(field_min) and torch.isfinite(field_max)):
+            raise ValueError("field must contain only finite values; leave no-data voxels inactive")
     return field.reshape(-1)
 
 

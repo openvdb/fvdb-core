@@ -1,6 +1,7 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 #
+import math
 import unittest
 
 import torch
@@ -15,6 +16,73 @@ def _dense_cube_grid(vx: float, half: int, device: torch.device) -> "fvdb.Grid":
     ijk = torch.stack([ii, jj, kk], dim=-1).reshape(-1, 3)
     pts = ijk * vx
     return fvdb.Grid.from_points(pts, voxel_size=vx)
+
+
+_FACE_OFFSETS = ((-1, 0, 0), (1, 0, 0), (0, -1, 0), (0, 1, 0), (0, 0, -1), (0, 0, 1))
+
+
+def reference_redistance(grid: "fvdb.Grid", field: torch.Tensor, band: int, iters: int, order: int) -> torch.Tensor:
+    """Float64 torch transcription of the CUDA redistance, the generator for the pinned values below.
+
+    Mirrors ReinitializeSdf.cu step for step: inactive faces read as +/-band*vx with the sign of the
+    voxel doing the reading; interface cells (a strict sign change across an active face in the input)
+    relax to the Russo-Smereka distance D with denominator max(central gradient norm, largest
+    one-sided slope, eps); all other cells take the Godunov update with the frozen Peng sign; RK1,
+    SSP Heun, and Shu-Osher RK3 with dt = 0.4 vx and a band clamp after every stage."""
+    vx = float(grid.voxel_size[0])
+    band_width = band * vx
+    dt = 0.4 * vx
+    ijk = grid.ijk
+    face_index = torch.stack(
+        [grid.ijk_to_index(ijk + torch.tensor(o, device=ijk.device, dtype=ijk.dtype)) for o in _FACE_OFFSETS], dim=1
+    )
+    active = face_index >= 0
+
+    def faces(phi: torch.Tensor, sign_source: torch.Tensor) -> torch.Tensor:
+        out = torch.where(sign_source < 0, -band_width, band_width).to(phi.dtype)[:, None].expand(-1, 6).clone()
+        out[active] = phi[face_index[active]]
+        return out
+
+    phi0 = field.reshape(-1).double()
+    phi0_faces = faces(phi0, phi0)
+    center = phi0[:, None]
+    interface = (phi0_faces * center < 0).any(dim=1)
+
+    forward = torch.where(active[:, 1::2], (phi0_faces[:, 1::2] - center).abs(), torch.zeros_like(center))
+    backward = torch.where(active[:, 0::2], (center - phi0_faces[:, 0::2]).abs(), torch.zeros_like(center))
+    both = active[:, 1::2] & active[:, 0::2]
+    axis_gradient = torch.where(
+        both, (phi0_faces[:, 1::2] - phi0_faces[:, 0::2]).abs() / 2, torch.maximum(forward, backward)
+    )
+    denominator = torch.maximum(torch.maximum(forward, backward).max(dim=1).values, axis_gradient.norm(dim=1))
+    distance = vx * phi0 / denominator.clamp(min=1e-6 * vx)
+
+    central = (phi0_faces[:, 1::2] - phi0_faces[:, 0::2]) / (2 * vx)
+    frozen_sign = phi0 / torch.sqrt(phi0 * phi0 + central.pow(2).sum(dim=1) * vx * vx + 1e-10 * vx * vx)
+
+    def rhs(phi: torch.Tensor) -> torch.Tensor:
+        f = faces(phi, frozen_sign)
+        back = (phi[:, None] - f[:, 0::2]) / vx
+        fwd = (f[:, 1::2] - phi[:, None]) / vx
+        positive = torch.maximum(back.clamp(min=0) ** 2, fwd.clamp(max=0) ** 2)
+        negative = torch.maximum(back.clamp(max=0) ** 2, fwd.clamp(min=0) ** 2)
+        gradient = torch.where(frozen_sign[:, None] > 0, positive, negative).sum(dim=1).sqrt()
+        return torch.where(interface, (distance - phi) / vx, frozen_sign * (1 - gradient))
+
+    def clamp(phi: torch.Tensor) -> torch.Tensor:
+        return phi.clamp(-band_width, band_width)
+
+    phi = phi0.clone()
+    for _ in range(iters):
+        stage1 = clamp(phi + dt * rhs(phi))
+        if order == 1:
+            phi = stage1
+        elif order == 2:
+            phi = clamp(0.5 * phi + 0.5 * stage1 + 0.5 * dt * rhs(stage1))
+        else:
+            stage2 = clamp(0.75 * phi + 0.25 * stage1 + 0.25 * dt * rhs(stage1))
+            phi = clamp(phi / 3 + 2 * stage2 / 3 + 2 * dt * rhs(stage2) / 3)
+    return phi.to(field.dtype)
 
 
 class ReinitializeSdfTests(unittest.TestCase):
@@ -160,11 +228,11 @@ class ReinitializeSdfTests(unittest.TestCase):
         self.assertLess(phi.min().item(), -(self.band - 1.25) * self.vx)
 
     def test_subcell_update_pins_interface_cross(self):
-        """Pinned value on a 7-voxel cross whose every voxel is an interface cell.
+        """Subcell update on a 7-voxel cross whose centre (+0.1) has five negative neighbours.
 
-        The centre (+0.1) has five negative neighbours, so it takes the Russo-Smereka subcell update
-        toward its initial distance D = 0.1 / 3.1 instead of a Godunov step. The +x arm relaxes toward
-        its own D. Reference values come from a float64 torch replica of the scheme (RK3, dt=0.4)."""
+        The centre is an interface cell and relaxes toward its initial distance D = 0.1 / 3.1; the
+        +x arm (+3.0) is not, and takes a Godunov step. Values are checked against the float64
+        reference transcription in this file, in both polarities."""
         ijk = torch.tensor(
             [[0, 0, 0], [1, 0, 0], [0, -1, 0], [0, 1, 0], [0, 0, -1], [0, 0, 1]],
             device=self.device,
@@ -172,15 +240,17 @@ class ReinitializeSdfTests(unittest.TestCase):
         )
         g = fvdb.Grid.from_ijk(ijk, voxel_size=1.0, origin=0.0)
         center = (g.ijk == 0).all(dim=1)
-        plus_x = (g.ijk == ijk[1]).all(dim=1)
         field = torch.full((g.num_voxels,), -3.0, device=self.device, dtype=torch.float64)
         field[center] = 0.1
-        field[plus_x] = 3.0
+        field[(g.ijk == ijk[1]).all(dim=1)] = 3.0
         for polarity in (1.0, -1.0):
             with self.subTest(polarity=polarity):
                 phi = g.reinitialize_sdf(polarity * field, band=3, order=3, redistance_iters=1)
-                self.assertAlmostEqual(phi[center].item(), polarity * 0.0776, delta=1e-6)
-                self.assertAlmostEqual(phi[plus_x].item(), polarity * 2.420515705, delta=1e-6)
+                expected = reference_redistance(g, polarity * field, band=3, iters=1, order=3)
+                self.assertLess((phi - expected).abs().max().item(), 1e-9)
+                # the centre moves toward D = 0.1 / 3.1 and keeps its sign
+                self.assertLess(abs(phi[center].item()), 0.1)
+                self.assertGreater(polarity * phi[center].item(), 0.1 / 3.1)
 
     def test_godunov_inactive_faces_continue_frozen_sign(self):
         """A non-interface cell's Godunov update must read inactive faces with its frozen sign.
@@ -189,33 +259,41 @@ class ReinitializeSdfTests(unittest.TestCase):
         interface cell, so both take the Godunov update, and every face but the one between them is
         inactive. Read with the frozen sign those faces are deep interior (-band) and downwind, so A
         relaxes toward -band. Read as +band (the PR #762 phantom-boundary bug) they would be upwind
-        with a slope of 3.5 and A would rise toward a surface that does not exist. Reference values
-        from a float64 torch replica of the scheme (RK1, dt = 0.4); the mirrored field checks the
+        with a slope of 3.5 and A would rise toward a surface that does not exist. Values are checked
+        against the float64 reference transcription in this file; the mirrored field checks the
         positive branch of the same rule."""
         ijk = torch.tensor([[0, 0, 0], [-1, 0, 0]], device=self.device, dtype=torch.int32)
         g = fvdb.Grid.from_ijk(ijk, voxel_size=1.0, origin=0.0)
         cell_a = (g.ijk == 0).all(dim=1)
-        cell_b = ~cell_a
         field = torch.empty(2, device=self.device, dtype=torch.float64)
         field[cell_a] = -0.5
-        field[cell_b] = -1.5
+        field[~cell_a] = -1.5
         for polarity in (1.0, -1.0):
             with self.subTest(polarity=polarity):
-                one_sweep = g.reinitialize_sdf(polarity * field, band=3, order=1, redistance_iters=1)
-                self.assertAlmostEqual(one_sweep[cell_a].item(), polarity * -0.721880078, delta=1e-6)
-                self.assertAlmostEqual(one_sweep[cell_b].item(), polarity * -1.5, delta=1e-9)
-                five_sweeps = g.reinitialize_sdf(polarity * field, band=3, order=1, redistance_iters=5)
-                self.assertAlmostEqual(five_sweeps[cell_a].item(), polarity * -1.609400392, delta=1e-6)
-                self.assertAlmostEqual(five_sweeps[cell_b].item(), polarity * -2.002511115, delta=1e-6)
+                for iters in (1, 5):
+                    phi = g.reinitialize_sdf(polarity * field, band=3, order=1, redistance_iters=iters)
+                    expected = reference_redistance(g, polarity * field, band=3, iters=iters, order=1)
+                    self.assertLess((phi - expected).abs().max().item(), 1e-9, f"iters={iters}")
                 # both keep their sign and move deeper, never toward a phantom surface
-                self.assertTrue(((five_sweeps * polarity) < (field * polarity)).all().item())
+                self.assertTrue(((phi * polarity) < (field * polarity)).all().item())
+
+    def test_matches_reference_transcription(self):
+        """CUDA solve equals the float64 reference on the sphere for all three RK orders and inputs."""
+        step = torch.where(self.analytic < 0, -self.bw, self.bw).expand_as(self.analytic).clone()
+        for name, field in (("exact sdf", self.analytic.clamp(-self.bw, self.bw)), ("sign step", step)):
+            for order in (1, 2, 3):
+                with self.subTest(field=name, order=order):
+                    field64 = field.double()
+                    phi = self.grid.reinitialize_sdf(field64, band=self.band, order=order, redistance_iters=6)
+                    expected = reference_redistance(self.grid, field64, band=self.band, iters=6, order=order)
+                    self.assertLess((phi - expected).abs().max().item() / self.vx, 1e-9)
 
     # ------------------------------------------------------- thin features
     @staticmethod
     def _rod(width_vox: int, device: torch.device, length: int = 16, pad: int = 4):
         """Dense grid holding an infinite square rod (axis z) of `width_vox` voxels with its exact SDF.
 
-        Voxel size 1. Returns (grid, field, is_interior, half_width)."""
+        Voxel size 1. Returns (grid, field, is_interior)."""
         n = width_vox + 2 * pad
         ax = torch.arange(n, device=device, dtype=torch.float32) - (n - 1) / 2
         half = width_vox / 2
@@ -225,7 +303,7 @@ class ReinitializeSdfTests(unittest.TestCase):
         grid = fvdb.Grid.from_dense_axis_aligned_bounds([n, n, length], [0, 0, 0], [n, n, length], device=device)
         ijk = grid.ijk
         field = sdf[ijk[:, 0], ijk[:, 1], ijk[:, 2]].contiguous().clamp(-3.0, 3.0)
-        return grid, field, field < 0, half
+        return grid, field, field < 0
 
     @staticmethod
     def _interface_cells(grid: "fvdb.Grid", field: torch.Tensor) -> torch.Tensor:
@@ -248,7 +326,7 @@ class ReinitializeSdfTests(unittest.TestCase):
         here. Non-interface cells (e.g. the diagonal exterior corners) keep the usual first-order
         upwind error and are not checked."""
         for width in (1, 2, 3):
-            grid, field, interior, half = self._rod(width, self.device)
+            grid, field, interior = self._rod(width, self.device)
             interface_cells = self._interface_cells(grid, field)
             for iters in (3, 12, 40):
                 with self.subTest(width=width, iters=iters):
@@ -263,8 +341,6 @@ class ReinitializeSdfTests(unittest.TestCase):
         from it alone pins the (1,1,1) plane at +/-0.5 instead of +/-0.2887 and leaves the gradient
         across the interface at sqrt(3). The estimate uses the central-difference gradient norm as
         well, which is exact for a plane."""
-        import math
-
         size = 12
         grid = fvdb.Grid.from_dense_axis_aligned_bounds(
             [size, size, size], [0, 0, 0], [size, size, size], device=self.device
