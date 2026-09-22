@@ -228,6 +228,30 @@ class ReinitializeSdfTests(unittest.TestCase):
                     self.assertEqual(((phi < 0) != interior).sum().item(), 0)
                     self.assertLess((phi[iface] - field[iface]).abs().max().item(), 0.05)
 
+    def test_oblique_plane_interface_distance(self):
+        """Interface cells of an oblique plane SDF must keep their exact Euclidean distance.
+
+        A single face difference only measures one gradient component, so a distance estimate built
+        from it alone pins the (1,1,1) plane at +/-0.5 instead of +/-0.2887 and leaves the gradient
+        across the interface at sqrt(3). The estimate uses the central-difference gradient norm as
+        well, which is exact for a plane."""
+        import math
+
+        n = 12
+        grid = fvdb.Grid.from_dense_axis_aligned_bounds([n, n, n], [0, 0, 0], [n, n, n], device=self.device)
+        p = grid.ijk.float()
+        interior = (p > 1).all(dim=1) & (p < n - 2).all(dim=1)
+        for normal in ((1.0, 1.0, 1.0), (1.0, 1.0, 0.0), (3.0, 1.0, 0.0)):
+            nv = torch.tensor(normal, device=self.device)
+            nv = nv / nv.norm()
+            analytic = ((p - (n - 1) / 2) @ nv - 0.5 / math.sqrt(3.0)).clamp(-3.0, 3.0)
+            iface = self._interface_cells(grid, analytic) & interior
+            for order in (1, 3):
+                with self.subTest(normal=normal, order=order):
+                    phi = grid.reinitialize_sdf(analytic, band=3, order=order, redistance_iters=40)
+                    self.assertLess((phi[iface] - analytic[iface]).abs().max().item(), 1e-3)
+                    self.assertEqual(((phi < 0) != (analytic < 0)).sum().item(), 0)
+
     def test_thin_slab_is_fixed_point(self):
         """A 1- or 2-voxel slab with an exact SDF is unchanged by redistancing (1D-thin is stable)."""
         n = 12

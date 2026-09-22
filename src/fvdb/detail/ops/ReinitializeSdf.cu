@@ -98,9 +98,9 @@ faceValue(const ScalarT *field, uint64_t index, ScalarT signSource, ScalarT band
 // memory):
 //   * the Peng smoothed sign  phi0 / sqrt(phi0^2 + |grad phi0|^2 dx^2);
 //   * whether the voxel is an interface cell (sign change across an active face);
-//   * the Russo-Smereka signed distance D to the zero crossing, from the largest one-sided slope of
-//     phi0 over its ACTIVE faces (see the note in frozenData on why crossing faces alone are not
-//     used).
+//   * the Russo-Smereka signed distance D to the zero crossing: phi0 * dx over the larger of the
+//     central-difference gradient norm and the largest one-sided slope, active faces only (see the
+//     note in frozenData).
 // An exactly-0 centre yields sign 0 and D 0, so the RHS vanishes there and such (no-data) voxels
 // are never moved by the redistance; the ray-implicit-intersection op relies on exact 0 surviving
 // as a gap marker.
@@ -131,18 +131,28 @@ frozenData(const ScalarT *phi0,
     d.sign = c / nanovdb::math::Sqrt(c * c + (gradX * gradX + gradY * gradY + gradZ * gradZ) * dx2 +
                                      ScalarT(1e-10) * dx2);
 
-    // Largest one-sided slope over ACTIVE faces. An inactive face reads as +/-bandWidth and would
-    // inflate the slope, pulling a band-edge interface cell toward zero. Restricting the max to
-    // crossing faces was tried and rejected: it picks oblique, shallow faces and shifted zero
-    // crossings by up to 0.9 voxels on a real SDF, versus 0.12 with this rule.
+    // Denominator for D, following Russo-Smereka's 1D max(central, one-sided, eps) in 3D: the
+    // Euclidean norm of the central-difference gradient captures oblique surfaces (a single face
+    // difference only sees one gradient component and would overestimate D by up to sqrt(3)); the
+    // largest one-sided slope takes over at kinks and thin features, where the central difference
+    // collapses toward zero. Only active faces contribute. An inactive face reads as +/-bandWidth
+    // and would inflate the slope, pulling a band-edge interface cell toward zero. Restricting the
+    // slopes to crossing faces was tried and rejected: it picks oblique, shallow faces and shifted
+    // zero crossings by up to 0.9 voxels on a real SDF.
     const bool centerNeg = c < ScalarT(0);
     d.isInterface        = false;
     ScalarT slope        = ScalarT(1e-6) * voxelSize;
-    for (int k = 0; k < 6; ++k) {
-        d.isInterface |= (f[k] < ScalarT(0)) != centerNeg;
-        if (faceIndex[k])
-            slope = Max(slope, Abs(f[k] - c));
+    ScalarT gradSq       = ScalarT(0);
+    for (int axis = 0; axis < 3; ++axis) {
+        const int km = 2 * axis, kp = 2 * axis + 1;
+        d.isInterface |= ((f[km] < ScalarT(0)) != centerNeg) || ((f[kp] < ScalarT(0)) != centerNeg);
+        const bool am = faceIndex[km] != 0, ap = faceIndex[kp] != 0;
+        const ScalarT dm = am ? Abs(c - f[km]) : ScalarT(0), dp = ap ? Abs(f[kp] - c) : ScalarT(0);
+        slope           = Max(slope, Max(dm, dp));
+        const ScalarT g = (am && ap) ? Abs(f[kp] - f[km]) * ScalarT(0.5) : Max(dm, dp);
+        gradSq += g * g;
     }
+    slope  = Max(slope, nanovdb::math::Sqrt(gradSq));
     d.dist = d.isInterface ? voxelSize * c / slope : ScalarT(0);
     return d;
 }
