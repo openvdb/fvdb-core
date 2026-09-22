@@ -12,6 +12,8 @@
 namespace fvdb::detail {
 
 /// @brief Create an owning, zeroed, contiguous CUDA tensor with the shape and dtype of tensor.
+/// Storage is rounded up to an equal number of elements per CUDA device, with a zeroed tail for
+/// reduceGradientShards(). The returned tensor retains the input's logical shape.
 /// @note The caller must select deviceId and supply a stream on that device. Allocation, zeroing,
 /// and freeing use the supplied stream; all uses of the tensor must be ordered before its free on
 /// that stream. The last tensor owner must be released while the stream is still valid.

@@ -6,8 +6,6 @@
 
 #include <fvdb/detail/utils/cuda/Utils.cuh>
 
-#include <nanovdb/util/cuda/Util.h>
-
 #include <torch/csrc/cuda/nccl.h>
 #include <torch/types.h>
 
@@ -16,41 +14,30 @@
 namespace fvdb::detail {
 
 // Reduce in place into each device's owned slice of its local gradient buffer.
+// Inputs must come from makeLocalGradient(), whose storage includes zeroed padding for equally
+// sized NCCL shards. The logical tensor shapes and deviceChunk() output ownership stay unchanged.
 inline void
 reduceGradientShards(const std::vector<torch::Tensor> &localGradients) {
     const int64_t numElements = localGradients.front().numel();
-    std::vector<torch::Tensor> reducedShards(c10::cuda::device_count());
-    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-        const auto [shardOffset, shardSize] = deviceChunk(numElements, deviceId);
-        if (shardSize == 0) {
-            continue;
-        }
+    if (numElements == 0) {
+        return;
+    }
 
+    const int64_t deviceCount       = c10::cuda::device_count();
+    const int64_t shardSize         = numElements / deviceCount + (numElements % deviceCount != 0);
+    const int64_t paddedNumElements = shardSize * deviceCount;
+    std::vector<torch::Tensor> paddedGradients(deviceCount);
+    std::vector<torch::Tensor> reducedShards(deviceCount);
+    for (const auto deviceId: c10::irange(deviceCount)) {
+        // Expose the allocation's zeroed tail without copying or changing the logical gradient.
+        paddedGradients[deviceId] = localGradients[deviceId].as_strided({paddedNumElements}, {1});
         reducedShards[deviceId] =
-            localGradients[deviceId].view({-1}).narrow(0, shardOffset, shardSize);
+            paddedGradients[deviceId].narrow(0, deviceId * shardSize, shardSize);
     }
 
-    if (numElements % c10::cuda::device_count() == 0) {
-        torch::cuda::nccl::reduce_scatter(localGradients, reducedShards);
-    } else {
-        // NCCL reduce-scatter requires equally sized shards. For an uneven tensor, reduce each
-        // ceil-divided shard into its owning device's local receive slice.
-        for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-            const auto [shardOffset, shardSize] = deviceChunk(numElements, deviceId);
-            if (shardSize == 0) {
-                continue;
-            }
-
-            std::vector<torch::Tensor> inputShards;
-            inputShards.reserve(c10::cuda::device_count());
-            for (const auto sourceDeviceId: c10::irange(c10::cuda::device_count())) {
-                inputShards.emplace_back(
-                    localGradients[sourceDeviceId].view({-1}).narrow(0, shardOffset, shardSize));
-            }
-            torch::cuda::nccl::reduce(
-                inputShards, reducedShards[deviceId], static_cast<int32_t>(deviceId));
-        }
-    }
+    // NCCL supports in-place reduce-scatter when each receive buffer is its rank's input slice.
+    // Ranks with no logical elements still participate using their zero-filled padded slice.
+    torch::cuda::nccl::reduce_scatter(paddedGradients, reducedShards);
 }
 
 // Call after queuing the reductions and waiting for output prefetching on the current streams.
