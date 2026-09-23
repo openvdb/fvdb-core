@@ -94,6 +94,8 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/AvgPool.cu
     fvdb/detail/ops/MaxPool.cu
     fvdb/detail/ops/GridEdgeNetwork.cu
+    fvdb/detail/ops/gsplat/FusedL1.cu
+    fvdb/detail/ops/gsplat/FusedL1SSIM.cu
     fvdb/detail/ops/gsplat/FusedSSIM.cu
     fvdb/detail/ops/gsplat/ComputeGaussianNanInfMask.cu
     fvdb/detail/ops/gsplat/AddNoiseToGaussianMeans.cu
