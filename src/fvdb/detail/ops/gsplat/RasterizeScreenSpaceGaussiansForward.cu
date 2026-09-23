@@ -733,15 +733,6 @@ launchRasterizeForwardKernels(
                                               renderWindow.width,
                                               tileSize};
             appendPerTilePrefetchRanges(prefetchPointers, prefetchSizes, tileTensors, tileRange);
-            if constexpr (!IS_PACKED) {
-                const uint32_t cameraOffset = deviceTileOffset / tilesPerCamera;
-                const uint32_t cameraCount =
-                    cuda::ceil_div(deviceTileOffset + deviceTileCount, tilesPerCamera) -
-                    cameraOffset;
-                std::vector<torch::Tensor> cameraTensors = {means2d, conics, features, opacities};
-                appendPerCameraPrefetchRanges(
-                    prefetchPointers, prefetchSizes, cameraTensors, cameraOffset, cameraCount);
-            }
             memPrefetchBatchAsync(prefetchPointers, prefetchSizes, deviceId, prefetchStream);
         }
         C10_CUDA_CHECK(cudaEventRecord(events[deviceId], prefetchStream));
