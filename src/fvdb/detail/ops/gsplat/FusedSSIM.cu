@@ -28,6 +28,7 @@
 #include <fvdb/detail/ops/gsplat/FusedSSIM.h>
 #include <fvdb/detail/utils/cuda/Prefetch.h>
 #include <fvdb/detail/utils/cuda/Utils.cuh>
+#include <fvdb/detail/utils/gsplat/ImagePartition.cuh>
 
 #include <c10/core/ScalarType.h>
 #include <c10/cuda/CUDAGuard.h>
@@ -66,8 +67,8 @@ __constant__ float cGauss[11] = {0.001028380123898387f,
 // ------------------------------------------
 // Block and Shared Memory Dimensions
 // ------------------------------------------
-#define BLOCK_X 16
-#define BLOCK_Y 16
+#define BLOCK_X kImageBlockWidth
+#define BLOCK_Y kImageBlockHeight
 #define HALO    5
 
 #define SHARED_X (BLOCK_X + 2 * HALO)
@@ -580,99 +581,6 @@ fusedSSIMBackwardCUDA(double C1,
 
     return dL_dimg1;
 }
-
-namespace {
-
-struct ImageBlockChunk {
-    size_t tileRowOffset;
-    size_t tileRowCount;
-    int blockOffset;
-    int blockCount;
-};
-
-ImageBlockChunk
-imageBlockChunk(int B, int H, int W, int deviceId) {
-    // Blocks are flattened with x varying fastest. Split only at full-width tile-row
-    // boundaries so each device's NCHW working set can be expressed as compact row ranges.
-    const size_t blocksPerTileRow = (W + BLOCK_X - 1) / BLOCK_X;
-    const size_t tileRowsPerImage = (H + BLOCK_Y - 1) / BLOCK_Y;
-    const size_t globalTileRows   = B * tileRowsPerImage;
-
-    size_t localTileRowOffset, localTileRowCount;
-    std::tie(localTileRowOffset, localTileRowCount) = deviceChunk(globalTileRows, deviceId);
-
-    return {localTileRowOffset,
-            localTileRowCount,
-            static_cast<int>(localTileRowOffset * blocksPerTileRow),
-            static_cast<int>(localTileRowCount * blocksPerTileRow)};
-}
-
-void
-appendImagePrefetchRanges(std::vector<void *> &prefetchPointers,
-                          std::vector<size_t> &prefetchSizes,
-                          const torch::TensorList &tensors,
-                          size_t tileRowOffset,
-                          size_t tileRowCount,
-                          int B,
-                          int CH,
-                          int H,
-                          int W) {
-    if (!tileRowCount) {
-        return;
-    }
-
-    const size_t tileRowsPerImage = (H + BLOCK_Y - 1) / BLOCK_Y;
-    const size_t tileRowEnd       = tileRowOffset + tileRowCount;
-
-    TORCH_CHECK(tileRowEnd <= B * tileRowsPerImage, "Invalid image tile-row range");
-
-    for (const auto &tensor: tensors) {
-        TORCH_CHECK(tensor.is_contiguous(), "Tensor to prefetch is not contiguous");
-        TORCH_CHECK(tensor.dim() == 4 && tensor.size(0) == B && tensor.size(1) == CH &&
-                        tensor.size(2) == H && tensor.size(3) == W,
-                    "Tensor to prefetch does not match the input image shape");
-
-        const size_t firstTensorRange = prefetchPointers.size();
-        const size_t scalarSize       = c10::elementSize(tensor.scalar_type());
-        auto *tensorData              = static_cast<uint8_t *>(tensor.data_ptr());
-
-        const size_t firstBatch = tileRowOffset / tileRowsPerImage;
-        const size_t lastBatch  = (tileRowEnd - 1) / tileRowsPerImage;
-        for (size_t batch = firstBatch; batch <= lastBatch; ++batch) {
-            const size_t batchTileRowOffset = batch * tileRowsPerImage;
-            const size_t firstTileRow =
-                std::max(tileRowOffset, batchTileRowOffset) - batchTileRowOffset;
-            const size_t lastTileRow =
-                std::min(tileRowEnd, batchTileRowOffset + tileRowsPerImage) - batchTileRowOffset;
-
-            // Prefetch only the rows owned by this device. Halo reads remain demand-driven so
-            // adjacent devices never issue prefetches for overlapping logical ranges.
-            const size_t firstRow = firstTileRow * BLOCK_Y;
-            const size_t lastRow  = std::min(lastTileRow * BLOCK_Y, static_cast<size_t>(H));
-            const size_t rowCount = lastRow - firstRow;
-
-            for (int channel = 0; channel < CH; ++channel) {
-                const size_t elementOffset = batch * tensor.stride(0) + channel * tensor.stride(1) +
-                                             firstRow * tensor.stride(2);
-                auto *pointer          = tensorData + elementOffset * scalarSize;
-                const size_t byteCount = rowCount * static_cast<size_t>(W) * scalarSize;
-
-                if (prefetchPointers.size() > firstTensorRange) {
-                    auto *previousEnd =
-                        static_cast<uint8_t *>(prefetchPointers.back()) + prefetchSizes.back();
-                    if (previousEnd == pointer) {
-                        prefetchSizes.back() += byteCount;
-                        continue;
-                    }
-                }
-                prefetchPointers.emplace_back(pointer);
-                prefetchSizes.emplace_back(byteCount);
-            }
-        }
-    }
-}
-
-} // namespace
 
 // ------------------------------------------
 // PyTorch Interface (Forward)
