@@ -179,6 +179,9 @@ target_include_directories(fvdb PUBLIC
 target_include_directories(fvdb PRIVATE
     ${tinyply_SOURCE_DIR}/source)
 
+# Expose nvcc's toolkit include paths, including CCCL, to host C++ sources.
+target_include_directories(fvdb SYSTEM PRIVATE ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
+
 # Needed by Torch for CUDA extensions
 set(TORCH_CUDA_COMMON_FLAGS
     "-D__CUDA_NO_HALF_OPERATORS__"
