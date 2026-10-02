@@ -262,7 +262,7 @@ TYPED_TEST(ComputeSparseInfo, Empty) {
         tileBitMask,
         torch::empty({0, this->mNumWordsPerTile}, tensorOpts<std::uint64_t>(torch::kCUDA))));
     EXPECT_TRUE(
-        torch::equal(tilePixelOffsets, torch::zeros({1}, tensorOpts<std::int64_t>(torch::kCUDA))));
+        torch::equal(tilePixelOffsets, torch::empty({0}, tensorOpts<std::int64_t>(torch::kCUDA))));
     EXPECT_TRUE(torch::equal(pixelMap, torch::empty({0}, tensorOpts<std::int64_t>(torch::kCUDA))));
 }
 
