@@ -22,7 +22,12 @@ on:
   workflow_call:
     inputs:
       label:
-        description: Runner label, as emitted or as given to start-ec2-runner.yml.
+        description: >-
+          Runner label. Pass the same literal that was given to
+          start-ec2-runner.yml as runner-label, NOT the start job's `label`
+          output: the output is empty when that job was cancelled mid-flight,
+          and the literal is what lets the RunnerLabel tag lookup below recover
+          the instance in that case.
         type: string
         required: true
       ec2-instance-id:
@@ -72,9 +77,12 @@ jobs:
             --output text)
 
           if [ "$INSTANCE_ID" == "None" ] || [ -z "$INSTANCE_ID" ]; then
-            echo "ERROR: No instance found with RunnerLabel=$LABEL"
+            # Not an error: this is the normal outcome when the start job was
+            # cancelled before (or without) launching an instance, or when the
+            # start job's own cancellation cleanup already terminated it.
+            echo "::warning::No EC2 instance tagged RunnerLabel=$LABEL is running; nothing to stop."
             echo "instance-id=" >> "$GITHUB_OUTPUT"
-            exit 1
+            exit 0
           fi
           echo "Found instance: $INSTANCE_ID"
           echo "instance-id=$INSTANCE_ID" >> "$GITHUB_OUTPUT"
@@ -82,6 +90,8 @@ jobs:
       - name: Stop EC2 runner
         # The lookup step is skipped when the caller supplied an id, so its
         # output is empty then; `||` picks whichever of the two we actually have.
+        # Skip entirely when neither route produced an id.
+        if: inputs.ec2-instance-id != '' || steps.find-instance.outputs.instance-id != ''
         uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
         with:
           mode: stop

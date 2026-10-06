@@ -7,6 +7,8 @@
 #include <nanovdb/cuda/DeviceResource.h>
 
 #include <c10/cuda/CUDACachingAllocator.h>
+#include <c10/cuda/CUDAException.h>
+#include <c10/cuda/CUDAStream.h>
 
 #include <cstdio>
 #include <cstdlib>
@@ -57,13 +59,23 @@ struct TorchResource : nanovdb::cuda::SyncFromAsync<TorchResource> {
     /// any cudaMalloc-family call satisfies 256 as well.
     static constexpr size_t DEFAULT_ALIGNMENT = 256;
 
-    /// @brief Stream-ordered allocation from torch's active CUDA allocator.
-    /// @note raw_alloc_with_stream records @p stream against the block so torch
-    ///       defers reuse until work on it completes, matching the stream-ordered
-    ///       semantics of the cudaMallocAsync call it replaces. Allocation
-    ///       happens on the current device, like cudaMallocAsync. The call
-    ///       dispatches to CUDACachingAllocator::get(), so a swapped-in backend
-    ///       or pluggable allocator is honored.
+    /// @brief Stream-ordered allocation from torch's active CUDA allocator, for scratch that
+    ///        is allocated, used and freed on @p stream.
+    /// @note The block is keyed to @p stream (raw_alloc_with_stream). In torch's native caching
+    ///       allocator the allocation stream is the key a block is filed under: only later
+    ///       allocations on that same stream can reuse it, and freeing does no synchronization.
+    ///       That is what makes deallocate_async safe without ordering: the builders destroy
+    ///       scratch right after enqueuing the kernels that read it (PointsToGrid frees its
+    ///       per-tile counts behind an in-flight scan), and the block can only go to a later
+    ///       allocation on the same stream, behind that work. Keyed to any other stream it could
+    ///       be reused, or under the cudaMallocAsync backend freed, ahead of those reads.
+    ///       Allocation happens on the current device, like cudaMallocAsync. The call dispatches
+    ///       to CUDACachingAllocator::get(), so a swapped-in backend or pluggable allocator is
+    ///       honored.
+    ///
+    ///       Consequently @p stream must outlive every block allocated on it (legacy stream 0
+    ///       and torch's pool streams do). Grid storage, which outlives the op, is allocated on
+    ///       the stream it retains through TorchDeviceResource (TorchDeviceResource.h).
     void *
     allocate_async(size_t bytes, size_t /*alignment*/, cudaStream_t stream) {
         if (const char *env = std::getenv("FVDB_NANOVDB_TRACE_ALLOCS")) {
@@ -84,12 +96,11 @@ struct TorchResource : nanovdb::cuda::SyncFromAsync<TorchResource> {
     }
 
     /// @brief Free through torch's active CUDA allocator.
-    /// @note The stream argument is deliberately ignored: raw_delete relies on
-    ///       the stream recorded at allocation time — the native backend's
-    ///       per-stream event tracking, or the alloc-time stream Torch hands a
-    ///       pluggable allocator's free function — so the free is safe without
-    ///       ordering on the caller's stream. This is the same contract Torch's
-    ///       own tensor frees rely on.
+    /// @note The stream argument is deliberately ignored: raw_delete returns the block to the
+    ///       stream it was allocated on (see allocate_async), where the next allocation is
+    ///       ordered after this one's use by stream order. That is the same contract torch's own
+    ///       tensor frees rely on. Use on any other stream is the caller's to order before the
+    ///       free, as it is for tensors.
     void
     deallocate_async(void *p, size_t /*bytes*/, size_t /*alignment*/, cudaStream_t /*stream*/) {
         if (p == nullptr) {

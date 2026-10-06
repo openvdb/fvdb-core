@@ -640,8 +640,9 @@ template <typename BuildT, typename ResourceT = nanovdb::cuda::DeviceResource> c
         mBuilder.mChecksum = mode;
     }
 
-    template <typename BufferT = nanovdb::cuda::DeviceBuffer>
-    GridHandle<BufferT> getHandle(const BufferT &buffer = BufferT());
+    /// @brief The padded grid, allocated from @p buffer's resource on this op's stream (fvdb
+    ///        passes GridStorage::deviceProto). No default: every caller names its storage.
+    template <typename BufferT> GridHandle<BufferT> getHandle(const BufferT &buffer);
 
   private:
     void padRoot();
@@ -702,8 +703,6 @@ PadGrid<BuildT, ResourceT>::padRoot() {
     // one octant, the symmetric speculation is a strict superset, so it guarantees every
     // tile the internal-node scatter might touch already exists. Speculatively introduced
     // tiles that end up empty are pruned by TopologyBuilder::countNodes.
-    int device = 0;
-    cudaGetDevice(&device);
 
     std::map<uint64_t, typename RootT::DataType::Tile> dilatedTiles;
 
@@ -755,14 +754,16 @@ PadGrid<BuildT, ResourceT>::padRoot() {
         }
     }
 
+    // Package the padded root topology into a RootNode plus Tile list in the builder's pinned
+    // host staging area, then upload it (asynchronously, on mStream) into the builder's device
+    // scratch. Mirrors nanovdb::tools::cuda::DilateGrid::dilateRoot.
     uint64_t rootSize          = RootT::memUsage(dilatedTiles.size());
-    mBuilder.mProcessedRoot    = nanovdb::cuda::DeviceBuffer::create(rootSize);
-    auto dilatedRootPtr        = static_cast<RootT *>(mBuilder.mProcessedRoot.data());
+    auto dilatedRootPtr        = mBuilder.allocateProcessedRoot(rootSize);
     dilatedRootPtr->mTableSize = dilatedTiles.size();
     uint32_t t                 = 0;
     for (const auto &[key, tile]: dilatedTiles)
         *dilatedRootPtr->tile(t++) = tile;
-    mBuilder.mProcessedRoot.deviceUpload(device, mStream, false);
+    mBuilder.uploadProcessedRoot(mStream);
 }
 
 template <typename BuildT, typename ResourceT>

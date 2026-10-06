@@ -42,17 +42,20 @@ on:
         required: true
       runner-label:
         description: >-
-          Explicit runner label. Leave empty to let the action generate one --
-          only the publish workflows need a predictable label, because they find
-          the instance again by tag at teardown.
+          Explicit runner label. Callers should pass a label that is unique per
+          run and per start job (e.g. cu130-build-<run_id>-<run_attempt>) and
+          hand the same literal to stop-ec2-runner.yml: it is tagged onto the
+          instance as RunnerLabel, so teardown can still find the instance when
+          this job was cancelled mid-flight and produced no outputs. Leave empty
+          to let the action generate one (no tag-based recovery then).
         type: string
         required: false
         default: ''
       aws-resource-tags:
         description: >-
-          JSON array of EC2 tags to apply to the instance. The publish workflows
-          set a RunnerLabel tag here so stop-ec2-runner.yml can find the instance
-          again without a job output.
+          JSON array of extra EC2 tags to apply to the instance. RunnerLabel (when
+          runner-label is set), GitHubRunId and GitHubRepository are added
+          automatically unless already present.
         type: string
         required: false
         default: ''
@@ -120,6 +123,36 @@ jobs:
           role-to-assume: ${{ inputs.aws-role }}
           aws-region: ${{ inputs.aws-region }}
 
+      # Every instance gets a RunnerLabel tag (when the caller supplied a label)
+      # and a GitHubRunId tag, on top of whatever the caller passed. The tag is
+      # the ONLY handle stop-ec2-runner.yml has when this job's outputs are
+      # empty -- which is exactly what happens when the run is cancelled while
+      # an attempt is in flight: the instance has launched but the select step
+      # below never runs. Caller-supplied keys win on collision.
+      - name: Compose EC2 resource tags
+        id: tags
+        env:
+          CALLER_TAGS: ${{ inputs.aws-resource-tags || '[]' }}
+          RUNNER_LABEL: ${{ inputs.runner-label }}
+          RUN_ID: ${{ github.run_id }}
+          REPO: ${{ github.repository }}
+        run: |
+          TAGS=$(jq -c -n \
+            --argjson caller "${CALLER_TAGS}" \
+            --arg label "${RUNNER_LABEL}" \
+            --arg run_id "${RUN_ID}" \
+            --arg repo "${REPO}" '
+            ($caller | map(.Key)) as $have
+            | $caller
+              + (if ($label != "" and (($have | index("RunnerLabel")) == null))
+                 then [{"Key": "RunnerLabel", "Value": $label}] else [] end)
+              + (if (($have | index("GitHubRunId")) == null)
+                 then [{"Key": "GitHubRunId", "Value": $run_id}] else [] end)
+              + (if (($have | index("GitHubRepository")) == null)
+                 then [{"Key": "GitHubRepository", "Value": $repo}] else [] end)')
+          echo "Tags: ${TAGS}"
+          echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
+
       - name: Start EC2 runner (attempt 1)
         id: a1
         continue-on-error: true
@@ -133,7 +166,7 @@ jobs:
           # behaviour). aws-resource-tags is NOT so forgiving: the action does a
           # bare JSON.parse() on it, which throws on '', so default to '[]'.
           label: ${{ inputs.runner-label }}
-          aws-resource-tags: ${{ inputs.aws-resource-tags || '[]' }}
+          aws-resource-tags: ${{ steps.tags.outputs.tags }}
 
       # The action publishes its outputs as soon as the instance launches, i.e.
       # BEFORE it waits for the runner to register. So a failed attempt can still
@@ -174,7 +207,7 @@ jobs:
           # behaviour). aws-resource-tags is NOT so forgiving: the action does a
           # bare JSON.parse() on it, which throws on '', so default to '[]'.
           label: ${{ inputs.runner-label }}
-          aws-resource-tags: ${{ inputs.aws-resource-tags || '[]' }}
+          aws-resource-tags: ${{ steps.tags.outputs.tags }}
 
       # The action publishes its outputs as soon as the instance launches, i.e.
       # BEFORE it waits for the runner to register. So a failed attempt can still
@@ -211,13 +244,51 @@ jobs:
           # behaviour). aws-resource-tags is NOT so forgiving: the action does a
           # bare JSON.parse() on it, which throws on '', so default to '[]'.
           label: ${{ inputs.runner-label }}
-          aws-resource-tags: ${{ inputs.aws-resource-tags || '[]' }}
+          aws-resource-tags: ${{ steps.tags.outputs.tags }}
 
       # The action publishes its outputs as soon as the instance launches, i.e.
       # BEFORE it waits for the runner to register. So a failed attempt can still
       # have left an instance running -- terminate it rather than leak it.
       - name: Clean up the instance left behind by attempt 3
         if: steps.a3.outcome == 'failure' && steps.a3.outputs.ec2-instance-id != ''
+        continue-on-error: true
+        uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
+        with:
+          mode: stop
+          github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
+          label: ${{ steps.a3.outputs.label }}
+          ec2-instance-id: ${{ steps.a3.outputs.ec2-instance-id }}
+
+      # If the run is cancelled (e.g. a new push to the same PR with
+      # cancel-in-progress) while an attempt is in flight, GitHub kills that
+      # step after the instance has launched but before the runner registered.
+      # The select step below then never runs, the job's outputs stay empty and
+      # the caller's stop job has no id to terminate. Terminate any attempt that
+      # launched an instance and did not fail (the in-flight one, or one that
+      # succeeded just before the cancel landed) while we still know which it
+      # is. Attempts that FAILED were already cleaned up above.
+      - name: Terminate the instance left behind by a cancelled attempt 1
+        if: cancelled() && steps.a1.outcome != 'failure' && steps.a1.outputs.ec2-instance-id != ''
+        continue-on-error: true
+        uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
+        with:
+          mode: stop
+          github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
+          label: ${{ steps.a1.outputs.label }}
+          ec2-instance-id: ${{ steps.a1.outputs.ec2-instance-id }}
+
+      - name: Terminate the instance left behind by a cancelled attempt 2
+        if: cancelled() && steps.a2.outcome != 'failure' && steps.a2.outputs.ec2-instance-id != ''
+        continue-on-error: true
+        uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
+        with:
+          mode: stop
+          github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
+          label: ${{ steps.a2.outputs.label }}
+          ec2-instance-id: ${{ steps.a2.outputs.ec2-instance-id }}
+
+      - name: Terminate the instance left behind by a cancelled attempt 3
+        if: cancelled() && steps.a3.outcome != 'failure' && steps.a3.outputs.ec2-instance-id != ''
         continue-on-error: true
         uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
         with:

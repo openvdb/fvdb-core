@@ -1,6 +1,8 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 #
+"""Interactive scenes, views, and widgets for the fVDB browser viewer."""
+
 from ._camera_view import CamerasView
 from ._fog_volume_view import FogVolumeView
 from ._gaussian_splat_3d_view import GaussianSplat3dView

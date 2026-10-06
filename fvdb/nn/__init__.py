@@ -1,11 +1,14 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 #
+"""Neural-network layers and U-Net blocks for sparse voxel features."""
+
 from .modules import (
     AvgPool,
     BatchNorm,
     GroupNorm,
     MaxPool,
+    Prune,
     SparseConv3d,
     SparseConvTranspose3d,
     SyncBatchNorm,
@@ -28,6 +31,7 @@ __all__ = [
     "BatchNorm",
     "GroupNorm",
     "MaxPool",
+    "Prune",
     "SimpleUNet",
     "SimpleUNetBasicBlock",
     "SimpleUNetBottleneck",

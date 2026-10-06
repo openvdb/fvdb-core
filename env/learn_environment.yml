@@ -10,6 +10,7 @@ dependencies:
   - fvdb-core
   - git
   - ipython
+  - ipywidgets
   - jupyterlab
   - linkify-it-py
   - matplotlib

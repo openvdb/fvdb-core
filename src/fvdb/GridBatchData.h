@@ -4,16 +4,16 @@
 #ifndef FVDB_GRIDBATCHDATA_H
 #define FVDB_GRIDBATCHDATA_H
 
+#include <fvdb/GridStorage.h>
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/TorchDeviceBuffer.h>
 #include <fvdb/VoxelCoordTransform.h>
 
-#include <nanovdb/GridHandle.h>
 #include <nanovdb/NanoVDB.h>
 
 #include <ATen/core/TensorBody.h>
 #include <torch/types.h>
 
+#include <optional>
 #include <vector>
 
 #if !defined(__CUDACC__) && !defined(__restrict__)
@@ -27,10 +27,11 @@ struct GridBatchData : public torch::CustomClassHolder {
 
     // Metadata about a single grid in the batch
     struct GridMetadata {
-        uint32_t version = 1;   // Version of this struct
+        static constexpr uint32_t kVersion = 1; // Version of this struct
+        uint32_t version = kVersion; // Stamped by populateGridMetadata for records it fills
 
-        int64_t mCumLeaves = 0; // Cumulative number of leaf nodes in the batch up to this grid
-        int64_t mCumVoxels = 0; // Cumulative number of voxels in the batch up to this grid
+        int64_t mCumLeaves = 0;      // Cumulative number of leaf nodes in the batch up to this grid
+        int64_t mCumVoxels = 0;      // Cumulative number of voxels in the batch up to this grid
         uint64_t mCumBytes = 0; // Cumulative number of bytes in the buffer of grids up to this grid
         VoxelCoordTransform mPrimalTransform; // Primal Transform of this grid (i.e. transform which
                                               // aligns origin with voxel center)
@@ -56,7 +57,8 @@ struct GridBatchData : public torch::CustomClassHolder {
 
     // Metadata about the whole batch
     struct GridBatchMetadata {
-        uint32_t version = 1; // Version of this struct
+        static constexpr uint32_t kVersion = 1; // Version of this struct
+        uint32_t version = kVersion; // Stamped by populateGridMetadata for records it fills
 
         // Total number of leaf nodes across all grids
         int64_t mTotalLeaves = 0;
@@ -78,23 +80,32 @@ struct GridBatchData : public torch::CustomClassHolder {
     };
 
     // -----------------------------------------------------------------------
-    // Data fields (all public, immutable after construction)
+    // Data fields (immutable after construction; the storage is private, below)
     // -----------------------------------------------------------------------
     GridMetadata *mHostGridMetadata{nullptr};   // CPU only
     GridMetadata *mDeviceGridMetadata{nullptr}; // CUDA only
     int64_t mBatchSize{0};
     GridBatchMetadata mBatchMetadata;           // Metadata about the whole batch
-    std::shared_ptr<nanovdb::GridHandle<TorchDeviceBuffer>> mGridHdl; // NanoVDB grid handle
     torch::Tensor mLeafBatchIndices; // Indices of leaf nodes in the batch shape = [total_leafs]
     torch::Tensor mBatchOffsets;     // Batch indices for grid
     torch::Tensor mListIndices;      // List indices for grid (same as JaggedTensor)
 
+  private:
+    // The grids' bytes and the metadata locating them; shared with views over this batch. Grid
+    // indices on it are *physical*: a view over a subset of the batch maps logical items onto them
+    // by byte offset (cumBytesAt), which is what deviceGridPtrAt / hostGridPtrAt do. Nothing
+    // outside this class reads the storage directly; ops go through those accessors,
+    // storageStream(), and copyStorage().
+    std::shared_ptr<GridStorage> mStorage;
+
+  public:
     // -----------------------------------------------------------------------
-    // Single constructor: bundles pre-computed fields (takes ownership of
-    // metadata pointers). All computation happens outside, in factory
-    // functions, before this constructor is called.
+    // Constructors: bundle pre-computed fields (take ownership of the metadata
+    // pointers). All computation happens outside, in factory functions, before
+    // a constructor is called. The second builds a view sharing another
+    // batch's storage.
     // -----------------------------------------------------------------------
-    GridBatchData(std::shared_ptr<nanovdb::GridHandle<TorchDeviceBuffer>> gridHdl,
+    GridBatchData(std::shared_ptr<GridStorage> storage,
                   GridMetadata *hostGridMetadata,
                   GridMetadata *deviceGridMetadata,
                   int64_t batchSize,
@@ -104,8 +115,25 @@ struct GridBatchData : public torch::CustomClassHolder {
                   torch::Tensor listIndices)
         : mHostGridMetadata(hostGridMetadata), mDeviceGridMetadata(deviceGridMetadata),
           mBatchSize(batchSize), mBatchMetadata(std::move(batchMetadata)),
-          mGridHdl(std::move(gridHdl)), mLeafBatchIndices(std::move(leafBatchIndices)),
-          mBatchOffsets(std::move(batchOffsets)), mListIndices(std::move(listIndices)) {}
+          mLeafBatchIndices(std::move(leafBatchIndices)), mBatchOffsets(std::move(batchOffsets)),
+          mListIndices(std::move(listIndices)), mStorage(std::move(storage)) {}
+
+    GridBatchData(const GridBatchData &sharingStorageOf,
+                  GridMetadata *hostGridMetadata,
+                  GridMetadata *deviceGridMetadata,
+                  int64_t batchSize,
+                  GridBatchMetadata batchMetadata,
+                  torch::Tensor leafBatchIndices,
+                  torch::Tensor batchOffsets,
+                  torch::Tensor listIndices)
+        : GridBatchData(sharingStorageOf.mStorage,
+                        hostGridMetadata,
+                        deviceGridMetadata,
+                        batchSize,
+                        std::move(batchMetadata),
+                        std::move(leafBatchIndices),
+                        std::move(batchOffsets),
+                        std::move(listIndices)) {}
 
     ~GridBatchData();
 
@@ -272,7 +300,18 @@ struct GridBatchData : public torch::CustomClassHolder {
         return sum;
     }
 
-    const nanovdb::GridHandle<TorchDeviceBuffer> &nanoGridHandle() const;
+    /// @brief The storage moved to @p device on @p stream, whole: every physical grid it holds,
+    ///        which is the batch's logical grids only when isContiguous() (or the batch is empty,
+    ///        whose storage holds one voxel-less grid). The caller decides whether that is the
+    ///        batch; detail::ops::contiguousGridStorage does so for a whole-batch copy.
+    GridStorage copyStorage(const torch::Device &device, cudaStream_t stream) const;
+
+    /// @brief The stream this batch's device storage was written on, retains, and frees on: what
+    ///        a reader of deviceGridPtrAt pointers on another stream orders itself after (see
+    ///        detail::orderStreamAfter). The legacy default stream for CPU storage, unlike the
+    ///        free function detail::storageStream(device), which names the stream *new* storage
+    ///        on a device is made on and rejects the CPU.
+    cudaStream_t storageStream() const;
     const c10::Device device() const;
     bool isEmpty() const;
 
@@ -328,9 +367,9 @@ struct GridBatchData : public torch::CustomClassHolder {
 
     // Pointer to the i-th *logical* grid of this batch, resolved by byte offset (cumBytesAt(i))
     // so it is correct for sliced / indexed / non-contiguous views, where item i is NOT the i-th
-    // physical grid in the underlying handle. Prefer these over nanoGridHandle().deviceGrid(i) /
-    // .grid(i) (which index the handle physically and read the wrong grid for a view). Defined in
-    // GridBatchData.cu. `deviceGridPtrAt` returns a device pointer (CUDA kernels /
+    // physical grid in the underlying storage (the storage's own deviceGridAt / hostGridAt index it
+    // physically and would read the wrong grid for a view).
+    // Defined in GridBatchData.cu. `deviceGridPtrAt` returns a device pointer (CUDA kernels /
     // TopologyBuilder), `hostGridPtrAt` a host pointer (CPU proxy-grid paths).
     nanovdb::OnIndexGrid *deviceGridPtrAt(int64_t bi) const;
     nanovdb::OnIndexGrid *hostGridPtrAt(int64_t bi) const;
