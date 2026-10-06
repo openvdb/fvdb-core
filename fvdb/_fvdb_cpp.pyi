@@ -152,7 +152,7 @@ def rasterize_num_contributing_gaussians(
     image_origin_h: int,
     tile_size: int,
 ) -> tuple[torch.Tensor, torch.Tensor]: ...
-def sparse_rasterize_num_contributing_gaussians(
+def rasterize_num_contributing_gaussians_sparse(
     means2d: torch.Tensor,
     conics: torch.Tensor,
     opacities: torch.Tensor,
@@ -183,7 +183,7 @@ def rasterize_contributing_gaussian_ids(
     num_depth_samples: int,
     num_contributing_gaussians: Optional[torch.Tensor] = ...,
 ) -> tuple[JaggedTensor, JaggedTensor]: ...
-def sparse_rasterize_contributing_gaussian_ids(
+def rasterize_contributing_gaussian_ids_sparse(
     means2d: torch.Tensor,
     conics: torch.Tensor,
     opacities: torch.Tensor,
@@ -201,6 +201,37 @@ def sparse_rasterize_contributing_gaussian_ids(
     tile_size: int,
     num_depth_samples: int,
     num_contributing_gaussians: Optional[JaggedTensor] = ...,
+) -> tuple[JaggedTensor, JaggedTensor]: ...
+def rasterize_top_contributing_gaussian_ids(
+    means2d: torch.Tensor,
+    conics: torch.Tensor,
+    opacities: torch.Tensor,
+    tile_offsets: torch.Tensor,
+    tile_gaussian_ids: torch.Tensor,
+    image_width: int,
+    image_height: int,
+    image_origin_w: int,
+    image_origin_h: int,
+    tile_size: int,
+    num_depth_samples: int,
+) -> tuple[torch.Tensor, torch.Tensor]: ...
+def rasterize_top_contributing_gaussian_ids_sparse(
+    means2d: torch.Tensor,
+    conics: torch.Tensor,
+    opacities: torch.Tensor,
+    tile_offsets: torch.Tensor,
+    tile_gaussian_ids: torch.Tensor,
+    pixels_to_render: JaggedTensor,
+    active_tiles: torch.Tensor,
+    tile_pixel_mask: torch.Tensor,
+    tile_pixel_cumsum: torch.Tensor,
+    pixel_map: torch.Tensor,
+    image_width: int,
+    image_height: int,
+    image_origin_w: int,
+    image_origin_h: int,
+    tile_size: int,
+    num_depth_samples: int,
 ) -> tuple[JaggedTensor, JaggedTensor]: ...
 def mcmc_relocate_gaussians(
     log_scales: torch.Tensor,
@@ -501,8 +532,10 @@ def build_sparse_gaussian_tile_layout(
     num_tiles_w: int,
     num_tiles_h: int,
     pixels_to_render: JaggedTensor,
+    image_width: Optional[int] = ...,
+    image_height: Optional[int] = ...,
 ) -> tuple[torch.Tensor, ...]: ...
-def project_gaussians_unscented_fwd(
+def project_gaussians_ut_fwd(
     means: torch.Tensor,
     quats: torch.Tensor,
     log_scales: torch.Tensor,

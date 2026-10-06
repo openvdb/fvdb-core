@@ -262,7 +262,7 @@ TYPED_TEST(ComputeSparseInfo, Empty) {
         tileBitMask,
         torch::empty({0, this->mNumWordsPerTile}, tensorOpts<std::uint64_t>(torch::kCUDA))));
     EXPECT_TRUE(
-        torch::equal(tilePixelOffsets, torch::zeros({1}, tensorOpts<std::int64_t>(torch::kCUDA))));
+        torch::equal(tilePixelOffsets, torch::empty({0}, tensorOpts<std::int64_t>(torch::kCUDA))));
     EXPECT_TRUE(torch::equal(pixelMap, torch::empty({0}, tensorOpts<std::int64_t>(torch::kCUDA))));
 }
 
@@ -343,6 +343,34 @@ TYPED_TEST(ComputeSparseInfo, StridedUVs) {
         this->testStridedUVs(config[0], config[1], config[2], config[3], config[4]);
         fvdb::test::printStatus();
     }
+}
+
+TYPED_TEST(ComputeSparseInfo, RejectsNestedLists) {
+    auto const uvs = torch::tensor({{0, 0}, {1, 1}}, tensorOpts<TypeParam>());
+    auto const nested =
+        fvdb::JaggedTensor(std::vector<std::vector<torch::Tensor>>{{uvs, uvs}, {uvs}});
+    EXPECT_THROW(fvdb::detail::ops::buildSparseGaussianTileLayout(16, 4, 4, nested),
+                 c10::ValueError);
+}
+
+TYPED_TEST(ComputeSparseInfo, ExactImageSize) {
+    auto const opts = tensorOpts<TypeParam>(torch::kCPU);
+    auto const make = [&](int64_t row) {
+        auto const uvs = torch::tensor({{row, int64_t(0)}}, opts);
+        return fvdb::JaggedTensor(std::vector<torch::Tensor>{uvs}).to(torch::kCUDA);
+    };
+
+    // A 40-pixel-tall image covers rows 0..39 of a 3-tile (48-pixel) grid.
+    fvdb::detail::ops::buildSparseGaussianTileLayout(16, 4, 3, make(39), 64, 40);
+    EXPECT_THROW(fvdb::detail::ops::buildSparseGaussianTileLayout(16, 4, 3, make(45), 64, 40),
+                 c10::ValueError);
+    fvdb::detail::ops::buildSparseGaussianTileLayout(16, 4, 3, make(45));
+
+    // The image size must fit the tile grid.
+    EXPECT_THROW(fvdb::detail::ops::buildSparseGaussianTileLayout(16, 4, 3, make(0), 64, 49),
+                 c10::ValueError);
+    EXPECT_THROW(fvdb::detail::ops::buildSparseGaussianTileLayout(16, 4, 3, make(0), 64, 32),
+                 c10::ValueError);
 }
 
 // Test that a single pixel produces correct results (edge case for dedup)

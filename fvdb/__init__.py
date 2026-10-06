@@ -80,9 +80,11 @@ from .convolution_plan import (
     ConvolutionTransformCompatibility,
 )
 from .enums import (
+    CameraModel,
     ConvolutionPhasePolicy,
     ConvolutionTopologyPolicy,
     ConvolutionTopologyProvenance,
+    RollingShutterType,
     SmoothingMode,
 )
 
@@ -154,6 +156,8 @@ __all__ = [
     "ConvolutionPhasePolicy",
     "ConvolutionTopologyPolicy",
     "ConvolutionTopologyProvenance",
+    "CameraModel",
+    "RollingShutterType",
     "NanoVDBGridMetadata",
     # Concatenation of jagged tensors or grid/grid batches
     "jcat",
