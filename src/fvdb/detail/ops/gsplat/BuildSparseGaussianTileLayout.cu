@@ -56,9 +56,8 @@ namespace fvdb::detail::ops {
 //
 //  where uv_n is a tensor of shape [P_n, 2] of pixel coordinates in the n^th image in the batch.
 //  If a pixel (c, i, j) is in in pixels_to_render we call it *active*, otherwise it is *inactive*.
-//  PRECONDITION: pixels_to_render must not contain duplicates. The caller
-//  (sparseProjectGaussiansImpl) deduplicates before calling buildSparseGaussianTileLayout and
-//  scatters results back afterward.
+//  Each pixel may appear at most once per image; buildSparseGaussianTileLayout throws on
+//  duplicates. Callers with repeated pixels deduplicate first and scatter results back.
 //
 // Let:
 //     AP denote the number of active pixels.
@@ -75,8 +74,8 @@ namespace fvdb::detail::ops {
 // pixels within those tiles. Thus, we need to compute:
 //     1. active_tiles: An integer tensor with shape [AT] indicating the tile_ids
 //        corresponding to tiles which contain active pixels.
-//     2. tile_pixel_mask: An int64 tensor of bitmasks with shape [AT, words_per_tile] where
-//        words_per_tile is the number of int64_t words needed to make a bitmask for a PxP tile.
+//     2. tile_pixel_mask: A uint64 tensor of bitmasks with shape [AT, words_per_tile] where
+//        words_per_tile is the number of uint64_t words needed to make a bitmask for a PxP tile.
 //        We asume bits are in raster order (top left to bottom right)
 //     3. tile_pixel_cumsum: An int64 tensor with shape [AT] encoding the cumuluative sum of
 //        active pixels in each active tile. i.e. tile_pixel_cumsum[i-1] is the number of active
@@ -105,11 +104,11 @@ computeTileMask(const fvdb::JaggedRAcc64<CoordType, 2> pixelCoords,
                 const int32_t tileSideLength,
                 const int32_t numTilesW,
                 const int32_t numTilesH,
+                const int32_t imageWidth,
+                const int32_t imageHeight,
                 fvdb::TorchRAcc64<bool, 1> outTileMask,
                 fvdb::TorchRAcc64<int64_t, 1> outTileIds,
                 int32_t *__restrict__ outOutOfBounds) {
-    const CoordType imageHeight = CoordType(numTilesH) * CoordType(tileSideLength);
-    const CoordType imageWidth  = CoordType(numTilesW) * CoordType(tileSideLength);
     for (auto pixelId = blockIdx.x * blockDim.x + threadIdx.x; pixelId < pixelCoords.elementCount();
          pixelId += blockDim.x * gridDim.x) {
         auto const batchId = pixelCoords.batchIdx(pixelId);
@@ -118,9 +117,10 @@ computeTileMask(const fvdb::JaggedRAcc64<CoordType, 2> pixelCoords,
         const CoordType pixelRow = pixelCoords.data()[pixelId][0];
         const CoordType pixelCol = pixelCoords.data()[pixelId][1];
 
-        // Out-of-image pixels would index outTileMask past its end. Flag them and skip; the host
-        // raises after the sync it performs anyway.
-        if (pixelRow < 0 || pixelCol < 0 || pixelRow >= imageHeight || pixelCol >= imageWidth) {
+        // Out-of-image pixels would index outTileMask past its end or render inside the tile
+        // padding. Flag them and skip; the host raises after the sync it performs anyway.
+        if (pixelRow < 0 || pixelCol < 0 || pixelRow >= CoordType(imageHeight) ||
+            pixelCol >= CoordType(imageWidth)) {
             *outOutOfBounds     = 1;
             outTileIds[pixelId] = 0;
             continue;
@@ -221,7 +221,9 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
 buildSparseGaussianTileLayout(const int32_t tileSideLength,
                               const int32_t numTilesW,
                               const int32_t numTilesH,
-                              const fvdb::JaggedTensor &pixelsToRender) {
+                              const fvdb::JaggedTensor &pixelsToRender,
+                              const std::optional<int32_t> imageWidth,
+                              const std::optional<int32_t> imageHeight) {
     FVDB_FUNC_RANGE();
     TORCH_CHECK_NOT_IMPLEMENTED(pixelsToRender.device().is_cuda(),
                                 "buildSparseGaussianTileLayout only implemented on the device");
@@ -232,6 +234,30 @@ buildSparseGaussianTileLayout(const int32_t tileSideLength,
     TORCH_CHECK_TYPE(pixelsToRender.scalar_type() == torch::kInt32 ||
                          pixelsToRender.scalar_type() == torch::kInt64,
                      "pixelsToRender must be of type int32 or int64");
+    // Tile ids are laid out per outer list, so nested lists would index past the tile mask.
+    TORCH_CHECK_VALUE(pixelsToRender.ldim() == 1,
+                      "pixelsToRender must have one list per camera (ldim == 1), got ldim == ",
+                      pixelsToRender.ldim());
+    TORCH_CHECK_VALUE(tileSideLength > 0 && numTilesW > 0 && numTilesH > 0,
+                      "tileSideLength, numTilesW and numTilesH must be positive");
+
+    const int32_t paddedWidth  = numTilesW * tileSideLength;
+    const int32_t paddedHeight = numTilesH * tileSideLength;
+    const int32_t width        = imageWidth.value_or(paddedWidth);
+    const int32_t height       = imageHeight.value_or(paddedHeight);
+    TORCH_CHECK_VALUE(width > paddedWidth - tileSideLength && width <= paddedWidth &&
+                          height > paddedHeight - tileSideLength && height <= paddedHeight,
+                      "image size ",
+                      height,
+                      " x ",
+                      width,
+                      " does not fit a ",
+                      numTilesH,
+                      " x ",
+                      numTilesW,
+                      " grid of ",
+                      tileSideLength,
+                      "-pixel tiles");
 
     auto const numImages = pixelsToRender.num_outer_lists();
     auto const numPixels = pixelsToRender.rsize(0);
@@ -269,6 +295,8 @@ buildSparseGaussianTileLayout(const int32_t tileSideLength,
             tileSideLength,
             numTilesW,
             numTilesH,
+            width,
+            height,
             outMaskAccessor,
             outTileIdAccessor,
             outOfBounds.data_ptr<int32_t>());
@@ -324,9 +352,9 @@ buildSparseGaussianTileLayout(const int32_t tileSideLength,
     auto const numUniqueTiles = statusAcc[0];
     TORCH_CHECK_VALUE(statusAcc[1] == 0,
                       "pixelsToRender contains coordinates outside the ",
-                      numTilesH * tileSideLength,
+                      height,
                       " x ",
-                      numTilesW * tileSideLength,
+                      width,
                       " image");
     TORCH_CHECK_VALUE(statusAcc[2] == 0,
                       "pixelsToRender contains duplicate pixel coordinates within one image");

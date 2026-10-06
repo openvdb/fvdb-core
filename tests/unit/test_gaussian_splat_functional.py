@@ -8,6 +8,7 @@ rendering correctness or gradients; the C++ gtests cover kernel numerics and gra
 with the differentiable pipeline downstream.
 """
 
+import functools
 import math
 import os
 import tempfile
@@ -128,6 +129,7 @@ class GaussianSplatFunctionalTests(unittest.TestCase):
         self.tile_size = 16
         self.tiles_h = math.ceil(self.H / self.tile_size)
         self.tiles_w = math.ceil(self.W / self.tile_size)
+        self.image_size = {"image_width": self.W, "image_height": self.H}
         self.sh_degree = 2
         dev, N = self.device, self.N
 
@@ -201,7 +203,9 @@ class GaussianSplatFunctionalTests(unittest.TestCase):
 
     def _sparse_layout(self):
         active_tiles, active_tile_mask, tile_pixel_mask, tile_pixel_cumsum, pixel_map = (
-            F.build_sparse_gaussian_tile_layout(self.tile_size, self.tiles_h, self.tiles_w, self.pixels)
+            F.build_sparse_gaussian_tile_layout(
+                self.tile_size, self.tiles_h, self.tiles_w, self.pixels, **self.image_size
+            )
         )
         tile_offsets, tile_gaussian_ids = F.intersect_gaussian_tiles_sparse(
             self.means2d,
@@ -476,7 +480,7 @@ class GaussianSplatFunctionalTests(unittest.TestCase):
             (torch.stack([px0, px0 + torch.tensor([0, 1], device=px0.device)]), 2),
         ):
             active_tiles, mask, *_ = F.build_sparse_gaussian_tile_layout(
-                self.tile_size, self.tiles_h, self.tiles_w, pixels
+                self.tile_size, self.tiles_h, self.tiles_w, pixels, **self.image_size
             )
             self.assertEqual(tuple(mask.shape), (num_cameras, self.tiles_h, self.tiles_w))
             self.assertGreater(active_tiles.numel(), 0)
@@ -484,11 +488,11 @@ class GaussianSplatFunctionalTests(unittest.TestCase):
         P = px0.shape[0]
         for bad in (px0, px0.reshape(-1), px0.reshape(1, P * 2, 1), px0.new_empty(0, P, 2)):
             with self.assertRaises(ValueError):
-                F.build_sparse_gaussian_tile_layout(self.tile_size, self.tiles_h, self.tiles_w, bad)
+                F.build_sparse_gaussian_tile_layout(self.tile_size, self.tiles_h, self.tiles_w, bad, **self.image_size)
 
     def test_sparse_layout_rejects_bad_pixels(self):
         px0 = self.pixels[0].jdata
-        layout = F.build_sparse_gaussian_tile_layout
+        layout = functools.partial(F.build_sparse_gaussian_tile_layout, **self.image_size)
         with self.assertRaises(TypeError):
             layout(self.tile_size, self.tiles_h, self.tiles_w, [1, 2, 3])  # type: ignore[arg-type]
         with self.assertRaises(TypeError):
@@ -509,11 +513,32 @@ class GaussianSplatFunctionalTests(unittest.TestCase):
         layout(self.tile_size, self.tiles_h, self.tiles_w, JaggedTensor([px0, px0]))
         with self.assertRaises(ValueError):  # non-positive tile grid
             layout(self.tile_size, 0, self.tiles_w, JaggedTensor([px0]))
+        with self.assertRaises(ValueError):  # nested lists would index past the tile mask
+            layout(self.tile_size, self.tiles_h, self.tiles_w, JaggedTensor([[px0, px0], [px0]]))
+
+        # A pixel inside the last tile row but below the image is rejected, not rendered.
+        exact = functools.partial(F.build_sparse_gaussian_tile_layout, image_width=self.W, image_height=self.H - 5)
+        inside = px0[px0[:, 0] < self.H - 5]
+        exact(self.tile_size, self.tiles_h, self.tiles_w, JaggedTensor([inside]))
+        with self.assertRaises(ValueError):
+            bad = inside.clone()
+            bad[0, 0] = self.H - 5
+            exact(self.tile_size, self.tiles_h, self.tiles_w, JaggedTensor([bad]))
+        for width, height in ((self.W, self.H + 1), (self.W - self.tile_size, self.H), (0, self.H)):
+            with self.assertRaises(ValueError):  # image size does not fit the tile grid
+                F.build_sparse_gaussian_tile_layout(
+                    self.tile_size,
+                    self.tiles_h,
+                    self.tiles_w,
+                    JaggedTensor([inside]),
+                    image_width=width,
+                    image_height=height,
+                )
 
     def test_sparse_wrappers_reject_layout_selection_mismatch(self):
         empty = JaggedTensor([torch.empty(0, 2, dtype=torch.int64, device=self.device) for _ in range(self.C)])
         active_tiles, _, tile_pixel_mask, tile_pixel_cumsum, pixel_map = F.build_sparse_gaussian_tile_layout(
-            self.tile_size, self.tiles_h, self.tiles_w, empty
+            self.tile_size, self.tiles_h, self.tiles_w, empty, **self.image_size
         )
         tile_offsets = torch.zeros(1, dtype=torch.int64, device=self.device)
         ids = torch.empty(0, dtype=torch.int32, device=self.device)
@@ -566,7 +591,9 @@ class GaussianSplatFunctionalTests(unittest.TestCase):
         active_tiles, _, tile_pixel_mask, tile_pixel_cumsum, pixel_map, tile_offsets, ids = self._sparse_layout()
         for bad_tile_size in (8, 32):
             with self.assertRaises(ValueError):
-                F.build_sparse_gaussian_tile_layout(bad_tile_size, self.tiles_h, self.tiles_w, self.pixels)
+                F.build_sparse_gaussian_tile_layout(
+                    bad_tile_size, self.tiles_h, self.tiles_w, self.pixels, **self.image_size
+                )
             with self.assertRaises(ValueError):
                 F.rasterize_screen_space_gaussians_sparse_fwd(
                     self.pixels,
@@ -609,7 +636,7 @@ class GaussianSplatFunctionalTests(unittest.TestCase):
         C, N, D, K = self.C, self.N, self.D, 4
         empty = JaggedTensor([torch.empty(0, 2, dtype=torch.int64, device=self.device) for _ in range(C)])
         active_tiles, active_tile_mask, tile_pixel_mask, tile_pixel_cumsum, pixel_map = (
-            F.build_sparse_gaussian_tile_layout(self.tile_size, self.tiles_h, self.tiles_w, empty)
+            F.build_sparse_gaussian_tile_layout(self.tile_size, self.tiles_h, self.tiles_w, empty, **self.image_size)
         )
         self._assert_shape(active_tiles, (0,), torch.int32)
         self._assert_shape(active_tile_mask, (C, self.tiles_h, self.tiles_w), torch.bool)
@@ -679,6 +706,28 @@ class GaussianSplatFunctionalTests(unittest.TestCase):
         for g, ref in zip(grads, (self.means2d, self.means2d, self.conics, self.features, self.opacities)):
             self.assertEqual(tuple(g.shape), tuple(ref.shape))
             self.assertEqual(float(g.abs().max()), 0.0)
+        # Argument types are checked even when there is nothing to rasterize.
+        with self.assertRaises(TypeError):
+            F.rasterize_screen_space_gaussians_sparse_bwd(
+                empty,
+                self.means2d,
+                self.conics,
+                self.features,
+                self.opacities,
+                self.W,
+                self.H,
+                0,
+                0,
+                self.tile_size,
+                tile_offsets,
+                ids,
+                alphas.jdata,
+                last_ids,
+                rendered,
+                alphas,
+                *layout,
+                True,
+            )
 
         common = (
             self.means2d,
@@ -701,6 +750,8 @@ class GaussianSplatFunctionalTests(unittest.TestCase):
             g_ids, weights = F.rasterize_contributing_gaussian_ids_sparse(*common, *mode_args)
             self.assertEqual(tuple(g_ids.jdata.shape), (0,))
             self.assertEqual(tuple(weights.jdata.shape), (0,))
+        with self.assertRaises(TypeError):
+            F.rasterize_contributing_gaussian_ids_sparse(*common, 0, counts.jdata)
         top_ids, top_weights = F.rasterize_top_contributing_gaussian_ids_sparse(*common, K)
         self.assertEqual(tuple(top_ids.jdata.shape), (0, K))
         self.assertEqual(tuple(top_weights.jdata.shape), (0, K))

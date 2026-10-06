@@ -542,7 +542,9 @@ bind_gaussian_splat_ops(py::module &m) {
           py::arg("tile_side_length"),
           py::arg("num_tiles_w"),
           py::arg("num_tiles_h"),
-          py::arg("pixels_to_render"));
+          py::arg("pixels_to_render"),
+          py::arg("image_width")  = py::none(),
+          py::arg("image_height") = py::none());
 
     // ------- UT projection forward (non-differentiable) -------
 
