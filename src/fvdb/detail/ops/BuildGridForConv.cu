@@ -3,6 +3,7 @@
 //
 #include <fvdb/BuilderResource.h>
 #include <fvdb/GridBatchData.h>
+#include <fvdb/GridStorage.h>
 #include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/BuildCoarseGridFromFine.h>
 #include <fvdb/detail/ops/BuildGridForConv.h>
@@ -12,8 +13,10 @@
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
+#include <fvdb/detail/utils/cuda/StreamOrdering.h>
 #include <fvdb/detail/utils/nanovdb/BatchedTopologyBuilder.cuh>
 
+#include <nanovdb/HostBuffer.h>
 #include <nanovdb/tools/CreateNanoGrid.h>
 #include <nanovdb/util/MorphologyHelpers.h>
 
@@ -160,17 +163,17 @@ lastBuildGridForConvResourceStats() {
 }
 
 template <torch::DeviceType>
-nanovdb::GridHandle<TorchDeviceBuffer> dispatchBuildGridForConv(const GridBatchData &baseBatchHdl,
-                                                                const nanovdb::Coord &kernelSize,
-                                                                const nanovdb::Coord &stride);
+GridStorage dispatchBuildGridForConv(const GridBatchData &baseBatchHdl,
+                                     const nanovdb::Coord &kernelSize,
+                                     const nanovdb::Coord &stride);
 
-nanovdb::GridHandle<TorchDeviceBuffer>
+GridStorage
 buildCoarseGridFromFineGridCPU(const GridBatchData &fineBatchHdl,
                                const nanovdb::Coord branchingFactor) {
     using GridT     = nanovdb::ValueOnIndex;
     using IndexTree = nanovdb::NanoTree<GridT>;
 
-    std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> batchHandles;
+    std::vector<nanovdb::GridHandle<nanovdb::HostBuffer>> batchHandles;
     batchHandles.reserve(fineBatchHdl.batchSize());
     for (int64_t bidx = 0; bidx < fineBatchHdl.batchSize(); bidx += 1) {
         const nanovdb::OnIndexGrid *fineGrid = fineBatchHdl.hostGridPtrAt(bidx);
@@ -188,13 +191,12 @@ buildCoarseGridFromFineGridCPU(const GridBatchData &fineBatchHdl,
             proxyGridAccessor.setValue(coarseIjk, 1.0f);
         }
         proxyGridAccessor.merge();
-        auto ret = nanovdb::tools::createNanoGrid<ProxyGridT, GridT, TorchDeviceBuffer>(
-            *proxyGrid, 0u, false, false);
-        ret.buffer().to(torch::kCPU);
-        batchHandles.push_back(std::move(ret));
+        batchHandles.push_back(
+            nanovdb::tools::createNanoGrid<ProxyGridT, GridT, nanovdb::HostBuffer>(
+                *proxyGrid, 0u, false, false));
     }
-    return batchHandles.size() == 1 ? std::move(batchHandles[0])
-                                    : nanovdb::mergeGrids(batchHandles);
+    return GridStorage(batchHandles.size() == 1 ? std::move(batchHandles[0])
+                                                : nanovdb::mergeGrids(batchHandles));
 }
 
 __device__ void
@@ -367,7 +369,7 @@ countThenFillConvIJKForGrid(const GridBatchData &batchHdl, ConvolutionGeometry c
 }
 
 template <>
-nanovdb::GridHandle<TorchDeviceBuffer>
+GridStorage
 dispatchBuildGridForConv<torch::kCUDA>(const GridBatchData &baseGridHdl,
                                        const nanovdb::Coord &kernelSize,
                                        const nanovdb::Coord &stride) {
@@ -379,7 +381,7 @@ dispatchBuildGridForConv<torch::kCUDA>(const GridBatchData &baseGridHdl,
     if (supportsLeafMaskDirectProjection(geometry)) {
         gLastBuildGridForConvResourceStats =
             directProjectionStats(baseGridHdl.totalVoxels(), geometry.kernelVolume(), false);
-        return coarseGridHandleFromFineCUDA(baseGridHdl, geometry.stride());
+        return coarseGridStorageFromFineCUDA(baseGridHdl, geometry.stride());
     }
     if (isUnshiftedDirectProjection(geometry)) {
         gLastBuildGridForConvResourceStats =
@@ -397,8 +399,8 @@ dispatchBuildGridForConv<torch::kCUDA>(const GridBatchData &baseGridHdl,
         gLastBuildGridForConvResourceStats =
             morphologyStats(baseGridHdl.totalVoxels(), geometry.kernelVolume());
         c10::cuda::CUDAGuard deviceGuard(baseGridHdl.device());
-        at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream(baseGridHdl.device().index());
-        const int k                 = geometry.kernelSize()[0];
+        const cudaStream_t stream = storageStream(baseGridHdl.device());
+        const int k               = geometry.kernelSize()[0];
 
         std::vector<PassSpec> passes;
         if (k % 2 == 1) {
@@ -411,7 +413,7 @@ dispatchBuildGridForConv<torch::kCUDA>(const GridBatchData &baseGridHdl,
                           geometry.paddingBefore()[0],
                           PassSpec::boxDilate(nanovdb::Coord(0), nanovdb::Coord(1)));
         }
-        return batched::batchedTopologyHandle(baseGridHdl, passes, stream.stream());
+        return batched::batchedTopologyStorage(baseGridHdl, passes, stream);
     }
 
     // Shifted K=S uses one exact quotient per input. Other geometries use exact-M count/fill.
@@ -422,7 +424,7 @@ dispatchBuildGridForConv<torch::kCUDA>(const GridBatchData &baseGridHdl,
 }
 
 template <>
-nanovdb::GridHandle<TorchDeviceBuffer>
+GridStorage
 dispatchBuildGridForConv<torch::kCPU>(const GridBatchData &baseBatchHdl,
                                       const nanovdb::Coord &kernelSize,
                                       const nanovdb::Coord &stride) {
@@ -435,7 +437,7 @@ dispatchBuildGridForConv<torch::kCPU>(const GridBatchData &baseBatchHdl,
         return buildCoarseGridFromFineGridCPU(baseBatchHdl, geometry.stride());
     }
 
-    std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> batchHandles;
+    std::vector<nanovdb::GridHandle<nanovdb::HostBuffer>> batchHandles;
     batchHandles.reserve(baseBatchHdl.batchSize());
     const bool directProjection = isDirectProjection(geometry);
     int64_t validEmissionCount  = 0;
@@ -471,16 +473,17 @@ dispatchBuildGridForConv<torch::kCPU>(const GridBatchData &baseBatchHdl,
             }
         }
         proxyGridAccessor.merge();
-        batchHandles.push_back(nanovdb::tools::createNanoGrid<ProxyGridT, GridT, TorchDeviceBuffer>(
-            *proxyGrid, 0u, false, false));
+        batchHandles.push_back(
+            nanovdb::tools::createNanoGrid<ProxyGridT, GridT, nanovdb::HostBuffer>(
+                *proxyGrid, 0u, false, false));
     }
     gLastBuildGridForConvResourceStats =
         directProjection
             ? directProjectionStats(baseBatchHdl.totalVoxels(), geometry.kernelVolume())
             : countThenFillStats(
                   baseBatchHdl.totalVoxels(), geometry.kernelVolume(), validEmissionCount);
-    return batchHandles.size() == 1 ? std::move(batchHandles[0])
-                                    : nanovdb::mergeGrids(batchHandles);
+    return GridStorage(batchHandles.size() == 1 ? std::move(batchHandles[0])
+                                                : nanovdb::mergeGrids(batchHandles));
 }
 
 c10::intrusive_ptr<GridBatchData>

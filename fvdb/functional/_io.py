@@ -204,7 +204,7 @@ def save_nanovdb(
     from .._fvdb_cpp import save as _save
 
     grid_data = grid.data
-    data_impl = data._impl if data else None
+    data_impl = data._impl if data is not None else None  # an empty JaggedTensor is falsy but still data
     if name is not None:
         _save(path, grid_data, data_impl, name, compressed, verbose)
     elif names is not None:

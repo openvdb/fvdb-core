@@ -3,6 +3,7 @@
 //
 #include <fvdb/BuilderResource.h>
 #include <fvdb/GridBatchData.h>
+#include <fvdb/GridStorage.h>
 #include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/BuildGridFromIjk.h>
 #include <fvdb/detail/ops/BuildGridFromNearestVoxelsToPoints.h>
@@ -10,9 +11,11 @@
 #include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 #include <fvdb/detail/utils/cuda/RAIIRawDeviceBuffer.h>
-#include <fvdb/detail/utils/nanovdb/CreateEmptyGridHandle.h>
+#include <fvdb/detail/utils/cuda/StreamOrdering.h>
+#include <fvdb/detail/utils/nanovdb/DeviceGridHandleUtils.cuh>
 #include <fvdb/detail/utils/nanovdb/PadGrid.cuh>
 
+#include <nanovdb/HostBuffer.h>
 #include <nanovdb/tools/CreateNanoGrid.h>
 #include <nanovdb/tools/cuda/PointsToGrid.cuh>
 
@@ -26,9 +29,8 @@ namespace detail {
 namespace ops {
 
 template <torch::DeviceType>
-nanovdb::GridHandle<TorchDeviceBuffer>
-dispatchBuildGridFromNearestVoxelsToPoints(const JaggedTensor &points,
-                                           const std::vector<VoxelCoordTransform> &txs);
+GridStorage dispatchBuildGridFromNearestVoxelsToPoints(const JaggedTensor &points,
+                                                       const std::vector<VoxelCoordTransform> &txs);
 
 namespace {
 
@@ -88,46 +90,47 @@ flooredIjkForPoints(const JaggedTensor &jaggedPoints,
 } // namespace
 
 template <>
-nanovdb::GridHandle<TorchDeviceBuffer>
+GridStorage
 dispatchBuildGridFromNearestVoxelsToPoints<torch::kCUDA>(
     const JaggedTensor &points, const std::vector<VoxelCoordTransform> &txs) {
-    c10::cuda::CUDAGuard deviceGuard(points.device());
-    at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream(points.device().index());
+    const torch::Device device = points.device();
+    c10::cuda::CUDAGuard deviceGuard(device);
+    // The grids are built and their storage retained on the device's current torch stream; the
+    // prototype carries that stream and the device into every allocation the builder makes.
+    const cudaStream_t stream    = storageStream(device);
+    const DeviceGridBuffer proto = GridStorage::deviceProto(device, stream);
 
     // Build the base grid from the single voxel containing each point. Points are unstructured, so
-    // one sort is unavoidable.
-    JaggedTensor flooredIjk                        = flooredIjkForPoints(points, txs);
-    nanovdb::GridHandle<TorchDeviceBuffer> baseHdl = ops::_createNanoGridFromIJK(flooredIjk);
+    // one sort is unavoidable. _createNanoGridFromIJK builds on this same storage stream.
+    JaggedTensor flooredIjk = flooredIjkForPoints(points, txs);
+    GridStorage base        = ops::_createNanoGridFromIJK(flooredIjk);
 
     // The 8 nearest voxels of a point are floor(p) + {0,1}^3, so the nearest-voxel grid is the base
     // grid padded by one positive octant (the Minkowski sum distributes over the point union).
-    TorchDeviceBuffer guide(0, points.device());
     const torch::Tensor joffsetsCpu = points.joffsets().cpu();
     const auto joffsetsAcc          = joffsetsCpu.accessor<fvdb::JOffsetsType, 1>();
 
-    std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> handles;
-    handles.reserve(baseHdl.gridCount());
-    for (uint32_t i = 0; i < baseHdl.gridCount(); i += 1) {
+    // Pad one grid per batch item, then lay them end to end in one storage.
+    GridStorageParts parts(device, stream, base.gridCount());
+    for (uint32_t i = 0; i < base.gridCount(); i += 1) {
         if (joffsetsAcc[i + 1] - joffsetsAcc[i] == 0) {
             // No points in this batch item -> empty grid (>=1 point always yields >=1 base voxel).
-            handles.push_back(createEmptyGridHandle(points.device()));
+            parts.addEmpty();
             continue;
         }
-        nanovdb::OnIndexGrid *grid = baseHdl.deviceGrid<nanovdb::ValueOnIndex>(i);
+        nanovdb::OnIndexGrid *grid = base.deviceGridAt<nanovdb::ValueOnIndex>(i);
         TORCH_CHECK(grid, "Grid is null");
         morphology::PadGrid<nanovdb::ValueOnIndex, BuilderResource> op(
-            grid, /*positiveOctant=*/true, stream.stream());
-        op.setChecksum(nanovdb::CheckMode::Default);
-        handles.push_back(op.getHandle(guide));
+            grid, /*positiveOctant=*/true, stream);
+        parts.add(GridStorage(op.getHandle(proto), device));
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     }
 
-    return handles.size() == 1 ? std::move(handles[0])
-                               : nanovdb::cuda::mergeGridHandles(handles, &guide);
+    return parts.merge();
 }
 
 template <>
-nanovdb::GridHandle<TorchDeviceBuffer>
+GridStorage
 dispatchBuildGridFromNearestVoxelsToPoints<torch::kCPU>(
     const JaggedTensor &jaggedPoints, const std::vector<VoxelCoordTransform> &txs) {
     using GridT = nanovdb::ValueOnIndex;
@@ -151,7 +154,7 @@ dispatchBuildGridFromNearestVoxelsToPoints<torch::kCPU>(
             const torch::TensorAccessor<fvdb::JOffsetsType, 1> &pointsBOffsetsAcc =
                 jaggedPoints.joffsets().accessor<fvdb::JOffsetsType, 1>();
 
-            std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> batchHandles;
+            std::vector<nanovdb::GridHandle<nanovdb::HostBuffer>> batchHandles;
             batchHandles.reserve(pointsBOffsetsAcc.size(0) - 1);
             for (int bi = 0; bi < (pointsBOffsetsAcc.size(0) - 1); bi += 1) {
                 const VoxelCoordTransform &tx = txs[bi];
@@ -186,17 +189,13 @@ dispatchBuildGridFromNearestVoxelsToPoints<torch::kCPU>(
                 }
 
                 proxyGridAccessor.merge();
-                auto ret = nanovdb::tools::createNanoGrid<ProxyGridT, GridT, TorchDeviceBuffer>(
-                    *proxyGrid, 0u, false, false);
-                ret.buffer().to(torch::kCPU);
-                batchHandles.push_back(std::move(ret));
+                batchHandles.push_back(
+                    nanovdb::tools::createNanoGrid<ProxyGridT, GridT, nanovdb::HostBuffer>(
+                        *proxyGrid, 0u, false, false));
             }
 
-            if (batchHandles.size() == 1) {
-                return std::move(batchHandles[0]);
-            } else {
-                return nanovdb::mergeGrids(batchHandles);
-            }
+            return GridStorage(batchHandles.size() == 1 ? std::move(batchHandles[0])
+                                                        : nanovdb::mergeGrids(batchHandles));
         }),
         AT_EXPAND(AT_FLOATING_TYPES),
         c10::kHalf);
@@ -235,10 +234,10 @@ buildGridFromNearestVoxelsToPoints(const JaggedTensor &points,
     for (int64_t i = 0; i < numGrids; i += 1) {
         transforms.push_back(primalVoxelTransformForSizeAndOrigin(voxelSizes[i], origins[i]));
     }
-    auto handle = FVDB_DISPATCH_KERNEL_DEVICE(points.device(), [&]() {
+    GridStorage storage = FVDB_DISPATCH_KERNEL_DEVICE(points.device(), [&]() {
         return dispatchBuildGridFromNearestVoxelsToPoints<DeviceTag>(points, transforms);
     });
-    return makeGridBatchData(std::move(handle), voxelSizes, origins);
+    return makeGridBatchData(std::move(storage), voxelSizes, origins);
 }
 
 } // namespace ops

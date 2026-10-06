@@ -7,10 +7,11 @@
 #include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/GradientReduction.h>
 #include <fvdb/detail/utils/cuda/GridDim.h>
+#include <fvdb/detail/utils/cuda/LocalGradient.h>
+#include <fvdb/detail/utils/cuda/Prefetch.h>
 #include <fvdb/detail/utils/cuda/Utils.cuh>
 
 #include <ATen/cuda/Atomic.cuh>
-#include <ATen/ops/from_blob.h>
 #include <c10/cuda/CUDAGuard.h>
 
 #include <cub/block/block_reduce.cuh>
@@ -910,74 +911,34 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
                 dLossDSh0Coeffs, dLossDShNCoeffs, dLossDMeans, dLossDWorldToCamMatrices);
         }
 
-        std::vector<cudaEvent_t> events(c10::cuda::device_count());
-        std::vector<scalar_t *> dLossDWorldToCamMatricesLocalPtrs(c10::cuda::device_count(),
-                                                                  nullptr);
+        std::vector<cudaStream_t> prefetchStreams(c10::cuda::device_count());
         std::vector<torch::Tensor> dLossDWorldToCamMatricesLocals(c10::cuda::device_count());
-        for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-            C10_CUDA_CHECK(cudaSetDevice(deviceId));
-            auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
-            C10_CUDA_CHECK(cudaEventCreateWithFlags(&events[deviceId], cudaEventDisableTiming));
-            C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
-        }
 
+        // Prefetch outputs first, then overlap their zeroing with incoming-gradient prefetching.
         for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
             C10_CUDA_CHECK(cudaSetDevice(deviceId));
-            auto stream = c10::cuda::getStreamFromPool(false, deviceId);
-            C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
+            auto currentStream        = c10::cuda::getCurrentCUDAStream(deviceId);
+            prefetchStreams[deviceId] = c10::cuda::getStreamFromPool(false, deviceId);
+            auto stream               = prefetchStreams[deviceId];
+
+            cudaEvent_t prefetchEvent;
+            C10_CUDA_CHECK(cudaEventCreateWithFlags(&prefetchEvent, cudaEventDisableTiming));
+            C10_CUDA_CHECK(cudaEventRecord(prefetchEvent, currentStream));
+            C10_CUDA_CHECK(cudaStreamWaitEvent(stream, prefetchEvent));
 
             int64_t elementOffset, elementCount;
             std::tie(elementOffset, elementCount) = deviceChunk(N, deviceId);
 
             if (computeDLossDWorldToCamMatrices) {
-                const auto localTensorOptions = at::TensorOptions()
-                                                    .dtype(worldToCamMatrices.scalar_type())
-                                                    .device(at::kCUDA, deviceId);
-                const size_t numBytes =
-                    dLossDWorldToCamMatrices.numel() * dLossDWorldToCamMatrices.element_size();
-                scalar_t *&localPtr = dLossDWorldToCamMatricesLocalPtrs[deviceId];
-                C10_CUDA_CHECK(cudaMallocAsync(&localPtr, numBytes, stream));
-                C10_CUDA_CHECK(cudaMemsetAsync(localPtr, 0, numBytes, stream));
+                // Use the compute stream so the captured cleanup stream follows the kernels and
+                // reduction. Zeroing can overlap prefetching on the preparation stream.
                 dLossDWorldToCamMatricesLocals[deviceId] =
-                    at::from_blob(localPtr, dLossDWorldToCamMatrices.sizes(), localTensorOptions);
+                    makeLocalGradient(dLossDWorldToCamMatrices, deviceId, currentStream);
             }
 
             if (elementCount > 0) {
-#if (CUDART_VERSION < 13000)
-                nanovdb::util::cuda::memPrefetchAsync(dLossDSh0Coeffs.data_ptr<scalar_t>() +
-                                                          elementOffset * dLossDSh0Coeffs.stride(0),
-                                                      elementCount * dLossDSh0Coeffs.stride(0) *
-                                                          sizeof(scalar_t),
-                                                      deviceId,
-                                                      stream);
-                nanovdb::util::cuda::memPrefetchAsync(dLossDShNCoeffs.data_ptr<scalar_t>() +
-                                                          elementOffset * dLossDShNCoeffs.stride(0),
-                                                      elementCount * dLossDShNCoeffs.stride(0) *
-                                                          sizeof(scalar_t),
-                                                      deviceId,
-                                                      stream);
-                if (computeDLossDMeans) {
-                    nanovdb::util::cuda::memPrefetchAsync(
-                        dLossDMeans.data_ptr<scalar_t>() + elementOffset * dLossDMeans.stride(0),
-                        elementCount * dLossDMeans.stride(0) * sizeof(scalar_t),
-                        deviceId,
-                        stream);
-                }
-                for (int cameraIndex = 0; cameraIndex < C; ++cameraIndex) {
-                    nanovdb::util::cuda::memPrefetchAsync(
-                        dLossDRenderQuantities.data_ptr<scalar_t>() +
-                            cameraIndex * dLossDRenderQuantities.stride(0) +
-                            elementOffset * dLossDRenderQuantities.stride(1),
-                        elementCount * dLossDRenderQuantities.stride(1) * sizeof(scalar_t),
-                        deviceId,
-                        stream);
-                }
-#else
                 std::vector<void *> prefetchPtrs;
                 std::vector<size_t> prefetchSizes;
-                const cudaMemLocation location = {cudaMemLocationTypeDevice, deviceId};
-                std::vector<cudaMemLocation> prefetchLocations = {location};
-                std::vector<size_t> prefetchLocationIndices    = {0};
 
                 prefetchPtrs.emplace_back(dLossDSh0Coeffs.data_ptr<scalar_t>() +
                                           elementOffset * dLossDSh0Coeffs.stride(0));
@@ -993,6 +954,18 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
                     prefetchSizes.emplace_back(elementCount * dLossDMeans.stride(0) *
                                                sizeof(scalar_t));
                 }
+                memPrefetchBatchAsync(prefetchPtrs, prefetchSizes, deviceId, stream);
+
+                // Zero outputs once resident while the prefetch stream prepares the inputs.
+                C10_CUDA_CHECK(cudaEventRecord(prefetchEvent, stream));
+                C10_CUDA_CHECK(cudaStreamWaitEvent(currentStream, prefetchEvent));
+                for (const auto i: c10::irange(prefetchPtrs.size())) {
+                    C10_CUDA_CHECK(
+                        cudaMemsetAsync(prefetchPtrs[i], 0, prefetchSizes[i], currentStream));
+                }
+
+                prefetchPtrs.clear();
+                prefetchSizes.clear();
                 for (int cameraIndex = 0; cameraIndex < C; ++cameraIndex) {
                     prefetchPtrs.emplace_back(dLossDRenderQuantities.data_ptr<scalar_t>() +
                                               cameraIndex * dLossDRenderQuantities.stride(0) +
@@ -1000,44 +973,18 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
                     prefetchSizes.emplace_back(elementCount * dLossDRenderQuantities.stride(1) *
                                                sizeof(scalar_t));
                 }
-
-                C10_CUDA_CHECK(cudaMemPrefetchBatchAsync(prefetchPtrs.data(),
-                                                         prefetchSizes.data(),
-                                                         prefetchPtrs.size(),
-                                                         prefetchLocations.data(),
-                                                         prefetchLocationIndices.data(),
-                                                         prefetchLocations.size(),
-                                                         0,
-                                                         stream));
-#endif
-                C10_CUDA_CHECK(
-                    cudaMemsetAsync(dLossDSh0Coeffs.data_ptr<scalar_t>() +
-                                        elementOffset * dLossDSh0Coeffs.stride(0),
-                                    0,
-                                    elementCount * dLossDSh0Coeffs.stride(0) * sizeof(scalar_t),
-                                    stream));
-                C10_CUDA_CHECK(
-                    cudaMemsetAsync(dLossDShNCoeffs.data_ptr<scalar_t>() +
-                                        elementOffset * dLossDShNCoeffs.stride(0),
-                                    0,
-                                    elementCount * dLossDShNCoeffs.stride(0) * sizeof(scalar_t),
-                                    stream));
-                if (computeDLossDMeans) {
-                    C10_CUDA_CHECK(cudaMemsetAsync(
-                        dLossDMeans.data_ptr<scalar_t>() + elementOffset * dLossDMeans.stride(0),
-                        0,
-                        elementCount * dLossDMeans.stride(0) * sizeof(scalar_t),
-                        stream));
-                }
+                memPrefetchBatchAsync(prefetchPtrs, prefetchSizes, deviceId, stream);
             }
-            C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
+            // Join input prefetching after output zeroing, before the SH kernel.
+            C10_CUDA_CHECK(cudaEventRecord(prefetchEvent, stream));
+            C10_CUDA_CHECK(cudaStreamWaitEvent(currentStream, prefetchEvent));
+            C10_CUDA_CHECK(cudaEventDestroy(prefetchEvent));
         }
 
+        // Launch kernels on every device before submitting camera-gradient output prefetches.
         for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
             C10_CUDA_CHECK(cudaSetDevice(deviceId));
             auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
-            C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
-            C10_CUDA_CHECK(cudaEventDestroy(events[deviceId]));
 
             int64_t elementOffset, elementCount;
             std::tie(elementOffset, elementCount) = deviceChunk(N, deviceId);
@@ -1101,13 +1048,42 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
         }
 
         if (computeDLossDWorldToCamMatrices) {
-            reduceGradientShards<scalar_t>(dLossDWorldToCamMatricesLocals,
-                                           dLossDWorldToCamMatrices);
+            // Kernels write camera gradients to device-local buffers, allowing output prefetching
+            // to overlap. Reuse the preparation streams to preserve their waits and ordering.
+            std::vector<cudaEvent_t> outputPrefetchEvents(c10::cuda::device_count(), nullptr);
             for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+                const auto [elementOffset, elementCount] =
+                    deviceChunk(dLossDWorldToCamMatrices.numel(), deviceId);
+                if (elementCount == 0) {
+                    continue;
+                }
+
                 C10_CUDA_CHECK(cudaSetDevice(deviceId));
-                auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
-                C10_CUDA_CHECK(cudaFreeAsync(dLossDWorldToCamMatricesLocalPtrs[deviceId], stream));
+                auto prefetchStream                  = prefetchStreams[deviceId];
+                std::vector<void *> prefetchPointers = {
+                    dLossDWorldToCamMatrices.data_ptr<scalar_t>() + elementOffset};
+                std::vector<size_t> prefetchSizes = {elementCount * sizeof(scalar_t)};
+                memPrefetchBatchAsync(prefetchPointers, prefetchSizes, deviceId, prefetchStream);
+
+                // The output copy waits on these events after the reduction has been queued.
+                C10_CUDA_CHECK(cudaEventCreateWithFlags(&outputPrefetchEvents[deviceId],
+                                                        cudaEventDisableTiming));
+                C10_CUDA_CHECK(cudaEventRecord(outputPrefetchEvents[deviceId], prefetchStream));
             }
+
+            reduceGradientShards(dLossDWorldToCamMatricesLocals);
+            for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+                if (outputPrefetchEvents[deviceId]) {
+                    C10_CUDA_CHECK(cudaSetDevice(deviceId));
+                    auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+                    C10_CUDA_CHECK(cudaStreamWaitEvent(stream, outputPrefetchEvents[deviceId]));
+                    C10_CUDA_CHECK(cudaEventDestroy(outputPrefetchEvents[deviceId]));
+                }
+            }
+            copyGradientShards<scalar_t>(dLossDWorldToCamMatricesLocals, dLossDWorldToCamMatrices);
+
+            // Enqueue frees after reduction and output copies, before merging the compute streams.
+            dLossDWorldToCamMatricesLocals.clear();
         }
         mergeStreams();
 
@@ -1123,50 +1099,40 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
                 dLossDSh0Coeffs, dLossDShNCoeffs, dLossDMeans, dLossDWorldToCamMatrices);
         }
 
-        std::vector<cudaEvent_t> events(c10::cuda::device_count());
+        // Prefetch outputs first, then overlap their zeroing with incoming-gradient prefetching.
         for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
             C10_CUDA_CHECK(cudaSetDevice(deviceId));
-            auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
-            C10_CUDA_CHECK(cudaEventCreateWithFlags(&events[deviceId], cudaEventDisableTiming));
-            C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
-        }
+            auto currentStream = c10::cuda::getCurrentCUDAStream(deviceId);
+            auto stream        = c10::cuda::getStreamFromPool(false, deviceId);
 
-        for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-            C10_CUDA_CHECK(cudaSetDevice(deviceId));
-            auto stream = c10::cuda::getStreamFromPool(false, deviceId);
-            C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
+            cudaEvent_t prefetchEvent;
+            C10_CUDA_CHECK(cudaEventCreateWithFlags(&prefetchEvent, cudaEventDisableTiming));
+            C10_CUDA_CHECK(cudaEventRecord(prefetchEvent, currentStream));
+            C10_CUDA_CHECK(cudaStreamWaitEvent(stream, prefetchEvent));
 
             int64_t elementOffset, elementCount;
             std::tie(elementOffset, elementCount) = deviceChunk(N, deviceId);
 
             if (elementCount > 0) {
-#if (CUDART_VERSION < 13000)
-                nanovdb::util::cuda::memPrefetchAsync(dLossDSh0Coeffs.data_ptr<scalar_t>() +
-                                                          elementOffset * dLossDSh0Coeffs.stride(0),
-                                                      elementCount * dLossDSh0Coeffs.stride(0) *
-                                                          sizeof(scalar_t),
-                                                      deviceId,
-                                                      stream);
-                for (int cameraIndex = 0; cameraIndex < C; ++cameraIndex) {
-                    nanovdb::util::cuda::memPrefetchAsync(
-                        dLossDRenderQuantities.data_ptr<scalar_t>() +
-                            cameraIndex * dLossDRenderQuantities.stride(0) +
-                            elementOffset * dLossDRenderQuantities.stride(1),
-                        elementCount * dLossDRenderQuantities.stride(1) * sizeof(scalar_t),
-                        deviceId,
-                        stream);
-                }
-#else
                 std::vector<void *> prefetchPtrs;
                 std::vector<size_t> prefetchSizes;
-                const cudaMemLocation location = {cudaMemLocationTypeDevice, deviceId};
-                std::vector<cudaMemLocation> prefetchLocations = {location};
-                std::vector<size_t> prefetchLocationIndices    = {0};
 
                 prefetchPtrs.emplace_back(dLossDSh0Coeffs.data_ptr<scalar_t>() +
                                           elementOffset * dLossDSh0Coeffs.stride(0));
                 prefetchSizes.emplace_back(elementCount * dLossDSh0Coeffs.stride(0) *
                                            sizeof(scalar_t));
+                memPrefetchBatchAsync(prefetchPtrs, prefetchSizes, deviceId, stream);
+
+                // Zero outputs once resident while the prefetch stream prepares the inputs.
+                C10_CUDA_CHECK(cudaEventRecord(prefetchEvent, stream));
+                C10_CUDA_CHECK(cudaStreamWaitEvent(currentStream, prefetchEvent));
+                for (const auto i: c10::irange(prefetchPtrs.size())) {
+                    C10_CUDA_CHECK(
+                        cudaMemsetAsync(prefetchPtrs[i], 0, prefetchSizes[i], currentStream));
+                }
+
+                prefetchPtrs.clear();
+                prefetchSizes.clear();
                 for (int cameraIndex = 0; cameraIndex < C; ++cameraIndex) {
                     prefetchPtrs.emplace_back(dLossDRenderQuantities.data_ptr<scalar_t>() +
                                               cameraIndex * dLossDRenderQuantities.stride(0) +
@@ -1174,31 +1140,17 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
                     prefetchSizes.emplace_back(elementCount * dLossDRenderQuantities.stride(1) *
                                                sizeof(scalar_t));
                 }
-
-                C10_CUDA_CHECK(cudaMemPrefetchBatchAsync(prefetchPtrs.data(),
-                                                         prefetchSizes.data(),
-                                                         prefetchPtrs.size(),
-                                                         prefetchLocations.data(),
-                                                         prefetchLocationIndices.data(),
-                                                         prefetchLocations.size(),
-                                                         0,
-                                                         stream));
-#endif
-                C10_CUDA_CHECK(
-                    cudaMemsetAsync(dLossDSh0Coeffs.data_ptr<scalar_t>() +
-                                        elementOffset * dLossDSh0Coeffs.stride(0),
-                                    0,
-                                    elementCount * dLossDSh0Coeffs.stride(0) * sizeof(scalar_t),
-                                    stream));
+                memPrefetchBatchAsync(prefetchPtrs, prefetchSizes, deviceId, stream);
             }
-            C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
+            // Join input prefetching after output zeroing, before the SH kernel.
+            C10_CUDA_CHECK(cudaEventRecord(prefetchEvent, stream));
+            C10_CUDA_CHECK(cudaStreamWaitEvent(currentStream, prefetchEvent));
+            C10_CUDA_CHECK(cudaEventDestroy(prefetchEvent));
         }
 
         for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
             C10_CUDA_CHECK(cudaSetDevice(deviceId));
             auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
-            C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
-            C10_CUDA_CHECK(cudaEventDestroy(events[deviceId]));
 
             int64_t elementOffset, elementCount;
             std::tie(elementOffset, elementCount) = deviceChunk(N, deviceId);

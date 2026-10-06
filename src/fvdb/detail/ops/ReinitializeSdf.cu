@@ -1,11 +1,12 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <fvdb/BuilderResource.h>
 #include <fvdb/detail/ops/ReinitializeSdf.h>
 #include <fvdb/detail/utils/cuda/GridDim.h>
 
 #include <nanovdb/NanoVDB.h>
-#include <nanovdb/cuda/DeviceBuffer.h>
+#include <nanovdb/cuda/Buffer.h>
 #include <nanovdb/math/Math.h>
 #include <nanovdb/tools/VoxelBlockManager.h>
 #include <nanovdb/tools/cuda/VoxelBlockManager.cuh>
@@ -24,7 +25,11 @@ namespace ops {
 namespace {
 
 using OnIndexGridT = nanovdb::NanoGrid<nanovdb::ValueOnIndex>;
-using VbmBuffer    = nanovdb::cuda::DeviceBuffer;
+// VoxelBlockManager metadata (firstLeafID / jumpMap) lives in a single-space device buffer
+// over the builders' resource (torch's active CUDA allocator). buildVoxelBlockManager
+// allocates it stream-ordered on the reinit stream via createDeviceStorage, and the handle's
+// single-space accessors (openvdb #2301) hand the pointers back without an adapter.
+using VbmBuffer = BuilderBuffer<std::byte>;
 
 // log2 of the VoxelBlockManager block width: each VBM block spans 2^9 = 512 active voxels.
 static constexpr int kLog2BlockWidth = 9;
@@ -391,8 +396,7 @@ reinitializeSdfCuda(const GridBatchData &batchHdl,
         const int64_t numVoxels = batchHdl.numVoxelsAt(batchIdx);
         if (numVoxels == 0)
             continue;
-        OnIndexGridT *grid =
-            batchHdl.mGridHdl->deviceGrid<nanovdb::ValueOnIndex>((uint32_t)batchIdx);
+        OnIndexGridT *grid        = batchHdl.deviceGridPtrAt(batchIdx);
         const int64_t voxelOffset = batchHdl.cumVoxelsAt(batchIdx);
         const nanovdb::Vec3d &vs  = batchHdl.voxelSizeAt(batchIdx);
         // The eikonal solve uses one voxel size for all three axes; an anisotropic grid would get

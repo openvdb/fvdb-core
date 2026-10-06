@@ -2,13 +2,16 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/BuilderResource.h>
-#include <fvdb/TorchDeviceBuffer.h>
+#include <fvdb/GridStorage.h>
 #include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/BuildDilatedGrid.h>
 #include <fvdb/detail/ops/CloneGrid.h>
 #include <fvdb/detail/ops/MakeContiguous.h>
 #include <fvdb/detail/utils/Utils.h>
+#include <fvdb/detail/utils/cuda/StreamOrdering.h>
+#include <fvdb/detail/utils/nanovdb/DeviceGridHandleUtils.cuh>
 
+#include <nanovdb/HostBuffer.h>
 #include <nanovdb/NanoVDB.h>
 #include <nanovdb/tools/CreateNanoGrid.h>
 #include <nanovdb/tools/GridBuilder.h>
@@ -23,72 +26,65 @@
 namespace fvdb::detail::ops {
 
 template <torch::DeviceType>
-nanovdb::GridHandle<TorchDeviceBuffer>
-dispatchDilateGrid(const GridBatchData &gridBatch, const std::vector<int64_t> &dilationAmount);
+GridStorage dispatchDilateGrid(const GridBatchData &gridBatch,
+                               const std::vector<int64_t> &dilationAmount);
 
 template <>
-nanovdb::GridHandle<TorchDeviceBuffer>
+GridStorage
 dispatchDilateGrid<torch::kCUDA>(const GridBatchData &gridBatch,
                                  const std::vector<int64_t> &dilationAmount) {
-    c10::cuda::CUDAGuard deviceGuard(gridBatch.device());
+    const torch::Device device = gridBatch.device();
+    c10::cuda::CUDAGuard deviceGuard(device);
 
-    at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream(gridBatch.device().index());
+    // The grids are built and their storage retained on the device's current torch stream; the
+    // prototype carries that stream and the device into every allocation the builder makes.
+    const cudaStream_t stream    = storageStream(device);
+    const DeviceGridBuffer proto = GridStorage::deviceProto(device, stream);
 
-    // This guide buffer is a hack to pass in a device with an index to the cudaCreateNanoGrid
-    // function. We can't pass in a device directly but we can pass in a buffer which gets
-    // passed to TorchDeviceBuffer::create. The guide buffer holds the device and effectively
-    // passes it to the created buffer.
-    TorchDeviceBuffer guide(0, gridBatch.device());
-
-    // Create a grid for each batch item and store the handles. (An all-zero dilation is handled
-    // upstream in dilateGrid() via cloneGrid, so the 0-branch below only fires for a mixed batch.)
-    std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> handles;
+    // Build one grid per batch item, then lay them end to end in one storage. (An all-zero
+    // dilation is handled upstream in dilateGrid() via cloneGrid, so the 0-branch below only
+    // fires for a mixed batch.)
+    std::vector<GridStorage> parts;
+    parts.reserve(gridBatch.batchSize());
     for (int i = 0; i < gridBatch.batchSize(); i += 1) {
-        nanovdb::GridHandle<TorchDeviceBuffer> handle;
-
         if (dilationAmount[i] == 0) {
             // 0-dilation item in a mixed batch: clone logical grid i by byte offset (correct for
             // sliced views)
-            handle = ops::cloneGridHandleAt(gridBatch, i);
-        } else {
-            nanovdb::OnIndexGrid *grid = gridBatch.deviceGridPtrAt(i);
-            TORCH_CHECK(grid, "Grid is null");
-
-            for (auto j = 0; j < dilationAmount[i]; j += 1) {
-                nanovdb::tools::cuda::DilateGrid<nanovdb::ValueOnIndex, BuilderResource> dilateOp(
-                    grid, stream);
-                dilateOp.setOperation(nanovdb::tools::morphology::NN_FACE_EDGE_VERTEX);
-                dilateOp.setChecksum(nanovdb::CheckMode::Default);
-                dilateOp.setVerbose(0);
-
-                handle = dilateOp.getHandle(guide);
-                C10_CUDA_KERNEL_LAUNCH_CHECK();
-
-                grid = handle.deviceGrid<nanovdb::ValueOnIndex>();
-            }
+            parts.emplace_back(ops::cloneGridStorageAt(gridBatch, i));
+            continue;
         }
 
-        handles.push_back(std::move(handle));
+        nanovdb::OnIndexGrid *grid = gridBatch.deviceGridPtrAt(i);
+        TORCH_CHECK(grid, "Grid is null");
+
+        // Each pass dilates the previous pass's grid; only the last one is kept.
+        GridStorage::DeviceHandle handle;
+        for (auto j = 0; j < dilationAmount[i]; j += 1) {
+            nanovdb::tools::cuda::DilateGrid<nanovdb::ValueOnIndex, BuilderResource> dilateOp(
+                grid, stream);
+            dilateOp.setOperation(nanovdb::tools::morphology::NN_FACE_EDGE_VERTEX);
+            dilateOp.setVerbose(0);
+
+            handle = dilateOp.getHandle(proto);
+            C10_CUDA_KERNEL_LAUNCH_CHECK();
+
+            grid = handle.deviceGrid<nanovdb::ValueOnIndex>();
+        }
+
+        parts.emplace_back(std::move(handle), device);
     }
 
-    if (handles.size() == 1) {
-        // If there's only one handle, just return it
-        return std::move(handles[0]);
-    } else {
-        // This copies all the handles into a single handle -- only do it if there are multiple
-        // grids
-        return nanovdb::cuda::mergeGridHandles(handles, &guide);
-    }
+    return mergeGridStorages(std::move(parts), device, stream);
 }
 
 template <>
-nanovdb::GridHandle<TorchDeviceBuffer>
+GridStorage
 dispatchDilateGrid<torch::kCPU>(const GridBatchData &gridBatch,
                                 const std::vector<int64_t> &dilationAmount) {
     using GridT     = nanovdb::ValueOnIndex;
     using IndexTree = nanovdb::NanoTree<GridT>;
 
-    std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> gridHandles;
+    std::vector<nanovdb::GridHandle<nanovdb::HostBuffer>> gridHandles;
     gridHandles.reserve(gridBatch.batchSize());
     for (int64_t bidx = 0; bidx < gridBatch.batchSize(); bidx += 1) {
         const nanovdb::OnIndexGrid *grid = gridBatch.hostGridPtrAt(bidx);
@@ -116,17 +112,13 @@ dispatchDilateGrid<torch::kCPU>(const GridBatchData &gridBatch,
         }
 
         proxyGridAccessor.merge();
-        auto ret = nanovdb::tools::createNanoGrid<ProxyGridT, GridT, TorchDeviceBuffer>(
-            *proxyGrid, 0u, false, false);
-        ret.buffer().to(torch::kCPU);
-        gridHandles.push_back(std::move(ret));
+        gridHandles.push_back(
+            nanovdb::tools::createNanoGrid<ProxyGridT, GridT, nanovdb::HostBuffer>(
+                *proxyGrid, 0u, false, false));
     }
 
-    if (gridHandles.size() == 1) {
-        return std::move(gridHandles[0]);
-    } else {
-        return nanovdb::mergeGrids(gridHandles);
-    }
+    return GridStorage(gridHandles.size() == 1 ? std::move(gridHandles[0])
+                                               : nanovdb::mergeGrids(gridHandles));
 }
 
 c10::intrusive_ptr<GridBatchData>
@@ -149,10 +141,10 @@ dilateGrid(const GridBatchData &gridBatch, const std::vector<int64_t> &dilationA
 
     std::vector<nanovdb::Vec3d> voxS, voxO;
     gridBatch.gridVoxelSizesAndOrigins(voxS, voxO);
-    auto hdl = FVDB_DISPATCH_KERNEL_DEVICE(gridBatch.device(), [&]() {
+    GridStorage storage = FVDB_DISPATCH_KERNEL_DEVICE(gridBatch.device(), [&]() {
         return dispatchDilateGrid<DeviceTag>(gridBatch, dilationAmount);
     });
-    return makeGridBatchData(std::move(hdl), voxS, voxO);
+    return makeGridBatchData(std::move(storage), voxS, voxO);
 }
 
 } // namespace fvdb::detail::ops

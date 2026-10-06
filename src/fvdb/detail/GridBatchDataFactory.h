@@ -5,6 +5,9 @@
 #define FVDB_DETAIL_GRIDBATCHDATAFACTORY_H
 
 #include <fvdb/GridBatchData.h>
+#include <fvdb/GridStorage.h>
+
+#include <nanovdb/NanoVDB.h>
 
 #include <torch/types.h>
 
@@ -31,8 +34,10 @@ torch::Tensor computeBatchOffsets(GridBatchData::GridMetadata *hostMeta,
                                   int64_t batchSize,
                                   torch::Device device);
 
+/// @brief Wraps grid storage (one ValueOnIndex grid per batch item, contiguous) in a
+///        GridBatchData, computing the per-grid and batch metadata.
 c10::intrusive_ptr<GridBatchData>
-makeGridBatchData(nanovdb::GridHandle<TorchDeviceBuffer> &&gridHdl,
+makeGridBatchData(GridStorage &&storage,
                   const std::vector<nanovdb::Vec3d> &voxelSizes,
                   const std::vector<nanovdb::Vec3d> &voxelOrigins);
 

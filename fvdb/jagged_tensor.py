@@ -49,7 +49,6 @@ from ._fvdb_cpp import jrandn as jrandn_cpp
 from ._fvdb_cpp import jzeros as jzeros_cpp
 from .types import DeviceIdentifier, LShapeSpec, RShapeSpec
 
-
 # --- JaggedTensor.__torch_function__ whitelist ---
 # Whitelist of torch.<fn> names supported by JaggedTensor.__torch_function__.
 # Only include ops that are elementwise or that *preserve* the primary (leading)
@@ -954,8 +953,8 @@ class JaggedTensor:
             # indices = JaggedTensor.from_list_of_lists_of_tensors([torch.min(t, dim=0).indices for t in [t1, t2, t3]])
 
         Args:
-            values (JaggedTensor): A :class:`JaggedTensor` containing the minimum values.
-            indices (JaggedTensor): A :class:`JaggedTensor` containing the indices of the minimum values.
+            dim (int): Dimension to reduce within each tensor. Defaults to 0.
+            keepdim (bool): Whether to retain the reduced dimension with size one.
 
         Returns:
             list[JaggedTensor]: A list containing [values, indices] as JaggedTensors.

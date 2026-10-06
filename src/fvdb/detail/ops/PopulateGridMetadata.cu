@@ -26,6 +26,10 @@ populateGridMetadataKernel(uint32_t numGrids,
                            TensorAccessorT<fvdb::JOffsetsType, 1> gridOffsets,
                            GridBatchData::GridMetadata *perGridMetadata,
                            GridBatchData::GridBatchMetadata *batchMetadata) {
+    // The records may be raw allocations (device memory, or the unified memory PrivateUse1 shares
+    // between host and device), so every field a reader checks is written here, the version
+    // stamps included.
+    batchMetadata->version       = GridBatchData::GridBatchMetadata::kVersion;
     batchMetadata->mMaxVoxels    = 0;
     batchMetadata->mMaxLeafCount = 0;
 
@@ -49,6 +53,7 @@ populateGridMetadataKernel(uint32_t numGrids,
         GridBatchData::GridMetadata &metaCur  = perGridMetadata[i];
         GridBatchData::GridMetadata &metaNext = perGridMetadata[i + 1];
 
+        metaCur.version = GridBatchData::GridMetadata::kVersion;
         metaCur.setTransform(voxelSizes[i], voxelOrigins[i]);
         metaCur.mNumVoxels = voxelCount;
         metaCur.mNumBytes  = byteCount;
@@ -73,6 +78,7 @@ populateGridMetadataKernel(uint32_t numGrids,
         i += 1;
     }
 
+    perGridMetadata[i].version = GridBatchData::GridMetadata::kVersion;
     perGridMetadata[i].setTransform(voxelSizes[i], voxelOrigins[i]);
     perGridMetadata[i].mNumVoxels = currentGrid->tree().activeVoxelCount();
     perGridMetadata[i].mNumBytes  = currentGrid->gridSize();
@@ -113,7 +119,7 @@ populateGridMetadataCUDA(uint32_t numGrids,
 }
 
 template <torch::DeviceType>
-void dispatchPopulateGridMetadata(const nanovdb::GridHandle<TorchDeviceBuffer> &gridHdl,
+void dispatchPopulateGridMetadata(const GridStorage &storage,
                                   const std::vector<nanovdb::Vec3d> &voxelSizes,
                                   const std::vector<nanovdb::Vec3d> &voxelOrigins,
                                   torch::Tensor &outBatchOffsets,
@@ -125,7 +131,7 @@ void dispatchPopulateGridMetadata(const nanovdb::GridHandle<TorchDeviceBuffer> &
 template <>
 void
 dispatchPopulateGridMetadata<torch::kCUDA>(
-    const nanovdb::GridHandle<TorchDeviceBuffer> &gridHdl,
+    const GridStorage &storage,
     const std::vector<nanovdb::Vec3d> &voxelSizes,
     const std::vector<nanovdb::Vec3d> &voxelOrigins,
     torch::Tensor &outBatchOffsets,
@@ -133,30 +139,29 @@ dispatchPopulateGridMetadata<torch::kCUDA>(
     GridBatchData::GridMetadata *outPerGridMetadataDevice,
     GridBatchData::GridBatchMetadata *outBatchMetadataHost,
     GridBatchData::GridBatchMetadata *outBatchMetadataDevice) {
-    c10::cuda::CUDAGuard deviceGuard(gridHdl.buffer().device());
-    cudaStream_t stream =
-        c10::cuda::getCurrentCUDAStream(gridHdl.buffer().device().index()).stream();
+    c10::cuda::CUDAGuard deviceGuard(storage.device());
+    cudaStream_t stream = c10::cuda::getCurrentCUDAStream(storage.device().index()).stream();
 
     // Copy sizes and origins to device buffers
-    RAIIRawDeviceBuffer<nanovdb::Vec3d> deviceVoxSizes(voxelSizes.size(),
-                                                       gridHdl.buffer().device());
+    RAIIRawDeviceBuffer<nanovdb::Vec3d> deviceVoxSizes(voxelSizes.size(), storage.device());
     deviceVoxSizes.setData((nanovdb::Vec3d *)voxelSizes.data(), true /* blocking */);
     const nanovdb::Vec3d *deviceVoxSizesPtr = deviceVoxSizes.devicePtr;
 
-    RAIIRawDeviceBuffer<nanovdb::Vec3d> deviceVoxOrigins(voxelOrigins.size(),
-                                                         gridHdl.buffer().device());
+    RAIIRawDeviceBuffer<nanovdb::Vec3d> deviceVoxOrigins(voxelOrigins.size(), storage.device());
     deviceVoxOrigins.setData((nanovdb::Vec3d *)voxelOrigins.data(), true /* blocking */);
     const nanovdb::Vec3d *deviceVoxOriginsPtr = deviceVoxOrigins.devicePtr;
 
     outBatchOffsets = torch::empty(
         {(fvdb::JOffsetsType)(voxelOrigins.size() + 1)},
-        torch::TensorOptions().dtype(fvdb::JOffsetsScalarType).device(gridHdl.buffer().device()));
+        torch::TensorOptions().dtype(fvdb::JOffsetsScalarType).device(storage.device()));
 
     // Read metadata into device buffers
-    TORCH_CHECK(gridHdl.deviceData() != nullptr, "GridHandle is empty");
-    const nanovdb::OnIndexGrid *grids = (nanovdb::OnIndexGrid *)gridHdl.deviceData();
+    TORCH_CHECK(storage.deviceBytes() != nullptr, "GridStorage is empty");
+    const nanovdb::OnIndexGrid *grids = (const nanovdb::OnIndexGrid *)storage.deviceBytes();
+
+    const size_t metaDataByteSize = sizeof(GridBatchData::GridMetadata) * storage.gridCount();
     populateGridMetadataCUDA<TorchRAcc64><<<1, NUM_THREADS, 0, stream>>>(
-        gridHdl.gridCount(),
+        storage.gridCount(),
         grids,
         (const nanovdb::Vec3d *)deviceVoxSizesPtr,
         (const nanovdb::Vec3d *)deviceVoxOriginsPtr,
@@ -166,19 +171,26 @@ dispatchPopulateGridMetadata<torch::kCUDA>(
 
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 
-    const size_t metaDataByteSize = sizeof(GridBatchData::GridMetadata) * gridHdl.gridCount();
-    cudaMemcpy(
-        outPerGridMetadataHost, outPerGridMetadataDevice, metaDataByteSize, cudaMemcpyDeviceToHost);
-    cudaMemcpy(outBatchMetadataHost,
-               outBatchMetadataDevice,
-               sizeof(GridBatchData::GridBatchMetadata),
-               cudaMemcpyDeviceToHost);
+    // Read back on the kernel's stream and wait for it. A synchronous cudaMemcpy would run on the
+    // legacy default stream, which torch's non-blocking streams do not synchronize with, so under
+    // torch.cuda.stream(s) it could read the records before the kernel had written them.
+    C10_CUDA_CHECK(cudaMemcpyAsync(outPerGridMetadataHost,
+                                   outPerGridMetadataDevice,
+                                   metaDataByteSize,
+                                   cudaMemcpyDeviceToHost,
+                                   stream));
+    C10_CUDA_CHECK(cudaMemcpyAsync(outBatchMetadataHost,
+                                   outBatchMetadataDevice,
+                                   sizeof(GridBatchData::GridBatchMetadata),
+                                   cudaMemcpyDeviceToHost,
+                                   stream));
+    C10_CUDA_CHECK(cudaStreamSynchronize(stream));
 }
 
 template <>
 void
 dispatchPopulateGridMetadata<torch::kCPU>(
-    const nanovdb::GridHandle<TorchDeviceBuffer> &gridHdl,
+    const GridStorage &storage,
     const std::vector<nanovdb::Vec3d> &voxelSizes,
     const std::vector<nanovdb::Vec3d> &voxelOrigins,
     torch::Tensor &outBatchOffsets,
@@ -188,10 +200,10 @@ dispatchPopulateGridMetadata<torch::kCPU>(
     GridBatchData::GridBatchMetadata *outBatchMetadataDevice) {
     outBatchOffsets = torch::empty(
         {(fvdb::JOffsetsType)(voxelOrigins.size() + 1)},
-        torch::TensorOptions().dtype(fvdb::JOffsetsScalarType).device(gridHdl.buffer().device()));
-    TORCH_CHECK(gridHdl.data() != nullptr, "GridHandle is empty");
-    const nanovdb::OnIndexGrid *grids = (nanovdb::OnIndexGrid *)gridHdl.data();
-    populateGridMetadataKernel<TorchAcc>(gridHdl.gridCount(),
+        torch::TensorOptions().dtype(fvdb::JOffsetsScalarType).device(storage.device()));
+    TORCH_CHECK(storage.hostBytes() != nullptr, "GridStorage is empty");
+    const nanovdb::OnIndexGrid *grids = (const nanovdb::OnIndexGrid *)storage.hostBytes();
+    populateGridMetadataKernel<TorchAcc>(storage.gridCount(),
                                          grids,
                                          voxelSizes.data(),
                                          voxelOrigins.data(),
@@ -203,7 +215,7 @@ dispatchPopulateGridMetadata<torch::kCPU>(
 template <>
 void
 dispatchPopulateGridMetadata<torch::kPrivateUse1>(
-    const nanovdb::GridHandle<TorchDeviceBuffer> &gridHdl,
+    const GridStorage &storage,
     const std::vector<nanovdb::Vec3d> &voxelSizes,
     const std::vector<nanovdb::Vec3d> &voxelOrigins,
     torch::Tensor &outBatchOffsets,
@@ -213,10 +225,10 @@ dispatchPopulateGridMetadata<torch::kPrivateUse1>(
     GridBatchData::GridBatchMetadata *outBatchMetadataDevice) {
     outBatchOffsets = torch::empty(
         {(fvdb::JOffsetsType)(voxelOrigins.size() + 1)},
-        torch::TensorOptions().dtype(fvdb::JOffsetsScalarType).device(gridHdl.buffer().device()));
-    TORCH_CHECK(gridHdl.data() != nullptr, "GridHandle is empty");
-    const nanovdb::OnIndexGrid *grids = (nanovdb::OnIndexGrid *)gridHdl.data();
-    populateGridMetadataKernel<TorchAcc>(gridHdl.gridCount(),
+        torch::TensorOptions().dtype(fvdb::JOffsetsScalarType).device(storage.device()));
+    TORCH_CHECK(storage.hostBytes() != nullptr, "GridStorage is empty");
+    const nanovdb::OnIndexGrid *grids = (const nanovdb::OnIndexGrid *)storage.hostBytes();
+    populateGridMetadataKernel<TorchAcc>(storage.gridCount(),
                                          grids,
                                          voxelSizes.data(),
                                          voxelOrigins.data(),
@@ -226,14 +238,14 @@ dispatchPopulateGridMetadata<torch::kPrivateUse1>(
 }
 
 void
-populateGridMetadata(const nanovdb::GridHandle<TorchDeviceBuffer> &batchHdl,
+populateGridMetadata(const GridStorage &storage,
                      const std::vector<nanovdb::Vec3d> &voxelSizes,
                      const std::vector<nanovdb::Vec3d> &voxelOrigins,
                      torch::Tensor &outBatchOffsets,
                      GridBatchData::GridMetadata *outPerGridMetadataHost,
                      GridBatchData::GridMetadata *outPerGridMetadataDevice,
                      GridBatchData::GridBatchMetadata *outBatchMetadataHost) {
-    const torch::Device device = batchHdl.buffer().device();
+    const torch::Device device = storage.device();
     FVDB_DISPATCH_KERNEL(device, [&]() {
         GridBatchData::GridBatchMetadata *deviceBatchMetadataPtr = nullptr;
         if constexpr (DeviceTag == torch::kCUDA) {
@@ -243,7 +255,7 @@ populateGridMetadata(const nanovdb::GridHandle<TorchDeviceBuffer> &batchHdl,
                 sizeof(GridBatchData::GridBatchMetadata), wrapper.stream());
             deviceBatchMetadataPtr = static_cast<GridBatchData::GridBatchMetadata *>(data);
         }
-        dispatchPopulateGridMetadata<DeviceTag>(batchHdl,
+        dispatchPopulateGridMetadata<DeviceTag>(storage,
                                                 voxelSizes,
                                                 voxelOrigins,
                                                 outBatchOffsets,

@@ -78,12 +78,14 @@ class SimpleUNetBasicBlock(nn.Module):
         self.batch_norm = fvnn.BatchNorm(out_channels, momentum=momentum)
 
     def extra_repr(self) -> str:
+        """Return the layer configuration shown in the module representation."""
         return (
             f"in_channels={self.in_channels}, out_channels={self.out_channels}, "
             f"kernel_size={self.kernel_size}, momentum={self.momentum}"
         )
 
     def reset_parameters(self) -> None:
+        """Reset child layers' parameters and batch-normalization statistics, where present."""
         self.conv.reset_parameters()
         self.batch_norm.reset_parameters()
 
@@ -92,6 +94,16 @@ class SimpleUNetBasicBlock(nn.Module):
         data: JaggedTensor,
         plan: ConvolutionPlan,
     ) -> JaggedTensor:
+        """Apply convolution, normalization, and ReLU using a reusable plan.
+
+        Args:
+            data (JaggedTensor): Input features with ``in_channels`` values per source voxel.
+            plan (ConvolutionPlan): Plan matching this block's kernel and channel counts.
+
+        Returns:
+            JaggedTensor: Features with ``out_channels`` values per target voxel,
+            ordered according to ``plan.target_grid_batch``.
+        """
         x = self.conv(data, plan)
         out_grid = plan.target_grid_batch
         x = self.batch_norm(x, out_grid)
@@ -159,6 +171,7 @@ class SimpleUNetConvBlock(nn.Module):
         self.blocks = nn.ModuleList(layers)
 
     def extra_repr(self) -> str:
+        """Return the layer configuration shown in the module representation."""
         return (
             f"in_channels={self.in_channels}, mid_channels={self.mid_channels}, out_channels={self.out_channels}, "
             f"kernel_size={self.kernel_size}, "
@@ -166,6 +179,7 @@ class SimpleUNetConvBlock(nn.Module):
         )
 
     def reset_parameters(self) -> None:
+        """Reset child layers' parameters and batch-normalization statistics, where present."""
         for block in self.blocks:
             assert isinstance(block, SimpleUNetBasicBlock)
             block.reset_parameters()
@@ -175,6 +189,19 @@ class SimpleUNetConvBlock(nn.Module):
         data: JaggedTensor,
         plan: ConvolutionPlan,
     ) -> JaggedTensor:
+        """Apply the convolution sequence and add the input residual.
+
+        Args:
+            data (JaggedTensor): Features in the plan's source voxel order. Input
+                and output channel counts must match for the residual addition.
+            plan (ConvolutionPlan): Fixed-topology plan compatible with every layer.
+
+        Returns:
+            JaggedTensor: Features with the same voxel order and shape as ``data``.
+
+        Raises:
+            ValueError: If the plan does not have fixed topology.
+        """
         # In order for this to work, the plan's source and target grids must be the same.
         if not plan.has_fixed_topology:
             raise ValueError("Convolution plan must have fixed topology for repeated conv blocks.")
@@ -224,13 +251,25 @@ class SimpleUNetDown(nn.Module):
         self.batch_norm = fvnn.BatchNorm(out_channels, momentum=momentum)
 
     def extra_repr(self) -> str:
+        """Return the layer configuration shown in the module representation."""
         return f"in_channels={self.in_channels}, out_channels={self.out_channels}, momentum={self.momentum}"
 
     def reset_parameters(self) -> None:
+        """Reset child layers' parameters and batch-normalization statistics, where present."""
         self.channel_fan_out.reset_parameters()
         self.batch_norm.reset_parameters()
 
     def forward(self, data: JaggedTensor, fine_grid: GridBatch, coarse_grid: GridBatch) -> JaggedTensor:
+        """Pool features by a factor of two and adjust their channel count.
+
+        Args:
+            data (JaggedTensor): Features with ``in_channels`` values per fine voxel.
+            fine_grid (GridBatch): Grid batch defining the input voxel order.
+            coarse_grid (GridBatch): Target grid batch compatible with factor-two pooling.
+
+        Returns:
+            JaggedTensor: Normalized features with ``out_channels`` values per coarse voxel.
+        """
         # Decrease the resolution by a factor of 2, same channel count
         data, _ = self.max_pool(data, fine_grid, coarse_grid)
 
@@ -275,13 +314,25 @@ class SimpleUNetUp(nn.Module):
         self.batch_norm = fvnn.BatchNorm(out_channels, momentum=momentum)
 
     def extra_repr(self) -> str:
+        """Return the layer configuration shown in the module representation."""
         return f"in_channels={self.in_channels}, out_channels={self.out_channels}, momentum={self.momentum}"
 
     def reset_parameters(self) -> None:
+        """Reset child layers' parameters and batch-normalization statistics, where present."""
         self.channel_fan_in.reset_parameters()
         self.batch_norm.reset_parameters()
 
     def forward(self, data: JaggedTensor, coarse_grid: GridBatch, fine_grid: GridBatch) -> JaggedTensor:
+        """Adjust channels and refine features onto a finer grid batch.
+
+        Args:
+            data (JaggedTensor): Features with ``in_channels`` values per coarse voxel.
+            coarse_grid (GridBatch): Grid batch defining the input voxel order.
+            fine_grid (GridBatch): Target grid batch compatible with factor-two refinement.
+
+        Returns:
+            JaggedTensor: Features with ``out_channels`` values per fine voxel.
+        """
         # Decrease the channel count at the lower resolution
         plan = ConvolutionPlan.from_grid_batch(
             kernel_size=1, stride=1, source_grid=coarse_grid, target_grid=coarse_grid
@@ -324,15 +375,26 @@ class SimpleUNetBottleneck(nn.Module):
         self.block = SimpleUNetConvBlock(channels, channels, channels, kernel_size, layer_count, momentum)
 
     def extra_repr(self) -> str:
+        """Return the layer configuration shown in the module representation."""
         return (
             f"channels={self.channels}, kernel_size={self.kernel_size}, "
             f"layer_count={self.layer_count}, momentum={self.momentum}"
         )
 
     def reset_parameters(self) -> None:
+        """Reset child layers' parameters and batch-normalization statistics, where present."""
         self.block.reset_parameters()
 
     def forward(self, data: JaggedTensor, grid: GridBatch) -> JaggedTensor:
+        """Process bottleneck features without changing topology or channels.
+
+        Args:
+            data (JaggedTensor): Features with ``channels`` values per voxel.
+            grid (GridBatch): Grid batch defining the input and output voxel order.
+
+        Returns:
+            JaggedTensor: Residual-block output with the same shape as ``data``.
+        """
         plan = ConvolutionPlan.from_grid_batch(
             kernel_size=self.block.kernel_size, stride=1, source_grid=grid, target_grid=grid
         )
@@ -414,6 +476,7 @@ class SimpleUNetDownUp(nn.Module):
         )
 
     def extra_repr(self) -> str:
+        """Return the layer configuration shown in the module representation."""
         return (
             f"in_channels={self.in_channels}, channel_growth_rate={self.channel_growth_rate}, "
             f"kernel_size={self.kernel_size}, downup_layer_count={self.downup_layer_count}, "
@@ -421,6 +484,7 @@ class SimpleUNetDownUp(nn.Module):
         )
 
     def reset_parameters(self) -> None:
+        """Reset child layers' parameters and batch-normalization statistics, where present."""
         self.conv_in.reset_parameters()
         self.down.reset_parameters()
         self.inner.reset_parameters()
@@ -428,6 +492,17 @@ class SimpleUNetDownUp(nn.Module):
         self.conv_out.reset_parameters()
 
     def forward(self, data: JaggedTensor, fine_grid: GridBatch) -> JaggedTensor:
+        """Run an encoder-decoder level and combine its skip connections.
+
+        Coarser grid batches and convolution plans are constructed internally.
+
+        Args:
+            data (JaggedTensor): Features with ``in_channels`` values per fine voxel.
+            fine_grid (GridBatch): Grid batch defining the input and output voxel order.
+
+        Returns:
+            JaggedTensor: Features with the same shape and voxel order as ``data``.
+        """
         # This block-centroid grid is used only by stride-1 convolution plans. Resolution changes
         # remain explicit max-pool/refine operations, so it is deliberately not a strided-convolution target.
         coarse_grid = fine_grid.coarsened_grid(coarsening_factor=2).conv_grid(kernel_size=self.kernel_size, stride=1)
@@ -482,19 +557,39 @@ class SimpleUNetPad(nn.Module):
         self.batch_norm = fvnn.BatchNorm(out_channels, momentum=momentum)
 
     def extra_repr(self) -> str:
+        """Return the layer configuration shown in the module representation."""
         return (
             f"in_channels={self.in_channels}, out_channels={self.out_channels}, "
             f"kernel_size={self.kernel_size}, momentum={self.momentum}"
         )
 
     def reset_parameters(self) -> None:
+        """Reset convolution parameters and batch-normalization statistics."""
         self.conv.reset_parameters()
         self.batch_norm.reset_parameters()
 
     def create_padded_grid(self, grid: GridBatch) -> GridBatch:
+        """Build the target topology for this module's input convolution.
+
+        Args:
+            grid (GridBatch): Original grid batch to pad using this module's kernel size.
+
+        Returns:
+            GridBatch: Padded topology to pass as ``padded_grid`` to :meth:`forward`.
+        """
         return grid.conv_grid(kernel_size=self.kernel_size, stride=1)
 
     def forward(self, data: JaggedTensor, grid: GridBatch, padded_grid: GridBatch) -> JaggedTensor:
+        """Convolve input features onto the padded topology and normalize them.
+
+        Args:
+            data (JaggedTensor): Features with ``in_channels`` values per original voxel.
+            grid (GridBatch): Original grid batch defining the input voxel order.
+            padded_grid (GridBatch): Target topology returned by :meth:`create_padded_grid`.
+
+        Returns:
+            JaggedTensor: Features with ``out_channels`` values per padded voxel.
+        """
         plan = ConvolutionPlan.from_grid_batch(
             kernel_size=self.kernel_size, stride=1, source_grid=grid, target_grid=padded_grid
         )
@@ -539,12 +634,24 @@ class SimpleUNetUnpad(nn.Module):
         )
 
     def extra_repr(self) -> str:
+        """Return the layer configuration shown in the module representation."""
         return f"in_channels={self.in_channels}, out_channels={self.out_channels}, " f"kernel_size={self.kernel_size}"
 
     def reset_parameters(self) -> None:
+        """Reset child layers' parameters and batch-normalization statistics, where present."""
         self.deconv.reset_parameters()
 
     def forward(self, data: JaggedTensor, padded_grid: GridBatch, grid: GridBatch) -> JaggedTensor:
+        """Map padded features back onto the original topology by transposed convolution.
+
+        Args:
+            data (JaggedTensor): Features with ``in_channels`` values per padded voxel.
+            padded_grid (GridBatch): Grid batch defining the input voxel order.
+            grid (GridBatch): Original grid batch defining the output voxel order.
+
+        Returns:
+            JaggedTensor: Predictions with ``out_channels`` values per original voxel.
+        """
         plan = ConvolutionPlan.from_grid_batch_transposed(
             kernel_size=self.kernel_size, stride=1, source_grid=padded_grid, target_grid=grid
         )
@@ -615,6 +722,7 @@ class SimpleUNet(nn.Module):
         self.unpad = SimpleUNetUnpad(base_channels, out_channels, kernel_size)
 
     def extra_repr(self) -> str:
+        """Return the layer configuration shown in the module representation."""
         return (
             f"in_channels={self.in_channels}, base_channels={self.base_channels}, out_channels={self.out_channels}, "
             f"channel_growth_rate={self.channel_growth_rate}, kernel_size={self.kernel_size}, "
@@ -623,12 +731,24 @@ class SimpleUNet(nn.Module):
         )
 
     def reset_parameters(self) -> None:
+        """Reset child layers' parameters and batch-normalization statistics, where present."""
         self.pad.reset_parameters()
         self.downup.reset_parameters()
         self.unpad.reset_parameters()
 
     def forward(self, data: JaggedTensor, grid: GridBatch) -> JaggedTensor:
+        """Run the U-Net and return predictions on the input grid batch.
 
+        Padding, intermediate topologies, and convolution plans are built internally.
+
+        Args:
+            data (JaggedTensor): Features with ``in_channels`` values per voxel,
+                ordered according to ``grid``.
+            grid (GridBatch): Grid batch defining the input and output voxel order.
+
+        Returns:
+            JaggedTensor: Predictions with ``out_channels`` values per input voxel.
+        """
         padded_grid = self.pad.create_padded_grid(grid)
 
         data = self.pad(data, grid, padded_grid)
