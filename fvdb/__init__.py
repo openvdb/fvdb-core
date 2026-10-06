@@ -84,7 +84,6 @@ from .enums import (
     ConvolutionPhasePolicy,
     ConvolutionTopologyPolicy,
     ConvolutionTopologyProvenance,
-    ProjectionMethod,
     RollingShutterType,
     SmoothingMode,
 )
@@ -158,7 +157,6 @@ __all__ = [
     "ConvolutionTopologyPolicy",
     "ConvolutionTopologyProvenance",
     "CameraModel",
-    "ProjectionMethod",
     "RollingShutterType",
     "NanoVDBGridMetadata",
     # Concatenation of jagged tensors or grid/grid batches

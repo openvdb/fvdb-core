@@ -246,8 +246,8 @@ the stages into a differentiable pipeline.
 Conventions: ``C`` is the number of cameras, ``N`` the number of Gaussians and ``D`` the feature
 channel count. Pixel coordinates have their origin at the top-left corner of the image. Sparse
 variants take ``pixels_to_render`` as a :class:`~fvdb.JaggedTensor` with one ``[P_c, 2]`` list of
-integer ``(row, col)`` coordinates per camera. Camera enums are :class:`~fvdb.CameraModel`,
-:class:`~fvdb.ProjectionMethod` and :class:`~fvdb.RollingShutterType`.
+integer ``(row, col)`` coordinates per camera. Camera enums are :class:`~fvdb.CameraModel` and
+:class:`~fvdb.RollingShutterType`.
 
 Projection
 ~~~~~~~~~~

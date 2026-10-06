@@ -137,20 +137,3 @@ class CameraModel(IntEnum):
 
     ORTHOGRAPHIC = 5
     """Orthographic camera (no distortion)."""
-
-
-class ProjectionMethod(IntEnum):
-    """
-    Projection implementation selector for Gaussian splat camera models.
-
-    Values mirror the C++ ``fvdb::detail::ops::ProjectionMethod`` enum.
-    """
-
-    AUTO = 0
-    """Choose the default implementation for the selected camera model."""
-
-    ANALYTIC = 1
-    """Use the analytic (EWA) projection path."""
-
-    UNSCENTED = 2
-    """Use the unscented-transform projection path."""

@@ -18,7 +18,7 @@ import torch
 
 import fvdb
 import fvdb.functional as F
-from fvdb import CameraModel, JaggedTensor, ProjectionMethod, RollingShutterType, _fvdb_cpp
+from fvdb import CameraModel, JaggedTensor, RollingShutterType, _fvdb_cpp
 from fvdb.enums import _to_cpp_enum
 
 _GAUSSIAN_EXPORTS = [
@@ -74,7 +74,6 @@ class PublicSurfaceTests(unittest.TestCase):
         for py_enum, cpp_enum in [
             (CameraModel, _fvdb_cpp.CameraModel),
             (RollingShutterType, _fvdb_cpp.RollingShutterType),
-            (ProjectionMethod, _fvdb_cpp.ProjectionMethod),
         ]:
             cpp_members = {name: int(member) for name, member in cpp_enum.__members__.items()}
             py_members = {member.name: int(member) for member in py_enum}
@@ -92,9 +91,8 @@ class PublicSurfaceTests(unittest.TestCase):
 
     def test_enums_exported_from_fvdb(self):
         self.assertIs(fvdb.CameraModel, CameraModel)
-        self.assertIs(fvdb.ProjectionMethod, ProjectionMethod)
         self.assertIs(fvdb.RollingShutterType, RollingShutterType)
-        for name in ("CameraModel", "ProjectionMethod", "RollingShutterType"):
+        for name in ("CameraModel", "RollingShutterType"):
             self.assertIn(name, fvdb.__all__)
 
     def test_as_pixel_jagged_normalizes_and_validates(self):
