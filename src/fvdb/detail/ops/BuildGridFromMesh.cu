@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/GridBatchData.h>
+#include <fvdb/GridStorage.h>
 #include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/BuildGridFromIjk.h>
 #include <fvdb/detail/ops/BuildGridFromMesh.h>
@@ -9,6 +10,7 @@
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Utils.h>
 
+#include <nanovdb/HostBuffer.h>
 #include <nanovdb/tools/CreateNanoGrid.h>
 #include <nanovdb/tools/cuda/PointsToGrid.cuh>
 
@@ -22,13 +24,12 @@ namespace detail {
 namespace ops {
 
 template <torch::DeviceType>
-nanovdb::GridHandle<TorchDeviceBuffer>
-dispatchBuildGridFromMesh(const JaggedTensor &meshVertices,
-                          const JaggedTensor &meshFaces,
-                          const std::vector<VoxelCoordTransform> &tx);
+GridStorage dispatchBuildGridFromMesh(const JaggedTensor &meshVertices,
+                                      const JaggedTensor &meshFaces,
+                                      const std::vector<VoxelCoordTransform> &tx);
 
 template <typename ScalarType>
-nanovdb::GridHandle<TorchDeviceBuffer>
+GridStorage
 buildGridFromMeshCPU(const JaggedTensor &vertices,
                      const JaggedTensor &triangles,
                      const std::vector<VoxelCoordTransform> &tx) {
@@ -36,7 +37,7 @@ buildGridFromMeshCPU(const JaggedTensor &vertices,
     using Vec3T      = nanovdb::math::Vec3<ScalarType>;
     using ProxyGridT = nanovdb::tools::build::Grid<float>;
 
-    std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> batchHandles;
+    std::vector<nanovdb::GridHandle<nanovdb::HostBuffer>> batchHandles;
     batchHandles.reserve(vertices.num_outer_lists());
 
     for (int64_t bidx = 0; bidx < vertices.num_outer_lists(); bidx += 1) {
@@ -90,21 +91,17 @@ buildGridFromMeshCPU(const JaggedTensor &vertices,
         // std::cerr << "I searched over " << numSearched << " voxels" << std::endl;
         // std::cerr << "I found " << numFound << " voxels" << std::endl;
         proxyGridAccessor.merge();
-        auto ret = nanovdb::tools::createNanoGrid<ProxyGridT, GridT, TorchDeviceBuffer>(
-            *proxyGrid, 0u, false, false);
-        ret.buffer().to(torch::kCPU);
-        batchHandles.push_back(std::move(ret));
+        batchHandles.push_back(
+            nanovdb::tools::createNanoGrid<ProxyGridT, GridT, nanovdb::HostBuffer>(
+                *proxyGrid, 0u, false, false));
     }
 
-    if (batchHandles.size() == 1) {
-        return std::move(batchHandles[0]);
-    } else {
-        return nanovdb::mergeGrids(batchHandles);
-    }
+    return GridStorage(batchHandles.size() == 1 ? std::move(batchHandles[0])
+                                                : nanovdb::mergeGrids(batchHandles));
 }
 
 template <>
-nanovdb::GridHandle<TorchDeviceBuffer>
+GridStorage
 dispatchBuildGridFromMesh<torch::kCUDA>(const JaggedTensor &meshVertices,
                                         const JaggedTensor &meshFaces,
                                         const std::vector<VoxelCoordTransform> &tx) {
@@ -113,7 +110,7 @@ dispatchBuildGridFromMesh<torch::kCUDA>(const JaggedTensor &meshVertices,
 }
 
 template <>
-nanovdb::GridHandle<TorchDeviceBuffer>
+GridStorage
 dispatchBuildGridFromMesh<torch::kCPU>(const JaggedTensor &meshVertices,
                                        const JaggedTensor &meshFaces,
                                        const std::vector<VoxelCoordTransform> &tx) {
@@ -182,10 +179,10 @@ buildGridFromMesh(const JaggedTensor &meshVertices,
     for (int64_t i = 0; i < numGrids; i += 1) {
         transforms.push_back(primalVoxelTransformForSizeAndOrigin(voxelSizes[i], origins[i]));
     }
-    auto handle = FVDB_DISPATCH_KERNEL_DEVICE(meshVertices.device(), [&]() {
+    GridStorage storage = FVDB_DISPATCH_KERNEL_DEVICE(meshVertices.device(), [&]() {
         return dispatchBuildGridFromMesh<DeviceTag>(meshVertices, meshFaces, transforms);
     });
-    return makeGridBatchData(std::move(handle), voxelSizes, origins);
+    return makeGridBatchData(std::move(storage), voxelSizes, origins);
 }
 
 } // namespace ops

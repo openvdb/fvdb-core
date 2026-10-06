@@ -202,6 +202,42 @@ class TestIO(unittest.TestCase):
             else:
                 self.assertTrue(torch.all(grid.ijk.jdata == grid2.ijk.jdata))
 
+    @parameterized.expand(["cpu", "cuda"])
+    def test_save_and_load_empty_gridbatch(self, device):
+        # No grids at all: saving without data writes the one voxel-less sentinel grid the empty
+        # batch's storage holds, and loading it back yields one empty grid (the behaviour before
+        # the storage flip). Saving *with* data has nothing to attach the data to and is an error.
+        grid = fvdb.GridBatch.from_zero_grids(device=device)
+        with tempfile.NamedTemporaryFile(suffix=".nvdb") as temp:
+            grid.save_nanovdb(temp.name)
+            grid2, data2, names2 = fvdb.GridBatch.from_nanovdb(temp.name, device=device)
+            self.assertEqual(grid2.grid_count, 1)
+            self.assertEqual(grid2.total_voxels, 0)
+        with self.assertRaises(ValueError):
+            grid.save_nanovdb("unused.nvdb", grid.jagged_like(torch.zeros(0, 3, device=device)))
+
+    @parameterized.expand(["cpu", "cuda"])
+    def test_save_and_load_with_empty_grid_in_batch(self, device):
+        # A batch whose middle grid has no voxels, exported as typed float grids: the empty member
+        # must round-trip as an empty grid rather than crash the CUDA converter.
+        ijk = fvdb.JaggedTensor(
+            [
+                torch.randint(-4, 4, (30, 3), device=device, dtype=torch.int32),
+                torch.empty(0, 3, device=device, dtype=torch.int32),
+                torch.randint(-4, 4, (20, 3), device=device, dtype=torch.int32),
+            ]
+        )
+        grid = fvdb.GridBatch.from_ijk(ijk)
+        self.assertEqual(grid.num_voxels[1].item(), 0)
+        data = grid.jagged_like(torch.randn(grid.total_voxels, device=device))
+        with tempfile.NamedTemporaryFile(suffix=".nvdb") as temp:
+            grid.save_nanovdb(temp.name, data)
+            grid2, data2, _ = fvdb.GridBatch.from_nanovdb(temp.name, device=device)
+            self.assertEqual(grid2.grid_count, 3)
+            self.assertEqual(grid2.num_voxels[1].item(), 0)
+            self.assertEqual(grid2.total_voxels, grid.total_voxels)
+            self.assertTrue(torch.allclose(data2.jdata.flatten(), data.jdata))
+
     def test_load_gridbatch_basic(self):
         datadir = get_fvdb_test_data_path()
         # Load an uncompressed gridbatch

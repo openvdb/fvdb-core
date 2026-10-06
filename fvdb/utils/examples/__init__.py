@@ -3,6 +3,7 @@
 #
 import hashlib
 import importlib
+import json
 import logging
 import timeit
 from pathlib import Path
@@ -17,7 +18,7 @@ from fvdb.utils._data_repo import fetch_data_repo
 from fvdb import GridBatch, JaggedTensor
 
 _EXAMPLE_DATA_REPO = "voxel-foundation/fvdb-example-data"
-_EXAMPLE_DATA_REVISION = "613c3a4e220eb45b9ae0271dca4808ab484ee134"
+_EXAMPLE_DATA_REVISION = "42ea11a3210677f7c010f93a2febf9760faa1641"
 
 
 def _import_optional(module_name: str) -> ModuleType:
@@ -218,6 +219,41 @@ def load_car_4_mesh(skip_every=1, mode="vf", device=torch.device("cuda"), dtype=
     )
 
 
+def load_gso_shoes(
+    limit: Union[int, None] = None, device=torch.device("cuda"), dtype=torch.float32
+) -> List[List[torch.Tensor]]:
+    """Load the Google Scanned Objects "Shoe" meshes (254 scans, CC-BY 4.0).
+
+    The subset lives in ``meshes/gso_shoes`` of the example-data snapshot; per-model
+    attribution and source URLs are recorded in its ``ATTRIBUTION.json`` manifest
+    (individual files are integrity-protected by the pinned data-repo revision, so
+    no per-file checksums are kept here).
+
+    Args:
+        limit: Load only the first ``limit`` meshes in manifest order, or ``None`` for all 254.
+        device: Device for the returned tensors.
+        dtype: Floating dtype for the vertex tensors.
+
+    Returns:
+        meshes: A list of ``[vertices, faces]`` tensor pairs, one per shoe.
+    """
+    pcu = _import_optional("point_cloud_utils")
+
+    shoes_dir = get_fvdb_example_data_path() / "meshes" / "gso_shoes"
+    with open(shoes_dir / "ATTRIBUTION.json") as fp:
+        entries = json.load(fp)["models"]
+    if limit is not None:
+        entries = entries[:limit]
+    logging.info(f"Loading {len(entries)} GSO shoe meshes...")
+    start = timeit.default_timer()
+    meshes = []
+    for entry in entries:
+        v, f = pcu.load_mesh_vf(str(shoes_dir / entry["file"]))
+        meshes.append([torch.from_numpy(v).to(device=device, dtype=dtype), torch.from_numpy(f).to(device)])
+    logging.info(f"Done in {timeit.default_timer() - start}s")
+    return meshes
+
+
 def plot_ray_segments(ray_o, ray_d, times, plot_every=1):
     ps = _import_optional("polyscope")
 
@@ -248,5 +284,6 @@ __all__ = [
     "load_bunny_mesh",
     "load_car_1_mesh",
     "load_car_2_mesh",
+    "load_gso_shoes",
     "plot_ray_segments",
 ]

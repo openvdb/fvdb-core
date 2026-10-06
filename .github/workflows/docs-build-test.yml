@@ -37,5 +37,24 @@ jobs:
       - name: Generate version stub
         run: python devtools/generate-version-stub.py
 
+      - name: Test coverage enforcement
+        working-directory: tests
+        run: |
+          python -m pip install "pytest==9.0.3"
+          python -m pytest ../.github/scripts/test_public_api_coverage.py -q
+
       - name: Build documentation
         run: sphinx-build -W --keep-going -a ./docs build/sphinx
+
+      - name: Enforce public Python API coverage
+        run: sphinx-build -W --keep-going -b coverage ./docs build/sphinx-coverage
+
+      - name: Upload API coverage reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: python-api-documentation-coverage
+          path: |
+            build/sphinx-coverage/python.txt
+            build/sphinx-coverage/coverage.json
+          if-no-files-found: ignore

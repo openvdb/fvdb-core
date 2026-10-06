@@ -37,8 +37,11 @@ allowed_padding = ["same", "valid"]
 
 
 class FusedSSIMMap(torch.autograd.Function):
+    """Autograd bridge for the fused SSIM map and its saved derivatives."""
+
     @staticmethod
     def forward(ctx, C1, C2, img1, img2, padding="same", train=True):
+        """Compute the SSIM map, optionally cropping boundary pixels for valid padding."""
         (
             ssim_map,
             dm_dmu1,
@@ -58,6 +61,7 @@ class FusedSSIMMap(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, opt_grad):
+        """Propagate SSIM-map gradients to the first input image."""
         img1, img2, dm_dmu1, dm_dsigma1_sq, dm_dsigma12 = ctx.saved_tensors
         C1, C2, padding = ctx.C1, ctx.C2, ctx.padding
         dL_dmap = opt_grad
@@ -71,6 +75,7 @@ class FusedSSIMMap(torch.autograd.Function):
 
 
 def fused_ssim(img1, img2, padding="same", train=True):
+    """Return mean fused SSIM, using same or valid padding and optional training derivatives."""
     C1 = 0.01**2
     C2 = 0.03**2
 

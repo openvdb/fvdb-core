@@ -5,7 +5,10 @@
 #define FVDB_DETAIL_OPS_BUILDGRIDFROMIJK_H
 
 #include <fvdb/GridBatchData.h>
+#include <fvdb/GridStorage.h>
 #include <fvdb/JaggedTensor.h>
+
+#include <nanovdb/NanoVDB.h>
 
 #include <vector>
 
@@ -14,8 +17,8 @@ namespace detail {
 namespace ops {
 
 // Internal helper used by other grid-building ops (BuildCoarseGridFromFine, BuildGridFromPoints,
-// etc.)
-nanovdb::GridHandle<TorchDeviceBuffer> _createNanoGridFromIJK(const JaggedTensor &ijk);
+// etc.): the batch's grids as one storage on ijk's device, built on that device's storage stream.
+GridStorage _createNanoGridFromIJK(const JaggedTensor &ijk);
 
 c10::intrusive_ptr<GridBatchData>
 createNanoGridFromIJK(const JaggedTensor &ijk,

@@ -28,7 +28,7 @@ The following is a matrix of the versions of software that we :ref:`test and dis
      - Python Version
      - CUDA Version
      - Vulkan Version (only for visualization)
-   * - 0.6 (pre-release, nightly wheels only)
+   * - 0.6
      - Linux Only
      - |torch_full_version|
      - |python_range|

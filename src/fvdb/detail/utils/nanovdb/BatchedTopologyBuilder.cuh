@@ -6,10 +6,10 @@
 // NanoVDB's morphology builders (RefineGrid / CoarsenGrid via TopologyBuilder) are single-grid by
 // construction: each getHandle() call performs several stream synchronizations (source-tree
 // readback, host-side speculative root refinement, node-count readback for allocation sizing) and
-// produces one single-grid handle, which fvdb then merges per batch member -- with another
-// synchronization per grid inside nanovdb::cuda::mergeGridHandles. For generated-topology
-// workloads that rebuild grids every training iteration (issue #755), that per-member fixed
-// overhead -- not the topology size -- dominates wall clock and serializes the GPU.
+// produces one single-grid handle, which fvdb then lays end to end per batch member
+// (mergeGridStorages) -- another copy of every grid's bytes. For generated-topology workloads that
+// rebuild grids every training iteration (issue #755), that per-member fixed overhead -- not the
+// topology size -- dominates wall clock and serializes the GPU.
 //
 // This header rebuilds the factor-2 refine (subdivision) and coarsen passes so one invocation
 // covers the whole batch:
@@ -31,7 +31,7 @@
 // The mask bit math is NanoVDB's own (RefineLeafMasksFunctor::refineMask /
 // CoarsenLeafMasksFunctor::coarsenMask); the header/bbox/prefix-sum stages are transcriptions of
 // tools::cuda::TopologyBuilder's functors with (gridIndex, localIndex) indexing. Checksums are
-// disabled on the output, matching ops::contiguousGridHandle and mergeGridHandles behavior.
+// disabled on the output, matching assembleGridStorage (compaction, concatenation, merge).
 //
 // Scratch is allocated through torch (the caching allocator) on the caller's current stream. The
 // only stream synchronization per pass is the node-count readback that sizes the output buffer.
@@ -40,8 +40,11 @@
 #define FVDB_DETAIL_UTILS_NANOVDB_BATCHEDTOPOLOGYBUILDER_CUH
 
 #include <fvdb/GridBatchData.h>
-#include <fvdb/TorchDeviceBuffer.h>
+#include <fvdb/GridStorage.h>
+#include <fvdb/TorchDeviceResource.h>
+#include <fvdb/detail/utils/nanovdb/DeviceGridHandleUtils.cuh>
 
+#include <nanovdb/GridHandle.h>
 #include <nanovdb/NanoVDB.h>
 #include <nanovdb/util/MorphologyHelpers.h>
 #include <nanovdb/util/cuda/Morphology.cuh>
@@ -51,6 +54,8 @@
 #include <torch/types.h>
 
 #include <cub/cub.cuh>
+
+#include <cuda_runtime.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -103,9 +108,11 @@ struct BatchedTopologySource {
 };
 
 /// Result of one batched pass: a single device buffer holding all B output grids back-to-back,
-/// plus the host-side layout needed to wrap it in a GridHandle or feed the next pass.
+/// plus the host-side layout needed to wrap it in GridStorage or feed the next pass. The buffer
+/// is grid storage proper (allocated through TorchDeviceResource, retaining the pass's stream),
+/// so the final pass's buffer becomes the batch's storage without another copy.
 struct BatchedTopologyResult {
-    TorchDeviceBuffer buffer;
+    DeviceGridBuffer buffer;
     std::vector<uint64_t> gridByteOffsets; // B+1 cumulative byte offsets into `buffer`
     std::vector<int64_t> leafCounts;       // per-member output leaf counts
 };
@@ -841,8 +848,8 @@ sourceFromResult(const BatchedTopologyResult &result, const torch::Device &devic
     src.device             = device;
     const size_t batchSize = result.leafCounts.size();
     src.grids.reserve(batchSize);
-    src.leafCounts      = result.leafCounts;
-    const uint8_t *base = result.buffer.deviceData();
+    src.leafCounts   = result.leafCounts;
+    const auto *base = reinterpret_cast<const uint8_t *>(result.buffer.data());
     for (size_t i = 0; i < batchSize; ++i) {
         src.grids.push_back(reinterpret_cast<const GridT *>(base + result.gridByteOffsets[i]));
     }
@@ -1132,8 +1139,9 @@ runBatchedTopologyPass(const BatchedTopologySource &src,
     const int32_t totalLower = int32_t(lowerStartHost[numGrids]);
     const int32_t totalUpper = int32_t(upperStartHost[numGrids]);
 
-    result.buffer = TorchDeviceBuffer(totalBytes, src.device);
-    C10_CUDA_CHECK(cudaMemsetAsync(result.buffer.deviceData(), 0, totalBytes, stream));
+    result.buffer = DeviceGridBuffer(
+        stream, TorchDeviceResource(src.device), totalBytes, nanovdb::cuda::noInit);
+    C10_CUDA_CHECK(cudaMemsetAsync(result.buffer.data(), 0, totalBytes, stream));
 
     torch::Tensor gridOffDev = torch::empty({numGrids + 1}, i64Opts);
     C10_CUDA_CHECK(cudaMemcpyAsync(gridOffDev.data_ptr<int64_t>(),
@@ -1143,7 +1151,7 @@ runBatchedTopologyPass(const BatchedTopologySource &src,
                                    stream));
 
     BuildDeviceArrays build;
-    build.dstBase         = result.buffer.deviceData();
+    build.dstBase         = reinterpret_cast<uint8_t *>(result.buffer.data());
     build.gridByteOffsets = u64(gridOffDev);
     build.upperStart      = u32(upperStart);
     build.lowerStart      = u32(lowerStart);
@@ -1207,20 +1215,33 @@ runBatchedTopologyPass(const BatchedTopologySource &src,
     return result;
 }
 
-/// Runs a chained sequence of batched passes over the batch and wraps the final buffer in a
-/// GridHandle. `passes` must be non-empty.
-inline nanovdb::GridHandle<TorchDeviceBuffer>
-batchedTopologyHandle(const GridBatchData &batch,
-                      const std::vector<TopologyPassSpec> &passes,
-                      cudaStream_t stream) {
-    TORCH_CHECK(!passes.empty(), "batchedTopologyHandle requires at least one pass");
+/// Runs a chained sequence of batched passes over the batch and wraps the final buffer as the
+/// batch's storage. `passes` must be non-empty. The layout is the one the host computed and the
+/// build kernels wrote (each header carries its gridIndex/gridCount), so the storage adopts it
+/// rather than parsing the buffer back; the kernels are still in flight on `stream`, which the
+/// storage retains.
+inline GridStorage
+batchedTopologyStorage(const GridBatchData &batch,
+                       const std::vector<TopologyPassSpec> &passes,
+                       cudaStream_t stream) {
+    TORCH_CHECK(!passes.empty(), "batchedTopologyStorage requires at least one pass");
     BatchedTopologyResult result =
         runBatchedTopologyPass(sourceFromGridBatch(batch), passes[0], stream);
     for (size_t p = 1; p < passes.size(); ++p) {
         result =
             runBatchedTopologyPass(sourceFromResult(result, batch.device()), passes[p], stream);
     }
-    return nanovdb::GridHandle<TorchDeviceBuffer>(std::move(result.buffer));
+    const size_t numGrids = result.leafCounts.size();
+    std::vector<nanovdb::GridHandleMetaData> meta;
+    meta.reserve(numGrids);
+    for (size_t g = 0; g < numGrids; ++g) {
+        meta.push_back(
+            nanovdb::GridHandleMetaData{result.gridByteOffsets[g],
+                                        result.gridByteOffsets[g + 1] - result.gridByteOffsets[g],
+                                        nanovdb::GridType::OnIndex});
+    }
+    return GridStorage(makeDeviceHandleFromLayout(std::move(result.buffer), std::move(meta)),
+                       batch.device());
 }
 
 } // namespace batched
