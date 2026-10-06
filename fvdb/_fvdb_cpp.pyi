@@ -532,6 +532,8 @@ def build_sparse_gaussian_tile_layout(
     num_tiles_w: int,
     num_tiles_h: int,
     pixels_to_render: JaggedTensor,
+    image_width: Optional[int] = ...,
+    image_height: Optional[int] = ...,
 ) -> tuple[torch.Tensor, ...]: ...
 def project_gaussians_ut_fwd(
     means: torch.Tensor,
