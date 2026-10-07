@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <string>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -19,6 +20,52 @@ namespace {
 using ReductionCase = std::tuple<int64_t, torch::ScalarType, bool>;
 
 class GradientReductionTest : public ::testing::TestWithParam<ReductionCase> {};
+
+TEST(GradientReductionValidationTest, RejectsNonzeroStorageOffset) {
+    const int deviceCount = c10::cuda::device_count();
+    if (deviceCount == 0) {
+        GTEST_SKIP() << "CUDA is required for gradient reduction tests";
+    }
+
+    const c10::cuda::CUDAGuard deviceGuard(0);
+    const auto options = torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA, 0);
+    // This view has enough capacity for reduction, but does not start at its storage base.
+    const auto gradient = torch::zeros({deviceCount + 1}, options).narrow(0, 1, deviceCount);
+    const std::vector<torch::Tensor> localGradients(deviceCount, gradient);
+    try {
+        fvdb::detail::reduceGradientShards(localGradients);
+        FAIL() << "Expected a nonzero storage offset to be rejected";
+    } catch (const c10::Error &error) {
+        EXPECT_NE(std::string(error.what_without_backtrace()).find("beginning of its storage"),
+                  std::string::npos);
+    }
+}
+
+TEST(GradientReductionValidationTest, RejectsIncorrectStorageSize) {
+    const int deviceCount = c10::cuda::device_count();
+    if (deviceCount == 0) {
+        GTEST_SKIP() << "CUDA is required for gradient reduction tests";
+    }
+
+    const c10::cuda::CUDAGuard deviceGuard(0);
+    const auto options = torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA, 0);
+    for (const int64_t storageElements: {int64_t{1}, int64_t{deviceCount} + 1}) {
+        if (storageElements == deviceCount) {
+            continue; // A one-element allocation needs no padding on a single device.
+        }
+        SCOPED_TRACE(storageElements);
+        const auto gradient = torch::zeros({storageElements}, options).narrow(0, 0, 1);
+        const std::vector<torch::Tensor> localGradients(deviceCount, gradient);
+        try {
+            fvdb::detail::reduceGradientShards(localGradients);
+            FAIL() << "Expected incorrect padded storage size to be rejected";
+        } catch (const c10::Error &error) {
+            EXPECT_NE(std::string(error.what_without_backtrace())
+                          .find("storage must match the padded reduction size"),
+                      std::string::npos);
+        }
+    }
+}
 
 TEST_P(GradientReductionTest, MatchesIndependentSumAndPreservesLogicalShape) {
     const int deviceCount = c10::cuda::device_count();
@@ -38,7 +85,7 @@ TEST_P(GradientReductionTest, MatchesIndependentSumAndPreservesLogicalShape) {
     const auto shape = torch::zeros({}, options).expand({1, numElements});
     auto expected    = torch::zeros({numElements}, options);
     std::vector<torch::Tensor> localGradients;
-    const int64_t shardSize         = (numElements + deviceCount - 1) / deviceCount;
+    const int64_t shardSize = fvdb::detail::localGradientShardSize(numElements, deviceCount);
     const int64_t paddedNumElements = shardSize * deviceCount;
     for (const auto deviceId: c10::irange(deviceCount)) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
