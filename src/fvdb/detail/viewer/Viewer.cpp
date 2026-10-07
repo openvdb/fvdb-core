@@ -136,10 +136,12 @@ Viewer::~Viewer() {
     mSplat3dViews.clear();
     mCameraViews.clear();
 
+    // The editor releases GPU buffers through the device queue during shutdown.
+    pnanovdb_editor_free(&mEditor.editor);
+
     mEditor.compute.device_interface.destroy_device(mEditor.deviceManager, mEditor.device);
     mEditor.compute.device_interface.destroy_device_manager(mEditor.deviceManager);
 
-    pnanovdb_editor_free(&mEditor.editor);
     pnanovdb_compute_free(&mEditor.compute);
     pnanovdb_compiler_free(&mEditor.compiler);
 }
