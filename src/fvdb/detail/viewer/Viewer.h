@@ -191,6 +191,8 @@ class Viewer {
     };
     int
     port() const {
+        // The editor worker publishes the bound port atomically.
+        // This non-waiting query only reads that value.
         auto editor             = mEditor.editor;
         const auto resolvedPort = editor.get_resolved_port(&editor, PNANOVDB_FALSE);
         return resolvedPort == PNANOVDB_EDITOR_RESOLVED_PORT_PENDING ? mPort : resolvedPort;
