@@ -1,7 +1,19 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 #
-"""Tests for patch and window attention in fvdb.scaled_dot_product_attention."""
+"""
+Tests for patch and window attention in fvdb.scaled_dot_product_attention.
+
+The tests come in three groups:
+
+- Layout tests check the patch padding index maps against a port of Pointcept's function.
+- Impulse-response tests derive every expected output analytically from the definition
+  ``Attention(Q, K, V) = softmax(Q @ K^T * scale) @ V``. With identical keys and one-hot values,
+  each output row equals that query's attention weights, which must be uniform over exactly the
+  keys the mode lets it see. This pins down locality for every mode, in every precision, without
+  a reference implementation.
+- Kernel tests compare random inputs against a per-patch or band-masked math reference.
+"""
 
 import importlib.util
 import unittest
@@ -307,6 +319,161 @@ class TestPatchAttentionKernel(unittest.TestCase):
             out = fvdb.permute_jagged(fvdb.scaled_dot_product_attention(q, k, v, scale, patch_size=64), ser.inv_perm(i))
             ref = _ref_patch_attention(q.jdata, k.jdata, v.jdata, lshape, 64, scale)[ser.inv_perm(i)]
             torch.testing.assert_close(out.jdata.float(), ref, atol=2e-2, rtol=2e-2)
+
+
+# =============================================================================
+# Impulse response
+# =============================================================================
+
+# Head dimension shared by queries, keys and values. Values are one-hot over all tokens, so a test
+# uses at most this many tokens. 128 keeps the flash backward supported on SM80+ GPUs.
+IMPULSE_DIM = 128
+IMPULSE_HEADS = 2
+
+# (forward atol, backward atol, backward rtol) for the kernel dtype. Attention weights are at most 1
+# and are rounded once to the output dtype, so the forward bound is about one ulp at 1.0.
+IMPULSE_TOLERANCES = {
+    torch.bfloat16: (4e-3, 3e-2, 3e-2),
+    torch.float16: (5e-4, 4e-3, 4e-3),
+}
+
+# (name, kwargs, lshape). The lengths cover a sequence shorter than the patch, exactly one patch,
+# an exact multiple, a padded remainder, a single token, and an empty grid between others.
+IMPULSE_CASES = [
+    ("global", dict(), [11, 0, 8, 1, 16, 21]),
+    ("patch8", dict(patch_size=8), [11, 0, 8, 1, 16, 21]),
+    ("patch4", dict(patch_size=4), [6, 13, 0, 3, 9]),
+    ("patch_covers_all", dict(patch_size=32), [11, 0, 8, 1, 16, 21]),
+    ("window4", dict(window_size=4), [11, 0, 8, 1, 16, 21]),
+    ("window5", dict(window_size=5), [11, 0, 8, 1, 16, 21]),
+    ("window_left3", dict(window_size=(3, 0)), [11, 0, 8, 1, 16, 21]),
+    ("window_right3", dict(window_size=(0, 3)), [11, 0, 8, 1, 16, 21]),
+    ("window_causal", dict(window_size=(-1, 0)), [11, 0, 8, 1, 16, 21]),
+    ("window_unbounded_left", dict(window_size=(-1, 2)), [11, 0, 8, 1, 16, 21]),
+]
+IMPULSE_DTYPES = [torch.bfloat16, torch.float16, torch.float32]
+IMPULSE_PARAMS = [[name, kwargs, lshape, dtype] for name, kwargs, lshape in IMPULSE_CASES for dtype in IMPULSE_DTYPES]
+
+
+def _visible_local(i: int, length: int, mode: dict) -> list[int]:
+    """Positions in a sequence of ``length`` that query ``i`` may attend to, from the mode's definition."""
+    patch = mode.get("patch_size", 0)
+    window = mode.get("window_size", 0)
+    if patch > 0:
+        if length <= patch:
+            return list(range(length))
+        start = (i // patch) * patch
+        if start + patch > length:
+            # The padded last patch holds its real tokens plus copies of the tokens just before them,
+            # so it sees the last patch_size tokens of the sequence.
+            return list(range(length - patch, length))
+        return list(range(start, start + patch))
+    if window != 0:
+        left, right = (window // 2, window // 2) if isinstance(window, int) else window
+        lo = 0 if left < 0 else max(0, i - left)
+        hi = length - 1 if right < 0 else min(length - 1, i + right)
+        return list(range(lo, hi + 1))
+    return list(range(length))
+
+
+def _expected_weights(lshape: list[int], mode: dict) -> torch.Tensor:
+    """Attention matrix over all tokens for identical keys: uniform over each query's visible keys."""
+    total = sum(lshape)
+    weights = torch.zeros(total, total, dtype=torch.float64)
+    start = 0
+    for length in lshape:
+        for i in range(length):
+            visible = _visible_local(i, length, mode)
+            weights[start + i, [start + j for j in visible]] = 1.0 / len(visible)
+        start += length
+    return weights
+
+
+@unittest.skipUnless(CAN_RUN_VARLEN, "requires torch.nn.attention.varlen and an SM80+ GPU")
+class TestAttentionImpulseResponse(unittest.TestCase):
+    """
+    Attention impulse response for global, patch and window attention.
+
+    Keys are identical, so every visible key gets the same score whatever the query, and softmax
+    is uniform over the visible keys. Value ``j`` is the one-hot vector ``e_j`` over all tokens of
+    the batch, so output row ``i`` is row ``i`` of the attention matrix. Each test checks that row
+    against weights derived from the mode's definition. Keys a query must not see, including every
+    key in another grid, must get exactly zero weight.
+
+    The backward pass has a closed form for the same inputs. With output ``O = A V`` and output
+    gradient ``dO``:
+
+    - ``dV = A^T dO``.
+    - ``dQ = 0``, because all keys are equal and the query cannot change the weights.
+    - ``dK_j = scale * sum_i A_ij (dO_i . V_j - dO_i . O_i) q_i``.
+    """
+
+    SCALE = 0.25
+
+    def _inputs(self, lshape, dtype, requires_grad=False):
+        total = sum(lshape)
+        self.assertLessEqual(total, IMPULSE_DIM)
+        gen = torch.Generator(device="cuda").manual_seed(0)
+        q = torch.randn(total, IMPULSE_HEADS, IMPULSE_DIM, device="cuda", generator=gen)
+        k = torch.full((total, IMPULSE_HEADS, IMPULSE_DIM), 0.5, device="cuda")
+        v = torch.zeros(total, IMPULSE_HEADS, IMPULSE_DIM, device="cuda")
+        v[torch.arange(total), :, torch.arange(total)] = 1.0
+        leaves = [t.to(dtype).requires_grad_(requires_grad) for t in (q, k, v)]
+        offsets = _offsets(lshape, "cuda")
+        return leaves, [JaggedTensor.from_data_and_offsets(t, offsets) for t in leaves]
+
+    @staticmethod
+    def _kernel_dtype(dtype):
+        return torch.bfloat16 if dtype == torch.float32 else dtype
+
+    @parameterized.expand(IMPULSE_PARAMS)
+    def test_forward_weights(self, name, mode, lshape, dtype):
+        _, (q, k, v) = self._inputs(lshape, dtype)
+        out = fvdb.scaled_dot_product_attention(q, k, v, self.SCALE, **mode)
+        self.assertEqual(out.dtype, dtype)
+        self.assertTrue(torch.equal(out.joffsets, q.joffsets))
+
+        total = sum(lshape)
+        expected = _expected_weights(lshape, mode).cuda()
+        atol = IMPULSE_TOLERANCES[self._kernel_dtype(dtype)][0]
+        for head in range(IMPULSE_HEADS):
+            weights = out.jdata[:, head, :total].double()
+            self.assertTrue(bool((weights[expected == 0] == 0).all()), f"{name}: weight on a hidden key")
+            torch.testing.assert_close(weights, expected, atol=atol, rtol=0)
+            self.assertTrue(bool((out.jdata[:, head, total:] == 0).all()), f"{name}: weight on a padding column")
+
+    @parameterized.expand(IMPULSE_PARAMS)
+    def test_backward_closed_form(self, name, mode, lshape, dtype):
+        leaves, (q, k, v) = self._inputs(lshape, dtype, requires_grad=True)
+        out = fvdb.scaled_dot_product_attention(q, k, v, self.SCALE, **mode)
+        gen = torch.Generator(device="cuda").manual_seed(1)
+        grad_out = torch.randn(out.jdata.shape, device="cuda", generator=gen).to(dtype)
+        out.jdata.backward(grad_out)
+
+        a = _expected_weights(lshape, mode).cuda()
+        q64, v64, d_o = (t.detach().double() for t in (leaves[0], leaves[2], grad_out))
+        _, atol, rtol = IMPULSE_TOLERANCES[self._kernel_dtype(dtype)]
+        dq, dk, dv = (t.grad for t in leaves)
+        assert dq is not None and dk is not None and dv is not None
+        for head in range(IMPULSE_HEADS):
+            v_h, do_h = v64[:, head], d_o[:, head]
+            o_h = a @ v_h
+            d_scores = a * (do_h @ v_h.T - (do_h * o_h).sum(-1, keepdim=True))
+            torch.testing.assert_close(dv[:, head].double(), a.T @ do_h, atol=atol, rtol=rtol, msg=name)
+            torch.testing.assert_close(
+                dq[:, head].double(), torch.zeros_like(q64[:, head]), atol=atol, rtol=0, msg=name
+            )
+            expected_dk = self.SCALE * d_scores.T @ q64[:, head]
+            torch.testing.assert_close(dk[:, head].double(), expected_dk, atol=2 * atol, rtol=rtol, msg=name)
+
+    def test_padded_patch_differs_from_remainder_patch(self):
+        # A sequence of 11 tokens with patch 8: the last three queries see the last 8 tokens with
+        # weight 1/8, not just their own 3 tokens with weight 1/3 as a remainder patch would give.
+        _, (q, k, v) = self._inputs([11], torch.bfloat16)
+        out = fvdb.scaled_dot_product_attention(q, k, v, self.SCALE, patch_size=8)
+        last_rows = out.jdata[8:, 0, :11].float()
+        torch.testing.assert_close(last_rows[:, 3:], torch.full((3, 8), 1 / 8, device="cuda"), atol=4e-3, rtol=0)
+        self.assertTrue(bool((last_rows[:, :3] == 0).all()))
 
 
 if __name__ == "__main__":
