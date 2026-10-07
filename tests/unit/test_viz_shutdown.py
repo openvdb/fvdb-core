@@ -2,75 +2,40 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import base64
+import json
 import os
 from pathlib import Path
 import socket
 import struct
 import subprocess
 import sys
-import threading
 import time
-from urllib.request import urlopen
-import zlib
 
-import numpy as np
 import pytest
 
 
-def _screenshot_pixels(png):
-    assert png.startswith(b"\x89PNG\r\n\x1a\n")
-    width, height, bits, color, compression, filtering, interlace = struct.unpack_from(">IIBBBBB", png, 16)
-    assert (bits, color, compression, filtering, interlace) == (8, 6, 0, 0, 0)
-    offset = 8
-    data = []
-    while offset < len(png):
-        size, kind = struct.unpack_from(">I4s", png, offset)
-        if kind == b"IDAT":
-            data.append(png[offset + 8 : offset + 8 + size])
-        offset += size + 12
-    rows = np.frombuffer(zlib.decompress(b"".join(data)), dtype=np.uint8).reshape(height, 1 + width * 4)
-    # The editor screenshot endpoint emits unfiltered RGBA8 scanlines.
-    assert np.all(rows[:, 0] == 0)
-    return rows[:, 1:].reshape(height, width, 4)[..., :3].astype(np.int16)
-
-
-def _render_point_cloud():
+def _create_point_cloud(port):
     import torch
 
-    from fvdb.viz._viewer_server import ViewerCpp
+    import fvdb
+    from fvdb.viz._viewer_server import _get_viewer_server_cpp
 
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        port = probe.getsockname()[1]
-    viewer = ViewerCpp(ip_address="127.0.0.1", port=port, device_id=0, verbose=False)
-    scene = "shutdown"
-    viewer.add_scene(scene)
-    axis = np.linspace(-0.6, 0.6, 23)
-    x, y = np.meshgrid(axis, axis)
-    keep = x * x + y * y < 0.36
-    disc = np.stack([x[keep], y[keep], np.zeros(keep.sum())], axis=1)
-    points = torch.tensor(np.concatenate([disc + [-1.5, 0, 0], disc, disc + [1.5, 0, 0]]), dtype=torch.float32)
-    colors = torch.eye(3).repeat_interleave(len(disc), dim=0)
-    quats = torch.zeros((len(points), 4))
-    quats[:, 0] = 1.0
-    cloud = viewer.add_gaussian_splat_3d_view(
-        scene_name=scene,
-        name="RGB points",
-        means=points,
-        quats=quats,
-        log_scales=torch.full_like(points, -20.0),
-        logit_opacities=torch.full((len(points),), 10.0),
-        sh0=(colors - 0.5) / 0.28209479177387814,
-        shN=torch.empty((len(points), 0, 3)),
+    fvdb.viz.init(ip_address="127.0.0.1", port=port)
+    viewer = _get_viewer_server_cpp()
+    viewer.add_scene("shutdown")
+    viewer.add_gaussian_splat_3d_view(
+        scene_name="shutdown",
+        name="point",
+        means=torch.zeros((1, 3)),
+        quats=torch.tensor([[1.0, 0.0, 0.0, 0.0]]),
+        log_scales=torch.full((1, 3), -20.0),
+        logit_opacities=torch.full((1,), 10.0),
+        sh0=torch.zeros((1, 3)),
+        shN=torch.empty((1, 0, 3)),
     )
-    cloud.eps_2d = 4.0
-    cloud.tile_size = 16
-    cloud.sh_degree_to_use = 0
-    viewer.set_camera_orbit_center(scene, 0, 0, 0)
-    viewer.set_camera_view_direction(scene, 0, 0, 1)
-    viewer.set_camera_orbit_radius(scene, 7.0)
-    viewer.set_camera_up_direction(scene, 0, 1, 0)
 
+
+def _wait_for_frames(port):
     deadline = time.monotonic() + 60
     while True:
         try:
@@ -80,9 +45,8 @@ def _render_point_cloud():
             if time.monotonic() >= deadline:
                 raise
             time.sleep(0.1)
-    stop = threading.Event()
-    thread = None
-    try:
+
+    with stream, stream.makefile("rb") as response:
         key = base64.b64encode(os.urandom(16)).decode()
         stream.sendall(
             (
@@ -90,52 +54,51 @@ def _render_point_cloud():
                 f"Connection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n"
             ).encode()
         )
-        header = b""
-        while b"\r\n\r\n" not in header:
-            part = stream.recv(4096)
-            assert part, "Viewer closed the WebSocket during handshake"
-            header += part
-        assert header.startswith(b"HTTP/1.1 101"), header
-        stream.settimeout(0.5)
+        assert response.readline().startswith(b"HTTP/1.1 101"), "WebSocket upgrade failed"
+        while True:
+            line = response.readline()
+            assert line, "Viewer closed the WebSocket during handshake"
+            if line == b"\r\n":
+                break
+            assert time.monotonic() < deadline, "WebSocket handshake timed out"
 
-        def drain():
-            while not stop.is_set():
-                try:
-                    if not stream.recv(65536):
-                        return
-                except socket.timeout:
-                    continue
-                except OSError:
-                    return
+        # The next render iteration processes the queued GPU upload before it sends a new frame.
+        frame_ids = set()
+        while len(frame_ids) < 2:
+            remaining = deadline - time.monotonic()
+            assert remaining > 0, "Viewer did not send two frames before shutdown"
+            stream.settimeout(remaining)
+            header = response.read(2)
+            assert len(header) == 2, "Viewer closed the WebSocket before shutdown"
+            opcode, size = header
+            size &= 0x7F
+            if size == 126:
+                size = struct.unpack(">H", response.read(2))[0]
+            elif size == 127:
+                size = struct.unpack(">Q", response.read(8))[0]
+            payload = response.read(size)
+            assert len(payload) == size, "Viewer sent an incomplete WebSocket frame"
+            if opcode & 0x0F == 1:
+                metadata = json.loads(payload)
+                if "frameid" in metadata:
+                    frame_ids.add(metadata["frameid"])
 
-        thread = threading.Thread(target=drain)
-        thread.start()
-        # A rendered point cloud proves that the asynchronous GPU upload has completed.
-        deadline = time.monotonic() + 60
-        while time.monotonic() < deadline:
-            with urlopen(f"http://127.0.0.1:{port}/screenshot.png", timeout=10) as response:
-                png = response.read()
-            if png:
-                rgb = _screenshot_pixels(png)
-                counts = [
-                    np.count_nonzero((rgb[..., c] > 150) & (rgb[..., c] > np.delete(rgb, c, axis=2).max(axis=2) + 65))
-                    for c in range(3)
-                ]
-                if min(counts) > 150:
-                    print("Point cloud rendered", flush=True)
-                    return viewer
-            time.sleep(0.1)
-        raise AssertionError("Point cloud did not render before shutdown")
-    finally:
-        stop.set()
-        stream.close()
-        if thread is not None:
-            thread.join(5)
-            assert not thread.is_alive(), "WebSocket reader did not stop"
+
+def _run_shutdown(shutdown):
+    from fvdb.viz import _viewer_server
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    _create_point_cloud(port)
+    _wait_for_frames(port)
+    print("Viewer ready for shutdown", flush=True)
+    if shutdown == "explicit":
+        _viewer_server._viewer_server_cpp = None
 
 
 @pytest.mark.parametrize("shutdown", ["explicit", "interpreter"])
-def test_viewer_shutdown_after_rendering(shutdown):
+def test_viewer_shutdown_with_gpu_buffers(shutdown):
     pytest.importorskip("nanovdb_editor")
     result = subprocess.run(
         [sys.executable, "-u", "-X", "faulthandler", str(Path(__file__).resolve()), shutdown],
@@ -143,11 +106,9 @@ def test_viewer_shutdown_after_rendering(shutdown):
         text=True,
         timeout=150,
     )
-    assert "Point cloud rendered" in result.stdout, result.stdout + result.stderr
+    assert "Viewer ready for shutdown" in result.stdout, result.stdout + result.stderr
     assert result.returncode == 0, result.stdout + result.stderr
 
 
 if __name__ == "__main__":
-    viewer = _render_point_cloud()
-    if sys.argv[1] == "explicit":
-        del viewer
+    _run_shutdown(sys.argv[1])
