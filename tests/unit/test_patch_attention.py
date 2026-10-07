@@ -11,7 +11,8 @@ The tests come in three groups:
   ``Attention(Q, K, V) = softmax(Q @ K^T * scale) @ V``. With identical keys and one-hot values,
   each output row equals that query's attention weights, which must be uniform over exactly the
   keys the mode lets it see. This pins down locality for every mode, in every precision, without
-  a reference implementation.
+  a reference implementation. Selection impulses add orthonormal keys and point each query at one
+  target key, which must be picked out inside the query's patch or window and ignored outside it.
 - Kernel tests compare random inputs against a per-patch or band-masked math reference.
 """
 
@@ -474,6 +475,154 @@ class TestAttentionImpulseResponse(unittest.TestCase):
         last_rows = out.jdata[8:, 0, :11].float()
         torch.testing.assert_close(last_rows[:, 3:], torch.full((3, 8), 1 / 8, device="cuda"), atol=4e-3, rtol=0)
         self.assertTrue(bool((last_rows[:, :3] == 0).all()))
+
+
+def _selection_targets(lshape: list[int], mode: dict, kind: str) -> list[int]:
+    """Global index of the key each query targets, or -1 for none.
+
+    ``"visible"`` picks the visible key farthest from the query, which for a padded last patch is
+    a key the patch only sees through padding. ``"hidden"`` picks the nearest key the query must
+    not see: just outside its window or patch, or in a neighboring grid when its own grid is
+    entirely visible.
+    """
+    starts = [sum(lshape[:g]) for g in range(len(lshape))]
+    nonempty = [g for g, n in enumerate(lshape) if n > 0]
+    targets = []
+    for g, (start, length) in enumerate(zip(starts, lshape)):
+        others = [h for h in nonempty if h != g]
+        for i in range(length):
+            visible = _visible_local(i, length, mode)
+            if kind == "visible":
+                candidates = [j for j in visible if j != i] or visible
+                j = max(candidates, key=lambda j: (abs(j - i), -j))
+                targets.append(start + j)
+                continue
+            hidden = [j for j in range(length) if j not in visible]
+            if hidden:
+                j = min(hidden, key=lambda j: (abs(j - i), j))
+                targets.append(start + j)
+            elif others:
+                h = min(others, key=lambda h: abs(h - g))
+                targets.append(starts[h])
+            else:
+                targets.append(-1)
+    return targets
+
+
+def _selection_weights(lshape: list[int], mode: dict, targets: list[int], boost: float) -> torch.Tensor:
+    """Attention matrix when query ``i`` scores ``boost`` on key ``targets[i]`` and 0 on all others."""
+    total = sum(lshape)
+    weights = torch.zeros(total, total, dtype=torch.float64)
+    start = 0
+    for length in lshape:
+        for i in range(length):
+            visible = [start + j for j in _visible_local(i, length, mode)]
+            row = torch.ones(len(visible), dtype=torch.float64)
+            t = targets[start + i]
+            if t in visible:
+                row[visible.index(t)] = torch.exp(torch.tensor(boost, dtype=torch.float64))
+            weights[start + i, visible] = row / row.sum()
+        start += length
+    return weights
+
+
+@unittest.skipUnless(CAN_RUN_VARLEN, "requires torch.nn.attention.varlen and an SM80+ GPU")
+class TestAttentionSelectionImpulse(unittest.TestCase):
+    """
+    Selection impulse for global, patch and window attention.
+
+    Key ``j`` is the standard basis vector ``e_j``, so keys are exactly orthonormal in every
+    precision. Query ``i`` is ``alpha * e_t`` for one target token ``t``, so it scores
+    ``a = alpha * scale`` on key ``t`` and exactly 0 on every other key. Values are one-hot as in
+    :class:`TestAttentionImpulseResponse`, so each output row is that query's attention weights.
+
+    If ``t`` is visible to query ``i``, with ``n`` visible keys in total, key ``t`` gets weight
+    ``e^a / (e^a + n - 1)`` and every other visible key gets ``1 / (e^a + n - 1)``. If ``t`` is
+    hidden, it gets exactly zero weight and the row stays uniform over the visible keys. Unlike the
+    uniform-key tests, this exercises the score path: a query must pick out its target key inside
+    its own patch or window and must ignore a target just outside it.
+
+    The backward pass is checked against the general closed form, with
+    ``dS_ij = A_ij (dO_i . V_j - dO_i . O_i)``: ``dV = A^T dO``, ``dQ = scale * dS K`` and
+    ``dK = scale * dS^T Q``.
+    """
+
+    SCALE = 0.5
+    ALPHA = 4.0  # boost a = 2, so a visible target takes most but not all of the weight
+
+    def _inputs(self, lshape, targets, dtype, requires_grad=False):
+        total = sum(lshape)
+        self.assertLessEqual(total, IMPULSE_DIM)
+        eye = torch.eye(total, IMPULSE_DIM, device="cuda")
+        q = torch.zeros(total, IMPULSE_DIM, device="cuda")
+        rows = [i for i, t in enumerate(targets) if t >= 0]
+        q[rows] = self.ALPHA * eye[[targets[i] for i in rows]]
+        tensors = [t[:, None, :].expand(-1, IMPULSE_HEADS, -1).contiguous() for t in (q, eye, eye)]
+        leaves = [t.to(dtype).requires_grad_(requires_grad) for t in tensors]
+        offsets = _offsets(lshape, "cuda")
+        return leaves, [JaggedTensor.from_data_and_offsets(t, offsets) for t in leaves]
+
+    @staticmethod
+    def _kernel_dtype(dtype):
+        return torch.bfloat16 if dtype == torch.float32 else dtype
+
+    @parameterized.expand([[kind, *params] for kind in ("visible", "hidden") for params in IMPULSE_PARAMS])
+    def test_forward_selection(self, kind, name, mode, lshape, dtype):
+        targets = _selection_targets(lshape, mode, kind)
+        _, (q, k, v) = self._inputs(lshape, targets, dtype)
+        out = fvdb.scaled_dot_product_attention(q, k, v, self.SCALE, **mode)
+
+        total = sum(lshape)
+        expected = _selection_weights(lshape, mode, targets, self.ALPHA * self.SCALE).cuda()
+        target_weight = expected[torch.arange(total), torch.tensor(targets).clamp(min=0)]
+        if kind == "visible":
+            self.assertTrue(bool((target_weight > expected.max(1).values - 1e-12).all()), f"{name}: bad targets")
+        atol = IMPULSE_TOLERANCES[self._kernel_dtype(dtype)][0]
+        for head in range(IMPULSE_HEADS):
+            weights = out.jdata[:, head, :total].double()
+            self.assertTrue(bool((weights[expected == 0] == 0).all()), f"{name}/{kind}: weight on a hidden key")
+            torch.testing.assert_close(weights, expected, atol=atol, rtol=0, msg=f"{name}/{kind}")
+
+    @parameterized.expand([[kind, *params] for kind in ("visible", "hidden") for params in IMPULSE_PARAMS])
+    def test_backward_selection(self, kind, name, mode, lshape, dtype):
+        targets = _selection_targets(lshape, mode, kind)
+        leaves, (q, k, v) = self._inputs(lshape, targets, dtype, requires_grad=True)
+        out = fvdb.scaled_dot_product_attention(q, k, v, self.SCALE, **mode)
+        gen = torch.Generator(device="cuda").manual_seed(2)
+        grad_out = torch.randn(out.jdata.shape, device="cuda", generator=gen).to(dtype)
+        out.jdata.backward(grad_out)
+
+        a = _selection_weights(lshape, mode, targets, self.ALPHA * self.SCALE).cuda()
+        q64, k64, v64, d_o = (t.detach().double() for t in (*leaves, grad_out))
+        _, atol, rtol = IMPULSE_TOLERANCES[self._kernel_dtype(dtype)]
+        grads = [t.grad for t in leaves]
+        assert all(g is not None for g in grads)
+        dq, dk, dv = (g.double() for g in grads if g is not None)
+        for head in range(IMPULSE_HEADS):
+            v_h, do_h = v64[:, head], d_o[:, head]
+            d_scores = a * (do_h @ v_h.T - (do_h * (a @ v_h)).sum(-1, keepdim=True))
+            msg = f"{name}/{kind}"
+            torch.testing.assert_close(dv[:, head], a.T @ do_h, atol=atol, rtol=rtol, msg=msg)
+            torch.testing.assert_close(dq[:, head], self.SCALE * d_scores @ k64[:, head], atol=atol, rtol=rtol, msg=msg)
+            torch.testing.assert_close(
+                dk[:, head], self.SCALE * d_scores.T @ q64[:, head], atol=2 * atol, rtol=rtol, msg=msg
+            )
+
+    def test_padded_patch_selects_padding_key(self):
+        # 11 tokens, patch 8: the last patch sees tokens 3-10. Token 3 reaches it only through
+        # padding, and token 2 not at all.
+        lshape, mode = [11], dict(patch_size=8)
+        for target, visible in ((3, True), (2, False)):
+            targets = [-1] * 8 + [target] * 3
+            _, (q, k, v) = self._inputs(lshape, targets, torch.bfloat16)
+            out = fvdb.scaled_dot_product_attention(q, k, v, self.SCALE, **mode).jdata[8:, 0, :11].float()
+            boost = torch.exp(torch.tensor(self.ALPHA * self.SCALE)).item()
+            expected = torch.zeros(3, 11, device="cuda")
+            expected[:, 3:] = 1.0
+            if visible:
+                expected[:, target] = boost
+            expected /= expected.sum(1, keepdim=True)
+            torch.testing.assert_close(out, expected, atol=4e-3, rtol=0)
 
 
 if __name__ == "__main__":
