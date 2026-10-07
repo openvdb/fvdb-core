@@ -21,11 +21,13 @@ Components:
 - :class:`PointTransformerV3Block`: position encoding, attention and MLP with residuals.
 - :class:`SerializedPooling` / :class:`SerializedUnpooling`: resolution changes by a factor of 2.
 - :class:`PointTransformerV3Embedding`: input stem.
+- :class:`PointTransformerV3`: the full encoder-decoder network.
 """
 
 from __future__ import annotations
 
-from typing import Literal
+from collections.abc import Sequence
+from typing import Literal, cast
 
 import torch
 import torch.nn as nn
@@ -37,6 +39,7 @@ from fvdb import (
     JaggedTensor,
     permute_jagged,
     scaled_dot_product_attention,
+    serialize,
 )
 
 from .modules import BatchNorm, DropPath, SparseConv3d, _trace_fvdb_nn_forward
@@ -425,3 +428,234 @@ class PointTransformerV3Embedding(nn.Module):
         else:
             data = self.stem(data)
         return self.act(self.norm(data, grid))
+
+
+class _Stage(nn.Module):
+    """One resolution level: an optional resolution change followed by blocks."""
+
+    resample: nn.Module | None
+
+    def __init__(self, resample: nn.Module | None, blocks: list[PointTransformerV3Block]) -> None:
+        super().__init__()
+        self.resample = resample
+        self.blocks = nn.ModuleList(blocks)
+
+    def run_blocks(
+        self, data: JaggedTensor, serialization: GridSerialization, cpe_plan: ConvolutionPlan | None
+    ) -> JaggedTensor:
+        for block in self.blocks:
+            data = block(data, serialization, cpe_plan)
+        return data
+
+
+def _as_tuple(value, name: str, length: int) -> tuple:
+    values = tuple(value) if isinstance(value, (list, tuple)) else (value,) * length
+    if len(values) != length:
+        raise ValueError(f"{name} must have {length} entries, got {len(values)}")
+    return values
+
+
+@_trace_fvdb_nn_forward
+class PointTransformerV3(nn.Module):
+    """
+    Point Transformer V3 encoder-decoder for sparse voxel grids.
+
+    The model embeds input features, runs an encoder of serialized-attention stages separated by
+    pooling, and, unless ``cls_mode`` is set, a decoder that unpools back to the input grid with
+    skip connections. Argument names and defaults follow Pointcept's ``PT-v3m1`` with its ScanNet
+    semantic segmentation config, so Pointcept configs port directly.
+
+    Serialization follows Pointcept. Orders are shuffled at the input when ``shuffle_orders`` is
+    set and after every pooling when ``shuffle_pooled_orders`` is set, in training and evaluation.
+    Pooled levels continue the curves of the input level. For orderings and pooling clusters that
+    match Pointcept exactly, build the grid from coordinates whose minimum is 0 in every grid, as
+    Pointcept's ``grid_coord`` is.
+
+    Patch and window attention need PyTorch 2.11 or newer and an SM80+ GPU (see
+    :func:`fvdb.scaled_dot_product_attention`). Set every patch size to ``0`` for global attention
+    within each grid.
+
+    Args:
+        in_channels (int): Input feature channels. Default: ``6``.
+        order (str | Sequence[str]): Serialization orders from :data:`fvdb.SERIALIZATION_ORDERS`.
+            Block ``i`` of each stage uses order ``i % len(order)``.
+            Default: ``("z", "z-trans", "hilbert", "hilbert-trans")``.
+        stride (Sequence[int]): Pooling stride between consecutive encoder stages, each a power of
+            two. Default: ``(2, 2, 2, 2)``.
+        enc_depths (Sequence[int]): Blocks per encoder stage. Default: ``(2, 2, 2, 6, 2)``.
+        enc_channels (Sequence[int]): Channels per encoder stage. Default: ``(32, 64, 128, 256, 512)``.
+        enc_num_head (Sequence[int]): Attention heads per encoder stage. Default: ``(2, 4, 8, 16, 32)``.
+        enc_patch_size (int | Sequence[int]): Patch size per encoder stage. Default: ``1024``.
+        dec_depths (Sequence[int]): Blocks per decoder stage, from shallow to deep.
+            Default: ``(2, 2, 2, 2)``.
+        dec_channels (Sequence[int]): Channels per decoder stage, from shallow to deep.
+            Default: ``(64, 64, 128, 256)``.
+        dec_num_head (Sequence[int]): Attention heads per decoder stage. Default: ``(4, 4, 8, 16)``.
+        dec_patch_size (int | Sequence[int]): Patch size per decoder stage. Default: ``1024``.
+        mlp_ratio (float): MLP hidden width relative to the channels. Default: ``4.0``.
+        qkv_bias (bool): Add a bias to the query, key and value projections. Default: ``True``.
+        qk_scale (float | None): Attention scale. ``None`` uses ``head_dim ** -0.5``. Default: ``None``.
+        attn_drop (float): Attention dropout. Only ``0`` is supported, because the fused attention
+            kernels have no dropout. Default: ``0.0``.
+        proj_drop (float): Dropout after projections. Default: ``0.0``.
+        drop_path (float): Largest stochastic depth rate; rates rise linearly over the blocks.
+            Default: ``0.3``.
+        pre_norm (bool): Normalize before attention and the MLP. Default: ``True``.
+        shuffle_orders (bool): Shuffle the orders at the input level. Default: ``True``.
+        shuffle_pooled_orders (bool): Shuffle the orders after each pooling, as Pointcept always
+            does. Default: ``True``.
+        cls_mode (bool): Build only the encoder and return features on the coarsest grid.
+            Default: ``False``.
+        window_size (int): If positive, use window attention of this size in every block instead
+            of patch attention. Default: ``0``.
+        embedding_mode (str): ``"conv"`` for the kernel-5 submanifold stem, or ``"linear"``.
+            Default: ``"conv"``.
+        norm (str): Norm for the stem, pooling and unpooling: ``"batch"`` as in Pointcept, or
+            ``"layer"``. Blocks always use layer norm. Default: ``"batch"``.
+        cpe_conv (bool): Include the sparse convolution in the position encoding. Default: ``True``.
+    """
+
+    def __init__(
+        self,
+        in_channels: int = 6,
+        order: str | Sequence[str] = ("z", "z-trans", "hilbert", "hilbert-trans"),
+        stride: Sequence[int] = (2, 2, 2, 2),
+        enc_depths: Sequence[int] = (2, 2, 2, 6, 2),
+        enc_channels: Sequence[int] = (32, 64, 128, 256, 512),
+        enc_num_head: Sequence[int] = (2, 4, 8, 16, 32),
+        enc_patch_size: int | Sequence[int] = 1024,
+        dec_depths: Sequence[int] = (2, 2, 2, 2),
+        dec_channels: Sequence[int] = (64, 64, 128, 256),
+        dec_num_head: Sequence[int] = (4, 4, 8, 16),
+        dec_patch_size: int | Sequence[int] = 1024,
+        mlp_ratio: float = 4.0,
+        qkv_bias: bool = True,
+        qk_scale: float | None = None,
+        attn_drop: float = 0.0,
+        proj_drop: float = 0.0,
+        drop_path: float = 0.3,
+        pre_norm: bool = True,
+        shuffle_orders: bool = True,
+        shuffle_pooled_orders: bool = True,
+        cls_mode: bool = False,
+        window_size: int = 0,
+        embedding_mode: Literal["conv", "linear"] = "conv",
+        norm: NormKind = "batch",
+        cpe_conv: bool = True,
+    ) -> None:
+        super().__init__()
+        if attn_drop != 0.0:
+            raise ValueError("attn_drop > 0 is not supported: the fused attention kernels have no dropout")
+        num_stages = len(enc_depths)
+        if len(stride) != num_stages - 1:
+            raise ValueError(f"stride must have {num_stages - 1} entries, got {len(stride)}")
+        for s in stride:
+            if s < 2 or s & (s - 1):
+                raise ValueError(f"Each stride must be a power of two, got {s}")
+        enc_channels = _as_tuple(enc_channels, "enc_channels", num_stages)
+        enc_num_head = _as_tuple(enc_num_head, "enc_num_head", num_stages)
+        enc_patch_size = _as_tuple(enc_patch_size, "enc_patch_size", num_stages)
+        dec_patch_sizes: tuple[int, ...] = ()
+        if not cls_mode:
+            dec_depths = _as_tuple(dec_depths, "dec_depths", num_stages - 1)
+            dec_channels = _as_tuple(dec_channels, "dec_channels", num_stages - 1)
+            dec_num_head = _as_tuple(dec_num_head, "dec_num_head", num_stages - 1)
+            dec_patch_sizes = _as_tuple(dec_patch_size, "dec_patch_size", num_stages - 1)
+
+        self.order = (order,) if isinstance(order, str) else tuple(order)
+        self.stride = tuple(stride)
+        self.shuffle_orders = shuffle_orders
+        self.shuffle_pooled_orders = shuffle_pooled_orders
+        self.cls_mode = cls_mode
+        self.cpe_conv = cpe_conv
+        self.embedding = PointTransformerV3Embedding(in_channels, enc_channels[0], mode=embedding_mode, norm=norm)
+
+        def make_block(channels: int, heads: int, patch: int, path: float, index: int) -> PointTransformerV3Block:
+            return PointTransformerV3Block(
+                channels,
+                heads,
+                patch_size=0 if window_size > 0 else patch,
+                window_size=window_size,
+                mlp_ratio=mlp_ratio,
+                qkv_bias=qkv_bias,
+                qk_scale=qk_scale,
+                proj_drop=proj_drop,
+                drop_path=path,
+                order_index=index % len(self.order),
+                pre_norm=pre_norm,
+                cpe_conv=cpe_conv,
+            )
+
+        enc_rates = [float(r) for r in torch.linspace(0, drop_path, sum(enc_depths))]
+        self.enc = nn.ModuleList()
+        for s in range(num_stages):
+            rates = enc_rates[sum(enc_depths[:s]) : sum(enc_depths[: s + 1])]
+            down = (
+                SerializedPooling(enc_channels[s - 1], enc_channels[s], stride=stride[s - 1], norm=norm)
+                if s > 0
+                else None
+            )
+            blocks = [
+                make_block(enc_channels[s], enc_num_head[s], enc_patch_size[s], rates[i], i)
+                for i in range(enc_depths[s])
+            ]
+            self.enc.append(_Stage(down, blocks))
+
+        # Decoder stages run from deep to shallow; dec_* arguments are indexed shallow to deep.
+        self.dec = nn.ModuleList()
+        if not cls_mode:
+            dec_rates = [float(r) for r in torch.linspace(0, drop_path, sum(dec_depths))]
+            channels = list(dec_channels) + [enc_channels[-1]]
+            for s in reversed(range(num_stages - 1)):
+                rates = dec_rates[sum(dec_depths[:s]) : sum(dec_depths[: s + 1])][::-1]
+                up = SerializedUnpooling(channels[s + 1], enc_channels[s], channels[s], stride=stride[s], norm=norm)
+                blocks = [
+                    make_block(channels[s], dec_num_head[s], dec_patch_sizes[s], rates[i], i)
+                    for i in range(dec_depths[s])
+                ]
+                self.dec.append(_Stage(up, blocks))
+
+    def _cpe_plan(self, grid: GridBatch) -> ConvolutionPlan | None:
+        if not self.cpe_conv:
+            return None
+        return ConvolutionPlan.from_grid_batch(kernel_size=3, stride=1, source_grid=grid, target_grid=grid)
+
+    def forward(self, data: JaggedTensor, grid: GridBatch) -> tuple[JaggedTensor, GridBatch]:
+        """
+        Run the network.
+
+        The output lives on ``grid`` with ``dec_channels[0]`` channels, or in ``cls_mode`` on the
+        coarsest grid with ``enc_channels[-1]`` channels.
+
+        Args:
+            data (JaggedTensor): Input features on ``grid``. Shape: ``(batch_size, num_voxels, in_channels)``.
+            grid (GridBatch): The input grid.
+
+        Returns:
+            result (JaggedTensor): Output features.
+            out_grid (GridBatch): The grid of ``result``.
+        """
+        serialization = serialize(grid, self.order, shuffle=self.shuffle_orders)
+        stem_plan = None
+        if self.embedding.mode == "conv":
+            k = self.embedding.kernel_size
+            stem_plan = ConvolutionPlan.from_grid_batch(kernel_size=k, stride=1, source_grid=grid, target_grid=grid)
+        data = self.embedding(data, grid, stem_plan)
+
+        skips: list[tuple[JaggedTensor, GridBatch, GridSerialization, ConvolutionPlan | None]] = []
+        cpe_plan = None
+        for s, stage in enumerate(cast(Sequence[_Stage], self.enc)):
+            if stage.resample is not None:
+                skips.append((data, grid, serialization, cpe_plan))
+                data, coarse = stage.resample(data, grid)
+                serialization = serialization.pooled(coarse, self.stride[s - 1], shuffle=self.shuffle_pooled_orders)
+                grid = coarse
+            cpe_plan = self._cpe_plan(grid)
+            data = stage.run_blocks(data, serialization, cpe_plan)
+
+        for stage in cast(Sequence[_Stage], self.dec):
+            assert stage.resample is not None
+            skip_data, skip_grid, serialization, cpe_plan = skips.pop()
+            data, grid = stage.resample(data, grid, skip_data, skip_grid)
+            data = stage.run_blocks(data, serialization, cpe_plan)
+        return data, grid
