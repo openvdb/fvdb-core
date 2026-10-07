@@ -517,6 +517,58 @@ class SparseConvTranspose3d(_SparseConv3dBase):
 
 
 @_trace_fvdb_nn_forward
+class DropPath(nn.Module):
+    """
+    Stochastic depth for residual branches over a :class:`JaggedTensor`.
+
+    During training, zeroes the input with probability ``drop_prob`` and scales the kept values
+    by ``1 / (1 - drop_prob)``. In evaluation mode, or when ``drop_prob`` is ``0``, the input is
+    returned unchanged.
+
+    By default each row (voxel) is dropped independently, which matches how Point Transformer V3
+    applies ``timm.layers.DropPath`` to its flat feature tensor. With ``per_sample=True`` each
+    batch element is dropped as a whole, which is the usual stochastic-depth definition.
+
+    Args:
+        drop_prob (float): Probability of dropping. Default: ``0.0``.
+        per_sample (bool): Drop whole batch elements instead of single rows. Default: ``False``.
+    """
+
+    def __init__(self, drop_prob: float = 0.0, per_sample: bool = False) -> None:
+        super().__init__()
+        if not 0.0 <= drop_prob < 1.0:
+            raise ValueError(f"drop_prob must be in [0, 1), got {drop_prob}")
+        self.drop_prob = drop_prob
+        self.per_sample = per_sample
+
+    def extra_repr(self) -> str:
+        """Return the layer configuration shown in the module representation."""
+        return f"drop_prob={self.drop_prob}, per_sample={self.per_sample}"
+
+    def forward(self, data: JaggedTensor) -> JaggedTensor:
+        """
+        Randomly drop rows or batch elements of ``data``.
+
+        Args:
+            data (JaggedTensor): Input features. Shape: ``(batch_size, num_elements, *)``.
+
+        Returns:
+            result (JaggedTensor): Features with dropped entries zeroed and kept entries rescaled.
+        """
+        if not self.training or self.drop_prob == 0.0:
+            return data
+        keep_prob = 1.0 - self.drop_prob
+        x = data.jdata
+        if self.per_sample:
+            keep = torch.rand(data.num_tensors, device=x.device) < keep_prob
+            keep = keep[data.jidx.long()] if data.num_tensors > 1 else keep.expand(x.shape[0])
+        else:
+            keep = torch.rand(x.shape[0], device=x.device) < keep_prob
+        mask = keep.to(x.dtype).view(-1, *([1] * (x.dim() - 1)))
+        return data.jagged_like(x * mask / keep_prob)
+
+
+@_trace_fvdb_nn_forward
 class GroupNorm(nn.GroupNorm):
     """
     Applies Group Normalization over a :class:`JaggedTensor` batch of features associated with a :class:`GridBatch`.

@@ -6,6 +6,7 @@
 from .modules import (
     AvgPool,
     BatchNorm,
+    DropPath,
     GroupNorm,
     MaxPool,
     Prune,
@@ -13,6 +14,14 @@ from .modules import (
     SparseConvTranspose3d,
     SyncBatchNorm,
     UpsamplingNearest,
+)
+from .point_transformer_v3 import (
+    ConditionalPositionEncoding,
+    PointTransformerV3Block,
+    PointTransformerV3Embedding,
+    SerializedAttention,
+    SerializedPooling,
+    SerializedUnpooling,
 )
 from .simple_unet import (
     SimpleUNet,
@@ -29,9 +38,16 @@ from .simple_unet import (
 __all__ = [
     "AvgPool",
     "BatchNorm",
+    "ConditionalPositionEncoding",
+    "DropPath",
     "GroupNorm",
     "MaxPool",
+    "PointTransformerV3Block",
+    "PointTransformerV3Embedding",
     "Prune",
+    "SerializedAttention",
+    "SerializedPooling",
+    "SerializedUnpooling",
     "SimpleUNet",
     "SimpleUNetBasicBlock",
     "SimpleUNetBottleneck",

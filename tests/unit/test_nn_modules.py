@@ -358,6 +358,48 @@ class TestNNModules(unittest.TestCase):
             conv(features, plan)
 
     # =========================================================================
+    # DropPath
+    # =========================================================================
+
+    @expand_tests(all_device_dtype_combos)
+    def test_drop_path_identity_in_eval_and_at_zero(self, device, dtype):
+        grid = self._make_dense_grid(device, batch_size=2, shape=(4, 4, 4))
+        data = self._make_features(grid, 3, device, dtype)
+        self.assertIs(fvnn.DropPath(0.0)(data), data)
+        module = fvnn.DropPath(0.5).eval()
+        self.assertIs(module(data), data)
+
+    @expand_tests(all_device_dtype_combos)
+    def test_drop_path_per_row(self, device, dtype):
+        grid = self._make_dense_grid(device, batch_size=2, shape=(8, 8, 8))
+        data = self._make_features(grid, 3, device, dtype)
+        out = fvnn.DropPath(0.25)(data)
+        self.assertTrue(torch.equal(out.joffsets, data.joffsets))
+        dropped = (out.jdata == 0).all(dim=1)
+        kept = ~dropped
+        torch.testing.assert_close(out.jdata[kept], data.jdata[kept] / 0.75)
+        self.assertTrue(0 < int(dropped.sum()) < data.jdata.shape[0])
+
+    @expand_tests(all_device_dtype_combos)
+    def test_drop_path_per_sample(self, device, dtype):
+        torch.manual_seed(3)
+        grid = self._make_dense_grid(device, batch_size=6, shape=(3, 3, 3))
+        data = self._make_features(grid, 2, device, dtype)
+        out = fvnn.DropPath(0.5, per_sample=True)(data)
+        for x, y in zip(data.unbind(), out.unbind()):
+            dropped = bool((y == 0).all())
+            if not dropped:
+                torch.testing.assert_close(y, x / 0.5)
+
+        single = self._make_features(self._make_dense_grid(device, batch_size=1, shape=(3, 3, 3)), 2, device, dtype)
+        out = fvnn.DropPath(0.5, per_sample=True)(single).jdata
+        self.assertTrue(bool((out == 0).all()) or torch.allclose(out, single.jdata / 0.5))
+
+    def test_drop_path_invalid_probability(self):
+        with self.assertRaises(ValueError):
+            fvnn.DropPath(1.0)
+
+    # =========================================================================
     # GroupNorm
     # =========================================================================
 
