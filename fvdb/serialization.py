@@ -233,26 +233,24 @@ class GridSerialization:
 
     Build with :func:`serialize`. Every attention block at one resolution level shares this
     object and selects an order by index, so the permutations are computed once per level.
-
-    Attributes:
-        orders (tuple[str, ...]): Order names, in their current (possibly shuffled) sequence.
-        perms (tuple[torch.Tensor, ...]): Per-order permutations, each of shape ``(total_voxels,)``.
-        inv_perms (tuple[torch.Tensor, ...]): Per-order inverse permutations.
-        codes (tuple[torch.Tensor, ...] | None): Per-order curve codes, if requested.
-        joffsets (torch.Tensor): Offsets of the grid batch these permutations belong to.
-        depth (int): Curve depth of the finest level.
-        code_shift (int): Number of halvings from the finest level to this grid.
-        offset_mode (str): Coordinate offset mode used for the codes.
     """
 
     orders: tuple[str, ...]
+    """Order names, in their current (possibly shuffled) sequence."""
     perms: tuple[torch.Tensor, ...]
+    """Per-order permutations, each of shape ``(total_voxels,)``."""
     inv_perms: tuple[torch.Tensor, ...]
+    """Per-order inverse permutations."""
     codes: tuple[torch.Tensor, ...] | None
+    """Per-order curve codes, if requested."""
     joffsets: torch.Tensor
+    """Offsets of the grid batch these permutations belong to."""
     depth: int
+    """Curve depth of the finest level."""
     code_shift: int
+    """Number of halvings from the finest level to this grid."""
     offset_mode: OffsetMode
+    """Coordinate offset mode used for the codes."""
 
     def __len__(self) -> int:
         return len(self.orders)
