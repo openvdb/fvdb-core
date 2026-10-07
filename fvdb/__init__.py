@@ -71,6 +71,15 @@ from .grid import Grid
 from .grid_batch import GridBatch, gcat
 from .grid import Grid
 from .attention import scaled_dot_product_attention
+from .serialization import (
+    SERIALIZATION_ORDERS,
+    GridSerialization,
+    permute_jagged,
+    serialization_codes,
+    serialization_depth,
+    serialization_perm,
+    serialize,
+)
 
 
 from .convolution_plan import (
@@ -165,6 +174,14 @@ __all__ = [
     # Morton/Hilbert operations
     "morton",
     "hilbert",
+    # Space-filling-curve serialization
+    "SERIALIZATION_ORDERS",
+    "GridSerialization",
+    "permute_jagged",
+    "serialization_codes",
+    "serialization_depth",
+    "serialization_perm",
+    "serialize",
     # Specialized operations
     "scaled_dot_product_attention",
     "volume_render",
