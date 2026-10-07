@@ -17,6 +17,7 @@ from .modules import (
 )
 from .point_transformer_v3 import (
     ConditionalPositionEncoding,
+    PointTransformerV3,
     PointTransformerV3Block,
     PointTransformerV3Embedding,
     SerializedAttention,
@@ -42,6 +43,7 @@ __all__ = [
     "DropPath",
     "GroupNorm",
     "MaxPool",
+    "PointTransformerV3",
     "PointTransformerV3Block",
     "PointTransformerV3Embedding",
     "Prune",

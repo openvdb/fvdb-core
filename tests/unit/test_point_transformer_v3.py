@@ -225,5 +225,116 @@ class TestPointTransformerV3Block(unittest.TestCase):
             self.assertTrue(bool(torch.isfinite(param.grad).all()), name)
 
 
+SMALL_CONFIG = dict(
+    in_channels=4,
+    order=("z", "hilbert-trans"),
+    stride=(2, 2),
+    enc_depths=(1, 1, 1),
+    enc_channels=(8, 16, 32),
+    enc_num_head=(1, 2, 4),
+    enc_patch_size=16,
+    dec_depths=(1, 1),
+    dec_channels=(8, 16),
+    dec_num_head=(1, 2),
+    dec_patch_size=16,
+    drop_path=0.1,
+)
+
+
+@unittest.skipUnless(CUDA, "requires CUDA")
+class TestPointTransformerV3(unittest.TestCase):
+    def setUp(self):
+        torch.manual_seed(0)
+        self.grid = _make_grid([400, 0, 250, 3], "cuda", extent=20)
+        self.data = _features(self.grid, 4)
+
+    def _check_backward(self, model, out):
+        out.jdata.square().mean().backward()
+        for name, param in model.named_parameters():
+            self.assertIsNotNone(param.grad, name)
+            assert param.grad is not None
+            self.assertTrue(bool(torch.isfinite(param.grad).all()), name)
+
+    def _check_output(self, out, out_grid, channels):
+        self.assertIs(out_grid, self.grid)
+        self.assertTrue(torch.equal(out.joffsets, self.data.joffsets))
+        self.assertEqual(out.jdata.shape, (self.grid.total_voxels, channels))
+        self.assertTrue(bool(torch.isfinite(out.jdata).all()))
+
+    @unittest.skipUnless(CAN_RUN_VARLEN, "requires torch.nn.attention.varlen and an SM80+ GPU")
+    def test_patch_attention_forward_backward(self):
+        model = fvnn.PointTransformerV3(**SMALL_CONFIG).cuda()
+        out, out_grid = model(self.data, self.grid)
+        self._check_output(out, out_grid, 8)
+        self._check_backward(model, out)
+
+    @unittest.skipUnless(CAN_RUN_VARLEN, "requires torch.nn.attention.varlen and an SM80+ GPU")
+    def test_window_attention(self):
+        model = fvnn.PointTransformerV3(**SMALL_CONFIG, window_size=8).cuda()
+        self.assertEqual(model.enc[0].blocks[0].attn.window_size, 8)
+        self.assertEqual(model.enc[0].blocks[0].attn.patch_size, 0)
+        out, out_grid = model(self.data, self.grid)
+        self._check_output(out, out_grid, 8)
+        self._check_backward(model, out)
+
+    def test_global_attention_float32_backward(self):
+        config = dict(SMALL_CONFIG, enc_patch_size=0, dec_patch_size=0)
+        model = fvnn.PointTransformerV3(**config).cuda()
+        out, out_grid = model(self.data, self.grid)
+        self._check_output(out, out_grid, 8)
+        self._check_backward(model, out)
+
+    def test_linear_stem_layer_norm_without_cpe_conv(self):
+        # The configuration fvdb-examples compared against its modified Pointcept model.
+        config = dict(SMALL_CONFIG, enc_patch_size=0, dec_patch_size=0, order=("z",))
+        model = fvnn.PointTransformerV3(**config, embedding_mode="linear", norm="layer", cpe_conv=False).cuda()
+        self.assertIsNone(model.enc[0].blocks[0].cpe.conv)
+        out, out_grid = model(self.data, self.grid)
+        self._check_output(out, out_grid, 8)
+
+    def test_cls_mode_returns_coarsest_grid(self):
+        config = dict(SMALL_CONFIG, enc_patch_size=0)
+        model = fvnn.PointTransformerV3(**config, cls_mode=True).cuda()
+        self.assertEqual(len(model.dec), 0)
+        out, out_grid = model(self.data, self.grid)
+        expected = self.grid.coarsened_grid(2).coarsened_grid(2)
+        self.assertTrue(torch.equal(out_grid.ijk.jdata, expected.ijk.jdata))
+        self.assertEqual(out.jdata.shape, (expected.total_voxels, 32))
+
+    def test_eval_is_deterministic_without_shuffling(self):
+        config = dict(SMALL_CONFIG, enc_patch_size=0, dec_patch_size=0)
+        model = fvnn.PointTransformerV3(**config, shuffle_orders=False, shuffle_pooled_orders=False).cuda().eval()
+        with torch.no_grad():
+            first, _ = model(self.data, self.grid)
+            second, _ = model(self.data, self.grid)
+        self.assertTrue(torch.equal(first.jdata, second.jdata))
+
+    @unittest.skipUnless(CAN_RUN_VARLEN, "requires torch.nn.attention.varlen and an SM80+ GPU")
+    def test_autocast_bfloat16(self):
+        model = fvnn.PointTransformerV3(**SMALL_CONFIG).cuda()
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            out, _ = model(self.data, self.grid)
+        self.assertTrue(bool(torch.isfinite(out.jdata.float()).all()))
+        self._check_backward(model, out.jagged_like(out.jdata.float()))
+
+    def test_default_config_builds(self):
+        model = fvnn.PointTransformerV3()
+        self.assertEqual(len(model.enc), 5)
+        self.assertEqual(len(model.dec), 4)
+        self.assertEqual([len(stage.blocks) for stage in model.enc], [2, 2, 2, 6, 2])
+        self.assertEqual(model.order, ("z", "z-trans", "hilbert", "hilbert-trans"))
+
+    def test_invalid_configs(self):
+        # fvdb-examples' PTV3 defaults: four encoder depths but five channel entries.
+        with self.assertRaisesRegex(ValueError, "enc_channels"):
+            fvnn.PointTransformerV3(enc_depths=(2, 2, 2, 2), stride=(2, 2, 2))
+        with self.assertRaisesRegex(ValueError, "stride"):
+            fvnn.PointTransformerV3(stride=(2, 2, 3, 2))
+        with self.assertRaisesRegex(ValueError, "attn_drop"):
+            fvnn.PointTransformerV3(attn_drop=0.1)
+        with self.assertRaisesRegex(ValueError, "dec_channels"):
+            fvnn.PointTransformerV3(dec_channels=(64, 64, 128))
+
+
 if __name__ == "__main__":
     unittest.main()
