@@ -164,6 +164,18 @@ using PackedJaggedAccessor64 = PackedJaggedAccessor<ScalarT, NDims, PtrTraits, i
 ///
 /// A jagged tensor is a tensor that stores variable-length sequences in a compact representation.
 /// It is represented by a data tensor and a set of indices/offsets/list indexes.
+///
+/// Structural invariants:
+///   - joffsets has num_tensors + 1 entries, starts at 0, is non-decreasing, and ends at
+///     jdata.size(0).
+///   - jidx is either empty or has jdata.size(0) entries. It is empty whenever num_tensors <= 1 or
+///     jdata is empty, so an empty jidx says nothing about the tensor count; use num_tensors().
+///   - num_outer_lists() is the only source of the outer list count.
+///   - ldim 1: num_outer_lists() == num_tensors(), and jlidx has shape [0, 1] or
+///     [num_tensors, 1].
+///   - ldim 2: jlidx has shape [num_tensors, 2]. Each row is (outer, inner). Outer ids are
+///     non-decreasing and lie in [0, num_outer_lists()). Inner ids count 0, 1, ... within each
+///     outer list. An empty outer list has no rows.
 class JaggedTensor : public torch::CustomClassHolder {
     torch::Tensor mData;     // Actual data indexed by a jagged tensor
     torch::Tensor mBatchIdx; // Which (linear) batch is each datum in
@@ -217,9 +229,26 @@ class JaggedTensor : public torch::CustomClassHolder {
                                                                  torch::Tensor jlidx,
                                                                  int64_t numOuterLists);
 
+    /// @brief Unchecked form of from_data_offsets_and_list_ids for internal callers whose structure
+    ///        is correct by construction. It skips value validation and its device-to-host sync.
+    static JaggedTensor from_data_offsets_and_list_ids_unsafe(torch::Tensor data,
+                                                              torch::Tensor offsets,
+                                                              torch::Tensor list_ids,
+                                                              int64_t num_outer_lists);
+
+    /// @brief Unchecked form of from_data_indices_and_list_ids for internal callers whose structure
+    ///        is correct by construction. It skips value validation and its device-to-host sync.
+    static JaggedTensor from_data_indices_and_list_ids_unsafe(torch::Tensor data,
+                                                              torch::Tensor indices,
+                                                              torch::Tensor list_ids,
+                                                              int64_t num_tensors,
+                                                              int64_t num_outer_lists);
+
     /// @brief Create a JaggedTensor from data, per-element indices, and list IDs.
     ///
-    /// This function validates that data, indices, list_ids, and num_tensors are compatible.
+    /// This function validates that data, indices, list_ids, and num_tensors are compatible and
+    /// describe a well-formed JaggedTensor (see the class invariants). Validation reads the
+    /// structure tensors on the host, so a CUDA input costs one device-to-host sync.
     /// The offsets are computed internally from the indices.
     ///
     /// Example (ldim == 1, list of tensors):
@@ -251,15 +280,24 @@ class JaggedTensor : public torch::CustomClassHolder {
     ///                 For ldim == 2: shape (num_tensors, 2) where each row is (outer_idx,
     ///                 inner_idx).
     /// @param num_tensors Total number of tensors.
+    /// @param num_outer_lists Number of outer lists for ldim == 2. Pass it when trailing outer
+    /// lists
+    ///                        may be empty, since list_ids cannot express them. Defaults to the
+    ///                        largest outer id + 1 (0 when there are no tensors). For ldim == 1 it
+    ///                        must equal num_tensors if given.
     /// @return A JaggedTensor defined by the data, indices, and list ids.
-    static JaggedTensor from_data_indices_and_list_ids(torch::Tensor data,
-                                                       torch::Tensor indices,
-                                                       torch::Tensor list_ids,
-                                                       int64_t num_tensors);
+    static JaggedTensor
+    from_data_indices_and_list_ids(torch::Tensor data,
+                                   torch::Tensor indices,
+                                   torch::Tensor list_ids,
+                                   int64_t num_tensors,
+                                   std::optional<int64_t> num_outer_lists = std::nullopt);
 
     /// @brief Create a JaggedTensor from data, offsets, and list IDs.
     ///
-    /// This function validates that data, offsets, and list_ids are compatible.
+    /// This function validates that data, offsets, and list_ids are compatible and describe a
+    /// well-formed JaggedTensor (see the class invariants). Validation reads the structure tensors
+    /// on the host, so a CUDA input costs one device-to-host sync.
     /// The per-element indices are computed internally from the offsets.
     ///
     /// Example (ldim == 1, list of tensors):
@@ -289,10 +327,17 @@ class JaggedTensor : public torch::CustomClassHolder {
     ///                 Empty tensor assumes a single, naturally ordered list of tensors.
     ///                 For ldim == 2: shape (num_tensors, 2) where each row is (outer_idx,
     ///                 inner_idx).
+    /// @param num_outer_lists Number of outer lists for ldim == 2. Pass it when trailing outer
+    /// lists
+    ///                        may be empty, since list_ids cannot express them. Defaults to the
+    ///                        largest outer id + 1 (0 when there are no tensors). For ldim == 1 it
+    ///                        must equal num_tensors if given.
     /// @return A JaggedTensor defined by the data, offsets, and list ids.
-    static JaggedTensor from_data_offsets_and_list_ids(torch::Tensor data,
-                                                       torch::Tensor offsets,
-                                                       torch::Tensor list_ids);
+    static JaggedTensor
+    from_data_offsets_and_list_ids(torch::Tensor data,
+                                   torch::Tensor offsets,
+                                   torch::Tensor list_ids,
+                                   std::optional<int64_t> num_outer_lists = std::nullopt);
 
     /// @brief Concatenate the list of JaggedTensors along a given dimension.
     ///        There are two modes for this function.

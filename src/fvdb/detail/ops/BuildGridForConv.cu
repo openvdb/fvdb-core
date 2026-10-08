@@ -314,8 +314,8 @@ directConvIJKForGrid(const GridBatchData &batchHdl, ConvolutionGeometry const &g
             bidx, lidx, vidx, cidx, batchAcc, geometry, outIJKAcc, outIJKBIdxAcc);
     };
     forEachVoxelCUDA(1, batchHdl, callback);
-    return JaggedTensor::from_data_indices_and_list_ids(
-        outIJK, outIJKBIdx, batchHdl.jlidx(), batchHdl.batchSize());
+    return JaggedTensor::from_data_indices_and_list_ids_unsafe(
+        outIJK, outIJKBIdx, batchHdl.jlidx(), batchHdl.batchSize(), batchHdl.batchSize());
 }
 
 JaggedTensor
@@ -364,8 +364,8 @@ countThenFillConvIJKForGrid(const GridBatchData &batchHdl, ConvolutionGeometry c
     forEachVoxelCUDA(1, batchHdl, fillCallback);
 
     prefix = torch::Tensor();
-    return JaggedTensor::from_data_indices_and_list_ids(
-        outIJK, outIJKBIdx, batchHdl.jlidx(), batchHdl.batchSize());
+    return JaggedTensor::from_data_indices_and_list_ids_unsafe(
+        outIJK, outIJKBIdx, batchHdl.jlidx(), batchHdl.batchSize(), batchHdl.batchSize());
 }
 
 template <>

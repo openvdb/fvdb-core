@@ -1066,11 +1066,20 @@ class JaggedTensor:
     def from_data_and_offsets(arg0: torch.Tensor, arg1: torch.Tensor) -> JaggedTensor: ...
     @staticmethod
     def from_data_indices_and_list_ids(
-        data: torch.Tensor, indices: torch.Tensor, list_ids: torch.Tensor, num_tensors: int
+        data: torch.Tensor,
+        indices: torch.Tensor,
+        list_ids: torch.Tensor,
+        num_tensors: int,
+        *,
+        num_outer_lists: int | None = None,
     ) -> JaggedTensor: ...
     @staticmethod
     def from_data_offsets_and_list_ids(
-        data: torch.Tensor, offsets: torch.Tensor, list_ids: torch.Tensor
+        data: torch.Tensor,
+        offsets: torch.Tensor,
+        list_ids: torch.Tensor,
+        *,
+        num_outer_lists: int | None = None,
     ) -> JaggedTensor: ...
     def int(self) -> JaggedTensor: ...
     def jagged_like(self, data: torch.Tensor) -> JaggedTensor: ...

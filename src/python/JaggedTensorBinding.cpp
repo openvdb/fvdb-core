@@ -67,12 +67,16 @@ bind_jagged_tensor(py::module &m) {
                     py::arg("data"),
                     py::arg("indices"),
                     py::arg("list_ids"),
-                    py::arg("num_tensors"))
+                    py::arg("num_tensors"),
+                    py::kw_only(),
+                    py::arg("num_outer_lists") = std::nullopt)
         .def_static("from_data_offsets_and_list_ids",
                     &fvdb::JaggedTensor::from_data_offsets_and_list_ids,
                     py::arg("data"),
                     py::arg("offsets"),
-                    py::arg("list_ids"))
+                    py::arg("list_ids"),
+                    py::kw_only(),
+                    py::arg("num_outer_lists") = std::nullopt)
 
         .def_property_readonly("is_cuda",
                                &fvdb::JaggedTensor::is_cuda,
