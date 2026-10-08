@@ -2617,19 +2617,17 @@ class TestJaggedTensor(unittest.TestCase):
                     self.assertEqual(jt.lshape, lsizes)
                     self.assertEqual(tuple(jt.eshape), eshape)
 
+        # Empty structures keep their element shape, device, and dtype
+        eshape = (3, 4)
         for func in funcs:
-            lsizes = []
-            eshape = (3, 4)
-            with self.assertRaises(Exception):
-                jt = fvdb.JaggedTensor.from_rand(lsizes, eshape, device=device, dtype=dtype)
-
-            lsizes = [[]]
-            with self.assertRaises(Exception):
-                jt = fvdb.JaggedTensor.from_rand(lsizes, eshape, device=device, dtype=dtype)
-
-            lsizes = [[], []]
-            with self.assertRaises(Exception):
-                jt = fvdb.JaggedTensor.from_rand(lsizes, eshape, device=device, dtype=dtype)
+            for lsizes, ldim in [([], 1), ([[]], 2), ([[], []], 2), ([[], [2, 0], []], 2)]:
+                jt = func(lsizes, eshape, device=device, dtype=dtype)
+                self.assertEqual(len(jt), len(lsizes))
+                self.assertEqual(jt.ldim, ldim)
+                self.assertEqual(jt.lshape, lsizes)
+                self.assertEqual(tuple(jt.eshape), eshape)
+                self.assertEqual(jt.device.type, torch.device(device).type)
+                self.assertEqual(jt.dtype, dtype)
 
     @expand_tests(all_device_dtype_combos)
     def test_assignment(self, device, dtype):
@@ -2906,21 +2904,14 @@ class TestJaggedTensor(unittest.TestCase):
                 num_outer = num_tensors
             else:
                 num_outer = np.random.randint(2, 10)
-                # Ensure at least one tensor overall
-                has_tensor = False
                 for _ in range(num_outer):
                     inner = []
-                    num_inner = np.random.randint(0, 10)  # Allow 0 inner tensors
+                    num_inner = np.random.randint(0, 10)  # Allow empty outer lists
                     for _ in range(num_inner):
                         # Random size for each tensor
                         size = np.random.randint(0, 20)
                         inner.append(torch.rand(size, 1, device=device, dtype=dtype))
-                        has_tensor = True
                     data.append(inner)
-
-                if not has_tensor:
-                    data = [[torch.rand(5, 1, device=device, dtype=dtype)]]
-                    num_outer = 1
 
             jt = fvdb.JaggedTensor(data)
 
@@ -2928,12 +2919,15 @@ class TestJaggedTensor(unittest.TestCase):
             self.assertEqual(jt.ldim, ldim)
 
             # Test from_data_offsets_and_list_ids
-            jt_offsets = fvdb.JaggedTensor.from_data_offsets_and_list_ids(jt.jdata, jt.joffsets, jt.jlidx)
+            jt_offsets = fvdb.JaggedTensor.from_data_offsets_and_list_ids(
+                jt.jdata, jt.joffsets, jt.jlidx, num_outer_lists=len(jt)
+            )
             self.assertEqual(len(jt_offsets), num_outer)
             self.assertEqual(jt_offsets.ldim, ldim)
             # Check that structure is preserved
             self.assertTrue(torch.equal(jt_offsets.joffsets, jt.joffsets))
             self.assertTrue(torch.equal(jt_offsets.jlidx, jt.jlidx))
+            self.assertEqual(jt_offsets.lshape, jt.lshape)
 
     @expand_tests(all_device_dtype_combos)
     def test_from_data_indices_and_list_ids(self, device, dtype):
@@ -2949,21 +2943,14 @@ class TestJaggedTensor(unittest.TestCase):
                 num_outer = num_tensors
             else:
                 num_outer = np.random.randint(2, 10)
-                # Ensure at least one tensor overall
-                has_tensor = False
                 for _ in range(num_outer):
                     inner = []
-                    num_inner = np.random.randint(0, 10)  # Allow 0 inner tensors
+                    num_inner = np.random.randint(0, 10)  # Allow empty outer lists
                     for _ in range(num_inner):
                         # Random size for each tensor
                         size = np.random.randint(0, 20)
                         inner.append(torch.rand(size, 1, device=device, dtype=dtype))
-                        has_tensor = True
                     data.append(inner)
-
-                if not has_tensor:
-                    data = [[torch.rand(5, 1, device=device, dtype=dtype)]]
-                    num_outer = 1
 
             jt = fvdb.JaggedTensor(data)
 
@@ -2972,12 +2959,15 @@ class TestJaggedTensor(unittest.TestCase):
 
             # Test from_data_indices_and_list_ids
             num_tensors = jt.joffsets.size(0) - 1
-            jt_indices = fvdb.JaggedTensor.from_data_indices_and_list_ids(jt.jdata, jt.jidx, jt.jlidx, num_tensors)
+            jt_indices = fvdb.JaggedTensor.from_data_indices_and_list_ids(
+                jt.jdata, jt.jidx, jt.jlidx, num_tensors, num_outer_lists=len(jt)
+            )
             self.assertEqual(len(jt_indices), num_outer)
             self.assertEqual(jt_indices.ldim, ldim)
             # Check that structure is preserved
             self.assertTrue(torch.equal(jt_indices.joffsets, jt.joffsets))
             self.assertTrue(torch.equal(jt_indices.jlidx, jt.jlidx))
+            self.assertEqual(jt_indices.lshape, jt.lshape)
 
     # def test_argsort(self):
     #     data = [torch.randn(np.random.randint(1024, 2048),) for _ in range(7)]

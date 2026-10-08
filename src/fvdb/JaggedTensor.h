@@ -714,8 +714,7 @@ class JaggedTensor : public torch::CustomClassHolder {
                     "offsets and data must be on the same device");
         TORCH_CHECK(jlidx().device() == jdata().device(),
                     "list indices and data must be on the same device");
-        TORCH_CHECK_VALUE(jlidx().numel() == 0 || jlidx().size(0) == (joffsets().size(0) - 1),
-                          "Corrupt list indices. This should never happen");
+        ldim(); // Checks the list index shape
     }
 
     /// @brief Get the total number of elements in the JaggedTensor
