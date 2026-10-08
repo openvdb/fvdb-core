@@ -14,40 +14,6 @@ namespace detail {
 namespace ops {
 
 // This kernel computes the offsets for an integer indexing operation
-__global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
-getJOffsetsIndexMask(const int64_t idxVal,
-                     const TorchRAcc64<JLIdxType, 2> jlidx,
-                     const TorchRAcc64<JOffsetsType, 1> inJoffsets,
-                     TorchRAcc64<JOffsetsType, 1> offsetsAndRange) {
-    int32_t idx = threadIdx.x + blockIdx.x * blockDim.x;
-
-    if (idx >= jlidx.size(0)) {
-        return;
-    }
-
-    JLIdxType lid     = jlidx[idx][0];
-    JLIdxType prevLid = -1;
-    if (idx - 1 >= 0) {
-        prevLid = jlidx[idx - 1][0];
-    }
-    const bool lidMatches     = lid == idxVal;
-    const bool prevLidMatches = prevLid == idxVal;
-    const bool isLastIdx      = idx == (jlidx.size(0) - 1);
-
-    if (lidMatches && !prevLidMatches) {
-        offsetsAndRange[0] = inJoffsets[idx];
-        offsetsAndRange[2] = idx;
-    }
-
-    if (!lidMatches && prevLidMatches) {
-        offsetsAndRange[1] = inJoffsets[idx];
-        offsetsAndRange[3] = idx;
-    } else if (lidMatches && isLastIdx) {
-        offsetsAndRange[1] = inJoffsets[idx + 1];
-        offsetsAndRange[3] = idx + 1;
-    }
-}
-
 // Computes a mask for the data tensor for a slice operation
 __global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
 makeDataSliceMask(const int64_t start,
@@ -203,6 +169,9 @@ jaggedTensorIndexJaggedTensorImpl(const JaggedTensor &jt, const JaggedTensor &jt
                     const int64_t numBlocks =
                         GET_BLOCKS(jtIndices.jdata().size(0), DEFAULT_BLOCK_DIM);
                     TORCH_INTERNAL_ASSERT(numBlocks < MAX_BLOCKS, "Too many blocks");
+                    if (numBlocks == 0) {
+                        return;
+                    }
                     calculateIndexShiftForEachElement<scalar_t>
                         <<<numBlocks, DEFAULT_BLOCK_DIM, 0, stream>>>(
                             jt.joffsets()
@@ -268,13 +237,13 @@ jaggedTensorIndexSliceCuda(const JaggedTensor &jt, int64_t start, int64_t end, i
         auto offsets_acc            = offsets_slice.accessor<JOffsetsType, 1>();
         const JOffsetsType startIdx = offsets_acc[0];
         const JOffsetsType endIdx   = offsets_acc[end - start];
-        const torch::Tensor retLidx = jt.jlidx().numel() == 0
-                                          ? jt.jlidx()
-                                          : jt.jlidx().index({torch::indexing::Slice(start, end)});
-        return JaggedTensor::from_data_offsets_and_list_ids(
+        const torch::Tensor retLidx =
+            torch::empty({0, 1}, torch::TensorOptions().dtype(JLIdxScalarType).device(jt.device()));
+        return JaggedTensor::from_data_offsets_and_list_ids_unsafe(
             jt.jdata().index({torch::indexing::Slice(startIdx, endIdx)}),
             jt.joffsets().index({torch::indexing::Slice(start, end + 1)}) - startIdx,
-            retLidx);
+            retLidx,
+            end - start);
     }
 
     // Compute a boolean mask for the data tensor and offsets as well as the tensor sizes (which we
@@ -287,6 +256,10 @@ jaggedTensorIndexSliceCuda(const JaggedTensor &jt, int64_t start, int64_t end, i
     torch::Tensor offsetsMask = torch::empty({jt.joffsets().size(0)}, maskOpts);
     torch::Tensor outJLIdx    = torch::empty_like(jt.jlidx());
     torch::Tensor outJOffsets = torch::empty_like(jt.joffsets());
+
+    // The offsets kernel writes the leading entries, but it does not launch for zero tensors
+    offsetsMask.index_put_({0}, true);
+    outJOffsets.index_put_({0}, 0);
 
     auto joffsetsAcc = jt.joffsets().packed_accessor64<JOffsetsType, 1, torch::RestrictPtrTraits>();
     auto jidxAcc     = jt.jidx().packed_accessor64<JIdxType, 1, torch::RestrictPtrTraits>();
@@ -303,28 +276,34 @@ jaggedTensorIndexSliceCuda(const JaggedTensor &jt, int64_t start, int64_t end, i
         const int64_t MAX_BLOCKS    = 4194302; // floor((2^32 - 1) / 1024)
         const int64_t numBlocksData = GET_BLOCKS(jt.jdata().size(0), DEFAULT_BLOCK_DIM);
         TORCH_INTERNAL_ASSERT(numBlocksData < MAX_BLOCKS, "Too many blocks");
-        makeDataSliceMask<<<numBlocksData, DEFAULT_BLOCK_DIM, 0, stream>>>(start,
-                                                                           end,
-                                                                           step,
-                                                                           jidxAcc,
-                                                                           jlidxAcc,
-                                                                           dataMaskAcc,
-                                                                           jt.ldim() == 1,
-                                                                           jt.num_tensors() == 1);
-        C10_CUDA_KERNEL_LAUNCH_CHECK();
+        if (numBlocksData > 0) {
+            makeDataSliceMask<<<numBlocksData, DEFAULT_BLOCK_DIM, 0, stream>>>(start,
+                                                                               end,
+                                                                               step,
+                                                                               jidxAcc,
+                                                                               jlidxAcc,
+                                                                               dataMaskAcc,
+                                                                               jt.ldim() == 1,
+                                                                               jt.num_tensors() ==
+                                                                                   1);
+            C10_CUDA_KERNEL_LAUNCH_CHECK();
+        }
 
         const int numBlocksOffsets = GET_BLOCKS(jt.joffsets().size(0) - 1, DEFAULT_BLOCK_DIM);
         TORCH_INTERNAL_ASSERT(numBlocksOffsets < MAX_BLOCKS, "Too many blocks");
-        makeOffsetsSliceMask<<<numBlocksOffsets, DEFAULT_BLOCK_DIM, 0, stream>>>(start,
-                                                                                 end,
-                                                                                 step,
-                                                                                 joffsetsAcc,
-                                                                                 jlidxAcc,
-                                                                                 offsetsMaskAcc,
-                                                                                 outJOffsetsAcc,
-                                                                                 outJLIdxAcc,
-                                                                                 jt.ldim() == 1);
-        C10_CUDA_KERNEL_LAUNCH_CHECK();
+        if (numBlocksOffsets > 0) {
+            makeOffsetsSliceMask<<<numBlocksOffsets, DEFAULT_BLOCK_DIM, 0, stream>>>(start,
+                                                                                     end,
+                                                                                     step,
+                                                                                     joffsetsAcc,
+                                                                                     jlidxAcc,
+                                                                                     offsetsMaskAcc,
+                                                                                     outJOffsetsAcc,
+                                                                                     outJLIdxAcc,
+                                                                                     jt.ldim() ==
+                                                                                         1);
+            C10_CUDA_KERNEL_LAUNCH_CHECK();
+        }
     };
     callKernel();
 
@@ -375,13 +354,13 @@ jaggedTensorIndexSliceCpu(const JaggedTensor &jt, int64_t start, int64_t end, in
         TORCH_CHECK(jt.ldim() == 1, "bad list indexes. this should never happen");
         const JOffsetsType startIdx = jt.joffsets()[start].item<JOffsetsType>();
         const JOffsetsType endIdx   = jt.joffsets()[end].item<JOffsetsType>();
-        const torch::Tensor retLidx = jt.jlidx().numel() == 0
-                                          ? jt.jlidx()
-                                          : jt.jlidx().index({torch::indexing::Slice(start, end)});
-        return JaggedTensor::from_data_offsets_and_list_ids(
+        const torch::Tensor retLidx =
+            torch::empty({0, 1}, torch::TensorOptions().dtype(JLIdxScalarType).device(jt.device()));
+        return JaggedTensor::from_data_offsets_and_list_ids_unsafe(
             jt.jdata().index({torch::indexing::Slice(startIdx, endIdx)}),
             jt.joffsets().index({torch::indexing::Slice(start, end + 1)}) - startIdx,
-            retLidx);
+            retLidx,
+            end - start);
     } else if (jt.ldim() > 1 && step == 1) {
         // Find all tensors that belong to the slice
         const torch::Tensor outerLidx = jt.jlidx().index({torch::indexing::Slice(), 0});
@@ -490,21 +469,17 @@ jaggedTensorIndexSliceCpu(const JaggedTensor &jt, int64_t start, int64_t end, in
         auto selOffsetsAcc = selectedOffsets.accessor<JOffsetsType, 2>();
         auto selLidxAcc    = selectedLidx.accessor<JLIdxType, 2>();
         retOffsetsAcc[0]   = 0;
-        JLIdxType count    = -1;
         for (int i = 0; i < retOffsets.size(0) - 1; i += 1) {
-            if (i == 0 || selLidxAcc[i][0] != selLidxAcc[i - 1][0]) {
-                count += 1;
-            }
-
             JOffsetsType startIdx = selOffsetsAcc[i][0];
             JOffsetsType endIdx   = selOffsetsAcc[i][1];
 
             dataMask.index({torch::indexing::Slice(startIdx, endIdx)}).fill_(true);
             retOffsetsAcc[i + 1] = endIdx - startIdx;
-            retJLidxAcc[i][0]    = count;
+            retJLidxAcc[i][0]    = (selLidxAcc[i][0] - start) / step;
             retJLidxAcc[i][1]    = selLidxAcc[i][1];
         }
-        count += 1;
+        // Selected outer lists keep their place in the slice even when they are empty
+        const int64_t count = (end - start + step - 1) / step;
         torch::cumsum_out(retOffsets, retOffsets, 0);
         const torch::Tensor retData = jt.jdata().index({dataMask});
         const torch::Tensor retJIdx =
@@ -519,14 +494,13 @@ jaggedTensorIndexSliceCpu(const JaggedTensor &jt, int64_t start, int64_t end, in
 }
 
 // Special case of integer indexing where the JaggedTensor is just a list of tensors and not a list
-// of lists of tensors. We call this from the CPU and GPU implementations which is why it's factored
+// of lists of tensors. We call this from every device implementation which is why it's factored
 // out i.e. jt = JaggedTensor([t_0, t_1, t_2, ..., t_n])
 //      jt[2] -> JaggedTensor([t_2]) where the 3rd list is selected
 JaggedTensor
 jaggedTensorIndexIntOneList(const JaggedTensor &jt, int64_t idxVal) {
     torch::Tensor joffsets = jt.joffsets();
     torch::Tensor jdata    = jt.jdata();
-    torch::Tensor jlidx    = jt.jlidx();
 
     TORCH_CHECK(jt.ldim() == 1, "bad list indexes. this should never happen");
     auto two_offsets = joffsets.narrow(0, idxVal, 2);
@@ -539,150 +513,46 @@ jaggedTensorIndexIntOneList(const JaggedTensor &jt, int64_t idxVal) {
         torch::tensor({JOffsetsType(0), endIdx - startIdx},
                       torch::TensorOptions().dtype(JOffsetsScalarType).device(jdata.device()));
     const torch::Tensor retData = jdata.index({torch::indexing::Slice(startIdx, endIdx)});
-    const torch::Tensor retJidx = torch::empty({0}, torch::TensorOptions().dtype(JIdxScalarType));
+    const torch::Tensor retJidx =
+        torch::empty({0}, torch::TensorOptions().dtype(JIdxScalarType).device(jdata.device()));
+    const torch::Tensor retJLidx =
+        torch::empty({0, 1}, torch::TensorOptions().dtype(JLIdxScalarType).device(jdata.device()));
     return JaggedTensor::from_jdata_joffsets_jidx_and_lidx_unsafe(
-        retData, retJoffsets, retJidx, jlidx, retJoffsets.size(0) - 1);
+        retData, retJoffsets, retJidx, retJLidx, 1);
 }
 
-// This corresponds to indexing with an integer
-// i.e. jt = JaggedTensor([...])
-//      jt[2] -> JaggedTensor([...]) where the 3rd list is selected
+// Integer indexing into a list of lists. Returns the tensors of outer list idxVal as a list of
+// tensors, which is empty when that outer list has no tensors.
+//      jt = JaggedTensor([[t_00, t_01], [], [t_20]])
+//      jt[0] -> JaggedTensor([t_00, t_01]), jt[1] -> JaggedTensor([])
 JaggedTensor
-jaggedTensorIndexIntCuda(const JaggedTensor &jt, int64_t idxVal) {
-    const c10::cuda::CUDAGuard device_guard(jt.device());
+jaggedTensorIndexIntNested(const JaggedTensor &jt, int64_t idxVal) {
+    TORCH_CHECK(jt.ldim() == 2, "We don't support ldim > 2.");
+    const torch::Tensor joffsets = jt.joffsets();
+    const torch::Tensor jdata    = jt.jdata();
 
-    if (idxVal < 0) {
-        idxVal += jt.num_outer_lists();
-    }
-    TORCH_CHECK_INDEX(idxVal >= 0 && idxVal < jt.num_outer_lists(),
-                      "Index ",
-                      idxVal,
-                      " is out of bounds for JaggedTensor with ",
-                      jt.num_outer_lists(),
-                      " elements");
-
-    if (jt.jlidx().size(0) == 0) {
-        return jaggedTensorIndexIntOneList(jt, idxVal);
-    }
-
-    torch::Tensor joffsets = jt.joffsets();
-    torch::Tensor jdata    = jt.jdata();
-    torch::Tensor jlidx    = jt.jlidx();
-
-    TORCH_CHECK_VALUE(jlidx.dim() == 2, "Corrupt list indices. This should never happen");
-    TORCH_CHECK_VALUE(jlidx.numel() == 0 || jlidx.size(0) == (joffsets.size(0) - 1),
-                      "Corrupt list indices. This should never happen");
-
-    torch::Tensor offsetsAndRange = torch::empty(
-        {4},
-        torch::TensorOptions().dtype(JOffsetsScalarType).device(torch::kCPU).pinned_memory(true));
-    offsetsAndRange    = offsetsAndRange.to(jt.device());
-    auto inJLidxAcc    = jlidx.packed_accessor64<JLIdxType, 2, torch::RestrictPtrTraits>();
-    auto inJOffsetsAcc = joffsets.packed_accessor64<JOffsetsType, 1, torch::RestrictPtrTraits>();
-    auto offsetsAndRangeAcc =
-        offsetsAndRange.packed_accessor64<JOffsetsType, 1, torch::RestrictPtrTraits>();
-
-    cudaStream_t stream      = c10::cuda::getCurrentCUDAStream(jt.device().index()).stream();
-    const int64_t MAX_BLOCKS = 4194302; // floor((2^32 - 1) / 1024)
-    const int64_t numBlocks  = GET_BLOCKS(joffsets.size(0), DEFAULT_BLOCK_DIM);
-    TORCH_INTERNAL_ASSERT(numBlocks < MAX_BLOCKS, "Too many blocks");
-    getJOffsetsIndexMask<<<numBlocks, DEFAULT_BLOCK_DIM, 0, stream>>>(
-        idxVal, inJLidxAcc, inJOffsetsAcc, offsetsAndRangeAcc);
-    C10_CUDA_KERNEL_LAUNCH_CHECK();
-
-    offsetsAndRange                       = offsetsAndRange.cpu();
-    auto oar_acc                          = offsetsAndRange.accessor<JOffsetsType, 1>();
-    const JOffsetsType elementStartOffset = oar_acc[0];
-    const JOffsetsType elementEndOffset   = oar_acc[1];
-    const JOffsetsType startIdx           = oar_acc[2];
-    const JOffsetsType endIdx             = oar_acc[3];
-    torch::Tensor retOffsets =
-        joffsets.index({torch::indexing::Slice(startIdx, endIdx + 1)}) - elementStartOffset;
-    const torch::Tensor retData =
-        jdata.index({torch::indexing::Slice(elementStartOffset, elementEndOffset)});
-
-    torch::Tensor retListIdx;
-    int64_t retNumOuterLists;
-    if (jlidx.size(1) > 1 && jlidx.size(1) > 2) {
-        TORCH_CHECK(false, "We don't support ldim > 2.");
-        // const auto lidxOpts =
-        // torch::TensorOptions().dtype(JLIdxScalarType).device(jdata.device()); retListIdx =
-        // torch::empty({retOffsets.size(0)-1, 2}, lidxOpts); auto outJLidxAcc =
-        // retListIdx.packed_accessor64<JLIdxType, 2, torch::RestrictPtrTraits>(); const int
-        // numBlocksJLidx = GET_BLOCKS(retListIdx.size(0), 1024); computeJLidx<<<numBlocksJLidx,
-        // 1024>>>(startIdx, idxVal, inJLidxAcc, outJLidxAcc); C10_CUDA_KERNEL_LAUNCH_CHECK();
-        // retNumOuterLists = std::get<0>(torch::unique_dim(retListIdx, 0)).size(0);
-    } else {
-        retListIdx = torch::empty(
-            {0, 1}, torch::TensorOptions().dtype(JLIdxScalarType).device(jdata.device()));
-        retNumOuterLists = retOffsets.size(0) - 1;
-    }
-
-    const torch::Tensor retJidx = JaggedTensor::jidx_from_joffsets(retOffsets, retData.size(0));
-    return JaggedTensor::from_jdata_joffsets_jidx_and_lidx_unsafe(
-        retData, retOffsets, retJidx, retListIdx, retNumOuterLists);
-}
-
-// This corresponds to indexing with an integer
-// i.e. jt = JaggedTensor([...])
-//      jt[2] -> JaggedTensor([...]) where the 3rd list is selected
-JaggedTensor
-jaggedTensorIndexIntCpu(const JaggedTensor &jt, int64_t idxVal) {
-    if (idxVal < 0) {
-        idxVal += jt.num_outer_lists();
-    }
-    TORCH_CHECK_INDEX(idxVal >= 0 && idxVal < jt.num_outer_lists(),
-                      "Index ",
-                      idxVal,
-                      " is out of bounds for JaggedTensor with ",
-                      jt.num_outer_lists(),
-                      " elements");
-
-    if (jt.jlidx().size(0) == 0) {
-        return jaggedTensorIndexIntOneList(jt, idxVal);
-    }
-
-    torch::Tensor joffsets = jt.joffsets();
-    torch::Tensor jdata    = jt.jdata();
-    torch::Tensor jlidx    = jt.jlidx();
-
-    TORCH_CHECK_VALUE(jlidx.dim() == 2, "Corrupt list indices. This should never happen");
-    TORCH_CHECK_VALUE(jlidx.numel() == 0 || jlidx.size(0) == (joffsets.size(0) - 1),
-                      "Corrupt list indices. This should never happen");
-    const torch::Tensor joffsetCat =
-        torch::stack({joffsets.index({torch::indexing::Slice(0, jt.num_tensors())}),
-                      joffsets.index({torch::indexing::Slice(1, jt.num_tensors() + 1)})},
-                     1);
-    const torch::Tensor mask            = jlidx.index({torch::indexing::Slice(), 0}).eq(idxVal);
-    const torch::Tensor selectedOffsets = joffsetCat.index({mask});
-
-    const JOffsetsType startIdx = selectedOffsets[0][0].item<JOffsetsType>();
-    const JOffsetsType endIdx   = selectedOffsets[-1][1].item<JOffsetsType>();
-
-    const torch::Tensor retData = jdata.index({torch::indexing::Slice(startIdx, endIdx)});
+    // Outer ids are sorted, so the tensors of one outer list are the contiguous rows
+    // [firstTensor, lastTensor)
+    const torch::Tensor outer  = jt.jlidx().index({torch::indexing::Slice(), 0}).contiguous();
+    const torch::Tensor bounds = torch::searchsorted(
+        outer,
+        torch::tensor({static_cast<JLIdxType>(idxVal), static_cast<JLIdxType>(idxVal + 1)},
+                      outer.options()));
+    const torch::Tensor readback = torch::cat({bounds, joffsets.index({bounds})}).cpu();
+    const auto acc               = readback.accessor<int64_t, 1>();
+    const int64_t firstTensor    = acc[0];
+    const int64_t lastTensor     = acc[1];
+    const JOffsetsType startIdx  = acc[2];
+    const JOffsetsType endIdx    = acc[3];
 
     const torch::Tensor retOffsets =
-        torch::cat({selectedOffsets.index({torch::indexing::Slice(), 0}),
-                    selectedOffsets.index({-1, 1}).unsqueeze(0)}) -
-        startIdx;
-    torch::Tensor retListIdx;
-    int64_t retNumOuterLists;
-    if (jlidx.size(1) > 1 && jlidx.size(1) > 2) {
-        TORCH_CHECK(false, "We don't support ldim > 2.");
-        // retListIdx = jlidx.index({mask, torch::indexing::Slice(1, jlidx.size(1))});
-        // if (retListIdx.dim() == 0) {
-        //     retListIdx = retListIdx.unsqueeze(1);
-        // }
-        // retNumOuterLists = std::get<0>(torch::unique_dim(retListIdx, 0)).size(0);
-    } else {
-        retListIdx = torch::empty(
-            {0, 1}, torch::TensorOptions().dtype(JLIdxScalarType).device(jdata.device()));
-        retNumOuterLists = retOffsets.size(0) - 1;
-    }
-
+        joffsets.index({torch::indexing::Slice(firstTensor, lastTensor + 1)}) - startIdx;
+    const torch::Tensor retData = jdata.index({torch::indexing::Slice(startIdx, endIdx)});
     const torch::Tensor retJidx = JaggedTensor::jidx_from_joffsets(retOffsets, retData.size(0));
+    const torch::Tensor retListIdx =
+        torch::empty({0, 1}, torch::TensorOptions().dtype(JLIdxScalarType).device(jdata.device()));
     return JaggedTensor::from_jdata_joffsets_jidx_and_lidx_unsafe(
-        retData, retOffsets, retJidx, retListIdx, retNumOuterLists);
+        retData, retOffsets, retJidx, retListIdx, lastTensor - firstTensor);
 }
 
 // This corresponds to indexing with an integer
@@ -700,8 +570,8 @@ jaggedTensorIndexIntPrivateUse1(const JaggedTensor &jt, int64_t idxVal) {
                       jt.num_outer_lists(),
                       " elements");
 
-    TORCH_CHECK(jt.jlidx().size(0) == 0,
-                "jaggedTensorIndexIntPrivateUse1 is not implemented for jlidx().size(0) != 0");
+    TORCH_CHECK(jt.ldim() == 1,
+                "jaggedTensorIndexIntPrivateUse1 is not implemented for nested lists");
 
     return jaggedTensorIndexIntOneList(jt, idxVal);
 }
@@ -711,14 +581,23 @@ jaggedTensorIndexIntPrivateUse1(const JaggedTensor &jt, int64_t idxVal) {
 //      jt[2] -> JaggedTensor([...]) where the 3rd list is selected
 JaggedTensor
 jaggedTensorIndexInt(const JaggedTensor &jt, int64_t idxVal) {
-    if (jt.device().is_cuda()) {
-        c10::cuda::CUDAGuard deviceGuard(jt.device());
-        return jaggedTensorIndexIntCuda(jt, idxVal);
-    } else if (jt.device().is_privateuseone()) {
+    if (jt.device().is_privateuseone()) {
         return jaggedTensorIndexIntPrivateUse1(jt, idxVal);
-    } else {
-        return jaggedTensorIndexIntCpu(jt, idxVal);
     }
+
+    if (idxVal < 0) {
+        idxVal += jt.num_outer_lists();
+    }
+    TORCH_CHECK_INDEX(idxVal >= 0 && idxVal < jt.num_outer_lists(),
+                      "Index ",
+                      idxVal,
+                      " is out of bounds for JaggedTensor with ",
+                      jt.num_outer_lists(),
+                      " elements");
+
+    c10::OptionalDeviceGuard deviceGuard(jt.device());
+    return jt.ldim() == 1 ? jaggedTensorIndexIntOneList(jt, idxVal)
+                          : jaggedTensorIndexIntNested(jt, idxVal);
 }
 
 JaggedTensor
