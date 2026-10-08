@@ -3004,5 +3004,271 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertTrue(torch.equal(jt2.jdata, cpu_tensor2))
 
 
+class TestEmptyStructures(unittest.TestCase):
+    """JaggedTensors with zero tensors, zero elements, or empty outer lists."""
+
+    devices = [["cpu"], ["cuda"]]
+
+    @staticmethod
+    def _t(device, *values):
+        return torch.tensor(values, dtype=torch.float32, device=device)
+
+    def _check_structure(self, jt, lshape, ldim):
+        self.assertEqual(len(jt), len(lshape))
+        self.assertEqual(jt.ldim, ldim)
+        self.assertEqual(jt.lshape, lshape)
+        unbound = jt.unbind()
+        self.assertEqual(len(unbound), len(lshape))
+        if ldim == 2:
+            self.assertEqual([[t.shape[0] for t in inner] for inner in unbound], lshape)
+            for i, inner in enumerate(lshape):
+                self.assertEqual(jt[i].lshape, inner)
+                self.assertEqual(jt[i].num_tensors, len(inner))
+
+    def test_empty_list(self):
+        # Issue 89
+        jt = fvdb.JaggedTensor([])
+        self.assertEqual(len(jt), 0)
+        self.assertEqual(jt.num_tensors, 0)
+        self.assertEqual(jt.ldim, 1)
+        self.assertEqual(jt.edim, 0)
+        self.assertEqual(jt.eshape, [])
+        self.assertEqual(jt.lshape, [])
+        self.assertEqual(jt.unbind(), [])
+        self.assertEqual(jt.joffsets.tolist(), [0])
+        self.assertEqual(jt.jdata.numel(), 0)
+
+    @parameterized.expand(devices)
+    def test_nested_constructor(self, device):
+        a, b, c = self._t(device, 1, 2), self._t(device, 3), self._t(device, 4)
+        cases = [
+            ([[]], [[]]),
+            ([[], []], [[], []]),
+            ([[a], []], [[2], []]),
+            ([[], [a]], [[], [2]]),
+            ([[a, b], [], [c]], [[2, 1], [], [1]]),
+            ([[a, b], [c], []], [[2, 1], [1], []]),
+            ([[], [a, b], [], [c], []], [[], [2, 1], [], [1], []]),
+        ]
+        for tensors, lshape in cases:
+            with self.subTest(lshape=lshape):
+                self._check_structure(fvdb.JaggedTensor(tensors), lshape, 2)
+
+    @parameterized.expand(devices)
+    def test_index_empty_outer_list(self, device):
+        # Issue 802: CPU raised and CUDA read uninitialized memory
+        jt = fvdb.JaggedTensor([[self._t(device, 1, 2), self._t(device, 3)], [], [self._t(device, 4)]])
+        empty = jt[1]
+        self.assertEqual(len(empty), 0)
+        self.assertEqual(empty.num_tensors, 0)
+        self.assertEqual(empty.ldim, 1)
+        self.assertEqual(empty.device.type, device)
+        self.assertEqual(empty.jdata.numel(), 0)
+        self.assertEqual(jt[2].jdata.tolist(), [4.0])
+        self.assertEqual(jt[-1].jdata.tolist(), [4.0])
+        self.assertEqual(jt[0].lshape, [2, 1])
+
+    @parameterized.expand(devices)
+    def test_slice_keeps_empty_outer_lists(self, device):
+        jt = fvdb.JaggedTensor(
+            [[self._t(device, 1, 2)], [], [self._t(device, 3)], [], [self._t(device, 4), self._t(device, 5)]]
+        )
+        self.assertEqual(jt[0:3].lshape, [[2], [], [1]])
+        self.assertEqual(jt[1:2].lshape, [[]])
+        self.assertEqual(jt[0:5:2].lshape, [[2], [1], [1, 1]])
+        self.assertEqual(jt[1:5:2].lshape, [[], []])
+        self.assertEqual(jt[1:4:2].lshape, [[], []])
+        self.assertEqual(jt[3:3].lshape, [])
+
+    @parameterized.expand(devices)
+    def test_index_and_slice_zero_tensors(self, device):
+        jt1 = fvdb.JaggedTensor.from_data_and_offsets(
+            torch.empty(0, 3, device=device), torch.zeros(1, dtype=torch.int64, device=device)
+        )
+        self.assertEqual(len(jt1), 0)
+        self.assertEqual(jt1[0:0].lshape, [])
+        with self.assertRaises(IndexError):
+            jt1[0]
+
+        jt2 = fvdb.JaggedTensor.from_data_offsets_and_list_ids(
+            torch.empty(0, 3, device=device),
+            torch.zeros(1, dtype=torch.int64, device=device),
+            torch.empty(0, 2, dtype=torch.int32, device=device),
+            num_outer_lists=3,
+        )
+        self._check_structure(jt2, [[], [], []], 2)
+        self.assertEqual(jt2[0:3:2].lshape, [[], []])
+        self.assertEqual(tuple(jt2.eshape), (3,))
+
+    @parameterized.expand(devices)
+    def test_from_data_offsets_num_outer_lists(self, device):
+        # Issue 802: a trailing empty outer list needs an explicit count
+        data = torch.tensor([1, 2, 3, 4], dtype=torch.int32, device=device)
+        offsets = torch.tensor([0, 2, 3, 4], device=device)
+        list_ids = torch.tensor([[0, 0], [0, 1], [1, 0]], dtype=torch.int32, device=device)
+        inferred = fvdb.JaggedTensor.from_data_offsets_and_list_ids(data, offsets, list_ids)
+        self._check_structure(inferred, [[2, 1], [1]], 2)
+        explicit = fvdb.JaggedTensor.from_data_offsets_and_list_ids(data, offsets, list_ids, num_outer_lists=3)
+        self._check_structure(explicit, [[2, 1], [1], []], 2)
+
+        # A leading empty outer list is expressed by the outer ids
+        list_ids = torch.tensor([[1, 0], [1, 1], [2, 0]], dtype=torch.int32, device=device)
+        leading = fvdb.JaggedTensor.from_data_offsets_and_list_ids(data, offsets, list_ids)
+        self._check_structure(leading, [[], [2, 1], [1]], 2)
+
+        # int64 list ids are accepted and cast
+        jt = fvdb.JaggedTensor.from_data_offsets_and_list_ids(data, offsets, list_ids.long(), num_outer_lists=4)
+        self._check_structure(jt, [[], [2, 1], [1], []], 2)
+
+    @parameterized.expand(devices)
+    def test_from_data_indices_num_outer_lists(self, device):
+        data = torch.tensor([1.0, 2.0, 3.0], device=device)
+        indices = torch.tensor([0, 0, 1], dtype=torch.int32, device=device)
+        list_ids = torch.tensor([[0, 0], [2, 0]], dtype=torch.int32, device=device)
+        jt = fvdb.JaggedTensor.from_data_indices_and_list_ids(data, indices, list_ids, 2, num_outer_lists=4)
+        self._check_structure(jt, [[2], [], [1], []], 2)
+
+        # Issue 805: zero list-id rows with num_tensors > 0 used to segfault in lshape
+        with self.assertRaisesRegex(ValueError, "rows"):
+            fvdb.JaggedTensor.from_data_indices_and_list_ids(
+                torch.empty(0, device=device),
+                torch.empty(0, dtype=torch.int32, device=device),
+                torch.empty(0, 2, dtype=torch.int32, device=device),
+                2,
+            )
+
+    @parameterized.expand(devices)
+    def test_rejects_malformed_structure(self, device):
+        # Issue 722
+        data = torch.randn(100, 3, device=device)
+        lids = torch.empty(0, 1, dtype=torch.int32, device=device)
+        bad_offsets = {
+            "non-decreasing": [0, 80, 20, 100],
+            "non-decreasing ": [0, -50, 100],
+            "end at": [0, 50, 10_000_000],
+            "start at 0": [5, 50, 100],
+        }
+        for message, offsets in bad_offsets.items():
+            with self.subTest(offsets=offsets):
+                with self.assertRaisesRegex(ValueError, message.strip()):
+                    fvdb.JaggedTensor.from_data_offsets_and_list_ids(
+                        data, torch.tensor(offsets, dtype=torch.int64, device=device), lids
+                    )
+
+        offsets = torch.tensor([0, 50, 100], device=device)
+        bad_list_ids = {
+            "non-decreasing": [[1, 0], [0, 0]],
+            "non-negative": [[-1, 0], [0, 0]],
+            "count 0, 1": [[0, 0], [0, 2]],
+            "less than num_outer_lists": [[0, 0], [3, 0]],
+        }
+        for message, list_ids in bad_list_ids.items():
+            with self.subTest(list_ids=list_ids):
+                with self.assertRaisesRegex(ValueError, message):
+                    fvdb.JaggedTensor.from_data_offsets_and_list_ids(
+                        data,
+                        offsets,
+                        torch.tensor(list_ids, dtype=torch.int32, device=device),
+                        num_outer_lists=2,
+                    )
+
+        with self.assertRaisesRegex(ValueError, "must equal num_tensors"):
+            fvdb.JaggedTensor.from_data_offsets_and_list_ids(data, offsets, lids, num_outer_lists=3)
+        with self.assertRaisesRegex(ValueError, "integer dtype"):
+            fvdb.JaggedTensor.from_data_offsets_and_list_ids(data, offsets.float(), lids)
+
+        indices = torch.zeros(100, dtype=torch.int32, device=device)
+        indices[50:] = 1
+        with self.assertRaisesRegex(ValueError, "less than num_tensors"):
+            fvdb.JaggedTensor.from_data_indices_and_list_ids(data, indices + 1, lids, 2)
+        with self.assertRaisesRegex(ValueError, "non-decreasing"):
+            fvdb.JaggedTensor.from_data_indices_and_list_ids(data, indices.flip(0), lids, 2)
+        with self.assertRaisesRegex(ValueError, "one entry per element"):
+            fvdb.JaggedTensor.from_data_indices_and_list_ids(data, indices[:10], lids, 2)
+
+        # Malformed input is rejected before an op consumes it
+        with self.assertRaises(ValueError):
+            jt = fvdb.JaggedTensor.from_data_offsets_and_list_ids(
+                data, torch.tensor([0, 50, 10_000_000], device=device), lids
+            )
+            fvdb.GridBatch.from_points(jt, voxel_sizes=0.1, origins=0.0)
+
+    @parameterized.expand(devices)
+    def test_reductions_on_empty_data(self, device):
+        jt = fvdb.JaggedTensor([torch.empty(0, 3, device=device) for _ in range(3)])
+        self.assertEqual(tuple(jt.jsum().jdata.shape), (3, 3))
+        self.assertTrue(torch.equal(jt.jsum().jdata, torch.zeros(3, 3, device=device)))
+        for vals, idxs in [jt.jmin(), jt.jmax()]:
+            self.assertEqual(tuple(vals.jdata.shape), (3, 3))
+            self.assertTrue(torch.all(idxs.jdata == -1))
+
+        nested = fvdb.JaggedTensor.from_data_offsets_and_list_ids(
+            torch.empty(0, 2, device=device),
+            torch.zeros(3, dtype=torch.int64, device=device),
+            torch.tensor([[0, 0], [2, 0]], dtype=torch.int32, device=device),
+            num_outer_lists=3,
+        )
+        summed = nested.jsum()
+        self.assertEqual(summed.lshape, [[1], [], [1]])
+        self.assertEqual(len(summed), 3)
+
+    @parameterized.expand(devices)
+    def test_jcat_with_empty_inputs(self, device):
+        empty = fvdb.JaggedTensor([torch.empty(0, 3, device=device), torch.empty(0, 3, device=device)])
+        full = fvdb.JaggedTensor([torch.randn(2, 3, device=device), torch.randn(4, 3, device=device)])
+        cat0 = fvdb.jcat([empty, full, empty], dim=0)
+        self.assertEqual(cat0.lshape, [2, 4])
+        self.assertTrue(torch.equal(cat0.jdata, full.jdata))
+
+        zero = fvdb.JaggedTensor.from_data_and_offsets(
+            torch.empty(0, 3, device=device), torch.zeros(1, dtype=torch.int64, device=device)
+        )
+        self.assertEqual(fvdb.jcat([zero, zero], dim=0).lshape, [])
+        self.assertEqual(fvdb.jcat([zero, full, zero], dim=None).lshape, [2, 4])
+
+        nested_empty = fvdb.JaggedTensor([[], []])
+        nested = fvdb.JaggedTensor([[torch.randn(2, device=device)], []])
+        cat_none = fvdb.jcat([nested.to(device), nested_empty.to(device)], dim=None)
+        self._check_structure(cat_none, [[2], [], [], []], 2)
+
+    @parameterized.expand(devices)
+    def test_jflatten_keeps_empty_outer_lists(self, device):
+        a, b = self._t(device, 1, 2), self._t(device, 3)
+        for tensors, expected in [
+            ([[a, b], [], [b]], [3, 0, 1]),
+            ([[], [a], []], [0, 2, 0]),
+            ([[], []], [0, 0]),
+        ]:
+            with self.subTest(expected=expected):
+                flat = fvdb.JaggedTensor(tensors).to(device).jflatten(dim=1)
+                self.assertEqual(flat.lshape, expected)
+                self.assertEqual(len(flat), len(expected))
+
+    @parameterized.expand(devices)
+    def test_set_jdata_on_empty_nested(self, device):
+        jt = fvdb.JaggedTensor([[torch.empty(0, device=device), torch.empty(0, device=device)]])
+        jt.jdata = torch.empty(0, device=device)
+        self.assertEqual(jt.lshape, [[0, 0]])
+
+        jt = fvdb.JaggedTensor([[self._t(device, 1, 2)], []])
+        jt.jdata = self._t(device, 5, 6)
+        self.assertEqual(jt.jdata.tolist(), [5.0, 6.0])
+        self.assertEqual(jt.lshape, [[2], []])
+
+    @parameterized.expand(devices)
+    def test_pickle_keeps_empty_outer_lists(self, device):
+        import pickle
+
+        a, b = self._t(device, 1, 2), self._t(device, 3)
+        for tensors in [[[a, b], [b], []], [[], [a], []], [[], []]]:
+            jt = fvdb.JaggedTensor(tensors)
+            restored = pickle.loads(pickle.dumps(jt))
+            self.assertEqual(len(restored), len(jt))
+            self.assertEqual(restored.lshape, jt.lshape)
+
+        flat = fvdb.JaggedTensor([a, b])
+        self.assertEqual(pickle.loads(pickle.dumps(flat)).lshape, [2, 1])
+
+
 if __name__ == "__main__":
     unittest.main()

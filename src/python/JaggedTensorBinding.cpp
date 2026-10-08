@@ -634,15 +634,8 @@ bind_jagged_tensor(py::module &m) {
 
                     const torch::Tensor jlidx   = THPVariable_Unpack(t[3].ptr());
                     const int64_t numOuterLists = t[4].cast<int64_t>();
-                    if (jlidx.numel() != 0 && jlidx.size(1) == 1) {
-                        TORCH_CHECK(
-                            numOuterLists == joffsets.size(0),
-                            "Invalid pickle format: numOuterLists does not match joffsets size");
-                    }
-                    TORCH_CHECK(jlidx.size(0) == 0 || jlidx.size(0) == (joffsets.size(0) - 1),
-                                "Invalid pickle format: jlidx size does not match joffsets size");
                     return fvdb::JaggedTensor::from_data_offsets_and_list_ids(
-                        jdata, joffsets, jlidx);
+                        jdata, joffsets, jlidx, numOuterLists);
                 } else {
                     TORCH_CHECK(
                         false, "Invalid JaggedTensor pickle version (got version = ", version, ")");
