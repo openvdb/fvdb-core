@@ -3269,6 +3269,17 @@ class TestEmptyStructures(unittest.TestCase):
         flat = fvdb.JaggedTensor([a, b])
         self.assertEqual(pickle.loads(pickle.dumps(flat)).lshape, [2, 1])
 
+    def test_jcat_dim0_jidx(self):
+        # Issue 811: CUDA wrote jidx at the wrong position
+        if not torch.cuda.is_available():
+            self.skipTest("CUDA is required")
+        a = fvdb.JaggedTensor([torch.arange(3.0).cuda(), torch.arange(2.0).cuda()])
+        b = fvdb.JaggedTensor([torch.arange(1.0).cuda(), torch.arange(4.0).cuda()])
+        c = fvdb.jcat([a, b], dim=0)
+        self.assertEqual(c.joffsets.tolist(), [0, 4, 10])
+        self.assertEqual(c.jidx.tolist(), [0] * 4 + [1] * 6)
+        self.assertEqual(c.jdata.tolist(), [0.0, 1.0, 2.0, 0.0, 0.0, 1.0, 0.0, 1.0, 2.0, 3.0])
+
 
 if __name__ == "__main__":
     unittest.main()
