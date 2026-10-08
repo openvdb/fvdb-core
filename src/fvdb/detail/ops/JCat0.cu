@@ -151,6 +151,9 @@ jCat0CUDA(const std::vector<JaggedTensor> &vec) {
             "computeIndexPutArg",
             AT_WRAP([&] {
                 const int64_t numElements = jt.jdata().size(0);
+                if (numElements == 0) {
+                    return;
+                }
                 const int64_t numBlocksComputeIndexPutArg =
                     GET_BLOCKS(numElements, DEFAULT_BLOCK_DIM);
                 computeIndexPutArg<<<numBlocksComputeIndexPutArg, DEFAULT_BLOCK_DIM, 0, stream>>>(
@@ -199,7 +202,7 @@ jCat0CPU(const std::vector<JaggedTensor> &vec) {
     torch::Tensor outJdata =
         torch::empty(shape, torch::TensorOptions().device(device).dtype(dtype));
     torch::Tensor outJoffsets =
-        torch::empty({numOffsets}, torch::TensorOptions().device(device).dtype(JOffsetsScalarType));
+        torch::zeros({numOffsets}, torch::TensorOptions().device(device).dtype(JOffsetsScalarType));
     torch::Tensor outJidx =
         torch::empty({totalElements}, torch::TensorOptions().device(device).dtype(JIdxScalarType));
     torch::Tensor outJLidx         = vec[0].jlidx();

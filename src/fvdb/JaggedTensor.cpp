@@ -932,7 +932,13 @@ JaggedTensor::jcat(const std::vector<JaggedTensor> &vec, std::optional<int64_t> 
         const torch::Tensor retJData    = torch::cat(data, 0);
         const torch::Tensor retJOffsets = torch::cat(offsets, 0);
         const torch::Tensor retJidx     = jidx_from_joffsets(retJOffsets, retJData.size(0));
-        const torch::Tensor retLidx     = torch::cat(lidx, 0);
+        // ldim 1 inputs may mix empty and explicit list indices, so use the empty form
+        const torch::Tensor retLidx =
+            vec[0].mListIdx.size(1) == 1
+                ? torch::empty(
+                      {0, 1},
+                      torch::TensorOptions().dtype(JLIdxScalarType).device(retJData.device()))
+                : torch::cat(lidx, 0);
         return JaggedTensor::from_jdata_joffsets_jidx_and_lidx_unsafe(
             retJData, retJOffsets, retJidx, retLidx, totalLists);
     } else {
