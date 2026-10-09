@@ -473,36 +473,8 @@ dispatchProjectGaussiansAnalyticBwd<torch::kPrivateUse1>(
             std::tie(elementOffset, elementCount) = deviceChunk(N, deviceId);
 
             if (elementCount > 0) {
-#if (CUDART_VERSION < 13000)
-                nanovdb::util::cuda::memPrefetchAsync(
-                    dLossDMeans.data_ptr<float>() + elementOffset * dLossDMeans.stride(0),
-                    elementCount * dLossDMeans.stride(0) * sizeof(float),
-                    deviceId,
-                    prefetchStream);
-                if (covars.has_value()) {
-                    nanovdb::util::cuda::memPrefetchAsync(
-                        dLossDCovars.data_ptr<float>() + elementOffset * dLossDCovars.stride(0),
-                        elementCount * dLossDCovars.stride(0) * sizeof(float),
-                        deviceId,
-                        prefetchStream);
-                } else {
-                    nanovdb::util::cuda::memPrefetchAsync(
-                        dLossDQuats.data_ptr<float>() + elementOffset * dLossDQuats.stride(0),
-                        elementCount * dLossDQuats.stride(0) * sizeof(float),
-                        deviceId,
-                        prefetchStream);
-                    nanovdb::util::cuda::memPrefetchAsync(
-                        dLossDScales.data_ptr<float>() + elementOffset * dLossDScales.stride(0),
-                        elementCount * dLossDScales.stride(0) * sizeof(float),
-                        deviceId,
-                        prefetchStream);
-                }
-#else
                 std::vector<void *> prefetchPtrs;
                 std::vector<size_t> prefetchSizes;
-                const cudaMemLocation location = {cudaMemLocationTypeDevice, deviceId};
-                std::vector<cudaMemLocation> prefetchLocations = {location};
-                std::vector<size_t> prefetchLocationIndices    = {0};
 
                 prefetchPtrs.emplace_back(dLossDMeans.data_ptr<float>() +
                                           elementOffset * dLossDMeans.stride(0));
@@ -523,15 +495,8 @@ dispatchProjectGaussiansAnalyticBwd<torch::kPrivateUse1>(
                                                sizeof(float));
                 }
 
-                C10_CUDA_CHECK(cudaMemPrefetchBatchAsync(prefetchPtrs.data(),
-                                                         prefetchSizes.data(),
-                                                         prefetchPtrs.size(),
-                                                         prefetchLocations.data(),
-                                                         prefetchLocationIndices.data(),
-                                                         prefetchLocations.size(),
-                                                         0,
-                                                         prefetchStream));
-#endif
+                memDiscardAndPrefetchBatchAsync(
+                    prefetchPtrs, prefetchSizes, deviceId, prefetchStream);
                 C10_CUDA_CHECK(cudaMemsetAsync(dLossDMeans.data_ptr<float>() +
                                                    elementOffset * dLossDMeans.stride(0),
                                                0,
@@ -692,7 +657,8 @@ dispatchProjectGaussiansAnalyticBwd<torch::kPrivateUse1>(
                 std::vector<void *> prefetchPointers = {dLossDWorldToCamMatrices.data_ptr<float>() +
                                                         elementOffset};
                 std::vector<size_t> prefetchSizes    = {elementCount * sizeof(float)};
-                memPrefetchBatchAsync(prefetchPointers, prefetchSizes, deviceId, prefetchStream);
+                memDiscardAndPrefetchBatchAsync(
+                    prefetchPointers, prefetchSizes, deviceId, prefetchStream);
 
                 // The output copy waits on these events after the reduction has been queued.
                 C10_CUDA_CHECK(cudaEventCreateWithFlags(&outputPrefetchEvents[deviceId],

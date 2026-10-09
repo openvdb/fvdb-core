@@ -698,7 +698,7 @@ launchBackwardPrivateUse1(const torch::Tensor &means,
                 prefetchSizes.emplace_back(elementCount * sizeof(float));
             }
         }
-        memPrefetchBatchAsync(prefetchPointers, prefetchSizes, deviceId, prefetchStream);
+        memDiscardAndPrefetchBatchAsync(prefetchPointers, prefetchSizes, deviceId, prefetchStream);
 
         // Output copies wait on these events after all reductions have been queued.
         C10_CUDA_CHECK(
