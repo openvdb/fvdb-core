@@ -58,8 +58,8 @@ class HostReadback {
     }
 };
 
-// Checks that a structure tensor is integral and on the data device, then casts it to the
-// canonical dtype. Empty tensors carry no values, so they are moved instead of rejected.
+// Checks that a structure tensor is integral, then moves it to the data device and casts it to the
+// canonical dtype.
 torch::Tensor
 canonicalStructureTensor(const torch::Tensor &t,
                          c10::ScalarType dtype,
@@ -70,12 +70,6 @@ canonicalStructureTensor(const torch::Tensor &t,
                       name,
                       " must have an integer dtype, but got ",
                       t.scalar_type());
-    TORCH_CHECK_VALUE(t.numel() == 0 || t.device() == device,
-                      name,
-                      " must be on the same device as data (",
-                      device,
-                      "), but got ",
-                      t.device());
     return t.to(device, dtype);
 }
 
@@ -128,10 +122,6 @@ checkListIds(HostReadback &checks,
                           ") must equal num_tensors (",
                           numTensors,
                           ") for ldim 1");
-        if (rows > 0) {
-            checks.require((listIds.select(1, 0) == torch::arange(rows, listIds.options())).all(),
-                           "list_ids for ldim 1 must be 0, 1, ..., num_tensors - 1");
-        }
         return numTensors;
     }
 
@@ -165,6 +155,13 @@ checkListIds(HostReadback &checks,
         return *numOuterLists;
     }
     return checks.read(outer[-1] + 1);
+}
+
+// A JaggedTensor with at most one tensor stores an empty jidx. Element-wise ops compare jidx
+// shapes, so every constructor must follow this convention.
+torch::Tensor
+singleTensorJIdx(const torch::Tensor &indices, int64_t numTensors) {
+    return numTensors <= 1 ? torch::empty({0}, indices.options()) : indices;
 }
 
 int64_t
@@ -350,10 +347,6 @@ JaggedTensor::JaggedTensor(const std::vector<std::vector<torch::Tensor>> &tensor
         return;
     }
 
-    // Number of elements per tensor
-    std::vector<torch::Tensor> batchIdxs;
-    batchIdxs.reserve(totalTensors);
-
     mOffsets              = torch::empty({totalTensors + 1},
                             torch::TensorOptions().dtype(JOffsetsScalarType).device(torch::kCPU));
     auto elementCountsAcc = mOffsets.accessor<JOffsetsType, 1>();
@@ -379,10 +372,6 @@ JaggedTensor::JaggedTensor(const std::vector<std::vector<torch::Tensor>> &tensor
             } else {
                 tensorsReshaped.push_back(tij);
             }
-            batchIdxs.push_back(
-                torch::full({tensorsReshaped[tensorCount].size(0)},
-                            tensorCount,
-                            torch::TensorOptions().dtype(JIdxScalarType).device(device)));
             elementCountsAcc[tensorCount + 1] = tensorsReshaped[tensorCount].size(0);
             tensorCount += 1;
         }
@@ -390,8 +379,8 @@ JaggedTensor::JaggedTensor(const std::vector<std::vector<torch::Tensor>> &tensor
 
     mOffsets = mOffsets.to(device);
     torch::cumsum_out(mOffsets, mOffsets, 0);
-    mBatchIdx      = torch::cat(batchIdxs, 0);
     mData          = torch::cat(tensorsReshaped, 0);
+    mBatchIdx      = jidx_from_joffsets(mOffsets, mData.size(0));
     mListIdx       = listIndexes.to(device);
     mNumOuterLists = tensors.size();
 }
@@ -680,8 +669,23 @@ JaggedTensor::from_data_indices_and_list_ids(torch::Tensor data,
     const auto outerCount = checkListIds(checks, list_ids, num_tensors, num_outer_lists);
     const std::vector<int64_t> values = checks.run();
 
-    return from_data_indices_and_list_ids_unsafe(
-        data, indices, list_ids, num_tensors, resolveOuterListCount(outerCount, values));
+    // The indices are now known to be sorted and in range, so each tensor starts at a binary search
+    // position. This avoids the second sync that unique_dim in joffsets_from_jidx_and_jdata costs.
+    const auto offsetOpts = torch::TensorOptions().dtype(JOffsetsScalarType).device(data.device());
+    torch::Tensor offsets;
+    if (indices.size(0) > 0) {
+        offsets = torch::searchsorted(indices, torch::arange(num_tensors + 1, indices.options()));
+    } else if (num_tensors == 1) {
+        offsets = torch::tensor({JOffsetsType(0), numElements}, offsetOpts);
+    } else {
+        offsets = torch::zeros({num_tensors + 1}, offsetOpts);
+    }
+
+    return from_jdata_joffsets_jidx_and_lidx_unsafe(data,
+                                                    offsets,
+                                                    singleTensorJIdx(indices, num_tensors),
+                                                    list_ids,
+                                                    resolveOuterListCount(outerCount, values));
 }
 
 JaggedTensor
@@ -717,7 +721,7 @@ JaggedTensor::from_data_indices_and_list_ids_unsafe(torch::Tensor data,
                                                     int64_t num_outer_lists) {
     const torch::Tensor offsets = joffsets_from_jidx_and_jdata(indices, data, num_tensors);
     return from_jdata_joffsets_jidx_and_lidx_unsafe(
-        data, offsets, indices, list_ids, num_outer_lists);
+        data, offsets, singleTensorJIdx(indices, num_tensors), list_ids, num_outer_lists);
 }
 
 JaggedTensor

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 import itertools
+import pickle
 import tempfile
 import unittest
 from typing import List
@@ -3257,8 +3258,6 @@ class TestEmptyStructures(unittest.TestCase):
 
     @parameterized.expand(devices)
     def test_pickle_keeps_empty_outer_lists(self, device):
-        import pickle
-
         a, b = self._t(device, 1, 2), self._t(device, 3)
         for tensors in [[[a, b], [b], []], [[], [a], []], [[], []]]:
             jt = fvdb.JaggedTensor(tensors)
@@ -3268,6 +3267,62 @@ class TestEmptyStructures(unittest.TestCase):
 
         flat = fvdb.JaggedTensor([a, b])
         self.assertEqual(pickle.loads(pickle.dumps(flat)).lshape, [2, 1])
+
+    @parameterized.expand(devices)
+    def test_single_tensor_structures_are_interchangeable(self, device):
+        # Element-wise ops compare jidx shapes, so every way of building one tensor must agree
+        t = self._t(device, 1, 2, 3)
+        nested = fvdb.JaggedTensor([[], [t]])
+        from_offsets = fvdb.JaggedTensor.from_data_offsets_and_list_ids(
+            t,
+            torch.tensor([0, 3], device=device),
+            torch.tensor([[1, 0]], dtype=torch.int32, device=device),
+            num_outer_lists=2,
+        )
+        restored = pickle.loads(pickle.dumps(nested))
+        for other in (from_offsets, restored):
+            self.assertEqual((nested + other).jdata.tolist(), [2.0, 4.0, 6.0])
+
+        flat = fvdb.JaggedTensor([t])
+        from_indices = fvdb.JaggedTensor.from_data_and_indices(t, torch.zeros(3, dtype=torch.int32, device=device), 1)
+        self.assertEqual((flat + from_indices).jdata.tolist(), [2.0, 4.0, 6.0])
+
+    def test_structure_tensors_move_to_data_device(self):
+        if not torch.cuda.is_available():
+            self.skipTest("CUDA is required")
+        data = torch.arange(5.0, device="cuda")
+        jt = fvdb.JaggedTensor.from_data_and_offsets(data, torch.tensor([0, 3, 5]))
+        self.assertEqual(jt.lshape, [3, 2])
+        self.assertEqual(jt.joffsets.device.type, "cuda")
+        jt = fvdb.JaggedTensor.from_data_and_indices(data, torch.tensor([0, 0, 0, 1, 1], dtype=torch.int32), 2)
+        self.assertEqual(jt.lshape, [3, 2])
+        jt = fvdb.JaggedTensor.from_data_offsets_and_list_ids(
+            data, torch.tensor([0, 3, 5]), torch.tensor([[0, 0], [2, 0]]), num_outer_lists=3
+        )
+        self.assertEqual(jt.lshape, [[3], [], [2]])
+
+    @parameterized.expand(devices)
+    def test_from_indices_with_empty_tensors(self, device):
+        data = torch.arange(4.0, device=device)
+        indices = torch.tensor([0, 0, 2, 2], dtype=torch.int32, device=device)
+        jt = fvdb.JaggedTensor.from_data_and_indices(data, indices, 4)
+        self.assertEqual(jt.joffsets.tolist(), [0, 2, 2, 4, 4])
+        self.assertEqual(jt.lshape, [2, 0, 2, 0])
+
+        empty = fvdb.JaggedTensor.from_data_and_indices(
+            torch.empty(0, 3, device=device), torch.empty(0, dtype=torch.int32, device=device), 3
+        )
+        self.assertEqual(empty.lshape, [0, 0, 0])
+
+    @parameterized.expand(devices)
+    def test_ldim1_list_ids_values_are_not_checked(self, device):
+        # Older slicing kept un-rebased ldim-1 list ids, which old pickles may still contain
+        jt = fvdb.JaggedTensor.from_data_offsets_and_list_ids(
+            self._t(device, 1, 2, 3),
+            torch.tensor([0, 1, 3], device=device),
+            torch.tensor([[4], [5]], dtype=torch.int32, device=device),
+        )
+        self.assertEqual(jt.lshape, [1, 2])
 
     def test_jcat_dim0_jidx(self):
         # Issue 811: CUDA wrote jidx at the wrong position
