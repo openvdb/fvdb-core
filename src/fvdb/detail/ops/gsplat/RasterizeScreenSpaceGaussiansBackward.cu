@@ -357,9 +357,9 @@ struct RasterizeBackwardArgs {
         atomicAdd(&dLossDConicsGaussianPtr->operator[](1), pixelConicGradientContribution[1]);
         atomicAdd(&dLossDConicsGaussianPtr->operator[](2), pixelConicGradientContribution[2]);
 
-        auto *dLossDMeans2DGaussianPtr = getAccessorPointer<vec2t>(mOutDLossDMeans2d, g);
-        atomicAdd(&dLossDMeans2DGaussianPtr->operator[](0), pixelMean2dGradientContribution[0]);
-        atomicAdd(&dLossDMeans2DGaussianPtr->operator[](1), pixelMean2dGradientContribution[1]);
+        auto *dLossDMeans2dGaussianPtr = getAccessorPointer<vec2t>(mOutDLossDMeans2d, g);
+        atomicAdd(&dLossDMeans2dGaussianPtr->operator[](0), pixelMean2dGradientContribution[0]);
+        atomicAdd(&dLossDMeans2dGaussianPtr->operator[](1), pixelMean2dGradientContribution[1]);
 
         if (mAbsGrad) {
             auto *dLossDMeans2dAbsGaussianPtr = getAccessorPointer<vec2t>(mOutDLossDMeans2dAbs, g);
@@ -1237,11 +1237,11 @@ callRasterizeBackwardPrivateUse1(
     std::vector<cudaStream_t> prefetchStreams(c10::cuda::device_count());
     // Keep each device's current compute stream unchanged through allocation, rasterization,
     // reduction, and release: the owning tensors enqueue their frees on their allocation streams.
-    std::vector<torch::Tensor> outDLossDMeans2DLocals(c10::cuda::device_count());
+    std::vector<torch::Tensor> outDLossDMeans2dLocals(c10::cuda::device_count());
     std::vector<torch::Tensor> outDLossDConicsLocals(c10::cuda::device_count());
     std::vector<torch::Tensor> outDLossDFeaturesLocals(c10::cuda::device_count());
     std::vector<torch::Tensor> outDLossDOpacitiesLocals(c10::cuda::device_count());
-    std::vector<torch::Tensor> outDLossDMeans2DAbsLocals(c10::cuda::device_count());
+    std::vector<torch::Tensor> outDLossDMeans2dAbsLocals(c10::cuda::device_count());
 
     // Prefetch inputs after prior work, then make the current streams wait for those inputs.
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
@@ -1284,12 +1284,12 @@ callRasterizeBackwardPrivateUse1(
         uint32_t deviceTileOffset, deviceTileCount;
         std::tie(deviceTileOffset, deviceTileCount) = deviceChunk(tileCount, deviceId);
 
-        outDLossDMeans2DLocals[deviceId]   = makeLocalGradient(means2d, deviceId, stream);
+        outDLossDMeans2dLocals[deviceId]   = makeLocalGradient(means2d, deviceId, stream);
         outDLossDConicsLocals[deviceId]    = makeLocalGradient(conics, deviceId, stream);
         outDLossDFeaturesLocals[deviceId]  = makeLocalGradient(features, deviceId, stream);
         outDLossDOpacitiesLocals[deviceId] = makeLocalGradient(opacities, deviceId, stream);
         if (absGrad) {
-            outDLossDMeans2DAbsLocals[deviceId] = makeLocalGradient(means2d, deviceId, stream);
+            outDLossDMeans2dAbsLocals[deviceId] = makeLocalGradient(means2d, deviceId, stream);
         }
 
         if (deviceTileCount) {
@@ -1309,11 +1309,11 @@ callRasterizeBackwardPrivateUse1(
                 reshapedLastGaussianIds,
                 reshapedDLossDRenderedFeatures,
                 reshapedDLossDRenderedAlphas,
-                outDLossDMeans2DLocals[deviceId],
+                outDLossDMeans2dLocals[deviceId],
                 outDLossDConicsLocals[deviceId],
                 outDLossDFeaturesLocals[deviceId],
                 outDLossDOpacitiesLocals[deviceId],
-                absGrad ? std::make_optional(outDLossDMeans2DAbsLocals[deviceId]) : std::nullopt,
+                absGrad ? std::make_optional(outDLossDMeans2dAbsLocals[deviceId]) : std::nullopt,
                 activeTiles,
                 tilePixelMask,
                 tilePixelCumsum,
@@ -1370,12 +1370,12 @@ callRasterizeBackwardPrivateUse1(
     }
 
     // Queue every reduction before waiting so they can all overlap with output prefetching.
-    reduceGradientShards(outDLossDMeans2DLocals);
+    reduceGradientShards(outDLossDMeans2dLocals);
     reduceGradientShards(outDLossDConicsLocals);
     reduceGradientShards(outDLossDFeaturesLocals);
     reduceGradientShards(outDLossDOpacitiesLocals);
     if (absGrad) {
-        reduceGradientShards(outDLossDMeans2DAbsLocals);
+        reduceGradientShards(outDLossDMeans2dAbsLocals);
     }
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
@@ -1384,20 +1384,20 @@ callRasterizeBackwardPrivateUse1(
         C10_CUDA_CHECK(cudaEventDestroy(outputPrefetchEvents[deviceId]));
     }
 
-    copyGradientShards<ScalarType>(outDLossDMeans2DLocals, outDLossDMeans2d);
+    copyGradientShards<ScalarType>(outDLossDMeans2dLocals, outDLossDMeans2d);
     copyGradientShards<ScalarType>(outDLossDConicsLocals, outDLossDConics);
     copyGradientShards<ScalarType>(outDLossDFeaturesLocals, outDLossDFeatures);
     copyGradientShards<ScalarType>(outDLossDOpacitiesLocals, outDLossDOpacities);
     if (absGrad) {
-        copyGradientShards<ScalarType>(outDLossDMeans2DAbsLocals, outDLossDMeans2dAbs);
+        copyGradientShards<ScalarType>(outDLossDMeans2dAbsLocals, outDLossDMeans2dAbs);
     }
 
     // Enqueue frees after the reductions and output copies, before merging the compute streams.
-    outDLossDMeans2DLocals.clear();
+    outDLossDMeans2dLocals.clear();
     outDLossDConicsLocals.clear();
     outDLossDFeaturesLocals.clear();
     outDLossDOpacitiesLocals.clear();
-    outDLossDMeans2DAbsLocals.clear();
+    outDLossDMeans2dAbsLocals.clear();
 
     mergeStreams();
 
