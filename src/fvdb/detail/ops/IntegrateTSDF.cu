@@ -30,9 +30,11 @@ template <typename ScalarType>
 __global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
 unprojectDepthmapKernel(int64_t imageWidth,
                         int64_t imageHeight,
+                        const bool hasWeights,
                         fvdb::TorchRAcc64<ScalarType, 3> invProjMats,
                         fvdb::TorchRAcc64<ScalarType, 3> camToWorldMats,
                         fvdb::TorchRAcc64<ScalarType, 3> depthImages,
+                        fvdb::TorchRAcc64<ScalarType, 3> weightImages,
                         fvdb::TorchRAcc64<ScalarType, 3> outPoints) {
     using Vec3T = nanovdb::math::Vec3<ScalarType>;
     using Vec4T = nanovdb::math::Vec4<ScalarType>;
@@ -78,7 +80,15 @@ unprojectDepthmapKernel(int64_t imageWidth,
             continue;
         }
 
-        const auto depth           = depthImages[batchIdx][rowIdx][colIdx];
+        // A pixel whose fusion weight is zero is one integrateTSDFKernel is guaranteed to skip,
+        // so it must not contribute to the grid bounds either: its depth is unconstrained, and
+        // unprojecting it would grow the allocation around a sample that can never be
+        // integrated. Collapsing such pixels onto the camera origin (depth 0) drops their
+        // influence while keeping this kernel's dense one-point-per-pixel output shape.
+        const bool pixelDropped =
+            hasWeights && !(static_cast<float>(weightImages[batchIdx][rowIdx][colIdx]) > 0.0f);
+        const auto depth = pixelDropped ? ScalarType(0) : depthImages[batchIdx][rowIdx][colIdx];
+
         const Vec3T screenSpacePos = {
             static_cast<ScalarType>(colIdx), static_cast<ScalarType>(rowIdx), ScalarType(1)};
         const Vec3T camSpacePos = (sharedInvProjMats[batchIdx] * screenSpacePos) * depth;
@@ -316,10 +326,14 @@ integrateTSDFKernel(const ScalarDataType truncationMargin,
 
 torch::Tensor
 unprojectDepthMapToPoints(const torch::Tensor &depthImages,
+                          const torch::Tensor &weightImages,
                           const torch::Tensor &projectionMatrices,
                           const torch::Tensor &invProjectionMatrices,
                           const torch::Tensor &camToWorldMatrices) {
     const c10::cuda::CUDAGuard device_guard(depthImages.device());
+
+    // Empty weights mean "every pixel counts", matching integrateTSDFKernel's convention.
+    const bool hasWeights = weightImages.size(0) > 0;
 
     const int64_t batchSize      = depthImages.size(0);
     const int64_t imageHeight    = depthImages.size(1);
@@ -355,9 +369,11 @@ unprojectDepthMapToPoints(const torch::Tensor &depthImages,
             unprojectDepthmapKernel<<<numBlocks, DEFAULT_BLOCK_DIM, sharedSize, stream>>>(
                 imageWidth,
                 imageHeight,
+                hasWeights,
                 invProjectionMatrices.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
                 camToWorldMatrices.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
                 depthImages.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
+                weightImages.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
                 outUnprojectedPoints.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>());
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         }),
@@ -829,6 +845,14 @@ integrateTSDFImpl(const c10::intrusive_ptr<GridBatchData> grid,
     const torch::Tensor squeezedDepthImages =
         depthImages.dim() == 4 ? depthImages.squeeze(-1) : depthImages;
 
+    // Same squeeze for the optional per-pixel fusion weights. These bound the unprojection in
+    // step 1 as well as the integration in step 3, so they have to be resolved up front.
+    const auto weightImagesValue = weightImages.has_value()
+                                       ? weightImages.value()
+                                       : torch::empty({0, 0, 0}, squeezedDepthImages.options());
+    const auto weightImagesSqueezed =
+        weightImagesValue.dim() == 4 ? weightImagesValue.squeeze(-1) : weightImagesValue;
+
     // Step 0: Inverse camera and projection matrices (using float32 precision for stability if
     // the inputs are float16). We need to compute the inverse of the camera-to-world matrices
     // and the projection matrices to unproject the depth maps to 3D points.
@@ -836,8 +860,11 @@ integrateTSDFImpl(const c10::intrusive_ptr<GridBatchData> grid,
         getCameraMatrices(projectionMatrices, camToWorldMatrices);
 
     // Step 1: Unproject the depth maps to 3D pointsauto
-    const torch::Tensor unprojectedPoints = unprojectDepthMapToPoints(
-        squeezedDepthImages, projectionMats, invProjectionMats, camToWorldMats);
+    const torch::Tensor unprojectedPoints = unprojectDepthMapToPoints(squeezedDepthImages,
+                                                                      weightImagesSqueezed,
+                                                                      projectionMats,
+                                                                      invProjectionMats,
+                                                                      camToWorldMats);
 
     // Step 2: Build union grid grid from unprojected points and merge into with the old grid
     const auto pointGrid = buildPointGrid(truncationMargin, unprojectedPoints, *grid);
@@ -860,11 +887,6 @@ integrateTSDFImpl(const c10::intrusive_ptr<GridBatchData> grid,
         }
     }();
 
-    const auto weightImagesValue = weightImages.has_value()
-                                       ? weightImages.value()
-                                       : torch::empty({0, 0, 0}, squeezedDepthImages.options());
-    const auto weightImagesSqueezed =
-        weightImagesValue.dim() == 4 ? weightImagesValue.squeeze(-1) : weightImagesValue;
     // Step 3: Integrate weights, tsdf values, and feautures into the output tensor
     const auto [outTsdf, outWeights, outFeatures] = doIntegrate(truncationMargin,
                                                                 squeezedDepthImages,
