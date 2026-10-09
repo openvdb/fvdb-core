@@ -76,6 +76,25 @@ jobs:
         licenses: |-
           Apache-2.0
 
+  # The compiled bindings are typed by the hand-written fvdb/_fvdb_cpp.pyi. Pyright checks the
+  # Python code in [tool.pyright] include against it, so a wrapper whose calls or returns disagree
+  # with the stub fails here. tests/unit/test_fvdb_cpp_stub.py checks the stub itself against the
+  # compiled bindings. CPU PyTorch is enough for the types; its version follows the build env.
+  pyright:
+    name: Python types (pyright)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      with:
+        persist-credentials: false
+    - name: Type-check against the _fvdb_cpp stub
+      run: |
+        set -euo pipefail
+        TORCH_VERSION=$(grep -oP 'pytorch-gpu=\K[0-9.]+' env/build_environment.yml)
+        python3 -m pip install --quiet "torch==${TORCH_VERSION}" --index-url https://download.pytorch.org/whl/cpu
+        python3 -m pip install --quiet "pyright==1.1.414" numpy
+        python3 -m pyright --pythonpath "$(command -v python3)"
+
   # Search the git repository for any trailing spaces excluding auto-generated wlt files
   # NOTE: Migrated from openvdb whitespace.yml
   trailingspaces:

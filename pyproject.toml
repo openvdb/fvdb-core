@@ -69,6 +69,14 @@ select = ["D101", "D102", "D103", "D104", "D417"]
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 
+[tool.pyright]
+# fvdb/functional is checked against the hand-written fvdb/_fvdb_cpp.pyi stub. The rest of the
+# package is not yet clean; widen this as it is.
+include = ["fvdb/functional"]
+pythonVersion = "3.10"
+# The compiled extension has a stub but no Python source.
+reportMissingModuleSource = false
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
