@@ -17,6 +17,21 @@ Attention and volume rendering
 .. autofunction:: fvdb.scaled_dot_product_attention
 .. autofunction:: fvdb.volume_render
 
+Space-filling-curve serialization
+---------------------------------
+
+Sort voxels along Morton (z-order) or Hilbert curves, as used by serialized patch
+attention in Point Transformer V3. Order names and axis conventions match Pointcept.
+
+.. autodata:: fvdb.SERIALIZATION_ORDERS
+.. autofunction:: fvdb.serialize
+.. autoclass:: fvdb.GridSerialization
+   :members:
+.. autofunction:: fvdb.serialization_perm
+.. autofunction:: fvdb.serialization_codes
+.. autofunction:: fvdb.serialization_depth
+.. autofunction:: fvdb.permute_jagged
+
 Unary tensor operations
 -----------------------
 
