@@ -3301,6 +3301,39 @@ class TestEmptyStructures(unittest.TestCase):
         )
         self.assertEqual(jt.lshape, [[3], [], [2]])
 
+    def test_rejects_malformed_host_structure_for_cuda_data(self):
+        # Host-built structure is validated on the host before it moves to the data device
+        if not torch.cuda.is_available():
+            self.skipTest("CUDA is required")
+        data = torch.randn(100, 3, device="cuda")
+        with self.assertRaisesRegex(ValueError, "non-decreasing"):
+            fvdb.JaggedTensor.from_data_and_offsets(data, torch.tensor([0, 80, 20, 100]))
+        with self.assertRaisesRegex(ValueError, "end at"):
+            fvdb.JaggedTensor.from_data_and_offsets(data, torch.tensor([0, 50, 10_000_000]))
+        with self.assertRaisesRegex(ValueError, "less than num_outer_lists"):
+            fvdb.JaggedTensor.from_data_offsets_and_list_ids(
+                data, torch.tensor([0, 50, 100]), torch.tensor([[0, 0], [3, 0]]), num_outer_lists=2
+            )
+
+    @parameterized.expand(devices)
+    def test_validates_large_structures(self, device):
+        # More entries than one block checks, so CUDA takes the multi-block path
+        n = 200_000
+        data = torch.randn(n, device=device)
+        indices = torch.repeat_interleave(torch.arange(4, device=device, dtype=torch.int32), n // 4)
+        self.assertEqual(fvdb.JaggedTensor.from_data_and_indices(data, indices, 4).lshape, [n // 4] * 4)
+        bad = indices.clone()
+        bad[n - 10] = 0
+        with self.assertRaisesRegex(ValueError, "non-decreasing"):
+            fvdb.JaggedTensor.from_data_and_indices(data, bad, 4)
+
+        offsets = torch.arange(0, n + 1, 2, device=device, dtype=torch.int64)
+        self.assertEqual(fvdb.JaggedTensor.from_data_and_offsets(data, offsets).num_tensors, n // 2)
+        bad_offsets = offsets.clone()
+        bad_offsets[-2] = n + 5
+        with self.assertRaisesRegex(ValueError, "non-decreasing"):
+            fvdb.JaggedTensor.from_data_and_offsets(data, bad_offsets)
+
     @parameterized.expand(devices)
     def test_from_indices_with_empty_tensors(self, device):
         data = torch.arange(4.0, device=device)

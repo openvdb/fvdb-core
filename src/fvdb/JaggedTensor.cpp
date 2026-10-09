@@ -13,6 +13,7 @@
 #include <fvdb/detail/ops/jagged/JaggedReductions.h>
 #include <fvdb/detail/ops/jagged/JaggedSort.h>
 
+#include <initializer_list>
 #include <optional>
 #include <string>
 #include <utility>
@@ -22,19 +23,28 @@ namespace fvdb {
 
 namespace {
 
-// Checks that a structure tensor is integral, then moves it to the data device and casts it to the
-// canonical dtype.
+// Checks that a structure tensor is integral, then casts it to the canonical dtype on its own
+// device
 torch::Tensor
-canonicalStructureTensor(const torch::Tensor &t,
-                         c10::ScalarType dtype,
-                         const torch::Device &device,
-                         const char *name) {
+canonicalStructureTensor(const torch::Tensor &t, c10::ScalarType dtype, const char *name) {
     TORCH_CHECK_VALUE(t.defined(), name, " must be a defined tensor");
     TORCH_CHECK_VALUE(c10::isIntegralType(t.scalar_type(), /*includeBool=*/false),
                       name,
                       " must have an integer dtype, but got ",
                       t.scalar_type());
-    return t.to(device, dtype);
+    return t.to(dtype);
+}
+
+// Structure tensors that all start on the host are validated there, which needs no kernel and no
+// sync. Otherwise they are validated on the data device.
+torch::Device
+structureCheckDevice(const torch::Tensor &data, std::initializer_list<torch::Tensor> structure) {
+    for (const auto &t: structure) {
+        if (!t.device().is_cpu() && t.numel() > 0) {
+            return data.device();
+        }
+    }
+    return torch::kCPU;
 }
 
 // A JaggedTensor with at most one tensor stores an empty jidx. Element-wise ops compare jidx
@@ -595,8 +605,11 @@ JaggedTensor::from_data_indices_and_list_ids(torch::Tensor data,
                       "data must have shape [N, ...], but got data.dim() = ",
                       data.defined() ? data.dim() : 0);
     TORCH_CHECK_VALUE(num_tensors >= 0, "num_tensors must be non-negative, but got ", num_tensors);
-    indices  = canonicalStructureTensor(indices, JIdxScalarType, data.device(), "indices");
-    list_ids = canonicalStructureTensor(list_ids, JLIdxScalarType, data.device(), "list_ids");
+    indices  = canonicalStructureTensor(indices, JIdxScalarType, "indices");
+    list_ids = canonicalStructureTensor(list_ids, JLIdxScalarType, "list_ids");
+    const torch::Device checkDevice = structureCheckDevice(data, {indices, list_ids});
+    indices                         = indices.to(checkDevice);
+    list_ids                        = list_ids.to(checkDevice);
     TORCH_CHECK_VALUE(indices.dim() == 1, "indices must be one-dimensional");
     const int64_t numElements = data.size(0);
     TORCH_CHECK_VALUE(indices.size(0) == numElements ||
@@ -613,6 +626,8 @@ JaggedTensor::from_data_indices_and_list_ids(torch::Tensor data,
 
     const int64_t outerLists = validateStructure(
         torch::Tensor(), numElements, indices, num_tensors, list_ids, num_outer_lists);
+    indices  = indices.to(data.device());
+    list_ids = list_ids.to(data.device());
 
     // The indices are now known to be sorted and in range, so each tensor starts at a binary search
     // position. This avoids the second sync that unique_dim in joffsets_from_jidx_and_jdata costs.
@@ -638,8 +653,11 @@ JaggedTensor::from_data_offsets_and_list_ids(torch::Tensor data,
     TORCH_CHECK_VALUE(data.defined() && data.dim() > 0,
                       "data must have shape [N, ...], but got data.dim() = ",
                       data.defined() ? data.dim() : 0);
-    offsets  = canonicalStructureTensor(offsets, JOffsetsScalarType, data.device(), "offsets");
-    list_ids = canonicalStructureTensor(list_ids, JLIdxScalarType, data.device(), "list_ids");
+    offsets  = canonicalStructureTensor(offsets, JOffsetsScalarType, "offsets");
+    list_ids = canonicalStructureTensor(list_ids, JLIdxScalarType, "list_ids");
+    const torch::Device checkDevice = structureCheckDevice(data, {offsets, list_ids});
+    offsets                         = offsets.to(checkDevice);
+    list_ids                        = list_ids.to(checkDevice);
     TORCH_CHECK_VALUE(
         offsets.dim() == 1 && offsets.size(0) > 0,
         "offsets must be one-dimensional with num_tensors + 1 entries, but got shape ",
@@ -648,6 +666,8 @@ JaggedTensor::from_data_offsets_and_list_ids(torch::Tensor data,
 
     const int64_t outerLists = validateStructure(
         offsets, data.size(0), torch::Tensor(), numTensors, list_ids, num_outer_lists);
+    offsets  = offsets.to(data.device());
+    list_ids = list_ids.to(data.device());
 
     return from_data_offsets_and_list_ids_unsafe(data, offsets, list_ids, outerLists);
 }
