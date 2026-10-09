@@ -326,6 +326,24 @@ class TestPointTransformerV3(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "non-negative"):
             model(shifted.jagged_like(self.data.jdata), shifted)
 
+    def test_pointcept_unpool_cpe(self):
+        # The option changes only the decoder's first-block convolution input, so it matters with conv
+        # in the position encoding and has no effect without it.
+        base = dict(SMALL_CONFIG, enc_patch_size=0, dec_patch_size=0, shuffle_orders=False, shuffle_pooled_orders=False)
+        for conv, should_differ in ((True, True), (False, False)):
+            torch.manual_seed(0)
+            a = fvnn.PointTransformerV3(**base, cpe_conv=conv).cuda().eval()
+            b = fvnn.PointTransformerV3(**base, cpe_conv=conv, pointcept_unpool_cpe=True).cuda().eval()
+            b.load_state_dict(a.state_dict())
+            with torch.no_grad():
+                out_a, _ = a(self.data, self.grid)
+                out_b, _ = b(self.data, self.grid)
+            self.assertEqual(not torch.allclose(out_a.jdata, out_b.jdata), should_differ, f"cpe_conv={conv}")
+        model = fvnn.PointTransformerV3(**base, pointcept_unpool_cpe=True).cuda()
+        out, out_grid = model(self.data, self.grid)
+        self._check_output(out, out_grid, 8)
+        self._check_backward(model, out)
+
     def test_default_config_builds(self):
         model = fvnn.PointTransformerV3()
         self.assertEqual(len(model.enc), 5)
