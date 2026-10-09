@@ -520,6 +520,37 @@ jaggedTensorIndexIntOneList(const JaggedTensor &jt, int64_t idxVal) {
         retData, retJoffsets, retJidx, retJLidx, 1);
 }
 
+// Returns the first list id row whose outer id is >= value. Outer ids are sorted.
+template <typename ListIdsAcc>
+__host__ __device__ int64_t
+lowerBoundOuterId(const ListIdsAcc &listIds, int64_t value) {
+    int64_t lo = 0;
+    int64_t hi = listIds.size(0);
+    while (lo < hi) {
+        const int64_t mid = lo + (hi - lo) / 2;
+        if (listIds[mid][0] < value) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    return lo;
+}
+
+// Writes the tensor range [first, last) of outer list idxVal and its element range
+__global__ void
+outerListRange(const int64_t idxVal,
+               const TorchRAcc64<JLIdxType, 2> listIds,
+               const TorchRAcc64<JOffsetsType, 1> offsets,
+               TorchRAcc64<int64_t, 1> out) {
+    const int64_t first = lowerBoundOuterId(listIds, idxVal);
+    const int64_t last  = lowerBoundOuterId(listIds, idxVal + 1);
+    out[0]              = first;
+    out[1]              = last;
+    out[2]              = offsets[first];
+    out[3]              = offsets[last];
+}
+
 // Integer indexing into a list of lists. Returns the tensors of outer list idxVal as a list of
 // tensors, which is empty when that outer list has no tensors.
 //      jt = JaggedTensor([[t_00, t_01], [], [t_20]])
@@ -529,20 +560,35 @@ jaggedTensorIndexIntNested(const JaggedTensor &jt, int64_t idxVal) {
     TORCH_CHECK(jt.ldim() == 2, "We don't support ldim > 2.");
     const torch::Tensor joffsets = jt.joffsets();
     const torch::Tensor jdata    = jt.jdata();
+    const torch::Tensor jlidx    = jt.jlidx();
 
-    // Outer ids are sorted, so the tensors of one outer list are the contiguous rows
-    // [firstTensor, lastTensor)
-    const torch::Tensor outer  = jt.jlidx().index({torch::indexing::Slice(), 0}).contiguous();
-    const torch::Tensor bounds = torch::searchsorted(
-        outer,
-        torch::tensor({static_cast<JLIdxType>(idxVal), static_cast<JLIdxType>(idxVal + 1)},
-                      outer.options()));
-    const torch::Tensor readback = torch::cat({bounds, joffsets.index({bounds})}).cpu();
-    const auto acc               = readback.accessor<int64_t, 1>();
-    const int64_t firstTensor    = acc[0];
-    const int64_t lastTensor     = acc[1];
-    const JOffsetsType startIdx  = acc[2];
-    const JOffsetsType endIdx    = acc[3];
+    // The tensors of one outer list are the contiguous rows [firstTensor, lastTensor)
+    int64_t firstTensor, lastTensor;
+    JOffsetsType startIdx, endIdx;
+    if (jt.device().is_cuda()) {
+        torch::Tensor range =
+            torch::empty({4}, torch::TensorOptions().dtype(torch::kInt64).device(jdata.device()));
+        cudaStream_t stream = c10::cuda::getCurrentCUDAStream(jt.device().index()).stream();
+        outerListRange<<<1, 1, 0, stream>>>(
+            idxVal,
+            jlidx.packed_accessor64<JLIdxType, 2, torch::RestrictPtrTraits>(),
+            joffsets.packed_accessor64<JOffsetsType, 1, torch::RestrictPtrTraits>(),
+            range.packed_accessor64<int64_t, 1, torch::RestrictPtrTraits>());
+        C10_CUDA_KERNEL_LAUNCH_CHECK();
+        range          = range.cpu();
+        const auto acc = range.accessor<int64_t, 1>();
+        firstTensor    = acc[0];
+        lastTensor     = acc[1];
+        startIdx       = acc[2];
+        endIdx         = acc[3];
+    } else {
+        const auto lidxAcc    = jlidx.accessor<JLIdxType, 2>();
+        const auto offsetsAcc = joffsets.accessor<JOffsetsType, 1>();
+        firstTensor           = lowerBoundOuterId(lidxAcc, idxVal);
+        lastTensor            = lowerBoundOuterId(lidxAcc, idxVal + 1);
+        startIdx              = offsetsAcc[firstTensor];
+        endIdx                = offsetsAcc[lastTensor];
+    }
 
     const torch::Tensor retOffsets =
         joffsets.index({torch::indexing::Slice(firstTensor, lastTensor + 1)}) - startIdx;
