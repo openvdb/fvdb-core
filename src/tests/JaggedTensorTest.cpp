@@ -1009,3 +1009,78 @@ TEST_F(JaggedTensorTest, DimensionMethodErrorCases) {
     // Test unbind2 on flat tensor (should throw)
     EXPECT_THROW(jt_flat.unbind2(), c10::Error); // Should throw for ldim != 2
 }
+
+// Empty lists and empty outer lists are valid structures
+TEST_F(JaggedTensorTest, EmptyListConstructors) {
+    JaggedTensor flat(std::vector<torch::Tensor>{});
+    EXPECT_EQ(flat.num_tensors(), 0);
+    EXPECT_EQ(flat.num_outer_lists(), 0);
+    EXPECT_EQ(flat.ldim(), 1);
+    EXPECT_EQ(flat.edim(), 0);
+    EXPECT_TRUE(flat.lsizes1().empty());
+    flat.check_valid();
+
+    JaggedTensor nested(std::vector<std::vector<torch::Tensor>>{{}, {}});
+    EXPECT_EQ(nested.num_tensors(), 0);
+    EXPECT_EQ(nested.num_outer_lists(), 2);
+    EXPECT_EQ(nested.ldim(), 2);
+    EXPECT_EQ(nested.lsizes2(), (std::vector<std::vector<int64_t>>{{}, {}}));
+
+    JaggedTensor mixed(std::vector<std::vector<torch::Tensor>>{{}, {tensor_a}, {}});
+    EXPECT_EQ(mixed.num_tensors(), 1);
+    EXPECT_EQ(mixed.num_outer_lists(), 3);
+    EXPECT_EQ(mixed.lsizes2(), (std::vector<std::vector<int64_t>>{{}, {3}, {}}));
+}
+
+// num_outer_lists keeps trailing empty outer lists that list ids cannot express
+TEST_F(JaggedTensorTest, ExplicitOuterListCount) {
+    auto offsets  = torch::tensor({0, 2, 4, 5}, torch::kInt64);
+    auto list_ids = torch::tensor({{0, 0}, {0, 1}, {2, 0}}, torch::kInt32);
+
+    auto inferred = JaggedTensor::from_data_offsets_and_list_ids(
+        sample_data_1d.slice(0, 0, 5), offsets, list_ids);
+    EXPECT_EQ(inferred.num_outer_lists(), 3);
+    EXPECT_EQ(inferred.lsizes2(), (std::vector<std::vector<int64_t>>{{2, 2}, {}, {1}}));
+
+    auto explicitCount = JaggedTensor::from_data_offsets_and_list_ids(
+        sample_data_1d.slice(0, 0, 5), offsets, list_ids, 5);
+    EXPECT_EQ(explicitCount.num_outer_lists(), 5);
+    EXPECT_EQ(explicitCount.lsizes2(),
+              (std::vector<std::vector<int64_t>>{{2, 2}, {}, {1}, {}, {}}));
+
+    auto indices = torch::tensor({0, 0, 1, 1, 2}, torch::kInt32);
+    auto fromIdx = JaggedTensor::from_data_indices_and_list_ids(
+        sample_data_1d.slice(0, 0, 5), indices, list_ids, 3, 4);
+    EXPECT_EQ(fromIdx.lsizes2(), (std::vector<std::vector<int64_t>>{{2, 2}, {}, {1}, {}}));
+}
+
+// The checked constructors reject structures that would make readers read out of bounds
+TEST_F(JaggedTensorTest, RejectsMalformedStructure) {
+    auto data = sample_data_1d.slice(0, 0, 5);
+    auto lids = torch::empty({0, 1}, torch::kInt32);
+
+    EXPECT_THROW(JaggedTensor::from_data_offsets_and_list_ids(
+                     data, torch::tensor({0, 4, 2, 5}, torch::kInt64), lids),
+                 c10::ValueError);
+    EXPECT_THROW(JaggedTensor::from_data_offsets_and_list_ids(
+                     data, torch::tensor({0, 2, 50}, torch::kInt64), lids),
+                 c10::ValueError);
+    EXPECT_THROW(JaggedTensor::from_data_offsets_and_list_ids(
+                     data, torch::tensor({1, 2, 5}, torch::kInt64), lids),
+                 c10::ValueError);
+
+    // List ids with zero rows but tensors present
+    EXPECT_THROW(JaggedTensor::from_data_indices_and_list_ids(torch::empty({0}),
+                                                              torch::empty({0}, torch::kInt32),
+                                                              torch::empty({0, 2}, torch::kInt32),
+                                                              2),
+                 c10::ValueError);
+
+    // Outer ids past the explicit outer list count
+    EXPECT_THROW(
+        JaggedTensor::from_data_offsets_and_list_ids(data,
+                                                     torch::tensor({0, 2, 5}, torch::kInt64),
+                                                     torch::tensor({{0, 0}, {3, 0}}, torch::kInt32),
+                                                     2),
+        c10::ValueError);
+}

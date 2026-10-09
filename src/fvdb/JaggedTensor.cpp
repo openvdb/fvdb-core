@@ -8,13 +8,136 @@
 #include <fvdb/detail/ops/JCat0.h>
 #include <fvdb/detail/ops/JIdxForJOffsets.h>
 #include <fvdb/detail/ops/JOffsetsFromJIdx.h>
+#include <fvdb/detail/ops/JaggedStructureCheck.h>
 #include <fvdb/detail/ops/JaggedTensorIndex.h>
 #include <fvdb/detail/ops/jagged/JaggedReductions.h>
 #include <fvdb/detail/ops/jagged/JaggedSort.h>
 
+#include <initializer_list>
 #include <optional>
+#include <string>
+#include <utility>
+#include <vector>
 
 namespace fvdb {
+
+namespace {
+
+// Checks that a structure tensor is integral, then casts it to the canonical dtype on its own
+// device
+torch::Tensor
+canonicalStructureTensor(const torch::Tensor &t, c10::ScalarType dtype, const char *name) {
+    TORCH_CHECK_VALUE(t.defined(), name, " must be a defined tensor");
+    TORCH_CHECK_VALUE(c10::isIntegralType(t.scalar_type(), /*includeBool=*/false),
+                      name,
+                      " must have an integer dtype, but got ",
+                      t.scalar_type());
+    return t.to(dtype);
+}
+
+// Structure tensors that all start on the host are validated there, which needs no kernel and no
+// sync. Otherwise they are validated on the data device.
+torch::Device
+structureCheckDevice(const torch::Tensor &data, std::initializer_list<torch::Tensor> structure) {
+    for (const auto &t: structure) {
+        if (!t.device().is_cpu() && t.numel() > 0) {
+            return data.device();
+        }
+    }
+    return torch::kCPU;
+}
+
+// A JaggedTensor with at most one tensor stores an empty jidx. Element-wise ops compare jidx
+// shapes, so every constructor must follow this convention.
+torch::Tensor
+singleTensorJIdx(const torch::Tensor &indices, int64_t numTensors) {
+    return numTensors <= 1 ? torch::empty({0}, indices.options()) : indices;
+}
+
+// Checks list id shapes against the tensor count. Returns the outer list count that outer ids must
+// stay below, or -1 when the count is inferred from the ids.
+int64_t
+checkListIdsShape(const torch::Tensor &listIds,
+                  int64_t numTensors,
+                  std::optional<int64_t> numOuterLists) {
+    TORCH_CHECK_VALUE(listIds.dim() == 2 && (listIds.size(1) == 1 || listIds.size(1) == 2),
+                      "list_ids must have shape [num_tensors, 1] or [num_tensors, 2], but got ",
+                      listIds.sizes());
+    const int64_t rows = listIds.size(0);
+
+    if (listIds.size(1) == 1) {
+        TORCH_CHECK_VALUE(rows == 0 || rows == numTensors,
+                          "list_ids for ldim 1 must have 0 or num_tensors (",
+                          numTensors,
+                          ") rows, but got ",
+                          rows);
+        TORCH_CHECK_VALUE(!numOuterLists.has_value() || *numOuterLists == numTensors,
+                          "num_outer_lists (",
+                          numOuterLists.value_or(0),
+                          ") must equal num_tensors (",
+                          numTensors,
+                          ") for ldim 1");
+        return numTensors;
+    }
+
+    TORCH_CHECK_VALUE(rows == numTensors,
+                      "list_ids for ldim 2 must have num_tensors (",
+                      numTensors,
+                      ") rows, but got ",
+                      rows);
+    TORCH_CHECK_VALUE(!numOuterLists.has_value() || *numOuterLists >= 0,
+                      "num_outer_lists must be non-negative, but got ",
+                      numOuterLists.value_or(0));
+    return numOuterLists.value_or(-1);
+}
+
+// Validates the structure tensors' values in one pass, which costs one device-to-host copy on CUDA,
+// and returns the outer list count. Offsets or indices may be undefined.
+int64_t
+validateStructure(const torch::Tensor &offsets,
+                  int64_t numElements,
+                  const torch::Tensor &indices,
+                  int64_t numTensors,
+                  const torch::Tensor &listIds,
+                  std::optional<int64_t> numOuterLists) {
+    using namespace detail::ops;
+
+    const int64_t knownOuterLists    = checkListIdsShape(listIds, numTensors, numOuterLists);
+    const bool nested                = listIds.size(1) == 2;
+    const JaggedStructureCheck check = checkJaggedStructure(offsets,
+                                                            numElements,
+                                                            indices,
+                                                            numTensors,
+                                                            nested ? listIds : torch::Tensor(),
+                                                            nested ? knownOuterLists : -1);
+
+    const auto failed = [&](JaggedStructureFailure bit) { return (check.failures & bit) != 0; };
+    TORCH_CHECK_VALUE(!failed(kOffsetsStart), "offsets must start at 0");
+    TORCH_CHECK_VALUE(!failed(kOffsetsEnd),
+                      "offsets must end at the number of elements in data (",
+                      numElements,
+                      ")");
+    TORCH_CHECK_VALUE(!failed(kOffsetsDecreasing), "offsets must be non-decreasing");
+    TORCH_CHECK_VALUE(!failed(kIndicesNegative), "indices must be non-negative");
+    TORCH_CHECK_VALUE(
+        !failed(kIndicesTooLarge), "indices must be less than num_tensors (", numTensors, ")");
+    TORCH_CHECK_VALUE(!failed(kIndicesDecreasing), "indices must be non-decreasing");
+    TORCH_CHECK_VALUE(!failed(kOuterIdsNegative), "outer list ids must be non-negative");
+    TORCH_CHECK_VALUE(!failed(kOuterIdsDecreasing), "outer list ids must be non-decreasing");
+    TORCH_CHECK_VALUE(!failed(kInnerIdsNotCounting),
+                      "inner list ids must count 0, 1, ... within each outer list");
+    TORCH_CHECK_VALUE(!failed(kOuterIdsTooLarge),
+                      "outer list ids must be less than num_outer_lists (",
+                      knownOuterLists,
+                      ")");
+
+    if (!nested) {
+        return numTensors;
+    }
+    return knownOuterLists >= 0 ? knownOuterLists : check.lastOuterId + 1;
+}
+
+} // namespace
 
 void
 JaggedTensor::binary_op_check(const JaggedTensor &other) const {
@@ -69,7 +192,17 @@ JaggedTensor::JaggedTensor(torch::Tensor data)
 
 JaggedTensor::JaggedTensor(const std::vector<torch::Tensor> &tensors) {
     // TODO: (Francis): rewrite as a cuda kernel
-    TORCH_CHECK(tensors.size() > 0, "empty tensor list");
+
+    // An empty list has no tensor to take a device, dtype, or element shape from, so it holds an
+    // empty float32 CPU data tensor with edim 0.
+    if (tensors.empty()) {
+        mData          = torch::empty({0});
+        mBatchIdx      = torch::empty({0}, torch::TensorOptions().dtype(JIdxScalarType));
+        mOffsets       = torch::zeros({1}, torch::TensorOptions().dtype(JOffsetsScalarType));
+        mListIdx       = torch::empty({0, 1}, torch::TensorOptions().dtype(JLIdxScalarType));
+        mNumOuterLists = 0;
+        return;
+    }
 
     // This is an implementation detail where we don't store jidx for
     // a single list since everything is just zero by default.
@@ -133,7 +266,6 @@ JaggedTensor::JaggedTensor(const std::vector<std::vector<torch::Tensor>> &tensor
     bool deviceIsNotSet       = true;
     JOffsetsType totalTensors = 0;
 
-    TORCH_CHECK(tensors.size() > 0, "empty tensor list");
     for (size_t i = 0; i < tensors.size(); ++i) {
         for (size_t j = 0; j < tensors[i].size(); j += 1) {
             if (deviceIsNotSet) {
@@ -146,13 +278,22 @@ JaggedTensor::JaggedTensor(const std::vector<std::vector<torch::Tensor>> &tensor
         }
     }
 
+    // Outer lists that are all empty have no tensor to take a device, dtype, or element shape
+    // from, so they hold an empty float32 data tensor with edim 0.
+    if (totalTensors == 0) {
+        mData     = torch::empty({0}, torch::TensorOptions().device(device));
+        mBatchIdx = torch::empty({0}, torch::TensorOptions().dtype(JIdxScalarType).device(device));
+        mOffsets =
+            torch::zeros({1}, torch::TensorOptions().dtype(JOffsetsScalarType).device(device));
+        mListIdx =
+            torch::empty({0, 2}, torch::TensorOptions().dtype(JLIdxScalarType).device(device));
+        mNumOuterLists = tensors.size();
+        return;
+    }
+
     // This is an implementation detail where we don't store jidx for
     // a single list since everything is just zero by default.
-    if (totalTensors == 1) {
-        TORCH_CHECK(tensors.size() == 1,
-                    "Single tensor must be a 1D tensor. This should never happen.");
-        TORCH_CHECK(tensors[0].size() == 1,
-                    "Single tensor must be a 1D tensor. This should never happen.");
+    if (tensors.size() == 1 && tensors[0].size() == 1) {
         mData = tensors[0][0];
         if (mData.dim() == 0) {
             mData = mData.unsqueeze(0);
@@ -169,10 +310,6 @@ JaggedTensor::JaggedTensor(const std::vector<std::vector<torch::Tensor>> &tensor
         mNumOuterLists = 1;
         return;
     }
-
-    // Number of elements per tensor
-    std::vector<torch::Tensor> batchIdxs;
-    batchIdxs.reserve(totalTensors);
 
     mOffsets              = torch::empty({totalTensors + 1},
                             torch::TensorOptions().dtype(JOffsetsScalarType).device(torch::kCPU));
@@ -199,10 +336,6 @@ JaggedTensor::JaggedTensor(const std::vector<std::vector<torch::Tensor>> &tensor
             } else {
                 tensorsReshaped.push_back(tij);
             }
-            batchIdxs.push_back(
-                torch::full({tensorsReshaped[tensorCount].size(0)},
-                            tensorCount,
-                            torch::TensorOptions().dtype(JIdxScalarType).device(device)));
             elementCountsAcc[tensorCount + 1] = tensorsReshaped[tensorCount].size(0);
             tensorCount += 1;
         }
@@ -210,15 +343,14 @@ JaggedTensor::JaggedTensor(const std::vector<std::vector<torch::Tensor>> &tensor
 
     mOffsets = mOffsets.to(device);
     torch::cumsum_out(mOffsets, mOffsets, 0);
-    mBatchIdx      = torch::cat(batchIdxs, 0);
     mData          = torch::cat(tensorsReshaped, 0);
+    mBatchIdx      = jidx_from_joffsets(mOffsets, mData.size(0));
     mListIdx       = listIndexes.to(device);
     mNumOuterLists = tensors.size();
 }
 
 JaggedTensor::JaggedTensor(const std::vector<int64_t> &lsizes, const torch::Tensor data) {
     // TODO: (Francis): rewrite as a cuda kernel
-    TORCH_CHECK_VALUE(lsizes.size() > 0, "empty list sizes");
 
     // This is an implementation detail where we don't store jidx for
     // a single list since everything is just zero by default.
@@ -266,18 +398,16 @@ JaggedTensor::JaggedTensor(const std::vector<int64_t> &lsizes, const torch::Tens
 }
 
 JaggedTensor::JaggedTensor(const std::vector<std::vector<int64_t>> &lsizes,
-                           const int64_t totalTensors,
                            const torch::Tensor data) {
     // TODO (Francis) : Rewrite as a cuda kernel
-    TORCH_CHECK_VALUE(lsizes.size() > 0, "empty lshape");
+    int64_t totalTensors = 0;
+    for (const auto &inner: lsizes) {
+        totalTensors += inner.size();
+    }
 
     // This is an implementation detail where we don't store jidx for
     // a single list since everything is just zero by default.
-    if (totalTensors == 1) {
-        TORCH_CHECK(lsizes.size() == 1,
-                    "Single tensor must be a 1D tensor. This should never happen.");
-        TORCH_CHECK(lsizes[0].size() == 1,
-                    "Single tensor must be a 1D tensor. This should never happen.");
+    if (lsizes.size() == 1 && lsizes[0].size() == 1) {
         TORCH_CHECK_VALUE(lsizes[0][0] == data.size(0), "Invalid size for data tensor.");
         mData = data;
         if (mData.dim() == 0) {
@@ -308,7 +438,6 @@ JaggedTensor::JaggedTensor(const std::vector<std::vector<int64_t>> &lsizes,
     JOffsetsType cumulativeElements = 0;
     int64_t tensorCount             = 0;
     for (size_t i = 0; i < lsizes.size(); ++i) {
-        TORCH_CHECK_VALUE(lsizes[i].size() > 0, "empty lshape");
         for (size_t j = 0; j < lsizes[i].size(); j += 1) {
             offsetsCPUAcc[tensorCount]    = cumulativeElements;
             listIdsCPUAcc[tensorCount][0] = i;
@@ -350,17 +479,17 @@ JaggedTensor::recompute_lsizes_if_dirty() {
         const auto offAcc              = offsetsCpu.accessor<JOffsetsType, 1>();
         const auto lixAcc              = listIdxCpu.accessor<JLIdxType, 2>();
 
-        ssize_t currentList = -1;
-        for (int i = 0; i < num_tensors(); ++i) {
+        // Empty outer lists have no rows in the list indices, so allocate every outer list first.
+        mLShapeCache.mLShape2.resize(mNumOuterLists);
+        for (int64_t i = 0; i < num_tensors(); ++i) {
             const JLIdxType outerIdx = lixAcc[i][0];
-
-            if (outerIdx != currentList) {
-                currentList += 1;
-                mLShapeCache.mLShape2.push_back(std::vector<int64_t>());
-            }
-            const JOffsetsType startIdx = offAcc[i];
-            const JOffsetsType endIdx   = offAcc[i + 1];
-            mLShapeCache.mLShape2.back().push_back(endIdx - startIdx);
+            TORCH_CHECK(outerIdx >= 0 && outerIdx < mNumOuterLists,
+                        "Corrupt list indices. Outer list id ",
+                        outerIdx,
+                        " is out of range for ",
+                        mNumOuterLists,
+                        " outer lists");
+            mLShapeCache.mLShape2[outerIdx].push_back(offAcc[i + 1] - offAcc[i]);
         }
         mLShapeCache.mDirty = false;
         return;
@@ -428,7 +557,8 @@ JaggedTensor::lsizes2() const {
 int64_t
 JaggedTensor::ldim() const {
     TORCH_CHECK_VALUE(mListIdx.dim() == 2, "Corrupt list indices. This should never happen");
-    TORCH_CHECK_VALUE(mListIdx.numel() == 0 || mListIdx.size(0) == (mOffsets.size(0) - 1),
+    const int64_t rows = mListIdx.size(0);
+    TORCH_CHECK_VALUE(rows == num_tensors() || (rows == 0 && mListIdx.size(1) == 1),
                       "Corrupt list indices. This should never happen");
     return mListIdx.size(1);
 }
@@ -451,9 +581,7 @@ JaggedTensor
 JaggedTensor::jagged_like(torch::Tensor data) const {
     TORCH_CHECK_VALUE(data.dim() > 0,
                       "assigned data must have shape [N, ...], but got data.dim() = 0");
-    TORCH_CHECK_VALUE(mListIdx.dim() == 2, "Corrupt list indices. This should never happen");
-    TORCH_CHECK_VALUE(mListIdx.numel() == 0 || mListIdx.size(0) == (mOffsets.size(0) - 1),
-                      "Corrupt list indices. This should never happen");
+    ldim(); // Checks the list index shape
     TORCH_CHECK_VALUE(data.size(0) == mData.size(0),
                       "Assigned data must have the same number of elements as the JaggedTensor");
 
@@ -471,64 +599,97 @@ JaggedTensor
 JaggedTensor::from_data_indices_and_list_ids(torch::Tensor data,
                                              torch::Tensor indices,
                                              torch::Tensor list_ids,
-                                             int64_t num_tensors) {
-    TORCH_CHECK_VALUE(
-        list_ids.dim() == 2,
-        "Invalid list indices when constructing JaggedTensor from data, indices, and list indices");
-    TORCH_CHECK_VALUE(
-        list_ids.numel() == 0 || list_ids.size(0) == num_tensors,
-        "Invalid list indices when constructing JaggedTensor from data, indices, and list indices");
-    TORCH_CHECK_VALUE(
-        indices.dim() == 1,
-        "Invalid indices when constructing JaggedTensor from data, indices, and list indices");
-    TORCH_CHECK_VALUE(
-        indices.numel() == 0 || indices.size(0) == data.size(0),
-        "Invalid indices when constructing JaggedTensor from data, indices, and list indices");
+                                             int64_t num_tensors,
+                                             std::optional<int64_t> num_outer_lists) {
+    TORCH_CHECK_VALUE(data.defined() && data.dim() > 0,
+                      "data must have shape [N, ...], but got data.dim() = ",
+                      data.defined() ? data.dim() : 0);
+    TORCH_CHECK_VALUE(num_tensors >= 0, "num_tensors must be non-negative, but got ", num_tensors);
+    indices  = canonicalStructureTensor(indices, JIdxScalarType, "indices");
+    list_ids = canonicalStructureTensor(list_ids, JLIdxScalarType, "list_ids");
+    const torch::Device checkDevice = structureCheckDevice(data, {indices, list_ids});
+    indices                         = indices.to(checkDevice);
+    list_ids                        = list_ids.to(checkDevice);
+    TORCH_CHECK_VALUE(indices.dim() == 1, "indices must be one-dimensional");
+    const int64_t numElements = data.size(0);
+    TORCH_CHECK_VALUE(indices.size(0) == numElements ||
+                          (indices.size(0) == 0 && (num_tensors == 1 || numElements == 0)),
+                      "indices must have one entry per element of data (",
+                      numElements,
+                      "), or be empty when num_tensors == 1, but got ",
+                      indices.size(0),
+                      " entries");
+    TORCH_CHECK_VALUE(numElements == 0 || num_tensors > 0,
+                      "data has ",
+                      numElements,
+                      " elements but num_tensors is 0");
 
-    JaggedTensor ret;
-    ret.mData     = data;
-    ret.mBatchIdx = indices;
-    ret.mListIdx  = list_ids;
-    ret.mOffsets  = joffsets_from_jidx_and_jdata(indices, data, num_tensors);
-    // In the ldim == 2 case, we need to compute the number of outer lists from the list indices.
-    if (ret.mListIdx.numel() > 0 && ret.mListIdx.size(1) == 2) {
-        ret.mNumOuterLists =
-            ret.mListIdx.index({torch::indexing::Slice(), 0}).max().item<int64_t>() + 1;
+    const int64_t outerLists = validateStructure(
+        torch::Tensor(), numElements, indices, num_tensors, list_ids, num_outer_lists);
+    indices  = indices.to(data.device());
+    list_ids = list_ids.to(data.device());
+
+    // The indices are now known to be sorted and in range, so each tensor starts at a binary search
+    // position. This avoids the second sync that unique_dim in joffsets_from_jidx_and_jdata costs.
+    const auto offsetOpts = torch::TensorOptions().dtype(JOffsetsScalarType).device(data.device());
+    torch::Tensor offsets;
+    if (indices.size(0) > 0) {
+        offsets = torch::searchsorted(indices, torch::arange(num_tensors + 1, indices.options()));
+    } else if (num_tensors == 1) {
+        offsets = torch::tensor({JOffsetsType(0), numElements}, offsetOpts);
     } else {
-        ret.mNumOuterLists = ret.joffsets().size(0) - 1;
+        offsets = torch::zeros({num_tensors + 1}, offsetOpts);
     }
-    ret.mLShapeCache.markDirty();
-    return ret;
+
+    return from_jdata_joffsets_jidx_and_lidx_unsafe(
+        data, offsets, singleTensorJIdx(indices, num_tensors), list_ids, outerLists);
 }
 
 JaggedTensor
 JaggedTensor::from_data_offsets_and_list_ids(torch::Tensor data,
                                              torch::Tensor offsets,
-                                             torch::Tensor list_ids) {
+                                             torch::Tensor list_ids,
+                                             std::optional<int64_t> num_outer_lists) {
+    TORCH_CHECK_VALUE(data.defined() && data.dim() > 0,
+                      "data must have shape [N, ...], but got data.dim() = ",
+                      data.defined() ? data.dim() : 0);
+    offsets  = canonicalStructureTensor(offsets, JOffsetsScalarType, "offsets");
+    list_ids = canonicalStructureTensor(list_ids, JLIdxScalarType, "list_ids");
+    const torch::Device checkDevice = structureCheckDevice(data, {offsets, list_ids});
+    offsets                         = offsets.to(checkDevice);
+    list_ids                        = list_ids.to(checkDevice);
     TORCH_CHECK_VALUE(
-        list_ids.dim() == 2,
-        "Invalid list indices when constructing JaggedTensor from data, offsets, and list indices");
-    TORCH_CHECK_VALUE(
-        list_ids.numel() == 0 || list_ids.size(0) == (offsets.size(0) - 1),
-        "Invalid list indices when constructing JaggedTensor from data, offsets, and list indices");
-    TORCH_CHECK_VALUE(
-        offsets.dim() == 1,
-        "Invalid offsets when constructing JaggedTensor from data, offsets, and list indices");
+        offsets.dim() == 1 && offsets.size(0) > 0,
+        "offsets must be one-dimensional with num_tensors + 1 entries, but got shape ",
+        offsets.sizes());
+    const int64_t numTensors = offsets.size(0) - 1;
 
-    JaggedTensor ret;
-    ret.mData    = data;
-    ret.mOffsets = offsets;
-    ret.mListIdx = list_ids;
-    // In the ldim == 2 case, we need to compute the number of outer lists from the list indices.
-    if (ret.mListIdx.numel() > 0 && ret.mListIdx.size(1) == 2) {
-        ret.mNumOuterLists =
-            ret.mListIdx.index({torch::indexing::Slice(), 0}).max().item<int64_t>() + 1;
-    } else {
-        ret.mNumOuterLists = offsets.size(0) - 1;
-    }
-    ret.mBatchIdx = jidx_from_joffsets(offsets, data.size(0));
-    ret.mLShapeCache.markDirty();
-    return ret;
+    const int64_t outerLists = validateStructure(
+        offsets, data.size(0), torch::Tensor(), numTensors, list_ids, num_outer_lists);
+    offsets  = offsets.to(data.device());
+    list_ids = list_ids.to(data.device());
+
+    return from_data_offsets_and_list_ids_unsafe(data, offsets, list_ids, outerLists);
+}
+
+JaggedTensor
+JaggedTensor::from_data_indices_and_list_ids_unsafe(torch::Tensor data,
+                                                    torch::Tensor indices,
+                                                    torch::Tensor list_ids,
+                                                    int64_t num_tensors,
+                                                    int64_t num_outer_lists) {
+    const torch::Tensor offsets = joffsets_from_jidx_and_jdata(indices, data, num_tensors);
+    return from_jdata_joffsets_jidx_and_lidx_unsafe(
+        data, offsets, singleTensorJIdx(indices, num_tensors), list_ids, num_outer_lists);
+}
+
+JaggedTensor
+JaggedTensor::from_data_offsets_and_list_ids_unsafe(torch::Tensor data,
+                                                    torch::Tensor offsets,
+                                                    torch::Tensor list_ids,
+                                                    int64_t num_outer_lists) {
+    return from_jdata_joffsets_jidx_and_lidx_unsafe(
+        data, offsets, jidx_from_joffsets(offsets, data.size(0)), list_ids, num_outer_lists);
 }
 
 JaggedTensor
@@ -541,7 +702,7 @@ JaggedTensor::from_jdata_joffsets_jidx_and_lidx_unsafe(torch::Tensor jdata,
         lidx.dim() == 2,
         "Invalid list indices when constructing JaggedTensor from data, offsets, indices, list indices");
     TORCH_CHECK_VALUE(
-        lidx.numel() == 0 || lidx.size(0) == (joffsets.size(0) - 1),
+        lidx.size(0) == (joffsets.size(0) - 1) || (lidx.size(0) == 0 && lidx.size(1) == 1),
         "Invalid list indices when constructing JaggedTensor from data, offsets, indices, list indices");
     TORCH_CHECK_VALUE(
         joffsets.dim() == 1,
@@ -560,23 +721,9 @@ void
 JaggedTensor::set_jdata(const torch::Tensor &jdata) {
     TORCH_CHECK_VALUE(jdata.dim() > 0,
                       "assigned data must have shape [N, ...], but got data.dim() = 0");
-    TORCH_CHECK_VALUE((jdata.device() == mBatchIdx.device()) ||
-                          (mBatchIdx.numel() == 0 && num_tensors() == 1),
-                      "Incorrect device for data");
     TORCH_CHECK_VALUE(jdata.device() == mOffsets.device(), "Incorrect device for data");
-    TORCH_CHECK_VALUE(mListIdx.dim() == 2, "Corrupt list indices. This should never happen");
-    TORCH_CHECK_VALUE(mListIdx.numel() == 0 || mListIdx.size(0) == (mOffsets.size(0) - 1),
-                      "Corrupt list indices. This should never happen");
-
-    if (mBatchIdx.size(0) == 0) {
-        TORCH_CHECK(mOffsets.dim() == 1, "bad offsets. this should never happen");
-        TORCH_CHECK(mOffsets.size(0) == (num_outer_lists() + 1),
-                    "bad offsets. this should never happen");
-        TORCH_CHECK_VALUE(jdata.size(0) == mData.size(0), "assigned data must have shape [N, ...]");
-    } else {
-        TORCH_CHECK_VALUE(jdata.size(0) == mBatchIdx.size(0),
-                          "assigned data must have shape [N, ...]");
-    }
+    ldim(); // Checks the list index shape
+    TORCH_CHECK_VALUE(jdata.size(0) == mData.size(0), "assigned data must have shape [N, ...]");
     mData = jdata;
 }
 
@@ -625,7 +772,7 @@ JaggedTensor::jreshape(const std::vector<int64_t> &lsizes) const {
 
 JaggedTensor
 JaggedTensor::jreshape(const std::vector<std::vector<int64_t>> &lsizes) const {
-    return JaggedTensor(lsizes, num_tensors(), mData);
+    return JaggedTensor(lsizes, mData);
 }
 
 JaggedTensor
@@ -643,18 +790,22 @@ JaggedTensor::jflatten(const int64_t dim) const {
 
     if (ldim() == 2) {
         if (jdim == 1) {
-            torch::Tensor newJIdx = mListIdx.index({torch::indexing::Slice(), 0})
-                                        .index({mBatchIdx.to(torch::kInt)})
-                                        .to(JIdxScalarType);
-            torch::Tensor newOffsets =
-                joffsets_from_jidx_and_jdata(newJIdx, mData, num_outer_lists());
+            // Outer list k starts at the first tensor whose outer id is >= k. This keeps empty
+            // outer lists, which have no rows in the list indices.
+            const torch::Tensor outerIds =
+                mListIdx.index({torch::indexing::Slice(), 0}).to(torch::kLong).contiguous();
+            const torch::Tensor outerBounds =
+                torch::arange(num_outer_lists() + 1,
+                              torch::TensorOptions().dtype(torch::kLong).device(mData.device()));
+            const torch::Tensor firstTensor = torch::searchsorted(outerIds, outerBounds);
+            const torch::Tensor newOffsets  = mOffsets.index({firstTensor});
             return JaggedTensor::from_jdata_joffsets_jidx_and_lidx_unsafe(
                 mData,
                 newOffsets,
-                newJIdx,
+                jidx_from_joffsets(newOffsets, mData.size(0)),
                 torch::empty({0, 1},
                              torch::TensorOptions().dtype(JLIdxScalarType).device(mData.device())),
-                newOffsets.size(0) - 1);
+                num_outer_lists());
         } else {
             return JaggedTensor::from_jdata_joffsets_jidx_and_lidx_unsafe(
                 mData,
@@ -732,7 +883,9 @@ JaggedTensor::jcat(const std::vector<JaggedTensor> &vec, std::optional<int64_t> 
             } else {
                 offsets.push_back(jvec.mOffsets + curOffset);
             }
-            lidx.push_back(jvec.mListIdx + curListOffset);
+            if (jvec.mListIdx.size(1) == 2) {
+                lidx.push_back(jvec.mListIdx + curListOffset);
+            }
             curOffset += jvec.mData.size(0);
             curListOffset[0][0] += jvec.mNumOuterLists;
             totalLists += jvec.mNumOuterLists;
@@ -740,7 +893,13 @@ JaggedTensor::jcat(const std::vector<JaggedTensor> &vec, std::optional<int64_t> 
         const torch::Tensor retJData    = torch::cat(data, 0);
         const torch::Tensor retJOffsets = torch::cat(offsets, 0);
         const torch::Tensor retJidx     = jidx_from_joffsets(retJOffsets, retJData.size(0));
-        const torch::Tensor retLidx     = torch::cat(lidx, 0);
+        // ldim 1 inputs may mix empty and explicit list indices, so use the empty form
+        const torch::Tensor retLidx =
+            vec[0].mListIdx.size(1) == 1
+                ? torch::empty(
+                      {0, 1},
+                      torch::TensorOptions().dtype(JLIdxScalarType).device(retJData.device()))
+                : torch::cat(lidx, 0);
         return JaggedTensor::from_jdata_joffsets_jidx_and_lidx_unsafe(
             retJData, retJOffsets, retJidx, retLidx, totalLists);
     } else {

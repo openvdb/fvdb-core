@@ -266,8 +266,12 @@ dispatchIJKForMesh<torch::kCUDA>(const JaggedTensor &meshVertices,
                                                                       outJidxKAcc);
                     C10_CUDA_KERNEL_LAUNCH_CHECK();
 
-                    return fvdb::JaggedTensor::from_data_indices_and_list_ids(
-                        outIJK, outJidx, meshFaces.jlidx(), meshFaces.num_tensors());
+                    return fvdb::JaggedTensor::from_data_indices_and_list_ids_unsafe(
+                        outIJK,
+                        outJidx,
+                        meshFaces.jlidx(),
+                        meshFaces.num_tensors(),
+                        meshFaces.num_outer_lists());
                 }),
                 AT_EXPAND(AT_FLOATING_TYPES),
                 c10::kHalf);
