@@ -15,6 +15,7 @@
 #include <fvdb/detail/utils/cuda/ForEachPrivateUse1.cuh>
 #include <fvdb/detail/utils/cuda/GridDim.h>
 #include <fvdb/detail/utils/cuda/StreamOrdering.h>
+#include <fvdb/detail/utils/nanovdb/BatchedTopologyBuilder.cuh>
 #include <fvdb/detail/utils/nanovdb/DeviceGridHandleUtils.cuh>
 #include <fvdb/detail/utils/nanovdb/PadGrid.cuh>
 
@@ -336,7 +337,20 @@ dispatchBuildPaddedGrid<torch::kCUDA>(const GridBatchData &baseBatchHdl,
         return ops::contiguousGridStorage(baseBatchHdl);
     }
 
-    // Build one grid per batch item, then lay them end to end in one storage.
+    // Pure positive padding without erosion (dual_grid, build_padded_grid(0, k)): the whole batch
+    // is built in `bmax` chained batched BoxDilate passes, each a Minkowski sum with the octant
+    // {0,1}^3 (issue #775). One output buffer, one stream synchronization per pass, no per-member
+    // builds or handle merging; empty members become valid empty grids inline. Sliced /
+    // non-contiguous batches are handled by the view-aware source pointers.
+    if (numNegative == 0 && !excludeBorder) {
+        const std::vector<batched::TopologyPassSpec> passes(
+            numPositive,
+            batched::TopologyPassSpec::boxDilate(nanovdb::Coord(0), nanovdb::Coord(1)));
+        return batched::batchedTopologyStorage(baseBatchHdl, passes, stream);
+    }
+
+    // Negative padding and/or erosion (exclude_border) stay on the per-member path: build one
+    // grid per batch item, then lay them end to end in one storage.
     GridStorageParts parts(device, stream, baseBatchHdl.batchSize());
     for (int64_t i = 0; i < baseBatchHdl.batchSize(); ++i) {
         if (baseBatchHdl.numVoxelsAt(i) == 0) {
