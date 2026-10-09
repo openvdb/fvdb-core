@@ -255,7 +255,11 @@ class PointTransformerV3Block(nn.Module):
         self.drop_path = DropPath(drop_path)
 
     def forward(
-        self, data: JaggedTensor, serialization: GridSerialization, cpe_plan: ConvolutionPlan | None
+        self,
+        data: JaggedTensor,
+        serialization: GridSerialization,
+        cpe_plan: ConvolutionPlan | None,
+        cpe_input: JaggedTensor | None = None,
     ) -> JaggedTensor:
         """
         Apply the block.
@@ -265,11 +269,14 @@ class PointTransformerV3Block(nn.Module):
             serialization (GridSerialization): Serialization of the grid that ``data`` lives on.
             cpe_plan (ConvolutionPlan | None): Submanifold kernel-3 plan for the grid, or ``None``
                 when the position encoding has no convolution.
+            cpe_input (JaggedTensor | None): Features for the position encoding's convolution in
+                place of ``data``. ``None`` uses ``data``. Default: ``None``.
 
         Returns:
             result (JaggedTensor): Output features with the same shape as ``data``.
         """
-        data = data + self.cpe(data, cpe_plan)
+        use_alt = cpe_input is not None and self.cpe.conv is not None
+        data = data + self.cpe(cpe_input if use_alt else data, cpe_plan)
 
         branch = self.norm1(data) if self.pre_norm else data
         data = data + self.drop_path(self.attn(branch, serialization))
@@ -350,8 +357,13 @@ class SerializedUnpooling(nn.Module):
         self.act = nn.GELU()
 
     def forward(
-        self, data: JaggedTensor, grid: GridBatch, skip_data: JaggedTensor, skip_grid: GridBatch
-    ) -> tuple[JaggedTensor, GridBatch]:
+        self,
+        data: JaggedTensor,
+        grid: GridBatch,
+        skip_data: JaggedTensor,
+        skip_grid: GridBatch,
+        return_skip: bool = False,
+    ) -> tuple[JaggedTensor, GridBatch] | tuple[JaggedTensor, GridBatch, JaggedTensor]:
         """
         Unpool features onto the skip grid.
 
@@ -361,14 +373,18 @@ class SerializedUnpooling(nn.Module):
             skip_data (JaggedTensor): Features on ``skip_grid``. Shape:
                 ``(batch_size, num_fine_voxels, skip_channels)``.
             skip_grid (GridBatch): The fine grid that ``grid`` was pooled from.
+            return_skip (bool): Also return the projected skip features. Default: ``False``.
 
         Returns:
             result (JaggedTensor): Fine features. Shape: ``(batch_size, num_fine_voxels, out_channels)``.
             fine_grid (GridBatch): ``skip_grid``.
+            skip (JaggedTensor): The projected skip features, when ``return_skip`` is set.
         """
         data = self.act(self.norm(self.proj(data), grid))
         skip = self.act(self.norm_skip(self.proj_skip(skip_data), skip_grid))
         data, _ = grid.refine(self.stride, data, fine_grid=skip_grid)
+        if return_skip:
+            return skip + data, skip_grid, skip
         return skip + data, skip_grid
 
 
@@ -442,10 +458,14 @@ class _Stage(nn.Module):
         self.blocks = nn.ModuleList(blocks)
 
     def run_blocks(
-        self, data: JaggedTensor, serialization: GridSerialization, cpe_plan: ConvolutionPlan | None
+        self,
+        data: JaggedTensor,
+        serialization: GridSerialization,
+        cpe_plan: ConvolutionPlan | None,
+        first_cpe_input: JaggedTensor | None = None,
     ) -> JaggedTensor:
-        for block in self.blocks:
-            data = block(data, serialization, cpe_plan)
+        for i, block in enumerate(self.blocks):
+            data = block(data, serialization, cpe_plan, first_cpe_input if i == 0 else None)
         return data
 
 
@@ -518,6 +538,10 @@ class PointTransformerV3(nn.Module):
             :func:`fvdb.serialization_codes`. ``"none"`` reproduces Pointcept's orders exactly for
             non-negative coordinates, including cropped samples that do not start at 0.
             Default: ``"grid"``.
+        pointcept_unpool_cpe (bool): Reproduce Pointcept's ``PT-v3m1`` exactly: after each unpooling,
+            the first block's position-encoding convolution sees only the projected skip features,
+            while its residual uses their sum with the upsampled features. Set this to reproduce
+            models trained in Pointcept. Default: ``False``.
     """
 
     def __init__(
@@ -548,6 +572,7 @@ class PointTransformerV3(nn.Module):
         norm: NormKind = "batch",
         cpe_conv: bool = True,
         serialization_offset: OffsetMode = "grid",
+        pointcept_unpool_cpe: bool = False,
     ) -> None:
         super().__init__()
         if attn_drop != 0.0:
@@ -575,6 +600,7 @@ class PointTransformerV3(nn.Module):
         self.cls_mode = cls_mode
         self.cpe_conv = cpe_conv
         self.serialization_offset = serialization_offset
+        self.pointcept_unpool_cpe = pointcept_unpool_cpe
         self.embedding = PointTransformerV3Embedding(in_channels, enc_channels[0], mode=embedding_mode, norm=norm)
 
         def make_block(channels: int, heads: int, patch: int, path: float, index: int) -> PointTransformerV3Block:
@@ -663,6 +689,10 @@ class PointTransformerV3(nn.Module):
         for stage in cast(Sequence[_Stage], self.dec):
             assert stage.resample is not None
             skip_data, skip_grid, serialization, cpe_plan = skips.pop()
-            data, grid = stage.resample(data, grid, skip_data, skip_grid)
-            data = stage.run_blocks(data, serialization, cpe_plan)
+            if self.pointcept_unpool_cpe:
+                data, grid, skip = stage.resample(data, grid, skip_data, skip_grid, return_skip=True)
+                data = stage.run_blocks(data, serialization, cpe_plan, first_cpe_input=skip)
+            else:
+                data, grid = stage.resample(data, grid, skip_data, skip_grid)
+                data = stage.run_blocks(data, serialization, cpe_plan)
         return data, grid
