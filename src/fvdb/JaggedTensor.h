@@ -403,11 +403,8 @@ class JaggedTensor : public torch::CustomClassHolder {
     ///       [sum(lsizes), ...])
     /// @param lsizes A vector of vectors of integers indicating the number of elements in each
     /// tensor
-    /// @param total_tensors The total number of tensors in the list of lists
     /// @param data The raw data tensor
-    JaggedTensor(const std::vector<std::vector<int64_t>> &lsizes,
-                 const int64_t total_tensors,
-                 const torch::Tensor data);
+    JaggedTensor(const std::vector<std::vector<int64_t>> &lsizes, const torch::Tensor data);
 
     /// @brief Create a JaggedTensor with the same list structure as this one but with the given raw
     /// data.

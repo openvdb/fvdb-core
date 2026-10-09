@@ -434,19 +434,12 @@ JaggedTensor::JaggedTensor(const std::vector<int64_t> &lsizes, const torch::Tens
 }
 
 JaggedTensor::JaggedTensor(const std::vector<std::vector<int64_t>> &lsizes,
-                           const int64_t totalTensors,
                            const torch::Tensor data) {
     // TODO (Francis) : Rewrite as a cuda kernel
-    int64_t countedTensors = 0;
+    int64_t totalTensors = 0;
     for (const auto &inner: lsizes) {
-        countedTensors += inner.size();
+        totalTensors += inner.size();
     }
-    TORCH_CHECK_VALUE(countedTensors == totalTensors,
-                      "totalTensors (",
-                      totalTensors,
-                      ") does not match the number of tensors in lsizes (",
-                      countedTensors,
-                      ")");
 
     // This is an implementation detail where we don't store jidx for
     // a single list since everything is just zero by default.
@@ -813,11 +806,7 @@ JaggedTensor::jreshape(const std::vector<int64_t> &lsizes) const {
 
 JaggedTensor
 JaggedTensor::jreshape(const std::vector<std::vector<int64_t>> &lsizes) const {
-    int64_t totalTensors = 0;
-    for (const auto &inner: lsizes) {
-        totalTensors += inner.size();
-    }
-    return JaggedTensor(lsizes, totalTensors, mData);
+    return JaggedTensor(lsizes, mData);
 }
 
 JaggedTensor
