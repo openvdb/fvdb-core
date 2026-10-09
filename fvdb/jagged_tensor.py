@@ -98,6 +98,10 @@ _JT_TORCH_WHITELIST: set[str] = {
     "ge",
     "where",
     "lerp",
+    # Row-wise layers that act on trailing dims (torch.nn.Linear, LayerNorm, Dropout)
+    "linear",
+    "layer_norm",
+    "dropout",
     # Reductions over *non-primary* dims (must keep the leading dim intact)
     "sum",
     "mean",
