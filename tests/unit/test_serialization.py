@@ -159,6 +159,60 @@ class TestSerializationCodes(unittest.TestCase):
             self.assertTrue(torch.equal(ser_c.codes[i][parent], ser.codes[i] >> 3), ser.orders[i])
             self.assertTrue(torch.equal(ser_cc.codes[i][grandparent], ser.codes[i] >> 6), ser.orders[i])
 
+    @parameterized.expand(DEVICES)
+    def test_raw_offset_matches_pointcept_on_shifted_grids(self, device):
+        # Pointcept encodes its grid coordinates as they are; after cropping they need not start at 0.
+        gen = torch.Generator().manual_seed(11)
+        ijks = [
+            torch.randint(lo, lo + 30, (n, 3), generator=gen, dtype=torch.int32).to(device)
+            for lo, n in ((5, 300), (17, 200))
+        ]
+        grid = GridBatch.from_ijk(JaggedTensor(ijks))
+        raw = grid.ijk.jdata.long()
+        depth = (int(raw.max()) + 1).bit_length()
+        self.assertEqual(fvdb.serialization_depth(grid, offset_mode="none"), depth)
+        expected = {
+            "z": _pointcept_z_order(raw),
+            "z-trans": _pointcept_z_order(raw[:, [1, 0, 2]]),
+            "hilbert": _skilling_hilbert(raw, depth),
+            "hilbert-trans": _skilling_hilbert(raw[:, [1, 0, 2]], depth),
+        }
+        for order, codes in expected.items():
+            self.assertTrue(torch.equal(fvdb.serialization_codes(grid, order, offset_mode="none"), codes), order)
+            perm, _ = fvdb.serialization_perm(grid, order, offset_mode="none")
+            self.assertTrue(torch.equal(perm, _loop_perm(grid, codes)), order)
+
+    @parameterized.expand(DEVICES)
+    def test_raw_and_grid_offsets_agree_from_origin(self, device):
+        grid = _make_origin_grid([200, 0, 150], device, extent=40)
+        for order in CURVE_ORDERS:
+            self.assertTrue(
+                torch.equal(
+                    fvdb.serialization_codes(grid, order, offset_mode="none", depth=6),
+                    fvdb.serialization_codes(grid, order, offset_mode="grid", depth=6),
+                ),
+                order,
+            )
+
+    @parameterized.expand(DEVICES)
+    def test_raw_offset_pooled_codes_drop_three_bits(self, device):
+        gen = torch.Generator().manual_seed(12)
+        ijks = [torch.randint(9, 60, (n, 3), generator=gen, dtype=torch.int32).to(device) for n in (500, 300)]
+        fine = GridBatch.from_ijk(JaggedTensor(ijks))
+        ser = fvdb.serialize(fine, CURVE_ORDERS, offset_mode="none", keep_codes=True)
+        coarse = fine.coarsened_grid(2)
+        ser_c = ser.pooled(coarse)
+        self.assertEqual(ser_c.offset_mode, "none")
+        parent = coarse.ijk_to_index(fine.ijk.jagged_like(fine.ijk.jdata // 2), cumulative=True).jdata
+        assert ser.codes is not None and ser_c.codes is not None
+        for i in range(len(CURVE_ORDERS)):
+            self.assertTrue(torch.equal(ser_c.codes[i][parent], ser.codes[i] >> 3), ser.orders[i])
+
+    def test_raw_offset_rejects_negative_coordinates(self):
+        grid = _make_grid([20], "cpu", lo=-5, hi=5)
+        with self.assertRaisesRegex(ValueError, "non-negative"):
+            fvdb.serialization_codes(grid, "z", offset_mode="none")
+
     def test_depth_too_small_raises(self):
         grid = _make_origin_grid([30], "cpu", extent=64)
         with self.assertRaisesRegex(ValueError, "depth"):

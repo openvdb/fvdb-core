@@ -27,7 +27,7 @@ from .jagged_tensor import JaggedTensor
 SERIALIZATION_ORDERS: tuple[str, ...] = ("vdb", "z", "z-trans", "hilbert", "hilbert-trans")
 """Supported serialization order names."""
 
-OffsetMode = Literal["grid", "batch"]
+OffsetMode = Literal["grid", "batch", "none"]
 
 _ALIASES = {"identity": "vdb", "morton": "z", "zorder": "z", "z_order": "z"}
 _MAX_DEPTH = 21  # bits per axis of fvdb's Morton and Hilbert encoders
@@ -64,13 +64,17 @@ def _grid_index(grid: GridBatch) -> torch.Tensor | None:
 
 
 def _check_offset_mode(offset_mode: str) -> None:
-    if offset_mode not in ("grid", "batch"):
-        raise ValueError(f"offset_mode must be 'grid' or 'batch', got {offset_mode!r}")
+    if offset_mode not in ("grid", "batch", "none"):
+        raise ValueError(f"offset_mode must be 'grid', 'batch' or 'none', got {offset_mode!r}")
 
 
 def _local_ijk(grid: GridBatch, offset_mode: OffsetMode) -> torch.Tensor:
     """Voxel coordinates shifted to be non-negative, in the grid's native voxel order."""
     ijk = grid.ijk.jdata
+    if offset_mode == "none":
+        if int(grid.data.total_bbox[0].min()) < 0:
+            raise ValueError("offset_mode='none' requires non-negative voxel coordinates")
+        return ijk
     if offset_mode == "grid":
         # Per-grid minimum, as Pointcept starts each sample at the origin.
         # data.bbox is host metadata; rows of empty grids are never gathered.
@@ -82,6 +86,8 @@ def _local_ijk(grid: GridBatch, offset_mode: OffsetMode) -> torch.Tensor:
 
 def _max_local_coord(grid: GridBatch, offset_mode: OffsetMode) -> int:
     """Largest coordinate after the offset, from host metadata. Empty grids have an inverted bbox."""
+    if offset_mode == "none":
+        return max(0, int(grid.data.total_bbox[1].max()))
     if offset_mode == "grid":
         bbox = grid.data.bbox.long()
         return max(0, int((bbox[:, 1] - bbox[:, 0]).max()))
@@ -93,9 +99,9 @@ def serialization_depth(grid: GridBatch, *, offset_mode: OffsetMode = "grid") ->
     """Curve depth Pointcept would choose for a grid batch.
 
     Pointcept sets the depth to ``(max_coord + 1).bit_length()`` over the whole batch, where
-    ``max_coord`` is the largest coordinate after each sample is shifted to start at 0. The
-    Hilbert curve's orientation depends on the depth, so batches with different extents can
-    order the same scene differently, exactly as in Pointcept.
+    ``max_coord`` is the largest grid coordinate, taken as it is. The Hilbert curve's orientation
+    depends on the depth, so batches with different extents can order the same scene differently,
+    exactly as in Pointcept.
 
     Args:
         grid (GridBatch): The grid batch.
@@ -182,7 +188,10 @@ def serialization_codes(
             which leaves voxels in the grid's native order.
         offset_mode (str): ``"grid"`` shifts each grid by its own minimum coordinate, which makes
             the order invariant to translating a grid. ``"batch"`` shifts every grid by the batch
-            minimum. Defaults to ``"grid"``.
+            minimum. ``"none"`` uses the coordinates as they are, which must be non-negative; this
+            is what Pointcept does, so it reproduces Pointcept's orders exactly even when a sample
+            does not start at 0, as after Pointcept's cropping augmentations. ``"grid"`` and
+            ``"none"`` agree when every grid starts at 0. Defaults to ``"grid"``.
         depth (int | None): Curve depth in bits per axis, at most 21. ``None`` uses
             :func:`serialization_depth` plus ``code_shift``. Defaults to ``None``.
         code_shift (int): Number of halvings since the level ``depth`` refers to. Defaults to ``0``.
