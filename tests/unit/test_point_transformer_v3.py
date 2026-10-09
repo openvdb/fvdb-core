@@ -317,6 +317,15 @@ class TestPointTransformerV3(unittest.TestCase):
         self.assertTrue(bool(torch.isfinite(out.jdata.float()).all()))
         self._check_backward(model, out.jagged_like(out.jdata.float()))
 
+    def test_raw_serialization_offset(self):
+        config = dict(SMALL_CONFIG, enc_patch_size=0, dec_patch_size=0)
+        model = fvnn.PointTransformerV3(**config, serialization_offset="none").cuda()
+        out, out_grid = model(self.data, self.grid)
+        self._check_output(out, out_grid, 8)
+        shifted = GridBatch.from_ijk(self.grid.ijk.jagged_like(self.grid.ijk.jdata - 3))
+        with self.assertRaisesRegex(ValueError, "non-negative"):
+            model(shifted.jagged_like(self.data.jdata), shifted)
+
     def test_default_config_builds(self):
         model = fvnn.PointTransformerV3()
         self.assertEqual(len(model.enc), 5)

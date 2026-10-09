@@ -42,6 +42,7 @@ from fvdb import (
     serialize,
 )
 
+from ..serialization import OffsetMode
 from .modules import BatchNorm, DropPath, SparseConv3d, _trace_fvdb_nn_forward
 
 NormKind = Literal["batch", "layer"]
@@ -513,6 +514,10 @@ class PointTransformerV3(nn.Module):
         norm (str): Norm for the stem, pooling and unpooling: ``"batch"`` as in Pointcept, or
             ``"layer"``. Blocks always use layer norm. Default: ``"batch"``.
         cpe_conv (bool): Include the sparse convolution in the position encoding. Default: ``True``.
+        serialization_offset (str): Coordinate offset for serialization; see
+            :func:`fvdb.serialization_codes`. ``"none"`` reproduces Pointcept's orders exactly for
+            non-negative coordinates, including cropped samples that do not start at 0.
+            Default: ``"grid"``.
     """
 
     def __init__(
@@ -542,6 +547,7 @@ class PointTransformerV3(nn.Module):
         embedding_mode: Literal["conv", "linear"] = "conv",
         norm: NormKind = "batch",
         cpe_conv: bool = True,
+        serialization_offset: OffsetMode = "grid",
     ) -> None:
         super().__init__()
         if attn_drop != 0.0:
@@ -568,6 +574,7 @@ class PointTransformerV3(nn.Module):
         self.shuffle_pooled_orders = shuffle_pooled_orders
         self.cls_mode = cls_mode
         self.cpe_conv = cpe_conv
+        self.serialization_offset = serialization_offset
         self.embedding = PointTransformerV3Embedding(in_channels, enc_channels[0], mode=embedding_mode, norm=norm)
 
         def make_block(channels: int, heads: int, patch: int, path: float, index: int) -> PointTransformerV3Block:
@@ -635,7 +642,7 @@ class PointTransformerV3(nn.Module):
             result (JaggedTensor): Output features.
             out_grid (GridBatch): The grid of ``result``.
         """
-        serialization = serialize(grid, self.order, shuffle=self.shuffle_orders)
+        serialization = serialize(grid, self.order, offset_mode=self.serialization_offset, shuffle=self.shuffle_orders)
         stem_plan = None
         if self.embedding.mode == "conv":
             k = self.embedding.kernel_size
