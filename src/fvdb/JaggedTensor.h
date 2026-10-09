@@ -281,10 +281,9 @@ class JaggedTensor : public torch::CustomClassHolder {
     ///                 inner_idx).
     /// @param num_tensors Total number of tensors.
     /// @param num_outer_lists Number of outer lists for ldim == 2. Pass it when trailing outer
-    /// lists
-    ///                        may be empty, since list_ids cannot express them. Defaults to the
-    ///                        largest outer id + 1 (0 when there are no tensors). For ldim == 1 it
-    ///                        must equal num_tensors if given.
+    ///        lists may be empty, since list_ids cannot express them. Defaults to the largest
+    ///        outer id + 1 (0 when there are no tensors). For ldim == 1 it must equal num_tensors
+    ///        if given.
     /// @return A JaggedTensor defined by the data, indices, and list ids.
     static JaggedTensor
     from_data_indices_and_list_ids(torch::Tensor data,
@@ -328,10 +327,9 @@ class JaggedTensor : public torch::CustomClassHolder {
     ///                 For ldim == 2: shape (num_tensors, 2) where each row is (outer_idx,
     ///                 inner_idx).
     /// @param num_outer_lists Number of outer lists for ldim == 2. Pass it when trailing outer
-    /// lists
-    ///                        may be empty, since list_ids cannot express them. Defaults to the
-    ///                        largest outer id + 1 (0 when there are no tensors). For ldim == 1 it
-    ///                        must equal num_tensors if given.
+    ///        lists may be empty, since list_ids cannot express them. Defaults to the largest
+    ///        outer id + 1 (0 when there are no tensors). For ldim == 1 it must equal num_tensors
+    ///        if given.
     /// @return A JaggedTensor defined by the data, offsets, and list ids.
     static JaggedTensor
     from_data_offsets_and_list_ids(torch::Tensor data,

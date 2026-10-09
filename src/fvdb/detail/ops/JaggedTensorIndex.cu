@@ -13,7 +13,6 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-// This kernel computes the offsets for an integer indexing operation
 // Computes a mask for the data tensor for a slice operation
 __global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
 makeDataSliceMask(const int64_t start,
@@ -559,32 +558,7 @@ jaggedTensorIndexIntNested(const JaggedTensor &jt, int64_t idxVal) {
 // i.e. jt = JaggedTensor([...])
 //      jt[2] -> JaggedTensor([...]) where the 3rd list is selected
 JaggedTensor
-jaggedTensorIndexIntPrivateUse1(const JaggedTensor &jt, int64_t idxVal) {
-    if (idxVal < 0) {
-        idxVal += jt.num_outer_lists();
-    }
-    TORCH_CHECK_INDEX(idxVal >= 0 && idxVal < jt.num_outer_lists(),
-                      "Index ",
-                      idxVal,
-                      " is out of bounds for JaggedTensor with ",
-                      jt.num_outer_lists(),
-                      " elements");
-
-    TORCH_CHECK(jt.ldim() == 1,
-                "jaggedTensorIndexIntPrivateUse1 is not implemented for nested lists");
-
-    return jaggedTensorIndexIntOneList(jt, idxVal);
-}
-
-// This corresponds to indexing with an integer
-// i.e. jt = JaggedTensor([...])
-//      jt[2] -> JaggedTensor([...]) where the 3rd list is selected
-JaggedTensor
 jaggedTensorIndexInt(const JaggedTensor &jt, int64_t idxVal) {
-    if (jt.device().is_privateuseone()) {
-        return jaggedTensorIndexIntPrivateUse1(jt, idxVal);
-    }
-
     if (idxVal < 0) {
         idxVal += jt.num_outer_lists();
     }
@@ -594,6 +568,12 @@ jaggedTensorIndexInt(const JaggedTensor &jt, int64_t idxVal) {
                       " is out of bounds for JaggedTensor with ",
                       jt.num_outer_lists(),
                       " elements");
+
+    if (jt.device().is_privateuseone()) {
+        TORCH_CHECK(
+            jt.ldim() == 1, "Integer indexing of nested lists is not implemented on ", jt.device());
+        return jaggedTensorIndexIntOneList(jt, idxVal);
+    }
 
     c10::OptionalDeviceGuard deviceGuard(jt.device());
     return jt.ldim() == 1 ? jaggedTensorIndexIntOneList(jt, idxVal)

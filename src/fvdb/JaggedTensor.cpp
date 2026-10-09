@@ -917,7 +917,9 @@ JaggedTensor::jcat(const std::vector<JaggedTensor> &vec, std::optional<int64_t> 
             } else {
                 offsets.push_back(jvec.mOffsets + curOffset);
             }
-            lidx.push_back(jvec.mListIdx + curListOffset);
+            if (jvec.mListIdx.size(1) == 2) {
+                lidx.push_back(jvec.mListIdx + curListOffset);
+            }
             curOffset += jvec.mData.size(0);
             curListOffset[0][0] += jvec.mNumOuterLists;
             totalLists += jvec.mNumOuterLists;
