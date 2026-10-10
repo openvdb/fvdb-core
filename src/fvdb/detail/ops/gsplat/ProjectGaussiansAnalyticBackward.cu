@@ -460,14 +460,14 @@ dispatchProjectGaussiansAnalyticBwd<torch::kPrivateUse1>(
         // Prepare gradients after prior work, then make the current streams wait for preparation.
         for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
             C10_CUDA_CHECK(cudaSetDevice(deviceId));
-            auto currentStream        = c10::cuda::getCurrentCUDAStream(deviceId);
+            auto stream               = c10::cuda::getCurrentCUDAStream(deviceId);
             prefetchStreams[deviceId] = c10::cuda::getStreamFromPool(false, deviceId);
-            auto stream               = prefetchStreams[deviceId];
+            auto prefetchStream       = prefetchStreams[deviceId];
 
             cudaEvent_t prefetchEvent;
             C10_CUDA_CHECK(cudaEventCreateWithFlags(&prefetchEvent, cudaEventDisableTiming));
-            C10_CUDA_CHECK(cudaEventRecord(prefetchEvent, currentStream));
-            C10_CUDA_CHECK(cudaStreamWaitEvent(stream, prefetchEvent));
+            C10_CUDA_CHECK(cudaEventRecord(prefetchEvent, stream));
+            C10_CUDA_CHECK(cudaStreamWaitEvent(prefetchStream, prefetchEvent));
 
             int64_t elementOffset, elementCount;
             std::tie(elementOffset, elementCount) = deviceChunk(N, deviceId);
@@ -478,24 +478,24 @@ dispatchProjectGaussiansAnalyticBwd<torch::kPrivateUse1>(
                     dLossDMeans.data_ptr<float>() + elementOffset * dLossDMeans.stride(0),
                     elementCount * dLossDMeans.stride(0) * sizeof(float),
                     deviceId,
-                    stream);
+                    prefetchStream);
                 if (covars.has_value()) {
                     nanovdb::util::cuda::memPrefetchAsync(
                         dLossDCovars.data_ptr<float>() + elementOffset * dLossDCovars.stride(0),
                         elementCount * dLossDCovars.stride(0) * sizeof(float),
                         deviceId,
-                        stream);
+                        prefetchStream);
                 } else {
                     nanovdb::util::cuda::memPrefetchAsync(
                         dLossDQuats.data_ptr<float>() + elementOffset * dLossDQuats.stride(0),
                         elementCount * dLossDQuats.stride(0) * sizeof(float),
                         deviceId,
-                        stream);
+                        prefetchStream);
                     nanovdb::util::cuda::memPrefetchAsync(
                         dLossDScales.data_ptr<float>() + elementOffset * dLossDScales.stride(0),
                         elementCount * dLossDScales.stride(0) * sizeof(float),
                         deviceId,
-                        stream);
+                        prefetchStream);
                 }
 #else
                 std::vector<void *> prefetchPtrs;
@@ -530,34 +530,34 @@ dispatchProjectGaussiansAnalyticBwd<torch::kPrivateUse1>(
                                                          prefetchLocationIndices.data(),
                                                          prefetchLocations.size(),
                                                          0,
-                                                         stream));
+                                                         prefetchStream));
 #endif
                 C10_CUDA_CHECK(cudaMemsetAsync(dLossDMeans.data_ptr<float>() +
                                                    elementOffset * dLossDMeans.stride(0),
                                                0,
                                                elementCount * dLossDMeans.stride(0) * sizeof(float),
-                                               stream));
+                                               prefetchStream));
                 if (covars.has_value()) {
                     C10_CUDA_CHECK(cudaMemsetAsync(
                         dLossDCovars.data_ptr<float>() + elementOffset * dLossDCovars.stride(0),
                         0,
                         elementCount * dLossDCovars.stride(0) * sizeof(float),
-                        stream));
+                        prefetchStream));
                 } else {
                     C10_CUDA_CHECK(cudaMemsetAsync(
                         dLossDQuats.data_ptr<float>() + elementOffset * dLossDQuats.stride(0),
                         0,
                         elementCount * dLossDQuats.stride(0) * sizeof(float),
-                        stream));
+                        prefetchStream));
                     C10_CUDA_CHECK(cudaMemsetAsync(
                         dLossDScales.data_ptr<float>() + elementOffset * dLossDScales.stride(0),
                         0,
                         elementCount * dLossDScales.stride(0) * sizeof(float),
-                        stream));
+                        prefetchStream));
                 }
             }
-            C10_CUDA_CHECK(cudaEventRecord(prefetchEvent, stream));
-            C10_CUDA_CHECK(cudaStreamWaitEvent(currentStream, prefetchEvent));
+            C10_CUDA_CHECK(cudaEventRecord(prefetchEvent, prefetchStream));
+            C10_CUDA_CHECK(cudaStreamWaitEvent(stream, prefetchEvent));
             C10_CUDA_CHECK(cudaEventDestroy(prefetchEvent));
         }
 

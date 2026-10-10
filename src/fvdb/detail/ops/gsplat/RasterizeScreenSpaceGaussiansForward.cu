@@ -717,8 +717,8 @@ launchRasterizeForwardKernels(
 
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
-        auto stream = c10::cuda::getStreamFromPool(false, deviceId);
-        C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
+        auto prefetchStream = c10::cuda::getStreamFromPool(false, deviceId);
+        C10_CUDA_CHECK(cudaStreamWaitEvent(prefetchStream, events[deviceId]));
 
         uint32_t deviceTileOffset, deviceTileCount;
         std::tie(deviceTileOffset, deviceTileCount) = deviceChunk(tileCount, deviceId);
@@ -742,9 +742,9 @@ launchRasterizeForwardKernels(
                 appendPerCameraPrefetchRanges(
                     prefetchPointers, prefetchSizes, cameraTensors, cameraOffset, cameraCount);
             }
-            memPrefetchBatchAsync(prefetchPointers, prefetchSizes, deviceId, stream);
+            memPrefetchBatchAsync(prefetchPointers, prefetchSizes, deviceId, prefetchStream);
         }
-        C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
+        C10_CUDA_CHECK(cudaEventRecord(events[deviceId], prefetchStream));
     }
 
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {

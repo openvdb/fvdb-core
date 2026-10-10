@@ -422,8 +422,8 @@ launchForwardPrivateUse1(const torch::Tensor &means,
 
     for (const auto deviceId: c10::irange(deviceCount)) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
-        auto stream = c10::cuda::getStreamFromPool(false, deviceId);
-        C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
+        auto prefetchStream = c10::cuda::getStreamFromPool(false, deviceId);
+        C10_CUDA_CHECK(cudaStreamWaitEvent(prefetchStream, events[deviceId]));
 
         const auto [deviceTileOffset, deviceTileCount] = deviceChunk(tileCount, deviceId);
         if (deviceTileCount > 0) {
@@ -444,9 +444,9 @@ launchForwardPrivateUse1(const torch::Tensor &means,
                 cameraOffset;
             appendPerCameraPrefetchRanges(
                 prefetchPointers, prefetchSizes, cameraTensors, cameraOffset, cameraCount);
-            memPrefetchBatchAsync(prefetchPointers, prefetchSizes, deviceId, stream);
+            memPrefetchBatchAsync(prefetchPointers, prefetchSizes, deviceId, prefetchStream);
         }
-        C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
+        C10_CUDA_CHECK(cudaEventRecord(events[deviceId], prefetchStream));
     }
 
     for (const auto deviceId: c10::irange(deviceCount)) {

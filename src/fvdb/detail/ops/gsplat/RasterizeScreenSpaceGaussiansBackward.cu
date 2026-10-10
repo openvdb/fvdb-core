@@ -1245,12 +1245,12 @@ callRasterizeBackwardPrivateUse1(
     // Prefetch inputs after prior work, then make the current streams wait for those inputs.
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
-        auto currentStream        = c10::cuda::getCurrentCUDAStream(deviceId);
+        auto stream               = c10::cuda::getCurrentCUDAStream(deviceId);
         prefetchStreams[deviceId] = c10::cuda::getStreamFromPool(false, deviceId);
 
         cudaEvent_t prefetchEvent;
         C10_CUDA_CHECK(cudaEventCreateWithFlags(&prefetchEvent, cudaEventDisableTiming));
-        C10_CUDA_CHECK(cudaEventRecord(prefetchEvent, currentStream));
+        C10_CUDA_CHECK(cudaEventRecord(prefetchEvent, stream));
         C10_CUDA_CHECK(cudaStreamWaitEvent(prefetchStreams[deviceId], prefetchEvent));
 
         uint32_t deviceTileOffset, deviceTileCount;
@@ -1271,7 +1271,7 @@ callRasterizeBackwardPrivateUse1(
                 prefetchPointers, prefetchSizes, deviceId, prefetchStreams[deviceId]);
         }
         C10_CUDA_CHECK(cudaEventRecord(prefetchEvent, prefetchStreams[deviceId]));
-        C10_CUDA_CHECK(cudaStreamWaitEvent(currentStream, prefetchEvent));
+        C10_CUDA_CHECK(cudaStreamWaitEvent(stream, prefetchEvent));
         C10_CUDA_CHECK(cudaEventDestroy(prefetchEvent));
     }
 
