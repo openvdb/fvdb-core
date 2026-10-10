@@ -116,6 +116,37 @@ memPrefetchBatchAsync(std::vector<void *> &prefetchPointers,
 }
 
 void
+memDiscardAndPrefetchBatchAsync(std::vector<void *> &prefetchPointers,
+                                std::vector<size_t> &prefetchSizes,
+                                int deviceId,
+                                cudaStream_t stream) {
+    TORCH_CHECK(stream, "cudaMemPrefetchBatchAsync does not support the default stream");
+    if (prefetchPointers.empty()) {
+        return;
+    }
+
+#if (CUDART_VERSION < 13000)
+    for (size_t i = 0; i < prefetchPointers.size(); ++i) {
+        C10_CUDA_CHECK(nanovdb::util::cuda::memPrefetchAsync(
+            prefetchPointers[i], prefetchSizes[i], deviceId, stream));
+    }
+#else
+    const cudaMemLocation location                 = {cudaMemLocationTypeDevice, deviceId};
+    std::vector<cudaMemLocation> prefetchLocations = {location};
+    std::vector<size_t> prefetchLocationIndices    = {0};
+
+    C10_CUDA_CHECK(cudaMemDiscardAndPrefetchBatchAsync(prefetchPointers.data(),
+                                                       prefetchSizes.data(),
+                                                       prefetchPointers.size(),
+                                                       prefetchLocations.data(),
+                                                       prefetchLocationIndices.data(),
+                                                       prefetchLocations.size(),
+                                                       0,
+                                                       stream));
+#endif
+}
+
+void
 perCameraPrefetchAsync(const torch::Tensor &tensor,
                        uint32_t cameraOffset,
                        uint32_t cameraCount,
