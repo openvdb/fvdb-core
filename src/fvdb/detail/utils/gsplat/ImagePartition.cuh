@@ -4,6 +4,7 @@
 #ifndef FVDB_DETAIL_UTILS_GSPLAT_IMAGEPARTITION_CUH
 #define FVDB_DETAIL_UTILS_GSPLAT_IMAGEPARTITION_CUH
 
+#include <fvdb/detail/utils/cuda/Prefetch.h>
 #include <fvdb/detail/utils/cuda/Utils.cuh>
 
 #include <torch/types.h>
@@ -105,6 +106,45 @@ appendImagePrefetchRanges(std::vector<void *> &prefetchPointers,
                 prefetchSizes.emplace_back(byteCount);
             }
         }
+    }
+}
+
+// Prepare preserved inputs and fully overwritten outputs on the image kernels' tile rows.
+// Each current compute stream is ordered after its device's prefetches before returning.
+inline void
+prefetchImages(const torch::TensorList &inputs, const torch::TensorList &outputs) {
+    TORCH_CHECK(!inputs.empty(), "Image prefetch requires at least one input");
+    const auto &image = inputs.front();
+    const int B       = image.size(0);
+    const int CH      = image.size(1);
+    const int H       = image.size(2);
+    const int W       = image.size(3);
+
+    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+        C10_CUDA_CHECK(cudaSetDevice(deviceId));
+        auto stream         = c10::cuda::getCurrentCUDAStream(deviceId);
+        auto prefetchStream = c10::cuda::getStreamFromPool(false, deviceId);
+        cudaEvent_t prefetchEvent;
+        C10_CUDA_CHECK(cudaEventCreateWithFlags(&prefetchEvent, cudaEventDisableTiming));
+        C10_CUDA_CHECK(cudaEventRecord(prefetchEvent, stream));
+        C10_CUDA_CHECK(cudaStreamWaitEvent(prefetchStream, prefetchEvent));
+        const auto chunk = imageBlockChunk(B, H, W, deviceId);
+        if (chunk.blockCount) {
+            std::vector<void *> pointers;
+            std::vector<size_t> sizes;
+            appendImagePrefetchRanges(
+                pointers, sizes, inputs, chunk.tileRowOffset, chunk.tileRowCount, B, CH, H, W);
+            memPrefetchBatchAsync(pointers, sizes, deviceId, prefetchStream);
+
+            pointers.clear();
+            sizes.clear();
+            appendImagePrefetchRanges(
+                pointers, sizes, outputs, chunk.tileRowOffset, chunk.tileRowCount, B, CH, H, W);
+            memDiscardAndPrefetchBatchAsync(pointers, sizes, deviceId, prefetchStream);
+        }
+        C10_CUDA_CHECK(cudaEventRecord(prefetchEvent, prefetchStream));
+        C10_CUDA_CHECK(cudaStreamWaitEvent(stream, prefetchEvent));
+        C10_CUDA_CHECK(cudaEventDestroy(prefetchEvent));
     }
 }
 

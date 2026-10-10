@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/detail/ops/gsplat/FusedL1.h>
-#include <fvdb/detail/utils/cuda/Prefetch.h>
 #include <fvdb/detail/utils/cuda/Utils.cuh>
 #include <fvdb/detail/utils/gsplat/ImagePartition.cuh>
 
@@ -196,46 +195,6 @@ checkL1LossGradient(const torch::Tensor &img1, const torch::Tensor &dL_dloss) {
                       "Fused L1 loss gradient must have the images' device and dtype");
 }
 
-// Record producers, prefetch on pooled streams, then let each current stream
-// wait before launching. This follows the multi-GPU FusedSSIM prefetch ordering.
-std::vector<cudaEvent_t>
-prefetchL1Images(const torch::TensorList &imageTensors) {
-    const auto &image = imageTensors.front();
-    const int B       = image.size(0);
-    const int CH      = image.size(1);
-    const int H       = image.size(2);
-    const int W       = image.size(3);
-    std::vector<cudaEvent_t> events(c10::cuda::device_count());
-    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-        C10_CUDA_CHECK(cudaSetDevice(deviceId));
-        auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
-        C10_CUDA_CHECK(cudaEventCreateWithFlags(&events[deviceId], cudaEventDisableTiming));
-        C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
-    }
-    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-        C10_CUDA_CHECK(cudaSetDevice(deviceId));
-        auto stream = c10::cuda::getStreamFromPool(false, deviceId);
-        C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
-        const auto chunk = imageBlockChunk(B, H, W, deviceId);
-        if (chunk.blockCount) {
-            std::vector<void *> prefetchPointers;
-            std::vector<size_t> prefetchSizes;
-            appendImagePrefetchRanges(prefetchPointers,
-                                      prefetchSizes,
-                                      imageTensors,
-                                      chunk.tileRowOffset,
-                                      chunk.tileRowCount,
-                                      B,
-                                      CH,
-                                      H,
-                                      W);
-            memPrefetchBatchAsync(prefetchPointers, prefetchSizes, deviceId, stream);
-        }
-        C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
-    }
-    return events;
-}
-
 void
 reduceL1MapTiles(const torch::Tensor &l1_map,
                  int blockOffset,
@@ -357,14 +316,15 @@ fusedL1PrivateUse1(const torch::Tensor &img1, const torch::Tensor &img2) {
     }
     auto l1_map = torch::empty_like(img1);
     auto loss   = torch::empty({}, img1.options());
-    auto events = prefetchL1Images({img1, img2, l1_map});
+
+    std::vector<torch::Tensor> inputs  = {img1, img2};
+    std::vector<torch::Tensor> outputs = {l1_map};
+    prefetchImages(inputs, outputs);
     std::vector<torch::Tensor> partial_losses;
     partial_losses.reserve(c10::cuda::device_count());
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
-        C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
-        C10_CUDA_CHECK(cudaEventDestroy(events[deviceId]));
 
         const auto chunk = imageBlockChunk(B, H, W, deviceId);
         if (chunk.blockCount) {
@@ -417,19 +377,18 @@ fusedL1BackwardPrivateUse1(const torch::Tensor &img1,
     if (!img1.numel() || (!need_img1 && !need_img2)) {
         return std::make_tuple(dL_dimg1, dL_dimg2);
     }
-    std::vector<torch::Tensor> imageTensors = {img1, img2};
+    std::vector<torch::Tensor> inputs = {img1, img2};
+    std::vector<torch::Tensor> outputs;
     if (dL_dimg1) {
-        imageTensors.emplace_back(*dL_dimg1);
+        outputs.emplace_back(*dL_dimg1);
     }
     if (dL_dimg2) {
-        imageTensors.emplace_back(*dL_dimg2);
+        outputs.emplace_back(*dL_dimg2);
     }
-    auto events = prefetchL1Images(imageTensors);
+    prefetchImages(inputs, outputs);
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
-        C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
-        C10_CUDA_CHECK(cudaEventDestroy(events[deviceId]));
 
         const auto chunk = imageBlockChunk(B, H, W, deviceId);
         if (chunk.blockCount) {

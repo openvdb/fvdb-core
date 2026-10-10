@@ -26,7 +26,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/detail/ops/gsplat/FusedL1SSIM.h>
-#include <fvdb/detail/utils/cuda/Prefetch.h>
 #include <fvdb/detail/utils/cuda/Utils.cuh>
 #include <fvdb/detail/utils/gsplat/ImagePartition.cuh>
 
@@ -528,9 +527,9 @@ checkImages(const torch::Tensor &img1, const torch::Tensor &img2) {
 }
 
 void
-checkBackwardInputs(const torch::Tensor &img1,
-                    const torch::Tensor &grad_loss,
-                    const torch::TensorList &derivatives) {
+checkGradients(const torch::Tensor &img1,
+               const torch::Tensor &grad_loss,
+               const torch::TensorList &derivatives) {
     TORCH_CHECK_VALUE(
         grad_loss.dim() == 0 && grad_loss.device() == img1.device() &&
             grad_loss.scalar_type() == img1.scalar_type(),
@@ -541,38 +540,6 @@ checkBackwardInputs(const torch::Tensor &img1,
                 derivative.scalar_type() == img1.scalar_type() && derivative.is_contiguous(),
             "Fused L1/SSIM requires contiguous saved derivatives matching the images");
     }
-}
-
-// Prefetch all images and intermediates once per pass, on the same tile rows.
-std::vector<cudaEvent_t>
-prefetchImages(const torch::TensorList &images) {
-    const auto &image = images.front();
-    const int B       = image.size(0);
-    const int CH      = image.size(1);
-    const int H       = image.size(2);
-    const int W       = image.size(3);
-    std::vector<cudaEvent_t> events(c10::cuda::device_count());
-    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-        C10_CUDA_CHECK(cudaSetDevice(deviceId));
-        auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
-        C10_CUDA_CHECK(cudaEventCreateWithFlags(&events[deviceId], cudaEventDisableTiming));
-        C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
-    }
-    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-        C10_CUDA_CHECK(cudaSetDevice(deviceId));
-        auto stream = c10::cuda::getStreamFromPool(false, deviceId);
-        C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
-        const auto chunk = imageBlockChunk(B, H, W, deviceId);
-        if (chunk.blockCount) {
-            std::vector<void *> pointers;
-            std::vector<size_t> sizes;
-            appendImagePrefetchRanges(
-                pointers, sizes, images, chunk.tileRowOffset, chunk.tileRowCount, B, CH, H, W);
-            memPrefetchBatchAsync(pointers, sizes, deviceId, stream);
-        }
-        C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
-    }
-    return events;
 }
 
 void
@@ -710,18 +677,17 @@ fusedL1SSIMPrivateUse1(const torch::Tensor &img1,
     auto dm_dsigma1_sq = train ? torch::empty_like(img1) : torch::empty({0}, img1.options());
     auto dm_dsigma12   = train ? torch::empty_like(img1) : torch::empty({0}, img1.options());
 
-    std::vector<torch::Tensor> images = {img1, img2};
+    std::vector<torch::Tensor> inputs = {img1, img2};
+    std::vector<torch::Tensor> outputs;
     if (train) {
-        images.insert(images.end(), {dm_dmu1, dm_dsigma1_sq, dm_dsigma12});
+        outputs = {dm_dmu1, dm_dsigma1_sq, dm_dsigma12};
     }
-    auto events = prefetchImages(images);
+    prefetchImages(inputs, outputs);
     std::vector<torch::Tensor> partial_losses;
     partial_losses.reserve(c10::cuda::device_count());
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
-        auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
-        C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
-        C10_CUDA_CHECK(cudaEventDestroy(events[deviceId]));
+        auto stream      = c10::cuda::getCurrentCUDAStream(deviceId);
         const auto chunk = imageBlockChunk(B, H, W, deviceId);
         partial_losses.push_back(torch::empty({1}, img1.options().device(torch::kCUDA, deviceId)));
         forwardTiles(img1,
@@ -758,7 +724,7 @@ fusedL1SSIMBackwardCUDA(const torch::Tensor &img1,
                         double C1,
                         double C2) {
     checkImages(img1, img2);
-    checkBackwardInputs(img1, grad_loss, {dm_dmu1, dm_dsigma1_sq, dm_dsigma12});
+    checkGradients(img1, grad_loss, {dm_dmu1, dm_dsigma1_sq, dm_dsigma12});
     const c10::cuda::CUDAGuard device_guard(img1.device().index());
     const int B    = img1.size(0);
     const int H    = img1.size(2);
@@ -792,18 +758,18 @@ fusedL1SSIMBackwardPrivateUse1(const torch::Tensor &img1,
                                double C1,
                                double C2) {
     checkImages(img1, img2);
-    checkBackwardInputs(img1, grad_loss, {dm_dmu1, dm_dsigma1_sq, dm_dsigma12});
+    checkGradients(img1, grad_loss, {dm_dmu1, dm_dsigma1_sq, dm_dsigma12});
     const int B    = img1.size(0);
     const int H    = img1.size(2);
     const int W    = img1.size(3);
     auto grad_img1 = torch::empty_like(img1);
 
-    auto events = prefetchImages({img1, img2, dm_dmu1, dm_dsigma1_sq, dm_dsigma12, grad_img1});
+    std::vector<torch::Tensor> inputs  = {img1, img2, dm_dmu1, dm_dsigma1_sq, dm_dsigma12};
+    std::vector<torch::Tensor> outputs = {grad_img1};
+    prefetchImages(inputs, outputs);
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
-        auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
-        C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
-        C10_CUDA_CHECK(cudaEventDestroy(events[deviceId]));
+        auto stream      = c10::cuda::getCurrentCUDAStream(deviceId);
         const auto chunk = imageBlockChunk(B, H, W, deviceId);
         backwardTiles(img1,
                       img2,

@@ -61,6 +61,15 @@ void memPrefetchBatchAsync(std::vector<void *> &prefetchPointers,
                            int deviceId,
                            cudaStream_t stream);
 
+/// Prefetch the memory ranges given by paired pointers and byte sizes to the specified device,
+/// ordered on the non-default input stream. On CUDA 13+, discard existing contents to avoid
+/// migrating data that will be overwritten; callers must overwrite discarded data before reading
+/// it. On older CUDA versions, fall back to individual prefetch calls without discarding contents.
+void memDiscardAndPrefetchBatchAsync(std::vector<void *> &prefetchPointers,
+                                     std::vector<size_t> &prefetchSizes,
+                                     int deviceId,
+                                     cudaStream_t stream);
+
 /// Given a list of contiguous tensors each with dimensions [C, ...] where C is the number of
 /// cameras, we memset the slices [cameraOffset : cameraCount, ...] to the specified value
 /// on the input stream.
