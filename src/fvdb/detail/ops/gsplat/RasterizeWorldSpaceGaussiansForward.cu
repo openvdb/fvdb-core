@@ -425,12 +425,13 @@ launchForwardPrivateUse1(const torch::Tensor &means,
         auto prefetchStream = c10::cuda::getStreamFromPool(false, deviceId);
         C10_CUDA_CHECK(cudaStreamWaitEvent(prefetchStream, events[deviceId]));
 
-        const auto [deviceTileOffset, deviceTileCount] = deviceChunk(tileCount, deviceId);
+        int64_t deviceTileOffset, deviceTileCount;
+        std::tie(deviceTileOffset, deviceTileCount) = deviceChunk(tileCount, deviceId);
         if (deviceTileCount > 0) {
             std::vector<void *> prefetchPointers;
             std::vector<size_t> prefetchSizes;
-            const TilePrefetchRange tileRange{static_cast<uint32_t>(deviceTileOffset),
-                                              static_cast<uint32_t>(deviceTileCount),
+            const TilePrefetchRange tileRange{deviceTileOffset,
+                                              deviceTileCount,
                                               tileExtentH,
                                               tileExtentW,
                                               imageHeight,
