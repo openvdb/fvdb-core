@@ -1413,32 +1413,52 @@ intersectGaussianTilesPrivateUse1Impl(
     // device can then sort its own intersections independently and their concatenation is globally
     // sorted, with no cross-device merge.
 
-    // Store one count per NUM_THREADS Gaussians on each device, then scan these block totals.
-    // Emit reconstructs the per-Gaussian offsets with a block-local scan, reducing the persistent
-    // prefix storage from 8 * totalGaussians bytes to 8 * gaussianBlockCount bytes per device.
-    // Count, scan, emit, and release share the device's stream; no merge is needed between them.
-    const int gaussianBlockCount = numGaussianBlocks(totalGaussians);
+    // Dense inputs are camera-major, so each device only visits Gaussians in cameras overlapping
+    // its tile-key range. Packed inputs retain the full Gaussian range. Count and scan use local
+    // indices within each device's buffer; input accesses and emitted IDs remain global.
+    // Store one count per NUM_THREADS Gaussians in each device's range, then scan these block
+    // totals. Emit reconstructs the per-Gaussian offsets with a block-local scan, reducing the
+    // persistent prefix storage from 8 * gaussianCount bytes to 8 * gaussianBlockCount bytes per
+    // device. Count, scan, emit, and release share the device's stream; no merge is needed between
+    // them.
+    std::vector<uint32_t> deviceGaussianOffset(deviceCount);
+    std::vector<uint32_t> deviceGaussianCount(deviceCount);
+    std::vector<int> deviceGaussianBlockCount(deviceCount);
     std::vector<int64_t *> deviceTilesPerBlockCumsum(deviceCount, nullptr);
 
     for (const auto deviceId: c10::irange(deviceCount)) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
 
+        int64_t deviceKeyOffset, deviceKeyCount;
+        std::tie(deviceKeyOffset, deviceKeyCount) = deviceChunk(totalTileKeys, deviceId);
+        if (deviceKeyCount == 0) {
+            continue;
+        }
+        const int64_t keyStart = deviceKeyOffset;
+        const int64_t keyEnd   = deviceKeyOffset + deviceKeyCount;
+
+        if (isPacked) {
+            deviceGaussianCount[deviceId] = totalGaussians;
+        } else {
+            const uint32_t cameraOffset    = keyStart / totalTiles;
+            const uint32_t cameraCount     = cuda::ceil_div(keyEnd, totalTiles) - cameraOffset;
+            deviceGaussianOffset[deviceId] = cameraOffset * numGaussians;
+            deviceGaussianCount[deviceId]  = cameraCount * numGaussians;
+        }
+
+        const uint32_t gaussianOffset      = deviceGaussianOffset[deviceId];
+        const uint32_t gaussianCount       = deviceGaussianCount[deviceId];
+        const int gaussianBlockCount       = numGaussianBlocks(gaussianCount);
+        deviceGaussianBlockCount[deviceId] = gaussianBlockCount;
         C10_CUDA_CHECK(cudaMallocAsync(
             &deviceTilesPerBlockCumsum[deviceId], gaussianBlockCount * sizeof(int64_t), stream));
 
-        size_t deviceKeyOffset, deviceKeyCount;
-        std::tie(deviceKeyOffset, deviceKeyCount) = deviceChunk(totalTileKeys, deviceId);
-        const int64_t keyStart                    = static_cast<int64_t>(deviceKeyOffset);
-        const int64_t keyEnd = static_cast<int64_t>(deviceKeyOffset + deviceKeyCount);
-
-        // Every device scans all Gaussians but counts only the tiles that fall in its tile-key
-        // range.
         const auto launchCountTilesPerGaussianBlock = [&]<typename TileIteratorT>() {
             countTilesPerGaussianBlock<TileIteratorT, scalar_t, int64_t>
                 <<<gaussianBlockCount, NUM_THREADS, 0, stream>>>(
-                    0,
-                    totalGaussians,
+                    gaussianOffset,
+                    gaussianCount,
                     numGaussians,
                     tileSize,
                     numTilesW,
@@ -1485,11 +1505,17 @@ intersectGaussianTilesPrivateUse1Impl(
         // The total is the last element of the device's scanned block counts. Issuing the copy on
         // the device's stream orders it after the scan; the synchronize below then guarantees it
         // has completed before we read deviceTotals on the host.
-        C10_CUDA_CHECK(cudaMemcpyAsync(&deviceTotals[deviceId],
-                                       deviceTilesPerBlockCumsum[deviceId] + gaussianBlockCount - 1,
-                                       sizeof(int64_t),
-                                       cudaMemcpyDeviceToHost,
-                                       stream));
+        const int gaussianBlockCount = deviceGaussianBlockCount[deviceId];
+        if (gaussianBlockCount > 0) {
+            C10_CUDA_CHECK(
+                cudaMemcpyAsync(&deviceTotals[deviceId],
+                                deviceTilesPerBlockCumsum[deviceId] + gaussianBlockCount - 1,
+                                sizeof(int64_t),
+                                cudaMemcpyDeviceToHost,
+                                stream));
+        } else {
+            deviceTotals[deviceId] = 0;
+        }
     }
     for (const auto deviceId: c10::irange(deviceCount)) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
@@ -1505,7 +1531,9 @@ intersectGaussianTilesPrivateUse1Impl(
         for (const auto deviceId: c10::irange(deviceCount)) {
             C10_CUDA_CHECK(cudaSetDevice(deviceId));
             auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
-            C10_CUDA_CHECK(cudaFreeAsync(deviceTilesPerBlockCumsum[deviceId], stream));
+            if (deviceTilesPerBlockCumsum[deviceId] != nullptr) {
+                C10_CUDA_CHECK(cudaFreeAsync(deviceTilesPerBlockCumsum[deviceId], stream));
+            }
         }
         return std::make_tuple(torch::zeros(outputDims, means2d.options().dtype(torch::kInt64)),
                                torch::empty({0}, means2d.options().dtype(torch::kInt32)));
@@ -1558,13 +1586,18 @@ intersectGaussianTilesPrivateUse1Impl(
             }
         }
 
-        // Compute the intersections owned by each device. Each device scans all Gaussians and
-        // writes only the intersections whose tile-key falls in its range, into its own contiguous
-        // slice [intersectionOffset, intersectionOffset + intersectionCount) of the global
-        // intersection arrays.
+        // Emit only the device's Gaussian range, using its local scan offsets and retaining global
+        // Gaussian IDs. Tile-key clipping still handles cameras shared by adjacent devices.
         for (const auto deviceId: c10::irange(deviceCount)) {
             C10_CUDA_CHECK(cudaSetDevice(deviceId));
             auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+
+            const uint32_t gaussianOffset = deviceGaussianOffset[deviceId];
+            const uint32_t gaussianCount  = deviceGaussianCount[deviceId];
+            const int gaussianBlockCount  = deviceGaussianBlockCount[deviceId];
+            if (gaussianCount == 0) {
+                continue;
+            }
 
             size_t deviceKeyOffset, deviceKeyCount;
             std::tie(deviceKeyOffset, deviceKeyCount) = deviceChunk(totalTileKeys, deviceId);
@@ -1578,8 +1611,8 @@ intersectGaussianTilesPrivateUse1Impl(
                     <<<gaussianBlockCount, NUM_THREADS, 0, stream>>>(
                         numCameras,
                         numGaussians,
-                        0,
-                        totalGaussians,
+                        gaussianOffset,
+                        gaussianCount,
                         tileSize,
                         numTilesW,
                         numTilesH,
