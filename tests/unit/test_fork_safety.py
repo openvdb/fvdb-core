@@ -1,6 +1,7 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import subprocess
 import sys
 import textwrap
@@ -41,5 +42,10 @@ _FORK_FREE_SCRIPT = textwrap.dedent(
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 def test_forked_child_frees_inherited_cuda_grid():
-    result = subprocess.run([sys.executable, "-c", _FORK_FREE_SCRIPT], capture_output=True, text=True, timeout=300)
+    # With caching disabled, every free calls cudaFree, which fails in a forked child for torch tensors too.
+    # Freeing in a forked child is only supported with the caching allocator, so run with it enabled.
+    env = {k: v for k, v in os.environ.items() if k != "PYTORCH_NO_CUDA_MEMORY_CACHING"}
+    result = subprocess.run(
+        [sys.executable, "-c", _FORK_FREE_SCRIPT], capture_output=True, text=True, timeout=300, env=env
+    )
     assert result.returncode == 0, f"forked child exited with {result.returncode}:\n{result.stderr}"
