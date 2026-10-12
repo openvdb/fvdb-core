@@ -24,7 +24,9 @@ Sort each grid's voxels along a Morton (z-order) or Hilbert curve, so that a spa
 becomes a 1D sequence for attention or state-space models. Order names and axis
 conventions match Pointcept, so weights trained there see the same orderings.
 
-.. autodata:: fvdb.SERIALIZATION_ORDERS
+Orders are :class:`~fvdb.SerializationOrder` values and the origin is a
+:class:`~fvdb.SerializationOffset`; both also accept their string values.
+
 .. autofunction:: fvdb.serialize
 .. autoclass:: fvdb.GridSerialization
    :members:
