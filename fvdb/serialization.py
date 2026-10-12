@@ -1,14 +1,22 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 #
-"""Space-filling-curve serialization of voxels for serialized (patch) attention.
+"""Space-filling-curve serialization of sparse voxels.
 
-Serialization sorts each grid's voxels along a space-filling curve so that voxels close in
-space end up close in sequence. Point Transformer V3 (PTv3) groups the sorted sequence into
-fixed-size patches and runs attention within each patch.
+Serialization sorts each grid's voxels along a space-filling curve, so that voxels close in
+space end up close in sequence. The result is a per-grid permutation and its inverse, which
+turn a sparse grid into a 1D sequence and back. Sequence models built on sparse grids start
+from this: serialized transformers group the sequence into patches or windows and run
+attention within each, and state-space models scan it directly. Several curves are available
+because no single curve keeps every neighbor close, so a model can alternate or shuffle them.
 
-The order names and axis conventions follow Pointcept's PTv3 implementation, so a model
-trained with one produces the same voxel orderings in the other.
+**Compatibility with Pointcept.** The order names, axis conventions and depth rule follow
+the Pointcept library, which most serialized point models (Point Transformer V3, Sonata and
+others) are implemented in, so weights trained there see the same voxel orderings here. The
+arbitrary choices this fixes are: the ``-trans`` orders swap x and y; the curve depth is
+``(max_coord + 1).bit_length()`` over the whole batch, which sets the Hilbert curve's
+orientation; and codes of a pooled grid are the finest level's codes with three bits dropped
+per halving. ``offset_mode="none"`` serializes raw coordinates as Pointcept does.
 """
 
 from __future__ import annotations
@@ -31,9 +39,9 @@ OffsetMode = Literal["grid", "batch", "none"]
 
 _ALIASES = {"identity": "vdb", "morton": "z", "zorder": "z", "z_order": "z"}
 _MAX_DEPTH = 21  # bits per axis of fvdb's Morton and Hilbert encoders
-_TRANS = (1, 0, 2)  # Pointcept "-trans" orders swap x and y
+_TRANS = (1, 0, 2)  # "-trans" orders swap x and y
 
-# Column order of ijk for fvdb.hilbert to equal Pointcept's Hilbert code at a depth d.
+# Column order of ijk for fvdb.hilbert to give the Hilbert code at a depth d.
 # The curve's orientation cycles with (21 - d) % 3.
 _HILBERT_AXES = {0: (0, 1, 2), 1: (1, 2, 0), 2: (2, 0, 1)}
 _MORTON_AXES = (2, 1, 0)
@@ -44,14 +52,14 @@ def _normalize_order(order: str) -> str:
     if name not in SERIALIZATION_ORDERS:
         raise ValueError(
             f"Unknown serialization order {order!r}. Expected one of {SERIALIZATION_ORDERS}. "
-            "Note that GridBatch.morton_zyx/hilbert_zyx swap x and z, which differs from the "
-            "Pointcept '-trans' orders (x and y swapped) used here."
+            "Note that GridBatch.morton_zyx/hilbert_zyx swap x and z, whereas the '-trans' "
+            "orders here swap x and y."
         )
     return name
 
 
 def _encoder_axes(order: str, depth: int) -> tuple[int, ...]:
-    """Columns of ijk to pass to fvdb's encoder so codes equal Pointcept's at ``depth``."""
+    """Columns of ijk to pass to fvdb's encoder for ``order`` at ``depth``."""
     axes = _MORTON_AXES if order.startswith("z") else _HILBERT_AXES[(_MAX_DEPTH - depth) % 3]
     if order.endswith("-trans"):
         axes = tuple(_TRANS[a] for a in axes)
@@ -76,7 +84,7 @@ def _local_ijk(grid: GridBatch, offset_mode: OffsetMode) -> torch.Tensor:
             raise ValueError("offset_mode='none' requires non-negative voxel coordinates")
         return ijk
     if offset_mode == "grid":
-        # Per-grid minimum, as Pointcept starts each sample at the origin.
+        # Per-grid minimum, so the order does not depend on where the grid sits.
         # data.bbox is host metadata; rows of empty grids are never gathered.
         mins = grid.data.bbox[:, 0].to(device=ijk.device, dtype=ijk.dtype)
         jidx = _grid_index(grid)
@@ -96,12 +104,12 @@ def _max_local_coord(grid: GridBatch, offset_mode: OffsetMode) -> int:
 
 
 def serialization_depth(grid: GridBatch, *, offset_mode: OffsetMode = "grid") -> int:
-    """Curve depth Pointcept would choose for a grid batch.
+    """Curve depth, in bits per axis, for a grid batch.
 
-    Pointcept sets the depth to ``(max_coord + 1).bit_length()`` over the whole batch, where
-    ``max_coord`` is the largest grid coordinate, taken as it is. The Hilbert curve's orientation
-    depends on the depth, so batches with different extents can order the same scene differently,
-    exactly as in Pointcept.
+    The depth is ``(max_coord + 1).bit_length()`` over the whole batch, where ``max_coord`` is
+    the largest coordinate after the offset is applied. The Hilbert curve's orientation depends
+    on the depth, so batches with different extents can order the same scene differently. This
+    is the rule Pointcept uses.
 
     Args:
         grid (GridBatch): The grid batch.
@@ -177,21 +185,22 @@ def serialization_codes(
 ) -> torch.Tensor:
     """Compute space-filling-curve codes for the active voxels of a grid batch.
 
-    Codes equal Pointcept's ``encode(grid_coord, depth=depth, order=order)`` for the same
-    coordinates. For a pooled grid, Pointcept derives codes from the finest level by dropping
-    three bits per halving. Pass the finest level's ``depth`` and the number of halvings as
-    ``code_shift`` to reproduce that.
+    Codes of a pooled grid can continue the finest level's curve: the coarse code is the fine
+    code with three bits dropped per halving. Pass the finest level's ``depth`` and the number
+    of halvings as ``code_shift`` for that. Codes equal Pointcept's ``encode(grid_coord, depth,
+    order)`` for the same coordinates.
 
     Args:
         grid (GridBatch): The grid batch.
         order (str): One of :data:`SERIALIZATION_ORDERS`. ``"vdb"`` returns the voxel index,
             which leaves voxels in the grid's native order.
-        offset_mode (str): ``"grid"`` shifts each grid by its own minimum coordinate, which makes
-            the order invariant to translating a grid. ``"batch"`` shifts every grid by the batch
-            minimum. ``"none"`` uses the coordinates as they are, which must be non-negative; this
-            is what Pointcept does, so it reproduces Pointcept's orders exactly even when a sample
-            does not start at 0, as after Pointcept's cropping augmentations. ``"grid"`` and
-            ``"none"`` agree when every grid starts at 0. Defaults to ``"grid"``.
+        offset_mode (str): Where the curve's origin sits, which changes the order. ``"grid"``
+            shifts each grid by its own minimum coordinate, so the order is invariant to
+            translating a grid. ``"batch"`` shifts every grid by the batch minimum. ``"none"``
+            uses the coordinates as they are, which must be non-negative; this matches
+            implementations that serialize raw coordinates, Pointcept among them, even for a
+            sample that does not start at 0. ``"grid"`` and ``"none"`` agree when every grid
+            starts at 0. Defaults to ``"grid"``.
         depth (int | None): Curve depth in bits per axis, at most 21. ``None`` uses
             :func:`serialization_depth` plus ``code_shift``. Defaults to ``None``.
         code_shift (int): Number of halvings since the level ``depth`` refers to. Defaults to ``0``.
@@ -308,8 +317,9 @@ class GridSerialization:
     ) -> GridSerialization:
         """Serialize a grid pooled from this one, continuing this level's curves.
 
-        Coarse codes are the fine codes with three bits dropped per halving, as in Pointcept's
-        serialized pooling. The coarse grid should be ``ijk // stride`` of this level's grid.
+        Coarse codes are the fine codes with three bits dropped per halving, so the coarse
+        order is the fine order with each pooled group collapsed to one token. The coarse grid
+        should be ``ijk // stride`` of this level's grid.
 
         Args:
             coarse_grid (GridBatch): The pooled grid.
@@ -354,8 +364,8 @@ def serialize(
         offset_mode (str): See :func:`serialization_codes`. Defaults to ``"grid"``.
         depth (int | None): See :func:`serialization_codes`. Defaults to ``None``.
         code_shift (int): See :func:`serialization_codes`. Defaults to ``0``.
-        shuffle (bool): Randomly reorder the orders, as PTv3 does each forward pass.
-            Defaults to ``False``.
+        shuffle (bool): Randomly reorder the orders, so a model that indexes them by position
+            sees a different order at each position every call. Defaults to ``False``.
         generator (torch.Generator | None): Optional CPU generator for the shuffle.
         keep_codes (bool): Keep the curve codes on the result. Defaults to ``False``.
 

@@ -20,8 +20,9 @@ Attention and volume rendering
 Space-filling-curve serialization
 ---------------------------------
 
-Sort voxels along Morton (z-order) or Hilbert curves, as used by serialized patch
-attention in Point Transformer V3. Order names and axis conventions match Pointcept.
+Sort each grid's voxels along a Morton (z-order) or Hilbert curve, so that a sparse grid
+becomes a 1D sequence for attention or state-space models. Order names and axis
+conventions match Pointcept, so weights trained there see the same orderings.
 
 .. autodata:: fvdb.SERIALIZATION_ORDERS
 .. autofunction:: fvdb.serialize
