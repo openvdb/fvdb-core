@@ -98,6 +98,9 @@ struct TorchDeviceResource {
 
     /// @brief Frees @p p on the bound device. The block returns to the stream it was allocated
     ///        on; @p stream is ignored, so it must be that same stream (see the class comment).
+    /// @note No device guard: torch's allocator finds the block's device itself, and setting a
+    ///       device fails in a child forked after CUDA initialized, where Python's cycle collector
+    ///       can free inherited grids.
     void
     deallocate_async(void *p, size_t bytes, size_t alignment, cudaStream_t stream) {
         if (p == nullptr) {
@@ -107,7 +110,6 @@ struct TorchDeviceResource {
             c10::GetAllocator(c10::DeviceType::PrivateUse1)->raw_deallocate(p);
             return;
         }
-        c10::cuda::CUDAGuard deviceGuard(mDevice);
         TorchResource{}.deallocate_async(p, bytes, alignment, stream);
     }
 
