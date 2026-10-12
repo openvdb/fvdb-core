@@ -293,7 +293,8 @@ class GridSerialization:
             generator (torch.Generator | None): Optional CPU generator for the shuffle.
 
         Returns:
-            GridSerialization: The shuffled serialization. Tensors are shared, not copied.
+            serialization (GridSerialization): The shuffled serialization. Tensors are shared,
+                not copied.
         """
         idx = torch.randperm(len(self.orders), generator=generator).tolist()
         return dataclasses.replace(
@@ -329,7 +330,7 @@ class GridSerialization:
             generator (torch.Generator | None): Optional CPU generator for the shuffle.
 
         Returns:
-            GridSerialization: Serialization of ``coarse_grid`` with the same orders.
+            serialization (GridSerialization): Serialization of ``coarse_grid`` with the same orders.
         """
         if stride < 1 or stride & (stride - 1):
             raise ValueError(f"stride must be a power of two, got {stride}")
@@ -375,7 +376,7 @@ def serialize(
         keep_codes (bool): Keep the curve codes on the result. Defaults to ``False``.
 
     Returns:
-        GridSerialization: Permutations for each order.
+        serialization (GridSerialization): Permutations for each order.
     """
     names = (orders,) if isinstance(orders, str) else tuple(orders)
     if not names:
@@ -422,6 +423,7 @@ def permute_jagged(data: JaggedTensor, perm: torch.Tensor) -> JaggedTensor:
             :class:`GridSerialization`. Shape: ``(total_elements,)``.
 
     Returns:
-        JaggedTensor: ``data`` with ``jdata`` reordered. The jagged layout is unchanged.
+        result (JaggedTensor): ``data`` with ``jdata`` reordered. The jagged layout is unchanged.
+            Shape: ``(batch_size, num_elements, *)``.
     """
     return data.jagged_like(data.jdata.index_select(0, perm))

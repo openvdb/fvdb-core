@@ -262,11 +262,12 @@ def scaled_dot_product_attention(
     for details on the underlying attention computation.
 
     Args:
-        query (JaggedTensor): Query of shape ``[B, -1, H, E]`` where *B* is the number of
-            sequences, *H* the number of heads, and *E* the embedding dimension.
-        key (JaggedTensor): Key of shape ``[B, -1, H, E]``.
-        value (JaggedTensor): Value of shape ``[B, -1, H, V]`` where *V* is the value dimension.
-            Key and value must share the same sequence lengths.
+        query (JaggedTensor): Queries, one sequence per batch element.
+            Shape: ``(batch_size, seq_len_b, num_heads, head_dim)``.
+        key (JaggedTensor): Keys. The local modes need the sequence lengths of ``query``.
+            Shape: ``(batch_size, kv_seq_len_b, num_heads, head_dim)``.
+        value (JaggedTensor): Values, with the same sequence lengths as ``key``.
+            Shape: ``(batch_size, kv_seq_len_b, num_heads, value_dim)``.
         scale (float): Scaling factor applied to the dot products before softmax.
         patch_size (int): Patch length for patch attention. ``0`` disables it. Defaults to ``0``.
         window_size (int | tuple[int, int]): Window for window attention. ``0`` disables it.
@@ -276,8 +277,8 @@ def scaled_dot_product_attention(
             the input dtype. Defaults to ``None``.
 
     Returns:
-        JaggedTensor: Attention output of shape ``[B, -1, H, V]`` with the same jagged structure
-        as the query.
+        result (JaggedTensor): Attention output with the jagged layout of ``query``.
+            Shape: ``(batch_size, seq_len_b, num_heads, value_dim)``.
     """
 
     for name, jt in [("query", query), ("key", key), ("value", value)]:
