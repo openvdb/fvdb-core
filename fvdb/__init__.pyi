@@ -35,6 +35,8 @@ from .enums import (
     ConvolutionPhasePolicy,
     ConvolutionTopologyPolicy,
     ConvolutionTopologyProvenance,
+    EmbeddingMode,
+    NormKind,
     SerializationOffset,
     SerializationOrder,
     SmoothingMode,
@@ -107,6 +109,8 @@ __all__ = [
     "morton",
     "hilbert",
     # Space-filling-curve serialization
+    "EmbeddingMode",
+    "NormKind",
     "SerializationOffset",
     "SerializationOrder",
     "GridSerialization",

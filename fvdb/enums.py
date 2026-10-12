@@ -95,6 +95,26 @@ class SerializationOffset(StrEnum):
     """Use the coordinates as they are. They must be non-negative."""
 
 
+class NormKind(StrEnum):
+    """Normalization applied to voxel features by :mod:`fvdb.nn` layers that offer a choice."""
+
+    BATCH = "batch"
+    """Batch normalization over all voxels in the batch."""
+
+    LAYER = "layer"
+    """Layer normalization over each voxel's channels."""
+
+
+class EmbeddingMode(StrEnum):
+    """Stem of :class:`fvdb.nn.PointTransformerV3`."""
+
+    CONV = "conv"
+    """A submanifold sparse convolution."""
+
+    LINEAR = "linear"
+    """A per-voxel linear layer."""
+
+
 class SmoothingMode(IntEnum):
     """
     Laplacian smoothing mode used to de-staircase a signed distance field in
