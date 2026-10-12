@@ -27,7 +27,7 @@ Components:
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Literal, cast
+from typing import cast
 
 import torch
 import torch.nn as nn
@@ -42,23 +42,19 @@ from fvdb import (
     serialize,
 )
 
-from ..serialization import OffsetMode
+from ..enums import EmbeddingMode, NormKind, SerializationOffset, SerializationOrder
 from .modules import BatchNorm, DropPath, SparseConv3d, _trace_fvdb_nn_forward
-
-NormKind = Literal["batch", "layer"]
 
 
 class _PointNorm(nn.Module):
     """Batch norm (Pointcept settings) or layer norm over voxel features."""
 
-    def __init__(self, kind: NormKind, channels: int) -> None:
+    def __init__(self, kind: NormKind | str, channels: int) -> None:
         super().__init__()
-        if kind == "batch":
+        if NormKind(kind) is NormKind.BATCH:
             self.norm: nn.Module = BatchNorm(channels, eps=1e-3, momentum=0.01)
-        elif kind == "layer":
-            self.norm = nn.LayerNorm(channels)
         else:
-            raise ValueError(f"norm must be 'batch' or 'layer', got {kind!r}")
+            self.norm = nn.LayerNorm(channels)
 
     def forward(self, data: JaggedTensor, grid: GridBatch) -> JaggedTensor:
         if isinstance(self.norm, BatchNorm):
@@ -303,10 +299,12 @@ class SerializedPooling(nn.Module):
         in_channels (int): Input feature channels.
         out_channels (int): Output feature channels.
         stride (int): Pooling factor. Default: ``2``.
-        norm (str): ``"batch"`` or ``"layer"``. Default: ``"batch"``.
+        norm (NormKind | str): ``"batch"`` or ``"layer"``. Default: ``"batch"``.
     """
 
-    def __init__(self, in_channels: int, out_channels: int, stride: int = 2, norm: NormKind = "batch") -> None:
+    def __init__(
+        self, in_channels: int, out_channels: int, stride: int = 2, norm: NormKind | str = NormKind.BATCH
+    ) -> None:
         super().__init__()
         self.stride = stride
         self.proj = nn.Linear(in_channels, out_channels)
@@ -342,11 +340,16 @@ class SerializedUnpooling(nn.Module):
         skip_channels (int): Skip feature channels.
         out_channels (int): Output feature channels.
         stride (int): Upsampling factor; must match the pooling stride. Default: ``2``.
-        norm (str): ``"batch"`` or ``"layer"``. Default: ``"batch"``.
+        norm (NormKind | str): ``"batch"`` or ``"layer"``. Default: ``"batch"``.
     """
 
     def __init__(
-        self, in_channels: int, skip_channels: int, out_channels: int, stride: int = 2, norm: NormKind = "batch"
+        self,
+        in_channels: int,
+        skip_channels: int,
+        out_channels: int,
+        stride: int = 2,
+        norm: NormKind | str = NormKind.BATCH,
     ) -> None:
         super().__init__()
         self.stride = stride
@@ -399,26 +402,24 @@ class PointTransformerV3Embedding(nn.Module):
     Args:
         in_channels (int): Input feature channels.
         embed_channels (int): Output feature channels.
-        mode (str): ``"conv"`` or ``"linear"``. Default: ``"conv"``.
+        mode (EmbeddingMode | str): ``"conv"`` or ``"linear"``. Default: ``"conv"``.
         kernel_size (int): Convolution kernel size for ``mode="conv"``. Default: ``5``.
-        norm (str): ``"batch"`` or ``"layer"``. Default: ``"batch"``.
+        norm (NormKind | str): ``"batch"`` or ``"layer"``. Default: ``"batch"``.
     """
 
     def __init__(
         self,
         in_channels: int,
         embed_channels: int,
-        mode: Literal["conv", "linear"] = "conv",
+        mode: EmbeddingMode | str = EmbeddingMode.CONV,
         kernel_size: int = 5,
-        norm: NormKind = "batch",
+        norm: NormKind | str = NormKind.BATCH,
     ) -> None:
         super().__init__()
-        if mode not in ("conv", "linear"):
-            raise ValueError(f"mode must be 'conv' or 'linear', got {mode!r}")
-        self.mode = mode
+        self.mode = EmbeddingMode(mode)
         self.kernel_size = kernel_size
         self.stem: nn.Module
-        if mode == "conv":
+        if self.mode is EmbeddingMode.CONV:
             self.stem = SparseConv3d(in_channels, embed_channels, kernel_size=kernel_size, bias=False)
         else:
             self.stem = nn.Linear(in_channels, embed_channels)
@@ -438,7 +439,7 @@ class PointTransformerV3Embedding(nn.Module):
         Returns:
             result (JaggedTensor): Embedded features. Shape: ``(batch_size, num_voxels, embed_channels)``.
         """
-        if self.mode == "conv":
+        if self.mode is EmbeddingMode.CONV:
             if plan is None:
                 raise ValueError("PointTransformerV3Embedding with mode='conv' requires a ConvolutionPlan")
             data = self.stem(data, plan)
@@ -498,7 +499,8 @@ class PointTransformerV3(nn.Module):
 
     Args:
         in_channels (int): Input feature channels. Default: ``6``.
-        order (str | Sequence[str]): Serialization orders from :data:`fvdb.SERIALIZATION_ORDERS`.
+        order (SerializationOrder | str | Sequence): Serialization orders, as
+            :class:`fvdb.SerializationOrder` values or their strings.
             Block ``i`` of each stage uses order ``i % len(order)``.
             Default: ``("z", "z-trans", "hilbert", "hilbert-trans")``.
         stride (Sequence[int]): Pooling stride between consecutive encoder stages, each a power of
@@ -529,12 +531,13 @@ class PointTransformerV3(nn.Module):
             Default: ``False``.
         window_size (int): If positive, use window attention of this size in every block instead
             of patch attention. Default: ``0``.
-        embedding_mode (str): ``"conv"`` for the kernel-5 submanifold stem, or ``"linear"``.
+        embedding_mode (EmbeddingMode | str): ``"conv"`` for the kernel-5 submanifold stem, or
+            ``"linear"``.
             Default: ``"conv"``.
-        norm (str): Norm for the stem, pooling and unpooling: ``"batch"`` as in Pointcept, or
+        norm (NormKind | str): Norm for the stem, pooling and unpooling: ``"batch"`` as in Pointcept, or
             ``"layer"``. Blocks always use layer norm. Default: ``"batch"``.
         cpe_conv (bool): Include the sparse convolution in the position encoding. Default: ``True``.
-        serialization_offset (str): Coordinate offset for serialization; see
+        serialization_offset (SerializationOffset | str): Coordinate offset for serialization; see
             :func:`fvdb.serialization_codes`. ``"none"`` reproduces Pointcept's orders exactly for
             non-negative coordinates, including cropped samples that do not start at 0.
             Default: ``"grid"``.
@@ -547,7 +550,12 @@ class PointTransformerV3(nn.Module):
     def __init__(
         self,
         in_channels: int = 6,
-        order: str | Sequence[str] = ("z", "z-trans", "hilbert", "hilbert-trans"),
+        order: SerializationOrder | str | Sequence[SerializationOrder | str] = (
+            "z",
+            "z-trans",
+            "hilbert",
+            "hilbert-trans",
+        ),
         stride: Sequence[int] = (2, 2, 2, 2),
         enc_depths: Sequence[int] = (2, 2, 2, 6, 2),
         enc_channels: Sequence[int] = (32, 64, 128, 256, 512),
@@ -568,10 +576,10 @@ class PointTransformerV3(nn.Module):
         shuffle_pooled_orders: bool = True,
         cls_mode: bool = False,
         window_size: int = 0,
-        embedding_mode: Literal["conv", "linear"] = "conv",
-        norm: NormKind = "batch",
+        embedding_mode: EmbeddingMode | str = EmbeddingMode.CONV,
+        norm: NormKind | str = NormKind.BATCH,
         cpe_conv: bool = True,
-        serialization_offset: OffsetMode = "grid",
+        serialization_offset: SerializationOffset | str = SerializationOffset.GRID,
         pointcept_unpool_cpe: bool = False,
     ) -> None:
         super().__init__()
@@ -593,13 +601,13 @@ class PointTransformerV3(nn.Module):
             dec_num_head = _as_tuple(dec_num_head, "dec_num_head", num_stages - 1)
             dec_patch_sizes = _as_tuple(dec_patch_size, "dec_patch_size", num_stages - 1)
 
-        self.order = (order,) if isinstance(order, str) else tuple(order)
+        self.order = tuple(SerializationOrder(o) for o in ((order,) if isinstance(order, str) else order))
         self.stride = tuple(stride)
         self.shuffle_orders = shuffle_orders
         self.shuffle_pooled_orders = shuffle_pooled_orders
         self.cls_mode = cls_mode
         self.cpe_conv = cpe_conv
-        self.serialization_offset = serialization_offset
+        self.serialization_offset = SerializationOffset(serialization_offset)
         self.pointcept_unpool_cpe = pointcept_unpool_cpe
         self.embedding = PointTransformerV3Embedding(in_channels, enc_channels[0], mode=embedding_mode, norm=norm)
 
@@ -670,7 +678,7 @@ class PointTransformerV3(nn.Module):
         """
         serialization = serialize(grid, self.order, offset_mode=self.serialization_offset, shuffle=self.shuffle_orders)
         stem_plan = None
-        if self.embedding.mode == "conv":
+        if self.embedding.mode is EmbeddingMode.CONV:
             k = self.embedding.kernel_size
             stem_plan = ConvolutionPlan.from_grid_batch(kernel_size=k, stride=1, source_grid=grid, target_grid=grid)
         data = self.embedding(data, grid, stem_plan)

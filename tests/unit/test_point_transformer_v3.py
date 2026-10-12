@@ -292,6 +292,22 @@ class TestPointTransformerV3(unittest.TestCase):
         out, out_grid = model(self.data, self.grid)
         self._check_output(out, out_grid, 8)
 
+    def test_options_accept_enums_and_strings(self):
+        config = dict(SMALL_CONFIG, enc_patch_size=0, dec_patch_size=0)
+        by_str = fvnn.PointTransformerV3(**config, embedding_mode="linear", norm="layer", serialization_offset="none")
+        by_enum = fvnn.PointTransformerV3(
+            **dict(config, order=(fvdb.SerializationOrder.Z, fvdb.SerializationOrder.HILBERT_TRANS)),
+            embedding_mode=fvdb.EmbeddingMode.LINEAR,
+            norm=fvdb.NormKind.LAYER,
+            serialization_offset=fvdb.SerializationOffset.NONE,
+        )
+        for model in (by_str, by_enum):
+            self.assertEqual(model.order, (fvdb.SerializationOrder.Z, fvdb.SerializationOrder.HILBERT_TRANS))
+            self.assertIs(model.embedding.mode, fvdb.EmbeddingMode.LINEAR)
+            self.assertIs(model.serialization_offset, fvdb.SerializationOffset.NONE)
+        with self.assertRaises(ValueError):
+            fvnn.PointTransformerV3(**config, embedding_mode="mlp")  # type: ignore[arg-type]
+
     def test_cls_mode_returns_coarsest_grid(self):
         config = dict(SMALL_CONFIG, enc_patch_size=0)
         model = fvnn.PointTransformerV3(**config, cls_mode=True).cuda()

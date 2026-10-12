@@ -13,6 +13,12 @@ Enums
 .. autoclass:: fvdb.ConvolutionTopologyProvenance
    :members:
 
+.. autoclass:: fvdb.NormKind
+   :members:
+
+.. autoclass:: fvdb.EmbeddingMode
+   :members:
+
 .. autoclass:: fvdb.SerializationOrder
    :members:
 
