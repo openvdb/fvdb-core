@@ -100,7 +100,7 @@ class _PatchLayout:
 
 
 def _patch_layout(joffsets: torch.Tensor, lshape: list[int], patch_size: int) -> _PatchLayout:
-    """Split each sequence into patches of ``patch_size`` tokens, padding as Pointcept does.
+    """Split each sequence into patches of ``patch_size`` tokens, padding the last one.
 
     A sequence of length ``L <= patch_size`` forms a single patch without padding. A longer
     sequence is padded up to a multiple of ``patch_size``; padded position ``p`` repeats the
@@ -237,12 +237,13 @@ def scaled_dot_product_attention(
 
     Each batch element of the jagged inputs is an independent sequence. By default every token
     attends to every token in its own sequence (global attention). Two local modes restrict the
-    keys each token sees, as used by serialized attention in Point Transformer V3:
+    keys each token sees, for sequences ordered along a space-filling curve (see
+    :func:`fvdb.serialize`):
 
     - **Patch attention** (``patch_size > 0``): each sequence is cut into consecutive patches of
       ``patch_size`` tokens and attention runs within each patch. A sequence no longer than
       ``patch_size`` forms one patch. A longer sequence is padded to a multiple of
-      ``patch_size`` by repeating the tokens one patch earlier, matching Pointcept.
+      ``patch_size`` by repeating the tokens one patch earlier, the padding rule Pointcept uses.
     - **Window attention** (``window_size != 0``): token ``i`` attends to tokens ``j`` with
       ``i - left <= j <= i + right`` in its sequence. An ``int`` ``W`` means
       ``(W // 2, W // 2)``; a tuple gives ``(left, right)`` directly, and ``-1`` is unbounded.
