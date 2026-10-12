@@ -24,20 +24,15 @@ from __future__ import annotations
 import dataclasses
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Literal
-
 import torch
 
 from . import _fvdb_cpp
+from .enums import SerializationOffset, SerializationOrder
 from .grid_batch import GridBatch
 from .jagged_tensor import JaggedTensor
 
-SERIALIZATION_ORDERS: tuple[str, ...] = ("vdb", "z", "z-trans", "hilbert", "hilbert-trans")
-"""Supported serialization order names."""
-
-OffsetMode = Literal["grid", "batch", "none"]
-
-_ALIASES = {"identity": "vdb", "morton": "z", "zorder": "z", "z_order": "z"}
+_MORTON_ORDERS = (SerializationOrder.Z, SerializationOrder.Z_TRANS)
+_TRANS_ORDERS = (SerializationOrder.Z_TRANS, SerializationOrder.HILBERT_TRANS)
 _MAX_DEPTH = 21  # bits per axis of fvdb's Morton and Hilbert encoders
 _TRANS = (1, 0, 2)  # "-trans" orders swap x and y
 
@@ -47,21 +42,30 @@ _HILBERT_AXES = {0: (0, 1, 2), 1: (1, 2, 0), 2: (2, 0, 1)}
 _MORTON_AXES = (2, 1, 0)
 
 
-def _normalize_order(order: str) -> str:
-    name = _ALIASES.get(order, order)
-    if name not in SERIALIZATION_ORDERS:
+def _normalize_order(order: SerializationOrder | str) -> SerializationOrder:
+    try:
+        return SerializationOrder(order)
+    except ValueError:
         raise ValueError(
-            f"Unknown serialization order {order!r}. Expected one of {SERIALIZATION_ORDERS}. "
-            "Note that GridBatch.morton_zyx/hilbert_zyx swap x and z, whereas the '-trans' "
-            "orders here swap x and y."
-        )
-    return name
+            f"Unknown serialization order {order!r}. Expected one of "
+            f"{[o.value for o in SerializationOrder]}. Note that GridBatch.morton_zyx/hilbert_zyx "
+            "swap x and z, whereas the '-trans' orders here swap x and y."
+        ) from None
 
 
-def _encoder_axes(order: str, depth: int) -> tuple[int, ...]:
+def _normalize_offset(offset_mode: SerializationOffset | str) -> SerializationOffset:
+    try:
+        return SerializationOffset(offset_mode)
+    except ValueError:
+        raise ValueError(
+            f"Unknown offset_mode {offset_mode!r}. Expected one of {[o.value for o in SerializationOffset]}."
+        ) from None
+
+
+def _encoder_axes(order: SerializationOrder, depth: int) -> tuple[int, ...]:
     """Columns of ijk to pass to fvdb's encoder for ``order`` at ``depth``."""
-    axes = _MORTON_AXES if order.startswith("z") else _HILBERT_AXES[(_MAX_DEPTH - depth) % 3]
-    if order.endswith("-trans"):
+    axes = _MORTON_AXES if order in _MORTON_ORDERS else _HILBERT_AXES[(_MAX_DEPTH - depth) % 3]
+    if order in _TRANS_ORDERS:
         axes = tuple(_TRANS[a] for a in axes)
     return axes
 
@@ -71,19 +75,14 @@ def _grid_index(grid: GridBatch) -> torch.Tensor | None:
     return grid.jidx.long() if grid.grid_count > 1 else None
 
 
-def _check_offset_mode(offset_mode: str) -> None:
-    if offset_mode not in ("grid", "batch", "none"):
-        raise ValueError(f"offset_mode must be 'grid', 'batch' or 'none', got {offset_mode!r}")
-
-
-def _local_ijk(grid: GridBatch, offset_mode: OffsetMode) -> torch.Tensor:
+def _local_ijk(grid: GridBatch, offset_mode: SerializationOffset) -> torch.Tensor:
     """Voxel coordinates shifted to be non-negative, in the grid's native voxel order."""
     ijk = grid.ijk.jdata
-    if offset_mode == "none":
+    if offset_mode is SerializationOffset.NONE:
         if int(grid.data.total_bbox[0].min()) < 0:
             raise ValueError("offset_mode='none' requires non-negative voxel coordinates")
         return ijk
-    if offset_mode == "grid":
+    if offset_mode is SerializationOffset.GRID:
         # Per-grid minimum, so the order does not depend on where the grid sits.
         # data.bbox is host metadata; rows of empty grids are never gathered.
         mins = grid.data.bbox[:, 0].to(device=ijk.device, dtype=ijk.dtype)
@@ -92,18 +91,18 @@ def _local_ijk(grid: GridBatch, offset_mode: OffsetMode) -> torch.Tensor:
     return ijk - grid.data.total_bbox[0].to(device=ijk.device, dtype=ijk.dtype)
 
 
-def _max_local_coord(grid: GridBatch, offset_mode: OffsetMode) -> int:
+def _max_local_coord(grid: GridBatch, offset_mode: SerializationOffset) -> int:
     """Largest coordinate after the offset, from host metadata. Empty grids have an inverted bbox."""
-    if offset_mode == "none":
+    if offset_mode is SerializationOffset.NONE:
         return max(0, int(grid.data.total_bbox[1].max()))
-    if offset_mode == "grid":
+    if offset_mode is SerializationOffset.GRID:
         bbox = grid.data.bbox.long()
         return max(0, int((bbox[:, 1] - bbox[:, 0]).max()))
     bbox = grid.data.total_bbox.long()
     return max(0, int((bbox[1] - bbox[0]).max()))
 
 
-def serialization_depth(grid: GridBatch, *, offset_mode: OffsetMode = "grid") -> int:
+def serialization_depth(grid: GridBatch, *, offset_mode: SerializationOffset | str = SerializationOffset.GRID) -> int:
     """Curve depth, in bits per axis, for a grid batch.
 
     The depth is ``(max_coord + 1).bit_length()`` over the whole batch, where ``max_coord`` is
@@ -113,18 +112,18 @@ def serialization_depth(grid: GridBatch, *, offset_mode: OffsetMode = "grid") ->
 
     Args:
         grid (GridBatch): The grid batch.
-        offset_mode (str): See :func:`serialization_codes`. Defaults to ``"grid"``.
+        offset_mode (SerializationOffset | str): See :func:`serialization_codes`. Defaults to ``"grid"``.
 
     Returns:
         depth (int): Bits per axis of the curve.
     """
-    _check_offset_mode(offset_mode)
+    offset_mode = _normalize_offset(offset_mode)
     if grid.total_voxels == 0:
         return 1
     return (_max_local_coord(grid, offset_mode) + 1).bit_length()
 
 
-def _resolve_depth(grid: GridBatch, offset_mode: OffsetMode, depth: int | None, code_shift: int) -> int:
+def _resolve_depth(grid: GridBatch, offset_mode: SerializationOffset, depth: int | None, code_shift: int) -> int:
     if code_shift < 0:
         raise ValueError(f"code_shift must be non-negative, got {code_shift}")
     if depth is None:
@@ -168,18 +167,20 @@ def _inverse_permutation(perm: torch.Tensor) -> torch.Tensor:
     return inv
 
 
-def _codes(grid: GridBatch, order: str, offset_mode: OffsetMode, depth: int, code_shift: int) -> torch.Tensor:
+def _codes(
+    grid: GridBatch, order: SerializationOrder, offset_mode: SerializationOffset, depth: int, code_shift: int
+) -> torch.Tensor:
     local = _local_ijk(grid, offset_mode) << code_shift
     ijk = local[:, list(_encoder_axes(order, depth))].contiguous()
-    code = _fvdb_cpp.morton(ijk) if order.startswith("z") else _fvdb_cpp.hilbert(ijk)
+    code = _fvdb_cpp.morton(ijk) if order in _MORTON_ORDERS else _fvdb_cpp.hilbert(ijk)
     return code >> (3 * code_shift)
 
 
 def serialization_codes(
     grid: GridBatch,
-    order: str,
+    order: SerializationOrder | str,
     *,
-    offset_mode: OffsetMode = "grid",
+    offset_mode: SerializationOffset | str = SerializationOffset.GRID,
     depth: int | None = None,
     code_shift: int = 0,
 ) -> torch.Tensor:
@@ -192,12 +193,12 @@ def serialization_codes(
 
     Args:
         grid (GridBatch): The grid batch.
-        order (str): One of :data:`SERIALIZATION_ORDERS`. ``"vdb"`` returns the voxel index,
+        order (SerializationOrder | str): The curve. ``"vdb"`` returns the voxel index,
             which leaves voxels in the grid's native order.
-        offset_mode (str): Where the curve's origin sits, which changes the order. ``"grid"``
-            shifts each grid by its own minimum coordinate, so the order is invariant to
-            translating a grid. ``"batch"`` shifts every grid by the batch minimum. ``"none"``
-            uses the coordinates as they are, which must be non-negative; this matches
+        offset_mode (SerializationOffset | str): Where the curve's origin sits, which changes
+            the order. ``"grid"`` shifts each grid by its own minimum coordinate, so the order is
+            invariant to translating a grid. ``"batch"`` shifts every grid by the batch minimum.
+            ``"none"`` uses the coordinates as they are, which must be non-negative; this matches
             implementations that serialize raw coordinates, Pointcept among them, even for a
             sample that does not start at 0. ``"grid"`` and ``"none"`` agree when every grid
             starts at 0. Defaults to ``"grid"``.
@@ -209,9 +210,9 @@ def serialization_codes(
         codes (torch.Tensor): Non-negative ``int64`` codes. Shape: ``(total_voxels,)``.
     """
     order = _normalize_order(order)
-    _check_offset_mode(offset_mode)
+    offset_mode = _normalize_offset(offset_mode)
     n = grid.total_voxels
-    if order == "vdb" or n == 0:
+    if order is SerializationOrder.VDB or n == 0:
         return torch.arange(n, dtype=torch.int64, device=grid.device)
     depth = _resolve_depth(grid, offset_mode, depth, code_shift)
     return _codes(grid, order, offset_mode, depth, code_shift)
@@ -219,9 +220,9 @@ def serialization_codes(
 
 def serialization_perm(
     grid: GridBatch,
-    order: str,
+    order: SerializationOrder | str,
     *,
-    offset_mode: OffsetMode = "grid",
+    offset_mode: SerializationOffset | str = SerializationOffset.GRID,
     depth: int | None = None,
     code_shift: int = 0,
 ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -232,8 +233,8 @@ def serialization_perm(
 
     Args:
         grid (GridBatch): The grid batch.
-        order (str): One of :data:`SERIALIZATION_ORDERS`.
-        offset_mode (str): See :func:`serialization_codes`. Defaults to ``"grid"``.
+        order (SerializationOrder | str): The curve.
+        offset_mode (SerializationOffset | str): See :func:`serialization_codes`. Defaults to ``"grid"``.
         depth (int | None): See :func:`serialization_codes`. Defaults to ``None``.
         code_shift (int): See :func:`serialization_codes`. Defaults to ``0``.
 
@@ -253,8 +254,8 @@ class GridSerialization:
     object and selects an order by index, so the permutations are computed once per level.
     """
 
-    orders: tuple[str, ...]
-    """Order names, in their current (possibly shuffled) sequence."""
+    orders: tuple[SerializationOrder, ...]
+    """Orders, in their current (possibly shuffled) sequence."""
     perms: tuple[torch.Tensor, ...]
     """Per-order permutations, each of shape ``(total_voxels,)``."""
     inv_perms: tuple[torch.Tensor, ...]
@@ -267,14 +268,14 @@ class GridSerialization:
     """Curve depth of the finest level."""
     code_shift: int
     """Number of halvings from the finest level to this grid."""
-    offset_mode: OffsetMode
-    """Coordinate offset mode used for the codes."""
+    offset_mode: SerializationOffset
+    """Coordinate offset used for the codes."""
 
     def __len__(self) -> int:
         return len(self.orders)
 
-    def order(self, index: int) -> str:
-        """Name of the order at ``index``, taken modulo the number of orders."""
+    def order(self, index: int) -> SerializationOrder:
+        """Order at ``index``, taken modulo the number of orders."""
         return self.orders[index % len(self.orders)]
 
     def perm(self, index: int) -> torch.Tensor:
@@ -346,9 +347,12 @@ class GridSerialization:
 
 def serialize(
     grid: GridBatch,
-    orders: str | Sequence[str] = ("z", "z-trans"),
+    orders: SerializationOrder | str | Sequence[SerializationOrder | str] = (
+        SerializationOrder.Z,
+        SerializationOrder.Z_TRANS,
+    ),
     *,
-    offset_mode: OffsetMode = "grid",
+    offset_mode: SerializationOffset | str = SerializationOffset.GRID,
     depth: int | None = None,
     code_shift: int = 0,
     shuffle: bool = False,
@@ -359,9 +363,10 @@ def serialize(
 
     Args:
         grid (GridBatch): The grid batch.
-        orders (str | Sequence[str]): Order name or names from :data:`SERIALIZATION_ORDERS`.
+        orders (SerializationOrder | str | Sequence): One or more curves. Strings are accepted
+            and converted to :class:`SerializationOrder`.
             Defaults to ``("z", "z-trans")``.
-        offset_mode (str): See :func:`serialization_codes`. Defaults to ``"grid"``.
+        offset_mode (SerializationOffset | str): See :func:`serialization_codes`. Defaults to ``"grid"``.
         depth (int | None): See :func:`serialization_codes`. Defaults to ``None``.
         code_shift (int): See :func:`serialization_codes`. Defaults to ``0``.
         shuffle (bool): Randomly reorder the orders, so a model that indexes them by position
@@ -376,7 +381,7 @@ def serialize(
     if not names:
         raise ValueError("serialize requires at least one order")
     names = tuple(_normalize_order(o) for o in names)
-    _check_offset_mode(offset_mode)
+    offset_mode = _normalize_offset(offset_mode)
 
     n = grid.total_voxels
     depth = _resolve_depth(grid, offset_mode, depth, code_shift) if n > 0 else (depth or 1)
@@ -384,7 +389,7 @@ def serialize(
     jidx = _grid_index(grid) if n > 0 else None
     perms, inv_perms, codes = [], [], []
     for name in names:
-        if name == "vdb" or n == 0:
+        if name is SerializationOrder.VDB or n == 0:
             code = torch.arange(n, dtype=torch.int64, device=grid.device)
             perm = code
         else:

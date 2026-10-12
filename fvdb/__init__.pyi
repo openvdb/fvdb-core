@@ -18,7 +18,6 @@ from ._fvdb_cpp import NanoVDBGridMetadata, config, hilbert, morton
 from ._volume_render import volume_render
 from .attention import scaled_dot_product_attention
 from .serialization import (
-    SERIALIZATION_ORDERS,
     GridSerialization,
     permute_jagged,
     serialization_codes,
@@ -36,6 +35,8 @@ from .enums import (
     ConvolutionPhasePolicy,
     ConvolutionTopologyPolicy,
     ConvolutionTopologyProvenance,
+    SerializationOffset,
+    SerializationOrder,
     SmoothingMode,
 )
 from .grid import Grid
@@ -106,7 +107,8 @@ __all__ = [
     "morton",
     "hilbert",
     # Space-filling-curve serialization
-    "SERIALIZATION_ORDERS",
+    "SerializationOffset",
+    "SerializationOrder",
     "GridSerialization",
     "permute_jagged",
     "serialization_codes",

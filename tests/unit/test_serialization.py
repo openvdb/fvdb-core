@@ -202,7 +202,7 @@ class TestSerializationCodes(unittest.TestCase):
         ser = fvdb.serialize(fine, CURVE_ORDERS, offset_mode="none", keep_codes=True)
         coarse = fine.coarsened_grid(2)
         ser_c = ser.pooled(coarse)
-        self.assertEqual(ser_c.offset_mode, "none")
+        self.assertIs(ser_c.offset_mode, fvdb.SerializationOffset.NONE)
         parent = coarse.ijk_to_index(fine.ijk.jagged_like(fine.ijk.jdata // 2), cumulative=True).jdata
         assert ser.codes is not None and ser_c.codes is not None
         for i in range(len(CURVE_ORDERS)):
@@ -249,10 +249,15 @@ class TestSerializationCodes(unittest.TestCase):
         perm, _ = fvdb.serialization_perm(grid, order)
         self.assertTrue(torch.equal(perm, _loop_perm(grid, fvdb.serialization_codes(grid, order))))
 
-    def test_aliases(self):
+    def test_enum_and_string_agree(self):
         grid = _make_grid([40], "cpu")
-        self.assertTrue(torch.equal(fvdb.serialization_codes(grid, "morton"), fvdb.serialization_codes(grid, "z")))
-        self.assertTrue(torch.equal(fvdb.serialization_codes(grid, "identity"), torch.arange(grid.total_voxels)))
+        for order in fvdb.SerializationOrder:
+            codes = fvdb.serialization_codes(grid, order, offset_mode=fvdb.SerializationOffset.BATCH)
+            self.assertTrue(torch.equal(codes, fvdb.serialization_codes(grid, order.value, offset_mode="batch")))
+        ser = fvdb.serialize(_make_grid([40], "cpu", lo=0), ("z", fvdb.SerializationOrder.HILBERT), offset_mode="none")
+        self.assertEqual(ser.orders, (fvdb.SerializationOrder.Z, fvdb.SerializationOrder.HILBERT))
+        self.assertIs(ser.order(1), fvdb.SerializationOrder.HILBERT)
+        self.assertIs(ser.offset_mode, fvdb.SerializationOffset.NONE)
 
 
 class TestSerializationPerm(unittest.TestCase):
