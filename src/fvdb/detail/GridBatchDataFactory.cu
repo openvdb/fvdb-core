@@ -60,9 +60,10 @@ allocateDeviceGridMetadata(torch::Device device, int64_t batchSize) {
     return static_cast<GridMetadata *>(data);
 }
 
+// No device guard: raw_delete finds the block's device itself, and setting a device fails in a
+// child forked after CUDA initialized, where Python's cycle collector can free inherited grids.
 void
-freeDeviceGridMetadata(torch::Device device, GridBatchData::GridMetadata *ptr) {
-    c10::cuda::CUDAGuard deviceGuard(device);
+freeDeviceGridMetadata(GridBatchData::GridMetadata *ptr) {
     c10::cuda::CUDACachingAllocator::raw_delete(ptr);
 }
 
