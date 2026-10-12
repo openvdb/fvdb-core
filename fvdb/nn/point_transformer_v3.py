@@ -123,7 +123,7 @@ class SerializedAttention(nn.Module):
         Attend over serialized voxels.
 
         Args:
-            data (JaggedTensor): Voxel features in grid order. Shape: ``(batch_size, num_voxels, channels)``.
+            data (JaggedTensor): Voxel features in grid order. Shape: ``(batch_size, total_voxels, channels)``.
             serialization (GridSerialization): Serialization of the grid that ``data`` lives on.
 
         Returns:
@@ -172,7 +172,7 @@ class ConditionalPositionEncoding(nn.Module):
         Encode voxel positions.
 
         Args:
-            data (JaggedTensor): Voxel features. Shape: ``(batch_size, num_voxels, channels)``.
+            data (JaggedTensor): Voxel features. Shape: ``(batch_size, total_voxels, channels)``.
             plan (ConvolutionPlan | None): Submanifold plan for the grid of ``data`` with this
                 module's kernel size and stride 1. Ignored when ``use_conv`` is ``False``.
 
@@ -261,7 +261,7 @@ class PointTransformerV3Block(nn.Module):
         Apply the block.
 
         Args:
-            data (JaggedTensor): Voxel features. Shape: ``(batch_size, num_voxels, channels)``.
+            data (JaggedTensor): Voxel features. Shape: ``(batch_size, total_voxels, channels)``.
             serialization (GridSerialization): Serialization of the grid that ``data`` lives on.
             cpe_plan (ConvolutionPlan | None): Submanifold kernel-3 plan for the grid, or ``None``
                 when the position encoding has no convolution.
@@ -316,11 +316,11 @@ class SerializedPooling(nn.Module):
         Pool features onto a coarser grid.
 
         Args:
-            data (JaggedTensor): Voxel features on ``grid``. Shape: ``(batch_size, num_voxels, in_channels)``.
+            data (JaggedTensor): Voxel features on ``grid``. Shape: ``(batch_size, total_voxels, in_channels)``.
             grid (GridBatch): The fine grid.
 
         Returns:
-            result (JaggedTensor): Pooled features. Shape: ``(batch_size, num_coarse_voxels, out_channels)``.
+            result (JaggedTensor): Pooled features. Shape: ``(batch_size, coarse_total_voxels, out_channels)``.
             coarse_grid (GridBatch): The coarse grid.
         """
         data, coarse_grid = grid.max_pool(self.stride, self.proj(data), stride=self.stride)
@@ -371,15 +371,15 @@ class SerializedUnpooling(nn.Module):
         Unpool features onto the skip grid.
 
         Args:
-            data (JaggedTensor): Coarse features on ``grid``. Shape: ``(batch_size, num_voxels, in_channels)``.
+            data (JaggedTensor): Coarse features on ``grid``. Shape: ``(batch_size, total_voxels, in_channels)``.
             grid (GridBatch): The coarse grid.
             skip_data (JaggedTensor): Features on ``skip_grid``. Shape:
-                ``(batch_size, num_fine_voxels, skip_channels)``.
+                ``(batch_size, fine_total_voxels, skip_channels)``.
             skip_grid (GridBatch): The fine grid that ``grid`` was pooled from.
             return_skip (bool): Also return the projected skip features. Default: ``False``.
 
         Returns:
-            result (JaggedTensor): Fine features. Shape: ``(batch_size, num_fine_voxels, out_channels)``.
+            result (JaggedTensor): Fine features. Shape: ``(batch_size, fine_total_voxels, out_channels)``.
             fine_grid (GridBatch): ``skip_grid``.
             skip (JaggedTensor): The projected skip features, when ``return_skip`` is set.
         """
@@ -431,13 +431,13 @@ class PointTransformerV3Embedding(nn.Module):
         Embed input features.
 
         Args:
-            data (JaggedTensor): Input features on ``grid``. Shape: ``(batch_size, num_voxels, in_channels)``.
+            data (JaggedTensor): Input features on ``grid``. Shape: ``(batch_size, total_voxels, in_channels)``.
             grid (GridBatch): The input grid.
             plan (ConvolutionPlan | None): Submanifold plan with this module's kernel size for
                 ``mode="conv"``. Ignored for ``mode="linear"``.
 
         Returns:
-            result (JaggedTensor): Embedded features. Shape: ``(batch_size, num_voxels, embed_channels)``.
+            result (JaggedTensor): Embedded features. Shape: ``(batch_size, total_voxels, embed_channels)``.
         """
         if self.mode is EmbeddingMode.CONV:
             if plan is None:
@@ -532,8 +532,7 @@ class PointTransformerV3(nn.Module):
         window_size (int): If positive, use window attention of this size in every block instead
             of patch attention. Default: ``0``.
         embedding_mode (EmbeddingMode | str): ``"conv"`` for the kernel-5 submanifold stem, or
-            ``"linear"``.
-            Default: ``"conv"``.
+            ``"linear"``. Default: ``"conv"``.
         norm (NormKind | str): Norm for the stem, pooling and unpooling: ``"batch"`` as in Pointcept, or
             ``"layer"``. Blocks always use layer norm. Default: ``"batch"``.
         cpe_conv (bool): Include the sparse convolution in the position encoding. Default: ``True``.
@@ -665,16 +664,17 @@ class PointTransformerV3(nn.Module):
         """
         Run the network.
 
-        The output lives on ``grid`` with ``dec_channels[0]`` channels, or in ``cls_mode`` on the
-        coarsest grid with ``enc_channels[-1]`` channels.
+        The output lives on ``grid`` with ``out_channels = dec_channels[0]``, or in ``cls_mode`` on
+        the coarsest grid with ``out_channels = enc_channels[-1]``.
 
         Args:
-            data (JaggedTensor): Input features on ``grid``. Shape: ``(batch_size, num_voxels, in_channels)``.
+            data (JaggedTensor): Input features on ``grid``. Shape: ``(batch_size, total_voxels, in_channels)``.
             grid (GridBatch): The input grid.
 
         Returns:
-            result (JaggedTensor): Output features.
-            out_grid (GridBatch): The grid of ``result``.
+            result (JaggedTensor): Output features on ``out_grid``.
+                Shape: ``(batch_size, out_total_voxels, out_channels)``.
+            out_grid (GridBatch): ``grid``, or the coarsest grid in ``cls_mode``.
         """
         serialization = serialize(grid, self.order, offset_mode=self.serialization_offset, shuffle=self.shuffle_orders)
         stem_plan = None
