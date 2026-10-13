@@ -680,8 +680,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     py::class_<MIGTopo>(m, "MaskedIGemmTopology")
         .def_readonly("neighbor_map", &MIGTopo::neighborMap)
         .def_readonly("sorted_rows", &MIGTopo::sortedRows)
-        .def_readonly("chunk_taps", &MIGTopo::chunkTaps)
-        .def_readonly("chunk_tap_offsets", &MIGTopo::chunkTapOffsets)
+        .def_readonly("row_masks", &MIGTopo::rowMasks)
+        .def_readonly("pair_in", &MIGTopo::pairIn)
+        .def_readonly("pair_out", &MIGTopo::pairOut)
+        .def_readonly("pair_offsets", &MIGTopo::pairOffsets)
         .def_readonly("total_voxels", &MIGTopo::totalVoxels)
         .def_readonly("kernel_volume", &MIGTopo::kernelVolume)
         .def_property_readonly("kernel_size", [](const MIGTopo &t) {
@@ -699,12 +701,16 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     m.def(
         "migemm_conv",
-        [](torch::Tensor features, torch::Tensor weights, const MIGTopo &topo) -> torch::Tensor {
-            return fvdb::detail::ops::maskedIGemmConv(features, weights, topo);
+        [](torch::Tensor features,
+           torch::Tensor weights,
+           std::optional<torch::Tensor> bias,
+           const MIGTopo &topo) -> torch::Tensor {
+            return fvdb::detail::ops::maskedIGemmConv(features, weights, bias, topo);
         },
-        "Masked implicit GEMM submanifold sparse convolution.",
+        "Masked implicit GEMM submanifold sparse convolution with an optional fused bias.",
         py::arg("features"),
         py::arg("weights"),
+        py::arg("bias"),
         py::arg("topology"));
 
     m.def(
@@ -712,14 +718,22 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         [](torch::Tensor grad_output,
            torch::Tensor features,
            torch::Tensor weights,
-           const MIGTopo &topo) -> std::tuple<torch::Tensor, torch::Tensor> {
-            return fvdb::detail::ops::maskedIGemmConvBackward(grad_output, features, weights, topo);
+           const MIGTopo &topo,
+           bool need_features,
+           bool need_weights)
+            -> std::tuple<std::optional<torch::Tensor>, std::optional<torch::Tensor>> {
+            auto [gf, gw] = fvdb::detail::ops::maskedIGemmConvBackward(
+                grad_output, features, weights, topo, need_features, need_weights);
+            return {gf.defined() ? std::optional<torch::Tensor>(gf) : std::nullopt,
+                    gw.defined() ? std::optional<torch::Tensor>(gw) : std::nullopt};
         },
-        "Backward of migemm_conv: returns (grad_features, grad_weights).",
+        "Backward of migemm_conv: (grad_features, grad_weights), None where not needed.",
         py::arg("grad_output"),
         py::arg("features"),
         py::arg("weights"),
-        py::arg("topology"));
+        py::arg("topology"),
+        py::arg("need_features") = true,
+        py::arg("need_weights")  = true);
 
     m.def("migemm_supports",
           &fvdb::detail::ops::maskedIGemmSupports,
