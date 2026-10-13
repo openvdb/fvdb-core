@@ -40,15 +40,15 @@ CONFIGS = [
     "64x64x4",
     "64x64x3",
 ]
-WORKLOADS = [(16, 1024), (64, 1024), (128, 512), (256, 256), (512, 128), (1024, 64)]
+WORKLOADS = [(8, 1024), (16, 1024), (32, 1024), (64, 1024), (128, 512), (256, 256), (512, 128), (1024, 64)]
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--mode", choices=["fp16", "bf16"], default="fp16")
+    ap.add_argument("--mode", choices=["fp16", "bf16", "tf32"], default="fp16")
     ap.add_argument("--wgrad", action="store_true", help="sweep weight-gradient configs (timing full backward)")
     args = ap.parse_args()
-    dtype = set_precision("fp16")
+    dtype = set_precision("tf32" if args.mode == "tf32" else "fp16")
     if args.mode == "bf16":
         dtype = torch.bfloat16
 
