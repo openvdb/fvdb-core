@@ -96,7 +96,7 @@ struct TorchDeviceResource {
         return TorchResource{}.allocate_async(bytes, alignment, stream);
     }
 
-    /// @brief Frees @p p on the bound device. The block returns to the stream it was allocated
+    /// @brief Frees @p p. The block returns to the stream it was allocated
     ///        on; @p stream is ignored, so it must be that same stream (see the class comment).
     /// @note No device guard: torch's allocator finds the block's device itself, and setting a
     ///       device fails in a child forked after CUDA initialized, where Python's cycle collector
