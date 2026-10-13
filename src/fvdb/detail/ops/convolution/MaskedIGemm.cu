@@ -168,6 +168,42 @@ template <> struct Mma<__nv_bfloat16> {
     }
 };
 
+// float32 runs as TF32: m16n8k8 with operands rounded to TF32 after loading.
+template <> struct Mma<float> {
+    __device__ __forceinline__ static void
+    run(float (&c)[4], uint32_t const (&a)[4], uint32_t b0, uint32_t b1) {
+#if FVDB_MIGEMM_SM80
+        asm volatile("mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32 "
+                     "{%0, %1, %2, %3}, {%4, %5, %6, %7}, {%8, %9}, {%0, %1, %2, %3};\n"
+                     : "+f"(c[0]), "+f"(c[1]), "+f"(c[2]), "+f"(c[3])
+                     : "r"(a[0]), "r"(a[1]), "r"(a[2]), "r"(a[3]), "r"(b0), "r"(b1));
+#endif
+    }
+};
+
+// Per-element-type tile constants. Every k-tile row is 64 bytes (four 16-byte
+// chunks), so shared-memory layouts and ldmatrix addressing match across types,
+// and each k-tile holds two MMA k-steps.
+template <typename T> struct Elem {
+    static constexpr int CHUNK = 16 / int(sizeof(T)); // elements per 16-byte chunk
+    static constexpr int BK    = 4 * CHUNK;           // k-tile width in elements
+    static constexpr int KSTEP = BK / 2;              // MMA k per instruction
+};
+
+// Round a loaded fragment register to TF32 (no-op for 16-bit types).
+template <typename T>
+__device__ __forceinline__ uint32_t
+prep(uint32_t x) {
+    if constexpr (sizeof(T) == 4) {
+#if FVDB_MIGEMM_SM80
+        uint32_t y;
+        asm("cvt.rna.tf32.f32 %0, %1;\n" : "=r"(y) : "f"(__uint_as_float(x)));
+        return y;
+#endif
+    }
+    return x;
+}
+
 template <typename T> __device__ __forceinline__ uint32_t packPair(float x, float y);
 
 template <>
@@ -182,6 +218,21 @@ __device__ __forceinline__ uint32_t
 packPair<__nv_bfloat16>(float x, float y) {
     __nv_bfloat162 h = __floats2bfloat162_rn(x, y);
     return *reinterpret_cast<uint32_t *>(&h);
+}
+
+// Store two adjacent output elements.
+template <typename T>
+__device__ __forceinline__ void
+storePair(T *dst, float x, float y) {
+    if constexpr (sizeof(T) == 4)
+        *reinterpret_cast<float2 *>(dst) = make_float2(x, y);
+    else
+        *reinterpret_cast<uint32_t *>(dst) = packPair<T>(x, y);
+}
+
+__device__ __forceinline__ float
+toFloat(float x) {
+    return x;
 }
 
 __device__ __forceinline__ float
@@ -216,7 +267,6 @@ constexpr int kMaxTaps = 32;
 template <int BM_, int BN_, int WM_, int WN_, int STAGES_> struct TileConfig {
     static constexpr int BM      = BM_;
     static constexpr int BN      = BN_;
-    static constexpr int BK      = 32;
     static constexpr int WM      = WM_;
     static constexpr int WN      = WN_;
     static constexpr int STAGES  = STAGES_;
@@ -230,16 +280,17 @@ template <int BM_, int BN_, int WM_, int WN_, int STAGES_> struct TileConfig {
 template <typename Cfg, typename T>
 constexpr int
 smemBytes(int K) {
-    return Cfg::STAGES * (Cfg::BM * Cfg::BK + Cfg::BK * Cfg::BN) * int(sizeof(T)) +
-           Cfg::BM * K * 4 + Cfg::BM * 4 + kMaxTaps * 4 + 16;
+    return Cfg::STAGES * (Cfg::BM + Cfg::BN) * Elem<T>::BK * int(sizeof(T)) + Cfg::BM * K * 4 +
+           Cfg::BM * 4 + kMaxTaps * 4 + 16;
 }
 
 // B_KMAJOR selects the weight operand layout per tap:
-//   false (forward):       B[k][n] at W + row * Kc * Nc + k * Nc + n
+//   false (forward):        B[k][n] at W + row * Kc * Nc + k * Nc + n
 //   true  (input gradient): B[k][n] at W + row * Kc * Nc + n * Kc + k
+// FLIP reads tap u's weights from tap K-1-u (input gradient).
 // With splits > 1, CTA z of a tile runs its share of the tile's (tap, k-tile)
 // iterations and adds float32 partials into outAcc instead of writing out.
-template <typename Cfg, typename T, bool B_KMAJOR>
+template <typename Cfg, typename T, bool B_KMAJOR, bool FLIP>
 __global__ void __launch_bounds__(Cfg::THREADS)
 maskedIGemmKernel(T const *__restrict__ A,
                   T const *__restrict__ W,
@@ -255,7 +306,8 @@ maskedIGemmKernel(T const *__restrict__ A,
                   int K,
                   int splits,
                   TapToRow tapToRow) {
-    constexpr int BM = Cfg::BM, BN = Cfg::BN, BK = Cfg::BK, STAGES = Cfg::STAGES;
+    constexpr int BM = Cfg::BM, BN = Cfg::BN, BK = Elem<T>::BK, STAGES = Cfg::STAGES;
+    constexpr int CE = Elem<T>::CHUNK, KSTEP = Elem<T>::KSTEP;
     constexpr int THREADS = Cfg::THREADS, MT = Cfg::MT, NT = Cfg::NT;
     constexpr int A_STAGE = BM * BK, B_STAGE = BK * BN;
 
@@ -321,37 +373,37 @@ maskedIGemmKernel(T const *__restrict__ A,
         int const ti   = (itBase + it) / kTiles;
         int const kt   = (itBase + it) - ti * kTiles;
         int const tap  = sTaps[ti];
-        int const wtap = B_KMAJOR ? K - 1 - tap : tap;
+        int const wtap = FLIP ? K - 1 - tap : tap;
         T const *Wt    = W + int64_t(tapToRow(wtap)) * Kc * Nc;
 
         T *a = sA + stage * A_STAGE;
 #pragma unroll
-        for (int i = 0; i < (BM * BK / 8 + THREADS - 1) / THREADS; ++i) {
+        for (int i = 0; i < (BM * 4 + THREADS - 1) / THREADS; ++i) {
             int const c = tid + i * THREADS;
-            if (c < BM * BK / 8) {
+            if (c < BM * 4) {
                 int const r   = c >> 2;
                 int const ch  = c & 3;
                 int const src = sNbr[r * nTaps + ti];
-                T const *g    = A + (src >= 0 ? int64_t(src) * Kc + kt * BK + ch * 8 : 0);
-                cpAsync16(smemAddr(a + r * BK + swz4(r, ch) * 8), g, src >= 0);
+                T const *g    = A + (src >= 0 ? int64_t(src) * Kc + kt * BK + ch * CE : 0);
+                cpAsync16(smemAddr(a + r * BK + swz4(r, ch) * CE), g, src >= 0);
             }
         }
 
         T *b = sB + stage * B_STAGE;
 #pragma unroll
-        for (int i = 0; i < (BK * BN / 8 + THREADS - 1) / THREADS; ++i) {
+        for (int i = 0; i < (BN * 4 + THREADS - 1) / THREADS; ++i) {
             int const c = tid + i * THREADS;
-            if (c < BK * BN / 8) {
+            if (c < BN * 4) {
                 if constexpr (B_KMAJOR) {
                     int const nr = c >> 2;
                     int const ch = c & 3;
-                    T const *g   = Wt + int64_t(n0 + nr) * Kc + kt * BK + ch * 8;
-                    cpAsync16(smemAddr(b + nr * BK + swz4(nr, ch) * 8), g, true);
+                    T const *g   = Wt + int64_t(n0 + nr) * Kc + kt * BK + ch * CE;
+                    cpAsync16(smemAddr(b + nr * BK + swz4(nr, ch) * CE), g, true);
                 } else {
-                    int const kr = c / (BN / 8);
-                    int const ch = c % (BN / 8);
-                    T const *g   = Wt + int64_t(kt * BK + kr) * Nc + n0 + ch * 8;
-                    cpAsync16(smemAddr(b + kr * BN + swz8(kr, ch) * 8), g, true);
+                    int const kr = c / (BN / CE);
+                    int const ch = c % (BN / CE);
+                    T const *g   = Wt + int64_t(kt * BK + kr) * Nc + n0 + ch * CE;
+                    cpAsync16(smemAddr(b + kr * BN + swz8(kr, ch) * CE), g, true);
                 }
             }
         }
@@ -386,14 +438,19 @@ maskedIGemmKernel(T const *__restrict__ A,
 
         T const *a = sA + (it % STAGES) * A_STAGE;
         T const *b = sB + (it % STAGES) * B_STAGE;
+        // Each k-step spans two 16-byte chunks for every element type; for float32,
+        // ldmatrix's 8x8 16-bit tiles are 8x4 float tiles, which match TF32 fragments.
 #pragma unroll
-        for (int kk = 0; kk < BK / 16; ++kk) {
+        for (int kk = 0; kk < BK / KSTEP; ++kk) {
             uint32_t af[MT][4];
 #pragma unroll
             for (int mt = 0; mt < MT; ++mt) {
                 int const r  = wm0 + mt * 16 + (lane & 15);
                 int const ch = kk * 2 + (lane >> 4);
-                ldsm4(af[mt], smemAddr(a + r * BK + swz4(r, ch) * 8));
+                ldsm4(af[mt], smemAddr(a + r * BK + swz4(r, ch) * CE));
+#pragma unroll
+                for (int e = 0; e < 4; ++e)
+                    af[mt][e] = prep<T>(af[mt][e]);
             }
             uint32_t bf[NT][2];
 #pragma unroll
@@ -402,16 +459,29 @@ maskedIGemmKernel(T const *__restrict__ A,
                 if constexpr (B_KMAJOR) {
                     int const nr = wn0 + np * 16 + (lane & 7) + ((lane >> 4) & 1) * 8;
                     int const ch = kk * 2 + ((lane >> 3) & 1);
-                    ldsm4(t, smemAddr(b + nr * BK + swz4(nr, ch) * 8));
+                    ldsm4(t, smemAddr(b + nr * BK + swz4(nr, ch) * CE));
+                } else if constexpr (sizeof(T) == 4) {
+                    // ldmatrix cannot transpose 32-bit data; read N-major fragments
+                    // element-wise: b0 = B[t][g], b1 = B[t + 4][g].
+                    int const g = lane >> 2, k = kk * KSTEP + (lane & 3);
+#pragma unroll
+                    for (int h = 0; h < 2; ++h) {
+                        int const n  = wn0 + np * 16 + h * 8 + g;
+                        auto const e = [&](int kr) {
+                            return __float_as_uint(b[kr * BN + swz8(kr, n / CE) * CE + n % CE]);
+                        };
+                        t[2 * h]     = e(k);
+                        t[2 * h + 1] = e(k + 4);
+                    }
                 } else {
-                    int const kr = kk * 16 + (lane & 7) + ((lane >> 3) & 1) * 8;
-                    int const ch = (wn0 + np * 16) / 8 + (lane >> 4);
-                    ldsm4T(t, smemAddr(b + kr * BN + swz8(kr, ch) * 8));
+                    int const kr = kk * KSTEP + (lane & 7) + ((lane >> 3) & 1) * 8;
+                    int const ch = (wn0 + np * 16) / CE + (lane >> 4);
+                    ldsm4T(t, smemAddr(b + kr * BN + swz8(kr, ch) * CE));
                 }
-                bf[2 * np][0]     = t[0];
-                bf[2 * np][1]     = t[1];
-                bf[2 * np + 1][0] = t[2];
-                bf[2 * np + 1][1] = t[3];
+                bf[2 * np][0]     = prep<T>(t[0]);
+                bf[2 * np][1]     = prep<T>(t[1]);
+                bf[2 * np + 1][0] = prep<T>(t[2]);
+                bf[2 * np + 1][1] = prep<T>(t[3]);
             }
 #pragma unroll
             for (int mt = 0; mt < MT; ++mt)
@@ -444,8 +514,8 @@ maskedIGemmKernel(T const *__restrict__ A,
                         b0 = toFloat(bias[col + nt * 8]);
                         b1 = toFloat(bias[col + nt * 8 + 1]);
                     }
-                    *reinterpret_cast<uint32_t *>(out + base + nt * 8) =
-                        packPair<T>(acc[mt][nt][2 * h] + b0, acc[mt][nt][2 * h + 1] + b1);
+                    storePair<T>(
+                        out + base + nt * 8, acc[mt][nt][2 * h] + b0, acc[mt][nt][2 * h + 1] + b1);
                 }
             }
         }
@@ -463,17 +533,18 @@ maskedIGemmKernel(T const *__restrict__ A,
 // stage's pair indices into a shared-memory ring one iteration ahead, so the
 // data loads never wait on a dependent global load.
 
-template <int BM_, int BN_, int WM_, int WN_, int STAGES_> struct WgradConfig {
+// BK is the rows reduced per pipeline stage (at most 32, one per lane of warp 0).
+template <int BM_, int BN_, int WM_, int WN_, int STAGES_, int BK_ = 32> struct WgradConfig {
     static constexpr int BM      = BM_;
     static constexpr int BN      = BN_;
-    static constexpr int BK      = 32;
+    static constexpr int BK      = BK_;
     static constexpr int WM      = WM_;
     static constexpr int WN      = WN_;
     static constexpr int STAGES  = STAGES_;
     static constexpr int THREADS = WM * WN * 32;
     static constexpr int MT      = BM / WM / 16;
     static constexpr int NT      = BN / WN / 8;
-    static_assert(NT % 2 == 0 && BM >= 64 && BN >= 64, "tile shape");
+    static_assert(NT % 2 == 0 && BM >= 64 && BN >= 64 && BK <= 32, "tile shape");
 };
 
 template <typename Cfg, typename T>
@@ -497,6 +568,7 @@ maskedIGemmWgradKernel(T const *__restrict__ X,
                        int splits,
                        TapToRow tapToRow) {
     constexpr int BM = Cfg::BM, BN = Cfg::BN, BK = Cfg::BK, STAGES = Cfg::STAGES;
+    constexpr int CE = Elem<T>::CHUNK, KSTEP = Elem<T>::KSTEP;
     constexpr int THREADS = Cfg::THREADS, MT = Cfg::MT, NT = Cfg::NT;
     constexpr int A_STAGE = BK * BM, B_STAGE = BK * BN;
 
@@ -526,11 +598,13 @@ maskedIGemmWgradKernel(T const *__restrict__ X,
     // Pair indices of step it, for lane `lane` of warp 0.
     auto fetchIdx = [&](int it, int &in, int &out) {
         int const p   = pBegin + (sFirst + it) * BK + lane;
-        bool const ok = it < nIter && p < pEnd;
+        bool const ok = lane < BK && it < nIter && p < pEnd;
         in            = ok ? pairIn[p] : -1;
         out           = ok ? pairOut[p] : -1;
     };
     auto storeIdx = [&](int it, int in, int out) {
+        if (lane >= BK)
+            return;
         int32_t *slot   = sIdx + (it % STAGES) * 2 * BK;
         slot[lane]      = in;
         slot[BK + lane] = out;
@@ -541,25 +615,25 @@ maskedIGemmWgradKernel(T const *__restrict__ X,
         T *a                = sA + stage * A_STAGE;
         T *b                = sB + stage * B_STAGE;
 #pragma unroll
-        for (int i = 0; i < (BK * BM / 8 + THREADS - 1) / THREADS; ++i) {
+        for (int i = 0; i < (BK * BM / CE + THREADS - 1) / THREADS; ++i) {
             int const c = tid + i * THREADS;
-            if (c < BK * BM / 8) {
-                int const kr  = c / (BM / 8);
-                int const ch  = c % (BM / 8);
+            if (c < BK * BM / CE) {
+                int const kr  = c / (BM / CE);
+                int const ch  = c % (BM / CE);
                 int const src = slot[kr];
-                T const *g    = X + (src >= 0 ? int64_t(src) * Ci + m0 + ch * 8 : 0);
-                cpAsync16(smemAddr(a + kr * BM + swz8(kr, ch) * 8), g, src >= 0);
+                T const *g    = X + (src >= 0 ? int64_t(src) * Ci + m0 + ch * CE : 0);
+                cpAsync16(smemAddr(a + kr * BM + swz8(kr, ch) * CE), g, src >= 0);
             }
         }
 #pragma unroll
-        for (int i = 0; i < (BK * BN / 8 + THREADS - 1) / THREADS; ++i) {
+        for (int i = 0; i < (BK * BN / CE + THREADS - 1) / THREADS; ++i) {
             int const c = tid + i * THREADS;
-            if (c < BK * BN / 8) {
-                int const kr = c / (BN / 8);
-                int const ch = c % (BN / 8);
+            if (c < BK * BN / CE) {
+                int const kr = c / (BN / CE);
+                int const ch = c % (BN / CE);
                 int const o  = slot[BK + kr];
-                T const *g   = dY + (o >= 0 ? int64_t(o) * Co + n0 + ch * 8 : 0);
-                cpAsync16(smemAddr(b + kr * BN + swz8(kr, ch) * 8), g, o >= 0);
+                T const *g   = dY + (o >= 0 ? int64_t(o) * Co + n0 + ch * CE : 0);
+                cpAsync16(smemAddr(b + kr * BN + swz8(kr, ch) * CE), g, o >= 0);
             }
         }
     };
@@ -610,25 +684,50 @@ maskedIGemmWgradKernel(T const *__restrict__ X,
         T const *a = sA + (it % STAGES) * A_STAGE;
         T const *b = sB + (it % STAGES) * B_STAGE;
 #pragma unroll
-        for (int kk = 0; kk < BK / 16; ++kk) {
+        for (int kk = 0; kk < BK / KSTEP; ++kk) {
             uint32_t af[MT][4];
-#pragma unroll
-            for (int mt = 0; mt < MT; ++mt) {
-                int const kr = kk * 16 + (lane & 7) + ((lane >> 4) & 1) * 8;
-                int const ch = (wm0 + mt * 16) / 8 + ((lane >> 3) & 1);
-                ldsm4T(af[mt], smemAddr(a + kr * BM + swz8(kr, ch) * 8));
-            }
             uint32_t bf[NT][2];
+            if constexpr (sizeof(T) == 4) {
+                // Both operands are stored [k][m|n]; ldmatrix cannot transpose 32-bit data,
+                // so float32 fragments are read element-wise.
+                int const g = lane >> 2, t = lane & 3;
+                auto at = [&](T const *base, int width, int k, int col) {
+                    return __float_as_uint(base[k * width + swz8(k, col / CE) * CE + col % CE]);
+                };
 #pragma unroll
-            for (int np = 0; np < NT / 2; ++np) {
-                uint32_t t[4];
-                int const kr = kk * 16 + (lane & 7) + ((lane >> 3) & 1) * 8;
-                int const ch = (wn0 + np * 16) / 8 + (lane >> 4);
-                ldsm4T(t, smemAddr(b + kr * BN + swz8(kr, ch) * 8));
-                bf[2 * np][0]     = t[0];
-                bf[2 * np][1]     = t[1];
-                bf[2 * np + 1][0] = t[2];
-                bf[2 * np + 1][1] = t[3];
+                for (int mt = 0; mt < MT; ++mt) {
+                    int const m = wm0 + mt * 16 + g;
+                    int const k = kk * KSTEP + t;
+                    af[mt][0]   = prep<T>(at(a, BM, k, m));
+                    af[mt][1]   = prep<T>(at(a, BM, k, m + 8));
+                    af[mt][2]   = prep<T>(at(a, BM, k + 4, m));
+                    af[mt][3]   = prep<T>(at(a, BM, k + 4, m + 8));
+                }
+#pragma unroll
+                for (int nt = 0; nt < NT; ++nt) {
+                    int const n = wn0 + nt * 8 + g;
+                    int const k = kk * KSTEP + t;
+                    bf[nt][0]   = prep<T>(at(b, BN, k, n));
+                    bf[nt][1]   = prep<T>(at(b, BN, k + 4, n));
+                }
+            } else {
+#pragma unroll
+                for (int mt = 0; mt < MT; ++mt) {
+                    int const kr = kk * KSTEP + (lane & 7) + ((lane >> 4) & 1) * 8;
+                    int const ch = (wm0 + mt * 16) / CE + ((lane >> 3) & 1);
+                    ldsm4T(af[mt], smemAddr(a + kr * BM + swz8(kr, ch) * CE));
+                }
+#pragma unroll
+                for (int np = 0; np < NT / 2; ++np) {
+                    uint32_t t[4];
+                    int const kr = kk * KSTEP + (lane & 7) + ((lane >> 3) & 1) * 8;
+                    int const ch = (wn0 + np * 16) / CE + (lane >> 4);
+                    ldsm4T(t, smemAddr(b + kr * BN + swz8(kr, ch) * CE));
+                    bf[2 * np][0]     = t[0];
+                    bf[2 * np][1]     = t[1];
+                    bf[2 * np + 1][0] = t[2];
+                    bf[2 * np + 1][1] = t[3];
+                }
             }
 #pragma unroll
             for (int mt = 0; mt < MT; ++mt)
@@ -656,8 +755,7 @@ maskedIGemmWgradKernel(T const *__restrict__ X,
                     atomicAdd(dWAcc + idx, acc[mt][nt][2 * h]);
                     atomicAdd(dWAcc + idx + 1, acc[mt][nt][2 * h + 1]);
                 } else {
-                    *reinterpret_cast<uint32_t *>(dWOut + idx) =
-                        packPair<T>(acc[mt][nt][2 * h], acc[mt][nt][2 * h + 1]);
+                    storePair<T>(dWOut + idx, acc[mt][nt][2 * h], acc[mt][nt][2 * h + 1]);
                 }
             }
         }
@@ -906,7 +1004,7 @@ smCount() {
     return sms;
 }
 
-template <typename Cfg, typename T, bool B_KMAJOR>
+template <typename Cfg, typename T, bool B_KMAJOR, bool FLIP>
 void
 launchConv(torch::Tensor const &A,
            torch::Tensor const &Wrows,
@@ -919,13 +1017,13 @@ launchConv(torch::Tensor const &A,
     int const N    = int(topo.totalVoxels);
     int const K    = int(topo.kernelVolume);
     int const smem = smemBytes<Cfg, T>(K);
-    auto kernel    = maskedIGemmKernel<Cfg, T, B_KMAJOR>;
+    auto kernel    = maskedIGemmKernel<Cfg, T, B_KMAJOR, FLIP>;
     C10_CUDA_CHECK(cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem));
     int const tiles = ((N + Cfg::BM - 1) / Cfg::BM) * (Nc / Cfg::BN);
 
     // Split each tile's (tap, k-tile) iterations when tiles alone underfill the GPU.
     int const sms    = smCount();
-    int const kTiles = Kc / Cfg::BK;
+    int const kTiles = Kc / Elem<T>::BK;
     int splits       = 1;
     // FVDB_MIGEMM_SPLIT overrides the target CTAs per SM for tuning.
     char const *env = std::getenv("FVDB_MIGEMM_SPLIT");
@@ -959,7 +1057,7 @@ launchConv(torch::Tensor const &A,
 }
 
 // Tile shape by output width. FVDB_MIGEMM_CFG=<BM>x<BN>x<STAGES> overrides it for tuning.
-template <typename T, bool B_KMAJOR>
+template <typename T, bool B_KMAJOR, bool FLIP>
 void
 dispatchConv(torch::Tensor const &A,
              torch::Tensor const &Wrows,
@@ -969,36 +1067,51 @@ dispatchConv(torch::Tensor const &A,
              int Kc,
              int Nc,
              cudaStream_t stream) {
-    char const *env       = std::getenv("FVDB_MIGEMM_CFG");
-    std::string const cfg = env ? env : "";
-#define FVDB_MIGEMM_TRY(BM, BN, WM, WN, ST)                      \
-    if (cfg == #BM "x" #BN "x" #ST && Nc % BN == 0) {            \
-        launchConv<TileConfig<BM, BN, WM, WN, ST>, T, B_KMAJOR>( \
-            A, Wrows, bias, out, topo, Kc, Nc, stream);          \
-        return;                                                  \
+    if constexpr (sizeof(T) == 2) {
+        char const *env       = std::getenv("FVDB_MIGEMM_CFG");
+        std::string const cfg = env ? env : "";
+#define FVDB_MIGEMM_TRY(BM, BN, WM, WN, ST)                            \
+    if (cfg == #BM "x" #BN "x" #ST && Nc % BN == 0) {                  \
+        launchConv<TileConfig<BM, BN, WM, WN, ST>, T, B_KMAJOR, FLIP>( \
+            A, Wrows, bias, out, topo, Kc, Nc, stream);                \
+        return;                                                        \
     }
-    FVDB_MIGEMM_TRY(128, 256, 2, 4, 3)
-    FVDB_MIGEMM_TRY(128, 256, 2, 4, 2)
-    FVDB_MIGEMM_TRY(64, 256, 1, 4, 3)
-    FVDB_MIGEMM_TRY(128, 128, 2, 2, 4)
-    FVDB_MIGEMM_TRY(128, 128, 2, 2, 3)
-    FVDB_MIGEMM_TRY(128, 128, 2, 2, 2)
-    FVDB_MIGEMM_TRY(64, 128, 2, 2, 4)
-    FVDB_MIGEMM_TRY(64, 128, 2, 2, 3)
-    FVDB_MIGEMM_TRY(128, 64, 4, 1, 4)
-    FVDB_MIGEMM_TRY(128, 64, 4, 1, 3)
-    FVDB_MIGEMM_TRY(128, 64, 4, 1, 2)
-    FVDB_MIGEMM_TRY(64, 64, 2, 2, 4)
-    FVDB_MIGEMM_TRY(64, 64, 2, 2, 3)
+        FVDB_MIGEMM_TRY(128, 256, 2, 4, 3)
+        FVDB_MIGEMM_TRY(128, 256, 2, 4, 2)
+        FVDB_MIGEMM_TRY(64, 256, 1, 4, 3)
+        FVDB_MIGEMM_TRY(128, 128, 2, 2, 4)
+        FVDB_MIGEMM_TRY(128, 128, 2, 2, 3)
+        FVDB_MIGEMM_TRY(128, 128, 2, 2, 2)
+        FVDB_MIGEMM_TRY(64, 128, 2, 2, 4)
+        FVDB_MIGEMM_TRY(64, 128, 2, 2, 3)
+        FVDB_MIGEMM_TRY(128, 64, 4, 1, 4)
+        FVDB_MIGEMM_TRY(128, 64, 4, 1, 3)
+        FVDB_MIGEMM_TRY(128, 64, 4, 1, 2)
+        FVDB_MIGEMM_TRY(64, 64, 2, 2, 4)
+        FVDB_MIGEMM_TRY(64, 64, 2, 2, 3)
 #undef FVDB_MIGEMM_TRY
+    }
     // Two stages keep two CTAs resident per SM, which beats deeper pipelines here.
     if (Nc % 128 == 0) {
-        launchConv<TileConfig<128, 128, 2, 2, 2>, T, B_KMAJOR>(
+        launchConv<TileConfig<128, 128, 2, 2, 2>, T, B_KMAJOR, FLIP>(
             A, Wrows, bias, out, topo, Kc, Nc, stream);
     } else {
-        launchConv<TileConfig<128, 64, 4, 1, 2>, T, B_KMAJOR>(
+        launchConv<TileConfig<128, 64, 4, 1, 2>, T, B_KMAJOR, FLIP>(
             A, Wrows, bias, out, topo, Kc, Nc, stream);
     }
+}
+
+template <typename T>
+void
+convForward(torch::Tensor const &features,
+            torch::Tensor const &Wrows,
+            torch::Tensor const &bias,
+            torch::Tensor &out,
+            MaskedIGemmTopology const &topo,
+            int Ci,
+            int Co,
+            cudaStream_t stream) {
+    dispatchConv<T, false, false>(features, Wrows, bias, out, topo, Ci, Co, stream);
 }
 
 template <typename Cfg, typename T>
@@ -1056,26 +1169,32 @@ dispatchWgrad(torch::Tensor const &X,
               int Ci,
               int Co,
               cudaStream_t stream) {
-    char const *env       = std::getenv("FVDB_MIGEMM_WCFG");
-    std::string const cfg = env ? env : "";
+    if constexpr (sizeof(T) == 4) {
+        // float32 reads fragments element-wise, so wide warp tiles amortize the loads;
+        // at 128x128, 16-row stages keep two CTAs resident per SM.
+        if (Ci % 128 == 0 && Co % 128 == 0)
+            return launchWgrad<WgradConfig<128, 128, 2, 2, 3, 16>, T>(X, dY, topo, Ci, Co, stream);
+        return launchWgrad<WgradConfig<64, 64, 2, 2, 2>, T>(X, dY, topo, Ci, Co, stream);
+    } else {
+        char const *env       = std::getenv("FVDB_MIGEMM_WCFG");
+        std::string const cfg = env ? env : "";
 #define FVDB_MIGEMM_TRYW(BM, BN, WM, WN, ST)                                                 \
     if (cfg == #BM "x" #BN "x" #ST && Ci % BM == 0 && Co % BN == 0) {                        \
         return launchWgrad<WgradConfig<BM, BN, WM, WN, ST>, T>(X, dY, topo, Ci, Co, stream); \
     }
-    FVDB_MIGEMM_TRYW(128, 128, 2, 2, 4)
-    FVDB_MIGEMM_TRYW(128, 128, 2, 2, 3)
-    FVDB_MIGEMM_TRYW(128, 128, 2, 2, 2)
-    FVDB_MIGEMM_TRYW(128, 64, 2, 2, 4)
-    FVDB_MIGEMM_TRYW(128, 64, 2, 2, 3)
-    FVDB_MIGEMM_TRYW(64, 128, 2, 2, 4)
-    FVDB_MIGEMM_TRYW(64, 128, 2, 2, 3)
-    FVDB_MIGEMM_TRYW(64, 64, 2, 2, 4)
-    FVDB_MIGEMM_TRYW(64, 64, 2, 2, 3)
-    FVDB_MIGEMM_TRYW(64, 64, 2, 2, 2)
+        FVDB_MIGEMM_TRYW(128, 128, 2, 2, 4)
+        FVDB_MIGEMM_TRYW(128, 128, 2, 2, 3)
+        FVDB_MIGEMM_TRYW(128, 128, 2, 2, 2)
+        FVDB_MIGEMM_TRYW(128, 64, 2, 2, 4)
+        FVDB_MIGEMM_TRYW(128, 64, 2, 2, 3)
+        FVDB_MIGEMM_TRYW(64, 128, 2, 2, 4)
+        FVDB_MIGEMM_TRYW(64, 128, 2, 2, 3)
+        FVDB_MIGEMM_TRYW(64, 64, 2, 2, 4)
+        FVDB_MIGEMM_TRYW(64, 64, 2, 2, 3)
+        FVDB_MIGEMM_TRYW(64, 64, 2, 2, 2)
 #undef FVDB_MIGEMM_TRYW
-    if (Ci % 128 == 0 && Co % 128 == 0) {
-        return launchWgrad<WgradConfig<128, 128, 2, 2, 3>, T>(X, dY, topo, Ci, Co, stream);
-    } else {
+        if (Ci % 128 == 0 && Co % 128 == 0)
+            return launchWgrad<WgradConfig<128, 128, 2, 2, 3>, T>(X, dY, topo, Ci, Co, stream);
         return launchWgrad<WgradConfig<64, 64, 2, 2, 2>, T>(X, dY, topo, Ci, Co, stream);
     }
 }
@@ -1116,7 +1235,8 @@ checkConv(torch::Tensor const &features,
 
 bool
 maskedIGemmSupports(int64_t inChannels, int64_t outChannels, torch::ScalarType dtype) {
-    bool const typeOk = dtype == torch::kFloat16 || dtype == torch::kBFloat16;
+    bool const typeOk =
+        dtype == torch::kFloat16 || dtype == torch::kBFloat16 || dtype == torch::kFloat32;
     if (!typeOk || inChannels % 64 != 0 || outChannels % 64 != 0)
         return false;
     int device = 0, major = 0;
@@ -1232,9 +1352,11 @@ maskedIGemmConv(torch::Tensor features,
         return out;
     auto stream = c10::cuda::getCurrentCUDAStream();
     if (st == torch::kFloat16)
-        dispatchConv<__half, false>(features, Wrows, b, out, topo, Ci, Co, stream);
+        convForward<__half>(features, Wrows, b, out, topo, Ci, Co, stream);
+    else if (st == torch::kBFloat16)
+        convForward<__nv_bfloat16>(features, Wrows, b, out, topo, Ci, Co, stream);
     else
-        dispatchConv<__nv_bfloat16, false>(features, Wrows, b, out, topo, Ci, Co, stream);
+        convForward<float>(features, Wrows, b, out, topo, Ci, Co, stream);
     return out;
 }
 
@@ -1262,20 +1384,25 @@ maskedIGemmConvBackward(torch::Tensor gradOutput,
         gradFeatures = torch::empty({topo.totalVoxels, Ci}, features.options());
         if (topo.totalVoxels > 0) {
             if (st == torch::kFloat16)
-                dispatchConv<__half, true>(
+                dispatchConv<__half, true, true>(
+                    gradOutput, Wrows, {}, gradFeatures, topo, Co, Ci, stream);
+            else if (st == torch::kBFloat16)
+                dispatchConv<__nv_bfloat16, true, true>(
                     gradOutput, Wrows, {}, gradFeatures, topo, Co, Ci, stream);
             else
-                dispatchConv<__nv_bfloat16, true>(
+                dispatchConv<float, true, true>(
                     gradOutput, Wrows, {}, gradFeatures, topo, Co, Ci, stream);
         }
     }
     if (needWeights) {
         torch::Tensor gradRows;
         if (topo.totalVoxels > 0) {
-            gradRows =
-                st == torch::kFloat16
-                    ? dispatchWgrad<__half>(features, gradOutput, topo, Ci, Co, stream)
-                    : dispatchWgrad<__nv_bfloat16>(features, gradOutput, topo, Ci, Co, stream);
+            if (st == torch::kFloat16)
+                gradRows = dispatchWgrad<__half>(features, gradOutput, topo, Ci, Co, stream);
+            else if (st == torch::kBFloat16)
+                gradRows = dispatchWgrad<__nv_bfloat16>(features, gradOutput, topo, Ci, Co, stream);
+            else
+                gradRows = dispatchWgrad<float>(features, gradOutput, topo, Ci, Co, stream);
         } else {
             gradRows = torch::zeros({topo.kernelVolume, Ci, Co}, features.options());
         }

@@ -10,7 +10,7 @@ convolution, or transposed convolution, but can represent either.
 
 import math
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from threading import Lock
 from typing import Any, overload
 
@@ -600,9 +600,21 @@ class _PredGatherIGemmBackend:
 
 @dataclass(frozen=True)
 class _MaskedIGemmBackend:
-    """Masked implicit GEMM submanifold convolution over a leaf-ordered neighbor map (SM80+)."""
+    """Masked implicit GEMM submanifold convolution over a leaf-ordered neighbor map (SM80+).
+
+    Inputs the kernels do not cover run on gather-scatter, whose rulebook is built on first use
+    and kept in ``fallback``.
+    """
 
     topology: _fvdb_cpp.MaskedIGemmTopology
+    fallback: dict = field(default_factory=dict, compare=False)
+
+
+def _masked_igemm_runs(in_channels: int, out_channels: int, dtype: torch.dtype) -> bool:
+    """True when the masked_igemm kernels cover this call; float32 runs only as TF32."""
+    if dtype == torch.float32 and not torch.backends.cuda.matmul.allow_tf32:
+        return False
+    return _fvdb_cpp.migemm_supports(in_channels, out_channels, dtype)
 
 
 _Backend = _MatmulBackend | _GatherScatterBackend | _PredGatherIGemmBackend | _MaskedIGemmBackend
@@ -1180,12 +1192,11 @@ class ConvolutionPlan:
             result = self._target_grid.jagged_like(out_tensor)
 
         elif isinstance(backend, _MaskedIGemmBackend):
-            if not _fvdb_cpp.migemm_supports(in_c, out_c, data.jdata.dtype):
-                raise ValueError(
-                    f"masked_igemm supports float16/bfloat16 features with channel counts divisible by 64 "
-                    f"on SM80+; got ({in_c}, {out_c}) {data.jdata.dtype}."
-                )
-            out_tensor = _MaskedIGemmConvFn.apply(data.jdata, weights, None, backend.topology)
+            if _masked_igemm_runs(in_c, out_c, data.jdata.dtype):
+                out_tensor = _MaskedIGemmConvFn.apply(data.jdata, weights, None, backend.topology)
+            else:
+                topology = self._masked_igemm_fallback(backend)
+                out_tensor = _GatherScatterConvFn.apply(data.jdata, weights, topology, False)
             result = self._target_grid.jagged_like(out_tensor)
 
         elif isinstance(backend, _PredGatherIGemmBackend):
@@ -1212,6 +1223,19 @@ class ConvolutionPlan:
         else:
             return result
 
+    def _masked_igemm_fallback(self, backend: "_MaskedIGemmBackend") -> _fvdb_cpp.GatherScatterDefaultTopology:
+        """Gather-scatter rulebook for inputs the masked_igemm kernels do not cover."""
+        topology = backend.fallback.get("gather_scatter")
+        if topology is None:
+            topology = _fvdb_cpp.gs_build_topology(
+                _get_grid_data(self._source_grid),
+                _get_grid_data(self._target_grid),
+                torch.tensor(self._geometry.kernel_size, dtype=torch.int32),
+                torch.tensor(self._geometry.stride, dtype=torch.int32),
+            )
+            backend.fallback["gather_scatter"] = topology
+        return topology
+
     def _execute_with_bias(self, data: JaggedTensor, weights: torch.Tensor, bias: torch.Tensor | None) -> JaggedTensor:
         """Execute and add ``bias``, fused into the kernel epilogue where the backend supports it."""
         backend = self._backend
@@ -1219,7 +1243,7 @@ class ConvolutionPlan:
             bias is not None
             and isinstance(backend, _MaskedIGemmBackend)
             and weights.ndim == 5
-            and _fvdb_cpp.migemm_supports(weights.shape[1], weights.shape[0], data.jdata.dtype)
+            and _masked_igemm_runs(weights.shape[1], weights.shape[0], data.jdata.dtype)
             and _channel_pair_supported(weights.shape[1], weights.shape[0], self._channel_pairs)
         ):
             out_tensor = _MaskedIGemmConvFn.apply(data.jdata, weights, bias, backend.topology)
