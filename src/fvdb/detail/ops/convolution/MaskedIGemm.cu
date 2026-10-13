@@ -190,16 +190,16 @@ template <typename T> struct Elem {
     static constexpr int KSTEP = BK / 2;              // MMA k per instruction
 };
 
-// Round a loaded fragment register to TF32 (no-op for 16-bit types).
+// Round a loaded fragment register to TF32 (no-op for 16-bit types). Adding half an ulp lets
+// the tensor core's truncation of the low 13 bits round to nearest, ties away from zero, as
+// cvt.rna.tf32.f32 does, for less issue cost (CUTLASS's round_half_ulp_truncate). Inf and NaN
+// skip the add, which would carry a NaN payload into the sign bit.
 template <typename T>
 __device__ __forceinline__ uint32_t
 prep(uint32_t x) {
     if constexpr (sizeof(T) == 4) {
-#if FVDB_MIGEMM_SM80
-        uint32_t y;
-        asm("cvt.rna.tf32.f32 %0, %1;\n" : "=r"(y) : "f"(__uint_as_float(x)));
-        return y;
-#endif
+        if (isfinite(__uint_as_float(x)))
+            x += 0x1000u;
     }
     return x;
 }
@@ -293,7 +293,7 @@ template <typename Cfg, typename T>
 constexpr int
 smemBytes(int K) {
     return Cfg::STAGES * (Cfg::BM + Cfg::BN) * Elem<T>::BK * int(sizeof(T)) + Cfg::BM * K * 4 +
-           Cfg::BM * 4 + kMaxTaps * 4 + 16;
+           Cfg::BM * 4 + 2 * kMaxTaps * 4 + 16;
 }
 
 // B_KMAJOR selects the weight operand layout per tap:
@@ -329,7 +329,8 @@ maskedIGemmKernel(T const *__restrict__ A,
     int32_t *sNbr   = reinterpret_cast<int32_t *>(sB + STAGES * B_STAGE);
     int32_t *sRows  = sNbr + BM * K;
     int32_t *sTaps  = sRows + BM;
-    uint32_t *sMask = reinterpret_cast<uint32_t *>(sTaps + kMaxTaps);
+    int32_t *sWRow  = sTaps + kMaxTaps;
+    uint32_t *sMask = reinterpret_cast<uint32_t *>(sWRow + kMaxTaps);
     int32_t *sNTaps = reinterpret_cast<int32_t *>(sMask + 1);
 
     int const tid   = threadIdx.x;
@@ -359,7 +360,9 @@ maskedIGemmKernel(T const *__restrict__ A,
         uint32_t m = *sMask;
         int n      = 0;
         while (m) {
-            sTaps[n++] = __ffs(m) - 1;
+            int const tap = __ffs(m) - 1;
+            sTaps[n]      = tap;
+            sWRow[n++]    = tapToRow(FLIP ? K - 1 - tap : tap);
             m &= m - 1;
         }
         *sNTaps = n;
@@ -381,43 +384,64 @@ maskedIGemmKernel(T const *__restrict__ A,
         return;
 
     // ---- Async tile loads ----
-    auto load = [&](int stage, int it) {
-        int const ti   = (itBase + it) / kTiles;
-        int const kt   = (itBase + it) - ti * kTiles;
-        int const tap  = sTaps[ti];
-        int const wtap = FLIP ? K - 1 - tap : tap;
-        T const *Wt    = W + int64_t(tapToRow(wtap)) * Kc * Nc;
+    // Each thread copies A_CHUNKS 16-byte chunks of A (rows aR + i * A_RSTEP, chunk aCh) and
+    // B_CHUNKS of B per stage. The loader walks (tap, k-tile) in order: pointers advance one
+    // k-tile per load and are rebuilt from the neighbor columns and weight rows only when the
+    // tap changes, so the loop does no division.
+    constexpr int A_CHUNKS = BM * 4 / THREADS, A_RSTEP = THREADS / 4;
+    constexpr int B_CHUNKS = BN * 4 / THREADS;
+    constexpr int B_ROW    = B_KMAJOR ? 4 : BN / CE; // chunks per B shared-memory row
+    constexpr int B_RSTEP  = THREADS / B_ROW;
+    static_assert(BM * 4 % THREADS == 0 && BN * 4 % THREADS == 0, "chunks must tile the CTA");
+    static_assert(A_RSTEP % 8 == 0 && THREADS % B_ROW == 0, "per-thread swizzles must repeat");
 
+    int const aR = tid >> 2, aCh = tid & 3;
+    int const bR = tid / B_ROW, bCh = tid % B_ROW;
+    int const aDst = aR * BK + swz4(aR, aCh) * CE;
+    // B source offset of chunk 0 within a tap's weight block, the step between chunks, and
+    // the step between k-tiles.
+    int64_t const bOff =
+        B_KMAJOR ? int64_t(n0 + bR) * Kc + bCh * CE : int64_t(bR) * Nc + n0 + bCh * CE;
+    int64_t const bStep = B_KMAJOR ? int64_t(B_RSTEP) * Kc : int64_t(B_RSTEP) * Nc;
+    int64_t const bKt   = B_KMAJOR ? int64_t(BK) : int64_t(BK) * Nc;
+
+    int ldTi = itBase / kTiles, ldKt = itBase - ldTi * kTiles;
+    T const *aPtr[A_CHUNKS];
+    bool aOk[A_CHUNKS];
+    T const *bPtr = nullptr;
+    auto setTap   = [&]() {
+#pragma unroll
+        for (int i = 0; i < A_CHUNKS; ++i) {
+            int const src = sNbr[(aR + i * A_RSTEP) * nTaps + ldTi];
+            aOk[i]        = src >= 0;
+            aPtr[i]       = A + (aOk[i] ? int64_t(src) * Kc + aCh * CE : 0) + ldKt * BK;
+        }
+        bPtr = W + int64_t(sWRow[ldTi]) * Kc * Nc + bOff + ldKt * bKt;
+    };
+    if (nIter > 0)
+        setTap();
+
+    auto load = [&](int stage) {
         T *a = sA + stage * A_STAGE;
 #pragma unroll
-        for (int i = 0; i < (BM * 4 + THREADS - 1) / THREADS; ++i) {
-            int const c = tid + i * THREADS;
-            if (c < BM * 4) {
-                int const r   = c >> 2;
-                int const ch  = c & 3;
-                int const src = sNbr[r * nTaps + ti];
-                T const *g    = A + (src >= 0 ? int64_t(src) * Kc + kt * BK + ch * CE : 0);
-                cpAsync16(smemAddr(a + r * BK + swz4(r, ch) * CE), g, src >= 0);
-            }
+        for (int i = 0; i < A_CHUNKS; ++i) {
+            cpAsync16(smemAddr(a + aDst + i * A_RSTEP * BK), aPtr[i], aOk[i]);
+            aPtr[i] += BK;
         }
-
         T *b = sB + stage * B_STAGE;
 #pragma unroll
-        for (int i = 0; i < (BN * 4 + THREADS - 1) / THREADS; ++i) {
-            int const c = tid + i * THREADS;
-            if (c < BN * 4) {
-                if constexpr (B_KMAJOR) {
-                    int const nr = c >> 2;
-                    int const ch = c & 3;
-                    T const *g   = Wt + int64_t(n0 + nr) * Kc + kt * BK + ch * CE;
-                    cpAsync16(smemAddr(b + nr * BK + swz4(nr, ch) * CE), g, true);
-                } else {
-                    int const kr = c / (BN / CE);
-                    int const ch = c % (BN / CE);
-                    T const *g   = Wt + int64_t(kt * BK + kr) * Nc + n0 + ch * CE;
-                    cpAsync16(smemAddr(b + kr * BN + swzKN<T>(kr, ch) * CE), g, true);
-                }
-            }
+        for (int i = 0; i < B_CHUNKS; ++i) {
+            int const r = bR + i * B_RSTEP;
+            if constexpr (B_KMAJOR)
+                cpAsync16(smemAddr(b + r * BK + swz4(r, bCh) * CE), bPtr + i * bStep, true);
+            else
+                cpAsync16(smemAddr(b + r * BN + swzKN<T>(r, bCh) * CE), bPtr + i * bStep, true);
+        }
+        bPtr += bKt;
+        if (++ldKt == kTiles) {
+            ldKt = 0;
+            if (++ldTi < nTaps)
+                setTap();
         }
     };
 
@@ -436,7 +460,7 @@ maskedIGemmKernel(T const *__restrict__ A,
 #pragma unroll
     for (int s = 0; s < STAGES - 1; ++s) {
         if (s < nIter)
-            load(s, s);
+            load(s);
         cpAsyncCommit();
     }
 
@@ -445,7 +469,7 @@ maskedIGemmKernel(T const *__restrict__ A,
         __syncthreads();
         int const next = it + STAGES - 1;
         if (next < nIter)
-            load(next % STAGES, next);
+            load(next % STAGES);
         cpAsyncCommit();
 
         T const *a = sA + (it % STAGES) * A_STAGE;
@@ -1109,6 +1133,7 @@ dispatchConv(torch::Tensor const &A,
         FVDB_MIGEMM_TRY(128, 256, 2, 4, 3)
         FVDB_MIGEMM_TRY(128, 256, 2, 4, 2)
         FVDB_MIGEMM_TRY(64, 256, 1, 4, 3)
+        FVDB_MIGEMM_TRY(64, 256, 1, 4, 2)
         FVDB_MIGEMM_TRY(128, 128, 2, 2, 4)
         FVDB_MIGEMM_TRY(128, 128, 2, 2, 3)
         FVDB_MIGEMM_TRY(128, 128, 2, 2, 2)
