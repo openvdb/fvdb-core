@@ -308,6 +308,40 @@ class TestNNModules(unittest.TestCase):
         self.assertEqual(output.jdata.shape[1], 16)
         self.assertEqual(output.jdata.shape[0], features.jdata.shape[0])
 
+    @expand_tests(all_device_dtype_combos)
+    def test_sparse_conv3d_module_weights_match_contiguous(self, device, dtype):
+        # Module weights are stored (k2, k1, k0, C_in, C_out) under a (C_out, C_in, k0, k1, k2)
+        # view. The conv reads them without a copy and must agree with a contiguous copy.
+        grid = self._make_dense_grid(device, shape=(6, 7, 8))
+        kernel_size = (3, 5, 1)
+        conv = fvnn.SparseConv3d(in_channels=4, out_channels=6, kernel_size=kernel_size, bias=False)
+        conv = conv.to(device=device, dtype=dtype)
+        plan = ConvolutionPlan.from_grid_batch(kernel_size=kernel_size, stride=1, source_grid=grid)
+        features = self._make_features(grid, 4, device, dtype)
+
+        out = conv(features, plan)
+        out.jdata.square().sum().backward()
+
+        weight = conv.weight.detach().contiguous().requires_grad_(True)
+        ref = plan.execute(features, weight)
+        ref.jdata.square().sum().backward()
+
+        torch.testing.assert_close(out.jdata, ref.jdata)
+        torch.testing.assert_close(conv.weight.grad, weight.grad)
+        self.assertEqual(conv.weight.grad.stride(), conv.weight.stride())
+
+        from torch.profiler import ProfilerActivity, profile
+
+        with profile(activities=[ProfilerActivity.CPU], record_shapes=True) as prof:
+            conv(features, plan).jdata.square().sum().backward()
+        for event in prof.key_averages(group_by_input_shape=True):
+            if event.key in ("aten::clone", "aten::copy_"):
+                for shape in event.input_shapes:
+                    numel = 1
+                    for s in shape:
+                        numel *= s
+                    self.assertFalse(shape and numel == conv.weight.numel(), f"weights copied by {event.key}")
+
     def test_sparse_conv3d_plan_mismatch(self):
         device, dtype = "cpu", torch.float32
         grid = self._make_dense_grid(device, shape=(8, 8, 8))
