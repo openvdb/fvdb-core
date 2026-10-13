@@ -109,6 +109,20 @@ def _transform_compatibility(
     # avoid losing registration precision through GridBatch's float32 view.
     fine_data = _get_grid_data(fine_grid)
     coarse_data = _get_grid_data(coarse_grid)
+
+    # A stride-1 transform between a grid and itself is compatible by construction.
+    if all(step == 1 for step in geometry.stride) and fine_data.is_same(coarse_data):
+        return ConvolutionTransformCompatibility(
+            fine_grid_count=fine_grid.grid_count,
+            coarse_grid_count=coarse_grid.grid_count,
+            same_batch_size=True,
+            same_device=True,
+            scale_compatible=True,
+            registration_integer=True,
+            registration_zero=True,
+            compatible=True,
+            registration_offset=torch.zeros_like(fine_data.origins),
+        )
     fine_voxel_sizes = fine_data.voxel_sizes
     coarse_voxel_sizes = coarse_data.voxel_sizes
     fine_origins = fine_data.origins
@@ -442,8 +456,9 @@ def _validate_masked_igemm_admission(
     """Admit only submanifold convolution: same grid, stride 1, odd kernel sizes, CUDA."""
     if transposed:
         raise ValueError("masked_igemm backend does not support transposed convolution.")
-    if not _vec_is_all(stride, 1):
-        raise ValueError(f"masked_igemm supports only stride 1; got {stride.tolist()}.")
+    stride_values = stride.tolist()
+    if any(step != 1 for step in stride_values):
+        raise ValueError(f"masked_igemm supports only stride 1; got {stride_values}.")
     kernel_values = [int(value) for value in kernel_size.tolist()]
     if any(k % 2 == 0 for k in kernel_values) or math.prod(kernel_values) > 32:
         raise ValueError(f"masked_igemm requires odd kernel sizes with volume <= 32; got {kernel_values}.")
