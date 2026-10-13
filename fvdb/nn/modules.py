@@ -446,12 +446,7 @@ class SparseConv3d(_SparseConv3dBase):
 
         assert isinstance(data, JaggedTensor), "Input data must be a JaggedTensor"
 
-        out_data = plan.execute(data, self.weight)
-
-        if self.bias is not None:
-            out_data.jdata = out_data.jdata + self.bias
-
-        return out_data
+        return plan._execute_with_bias(data, self.weight, self.bias)
 
 
 @_trace_fvdb_nn_forward

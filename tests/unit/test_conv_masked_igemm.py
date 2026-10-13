@@ -141,6 +141,35 @@ class TestMaskedIGemm(unittest.TestCase):
                 torch.randn(64, 48, 3, 3, 3, device="cuda", dtype=torch.float16),
             )
 
+    @parameterized.expand([(True,), (False,)])
+    def test_module_bias_and_grad_flags(self, input_requires_grad):
+        torch.manual_seed(0)
+        grid = _random_grid(2000, 10)
+        plan = ConvolutionPlan.from_grid_batch(3, 1, grid, grid, expert_config=CONFIG)
+        ref_plan = ConvolutionPlan.from_grid_batch(3, 1, grid, grid)
+        conv = fvdb.nn.SparseConv3d(64, 128, 3, bias=True).cuda()
+        torch.nn.init.normal_(conv.bias)
+        ref = fvdb.nn.SparseConv3d(64, 128, 3, bias=True).cuda()
+        ref.load_state_dict(conv.state_dict())
+        conv = conv.half()
+
+        x = torch.randn(grid.total_voxels, 64, device="cuda")
+        xh = x.half().requires_grad_(input_requires_grad)
+        xr = xh.detach().float().requires_grad_(input_requires_grad)
+        y = conv(grid.jagged_like(xh), plan).jdata
+        yr = ref(grid.jagged_like(xr), ref_plan).jdata
+        gy = torch.randn_like(yr)
+        y.backward(gy.half())
+        yr.backward(gy.half().float())
+
+        self.assertLess(_rel_err(y, yr), 4e-3)
+        self.assertLess(_rel_err(conv.bias.grad, ref.bias.grad), 4e-3)
+        self.assertLess(_rel_err(conv.weight.grad, ref.weight.grad), 4e-3)
+        if input_requires_grad:
+            self.assertLess(_rel_err(xh.grad, xr.grad), 4e-3)
+        else:
+            self.assertIsNone(xh.grad)
+
     def test_module_and_transpose(self):
         grid = _random_grid(1000, 8)
         plan = ConvolutionPlan.from_grid_batch(3, 1, grid, grid, expert_config=CONFIG)

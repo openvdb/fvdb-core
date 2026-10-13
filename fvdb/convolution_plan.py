@@ -523,19 +523,33 @@ class _PredGatherIGemmConvFn(torch.autograd.Function):
 
 
 class _MaskedIGemmConvFn(torch.autograd.Function):
-    """Autograd wrapper for the masked implicit GEMM submanifold convolution."""
+    """Autograd wrapper for the masked implicit GEMM submanifold convolution with optional fused bias."""
 
     @staticmethod
-    def forward(ctx, features: torch.Tensor, weights: torch.Tensor, topo: _fvdb_cpp.MaskedIGemmTopology) -> torch.Tensor:  # type: ignore[override]
+    def forward(  # type: ignore[override]
+        ctx,
+        features: torch.Tensor,
+        weights: torch.Tensor,
+        bias: torch.Tensor | None,
+        topo: _fvdb_cpp.MaskedIGemmTopology,
+    ) -> torch.Tensor:
         ctx.save_for_backward(features, weights)
         ctx.topo = topo
-        return _fvdb_cpp.migemm_conv(features, weights, topo)
+        ctx.has_bias = bias is not None
+        return _fvdb_cpp.migemm_conv(features, weights, bias, topo)
 
     @staticmethod
-    def backward(ctx, grad_output: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, None]:  # type: ignore[override]
+    def backward(ctx, grad_output: torch.Tensor):  # type: ignore[override]
         features, weights = ctx.saved_tensors
-        grad_feat, grad_w = _fvdb_cpp.migemm_conv_backward(grad_output.contiguous(), features, weights, ctx.topo)
-        return grad_feat, grad_w, None
+        need_feat, need_w, need_b = ctx.needs_input_grad[:3]
+        grad_output = grad_output.contiguous()
+        grad_feat, grad_w = None, None
+        if need_feat or need_w:
+            grad_feat, grad_w = _fvdb_cpp.migemm_conv_backward(
+                grad_output, features, weights, ctx.topo, bool(need_feat), bool(need_w)
+            )
+        grad_b = grad_output.sum(0) if ctx.has_bias and need_b else None
+        return grad_feat, grad_w, grad_b, None
 
 
 # ============================================================
@@ -1156,7 +1170,7 @@ class ConvolutionPlan:
                     f"masked_igemm supports float16/bfloat16 features with channel counts divisible by 64 "
                     f"on SM80+; got ({in_c}, {out_c}) {data.jdata.dtype}."
                 )
-            out_tensor = _MaskedIGemmConvFn.apply(data.jdata, weights, backend.topology)
+            out_tensor = _MaskedIGemmConvFn.apply(data.jdata, weights, None, backend.topology)
             result = self._target_grid.jagged_like(out_tensor)
 
         elif isinstance(backend, _PredGatherIGemmBackend):
@@ -1182,6 +1196,23 @@ class ConvolutionPlan:
             return result.jdata
         else:
             return result
+
+    def _execute_with_bias(self, data: JaggedTensor, weights: torch.Tensor, bias: torch.Tensor | None) -> JaggedTensor:
+        """Execute and add ``bias``, fused into the kernel epilogue where the backend supports it."""
+        backend = self._backend
+        if (
+            bias is not None
+            and isinstance(backend, _MaskedIGemmBackend)
+            and weights.ndim == 5
+            and _fvdb_cpp.migemm_supports(weights.shape[1], weights.shape[0], data.jdata.dtype)
+            and _channel_pair_supported(weights.shape[1], weights.shape[0], self._channel_pairs)
+        ):
+            out_tensor = _MaskedIGemmConvFn.apply(data.jdata, weights, bias, backend.topology)
+            return self._target_grid.jagged_like(out_tensor)
+        out = self.execute(data, weights)
+        if bias is not None:
+            out.jdata = out.jdata + bias
+        return out
 
     # ============================================================
     #                 Properties
