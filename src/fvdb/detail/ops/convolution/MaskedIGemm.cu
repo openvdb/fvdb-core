@@ -691,11 +691,11 @@ pairCountKernel(int32_t const *__restrict__ rowMasks,
         int sum = 0;
         for (int w = 0; w < kPairBlock / 32; ++w)
             sum += warpCounts[w][threadIdx.x];
-        blockCounts[int64_t(blockIdx.x) * K + threadIdx.x] = sum;
+        blockCounts[int64_t(threadIdx.x) * gridDim.x + blockIdx.x] = sum;
     }
 }
 
-// blockOffsets[b * K + k]: start of block b's tap-k pairs (tap offset included).
+// blockOffsets[k * blocks + b]: start of block b's tap-k pairs (tap offset included).
 __global__ void
 pairFillKernel(int32_t const *__restrict__ rowMasks,
                int32_t const *__restrict__ nbr,
@@ -719,7 +719,8 @@ pairFillKernel(int32_t const *__restrict__ rowMasks,
         uint32_t const bits = __ballot_sync(0xffffffffu, (m >> k) & 1u);
         if (!((m >> k) & 1u))
             continue;
-        int pos = blockOffsets[int64_t(blockIdx.x) * K + k] + __popc(bits & ((1u << lane) - 1u));
+        int pos =
+            blockOffsets[int64_t(k) * gridDim.x + blockIdx.x] + __popc(bits & ((1u << lane) - 1u));
         for (int w = 0; w < warp; ++w)
             pos += warpCounts[w][k];
         pairOut[pos] = row;
@@ -1021,30 +1022,29 @@ maskedIGemmTopology(GridBatchData const &grid, nanovdb::Coord kernelSize) {
 
     // Weight-gradient pairs per tap, output rows ascending (leaf order).
     int64_t const blocks = (N + kPairBlock - 1) / kPairBlock;
-    auto blockCounts     = torch::zeros({blocks, K}, i32);
+    auto blockCounts     = torch::zeros({K, blocks}, i32); // tap-major, so scans run along rows
     auto stream          = c10::cuda::getCurrentCUDAStream();
     if (blocks > 0) {
         pairCountKernel<<<blocks, kPairBlock, 0, stream>>>(
             rowMasks.data_ptr<int32_t>(), int(N), int(K), blockCounts.data_ptr<int32_t>());
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     }
-    auto tapCounts = blockCounts.sum(0, false, torch::kInt64);
+    auto tapCounts = blockCounts.sum(1, false, torch::kInt64);
     auto offsets   = torch::zeros({K + 1}, i32);
     offsets.slice(0, 1).copy_(torch::cumsum(tapCounts, 0));
-    auto blockOffsets = (torch::cumsum(blockCounts, 0, torch::kInt32) - blockCounts) +
-                        offsets.slice(0, 0, K).unsqueeze(0);
+    auto blockOffsets = (torch::cumsum(blockCounts, 1, torch::kInt32) - blockCounts) +
+                        offsets.slice(0, 0, K).unsqueeze(1);
     int64_t const P = offsets[K].item<int64_t>();
     auto pairIn     = torch::empty({P}, i32);
     auto pairOut    = torch::empty({P}, i32);
     if (blocks > 0 && P > 0) {
-        pairFillKernel<<<blocks, kPairBlock, 0, stream>>>(
-            rowMasks.data_ptr<int32_t>(),
-            nbr.data_ptr<int32_t>(),
-            blockOffsets.contiguous().data_ptr<int32_t>(),
-            int(N),
-            int(K),
-            pairIn.data_ptr<int32_t>(),
-            pairOut.data_ptr<int32_t>());
+        pairFillKernel<<<blocks, kPairBlock, 0, stream>>>(rowMasks.data_ptr<int32_t>(),
+                                                          nbr.data_ptr<int32_t>(),
+                                                          blockOffsets.data_ptr<int32_t>(),
+                                                          int(N),
+                                                          int(K),
+                                                          pairIn.data_ptr<int32_t>(),
+                                                          pairOut.data_ptr<int32_t>());
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     }
 
