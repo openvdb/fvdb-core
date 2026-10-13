@@ -10,6 +10,7 @@ Forward, input gradient and weight gradient are checked against the default gath
 backend evaluated in float32.
 """
 
+import os
 import unittest
 
 import torch
@@ -120,6 +121,44 @@ class TestMaskedIGemm(unittest.TestCase):
         self.assertTrue(
             torch.equal(topo.sorted_rows.sort().values.cpu(), torch.arange(ijk.shape[0], dtype=torch.int32))
         )
+
+    @parameterized.expand(
+        [
+            ("sparse", (3, 3, 3)),
+            ("dense", (3, 3, 3)),
+            ("shell", (3, 3, 3)),
+            ("batch", (3, 3, 3)),
+            ("view", (3, 3, 3)),
+            ("sparse", (3, 5, 1)),
+            ("dense", (17, 1, 1)),
+            ("sparse", (19, 1, 1)),
+        ]
+    )
+    def test_staged_builder_matches_scan(self, kind, kernel_size):
+        if kind == "sparse":
+            grid = _random_grid(4000, 40)
+        elif kind == "dense":
+            grid = GridBatch.from_dense(1, [20, 19, 18], device="cuda")
+        elif kind == "shell":
+            grid = _shell_grid(64)
+        elif kind == "batch":
+            grid = _random_grid(3000, 16, batch=3)
+        else:
+            grid = _random_grid(2000, 12, batch=4)[1:3]
+        ks = torch.tensor(kernel_size, dtype=torch.int32)
+        data = _get_grid_data(grid)
+        os.environ["FVDB_MIGEMM_BUILDER"] = "scan"
+        try:
+            ref = _fvdb_cpp.migemm_build_topology(data, ks)
+        finally:
+            del os.environ["FVDB_MIGEMM_BUILDER"]
+        os.environ["FVDB_MIGEMM_BUILDER"] = "staged"
+        try:
+            topo = _fvdb_cpp.migemm_build_topology(data, ks)
+        finally:
+            del os.environ["FVDB_MIGEMM_BUILDER"]
+        for name in ("neighbor_map", "row_masks", "pair_in", "pair_out", "pair_offsets"):
+            self.assertTrue(torch.equal(getattr(topo, name), getattr(ref, name)), name)
 
     def test_rejects_unsupported(self):
         grid = _random_grid(500, 8)

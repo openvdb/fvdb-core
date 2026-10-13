@@ -19,12 +19,14 @@
 #include "dispatch/detail/core_types.h"
 #include "dispatch/torch/types.h"
 
+#include <fvdb/detail/VbmCache.h>
 #include <fvdb/detail/dispatch/ForEachActiveVoxel.cuh>
 #include <fvdb/detail/dispatch/GridAccessor.h>
 #include <fvdb/detail/ops/convolution/ConvolutionGeometry.h>
 #include <fvdb/detail/ops/convolution/MaskedIGemm.h>
 
 #include <nanovdb/NanoVDB.h>
+#include <nanovdb/tools/cuda/VoxelBlockManager.cuh>
 
 #include <c10/cuda/CUDAException.h>
 #include <c10/cuda/CUDAGuard.h>
@@ -663,6 +665,170 @@ maskedIGemmWgradKernel(T const *__restrict__ X,
 }
 
 // =============================================================================
+// Neighbor-map builders
+// =============================================================================
+//
+// Both write, per output row o: nbr[o, k] (input row or -1), the tap mask, and
+// the mask's Gray-code rank (prefix XOR), which orders rows as FlexGEMM does.
+
+__host__ __device__ inline uint32_t
+grayRank(uint32_t mask) {
+    mask ^= mask >> 1;
+    mask ^= mask >> 2;
+    mask ^= mask >> 4;
+    mask ^= mask >> 8;
+    mask ^= mask >> 16;
+    return mask;
+}
+
+// Leaf-staged builder. One CTA per VoxelBlockManager block of 128 active voxels
+// in leaf order, which span a run of consecutive leaves. The CTA probes each of
+// those leaves' 27 neighbor leaves once into shared memory, then every voxel
+// resolves its taps with a mask test and the leaf's prefix-sum popcount instead
+// of walking the tree. Every tap offset must stay within one leaf (|d| <= 8).
+constexpr int kStagedWidth = VbmCache::kBlockWidth;
+
+__global__ void __launch_bounds__(kStagedWidth)
+stagedNeighborMapKernel(nanovdb::OnIndexGrid const *__restrict__ grid,
+                        uint32_t const *__restrict__ firstLeafID,
+                        uint64_t const *__restrict__ jumpMap,
+                        uint64_t firstOffset,
+                        uint64_t lastOffset,
+                        int64_t base,
+                        ConvolutionGeometry geometry,
+                        int K,
+                        int32_t *__restrict__ nbr,
+                        int32_t *__restrict__ code,
+                        int32_t *__restrict__ masks) {
+    using VbmT          = nanovdb::tools::cuda::VoxelBlockManager<VbmCache::kLog2BlockWidth>;
+    constexpr int WORDS = VbmCache::kJumpMapWordCount;
+
+    __shared__ int32_t sLeaves[kStagedWidth][27]; // neighbor leaf index, -1 if absent
+    __shared__ int sNumLeaves;
+
+    uint64_t const *jump = jumpMap + uint64_t(blockIdx.x) * WORDS;
+    uint32_t const leaf0 = firstLeafID[blockIdx.x];
+    auto const *leaves   = grid->tree().template getFirstNode<0>();
+    auto const &root     = grid->tree().root();
+    uint64_t const first = firstOffset + uint64_t(blockIdx.x) * kStagedWidth;
+
+    if (threadIdx.x == 0) {
+        int n = 1; // a jump bit marks each later leaf starting inside the block
+        for (int w = 0; w < WORDS; ++w)
+            n += __popcll(jump[w]);
+        sNumLeaves = n;
+    }
+    __syncthreads();
+    int const numLeaves = sNumLeaves;
+    for (int i = threadIdx.x; i < numLeaves * 27; i += kStagedWidth) {
+        int const j  = i / 27;
+        int const n  = i - j * 27;
+        auto const o = leaves[leaf0 + j].origin();
+        auto const *l =
+            root.probeLeaf(o.offsetBy((n / 9 - 1) * 8, ((n / 3) % 3 - 1) * 8, (n % 3 - 1) * 8));
+        sLeaves[j][n] = l ? int32_t(l - leaves) : -1;
+    }
+    __syncthreads();
+
+    if (first + threadIdx.x > lastOffset)
+        return;
+    uint32_t leafIndex;
+    uint16_t voxelOffset;
+    VbmT::decodeInverseMap(grid, leaf0, jump, first, int(threadIdx.x), leafIndex, voxelOffset);
+    if (leafIndex == VbmT::UnusedLeafIndex)
+        return; // defensive; the lastOffset guard makes this unreachable
+
+    int const j = int(leafIndex - leaf0);
+    int const x = voxelOffset >> 6, y = (voxelOffset >> 3) & 7, z = voxelOffset & 7;
+    // Sequential OnIndex invariant: this voxel's value index is its slot.
+    int64_t const row = base + int64_t(first + threadIdx.x) - 1;
+    int32_t *out      = nbr + row * K;
+    uint32_t mask     = 0;
+    for (int k = 0; k < K; ++k) {
+        nanovdb::Coord const d = geometry.tapOffset(geometry.tapCoord(k));
+        int const nx = x + d[0], ny = y + d[1], nz = z + d[2];
+        int const n  = ((nx + 8) / 8) * 9 + ((ny + 8) / 8) * 3 + (nz + 8) / 8;
+        int const li = sLeaves[j][n];
+        int32_t idx  = -1;
+        if (li >= 0) {
+            uint32_t const off = uint32_t(((nx & 7) << 6) | ((ny & 7) << 3) | (nz & 7));
+            auto const &leaf   = leaves[li];
+            if (leaf.isActive(off)) {
+                idx = int32_t(base + int64_t(leaf.getValue(off)) - 1);
+                mask |= 1u << k;
+            }
+        }
+        out[k] = idx;
+    }
+    code[row]  = int32_t(grayRank(mask));
+    masks[row] = int32_t(mask);
+}
+
+void
+buildNeighborMapStaged(GridBatchData const &grid,
+                       ConvolutionGeometry const &geometry,
+                       int K,
+                       int32_t *nbr,
+                       int32_t *code,
+                       int32_t *masks,
+                       cudaStream_t stream) {
+    for (int64_t bi = 0; bi < grid.batchSize(); ++bi) {
+        auto const vbm = grid.vbmCache().get(grid, bi);
+        if (vbm.blockCount == 0)
+            continue;
+        stagedNeighborMapKernel<<<vbm.blockCount, kStagedWidth, 0, stream>>>(
+            grid.deviceGridPtrAt(bi),
+            vbm.firstLeafID,
+            vbm.jumpMap,
+            vbm.firstOffset,
+            vbm.lastOffset,
+            grid.cumVoxelsAt(bi),
+            geometry,
+            K,
+            nbr,
+            code,
+            masks);
+        C10_CUDA_KERNEL_LAUNCH_CHECK();
+    }
+}
+
+// Leaf-scan builder: one thread per leaf slot, K tree probes per active voxel.
+void
+buildNeighborMapScan(GridBatchData const &grid,
+                     ConvolutionGeometry const &geometry,
+                     int K,
+                     int32_t *nbr,
+                     int32_t *code,
+                     int32_t *masks) {
+    using CudaTag  = ::dispatch::tag<torch::kCUDA>;
+    auto const acc = dispatch::make_grid_accessor(CudaTag{}, grid);
+    dispatch::forEachActiveVoxel(CudaTag{},
+                                 grid,
+                                 [=] __hostdev__(CudaTag,
+                                                 JIdxType batchIdx,
+                                                 nanovdb::Coord ijk,
+                                                 int64_t voxelIdx,
+                                                 GridBatchData::Accessor) {
+                                     auto treeAcc       = acc.grid(batchIdx)->getAccessor();
+                                     int64_t const base = acc.voxelOffset(batchIdx);
+                                     int32_t *row       = nbr + voxelIdx * K;
+                                     uint32_t mask      = 0;
+                                     for (int k = 0; k < K; ++k) {
+                                         nanovdb::Coord const probe =
+                                             geometry.fineFromCoarse(ijk, geometry.tapCoord(k));
+                                         int32_t idx = -1;
+                                         if (treeAcc.isActive(probe)) {
+                                             idx = int32_t(base + treeAcc.getValue(probe) - 1);
+                                             mask |= 1u << k;
+                                         }
+                                         row[k] = idx;
+                                     }
+                                     code[voxelIdx]  = int32_t(grayRank(mask));
+                                     masks[voxelIdx] = int32_t(mask);
+                                 });
+}
+
+// =============================================================================
 // Weight-gradient pair lists
 // =============================================================================
 //
@@ -979,43 +1145,35 @@ maskedIGemmTopology(GridBatchData const &grid, nanovdb::Coord kernelSize) {
     auto rowMasks  = torch::empty({N}, i32);
 
     if (N > 0) {
-        using CudaTag    = ::dispatch::tag<torch::kCUDA>;
-        auto const acc   = dispatch::make_grid_accessor(CudaTag{}, grid);
-        int32_t *nbrPtr  = nbr.data_ptr<int32_t>();
-        int32_t *codePtr = code.data_ptr<int32_t>();
-        int32_t *maskPtr = rowMasks.data_ptr<int32_t>();
-        dispatch::forEachActiveVoxel(CudaTag{},
-                                     grid,
-                                     [=] __hostdev__(CudaTag,
-                                                     JIdxType batchIdx,
-                                                     nanovdb::Coord ijk,
-                                                     int64_t voxelIdx,
-                                                     GridBatchData::Accessor) {
-                                         auto treeAcc       = acc.grid(batchIdx)->getAccessor();
-                                         int64_t const base = acc.voxelOffset(batchIdx);
-                                         int32_t *row       = nbrPtr + voxelIdx * K;
-                                         uint32_t mask      = 0;
-                                         for (int64_t k = 0; k < K; ++k) {
-                                             nanovdb::Coord const probe =
-                                                 geometry.fineFromCoarse(ijk, geometry.tapCoord(k));
-                                             int32_t idx = -1;
-                                             if (treeAcc.isActive(probe)) {
-                                                 idx = int32_t(base + treeAcc.getValue(probe) - 1);
-                                                 mask |= 1u << k;
-                                             }
-                                             row[k] = idx;
-                                         }
-                                         // Gray-code rank of the mask (prefix XOR), as FlexGEMM
-                                         // orders rows.
-                                         uint32_t b = mask;
-                                         b ^= b >> 1;
-                                         b ^= b >> 2;
-                                         b ^= b >> 4;
-                                         b ^= b >> 8;
-                                         b ^= b >> 16;
-                                         codePtr[voxelIdx] = int32_t(b);
-                                         maskPtr[voxelIdx] = int32_t(mask);
-                                     });
+        // The staged builder needs every tap within one leaf of its voxel. Below ~128K
+        // voxels the VoxelBlockManager's cold build (a host sync) costs more than the
+        // probes it saves. FVDB_MIGEMM_BUILDER=scan|staged overrides the choice.
+        bool withinLeaf = true;
+        for (int d = 0; d < 3; ++d)
+            withinLeaf &= (kernelSize[d] - 1) / 2 <= 8;
+        char const *env          = std::getenv("FVDB_MIGEMM_BUILDER");
+        std::string const choice = env ? env : "";
+        bool scan                = !withinLeaf || N < (int64_t(1) << 17);
+        if (withinLeaf && choice == "staged")
+            scan = false;
+        else if (choice == "scan")
+            scan = true;
+        if (scan) {
+            buildNeighborMapScan(grid,
+                                 geometry,
+                                 int(K),
+                                 nbr.data_ptr<int32_t>(),
+                                 code.data_ptr<int32_t>(),
+                                 rowMasks.data_ptr<int32_t>());
+        } else {
+            buildNeighborMapStaged(grid,
+                                   geometry,
+                                   int(K),
+                                   nbr.data_ptr<int32_t>(),
+                                   code.data_ptr<int32_t>(),
+                                   rowMasks.data_ptr<int32_t>(),
+                                   c10::cuda::getCurrentCUDAStream());
+        }
     }
 
     auto sortedRows = torch::argsort(code).to(torch::kInt32);
