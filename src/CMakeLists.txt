@@ -215,8 +215,10 @@ target_compile_options(fvdb PRIVATE
     >
     $<$<AND:$<BOOL:${FVDB_LINEINFO}>,$<COMPILE_LANGUAGE:CUDA>>:-lineinfo>)
 
+# Header-only NVTX v3 loads its injection library with dlopen. Consumers of fvdb
+# headers emit those calls, and glibc < 2.34 keeps dlopen in libdl.
 target_link_libraries(fvdb
-    PUBLIC torch nanovdb_editor::public_headers
+    PUBLIC torch nanovdb_editor::public_headers ${CMAKE_DL_LIBS}
     PRIVATE tinyply cutlass blosc::blosc ZLIB::ZLIB dispatch)
 
 # ----------------------------------------------------------------------------
