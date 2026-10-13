@@ -10,6 +10,7 @@
 #include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/convolution/ConvolutionGeometry.h>
 #include <fvdb/detail/ops/convolution/GatherScatterDefault.h>
+#include <fvdb/detail/ops/convolution/MaskedIGemm.h>
 #include <fvdb/detail/ops/convolution/PredGatherIGemm.h>
 #include <fvdb/detail/utils/nanovdb/TorchNanoConversions.h>
 
@@ -672,6 +673,60 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         py::arg("output_grid"),
         py::arg("kernel_size"),
         py::arg("stride"));
+
+    // --- Masked implicit GEMM (submanifold) ---
+
+    using MIGTopo = fvdb::detail::ops::MaskedIGemmTopology;
+    py::class_<MIGTopo>(m, "MaskedIGemmTopology")
+        .def_readonly("neighbor_map", &MIGTopo::neighborMap)
+        .def_readonly("sorted_rows", &MIGTopo::sortedRows)
+        .def_readonly("chunk_taps", &MIGTopo::chunkTaps)
+        .def_readonly("chunk_tap_offsets", &MIGTopo::chunkTapOffsets)
+        .def_readonly("total_voxels", &MIGTopo::totalVoxels)
+        .def_readonly("kernel_volume", &MIGTopo::kernelVolume)
+        .def_property_readonly("kernel_size", [](const MIGTopo &t) {
+            return std::vector<int>{t.kernelSize[0], t.kernelSize[1], t.kernelSize[2]};
+        });
+
+    m.def(
+        "migemm_build_topology",
+        [](const fvdb::GridBatchData &grid, const torch::Tensor &kernelSize) -> MIGTopo {
+            return fvdb::detail::ops::maskedIGemmTopology(grid, pyToCoord(kernelSize));
+        },
+        "Build the masked implicit GEMM topology for submanifold convolution on a grid.",
+        py::arg("grid"),
+        py::arg("kernel_size"));
+
+    m.def(
+        "migemm_conv",
+        [](torch::Tensor features, torch::Tensor weights, const MIGTopo &topo) -> torch::Tensor {
+            return fvdb::detail::ops::maskedIGemmConv(features, weights, topo);
+        },
+        "Masked implicit GEMM submanifold sparse convolution.",
+        py::arg("features"),
+        py::arg("weights"),
+        py::arg("topology"));
+
+    m.def(
+        "migemm_conv_backward",
+        [](torch::Tensor grad_output,
+           torch::Tensor features,
+           torch::Tensor weights,
+           const MIGTopo &topo) -> std::tuple<torch::Tensor, torch::Tensor> {
+            return fvdb::detail::ops::maskedIGemmConvBackward(grad_output, features, weights, topo);
+        },
+        "Backward of migemm_conv: returns (grad_features, grad_weights).",
+        py::arg("grad_output"),
+        py::arg("features"),
+        py::arg("weights"),
+        py::arg("topology"));
+
+    m.def("migemm_supports",
+          &fvdb::detail::ops::maskedIGemmSupports,
+          "True when migemm_conv supports these channel counts and dtype on the current device.",
+          py::arg("in_channels"),
+          py::arg("out_channels"),
+          py::arg("dtype"));
 }
 
 TORCH_LIBRARY(fvdb, m) {
