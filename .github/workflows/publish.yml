@@ -87,7 +87,9 @@ jobs:
             core.setOutput('release_push', releasePush ? 'true' : 'false');
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
-          sparse-checkout: env/test_environment.yml
+          sparse-checkout: |
+            env/test_environment.yml
+            .github/versions.json
           sparse-checkout-cone-mode: false
           ref: ${{ inputs.branch || github.ref }}
           persist-credentials: false
@@ -96,21 +98,25 @@ jobs:
         run: |
           PY_VER=$(grep -oP '^\s*-\s*python=\K[0-9]+\.[0-9]+' env/test_environment.yml)
           TORCH_VER=$(grep -oP '^\s*-\s*pytorch-gpu=\K[0-9]+\.[0-9]+' env/test_environment.yml)
-          CUDA_VER=$(grep -oP '^\s*-\s*cuda-version=\K[0-9]+\.[0-9]+' env/test_environment.yml)
-          case "$CUDA_VER" in
-            11.8) CUDA_IMAGE_TAG="11.8.0" ;;
-            12.1) CUDA_IMAGE_TAG="12.1.1" ;;
-            12.4) CUDA_IMAGE_TAG="12.4.1" ;;
-            12.8) CUDA_IMAGE_TAG="12.8.1" ;;
-            13.0) CUDA_IMAGE_TAG="13.0.2" ;;
-            13.2) CUDA_IMAGE_TAG="13.2.1" ;;
-            *)    echo "WARNING: Unknown CUDA version $CUDA_VER" >&2; CUDA_IMAGE_TAG="${CUDA_VER}.0" ;;
-          esac
+          ENV_CUDA_VER=$(grep -oP '^\s*-\s*cuda-version=\K[0-9]+\.[0-9]+' env/test_environment.yml)
+
+          # The conda test env may pin a CUDA minor we do not publish wheels for.
+          # Validate the newest published wheel whose CUDA minor the env's runtime
+          # can serve (same major, not newer).
+          CUDA_VER=$(jq -r --arg env "$ENV_CUDA_VER" '
+            ($env | split(".") | map(tonumber)) as $e
+            | [.cuda.versions | keys[] | select((split(".") | map(tonumber)) as $v | $v[0] == $e[0] and $v[1] <= $e[1])]
+            | sort_by(split(".") | map(tonumber)) | last // empty' .github/versions.json)
+          if [ -z "$CUDA_VER" ]; then
+            echo "ERROR: no published CUDA version is compatible with test env CUDA $ENV_CUDA_VER" >&2
+            exit 1
+          fi
+          CUDA_IMAGE_TAG=$(jq -r --arg v "$CUDA_VER" '.cuda.versions[$v].patch' .github/versions.json)
           echo "python_version=$PY_VER" >> $GITHUB_OUTPUT
           echo "torch_version=$TORCH_VER" >> $GITHUB_OUTPUT
           echo "cuda_version=$CUDA_VER" >> $GITHUB_OUTPUT
           echo "cuda_image_tag=$CUDA_IMAGE_TAG" >> $GITHUB_OUTPUT
-          echo "Test env: python=$PY_VER torch=$TORCH_VER cuda=$CUDA_VER image=$CUDA_IMAGE_TAG"
+          echo "Test env: python=$PY_VER torch=$TORCH_VER cuda=$ENV_CUDA_VER wheel cuda=$CUDA_VER image=$CUDA_IMAGE_TAG"
 
   versions:
     uses: ./.github/workflows/load-versions.yml
@@ -613,7 +619,7 @@ jobs:
     name: Full unit tests on built wheel
     needs: [start-validation-runner, validate-smoke-test, pr-flags]
     if: ${{ !cancelled() && needs.validate-smoke-test.result == 'success' && (needs.pr-flags.outputs.release_push == 'true' || needs.pr-flags.outputs.release == 'true' || inputs.run_validation == true) }}
-    # Run on the validation runner matching env/test_environment.yml (no matrix -- single job)
+    # Run on the validation runner whose wheel matches env/test_environment.yml (no matrix -- single job)
     runs-on: val-${{ needs.pr-flags.outputs.test_python_version }}-pt${{ needs.pr-flags.outputs.test_torch_version }}-cu${{ needs.pr-flags.outputs.test_cuda_version }}-${{ github.run_id }}
     container:
       image: nvidia/cuda:${{ needs.pr-flags.outputs.test_cuda_image_tag }}-base-rockylinux8

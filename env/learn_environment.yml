@@ -6,7 +6,7 @@ dependencies:
   - blas=*=mkl
   - ca-certificates
   - certifi
-  - cuda-version=13.0
+  - cuda-version=13.4
   - fvdb-core
   - git
   - ipython
@@ -24,7 +24,7 @@ dependencies:
   - pyrender
   - pytest-benchmark
   - python=3.12
-  - pytorch-gpu=2.13.0
+  - pytorch-gpu=2.14.1
   - tensorboard
   - tqdm
   ## 3dgs

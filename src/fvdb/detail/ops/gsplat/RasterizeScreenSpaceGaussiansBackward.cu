@@ -1352,7 +1352,7 @@ callRasterizeBackwardPrivateUse1(
         auto prefetchStream = prefetchStreams[deviceId];
         std::vector<void *> prefetchPointers;
         std::vector<size_t> prefetchSizes;
-        for (const auto &outTensor: outTensors) {
+        for (const torch::Tensor &outTensor: outTensors) {
             int64_t elementOffset, elementCount;
             std::tie(elementOffset, elementCount) = deviceChunk(outTensor.numel(), deviceId);
             if (elementCount > 0) {
