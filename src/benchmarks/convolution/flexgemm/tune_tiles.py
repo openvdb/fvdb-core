@@ -48,6 +48,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--mode", choices=["fp16", "bf16", "tf32"], default="fp16")
     ap.add_argument("--wgrad", action="store_true", help="sweep weight-gradient configs (timing full backward)")
+    ap.add_argument(
+        "--dgrad", action="store_true", help="time forward plus input gradient, which share FVDB_MIGEMM_CFG"
+    )
     args = ap.parse_args()
     dtype = set_precision("tf32" if args.mode == "tf32" else "fp16")
     if args.mode == "bf16":
@@ -68,7 +71,11 @@ def main():
         def bwd():
             torch.autograd.grad(y, (xg, Wg), gy, retain_graph=True)
 
-        fn = bwd if args.wgrad else (lambda: plan.execute(x, W))
+        def fwd_dgrad():
+            yx = plan.execute(grid.jagged_like(xg), W).jdata
+            torch.autograd.grad(yx, xg, gy)
+
+        fn = bwd if args.wgrad else fwd_dgrad if args.dgrad else (lambda: plan.execute(x, W))
         var = "FVDB_MIGEMM_WCFG" if args.wgrad else "FVDB_MIGEMM_CFG"
         results = []
         for cfg in WGRAD_CONFIGS if args.wgrad else CONFIGS:
