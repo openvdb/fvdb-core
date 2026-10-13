@@ -258,6 +258,18 @@ swz8(int row, int chunk) {
     return chunk ^ (row & 7);
 }
 
+// [k][m|n] tiles. 16-bit types read them with ldmatrix.trans and use swz8. float32 reads
+// them element-wise, with lane (g, t) reading rows t and t + 4; XOR with bits 0-1 of the row,
+// shifted past the chunk's low bit, so those 32 lanes hit distinct banks.
+template <typename T>
+__device__ __forceinline__ int
+swzKN(int row, int chunk) {
+    if constexpr (sizeof(T) == 4)
+        return chunk ^ ((row & 3) << 1);
+    else
+        return swz8(row, chunk);
+}
+
 // =============================================================================
 // Output-stationary masked implicit GEMM (forward and input gradient)
 // =============================================================================
@@ -403,7 +415,7 @@ maskedIGemmKernel(T const *__restrict__ A,
                     int const kr = c / (BN / CE);
                     int const ch = c % (BN / CE);
                     T const *g   = Wt + int64_t(kt * BK + kr) * Nc + n0 + ch * CE;
-                    cpAsync16(smemAddr(b + kr * BN + swz8(kr, ch) * CE), g, true);
+                    cpAsync16(smemAddr(b + kr * BN + swzKN<T>(kr, ch) * CE), g, true);
                 }
             }
         }
@@ -468,7 +480,7 @@ maskedIGemmKernel(T const *__restrict__ A,
                     for (int h = 0; h < 2; ++h) {
                         int const n  = wn0 + np * 16 + h * 8 + g;
                         auto const e = [&](int kr) {
-                            return __float_as_uint(b[kr * BN + swz8(kr, n / CE) * CE + n % CE]);
+                            return __float_as_uint(b[kr * BN + swzKN<T>(kr, n / CE) * CE + n % CE]);
                         };
                         t[2 * h]     = e(k);
                         t[2 * h + 1] = e(k + 4);
@@ -622,7 +634,7 @@ maskedIGemmWgradKernel(T const *__restrict__ X,
                 int const ch  = c % (BM / CE);
                 int const src = slot[kr];
                 T const *g    = X + (src >= 0 ? int64_t(src) * Ci + m0 + ch * CE : 0);
-                cpAsync16(smemAddr(a + kr * BM + swz8(kr, ch) * CE), g, src >= 0);
+                cpAsync16(smemAddr(a + kr * BM + swzKN<T>(kr, ch) * CE), g, src >= 0);
             }
         }
 #pragma unroll
@@ -633,7 +645,7 @@ maskedIGemmWgradKernel(T const *__restrict__ X,
                 int const ch = c % (BN / CE);
                 int const o  = slot[BK + kr];
                 T const *g   = dY + (o >= 0 ? int64_t(o) * Co + n0 + ch * CE : 0);
-                cpAsync16(smemAddr(b + kr * BN + swz8(kr, ch) * CE), g, o >= 0);
+                cpAsync16(smemAddr(b + kr * BN + swzKN<T>(kr, ch) * CE), g, o >= 0);
             }
         }
     };
@@ -692,7 +704,7 @@ maskedIGemmWgradKernel(T const *__restrict__ X,
                 // so float32 fragments are read element-wise.
                 int const g = lane >> 2, t = lane & 3;
                 auto at = [&](T const *base, int width, int k, int col) {
-                    return __float_as_uint(base[k * width + swz8(k, col / CE) * CE + col % CE]);
+                    return __float_as_uint(base[k * width + swzKN<T>(k, col / CE) * CE + col % CE]);
                 };
 #pragma unroll
                 for (int mt = 0; mt < MT; ++mt) {
@@ -1085,7 +1097,7 @@ dispatchConv(torch::Tensor const &A,
              int Kc,
              int Nc,
              cudaStream_t stream) {
-    if constexpr (sizeof(T) == 2) {
+    {
         char const *env       = std::getenv("FVDB_MIGEMM_CFG");
         std::string const cfg = env ? env : "";
 #define FVDB_MIGEMM_TRY(BM, BN, WM, WN, ST)                            \
