@@ -485,7 +485,8 @@ template <typename Cfg, typename T>
 __global__ void __launch_bounds__(Cfg::THREADS)
 maskedIGemmWgradKernel(T const *__restrict__ X,
                        T const *__restrict__ dY,
-                       float *__restrict__ dW,
+                       float *__restrict__ dWAcc,
+                       T *__restrict__ dWOut,
                        int32_t const *__restrict__ pairIn,
                        int32_t const *__restrict__ pairOut,
                        int32_t const *__restrict__ pairOffsets,
@@ -516,7 +517,8 @@ maskedIGemmWgradKernel(T const *__restrict__ X,
     int const sFirst = int(int64_t(steps) * blockIdx.z / splits);
     int const nIter  = int(int64_t(steps) * (blockIdx.z + 1) / splits) - sFirst;
     int const pEnd   = pairOffsets[tap + 1];
-    if (nIter <= 0)
+    // With one split, this CTA is the only writer of its tile and stores it even when empty.
+    if (splits > 1 && nIter <= 0)
         return;
 
     // Pair indices of step it, for lane `lane` of warp 0.
@@ -638,7 +640,7 @@ maskedIGemmWgradKernel(T const *__restrict__ X,
     }
     cpAsyncWait<0>();
 
-    float *dWt = dW + int64_t(tapToRow(tap)) * Ci * Co;
+    int64_t const tapBase = int64_t(tapToRow(tap)) * Ci * Co;
 #pragma unroll
     for (int mt = 0; mt < MT; ++mt) {
 #pragma unroll
@@ -646,9 +648,15 @@ maskedIGemmWgradKernel(T const *__restrict__ X,
             int const m = m0 + wm0 + mt * 16 + (lane >> 2) + h * 8;
 #pragma unroll
             for (int nt = 0; nt < NT; ++nt) {
-                int const n = n0 + wn0 + nt * 8 + (lane & 3) * 2;
-                atomicAdd(dWt + int64_t(m) * Co + n, acc[mt][nt][2 * h]);
-                atomicAdd(dWt + int64_t(m) * Co + n + 1, acc[mt][nt][2 * h + 1]);
+                int const n       = n0 + wn0 + nt * 8 + (lane & 3) * 2;
+                int64_t const idx = tapBase + int64_t(m) * Co + n;
+                if (splits > 1) {
+                    atomicAdd(dWAcc + idx, acc[mt][nt][2 * h]);
+                    atomicAdd(dWAcc + idx + 1, acc[mt][nt][2 * h + 1]);
+                } else {
+                    *reinterpret_cast<uint32_t *>(dWOut + idx) =
+                        packPair<T>(acc[mt][nt][2 * h], acc[mt][nt][2 * h + 1]);
+                }
             }
         }
     }
@@ -752,8 +760,11 @@ launchConv(torch::Tensor const &A,
     int const sms    = smCount();
     int const kTiles = Kc / Cfg::BK;
     int splits       = 1;
-    if (tiles < sms)
-        splits = std::min({(2 * sms + tiles - 1) / tiles, 4 * kTiles, 32});
+    // FVDB_MIGEMM_SPLIT overrides the target CTAs per SM for tuning.
+    char const *env = std::getenv("FVDB_MIGEMM_SPLIT");
+    int const perSm = env ? std::max(1, std::atoi(env)) : 2;
+    if (tiles < perSm * sms)
+        splits = std::min({(perSm * sms + tiles - 1) / tiles, 4 * kTiles, 64});
     torch::Tensor acc;
     if (splits > 1)
         acc = torch::zeros({N, Nc}, out.options().dtype(torch::kFloat32));
@@ -824,10 +835,9 @@ dispatchConv(torch::Tensor const &A,
 }
 
 template <typename Cfg, typename T>
-void
+torch::Tensor
 launchWgrad(torch::Tensor const &X,
             torch::Tensor const &dY,
-            torch::Tensor &dW,
             MaskedIGemmTopology const &topo,
             int Ci,
             int Co,
@@ -847,36 +857,43 @@ launchWgrad(torch::Tensor const &X,
     int const splits     = int(std::clamp<int64_t>(
         (target + tiles * K - 1) / (tiles * K), 1, std::max<int64_t>(1, steps / 128)));
 
+    torch::Tensor rows, acc;
+    if (splits > 1)
+        acc = torch::zeros({K, Ci, Co}, X.options().dtype(torch::kFloat32));
+    else
+        rows = torch::empty({K, Ci, Co}, X.options());
+
     TapToRow const ttr{topo.kernelSize[1], topo.kernelSize[2], topo.kernelSize[0]};
     dim3 const grid(tiles, K, splits);
-    kernel<<<grid, Cfg::THREADS, smem, stream>>>(reinterpret_cast<T const *>(X.data_ptr()),
-                                                 reinterpret_cast<T const *>(dY.data_ptr()),
-                                                 dW.data_ptr<float>(),
-                                                 topo.pairIn.data_ptr<int32_t>(),
-                                                 topo.pairOut.data_ptr<int32_t>(),
-                                                 topo.pairOffsets.data_ptr<int32_t>(),
-                                                 Ci,
-                                                 Co,
-                                                 splits,
-                                                 ttr);
+    kernel<<<grid, Cfg::THREADS, smem, stream>>>(
+        reinterpret_cast<T const *>(X.data_ptr()),
+        reinterpret_cast<T const *>(dY.data_ptr()),
+        splits > 1 ? acc.data_ptr<float>() : nullptr,
+        splits > 1 ? nullptr : reinterpret_cast<T *>(rows.data_ptr()),
+        topo.pairIn.data_ptr<int32_t>(),
+        topo.pairOut.data_ptr<int32_t>(),
+        topo.pairOffsets.data_ptr<int32_t>(),
+        Ci,
+        Co,
+        splits,
+        ttr);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
+    return splits > 1 ? acc.to(X.scalar_type()) : rows;
 }
 
 template <typename T>
-void
+torch::Tensor
 dispatchWgrad(torch::Tensor const &X,
               torch::Tensor const &dY,
-              torch::Tensor &dW,
               MaskedIGemmTopology const &topo,
               int Ci,
               int Co,
               cudaStream_t stream) {
     char const *env       = std::getenv("FVDB_MIGEMM_WCFG");
     std::string const cfg = env ? env : "";
-#define FVDB_MIGEMM_TRYW(BM, BN, WM, WN, ST)                                              \
-    if (cfg == #BM "x" #BN "x" #ST && Ci % BM == 0 && Co % BN == 0) {                     \
-        launchWgrad<WgradConfig<BM, BN, WM, WN, ST>, T>(X, dY, dW, topo, Ci, Co, stream); \
-        return;                                                                           \
+#define FVDB_MIGEMM_TRYW(BM, BN, WM, WN, ST)                                                 \
+    if (cfg == #BM "x" #BN "x" #ST && Ci % BM == 0 && Co % BN == 0) {                        \
+        return launchWgrad<WgradConfig<BM, BN, WM, WN, ST>, T>(X, dY, topo, Ci, Co, stream); \
     }
     FVDB_MIGEMM_TRYW(128, 128, 2, 2, 4)
     FVDB_MIGEMM_TRYW(128, 128, 2, 2, 3)
@@ -890,9 +907,9 @@ dispatchWgrad(torch::Tensor const &X,
     FVDB_MIGEMM_TRYW(64, 64, 2, 2, 2)
 #undef FVDB_MIGEMM_TRYW
     if (Ci % 128 == 0 && Co % 128 == 0) {
-        launchWgrad<WgradConfig<128, 128, 2, 2, 3>, T>(X, dY, dW, topo, Ci, Co, stream);
+        return launchWgrad<WgradConfig<128, 128, 2, 2, 3>, T>(X, dY, topo, Ci, Co, stream);
     } else {
-        launchWgrad<WgradConfig<64, 64, 2, 2, 2>, T>(X, dY, dW, topo, Ci, Co, stream);
+        return launchWgrad<WgradConfig<64, 64, 2, 2, 2>, T>(X, dY, topo, Ci, Co, stream);
     }
 }
 
@@ -1095,13 +1112,14 @@ maskedIGemmConvBackward(torch::Tensor gradOutput,
         }
     }
     if (needWeights) {
-        auto gradRows =
-            torch::zeros({topo.kernelVolume, Ci, Co}, features.options().dtype(torch::kFloat32));
+        torch::Tensor gradRows;
         if (topo.totalVoxels > 0) {
-            if (st == torch::kFloat16)
-                dispatchWgrad<__half>(features, gradOutput, gradRows, topo, Ci, Co, stream);
-            else
-                dispatchWgrad<__nv_bfloat16>(features, gradOutput, gradRows, topo, Ci, Co, stream);
+            gradRows =
+                st == torch::kFloat16
+                    ? dispatchWgrad<__half>(features, gradOutput, topo, Ci, Co, stream)
+                    : dispatchWgrad<__nv_bfloat16>(features, gradOutput, topo, Ci, Co, stream);
+        } else {
+            gradRows = torch::zeros({topo.kernelVolume, Ci, Co}, features.options());
         }
         gradWeights = weightsFromRows(gradRows.to(weights.scalar_type()), topo.kernelSize);
     }
