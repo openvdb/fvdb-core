@@ -1021,15 +1021,33 @@ launchConv(torch::Tensor const &A,
     C10_CUDA_CHECK(cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem));
     int const tiles = ((N + Cfg::BM - 1) / Cfg::BM) * (Nc / Cfg::BN);
 
-    // Split each tile's (tap, k-tile) iterations when tiles alone underfill the GPU.
-    int const sms    = smCount();
-    int const kTiles = Kc / Elem<T>::BK;
-    int splits       = 1;
-    // FVDB_MIGEMM_SPLIT overrides the target CTAs per SM for tuning.
-    char const *env = std::getenv("FVDB_MIGEMM_SPLIT");
-    int const perSm = env ? std::max(1, std::atoi(env)) : 2;
-    if (tiles < perSm * sms)
-        splits = std::min({(perSm * sms + tiles - 1) / tiles, 4 * kTiles, 64});
+    // Split each tile's (tap, k-tile) iterations to fill the last wave. Cost is in k-tile units:
+    // each wave runs blocks of iters / s k-tiles plus a fixed prologue and epilogue (a float32
+    // atomic tile when split), and splitting adds a zero-fill and copy pass over the output.
+    // FVDB_MIGEMM_SPLIT forces the split count for tuning.
+    constexpr double kBlockOverhead = 24.0;
+    constexpr double kSplitPass     = 1.1;
+    int perSm                       = 0;
+    C10_CUDA_CHECK(
+        cudaOccupancyMaxActiveBlocksPerMultiprocessor(&perSm, kernel, Cfg::THREADS, smem));
+    int const slots     = std::max(1, perSm) * smCount();
+    int const kTiles    = Kc / Elem<T>::BK;
+    double const iters  = double(K) * kTiles;
+    int const maxSplits = std::min(64, 4 * kTiles);
+    auto const cost     = [&](int s) {
+        int64_t const waves = (int64_t(tiles) * s + slots - 1) / slots;
+        return waves * (iters / s + kBlockOverhead) * (s > 1 ? kSplitPass : 1.0);
+    };
+    int splits  = 1;
+    double best = cost(1);
+    for (int s = 2; s <= maxSplits; ++s) {
+        if (double const c = cost(s); c < best) {
+            best   = c;
+            splits = s;
+        }
+    }
+    if (char const *env = std::getenv("FVDB_MIGEMM_SPLIT"))
+        splits = std::clamp(std::atoi(env), 1, maxSplits);
     torch::Tensor acc;
     if (splits > 1)
         acc = torch::zeros({N, Nc}, out.options().dtype(torch::kFloat32));
