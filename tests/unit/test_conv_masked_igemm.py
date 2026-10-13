@@ -10,6 +10,7 @@ Forward, input gradient and weight gradient are checked against the default gath
 backend evaluated in float32.
 """
 
+import contextlib
 import os
 import unittest
 
@@ -43,6 +44,16 @@ def _shell_grid(res: int) -> GridBatch:
     return GridBatch.from_ijk(JaggedTensor([ijk.int().cuda()]))
 
 
+@contextlib.contextmanager
+def _tf32(enabled: bool):
+    previous = torch.backends.cuda.matmul.allow_tf32
+    torch.backends.cuda.matmul.allow_tf32 = enabled
+    try:
+        yield
+    finally:
+        torch.backends.cuda.matmul.allow_tf32 = previous
+
+
 def _rel_err(a: torch.Tensor, b: torch.Tensor) -> float:
     return ((a.float() - b.float()).abs().max() / b.float().abs().max().clamp_min(1e-12)).item()
 
@@ -67,10 +78,12 @@ class TestMaskedIGemm(unittest.TestCase):
         y = plan.execute(grid.jagged_like(xl), wl).jdata
         y.backward(gy.to(dtype))
 
+        # The reference runs in exact float32.
         xr = xl.detach().float().requires_grad_(True)
         wr = wl.detach().float().requires_grad_(True)
-        yr = ref_plan.execute(grid.jagged_like(xr), wr).jdata
-        yr.backward(gy.to(dtype).float())
+        with _tf32(False):
+            yr = ref_plan.execute(grid.jagged_like(xr), wr).jdata
+            yr.backward(gy.to(dtype).float())
 
         self.assertEqual(y.dtype, dtype)
         self.assertLess(_rel_err(y, yr), tol, "forward")
@@ -168,17 +181,35 @@ class TestMaskedIGemm(unittest.TestCase):
             ConvolutionPlan.from_grid_batch(3, 1, grid, grid.conv_grid(3, 1), expert_config=CONFIG)
         with self.assertRaises(ValueError):
             ConvolutionPlan.from_grid_batch(4, 1, grid, grid, expert_config=CONFIG)
+
+    @parameterized.expand([((64, 128),), ((128, 64),), ((192, 256),)])
+    def test_tf32(self, channels):
+        with _tf32(True):
+            self._check(_random_grid(3000, 12), *channels, 3, torch.float32, tol=5e-3)
+
+    def test_tf32_shell(self):
+        with _tf32(True):
+            self._check(_shell_grid(48), 128, 128, 3, torch.float32, tol=5e-3)
+
+    @parameterized.expand(
+        [
+            ("strict_fp32", 64, 64, torch.float32),
+            ("float64", 64, 64, torch.float64),
+            ("channels", 48, 64, torch.float16),
+        ]
+    )
+    def test_uncovered_inputs_fall_back(self, _, cin, cout, dtype):
+        # Inputs the kernels do not cover run on gather-scatter and match it exactly.
+        grid = _random_grid(1500, 10)
         plan = ConvolutionPlan.from_grid_batch(3, 1, grid, grid, expert_config=CONFIG)
-        with self.assertRaises(ValueError):
-            plan.execute(
-                grid.jagged_like(torch.randn(grid.total_voxels, 64, device="cuda")),
-                torch.randn(64, 64, 3, 3, 3, device="cuda"),
-            )
-        with self.assertRaises(ValueError):
-            plan.execute(
-                grid.jagged_like(torch.randn(grid.total_voxels, 48, device="cuda", dtype=torch.float16)),
-                torch.randn(64, 48, 3, 3, 3, device="cuda", dtype=torch.float16),
-            )
+        ref_plan = ConvolutionPlan.from_grid_batch(3, 1, grid, grid)
+        x = torch.randn(grid.total_voxels, cin, device="cuda", dtype=dtype)
+        w = torch.randn(cout, cin, 3, 3, 3, device="cuda", dtype=dtype)
+        with _tf32(False):
+            y = plan.execute(grid.jagged_like(x), w).jdata
+            yr = ref_plan.execute(grid.jagged_like(x), w).jdata
+        torch.testing.assert_close(y, yr)
+        self.assertIn("gather_scatter", plan._backend.fallback)
 
     @parameterized.expand([(True,), (False,)])
     def test_module_bias_and_grad_flags(self, input_requires_grad):

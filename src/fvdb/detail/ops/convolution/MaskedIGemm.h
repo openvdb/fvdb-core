@@ -11,7 +11,8 @@
 // reduces over per-tap (input, output) pair lists.
 //
 // Supports submanifold convolution (output grid == feature grid, stride 1,
-// odd kernel sizes) on CUDA with float16 and bfloat16 features.
+// odd kernel sizes) on CUDA with float16, bfloat16 and float32 (computed as TF32)
+// features.
 //
 
 #ifndef FVDB_DETAIL_OPS_CONVOLUTION_MASKEDIGEMM_H
