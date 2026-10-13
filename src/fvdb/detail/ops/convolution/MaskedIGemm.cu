@@ -686,6 +686,35 @@ maskedIGemmWgradKernel(T const *__restrict__ X,
     int const wm0 = (warp / Cfg::WN) * (BM / Cfg::WM);
     int const wn0 = (warp % Cfg::WN) * (BN / Cfg::WN);
 
+    // float32 fragments are read element-wise (ldmatrix cannot transpose 32-bit data): lane
+    // (g, t) reads rows t and t + 4 of each k-step. The swizzle depends only on row & 3 == t,
+    // so each column's offset within a stage is fixed per thread, and the k-step and row half
+    // are immediate offsets.
+    int aOff[MT][2], bOff[NT];
+    if constexpr (sizeof(T) == 4) {
+        int const g = lane >> 2, t = lane & 3;
+#pragma unroll
+        for (int mt = 0; mt < MT; ++mt)
+#pragma unroll
+            for (int r = 0; r < 2; ++r) {
+                int const m = wm0 + mt * 16 + g + 8 * r;
+                aOff[mt][r] = t * BM + swzKN<T>(t, m / CE) * CE + m % CE;
+            }
+#pragma unroll
+        for (int nt = 0; nt < NT; ++nt) {
+            int const n = wn0 + nt * 8 + g;
+            bOff[nt]    = t * BN + swzKN<T>(t, n / CE) * CE + n % CE;
+        }
+        // Keep the offsets in registers; otherwise ptxas rebuilds them from the lane index
+        // in every iteration.
+#pragma unroll
+        for (int mt = 0; mt < MT; ++mt)
+            asm("" : "+r"(aOff[mt][0]), "+r"(aOff[mt][1]));
+#pragma unroll
+        for (int nt = 0; nt < NT; ++nt)
+            asm("" : "+r"(bOff[nt]));
+    }
+
     if (warp == 0) {
 #pragma unroll
         for (int s = 0; s < STAGES; ++s) {
@@ -724,27 +753,17 @@ maskedIGemmWgradKernel(T const *__restrict__ X,
             uint32_t af[MT][4];
             uint32_t bf[NT][2];
             if constexpr (sizeof(T) == 4) {
-                // Both operands are stored [k][m|n]; ldmatrix cannot transpose 32-bit data,
-                // so float32 fragments are read element-wise.
-                int const g = lane >> 2, t = lane & 3;
-                auto at = [&](T const *base, int width, int k, int col) {
-                    return __float_as_uint(base[k * width + swzKN<T>(k, col / CE) * CE + col % CE]);
-                };
 #pragma unroll
-                for (int mt = 0; mt < MT; ++mt) {
-                    int const m = wm0 + mt * 16 + g;
-                    int const k = kk * KSTEP + t;
-                    af[mt][0]   = prep<T>(at(a, BM, k, m));
-                    af[mt][1]   = prep<T>(at(a, BM, k, m + 8));
-                    af[mt][2]   = prep<T>(at(a, BM, k + 4, m));
-                    af[mt][3]   = prep<T>(at(a, BM, k + 4, m + 8));
-                }
+                for (int h = 0; h < 2; ++h) {
+                    int const k = kk * KSTEP + 4 * h;
 #pragma unroll
-                for (int nt = 0; nt < NT; ++nt) {
-                    int const n = wn0 + nt * 8 + g;
-                    int const k = kk * KSTEP + t;
-                    bf[nt][0]   = prep<T>(at(b, BN, k, n));
-                    bf[nt][1]   = prep<T>(at(b, BN, k + 4, n));
+                    for (int mt = 0; mt < MT; ++mt) {
+                        af[mt][2 * h]     = prep<T>(__float_as_uint(a[aOff[mt][0] + k * BM]));
+                        af[mt][2 * h + 1] = prep<T>(__float_as_uint(a[aOff[mt][1] + k * BM]));
+                    }
+#pragma unroll
+                    for (int nt = 0; nt < NT; ++nt)
+                        bf[nt][h] = prep<T>(__float_as_uint(b[bOff[nt] + k * BN]));
                 }
             } else {
 #pragma unroll
