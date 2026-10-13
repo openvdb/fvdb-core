@@ -56,7 +56,9 @@ dependencies:
   - pyrender
   - pytest-benchmark
   - python=3.12
-  - pytorch-gpu=2.14.1
+  # The build string labels this metapackage only. cuda-version selects the
+  # CUDA build of pytorch itself.
+  - pytorch-gpu=2.14.1=cuda134*
   - rich
   - sam2
   - scikit-build-core
