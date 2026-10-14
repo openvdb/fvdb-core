@@ -283,7 +283,6 @@ class TestMaskedIGemm(unittest.TestCase):
 
     @parameterized.expand(
         [
-            ("strict_fp32", 64, 64, torch.float32),
             ("float64", 64, 64, torch.float64),
         ]
     )
@@ -329,6 +328,49 @@ class TestMaskedIGemm(unittest.TestCase):
         else:
             self.assertIsNone(xh.grad)
 
+    @parameterized.expand(
+        [
+            ("submanifold", 3, 1, False, 64, 128),
+            ("strided", 2, 2, False, 64, 64),
+            ("transposed", 2, 2, True, 96, 32),
+            ("narrow", 3, 1, False, 3, 40),
+        ]
+    )
+    def test_strict_fp32(self, _, kernel_size, stride, transposed, cin, cout):
+        # float32 with TF32 off runs natively as 3xTF32, as accurate as IEEE float32 and far below TF32.
+        torch.manual_seed(0)
+        fine = _random_grid(3000, 12)
+        coarse = fine if stride == 1 else fine.conv_grid(kernel_size, stride)
+        if transposed:
+            make = lambda cfg: ConvolutionPlan.from_grid_batch_transposed(
+                kernel_size, stride, coarse, fine, expert_config=cfg
+            )
+        else:
+            make = lambda cfg: ConvolutionPlan.from_grid_batch(kernel_size, stride, fine, coarse, expert_config=cfg)
+        plan, ref_plan = make(CONFIG), make({})
+        source = plan.source_grid_batch
+        ks = (kernel_size,) * 3
+        x = torch.randn(source.total_voxels, cin, device="cuda", dtype=torch.float64)
+        w = torch.randn(cout, cin, *ks, device="cuda", dtype=torch.float64) / (cin * math.prod(ks)) ** 0.5
+
+        def run(plan, dtype):
+            xx = x.detach().clone().to(dtype).requires_grad_(True)
+            ww = w.detach().clone().to(dtype).requires_grad_(True)
+            y = plan.execute(source.jagged_like(xx), ww).jdata
+            y.backward(torch.ones_like(y))
+            return y.detach(), xx.grad, ww.grad
+
+        with _tf32(False):
+            ref = run(ref_plan, torch.float64)
+            strict = run(plan, torch.float32)
+        self.assertNotIn("gather_scatter", plan._backend.fallback)
+        with _tf32(True):
+            tf32 = run(plan, torch.float32)
+        for name, a, b, r in zip(("forward", "input gradient", "weight gradient"), strict, tf32, ref):
+            err_strict, err_tf32 = _rel_err(a.double(), r), _rel_err(b.double(), r)
+            self.assertLess(err_strict, 2e-6, name)
+            self.assertLess(err_strict * 20, err_tf32, f"{name}: 3xTF32 should be far below TF32")
+
     def test_tf32_legacy_api(self):
         # The other TF32 tests use fp32_precision; this one enables TF32 through allow_tf32.
         matmul = torch.backends.cuda.matmul
@@ -352,7 +394,7 @@ class TestMaskedIGemm(unittest.TestCase):
         ]
     )
     def test_mixed_dtypes(self, _, feature_dtype, weight_dtype, tf32):
-        # Mixed inputs promote like gather-scatter. float32 results run natively only as TF32.
+        # Mixed inputs promote like gather-scatter and run natively, as 3xTF32 when TF32 is off.
         torch.manual_seed(0)
         grid = _random_grid(2000, 10)
         plan = ConvolutionPlan.from_grid_batch(3, 1, grid, grid, expert_config=CONFIG)
@@ -372,7 +414,7 @@ class TestMaskedIGemm(unittest.TestCase):
         self.assertEqual(y.dtype, torch.float32)
         self.assertEqual(x.grad.dtype, feature_dtype)
         self.assertEqual(w.grad.dtype, weight_dtype)
-        self.assertEqual("gather_scatter" in plan._backend.fallback, not tf32)
+        self.assertNotIn("gather_scatter", plan._backend.fallback)
         self.assertLess(_rel_err(y, yr), 5e-3)
         self.assertLess(_rel_err(x.grad, xr.grad), 5e-3)
         self.assertLess(_rel_err(w.grad, wr.grad), 5e-3)

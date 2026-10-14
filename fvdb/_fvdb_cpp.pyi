@@ -179,6 +179,7 @@ def migemm_conv(
     bias: torch.Tensor | None,
     topology: MaskedIGemmTopology,
     transposed: bool = False,
+    precise: bool = False,
 ) -> torch.Tensor: ...
 def migemm_conv_backward(
     grad_output: torch.Tensor,
@@ -188,6 +189,7 @@ def migemm_conv_backward(
     need_features: bool = True,
     need_weights: bool = True,
     transposed: bool = False,
+    precise: bool = False,
 ) -> tuple[torch.Tensor | None, torch.Tensor | None]: ...
 def migemm_column_sum(x: torch.Tensor) -> torch.Tensor: ...
 def migemm_supports(in_channels: int, out_channels: int, dtype: torch.dtype, device: torch.device) -> bool: ...

@@ -718,16 +718,19 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
            torch::Tensor weights,
            std::optional<torch::Tensor> bias,
            const MIGTopo &topo,
-           bool transposed) -> torch::Tensor {
-            return fvdb::detail::ops::maskedIGemmConv(features, weights, bias, topo, transposed);
+           bool transposed,
+           bool precise) -> torch::Tensor {
+            return fvdb::detail::ops::maskedIGemmConv(
+                features, weights, bias, topo, transposed, precise);
         },
         "Masked implicit GEMM sparse convolution with an optional fused bias. transposed runs "
-        "from the topology's output rows to its input rows.",
+        "from the topology's output rows to its input rows. precise computes float32 as 3xTF32.",
         py::arg("features"),
         py::arg("weights"),
         py::arg("bias"),
         py::arg("topology"),
-        py::arg("transposed") = false);
+        py::arg("transposed") = false,
+        py::arg("precise")    = false);
 
     m.def(
         "migemm_conv_backward",
@@ -737,10 +740,16 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
            const MIGTopo &topo,
            bool need_features,
            bool need_weights,
-           bool transposed)
-            -> std::tuple<std::optional<torch::Tensor>, std::optional<torch::Tensor>> {
-            auto [gf, gw] = fvdb::detail::ops::maskedIGemmConvBackward(
-                grad_output, features, weights, topo, need_features, need_weights, transposed);
+           bool transposed,
+           bool precise) -> std::tuple<std::optional<torch::Tensor>, std::optional<torch::Tensor>> {
+            auto [gf, gw] = fvdb::detail::ops::maskedIGemmConvBackward(grad_output,
+                                                                       features,
+                                                                       weights,
+                                                                       topo,
+                                                                       need_features,
+                                                                       need_weights,
+                                                                       transposed,
+                                                                       precise);
             return {gf.defined() ? std::optional<torch::Tensor>(gf) : std::nullopt,
                     gw.defined() ? std::optional<torch::Tensor>(gw) : std::nullopt};
         },
@@ -751,7 +760,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         py::arg("topology"),
         py::arg("need_features") = true,
         py::arg("need_weights")  = true,
-        py::arg("transposed")    = false);
+        py::arg("transposed")    = false,
+        py::arg("precise")       = false);
 
     m.def("migemm_column_sum",
           &fvdb::detail::ops::columnSum,

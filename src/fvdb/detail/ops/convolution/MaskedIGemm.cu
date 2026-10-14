@@ -211,6 +211,40 @@ prep(uint32_t x) {
     return x;
 }
 
+// Fragments for 3xTF32 stay unrounded until mmaTiles splits them.
+template <typename T, bool PRECISE>
+__device__ __forceinline__ uint32_t
+prepIf(uint32_t x) {
+    if constexpr (PRECISE)
+        return x;
+    else
+        return prep<T>(x);
+}
+
+// Split a float32 into TF32 parts: big is the value rounded to TF32 and small the rounded
+// remainder, so big + small keeps about 21 of float32's 24 mantissa bits.
+__device__ __forceinline__ void
+splitTf32(uint32_t x, uint32_t &big, uint32_t &small) {
+    float const f = __uint_as_float(x);
+    if (!isfinite(f)) {
+        big   = x;
+        small = 0u;
+        return;
+    }
+    big   = (x + 0x1000u) & 0xffffe000u;
+    small = prep<float>(__float_as_uint(f - __uint_as_float(big)));
+}
+
+// acc += A * B over a warp's MT x NT fragments. PRECISE (float32 only) computes 3xTF32:
+// small * big, big * small, then big * big, which carries ~22 mantissa bits through TF32
+// tensor cores. The small * small term is below float32 rounding and is dropped. The tensor
+// core truncates while adding into its accumulator, so the three products go into a zeroed
+// temporary and reach acc through a rounding float32 add; otherwise the truncation, relative
+// to the whole running sum, dominates the error.
+template <typename T, bool PRECISE, int MT, int NT>
+__device__ __forceinline__ void
+mmaTiles(float (&acc)[MT][NT][4], uint32_t (&af)[MT][4], uint32_t (&bf)[NT][2]);
+
 template <typename T> __device__ __forceinline__ uint32_t packPair(float x, float y);
 
 template <>
@@ -291,6 +325,43 @@ swzRow(int row, int chunk) {
         return swzKN<T>(row, chunk);
 }
 
+template <typename T, bool PRECISE, int MT, int NT>
+__device__ __forceinline__ void
+mmaTiles(float (&acc)[MT][NT][4], uint32_t (&af)[MT][4], uint32_t (&bf)[NT][2]) {
+    if constexpr (PRECISE) {
+        static_assert(sizeof(T) == 4, "3xTF32 applies to float32");
+        uint32_t as[MT][4], bs[NT][2];
+#pragma unroll
+        for (int mt = 0; mt < MT; ++mt)
+#pragma unroll
+            for (int e = 0; e < 4; ++e)
+                splitTf32(af[mt][e], af[mt][e], as[mt][e]);
+#pragma unroll
+        for (int nt = 0; nt < NT; ++nt)
+#pragma unroll
+            for (int h = 0; h < 2; ++h)
+                splitTf32(bf[nt][h], bf[nt][h], bs[nt][h]);
+#pragma unroll
+        for (int mt = 0; mt < MT; ++mt)
+#pragma unroll
+            for (int nt = 0; nt < NT; ++nt) {
+                float t[4] = {0.f, 0.f, 0.f, 0.f};
+                Mma<T>::run(t, as[mt], bf[nt][0], bf[nt][1]);
+                Mma<T>::run(t, af[mt], bs[nt][0], bs[nt][1]);
+                Mma<T>::run(t, af[mt], bf[nt][0], bf[nt][1]);
+#pragma unroll
+                for (int e = 0; e < 4; ++e)
+                    acc[mt][nt][e] += t[e];
+            }
+    } else {
+#pragma unroll
+        for (int mt = 0; mt < MT; ++mt)
+#pragma unroll
+            for (int nt = 0; nt < NT; ++nt)
+                Mma<T>::run(acc[mt][nt], af[mt], bf[nt][0], bf[nt][1]);
+    }
+}
+
 // =============================================================================
 // Output-stationary masked implicit GEMM (forward and input gradient)
 // =============================================================================
@@ -326,7 +397,7 @@ smemBytes(int K) {
 //   true  (input gradient): B[k][n] at W + row * Kc * Nc + n * Kc + k
 // With splits > 1, CTA z of a tile runs its share of the tile's (tap, k-tile)
 // iterations and adds float32 partials into outAcc instead of writing out.
-template <typename Cfg, typename T, bool B_KMAJOR>
+template <typename Cfg, typename T, bool B_KMAJOR, bool PRECISE>
 __global__ void __launch_bounds__(Cfg::THREADS)
 maskedIGemmKernel(T const *__restrict__ A,
                   T const *__restrict__ W,
@@ -544,7 +615,7 @@ maskedIGemmKernel(T const *__restrict__ A,
                 ldsm4(af[mt], smemAddr(a + r * BK + swz4(r, ch) * CE));
 #pragma unroll
                 for (int e = 0; e < 4; ++e)
-                    af[mt][e] = prep<T>(af[mt][e]);
+                    af[mt][e] = prepIf<T, PRECISE>(af[mt][e]);
             }
             uint32_t bf[NT][2];
 #pragma unroll
@@ -573,16 +644,12 @@ maskedIGemmKernel(T const *__restrict__ A,
                     int const ch = (wn0 + np * 16) / CE + (lane >> 4);
                     ldsm4T(t, smemAddr(b + kr * BN + swzRow<T, BN>(kr, ch) * CE));
                 }
-                bf[2 * np][0]     = prep<T>(t[0]);
-                bf[2 * np][1]     = prep<T>(t[1]);
-                bf[2 * np + 1][0] = prep<T>(t[2]);
-                bf[2 * np + 1][1] = prep<T>(t[3]);
+                bf[2 * np][0]     = prepIf<T, PRECISE>(t[0]);
+                bf[2 * np][1]     = prepIf<T, PRECISE>(t[1]);
+                bf[2 * np + 1][0] = prepIf<T, PRECISE>(t[2]);
+                bf[2 * np + 1][1] = prepIf<T, PRECISE>(t[3]);
             }
-#pragma unroll
-            for (int mt = 0; mt < MT; ++mt)
-#pragma unroll
-                for (int nt = 0; nt < NT; ++nt)
-                    Mma<T>::run(acc[mt][nt], af[mt], bf[nt][0], bf[nt][1]);
+            mmaTiles<T, PRECISE>(acc, af, bf);
         }
     }
     cpAsyncWait<0>();
@@ -651,7 +718,7 @@ wgradSmemBytes() {
            Cfg::STAGES * 2 * Cfg::BK * 4;
 }
 
-template <typename Cfg, typename T>
+template <typename Cfg, typename T, bool PRECISE>
 __global__ void __launch_bounds__(Cfg::THREADS)
 maskedIGemmWgradKernel(T const *__restrict__ X,
                        T const *__restrict__ dY,
@@ -836,12 +903,14 @@ maskedIGemmWgradKernel(T const *__restrict__ X,
                     int const k = kk * KSTEP + 4 * h;
 #pragma unroll
                     for (int mt = 0; mt < MT; ++mt) {
-                        af[mt][2 * h]     = prep<T>(__float_as_uint(a[aOff[mt][0] + k * BM]));
-                        af[mt][2 * h + 1] = prep<T>(__float_as_uint(a[aOff[mt][1] + k * BM]));
+                        af[mt][2 * h] =
+                            prepIf<T, PRECISE>(__float_as_uint(a[aOff[mt][0] + k * BM]));
+                        af[mt][2 * h + 1] =
+                            prepIf<T, PRECISE>(__float_as_uint(a[aOff[mt][1] + k * BM]));
                     }
 #pragma unroll
                     for (int nt = 0; nt < NT; ++nt)
-                        bf[nt][h] = prep<T>(__float_as_uint(b[bOff[nt] + k * BN]));
+                        bf[nt][h] = prepIf<T, PRECISE>(__float_as_uint(b[bOff[nt] + k * BN]));
                 }
             } else {
 #pragma unroll
@@ -862,11 +931,7 @@ maskedIGemmWgradKernel(T const *__restrict__ X,
                     bf[2 * np + 1][1] = t[3];
                 }
             }
-#pragma unroll
-            for (int mt = 0; mt < MT; ++mt)
-#pragma unroll
-                for (int nt = 0; nt < NT; ++nt)
-                    Mma<T>::run(acc[mt][nt], af[mt], bf[nt][0], bf[nt][1]);
+            mmaTiles<T, PRECISE>(acc, af, bf);
         }
 
         if (warp == 0)
@@ -1199,7 +1264,7 @@ rowOrder(MaskedIGemmTopology const &topo, int64_t gatheredBytes) {
     return topo.localRows;
 }
 
-template <typename Cfg, typename T, bool B_KMAJOR>
+template <typename Cfg, typename T, bool B_KMAJOR, bool PRECISE>
 void
 launchConv(torch::Tensor const &A,
            torch::Tensor const &Wrows,
@@ -1213,7 +1278,7 @@ launchConv(torch::Tensor const &A,
     int const N    = int(topo.totalVoxels);
     int const K    = int(topo.kernelVolume);
     int const smem = smemBytes<Cfg, T>(K);
-    auto kernel    = maskedIGemmKernel<Cfg, T, B_KMAJOR>;
+    auto kernel    = maskedIGemmKernel<Cfg, T, B_KMAJOR, PRECISE>;
     C10_CUDA_CHECK(cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem));
     int const tiles = ((N + Cfg::BM - 1) / Cfg::BM) * ((Nc + Cfg::BN - 1) / Cfg::BN);
 
@@ -1271,7 +1336,7 @@ launchConv(torch::Tensor const &A,
 }
 
 // Tile shape by output width. FVDB_MIGEMM_CFG=<BM>x<BN>x<STAGES> overrides it for tuning.
-template <typename T, bool B_KMAJOR>
+template <typename T, bool B_KMAJOR, bool PRECISE>
 void
 dispatchConv(torch::Tensor const &A,
              torch::Tensor const &Wrows,
@@ -1282,14 +1347,14 @@ dispatchConv(torch::Tensor const &A,
              int Kc,
              int Nc,
              cudaStream_t stream) {
-    {
+    if constexpr (!PRECISE) {
         char const *env       = std::getenv("FVDB_MIGEMM_CFG");
         std::string const cfg = env ? env : "";
-#define FVDB_MIGEMM_TRY(BM, BN, WM, WN, ST)                       \
-    if (cfg == #BM "x" #BN "x" #ST) {                             \
-        launchConv<TileConfig<BM, BN, WM, WN, ST>, T, B_KMAJOR>(  \
-            A, Wrows, bias, out, topo, flipTaps, Kc, Nc, stream); \
-        return;                                                   \
+#define FVDB_MIGEMM_TRY(BM, BN, WM, WN, ST)                               \
+    if (cfg == #BM "x" #BN "x" #ST) {                                     \
+        launchConv<TileConfig<BM, BN, WM, WN, ST>, T, B_KMAJOR, PRECISE>( \
+            A, Wrows, bias, out, topo, flipTaps, Kc, Nc, stream);         \
+        return;                                                           \
     }
         FVDB_MIGEMM_TRY(128, 256, 2, 4, 3)
         FVDB_MIGEMM_TRY(128, 256, 2, 4, 2)
@@ -1318,22 +1383,22 @@ dispatchConv(torch::Tensor const &A,
     // narrow output (48, say) takes one wider tile instead of re-gathering its rows per tile.
     int const Np = (Nc + 31) / 32 * 32;
     if (Np % 128 == 0) {
-        launchConv<TileConfig<128, 128, 2, 2, 2>, T, B_KMAJOR>(
+        launchConv<TileConfig<128, 128, 2, 2, 2>, T, B_KMAJOR, PRECISE>(
             A, Wrows, bias, out, topo, flipTaps, Kc, Nc, stream);
     } else if (Np % 64 == 0) {
-        launchConv<TileConfig<128, 64, 4, 1, 2>, T, B_KMAJOR>(
+        launchConv<TileConfig<128, 64, 4, 1, 2>, T, B_KMAJOR, PRECISE>(
             A, Wrows, bias, out, topo, flipTaps, Kc, Nc, stream);
     } else if (Np % 96 == 0) {
-        launchConv<TileConfig<128, 96, 4, 1, 2>, T, B_KMAJOR>(
+        launchConv<TileConfig<128, 96, 4, 1, 2>, T, B_KMAJOR, PRECISE>(
             A, Wrows, bias, out, topo, flipTaps, Kc, Nc, stream);
     } else {
         // 32-wide stages are small enough for a third stage at two CTAs per SM.
-        launchConv<TileConfig<128, 32, 4, 1, 3>, T, B_KMAJOR>(
+        launchConv<TileConfig<128, 32, 4, 1, 3>, T, B_KMAJOR, PRECISE>(
             A, Wrows, bias, out, topo, flipTaps, Kc, Nc, stream);
     }
 }
 
-template <typename Cfg, typename T>
+template <typename Cfg, typename T, bool PRECISE>
 torch::Tensor
 launchWgrad(torch::Tensor const &X,
             torch::Tensor const &dY,
@@ -1343,7 +1408,7 @@ launchWgrad(torch::Tensor const &X,
             cudaStream_t stream) {
     int const K    = int(topo.kernelVolume);
     int const smem = wgradSmemBytes<Cfg, T>();
-    auto kernel    = maskedIGemmWgradKernel<Cfg, T>;
+    auto kernel    = maskedIGemmWgradKernel<Cfg, T, PRECISE>;
     C10_CUDA_CHECK(cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem));
 
     int const sms       = smCount();
@@ -1412,7 +1477,7 @@ round32(int c) {
 // Channel counts not divisible by 128 use 64-, 96- or 32-wide tiles on each side, whichever
 // divides the count rounded up to 32 first, so each CTA gathers its rows once per 64 or 96
 // channels where possible.
-template <typename T, int BM, int WM>
+template <typename T, int BM, int WM, bool PRECISE>
 torch::Tensor
 launchWgradByCo(torch::Tensor const &X,
                 torch::Tensor const &dY,
@@ -1421,13 +1486,13 @@ launchWgradByCo(torch::Tensor const &X,
                 int Co,
                 cudaStream_t stream) {
     if (round32(Co) % 64 == 0)
-        return launchWgrad<WgradConfig<BM, 64, WM, 2, 2>, T>(X, dY, topo, Ci, Co, stream);
+        return launchWgrad<WgradConfig<BM, 64, WM, 2, 2>, T, PRECISE>(X, dY, topo, Ci, Co, stream);
     if (round32(Co) % 96 == 0)
-        return launchWgrad<WgradConfig<BM, 96, WM, 2, 2>, T>(X, dY, topo, Ci, Co, stream);
-    return launchWgrad<WgradConfig<BM, 32, WM, 1, 2>, T>(X, dY, topo, Ci, Co, stream);
+        return launchWgrad<WgradConfig<BM, 96, WM, 2, 2>, T, PRECISE>(X, dY, topo, Ci, Co, stream);
+    return launchWgrad<WgradConfig<BM, 32, WM, 1, 2>, T, PRECISE>(X, dY, topo, Ci, Co, stream);
 }
 
-template <typename T>
+template <typename T, bool PRECISE>
 torch::Tensor
 launchWgradNarrow(torch::Tensor const &X,
                   torch::Tensor const &dY,
@@ -1436,13 +1501,13 @@ launchWgradNarrow(torch::Tensor const &X,
                   int Co,
                   cudaStream_t stream) {
     if (round32(Ci) % 64 == 0)
-        return launchWgradByCo<T, 64, 2>(X, dY, topo, Ci, Co, stream);
+        return launchWgradByCo<T, 64, 2, PRECISE>(X, dY, topo, Ci, Co, stream);
     if (round32(Ci) % 96 == 0)
-        return launchWgradByCo<T, 96, 2>(X, dY, topo, Ci, Co, stream);
-    return launchWgradByCo<T, 32, 1>(X, dY, topo, Ci, Co, stream);
+        return launchWgradByCo<T, 96, 2, PRECISE>(X, dY, topo, Ci, Co, stream);
+    return launchWgradByCo<T, 32, 1, PRECISE>(X, dY, topo, Ci, Co, stream);
 }
 
-template <typename T>
+template <typename T, bool PRECISE>
 torch::Tensor
 dispatchWgrad(torch::Tensor const &X,
               torch::Tensor const &dY,
@@ -1454,14 +1519,16 @@ dispatchWgrad(torch::Tensor const &X,
         // float32 reads fragments element-wise, so wide warp tiles amortize the loads;
         // at 128x128, 16-row stages keep two CTAs resident per SM.
         if (round32(Ci) % 128 == 0 && round32(Co) % 128 == 0)
-            return launchWgrad<WgradConfig<128, 128, 2, 2, 3, 16>, T>(X, dY, topo, Ci, Co, stream);
-        return launchWgradNarrow<T>(X, dY, topo, Ci, Co, stream);
+            return launchWgrad<WgradConfig<128, 128, 2, 2, 3, 16>, T, PRECISE>(
+                X, dY, topo, Ci, Co, stream);
+        return launchWgradNarrow<T, PRECISE>(X, dY, topo, Ci, Co, stream);
     } else {
         char const *env       = std::getenv("FVDB_MIGEMM_WCFG");
         std::string const cfg = env ? env : "";
-#define FVDB_MIGEMM_TRYW(BM, BN, WM, WN, ST)                                                 \
-    if (cfg == #BM "x" #BN "x" #ST) {                                                        \
-        return launchWgrad<WgradConfig<BM, BN, WM, WN, ST>, T>(X, dY, topo, Ci, Co, stream); \
+#define FVDB_MIGEMM_TRYW(BM, BN, WM, WN, ST)                             \
+    if (cfg == #BM "x" #BN "x" #ST) {                                    \
+        return launchWgrad<WgradConfig<BM, BN, WM, WN, ST>, T, PRECISE>( \
+            X, dY, topo, Ci, Co, stream);                                \
     }
         FVDB_MIGEMM_TRYW(128, 128, 2, 2, 4)
         FVDB_MIGEMM_TRYW(128, 128, 2, 2, 3)
@@ -1475,8 +1542,9 @@ dispatchWgrad(torch::Tensor const &X,
         FVDB_MIGEMM_TRYW(64, 64, 2, 2, 2)
 #undef FVDB_MIGEMM_TRYW
         if (round32(Ci) % 128 == 0 && round32(Co) % 128 == 0)
-            return launchWgrad<WgradConfig<128, 128, 2, 2, 3>, T>(X, dY, topo, Ci, Co, stream);
-        return launchWgradNarrow<T>(X, dY, topo, Ci, Co, stream);
+            return launchWgrad<WgradConfig<128, 128, 2, 2, 3>, T, PRECISE>(
+                X, dY, topo, Ci, Co, stream);
+        return launchWgradNarrow<T, PRECISE>(X, dY, topo, Ci, Co, stream);
     }
 }
 
@@ -1541,15 +1609,21 @@ runConv(torch::Tensor const &A,
         RowMap map,
         int Kc,
         int Nc,
+        bool precise,
         cudaStream_t stream) {
     auto const st = A.scalar_type();
     if (st == torch::kFloat16)
-        dispatchConv<__half, B_KMAJOR>(A, Wrows, bias, out, map.topo, map.flip, Kc, Nc, stream);
+        dispatchConv<__half, B_KMAJOR, false>(
+            A, Wrows, bias, out, map.topo, map.flip, Kc, Nc, stream);
     else if (st == torch::kBFloat16)
-        dispatchConv<__nv_bfloat16, B_KMAJOR>(
+        dispatchConv<__nv_bfloat16, B_KMAJOR, false>(
+            A, Wrows, bias, out, map.topo, map.flip, Kc, Nc, stream);
+    else if (precise)
+        dispatchConv<float, B_KMAJOR, true>(
             A, Wrows, bias, out, map.topo, map.flip, Kc, Nc, stream);
     else
-        dispatchConv<float, B_KMAJOR>(A, Wrows, bias, out, map.topo, map.flip, Kc, Nc, stream);
+        dispatchConv<float, B_KMAJOR, false>(
+            A, Wrows, bias, out, map.topo, map.flip, Kc, Nc, stream);
 }
 
 // Per-tap X^T dY over the topology's pairs, X gathered by input row and dY by output row.
@@ -1559,15 +1633,18 @@ runWgrad(torch::Tensor const &X,
          MaskedIGemmTopology const &topo,
          int Ci,
          int Co,
+         bool precise,
          cudaStream_t stream) {
     if (topo.pairIn.numel() == 0)
         return torch::zeros({topo.kernelVolume, Ci, Co}, X.options());
     auto const st = X.scalar_type();
     if (st == torch::kFloat16)
-        return dispatchWgrad<__half>(X, dY, topo, Ci, Co, stream);
+        return dispatchWgrad<__half, false>(X, dY, topo, Ci, Co, stream);
     if (st == torch::kBFloat16)
-        return dispatchWgrad<__nv_bfloat16>(X, dY, topo, Ci, Co, stream);
-    return dispatchWgrad<float>(X, dY, topo, Ci, Co, stream);
+        return dispatchWgrad<__nv_bfloat16, false>(X, dY, topo, Ci, Co, stream);
+    if (precise)
+        return dispatchWgrad<float, true>(X, dY, topo, Ci, Co, stream);
+    return dispatchWgrad<float, false>(X, dY, topo, Ci, Co, stream);
 }
 
 // Column sums of a row-major [N, C] tensor, accumulated in float32. Each thread loads 16-byte
@@ -1822,7 +1899,8 @@ maskedIGemmConv(torch::Tensor features,
                 torch::Tensor weights,
                 std::optional<torch::Tensor> bias,
                 MaskedIGemmTopology const &topo,
-                bool transposed) {
+                bool transposed,
+                bool precise) {
     checkConv(features, weights, topo, transposed, "maskedIGemmConv");
     c10::cuda::CUDAGuard guard(features.device());
     auto const st = features.scalar_type();
@@ -1841,7 +1919,8 @@ maskedIGemmConv(torch::Tensor features,
     RowMap const map = transposed ? inputRows(topo) : RowMap{topo, false};
     auto out         = torch::empty({map.topo.totalVoxels, Co}, features.options());
     if (map.topo.totalVoxels > 0)
-        runConv<false>(features, Wrows, b, out, map, Ci, Co, c10::cuda::getCurrentCUDAStream());
+        runConv<false>(
+            features, Wrows, b, out, map, Ci, Co, precise, c10::cuda::getCurrentCUDAStream());
     return out;
 }
 
@@ -1852,7 +1931,8 @@ maskedIGemmConvBackward(torch::Tensor gradOutput,
                         MaskedIGemmTopology const &topo,
                         bool needFeatures,
                         bool needWeights,
-                        bool transposed) {
+                        bool transposed,
+                        bool precise) {
     checkConv(features, weights, topo, transposed, "maskedIGemmConvBackward");
     int64_t const outRows = transposed ? topo.inputVoxels : topo.totalVoxels;
     TORCH_CHECK(gradOutput.dim() == 2 && gradOutput.size(0) == outRows &&
@@ -1873,16 +1953,18 @@ maskedIGemmConvBackward(torch::Tensor gradOutput,
         RowMap const map = transposed ? RowMap{topo, false} : inputRows(topo);
         gradFeatures     = torch::empty({features.size(0), Ci}, features.options());
         if (map.topo.totalVoxels > 0)
-            runConv<true>(gradOutput, weightRows(weights), {}, gradFeatures, map, Co, Ci, stream);
+            runConv<true>(
+                gradOutput, weightRows(weights), {}, gradFeatures, map, Co, Ci, precise, stream);
     }
     if (needWeights) {
         // Pairs gather input rows from the forward convolution's input. For the transpose
         // that is grad_output, so swap the operands and transpose each tap's product.
-        auto const gradRows =
-            transposed
-                ? runWgrad(gradOutput, features, topo, Co, Ci, stream).transpose(1, 2).contiguous()
-                : runWgrad(features, gradOutput, topo, Ci, Co, stream);
-        gradWeights = weightsFromRows(gradRows, topo.kernelSize);
+        auto const gradRows = transposed
+                                  ? runWgrad(gradOutput, features, topo, Co, Ci, precise, stream)
+                                        .transpose(1, 2)
+                                        .contiguous()
+                                  : runWgrad(features, gradOutput, topo, Ci, Co, precise, stream);
+        gradWeights         = weightsFromRows(gradRows, topo.kernelSize);
     }
     return {gradFeatures, gradWeights};
 }
