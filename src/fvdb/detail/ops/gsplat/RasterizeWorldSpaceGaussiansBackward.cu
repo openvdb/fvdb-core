@@ -563,9 +563,9 @@ launchBackwardPrivateUse1(const torch::Tensor &means,
                           const at::optional<torch::Tensor> &masks) {
     TORCH_CHECK(tileSize > 0, "Tile size must be greater than 0");
 
-    const uint32_t tileExtentW = (imageWidth + tileSize - 1) / tileSize;
-    const uint32_t tileExtentH = (imageHeight + tileSize - 1) / tileSize;
-    const uint32_t tileCount   = features.size(0) * tileExtentH * tileExtentW;
+    const int64_t tileExtentW = (int64_t{imageWidth} + tileSize - 1) / tileSize;
+    const int64_t tileExtentH = (int64_t{imageHeight} + tileSize - 1) / tileSize;
+    const int64_t tileCount   = features.size(0) * tileExtentH * tileExtentW;
     if (means.numel() == 0 || tileGaussianIds.numel() == 0 || tileCount == 0) {
         return {torch::zeros_like(means),
                 torch::zeros_like(quats),

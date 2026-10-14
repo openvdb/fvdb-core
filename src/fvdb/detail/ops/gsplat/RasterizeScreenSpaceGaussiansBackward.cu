@@ -1219,11 +1219,12 @@ callRasterizeBackwardPrivateUse1(
             renderedAlphas, lastGaussianIds, dLossDRenderedFeatures, dLossDRenderedAlphas);
     }();
 
-    const uint32_t tileExtentH    = renderWindow.tileExtentH(tileSize);
-    const uint32_t tileExtentW    = renderWindow.tileExtentW(tileSize);
-    const uint32_t tilesPerCamera = tileExtentH * tileExtentW;
+    const int64_t tileExtentH    = renderWindow.tileExtentH(tileSize);
+    const int64_t tileExtentW    = renderWindow.tileExtentW(tileSize);
+    const int64_t tilesPerCamera = tileExtentH * tileExtentW;
     // Compute tile count: for sparse mode use activeTiles, for dense mode compute from image dims
-    uint32_t tileCount = activeTiles.has_value() ? activeTiles.value().size(0) : C * tilesPerCamera;
+    const int64_t tileCount =
+        activeTiles.has_value() ? activeTiles.value().size(0) : C * tilesPerCamera;
     std::vector<torch::Tensor> tileTensors = {dLossDRenderedFeatures.jdata(),
                                               dLossDRenderedAlphas.jdata()};
 
@@ -1253,7 +1254,7 @@ callRasterizeBackwardPrivateUse1(
         C10_CUDA_CHECK(cudaEventRecord(prefetchEvent, stream));
         C10_CUDA_CHECK(cudaStreamWaitEvent(prefetchStreams[deviceId], prefetchEvent));
 
-        uint32_t deviceTileOffset, deviceTileCount;
+        int64_t deviceTileOffset, deviceTileCount;
         std::tie(deviceTileOffset, deviceTileCount) = deviceChunk(tileCount, deviceId);
         if (deviceTileCount) {
             std::vector<void *> prefetchPointers;
