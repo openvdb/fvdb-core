@@ -610,11 +610,29 @@ class _MaskedIGemmBackend:
     fallback: dict = field(default_factory=dict, compare=False)
 
 
-def _masked_igemm_runs(in_channels: int, out_channels: int, dtype: torch.dtype) -> bool:
+def _tf32_matmul_enabled() -> bool:
+    """True when float32 matmuls may run as TF32, under either the legacy or the fp32_precision API."""
+    # Reading allow_tf32 raises once TF32 was set through fp32_precision (PyTorch 2.9+).
+    precision = getattr(torch.backends.cuda.matmul, "fp32_precision", None)
+    if precision is not None:
+        return precision == "tf32"
+    return torch.backends.cuda.matmul.allow_tf32
+
+
+def _masked_igemm_dtype(*tensors: torch.Tensor | None) -> torch.dtype:
+    """Compute dtype for a masked_igemm call, promoted like gather-scatter's."""
+    dtypes = [t.dtype for t in tensors if t is not None]
+    dtype = dtypes[0]
+    for other in dtypes[1:]:
+        dtype = torch.promote_types(dtype, other)
+    return dtype
+
+
+def _masked_igemm_runs(in_channels: int, out_channels: int, dtype: torch.dtype, device: torch.device) -> bool:
     """True when the masked_igemm kernels cover this call; float32 runs only as TF32."""
-    if dtype == torch.float32 and not torch.backends.cuda.matmul.allow_tf32:
+    if dtype == torch.float32 and not _tf32_matmul_enabled():
         return False
-    return _fvdb_cpp.migemm_supports(in_channels, out_channels, dtype)
+    return _fvdb_cpp.migemm_supports(in_channels, out_channels, dtype, device)
 
 
 _Backend = _MatmulBackend | _GatherScatterBackend | _PredGatherIGemmBackend | _MaskedIGemmBackend
@@ -1192,8 +1210,9 @@ class ConvolutionPlan:
             result = self._target_grid.jagged_like(out_tensor)
 
         elif isinstance(backend, _MaskedIGemmBackend):
-            if _masked_igemm_runs(in_c, out_c, data.jdata.dtype):
-                out_tensor = _MaskedIGemmConvFn.apply(data.jdata, weights, None, backend.topology)
+            dtype = _masked_igemm_dtype(data.jdata, weights)
+            if _masked_igemm_runs(in_c, out_c, dtype, data.jdata.device):
+                out_tensor = _MaskedIGemmConvFn.apply(data.jdata.to(dtype), weights.to(dtype), None, backend.topology)
             else:
                 topology = self._masked_igemm_fallback(backend)
                 out_tensor = _GatherScatterConvFn.apply(data.jdata, weights, topology, False)
@@ -1239,14 +1258,17 @@ class ConvolutionPlan:
     def _execute_with_bias(self, data: JaggedTensor, weights: torch.Tensor, bias: torch.Tensor | None) -> JaggedTensor:
         """Execute and add ``bias``, fused into the kernel epilogue where the backend supports it."""
         backend = self._backend
+        dtype = _masked_igemm_dtype(data.jdata, weights, bias)
         if (
             bias is not None
             and isinstance(backend, _MaskedIGemmBackend)
             and weights.ndim == 5
-            and _masked_igemm_runs(weights.shape[1], weights.shape[0], data.jdata.dtype)
+            and _masked_igemm_runs(weights.shape[1], weights.shape[0], dtype, data.jdata.device)
             and _channel_pair_supported(weights.shape[1], weights.shape[0], self._channel_pairs)
         ):
-            out_tensor = _MaskedIGemmConvFn.apply(data.jdata, weights, bias, backend.topology)
+            out_tensor = _MaskedIGemmConvFn.apply(
+                data.jdata.to(dtype), weights.to(dtype), bias.to(dtype), backend.topology
+            )
             return self._target_grid.jagged_like(out_tensor)
         out = self.execute(data, weights)
         if bias is not None:

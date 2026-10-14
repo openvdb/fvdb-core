@@ -40,6 +40,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <limits>
 #include <optional>
 #include <string>
 
@@ -1420,6 +1421,14 @@ checkConv(torch::Tensor const &features,
           MaskedIGemmTopology const &topo,
           char const *name) {
     TORCH_CHECK(features.is_cuda(), name, ": features must be on CUDA");
+    TORCH_CHECK(weights.device() == features.device() &&
+                    topo.neighborMap.device() == features.device(),
+                name,
+                ": features, weights and topology must be on the same device");
+    TORCH_CHECK(weights.scalar_type() == features.scalar_type(),
+                name,
+                ": weights must have the features' dtype ",
+                features.scalar_type());
     TORCH_CHECK(features.dim() == 2 && features.size(0) == topo.totalVoxels,
                 name,
                 ": features must be [",
@@ -1432,7 +1441,8 @@ checkConv(torch::Tensor const &features,
                     weights.size(4) == topo.kernelSize[2],
                 name,
                 ": weights spatial dims must match the topology kernel size");
-    TORCH_CHECK(maskedIGemmSupports(weights.size(1), weights.size(0), features.scalar_type()),
+    TORCH_CHECK(maskedIGemmSupports(
+                    weights.size(1), weights.size(0), features.scalar_type(), features.device()),
                 name,
                 ": unsupported channels (",
                 weights.size(1),
@@ -1449,14 +1459,20 @@ checkConv(torch::Tensor const &features,
 // =============================================================================
 
 bool
-maskedIGemmSupports(int64_t inChannels, int64_t outChannels, torch::ScalarType dtype) {
+maskedIGemmSupports(int64_t inChannels,
+                    int64_t outChannels,
+                    torch::ScalarType dtype,
+                    torch::Device device) {
     bool const typeOk =
         dtype == torch::kFloat16 || dtype == torch::kBFloat16 || dtype == torch::kFloat32;
-    if (!typeOk || inChannels % 32 != 0 || outChannels % 32 != 0)
+    if (!typeOk || !device.is_cuda() || inChannels <= 0 || outChannels <= 0 ||
+        inChannels % 32 != 0 || outChannels % 32 != 0)
         return false;
-    int device = 0, major = 0;
-    C10_CUDA_CHECK(cudaGetDevice(&device));
-    C10_CUDA_CHECK(cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, device));
+    int index = device.has_index() ? device.index() : 0;
+    if (!device.has_index())
+        C10_CUDA_CHECK(cudaGetDevice(&index));
+    int major = 0;
+    C10_CUDA_CHECK(cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, index));
     return major >= 8;
 }
 
@@ -1522,14 +1538,18 @@ maskedIGemmTopology(GridBatchData const &grid, nanovdb::Coord kernelSize) {
             rowMasks.data_ptr<int32_t>(), int(N), int(K), blockCounts.data_ptr<int32_t>());
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     }
-    auto tapCounts = blockCounts.sum(1, false, torch::kInt64);
-    auto offsets   = torch::zeros({K + 1}, i32);
-    offsets.slice(0, 1).copy_(torch::cumsum(tapCounts, 0));
+    auto tapEnds    = torch::cumsum(blockCounts.sum(1, false, torch::kInt64), 0);
+    int64_t const P = tapEnds[K - 1].item<int64_t>();
+    TORCH_CHECK(P < std::numeric_limits<int32_t>::max(),
+                "maskedIGemmTopology: ",
+                P,
+                " neighbor pairs exceed the int32 pair index");
+    auto offsets = torch::zeros({K + 1}, i32);
+    offsets.slice(0, 1).copy_(tapEnds);
     auto blockOffsets = (torch::cumsum(blockCounts, 1, torch::kInt32) - blockCounts) +
                         offsets.slice(0, 0, K).unsqueeze(1);
-    int64_t const P = offsets[K].item<int64_t>();
-    auto pairIn     = torch::empty({P}, i32);
-    auto pairOut    = torch::empty({P}, i32);
+    auto pairIn  = torch::empty({P}, i32);
+    auto pairOut = torch::empty({P}, i32);
     if (blocks > 0 && P > 0) {
         pairFillKernel<<<blocks, kPairBlock, 0, stream>>>(rowMasks.data_ptr<int32_t>(),
                                                           nbr.data_ptr<int32_t>(),
@@ -1563,13 +1583,15 @@ maskedIGemmConv(torch::Tensor features,
     c10::cuda::CUDAGuard guard(features.device());
     auto const st = features.scalar_type();
     features      = features.contiguous();
-    auto Wrows    = weightRows(weights).to(st);
+    auto Wrows    = weightRows(weights);
     int const Ci = int(weights.size(1)), Co = int(weights.size(0));
     torch::Tensor b;
     if (bias.has_value() && bias->defined()) {
         TORCH_CHECK(bias->dim() == 1 && bias->size(0) == Co,
                     "maskedIGemmConv: bias must be [C_out]");
-        b = bias->to(st).contiguous();
+        TORCH_CHECK(bias->device() == features.device() && bias->scalar_type() == st,
+                    "maskedIGemmConv: bias must match the features' device and dtype");
+        b = bias->contiguous();
     }
     auto out = torch::empty({topo.totalVoxels, Co}, features.options());
     if (topo.totalVoxels == 0)
@@ -1595,6 +1617,8 @@ maskedIGemmConvBackward(torch::Tensor gradOutput,
     TORCH_CHECK(gradOutput.dim() == 2 && gradOutput.size(0) == topo.totalVoxels &&
                     gradOutput.size(1) == weights.size(0),
                 "maskedIGemmConvBackward: grad_output must be [N, C_out]");
+    TORCH_CHECK(gradOutput.device() == features.device(),
+                "maskedIGemmConvBackward: grad_output must be on the features' device");
     c10::cuda::CUDAGuard guard(features.device());
     auto const st = features.scalar_type();
     features      = features.contiguous();
@@ -1604,7 +1628,7 @@ maskedIGemmConvBackward(torch::Tensor gradOutput,
 
     torch::Tensor gradFeatures, gradWeights;
     if (needFeatures) {
-        auto Wrows   = weightRows(weights).to(st);
+        auto Wrows   = weightRows(weights);
         gradFeatures = torch::empty({topo.totalVoxels, Ci}, features.options());
         if (topo.totalVoxels > 0) {
             if (st == torch::kFloat16)
@@ -1630,7 +1654,7 @@ maskedIGemmConvBackward(torch::Tensor gradOutput,
         } else {
             gradRows = torch::zeros({topo.kernelVolume, Ci, Co}, features.options());
         }
-        gradWeights = weightsFromRows(gradRows.to(weights.scalar_type()), topo.kernelSize);
+        gradWeights = weightsFromRows(gradRows, topo.kernelSize);
     }
     return {gradFeatures, gradWeights};
 }

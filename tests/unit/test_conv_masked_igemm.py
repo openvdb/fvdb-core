@@ -5,7 +5,7 @@
 Test the masked implicit GEMM (masked_igemm) submanifold convolution backend.
 
 The backend runs submanifold convolution only: target grid == source grid, stride 1, odd kernel
-sizes with volume <= 32, CUDA SM80+, float16/bfloat16 features, channel counts divisible by 64.
+sizes with volume <= 32, CUDA SM80+, float16/bfloat16/TF32 features, channel counts divisible by 32.
 Forward, input gradient and weight gradient are checked against the default gather-scatter
 backend evaluated in float32.
 """
@@ -46,12 +46,15 @@ def _shell_grid(res: int) -> GridBatch:
 
 @contextlib.contextmanager
 def _tf32(enabled: bool):
-    previous = torch.backends.cuda.matmul.allow_tf32
-    torch.backends.cuda.matmul.allow_tf32 = enabled
+    # Prefer fp32_precision (PyTorch 2.9+); reading allow_tf32 raises once it was used.
+    matmul = torch.backends.cuda.matmul
+    name = "fp32_precision" if hasattr(matmul, "fp32_precision") else "allow_tf32"
+    previous = getattr(matmul, name)
+    setattr(matmul, name, ("tf32" if enabled else "ieee") if name == "fp32_precision" else enabled)
     try:
         yield
     finally:
-        torch.backends.cuda.matmul.allow_tf32 = previous
+        setattr(matmul, name, previous)
 
 
 def _rel_err(a: torch.Tensor, b: torch.Tensor) -> float:
@@ -275,6 +278,76 @@ class TestMaskedIGemm(unittest.TestCase):
             self.assertLess(_rel_err(xh.grad, xr.grad), 4e-3)
         else:
             self.assertIsNone(xh.grad)
+
+    def test_tf32_legacy_api(self):
+        # The other TF32 tests use fp32_precision; this one enables TF32 through allow_tf32.
+        matmul = torch.backends.cuda.matmul
+        previous = matmul.fp32_precision if hasattr(matmul, "fp32_precision") else None
+        matmul.allow_tf32 = True
+        try:
+            grid = _random_grid(2000, 10)
+            plan = ConvolutionPlan.from_grid_batch(3, 1, grid, grid, expert_config=CONFIG)
+            x = torch.randn(grid.total_voxels, 64, device="cuda")
+            plan.execute(grid.jagged_like(x), torch.randn(64, 64, 3, 3, 3, device="cuda"))
+            self.assertNotIn("gather_scatter", plan._backend.fallback)
+        finally:
+            if previous is None:
+                matmul.allow_tf32 = False
+            else:
+                matmul.fp32_precision = previous
+
+    @parameterized.expand(
+        [
+            ("half_features", torch.float16, torch.float32, True),
+            ("half_weights", torch.float32, torch.float16, True),
+            ("half_features_strict", torch.float16, torch.float32, False),
+        ]
+    )
+    def test_mixed_dtypes(self, _, feature_dtype, weight_dtype, tf32):
+        # Mixed inputs promote like gather-scatter. float32 results run natively only as TF32.
+        torch.manual_seed(0)
+        grid = _random_grid(2000, 10)
+        plan = ConvolutionPlan.from_grid_batch(3, 1, grid, grid, expert_config=CONFIG)
+        ref_plan = ConvolutionPlan.from_grid_batch(3, 1, grid, grid)
+        x = torch.randn(grid.total_voxels, 64, device="cuda", dtype=feature_dtype, requires_grad=True)
+        w = (torch.randn(64, 64, 3, 3, 3, device="cuda") / 40).to(weight_dtype).requires_grad_(True)
+        xr = x.detach().float().requires_grad_(True)
+        wr = w.detach().float().requires_grad_(True)
+        with _tf32(tf32):
+            y = plan.execute(grid.jagged_like(x), w).jdata
+            gy = torch.randn_like(y)
+            y.backward(gy)
+        with _tf32(False):
+            yr = ref_plan.execute(grid.jagged_like(xr), wr).jdata
+            yr.backward(gy)
+
+        self.assertEqual(y.dtype, torch.float32)
+        self.assertEqual(x.grad.dtype, feature_dtype)
+        self.assertEqual(w.grad.dtype, weight_dtype)
+        self.assertEqual("gather_scatter" in plan._backend.fallback, not tf32)
+        self.assertLess(_rel_err(y, yr), 5e-3)
+        self.assertLess(_rel_err(x.grad, xr.grad), 5e-3)
+        self.assertLess(_rel_err(w.grad, wr.grad), 5e-3)
+
+    def test_rejects_mismatched_inputs(self):
+        grid = _random_grid(500, 8)
+        topo = _fvdb_cpp.migemm_build_topology(_get_grid_data(grid), torch.tensor([3, 3, 3], dtype=torch.int32))
+        x = torch.randn(grid.total_voxels, 64, device="cuda", dtype=torch.float16)
+        w = torch.randn(64, 64, 3, 3, 3, device="cuda", dtype=torch.float16)
+        with self.assertRaisesRegex(RuntimeError, "same device"):
+            _fvdb_cpp.migemm_conv(x, w.cpu(), None, topo)
+        with self.assertRaisesRegex(RuntimeError, "dtype"):
+            _fvdb_cpp.migemm_conv(x, w.float(), None, topo)
+        with self.assertRaisesRegex(RuntimeError, "bias"):
+            _fvdb_cpp.migemm_conv(x, w, torch.zeros(64, device="cuda"), topo)
+
+    def test_supports(self):
+        cuda = torch.device("cuda", torch.cuda.current_device())
+        self.assertTrue(_fvdb_cpp.migemm_supports(64, 32, torch.float16, cuda))
+        self.assertFalse(_fvdb_cpp.migemm_supports(64, 32, torch.float16, torch.device("cpu")))
+        self.assertFalse(_fvdb_cpp.migemm_supports(0, 64, torch.float16, cuda))
+        self.assertFalse(_fvdb_cpp.migemm_supports(64, 0, torch.float16, cuda))
+        self.assertFalse(_fvdb_cpp.migemm_supports(48, 64, torch.float16, cuda))
 
     def test_module_and_transpose(self):
         grid = _random_grid(1000, 8)

@@ -54,7 +54,8 @@ struct MaskedIGemmTopology {
 MaskedIGemmTopology maskedIGemmTopology(GridBatchData const &grid, nanovdb::Coord kernelSize);
 
 /// Forward: weights are a (C_out, C_in, k0, k1, k2) tensor, bias an optional [C_out] tensor
-/// added in the epilogue. Returns [N, C_out].
+/// added in the epilogue. Weights and bias must match the features' device and dtype.
+/// Returns [N, C_out].
 torch::Tensor maskedIGemmConv(torch::Tensor features,
                               torch::Tensor weights,
                               std::optional<torch::Tensor> bias,
@@ -69,8 +70,11 @@ std::tuple<torch::Tensor, torch::Tensor> maskedIGemmConvBackward(torch::Tensor g
                                                                  bool needFeatures,
                                                                  bool needWeights);
 
-/// True when maskedIGemmConv can run these channel counts and dtype.
-bool maskedIGemmSupports(int64_t inChannels, int64_t outChannels, torch::ScalarType dtype);
+/// True when maskedIGemmConv can run these channel counts and dtype on @p device.
+bool maskedIGemmSupports(int64_t inChannels,
+                         int64_t outChannels,
+                         torch::ScalarType dtype,
+                         torch::Device device);
 
 } // namespace ops
 } // namespace detail
