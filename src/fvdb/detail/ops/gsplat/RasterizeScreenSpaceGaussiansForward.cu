@@ -695,9 +695,9 @@ launchRasterizeForwardKernels(
     auto outAlphas   = fvdb::JaggedTensor(alphasToRenderVec);
     auto outLastIds  = fvdb::JaggedTensor(lastIdsToRenderVec);
 
-    auto isSparse                 = activeTiles.has_value();
-    const int64_t tilesPerCamera  = tileExtentH * tileExtentW;
-    const int64_t tileCount       = isSparse ? activeTiles.value().size(0) : C * tilesPerCamera;
+    auto isSparse                = activeTiles.has_value();
+    const int64_t tilesPerCamera = tileExtentH * tileExtentW;
+    const int64_t tileCount      = isSparse ? activeTiles.value().size(0) : C * tilesPerCamera;
 
     std::vector<cudaEvent_t> events(c10::cuda::device_count());
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {

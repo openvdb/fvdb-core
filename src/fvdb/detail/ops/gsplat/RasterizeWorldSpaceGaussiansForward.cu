@@ -374,11 +374,11 @@ launchForwardPrivateUse1(const torch::Tensor &means,
                          const at::optional<torch::Tensor> &masks) {
     TORCH_CHECK(tileSize > 0, "Tile size must be greater than 0");
 
-    const int64_t C               = features.size(0);
-    const int64_t tileExtentW     = (int64_t{imageWidth} + tileSize - 1) / tileSize;
-    const int64_t tileExtentH     = (int64_t{imageHeight} + tileSize - 1) / tileSize;
-    const int64_t tilesPerCamera  = tileExtentH * tileExtentW;
-    const int64_t tileCount       = C * tilesPerCamera;
+    const int64_t C              = features.size(0);
+    const int64_t tileExtentW    = (int64_t{imageWidth} + tileSize - 1) / tileSize;
+    const int64_t tileExtentH    = (int64_t{imageHeight} + tileSize - 1) / tileSize;
+    const int64_t tilesPerCamera = tileExtentH * tileExtentW;
+    const int64_t tileCount      = C * tilesPerCamera;
 
     // Every in-bounds pixel is written by exactly one tile, including masked tiles and tiles with
     // no intersections, so the managed outputs do not need a separate initialization kernel.
