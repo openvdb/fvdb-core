@@ -320,10 +320,9 @@ smemBytes(int K) {
 // B_KMAJOR selects the weight operand layout per tap:
 //   false (forward):        B[k][n] at W + row * Kc * Nc + k * Nc + n
 //   true  (input gradient): B[k][n] at W + row * Kc * Nc + n * Kc + k
-// FLIP reads tap u's weights from tap K-1-u (input gradient).
 // With splits > 1, CTA z of a tile runs its share of the tile's (tap, k-tile)
 // iterations and adds float32 partials into outAcc instead of writing out.
-template <typename Cfg, typename T, bool B_KMAJOR, bool FLIP>
+template <typename Cfg, typename T, bool B_KMAJOR>
 __global__ void __launch_bounds__(Cfg::THREADS)
 maskedIGemmKernel(T const *__restrict__ A,
                   T const *__restrict__ W,
@@ -383,7 +382,7 @@ maskedIGemmKernel(T const *__restrict__ A,
         while (m) {
             int const tap = __ffs(m) - 1;
             sTaps[n]      = tap;
-            sWRow[n++]    = tapToRow(FLIP ? K - 1 - tap : tap);
+            sWRow[n++]    = tapToRow(tap);
             m &= m - 1;
         }
         *sNTaps = n;
@@ -999,18 +998,19 @@ buildNeighborMapStaged(GridBatchData const &grid,
     }
 }
 
-// Leaf-scan builder: one thread per leaf slot, K tree probes per active voxel.
+// Leaf-scan builder: one thread per output voxel, K probes of the feature grid's tree.
 void
-buildNeighborMapScan(GridBatchData const &grid,
+buildNeighborMapScan(GridBatchData const &featureGrid,
+                     GridBatchData const &outputGrid,
                      ConvolutionGeometry const &geometry,
                      int K,
                      int32_t *nbr,
                      int32_t *code,
                      int32_t *masks) {
     using CudaTag  = ::dispatch::tag<torch::kCUDA>;
-    auto const acc = dispatch::make_grid_accessor(CudaTag{}, grid);
+    auto const acc = dispatch::make_grid_accessor(CudaTag{}, featureGrid);
     dispatch::forEachActiveVoxel(CudaTag{},
-                                 grid,
+                                 outputGrid,
                                  [=] __hostdev__(CudaTag,
                                                  JIdxType batchIdx,
                                                  nanovdb::Coord ijk,
@@ -1033,6 +1033,39 @@ buildNeighborMapScan(GridBatchData const &grid,
                                      code[voxelIdx]  = int32_t(grayRank(mask));
                                      masks[voxelIdx] = int32_t(mask);
                                  });
+}
+
+// Reverse map: rev[i, k] = o where nbr[o, k] = i. The tap fixes the output coordinate,
+// so each (input row, tap) has at most one output row and the scatter has no conflicts.
+__global__ void
+reverseMapKernel(int32_t const *__restrict__ nbr, int64_t total, int K, int32_t *__restrict__ rev) {
+    for (int64_t e = blockIdx.x * int64_t(blockDim.x) + threadIdx.x; e < total;
+         e += int64_t(gridDim.x) * blockDim.x) {
+        int32_t const i = nbr[e];
+        if (i >= 0)
+            rev[int64_t(i) * K + e % K] = int32_t(e / K);
+    }
+}
+
+__global__ void
+rowMaskKernel(int32_t const *__restrict__ map,
+              int64_t N,
+              int K,
+              int32_t *__restrict__ code,
+              int32_t *__restrict__ masks) {
+    for (int64_t row = blockIdx.x * int64_t(blockDim.x) + threadIdx.x; row < N;
+         row += int64_t(gridDim.x) * blockDim.x) {
+        uint32_t mask = 0;
+        for (int k = 0; k < K; ++k)
+            mask |= uint32_t(map[row * K + k] >= 0) << k;
+        code[row]  = int32_t(grayRank(mask));
+        masks[row] = int32_t(mask);
+    }
+}
+
+int
+gridStrideBlocks(int64_t work) {
+    return int(std::clamp<int64_t>((work + 255) / 256, 1, int64_t(1) << 16));
 }
 
 // =============================================================================
@@ -1137,7 +1170,7 @@ rowOrder(MaskedIGemmTopology const &topo, int64_t gatheredBytes) {
     return topo.localRows;
 }
 
-template <typename Cfg, typename T, bool B_KMAJOR, bool FLIP>
+template <typename Cfg, typename T, bool B_KMAJOR>
 void
 launchConv(torch::Tensor const &A,
            torch::Tensor const &Wrows,
@@ -1151,7 +1184,7 @@ launchConv(torch::Tensor const &A,
     int const N    = int(topo.totalVoxels);
     int const K    = int(topo.kernelVolume);
     int const smem = smemBytes<Cfg, T>(K);
-    auto kernel    = maskedIGemmKernel<Cfg, T, B_KMAJOR, FLIP>;
+    auto kernel    = maskedIGemmKernel<Cfg, T, B_KMAJOR>;
     C10_CUDA_CHECK(cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem));
     int const tiles = ((N + Cfg::BM - 1) / Cfg::BM) * (Nc / Cfg::BN);
 
@@ -1209,7 +1242,7 @@ launchConv(torch::Tensor const &A,
 }
 
 // Tile shape by output width. FVDB_MIGEMM_CFG=<BM>x<BN>x<STAGES> overrides it for tuning.
-template <typename T, bool B_KMAJOR, bool FLIP>
+template <typename T, bool B_KMAJOR>
 void
 dispatchConv(torch::Tensor const &A,
              torch::Tensor const &Wrows,
@@ -1223,11 +1256,11 @@ dispatchConv(torch::Tensor const &A,
     {
         char const *env       = std::getenv("FVDB_MIGEMM_CFG");
         std::string const cfg = env ? env : "";
-#define FVDB_MIGEMM_TRY(BM, BN, WM, WN, ST)                            \
-    if (cfg == #BM "x" #BN "x" #ST && Nc % BN == 0) {                  \
-        launchConv<TileConfig<BM, BN, WM, WN, ST>, T, B_KMAJOR, FLIP>( \
-            A, Wrows, bias, out, topo, flipTaps, Kc, Nc, stream);      \
-        return;                                                        \
+#define FVDB_MIGEMM_TRY(BM, BN, WM, WN, ST)                       \
+    if (cfg == #BM "x" #BN "x" #ST && Nc % BN == 0) {             \
+        launchConv<TileConfig<BM, BN, WM, WN, ST>, T, B_KMAJOR>(  \
+            A, Wrows, bias, out, topo, flipTaps, Kc, Nc, stream); \
+        return;                                                   \
     }
         FVDB_MIGEMM_TRY(128, 256, 2, 4, 3)
         FVDB_MIGEMM_TRY(128, 256, 2, 4, 2)
@@ -1253,33 +1286,19 @@ dispatchConv(torch::Tensor const &A,
     }
     // Two stages keep two CTAs resident per SM, which beats deeper pipelines here.
     if (Nc % 128 == 0) {
-        launchConv<TileConfig<128, 128, 2, 2, 2>, T, B_KMAJOR, FLIP>(
+        launchConv<TileConfig<128, 128, 2, 2, 2>, T, B_KMAJOR>(
             A, Wrows, bias, out, topo, flipTaps, Kc, Nc, stream);
     } else if (Nc % 64 == 0) {
-        launchConv<TileConfig<128, 64, 4, 1, 2>, T, B_KMAJOR, FLIP>(
+        launchConv<TileConfig<128, 64, 4, 1, 2>, T, B_KMAJOR>(
             A, Wrows, bias, out, topo, flipTaps, Kc, Nc, stream);
     } else if (Nc % 96 == 0) {
-        launchConv<TileConfig<128, 96, 4, 1, 2>, T, B_KMAJOR, FLIP>(
+        launchConv<TileConfig<128, 96, 4, 1, 2>, T, B_KMAJOR>(
             A, Wrows, bias, out, topo, flipTaps, Kc, Nc, stream);
     } else {
         // 32-wide stages are small enough for a third stage at two CTAs per SM.
-        launchConv<TileConfig<128, 32, 4, 1, 3>, T, B_KMAJOR, FLIP>(
+        launchConv<TileConfig<128, 32, 4, 1, 3>, T, B_KMAJOR>(
             A, Wrows, bias, out, topo, flipTaps, Kc, Nc, stream);
     }
-}
-
-template <typename T>
-void
-convForward(torch::Tensor const &features,
-            torch::Tensor const &Wrows,
-            torch::Tensor const &bias,
-            torch::Tensor &out,
-            MaskedIGemmTopology const &topo,
-            bool flipTaps,
-            int Ci,
-            int Co,
-            cudaStream_t stream) {
-    dispatchConv<T, false, false>(features, Wrows, bias, out, topo, flipTaps, Ci, Co, stream);
 }
 
 template <typename Cfg, typename T>
@@ -1287,7 +1306,6 @@ torch::Tensor
 launchWgrad(torch::Tensor const &X,
             torch::Tensor const &dY,
             MaskedIGemmTopology const &topo,
-            bool flipTaps,
             int Ci,
             int Co,
             cudaStream_t stream) {
@@ -1334,7 +1352,7 @@ launchWgrad(torch::Tensor const &X,
     else
         rows = torch::empty({K, Ci, Co}, X.options());
 
-    TapToRow const ttr{topo.kernelSize[1], topo.kernelSize[2], topo.kernelSize[0], flipTaps};
+    TapToRow const ttr{topo.kernelSize[1], topo.kernelSize[2], topo.kernelSize[0], false};
     dim3 const grid(tiles, K, unsigned(splits));
     kernel<<<grid, Cfg::THREADS, smem, stream>>>(
         reinterpret_cast<T const *>(X.data_ptr()),
@@ -1361,15 +1379,14 @@ torch::Tensor
 launchWgradByCo(torch::Tensor const &X,
                 torch::Tensor const &dY,
                 MaskedIGemmTopology const &topo,
-                bool flipTaps,
                 int Ci,
                 int Co,
                 cudaStream_t stream) {
     if (Co % 64 == 0)
-        return launchWgrad<WgradConfig<BM, 64, WM, 2, 2>, T>(X, dY, topo, flipTaps, Ci, Co, stream);
+        return launchWgrad<WgradConfig<BM, 64, WM, 2, 2>, T>(X, dY, topo, Ci, Co, stream);
     if (Co % 96 == 0)
-        return launchWgrad<WgradConfig<BM, 96, WM, 2, 2>, T>(X, dY, topo, flipTaps, Ci, Co, stream);
-    return launchWgrad<WgradConfig<BM, 32, WM, 1, 2>, T>(X, dY, topo, flipTaps, Ci, Co, stream);
+        return launchWgrad<WgradConfig<BM, 96, WM, 2, 2>, T>(X, dY, topo, Ci, Co, stream);
+    return launchWgrad<WgradConfig<BM, 32, WM, 1, 2>, T>(X, dY, topo, Ci, Co, stream);
 }
 
 template <typename T>
@@ -1377,15 +1394,14 @@ torch::Tensor
 launchWgradNarrow(torch::Tensor const &X,
                   torch::Tensor const &dY,
                   MaskedIGemmTopology const &topo,
-                  bool flipTaps,
                   int Ci,
                   int Co,
                   cudaStream_t stream) {
     if (Ci % 64 == 0)
-        return launchWgradByCo<T, 64, 2>(X, dY, topo, flipTaps, Ci, Co, stream);
+        return launchWgradByCo<T, 64, 2>(X, dY, topo, Ci, Co, stream);
     if (Ci % 96 == 0)
-        return launchWgradByCo<T, 96, 2>(X, dY, topo, flipTaps, Ci, Co, stream);
-    return launchWgradByCo<T, 32, 1>(X, dY, topo, flipTaps, Ci, Co, stream);
+        return launchWgradByCo<T, 96, 2>(X, dY, topo, Ci, Co, stream);
+    return launchWgradByCo<T, 32, 1>(X, dY, topo, Ci, Co, stream);
 }
 
 template <typename T>
@@ -1393,7 +1409,6 @@ torch::Tensor
 dispatchWgrad(torch::Tensor const &X,
               torch::Tensor const &dY,
               MaskedIGemmTopology const &topo,
-              bool flipTaps,
               int Ci,
               int Co,
               cudaStream_t stream) {
@@ -1401,16 +1416,14 @@ dispatchWgrad(torch::Tensor const &X,
         // float32 reads fragments element-wise, so wide warp tiles amortize the loads;
         // at 128x128, 16-row stages keep two CTAs resident per SM.
         if (Ci % 128 == 0 && Co % 128 == 0)
-            return launchWgrad<WgradConfig<128, 128, 2, 2, 3, 16>, T>(
-                X, dY, topo, flipTaps, Ci, Co, stream);
-        return launchWgradNarrow<T>(X, dY, topo, flipTaps, Ci, Co, stream);
+            return launchWgrad<WgradConfig<128, 128, 2, 2, 3, 16>, T>(X, dY, topo, Ci, Co, stream);
+        return launchWgradNarrow<T>(X, dY, topo, Ci, Co, stream);
     } else {
         char const *env       = std::getenv("FVDB_MIGEMM_WCFG");
         std::string const cfg = env ? env : "";
-#define FVDB_MIGEMM_TRYW(BM, BN, WM, WN, ST)                          \
-    if (cfg == #BM "x" #BN "x" #ST && Ci % BM == 0 && Co % BN == 0) { \
-        return launchWgrad<WgradConfig<BM, BN, WM, WN, ST>, T>(       \
-            X, dY, topo, flipTaps, Ci, Co, stream);                   \
+#define FVDB_MIGEMM_TRYW(BM, BN, WM, WN, ST)                                                 \
+    if (cfg == #BM "x" #BN "x" #ST && Ci % BM == 0 && Co % BN == 0) {                        \
+        return launchWgrad<WgradConfig<BM, BN, WM, WN, ST>, T>(X, dY, topo, Ci, Co, stream); \
     }
         FVDB_MIGEMM_TRYW(128, 128, 2, 2, 4)
         FVDB_MIGEMM_TRYW(128, 128, 2, 2, 3)
@@ -1424,9 +1437,8 @@ dispatchWgrad(torch::Tensor const &X,
         FVDB_MIGEMM_TRYW(64, 64, 2, 2, 2)
 #undef FVDB_MIGEMM_TRYW
         if (Ci % 128 == 0 && Co % 128 == 0)
-            return launchWgrad<WgradConfig<128, 128, 2, 2, 3>, T>(
-                X, dY, topo, flipTaps, Ci, Co, stream);
-        return launchWgradNarrow<T>(X, dY, topo, flipTaps, Ci, Co, stream);
+            return launchWgrad<WgradConfig<128, 128, 2, 2, 3>, T>(X, dY, topo, Ci, Co, stream);
+        return launchWgradNarrow<T>(X, dY, topo, Ci, Co, stream);
     }
 }
 
@@ -1434,7 +1446,9 @@ void
 checkConv(torch::Tensor const &features,
           torch::Tensor const &weights,
           MaskedIGemmTopology const &topo,
+          bool transposed,
           char const *name) {
+    int64_t const inRows = transposed ? topo.totalVoxels : topo.inputVoxels;
     TORCH_CHECK(features.is_cuda(), name, ": features must be on CUDA");
     TORCH_CHECK(weights.device() == features.device() &&
                     topo.neighborMap.device() == features.device(),
@@ -1444,10 +1458,10 @@ checkConv(torch::Tensor const &features,
                 name,
                 ": weights must have the features' dtype ",
                 features.scalar_type());
-    TORCH_CHECK(features.dim() == 2 && features.size(0) == topo.totalVoxels,
+    TORCH_CHECK(features.dim() == 2 && features.size(0) == inRows,
                 name,
                 ": features must be [",
-                topo.totalVoxels,
+                inRows,
                 ", C_in]");
     TORCH_CHECK(weights.dim() == 5 && weights.size(1) == features.size(1),
                 name,
@@ -1465,6 +1479,57 @@ checkConv(torch::Tensor const &features,
                 weights.size(0),
                 ") or dtype ",
                 features.scalar_type());
+}
+
+// A row map for the conv kernel, applied with or without mirrored taps.
+struct RowMap {
+    MaskedIGemmTopology const &topo;
+    bool flip;
+};
+
+// Rows of the forward convolution's input: the reverse map, or for a submanifold map the
+// forward map itself, since tap K-1-k of input row i reaches the row tap k reads from.
+RowMap
+inputRows(MaskedIGemmTopology const &topo) {
+    return topo.reverse ? RowMap{*topo.reverse, false} : RowMap{topo, true};
+}
+
+template <bool B_KMAJOR>
+void
+runConv(torch::Tensor const &A,
+        torch::Tensor const &Wrows,
+        torch::Tensor const &bias,
+        torch::Tensor &out,
+        RowMap map,
+        int Kc,
+        int Nc,
+        cudaStream_t stream) {
+    auto const st = A.scalar_type();
+    if (st == torch::kFloat16)
+        dispatchConv<__half, B_KMAJOR>(A, Wrows, bias, out, map.topo, map.flip, Kc, Nc, stream);
+    else if (st == torch::kBFloat16)
+        dispatchConv<__nv_bfloat16, B_KMAJOR>(
+            A, Wrows, bias, out, map.topo, map.flip, Kc, Nc, stream);
+    else
+        dispatchConv<float, B_KMAJOR>(A, Wrows, bias, out, map.topo, map.flip, Kc, Nc, stream);
+}
+
+// Per-tap X^T dY over the topology's pairs, X gathered by input row and dY by output row.
+torch::Tensor
+runWgrad(torch::Tensor const &X,
+         torch::Tensor const &dY,
+         MaskedIGemmTopology const &topo,
+         int Ci,
+         int Co,
+         cudaStream_t stream) {
+    if (topo.pairIn.numel() == 0)
+        return torch::zeros({topo.kernelVolume, Ci, Co}, X.options());
+    auto const st = X.scalar_type();
+    if (st == torch::kFloat16)
+        return dispatchWgrad<__half>(X, dY, topo, Ci, Co, stream);
+    if (st == torch::kBFloat16)
+        return dispatchWgrad<__nv_bfloat16>(X, dY, topo, Ci, Co, stream);
+    return dispatchWgrad<float>(X, dY, topo, Ci, Co, stream);
 }
 
 } // namespace
@@ -1492,29 +1557,44 @@ maskedIGemmSupports(int64_t inChannels,
 }
 
 MaskedIGemmTopology
-maskedIGemmTopology(GridBatchData const &grid, nanovdb::Coord kernelSize) {
-    TORCH_CHECK(grid.device().is_cuda(), "maskedIGemmTopology: grid must be on CUDA");
+maskedIGemmTopology(GridBatchData const &featureGrid,
+                    GridBatchData const &outputGrid,
+                    nanovdb::Coord kernelSize,
+                    nanovdb::Coord stride) {
+    TORCH_CHECK(outputGrid.device().is_cuda(), "maskedIGemmTopology: grids must be on CUDA");
+    TORCH_CHECK(featureGrid.device() == outputGrid.device(),
+                "maskedIGemmTopology: grids must be on the same device");
+    TORCH_CHECK(featureGrid.batchSize() == outputGrid.batchSize(),
+                "maskedIGemmTopology: grids must have the same batch size");
+    bool odd = true;
     for (int d = 0; d < 3; ++d) {
-        TORCH_CHECK(kernelSize[d] > 0 && kernelSize[d] % 2 == 1,
-                    "maskedIGemmTopology: kernel sizes must be positive and odd");
+        TORCH_CHECK(kernelSize[d] > 0 && stride[d] > 0,
+                    "maskedIGemmTopology: kernel sizes and strides must be positive");
+        odd &= kernelSize[d] % 2 == 1;
     }
-    ConvolutionGeometry const geometry(kernelSize, nanovdb::Coord(1));
+    // A submanifold map is its own reverse with mirrored taps; other maps store the reverse.
+    bool const submanifold = &featureGrid == &outputGrid && stride == nanovdb::Coord(1) && odd;
+    ConvolutionGeometry const geometry(kernelSize, stride);
     int64_t const K = geometry.kernelVolume();
     TORCH_CHECK(K <= kMaxTaps, "maskedIGemmTopology: kernel volume must be at most ", kMaxTaps);
-    int64_t const N = grid.totalVoxels();
-    TORCH_CHECK(N < std::numeric_limits<int32_t>::max(), "maskedIGemmTopology: too many voxels");
+    int64_t const N   = outputGrid.totalVoxels();
+    int64_t const NIn = featureGrid.totalVoxels();
+    TORCH_CHECK(N < std::numeric_limits<int32_t>::max() &&
+                    NIn < std::numeric_limits<int32_t>::max(),
+                "maskedIGemmTopology: too many voxels");
 
-    c10::cuda::CUDAGuard guard(grid.device());
-    auto const i32 = torch::dtype(torch::kInt32).device(grid.device());
+    c10::cuda::CUDAGuard guard(outputGrid.device());
+    auto const i32 = torch::dtype(torch::kInt32).device(outputGrid.device());
     auto nbr       = torch::empty({N, K}, i32);
     auto code      = torch::empty({N}, i32);
     auto rowMasks  = torch::empty({N}, i32);
+    auto stream    = c10::cuda::getCurrentCUDAStream();
 
     if (N > 0) {
-        // The staged builder needs every tap within one leaf of its voxel. Below ~128K
-        // voxels the VoxelBlockManager's cold build (a host sync) costs more than the
-        // probes it saves. FVDB_MIGEMM_BUILDER=scan|staged overrides the choice.
-        bool withinLeaf = true;
+        // The staged builder needs a submanifold map with every tap within one leaf of its
+        // voxel. Below ~128K voxels the VoxelBlockManager's cold build (a host sync) costs more
+        // than the probes it saves. FVDB_MIGEMM_BUILDER=scan|staged overrides the choice.
+        bool withinLeaf = submanifold;
         for (int d = 0; d < 3; ++d)
             withinLeaf &= (kernelSize[d] - 1) / 2 <= 8;
         char const *env          = std::getenv("FVDB_MIGEMM_BUILDER");
@@ -1525,29 +1605,28 @@ maskedIGemmTopology(GridBatchData const &grid, nanovdb::Coord kernelSize) {
         else if (choice == "scan")
             scan = true;
         if (scan) {
-            buildNeighborMapScan(grid,
+            buildNeighborMapScan(featureGrid,
+                                 outputGrid,
                                  geometry,
                                  int(K),
                                  nbr.data_ptr<int32_t>(),
                                  code.data_ptr<int32_t>(),
                                  rowMasks.data_ptr<int32_t>());
         } else {
-            buildNeighborMapStaged(grid,
+            buildNeighborMapStaged(outputGrid,
                                    geometry,
                                    int(K),
                                    nbr.data_ptr<int32_t>(),
                                    code.data_ptr<int32_t>(),
                                    rowMasks.data_ptr<int32_t>(),
-                                   c10::cuda::getCurrentCUDAStream());
+                                   stream);
         }
     }
 
     auto sortedRows = torch::argsort(code).to(torch::kInt32);
-
     // Weight-gradient pairs per tap, output rows ascending (leaf order).
     int64_t const blocks = (N + kPairBlock - 1) / kPairBlock;
     auto blockCounts     = torch::zeros({K, blocks}, i32); // tap-major, so scans run along rows
-    auto stream          = c10::cuda::getCurrentCUDAStream();
     if (blocks > 0) {
         pairCountKernel<<<blocks, kPairBlock, 0, stream>>>(
             rowMasks.data_ptr<int32_t>(), int(N), int(K), blockCounts.data_ptr<int32_t>());
@@ -1576,17 +1655,54 @@ maskedIGemmTopology(GridBatchData const &grid, nanovdb::Coord kernelSize) {
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     }
 
-    return MaskedIGemmTopology{nbr,
-                               sortedRows,
-                               torch::Tensor(),
-                               rowMasks,
-                               pairIn,
-                               pairOut,
-                               offsets,
-                               blockOffsets,
-                               N,
-                               K,
-                               kernelSize};
+    MaskedIGemmTopology topo{nbr,
+                             sortedRows,
+                             torch::Tensor(),
+                             rowMasks,
+                             pairIn,
+                             pairOut,
+                             offsets,
+                             blockOffsets,
+                             N,
+                             NIn,
+                             K,
+                             kernelSize,
+                             nullptr};
+    if (submanifold)
+        return topo;
+
+    auto rev      = torch::full({NIn, K}, -1, i32);
+    auto revCode  = torch::empty({NIn}, i32);
+    auto revMasks = torch::empty({NIn}, i32);
+    if (N > 0 && NIn > 0) {
+        reverseMapKernel<<<gridStrideBlocks(N * K), 256, 0, stream>>>(
+            nbr.data_ptr<int32_t>(), N * K, int(K), rev.data_ptr<int32_t>());
+        C10_CUDA_KERNEL_LAUNCH_CHECK();
+    }
+    if (NIn > 0) {
+        rowMaskKernel<<<gridStrideBlocks(NIn), 256, 0, stream>>>(rev.data_ptr<int32_t>(),
+                                                                 NIn,
+                                                                 int(K),
+                                                                 revCode.data_ptr<int32_t>(),
+                                                                 revMasks.data_ptr<int32_t>());
+        C10_CUDA_KERNEL_LAUNCH_CHECK();
+    }
+    auto const none = torch::empty({0}, i32);
+    topo.reverse    = std::make_shared<MaskedIGemmTopology const>(
+        MaskedIGemmTopology{rev,
+                            torch::argsort(revCode).to(torch::kInt32),
+                            torch::Tensor(),
+                            revMasks,
+                            none,
+                            none,
+                            none,
+                            none,
+                            NIn,
+                            N,
+                            K,
+                            kernelSize,
+                            nullptr});
+    return topo;
 }
 
 torch::Tensor
@@ -1594,8 +1710,8 @@ maskedIGemmConv(torch::Tensor features,
                 torch::Tensor weights,
                 std::optional<torch::Tensor> bias,
                 MaskedIGemmTopology const &topo,
-                bool flipTaps) {
-    checkConv(features, weights, topo, "maskedIGemmConv");
+                bool transposed) {
+    checkConv(features, weights, topo, transposed, "maskedIGemmConv");
     c10::cuda::CUDAGuard guard(features.device());
     auto const st = features.scalar_type();
     features      = features.contiguous();
@@ -1609,16 +1725,11 @@ maskedIGemmConv(torch::Tensor features,
                     "maskedIGemmConv: bias must match the features' device and dtype");
         b = bias->contiguous();
     }
-    auto out = torch::empty({topo.totalVoxels, Co}, features.options());
-    if (topo.totalVoxels == 0)
-        return out;
-    auto stream = c10::cuda::getCurrentCUDAStream();
-    if (st == torch::kFloat16)
-        convForward<__half>(features, Wrows, b, out, topo, flipTaps, Ci, Co, stream);
-    else if (st == torch::kBFloat16)
-        convForward<__nv_bfloat16>(features, Wrows, b, out, topo, flipTaps, Ci, Co, stream);
-    else
-        convForward<float>(features, Wrows, b, out, topo, flipTaps, Ci, Co, stream);
+    // The transpose runs the forward kernel over the input rows' map.
+    RowMap const map = transposed ? inputRows(topo) : RowMap{topo, false};
+    auto out         = torch::empty({map.topo.totalVoxels, Co}, features.options());
+    if (map.topo.totalVoxels > 0)
+        runConv<false>(features, Wrows, b, out, map, Ci, Co, c10::cuda::getCurrentCUDAStream());
     return out;
 }
 
@@ -1629,11 +1740,12 @@ maskedIGemmConvBackward(torch::Tensor gradOutput,
                         MaskedIGemmTopology const &topo,
                         bool needFeatures,
                         bool needWeights,
-                        bool flipTaps) {
-    checkConv(features, weights, topo, "maskedIGemmConvBackward");
-    TORCH_CHECK(gradOutput.dim() == 2 && gradOutput.size(0) == topo.totalVoxels &&
+                        bool transposed) {
+    checkConv(features, weights, topo, transposed, "maskedIGemmConvBackward");
+    int64_t const outRows = transposed ? topo.inputVoxels : topo.totalVoxels;
+    TORCH_CHECK(gradOutput.dim() == 2 && gradOutput.size(0) == outRows &&
                     gradOutput.size(1) == weights.size(0),
-                "maskedIGemmConvBackward: grad_output must be [N, C_out]");
+                "maskedIGemmConvBackward: grad_output must be [N_out, C_out]");
     TORCH_CHECK(gradOutput.device() == features.device(),
                 "maskedIGemmConvBackward: grad_output must be on the features' device");
     c10::cuda::CUDAGuard guard(features.device());
@@ -1645,35 +1757,19 @@ maskedIGemmConvBackward(torch::Tensor gradOutput,
 
     torch::Tensor gradFeatures, gradWeights;
     if (needFeatures) {
-        auto Wrows   = weightRows(weights);
-        gradFeatures = torch::empty({topo.totalVoxels, Ci}, features.options());
-        if (topo.totalVoxels > 0) {
-            if (st == torch::kFloat16)
-                dispatchConv<__half, true, true>(
-                    gradOutput, Wrows, {}, gradFeatures, topo, flipTaps, Co, Ci, stream);
-            else if (st == torch::kBFloat16)
-                dispatchConv<__nv_bfloat16, true, true>(
-                    gradOutput, Wrows, {}, gradFeatures, topo, flipTaps, Co, Ci, stream);
-            else
-                dispatchConv<float, true, true>(
-                    gradOutput, Wrows, {}, gradFeatures, topo, flipTaps, Co, Ci, stream);
-        }
+        // The input gradient runs the transposed weights over the other direction's map.
+        RowMap const map = transposed ? RowMap{topo, false} : inputRows(topo);
+        gradFeatures     = torch::empty({features.size(0), Ci}, features.options());
+        if (map.topo.totalVoxels > 0)
+            runConv<true>(gradOutput, weightRows(weights), {}, gradFeatures, map, Co, Ci, stream);
     }
     if (needWeights) {
-        torch::Tensor gradRows;
-        if (topo.totalVoxels > 0) {
-            if (st == torch::kFloat16)
-                gradRows =
-                    dispatchWgrad<__half>(features, gradOutput, topo, flipTaps, Ci, Co, stream);
-            else if (st == torch::kBFloat16)
-                gradRows = dispatchWgrad<__nv_bfloat16>(
-                    features, gradOutput, topo, flipTaps, Ci, Co, stream);
-            else
-                gradRows =
-                    dispatchWgrad<float>(features, gradOutput, topo, flipTaps, Ci, Co, stream);
-        } else {
-            gradRows = torch::zeros({topo.kernelVolume, Ci, Co}, features.options());
-        }
+        // Pairs gather input rows from the forward convolution's input. For the transpose
+        // that is grad_output, so swap the operands and transpose each tap's product.
+        auto const gradRows =
+            transposed
+                ? runWgrad(gradOutput, features, topo, Co, Ci, stream).transpose(1, 2).contiguous()
+                : runWgrad(features, gradOutput, topo, Ci, Co, stream);
         gradWeights = weightsFromRows(gradRows, topo.kernelSize);
     }
     return {gradFeatures, gradWeights};

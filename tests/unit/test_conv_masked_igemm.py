@@ -2,15 +2,16 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 """
-Test the masked implicit GEMM (masked_igemm) submanifold convolution backend.
+Test the masked implicit GEMM (masked_igemm) convolution backend.
 
-The backend runs submanifold convolution only: target grid == source grid, stride 1, odd kernel
-sizes with volume <= 32, CUDA SM80+, float16/bfloat16/TF32 features, channel counts divisible by 32.
-Forward, input gradient and weight gradient are checked against the default gather-scatter
-backend evaluated in float32.
+The backend runs regular and transposed convolution with any stride and kernel volumes <= 32 on
+CUDA SM80+, with float16/bfloat16/TF32 features and channel counts divisible by 32. Forward, input
+gradient and weight gradient are checked against the default gather-scatter backend evaluated in
+float32.
 """
 
 import contextlib
+import math
 import os
 import unittest
 
@@ -55,6 +56,13 @@ def _tf32(enabled: bool):
         yield
     finally:
         setattr(matmul, name, previous)
+
+
+def _build_topology(feature_grid: GridBatch, output_grid: GridBatch, kernel_size, stride=1):
+    as_vec = lambda v: torch.tensor(v if isinstance(v, (tuple, list)) else (v,) * 3, dtype=torch.int32)
+    return _fvdb_cpp.migemm_build_topology(
+        _get_grid_data(feature_grid), _get_grid_data(output_grid), as_vec(kernel_size), as_vec(stride)
+    )
 
 
 def _rel_err(a: torch.Tensor, b: torch.Tensor) -> float:
@@ -159,7 +167,8 @@ class TestMaskedIGemm(unittest.TestCase):
 
     def test_neighbor_map(self):
         grid = _random_grid(800, 6)
-        topo = _fvdb_cpp.migemm_build_topology(_get_grid_data(grid), torch.tensor([3, 3, 3], dtype=torch.int32))
+        topo = _build_topology(grid, grid, 3)
+        self.assertIsNone(topo.reverse_map, "a submanifold map is its own reverse")
         ijk = grid.ijk.jdata.cpu()
         lookup = {tuple(v.tolist()): i for i, v in enumerate(ijk)}
         nbr = topo.neighbor_map.cpu()
@@ -195,16 +204,14 @@ class TestMaskedIGemm(unittest.TestCase):
             grid = _random_grid(3000, 16, batch=3)
         else:
             grid = _random_grid(2000, 12, batch=4)[1:3]
-        ks = torch.tensor(kernel_size, dtype=torch.int32)
-        data = _get_grid_data(grid)
         os.environ["FVDB_MIGEMM_BUILDER"] = "scan"
         try:
-            ref = _fvdb_cpp.migemm_build_topology(data, ks)
+            ref = _build_topology(grid, grid, kernel_size)
         finally:
             del os.environ["FVDB_MIGEMM_BUILDER"]
         os.environ["FVDB_MIGEMM_BUILDER"] = "staged"
         try:
-            topo = _fvdb_cpp.migemm_build_topology(data, ks)
+            topo = _build_topology(grid, grid, kernel_size)
         finally:
             del os.environ["FVDB_MIGEMM_BUILDER"]
         for name in ("neighbor_map", "row_masks", "pair_in", "pair_out", "pair_offsets"):
@@ -212,12 +219,13 @@ class TestMaskedIGemm(unittest.TestCase):
 
     def test_rejects_unsupported(self):
         grid = _random_grid(500, 8)
-        with self.assertRaises(ValueError):
-            ConvolutionPlan.from_grid_batch(3, 2, grid, expert_config=CONFIG)
-        with self.assertRaises(ValueError):
-            ConvolutionPlan.from_grid_batch(3, 1, grid, grid.conv_grid(3, 1), expert_config=CONFIG)
-        with self.assertRaises(ValueError):
-            ConvolutionPlan.from_grid_batch(4, 1, grid, grid, expert_config=CONFIG)
+        with self.assertRaisesRegex(ValueError, "kernel volume"):
+            ConvolutionPlan.from_grid_batch(5, 1, grid, grid, expert_config=CONFIG)
+        with self.assertRaisesRegex(ValueError, "kernel volume"):
+            ConvolutionPlan.from_grid_batch_transposed(4, 2, grid, expert_config=CONFIG)
+        cpu = GridBatch.from_ijk(JaggedTensor([torch.randint(0, 8, (100, 3), dtype=torch.int32)]))
+        with self.assertRaisesRegex(ValueError, "CUDA"):
+            ConvolutionPlan.from_grid_batch(3, 2, cpu, expert_config=CONFIG)
 
     @parameterized.expand(
         [((64, 128),), ((128, 64),), ((192, 256),), ((32, 32),), ((96, 64),), ((64, 96),), ((96, 96),)]
@@ -329,7 +337,7 @@ class TestMaskedIGemm(unittest.TestCase):
 
     def test_rejects_mismatched_inputs(self):
         grid = _random_grid(500, 8)
-        topo = _fvdb_cpp.migemm_build_topology(_get_grid_data(grid), torch.tensor([3, 3, 3], dtype=torch.int32))
+        topo = _build_topology(grid, grid, 3)
         x = torch.randn(grid.total_voxels, 64, device="cuda", dtype=torch.float16)
         w = torch.randn(64, 64, 3, 3, 3, device="cuda", dtype=torch.float16)
         with self.assertRaisesRegex(RuntimeError, "same device"):
@@ -346,6 +354,120 @@ class TestMaskedIGemm(unittest.TestCase):
         self.assertFalse(_fvdb_cpp.migemm_supports(0, 64, torch.float16, cuda))
         self.assertFalse(_fvdb_cpp.migemm_supports(64, 0, torch.float16, cuda))
         self.assertFalse(_fvdb_cpp.migemm_supports(48, 64, torch.float16, cuda))
+
+    def _compare_plans(self, plan, ref_plan, cin, cout, dtype, tol, *, native=True):
+        """Forward, input, weight and bias gradients of ``plan`` against float32 gather-scatter."""
+        torch.manual_seed(0)
+        source = plan.source_grid_batch
+        ks = tuple(int(k) for k in plan.kernel_size.tolist())
+        x = torch.randn(source.total_voxels, cin, device="cuda").to(dtype).requires_grad_(True)
+        w = (torch.randn(cout, cin, *ks, device="cuda") / (cin * math.prod(ks)) ** 0.5).to(dtype).requires_grad_(True)
+        b = torch.randn(cout, device="cuda").to(dtype).requires_grad_(True)
+        xr = x.detach().float().requires_grad_(True)
+        wr = w.detach().float().requires_grad_(True)
+        br = b.detach().float().requires_grad_(True)
+        with _tf32(True):
+            y = plan.execute(source.jagged_like(x), w, b).jdata
+            gy = torch.randn_like(y)
+            y.backward(gy)
+        with _tf32(False):
+            yr = ref_plan.execute(source.jagged_like(xr), wr, br).jdata
+            yr.backward(gy.float())
+
+        self.assertIsInstance(plan._backend, _MaskedIGemmBackend)
+        self.assertEqual(y.shape, yr.shape)
+        self.assertEqual("gather_scatter" not in plan._backend.fallback, native)
+        self.assertLess(_rel_err(y, yr), tol, "forward")
+        self.assertLess(_rel_err(x.grad, xr.grad), tol, "input gradient")
+        self.assertLess(_rel_err(w.grad, wr.grad), tol, "weight gradient")
+        self.assertLess(_rel_err(b.grad, br.grad), tol, "bias gradient")
+
+    @parameterized.expand(
+        [
+            ("k2_s2", 2, 2, 64, 128, torch.float16),
+            ("k3_s2", 3, 2, 128, 64, torch.float16),
+            ("k2_s2_bf16", 2, 2, 64, 96, torch.bfloat16),
+            ("k2_s2_tf32", 2, 2, 32, 64, torch.float32),
+            ("k3_s122", 3, (1, 2, 2), 64, 64, torch.float16),
+            ("k2_s1", 2, 1, 64, 64, torch.float16),
+            ("k3_s1_dilated", 3, 1, 32, 64, torch.float16),
+            ("fallback", 2, 2, 48, 64, torch.float16),
+        ]
+    )
+    def test_strided(self, _, kernel_size, stride, cin, cout, dtype):
+        grid = _random_grid(3000, 12, batch=2)
+        plan = ConvolutionPlan.from_grid_batch(kernel_size, stride, grid, expert_config=CONFIG)
+        ref_plan = ConvolutionPlan.from_grid_batch(kernel_size, stride, grid)
+        self.assertIsNotNone(plan._backend.topology.reverse_map)
+        tol = {torch.float16: 4e-3, torch.bfloat16: 2e-2, torch.float32: 5e-3}[dtype]
+        self._compare_plans(plan, ref_plan, cin, cout, dtype, tol, native=cin % 32 == 0)
+
+    @parameterized.expand(
+        [
+            ("factory_k2_s2", 2, 2, 128, 64, torch.float16, True),
+            ("factory_k3_s2", 3, 2, 64, 64, torch.float16, True),
+            ("from_plan_k2_s2", 2, 2, 64, 128, torch.float16, False),
+            ("from_plan_k3_s2_tf32", 3, 2, 64, 32, torch.float32, False),
+            ("factory_fallback", 2, 2, 48, 64, torch.float16, True),
+        ]
+    )
+    def test_strided_transpose(self, _, kernel_size, stride, cin, cout, dtype, factory):
+        fine = _random_grid(3000, 12, batch=2)
+        coarse = fine.conv_grid(kernel_size, stride)
+        if factory:
+            plan = ConvolutionPlan.from_grid_batch_transposed(kernel_size, stride, coarse, fine, expert_config=CONFIG)
+            ref_plan = ConvolutionPlan.from_grid_batch_transposed(kernel_size, stride, coarse, fine)
+        else:
+            plan = ConvolutionPlan.from_plan_transposed(
+                ConvolutionPlan.from_grid_batch(kernel_size, stride, fine, coarse, expert_config=CONFIG)
+            )
+            ref_plan = ConvolutionPlan.from_plan_transposed(
+                ConvolutionPlan.from_grid_batch(kernel_size, stride, fine, coarse)
+            )
+        tol = 5e-3 if dtype == torch.float32 else 4e-3
+        self._compare_plans(plan, ref_plan, cin, cout, dtype, tol, native=cin % 32 == 0)
+
+    def test_reverse_map(self):
+        fine = _random_grid(2000, 10, batch=2)
+        topo = _build_topology(fine, fine.conv_grid(3, 2), 3, 2)
+        nbr, rev = topo.neighbor_map.long(), topo.reverse_map.long()
+        self.assertEqual(tuple(rev.shape), (fine.total_voxels, 27))
+        self.assertEqual(topo.input_voxels, fine.total_voxels)
+        self.assertEqual(int((nbr >= 0).sum()), int((rev >= 0).sum()))
+        o, k = torch.nonzero(nbr >= 0, as_tuple=True)
+        self.assertTrue(torch.equal(rev[nbr[o, k], k], o))
+
+    @parameterized.expand([("forward", False), ("transposed", True)])
+    def test_strided_coverage_report(self, _, transposed):
+        fine = _random_grid(1500, 10)
+        coarse = fine.conv_grid(2, 2)
+        if transposed:
+            report = ConvolutionPlan.from_grid_batch_transposed(
+                2, 2, coarse, fine, expert_config=CONFIG
+            ).coverage_report
+            expected = ConvolutionPlan.from_grid_batch_transposed(2, 2, coarse, fine).coverage_report
+        else:
+            report = ConvolutionPlan.from_grid_batch(2, 2, fine, coarse, expert_config=CONFIG).coverage_report
+            expected = ConvolutionPlan.from_grid_batch(2, 2, fine, coarse).coverage_report
+        self.assertEqual(report, expected)
+
+    @parameterized.expand([("forward", False), ("transposed", True)])
+    def test_strided_strict_coverage(self, _, transposed):
+        # Dropping coarse voxels leaves fine voxels with no coarse neighbor while every kept coarse
+        # voxel still has fine inputs, so only the transposed direction has zero-degree outputs.
+        fine = _random_grid(1500, 10)
+        full = fine.conv_grid(2, 2)
+        coarse = GridBatch.from_ijk(
+            JaggedTensor([full.ijk.jdata[::2].contiguous()]), voxel_sizes=full.voxel_sizes, origins=full.origins
+        )
+        for config in (CONFIG, {}):
+            if transposed:
+                with self.assertRaisesRegex(ValueError, "zero-degree output rows"):
+                    ConvolutionPlan.from_grid_batch_transposed(
+                        2, 2, coarse, fine, expert_config=config, strict_output_coverage=True
+                    )
+            else:
+                ConvolutionPlan.from_grid_batch(2, 2, fine, coarse, expert_config=config, strict_output_coverage=True)
 
     def test_module_and_transpose(self):
         grid = _random_grid(1000, 8)

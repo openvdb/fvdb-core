@@ -142,7 +142,7 @@ def pred_gather_igemm_conv(
 ) -> torch.Tensor: ...
 
 class MaskedIGemmTopology:
-    """Neighbor map and row ordering for masked implicit GEMM submanifold convolution."""
+    """Neighbor map, row ordering and pair lists for masked implicit GEMM convolution."""
 
     @property
     def neighbor_map(self) -> torch.Tensor: ...
@@ -159,17 +159,26 @@ class MaskedIGemmTopology:
     @property
     def total_voxels(self) -> int: ...
     @property
+    def input_voxels(self) -> int: ...
+    @property
+    def reverse_map(self) -> torch.Tensor | None: ...
+    @property
     def kernel_volume(self) -> int: ...
     @property
     def kernel_size(self) -> list[int]: ...
 
-def migemm_build_topology(grid: GridBatchData, kernel_size: Vec3iOrScalar) -> MaskedIGemmTopology: ...
+def migemm_build_topology(
+    feature_grid: GridBatchData,
+    output_grid: GridBatchData,
+    kernel_size: Vec3iOrScalar,
+    stride: Vec3iOrScalar,
+) -> MaskedIGemmTopology: ...
 def migemm_conv(
     features: torch.Tensor,
     weights: torch.Tensor,
     bias: torch.Tensor | None,
     topology: MaskedIGemmTopology,
-    flip_taps: bool = False,
+    transposed: bool = False,
 ) -> torch.Tensor: ...
 def migemm_conv_backward(
     grad_output: torch.Tensor,
@@ -178,7 +187,7 @@ def migemm_conv_backward(
     topology: MaskedIGemmTopology,
     need_features: bool = True,
     need_weights: bool = True,
-    flip_taps: bool = False,
+    transposed: bool = False,
 ) -> tuple[torch.Tensor | None, torch.Tensor | None]: ...
 def migemm_supports(in_channels: int, out_channels: int, dtype: torch.dtype, device: torch.device) -> bool: ...
 def rasterize_num_contributing_gaussians(

@@ -674,7 +674,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         py::arg("kernel_size"),
         py::arg("stride"));
 
-    // --- Masked implicit GEMM (submanifold) ---
+    // --- Masked implicit GEMM ---
 
     using MIGTopo = fvdb::detail::ops::MaskedIGemmTopology;
     py::class_<MIGTopo>(m, "MaskedIGemmTopology")
@@ -685,6 +685,13 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def_readonly("pair_out", &MIGTopo::pairOut)
         .def_readonly("pair_offsets", &MIGTopo::pairOffsets)
         .def_readonly("total_voxels", &MIGTopo::totalVoxels)
+        .def_readonly("input_voxels", &MIGTopo::inputVoxels)
+        .def_property_readonly("reverse_map",
+                               [](const MIGTopo &t) -> std::optional<torch::Tensor> {
+                                   if (!t.reverse)
+                                       return std::nullopt;
+                                   return t.reverse->neighborMap;
+                               })
         .def_readonly("kernel_volume", &MIGTopo::kernelVolume)
         .def_property_readonly("kernel_size", [](const MIGTopo &t) {
             return std::vector<int>{t.kernelSize[0], t.kernelSize[1], t.kernelSize[2]};
@@ -692,12 +699,18 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     m.def(
         "migemm_build_topology",
-        [](const fvdb::GridBatchData &grid, const torch::Tensor &kernelSize) -> MIGTopo {
-            return fvdb::detail::ops::maskedIGemmTopology(grid, pyToCoord(kernelSize));
+        [](const fvdb::GridBatchData &featureGrid,
+           const fvdb::GridBatchData &outputGrid,
+           const torch::Tensor &kernelSize,
+           const torch::Tensor &stride) -> MIGTopo {
+            return fvdb::detail::ops::maskedIGemmTopology(
+                featureGrid, outputGrid, pyToCoord(kernelSize), pyToCoord(stride));
         },
-        "Build the masked implicit GEMM topology for submanifold convolution on a grid.",
-        py::arg("grid"),
-        py::arg("kernel_size"));
+        "Build the masked implicit GEMM topology from output_grid's voxels to feature_grid's.",
+        py::arg("feature_grid"),
+        py::arg("output_grid"),
+        py::arg("kernel_size"),
+        py::arg("stride"));
 
     m.def(
         "migemm_conv",
@@ -705,16 +718,16 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
            torch::Tensor weights,
            std::optional<torch::Tensor> bias,
            const MIGTopo &topo,
-           bool flip_taps) -> torch::Tensor {
-            return fvdb::detail::ops::maskedIGemmConv(features, weights, bias, topo, flip_taps);
+           bool transposed) -> torch::Tensor {
+            return fvdb::detail::ops::maskedIGemmConv(features, weights, bias, topo, transposed);
         },
-        "Masked implicit GEMM submanifold sparse convolution with an optional fused bias. "
-        "flip_taps applies each tap's weights at its mirror tap (the transposed convolution).",
+        "Masked implicit GEMM sparse convolution with an optional fused bias. transposed runs "
+        "from the topology's output rows to its input rows.",
         py::arg("features"),
         py::arg("weights"),
         py::arg("bias"),
         py::arg("topology"),
-        py::arg("flip_taps") = false);
+        py::arg("transposed") = false);
 
     m.def(
         "migemm_conv_backward",
@@ -724,10 +737,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
            const MIGTopo &topo,
            bool need_features,
            bool need_weights,
-           bool flip_taps)
+           bool transposed)
             -> std::tuple<std::optional<torch::Tensor>, std::optional<torch::Tensor>> {
             auto [gf, gw] = fvdb::detail::ops::maskedIGemmConvBackward(
-                grad_output, features, weights, topo, need_features, need_weights, flip_taps);
+                grad_output, features, weights, topo, need_features, need_weights, transposed);
             return {gf.defined() ? std::optional<torch::Tensor>(gf) : std::nullopt,
                     gw.defined() ? std::optional<torch::Tensor>(gw) : std::nullopt};
         },
@@ -738,7 +751,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         py::arg("topology"),
         py::arg("need_features") = true,
         py::arg("need_weights")  = true,
-        py::arg("flip_taps")     = false);
+        py::arg("transposed")    = false);
 
     m.def("migemm_supports",
           &fvdb::detail::ops::maskedIGemmSupports,
