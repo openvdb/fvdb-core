@@ -453,12 +453,8 @@ def _validate_masked_igemm_admission(
     stride: torch.Tensor,
     source_grid: GridBatch,
     target_grid: GridBatch | None,
-    *,
-    transposed: bool,
 ) -> None:
-    """Admit only submanifold convolution: same grid, stride 1, odd kernel sizes, CUDA."""
-    if transposed:
-        raise ValueError("masked_igemm backend does not support transposed convolution.")
+    """Admit only submanifold convolution and its transpose: same grid, stride 1, odd kernel sizes, CUDA."""
     stride_values = stride.tolist()
     if any(step != 1 for step in stride_values):
         raise ValueError(f"masked_igemm supports only stride 1; got {stride_values}.")
@@ -550,11 +546,13 @@ class _MaskedIGemmConvFn(torch.autograd.Function):
         weights: torch.Tensor,
         bias: torch.Tensor | None,
         topo: _fvdb_cpp.MaskedIGemmTopology,
+        flip_taps: bool,
     ) -> torch.Tensor:
         ctx.save_for_backward(features, weights)
         ctx.topo = topo
+        ctx.flip_taps = flip_taps
         ctx.has_bias = bias is not None
-        return _fvdb_cpp.migemm_conv(features, weights, bias, topo)
+        return _fvdb_cpp.migemm_conv(features, weights, bias, topo, flip_taps)
 
     @staticmethod
     def backward(ctx, grad_output: torch.Tensor):  # type: ignore[override]
@@ -564,10 +562,10 @@ class _MaskedIGemmConvFn(torch.autograd.Function):
         grad_feat, grad_w = None, None
         if need_feat or need_w:
             grad_feat, grad_w = _fvdb_cpp.migemm_conv_backward(
-                grad_output, features, weights, ctx.topo, bool(need_feat), bool(need_w)
+                grad_output, features, weights, ctx.topo, bool(need_feat), bool(need_w), ctx.flip_taps
             )
         grad_b = grad_output.sum(0) if ctx.has_bias and need_b else None
-        return grad_feat, grad_w, grad_b, None
+        return grad_feat, grad_w, grad_b, None, None
 
 
 # ============================================================
@@ -622,13 +620,9 @@ def _tf32_matmul_enabled() -> bool:
     return torch.backends.cuda.matmul.allow_tf32
 
 
-def _masked_igemm_dtype(*tensors: torch.Tensor | None) -> torch.dtype:
+def _masked_igemm_dtype(features: torch.Tensor, weights: torch.Tensor) -> torch.dtype:
     """Compute dtype for a masked_igemm call, promoted like gather-scatter's."""
-    dtypes = [t.dtype for t in tensors if t is not None]
-    dtype = dtypes[0]
-    for other in dtypes[1:]:
-        dtype = torch.promote_types(dtype, other)
-    return dtype
+    return torch.promote_types(features.dtype, weights.dtype)
 
 
 def _masked_igemm_runs(in_channels: int, out_channels: int, dtype: torch.dtype, device: torch.device) -> bool:
@@ -836,9 +830,7 @@ class ConvolutionPlan:
         if backend_name == "pred_gather_igemm":
             _validate_pred_gather_igemm_admission(kernel_size, stride, channel_pairs, transposed=False)
             _validate_pred_gather_igemm_grid_admission(source_grid, target_grid)
-        elif backend_name == "masked_igemm":
-            _validate_masked_igemm_admission(kernel_size, stride, source_grid, target_grid, transposed=False)
-        elif backend_name in ("default", "gather_scatter"):
+        elif backend_name in ("default", "gather_scatter", "masked_igemm"):
             identity_plan = cls._identity_matmul_plan(
                 kernel_size,
                 stride,
@@ -851,6 +843,8 @@ class ConvolutionPlan:
             )
             if identity_plan is not None:
                 return identity_plan
+            if backend_name == "masked_igemm":
+                _validate_masked_igemm_admission(kernel_size, stride, source_grid, target_grid)
         if target_grid is None:
             target_grid = source_grid.conv_grid(kernel_size, stride)
 
@@ -943,7 +937,7 @@ class ConvolutionPlan:
         if backend_name == "pred_gather_igemm":
             _validate_pred_gather_igemm_admission(kernel_size, stride, channel_pairs, transposed=True)
             _validate_pred_gather_igemm_grid_admission(source_grid, target_grid)
-        elif backend_name in ("default", "gather_scatter"):
+        elif backend_name in ("default", "gather_scatter", "masked_igemm"):
             identity_plan = cls._identity_matmul_plan(
                 kernel_size,
                 stride,
@@ -956,6 +950,8 @@ class ConvolutionPlan:
             )
             if identity_plan is not None:
                 return identity_plan
+            if backend_name == "masked_igemm":
+                _validate_masked_igemm_admission(kernel_size, stride, source_grid, target_grid)
         if target_grid is None:
             target_grid = source_grid.conv_transpose_grid(kernel_size, stride)
 
@@ -1182,6 +1178,8 @@ class ConvolutionPlan:
 
         if not _channel_pair_supported(in_c, out_c, self._channel_pairs):
             raise ValueError(f"Channel pair {in_c, out_c} is not supported")
+        if bias is not None and tuple(bias.shape) != (out_c,):
+            raise ValueError(f"bias must have shape ({out_c},); got {tuple(bias.shape)}")
         if isinstance(backend, _PredGatherIGemmBackend) and not _pred_gather_igemm_channel_pair_supported(in_c, out_c):
             raise ValueError(
                 f"PredGatherIGemm requires input and output channel counts divisible by 32; got ({in_c}, {out_c})."
@@ -1214,19 +1212,24 @@ class ConvolutionPlan:
         elif isinstance(backend, _MaskedIGemmBackend):
             if weights.ndim != 5:
                 raise ValueError("masked_igemm weights must be (out_channels, in_channels, k0, k1, k2)")
-            if self._transposed:
-                # Tap K-1-k mirrors tap k, so the transpose is the forward conv with a flipped kernel.
-                weights = weights.flip((2, 3, 4))
-            dtype = _masked_igemm_dtype(data.jdata, weights, bias)
+            # Tap K-1-k mirrors tap k, so the transpose is the forward conv with flipped taps.
+            dtype = _masked_igemm_dtype(data.jdata, weights)
             if _masked_igemm_runs(in_c, out_c, dtype, data.jdata.device):
-                fused_bias = None if bias is None else bias.to(dtype)
+                # Fuse the bias only when adding it afterwards would not promote the output.
+                fuse = bias is not None and torch.promote_types(dtype, bias.dtype) == dtype
                 out_tensor = _MaskedIGemmConvFn.apply(
-                    data.jdata.to(dtype), weights.to(dtype), fused_bias, backend.topology
+                    data.jdata.to(dtype),
+                    weights.to(dtype),
+                    bias.to(dtype) if fuse else None,
+                    backend.topology,
+                    self._transposed,
                 )
-                bias = None
+                if fuse:
+                    bias = None
             else:
                 topology = self._masked_igemm_fallback(backend)
-                out_tensor = _GatherScatterConvFn.apply(data.jdata, weights, topology, False)
+                fallback_weights = weights.flip((2, 3, 4)) if self._transposed else weights
+                out_tensor = _GatherScatterConvFn.apply(data.jdata, fallback_weights, topology, False)
 
         elif isinstance(backend, _PredGatherIGemmBackend):
             out_tensor = _PredGatherIGemmConvFn.apply(
@@ -1460,7 +1463,7 @@ class ConvolutionPlan:
             return _PredGatherIGemmBackend(gs_topology=gs_topo, kernel_size=kernel, stride=step)
 
         if backend_name == "masked_igemm":
-            _validate_masked_igemm_admission(kernel_size, stride, source_grid, target_grid, transposed=transposed)
+            _validate_masked_igemm_admission(kernel_size, stride, source_grid, target_grid)
             topology = _fvdb_cpp.migemm_build_topology(_get_grid_data(source_grid), kernel_size)
             return _MaskedIGemmBackend(topology=topology)
 
