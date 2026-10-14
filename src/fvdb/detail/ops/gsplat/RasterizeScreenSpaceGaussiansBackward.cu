@@ -1219,11 +1219,12 @@ callRasterizeBackwardPrivateUse1(
             renderedAlphas, lastGaussianIds, dLossDRenderedFeatures, dLossDRenderedAlphas);
     }();
 
-    const uint32_t tileExtentH    = renderWindow.tileExtentH(tileSize);
-    const uint32_t tileExtentW    = renderWindow.tileExtentW(tileSize);
-    const uint32_t tilesPerCamera = tileExtentH * tileExtentW;
+    const int64_t tileExtentH    = renderWindow.tileExtentH(tileSize);
+    const int64_t tileExtentW    = renderWindow.tileExtentW(tileSize);
+    const int64_t tilesPerCamera = tileExtentH * tileExtentW;
     // Compute tile count: for sparse mode use activeTiles, for dense mode compute from image dims
-    uint32_t tileCount = activeTiles.has_value() ? activeTiles.value().size(0) : C * tilesPerCamera;
+    const int64_t tileCount =
+        activeTiles.has_value() ? activeTiles.value().size(0) : C * tilesPerCamera;
     std::vector<torch::Tensor> tileTensors = {dLossDRenderedFeatures.jdata(),
                                               dLossDRenderedAlphas.jdata()};
 
@@ -1245,15 +1246,15 @@ callRasterizeBackwardPrivateUse1(
     // Prefetch inputs after prior work, then make the current streams wait for those inputs.
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
-        auto currentStream        = c10::cuda::getCurrentCUDAStream(deviceId);
+        auto stream               = c10::cuda::getCurrentCUDAStream(deviceId);
         prefetchStreams[deviceId] = c10::cuda::getStreamFromPool(false, deviceId);
 
         cudaEvent_t prefetchEvent;
         C10_CUDA_CHECK(cudaEventCreateWithFlags(&prefetchEvent, cudaEventDisableTiming));
-        C10_CUDA_CHECK(cudaEventRecord(prefetchEvent, currentStream));
+        C10_CUDA_CHECK(cudaEventRecord(prefetchEvent, stream));
         C10_CUDA_CHECK(cudaStreamWaitEvent(prefetchStreams[deviceId], prefetchEvent));
 
-        uint32_t deviceTileOffset, deviceTileCount;
+        int64_t deviceTileOffset, deviceTileCount;
         std::tie(deviceTileOffset, deviceTileCount) = deviceChunk(tileCount, deviceId);
         if (deviceTileCount) {
             std::vector<void *> prefetchPointers;
@@ -1271,7 +1272,7 @@ callRasterizeBackwardPrivateUse1(
                 prefetchPointers, prefetchSizes, deviceId, prefetchStreams[deviceId]);
         }
         C10_CUDA_CHECK(cudaEventRecord(prefetchEvent, prefetchStreams[deviceId]));
-        C10_CUDA_CHECK(cudaStreamWaitEvent(currentStream, prefetchEvent));
+        C10_CUDA_CHECK(cudaStreamWaitEvent(stream, prefetchEvent));
         C10_CUDA_CHECK(cudaEventDestroy(prefetchEvent));
     }
 

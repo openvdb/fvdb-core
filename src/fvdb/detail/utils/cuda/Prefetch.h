@@ -8,19 +8,20 @@
 
 #include <cuda_runtime_api.h>
 
+#include <cstdint>
 #include <vector>
 
 namespace fvdb {
 namespace detail {
 
 struct TilePrefetchRange {
-    uint32_t offset;
-    uint32_t count;
-    uint32_t numTilesH;
-    uint32_t numTilesW;
-    uint32_t imageHeight;
-    uint32_t imageWidth;
-    uint32_t tileSize;
+    int64_t offset;
+    int64_t count;
+    int64_t numTilesH;
+    int64_t numTilesW;
+    int64_t imageHeight;
+    int64_t imageWidth;
+    int64_t tileSize;
 };
 
 /// Given a contiguous tensor with dimensions [C, ...] where C is the number of cameras, we prefetch
