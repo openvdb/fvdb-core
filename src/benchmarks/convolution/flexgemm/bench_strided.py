@@ -5,6 +5,10 @@
 Times one strided convolution (default 2x2x2, stride 2: a U-Net encoder downsample) forward and
 backward, with input, weight and bias gradients. Configs follow FlexGEMM's tests/spconv/bwd.py.
 
+Gradients are cleared to None before each step, so backward assigns them as it would for a layer
+inside a network instead of accumulating into existing buffers. fVDB runs through
+fvdb.nn.SparseConv3d, whose weight storage is the kernels' tap-major layout.
+
     python bench_strided.py --mode fp16 --topology fixed --json out.json
     python bench_strided.py --mode tf32 --topology per-iter --backends masked_igemm,flex_gemm
 """
@@ -13,9 +17,15 @@ import json
 import math
 
 import torch
-from common import HAVE_FLEX_GEMM, coords_to_jagged, set_precision, sphere_coords, time_cuda, zero_grad
+from common import HAVE_FLEX_GEMM, coords_to_jagged, set_precision, sphere_coords, time_cuda
 
 import fvdb
+
+
+def clear_grads(params):
+    for p in params:
+        p.grad = None
+
 
 if HAVE_FLEX_GEMM:
     import flex_gemm
@@ -37,8 +47,10 @@ STRIDED_CONFIGS = [
 def fvdb_step(backend, feats, coords, batch, C, k, s, topology, weight, bias):
     ijk = coords_to_jagged(coords, batch)
     expert = {"backend": backend}
-    w = torch.nn.Parameter(weight.clone())
-    b = torch.nn.Parameter(bias.clone())
+    conv = fvdb.nn.SparseConv3d(C, C, k, stride=s, bias=True).cuda().to(weight.dtype)
+    with torch.no_grad():
+        conv.weight.copy_(weight)
+        conv.bias.copy_(bias)
     # FlexGEMM rows follow the input coords; fVDB rows follow NanoVDB order.
     grid = fvdb.GridBatch.from_ijk(ijk)
     x = torch.empty_like(feats)
@@ -53,10 +65,10 @@ def fvdb_step(backend, feats, coords, batch, C, k, s, topology, weight, bias):
 
     def forward():
         grid, plan = fixed if fixed is not None else build()
-        return plan, plan.execute(grid.jagged_like(x), w, b)
+        return plan, conv(grid.jagged_like(x), plan)
 
     def step():
-        zero_grad([w, b, x])
+        clear_grads([conv.weight, conv.bias, x])
         out = forward()[1].jdata
         out.backward(torch.ones_like(out))
 
@@ -85,7 +97,7 @@ def flex_step(feats, coords, shape, k, s, topology, weight, bias):
         return out_coords, out
 
     def step():
-        zero_grad([w, b, x])
+        clear_grads([w, b, x])
         out = forward()[1]
         out.backward(torch.ones_like(out))
 
