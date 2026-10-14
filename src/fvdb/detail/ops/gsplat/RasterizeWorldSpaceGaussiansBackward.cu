@@ -690,7 +690,7 @@ launchBackwardPrivateUse1(const torch::Tensor &means,
         auto prefetchStream = prefetchStreams[deviceId];
         std::vector<void *> prefetchPointers;
         std::vector<size_t> prefetchSizes;
-        for (const auto &outTensor: outTensors) {
+        for (const torch::Tensor &outTensor: outTensors) {
             const auto [elementOffset, elementCount] = deviceChunk(outTensor.numel(), deviceId);
             if (elementCount > 0) {
                 prefetchPointers.emplace_back(outTensor.data_ptr<float>() + elementOffset);
