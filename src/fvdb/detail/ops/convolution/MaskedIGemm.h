@@ -10,9 +10,11 @@
 // mask so tiles skip the taps none of their rows use. The weight gradient
 // reduces over per-tap (input, output) pair lists.
 //
-// Supports submanifold convolution (output grid == feature grid, stride 1,
-// odd kernel sizes) on CUDA with float16, bfloat16 and float32 (computed as TF32)
-// features.
+// Supports any stride and kernel size with volume <= 32, and the transposed
+// direction of each, on CUDA with float16, bfloat16 and float32 (computed as TF32)
+// features. The input gradient and the transpose run the same kernel over the
+// reverse map; a submanifold map (same grid, stride 1, odd kernel) is its own
+// reverse with mirrored taps, so it stores none.
 //
 
 #ifndef FVDB_DETAIL_OPS_CONVOLUTION_MASKEDIGEMM_H
@@ -25,6 +27,7 @@
 #include <torch/types.h>
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <tuple>
 
@@ -45,25 +48,34 @@ struct MaskedIGemmTopology {
     /// int32 [K, ceil(N / 256)], first pair of each tap at or after each 256-row boundary
     torch::Tensor pairBlockOffsets;
 
-    int64_t totalVoxels;       ///< Rows in the feature (and output) grid
+    int64_t totalVoxels;       ///< Output rows (rows of neighborMap)
+    int64_t inputVoxels;       ///< Input rows (the values neighborMap holds)
     int64_t kernelVolume;      ///< k0 * k1 * k2
     nanovdb::Coord kernelSize; ///< [k0, k1, k2]
+
+    /// Map from input rows to the output rows reading them per tap, with its row order and
+    /// masks; no pair lists. Null for submanifold maps.
+    std::shared_ptr<MaskedIGemmTopology const> reverse;
 };
 
-/// Build the neighbor map and row ordering for submanifold convolution on @p grid.
-MaskedIGemmTopology maskedIGemmTopology(GridBatchData const &grid, nanovdb::Coord kernelSize);
+/// Build the map from @p outputGrid's voxels to @p featureGrid's voxels for convolution with
+/// @p kernelSize and @p stride (fine = stride * coarse + tap - paddingBefore).
+MaskedIGemmTopology maskedIGemmTopology(GridBatchData const &featureGrid,
+                                        GridBatchData const &outputGrid,
+                                        nanovdb::Coord kernelSize,
+                                        nanovdb::Coord stride);
 
 /// Forward: weights are a (C_out, C_in, k0, k1, k2) tensor, bias an optional [C_out] tensor
 /// added in the epilogue. Weights and bias must match the features' device and dtype.
-/// @p flipTaps applies tap k's weights at tap K-1-k, which computes the transposed
-/// convolution. Returns [N, C_out].
+/// @p transposed runs the transposed convolution, from the topology's output rows to its
+/// input rows. Returns [N_out, C_out].
 torch::Tensor maskedIGemmConv(torch::Tensor features,
                               torch::Tensor weights,
                               std::optional<torch::Tensor> bias,
                               MaskedIGemmTopology const &topo,
-                              bool flipTaps = false);
+                              bool transposed = false);
 
-/// Backward of maskedIGemmConv with the same @p flipTaps: returns (grad_features [N, C_in],
+/// Backward of maskedIGemmConv with the same @p transposed: returns (grad_features [N, C_in],
 /// grad_weights shaped like weights). Each is an undefined tensor when its need flag is false.
 std::tuple<torch::Tensor, torch::Tensor> maskedIGemmConvBackward(torch::Tensor gradOutput,
                                                                  torch::Tensor features,
@@ -71,7 +83,7 @@ std::tuple<torch::Tensor, torch::Tensor> maskedIGemmConvBackward(torch::Tensor g
                                                                  MaskedIGemmTopology const &topo,
                                                                  bool needFeatures,
                                                                  bool needWeights,
-                                                                 bool flipTaps = false);
+                                                                 bool transposed = false);
 
 /// True when maskedIGemmConv can run these channel counts and dtype on @p device.
 bool maskedIGemmSupports(int64_t inChannels,
