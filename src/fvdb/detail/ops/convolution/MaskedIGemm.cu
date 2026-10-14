@@ -317,6 +317,10 @@ smemBytes(int K) {
            Cfg::BM * 4 + 2 * kMaxTaps * 4 + 16;
 }
 
+// Channel counts are multiples of 8, so every 16-byte chunk lies wholly inside or outside the
+// channels. The last k-tile and the last n-tile may be partial: loads past Kc or Nc zero-fill
+// and stores past Nc are skipped.
+//
 // B_KMAJOR selects the weight operand layout per tap:
 //   false (forward):        B[k][n] at W + row * Kc * Nc + k * Nc + n
 //   true  (input gradient): B[k][n] at W + row * Kc * Nc + n * Kc + k
@@ -353,13 +357,14 @@ maskedIGemmKernel(T const *__restrict__ A,
     uint32_t *sMask = reinterpret_cast<uint32_t *>(sWRow + kMaxTaps);
     int32_t *sNTaps = reinterpret_cast<int32_t *>(sMask + 1);
 
-    int const tid   = threadIdx.x;
-    int const lane  = tid & 31;
-    int const warp  = tid >> 5;
-    int const nTile = blockIdx.x % (Nc / BN);
-    int const mTile = blockIdx.x / (Nc / BN);
-    int const row0  = mTile * BM;
-    int const n0    = nTile * BN;
+    int const tid    = threadIdx.x;
+    int const lane   = tid & 31;
+    int const warp   = tid >> 5;
+    int const nTiles = (Nc + BN - 1) / BN;
+    int const nTile  = blockIdx.x % nTiles;
+    int const mTile  = blockIdx.x / nTiles;
+    int const row0   = mTile * BM;
+    int const n0     = nTile * BN;
 
     // ---- Stage the tile's rows, tap union, and neighbor columns of the union ----
     if (tid == 0)
@@ -396,7 +401,7 @@ maskedIGemmKernel(T const *__restrict__ A,
     }
     __syncthreads();
 
-    int const kTiles = Kc / BK;
+    int const kTiles = (Kc + BK - 1) / BK;
     int const total  = nTaps * kTiles;
     int const itBase = int(int64_t(total) * blockIdx.y / splits);
     int const nIter  = int(int64_t(total) * (blockIdx.y + 1) / splits) - itBase;
@@ -429,14 +434,20 @@ maskedIGemmKernel(T const *__restrict__ A,
     int64_t const bStep = B_KMAJOR ? int64_t(B_RSTEP) * Kc : int64_t(B_RSTEP) * Nc;
     int64_t const bKt   = B_KMAJOR ? int64_t(BK) : int64_t(BK) * Nc;
     int bDst[B_TILED ? 1 : B_CHUNKS], bSrc[B_TILED ? 1 : B_CHUNKS];
+    int bRow[B_TILED ? 1 : B_CHUNKS];
+    bool bColOk[B_TILED ? 1 : B_CHUNKS];
     if constexpr (!B_TILED) {
 #pragma unroll
         for (int i = 0; i < B_CHUNKS; ++i) {
             int const c = tid + i * THREADS, r = c / B_ROW, ch = c % B_ROW;
-            bDst[i] = r * BN + swzRow<T, BN>(r, ch) * CE;
-            bSrc[i] = r * Nc + ch * CE;
+            bDst[i]   = r * BN + swzRow<T, BN>(r, ch) * CE;
+            bSrc[i]   = r * Nc + ch * CE;
+            bRow[i]   = r;
+            bColOk[i] = n0 + ch * CE < Nc;
         }
     }
+    // Rows of B along n (k-major) or columns (n-major) that exist in this n-tile.
+    bool const bNOk = B_KMAJOR ? true : n0 + bCh * CE < Nc;
 
     int ldTi = itBase / kTiles, ldKt = itBase - ldTi * kTiles;
     T const *aPtr[A_CHUNKS];
@@ -455,24 +466,33 @@ maskedIGemmKernel(T const *__restrict__ A,
         setTap();
 
     auto load = [&](int stage) {
-        T *a = sA + stage * A_STAGE;
+        int const k0    = ldKt * BK;
+        T *a            = sA + stage * A_STAGE;
+        bool const aKOk = k0 + aCh * CE < Kc;
 #pragma unroll
         for (int i = 0; i < A_CHUNKS; ++i) {
-            cpAsync16(smemAddr(a + aDst + i * A_RSTEP * BK), aPtr[i], aOk[i]);
+            bool const ok = aOk[i] && aKOk;
+            cpAsync16(smemAddr(a + aDst + i * A_RSTEP * BK), ok ? aPtr[i] : A, ok);
             aPtr[i] += BK;
         }
         T *b = sB + stage * B_STAGE;
 #pragma unroll
         for (int i = 0; i < B_CHUNKS; ++i) {
             if constexpr (!B_TILED) {
-                cpAsync16(smemAddr(b + bDst[i]), bPtr + bSrc[i], true);
+                bool const ok = bColOk[i] && k0 + bRow[i] < Kc;
+                cpAsync16(smemAddr(b + bDst[i]), ok ? bPtr + bSrc[i] : W, ok);
             } else {
                 int const r = bR + i * B_RSTEP;
-                if constexpr (B_KMAJOR)
-                    cpAsync16(smemAddr(b + r * BK + swz4(r, bCh) * CE), bPtr + i * bStep, true);
-                else
+                if constexpr (B_KMAJOR) {
+                    bool const ok = n0 + r < Nc && k0 + bCh * CE < Kc;
                     cpAsync16(
-                        smemAddr(b + r * BN + swzRow<T, BN>(r, bCh) * CE), bPtr + i * bStep, true);
+                        smemAddr(b + r * BK + swz4(r, bCh) * CE), ok ? bPtr + i * bStep : W, ok);
+                } else {
+                    bool const ok = bNOk && k0 + r < Kc;
+                    cpAsync16(smemAddr(b + r * BN + swzRow<T, BN>(r, bCh) * CE),
+                              ok ? bPtr + i * bStep : W,
+                              ok);
+                }
             }
         }
         bPtr += bKt;
@@ -580,6 +600,8 @@ maskedIGemmKernel(T const *__restrict__ A,
             int64_t const base = int64_t(o) * Nc + col;
 #pragma unroll
             for (int nt = 0; nt < NT; ++nt) {
+                if (col + nt * 8 >= Nc)
+                    continue;
                 if (splits > 1) {
                     atomicAdd(outAcc + base + nt * 8, acc[mt][nt][2 * h]);
                     atomicAdd(outAcc + base + nt * 8 + 1, acc[mt][nt][2 * h + 1]);
@@ -654,14 +676,15 @@ maskedIGemmWgradKernel(T const *__restrict__ X,
     T *sB         = sA + STAGES * A_STAGE;
     int32_t *sIdx = reinterpret_cast<int32_t *>(sB + STAGES * B_STAGE); // [STAGES][2][BK]
 
-    int const tid   = threadIdx.x;
-    int const lane  = tid & 31;
-    int const warp  = tid >> 5;
-    int const nTile = blockIdx.x % (Co / BN);
-    int const mTile = blockIdx.x / (Co / BN);
-    int const tap   = blockIdx.y;
-    int const m0    = mTile * BM;
-    int const n0    = nTile * BN;
+    int const tid    = threadIdx.x;
+    int const lane   = tid & 31;
+    int const warp   = tid >> 5;
+    int const nTiles = (Co + BN - 1) / BN;
+    int const nTile  = blockIdx.x % nTiles;
+    int const mTile  = blockIdx.x / nTiles;
+    int const tap    = blockIdx.y;
+    int const m0     = mTile * BM;
+    int const n0     = nTile * BN;
 
     // Each split takes an equal share of this tap's pairs, or, with pairBlockOffsets, an equal
     // share of the output rows so that concurrent CTAs of every tap read the same rows.
@@ -710,19 +733,21 @@ maskedIGemmWgradKernel(T const *__restrict__ X,
                 int const kr  = c / (BM / CE);
                 int const ch  = c % (BM / CE);
                 int const src = slot[kr];
-                T const *g    = X + (src >= 0 ? int64_t(src) * Ci + m0 + ch * CE : 0);
-                cpAsync16(smemAddr(a + kr * BM + swzRow<T, BM>(kr, ch) * CE), g, src >= 0);
+                bool const ok = src >= 0 && m0 + ch * CE < Ci;
+                T const *g    = X + (ok ? int64_t(src) * Ci + m0 + ch * CE : 0);
+                cpAsync16(smemAddr(a + kr * BM + swzRow<T, BM>(kr, ch) * CE), g, ok);
             }
         }
 #pragma unroll
         for (int i = 0; i < (BK * BN / CE + THREADS - 1) / THREADS; ++i) {
             int const c = tid + i * THREADS;
             if (c < BK * BN / CE) {
-                int const kr = c / (BN / CE);
-                int const ch = c % (BN / CE);
-                int const o  = slot[BK + kr];
-                T const *g   = dY + (o >= 0 ? int64_t(o) * Co + n0 + ch * CE : 0);
-                cpAsync16(smemAddr(b + kr * BN + swzRow<T, BN>(kr, ch) * CE), g, o >= 0);
+                int const kr  = c / (BN / CE);
+                int const ch  = c % (BN / CE);
+                int const o   = slot[BK + kr];
+                bool const ok = o >= 0 && n0 + ch * CE < Co;
+                T const *g    = dY + (ok ? int64_t(o) * Co + n0 + ch * CE : 0);
+                cpAsync16(smemAddr(b + kr * BN + swzRow<T, BN>(kr, ch) * CE), g, ok);
             }
         }
     };
@@ -855,9 +880,13 @@ maskedIGemmWgradKernel(T const *__restrict__ X,
 #pragma unroll
         for (int h = 0; h < 2; ++h) {
             int const m = m0 + wm0 + mt * 16 + (lane >> 2) + h * 8;
+            if (m >= Ci)
+                continue;
 #pragma unroll
             for (int nt = 0; nt < NT; ++nt) {
-                int const n       = n0 + wn0 + nt * 8 + (lane & 3) * 2;
+                int const n = n0 + wn0 + nt * 8 + (lane & 3) * 2;
+                if (n >= Co)
+                    continue;
                 int64_t const idx = tapBase + int64_t(m) * Co + n;
                 if (splits > 1) {
                     atomicAdd(dWAcc + idx, acc[mt][nt][2 * h]);
@@ -1186,7 +1215,7 @@ launchConv(torch::Tensor const &A,
     int const smem = smemBytes<Cfg, T>(K);
     auto kernel    = maskedIGemmKernel<Cfg, T, B_KMAJOR>;
     C10_CUDA_CHECK(cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem));
-    int const tiles = ((N + Cfg::BM - 1) / Cfg::BM) * (Nc / Cfg::BN);
+    int const tiles = ((N + Cfg::BM - 1) / Cfg::BM) * ((Nc + Cfg::BN - 1) / Cfg::BN);
 
     // Split each tile's (tap, k-tile) iterations to fill the last wave. Cost is in k-tile units:
     // each wave runs blocks of iters / s k-tiles plus a fixed prologue and epilogue (a float32
@@ -1198,7 +1227,7 @@ launchConv(torch::Tensor const &A,
     C10_CUDA_CHECK(
         cudaOccupancyMaxActiveBlocksPerMultiprocessor(&perSm, kernel, Cfg::THREADS, smem));
     int const slots     = std::max(1, perSm) * smCount();
-    int const kTiles    = Kc / Elem<T>::BK;
+    int const kTiles    = (Kc + Elem<T>::BK - 1) / Elem<T>::BK;
     double const iters  = double(K) * kTiles;
     int const maxSplits = std::min(64, 4 * kTiles);
     auto const cost     = [&](int s) {
@@ -1257,7 +1286,7 @@ dispatchConv(torch::Tensor const &A,
         char const *env       = std::getenv("FVDB_MIGEMM_CFG");
         std::string const cfg = env ? env : "";
 #define FVDB_MIGEMM_TRY(BM, BN, WM, WN, ST)                       \
-    if (cfg == #BM "x" #BN "x" #ST && Nc % BN == 0) {             \
+    if (cfg == #BM "x" #BN "x" #ST) {                             \
         launchConv<TileConfig<BM, BN, WM, WN, ST>, T, B_KMAJOR>(  \
             A, Wrows, bias, out, topo, flipTaps, Kc, Nc, stream); \
         return;                                                   \
@@ -1285,13 +1314,16 @@ dispatchConv(torch::Tensor const &A,
 #undef FVDB_MIGEMM_TRY
     }
     // Two stages keep two CTAs resident per SM, which beats deeper pipelines here.
-    if (Nc % 128 == 0) {
+    // Channel counts that are not multiples of 32 pick tiles as their round-up would, so a
+    // narrow output (48, say) takes one wider tile instead of re-gathering its rows per tile.
+    int const Np = (Nc + 31) / 32 * 32;
+    if (Np % 128 == 0) {
         launchConv<TileConfig<128, 128, 2, 2, 2>, T, B_KMAJOR>(
             A, Wrows, bias, out, topo, flipTaps, Kc, Nc, stream);
-    } else if (Nc % 64 == 0) {
+    } else if (Np % 64 == 0) {
         launchConv<TileConfig<128, 64, 4, 1, 2>, T, B_KMAJOR>(
             A, Wrows, bias, out, topo, flipTaps, Kc, Nc, stream);
-    } else if (Nc % 96 == 0) {
+    } else if (Np % 96 == 0) {
         launchConv<TileConfig<128, 96, 4, 1, 2>, T, B_KMAJOR>(
             A, Wrows, bias, out, topo, flipTaps, Kc, Nc, stream);
     } else {
@@ -1315,7 +1347,7 @@ launchWgrad(torch::Tensor const &X,
     C10_CUDA_CHECK(cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem));
 
     int const sms       = smCount();
-    int const tiles     = (Ci / Cfg::BM) * (Co / Cfg::BN);
+    int const tiles     = ((Ci + Cfg::BM - 1) / Cfg::BM) * ((Co + Cfg::BN - 1) / Cfg::BN);
     int64_t const steps = std::max<int64_t>(1, topo.pairIn.numel() / std::max(1, K) / Cfg::BK);
     // Many short CTAs keep the last wave small, but each split adds a tile of float32 atomics,
     // so every CTA keeps at least 128 steps. FVDB_MIGEMM_WSPLIT overrides CTAs per SM for tuning.
@@ -1372,8 +1404,14 @@ launchWgrad(torch::Tensor const &X,
     return splits > 1 ? acc.to(X.scalar_type()) : rows;
 }
 
+int
+round32(int c) {
+    return (c + 31) / 32 * 32;
+}
+
 // Channel counts not divisible by 128 use 64-, 96- or 32-wide tiles on each side, whichever
-// divides first, so each CTA gathers its rows once per 64 or 96 channels where possible.
+// divides the count rounded up to 32 first, so each CTA gathers its rows once per 64 or 96
+// channels where possible.
 template <typename T, int BM, int WM>
 torch::Tensor
 launchWgradByCo(torch::Tensor const &X,
@@ -1382,9 +1420,9 @@ launchWgradByCo(torch::Tensor const &X,
                 int Ci,
                 int Co,
                 cudaStream_t stream) {
-    if (Co % 64 == 0)
+    if (round32(Co) % 64 == 0)
         return launchWgrad<WgradConfig<BM, 64, WM, 2, 2>, T>(X, dY, topo, Ci, Co, stream);
-    if (Co % 96 == 0)
+    if (round32(Co) % 96 == 0)
         return launchWgrad<WgradConfig<BM, 96, WM, 2, 2>, T>(X, dY, topo, Ci, Co, stream);
     return launchWgrad<WgradConfig<BM, 32, WM, 1, 2>, T>(X, dY, topo, Ci, Co, stream);
 }
@@ -1397,9 +1435,9 @@ launchWgradNarrow(torch::Tensor const &X,
                   int Ci,
                   int Co,
                   cudaStream_t stream) {
-    if (Ci % 64 == 0)
+    if (round32(Ci) % 64 == 0)
         return launchWgradByCo<T, 64, 2>(X, dY, topo, Ci, Co, stream);
-    if (Ci % 96 == 0)
+    if (round32(Ci) % 96 == 0)
         return launchWgradByCo<T, 96, 2>(X, dY, topo, Ci, Co, stream);
     return launchWgradByCo<T, 32, 1>(X, dY, topo, Ci, Co, stream);
 }
@@ -1415,14 +1453,14 @@ dispatchWgrad(torch::Tensor const &X,
     if constexpr (sizeof(T) == 4) {
         // float32 reads fragments element-wise, so wide warp tiles amortize the loads;
         // at 128x128, 16-row stages keep two CTAs resident per SM.
-        if (Ci % 128 == 0 && Co % 128 == 0)
+        if (round32(Ci) % 128 == 0 && round32(Co) % 128 == 0)
             return launchWgrad<WgradConfig<128, 128, 2, 2, 3, 16>, T>(X, dY, topo, Ci, Co, stream);
         return launchWgradNarrow<T>(X, dY, topo, Ci, Co, stream);
     } else {
         char const *env       = std::getenv("FVDB_MIGEMM_WCFG");
         std::string const cfg = env ? env : "";
 #define FVDB_MIGEMM_TRYW(BM, BN, WM, WN, ST)                                                 \
-    if (cfg == #BM "x" #BN "x" #ST && Ci % BM == 0 && Co % BN == 0) {                        \
+    if (cfg == #BM "x" #BN "x" #ST) {                                                        \
         return launchWgrad<WgradConfig<BM, BN, WM, WN, ST>, T>(X, dY, topo, Ci, Co, stream); \
     }
         FVDB_MIGEMM_TRYW(128, 128, 2, 2, 4)
@@ -1436,7 +1474,7 @@ dispatchWgrad(torch::Tensor const &X,
         FVDB_MIGEMM_TRYW(64, 64, 2, 2, 3)
         FVDB_MIGEMM_TRYW(64, 64, 2, 2, 2)
 #undef FVDB_MIGEMM_TRYW
-        if (Ci % 128 == 0 && Co % 128 == 0)
+        if (round32(Ci) % 128 == 0 && round32(Co) % 128 == 0)
             return launchWgrad<WgradConfig<128, 128, 2, 2, 3>, T>(X, dY, topo, Ci, Co, stream);
         return launchWgradNarrow<T>(X, dY, topo, Ci, Co, stream);
     }
@@ -1620,7 +1658,7 @@ maskedIGemmSupports(int64_t inChannels,
     bool const typeOk =
         dtype == torch::kFloat16 || dtype == torch::kBFloat16 || dtype == torch::kFloat32;
     if (!typeOk || !device.is_cuda() || inChannels <= 0 || outChannels <= 0 ||
-        inChannels % 32 != 0 || outChannels % 32 != 0)
+        inChannels % 8 != 0 || outChannels % 8 != 0)
         return false;
     int index = device.has_index() ? device.index() : 0;
     if (!device.has_index())
