@@ -131,6 +131,16 @@ class TestMaskedIGemm(unittest.TestCase):
         finally:
             del os.environ["FVDB_MIGEMM_ORDER"]
 
+    @parameterized.expand([("1",), ("5",), ("1000",)])
+    def test_weight_gradient_row_split(self, splits):
+        # Row splitting is chosen only when features are several times L2; force it on small grids.
+        os.environ["FVDB_MIGEMM_WROWS"] = splits
+        try:
+            self._check(_shell_grid(48), 64, 128, 3, torch.float16)
+            self._check(_random_grid(3000, 12, batch=2), 128, 64, 3, torch.float16)
+        finally:
+            del os.environ["FVDB_MIGEMM_WROWS"]
+
     def test_neighbor_map(self):
         grid = _random_grid(800, 6)
         topo = _fvdb_cpp.migemm_build_topology(_get_grid_data(grid), torch.tensor([3, 3, 3], dtype=torch.int32))

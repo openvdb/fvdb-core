@@ -42,6 +42,8 @@ struct MaskedIGemmTopology {
     torch::Tensor pairIn;      ///< int32 [P], per tap the input row of each active pair
     torch::Tensor pairOut;     ///< int32 [P], per tap the output row, ascending
     torch::Tensor pairOffsets; ///< int32 [K + 1], CSR offsets of each tap's pairs (device)
+    /// int32 [K, ceil(N / 256)], first pair of each tap at or after each 256-row boundary
+    torch::Tensor pairBlockOffsets;
 
     int64_t totalVoxels;       ///< Rows in the feature (and output) grid
     int64_t kernelVolume;      ///< k0 * k1 * k2
