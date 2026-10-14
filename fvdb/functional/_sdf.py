@@ -30,8 +30,11 @@ def _validated_scalar_field(field: torch.Tensor, num_voxels: int) -> torch.Tenso
         raise ValueError(f"field must be a scalar field with shape (N,) or (N, 1), got {tuple(field.shape)}")
     if field.shape[0] != num_voxels:
         raise ValueError(f"field must have one value per voxel, got {field.shape[0]} values for {num_voxels} voxels")
-    if not torch.isfinite(field).all().item():
-        raise ValueError("field must contain only finite values; leave no-data voxels inactive")
+    # NaN and +/-Inf both propagate to the extrema, so this avoids a per-voxel bool mask.
+    if field.numel() > 0:
+        field_min, field_max = torch.aminmax(field)
+        if not (torch.isfinite(field_min) and torch.isfinite(field_max)):
+            raise ValueError("field must contain only finite values; leave no-data voxels inactive")
     return field.reshape(-1)
 
 
@@ -100,27 +103,32 @@ def reinitialize_sdf_batch(
     field: JaggedTensor,
     band: int = 3,
     smooth: int = 0,
-    order: int = 3,
+    order: int = 1,
     smoothing: SmoothingMode = SmoothingMode.MEAN_CURVATURE,
     redistance_iters: int = -1,
 ) -> JaggedTensor:
     """Re-initialize a signed per-voxel field into an SDF on the same grid batch.
 
     Redistances ``field`` to satisfy ``|grad phi| = 1`` (TVD-RK Godunov upwind eikonal solve with a
-    frozen Peng sign), then optionally de-staircases it with curvature-based smoothing. The grid
-    topology is unchanged: the returned field has the same per-voxel ordering as ``field``.
+    frozen Peng sign and a Russo-Smereka subcell fix that anchors the zero crossing), then
+    optionally de-staircases it with curvature-based smoothing. The grid topology is unchanged: the
+    returned field has the same per-voxel ordering as ``field``.
 
     Args:
         grid (GridBatch): The grid batch defining the sparse topology.
         field (JaggedTensor): Per-voxel signed field values.
         band (int): Narrow-band half-width in voxels. The field is clamped to ``[-band*vx, band*vx]``.
         smooth (int): Number of smoothing passes (``0`` disables smoothing).
-        order (int): TVD-RK order, one of ``1`` (Euler), ``2`` (Heun), or ``3`` (Shu-Osher).
+        order (int): TVD-RK order, one of ``1`` (Euler, default), ``2`` (Heun), or ``3`` (Shu-Osher).
+            The redistance marches to a steady state, so the order does not change the converged
+            result; ``1`` costs one stencil pass per sweep and one scratch buffer.
         smoothing (SmoothingMode): Which Laplacian flow each smoothing pass applies --
             :attr:`~fvdb.SmoothingMode.MEAN_CURVATURE` (default) or
             :attr:`~fvdb.SmoothingMode.TAUBIN` (volume-preserving). Only used when ``smooth > 0``.
-        redistance_iters (int): Number of redistancing sweeps. ``<= 0`` uses the default
-            ``max(6, round(2.5*band) + 2)``.
+        redistance_iters (int): Number of redistancing sweeps; ``<= 0`` uses the default
+            ``max(20, 6*band)``. The same count is used for the redistance that follows smoothing,
+            so a small explicit value renormalizes the smoothed field only within about
+            ``0.4*redistance_iters`` voxels of the surface.
 
     Returns:
         sdf (JaggedTensor): The re-initialized SDF, same per-voxel ordering as ``field``.
@@ -162,7 +170,7 @@ def reinitialize_sdf_single(
     field: torch.Tensor,
     band: int = 3,
     smooth: int = 0,
-    order: int = 3,
+    order: int = 1,
     smoothing: SmoothingMode = SmoothingMode.MEAN_CURVATURE,
     redistance_iters: int = -1,
 ) -> torch.Tensor:
@@ -173,7 +181,8 @@ def reinitialize_sdf_single(
         field (torch.Tensor): Per-voxel signed field values, shape ``(num_voxels,)`` or ``(num_voxels, 1)``.
         band (int): Narrow-band half-width in voxels.
         smooth (int): Number of smoothing passes (``0`` disables smoothing).
-        order (int): TVD-RK order, one of ``1``, ``2``, or ``3``.
+        order (int): TVD-RK order, one of ``1`` (default), ``2``, or ``3``. The order does not
+            change the converged result; ``1`` is the cheapest in time and memory.
         smoothing (SmoothingMode): Which Laplacian flow each smoothing pass applies --
             :attr:`~fvdb.SmoothingMode.MEAN_CURVATURE` (default) or
             :attr:`~fvdb.SmoothingMode.TAUBIN` (volume-preserving). Only used when ``smooth > 0``.
@@ -204,7 +213,7 @@ def rebuild_narrow_band_batch(
     field: JaggedTensor,
     band: int = 3,
     smooth: int = 0,
-    order: int = 3,
+    order: int = 1,
     smoothing: SmoothingMode = SmoothingMode.MEAN_CURVATURE,
     redistance_iters: int = -1,
     pad: bool = True,
@@ -223,7 +232,8 @@ def rebuild_narrow_band_batch(
         field (JaggedTensor): Per-voxel signed field values.
         band (int): Narrow-band half-width in voxels.
         smooth (int): Number of smoothing passes (``0`` disables smoothing).
-        order (int): TVD-RK order, one of ``1``, ``2``, or ``3``.
+        order (int): TVD-RK order, one of ``1`` (default), ``2``, or ``3``. The order does not
+            change the converged result; ``1`` is the cheapest in time and memory.
         smoothing (SmoothingMode): Which Laplacian flow each smoothing pass applies --
             :attr:`~fvdb.SmoothingMode.MEAN_CURVATURE` (default) or
             :attr:`~fvdb.SmoothingMode.TAUBIN` (volume-preserving). Only used when ``smooth > 0``.
@@ -264,7 +274,7 @@ def rebuild_narrow_band_single(
     field: torch.Tensor,
     band: int = 3,
     smooth: int = 0,
-    order: int = 3,
+    order: int = 1,
     smoothing: SmoothingMode = SmoothingMode.MEAN_CURVATURE,
     redistance_iters: int = -1,
     pad: bool = True,
@@ -282,7 +292,8 @@ def rebuild_narrow_band_single(
         field (torch.Tensor): Per-voxel signed field values, shape ``(num_voxels,)`` or ``(num_voxels, 1)``.
         band (int): Narrow-band half-width in voxels.
         smooth (int): Number of smoothing passes (``0`` disables smoothing).
-        order (int): TVD-RK order, one of ``1``, ``2``, or ``3``.
+        order (int): TVD-RK order, one of ``1`` (default), ``2``, or ``3``. The order does not
+            change the converged result; ``1`` is the cheapest in time and memory.
         smoothing (SmoothingMode): Which Laplacian flow each smoothing pass applies --
             :attr:`~fvdb.SmoothingMode.MEAN_CURVATURE` (default) or
             :attr:`~fvdb.SmoothingMode.TAUBIN` (volume-preserving). Only used when ``smooth > 0``.
