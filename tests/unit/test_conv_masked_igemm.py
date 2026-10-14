@@ -5,9 +5,9 @@
 Test the masked implicit GEMM (masked_igemm) convolution backend.
 
 The backend runs regular and transposed convolution with any stride and kernel volumes <= 32 on
-CUDA SM80+, with float16/bfloat16/TF32 features and channel counts divisible by 32. Forward, input
-gradient and weight gradient are checked against the default gather-scatter backend evaluated in
-float32.
+CUDA SM80+, with float16/bfloat16/TF32 features. Channel counts that are not multiples of 8 run
+zero-padded. Forward, input gradient and weight gradient are checked against the default
+gather-scatter backend evaluated in float32.
 """
 
 import contextlib
@@ -130,6 +130,49 @@ class TestMaskedIGemm(unittest.TestCase):
         with _tf32(True):
             self._check(_shell_grid(48), 32, 32, 3, dtype, tol=5e-3)
 
+    @parameterized.expand(
+        [
+            (8, 8, torch.float16),
+            (16, 24, torch.float16),
+            (40, 48, torch.float16),
+            (48, 64, torch.bfloat16),
+            (24, 136, torch.float16),
+            (1, 32, torch.float16),
+            (3, 16, torch.float16),
+            (4, 64, torch.bfloat16),
+            (17, 33, torch.float16),
+            (100, 100, torch.float16),
+            (8, 3, torch.float16),
+            (40, 24, torch.float32),
+            (3, 32, torch.float32),
+        ]
+    )
+    def test_channels_not_multiple_of_32(self, cin, cout, dtype):
+        # Multiples of 8 run on partial tiles; other counts run zero-padded to a multiple of 8.
+        with _tf32(True):
+            self._check(_random_grid(3000, 12), cin, cout, 3, dtype, tol=5e-3 if dtype == torch.float32 else None)
+
+    @parameterized.expand([(8, 8), (16, 40), (3, 20), (40, 24)])
+    def test_channels_not_multiple_of_32_unsplit(self, cin, cout):
+        # Partial n-tiles must not store past C_out. Split-K adds the zero columns past C_out,
+        # which hides an unguarded store, so force direct stores, with a bias.
+        torch.manual_seed(0)
+        grid = _random_grid(3000, 12)
+        plan = ConvolutionPlan.from_grid_batch(3, 1, grid, grid, expert_config=CONFIG)
+        ref_plan = ConvolutionPlan.from_grid_batch(3, 1, grid, grid)
+        x = torch.randn(grid.total_voxels, cin, device="cuda", dtype=torch.float16)
+        w = (torch.randn(cout, cin, 3, 3, 3, device="cuda") / (27 * cin) ** 0.5).half()
+        b = torch.randn(cout, device="cuda", dtype=torch.float16)
+        os.environ["FVDB_MIGEMM_SPLIT"] = "1"
+        try:
+            y = plan.execute(x, w, b)
+        finally:
+            del os.environ["FVDB_MIGEMM_SPLIT"]
+        with _tf32(False):
+            yr = ref_plan.execute(x.float(), w.float(), b.float())
+        self.assertNotIn("gather_scatter", plan._backend.fallback)
+        self.assertLess(_rel_err(y, yr), 4e-3)
+
     def test_anisotropic_kernel(self):
         self._check(_random_grid(2000, 10), 64, 64, (3, 5, 1), torch.float16)
 
@@ -242,7 +285,6 @@ class TestMaskedIGemm(unittest.TestCase):
         [
             ("strict_fp32", 64, 64, torch.float32),
             ("float64", 64, 64, torch.float64),
-            ("channels", 48, 64, torch.float16),
         ]
     )
     def test_uncovered_inputs_fall_back(self, _, cin, cout, dtype):
@@ -371,7 +413,9 @@ class TestMaskedIGemm(unittest.TestCase):
         self.assertFalse(_fvdb_cpp.migemm_supports(64, 32, torch.float16, torch.device("cpu")))
         self.assertFalse(_fvdb_cpp.migemm_supports(0, 64, torch.float16, cuda))
         self.assertFalse(_fvdb_cpp.migemm_supports(64, 0, torch.float16, cuda))
-        self.assertFalse(_fvdb_cpp.migemm_supports(48, 64, torch.float16, cuda))
+        self.assertTrue(_fvdb_cpp.migemm_supports(48, 8, torch.float16, cuda))
+        self.assertFalse(_fvdb_cpp.migemm_supports(12, 64, torch.float16, cuda))
+        self.assertFalse(_fvdb_cpp.migemm_supports(64, 4, torch.float16, cuda))
 
     def _compare_plans(self, plan, ref_plan, cin, cout, dtype, tol, *, native=True):
         """Forward, input, weight and bias gradients of ``plan`` against float32 gather-scatter."""
@@ -409,7 +453,9 @@ class TestMaskedIGemm(unittest.TestCase):
             ("k3_s122", 3, (1, 2, 2), 64, 64, torch.float16),
             ("k2_s1", 2, 1, 64, 64, torch.float16),
             ("k3_s1_dilated", 3, 1, 32, 64, torch.float16),
-            ("fallback", 2, 2, 48, 64, torch.float16),
+            ("narrow", 2, 2, 16, 40, torch.float16),
+            ("padded", 2, 2, 3, 20, torch.float16),
+            ("fallback", 2, 2, 64, 64, torch.float64),
         ]
     )
     def test_strided(self, _, kernel_size, stride, cin, cout, dtype):
@@ -417,8 +463,8 @@ class TestMaskedIGemm(unittest.TestCase):
         plan = ConvolutionPlan.from_grid_batch(kernel_size, stride, grid, expert_config=CONFIG)
         ref_plan = ConvolutionPlan.from_grid_batch(kernel_size, stride, grid)
         self.assertIsNotNone(plan._backend.topology.reverse_map)
-        tol = {torch.float16: 4e-3, torch.bfloat16: 2e-2, torch.float32: 5e-3}[dtype]
-        self._compare_plans(plan, ref_plan, cin, cout, dtype, tol, native=cin % 32 == 0)
+        tol = {torch.float16: 4e-3, torch.bfloat16: 2e-2, torch.float32: 5e-3, torch.float64: 1e-5}[dtype]
+        self._compare_plans(plan, ref_plan, cin, cout, dtype, tol, native=dtype != torch.float64)
 
     @parameterized.expand(
         [
@@ -426,7 +472,8 @@ class TestMaskedIGemm(unittest.TestCase):
             ("factory_k3_s2", 3, 2, 64, 64, torch.float16, True),
             ("from_plan_k2_s2", 2, 2, 64, 128, torch.float16, False),
             ("from_plan_k3_s2_tf32", 3, 2, 64, 32, torch.float32, False),
-            ("factory_fallback", 2, 2, 48, 64, torch.float16, True),
+            ("factory_padded", 2, 2, 20, 4, torch.float16, True),
+            ("factory_fallback", 2, 2, 64, 64, torch.float64, True),
         ]
     )
     def test_strided_transpose(self, _, kernel_size, stride, cin, cout, dtype, factory):
@@ -442,8 +489,8 @@ class TestMaskedIGemm(unittest.TestCase):
             ref_plan = ConvolutionPlan.from_plan_transposed(
                 ConvolutionPlan.from_grid_batch(kernel_size, stride, fine, coarse)
             )
-        tol = 5e-3 if dtype == torch.float32 else 4e-3
-        self._compare_plans(plan, ref_plan, cin, cout, dtype, tol, native=cin % 32 == 0)
+        tol = {torch.float16: 4e-3, torch.float32: 5e-3, torch.float64: 1e-5}[dtype]
+        self._compare_plans(plan, ref_plan, cin, cout, dtype, tol, native=dtype != torch.float64)
 
     def test_reverse_map(self):
         fine = _random_grid(2000, 10, batch=2)
@@ -499,7 +546,8 @@ class TestMaskedIGemm(unittest.TestCase):
     @parameterized.expand(
         [
             ("native", 64, 128, torch.float16, False),
-            ("fallback", 48, 64, torch.float16, False),
+            ("padded", 4, 20, torch.float16, False),
+            ("fallback", 64, 64, torch.float64, False),
             ("factory_native", 64, 128, torch.float16, True),
             ("factory_tf32", 64, 96, torch.float32, True),
         ]
@@ -532,8 +580,8 @@ class TestMaskedIGemm(unittest.TestCase):
             yr = ref_plan.execute(grid.jagged_like(xr), wr, br).jdata
             yr.backward(gy.float())
 
-        tol = 5e-3 if dtype == torch.float32 else 4e-3
-        self.assertEqual("gather_scatter" in plan._backend.fallback, cin % 32 != 0)
+        tol = {torch.float16: 4e-3, torch.float32: 5e-3, torch.float64: 1e-5}[dtype]
+        self.assertEqual("gather_scatter" in plan._backend.fallback, dtype == torch.float64)
         self.assertLess(_rel_err(y, yr), tol)
         self.assertLess(_rel_err(x.grad, xr.grad), tol)
         self.assertLess(_rel_err(w.grad, wr.grad), tol)

@@ -7,6 +7,7 @@ FlexGEMM's submanifold training benchmark (voxelized sphere shells).
 | Script | Purpose |
 |---|---|
 | `bench_train.py` | L-layer forward + backward step; `--topology per-iter` rebuilds grid and plan each step as FlexGEMM's README does, `--topology fixed` builds them once |
+| `bench_layer.py` | Stem and head layers (C_in or C_out of 1-4) forward + backward, which masked_igemm runs zero-padded |
 | `bench_strided.py` | One strided conv (default 2x2x2, stride 2) forward + backward against FlexGEMM's `sparse_conv3d`, on the configs of FlexGEMM's `tests/spconv/bwd.py`; also checks that both outputs match |
 | `profile_split.py` | One layer split into grid build, plan build, forward, backward; `--kernels` prints per-kernel tables |
 | `check.py` | Forward, input-gradient and weight-gradient agreement with FlexGEMM |

@@ -629,6 +629,17 @@ def _masked_igemm_dtype(features: torch.Tensor, weights: torch.Tensor) -> torch.
     return torch.promote_types(features.dtype, weights.dtype)
 
 
+def _round_up(value: int, multiple: int) -> int:
+    return (value + multiple - 1) // multiple * multiple
+
+
+def _pad_last(tensor: torch.Tensor, size: int) -> torch.Tensor:
+    """Zero-pad the last dimension of ``tensor`` to ``size``."""
+    if tensor.shape[-1] == size:
+        return tensor
+    return torch.nn.functional.pad(tensor, (0, size - tensor.shape[-1]))
+
+
 def _masked_igemm_runs(in_channels: int, out_channels: int, dtype: torch.dtype, device: torch.device) -> bool:
     """True when the masked_igemm kernels cover this call; float32 runs only as TF32."""
     if dtype == torch.float32 and not _tf32_matmul_enabled():
@@ -1222,16 +1233,26 @@ class ConvolutionPlan:
             if weights.ndim != 5:
                 raise ValueError("masked_igemm weights must be (out_channels, in_channels, k0, k1, k2)")
             dtype = _masked_igemm_dtype(data.jdata, weights)
-            if _masked_igemm_runs(in_c, out_c, dtype, data.jdata.device):
+            # The kernels take channel counts in multiples of 8; others run zero-padded.
+            in_p, out_p = _round_up(in_c, 8), _round_up(out_c, 8)
+            if _masked_igemm_runs(in_p, out_p, dtype, data.jdata.device):
                 # Fuse the bias only when adding it afterwards would not promote the output.
                 fuse = bias is not None and torch.promote_types(dtype, bias.dtype) == dtype
+                features = _pad_last(data.jdata.to(dtype), in_p)
+                kernel_weights = weights.to(dtype)
+                if (in_p, out_p) != (in_c, out_c):
+                    padded = kernel_weights.new_zeros(out_p, in_p, *kernel_weights.shape[2:])
+                    padded[:out_c, :in_c] = kernel_weights
+                    kernel_weights = padded
                 out_tensor = _MaskedIGemmConvFn.apply(
-                    data.jdata.to(dtype),
-                    weights.to(dtype),
-                    bias.to(dtype) if fuse else None,
+                    features,
+                    kernel_weights,
+                    _pad_last(bias.to(dtype), out_p) if fuse else None,
                     backend.topology,
                     self._transposed,
                 )
+                if out_p != out_c:
+                    out_tensor = out_tensor[:, :out_c].contiguous()
                 if fuse:
                     bias = None
             else:
