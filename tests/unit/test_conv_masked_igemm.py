@@ -120,6 +120,17 @@ class TestMaskedIGemm(unittest.TestCase):
         grid = GridBatch.from_ijk(JaggedTensor([torch.zeros(1, 3, dtype=torch.int32, device="cuda")]))
         self._check(grid, 64, 64, 3, torch.float16)
 
+    @parameterized.expand([("global",), ("local",)])
+    def test_row_order(self, order):
+        # The local order regroups rows in windows of 65536, so the grid spans several windows.
+        grid = _random_grid(200000, 40)
+        self.assertGreater(grid.total_voxels, 2 * 65536)
+        os.environ["FVDB_MIGEMM_ORDER"] = order
+        try:
+            self._check(grid, 64, 64, 3, torch.float16)
+        finally:
+            del os.environ["FVDB_MIGEMM_ORDER"]
+
     def test_neighbor_map(self):
         grid = _random_grid(800, 6)
         topo = _fvdb_cpp.migemm_build_topology(_get_grid_data(grid), torch.tensor([3, 3, 3], dtype=torch.int32))
