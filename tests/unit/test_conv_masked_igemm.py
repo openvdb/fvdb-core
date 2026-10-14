@@ -86,6 +86,7 @@ class TestMaskedIGemm(unittest.TestCase):
             yr.backward(gy.to(dtype).float())
 
         self.assertEqual(y.dtype, dtype)
+        self.assertNotIn("gather_scatter", plan._backend.fallback, "covered inputs must run natively")
         self.assertLess(_rel_err(y, yr), tol, "forward")
         self.assertLess(_rel_err(xl.grad, xr.grad), tol, "input gradient")
         self.assertLess(_rel_err(wl.grad, wr.grad), tol, "weight gradient")
@@ -97,6 +98,13 @@ class TestMaskedIGemm(unittest.TestCase):
             (128, 64, torch.float16),
             (256, 128, torch.bfloat16),
             (192, 320, torch.float16),
+            (32, 32, torch.float16),
+            (32, 64, torch.float16),
+            (64, 32, torch.bfloat16),
+            (32, 96, torch.float16),
+            (96, 160, torch.float16),
+            (96, 96, torch.float16),
+            (96, 64, torch.bfloat16),
         ]
     )
     def test_random_grid(self, cin, cout, dtype):
@@ -105,6 +113,11 @@ class TestMaskedIGemm(unittest.TestCase):
     @parameterized.expand([(torch.float16,), (torch.bfloat16,)])
     def test_shell(self, dtype):
         self._check(_shell_grid(48), 128, 128, 3, dtype)
+
+    @parameterized.expand([(torch.float16,), (torch.float32,)])
+    def test_shell_narrow(self, dtype):
+        with _tf32(True):
+            self._check(_shell_grid(48), 32, 32, 3, dtype, tol=5e-3)
 
     def test_anisotropic_kernel(self):
         self._check(_random_grid(2000, 10), 64, 64, (3, 5, 1), torch.float16)
@@ -203,7 +216,9 @@ class TestMaskedIGemm(unittest.TestCase):
         with self.assertRaises(ValueError):
             ConvolutionPlan.from_grid_batch(4, 1, grid, grid, expert_config=CONFIG)
 
-    @parameterized.expand([((64, 128),), ((128, 64),), ((192, 256),)])
+    @parameterized.expand(
+        [((64, 128),), ((128, 64),), ((192, 256),), ((32, 32),), ((96, 64),), ((64, 96),), ((96, 96),)]
+    )
     def test_tf32(self, channels):
         with _tf32(True):
             self._check(_random_grid(3000, 12), *channels, 3, torch.float32, tol=5e-3)
