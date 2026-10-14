@@ -68,22 +68,26 @@ MaskedIGemmTopology maskedIGemmTopology(GridBatchData const &featureGrid,
 /// Forward: weights are a (C_out, C_in, k0, k1, k2) tensor, bias an optional [C_out] tensor
 /// added in the epilogue. Weights and bias must match the features' device and dtype.
 /// @p transposed runs the transposed convolution, from the topology's output rows to its
-/// input rows. Returns [N_out, C_out].
+/// input rows. @p precise computes float32 as 3xTF32 (near-float32 accuracy) instead of TF32;
+/// other dtypes ignore it. Returns [N_out, C_out].
 torch::Tensor maskedIGemmConv(torch::Tensor features,
                               torch::Tensor weights,
                               std::optional<torch::Tensor> bias,
                               MaskedIGemmTopology const &topo,
-                              bool transposed = false);
+                              bool transposed = false,
+                              bool precise    = false);
 
-/// Backward of maskedIGemmConv with the same @p transposed: returns (grad_features [N, C_in],
-/// grad_weights shaped like weights). Each is an undefined tensor when its need flag is false.
+/// Backward of maskedIGemmConv with the same @p transposed and @p precise: returns (grad_features
+/// [N, C_in], grad_weights shaped like weights). Each is an undefined tensor when its need flag is
+/// false.
 std::tuple<torch::Tensor, torch::Tensor> maskedIGemmConvBackward(torch::Tensor gradOutput,
                                                                  torch::Tensor features,
                                                                  torch::Tensor weights,
                                                                  MaskedIGemmTopology const &topo,
                                                                  bool needFeatures,
                                                                  bool needWeights,
-                                                                 bool transposed = false);
+                                                                 bool transposed = false,
+                                                                 bool precise    = false);
 
 /// Sum over the rows of a 2-D CUDA tensor (the bias gradient), accumulated in float32.
 torch::Tensor columnSum(torch::Tensor x);

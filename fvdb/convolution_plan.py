@@ -550,12 +550,14 @@ class _MaskedIGemmConvFn(torch.autograd.Function):
         bias: torch.Tensor | None,
         topo: _fvdb_cpp.MaskedIGemmTopology,
         transposed: bool,
+        precise: bool,
     ) -> torch.Tensor:
         ctx.save_for_backward(features, weights)
         ctx.topo = topo
         ctx.transposed = transposed
+        ctx.precise = precise
         ctx.has_bias = bias is not None
-        return _fvdb_cpp.migemm_conv(features, weights, bias, topo, transposed)
+        return _fvdb_cpp.migemm_conv(features, weights, bias, topo, transposed, precise)
 
     @staticmethod
     def backward(ctx, grad_output: torch.Tensor):  # type: ignore[override]
@@ -565,10 +567,10 @@ class _MaskedIGemmConvFn(torch.autograd.Function):
         grad_feat, grad_w = None, None
         if need_feat or need_w:
             grad_feat, grad_w = _fvdb_cpp.migemm_conv_backward(
-                grad_output, features, weights, ctx.topo, bool(need_feat), bool(need_w), ctx.transposed
+                grad_output, features, weights, ctx.topo, bool(need_feat), bool(need_w), ctx.transposed, ctx.precise
             )
         grad_b = _fvdb_cpp.migemm_column_sum(grad_output) if ctx.has_bias and need_b else None
-        return grad_feat, grad_w, grad_b, None, None
+        return grad_feat, grad_w, grad_b, None, None, None
 
 
 # ============================================================
@@ -641,9 +643,7 @@ def _pad_last(tensor: torch.Tensor, size: int) -> torch.Tensor:
 
 
 def _masked_igemm_runs(in_channels: int, out_channels: int, dtype: torch.dtype, device: torch.device) -> bool:
-    """True when the masked_igemm kernels cover this call; float32 runs only as TF32."""
-    if dtype == torch.float32 and not _tf32_matmul_enabled():
-        return False
+    """True when the masked_igemm kernels cover this call."""
     return _fvdb_cpp.migemm_supports(in_channels, out_channels, dtype, device)
 
 
@@ -1250,6 +1250,8 @@ class ConvolutionPlan:
                     _pad_last(bias.to(dtype), out_p) if fuse else None,
                     backend.topology,
                     self._transposed,
+                    # float32 with TF32 off runs as 3xTF32, near float32 accuracy.
+                    dtype == torch.float32 and not _tf32_matmul_enabled(),
                 )
                 if out_p != out_c:
                     out_tensor = out_tensor[:, :out_c].contiguous()
