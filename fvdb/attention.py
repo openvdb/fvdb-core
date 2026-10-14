@@ -223,6 +223,56 @@ def _varlen_attention(
     return JaggedTensor.from_data_and_offsets(out.to(out_dtype), query.joffsets)
 
 
+def _same_offsets(a: JaggedTensor, b: JaggedTensor) -> bool:
+    """True when two jagged tensors share sequence lengths; skips the device sync for shared offsets."""
+    return a.joffsets is b.joffsets or torch.equal(a.joffsets, b.joffsets)
+
+
+def _global_varlen_available(query: JaggedTensor, key: JaggedTensor, value: JaggedTensor) -> bool:
+    """True when global attention can run on ``varlen_attn`` without changing numerics."""
+    q = query.jdata
+    if q.device.type != "cuda" or q.dtype not in _HALF_DTYPES:
+        return False
+    if key.jdata.dtype != q.dtype or value.jdata.dtype != q.dtype:
+        return False
+    if value.jdata.size(-1) != q.size(-1) or key.jdata.size(1) != q.size(1):
+        return False
+    if torch.cuda.get_device_capability(q.device)[0] < 8:
+        return False
+    try:
+        from torch.nn.attention.varlen import varlen_attn  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def _global_varlen_attention(query: JaggedTensor, key: JaggedTensor, value: JaggedTensor, scale: float) -> JaggedTensor:
+    """Global attention with ``varlen_attn``; query and key may have different sequence lengths."""
+    from torch.nn.attention.varlen import varlen_attn
+
+    q_lens = cast(list[int], query.lshape)
+    k_lens = cast(list[int], key.lshape)
+    if sum(q_lens) == 0:
+        empty = value.jdata.new_empty((0, value.jdata.size(1), value.jdata.size(2)))
+        return query.jagged_like(empty)
+    if max(sum(q_lens), sum(k_lens)) > _INT32_MAX:
+        raise ValueError("Token count exceeds the int32 range of cu_seqlens")
+
+    cu_q = query.joffsets.to(torch.int32)
+    cu_k = cu_q if key.joffsets is query.joffsets else key.joffsets.to(torch.int32)
+    out = varlen_attn(
+        query.jdata.contiguous(),
+        key.jdata.contiguous(),
+        value.jdata.contiguous(),
+        cu_q,
+        cu_k,
+        max(q_lens),
+        max(k_lens),
+        scale=scale,
+    )
+    return JaggedTensor.from_data_and_offsets(cast(torch.Tensor, out), query.joffsets)
+
+
 def scaled_dot_product_attention(
     query: JaggedTensor,
     key: JaggedTensor,
@@ -251,8 +301,10 @@ def scaled_dot_product_attention(
     For the local modes the inputs should already be ordered so that neighboring tokens are close
     in space, for example with :func:`fvdb.serialize` and :func:`fvdb.permute_jagged`.
 
-    Global attention wraps :func:`torch.nn.functional.scaled_dot_product_attention` on PyTorch
-    nested tensors. The backend (flash, memory-efficient, math, or cuDNN) follows
+    Global attention on float16 or bfloat16 CUDA inputs calls ``varlen_attn`` directly when it is
+    available, with separate sequence lengths for queries and keys. Otherwise it wraps
+    :func:`torch.nn.functional.scaled_dot_product_attention` on PyTorch nested tensors, and the
+    backend (flash, memory-efficient, math, or cuDNN) follows
     :func:`torch.nn.attention.sdpa_kernel`. The local modes call
     ``torch.nn.attention.varlen.varlen_attn``, which needs PyTorch 2.11 or newer, a CUDA GPU
     of SM80 or newer, and computes in float16 or bfloat16.
@@ -295,7 +347,7 @@ def scaled_dot_product_attention(
             f"query, key, and value must have the same batch size (num_tensors), "
             f"got {query.num_tensors}, {key.num_tensors}, {value.num_tensors}"
         )
-    if not torch.equal(key.joffsets, value.joffsets):
+    if not _same_offsets(key, value):
         raise ValueError("key and value must have matching sequence lengths (joffsets differ)")
 
     if patch_size < 0:
@@ -303,9 +355,12 @@ def scaled_dot_product_attention(
     if patch_size > 0 or window_size != 0:
         if patch_size > 0 and window_size != 0:
             raise ValueError("Set at most one of patch_size and window_size")
-        if not torch.equal(query.joffsets, key.joffsets):
+        if not _same_offsets(query, key):
             raise ValueError("Patch and window attention require query and key with matching sequence lengths")
         return _varlen_attention(query, key, value, scale, patch_size, window_size, compute_dtype)
+
+    if _global_varlen_available(query, key, value):
+        return _global_varlen_attention(query, key, value, scale)
 
     # Build zero-copy views first (cheap metadata, no data copy), then probe
     # which backend PyTorch will actually select for the given inputs.
