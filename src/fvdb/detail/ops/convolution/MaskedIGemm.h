@@ -36,6 +36,8 @@ struct MaskedIGemmTopology {
     // Row o of neighborMap holds output voxel o's K input rows (-1 if absent).
     torch::Tensor neighborMap; ///< int32 [N, K]
     torch::Tensor sortedRows;  ///< int32 [N], rows ordered by Gray rank of their tap mask
+    /// sortedRows regrouped into windows of nearby rows; built on first use for large inputs.
+    mutable torch::Tensor localRows;
     torch::Tensor rowMasks;    ///< int32 [N], bit k set when the row has a tap-k neighbor
     torch::Tensor pairIn;      ///< int32 [P], per tap the input row of each active pair
     torch::Tensor pairOut;     ///< int32 [P], per tap the output row, ascending

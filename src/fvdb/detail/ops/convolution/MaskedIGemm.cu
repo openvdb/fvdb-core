@@ -37,6 +37,7 @@
 #include <cuda_fp16.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <optional>
@@ -1059,6 +1060,30 @@ smCount() {
     return sms;
 }
 
+// The global Gray order groups rows with similar tap masks but scatters spatial neighbors
+// across the grid. When the gathered tensor is several times L2, windows of nearby rows each
+// sorted by Gray rank keep the neighbor gathers in L2 at the cost of slightly larger tile
+// unions. FVDB_MIGEMM_ORDER=global|local overrides the choice.
+constexpr int64_t kLocalWindow = int64_t(1) << 16;
+
+torch::Tensor const &
+rowOrder(MaskedIGemmTopology const &topo, int64_t gatheredBytes) {
+    int device = 0, l2 = 0;
+    C10_CUDA_CHECK(cudaGetDevice(&device));
+    C10_CUDA_CHECK(cudaDeviceGetAttribute(&l2, cudaDevAttrL2CacheSize, device));
+    bool local = topo.totalVoxels > kLocalWindow && gatheredBytes >= 3 * int64_t(l2);
+    if (char const *env = std::getenv("FVDB_MIGEMM_ORDER"))
+        local = std::string(env) == "local";
+    if (!local)
+        return topo.sortedRows;
+    if (!topo.localRows.defined()) {
+        auto const window = torch::div(topo.sortedRows, kLocalWindow, "floor");
+        auto const perm   = std::get<1>(torch::sort(window, std::optional<bool>(true), 0));
+        topo.localRows    = topo.sortedRows.index_select(0, perm);
+    }
+    return topo.localRows;
+}
+
 template <typename Cfg, typename T, bool B_KMAJOR, bool FLIP>
 void
 launchConv(torch::Tensor const &A,
@@ -1116,7 +1141,7 @@ launchConv(torch::Tensor const &A,
         reinterpret_cast<T *>(out.data_ptr()),
         splits > 1 ? acc.data_ptr<float>() : nullptr,
         topo.neighborMap.data_ptr<int32_t>(),
-        topo.sortedRows.data_ptr<int32_t>(),
+        rowOrder(topo, int64_t(N) * Kc * A.element_size()).data_ptr<int32_t>(),
         topo.rowMasks.data_ptr<int32_t>(),
         N,
         Kc,
@@ -1208,8 +1233,22 @@ launchWgrad(torch::Tensor const &X,
     // so every CTA keeps at least 128 steps. FVDB_MIGEMM_WSPLIT overrides CTAs per SM for tuning.
     char const *env      = std::getenv("FVDB_MIGEMM_WSPLIT");
     int64_t const target = int64_t(env ? std::max(1, std::atoi(env)) : 64) * sms;
-    int const splits     = int(std::clamp<int64_t>(
-        (target + tiles * K - 1) / (tiles * K), 1, std::max<int64_t>(1, steps / 128)));
+    int64_t splits       = std::clamp<int64_t>(
+        (target + tiles * K - 1) / (tiles * K), 1, std::max<int64_t>(1, steps / 128));
+
+    // Each row is read by up to K taps. Resident CTAs cover about resident / (tiles * K) split
+    // ranges of rows at once; keep the rows they read within a quarter of L2 so those reads hit.
+    // Matters only when X and dY are several times L2.
+    int perSm = 0, device = 0, l2 = 0;
+    C10_CUDA_CHECK(
+        cudaOccupancyMaxActiveBlocksPerMultiprocessor(&perSm, kernel, Cfg::THREADS, smem));
+    C10_CUDA_CHECK(cudaGetDevice(&device));
+    C10_CUDA_CHECK(cudaDeviceGetAttribute(&l2, cudaDevAttrL2CacheSize, device));
+    double const groups = double(std::max(1, perSm) * sms) / double(tiles * K);
+    double const bytes  = double(topo.totalVoxels) * (Ci + Co) * X.element_size();
+    auto const local    = int64_t(std::ceil(groups * bytes / (l2 / 4.0)));
+    if (!env)
+        splits = std::max(splits, std::min(local, std::max<int64_t>(1, steps / 32)));
 
     torch::Tensor rows, acc;
     if (splits > 1)
@@ -1218,7 +1257,7 @@ launchWgrad(torch::Tensor const &X,
         rows = torch::empty({K, Ci, Co}, X.options());
 
     TapToRow const ttr{topo.kernelSize[1], topo.kernelSize[2], topo.kernelSize[0]};
-    dim3 const grid(tiles, K, splits);
+    dim3 const grid(tiles, K, unsigned(splits));
     kernel<<<grid, Cfg::THREADS, smem, stream>>>(
         reinterpret_cast<T const *>(X.data_ptr()),
         reinterpret_cast<T const *>(dY.data_ptr()),
@@ -1229,7 +1268,7 @@ launchWgrad(torch::Tensor const &X,
         topo.pairOffsets.data_ptr<int32_t>(),
         Ci,
         Co,
-        splits,
+        int(splits),
         ttr);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
     return splits > 1 ? acc.to(X.scalar_type()) : rows;
@@ -1401,7 +1440,7 @@ maskedIGemmTopology(GridBatchData const &grid, nanovdb::Coord kernelSize) {
     }
 
     return MaskedIGemmTopology{
-        nbr, sortedRows, rowMasks, pairIn, pairOut, offsets, N, K, kernelSize};
+        nbr, sortedRows, torch::Tensor(), rowMasks, pairIn, pairOut, offsets, N, K, kernelSize};
 }
 
 torch::Tensor
