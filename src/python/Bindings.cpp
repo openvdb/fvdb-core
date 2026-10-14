@@ -737,10 +737,11 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     m.def("migemm_supports",
           &fvdb::detail::ops::maskedIGemmSupports,
-          "True when migemm_conv supports these channel counts and dtype on the current device.",
+          "True when migemm_conv supports these channel counts and dtype on the device.",
           py::arg("in_channels"),
           py::arg("out_channels"),
-          py::arg("dtype"));
+          py::arg("dtype"),
+          py::arg("device"));
 }
 
 TORCH_LIBRARY(fvdb, m) {
