@@ -282,7 +282,7 @@ class TestMaskedIGemm(unittest.TestCase):
     def test_tf32_legacy_api(self):
         # The other TF32 tests use fp32_precision; this one enables TF32 through allow_tf32.
         matmul = torch.backends.cuda.matmul
-        previous = matmul.fp32_precision if hasattr(matmul, "fp32_precision") else None
+        previous = matmul.allow_tf32
         matmul.allow_tf32 = True
         try:
             grid = _random_grid(2000, 10)
@@ -291,10 +291,8 @@ class TestMaskedIGemm(unittest.TestCase):
             plan.execute(grid.jagged_like(x), torch.randn(64, 64, 3, 3, 3, device="cuda"))
             self.assertNotIn("gather_scatter", plan._backend.fallback)
         finally:
-            if previous is None:
-                matmul.allow_tf32 = False
-            else:
-                matmul.fp32_precision = previous
+            # Restore through the same API; resetting fp32_precision would leave the flags mixed.
+            matmul.allow_tf32 = previous
 
     @parameterized.expand(
         [
@@ -358,8 +356,53 @@ class TestMaskedIGemm(unittest.TestCase):
         ref = conv(x, ConvolutionPlan.from_grid_batch(3, 1, grid, grid))
         self.assertLess(_rel_err(y.jdata, ref.jdata), 4e-3)
 
-        transposed = ConvolutionPlan.from_plan_transposed(plan)
-        self.assertEqual(transposed.execute(y, conv.weight.transpose(0, 1).contiguous()).jdata.shape[1], 64)
+    @parameterized.expand([("native", 64, 128, torch.float16), ("fallback", 48, 64, torch.float16)])
+    def test_transpose(self, _, cin, cout, dtype):
+        # The transposed masked plan shares the forward topology and matches gather-scatter's transpose.
+        torch.manual_seed(0)
+        grid = _random_grid(2000, 10)
+        plan = ConvolutionPlan.from_plan_transposed(
+            ConvolutionPlan.from_grid_batch((3, 1, 5), 1, grid, grid, expert_config=CONFIG)
+        )
+        ref_plan = ConvolutionPlan.from_plan_transposed(ConvolutionPlan.from_grid_batch((3, 1, 5), 1, grid, grid))
+        self.assertIsInstance(plan._backend, _MaskedIGemmBackend)
+
+        x = torch.randn(grid.total_voxels, cin, device="cuda", dtype=dtype, requires_grad=True)
+        w = (torch.randn(cout, cin, 3, 1, 5, device="cuda") / 40).to(dtype).requires_grad_(True)
+        b = torch.randn(cout, device="cuda", dtype=dtype, requires_grad=True)
+        xr = x.detach().float().requires_grad_(True)
+        wr = w.detach().float().requires_grad_(True)
+        br = b.detach().float().requires_grad_(True)
+        y = plan.execute(grid.jagged_like(x), w, b).jdata
+        gy = torch.randn_like(y)
+        y.backward(gy)
+        with _tf32(False):
+            yr = ref_plan.execute(grid.jagged_like(xr), wr, br).jdata
+            yr.backward(gy.float())
+
+        self.assertEqual("gather_scatter" in plan._backend.fallback, cin % 32 != 0)
+        self.assertLess(_rel_err(y, yr), 4e-3)
+        self.assertLess(_rel_err(x.grad, xr.grad), 4e-3)
+        self.assertLess(_rel_err(w.grad, wr.grad), 4e-3)
+        self.assertLess(_rel_err(b.grad, br.grad), 4e-3)
+
+    @parameterized.expand([("gather_scatter", 3, {}), ("matmul", 1, {}), ("masked_igemm", 3, CONFIG)])
+    def test_execute_bias(self, _, kernel_size, config):
+        torch.manual_seed(0)
+        grid = _random_grid(1000, 8)
+        plan = ConvolutionPlan.from_grid_batch(kernel_size, 1, grid, grid, expert_config=config)
+        x = torch.randn(grid.total_voxels, 64, device="cuda", dtype=torch.float16)
+        w = (torch.randn(32, 64, kernel_size, kernel_size, kernel_size, device="cuda") / 20).half()
+        b = torch.randn(32, device="cuda", dtype=torch.float16)
+        expected = plan.execute(x, w).float() + b.float()
+        self.assertLess(_rel_err(plan.execute(x, w, b), expected), 4e-3)
+        self.assertLess(_rel_err(plan.execute(grid.jagged_like(x), w, b).jdata, expected), 4e-3)
+
+    def test_coverage_report(self):
+        grid = _random_grid(1500, 10)
+        report = ConvolutionPlan.from_grid_batch(3, 1, grid, grid, expert_config=CONFIG).coverage_report
+        expected = ConvolutionPlan.from_grid_batch(3, 1, grid, grid).coverage_report
+        self.assertEqual(report, expected)
 
 
 if __name__ == "__main__":

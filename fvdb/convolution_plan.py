@@ -345,11 +345,13 @@ def _swap_coverage_report(report: ConvolutionCoverageReport) -> ConvolutionCover
 
 
 def _masked_igemm_degrees(topology: _fvdb_cpp.MaskedIGemmTopology) -> tuple[torch.Tensor, torch.Tensor]:
-    """Input and output degrees from a submanifold neighbor map."""
-    nbr = topology.neighbor_map
-    valid = nbr >= 0
-    input_degrees = torch.bincount(nbr[valid].long(), minlength=topology.total_voxels)
-    return input_degrees, valid.sum(dim=1)
+    """Input and output degrees from a submanifold neighbor map.
+
+    The map is symmetric (row o has input i at tap k exactly when row i has input o at tap K-1-k),
+    so each voxel's input degree equals its output degree.
+    """
+    degrees = (topology.neighbor_map >= 0).sum(dim=1)
+    return degrees, degrees
 
 
 def _output_zero_count(backend: "_Backend") -> int | None:
@@ -357,7 +359,8 @@ def _output_zero_count(backend: "_Backend") -> int | None:
     if isinstance(backend, _MatmulBackend):
         return 0
     if isinstance(backend, _MaskedIGemmBackend):
-        return int((_masked_igemm_degrees(backend.topology)[1] == 0).sum().item())
+        # Every row has its center tap.
+        return 0
     if isinstance(backend, _GatherScatterBackend):
         topology = backend.topology
     elif isinstance(backend, _PredGatherIGemmBackend):
@@ -1034,14 +1037,9 @@ class ConvolutionPlan:
             # already-stored default gather/scatter fallback rulebook.
             backend = _GatherScatterBackend(topology=_fvdb_cpp.gs_reverse_topology(plan._backend.gs_topology))
         elif isinstance(plan._backend, _MaskedIGemmBackend):
-            # The exact transpose runs on gather-scatter, built from the forward geometry.
-            forward_topology = _fvdb_cpp.gs_build_topology(
-                _get_grid_data(plan._source_grid),
-                _get_grid_data(plan._target_grid),
-                torch.tensor(plan._geometry.kernel_size, dtype=torch.int32),
-                torch.tensor(plan._geometry.stride, dtype=torch.int32),
-            )
-            backend = _GatherScatterBackend(topology=_fvdb_cpp.gs_reverse_topology(forward_topology))
+            # A submanifold transpose is the forward conv with a spatially flipped kernel, so it
+            # shares the topology and its gather-scatter fallback.
+            backend = plan._backend
         elif isinstance(plan._backend, _MatmulBackend):
             backend = plan._backend
         else:
@@ -1107,12 +1105,14 @@ class ConvolutionPlan:
     # ============================================================
 
     @overload
-    def execute(self, data: torch.Tensor, weights: torch.Tensor) -> torch.Tensor: ...
+    def execute(self, data: torch.Tensor, weights: torch.Tensor, bias: torch.Tensor | None = None) -> torch.Tensor: ...
 
     @overload
-    def execute(self, data: JaggedTensor, weights: torch.Tensor) -> JaggedTensor: ...
+    def execute(self, data: JaggedTensor, weights: torch.Tensor, bias: torch.Tensor | None = None) -> JaggedTensor: ...
 
-    def execute(self, data: JaggedTensor | torch.Tensor, weights: torch.Tensor) -> JaggedTensor | torch.Tensor:
+    def execute(
+        self, data: JaggedTensor | torch.Tensor, weights: torch.Tensor, bias: torch.Tensor | None = None
+    ) -> JaggedTensor | torch.Tensor:
         """
         Execute this :class:`ConvolutionPlan` with the input data and weights.
 
@@ -1141,6 +1141,8 @@ class ConvolutionPlan:
                     ``(out_channels, in_channels, kernel_size[0], kernel_size[1], kernel_size[2])``.
                     Identity ``K=1, S=1`` plans also accept the compact shape
                     ``(out_channels, in_channels)``.
+            bias (torch.Tensor | None): Optional ``(out_channels,)`` tensor added to every output
+                    voxel. Backends that support it fuse the add into the convolution kernel.
 
         Returns:
             output_features (torch.Tensor | JaggedTensor): Convolved features with the same type as input:
@@ -1166,6 +1168,7 @@ class ConvolutionPlan:
         """
         assert isinstance(data, (torch.Tensor, JaggedTensor)), "data must be a torch.Tensor or JaggedTensor"
         assert isinstance(weights, torch.Tensor), "weights must be a torch.Tensor"
+        assert bias is None or isinstance(bias, torch.Tensor), "bias must be a torch.Tensor or None"
 
         backend = self._backend
         if isinstance(backend, _MatmulBackend):
@@ -1191,11 +1194,11 @@ class ConvolutionPlan:
 
         # Matmul: 1x1x1 kernel, stride 1 — no kernel map needed
         if isinstance(backend, _MatmulBackend):
-            if is_flat:
-                return data.matmul(weight_matrix.transpose(0, 1))
-            else:
-                out_data = data.jdata.matmul(weight_matrix.transpose(0, 1))
-                return data.jagged_like(out_data)
+            features = data if is_flat else data.jdata
+            out_data = features.matmul(weight_matrix.transpose(0, 1))
+            if bias is not None:
+                out_data = out_data + bias
+            return out_data if is_flat else data.jagged_like(out_data)
 
         if is_flat:
             data = JaggedTensor(data)
@@ -1207,16 +1210,23 @@ class ConvolutionPlan:
                 raise ValueError("Gather-scatter convolution returned None")
             if not isinstance(out_tensor, torch.Tensor):
                 raise ValueError("Gather-scatter convolution returned non-tensor")
-            result = self._target_grid.jagged_like(out_tensor)
 
         elif isinstance(backend, _MaskedIGemmBackend):
-            dtype = _masked_igemm_dtype(data.jdata, weights)
+            if weights.ndim != 5:
+                raise ValueError("masked_igemm weights must be (out_channels, in_channels, k0, k1, k2)")
+            if self._transposed:
+                # Tap K-1-k mirrors tap k, so the transpose is the forward conv with a flipped kernel.
+                weights = weights.flip((2, 3, 4))
+            dtype = _masked_igemm_dtype(data.jdata, weights, bias)
             if _masked_igemm_runs(in_c, out_c, dtype, data.jdata.device):
-                out_tensor = _MaskedIGemmConvFn.apply(data.jdata.to(dtype), weights.to(dtype), None, backend.topology)
+                fused_bias = None if bias is None else bias.to(dtype)
+                out_tensor = _MaskedIGemmConvFn.apply(
+                    data.jdata.to(dtype), weights.to(dtype), fused_bias, backend.topology
+                )
+                bias = None
             else:
                 topology = self._masked_igemm_fallback(backend)
                 out_tensor = _GatherScatterConvFn.apply(data.jdata, weights, topology, False)
-            result = self._target_grid.jagged_like(out_tensor)
 
         elif isinstance(backend, _PredGatherIGemmBackend):
             out_tensor = _PredGatherIGemmConvFn.apply(
@@ -1232,10 +1242,13 @@ class ConvolutionPlan:
                 raise ValueError("PredGatherIGemm convolution returned None")
             if not isinstance(out_tensor, torch.Tensor):
                 raise ValueError("PredGatherIGemm convolution returned non-tensor")
-            result = self._target_grid.jagged_like(out_tensor)
 
         else:
             raise TypeError(f"Unknown backend type: {type(backend)}")
+
+        if bias is not None:
+            out_tensor = out_tensor + bias
+        result = self._target_grid.jagged_like(out_tensor)
 
         if is_flat:
             return result.jdata
@@ -1254,26 +1267,6 @@ class ConvolutionPlan:
             )
             backend.fallback["gather_scatter"] = topology
         return topology
-
-    def _execute_with_bias(self, data: JaggedTensor, weights: torch.Tensor, bias: torch.Tensor | None) -> JaggedTensor:
-        """Execute and add ``bias``, fused into the kernel epilogue where the backend supports it."""
-        backend = self._backend
-        dtype = _masked_igemm_dtype(data.jdata, weights, bias)
-        if (
-            bias is not None
-            and isinstance(backend, _MaskedIGemmBackend)
-            and weights.ndim == 5
-            and _masked_igemm_runs(weights.shape[1], weights.shape[0], dtype, data.jdata.device)
-            and _channel_pair_supported(weights.shape[1], weights.shape[0], self._channel_pairs)
-        ):
-            out_tensor = _MaskedIGemmConvFn.apply(
-                data.jdata.to(dtype), weights.to(dtype), bias.to(dtype), backend.topology
-            )
-            return self._target_grid.jagged_like(out_tensor)
-        out = self.execute(data, weights)
-        if bias is not None:
-            out.jdata = out.jdata + bias
-        return out
 
     # ============================================================
     #                 Properties
