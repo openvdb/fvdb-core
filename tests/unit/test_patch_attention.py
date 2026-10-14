@@ -18,12 +18,14 @@ The tests come in three groups:
 
 import importlib.util
 import unittest
+from unittest import mock
 
 import torch
 import torch.nn.functional as F
 from parameterized import parameterized
 
 import fvdb
+import fvdb.attention
 from fvdb import JaggedTensor
 from fvdb.attention import _patch_layout, _window_bounds
 
@@ -388,6 +390,80 @@ def _expected_weights(lshape: list[int], mode: dict) -> torch.Tensor:
             weights[start + i, [start + j for j in visible]] = 1.0 / len(visible)
         start += length
     return weights
+
+
+@unittest.skipUnless(CAN_RUN_VARLEN, "requires torch.nn.attention.varlen and an SM80+ GPU")
+class TestGlobalVarlenAttention(unittest.TestCase):
+    HEADS = 4
+    DIM = 64
+    LSHAPE = [37, 64, 0, 5, 128]
+
+    def _nested(self, q, k, v, scale):
+        with mock.patch.object(fvdb.attention, "_global_varlen_available", return_value=False):
+            return fvdb.scaled_dot_product_attention(q, k, v, scale)
+
+    @parameterized.expand([[torch.bfloat16, True], [torch.float16, True], [torch.float32, False]])
+    def test_dispatch(self, dtype, expect_varlen):
+        q, k, v = _random_qkv(self.LSHAPE, self.HEADS, self.DIM, dtype)
+        with mock.patch.object(
+            fvdb.attention, "_global_varlen_attention", wraps=fvdb.attention._global_varlen_attention
+        ) as spy:
+            fvdb.scaled_dot_product_attention(q, k, v, self.DIM**-0.5)
+        self.assertEqual(spy.called, expect_varlen)
+
+    @parameterized.expand([[torch.bfloat16], [torch.float16]])
+    def test_matches_nested_path(self, dtype):
+        q, k, v = _random_qkv(self.LSHAPE, self.HEADS, self.DIM, dtype)
+        scale = self.DIM**-0.5
+        out = fvdb.scaled_dot_product_attention(q, k, v, scale)
+        self.assertEqual(out.dtype, dtype)
+        self.assertTrue(torch.equal(out.joffsets, q.joffsets))
+        tol = TOLERANCES[dtype]
+        torch.testing.assert_close(out.jdata, self._nested(q, k, v, scale).jdata, atol=tol, rtol=tol)
+
+    def test_cross_attention_lengths(self):
+        q_lshape, kv_lshape = [7, 0, 30], [77, 77, 77]
+        q = _random_qkv(q_lshape, self.HEADS, self.DIM, torch.bfloat16, seed=1)[0]
+        _, k, v = _random_qkv(kv_lshape, self.HEADS, self.DIM, torch.bfloat16, seed=2)
+        scale = self.DIM**-0.5
+        out = fvdb.scaled_dot_product_attention(q, k, v, scale)
+        self.assertTrue(torch.equal(out.joffsets, q.joffsets))
+
+        refs = [_attend(qs, ks, vs, scale) for qs, ks, vs in zip(q.unbind(), k.unbind(), v.unbind()) if qs.size(0) > 0]
+        torch.testing.assert_close(out.jdata.float(), torch.cat(refs), atol=2e-2, rtol=2e-2)
+
+    def test_value_dim_differs_uses_nested_path(self):
+        q, k, _ = _random_qkv(self.LSHAPE, self.HEADS, self.DIM, torch.bfloat16)
+        v = k.jagged_like(k.jdata[..., :32].contiguous())
+        with mock.patch.object(fvdb.attention, "_global_varlen_attention") as spy:
+            out = fvdb.scaled_dot_product_attention(q, k, v, self.DIM**-0.5)
+        spy.assert_not_called()
+        self.assertEqual(out.jdata.shape[-1], 32)
+
+    def test_all_sequences_empty(self):
+        q, k, v = _random_qkv([0, 0], self.HEADS, self.DIM, torch.bfloat16)
+        out = fvdb.scaled_dot_product_attention(q, k, v, 1.0)
+        self.assertEqual(out.jdata.shape, (0, self.HEADS, self.DIM))
+
+    def test_shared_offsets_skip_sync(self):
+        q, k, v = _random_qkv(self.LSHAPE, self.HEADS, self.DIM, torch.bfloat16)
+        k = k.jagged_like(k.jdata)
+        v = v.jagged_like(v.jdata)
+        self.assertIs(k.joffsets, v.joffsets)
+        with mock.patch.object(torch, "equal", side_effect=AssertionError("offsets compared on device")):
+            fvdb.scaled_dot_product_attention(k, k, v, 1.0)
+
+    def test_backward_matches_nested_path(self):
+        q, k, v = _random_qkv(self.LSHAPE, self.HEADS, self.DIM, torch.bfloat16)
+        scale = self.DIM**-0.5
+        grads = []
+        for fn in (fvdb.scaled_dot_product_attention, self._nested):
+            leaves = [t.jdata.detach().clone().requires_grad_(True) for t in (q, k, v)]
+            jts = [JaggedTensor.from_data_and_offsets(t, q.joffsets) for t in leaves]
+            fn(*jts, scale).jdata.float().square().sum().backward()
+            grads.append([t.grad for t in leaves])
+        for got, ref in zip(*grads):
+            torch.testing.assert_close(got.float(), ref.float(), atol=5e-2, rtol=5e-2)
 
 
 @unittest.skipUnless(CAN_RUN_VARLEN, "requires torch.nn.attention.varlen and an SM80+ GPU")
