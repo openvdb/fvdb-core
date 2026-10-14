@@ -85,6 +85,9 @@ std::tuple<torch::Tensor, torch::Tensor> maskedIGemmConvBackward(torch::Tensor g
                                                                  bool needWeights,
                                                                  bool transposed = false);
 
+/// Sum over the rows of a 2-D CUDA tensor (the bias gradient), accumulated in float32.
+torch::Tensor columnSum(torch::Tensor x);
+
 /// True when maskedIGemmConv can run these channel counts and dtype on @p device.
 bool maskedIGemmSupports(int64_t inChannels,
                          int64_t outChannels,

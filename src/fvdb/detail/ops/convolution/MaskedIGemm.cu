@@ -1532,11 +1532,85 @@ runWgrad(torch::Tensor const &X,
     return dispatchWgrad<float>(X, dY, topo, Ci, Co, stream);
 }
 
+// Column sums of a row-major [N, C] tensor, accumulated in float32. Each thread loads 16-byte
+// column chunks from a strided set of rows; a block reduces its rows in shared memory and adds
+// one partial per column into out.
+constexpr int kColumnSumThreads = 256;
+
+template <typename T>
+__global__ void __launch_bounds__(kColumnSumThreads)
+columnSumKernel(T const *__restrict__ x, int64_t N, int C, float *__restrict__ out) {
+    constexpr int V  = 16 / sizeof(T);
+    int const chunks = C / V;
+    int const lanes  = kColumnSumThreads / chunks;
+    int const chunk  = threadIdx.x % chunks;
+    int const lane   = threadIdx.x / chunks;
+    __shared__ float part[kColumnSumThreads * V];
+
+    float acc[V] = {};
+    if (lane < lanes) {
+        for (int64_t row = int64_t(blockIdx.x) * lanes + lane; row < N;
+             row += int64_t(gridDim.x) * lanes) {
+            T v[V];
+            *reinterpret_cast<uint4 *>(v) =
+                *reinterpret_cast<uint4 const *>(x + row * C + chunk * V);
+#pragma unroll
+            for (int i = 0; i < V; ++i)
+                acc[i] += toFloat(v[i]);
+        }
+    }
+#pragma unroll
+    for (int i = 0; i < V; ++i)
+        part[threadIdx.x * V + i] = acc[i];
+    __syncthreads();
+    for (int c = threadIdx.x; c < C; c += kColumnSumThreads) {
+        float sum = 0.0f;
+        for (int l = 0; l < lanes; ++l)
+            sum += part[(l * chunks + c / V) * V + c % V];
+        atomicAdd(out + c, sum);
+    }
+}
+
 } // namespace
 
 // =============================================================================
 // Public entry points
 // =============================================================================
+
+torch::Tensor
+columnSum(torch::Tensor x) {
+    TORCH_CHECK(x.is_cuda() && x.dim() == 2, "columnSum: x must be a 2-D CUDA tensor");
+    int64_t const N = x.size(0), C = x.size(1);
+    int const V     = 16 / int(x.element_size());
+    bool const fast = (x.scalar_type() == torch::kFloat16 || x.scalar_type() == torch::kBFloat16 ||
+                       x.scalar_type() == torch::kFloat32) &&
+                      C > 0 && C % V == 0 && C / V <= kColumnSumThreads;
+    // Below ~1M elements the three launches here cost more than torch's single reduction.
+    if (!fast || N * C < (int64_t(1) << 20))
+        return x.sum(0);
+    c10::cuda::CUDAGuard guard(x.device());
+    x = x.contiguous();
+    if (reinterpret_cast<uintptr_t>(x.data_ptr()) % 16 != 0)
+        return x.sum(0);
+    auto out         = torch::zeros({C}, x.options().dtype(torch::kFloat32));
+    int const lanes  = kColumnSumThreads / int(C / V);
+    int const blocks = int(std::clamp<int64_t>((N + lanes - 1) / lanes, 1, 4 * int64_t(smCount())));
+    auto const stream = c10::cuda::getCurrentCUDAStream();
+    if (x.scalar_type() == torch::kFloat16)
+        columnSumKernel<__half><<<blocks, kColumnSumThreads, 0, stream>>>(
+            reinterpret_cast<__half const *>(x.data_ptr()), N, int(C), out.data_ptr<float>());
+    else if (x.scalar_type() == torch::kBFloat16)
+        columnSumKernel<__nv_bfloat16><<<blocks, kColumnSumThreads, 0, stream>>>(
+            reinterpret_cast<__nv_bfloat16 const *>(x.data_ptr()),
+            N,
+            int(C),
+            out.data_ptr<float>());
+    else
+        columnSumKernel<float><<<blocks, kColumnSumThreads, 0, stream>>>(
+            x.data_ptr<float>(), N, int(C), out.data_ptr<float>());
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
+    return out.to(x.scalar_type());
+}
 
 bool
 maskedIGemmSupports(int64_t inChannels,

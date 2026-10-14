@@ -753,6 +753,11 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         py::arg("need_weights")  = true,
         py::arg("transposed")    = false);
 
+    m.def("migemm_column_sum",
+          &fvdb::detail::ops::columnSum,
+          "Sum over the rows of a 2-D CUDA tensor, accumulated in float32 (the bias gradient).",
+          py::arg("x"));
+
     m.def("migemm_supports",
           &fvdb::detail::ops::maskedIGemmSupports,
           "True when migemm_conv supports these channel counts and dtype on the device.",
