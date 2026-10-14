@@ -7,6 +7,7 @@ FlexGEMM's submanifold training benchmark (voxelized sphere shells).
 | Script | Purpose |
 |---|---|
 | `bench_train.py` | L-layer forward + backward step; `--topology per-iter` rebuilds grid and plan each step as FlexGEMM's README does, `--topology fixed` builds them once |
+| `bench_strided.py` | One strided conv (default 2x2x2, stride 2) forward + backward against FlexGEMM's `sparse_conv3d`, on the configs of FlexGEMM's `tests/spconv/bwd.py`; also checks that both outputs match |
 | `profile_split.py` | One layer split into grid build, plan build, forward, backward; `--kernels` prints per-kernel tables |
 | `check.py` | Forward, input-gradient and weight-gradient agreement with FlexGEMM |
 | `proto_fvdb_topology.py` | fVDB neighbor map driving FlexGEMM's Triton kernels under different row orderings |
@@ -28,6 +29,7 @@ On Blackwell, Triton needs `TRITON_PTXAS_BLACKWELL_PATH=$(which ptxas)`.
 
 ```
 python bench_train.py --mode fp16 --topology fixed --backends default,masked_igemm,flex_gemm --json out.json
+python bench_strided.py --mode fp16 --topology fixed --json strided.json
 python profile_split.py --mode fp16 --backends masked_igemm,flex_gemm
 python check.py --backends masked_igemm --dtypes fp16
 ```
