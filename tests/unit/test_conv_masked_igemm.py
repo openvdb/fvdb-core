@@ -347,6 +347,24 @@ class TestMaskedIGemm(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "bias"):
             _fvdb_cpp.migemm_conv(x, w, torch.zeros(64, device="cuda"), topo)
 
+    @parameterized.expand(
+        [
+            ("half", 300000, 128, torch.float16),
+            ("bf16", 70000, 256, torch.bfloat16),
+            ("float", 100000, 64, torch.float32),
+            ("small", 100, 64, torch.float16),
+            ("wide", 1000, 4096, torch.float16),
+        ]
+    )
+    def test_column_sum(self, _, rows, cols, dtype):
+        x = torch.randn(rows, cols, device="cuda").to(dtype)
+        y = _fvdb_cpp.migemm_column_sum(x)
+        ref = x.double().sum(0)
+        self.assertEqual(y.dtype, dtype)
+        self.assertLess(
+            ((y.double() - ref).abs().max() / ref.abs().max()).item(), 1e-2 if dtype != torch.float32 else 1e-5
+        )
+
     def test_supports(self):
         cuda = torch.device("cuda", torch.cuda.current_device())
         self.assertTrue(_fvdb_cpp.migemm_supports(64, 32, torch.float16, cuda))

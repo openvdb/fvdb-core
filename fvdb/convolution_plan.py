@@ -567,7 +567,7 @@ class _MaskedIGemmConvFn(torch.autograd.Function):
             grad_feat, grad_w = _fvdb_cpp.migemm_conv_backward(
                 grad_output, features, weights, ctx.topo, bool(need_feat), bool(need_w), ctx.transposed
             )
-        grad_b = grad_output.sum(0) if ctx.has_bias and need_b else None
+        grad_b = _fvdb_cpp.migemm_column_sum(grad_output) if ctx.has_bias and need_b else None
         return grad_feat, grad_w, grad_b, None, None
 
 
