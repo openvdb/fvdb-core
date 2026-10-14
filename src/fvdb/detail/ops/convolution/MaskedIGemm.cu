@@ -600,6 +600,8 @@ maskedIGemmWgradKernel(T const *__restrict__ X,
                        int32_t const *__restrict__ pairIn,
                        int32_t const *__restrict__ pairOut,
                        int32_t const *__restrict__ pairOffsets,
+                       int32_t const *__restrict__ pairBlockOffsets,
+                       int rowBlocks,
                        int Ci,
                        int Co,
                        int splits,
@@ -623,18 +625,30 @@ maskedIGemmWgradKernel(T const *__restrict__ X,
     int const m0    = mTile * BM;
     int const n0    = nTile * BN;
 
-    int const pBegin = pairOffsets[tap];
-    int const steps  = (pairOffsets[tap + 1] - pBegin + BK - 1) / BK;
-    int const sFirst = int(int64_t(steps) * blockIdx.z / splits);
-    int const nIter  = int(int64_t(steps) * (blockIdx.z + 1) / splits) - sFirst;
-    int const pEnd   = pairOffsets[tap + 1];
+    // Each split takes an equal share of this tap's pairs, or, with pairBlockOffsets, an equal
+    // share of the output rows so that concurrent CTAs of every tap read the same rows.
+    int pFirst, pEnd;
+    if (pairBlockOffsets) {
+        int const b0     = int(int64_t(rowBlocks) * blockIdx.z / splits);
+        int const b1     = int(int64_t(rowBlocks) * (blockIdx.z + 1) / splits);
+        int32_t const *o = pairBlockOffsets + int64_t(tap) * rowBlocks;
+        pFirst           = o[b0];
+        pEnd             = b1 < rowBlocks ? o[b1] : pairOffsets[tap + 1];
+    } else {
+        int const pBegin = pairOffsets[tap];
+        int const steps  = (pairOffsets[tap + 1] - pBegin + BK - 1) / BK;
+        pFirst           = pBegin + int(int64_t(steps) * blockIdx.z / splits) * BK;
+        pEnd             = std::min(pairOffsets[tap + 1],
+                        pBegin + int(int64_t(steps) * (blockIdx.z + 1) / splits) * BK);
+    }
+    int const nIter = (pEnd - pFirst + BK - 1) / BK;
     // With one split, this CTA is the only writer of its tile and stores it even when empty.
     if (splits > 1 && nIter <= 0)
         return;
 
     // Pair indices of step it, for lane `lane` of warp 0.
     auto fetchIdx = [&](int it, int &in, int &out) {
-        int const p   = pBegin + (sFirst + it) * BK + lane;
+        int const p   = pFirst + it * BK + lane;
         bool const ok = lane < BK && it < nIter && p < pEnd;
         in            = ok ? pairIn[p] : -1;
         out           = ok ? pairOut[p] : -1;
@@ -1236,9 +1250,10 @@ launchWgrad(torch::Tensor const &X,
     int64_t splits       = std::clamp<int64_t>(
         (target + tiles * K - 1) / (tiles * K), 1, std::max<int64_t>(1, steps / 128));
 
-    // Each row is read by up to K taps. Resident CTAs cover about resident / (tiles * K) split
-    // ranges of rows at once; keep the rows they read within a quarter of L2 so those reads hit.
-    // Matters only when X and dY are several times L2.
+    // Each row is read by up to K taps, which hit L2 only if they run close together. When X and
+    // dY are several times L2, split by output rows rather than pairs, so the K taps of a split
+    // read the same rows, and use enough splits that the rows read by the resident
+    // resident / (tiles * K) splits fit in a quarter of L2.
     int perSm = 0, device = 0, l2 = 0;
     C10_CUDA_CHECK(
         cudaOccupancyMaxActiveBlocksPerMultiprocessor(&perSm, kernel, Cfg::THREADS, smem));
@@ -1247,8 +1262,15 @@ launchWgrad(torch::Tensor const &X,
     double const groups = double(std::max(1, perSm) * sms) / double(tiles * K);
     double const bytes  = double(topo.totalVoxels) * (Ci + Co) * X.element_size();
     auto const local    = int64_t(std::ceil(groups * bytes / (l2 / 4.0)));
-    if (!env)
-        splits = std::max(splits, std::min(local, std::max<int64_t>(1, steps / 32)));
+    int const rowBlocks = int(topo.pairBlockOffsets.size(1));
+    bool rowSplit       = !env && local > splits && rowBlocks > 1;
+    if (rowSplit)
+        splits = std::min<int64_t>({local, std::max<int64_t>(1, steps / 32), rowBlocks});
+    // FVDB_MIGEMM_WROWS=<splits> forces row splitting, for tests and tuning.
+    if (char const *rows = std::getenv("FVDB_MIGEMM_WROWS"); rows && rowBlocks > 0) {
+        rowSplit = true;
+        splits   = std::clamp<int64_t>(std::atoi(rows), 1, rowBlocks);
+    }
 
     torch::Tensor rows, acc;
     if (splits > 1)
@@ -1266,6 +1288,8 @@ launchWgrad(torch::Tensor const &X,
         topo.pairIn.data_ptr<int32_t>(),
         topo.pairOut.data_ptr<int32_t>(),
         topo.pairOffsets.data_ptr<int32_t>(),
+        rowSplit ? topo.pairBlockOffsets.data_ptr<int32_t>() : nullptr,
+        rowBlocks,
         Ci,
         Co,
         int(splits),
@@ -1439,8 +1463,17 @@ maskedIGemmTopology(GridBatchData const &grid, nanovdb::Coord kernelSize) {
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     }
 
-    return MaskedIGemmTopology{
-        nbr, sortedRows, torch::Tensor(), rowMasks, pairIn, pairOut, offsets, N, K, kernelSize};
+    return MaskedIGemmTopology{nbr,
+                               sortedRows,
+                               torch::Tensor(),
+                               rowMasks,
+                               pairIn,
+                               pairOut,
+                               offsets,
+                               blockOffsets,
+                               N,
+                               K,
+                               kernelSize};
 }
 
 torch::Tensor
