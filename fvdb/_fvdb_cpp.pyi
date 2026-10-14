@@ -169,6 +169,7 @@ def migemm_conv(
     weights: torch.Tensor,
     bias: torch.Tensor | None,
     topology: MaskedIGemmTopology,
+    flip_taps: bool = False,
 ) -> torch.Tensor: ...
 def migemm_conv_backward(
     grad_output: torch.Tensor,
@@ -177,6 +178,7 @@ def migemm_conv_backward(
     topology: MaskedIGemmTopology,
     need_features: bool = True,
     need_weights: bool = True,
+    flip_taps: bool = False,
 ) -> tuple[torch.Tensor | None, torch.Tensor | None]: ...
 def migemm_supports(in_channels: int, out_channels: int, dtype: torch.dtype, device: torch.device) -> bool: ...
 def rasterize_num_contributing_gaussians(

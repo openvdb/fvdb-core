@@ -15,7 +15,7 @@ import os
 import unittest
 
 import torch
-from fvdb.convolution_plan import _MaskedIGemmBackend
+from fvdb.convolution_plan import _MaskedIGemmBackend, _MatmulBackend
 from fvdb.functional._dispatch import _get_grid_data
 from parameterized import parameterized
 
@@ -356,15 +356,26 @@ class TestMaskedIGemm(unittest.TestCase):
         ref = conv(x, ConvolutionPlan.from_grid_batch(3, 1, grid, grid))
         self.assertLess(_rel_err(y.jdata, ref.jdata), 4e-3)
 
-    @parameterized.expand([("native", 64, 128, torch.float16), ("fallback", 48, 64, torch.float16)])
-    def test_transpose(self, _, cin, cout, dtype):
-        # The transposed masked plan shares the forward topology and matches gather-scatter's transpose.
+    @parameterized.expand(
+        [
+            ("native", 64, 128, torch.float16, False),
+            ("fallback", 48, 64, torch.float16, False),
+            ("factory_native", 64, 128, torch.float16, True),
+            ("factory_tf32", 64, 96, torch.float32, True),
+        ]
+    )
+    def test_transpose(self, _, cin, cout, dtype, factory):
+        # Transposed masked plans, from either constructor, match gather-scatter's transpose.
         torch.manual_seed(0)
         grid = _random_grid(2000, 10)
-        plan = ConvolutionPlan.from_plan_transposed(
-            ConvolutionPlan.from_grid_batch((3, 1, 5), 1, grid, grid, expert_config=CONFIG)
-        )
-        ref_plan = ConvolutionPlan.from_plan_transposed(ConvolutionPlan.from_grid_batch((3, 1, 5), 1, grid, grid))
+        if factory:
+            plan = ConvolutionPlan.from_grid_batch_transposed((3, 1, 5), 1, grid, grid, expert_config=CONFIG)
+            ref_plan = ConvolutionPlan.from_grid_batch_transposed((3, 1, 5), 1, grid, grid)
+        else:
+            plan = ConvolutionPlan.from_plan_transposed(
+                ConvolutionPlan.from_grid_batch((3, 1, 5), 1, grid, grid, expert_config=CONFIG)
+            )
+            ref_plan = ConvolutionPlan.from_plan_transposed(ConvolutionPlan.from_grid_batch((3, 1, 5), 1, grid, grid))
         self.assertIsInstance(plan._backend, _MaskedIGemmBackend)
 
         x = torch.randn(grid.total_voxels, cin, device="cuda", dtype=dtype, requires_grad=True)
@@ -373,18 +384,56 @@ class TestMaskedIGemm(unittest.TestCase):
         xr = x.detach().float().requires_grad_(True)
         wr = w.detach().float().requires_grad_(True)
         br = b.detach().float().requires_grad_(True)
-        y = plan.execute(grid.jagged_like(x), w, b).jdata
-        gy = torch.randn_like(y)
-        y.backward(gy)
+        with _tf32(True):
+            y = plan.execute(grid.jagged_like(x), w, b).jdata
+            gy = torch.randn_like(y)
+            y.backward(gy)
         with _tf32(False):
             yr = ref_plan.execute(grid.jagged_like(xr), wr, br).jdata
             yr.backward(gy.float())
 
+        tol = 5e-3 if dtype == torch.float32 else 4e-3
         self.assertEqual("gather_scatter" in plan._backend.fallback, cin % 32 != 0)
-        self.assertLess(_rel_err(y, yr), 4e-3)
-        self.assertLess(_rel_err(x.grad, xr.grad), 4e-3)
-        self.assertLess(_rel_err(w.grad, wr.grad), 4e-3)
-        self.assertLess(_rel_err(b.grad, br.grad), 4e-3)
+        self.assertLess(_rel_err(y, yr), tol)
+        self.assertLess(_rel_err(x.grad, xr.grad), tol)
+        self.assertLess(_rel_err(w.grad, wr.grad), tol)
+        self.assertLess(_rel_err(b.grad, br.grad), tol)
+
+    def test_kernel_size_one(self):
+        # 1x1x1 masked plans are identity matmuls, which accept SparseConv3d's 2-D weights.
+        grid = _random_grid(1000, 8)
+        forward = ConvolutionPlan.from_grid_batch(1, 1, grid, grid, expert_config=CONFIG)
+        transposed = ConvolutionPlan.from_grid_batch_transposed(1, 1, grid, grid, expert_config=CONFIG)
+        self.assertIsInstance(forward._backend, _MatmulBackend)
+        self.assertIsInstance(transposed._backend, _MatmulBackend)
+        conv = fvdb.nn.SparseConv3d(64, 32, 1, bias=True).cuda()
+        x = grid.jagged_like(torch.randn(grid.total_voxels, 64, device="cuda"))
+        ref = conv(x, ConvolutionPlan.from_grid_batch(1, 1, grid, grid))
+        torch.testing.assert_close(conv(x, forward).jdata, ref.jdata)
+
+    def test_wide_bias_runs_natively(self):
+        # A float32 bias on a float16 conv keeps the float16 kernel and is added afterwards.
+        torch.manual_seed(0)
+        grid = _random_grid(1500, 10)
+        plan = ConvolutionPlan.from_grid_batch(3, 1, grid, grid, expert_config=CONFIG)
+        x = torch.randn(grid.total_voxels, 64, device="cuda", dtype=torch.float16)
+        w = (torch.randn(64, 64, 3, 3, 3, device="cuda") / 40).half()
+        b = torch.randn(64, device="cuda")
+        with _tf32(False):
+            y = plan.execute(x, w, b)
+        self.assertEqual(y.dtype, torch.float32)
+        self.assertNotIn("gather_scatter", plan._backend.fallback)
+        self.assertLess(_rel_err(y, plan.execute(x, w).float() + b), 1e-3)
+
+    @parameterized.expand([("gather_scatter", 3, {}), ("matmul", 1, {}), ("masked_igemm", 3, CONFIG)])
+    def test_rejects_bias_shape(self, _, kernel_size, config):
+        grid = _random_grid(500, 8)
+        plan = ConvolutionPlan.from_grid_batch(kernel_size, 1, grid, grid, expert_config=config)
+        x = torch.randn(grid.total_voxels, 64, device="cuda", dtype=torch.float16)
+        w = torch.randn(32, 64, kernel_size, kernel_size, kernel_size, device="cuda", dtype=torch.float16)
+        for bias in (torch.zeros(1, 32, device="cuda"), torch.zeros((), device="cuda")):
+            with self.assertRaisesRegex(ValueError, "bias must have shape"):
+                plan.execute(x, w, bias.half())
 
     @parameterized.expand([("gather_scatter", 3, {}), ("matmul", 1, {}), ("masked_igemm", 3, CONFIG)])
     def test_execute_bias(self, _, kernel_size, config):

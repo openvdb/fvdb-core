@@ -704,14 +704,17 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         [](torch::Tensor features,
            torch::Tensor weights,
            std::optional<torch::Tensor> bias,
-           const MIGTopo &topo) -> torch::Tensor {
-            return fvdb::detail::ops::maskedIGemmConv(features, weights, bias, topo);
+           const MIGTopo &topo,
+           bool flip_taps) -> torch::Tensor {
+            return fvdb::detail::ops::maskedIGemmConv(features, weights, bias, topo, flip_taps);
         },
-        "Masked implicit GEMM submanifold sparse convolution with an optional fused bias.",
+        "Masked implicit GEMM submanifold sparse convolution with an optional fused bias. "
+        "flip_taps applies each tap's weights at its mirror tap (the transposed convolution).",
         py::arg("features"),
         py::arg("weights"),
         py::arg("bias"),
-        py::arg("topology"));
+        py::arg("topology"),
+        py::arg("flip_taps") = false);
 
     m.def(
         "migemm_conv_backward",
@@ -720,10 +723,11 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
            torch::Tensor weights,
            const MIGTopo &topo,
            bool need_features,
-           bool need_weights)
+           bool need_weights,
+           bool flip_taps)
             -> std::tuple<std::optional<torch::Tensor>, std::optional<torch::Tensor>> {
             auto [gf, gw] = fvdb::detail::ops::maskedIGemmConvBackward(
-                grad_output, features, weights, topo, need_features, need_weights);
+                grad_output, features, weights, topo, need_features, need_weights, flip_taps);
             return {gf.defined() ? std::optional<torch::Tensor>(gf) : std::nullopt,
                     gw.defined() ? std::optional<torch::Tensor>(gw) : std::nullopt};
         },
@@ -733,7 +737,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         py::arg("weights"),
         py::arg("topology"),
         py::arg("need_features") = true,
-        py::arg("need_weights")  = true);
+        py::arg("need_weights")  = true,
+        py::arg("flip_taps")     = false);
 
     m.def("migemm_supports",
           &fvdb::detail::ops::maskedIGemmSupports,

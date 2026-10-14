@@ -55,20 +55,23 @@ MaskedIGemmTopology maskedIGemmTopology(GridBatchData const &grid, nanovdb::Coor
 
 /// Forward: weights are a (C_out, C_in, k0, k1, k2) tensor, bias an optional [C_out] tensor
 /// added in the epilogue. Weights and bias must match the features' device and dtype.
-/// Returns [N, C_out].
+/// @p flipTaps applies tap k's weights at tap K-1-k, which computes the transposed
+/// convolution. Returns [N, C_out].
 torch::Tensor maskedIGemmConv(torch::Tensor features,
                               torch::Tensor weights,
                               std::optional<torch::Tensor> bias,
-                              MaskedIGemmTopology const &topo);
+                              MaskedIGemmTopology const &topo,
+                              bool flipTaps = false);
 
-/// Backward: returns (grad_features [N, C_in], grad_weights shaped like weights). Each is an
-/// undefined tensor when its need flag is false.
+/// Backward of maskedIGemmConv with the same @p flipTaps: returns (grad_features [N, C_in],
+/// grad_weights shaped like weights). Each is an undefined tensor when its need flag is false.
 std::tuple<torch::Tensor, torch::Tensor> maskedIGemmConvBackward(torch::Tensor gradOutput,
                                                                  torch::Tensor features,
                                                                  torch::Tensor weights,
                                                                  MaskedIGemmTopology const &topo,
                                                                  bool needFeatures,
-                                                                 bool needWeights);
+                                                                 bool needWeights,
+                                                                 bool flipTaps = false);
 
 /// True when maskedIGemmConv can run these channel counts and dtype on @p device.
 bool maskedIGemmSupports(int64_t inChannels,
