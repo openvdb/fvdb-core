@@ -13,13 +13,14 @@
 #include <c10/cuda/CUDAGuard.h>
 
 #include <cub/cub.cuh>
-#include <cuda/std/functional>
+#include <cuda/cmath>
 #include <cuda/std/utility>
 #include <thrust/binary_search.h>
 
 #include <cuda_runtime.h>
 
 #include <type_traits>
+#include <utility>
 
 namespace fvdb {
 namespace detail {
@@ -1127,15 +1128,15 @@ intersectGaussianTilesCudaImpl(
             // https://nvidia.github.io/cccl/cub/api/structcub_1_1DeviceRadixSort.html
             // DoubleBuffer reduce the auxiliary memory usage from O(N+P) to O(P)
             // Create a set of DoubleBuffers to wrap pairs of device pointers
-            cub::DoubleBuffer<int64_t> d_keys(intersectionKeys.data_ptr<int64_t>(),
-                                              keysSorted.data_ptr<int64_t>());
-            cub::DoubleBuffer<int32_t> d_vals(intersectionValues.data_ptr<int32_t>(),
-                                              valsSorted.data_ptr<int32_t>());
+            cub::DoubleBuffer<int64_t> keysDoubleBuffer(intersectionKeys.data_ptr<int64_t>(),
+                                                        keysSorted.data_ptr<int64_t>());
+            cub::DoubleBuffer<int32_t> valsDoubleBuffer(intersectionValues.data_ptr<int32_t>(),
+                                                        valsSorted.data_ptr<int32_t>());
 
             const int32_t numBits = 32 + numCamIdBits + numTileIdBits;
             FVDB_CUB_WRAPPER(cub::DeviceRadixSort::SortPairs,
-                             d_keys,
-                             d_vals,
+                             keysDoubleBuffer,
+                             valsDoubleBuffer,
                              totalIntersections,
                              0,
                              numBits,
@@ -1143,10 +1144,10 @@ intersectGaussianTilesCudaImpl(
 
             // DoubleBuffer swaps the pointers if the keys were sorted in the input buffer
             // so we need to grab the right buffer.
-            if (d_keys.selector == 1) {
+            if (keysDoubleBuffer.selector == 1) {
                 intersectionKeys = keysSorted;
             }
-            if (d_vals.selector == 1) {
+            if (valsDoubleBuffer.selector == 1) {
                 intersectionValues = valsSorted;
             }
         }
@@ -1311,6 +1312,7 @@ intersectGaussianTilesPrivateUse1Impl(
     // const uint32_t numCameras      = means2d.size(0);
     const uint32_t totalTiles    = numTilesH * numTilesW;
     const uint32_t numTileIdBits = (uint32_t)floor(log2(totalTiles)) + 1;
+    const uint32_t numCamIdBits  = (uint32_t)floor(log2(numCameras)) + 1;
     const auto cameraJIdxPtr =
         cameraJIdx.has_value() ? cameraJIdx.value().const_data_ptr<int32_t>() : nullptr;
 
@@ -1542,13 +1544,11 @@ intersectGaussianTilesPrivateUse1Impl(
             C10_CUDA_CHECK(cudaFreeAsync(deviceTilesPerGaussianCumsum[deviceId], stream));
         }
 
-        // Each device independently sorts its own slice in place. Because the tile-key ranges are
-        // disjoint and ordered, the concatenation of the sorted slices is globally sorted, so no
-        // cross-device merge is needed. DeviceMergeSort sorts in place, avoiding the separate
-        // output arrays (and their allocations) a radix sort would require. No mergeStreams() is
-        // needed before this: each device's sort reads only its own slice, written by that device's
-        // emit on the same stream, so it is already ordered after the emit without a global
-        // barrier.
+        // Sort the intersections by their key so intersections within the same tile are grouped
+        // together and sorted by their depth (near to far). Each device independently sorts its
+        // own slice. Because the tile-key ranges are disjoint and ordered, the concatenation of the
+        // sorted slices is globally sorted, so no cross-device merge is needed. Sorting follows
+        // emit on the same stream without a global barrier.
         for (const auto deviceId: c10::irange(deviceCount)) {
             C10_CUDA_CHECK(cudaSetDevice(deviceId));
             auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
@@ -1556,12 +1556,47 @@ intersectGaussianTilesPrivateUse1Impl(
             const int64_t intersectionOffset = deviceIntersectionOffset[deviceId];
             const int64_t intersectionCount  = deviceIntersectionCount[deviceId];
             if (intersectionCount > 0) {
+                // Allocate device-local buffers to store the sorted intersections
+                int64_t *keysSorted = nullptr;
+                int32_t *valsSorted = nullptr;
+                C10_CUDA_CHECK(
+                    cudaMallocAsync(&keysSorted, intersectionCount * sizeof(int64_t), stream));
+                C10_CUDA_CHECK(
+                    cudaMallocAsync(&valsSorted, intersectionCount * sizeof(int32_t), stream));
+
+                // https://nvidia.github.io/cccl/cub/api/structcub_1_1DeviceRadixSort.html
+                // DoubleBuffer reduce the auxiliary memory usage from O(N+P) to O(P)
+                // Create a set of DoubleBuffers to wrap pairs of device pointers
+                int32_t *intersectionValuesPtr =
+                    intersectionValues.data_ptr<int32_t>() + intersectionOffset;
+                cub::DoubleBuffer<int64_t> keysDoubleBuffer(deviceIntersectionKeys[deviceId],
+                                                            keysSorted);
+                cub::DoubleBuffer<int32_t> valsDoubleBuffer(intersectionValuesPtr, valsSorted);
+
+                const int32_t numBits = 32 + numCamIdBits + numTileIdBits;
                 FVDB_CUB_WRAPPER_ASYNC(stream,
-                                       cub::DeviceMergeSort::SortPairs,
-                                       deviceIntersectionKeys[deviceId],
-                                       intersectionValues.data_ptr<int32_t>() + intersectionOffset,
+                                       cub::DeviceRadixSort::SortPairs,
+                                       keysDoubleBuffer,
+                                       valsDoubleBuffer,
                                        intersectionCount,
-                                       ::cuda::std::less<int64_t>{});
+                                       0,
+                                       numBits);
+
+                // If the sorted output landed in the alternate buffer, keep it as this device's
+                // keys for offset generation (the swapped-out input buffer is freed below). The
+                // values must reside in the managed output tensor, so copy them back instead.
+                if (keysDoubleBuffer.selector == 1) {
+                    std::swap(deviceIntersectionKeys[deviceId], keysSorted);
+                }
+                if (valsDoubleBuffer.selector == 1) {
+                    C10_CUDA_CHECK(cudaMemcpyAsync(intersectionValuesPtr,
+                                                   valsSorted,
+                                                   intersectionCount * sizeof(int32_t),
+                                                   cudaMemcpyDeviceToDevice,
+                                                   stream));
+                }
+                C10_CUDA_CHECK(cudaFreeAsync(keysSorted, stream));
+                C10_CUDA_CHECK(cudaFreeAsync(valsSorted, stream));
             }
         }
 
