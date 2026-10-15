@@ -583,7 +583,7 @@ class TestBasicOpsSingle(unittest.TestCase):
                 pred_primal_coordinates,
                 atol=dtype_to_atol(dtype),
             ),
-            f"Max diff = {torch.max(torch.abs(target_primal_coordinates- pred_primal_coordinates)).item()}",
+            f"Max diff = {torch.max(torch.abs(target_primal_coordinates - pred_primal_coordinates)).item()}",
         )
 
         target_dual_coordinates = ((pts - vox_origin) / vox_size) + 0.5

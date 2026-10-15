@@ -49,9 +49,7 @@ class ConvolutionRelation:
 
     @property
     def p_after(self) -> Kernel:
-        return tuple(
-            self.dilation[axis] * (self.kernel_size[axis] - 1) - self.p_before[axis] for axis in range(3)
-        )  # type: ignore[return-value]
+        return tuple(self.dilation[axis] * (self.kernel_size[axis] - 1) - self.p_before[axis] for axis in range(3))  # type: ignore[return-value]
 
     @property
     def r_min(self) -> Kernel:
@@ -59,9 +57,7 @@ class ConvolutionRelation:
 
     @property
     def r_max(self) -> Kernel:
-        return tuple(
-            self.dilation[axis] * (self.kernel_size[axis] - 1) - self.p_before[axis] for axis in range(3)
-        )  # type: ignore[return-value]
+        return tuple(self.dilation[axis] * (self.kernel_size[axis] - 1) - self.p_before[axis] for axis in range(3))  # type: ignore[return-value]
 
     @property
     def kernel_volume(self) -> int:

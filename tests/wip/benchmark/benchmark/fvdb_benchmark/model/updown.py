@@ -11,7 +11,6 @@ import fvdb
 
 
 class UpDown(nn.Module):
-
     def __init__(self, backend: str, factor: int = 2):
         super().__init__()
 

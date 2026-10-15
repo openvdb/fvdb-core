@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 """Functional API for dense <-> sparse grid data transfer and grid-to-grid injection."""
+
 from __future__ import annotations
 
 from typing import Any, TYPE_CHECKING, cast

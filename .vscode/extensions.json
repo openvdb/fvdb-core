@@ -11,7 +11,7 @@
         "ms-python.vscode-pylance",
         "ms-python.debugpy",
         "ms-python.isort",
-        "ms-python.black-formatter",
+        "charliermarsh.ruff",
         "ms-toolsai.tensorboard",
         "ms-toolsai.jupyter",
         "rodolphebarbanneau.python-docstring-highlighter",

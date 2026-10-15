@@ -17,16 +17,17 @@ Codex, etc.) working on this codebase. Human contributors should also refer to
 
 ## Python Code Style
 
-- Format Python code with **black** using the exact flags from CI:
+- Format Python code with **ruff** 0.15.7, the version pinned in CI, from the
+  repository root:
 
   ```
-  black --target-version=py311 --line-length=120 --extend-exclude='wip/' .
+  ruff format .
   ```
 
-- **Do not** run `black` with default settings — the default line-length (88) does
-  not match this project's setting (120).
-- There is currently no `[tool.black]` section in `pyproject.toml`; a future PR may
-  add one so that plain `black .` picks up the correct settings automatically.
+- Ruff reads its settings (line length 120, target `py311`, and exclusions) from
+  `[tool.ruff]` in `pyproject.toml`, so no extra flags are needed.
+- `./build.sh format` runs both clang-format and `ruff format`; `./build.sh format check`
+  reports violations without rewriting files.
 
 ## C++ Code Style
 

@@ -640,9 +640,9 @@ class TestConvSemanticsIntegration(unittest.TestCase):
         )
         if completed.returncode == 77:
             pytest.skip(completed.stdout.strip())
-        assert (
-            completed.returncode == 0
-        ), f"split-cache subprocess failed\nstdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
+        assert completed.returncode == 0, (
+            f"split-cache subprocess failed\nstdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
+        )
         assert "split cache reused" in completed.stdout
 
     def test_generated_forward_grid_uses_convolution_lattice_transform(self) -> None:

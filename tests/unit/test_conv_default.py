@@ -58,7 +58,6 @@ from . import expand_tests
 
 
 class TestConvDefault(DisableTF32Mixin, unittest.TestCase):
-
     VOLUME_SHAPE = (71, 34, 58)
     KERNEL_SIZE = (3, 5, 7)
     SINGLE_VOLUME_SHAPE = (5, 7, 9)

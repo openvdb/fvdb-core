@@ -13,7 +13,7 @@ usage() {
   echo "                   wheel      - Build the Python wheel."
   echo "                   ctest      - Run tests (requires tests to be built)."
   echo "                   docstest   - Run pytest markdown documentation tests."
-  echo "                   format     - Run clang-format and black over the repo (matches CI)."
+  echo "                   format     - Run clang-format and ruff format over the repo (matches CI)."
   echo "                                Pass 'check' to report violations without rewriting files."
   echo ""
   echo "Options:"
@@ -370,7 +370,7 @@ fi
 export PIP_ARGS="--no-build-isolation$CONFIG_SETTINGS$PASS_THROUGH_ARGS"
 
 if [ "$BUILD_TYPE" == "format" ]; then
-    # Formatting needs no CUDA or build-job setup. Black reads its
+    # Formatting needs no CUDA or build-job setup. Ruff reads its
     # settings from pyproject.toml, so no flags are duplicated here.
     FORMAT_MODE="${PASS_THROUGH_ARGS# }"
     FORMAT_MODE="${FORMAT_MODE:-format}"
@@ -383,15 +383,15 @@ if [ "$BUILD_TYPE" == "format" ]; then
     echo "Running clang-format ($FORMAT_MODE)"
     ./src/scripts/run_clang_format.sh "$FORMAT_MODE" || FORMAT_EXIT_CODE=$?
 
-    echo "Running black ($FORMAT_MODE)"
-    if ! python -c "import black" >/dev/null 2>&1; then
-        echo "Error: black is not installed. Install with: python -m pip install \"black~=24.0\""
+    echo "Running ruff format ($FORMAT_MODE)"
+    if ! command -v ruff >/dev/null 2>&1; then
+        echo "Error: ruff is not installed. Install with: python -m pip install \"ruff==0.15.7\""
         exit 127
     fi
     if [ "$FORMAT_MODE" == "check" ]; then
-        python -m black --check --diff . || FORMAT_EXIT_CODE=$?
+        ruff format --check --diff . || FORMAT_EXIT_CODE=$?
     else
-        python -m black . || FORMAT_EXIT_CODE=$?
+        ruff format . || FORMAT_EXIT_CODE=$?
     fi
     exit $FORMAT_EXIT_CODE
 fi

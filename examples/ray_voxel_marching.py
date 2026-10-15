@@ -54,7 +54,7 @@ def main():
 
     ray_o, ray_d = fvdb.JaggedTensor([ray_o] * batch_size), fvdb.JaggedTensor([ray_d] * batch_size)
 
-    logging.info(f"Tracing {nrays ** 2} Rays Per Grid...")
+    logging.info(f"Tracing {nrays**2} Rays Per Grid...")
     start = timeit.default_timer()
     vox, times = grid.voxels_along_rays(ray_o, ray_d, max_voxels, 1e-4)
     if p.jdata.is_cuda:

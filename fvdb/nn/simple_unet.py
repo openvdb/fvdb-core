@@ -635,7 +635,7 @@ class SimpleUNetUnpad(nn.Module):
 
     def extra_repr(self) -> str:
         """Return the layer configuration shown in the module representation."""
-        return f"in_channels={self.in_channels}, out_channels={self.out_channels}, " f"kernel_size={self.kernel_size}"
+        return f"in_channels={self.in_channels}, out_channels={self.out_channels}, kernel_size={self.kernel_size}"
 
     def reset_parameters(self) -> None:
         """Reset child layers' parameters and batch-normalization statistics, where present."""
