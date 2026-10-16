@@ -63,6 +63,9 @@ import math
 import unittest
 
 import torch
+from parameterized import parameterized
+
+from fvdb import ConvolutionPlan, GridBatch, JaggedTensor
 from fvdb.types import DeviceIdentifier, resolve_device
 from fvdb.utils.tests import (
     fourier_anti_symmetric_kernel,
@@ -85,9 +88,6 @@ from fvdb.utils.tests.convolution_utils import (
     get_tolerances,
     sort_coords_by_ijk,
 )
-from parameterized import parameterized
-
-from fvdb import ConvolutionPlan, GridBatch, JaggedTensor
 
 from . import expand_tests
 

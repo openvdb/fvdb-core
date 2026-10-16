@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import Any, TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import torch
 

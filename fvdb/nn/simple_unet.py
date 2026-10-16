@@ -30,12 +30,12 @@ The architecture is designed for tasks requiring dense predictions on sparse 3D 
 such as 3D semantic segmentation, shape completion, or volumetric reconstruction.
 """
 
+import torch.nn as nn
+
 import fvdb.nn as fvnn
 import fvdb.torch_jagged as fvdb_jagged
-import torch.nn as nn
-from fvdb.types import NumericMaxRank1
-
 from fvdb import ConvolutionPlan, GridBatch, JaggedTensor
+from fvdb.types import NumericMaxRank1
 
 from .modules import _trace_fvdb_nn_forward
 

@@ -7,14 +7,14 @@ import unittest
 
 import numpy as np
 import torch
+from parameterized import parameterized
+
+from fvdb import Grid
 from fvdb.utils.tests import (
     dtype_to_atol,
     make_dense_grid_and_point_data,
     make_grid_and_point_data,
 )
-from parameterized import parameterized
-
-from fvdb import Grid
 
 from . import expand_tests
 

@@ -7,10 +7,10 @@ from typing import Any
 
 import torch
 import torch.nn as nn
-from fvdb.types import NumericMaxRank1, ValueConstraint, to_Vec3i, to_Vec3iBroadcastable
 from torch.profiler import record_function
 
 from fvdb import ConvolutionPlan, GridBatch, JaggedTensor
+from fvdb.types import NumericMaxRank1, ValueConstraint, to_Vec3i, to_Vec3iBroadcastable
 
 
 def _trace_fvdb_nn_forward(module):

@@ -4,13 +4,13 @@
 import logging
 import timeit
 
-import fvdb.viz as fviz
 import polyscope as ps
 import torch
-from fvdb.utils.examples import load_dragon_mesh, make_ray_grid
 
 import fvdb
+import fvdb.viz as fviz
 from fvdb import GridBatch, JaggedTensor
+from fvdb.utils.examples import load_dragon_mesh, make_ray_grid
 
 
 def main():

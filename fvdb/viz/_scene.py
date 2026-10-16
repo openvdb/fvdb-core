@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 import logging
-from typing import TYPE_CHECKING
 import warnings
+from typing import TYPE_CHECKING
 
 import numpy as np
 import torch

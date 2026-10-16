@@ -32,7 +32,7 @@
         "editor.defaultFormatter": "charliermarsh.ruff",
         "editor.formatOnSave": true,
         "editor.codeActionsOnSave": {
-            "source.organizeImports": "explicit"
+            "source.organizeImports.ruff": "explicit"
         },
     },
     "python.analysis.typeCheckingMode": "basic",
@@ -48,9 +48,6 @@
     "python.analysis.diagnosticSeverityOverrides": {
         "reportPrivateImportUsage": "none",
     },
-    "isort.args": [
-        "--profile", "black"
-    ],
     "json.format.keepLines": true,
 
     "clangd.path": "${env:CONDA_PREFIX}/envs/fvdb/bin/clangd",

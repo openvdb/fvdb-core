@@ -6,12 +6,12 @@ import os
 
 import torch
 import tyro
+from fvdb_reality_capture import GaussianSplat3d
+
 from fvdb.utils.tests import (
     generate_center_frame_point_at_depth,
     generate_random_4x4_xform,
 )
-
-from fvdb_reality_capture import GaussianSplat3d
 
 
 def save_tensors_torchscript(tensor_list, filepath, tensor_names=None):

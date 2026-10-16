@@ -14,10 +14,10 @@ from threading import Lock
 from typing import Any, overload
 
 import torch
-from fvdb.types import NumericMaxRank1, ValueConstraint, to_Vec3i
 
 from fvdb import GridBatch, JaggedTensor
 from fvdb.functional._dispatch import _get_grid_data
+from fvdb.types import NumericMaxRank1, ValueConstraint, to_Vec3i
 
 from . import _fvdb_cpp
 from .enums import ConvolutionPhasePolicy, ConvolutionTopologyPolicy, ConvolutionTopologyProvenance

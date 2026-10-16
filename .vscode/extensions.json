@@ -10,7 +10,6 @@
         "ms-python.python",
         "ms-python.vscode-pylance",
         "ms-python.debugpy",
-        "ms-python.isort",
         "charliermarsh.ruff",
         "ms-toolsai.tensorboard",
         "ms-toolsai.jupyter",

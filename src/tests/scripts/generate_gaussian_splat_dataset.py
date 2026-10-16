@@ -2,8 +2,8 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import argparse
+import os
 import sys
 
 try:

@@ -3,17 +3,13 @@
 #
 """Regression tests for canonical sparse-convolution semantics."""
 
-from itertools import product
 import unittest
+from itertools import product
 
 import pytest
 import torch
 from parameterized import parameterized
 
-from fvdb.utils.tests.convolution_utils import (
-    compute_conv_grid_topology_ground_truth,
-    compute_conv_transpose_topology_ground_truth,
-)
 from fvdb.utils.tests.convolution_semantics_oracle import (
     MAX_DENSE_ORACLE_SPATIAL_SITES,
     ConvolutionRelation,
@@ -26,6 +22,10 @@ from fvdb.utils.tests.convolution_semantics_oracle import (
     forward_support,
     relation_edges,
     transpose_support,
+)
+from fvdb.utils.tests.convolution_utils import (
+    compute_conv_grid_topology_ground_truth,
+    compute_conv_transpose_topology_ground_truth,
 )
 
 

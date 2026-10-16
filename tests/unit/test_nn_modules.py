@@ -6,13 +6,13 @@ import unittest
 from collections.abc import MutableMapping
 from typing import NamedTuple
 
-import fvdb.nn as fvnn
 import torch
 import torch.distributed
 import torch.multiprocessing
 import torch.nn as nn
 
 import fvdb
+import fvdb.nn as fvnn
 from fvdb import ConvolutionPlan, GridBatch, JaggedTensor
 
 from . import expand_tests

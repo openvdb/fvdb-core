@@ -38,6 +38,7 @@ jobs:
           version: "0.15.7"
           args: "format --check --diff"
           src: "."
+      - run: ruff check --select I --output-format=github .
 
   test-cpp-clang-format-lint:
     name: C++ code style (clang-format)

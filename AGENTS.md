@@ -17,17 +17,18 @@ Codex, etc.) working on this codebase. Human contributors should also refer to
 
 ## Python Code Style
 
-- Format Python code with **ruff** 0.15.7, the version pinned in CI, from the
+- Sort imports and format Python code with **ruff** 0.15.7, the version pinned in CI, from the
   repository root:
 
   ```
+  ruff check --select I --fix .
   ruff format .
   ```
 
 - Ruff reads its settings (line length 120, target `py311`, and exclusions) from
   `[tool.ruff]` in `pyproject.toml`, so no extra flags are needed.
-- `./build.sh format` runs both clang-format and `ruff format`; `./build.sh format check`
-  reports violations without rewriting files.
+- `./build.sh format` runs clang-format, Ruff import sorting, and `ruff format`;
+  `./build.sh format check` reports violations without rewriting files.
 
 ## C++ Code Style
 
