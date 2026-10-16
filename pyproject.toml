@@ -53,18 +53,21 @@ components = ["PythonModule"]
 [tool.scikit-build.wheel]
 packages = ["fvdb"]
 
-[tool.black]
-line-length = 120
-target-version = ["py311"]
-
 [tool.ruff]
+required-version = "==0.15.7"
 target-version = "py311"
 line-length = 120
-extend-exclude = ["*.pyi", "fvdb/utils/tests", "fvdb/utils/examples"]
+
+[tool.ruff.format]
+# Only Python sources are formatted: not notebooks, and not the code blocks in Markdown
+# docs that newer Ruff releases format by default.
+exclude = ["*.ipynb", "*.md"]
 
 [tool.ruff.lint]
-# Enforce API descriptions without changing the existing Black formatting policy.
-select = ["D101", "D102", "D103", "D104", "D417"]
+# Enforce API descriptions and sort imports. Type stubs and test/example helpers
+# remain exempt from linting, but are still formatted by `ruff format`.
+select = ["D101", "D102", "D103", "D104", "D417", "I"]
+exclude = ["*.pyi", "fvdb/utils/tests/**", "fvdb/utils/examples/**", "*.ipynb", "*.md"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"

@@ -3,16 +3,16 @@
 #
 from pathlib import Path
 
-import fvdb.viz as fviz
 import numpy as np
 import point_cloud_utils as pcu
 import polyscope as ps
 import torch
-from fvdb.types import DeviceIdentifier, resolve_device
-from fvdb.utils.examples import load_car_1_mesh, load_car_2_mesh
 
 import fvdb
+import fvdb.viz as fviz
 from fvdb import JaggedTensor
+from fvdb.types import DeviceIdentifier, resolve_device
+from fvdb.utils.examples import load_car_1_mesh, load_car_2_mesh
 
 voxel_size_1 = 0.02
 voxel_size_2 = 0.03

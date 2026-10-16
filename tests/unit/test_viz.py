@@ -407,7 +407,6 @@ class TestViewerScene(unittest.TestCase):
 
 
 class TestSceneParamWidgets(unittest.TestCase):
-
     @classmethod
     def setUpClass(cls):
         try:

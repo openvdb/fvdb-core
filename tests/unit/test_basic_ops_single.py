@@ -7,14 +7,14 @@ import unittest
 
 import numpy as np
 import torch
+from parameterized import parameterized
+
+from fvdb import Grid
 from fvdb.utils.tests import (
     dtype_to_atol,
     make_dense_grid_and_point_data,
     make_grid_and_point_data,
 )
-from parameterized import parameterized
-
-from fvdb import Grid
 
 from . import expand_tests
 
@@ -583,7 +583,7 @@ class TestBasicOpsSingle(unittest.TestCase):
                 pred_primal_coordinates,
                 atol=dtype_to_atol(dtype),
             ),
-            f"Max diff = {torch.max(torch.abs(target_primal_coordinates- pred_primal_coordinates)).item()}",
+            f"Max diff = {torch.max(torch.abs(target_primal_coordinates - pred_primal_coordinates)).item()}",
         )
 
         target_dual_coordinates = ((pts - vox_origin) / vox_size) + 0.5

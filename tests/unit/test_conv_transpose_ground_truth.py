@@ -64,6 +64,8 @@ The relationship: strided conv_transpose is the adjoint of strided conv3d.
 import unittest
 
 import torch
+from parameterized import parameterized
+
 from fvdb.types import DeviceIdentifier, resolve_device
 from fvdb.utils.tests import (
     fourier_anti_symmetric_kernel,
@@ -76,7 +78,6 @@ from fvdb.utils.tests.convolution_utils import (
     disable_tf32,
     get_tolerances,
 )
-from parameterized import parameterized
 
 from . import expand_tests
 

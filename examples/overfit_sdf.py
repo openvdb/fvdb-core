@@ -10,9 +10,9 @@ import point_cloud_utils as pcu
 import polyscope as ps
 import torch
 import tqdm
-from fvdb.utils.examples import load_happy_mesh
 
 from fvdb import Grid
+from fvdb.utils.examples import load_happy_mesh
 
 
 def prepare_sdf(npts, ng):

@@ -215,9 +215,9 @@ def assert_coords_equal(
     Raises:
         AssertionError: If the coordinate sets don't match
     """
-    assert len(actual) == len(
-        expected
-    ), f"Coordinate count mismatch: got {len(actual)}, expected {len(expected)}. {msg}"
+    assert len(actual) == len(expected), (
+        f"Coordinate count mismatch: got {len(actual)}, expected {len(expected)}. {msg}"
+    )
 
     actual_sorted, _ = sort_coords_by_ijk(actual)
     expected_sorted, _ = sort_coords_by_ijk(expected)
@@ -508,7 +508,7 @@ def diagnose_tensor_mismatch(
     Returns:
         Formatted string with error statistics and top mismatches
     """
-    lines = [f"\n{'='*60}", f"TENSOR MISMATCH: {name}", f"{'='*60}"]
+    lines = [f"\n{'=' * 60}", f"TENSOR MISMATCH: {name}", f"{'=' * 60}"]
 
     if actual.shape != expected.shape:
         lines.append(f"SHAPE MISMATCH: actual={actual.shape}, expected={expected.shape}")
@@ -546,7 +546,7 @@ def diagnose_tensor_mismatch(
             diff: float = flat_abs_diff[i].item()
             lines.append(f"  idx={i}: actual={a_val:.6f}, expected={e_val:.6f}, diff={diff:.6e}")
 
-    lines.append(f"{'='*60}\n")
+    lines.append(f"{'=' * 60}\n")
     return "\n".join(lines)
 
 

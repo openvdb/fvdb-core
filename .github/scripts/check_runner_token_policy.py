@@ -336,7 +336,7 @@ def check_workflow_file(path: Path, violations: list[str]) -> None:
                     violations,
                     path,
                     job_name,
-                    f"job exposes the token and also runs a LOCAL action " f"(uses: {uses}); not allowed",
+                    f"job exposes the token and also runs a LOCAL action (uses: {uses}); not allowed",
                 )
             if bare == "actions/checkout":
                 fail(
@@ -368,8 +368,7 @@ def check_no_leaks_outside_workflows(repo_root: Path, violations: list[str], ref
         # git is required to verify confinement; if it is unavailable we cannot
         # run the check, so fail closed rather than silently passing.
         violations.append(
-            f"<repo-wide leak check>: 'git' not found; cannot verify "
-            f"'{TOKEN_NAME}' is confined to {ALLOWED_PATHS_DESC}"
+            f"<repo-wide leak check>: 'git' not found; cannot verify '{TOKEN_NAME}' is confined to {ALLOWED_PATHS_DESC}"
         )
         return
 

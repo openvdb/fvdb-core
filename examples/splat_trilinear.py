@@ -6,9 +6,9 @@ import timeit
 
 import polyscope as ps
 import torch
-from fvdb.utils.examples import load_dragon_mesh
 
 from fvdb import Grid
+from fvdb.utils.examples import load_dragon_mesh
 
 
 def main():

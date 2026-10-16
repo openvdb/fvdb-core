@@ -6,13 +6,13 @@ import unittest
 
 import numpy as np
 import torch
+from parameterized import parameterized
+
+from fvdb import GridBatch, JaggedTensor
 from fvdb.utils.tests import (
     make_dense_grid_batch_and_jagged_point_data,
     make_grid_batch_and_jagged_point_data,
 )
-from parameterized import parameterized
-
-from fvdb import GridBatch, JaggedTensor
 
 from . import expand_tests
 

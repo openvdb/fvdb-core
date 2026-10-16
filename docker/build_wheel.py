@@ -232,7 +232,7 @@ def main():
         die("docker is required but not found")
     buildx = subprocess.run(["docker", "buildx", "version"], capture_output=True)
     if buildx.returncode != 0:
-        die("docker with BuildKit (buildx) is required; " "upgrade Docker or install the buildx plugin")
+        die("docker with BuildKit (buildx) is required; upgrade Docker or install the buildx plugin")
 
     known_cuda = versions["cuda"]["versions"].get(args.cuda_version)
     if known_cuda is not None:
@@ -270,8 +270,8 @@ def main():
 
     print("Building fvdb-core wheel with:")
     print(f"  Python:          {args.python_version}")
-    print(f"  PyTorch:         {args.torch_version} " f"(index: https://download.pytorch.org/whl/{cuda_tag})")
-    print(f"  CUDA:            {args.cuda_version} " f"(image: nvidia/cuda:{cuda_image_tag}-cudnn-devel-rockylinux8)")
+    print(f"  PyTorch:         {args.torch_version} (index: https://download.pytorch.org/whl/{cuda_tag})")
+    print(f"  CUDA:            {args.cuda_version} (image: nvidia/cuda:{cuda_image_tag}-cudnn-devel-rockylinux8)")
     print(f"  CUDA archs:      {cuda_arch_list}")
     print(f"  Wheel version:   {wheel_version or f'{current_version} (unchanged)'}")
     print(f"  auditwheel:      {'skipped' if args.skip_auditwheel else 'enabled'}")
@@ -321,9 +321,7 @@ def main():
         print(f"  {wheel}")
     print()
     print("Install with the matching PyTorch build, e.g.:")
-    print(
-        f"  pip install torch=={args.torch_version} " f"--extra-index-url https://download.pytorch.org/whl/{cuda_tag}"
-    )
+    print(f"  pip install torch=={args.torch_version} --extra-index-url https://download.pytorch.org/whl/{cuda_tag}")
     print(f"  pip install {args.output_dir}/fvdb_core-*.whl")
 
 
