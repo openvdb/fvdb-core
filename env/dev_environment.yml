@@ -60,6 +60,7 @@ dependencies:
   # CUDA build of pytorch itself.
   - pytorch-gpu=2.14.1=cuda134*
   - rich
+  - ruff=0.15.7
   - sam2
   - scikit-build-core
   - scikit-image
