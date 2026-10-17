@@ -120,6 +120,7 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/Inject.cu
     fvdb/detail/ops/IntegrateTSDF.cu
     fvdb/detail/ops/jagged/JaggedSort.cu
+    fvdb/detail/ops/JaggedStructureCheck.cu
     fvdb/detail/ops/JaggedTensorIndex.cu
     fvdb/detail/ops/JCat0.cu
     fvdb/detail/ops/JIdxForGrid.cu

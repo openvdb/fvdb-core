@@ -152,10 +152,10 @@ GridEdgeNetwork(const GridBatchData &batchHdl, bool returnVoxelCoordinates) {
         batchHdl.batchSize() == 1 ? torch::empty({0}, optsBIdx) : outVBidx;
     const torch::Tensor outEBidx2 =
         batchHdl.batchSize() == 1 ? torch::empty({0}, optsBIdx) : outEBidx;
-    return {JaggedTensor::from_data_indices_and_list_ids(
-                outV, outVBidx2, batchHdl.jlidx(), batchHdl.batchSize()),
-            JaggedTensor::from_data_indices_and_list_ids(
-                outE, outEBidx2, batchHdl.jlidx(), batchHdl.batchSize())};
+    return {JaggedTensor::from_data_indices_and_list_ids_unsafe(
+                outV, outVBidx2, batchHdl.jlidx(), batchHdl.batchSize(), batchHdl.batchSize()),
+            JaggedTensor::from_data_indices_and_list_ids_unsafe(
+                outE, outEBidx2, batchHdl.jlidx(), batchHdl.batchSize(), batchHdl.batchSize())};
 }
 
 std::vector<JaggedTensor>

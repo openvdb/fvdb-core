@@ -202,40 +202,32 @@ jdataShape1(const std::vector<int64_t> &lsizes, const std::vector<int64_t> &rsiz
     return shape;
 }
 
-std::tuple<int64_t, std::vector<int64_t>>
+std::vector<int64_t>
 jdataShape2(const std::vector<std::vector<int64_t>> &lsizes, const std::vector<int64_t> &rsizes) {
-    std::vector<int64_t> elementCountsPerList;
-    std::vector<int64_t> tensorCountsPerList;
-    elementCountsPerList.reserve(lsizes.size());
-    tensorCountsPerList.reserve(lsizes.size());
+    int64_t totalSize = 0;
     for (const auto &l: lsizes) {
-        elementCountsPerList.push_back(std::reduce(l.begin(), l.end()));
-        tensorCountsPerList.push_back(l.size());
+        totalSize += std::reduce(l.begin(), l.end(), int64_t(0));
     }
-    const int64_t totalSize = std::reduce(elementCountsPerList.begin(), elementCountsPerList.end());
-    const int64_t totalTensors =
-        std::reduce(tensorCountsPerList.begin(), tensorCountsPerList.end());
     std::vector<int64_t> shape;
     shape.reserve(rsizes.size() + 1);
     shape.push_back(totalSize);
     shape.insert(shape.end(), rsizes.begin(), rsizes.end());
-
-    return std::make_tuple(totalTensors, shape);
+    return shape;
 }
 
-#define __FVDB__BUILDER(FNAME, JFNAME)                                                       \
-    JaggedTensor JFNAME(const std::vector<int64_t> &lsizes,                                  \
-                        const std::vector<int64_t> rsizes,                                   \
-                        at::TensorOptions options) {                                         \
-        auto shape = jdataShape1(lsizes, rsizes);                                            \
-        return JaggedTensor(lsizes, FNAME(shape, options));                                  \
-    }                                                                                        \
-                                                                                             \
-    JaggedTensor JFNAME(const std::vector<std::vector<int64_t>> &lsizes,                     \
-                        const std::vector<int64_t> rsizes,                                   \
-                        at::TensorOptions options) {                                         \
-        auto shape = jdataShape2(lsizes, rsizes);                                            \
-        return JaggedTensor(lsizes, std::get<0>(shape), FNAME(std::get<1>(shape), options)); \
+#define __FVDB__BUILDER(FNAME, JFNAME)                                   \
+    JaggedTensor JFNAME(const std::vector<int64_t> &lsizes,              \
+                        const std::vector<int64_t> rsizes,               \
+                        at::TensorOptions options) {                     \
+        auto shape = jdataShape1(lsizes, rsizes);                        \
+        return JaggedTensor(lsizes, FNAME(shape, options));              \
+    }                                                                    \
+                                                                         \
+    JaggedTensor JFNAME(const std::vector<std::vector<int64_t>> &lsizes, \
+                        const std::vector<int64_t> rsizes,               \
+                        at::TensorOptions options) {                     \
+        auto shape = jdataShape2(lsizes, rsizes);                        \
+        return JaggedTensor(lsizes, FNAME(shape, options));              \
     }
 
 __FVDB__BUILDER(torch::rand, jrand)

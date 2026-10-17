@@ -24,7 +24,7 @@ broadcastIdxToMatchData(const torch::Tensor &idx1d, const torch::Tensor &data) {
     torch::Tensor idx = idx1d.to(torch::kLong);
     if (data.dim() > 1) {
         std::vector<int64_t> viewShape(data.dim(), 1);
-        viewShape[0] = -1;
+        viewShape[0] = idx.size(0);
         idx          = idx.view(viewShape).expand_as(data);
     }
     return idx;
@@ -120,7 +120,8 @@ jaggedSum(const JaggedTensor &jt, int64_t dim, bool keepdim) {
 
     if (dim == 0) {
         torch::Tensor retData;
-        if (batchIdx.size(0) == 0) {
+        // An empty jidx with data means a single tensor. With no data, every group is empty.
+        if (batchIdx.size(0) == 0 && data.size(0) > 0) {
             retData = data.sum(0).unsqueeze(0);
         } else {
             torch::Tensor idx = broadcastIdxToMatchData(batchIdx, data);
@@ -164,7 +165,8 @@ jaggedMin(const JaggedTensor &jt, int64_t dim, bool keepdim) {
 
     if (dim == 0) {
         torch::Tensor minVals, minIndices;
-        if (batchIdx.size(0) == 0) {
+        // An empty jidx with data means a single tensor. With no data, every group is empty.
+        if (batchIdx.size(0) == 0 && data.size(0) > 0) {
             auto minTuple = data.min(0);
             minVals       = std::get<0>(minTuple).unsqueeze(0);
             minIndices    = std::get<1>(minTuple).unsqueeze(0);
@@ -233,7 +235,8 @@ jaggedMax(const JaggedTensor &jt, int64_t dim, bool keepdim) {
 
     if (dim == 0) {
         torch::Tensor maxVals, maxIndices;
-        if (batchIdx.size(0) == 0) {
+        // An empty jidx with data means a single tensor. With no data, every group is empty.
+        if (batchIdx.size(0) == 0 && data.size(0) > 0) {
             auto maxTuple = data.max(0);
             maxVals       = std::get<0>(maxTuple).unsqueeze(0);
             maxIndices    = std::get<1>(maxTuple).unsqueeze(0);
