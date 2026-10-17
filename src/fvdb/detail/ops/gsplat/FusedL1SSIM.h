@@ -12,21 +12,23 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-// Aggregate loss and the three SSIM derivative tensors saved for backward.
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+// Aggregate loss, three SSIM derivatives, and the device target saved for backward.
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 fusedL1SSIMCUDA(const torch::Tensor &img1,
                 const torch::Tensor &img2,
                 double ssim_weight,
                 double C1,
                 double C2,
-                bool train);
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+                bool train,
+                bool normalize_target = false);
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 fusedL1SSIMPrivateUse1(const torch::Tensor &img1,
                        const torch::Tensor &img2,
                        double ssim_weight,
                        double C1,
                        double C2,
-                       bool train);
+                       bool train,
+                       bool normalize_target = false);
 
 torch::Tensor fusedL1SSIMBackwardCUDA(const torch::Tensor &img1,
                                       const torch::Tensor &img2,
@@ -36,7 +38,8 @@ torch::Tensor fusedL1SSIMBackwardCUDA(const torch::Tensor &img1,
                                       const torch::Tensor &dm_dsigma12,
                                       double ssim_weight,
                                       double C1,
-                                      double C2);
+                                      double C2,
+                                      bool normalize_target = false);
 torch::Tensor fusedL1SSIMBackwardPrivateUse1(const torch::Tensor &img1,
                                              const torch::Tensor &img2,
                                              const torch::Tensor &grad_loss,
@@ -45,7 +48,8 @@ torch::Tensor fusedL1SSIMBackwardPrivateUse1(const torch::Tensor &img1,
                                              const torch::Tensor &dm_dsigma12,
                                              double ssim_weight,
                                              double C1,
-                                             double C2);
+                                             double C2,
+                                             bool normalize_target = false);
 
 } // namespace ops
 } // namespace detail
