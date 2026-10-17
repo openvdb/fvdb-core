@@ -17,6 +17,14 @@ from . import nn, utils, viz
 from ._fvdb_cpp import NanoVDBGridMetadata, config, hilbert, morton
 from ._volume_render import volume_render
 from .attention import scaled_dot_product_attention
+from .serialization import (
+    GridSerialization,
+    permute_jagged,
+    serialization_codes,
+    serialization_depth,
+    serialization_perm,
+    serialize,
+)
 from .convolution_plan import (
     ConvolutionCoverageReport,
     ConvolutionCoverageWarning,
@@ -27,6 +35,10 @@ from .enums import (
     ConvolutionPhasePolicy,
     ConvolutionTopologyPolicy,
     ConvolutionTopologyProvenance,
+    EmbeddingMode,
+    NormKind,
+    SerializationOffset,
+    SerializationOrder,
     SmoothingMode,
 )
 from .grid import Grid
@@ -96,6 +108,17 @@ __all__ = [
     # Morton/Hilbert operations
     "morton",
     "hilbert",
+    # Space-filling-curve serialization
+    "EmbeddingMode",
+    "NormKind",
+    "SerializationOffset",
+    "SerializationOrder",
+    "GridSerialization",
+    "permute_jagged",
+    "serialization_codes",
+    "serialization_depth",
+    "serialization_perm",
+    "serialize",
     # Specialized operations
     "scaled_dot_product_attention",
     "volume_render",
