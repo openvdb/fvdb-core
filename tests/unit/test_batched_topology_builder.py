@@ -4,8 +4,9 @@
 """Equivalence tests for the batched leaf-mask topology builder (issue #755).
 
 On CUDA, ``refined_grid`` / ``coarsened_grid`` (and through them ``conv_grid`` /
-``conv_transpose_grid`` for K == S) build all batch members in a single batched pass instead of
-one NanoVDB build + merge per member. These tests pin the batched results against:
+``conv_transpose_grid`` for K == S), and the positive-padding ops ``dual_grid`` /
+``build_padded_grid(0, k)`` (issue #775), build all batch members in a single batched pass instead
+of one NanoVDB build + merge per member. These tests pin the batched results against:
 
 - ``from_ijk`` (PointsToGrid) grids built from independently computed expected coordinates,
   compared **elementwise** (``torch.equal`` on ``ijk.jdata``), which pins the canonical NanoVDB
@@ -50,6 +51,26 @@ def _expected_coarsen_ijk(ijk: torch.Tensor, factor: int) -> torch.Tensor:
         return ijk.reshape(0, 3)
     coarse = torch.div(ijk.to(torch.int64), factor, rounding_mode="floor")
     return torch.unique(coarse, dim=0).to(torch.int32)
+
+
+def _expected_pad_ijk(ijk: torch.Tensor, bmax: int) -> torch.Tensor:
+    """Unique coordinates of the Minkowski sum of ``ijk`` with the box {0, ..., bmax}^3.
+
+    ``bmax`` chained unit pads by the octant {0,1}^3 compose to exactly this box (Minkowski sums
+    of axis-aligned boxes compose), so this is the expected result of ``build_padded_grid(0, bmax)``
+    and, for ``bmax == 1``, of ``dual_grid()``.
+    """
+    if ijk.numel() == 0:
+        return ijk.reshape(0, 3)
+    r = torch.arange(bmax + 1)
+    offsets = torch.stack(torch.meshgrid(r, r, r, indexing="ij"), dim=-1).reshape(-1, 3)
+    padded = ijk.to(torch.int64)[:, None, :] + offsets[None, :, :].to(ijk.device)
+    return torch.unique(padded.reshape(-1, 3), dim=0).to(torch.int32)
+
+
+def _build_padded_grid(grid: GridBatch, bmin: int, bmax: int, exclude_border: bool = False) -> GridBatch:
+    """Wrapper around the low-level ``build_padded_grid`` binding (generic [bmin, bmax] box)."""
+    return GridBatch(data=fvdb._fvdb_cpp.build_padded_grid(grid.data, bmin, bmax, exclude_border))
 
 
 def _ijk_sets(grid: GridBatch):
@@ -146,6 +167,53 @@ class TestBatchedTopologyBuilder(unittest.TestCase):
             self._check_against_expected(result, expected, f"{name} coarsen x{factor}")
             cpu_result = _build(coords, "cpu").coarsened_grid(factor)
             self._check_against_cpu(result, cpu_result, f"{name} coarsen x{factor} vs CPU")
+
+    @parameterized.expand([(name,) for name in _tricky_batches().keys()])
+    def test_dual_grid_matches_expected_and_cpu(self, name):
+        # dual_grid is one batched BoxDilate({0,1}^3) pass: the Minkowski sum of the primal
+        # voxels with the unit octant (voxels at the corners of the primal voxels).
+        coords = _tricky_batches()[name]
+        grid = _build(coords, "cuda")
+        result = grid.dual_grid()
+        expected = [_expected_pad_ijk(c, 1) for c in coords]
+        self._check_against_expected(result, expected, f"{name} dual_grid")
+        cpu_result = _build(coords, "cpu").dual_grid()
+        self._check_against_cpu(result, cpu_result, f"{name} dual_grid vs CPU")
+        # The dual transform fix-up must survive the batched build: result voxel centers sit on
+        # the source's corner (dual) lattice, i.e. the origin shifts by half a voxel.
+        self.assertTrue(torch.allclose(result.voxel_sizes, grid.voxel_sizes), f"{name} dual_grid voxel size")
+        self.assertTrue(
+            torch.allclose(result.origins, grid.origins - 0.5 * grid.voxel_sizes), f"{name} dual_grid origin"
+        )
+
+    @parameterized.expand([(name,) for name in _tricky_batches().keys()])
+    def test_padded_grid_positive_matches_expected_and_cpu(self, name):
+        # build_padded_grid(0, k) is k chained batched BoxDilate({0,1}^3) passes; the result lies
+        # on the source lattice (transforms unchanged).
+        coords = _tricky_batches()[name]
+        grid = _build(coords, "cuda")
+        cpu_grid = _build(coords, "cpu")
+        for bmax in (1, 2):
+            result = _build_padded_grid(grid, 0, bmax)
+            expected = [_expected_pad_ijk(c, bmax) for c in coords]
+            self._check_against_expected(result, expected, f"{name} padded_grid(0, {bmax})")
+            cpu_result = _build_padded_grid(cpu_grid, 0, bmax)
+            self._check_against_cpu(result, cpu_result, f"{name} padded_grid(0, {bmax}) vs CPU")
+            self.assertTrue(torch.allclose(result.origins, grid.origins), f"{name} padded_grid(0, {bmax}) origin")
+
+    def test_dual_grid_of_sliced_batch(self):
+        # A sliced (non-contiguous) view shares a handle holding more grids than batchSize(); the
+        # batched builder must read the *logical* members via the view-aware grid pointers.
+        coords = _tricky_batches()["mixed_sizes"] + _tricky_batches()["empty_members"]
+        full = _build(coords, "cuda")
+        view = full[1:6]
+        self.assertEqual(view.grid_count, 5)
+        result = view.dual_grid()
+        expected = [_expected_pad_ijk(c, 1) for c in coords[1:6]]
+        self._check_against_expected(result, expected, "sliced dual_grid")
+        for b in range(5):
+            single = _build([coords[1 + b]], "cuda").dual_grid()
+            self.assertTrue(torch.equal(result.ijk.unbind()[b], single.ijk.jdata), f"sliced dual_grid member {b}")
 
     def test_conv_grid_k2s2_multi_grid_matches_per_member(self):
         coords = _tricky_batches()["mixed_sizes"]
