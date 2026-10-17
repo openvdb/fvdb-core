@@ -764,9 +764,8 @@ fusedL1SSIMBackwardPrivateUse1(const torch::Tensor &img1,
     const int W    = img1.size(3);
     auto grad_img1 = torch::empty_like(img1);
 
-    std::vector<torch::Tensor> inputs  = {img1, img2, dm_dmu1, dm_dsigma1_sq, dm_dsigma12};
     std::vector<torch::Tensor> outputs = {grad_img1};
-    prefetchImages(inputs, outputs);
+    prefetchImages({}, outputs);
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto stream      = c10::cuda::getCurrentCUDAStream(deviceId);

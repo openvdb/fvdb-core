@@ -113,8 +113,8 @@ appendImagePrefetchRanges(std::vector<void *> &prefetchPointers,
 // Each current compute stream is ordered after its device's prefetches before returning.
 inline void
 prefetchImages(const torch::TensorList &inputs, const torch::TensorList &outputs) {
-    TORCH_CHECK(!inputs.empty(), "Image prefetch requires at least one input");
-    const auto &image = inputs.front();
+    TORCH_CHECK(!inputs.empty() || !outputs.empty(), "Image prefetch requires at least one image");
+    const auto &image = inputs.empty() ? outputs.front() : inputs.front();
     const int B       = image.size(0);
     const int CH      = image.size(1);
     const int H       = image.size(2);
