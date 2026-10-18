@@ -12,8 +12,8 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-// Aggregate loss, three SSIM derivatives, and the device target saved for backward.
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+// Aggregate loss and three SSIM derivatives. Both images must be on the same device.
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 fusedL1SSIMCUDA(const torch::Tensor &img1,
                 const torch::Tensor &img2,
                 double ssim_weight,
@@ -21,7 +21,7 @@ fusedL1SSIMCUDA(const torch::Tensor &img1,
                 double C2,
                 bool train,
                 bool normalize_target = false);
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 fusedL1SSIMPrivateUse1(const torch::Tensor &img1,
                        const torch::Tensor &img2,
                        double ssim_weight,

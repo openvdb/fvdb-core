@@ -10,12 +10,12 @@ from torch.autograd.function import once_differentiable
 class _FusedL1SSIM(torch.autograd.Function):
     @staticmethod
     def forward(ctx, img1: torch.Tensor, img2: torch.Tensor, ssim_weight: float, train: bool, normalize_target: bool):
-        loss, dm_dmu1, dm_dsigma1_sq, dm_dsigma12, target = torch.ops.fvdb._fused_l1_ssim.default(
+        loss, dm_dmu1, dm_dsigma1_sq, dm_dsigma12 = torch.ops.fvdb._fused_l1_ssim.default(
             img1, img2, ssim_weight, 0.01**2, 0.03**2, train, normalize_target
         )
 
         if train:
-            ctx.save_for_backward(img1, target, dm_dmu1, dm_dsigma1_sq, dm_dsigma12)
+            ctx.save_for_backward(img1, img2, dm_dmu1, dm_dsigma1_sq, dm_dsigma12)
         ctx.ssim_weight = ssim_weight
         ctx.normalize_target = normalize_target
         ctx.set_materialize_grads(False)
@@ -54,13 +54,15 @@ def fused_l1_ssim_loss(
     Computes ``torch.lerp(fused_l1_loss(img1, img2), 1 - ssim(img1, img2),
     ssim_weight)`` using SSIM's default ``same`` padding. Both inputs must be
     nonempty NCHW images with identical shapes. Predictions must be float32 on
-    CUDA or DGX; float32 or uint8 targets may be on CPU or the prediction device. When
+    CUDA or DGX; float32 or uint8 targets must be on the prediction device. When
     ``normalize_target=True``, target values are divided by 255 inside the
     forward and backward kernels without allocating a normalized target tensor.
     Noncontiguous inputs are copied to contiguous NCHW storage.
 
-    CPU targets are transferred once and the device copy is saved for backward.
-    CUDA uses ``to(img1.device)``; DGX uses asynchronous copies of each GPU's
+    Transfer CPU targets explicitly with
+    ``torch.ops.fvdb._copy_image_to_device(img2, img1.device)`` before calling this
+    function. The device target is saved for backward. The transfer operator uses
+    ``to(img1.device)`` for CUDA; DGX uses asynchronous copies of each GPU's
     assigned tile rows into a DGX buffer, preserving NCHW storage. CPU targets for
     DGX must already be contiguous and pinned, and the caller must keep their
     storage alive and unchanged until the uploads finish.
@@ -76,7 +78,7 @@ def fused_l1_ssim_loss(
 
     Args:
         img1: Predicted images of shape ``(B, C, H, W)``.
-        img2: Float32 or uint8 target images with the same shape, on CPU or the prediction device.
+        img2: Float32 or uint8 target images with the same shape and device as ``img1``.
         ssim_weight: Scalar interpolation weight for the SSIM loss.
         normalize_target: Divide target values by 255 before computing the loss.
             Defaults to ``False``, which uses target values unchanged.

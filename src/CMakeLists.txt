@@ -93,6 +93,7 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/CubesInGrid.cu
     fvdb/detail/ops/AvgPool.cu
     fvdb/detail/ops/MaxPool.cu
+    fvdb/detail/ops/gsplat/CopyImageToDevice.cu
     fvdb/detail/ops/GridEdgeNetwork.cu
     fvdb/detail/ops/gsplat/FusedL1.cu
     fvdb/detail/ops/gsplat/FusedL1SSIM.cu

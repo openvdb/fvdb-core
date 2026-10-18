@@ -29,6 +29,7 @@
 #include <fvdb/detail/utils/cuda/Utils.cuh>
 #include <fvdb/detail/utils/gsplat/ImagePartition.cuh>
 
+#include <ATen/Dispatch_v2.h>
 #include <ATen/native/Lerp.h>
 #include <c10/cuda/CUDAGuard.h>
 #include <torch/csrc/cuda/nccl.h>
@@ -38,7 +39,6 @@
 
 #include <cooperative_groups.h>
 
-#include <cstdint>
 #include <limits>
 #include <vector>
 
@@ -516,14 +516,13 @@ fusedL1SSIMBackwardKernel(int localToGlobalOffset,
 }
 
 void
-checkImages(const torch::Tensor &img1, const torch::Tensor &img2, bool allow_cpu_target = false) {
+checkImages(const torch::Tensor &img1, const torch::Tensor &img2) {
     TORCH_CHECK_VALUE(img1.dim() == 4 && img2.dim() == 4,
                       "Fused L1/SSIM expects NCHW image batches");
     TORCH_CHECK_VALUE(img1.sizes() == img2.sizes(),
                       "Fused L1/SSIM requires identical image shapes");
-    TORCH_CHECK_VALUE(img1.device() == img2.device() || (allow_cpu_target && img2.is_cpu()),
-                      "Fused L1/SSIM requires the target on the prediction device",
-                      allow_cpu_target ? " or CPU" : "");
+    TORCH_CHECK_VALUE(img1.device() == img2.device(),
+                      "Fused L1/SSIM requires the target on the prediction device");
     TORCH_CHECK_VALUE(img1.scalar_type() == torch::kFloat && (img2.scalar_type() == torch::kFloat ||
                                                               img2.scalar_type() == torch::kUInt8),
                       "Fused L1/SSIM requires float32 predictions and float32 or uint8 targets");
@@ -584,29 +583,28 @@ forwardTiles(const torch::Tensor &img1,
 
     dim3 grid(blockCount);
     dim3 block(BLOCK_X, BLOCK_Y);
-    const auto launch = [&](const auto *target) {
-        fusedL1SSIMKernel<<<grid, block, 0, stream>>>(
-            blockOffset,
-            B,
-            H,
-            W,
-            CH,
-            ssim_weight,
-            C1,
-            C2,
-            img1.const_data_ptr<float>(),
-            target,
-            loss_tiles,
-            dm_dmu1.numel() ? dm_dmu1.data_ptr<float>() : nullptr,
-            dm_dsigma1_sq.numel() ? dm_dsigma1_sq.data_ptr<float>() : nullptr,
-            dm_dsigma12.numel() ? dm_dsigma12.data_ptr<float>() : nullptr,
-            normalize_target);
-    };
-    if (img2.scalar_type() == torch::kUInt8) {
-        launch(img2.const_data_ptr<uint8_t>());
-    } else {
-        launch(img2.const_data_ptr<float>());
-    }
+    AT_DISPATCH_V2(img2.scalar_type(),
+                   "fusedL1SSIMKernel",
+                   AT_WRAP([&] {
+                       fusedL1SSIMKernel<<<grid, block, 0, stream>>>(
+                           blockOffset,
+                           B,
+                           H,
+                           W,
+                           CH,
+                           ssim_weight,
+                           C1,
+                           C2,
+                           img1.const_data_ptr<float>(),
+                           img2.const_data_ptr<scalar_t>(),
+                           loss_tiles,
+                           dm_dmu1.numel() ? dm_dmu1.data_ptr<float>() : nullptr,
+                           dm_dsigma1_sq.numel() ? dm_dsigma1_sq.data_ptr<float>() : nullptr,
+                           dm_dsigma12.numel() ? dm_dsigma12.data_ptr<float>() : nullptr,
+                           normalize_target);
+                   }),
+                   at::kFloat,
+                   at::kByte);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
     FVDB_CUB_WRAPPER_ASYNC(stream, cub::DeviceReduce::Sum, loss_tiles, loss, blockCount);
 }
@@ -629,27 +627,27 @@ backwardTiles(const torch::Tensor &img1,
     }
     dim3 grid(blockCount);
     dim3 block(BLOCK_X, BLOCK_Y);
-    const auto launch = [&](const auto *target) {
-        fusedL1SSIMBackwardKernel<<<grid, block, 0, stream>>>(blockOffset,
-                                                              img1.size(0),
-                                                              img1.size(2),
-                                                              img1.size(3),
-                                                              img1.size(1),
-                                                              ssim_weight,
-                                                              img1.const_data_ptr<float>(),
-                                                              target,
-                                                              grad_loss.const_data_ptr<float>(),
-                                                              grad_img1.data_ptr<float>(),
-                                                              dm_dmu1.const_data_ptr<float>(),
-                                                              dm_dsigma1_sq.const_data_ptr<float>(),
-                                                              dm_dsigma12.const_data_ptr<float>(),
-                                                              normalize_target);
-    };
-    if (img2.scalar_type() == torch::kUInt8) {
-        launch(img2.const_data_ptr<uint8_t>());
-    } else {
-        launch(img2.const_data_ptr<float>());
-    }
+    AT_DISPATCH_V2(img2.scalar_type(),
+                   "fusedL1SSIMBackwardKernel",
+                   AT_WRAP([&] {
+                       fusedL1SSIMBackwardKernel<<<grid, block, 0, stream>>>(
+                           blockOffset,
+                           img1.size(0),
+                           img1.size(2),
+                           img1.size(3),
+                           img1.size(1),
+                           ssim_weight,
+                           img1.const_data_ptr<float>(),
+                           img2.const_data_ptr<scalar_t>(),
+                           grad_loss.const_data_ptr<float>(),
+                           grad_img1.data_ptr<float>(),
+                           dm_dmu1.const_data_ptr<float>(),
+                           dm_dsigma1_sq.const_data_ptr<float>(),
+                           dm_dsigma12.const_data_ptr<float>(),
+                           normalize_target);
+                   }),
+                   at::kFloat,
+                   at::kByte);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 
@@ -658,7 +656,7 @@ backwardTiles(const torch::Tensor &img1,
 // ------------------------------------------
 // PyTorch Interfaces (Forward)
 // ------------------------------------------
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 fusedL1SSIMCUDA(const torch::Tensor &img1,
                 const torch::Tensor &img2,
                 double ssim_weight,
@@ -666,9 +664,8 @@ fusedL1SSIMCUDA(const torch::Tensor &img1,
                 double C2,
                 bool train,
                 bool normalize_target) {
-    checkImages(img1, img2, true);
+    checkImages(img1, img2);
     const c10::cuda::CUDAGuard device_guard(img1.device().index());
-    auto target        = img2.is_cpu() ? img2.to(img1.device()) : img2;
     const int B        = img1.size(0);
     const int H        = img1.size(2);
     const int W        = img1.size(3);
@@ -680,7 +677,7 @@ fusedL1SSIMCUDA(const torch::Tensor &img1,
     auto stream          = c10::cuda::getCurrentCUDAStream(img1.device().index());
     const int blockCount = B * ((H + BLOCK_Y - 1) / BLOCK_Y) * ((W + BLOCK_X - 1) / BLOCK_X);
     forwardTiles(img1,
-                 target,
+                 img2,
                  dm_dmu1,
                  dm_dsigma1_sq,
                  dm_dsigma12,
@@ -692,10 +689,10 @@ fusedL1SSIMCUDA(const torch::Tensor &img1,
                  loss.data_ptr<float>(),
                  stream,
                  normalize_target);
-    return std::make_tuple(loss, dm_dmu1, dm_dsigma1_sq, dm_dsigma12, target);
+    return std::make_tuple(loss, dm_dmu1, dm_dsigma1_sq, dm_dsigma12);
 }
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 fusedL1SSIMPrivateUse1(const torch::Tensor &img1,
                        const torch::Tensor &img2,
                        double ssim_weight,
@@ -703,12 +700,8 @@ fusedL1SSIMPrivateUse1(const torch::Tensor &img1,
                        double C2,
                        bool train,
                        bool normalize_target) {
-    checkImages(img1, img2, true);
-    const bool cpuTarget = img2.is_cpu();
-    auto target =
-        cpuTarget ? torch::empty(img2.sizes(), img1.options().dtype(img2.scalar_type())) : img2;
+    checkImages(img1, img2);
     const int B        = img1.size(0);
-    const int CH       = img1.size(1);
     const int H        = img1.size(2);
     const int W        = img1.size(3);
     auto loss          = torch::empty({}, img1.options());
@@ -717,41 +710,11 @@ fusedL1SSIMPrivateUse1(const torch::Tensor &img1,
     auto dm_dsigma12   = train ? torch::empty_like(img1) : torch::empty({0}, img1.options());
 
     std::vector<torch::Tensor> inputs = {img1};
-    if (!cpuTarget) {
-        inputs.emplace_back(target);
-    }
     std::vector<torch::Tensor> outputs;
     if (train) {
         outputs = {dm_dmu1, dm_dsigma1_sq, dm_dsigma12};
     }
-    if (cpuTarget) {
-        outputs.emplace_back(target);
-    }
     prefetchImages(inputs, outputs);
-    if (cpuTarget) {
-        const auto *sourceData = static_cast<const uint8_t *>(img2.data_ptr());
-        auto *targetData       = static_cast<uint8_t *>(target.data_ptr());
-        for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-            C10_CUDA_CHECK(cudaSetDevice(deviceId));
-            auto stream      = c10::cuda::getCurrentCUDAStream(deviceId);
-            const auto chunk = imageBlockChunk(B, H, W, deviceId);
-            std::vector<void *> pointers;
-            std::vector<size_t> sizes;
-            appendImagePrefetchRanges(
-                pointers, sizes, {target}, chunk.tileRowOffset, chunk.tileRowCount, B, CH, H, W);
-            // Copy full-width tile rows using the same ownership as prefetch and loss.
-            for (const auto rangeId: c10::irange(pointers.size())) {
-                const auto offset = static_cast<uint8_t *>(pointers[rangeId]) - targetData;
-                C10_CUDA_CHECK(cudaMemcpyAsync(pointers[rangeId],
-                                               sourceData + offset,
-                                               sizes[rangeId],
-                                               cudaMemcpyDefault,
-                                               stream));
-            }
-        }
-        // SSIM's halo reads also need rows uploaded by neighboring GPUs.
-        mergeStreams();
-    }
     std::vector<torch::Tensor> partial_losses;
     partial_losses.reserve(c10::cuda::device_count());
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
@@ -760,7 +723,7 @@ fusedL1SSIMPrivateUse1(const torch::Tensor &img1,
         const auto chunk = imageBlockChunk(B, H, W, deviceId);
         partial_losses.push_back(torch::empty({1}, img1.options().device(torch::kCUDA, deviceId)));
         forwardTiles(img1,
-                     target,
+                     img2,
                      dm_dmu1,
                      dm_dsigma1_sq,
                      dm_dsigma12,
@@ -777,7 +740,7 @@ fusedL1SSIMPrivateUse1(const torch::Tensor &img1,
         torch::from_blob(loss.data_ptr<float>(), {1}, partial_losses.front().options());
     torch::cuda::nccl::reduce(partial_losses, nccl_loss);
     mergeStreams();
-    return std::make_tuple(loss, dm_dmu1, dm_dsigma1_sq, dm_dsigma12, target);
+    return std::make_tuple(loss, dm_dmu1, dm_dsigma1_sq, dm_dsigma12);
 }
 
 // ------------------------------------------

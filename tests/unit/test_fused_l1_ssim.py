@@ -48,32 +48,6 @@ def test_fused_l1_ssim_forward_backward(image_device, shape, weight):
     torch.testing.assert_close(actual.grad.cpu(), reference.grad.cpu(), rtol=2e-4, atol=2e-6)
 
 
-@pytest.mark.parametrize("shape", [(1, 3, 1, 1), (1, 3, 33, 19), (3, 4, 17, 23)])
-@pytest.mark.parametrize("weight", [0.0, 0.2, 1.0])
-@pytest.mark.parametrize("target_dtype", [torch.uint8, torch.float32])
-@pytest.mark.parametrize("cpu_target", [False, True])
-def test_fused_l1_ssim_normalize_target(image_device, shape, weight, target_dtype, cpu_target):
-    img1, _ = make_images(shape)
-    img2 = (torch.arange(img1.numel()).reshape(shape) % 256).to(target_dtype)
-    reference = img1.to("cuda").requires_grad_()
-    reference_target = img2.to(device="cuda", dtype=torch.float32) / 255.0
-    actual = img1.to(image_device).requires_grad_()
-    actual_target = img2.pin_memory() if cpu_target else img2.to(image_device)
-
-    expected = torch.lerp(nnf.l1_loss(reference, reference_target), 1.0 - ssim(reference, reference_target), weight)
-    result = fused_l1_ssim_loss(actual, actual_target, weight, normalize_target=True)
-    torch.testing.assert_close(result.cpu(), expected.detach().cpu(), rtol=2e-5, atol=2e-6)
-
-    expected.backward(torch.tensor(-2.75, device="cuda"))
-    result.backward(torch.tensor(-2.75, device=image_device))
-    torch.testing.assert_close(actual.grad.cpu(), reference.grad.cpu(), rtol=2e-4, atol=2e-6)
-    torch.testing.assert_close(actual_target.cpu(), img2)
-
-    with torch.no_grad():
-        result = fused_l1_ssim_loss(actual, actual_target, weight, normalize_target=True)
-    torch.testing.assert_close(result.cpu(), expected.detach().cpu(), rtol=2e-5, atol=2e-6)
-
-
 def test_fused_l1_ssim_noncontiguous_inputs(image_device):
     img1, img2 = make_images((2, 3, 33, 38))
     reference = img1.to("cuda").requires_grad_()
@@ -92,8 +66,7 @@ def test_fused_l1_ssim_noncontiguous_inputs(image_device):
     torch.testing.assert_close(actual.grad.cpu(), reference.grad.cpu(), rtol=2e-4, atol=2e-6)
 
 
-@pytest.mark.parametrize("cpu_target", [False, True])
-def test_fused_l1_ssim_nondefault_streams(image_device, cpu_target):
+def test_fused_l1_ssim_nondefault_streams(image_device):
     img1, img2 = make_images((3, 3, 17, 19))
     reference = img1.to("cuda").requires_grad_()
     target = img2.to("cuda")
@@ -106,12 +79,7 @@ def test_fused_l1_ssim_nondefault_streams(image_device, cpu_target):
         for stream in streams:
             stack.enter_context(torch.cuda.stream(stream))
         actual = img1.to(image_device).requires_grad_()
-        if cpu_target:
-            storage = torch.empty(img2.numel() + 1, pin_memory=True)
-            actual_target = storage[1:].view(img2.shape)
-            actual_target.copy_(img2)
-        else:
-            actual_target = img2.to(image_device)
+        actual_target = img2.to(image_device)
         current_device = torch.cuda.current_device()
         result = fused_l1_ssim_loss(actual, actual_target, 0.2)
         if image_device == "cuda":
@@ -149,8 +117,7 @@ def test_fused_l1_ssim_rejects_empty_images():
         fused_l1_ssim_loss(empty, empty, 0.2)
 
 
-@pytest.mark.parametrize("cpu_target", [False, True])
-def test_fused_l1_ssim_native_parameters(image_device, cpu_target):
+def test_fused_l1_ssim_native_parameters(image_device):
     from fvdb.utils.metrics.ssim import FusedSSIMMap
 
     img1, img2 = make_images((2, 3, 17, 19))
@@ -163,16 +130,13 @@ def test_fused_l1_ssim_native_parameters(image_device, cpu_target):
     expected.backward(torch.tensor(-1.5, device="cuda"))
 
     actual = img1.to(image_device)
-    actual_target = img2.pin_memory() if cpu_target else img2.to(image_device)
-    result, dm_dmu1, dm_dsigma1_sq, dm_dsigma12, saved_target = torch.ops.fvdb._fused_l1_ssim.default(
+    actual_target = img2.to(image_device)
+    result, dm_dmu1, dm_dsigma1_sq, dm_dsigma12 = torch.ops.fvdb._fused_l1_ssim.default(
         actual, actual_target, weight, C1, C2, True
     )
-    assert saved_target.device == actual.device
-    assert saved_target.dtype == actual_target.dtype
-    torch.testing.assert_close(saved_target.cpu(), img2)
     grad = torch.ops.fvdb._fused_l1_ssim_backward.default(
         actual,
-        saved_target,
+        actual_target,
         torch.tensor(-1.5, device=image_device),
         dm_dmu1,
         dm_dsigma1_sq,
