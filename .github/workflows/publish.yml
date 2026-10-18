@@ -579,7 +579,7 @@ jobs:
       - name: Set up Python
         run: |
           uv python install ${MATRIX_PYTHON_VERSION}
-          uv venv
+          uv venv --python ${MATRIX_PYTHON_VERSION}
         env:
           MATRIX_PYTHON_VERSION: ${{ matrix.python-version }}
 
@@ -625,13 +625,18 @@ jobs:
       image: nvidia/cuda:${{ needs.pr-flags.outputs.test_cuda_image_tag }}-base-rockylinux8
       env:
         PYTHONPATH: ""
+        # The viewer tests need the NVIDIA Vulkan driver, which the toolkit only mounts with graphics
+        NVIDIA_DRIVER_CAPABILITIES: all
+        # Point the conda Vulkan loader at the driver manifest the toolkit mounts, in case it skips /etc
+        VK_DRIVER_FILES: /etc/vulkan/icd.d/nvidia_icd.json
       options: --rm
     defaults:
       run:
         shell: bash -el {0}
     steps:
       - name: Install prerequisites
-        run: dnf install -y git wget procps-ng findutils
+        # libXext and libglvnd-egl let the NVIDIA Vulkan driver load for the viewer tests
+        run: dnf install -y git wget procps-ng findutils libXext libglvnd-egl
 
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
