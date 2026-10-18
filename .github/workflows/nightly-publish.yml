@@ -63,16 +63,16 @@ jobs:
       id-token: write  # Required for AWS OIDC
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.versions.outputs.publish-matrix) }}
+      matrix: ${{ fromJSON(needs.versions.outputs.publish-build-matrix) }}
     uses: ./.github/workflows/start-ec2-runner.yml
     with:
-      instance-type: m6a.xlarge
+      # One job builds the CUDA library once, then the bindings for every Python version
+      instance-type: m6a.4xlarge
       az-config: ${{ needs.versions.outputs.aws-cpu-az-config }}
-      runner-label: nightly-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
+      runner-label: nightly-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
       aws-resource-tags: >
         [
-          {"Key": "RunnerLabel", "Value": "nightly-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}"},
-          {"Key": "PythonVersion", "Value": "${{ matrix.python-version }}"},
+          {"Key": "RunnerLabel", "Value": "nightly-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}"},
           {"Key": "TorchVersion", "Value": "${{ matrix.torch-version }}"},
           {"Key": "CudaVersion", "Value": "${{ matrix.cuda-version }}"},
           {"Key": "GitHubRunId", "Value": "${{ github.run_id }}"}
@@ -90,10 +90,10 @@ jobs:
     name: fVDB Nightly Build
     needs: [start-build-runner, check-new-commits, versions]
     if: needs.check-new-commits.outputs.should_build == 'true'
-    runs-on: nightly-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
+    runs-on: nightly-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.versions.outputs.publish-matrix) }}
+      matrix: ${{ fromJSON(needs.versions.outputs.publish-build-matrix) }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
@@ -105,24 +105,27 @@ jobs:
           # docker/build_wheel.py holds the shared production wheel recipe
           # (toolchain image, torch pin, build, nightly version stamp, auditwheel).
           ./docker/build_wheel.py \
-            --python "${MATRIX_PYTHON_VERSION}" \
+            --python "${NEEDS_VERSIONS_OUTPUTS_PUBLISH_PYTHON_VERSIONS}" \
             --torch "${NEEDS_VERSIONS_OUTPUTS_TORCH_FULL_VERSION}" \
             --cuda "${MATRIX_CUDA_VERSION}" \
             --cuda-arch-list "${NEEDS_VERSIONS_OUTPUTS_CUDA_ARCH_PUBLISH}" \
             --version-mode nightly
         env:
-          MATRIX_PYTHON_VERSION: ${{ matrix.python-version }}
+          NEEDS_VERSIONS_OUTPUTS_PUBLISH_PYTHON_VERSIONS: ${{ needs.versions.outputs.publish-python-versions }}
           MATRIX_CUDA_VERSION: ${{ matrix.cuda-version }}
           NEEDS_VERSIONS_OUTPUTS_TORCH_FULL_VERSION: ${{ needs.versions.outputs.torch-full-version }}
           NEEDS_VERSIONS_OUTPUTS_CUDA_ARCH_PUBLISH: ${{ needs.versions.outputs.cuda-arch-publish }}
 
-      - name: Show built wheel
+      - name: Show built wheels
+        if: ${{ !cancelled() }}
         run: ls -lh dist/
 
-      - name: Upload wheel
+      # Runs after a partial failure too, so the wheels that did build stay inspectable
+      - name: Upload wheels
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: fvdb-nightly-${{ matrix.python-version }}-torch${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}
+          name: fvdb-nightly-torch${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}
           path: dist/fvdb_core-*.whl
           retention-days: 7
 
@@ -357,10 +360,10 @@ jobs:
       id-token: write  # Required for AWS OIDC
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.versions.outputs.publish-matrix) }}
+      matrix: ${{ fromJSON(needs.versions.outputs.publish-build-matrix) }}
     uses: ./.github/workflows/stop-ec2-runner.yml
     with:
-      label: nightly-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
+      label: nightly-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
       aws-role: ${{ needs.versions.outputs.aws-role }}
       aws-region: ${{ needs.versions.outputs.aws-region }}
     secrets:

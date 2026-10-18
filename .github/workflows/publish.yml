@@ -130,16 +130,16 @@ jobs:
     needs: versions
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.versions.outputs.publish-matrix) }}
+      matrix: ${{ fromJSON(needs.versions.outputs.publish-build-matrix) }}
     uses: ./.github/workflows/start-ec2-runner.yml
     with:
+      # One job builds the CUDA library once, then the bindings for every Python version
       instance-type: m6a.8xlarge
       az-config: ${{ needs.versions.outputs.aws-cpu-az-config }}
-      runner-label: ec2-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
+      runner-label: ec2-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
       aws-resource-tags: >
         [
-          {"Key": "RunnerLabel", "Value": "ec2-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}"},
-          {"Key": "PythonVersion", "Value": "${{ matrix.python-version }}"},
+          {"Key": "RunnerLabel", "Value": "ec2-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}"},
           {"Key": "TorchVersion", "Value": "${{ matrix.torch-version }}"},
           {"Key": "CudaVersion", "Value": "${{ matrix.cuda-version }}"},
           {"Key": "GitHubRunId", "Value": "${{ github.run_id }}"}
@@ -153,10 +153,10 @@ jobs:
   fvdb-build:
     name: fVDB Build
     needs: [start-build-runner, pr-flags, versions] # start when runner is ready and flags computed
-    runs-on: ec2-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }} # run the job on the newly created runner
+    runs-on: ec2-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }} # run the job on the newly created runner
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.versions.outputs.publish-matrix) }}
+      matrix: ${{ fromJSON(needs.versions.outputs.publish-build-matrix) }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
@@ -206,7 +206,7 @@ jobs:
             EXTRA_ARGS+=(--skip-auditwheel)
           fi
           ./docker/build_wheel.py \
-            --python "${MATRIX_PYTHON_VERSION}" \
+            --python "${NEEDS_VERSIONS_OUTPUTS_PUBLISH_PYTHON_VERSIONS}" \
             --torch "${NEEDS_VERSIONS_OUTPUTS_TORCH_FULL_VERSION}" \
             --cuda "${MATRIX_CUDA_VERSION}" \
             --cuda-arch-list "${NEEDS_VERSIONS_OUTPUTS_CUDA_ARCH_PUBLISH}" \
@@ -215,21 +215,26 @@ jobs:
           PR_FLAGS_S3: ${{ needs.pr-flags.outputs.s3 }}
           PR_FLAGS_RELEASE: ${{ needs.pr-flags.outputs.release }}
           PR_FLAGS_RELEASE_PUSH: ${{ needs.pr-flags.outputs.release_push }}
-          MATRIX_PYTHON_VERSION: ${{ matrix.python-version }}
+          NEEDS_VERSIONS_OUTPUTS_PUBLISH_PYTHON_VERSIONS: ${{ needs.versions.outputs.publish-python-versions }}
           MATRIX_CUDA_VERSION: ${{ matrix.cuda-version }}
           NEEDS_VERSIONS_OUTPUTS_TORCH_FULL_VERSION: ${{ needs.versions.outputs.torch-full-version }}
           NEEDS_VERSIONS_OUTPUTS_CUDA_ARCH_PUBLISH: ${{ needs.versions.outputs.cuda-arch-publish }}
 
-      - name: Show built wheel
+      - name: Show built wheels
+        if: ${{ !cancelled() }}
         run: |
           ls -lh dist/
-          echo "Wheel contents (largest files):"
-          python3 -m zipfile -l dist/fvdb_core-*.whl | sort -k4 -n -r | head -30
+          for whl in dist/fvdb_core-*.whl; do
+            echo "${whl} contents (largest files):"
+            python3 -m zipfile -l "${whl}" | sort -k4 -n -r | head -30
+          done
 
-      - name: Upload wheel
+      # Runs after a partial failure too, so the wheels that did build stay inspectable
+      - name: Upload wheels
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: fvdb-publish-package-${{ matrix.python-version }}-torch${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}
+          name: fvdb-publish-package-torch${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}
           path: dist/fvdb_core-*.whl
           retention-days: 2
 
@@ -586,7 +591,7 @@ jobs:
       - name: Download wheel artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: fvdb-publish-package-${{ matrix.python-version }}-torch${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}
+          name: fvdb-publish-package-torch${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}
           path: dist
 
       - name: Install wheel
@@ -594,8 +599,10 @@ jobs:
           CUDA_TAG="cu$(echo "${MATRIX_CUDA_VERSION}" | tr -d '.')"
           echo "torch==${NEEDS_VERSIONS_OUTPUTS_TORCH_FULL_VERSION}" > "${RUNNER_TEMP}/torch-constraints.txt"
           uv pip install --no-cache -c "${RUNNER_TEMP}/torch-constraints.txt" torch --extra-index-url https://download.pytorch.org/whl/${CUDA_TAG}
-          uv pip install dist/fvdb_core-*.whl
+          CP_TAG="cp$(echo "${MATRIX_PYTHON_VERSION}" | tr -d '.')"
+          uv pip install dist/fvdb_core-*-"${CP_TAG}"-"${CP_TAG}"-*.whl
         env:
+          MATRIX_PYTHON_VERSION: ${{ matrix.python-version }}
           MATRIX_CUDA_VERSION: ${{ matrix.cuda-version }}
           NEEDS_VERSIONS_OUTPUTS_TORCH_FULL_VERSION: ${{ needs.versions.outputs.torch-full-version }}
 
@@ -667,11 +674,15 @@ jobs:
       - name: Download wheel artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: fvdb-publish-package-${{ needs.pr-flags.outputs.test_python_version }}-torch${{ needs.pr-flags.outputs.test_torch_version }}-cu${{ needs.pr-flags.outputs.test_cuda_version }}
+          name: fvdb-publish-package-torch${{ needs.pr-flags.outputs.test_torch_version }}-cu${{ needs.pr-flags.outputs.test_cuda_version }}
           path: dist
 
       - name: Install wheel
-        run: uv pip install --no-cache dist/fvdb_core-*.whl
+        run: |
+          CP_TAG="cp$(echo "${TEST_PYTHON_VERSION}" | tr -d '.')"
+          uv pip install --no-cache dist/fvdb_core-*-"${CP_TAG}"-"${CP_TAG}"-*.whl
+        env:
+          TEST_PYTHON_VERSION: ${{ needs.pr-flags.outputs.test_python_version }}
 
       - name: Run unit tests
         env:
@@ -721,10 +732,10 @@ jobs:
       id-token: write  # Required for AWS OIDC
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.versions.outputs.publish-matrix) }}
+      matrix: ${{ fromJSON(needs.versions.outputs.publish-build-matrix) }}
     uses: ./.github/workflows/stop-ec2-runner.yml
     with:
-      label: ec2-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
+      label: ec2-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
       aws-role: ${{ needs.versions.outputs.aws-role }}
       aws-region: ${{ needs.versions.outputs.aws-region }}
     secrets:
