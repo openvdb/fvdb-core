@@ -616,7 +616,8 @@ bind_gaussian_splat_ops(py::module &m) {
 
     // ------- UT projection backward -------
     //
-    // Companion to project_gaussians_unscented_fwd above: until this was added, that forward op
+    // Companion to project_gaussians_ut_fwd above (renamed from project_gaussians_unscented_fwd
+    // by #799; this binding follows the same convention): until this was added, that forward op
     // was called directly (not through a torch.autograd.Function), so it had no way to
     // contribute a gradient at all -- the photometric loss produced zero gradient on
     // means/quats/log_scales for every camera model requiring distortion handling (every COLMAP
@@ -624,8 +625,14 @@ bind_gaussian_splat_ops(py::module &m) {
     // the derivation, its scope (float32, RollingShutterType::NONE, DistortionModel::
     // OPENCV_RADTAN_5 only, no camera-pose or distortion-coefficient gradient yet), and the
     // numerical validation performed before this was written.
+    //
+    // NOTE: project_gaussians_ut_fwd's own docstring now says "There is no separate backward
+    // kernel; use rasterize_world_space_gaussians_bwd to differentiate through this path" --
+    // fvdb-reality-capture's own fix for this exact gradient gap (#338) went that route instead
+    // of this one. This binding is kept as a lower-level, screen-space-only alternative; see the
+    // PR discussion for whether it's still wanted given that.
     m.def(
-        "project_gaussians_unscented_bwd",
+        "project_gaussians_ut_bwd",
         [](const torch::Tensor &means,
            const torch::Tensor &quats,
            const torch::Tensor &logScales,
