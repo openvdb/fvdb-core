@@ -148,6 +148,10 @@ only the GPU architecture present on this machine:
 
    ./docker/build_wheel.py --python 3.11 --torch 2.11.0 --cuda 13.0 --cuda-arch-list native
 
+``--python`` also takes a comma-separated list, such as ``--python 3.11,3.12,3.13``. The script
+then compiles the CUDA library once and builds one wheel per Python version, which is much faster
+than running it once per version.
+
 The set of valid PyTorch/CUDA/Python combinations is determined by which wheels
 PyTorch publishes on `download.pytorch.org <https://download.pytorch.org/whl/>`_
 (the human-readable summary is on the `PyTorch get-started page

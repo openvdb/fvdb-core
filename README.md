@@ -119,7 +119,7 @@ pip install -r env/build_requirements.txt
 ```shell
 ./docker/build_wheel.py --python 3.12 --cuda 13.0 --cuda-arch-list native
 ```
-> Run `./docker/build_wheel.py --help` for all options; defaults come from [`.github/versions.json`](.github/versions.json).
+> Run `./docker/build_wheel.py --help` for all options; defaults come from [`.github/versions.json`](.github/versions.json). To build wheels for several Python versions, pass a list such as `--python 3.11,3.12,3.13`; the CUDA library is compiled once and shared by every wheel.
 
 ---
 
