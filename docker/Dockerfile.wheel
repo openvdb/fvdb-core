@@ -15,7 +15,10 @@ FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
 FROM nvidia/cuda:${CUDA_IMAGE_TAG}-cudnn-devel-rockylinux8 AS builder
 SHELL ["/bin/bash", "-c"]
 
+# PYTHON_VERSION gets the full build. Each version in EXTRA_PYTHON_VERSIONS
+# (space-separated) builds only the Python bindings against that libfvdb.so.
 ARG PYTHON_VERSION=3.12
+ARG EXTRA_PYTHON_VERSIONS=""
 ARG TORCH_VERSION=2.14.1
 # Tag for the PyTorch wheel index, e.g. cu130
 ARG CUDA_TAG=cu130
@@ -82,19 +85,43 @@ RUN --mount=type=cache,target=/cpm_cache \
     && if [ -n "${BUILD_JOBS}" ]; then export CMAKE_BUILD_PARALLEL_LEVEL="${BUILD_JOBS}"; fi \
     && ./build.sh wheel strip_symbols verbose --cuda-arch-list "${CUDA_ARCH_LIST}"
 
+# Bindings-only builds for the extra Python versions. A failure is recorded in
+# dist/.build_failures instead of stopping the build, so the remaining versions
+# still build and build_wheel.py reports every failure. These builds compile no
+# CUDA, so NVCC_THREADS=1 lets build.sh size its job count to every core.
+RUN --mount=type=cache,target=/cpm_cache \
+    --mount=type=cache,target=/root/.cache/uv \
+    source /opt/rh/gcc-toolset-${GCC_TOOLSET}/enable \
+    && export NVCC_THREADS=1 \
+    && if [ -n "${BUILD_JOBS}" ]; then export CMAKE_BUILD_PARALLEL_LEVEL="${BUILD_JOBS}"; fi \
+    && CORE_LIB=$(ls "${PWD}"/build/*-Release/src/libfvdb.so) \
+    && for py in ${EXTRA_PYTHON_VERSIONS}; do \
+        echo "=== Building Python ${py} bindings against ${CORE_LIB} ===" \
+        && ( uv python install "${py}" \
+            && uv venv "/opt/venv-${py}" --python "${py}" \
+            && source "/opt/venv-${py}/bin/activate" \
+            && uv pip install -c /tmp/torch-constraints.txt -r env/build_requirements.txt \
+                --extra-index-url https://download.pytorch.org/whl/${CUDA_TAG} \
+            && ./build.sh wheel strip_symbols verbose --cuda-arch-list "${CUDA_ARCH_LIST}" \
+                -C "cmake.define.FVDB_PREBUILT_CORE=${CORE_LIB}" ) \
+        || { echo "=== Python ${py} build FAILED ==="; echo "${py}" >> dist/.build_failures; }; \
+        rm -rf "/opt/venv-${py}"; \
+    done
+
 # Repair to manylinux, excluding CUDA/PyTorch/system libraries to keep the
 # wheel size down. If repair fails the original linux_x86_64 wheel is kept.
 RUN if [ "${RUN_AUDITWHEEL}" = "1" ]; then \
         source /opt/venv/bin/activate \
         && uv pip install auditwheel patchelf \
         && ldd --version | head -n1 \
-        && (auditwheel repair dist/fvdb_core-*.whl -w dist/ ${AUDITWHEEL_EXCLUDES} \
-            || echo "auditwheel failed, keeping original wheel") \
-        && if ls dist/fvdb_core-*-manylinux*.whl >/dev/null 2>&1; then \
-            rm -f dist/fvdb_core-*-linux_x86_64.whl; \
-        fi; \
+        && shopt -s nullglob \
+        && for whl in dist/fvdb_core-*-linux_x86_64.whl; do \
+            auditwheel repair "${whl}" -w dist/ ${AUDITWHEEL_EXCLUDES} \
+                && rm -f "${whl}" \
+                || echo "auditwheel failed for ${whl}, keeping original wheel"; \
+        done; \
     fi \
-    && ls -lh dist/
+    && ls -lha dist/
 
 FROM scratch AS export
 COPY --from=builder /workspace/fvdb-core/dist/ /

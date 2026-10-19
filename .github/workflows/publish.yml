@@ -43,9 +43,6 @@ jobs:
       release: ${{ steps.flags.outputs.release }}
       release_push: ${{ steps.flags.outputs.release_push }}
       test_python_version: ${{ steps.test-env.outputs.python_version }}
-      test_torch_version: ${{ steps.test-env.outputs.torch_version }}
-      test_cuda_version: ${{ steps.test-env.outputs.cuda_version }}
-      test_cuda_image_tag: ${{ steps.test-env.outputs.cuda_image_tag }}
     steps:
       - name: Compute publish routing flags
         id: flags
@@ -87,9 +84,7 @@ jobs:
             core.setOutput('release_push', releasePush ? 'true' : 'false');
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
-          sparse-checkout: |
-            env/test_environment.yml
-            .github/versions.json
+          sparse-checkout: env/test_environment.yml
           sparse-checkout-cone-mode: false
           ref: ${{ inputs.branch || github.ref }}
           persist-credentials: false
@@ -97,26 +92,8 @@ jobs:
         id: test-env
         run: |
           PY_VER=$(grep -oP '^\s*-\s*python=\K[0-9]+\.[0-9]+' env/test_environment.yml)
-          TORCH_VER=$(grep -oP '^\s*-\s*pytorch-gpu=\K[0-9]+\.[0-9]+' env/test_environment.yml)
-          ENV_CUDA_VER=$(grep -oP '^\s*-\s*cuda-version=\K[0-9]+\.[0-9]+' env/test_environment.yml)
-
-          # The conda test env may pin a CUDA minor we do not publish wheels for.
-          # Validate the newest published wheel whose CUDA minor the env's runtime
-          # can serve (same major, not newer).
-          CUDA_VER=$(jq -r --arg env "$ENV_CUDA_VER" '
-            ($env | split(".") | map(tonumber)) as $e
-            | [.cuda.versions | keys[] | select((split(".") | map(tonumber)) as $v | $v[0] == $e[0] and $v[1] <= $e[1])]
-            | sort_by(split(".") | map(tonumber)) | last // empty' .github/versions.json)
-          if [ -z "$CUDA_VER" ]; then
-            echo "ERROR: no published CUDA version is compatible with test env CUDA $ENV_CUDA_VER" >&2
-            exit 1
-          fi
-          CUDA_IMAGE_TAG=$(jq -r --arg v "$CUDA_VER" '.cuda.versions[$v].patch' .github/versions.json)
-          echo "python_version=$PY_VER" >> $GITHUB_OUTPUT
-          echo "torch_version=$TORCH_VER" >> $GITHUB_OUTPUT
-          echo "cuda_version=$CUDA_VER" >> $GITHUB_OUTPUT
-          echo "cuda_image_tag=$CUDA_IMAGE_TAG" >> $GITHUB_OUTPUT
-          echo "Test env: python=$PY_VER torch=$TORCH_VER cuda=$ENV_CUDA_VER wheel cuda=$CUDA_VER image=$CUDA_IMAGE_TAG"
+          echo "python_version=$PY_VER" >> "$GITHUB_OUTPUT"
+          echo "Test env: python=$PY_VER"
 
   versions:
     uses: ./.github/workflows/load-versions.yml
@@ -130,16 +107,16 @@ jobs:
     needs: versions
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.versions.outputs.publish-matrix) }}
+      matrix: ${{ fromJSON(needs.versions.outputs.publish-build-matrix) }}
     uses: ./.github/workflows/start-ec2-runner.yml
     with:
+      # One job builds the CUDA library once, then the bindings for every Python version
       instance-type: m6a.8xlarge
       az-config: ${{ needs.versions.outputs.aws-cpu-az-config }}
-      runner-label: ec2-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
+      runner-label: ec2-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
       aws-resource-tags: >
         [
-          {"Key": "RunnerLabel", "Value": "ec2-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}"},
-          {"Key": "PythonVersion", "Value": "${{ matrix.python-version }}"},
+          {"Key": "RunnerLabel", "Value": "ec2-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}"},
           {"Key": "TorchVersion", "Value": "${{ matrix.torch-version }}"},
           {"Key": "CudaVersion", "Value": "${{ matrix.cuda-version }}"},
           {"Key": "GitHubRunId", "Value": "${{ github.run_id }}"}
@@ -153,10 +130,10 @@ jobs:
   fvdb-build:
     name: fVDB Build
     needs: [start-build-runner, pr-flags, versions] # start when runner is ready and flags computed
-    runs-on: ec2-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }} # run the job on the newly created runner
+    runs-on: ec2-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }} # run the job on the newly created runner
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.versions.outputs.publish-matrix) }}
+      matrix: ${{ fromJSON(needs.versions.outputs.publish-build-matrix) }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
@@ -206,7 +183,7 @@ jobs:
             EXTRA_ARGS+=(--skip-auditwheel)
           fi
           ./docker/build_wheel.py \
-            --python "${MATRIX_PYTHON_VERSION}" \
+            --python "${NEEDS_VERSIONS_OUTPUTS_PUBLISH_PYTHON_VERSIONS}" \
             --torch "${NEEDS_VERSIONS_OUTPUTS_TORCH_FULL_VERSION}" \
             --cuda "${MATRIX_CUDA_VERSION}" \
             --cuda-arch-list "${NEEDS_VERSIONS_OUTPUTS_CUDA_ARCH_PUBLISH}" \
@@ -215,21 +192,26 @@ jobs:
           PR_FLAGS_S3: ${{ needs.pr-flags.outputs.s3 }}
           PR_FLAGS_RELEASE: ${{ needs.pr-flags.outputs.release }}
           PR_FLAGS_RELEASE_PUSH: ${{ needs.pr-flags.outputs.release_push }}
-          MATRIX_PYTHON_VERSION: ${{ matrix.python-version }}
+          NEEDS_VERSIONS_OUTPUTS_PUBLISH_PYTHON_VERSIONS: ${{ needs.versions.outputs.publish-python-versions }}
           MATRIX_CUDA_VERSION: ${{ matrix.cuda-version }}
           NEEDS_VERSIONS_OUTPUTS_TORCH_FULL_VERSION: ${{ needs.versions.outputs.torch-full-version }}
           NEEDS_VERSIONS_OUTPUTS_CUDA_ARCH_PUBLISH: ${{ needs.versions.outputs.cuda-arch-publish }}
 
-      - name: Show built wheel
+      - name: Show built wheels
+        if: ${{ !cancelled() }}
         run: |
           ls -lh dist/
-          echo "Wheel contents (largest files):"
-          python3 -m zipfile -l dist/fvdb_core-*.whl | sort -k4 -n -r | head -30
+          for whl in dist/fvdb_core-*.whl; do
+            echo "${whl} contents (largest files):"
+            python3 -m zipfile -l "${whl}" | sort -k4 -n -r | head -30
+          done
 
-      - name: Upload wheel
+      # Runs after a partial failure too, so the wheels that did build stay inspectable
+      - name: Upload wheels
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: fvdb-publish-package-${{ matrix.python-version }}-torch${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}
+          name: fvdb-publish-package-torch${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}
           path: dist/fvdb_core-*.whl
           retention-days: 2
 
@@ -529,17 +511,16 @@ jobs:
       id-token: write  # Required for AWS OIDC
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.versions.outputs.publish-matrix) }}
+      matrix: ${{ fromJSON(needs.versions.outputs.publish-build-matrix) }}
     uses: ./.github/workflows/start-ec2-runner.yml
     with:
       instance-type: g6.xlarge
       fallback-instance-type: g5.xlarge # A10G, SM 8.6 -- different capacity pool
       az-config: ${{ needs.versions.outputs.aws-gpu-az-config }}
-      runner-label: val-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
+      runner-label: val-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
       aws-resource-tags: >
         [
-          {"Key": "RunnerLabel", "Value": "val-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}"},
-          {"Key": "PythonVersion", "Value": "${{ matrix.python-version }}"},
+          {"Key": "RunnerLabel", "Value": "val-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}"},
           {"Key": "TorchVersion", "Value": "${{ matrix.torch-version }}"},
           {"Key": "CudaVersion", "Value": "${{ matrix.cuda-version }}"},
           {"Key": "GitHubRunId", "Value": "${{ github.run_id }}"}
@@ -554,7 +535,7 @@ jobs:
     name: Smoke test built wheel
     needs: [start-validation-runner, fvdb-build, pr-flags, versions]
     if: ${{ !cancelled() && needs.start-validation-runner.result == 'success' }}
-    runs-on: val-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
+    runs-on: val-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
     container:
       image: nvidia/cuda:${{ matrix.cuda-image-tag }}-base-rockylinux8
       env:
@@ -565,7 +546,7 @@ jobs:
         shell: bash -el {0}
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.versions.outputs.publish-matrix) }}
+      matrix: ${{ fromJSON(needs.versions.outputs.publish-build-matrix) }}
     steps:
       - name: Install prerequisites
         run: dnf install -y git wget procps-ng findutils
@@ -576,55 +557,70 @@ jobs:
           version: "${{ needs.versions.outputs.uv-version }}"
           enable-cache: false
 
-      - name: Set up Python
-        run: |
-          uv python install ${MATRIX_PYTHON_VERSION}
-          uv venv --python ${MATRIX_PYTHON_VERSION}
-        env:
-          MATRIX_PYTHON_VERSION: ${{ matrix.python-version }}
-
       - name: Download wheel artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: fvdb-publish-package-${{ matrix.python-version }}-torch${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}
+          name: fvdb-publish-package-torch${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}
           path: dist
 
-      - name: Install wheel
+      # Each Python's bindings are built separately, so every wheel gets its own import
+      # and smoke test. Venvs are deleted between versions to keep disk use at one venv.
+      - name: Smoke test each Python wheel
         run: |
+          cat > "${RUNNER_TEMP}/smoke.py" <<'EOF'
+          import sys
+
+          import torch
+
+          import fvdb
+
+          print(f"python {sys.version.split()[0]}, fvdb {fvdb.__version__}, torch {torch.__version__}")
+          assert torch.cuda.is_available(), "CUDA not available"
+          ijk = fvdb.JaggedTensor([torch.tensor([[0, 0, 0], [1, 1, 1], [2, 2, 2]], device="cuda")])
+          grid = fvdb.GridBatch.from_ijk(ijk)
+          assert grid.total_voxels == 3, f"Expected 3 voxels, got {grid.total_voxels}"
+          print(f"GridBatch created: {grid.total_voxels} voxels on {grid.device}")
+          EOF
           CUDA_TAG="cu$(echo "${MATRIX_CUDA_VERSION}" | tr -d '.')"
           echo "torch==${NEEDS_VERSIONS_OUTPUTS_TORCH_FULL_VERSION}" > "${RUNNER_TEMP}/torch-constraints.txt"
-          uv pip install --no-cache -c "${RUNNER_TEMP}/torch-constraints.txt" torch --extra-index-url https://download.pytorch.org/whl/${CUDA_TAG}
-          uv pip install dist/fvdb_core-*.whl
+          FAILED=()
+          for PY in ${PUBLISH_PYTHON_VERSIONS//,/ }; do
+            echo "::group::Python ${PY}"
+            CP_TAG="cp${PY//./}"
+            VENV="${RUNNER_TEMP}/venv-${PY}"
+            if uv python install "${PY}" \
+              && uv venv "${VENV}" --python "${PY}" \
+              && VIRTUAL_ENV="${VENV}" uv pip install --no-cache -c "${RUNNER_TEMP}/torch-constraints.txt" torch \
+                --extra-index-url "https://download.pytorch.org/whl/${CUDA_TAG}" \
+              && VIRTUAL_ENV="${VENV}" uv pip install --no-cache dist/fvdb_core-*-"${CP_TAG}"-"${CP_TAG}"-*.whl \
+              && "${VENV}/bin/python" "${RUNNER_TEMP}/smoke.py"; then
+              echo "Smoke test PASSED for Python ${PY}"
+            else
+              echo "::error::Smoke test FAILED for Python ${PY}"
+              FAILED+=("${PY}")
+            fi
+            rm -rf "${VENV}"
+            echo "::endgroup::"
+          done
+          if [ "${#FAILED[@]}" -gt 0 ]; then
+            echo "::error::Smoke test failed for Python ${FAILED[*]}"
+            exit 1
+          fi
         env:
+          PUBLISH_PYTHON_VERSIONS: ${{ needs.versions.outputs.publish-python-versions }}
           MATRIX_CUDA_VERSION: ${{ matrix.cuda-version }}
           NEEDS_VERSIONS_OUTPUTS_TORCH_FULL_VERSION: ${{ needs.versions.outputs.torch-full-version }}
-
-      - name: Run smoke test
-        run: |
-          uv run python3 -c "
-          import fvdb
-          import torch
-          print(f'fvdb version: {fvdb.__version__}')
-          print(f'torch version: {torch.__version__}')
-          print(f'CUDA available: {torch.cuda.is_available()}')
-          assert torch.cuda.is_available(), 'CUDA not available'
-          ijk = fvdb.JaggedTensor([torch.tensor([[0,0,0],[1,1,1],[2,2,2]], device='cuda')])
-          grid = fvdb.GridBatch.from_ijk(ijk)
-          print(f'GridBatch created: {grid.total_voxels} voxels on {grid.device}')
-          assert grid.total_voxels == 3, f'Expected 3 voxels, got {grid.total_voxels}'
-          print('Smoke test PASSED')
-          "
 
   validate-unit-tests:
     name: Full unit tests on built wheel
     needs: [start-validation-runner, validate-smoke-test, pr-flags, versions]
     if: ${{ !cancelled() && needs.validate-smoke-test.result == 'success' && (needs.pr-flags.outputs.release_push == 'true' || needs.pr-flags.outputs.release == 'true' || inputs.run_validation == true) }}
-    # Single job on the validation runner for the test Python and CUDA versions chosen in pr-flags
-    runs-on: val-${{ needs.pr-flags.outputs.test_python_version }}-pt${{ needs.pr-flags.outputs.test_torch_version }}-cu${{ needs.pr-flags.outputs.test_cuda_version }}-${{ github.run_id }}
+    # One run per CUDA build, using the wheel for the Python that env/test_environment.yml pins
+    runs-on: val-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
     # Tests the wheel against the pip torch it was built for, as fvdb-unit-test in cu130.yml does.
     # conda-forge torch uses a different pybind11 internals ABI, so the wheel cannot import there.
     container:
-      image: nvidia/cuda:${{ needs.pr-flags.outputs.test_cuda_image_tag }}-cudnn-devel-${{ needs.versions.outputs.docker-os-ubuntu }}
+      image: nvidia/cuda:${{ matrix.cuda-image-tag }}-cudnn-devel-${{ needs.versions.outputs.docker-os-ubuntu }}
       env:
         PYTHONPATH: ""
         # The viewer tests need the NVIDIA Vulkan driver, which the toolkit only mounts with graphics
@@ -633,6 +629,9 @@ jobs:
     defaults:
       run:
         shell: bash -el {0}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.versions.outputs.publish-build-matrix) }}
     steps:
       - name: Install apt dependencies
         # The NVIDIA Vulkan driver needs the loader, libXext, and libEGL from the image
@@ -661,17 +660,21 @@ jobs:
           uv pip install --no-cache setuptools
         env:
           TEST_PYTHON_VERSION: ${{ needs.pr-flags.outputs.test_python_version }}
-          TEST_CUDA_VERSION: ${{ needs.pr-flags.outputs.test_cuda_version }}
+          TEST_CUDA_VERSION: ${{ matrix.cuda-version }}
           NEEDS_VERSIONS_OUTPUTS_TORCH_FULL_VERSION: ${{ needs.versions.outputs.torch-full-version }}
 
       - name: Download wheel artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: fvdb-publish-package-${{ needs.pr-flags.outputs.test_python_version }}-torch${{ needs.pr-flags.outputs.test_torch_version }}-cu${{ needs.pr-flags.outputs.test_cuda_version }}
+          name: fvdb-publish-package-torch${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}
           path: dist
 
       - name: Install wheel
-        run: uv pip install --no-cache dist/fvdb_core-*.whl
+        run: |
+          CP_TAG="cp$(echo "${TEST_PYTHON_VERSION}" | tr -d '.')"
+          uv pip install --no-cache dist/fvdb_core-*-"${CP_TAG}"-"${CP_TAG}"-*.whl
+        env:
+          TEST_PYTHON_VERSION: ${{ needs.pr-flags.outputs.test_python_version }}
 
       - name: Run unit tests
         env:
@@ -701,10 +704,10 @@ jobs:
       id-token: write  # Required for AWS OIDC
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.versions.outputs.publish-matrix) }}
+      matrix: ${{ fromJSON(needs.versions.outputs.publish-build-matrix) }}
     uses: ./.github/workflows/stop-ec2-runner.yml
     with:
-      label: val-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
+      label: val-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
       aws-role: ${{ needs.versions.outputs.aws-role }}
       aws-region: ${{ needs.versions.outputs.aws-region }}
     secrets:
@@ -721,10 +724,10 @@ jobs:
       id-token: write  # Required for AWS OIDC
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.versions.outputs.publish-matrix) }}
+      matrix: ${{ fromJSON(needs.versions.outputs.publish-build-matrix) }}
     uses: ./.github/workflows/stop-ec2-runner.yml
     with:
-      label: ec2-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
+      label: ec2-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
       aws-role: ${{ needs.versions.outputs.aws-role }}
       aws-region: ${{ needs.versions.outputs.aws-region }}
     secrets:

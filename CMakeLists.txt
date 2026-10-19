@@ -128,8 +128,35 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/src/cmake/get_nanovdb_editor.cmake)
 # Generate compile_commands.json
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# configure libfvdb
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/src/)
+# ----------------------------------------------------------------------------
+# libfvdb
+#
+# libfvdb.so does not depend on Python. Set FVDB_PREBUILT_CORE to a libfvdb.so
+# from an earlier build with the same CUDA and torch versions to build only the
+# Python bindings against it. docker/build_wheel.py uses this to build wheels
+# for several Python versions from one core build.
+# ----------------------------------------------------------------------------
+set(FVDB_PREBUILT_CORE "" CACHE FILEPATH "Prebuilt libfvdb.so to link the Python bindings against")
+
+if(FVDB_PREBUILT_CORE)
+    if(NOT EXISTS "${FVDB_PREBUILT_CORE}")
+        message(FATAL_ERROR "FVDB_PREBUILT_CORE does not exist: ${FVDB_PREBUILT_CORE}")
+    endif()
+    message(STATUS "FVDB: linking bindings against prebuilt core ${FVDB_PREBUILT_CORE}")
+
+    # Mirrors the PUBLIC usage requirements of the fvdb target in src/CMakeLists.txt
+    add_library(fvdb SHARED IMPORTED)
+    set_target_properties(fvdb PROPERTIES
+        IMPORTED_LOCATION "${FVDB_PREBUILT_CORE}"
+        IMPORTED_SONAME "libfvdb.so")
+    target_include_directories(fvdb INTERFACE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${nanovdb_SOURCE_DIR}/nanovdb
+        ${nvtx3_SOURCE_DIR}/include)
+    target_link_libraries(fvdb INTERFACE torch nanovdb_editor::public_headers ${CMAKE_DL_LIBS})
+else()
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/src/)
+endif()
 
 # Source files
 set(FVDB_BINDINGS_CPP_FILES
@@ -215,9 +242,28 @@ if(NOT (CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "RelWithD
 endif()
 
 # Only install the Python package artifacts; the core lib is installed as part of the Python module
-install(TARGETS _fvdb_cpp fvdb
-    LIBRARY DESTINATION fvdb COMPONENT PythonModule
-    RUNTIME DESTINATION fvdb COMPONENT PythonModule)
+if(FVDB_PREBUILT_CORE)
+    install(TARGETS _fvdb_cpp
+        LIBRARY DESTINATION fvdb COMPONENT PythonModule
+        RUNTIME DESTINATION fvdb COMPONENT PythonModule)
+    # Match install(TARGETS), which rewrites the build-tree RUNPATH to $ORIGIN
+    # and strips when installing with --strip
+    install(PROGRAMS ${FVDB_PREBUILT_CORE}
+        DESTINATION fvdb COMPONENT PythonModule
+        RENAME libfvdb.so)
+    install(CODE "set(_fvdb_strip \"${CMAKE_STRIP}\")" COMPONENT PythonModule)
+    install(CODE [[
+        set(_fvdb_core "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/fvdb/libfvdb.so")
+        file(RPATH_SET FILE "${_fvdb_core}" NEW_RPATH "$ORIGIN")
+        if(CMAKE_INSTALL_DO_STRIP)
+            execute_process(COMMAND "${_fvdb_strip}" "${_fvdb_core}")
+        endif()
+    ]] COMPONENT PythonModule)
+else()
+    install(TARGETS _fvdb_cpp fvdb
+        LIBRARY DESTINATION fvdb COMPONENT PythonModule
+        RUNTIME DESTINATION fvdb COMPONENT PythonModule)
+endif()
 
 # Public headers for downstream C++ consumers (bundled in wheel like torch/include/)
 file(GLOB FVDB_PUBLIC_HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/src/fvdb/*.h")
