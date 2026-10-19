@@ -617,26 +617,26 @@ jobs:
 
   validate-unit-tests:
     name: Full unit tests on built wheel
-    needs: [start-validation-runner, validate-smoke-test, pr-flags]
+    needs: [start-validation-runner, validate-smoke-test, pr-flags, versions]
     if: ${{ !cancelled() && needs.validate-smoke-test.result == 'success' && (needs.pr-flags.outputs.release_push == 'true' || needs.pr-flags.outputs.release == 'true' || inputs.run_validation == true) }}
-    # Run on the validation runner whose wheel matches env/test_environment.yml (no matrix -- single job)
+    # Single job on the validation runner for the test Python and CUDA versions chosen in pr-flags
     runs-on: val-${{ needs.pr-flags.outputs.test_python_version }}-pt${{ needs.pr-flags.outputs.test_torch_version }}-cu${{ needs.pr-flags.outputs.test_cuda_version }}-${{ github.run_id }}
+    # Tests the wheel against the pip torch it was built for, as fvdb-unit-test in cu130.yml does.
+    # conda-forge torch uses a different pybind11 internals ABI, so the wheel cannot import there.
     container:
-      image: nvidia/cuda:${{ needs.pr-flags.outputs.test_cuda_image_tag }}-base-rockylinux8
+      image: nvidia/cuda:${{ needs.pr-flags.outputs.test_cuda_image_tag }}-cudnn-devel-${{ needs.versions.outputs.docker-os-ubuntu }}
       env:
         PYTHONPATH: ""
         # The viewer tests need the NVIDIA Vulkan driver, which the toolkit only mounts with graphics
         NVIDIA_DRIVER_CAPABILITIES: all
-        # Point the conda Vulkan loader at the driver manifest the toolkit mounts, in case it skips /etc
-        VK_DRIVER_FILES: /etc/vulkan/icd.d/nvidia_icd.json
       options: --rm
     defaults:
       run:
         shell: bash -el {0}
     steps:
-      - name: Install prerequisites
-        # libXext and libglvnd-egl let the NVIDIA Vulkan driver load for the viewer tests
-        run: dnf install -y git wget procps-ng findutils libXext libglvnd-egl
+      - name: Install apt dependencies
+        # The NVIDIA Vulkan driver needs the loader, libXext, and libEGL from the image
+        run: apt update && apt install -y git wget zlib1g-dev libpng-dev libvulkan1 libxext6 libegl1
 
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
@@ -644,13 +644,25 @@ jobs:
           ref: ${{ inputs.branch || github.ref }}
           persist-credentials: false
 
-      - name: Set up fvdb_test Conda env
-        uses: mamba-org/setup-micromamba@d7c9bd84e824b79d2af72a2d4196c7f4300d3476 # v3.0.0
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
         with:
-          cache-environment: false
-          post-cleanup: 'all'
-          environment-name: fvdb_test
-          environment-file: env/test_environment.yml
+          version: "${{ needs.versions.outputs.uv-version }}"
+          enable-cache: false
+
+      - name: Install pip dependencies
+        run: |
+          CUDA_TAG="cu$(echo "${TEST_CUDA_VERSION}" | tr -d '.')"
+          uv python install "${TEST_PYTHON_VERSION}"
+          uv venv --python "${TEST_PYTHON_VERSION}"
+          echo "torch==${NEEDS_VERSIONS_OUTPUTS_TORCH_FULL_VERSION}" > "${RUNNER_TEMP}/torch-constraints.txt"
+          uv pip install --no-cache -c "${RUNNER_TEMP}/torch-constraints.txt" -r env/test_requirements.txt \
+            --extra-index-url "https://download.pytorch.org/whl/${CUDA_TAG}" --index-strategy unsafe-best-match
+          uv pip install --no-cache setuptools
+        env:
+          TEST_PYTHON_VERSION: ${{ needs.pr-flags.outputs.test_python_version }}
+          TEST_CUDA_VERSION: ${{ needs.pr-flags.outputs.test_cuda_version }}
+          NEEDS_VERSIONS_OUTPUTS_TORCH_FULL_VERSION: ${{ needs.versions.outputs.torch-full-version }}
 
       - name: Download wheel artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -659,9 +671,7 @@ jobs:
           path: dist
 
       - name: Install wheel
-        run: |
-          micromamba activate fvdb_test
-          pip install dist/fvdb_core-*.whl
+        run: uv pip install --no-cache dist/fvdb_core-*.whl
 
       - name: Run unit tests
         env:
@@ -673,9 +683,9 @@ jobs:
           # https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-alloc-conf
           PYTORCH_NO_CUDA_MEMORY_CACHING: 1
         run: |
-          micromamba activate fvdb_test
+          source .venv/bin/activate
           NANOVDB_EDITOR_SPEC=$(python .github/scripts/get_viewer_dependency.py)
-          pip install "$NANOVDB_EDITOR_SPEC"
+          uv pip install --no-cache "$NANOVDB_EDITOR_SPEC"
           cd tests
           pytest -v unit
 
