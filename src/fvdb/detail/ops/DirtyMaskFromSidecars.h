@@ -17,9 +17,9 @@ namespace ops {
 ///        whose sidecar value differs from the corresponding voxel in
 ///        `oldGrid` (if present), or is absent from `oldGrid` entirely.
 ///
-/// Primitive used by the paper's dirty-region ESDF update pattern
-/// (and composable into any user-level change-tracking workflow).
-/// Built from `ops::inject`, no new CUDA kernels.
+/// Used for dirty-region ESDF updates and composable into any
+/// user-level change tracking. Built from `ops::inject`, no new CUDA
+/// kernels.
 ///
 /// Semantics per output voxel `v` in `newGrid`:
 ///
@@ -33,7 +33,7 @@ namespace ops {
 /// Multi-channel sidecars (2-D `[num_voxels, C]`) reduce via
 /// "any channel differs" → per-voxel bool.
 ///
-/// Both sidecars must have floating-point dtype in M5; we use the
+/// Both sidecars must have a floating-point dtype, because we use the
 /// NaN != anything trick to flag "voxel not present in old grid"
 /// without needing a separate overlap mask pass (NaN-init the
 /// projection target, inject only writes ijk-overlap slots, then

@@ -42,13 +42,11 @@ constexpr int64_t MCF_BLOCK_SIZE = 128;
 
 // Packed-key bit layout (must match the unpack in marchingCubesFastImpl).
 //
-// 30 bits per vid supports up to 2^30 = 1,073,741,824 active voxels per
-// batch — comfortably covering a paper-hero 800^3 = 512M voxel grid. An
-// earlier 24-bit layout silently truncated pids above 16M, which caused
-// vertex-dedup over-merging at 400^3 and 512^3 sweeps (triangles still
-// matched but vertex counts drifted by <1%).
+// 30 bits per vid supports up to 2^30 = 1,073,741,824 active voxels, which
+// covers an 800^3 grid. Narrower vid fields truncate large indices and
+// over-merge vertices without any error.
 //
-// Layout:  [bits 63..60 batchIdx] [bits 59..30 vid0] [bits 29..0 vid1]
+// Layout:  [bit 63 clear] [bits 62..60 batchIdx] [bits 59..30 vid0] [bits 29..0 vid1]
 constexpr int MCF_VID_BITS     = 30;
 constexpr int64_t MCF_VID_MASK = (int64_t{1} << MCF_VID_BITS) - 1;
 constexpr int MCF_VID1_SHIFT   = 0;
@@ -558,8 +556,7 @@ marchingCubesFast(const GridBatchData &batchHdl, const JaggedTensor &field, doub
     //       large reality-capture scenes (thousands of meters at ~mm
     //       voxel size);
     //   (b) keeping arithmetic at fp32 gives numerically identical
-    //       output across input dtypes — a property the ablation
-    //       table's correctness gate relies on.
+    //       output across input dtypes.
     // But we do NOT upcast the input buffer. The kernels are templated
     // on the SDF input scalar type (float or at::Half) and cast on the
     // fly per load via c10::Half's `operator float()` — a single
@@ -569,8 +566,7 @@ marchingCubesFast(const GridBatchData &batchHdl, const JaggedTensor &field, doub
     //   - only the final small `retVertices` tensor (nV x 3 floats,
     //     orders of magnitude smaller than the SDF) gets downcast to
     //     fp16 to preserve legacy's output-dtype contract.
-    // This matters for fvdb-reality-capture's 500M+ voxel hero runs
-    // where a 2 GB fp32 upcast would be painful.
+    // On a 500M-voxel fp16 SDF this avoids a 2 GB fp32 upcast.
     const bool isCuda         = field.device().is_cuda();
     const auto origDtype      = fieldJdata.scalar_type();
     const bool supportedDtype = (origDtype == torch::kFloat32 || origDtype == torch::kHalf);

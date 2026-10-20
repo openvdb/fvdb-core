@@ -40,13 +40,9 @@ namespace ops {
 /// Bayesian updates compose as additions in log space and don't
 /// require per-update division.
 ///
-/// Paper-framing: this is the paper's fifth application of the
-/// nanoVDB topology-op vocabulary (after depth TSDF, LiDAR TSDF, MC,
-/// ESDF). Same substrate (voxelsToGrid + mergeGrids + an HDDA ray-
-/// walk) with a different per-voxel update rule. Demonstrates the
-/// orthogonality claim: nvblox's `OCCUPANCY` vs `TSDF` integrator is
-/// a whole-different-allocator distinction; ours is a
-/// different-inner-loop distinction.
+/// It shares its topology and ray-walk with the TSDF-from-points
+/// integrator (truncation shell + mergeGrids + an HDDA ray walk) and
+/// differs only in the per-voxel update rule.
 ///
 /// **Why ray-walking and not projective-per-pixel** (nvblox's default):
 /// nvblox's occupancy integrator projects voxels into the depth

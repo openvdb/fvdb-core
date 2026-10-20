@@ -4,10 +4,6 @@
 Unit tests for :func:`fvdb.Grid.integrate_occupancy_from_points` and
 its batched counterpart :func:`integrate_occupancy_from_points_frames`.
 
-This op is the paper's fifth application of the nanoVDB topology-op
-vocabulary (after depth TSDF, LiDAR TSDF, MC V4-V6, ESDF). It closes
-the nvblox feature-parity gap from the primitive-usage matrix.
-
 The tests below pin the invariants any future refactor must preserve:
 
 * **Hit / miss / unknown classification**. A voxel at the sphere

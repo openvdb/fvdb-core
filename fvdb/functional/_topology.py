@@ -58,14 +58,10 @@ def dirty_mask_from_sidecars_single(
     Multi-channel sidecars (``[num_voxels, C]``) reduce via "any
     channel differs" to per-voxel bool.
 
-    **Paper-framing**: fvdb exposes dirty-region information as a
-    user-visible torch tensor (the result of this function) rather
-    than as library-internal allocator state (nvblox's
-    ``BlockManager``-resident dirty-block set). The user can
-    inspect it, combine it with other predicates
-    (``mask & (weights > threshold)``), pass it to multiple
-    consumers, or drop it to reclaim memory. All composable,
-    nothing hidden.
+    The mask is an ordinary torch tensor. You can inspect it, combine it
+    with other predicates (``mask & (weights > threshold)``), or pass it
+    to several consumers such as
+    :func:`fvdb.functional.compute_esdf_incremental_single`.
 
     Args:
         new_grid (Grid): Grid whose voxel set we compute the mask on.

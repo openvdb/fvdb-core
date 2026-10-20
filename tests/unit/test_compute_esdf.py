@@ -3,15 +3,12 @@
 """
 Unit tests for :func:`fvdb.Grid.compute_esdf`.
 
-This op is the paper's second application of the nanoVDB topology-op
-vocabulary (after depth/LiDAR TSDF). The tests below pin the invariants
-any future refactor needs to preserve:
+The tests below pin the invariants any future refactor needs to preserve:
 
 * Analytic accuracy on a fully-contained spherical TSDF — the ESDF
   wavefront recovers signed distance to within the 26-neighbour chamfer
   approximation envelope (~half a voxel max error).
-* VBM vs per-leaf-slot iteration parity — the ablation knob (which the
-  paper depends on for the C3 "VBM cost model" argument) produces
+* VBM vs per-leaf-slot iteration parity — the ``use_vbm`` switch produces
   bit-identical output.
 * Distance magnitudes are bounded by ``max_distance``.
 * Pruning drops exactly the unreached (saturated at cap) voxels.
@@ -245,9 +242,7 @@ def test_magnitude_bounded_by_max_distance(device):
 @pytest.mark.parametrize("device", ["cuda"])
 def test_vbm_and_per_leaf_outputs_are_identical(device):
     """The ablation knob must NOT change the output — both iteration
-    patterns execute the same monotone-min body per voxel. This is the
-    paper's load-bearing correctness invariant for the VBM vs
-    per-leaf-slot comparison figure."""
+    patterns execute the same monotone-min body per voxel."""
     vs, trunc, max_dist = 0.025, 0.1, 0.2
     g, tsdf, weights = _sphere_tsdf(vs, 40, -20, 0.25, trunc, device)
 
@@ -409,8 +404,8 @@ def test_mismatched_tsdf_size_raises(device):
 
 @pytest.mark.parametrize("device", ["cuda"])
 def test_non_float32_tsdf_raises(device):
-    """M5 scope is float32 CUDA only; fp64 input should raise a clear
-    error rather than silently down-cast."""
+    """Only float32 CUDA input is supported; fp64 input should raise a
+    clear error rather than silently down-cast."""
     vs, trunc, max_dist = 0.05, 0.1, 0.15
     g, tsdf, weights = _sphere_tsdf(vs, 16, -8, 0.15, trunc, device)
     with pytest.raises((RuntimeError, TypeError)):
@@ -600,9 +595,9 @@ def test_incremental_partial_observation_converges_to_full(device):
     This is the canonical valid use-case for monotone-incremental
     ESDF: the TSDF zero-crossing doesn't move, only the set of
     confidently-observed voxels grows. The monotone-min assumption
-    (distances can only shrink as more seeds appear) holds. See
-    sessions/2026-04-23_esdf_one_shot.md for why the 'growing
-    sphere' counter-example is NOT a valid monotone scenario.
+    (distances can only shrink as more seeds appear) holds. A growing
+    sphere is not a valid monotone scenario, because its old surface
+    disappears and distances near it must grow.
     """
     vs = 0.025
     trunc = 0.1

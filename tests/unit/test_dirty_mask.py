@@ -4,10 +4,9 @@
 Unit tests for :func:`fvdb.functional.dirty_mask_from_sidecars_single`
 and the ``dirty_mask`` argument on :meth:`fvdb.Grid.compute_esdf_incremental`.
 
-Paper-framing context: dirty-region ESDF updates in fvdb are expressed
-via a user-visible torch tensor (the dirty mask) rather than library-
-internal allocator state (nvblox's ``BlockManager`` dirty-block set).
-These tests pin the invariants that make that composition work.
+Dirty-region ESDF updates take the dirty region as an ordinary torch
+tensor (the dirty mask). These tests pin the invariants that make that
+composition work.
 
 Coverage:
 
@@ -276,8 +275,7 @@ def test_esdf_incremental_no_mask_unchanged_behaviour(device):
 def test_full_pipeline_dirty_mask_workflow(device):
     """End-to-end demonstration that a user can (a) integrate a TSDF
     sweep, (b) compute a dirty mask from pre/post weights, (c) pass
-    the dirty mask to compute_esdf_incremental. This is the paper's
-    "dirty-region ESDF update" recipe in one test."""
+    the dirty mask to compute_esdf_incremental."""
     vs, trunc, max_dist = 0.1, 0.3, 0.5
     device_t = device
 

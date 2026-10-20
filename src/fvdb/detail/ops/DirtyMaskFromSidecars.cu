@@ -6,13 +6,8 @@
 // Standalone utility that computes a per-voxel "dirty" bool mask on
 // newGrid from two (grid, sidecar) pairs. Built entirely on top of
 // `ops::inject` — no new CUDA kernels, just one inject + one tensor
-// comparison.
-//
-// Paper-framing: this is a 40-LoC C++ helper that the paper cites as
-// the backbone of fvdb's dirty-region ESDF update. Contrast nvblox's
-// dirty-block tracking, which lives inside the block-hash allocator
-// and isn't user-visible. Ours is a torch tensor the user can pass
-// to `compute_esdf_incremental` (new `dirty_mask` arg) or compose
+// comparison. The result is a torch tensor the caller can pass to
+// `compute_esdf_incremental` (its `dirty_mask` argument) or combine
 // with their own predicates.
 
 #include <fvdb/GridBatchData.h>

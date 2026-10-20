@@ -4,12 +4,9 @@
 Unit tests for :meth:`fvdb.Grid.decay_and_prune` — the dynamic-scene
 decay primitive.
 
-The paper-framing point this helper demonstrates: because fvdb stores
-each per-voxel sidecar as a separate torch tensor, selective decay
-(decay one field, leave the others alone) is a trivial composition of
-a multiplicative torch op and the existing ``pruneGrid`` primitive.
-No new library machinery needed -- contrast nvblox, whose block-packed
-``{sdf, weight, color}`` tuples require layer-aware decay methods.
+Each per-voxel sidecar is a separate torch tensor, so selective decay
+(decay one field, leave the others alone) is a multiplicative torch op
+followed by the existing ``pruneGrid`` primitive.
 
 These tests pin the six invariants the helper promises:
 
@@ -218,19 +215,14 @@ def test_repeated_decay_composes(device):
 
 
 # ---------------------------------------------------------------------------
-#  Composability with other per-field ops (the paper-figure point)
+#  Composability with other per-field ops
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("device", ["cuda"])
 def test_per_field_decay_is_independent(device):
     """Selective decay: decay weights while leaving features untouched,
-    using nothing but :meth:`decay_and_prune` on the one sidecar.
-
-    This is the paper-figure demonstration of fvdb's "field
-    orthogonality is free" architectural advantage — you don't need a
-    layer-aware library method; you decay the tensor you care about
-    and that's it."""
+    using nothing but :meth:`decay_and_prune` on the one sidecar."""
     g, tsdf, weights, features = _make_grid_with_sidecars(device=device)
     features_orig = features.clone()
 
@@ -256,8 +248,7 @@ def test_compound_prune_predicate_via_user_mask(device):
     compound prune predicate directly through :meth:`pruned_grid`
     (which is what ``decay_and_prune`` uses internally). This pins
     that the underlying primitive is accessible for custom
-    predicates -- the paper point is that every composition here is
-    1-3 lines of Python."""
+    predicates."""
     g, tsdf, weights, features = _make_grid_with_sidecars(device=device)
     # Compound predicate: keep voxels with weight > 5 AND features-
     # norm > 0.5. Entirely user-authored, no fvdb helper needed.

@@ -800,16 +800,9 @@ class Grid:
         3. ``new_grid = self.pruned_grid(keep)``  (existing fvdb primitive)
         4. ``sidecar_out = sidecar_new[keep]``; similar for extras.
 
-        **Paper-framing: this method demonstrates that per-field
-        decay is "free" under fvdb's sidecar-as-tensor architecture.**
-        Because each sidecar (``tsdf``, ``weights``, ``features``,
-        ``log_odds``, ...) is stored as a separate torch tensor
-        aligned to the sparse grid, selective decay is just a tensor
-        op on the field the user cares about -- there's no library
-        machinery needed to "know which layer to decay" (contrast
-        nvblox's block-packed ``{sdf, weight, color}`` tuples, which
-        need integrator-aware ``decay_tsdf`` / ``decay_color``
-        methods to reach individual fields within a block).
+        Each sidecar (``tsdf``, ``weights``, ``features``,
+        ``log_odds``, ...) is a separate torch tensor aligned to the
+        sparse grid, so decaying one field leaves the others untouched.
 
         Common use cases (all 1-3 lines of Python):
 

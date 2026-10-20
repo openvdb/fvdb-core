@@ -21,8 +21,7 @@ namespace ops {
 /// The ESDF extends the TSDF's narrow-band signed distances outward (and
 /// inward) across a wider band via monotone 26-neighbour min-propagation,
 /// producing per-voxel world-unit signed distances `d` with
-/// `|d| <= max_distance`. This is the paper's **second application** of
-/// the nanoVDB topology-op vocabulary (the first being depth/LiDAR TSDF):
+/// `|d| <= max_distance`. It is built from:
 ///
 ///   - `dilateGrid`  (once, by `ceil(max_distance / voxel_size) + 1`) to
 ///     allocate the ESDF support band around the TSDF zero-crossing shell.
@@ -56,8 +55,7 @@ namespace ops {
 /// @param gridBatch               Input TSDF grid topology (single batch).
 /// @param tsdf                    `[totalVoxels]` fp32 normalized TSDF
 ///                                in `[-1, +1]` (fvdb's `integrate_tsdf*`
-///                                convention). Other scalar types fall
-///                                back to float by internal cast in M5.
+///                                convention). Must be float32.
 /// @param weights                 `[totalVoxels]` fp32 integration weights.
 /// @param truncation_distance     Truncation margin in world units (the
 ///                                `T` of `tsdf = clip(d_world / T, -1, 1)`).
@@ -86,10 +84,8 @@ computeESDF(const GridBatchData &gridBatch,
 ///        the current TSDF grid without paying the full-from-scratch
 ///        wavefront cost on every frame.
 ///
-/// Pattern (the paper's "same primitives, different composition"
-/// argument): instead of restarting from a sentinel-filled buffer, we
-/// reuse the previous frame's ESDF values as a warm-start for the
-/// wavefront. Because the 26-neighbour min-propagation is monotone, a
+/// Instead of restarting from a sentinel-filled buffer, we reuse the previous frame's ESDF values
+/// as a warm-start for the wavefront. Because the 26-neighbour min-propagation is monotone, a
 /// warm-started sweep converges in fewer effective iterations than a
 /// cold start -- and even better, previously-converged values in
 /// regions the current frame didn't touch are preserved byte-for-byte.
@@ -120,10 +116,9 @@ computeESDF(const GridBatchData &gridBatch,
 /// disappear (dynamic objects, noise-resolved phantom surfaces), the
 /// incremental ESDF can lock in stale-lower distances. For those
 /// cases, call `computeESDF` one-shot on a fresh schedule (e.g. every
-/// M frames) as a correction pass. See
-/// `sessions/2026-04-23_esdf_one_shot.md` section on "the one subtle
-/// correctness trap" for the FIESTA-style parent-witness alternative
-/// we explicitly chose NOT to implement here.
+/// M frames) as a correction pass. Handling removals incrementally
+/// would need FIESTA-style parent-witness tracking, which this does not
+/// implement.
 ///
 /// When `prevEsdfGrid.totalVoxels() == 0`, falls through to one-shot
 /// semantics (useful for the first frame of an incremental session).
