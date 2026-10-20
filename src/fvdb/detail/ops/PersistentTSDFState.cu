@@ -102,11 +102,9 @@ PersistentTSDFState::PersistentTSDFState(c10::intrusive_ptr<GridBatchData> grid,
         // Maintain a well-shaped `[totalVoxels, 0]` placeholder so that
         // `grid().jaggedTensor(features())` works uniformly and so callers
         // can pass `features()` into the `GridBatchData::jaggedTensor`
-        // size check even when features are disabled. Matches the
-        // placeholder convention already used in `IntegrateTSDF.cu`
-        // (`torch::empty({0, 0}, opts)` + `GridBatchData::jaggedTensor`
-        // size-check pitfall, documented in paper_extractions impl-notes
-        // entry #12).
+        // size check even when features are disabled. `IntegrateTSDF.cu`
+        // uses the same placeholder convention, because a `{0, 0}` tensor
+        // fails that size check.
         mFeatures = torch::empty({mGrid->totalVoxels(), 0}, mTsdf.options());
     }
 }
@@ -168,35 +166,11 @@ PersistentTSDFState::growFromGrid(const GridBatchData &shellGrid) {
     // TSDF update) if we swap it to `(mGrid, shell)`.
     auto mergedGrid = mergeGrids(shellGrid, *mGrid);
 
-    // The "overlap-only fast path" -- return early when the merged
-    // grid's voxel set exactly matches the live grid's -- is a
-    // tempting optimization (avoid the realloc + inject) but in
-    // practice introduces a semantic divergence with the sequential-
-    // path TSDF output: weight sidecars end up with absolute errors
-    // of up to one frame's worth of `new_observation_weight` on
-    // multiple-percent of voxels.
-    //
-    // Hypothesis: when the fast path fires, `state.grid()` retains
-    // the *previous* merged-grid `GridBatchData` object, whereas the
-    // sequential path constructs a fresh `mergeGrids(shell, base)`
-    // result every frame. Even when both produce the same voxel set
-    // and enumeration order, there is an internal `GridBatchData`
-    // bookkeeping difference that affects what
-    // `grid.deviceAccessor().getValue(ijk)` returns for specific
-    // voxels in specific frames, causing shell voxels to look up to
-    // the wrong linear index and either miss the update or double-
-    // count.
-    //
-    // Disabling the fast path costs us the steady-state speedup on
-    // bounded trajectories but keeps the output bit-identical to the
-    // sequential reference. TODO: revisit when we have a cheap way
-    // to detect "merged grid is structurally identical to base in
-    // ALL respects, including internal bookkeeping" -- likely needs
-    // a deeper look at `nanovdb::tools::cuda::MergeGrids`'s output
-    // layout vs a grid's original construction.
-    if (false && mergedGrid->totalVoxels() == mGrid->totalVoxels()) {
-        return;
-    }
+    // Always reallocate, even when the shell adds no voxels. Skipping the
+    // realloc in that case made the multi-frame result diverge from
+    // sequential integration (cause not identified), and would leave the
+    // sidecars aliasing the caller's input tensors, which the in-place
+    // integrate would then mutate.
 
     const int64_t newTotal   = mergedGrid->totalVoxels();
     const int64_t featureDim = mHasFeatures ? mFeatures.size(1) : 0;

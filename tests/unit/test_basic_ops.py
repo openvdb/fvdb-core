@@ -2239,9 +2239,9 @@ class TestBasicOps(unittest.TestCase):
             sphere_sdf = torch.stack(
                 [-torch.sqrt(xx**2 + yy**2 + zz**2) + sphere_rad for sphere_rad in sphere_rads[:batch_size]]
             ).unsqueeze(-1)  # [B, N, N, N, 1] sdf
-            # Actually cast to the parameterized dtype so the test exercises
-            # each integrator path (CUDA fp32+fp16 -> V4, CUDA fp64 -> legacy,
-            # CPU -> legacy for all dtypes).
+            # Cast to the parameterized dtype so the test exercises each
+            # marching-cubes path (CUDA fp32/fp16 -> fast, CUDA fp64 and
+            # CPU -> legacy).
             sphere_sdf = sphere_sdf.to(dtype)
 
             # Build a grid with the SDF
@@ -2258,9 +2258,8 @@ class TestBasicOps(unittest.TestCase):
             for level in [0.0, 0.2, -0.2]:
                 v, f, _ = grid.marching_cubes(sdf_p, level)
 
-                # Output vertex dtype should match input SDF dtype (legacy's
-                # public contract; V4 preserves this via its end-of-pipeline
-                # downcast of retVertices).
+                # Output vertex dtype should match input SDF dtype. The fast
+                # path keeps this by downcasting retVertices at the end.
                 self.assertEqual(v[0].jdata.dtype, dtype)
 
                 for bi in range(batch_size):
@@ -2278,7 +2277,7 @@ class TestBasicOps(unittest.TestCase):
     @unittest.skipUnless(torch.cuda.is_available(), "CUDA required for fp16 MC fast path")
     def test_marching_cubes_fp16_matches_fp32(self):
         """
-        The CUDA fp16 path in `marchingCubes` routes through V4 with kernel-
+        The CUDA fp16 path in `marchingCubes` uses the fast path with kernel-
         side `fp16 -> fp32` per-load casts (no transient fp32 buffer). This
         test pins that the fp16 output is numerically close to fp32 (within
         fp16's resolution) and that the topology matches exactly.
@@ -2305,8 +2304,8 @@ class TestBasicOps(unittest.TestCase):
         v32, f32, _ = grid.marching_cubes(sdf_fp32, 0.0)
         v16, f16, _ = grid.marching_cubes(sdf_fp16, 0.0)
 
-        # Topology must be identical: V4 with fp32 input and V4 with fp16
-        # input run the same kernel logic; only the per-load cast differs.
+        # Topology must be identical: fp32 and fp16 input run the same
+        # kernel logic; only the per-load cast differs.
         self.assertEqual(v32[0].jdata.shape, v16[0].jdata.shape)
         self.assertEqual(f32[0].jdata.shape, f16[0].jdata.shape)
 
@@ -2557,6 +2556,39 @@ class TestBasicOps(unittest.TestCase):
         self.assertEqual(new_batch.num_voxels_at(0), ref_grid.num_voxels)
         torch.testing.assert_close(new_tsdf[0].jdata, ref_tsdf)
         torch.testing.assert_close(new_weights[0].jdata, ref_weights)
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA required for integrate_*_from_points")
+    def test_integrate_from_points_rejects_bad_inputs(self):
+        """
+        Inputs on the wrong device or with the wrong size raise ``ValueError``
+        instead of reaching the kernels.
+        """
+        import fvdb as fv
+
+        device = "cuda"
+        voxel_size = 0.05
+        trunc = 3 * voxel_size
+        grid = fv.Grid.from_dense(
+            dense_dims=[16, 16, 16], ijk_min=[-8, -8, -8], voxel_size=voxel_size, origin=0.0, device=device
+        )
+        points = torch.tensor([[0.2, 0.0, 0.0]], device=device)
+        zeros = torch.zeros(grid.num_voxels, device=device)
+        short = torch.zeros(grid.num_voxels - 1, device=device)
+
+        with self.assertRaises(ValueError):
+            grid.integrate_tsdf_from_points(trunc, points, torch.zeros(3), zeros, zeros.clone())
+        with self.assertRaises(ValueError):
+            grid.integrate_occupancy_from_points(trunc, points, torch.zeros(3), zeros.clone())
+        with self.assertRaises(ValueError):
+            grid.integrate_tsdf_from_points_frames(
+                trunc, [points, points], torch.zeros(2, 3, device=device), short, short.clone()
+            )
+        with self.assertRaises(ValueError):
+            grid.integrate_tsdf_from_points_frames(
+                trunc, [points, points.cpu()], torch.zeros(2, 3, device=device), zeros, zeros.clone()
+            )
+        with self.assertRaises(ValueError):
+            grid.integrate_occupancy_from_points_frames(trunc, [points], torch.zeros(1, 3, device=device), short)
 
     @unittest.skipUnless(torch.cuda.is_available(), "CUDA required for integrate_*_from_points")
     def test_integrate_from_points_skips_non_finite_points(self):

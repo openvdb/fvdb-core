@@ -47,6 +47,7 @@
 #include <cuda_runtime.h>
 
 #include <cmath>
+#include <utility>
 
 namespace fvdb::detail::ops {
 
@@ -148,7 +149,7 @@ seedAccumulatorsFromBaseGridKernel(const fvdb::BatchGridAccessor baseGridAcc,
 //   - free-space without carving: skip.
 // Updates go via atomicAdd on the running-sum accumulators; the
 // running-sum form is what makes the concurrent updates lock-free
-// (see plan.md D3 and the `seedAccumulatorsFromBaseGridKernel` note).
+// (see the `seedAccumulatorsFromBaseGridKernel` note).
 // -------------------------------------------------------------------------
 
 template <typename ScalarDataType, typename FeatureDataType, typename FeatureAccumT>
@@ -220,9 +221,8 @@ rayWalkIntegrateKernel(const fvdb::BatchGridAccessor unionGridAcc,
     // HDDALeafVoxelIterator walks active leaf voxels of the sparse grid along the
     // ray, automatically skipping inactive regions. This is the sparse-
     // native "ray-walk" primitive fvdb exposes; the per-ray thread hits
-    // only voxels that exist in the endpoint-shell topology (see plan.md
-    // D2 — free-space carving fills topology gaps only within the
-    // existing union grid, does not extend it).
+    // only voxels that exist in the union grid. Free-space carving updates
+    // voxels already in that grid and never adds topology.
     fvdb::HDDALeafVoxelIterator<decltype(acc), MathT> it(rayVox, acc);
     while (it.isValid()) {
         const nanovdb::Coord voxIjk = it->first;
@@ -582,6 +582,17 @@ checkCommonInputs(const c10::intrusive_ptr<GridBatchData> &grid,
                   const JaggedTensor &weights) {
     TORCH_CHECK_VALUE(grid != nullptr, "grid must be non-null");
     TORCH_CHECK_VALUE(grid->device().is_cuda(), "integrateTSDFFromPoints requires a CUDA grid");
+    for (const auto &[name, device]: {std::pair{"points", points.device()},
+                                      std::pair{"sensorOrigins", sensorOrigins.device()},
+                                      std::pair{"tsdf", tsdf.device()},
+                                      std::pair{"weights", weights.device()}}) {
+        TORCH_CHECK_VALUE(device == grid->device(),
+                          name,
+                          " must be on the grid's device (",
+                          grid->device(),
+                          "); got ",
+                          device);
+    }
     TORCH_CHECK_VALUE(points.rdim() == 2 && points.rsize(-1) == 3,
                       "points must have shape [B, N, 3]");
     TORCH_CHECK_VALUE(sensorOrigins.dim() == 2 && sensorOrigins.size(1) == 3,
@@ -734,6 +745,20 @@ integrateTSDFFromPointsFrames(const c10::intrusive_ptr<GridBatchData> grid,
                       grid->batchSize());
     TORCH_CHECK_VALUE(grid->device().is_cuda(),
                       "integrateTSDFFromPointsFrames requires a CUDA grid");
+    checkCommonInputs(
+        grid, JaggedTensor(pointsPerFrame[0]), sensorOrigins.narrow(0, 0, 1), tsdf, weights);
+    for (const auto &framePoints: pointsPerFrame) {
+        TORCH_CHECK_VALUE(framePoints.dim() == 2 && framePoints.size(1) == 3,
+                          "each frame's points must have shape [M, 3]; got ",
+                          framePoints.sizes());
+        TORCH_CHECK_VALUE(framePoints.device() == grid->device(),
+                          "each frame's points must be on the grid's device (",
+                          grid->device(),
+                          "); got ",
+                          framePoints.device());
+        TORCH_CHECK_TYPE(framePoints.scalar_type() == tsdf.scalar_type(),
+                         "each frame's points dtype must match tsdf dtype");
+    }
 
     const at::cuda::CUDAGuard device_guard(tsdf.device());
 
@@ -751,9 +776,7 @@ integrateTSDFFromPointsFrames(const c10::intrusive_ptr<GridBatchData> grid,
     // grow-on-touch fast path can't fire here (the ray-walk
     // accumulator tensors are throwaway per-frame temporaries, not
     // persistent sidecars). Wrapping in `PersistentTSDFState` would
-    // add an extra level of ref-counting without saving any work. See
-    // session note `2026-04-23_stream_c_lidar.md` for the design
-    // rationale.
+    // add an extra level of ref-counting without saving any work.
     c10::intrusive_ptr<GridBatchData> accumGrid = grid;
     JaggedTensor accumTsdf                      = tsdf;
     JaggedTensor accumWeights                   = weights;

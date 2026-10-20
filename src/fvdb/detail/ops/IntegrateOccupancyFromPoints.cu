@@ -9,17 +9,12 @@
 // the per-voxel update rule (log-odds increment instead of running
 // weighted-average signed distance).
 //
-// Paper-framing: this is the paper's fifth application of the
-// nanoVDB topology-op vocabulary. Uses:
-//   - `voxelsToGrid` (via buildPointTruncationShell -> voxelsToGrid)
-//   - `mergeGrids`   (to preserve previous-frame topology)
-//   - `inject`       (to carry over previous log-odds values)
-//   - ONE custom CUDA kernel (the ray-walk log-odds update)
-//   - `torch.clamp` (for the [log_odds_min, log_odds_max] cap)
-//
-// No custom allocator, no custom hash table, no per-pixel projective
-// integrator. Just the same sparse-substrate primitives that power
-// TSDF.
+// Building blocks:
+//   - `buildPointTruncationShell` for the new points' topology
+//   - `mergeGrids` to keep the previous-frame topology
+//   - `inject` to carry over previous log-odds values
+//   - one CUDA kernel for the ray-walk log-odds update
+//   - `torch.clamp` for the [log_odds_min, log_odds_max] cap
 //
 // Pipeline:
 //   P0. Build topology: union of existing grid + truncation shell of
@@ -59,6 +54,7 @@
 #include <cuda_runtime.h>
 
 #include <cmath>
+#include <utility>
 
 namespace fvdb::detail::ops {
 
@@ -264,6 +260,16 @@ checkCommonInputs(const c10::intrusive_ptr<GridBatchData> &grid,
     TORCH_CHECK_VALUE(grid != nullptr, "grid must be non-null");
     TORCH_CHECK_VALUE(grid->device().is_cuda(),
                       "integrateOccupancyFromPoints requires a CUDA grid");
+    for (const auto &[name, device]: {std::pair{"points", points.device()},
+                                      std::pair{"sensorOrigins", sensorOrigins.device()},
+                                      std::pair{"logOdds", logOdds.device()}}) {
+        TORCH_CHECK_VALUE(device == grid->device(),
+                          name,
+                          " must be on the grid's device (",
+                          grid->device(),
+                          "); got ",
+                          device);
+    }
     TORCH_CHECK_VALUE(points.rdim() == 2 && points.rsize(-1) == 3,
                       "points must have shape [B, N, 3]");
     TORCH_CHECK_VALUE(sensorOrigins.dim() == 2 && sensorOrigins.size(1) == 3,
@@ -361,6 +367,24 @@ integrateOccupancyFromPointsFrames(const c10::intrusive_ptr<GridBatchData> grid,
                       grid->batchSize());
     TORCH_CHECK_VALUE(grid->device().is_cuda(),
                       "integrateOccupancyFromPointsFrames requires a CUDA grid");
+    checkCommonInputs(grid,
+                      JaggedTensor(pointsPerFrame[0]),
+                      sensorOrigins.narrow(0, 0, 1),
+                      logOdds,
+                      logOddsMin,
+                      logOddsMax);
+    for (const auto &framePoints: pointsPerFrame) {
+        TORCH_CHECK_VALUE(framePoints.dim() == 2 && framePoints.size(1) == 3,
+                          "each frame's points must have shape [M, 3]; got ",
+                          framePoints.sizes());
+        TORCH_CHECK_VALUE(framePoints.device() == grid->device(),
+                          "each frame's points must be on the grid's device (",
+                          grid->device(),
+                          "); got ",
+                          framePoints.device());
+        TORCH_CHECK_TYPE(framePoints.scalar_type() == logOdds.scalar_type(),
+                         "each frame's points dtype must match logOdds dtype");
+    }
 
     const at::cuda::CUDAGuard device_guard(logOdds.device());
 

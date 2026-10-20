@@ -33,15 +33,10 @@ namespace ops {
 /// can stack additional `PersistentTSDFState`-like wrappers on the same
 /// underlying grid.
 ///
-/// Why this class exists (paper-framing note): there are TSDF-fusion
-/// workloads in which the output topology naturally persists across
-/// observations (canonical incremental RGB-D / LiDAR fusion), and other
-/// workloads where two independently-built grids want to be composed
-/// one-shot (non-persistent union of attribute fields, runtime-loaded
-/// terrain tiles, etc.). The one-shot pattern is served by the existing
-/// `mergeGrids` primitive; the persistent pattern is served by this
-/// class. Both patterns compose the same nanoVDB `voxelsToGrid +
-/// mergeGrids + inject` building blocks -- only the outer shape differs.
+/// Incremental RGB-D / LiDAR fusion keeps one topology across many
+/// observations. This class holds that persistent topology and its
+/// sidecars, growing both with `mergeGrids` + `inject`. One-shot unions of
+/// independently built grids use `mergeGrids` directly.
 class PersistentTSDFState {
   public:
     /// @brief Construct a new state from an initial grid + sidecar tensors.
@@ -80,11 +75,9 @@ class PersistentTSDFState {
     ///        depth / LiDAR integrators, both of which have already built
     ///        a shell grid via `buildPointTruncationShell`.
     ///
-    /// No-op when `shellGrid.totalVoxels() == 0`.
-    /// No-op when the merged grid has the same active-voxel count as the
-    /// current live grid (the shell was a subset). In that case the
-    /// existing sidecar tensors and grid handle are retained unmodified,
-    /// which is the steady-state fast path on bounded-scene trajectories.
+    /// No-op when `shellGrid.totalVoxels() == 0`. Otherwise the sidecars are
+    /// reallocated for the merged grid, with existing values carried forward
+    /// and new voxels zero-filled.
     ///
     /// @param shellGrid The shell (or any other) grid whose active voxels
     ///                  should be merged into the live grid.

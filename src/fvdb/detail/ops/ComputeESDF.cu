@@ -80,9 +80,8 @@ using VbmBuffer = BuilderBuffer<std::byte>;
 
 // Sentinel used for "never-reached" voxels. Must be LARGE ENOUGH that
 // it is unambiguously identifiable after propagation: the wavefront
-// intentionally doesn't cap at `max_distance` (doing so loses sign
-// information on voxels beyond the cap — see journal entry for this
-// session). With a 1e30 sentinel, any finite propagated distance (even
+// intentionally doesn't cap at `max_distance`, because capping loses sign
+// information on voxels beyond the cap. With a 1e30 sentinel, any finite propagated distance (even
 // well beyond `max_distance`) is clearly distinguishable, and the
 // final post-loop `clamp(-max, +max)` yields the correct signed result.
 constexpr float kEsdfSentinel = 1.0e30f;
@@ -326,9 +325,8 @@ esdfSweepVBMKernel(nanovdb::NanoGrid<nanovdb::ValueOnIndex> *__restrict__ esdfGr
 // -----------------------------------------------------------------------
 // Sweep kernel (per-leaf-slot ablation path). One CUDA block per leaf;
 // 512 threads iterate every slot in that leaf, skipping inactive ones.
-// Same inner body as the VBM kernel. Purpose: measure the cost model
-// delta of VBM iteration vs V4-style per-leaf iteration on this
-// specific stencil shape, for the paper's VBM ablation figure.
+// Same inner body as the VBM kernel. Selected with `use_vbm=False`, for
+// comparing VBM iteration against per-leaf iteration on this stencil.
 // -----------------------------------------------------------------------
 
 __global__ void
@@ -524,10 +522,11 @@ computeESDF(const GridBatchData &gridBatch,
     // ------------------ Shape / dtype / scope checks ------------------
 
     TORCH_CHECK_VALUE(gridBatch.batchSize() == 1,
-                      "computeESDF: batchSize must be 1 in M5, got ",
+                      "computeESDF: batchSize must be 1, got ",
                       gridBatch.batchSize());
-    TORCH_CHECK(tsdf.is_cuda() && weights.is_cuda(),
-                "computeESDF: tsdf and weights must be CUDA tensors");
+    TORCH_CHECK(tsdf.device() == gridBatch.device() && weights.device() == gridBatch.device(),
+                "computeESDF: tsdf and weights must be on the grid's device");
+    TORCH_CHECK(tsdf.is_cuda(), "computeESDF: tsdf and weights must be CUDA tensors");
     gridBatch.checkDevice(tsdf);
     gridBatch.checkDevice(weights);
 
@@ -547,9 +546,9 @@ computeESDF(const GridBatchData &gridBatch,
                       weights.size(0));
 
     TORCH_CHECK_TYPE(tsdf.scalar_type() == torch::kFloat32,
-                     "computeESDF: only float32 tsdf is supported in M5");
+                     "computeESDF: only float32 tsdf is supported");
     TORCH_CHECK_TYPE(weights.scalar_type() == torch::kFloat32,
-                     "computeESDF: only float32 weights is supported in M5");
+                     "computeESDF: only float32 weights are supported");
 
     TORCH_CHECK_VALUE(truncation_distance > 0.0,
                       "computeESDF: truncation_distance must be > 0, got ",
@@ -575,7 +574,7 @@ computeESDF(const GridBatchData &gridBatch,
     const double vsY = voxSizes[0][1];
     const double vsZ = voxSizes[0][2];
     TORCH_CHECK_VALUE(std::fabs(vsX - vsY) < 1e-9 && std::fabs(vsX - vsZ) < 1e-9,
-                      "computeESDF: anisotropic voxels not supported in M5 (",
+                      "computeESDF: anisotropic voxels are not supported (",
                       vsX,
                       ", ",
                       vsY,
@@ -614,15 +613,18 @@ computeESDF(const GridBatchData &gridBatch,
         if (inputLeaves > 0) {
             // One-shot compute has no dirty-mask concept (it seeds
             // from every near-surface voxel unconditionally). Pass
-            // nullptr.
+            // nullptr. The kernel indexes the sidecars directly, so
+            // they must be contiguous.
+            const torch::Tensor tsdfC    = tsdf.contiguous();
+            const torch::Tensor weightsC = weights.contiguous();
             esdfSeedKernel<<<static_cast<unsigned int>(inputLeaves),
                              static_cast<unsigned int>(
                                  nanovdb::OnIndexTree::LeafNodeType::NUM_VALUES),
                              0,
                              stream.stream()>>>(inputDeviceGrid,
                                                 esdfDeviceGrid,
-                                                tsdf.data_ptr<float>(),
-                                                weights.data_ptr<float>(),
+                                                tsdfC.data_ptr<float>(),
+                                                weightsC.data_ptr<float>(),
                                                 /*dirtyMask=*/nullptr,
                                                 esdfA.data_ptr<float>(),
                                                 truncF,
@@ -657,9 +659,11 @@ computeESDFIncremental(const GridBatchData &gridBatch,
     // ------------------ Shape / dtype / scope checks ------------------
 
     TORCH_CHECK_VALUE(gridBatch.batchSize() == 1 && prevEsdfGrid.batchSize() <= 1,
-                      "computeESDFIncremental: batchSize must be 1 in M5");
-    TORCH_CHECK(tsdf.is_cuda() && weights.is_cuda() && prevEsdf.is_cuda(),
-                "computeESDFIncremental: all tensors must be CUDA");
+                      "computeESDFIncremental: batchSize must be 1");
+    TORCH_CHECK(tsdf.device() == gridBatch.device() && weights.device() == gridBatch.device() &&
+                    prevEsdf.device() == gridBatch.device(),
+                "computeESDFIncremental: all tensors must be on the grid's device");
+    TORCH_CHECK(tsdf.is_cuda(), "computeESDFIncremental: all tensors must be CUDA");
     gridBatch.checkDevice(tsdf);
     gridBatch.checkDevice(weights);
     TORCH_CHECK_VALUE(tsdf.dim() == 1 && weights.dim() == 1 && prevEsdf.dim() == 1,
@@ -679,7 +683,7 @@ computeESDFIncremental(const GridBatchData &gridBatch,
     TORCH_CHECK_TYPE(tsdf.scalar_type() == torch::kFloat32 &&
                          weights.scalar_type() == torch::kFloat32 &&
                          prevEsdf.scalar_type() == torch::kFloat32,
-                     "computeESDFIncremental: only float32 is supported in M5");
+                     "computeESDFIncremental: only float32 is supported");
     TORCH_CHECK_VALUE(truncation_distance > 0.0,
                       "computeESDFIncremental: truncation_distance must be > 0");
     TORCH_CHECK_VALUE(max_distance > 0.0, "computeESDFIncremental: max_distance must be > 0");
@@ -834,14 +838,19 @@ computeESDFIncremental(const GridBatchData &gridBatch,
         // whatever they had in `prevEsdf` (via the inject+restore
         // above). Monotone-min correctness is preserved under the
         // existing "distances can decrease but not grow" assumption.
-        const bool *dirtyMaskPtr = hasDirtyMask ? dirtyMask.data_ptr<bool>() : nullptr;
+        // The kernel indexes the sidecars and mask directly, so they must be
+        // contiguous.
+        const torch::Tensor tsdfC      = tsdf.contiguous();
+        const torch::Tensor weightsC   = weights.contiguous();
+        const torch::Tensor dirtyMaskC = hasDirtyMask ? dirtyMask.contiguous() : dirtyMask;
+        const bool *dirtyMaskPtr       = hasDirtyMask ? dirtyMaskC.data_ptr<bool>() : nullptr;
         esdfSeedKernel<<<static_cast<unsigned int>(inputLeaves),
                          static_cast<unsigned int>(nanovdb::OnIndexTree::LeafNodeType::NUM_VALUES),
                          0,
                          stream.stream()>>>(inputDeviceGrid,
                                             esdfDeviceGrid,
-                                            tsdf.data_ptr<float>(),
-                                            weights.data_ptr<float>(),
+                                            tsdfC.data_ptr<float>(),
+                                            weightsC.data_ptr<float>(),
                                             dirtyMaskPtr,
                                             esdfInit.data_ptr<float>(),
                                             truncF,
