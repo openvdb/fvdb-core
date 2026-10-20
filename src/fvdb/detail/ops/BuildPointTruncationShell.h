@@ -27,9 +27,8 @@ namespace ops {
 ///      `truncationMargin` of any point is active.
 ///
 /// Shared by the depth-image and LiDAR-point TSDF and occupancy
-/// integrators. Non-finite and far-field points are dropped before the
-/// grid is built; a batch item with no surviving points gets a
-/// voxel-less grid.
+/// integrators. Non-finite points are dropped before the grid is built;
+/// a batch item with no finite points gets a voxel-less grid.
 ///
 /// `points` is a JaggedTensor `[B, N_i, 3]` — each batch item may
 /// have a different number of input points. `grid` is used only for

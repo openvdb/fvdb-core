@@ -20,54 +20,10 @@ namespace ops {
 
 namespace {
 
-// Drops points that would inflate the shell topology.
-//
-// `unprojectDepthmapKernel` emits about 1% (Replica room0) of finite but
-// far-field coordinates, tens to millions of metres from the scene, where
-// the fp32 unprojection loses precision. A fixed clamp cannot serve both
-// room-scale depth (~5 m) and outdoor LiDAR (~100 m), so the clamp adapts
-// to the scene. It is `kAdaptiveClampHeadroom` times the median of
-// `max|coord|` over the finite points. The median ignores the garbage tail, which drags
-// p99 to ~50 m on a 4 m room. Replica gets a ~12 m clamp. The floor keeps
-// tiny scenes intact, and the 100 km ceiling keeps far-from-origin LiDAR
-// trajectories (Mai City, KITTI) while rejecting the 10^4+ m tail.
-constexpr double kAdaptiveClampHeadroom = 8.0;
-constexpr double kMinAdaptiveClamp      = 4.0;
-constexpr double kMaxAdaptiveClamp      = 100000.0;
-
+// Drops NaN / Inf points, which would otherwise quantise to arbitrary voxels.
 torch::Tensor
-filterValidPoints(const torch::Tensor &points) {
-    // Works in the caller's dtype to avoid an fp64 copy. Non-finite points
-    // go first so the median only sees real coordinates.
-    const torch::Tensor finite_mask = at::isfinite(points).all(/*dim=*/1);
-    const torch::Tensor finite_pts  = points.index({finite_mask});
-    if (finite_pts.size(0) == 0) {
-        return points.new_empty({0, 3});
-    }
-
-    // `at::quantile` has a ~2^24-row sort limit, so large inputs are
-    // stride-subsampled to 1 M rows, which pins the median to within a
-    // centimetre.
-    const torch::Tensor max_abs     = std::get<0>(finite_pts.abs().max(/*dim=*/1)); // [N_fin]
-    constexpr int64_t kPctSampleCap = 1 << 20;                                      // 1 M
-    torch::Tensor max_abs_for_quantile;
-    if (max_abs.size(0) > kPctSampleCap) {
-        const int64_t stride = (max_abs.size(0) + kPctSampleCap - 1) / kPctSampleCap;
-        max_abs_for_quantile =
-            max_abs.index({torch::indexing::Slice(0, torch::indexing::None, stride)}).contiguous();
-    } else {
-        max_abs_for_quantile = max_abs;
-    }
-    // `at::quantile` takes only float or double.
-    const torch::Tensor max_abs_f32 = max_abs_for_quantile.scalar_type() == torch::kHalf
-                                          ? max_abs_for_quantile.to(torch::kFloat32)
-                                          : max_abs_for_quantile;
-    const double median             = at::quantile(max_abs_f32, 0.50).item<double>();
-    const double clamp =
-        std::min(kMaxAdaptiveClamp, std::max(kMinAdaptiveClamp, kAdaptiveClampHeadroom * median));
-    const torch::Tensor bounded_mask = (finite_pts.abs() < clamp).all(/*dim=*/1);
-
-    return finite_pts.index({bounded_mask}).contiguous();
+filterFinitePoints(const torch::Tensor &points) {
+    return points.index({at::isfinite(points).all(/*dim=*/1)});
 }
 
 } // namespace
@@ -146,9 +102,9 @@ buildPointTruncationShell(const JaggedTensor &points,
         numPadVoxels.push_back(numPadVoxelsI);
     }
 
-    // Drop non-finite and far-field points per batch item, then build one
-    // voxel per occupied cell and dilate it by the truncation band. An item
-    // with no surviving points yields a voxel-less grid.
+    // Drop non-finite points per batch item, then build one voxel per
+    // occupied cell and dilate it by the truncation band. An item with no
+    // finite points yields a voxel-less grid.
     const torch::Tensor offsets = points.joffsets().cpu();
     const auto offsetsAcc       = offsets.accessor<JOffsetsType, 1>();
     std::vector<torch::Tensor> validPoints;
@@ -156,7 +112,7 @@ buildPointTruncationShell(const JaggedTensor &points,
     for (int64_t i = 0; i < grid.batchSize(); ++i) {
         const int64_t start = offsetsAcc[i];
         const int64_t count = offsetsAcc[i + 1] - start;
-        validPoints.push_back(filterValidPoints(points.jdata().narrow(0, start, count)));
+        validPoints.push_back(filterFinitePoints(points.jdata().narrow(0, start, count)));
     }
 
     auto pointGrid = buildGridFromPoints(JaggedTensor(validPoints), voxelSizes, origins);
