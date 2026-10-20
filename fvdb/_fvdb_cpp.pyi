@@ -960,6 +960,132 @@ def integrate_tsdf_with_features(
     feature_images: torch.Tensor,
     weight_images: torch.Tensor | None,
 ) -> tuple[GridBatchData, JaggedTensor, JaggedTensor, JaggedTensor]: ...
+def integrate_tsdf_batch(
+    grid: GridBatchData,
+    truncation_margin: float,
+    projection_matrices: torch.Tensor,
+    cam_to_world_matrices: torch.Tensor,
+    tsdf: JaggedTensor,
+    weights: JaggedTensor,
+    depth_images: torch.Tensor,
+    weight_images: torch.Tensor | None,
+) -> tuple[GridBatchData, JaggedTensor, JaggedTensor]: ...
+def integrate_tsdf_batch_with_features(
+    grid: GridBatchData,
+    truncation_margin: float,
+    projection_matrices: torch.Tensor,
+    cam_to_world_matrices: torch.Tensor,
+    tsdf: JaggedTensor,
+    features: JaggedTensor,
+    weights: JaggedTensor,
+    depth_images: torch.Tensor,
+    feature_images: torch.Tensor,
+    weight_images: torch.Tensor | None,
+) -> tuple[GridBatchData, JaggedTensor, JaggedTensor, JaggedTensor]: ...
+def integrate_tsdf_from_points(
+    grid: GridBatchData,
+    truncation_margin: float,
+    points: JaggedTensor,
+    sensor_origins: torch.Tensor,
+    tsdf: JaggedTensor,
+    weights: JaggedTensor,
+    carve_free_space: bool,
+) -> tuple[GridBatchData, JaggedTensor, JaggedTensor]: ...
+def integrate_tsdf_from_points_with_features(
+    grid: GridBatchData,
+    truncation_margin: float,
+    points: JaggedTensor,
+    sensor_origins: torch.Tensor,
+    tsdf: JaggedTensor,
+    features: JaggedTensor,
+    weights: JaggedTensor,
+    point_features: JaggedTensor,
+    carve_free_space: bool,
+) -> tuple[GridBatchData, JaggedTensor, JaggedTensor, JaggedTensor]: ...
+def integrate_tsdf_from_points_frames(
+    grid: GridBatchData,
+    truncation_margin: float,
+    points_per_frame: typing.Sequence[torch.Tensor],
+    sensor_origins: torch.Tensor,
+    tsdf: JaggedTensor,
+    weights: JaggedTensor,
+    carve_free_space: bool,
+) -> tuple[GridBatchData, JaggedTensor, JaggedTensor]: ...
+def integrate_occupancy_from_points(
+    grid: GridBatchData,
+    truncation_margin: float,
+    points: JaggedTensor,
+    sensor_origins: torch.Tensor,
+    log_odds: JaggedTensor,
+    log_odds_hit: float,
+    log_odds_miss: float,
+    log_odds_min: float,
+    log_odds_max: float,
+) -> tuple[GridBatchData, JaggedTensor]: ...
+def integrate_occupancy_from_points_frames(
+    grid: GridBatchData,
+    truncation_margin: float,
+    points_per_frame: typing.Sequence[torch.Tensor],
+    sensor_origins: torch.Tensor,
+    log_odds: JaggedTensor,
+    log_odds_hit: float,
+    log_odds_miss: float,
+    log_odds_min: float,
+    log_odds_max: float,
+) -> tuple[GridBatchData, JaggedTensor]: ...
+def compute_esdf(
+    grid: GridBatchData,
+    tsdf: torch.Tensor,
+    weights: torch.Tensor,
+    truncation_distance: float,
+    max_distance: float,
+    weight_threshold: float,
+    prune_unreached: bool,
+    use_vbm: bool,
+) -> tuple[GridBatchData, torch.Tensor]: ...
+def compute_esdf_incremental(
+    grid: GridBatchData,
+    tsdf: torch.Tensor,
+    weights: torch.Tensor,
+    prev_esdf_grid: GridBatchData,
+    prev_esdf: torch.Tensor,
+    truncation_distance: float,
+    max_distance: float,
+    weight_threshold: float,
+    prune_unreached: bool,
+    use_vbm: bool,
+    dirty_mask: torch.Tensor,
+) -> tuple[GridBatchData, torch.Tensor]: ...
+def dirty_mask_from_sidecars(
+    new_grid: GridBatchData,
+    new_sidecar: torch.Tensor,
+    old_grid: GridBatchData,
+    old_sidecar: torch.Tensor,
+) -> torch.Tensor: ...
+
+class PersistentTSDFState:
+    def __init__(
+        self,
+        grid: GridBatchData,
+        tsdf: torch.Tensor,
+        weights: torch.Tensor,
+        features: torch.Tensor | None = None,
+    ) -> None: ...
+    def grow(self, ijks: JaggedTensor) -> None: ...
+    def grow_from_grid(self, shell_grid: GridBatchData) -> None: ...
+    def reset(self) -> None: ...
+    @property
+    def active_voxel_count(self) -> int: ...
+    @property
+    def grid(self) -> GridBatchData: ...
+    @property
+    def tsdf(self) -> torch.Tensor: ...
+    @property
+    def weights(self) -> torch.Tensor: ...
+    @property
+    def has_features(self) -> bool: ...
+    @property
+    def features(self) -> torch.Tensor | None: ...
 
 # SDF ops
 class SmoothingMode(Enum):
