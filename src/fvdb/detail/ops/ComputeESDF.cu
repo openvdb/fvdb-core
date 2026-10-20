@@ -38,6 +38,7 @@
 // Scope. float32 CUDA + batchSize == 1 only. Multi-batch and fp64 are
 // future-work lifts.
 
+#include <fvdb/BuilderResource.h>
 #include <fvdb/GridBatchData.h>
 #include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/BuildDilatedGrid.h>
@@ -48,7 +49,6 @@
 
 #include <nanovdb/NanoVDB.h>
 #include <nanovdb/tools/cuda/VoxelBlockManager.cuh>
-#include <nanovdb/util/cuda/DeviceGridTraits.cuh>
 #include <nanovdb/util/cuda/Util.h>
 
 #include <c10/cuda/CUDAException.h>
@@ -74,6 +74,9 @@ constexpr int ESDF_BLOCK_WIDTH_LOG2 = 7;
 constexpr int ESDF_BLOCK_WIDTH      = 1 << ESDF_BLOCK_WIDTH_LOG2; // 128
 constexpr int ESDF_JUMP_MAP_LENGTH  = ESDF_BLOCK_WIDTH / 64;      // 2
 constexpr int ESDF_PERLEAF_THREADS  = 128;                        // per-leaf ablation
+
+// VBM firstLeafID / jumpMap storage, over torch's active CUDA allocator.
+using VbmBuffer = BuilderBuffer<std::byte>;
 
 // Sentinel used for "never-reached" voxels. Must be LARGE ENOUGH that
 // it is unambiguously identifiable after propagation: the wavefront
@@ -427,42 +430,17 @@ runEsdfSweepsAndFinalize(const c10::intrusive_ptr<GridBatchData> &esdfGrid,
     const int numSweepsMax = static_cast<int>(dilateAmount) * 2 + 4;
 
     if (use_vbm) {
-        const auto treeData =
-            nanovdb::util::cuda::DeviceGridTraits<nanovdb::ValueOnIndex>::getTreeData(
-                esdfDeviceGrid);
-        const int lowerCount = static_cast<int>(treeData.mNodeCount[1]);
-
-        const int nBlocks =
-            static_cast<int>((esdfVoxels + ESDF_BLOCK_WIDTH - 1) / ESDF_BLOCK_WIDTH);
-
-        // firstLeafID / jumpMap live in torch tensors so they come from the
-        // same caching-allocator pool as every other fvdb allocation.
-        // nanovdb's VoxelBlockManagerHandle can't own them (its accessors
-        // static_cast from deviceData(), which TorchDeviceBuffer types as
-        // uint8_t*), so launch the public build functor directly — the same
-        // launch buildVoxelBlockManager performs on a handle it owns. The
-        // functor expects a zeroed jumpMap, which torch::zeros provides.
-        auto u32Opts = torch::TensorOptions().dtype(torch::kInt32).device(esdfInit.device());
-        auto u64Opts = torch::TensorOptions().dtype(torch::kInt64).device(esdfInit.device());
-        torch::Tensor firstLeafID = torch::zeros({nBlocks}, u32Opts);
-        torch::Tensor jumpMap     = torch::zeros({nBlocks * ESDF_JUMP_MAP_LENGTH}, u64Opts);
-        uint32_t *vbmFirstLeafID  = reinterpret_cast<uint32_t *>(firstLeafID.data_ptr<int32_t>());
-        uint64_t *vbmJumpMap      = reinterpret_cast<uint64_t *>(jumpMap.data_ptr<int64_t>());
-
-        using VbmBuildOp =
-            nanovdb::tools::cuda::BuildVoxelBlockManagerFunctor<ESDF_BLOCK_WIDTH_LOG2>;
-        nanovdb::util::cuda::operatorKernel<VbmBuildOp>
-            <<<dim3(lowerCount, VbmBuildOp::SlicesPerLowerNode, 1),
-               VbmBuildOp::MaxThreadsPerBlock,
-               0,
-               stream.stream()>>>(
-                /*firstOffset=*/static_cast<uint64_t>(1),
-                /*lastOffset=*/static_cast<uint64_t>(esdfVoxels),
-                /*nBlocks=*/nBlocks,
+        const auto vbm =
+            nanovdb::tools::cuda::buildVoxelBlockManager<ESDF_BLOCK_WIDTH_LOG2, VbmBuffer>(
                 esdfDeviceGrid,
-                vbmFirstLeafID,
-                vbmJumpMap);
+                /*firstOffset=*/1,
+                /*lastOffset=*/static_cast<uint64_t>(esdfVoxels),
+                /*nBlocks=*/0,
+                stream.stream());
         C10_CUDA_KERNEL_LAUNCH_CHECK();
+        const int nBlocks              = static_cast<int>(vbm.blockCount());
+        const uint32_t *vbmFirstLeafID = vbm.deviceFirstLeafID();
+        const uint64_t *vbmJumpMap     = vbm.deviceJumpMap();
 
         for (int sweep = 0; sweep < numSweepsMax; ++sweep) {
             changedFlag.zero_();

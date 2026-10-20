@@ -1,12 +1,15 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <fvdb/GridStorage.h>
 #include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/ActiveGridCoords.h>
 #include <fvdb/detail/ops/BuildDilatedGrid.h>
 #include <fvdb/detail/ops/BuildGridFromIjk.h>
 #include <fvdb/detail/ops/BuildGridFromPoints.h>
 #include <fvdb/detail/ops/BuildPointTruncationShell.h>
+#include <fvdb/detail/utils/cuda/StreamOrdering.h>
+#include <fvdb/detail/utils/nanovdb/DeviceGridHandleUtils.cuh>
 
 #include <c10/util/Exception.h>
 #include <torch/types.h>
@@ -320,7 +323,7 @@ leafGranularityShell(const torch::Tensor &ijk, int64_t numPad) {
 // accumulation that dominates the voxel-granularity path on room-
 // scale scenes. Targeted for the phase-1b per-frame fusion pipeline;
 // see research journal `2026-04-22_topology_ops_feasibility.md`.
-nanovdb::GridHandle<TorchDeviceBuffer>
+GridStorage
 buildSingleBatchShell(const torch::Tensor &points_b,
                       const nanovdb::Vec3d &voxelSize,
                       const nanovdb::Vec3d &origin,
@@ -359,8 +362,7 @@ buildSingleBatchShell(const torch::Tensor &points_b,
     {
         torch::Tensor valid_points = filterValidPoints(points_b);
         if (valid_points.size(0) == 0) {
-            TorchDeviceBuffer emptyBuf(0, device);
-            return nanovdb::GridHandle<TorchDeviceBuffer>(std::move(emptyBuf));
+            return GridStorage::empty(device);
         }
         ijk_i32 = pointsToIjk(valid_points, voxelSize, origin);
     } // valid_points drops here
@@ -399,8 +401,7 @@ buildSingleBatchShell(const torch::Tensor &points_b,
         const torch::Tensor leaf_shell = leafGranularityShell(ijk_i32, numPad);
         ijk_i32                        = torch::Tensor();
         if (leaf_shell.size(0) == 0) {
-            TorchDeviceBuffer emptyBuf(0, device);
-            return nanovdb::GridHandle<TorchDeviceBuffer>(std::move(emptyBuf));
+            return GridStorage::empty(device);
         }
         if (std::getenv("FVDB_NANOVDB_TRACE_ALLOCS")) {
             std::fprintf(
@@ -493,8 +494,7 @@ buildSingleBatchShell(const torch::Tensor &points_b,
     keys            = applyAxis(std::move(keys), stencil_z);
     const int64_t F = keys.size(0);
     if (F == 0) {
-        TorchDeviceBuffer emptyBuf(0, device);
-        return nanovdb::GridHandle<TorchDeviceBuffer>(std::move(emptyBuf));
+        return GridStorage::empty(device);
     }
     const torch::Tensor shell = unpackKeys(keys);
     keys                      = torch::Tensor();
@@ -640,11 +640,11 @@ buildPointTruncationShell(const JaggedTensor &points,
     //   4. Stencil-dilate by `[-numPad, numPad]^3`, chunked + tree-merged.
     //   5. Call `voxelsToGrid` once on the final shell voxel set.
     //
-    // Per-batch grids are concatenated via `nanovdb::cuda::mergeGridHandles`
-    // which is a pure-buffer memcpy (no topology work, no speculative root
-    // blow-up).
-    std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> handles;
-    handles.reserve(points.num_outer_lists());
+    // Per-batch grids are concatenated by `GridStorageParts`, a pure-buffer
+    // copy (no topology work, no speculative root blow-up). A batch item with
+    // no surviving points contributes a voxel-less grid.
+    const torch::Device device = points.device();
+    GridStorageParts parts(device, storageStream(device), grid.batchSize());
 
     const torch::Tensor offsetsCpu = points.joffsets().cpu();
     const auto offsets             = offsetsCpu.accessor<JOffsetsType, 1>();
@@ -659,24 +659,21 @@ buildPointTruncationShell(const JaggedTensor &points,
         const int64_t start = offsets[i];
         const int64_t count = offsets[i + 1] - start;
         if (count == 0) {
-            TorchDeviceBuffer emptyBuf(0, points.device());
-            handles.emplace_back(nanovdb::GridHandle<TorchDeviceBuffer>(std::move(emptyBuf)));
+            parts.addEmpty();
             continue;
         }
 
         const torch::Tensor points_i = data.narrow(0, start, count).contiguous();
-        handles.push_back(
-            buildSingleBatchShell(points_i, voxelSizes[i], origins[i], numPadVoxels[i]));
+        GridStorage shell =
+            buildSingleBatchShell(points_i, voxelSizes[i], origins[i], numPadVoxels[i]);
+        if (shell.isEmpty()) {
+            parts.addEmpty();
+        } else {
+            parts.add(std::move(shell));
+        }
     }
 
-    nanovdb::GridHandle<TorchDeviceBuffer> mergedHandle;
-    if (handles.size() == 1) {
-        mergedHandle = std::move(handles[0]);
-    } else {
-        TorchDeviceBuffer guide(0, points.device());
-        mergedHandle = nanovdb::cuda::mergeGridHandles(handles, &guide);
-    }
-    return makeGridBatchData(std::move(mergedHandle), voxelSizes, origins);
+    return makeGridBatchData(parts.merge(), voxelSizes, origins);
 }
 
 } // namespace ops
