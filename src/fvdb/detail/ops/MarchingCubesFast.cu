@@ -49,12 +49,15 @@ constexpr int64_t MCF_BLOCK_SIZE = 128;
 // matched but vertex counts drifted by <1%).
 //
 // Layout:  [bits 63..60 batchIdx] [bits 59..30 vid0] [bits 29..0 vid1]
-constexpr int MCF_VID_BITS      = 30;
-constexpr int64_t MCF_VID_MASK  = (int64_t{1} << MCF_VID_BITS) - 1;
-constexpr int MCF_VID1_SHIFT    = 0;
-constexpr int MCF_VID0_SHIFT    = MCF_VID_BITS;
-constexpr int MCF_BATCH_SHIFT   = 2 * MCF_VID_BITS;
-constexpr int64_t MCF_BATCH_MAX = int64_t{1} << (64 - MCF_BATCH_SHIFT);
+constexpr int MCF_VID_BITS     = 30;
+constexpr int64_t MCF_VID_MASK = (int64_t{1} << MCF_VID_BITS) - 1;
+constexpr int MCF_VID1_SHIFT   = 0;
+constexpr int MCF_VID0_SHIFT   = MCF_VID_BITS;
+constexpr int MCF_BATCH_SHIFT  = 2 * MCF_VID_BITS;
+// Batch indices stay below 2^3 so the key's sign bit is never set; the
+// keys are sorted as signed int64, and a negative key would sort first.
+constexpr int64_t MCF_BATCH_MAX = int64_t{1} << (63 - MCF_BATCH_SHIFT);
+constexpr int64_t MCF_VOXEL_MAX = int64_t{1} << MCF_VID_BITS;
 
 __host__ __device__ __forceinline__ int64_t
 mcf_pack_key(int32_t batchIdx, int64_t vid0, int64_t vid1) {
@@ -397,20 +400,10 @@ marchingCubesFastImpl(const GridBatchData &batchHdl, const torch::Tensor &sdf, d
     TORCH_CHECK_TYPE(sdf.is_floating_point(), "field must have a floating point type");
     TORCH_CHECK(sdf.dim() == 1, "Expected field to have 1 dimension but got ", sdf.dim());
 
-    // Guard against silent pid / batch overflow in the packed key. The
-    // 30-bit vid field covers up to 1B active voxels per batch; batch
-    // field at bits 60..63 supports up to 16 batches.
-    TORCH_CHECK_VALUE(batchHdl.batchSize() < MCF_BATCH_MAX,
-                      "marchingCubesFast: batch size ",
-                      batchHdl.batchSize(),
-                      " exceeds packed-key capacity ",
-                      MCF_BATCH_MAX);
-    TORCH_CHECK_VALUE(batchHdl.totalVoxels() <= (int64_t{1} << MCF_VID_BITS),
-                      "marchingCubesFast: totalVoxels ",
-                      batchHdl.totalVoxels(),
-                      " exceeds packed-key vid capacity ",
-                      int64_t{1} << MCF_VID_BITS,
-                      " — widen MCF_VID_BITS or fall back to legacy MC.");
+    // `marchingCubesFast` routes batches the packed key cannot hold to the
+    // legacy path, so these only guard internal misuse.
+    TORCH_CHECK(batchHdl.batchSize() <= MCF_BATCH_MAX && batchHdl.totalVoxels() <= MCF_VOXEL_MAX,
+                "marchingCubesFastImpl: batch exceeds packed-key capacity");
 
     c10::cuda::CUDAGuard guard(sdf.device());
     at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream(sdf.device().index());
@@ -582,9 +575,13 @@ marchingCubesFast(const GridBatchData &batchHdl, const JaggedTensor &field, doub
     const auto origDtype      = fieldJdata.scalar_type();
     const bool supportedDtype = (origDtype == torch::kFloat32 || origDtype == torch::kHalf);
 
-    if (!isCuda || !supportedDtype) {
+    const bool fitsPackedKey =
+        batchHdl.batchSize() <= MCF_BATCH_MAX && batchHdl.totalVoxels() <= MCF_VOXEL_MAX;
+
+    if (!isCuda || !supportedDtype || !fitsPackedKey) {
         return marchingCubesLegacy(batchHdl, field, level);
     }
+    fieldJdata = fieldJdata.contiguous();
 
     std::vector<JaggedTensor> outputs =
         (origDtype == torch::kFloat32)

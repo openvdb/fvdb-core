@@ -39,15 +39,16 @@ namespace ops {
 ///     avoiding the 2x transient fp32 buffer a naive
 ///     `sdf.to(kFloat32)` would allocate.
 ///
-/// Packing layout (64-bit key; validated by `TORCH_CHECK_VALUE`
-/// guards in the implementation so future scale changes fail loudly):
+/// Packing layout (64-bit signed key; bit 63 stays clear so keys sort in
+/// batch order):
 ///
-///     key = (batchIdx & 0xF) << 60                // 4 bits, up to 16 batches
-///         | (vid0     & 0x3FFFFFFF) << 30         // 30 bits, up to 1B voxels/batch
-///         | (vid1     & 0x3FFFFFFF)               // 30 bits, up to 1B voxels/batch
+///     key = (batchIdx & 0x7) << 60                // 3 bits, up to 8 grids
+///         | (vid0     & 0x3FFFFFFF) << 30         // 30 bits, up to 2^30 voxels
+///         | (vid1     & 0x3FFFFFFF)               // 30 bits
 ///
 /// Dtype / device coverage:
-///   - float32 CUDA: native fast path.
+///   - float32 CUDA: native fast path for batches of up to 8 grids and
+///     2^30 voxels. Larger batches go to `marchingCubesLegacy`.
 ///   - float16 CUDA: as described above; only the final `retVertices`
 ///     tensor (`[nV, 3]` floats, orders of magnitude smaller than the
 ///     SDF) is downcast to fp16 to preserve the public output-dtype

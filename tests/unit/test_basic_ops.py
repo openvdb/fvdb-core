@@ -2318,6 +2318,40 @@ class TestBasicOps(unittest.TestCase):
         max_dev = (v32[0].jdata - v16[0].jdata.float()).abs().max().item()
         self.assertLess(max_dev, 1.0e-3, f"fp16 vs fp32 MC vertex deviation {max_dev:.2e} exceeds fp16 resolution")
 
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA required")
+    def test_marching_cubes_large_batches_match_per_grid(self):
+        """
+        Each grid of a batch meshes the same as on its own, including batches
+        past the fast path's 8-grid packed-key limit, which fall back to the
+        legacy implementation.
+        """
+        device = "cuda"
+        N = 16
+        ii, jj, kk = torch.meshgrid([torch.arange(N, device=device)] * 3, indexing="ij")
+        xx, yy, zz = (t.float() / (N - 1) - 0.5 for t in (ii, jj, kk))
+        dist = torch.sqrt(xx**2 + yy**2 + zz**2)
+
+        def sphere_sdfs(count):
+            radii = torch.linspace(0.2, 0.45, count, device=device)
+            return [(r - dist).unsqueeze(-1).unsqueeze(0) for r in radii]
+
+        def mesh(sdfs):
+            grid = GridBatch.from_dense(
+                len(sdfs), [N, N, N], [0] * 3, voxel_sizes=1.0 / N, origins=[0] * 3, device=device
+            )
+            field = grid.inject_from_dense_cminor(torch.cat(sdfs))
+            return grid.marching_cubes(field, 0.0)
+
+        for batch_size in (8, 12, 17):
+            sdfs = sphere_sdfs(batch_size)
+            verts, faces, _ = mesh(sdfs)
+            for i in range(batch_size):
+                ref_verts, ref_faces, _ = mesh(sdfs[i : i + 1])
+                # Shared edge vertices may be interpolated from either side, so
+                # positions can differ by an ulp between calls.
+                torch.testing.assert_close(verts[i].jdata, ref_verts[0].jdata, atol=1e-6, rtol=0)
+                self.assertTrue(torch.equal(faces[i].jdata, ref_faces[0].jdata), f"B={batch_size} grid {i} faces")
+
     @expand_tests(list(itertools.product(["cuda"], [torch.float32, torch.float64])))
     def test_integrate_tsdf_pixel_weight_blending(self, device, dtype):
         """Verify that per-pixel weights are applied to *new* samples during TSDF integration."""

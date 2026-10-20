@@ -413,14 +413,10 @@ marchingCubesLegacy(const GridBatchData &batchHdl, const JaggedTensor &field, do
         field.device(), [&]() { return MarchingCubes<DeviceTag>(batchHdl, fieldJdata, level); });
 }
 
-// Public dispatcher. Routes to the fast sparse-compact / packed-key
-// variant (`marchingCubesFast`) whenever it's eligible, and to the legacy
-// implementation otherwise. `marchingCubesFast` internally covers both
-// float32 and float16 CUDA inputs (fp16 is upcast to fp32, the fp32
-// kernel runs, and output vertex positions are downcast back) so that
-// reality-capture's default fp16 TSDF pipelines get the full speedup.
-// Other dtypes (fp64) and non-CUDA devices are handled by the legacy
-// path, which `marchingCubesFast` forwards to internally.
+// Public dispatcher. `marchingCubesFast` runs the sparse-compact,
+// packed-key variant for float32 / float16 CUDA fields on batches of up
+// to 8 grids and 2^30 voxels, and forwards everything else (CPU, fp64,
+// larger batches) to `marchingCubesLegacy`.
 std::vector<JaggedTensor>
 marchingCubes(const GridBatchData &batchHdl, const JaggedTensor &field, double level) {
     return marchingCubesFast(batchHdl, field, level);
