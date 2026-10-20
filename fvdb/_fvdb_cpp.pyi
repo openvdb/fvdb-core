@@ -560,6 +560,28 @@ def project_gaussians_ut_fwd(
     ut_in_image_margin: float = ...,
     ut_require_all_sigma_points_in_image: bool = ...,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor | None]: ...
+def project_gaussians_ut_bwd(
+    means: torch.Tensor,
+    quats: torch.Tensor,
+    log_scales: torch.Tensor,
+    world_to_cam_matrices: torch.Tensor,
+    projection_matrices: torch.Tensor,
+    camera_model: CameraModel,
+    distortion_coeffs: torch.Tensor,
+    image_width: int,
+    image_height: int,
+    eps2d: float,
+    radii: torch.Tensor,
+    conics: torch.Tensor,
+    d_loss_d_means2d: torch.Tensor,
+    d_loss_d_depths: torch.Tensor,
+    d_loss_d_conics: torch.Tensor,
+    ut_alpha: float = ...,
+    ut_beta: float = ...,
+    ut_kappa: float = ...,
+    ut_in_image_margin: float = ...,
+    ut_require_all_sigma_points_in_image: bool = ...,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]: ...
 
 class GridBatchData:
     MAX_GRIDS_PER_BATCH: ClassVar[int] = ...
