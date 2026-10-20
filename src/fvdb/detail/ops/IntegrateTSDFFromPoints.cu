@@ -64,13 +64,14 @@ constexpr uint64_t VOXELS_PER_LEAF = nanovdb::NanoTree<GridT>::LeafNodeType::NUM
 // accumulators from the base grid's (tsdf, weights, features) if the
 // voxel already exists there, otherwise zero.
 //
-// The output `outTsdf` and `outFeatures` tensors store SUM-OF-WEIGHTED
-// values at this stage (i.e. tsdf * weight, features * weight). The
-// final normalise pass divides by `outWeights` to recover the true
-// running average.
+// The accumulators hold weighted sums at this stage (tsdf * weight,
+// features * weight). They use the op-math type of the sidecar dtype
+// (float for fp16, double for fp64), so many rays per voxel per frame
+// don't lose precision. The normalise pass divides by the accumulated
+// weight and writes the sidecar dtype.
 // -------------------------------------------------------------------------
 
-template <typename ScalarDataType, typename FeatureAccumT>
+template <typename ScalarDataType, typename AccumT, typename FeatureAccumT>
 __global__ void
 seedAccumulatorsFromBaseGridKernel(const fvdb::BatchGridAccessor baseGridAcc,
                                    const fvdb::BatchGridAccessor unionGridAcc,
@@ -79,8 +80,8 @@ seedAccumulatorsFromBaseGridKernel(const fvdb::BatchGridAccessor baseGridAcc,
                                    const fvdb::JaggedRAcc64<ScalarDataType, 1> tsdfAcc,
                                    const fvdb::JaggedRAcc64<ScalarDataType, 1> weightsAcc,
                                    const fvdb::JaggedRAcc64<FeatureAccumT, 2> featuresAsAccumAcc,
-                                   fvdb::TorchRAcc64<ScalarDataType, 1> outTsdfAcc,
-                                   fvdb::TorchRAcc64<ScalarDataType, 1> outWeightsAcc,
+                                   fvdb::TorchRAcc64<AccumT, 1> tsdfAccumAcc,
+                                   fvdb::TorchRAcc64<AccumT, 1> weightsAccumAcc,
                                    fvdb::TorchRAcc64<FeatureAccumT, 2> outFeaturesAccumAcc) {
     const uint64_t problemSize = unionGridAcc.totalLeaves() * VOXELS_PER_LEAF;
     for (uint64_t idx = blockIdx.x * blockDim.x + threadIdx.x; idx < problemSize;
@@ -109,21 +110,19 @@ seedAccumulatorsFromBaseGridKernel(const fvdb::BatchGridAccessor baseGridAcc,
         if (inBase) {
             const int64_t baseOffset =
                 baseGridAcc.voxelOffset(batchIdx) + static_cast<int64_t>(baseAcc.getValue(ijk)) - 1;
-            const ScalarDataType oldW = weightsAcc.data()[baseOffset];
-            const ScalarDataType oldT = tsdfAcc.data()[baseOffset];
-            outTsdfAcc[unionWriteOffset] =
-                ScalarDataType(static_cast<float>(oldT) * static_cast<float>(oldW));
-            outWeightsAcc[unionWriteOffset] = oldW;
+            const AccumT oldW                 = static_cast<AccumT>(weightsAcc.data()[baseOffset]);
+            const AccumT oldT                 = static_cast<AccumT>(tsdfAcc.data()[baseOffset]);
+            tsdfAccumAcc[unionWriteOffset]    = oldT * oldW;
+            weightsAccumAcc[unionWriteOffset] = oldW;
             if (hasFeatures) {
                 for (int64_t d = 0; d < featureDim; ++d) {
                     outFeaturesAccumAcc[unionWriteOffset][d] =
-                        FeatureAccumT(static_cast<float>(featuresAsAccumAcc.data()[baseOffset][d]) *
-                                      static_cast<float>(oldW));
+                        featuresAsAccumAcc.data()[baseOffset][d] * static_cast<FeatureAccumT>(oldW);
                 }
             }
         } else {
-            outTsdfAcc[unionWriteOffset]    = ScalarDataType(0);
-            outWeightsAcc[unionWriteOffset] = ScalarDataType(0);
+            tsdfAccumAcc[unionWriteOffset]    = AccumT(0);
+            weightsAccumAcc[unionWriteOffset] = AccumT(0);
             if (hasFeatures) {
                 for (int64_t d = 0; d < featureDim; ++d) {
                     outFeaturesAccumAcc[unionWriteOffset][d] = FeatureAccumT(0);
@@ -152,7 +151,10 @@ seedAccumulatorsFromBaseGridKernel(const fvdb::BatchGridAccessor baseGridAcc,
 // (see the `seedAccumulatorsFromBaseGridKernel` note).
 // -------------------------------------------------------------------------
 
-template <typename ScalarDataType, typename FeatureDataType, typename FeatureAccumT>
+template <typename ScalarDataType,
+          typename AccumT,
+          typename FeatureDataType,
+          typename FeatureAccumT>
 __global__ void
 rayWalkIntegrateKernel(const fvdb::BatchGridAccessor unionGridAcc,
                        const fvdb::JaggedRAcc64<ScalarDataType, 2> pointsAcc,
@@ -160,10 +162,10 @@ rayWalkIntegrateKernel(const fvdb::BatchGridAccessor unionGridAcc,
                        const bool hasFeatures,
                        const int64_t featureDim,
                        const fvdb::JaggedRAcc64<FeatureDataType, 2> pointFeaturesAcc,
-                       const float truncationMargin,
+                       const double truncationMargin,
                        const bool carveFreeSpace,
-                       fvdb::TorchRAcc64<ScalarDataType, 1> outTsdfAcc,
-                       fvdb::TorchRAcc64<ScalarDataType, 1> outWeightsAcc,
+                       fvdb::TorchRAcc64<AccumT, 1> tsdfAccumAcc,
+                       fvdb::TorchRAcc64<AccumT, 1> weightsAccumAcc,
                        fvdb::TorchRAcc64<FeatureAccumT, 2> outFeaturesAccumAcc) {
     using MathT = at::opmath_type<ScalarDataType>;
     using Vec3T = nanovdb::math::Vec3<MathT>;
@@ -275,8 +277,8 @@ rayWalkIntegrateKernel(const fvdb::BatchGridAccessor unionGridAcc,
         // dtypes — including the half-precision path that plain
         // `atomicAdd(c10::Half*, ...)` doesn't resolve.
         constexpr MathT kSampleWeight = MathT(1);
-        atomAdd(&outTsdfAcc[writeOffset], static_cast<ScalarDataType>(tsdfClamped * kSampleWeight));
-        atomAdd(&outWeightsAcc[writeOffset], static_cast<ScalarDataType>(kSampleWeight));
+        atomAdd(&tsdfAccumAcc[writeOffset], static_cast<AccumT>(tsdfClamped * kSampleWeight));
+        atomAdd(&weightsAccumAcc[writeOffset], static_cast<AccumT>(kSampleWeight));
         if (hasFeatures) {
             for (int64_t d = 0; d < featureDim; ++d) {
                 const FeatureAccumT featVal =
@@ -299,27 +301,37 @@ rayWalkIntegrateKernel(const fvdb::BatchGridAccessor unionGridAcc,
 // 0) are left at zero (reasonable — signals "no observation").
 // -------------------------------------------------------------------------
 
-template <typename ScalarDataType, typename FeatureDataType, typename FeatureAccumT>
+// The accumulators may alias the outputs (when the op-math type equals the
+// sidecar dtype); each thread reads its own slot before writing it.
+template <typename ScalarDataType,
+          typename AccumT,
+          typename FeatureDataType,
+          typename FeatureAccumT>
 __global__ void
-normaliseAccumulatorsKernel(const int64_t totalVoxels,
-                            const bool hasFeatures,
-                            const int64_t featureDim,
-                            fvdb::TorchRAcc64<ScalarDataType, 1> outTsdfAcc,
-                            fvdb::TorchRAcc64<ScalarDataType, 1> outWeightsAcc,
-                            const fvdb::TorchRAcc64<FeatureAccumT, 2> outFeaturesAccumAcc,
-                            fvdb::TorchRAcc64<FeatureDataType, 2> outFeaturesAcc) {
+normaliseAccumulatorsKernel(
+    const int64_t totalVoxels,
+    const bool hasFeatures,
+    const int64_t featureDim,
+    const torch::PackedTensorAccessor64<AccumT, 1> tsdfAccumAcc,
+    const torch::PackedTensorAccessor64<AccumT, 1> weightsAccumAcc,
+    const torch::PackedTensorAccessor64<FeatureAccumT, 2> outFeaturesAccumAcc,
+    torch::PackedTensorAccessor64<ScalarDataType, 1> outTsdfAcc,
+    torch::PackedTensorAccessor64<ScalarDataType, 1> outWeightsAcc,
+    torch::PackedTensorAccessor64<FeatureDataType, 2> outFeaturesAcc) {
     const int64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= totalVoxels) {
         return;
     }
 
-    const float w = static_cast<float>(outWeightsAcc[idx]);
-    if (w > 0.0f) {
-        outTsdfAcc[idx] = ScalarDataType(static_cast<float>(outTsdfAcc[idx]) / w);
+    const AccumT w     = weightsAccumAcc[idx];
+    const AccumT tsdfW = tsdfAccumAcc[idx];
+    outWeightsAcc[idx] = static_cast<ScalarDataType>(w);
+    if (w > AccumT(0)) {
+        outTsdfAcc[idx] = static_cast<ScalarDataType>(tsdfW / w);
         if (hasFeatures) {
             for (int64_t d = 0; d < featureDim; ++d) {
-                outFeaturesAcc[idx][d] =
-                    FeatureDataType(static_cast<float>(outFeaturesAccumAcc[idx][d]) / w);
+                outFeaturesAcc[idx][d] = static_cast<FeatureDataType>(
+                    outFeaturesAccumAcc[idx][d] / static_cast<FeatureAccumT>(w));
             }
         }
     } else {
@@ -349,12 +361,12 @@ normaliseAccumulatorsKernel(const int64_t totalVoxels,
         __VA_ARGS__();                                                  \
     } else {                                                            \
         using feature_t       = SCALAR;                                 \
-        using feature_accum_t = SCALAR;                                 \
+        using feature_accum_t = at::opmath_type<SCALAR>;                \
         __VA_ARGS__();                                                  \
     }
 
 std::tuple<JaggedTensor, JaggedTensor, JaggedTensor>
-doIntegrateFromPoints(const float truncationMargin,
+doIntegrateFromPoints(const double truncationMargin,
                       const JaggedTensor &points,
                       const torch::Tensor &sensorOrigins,
                       const JaggedTensor &pointFeatures,
@@ -384,8 +396,19 @@ doIntegrateFromPoints(const float truncationMargin,
         "integrateTSDFFromPointsKernel",
         AT_WRAP([&] {
             DISPATCH_FEATURE_TYPE_LIDAR(scalar_t, features.scalar_type(), [&] {
-                // Feature accumulator tensor (may be wider than features
-                // itself when features are uint8 → accumulate in fp32).
+                // TSDF / weight accumulators in the op-math type. fp32 and
+                // fp64 sidecars accumulate in place; fp16 gets fp32 buffers.
+                using accum_t                 = at::opmath_type<scalar_t>;
+                constexpr bool accumInSidecar = std::is_same_v<accum_t, scalar_t>;
+                const auto accumOpts =
+                    outTsdf.options().dtype(c10::CppTypeToScalarType<accum_t>::value);
+                const torch::Tensor tsdfAccum =
+                    accumInSidecar ? outTsdf : torch::empty({totalOutVoxels}, accumOpts);
+                const torch::Tensor weightsAccum =
+                    accumInSidecar ? outWeights : torch::empty({totalOutVoxels}, accumOpts);
+
+                // Feature accumulator tensor (wider than the features when
+                // they are fp16 or uint8).
                 torch::Tensor outFeaturesAccum;
                 constexpr bool accumIsSame = std::is_same_v<feature_t, feature_accum_t>;
                 if (hasFeatures) {
@@ -434,10 +457,10 @@ doIntegrateFromPoints(const float truncationMargin,
                 auto tsdfAcc = tsdf.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>();
                 auto weightsAcc =
                     weights.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>();
-                auto outTsdfAcc =
-                    outTsdf.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>();
-                auto outWeightsAcc =
-                    outWeights.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>();
+                auto tsdfAccumAcc =
+                    tsdfAccum.packed_accessor64<accum_t, 1, torch::RestrictPtrTraits>();
+                auto weightsAccumAcc =
+                    weightsAccum.packed_accessor64<accum_t, 1, torch::RestrictPtrTraits>();
                 // Reinterpret features/jagged features as an accessor
                 // with the accumulator's dtype; when features are
                 // uint8 we already up-converted above, otherwise this
@@ -488,7 +511,7 @@ doIntegrateFromPoints(const float truncationMargin,
                 {
                     const uint64_t problemSize = unionGrid.totalLeaves() * VOXELS_PER_LEAF;
                     const int64_t blocks       = GET_BLOCKS(problemSize, DEFAULT_BLOCK_DIM);
-                    seedAccumulatorsFromBaseGridKernel<scalar_t, feature_accum_t>
+                    seedAccumulatorsFromBaseGridKernel<scalar_t, accum_t, feature_accum_t>
                         <<<blocks, DEFAULT_BLOCK_DIM, 0, stream.stream()>>>(
                             baseGrid.deviceAccessor(),
                             unionGrid.deviceAccessor(),
@@ -497,8 +520,8 @@ doIntegrateFromPoints(const float truncationMargin,
                             tsdfAcc,
                             weightsAcc,
                             featuresAsAccumAcc,
-                            outTsdfAcc,
-                            outWeightsAcc,
+                            tsdfAccumAcc,
+                            weightsAccumAcc,
                             outFeaturesAccumAcc);
                     C10_CUDA_KERNEL_LAUNCH_CHECK();
                 }
@@ -514,7 +537,7 @@ doIntegrateFromPoints(const float truncationMargin,
                 const int64_t totalPoints = points.jdata().size(0);
                 if (totalPoints > 0) {
                     const int64_t blocks = GET_BLOCKS(totalPoints, DEFAULT_BLOCK_DIM);
-                    rayWalkIntegrateKernel<scalar_t, feature_t, feature_accum_t>
+                    rayWalkIntegrateKernel<scalar_t, accum_t, feature_t, feature_accum_t>
                         <<<blocks, DEFAULT_BLOCK_DIM, 0, stream.stream()>>>(
                             unionGrid.deviceAccessor(),
                             pointsAcc,
@@ -524,29 +547,26 @@ doIntegrateFromPoints(const float truncationMargin,
                             pointFeaturesAcc,
                             truncationMargin,
                             carveFreeSpace,
-                            outTsdfAcc,
-                            outWeightsAcc,
+                            tsdfAccumAcc,
+                            weightsAccumAcc,
                             outFeaturesAccumAcc);
                     C10_CUDA_KERNEL_LAUNCH_CHECK();
                 }
 
                 // Step 3: normalise accumulators into per-voxel TSDF / weights / features.
                 {
-                    auto outFeaturesAccOut =
-                        hasFeatures
-                            ? outFeatures
-                                  .packed_accessor64<feature_t, 2, torch::RestrictPtrTraits>()
-                            : outFeatures
-                                  .packed_accessor64<feature_t, 2, torch::RestrictPtrTraits>();
                     const int64_t blocks = GET_BLOCKS(totalOutVoxels, DEFAULT_BLOCK_DIM);
-                    normaliseAccumulatorsKernel<scalar_t, feature_t, feature_accum_t>
-                        <<<blocks, DEFAULT_BLOCK_DIM, 0, stream.stream()>>>(totalOutVoxels,
-                                                                            hasFeatures,
-                                                                            featureDim,
-                                                                            outTsdfAcc,
-                                                                            outWeightsAcc,
-                                                                            outFeaturesAccumAcc,
-                                                                            outFeaturesAccOut);
+                    normaliseAccumulatorsKernel<scalar_t, accum_t, feature_t, feature_accum_t>
+                        <<<blocks, DEFAULT_BLOCK_DIM, 0, stream.stream()>>>(
+                            totalOutVoxels,
+                            hasFeatures,
+                            featureDim,
+                            tsdfAccum.packed_accessor64<accum_t, 1>(),
+                            weightsAccum.packed_accessor64<accum_t, 1>(),
+                            outFeaturesAccum.packed_accessor64<feature_accum_t, 2>(),
+                            outTsdf.packed_accessor64<scalar_t, 1>(),
+                            outWeights.packed_accessor64<scalar_t, 1>(),
+                            outFeatures.packed_accessor64<feature_t, 2>());
                     C10_CUDA_KERNEL_LAUNCH_CHECK();
                 }
             });
@@ -660,17 +680,16 @@ integrateTSDFFromPoints(const c10::intrusive_ptr<GridBatchData> grid,
     const fvdb::JaggedTensor emptyFeatures      = torch::empty({0, 0}, tsdf.jdata().options());
     const fvdb::JaggedTensor emptyPointFeatures = torch::empty({0, 0}, tsdf.jdata().options());
 
-    auto [newTsdf, newWeights, _unusedFeatures] =
-        doIntegrateFromPoints(static_cast<float>(truncationMargin),
-                              points,
-                              sensorOrigins,
-                              emptyPointFeatures,
-                              *unionGrid,
-                              *grid,
-                              tsdf,
-                              weights,
-                              emptyFeatures,
-                              carveFreeSpace);
+    auto [newTsdf, newWeights, _unusedFeatures] = doIntegrateFromPoints(truncationMargin,
+                                                                        points,
+                                                                        sensorOrigins,
+                                                                        emptyPointFeatures,
+                                                                        *unionGrid,
+                                                                        *grid,
+                                                                        tsdf,
+                                                                        weights,
+                                                                        emptyFeatures,
+                                                                        carveFreeSpace);
 
     return {unionGrid, newTsdf, newWeights};
 }
@@ -708,17 +727,16 @@ integrateTSDFFromPointsWithFeatures(const c10::intrusive_ptr<GridBatchData> grid
 
     auto unionGrid = buildUnionGrid(grid, points, truncationMargin);
 
-    auto [newTsdf, newWeights, newFeatures] =
-        doIntegrateFromPoints(static_cast<float>(truncationMargin),
-                              points,
-                              sensorOrigins,
-                              pointFeatures,
-                              *unionGrid,
-                              *grid,
-                              tsdf,
-                              weights,
-                              features,
-                              carveFreeSpace);
+    auto [newTsdf, newWeights, newFeatures] = doIntegrateFromPoints(truncationMargin,
+                                                                    points,
+                                                                    sensorOrigins,
+                                                                    pointFeatures,
+                                                                    *unionGrid,
+                                                                    *grid,
+                                                                    tsdf,
+                                                                    weights,
+                                                                    features,
+                                                                    carveFreeSpace);
 
     return {unionGrid, newTsdf, newWeights, newFeatures};
 }
@@ -821,17 +839,16 @@ integrateTSDFFromPointsFrames(const c10::intrusive_ptr<GridBatchData> grid,
         const fvdb::JaggedTensor emptyPointFeatures =
             torch::empty({0, 0}, accumTsdf.jdata().options());
 
-        auto [newTsdf, newWeights, _unusedFeatures] =
-            doIntegrateFromPoints(static_cast<float>(truncationMargin),
-                                  ptsJagged,
-                                  originI,
-                                  emptyPointFeatures,
-                                  *unionGrid,
-                                  *accumGrid,
-                                  accumTsdf,
-                                  accumWeights,
-                                  emptyFeatures,
-                                  carveFreeSpace);
+        auto [newTsdf, newWeights, _unusedFeatures] = doIntegrateFromPoints(truncationMargin,
+                                                                            ptsJagged,
+                                                                            originI,
+                                                                            emptyPointFeatures,
+                                                                            *unionGrid,
+                                                                            *accumGrid,
+                                                                            accumTsdf,
+                                                                            accumWeights,
+                                                                            emptyFeatures,
+                                                                            carveFreeSpace);
 
         // Swap state to the new union grid + freshly-normalised
         // sidecars. Old accumGrid / accumTsdf / accumWeights refs

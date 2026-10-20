@@ -2558,6 +2558,60 @@ class TestBasicOps(unittest.TestCase):
         torch.testing.assert_close(new_weights[0].jdata, ref_weights)
 
     @unittest.skipUnless(torch.cuda.is_available(), "CUDA required for integrate_*_from_points")
+    def test_integrate_from_points_accumulates_in_op_math(self):
+        """
+        Many rays through one voxel in a single frame accumulate in the op-math
+        type, so fp16 matches fp32 to fp16 resolution and fp64 is exact.
+        """
+        import fvdb as fv
+
+        device = "cuda"
+        voxel_size = 0.05
+        trunc = 3 * voxel_size
+        rays = 5000
+
+        def make(dtype):
+            grid = fv.Grid.from_dense(
+                dense_dims=[64, 16, 16], ijk_min=[-8, -8, -8], voxel_size=voxel_size, origin=0.0, device=device
+            )
+            return grid, torch.zeros(grid.num_voxels, device=device, dtype=dtype)
+
+        # Every ray ends at the same point, so each on-axis voxel sees `rays` updates.
+        points = torch.tensor([[1.0, 0.0, 0.0]], device=device).repeat(rays, 1)
+        origin = torch.zeros(3, device=device)
+
+        results = {}
+        for dtype in (torch.float16, torch.float32, torch.float64):
+            grid, zeros = make(dtype)
+            results[dtype] = grid.integrate_tsdf_from_points(
+                trunc, points.to(dtype), origin.to(dtype), zeros, zeros.clone()
+            )
+        _, t16, w16 = results[torch.float16]
+        _, t32, w32 = results[torch.float32]
+        g64, t64, w64 = results[torch.float64]
+
+        self.assertEqual(w32.max().item(), rays)
+        torch.testing.assert_close(w16.float(), w32, atol=0, rtol=0)
+        torch.testing.assert_close(t16.float(), t32, atol=1e-3, rtol=0)
+
+        world = g64.voxel_to_world(g64.ijk.double())
+        on_axis = (g64.ijk[:, 1] == 0) & (g64.ijk[:, 2] == 0) & ((world[:, 0] - 1.0).abs() <= trunc)
+        expected = ((1.0 - world[on_axis, 0]) / trunc).clamp(-1.0, 1.0)
+        torch.testing.assert_close(t64[on_axis], expected, atol=1e-12, rtol=0)
+
+        # Occupancy: each on-axis voxel in front of the far endpoint gets `rays` misses,
+        # and voxels near the near endpoint get `rays` hits. Wide bounds expose the sums.
+        both = torch.cat([points, 0.5 * points])
+        log_odds = {}
+        for dtype in (torch.float16, torch.float32):
+            grid, zeros = make(dtype)
+            _, log_odds[dtype] = grid.integrate_occupancy_from_points(
+                trunc, both.to(dtype), origin.to(dtype), zeros, log_odds_min=-1e4, log_odds_max=1e4
+            )
+        # fp16 can only round the final sums (|sum| < 4096, ulp <= 2).
+        torch.testing.assert_close(log_odds[torch.float16].float(), log_odds[torch.float32], atol=2.0, rtol=0)
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA required for integrate_*_from_points")
     def test_integrate_from_points_rejects_bad_inputs(self):
         """
         Inputs on the wrong device or with the wrong size raise ``ValueError``

@@ -85,15 +85,15 @@ using GridT = nanovdb::ValueOnIndex;
 // semantics and avoids per-write atomicMin/Max complexity.
 // -------------------------------------------------------------------------
 
-template <typename ScalarT>
+template <typename ScalarT, typename AccumT>
 __global__ void
 rayWalkLogOddsKernel(const fvdb::BatchGridAccessor unionGridAcc,
                      const fvdb::JaggedRAcc64<ScalarT, 2> pointsAcc,
                      const fvdb::TorchRAcc64<ScalarT, 2> sensorOriginsAcc,
-                     const float truncationMargin,
-                     const float logOddsHit,
-                     const float logOddsMiss,
-                     fvdb::TorchRAcc64<ScalarT, 1> outLogOddsAcc) {
+                     const double truncationMargin,
+                     const double logOddsHit,
+                     const double logOddsMiss,
+                     fvdb::TorchRAcc64<AccumT, 1> logOddsAccumAcc) {
     using MathT = at::opmath_type<ScalarT>;
     using Vec3T = nanovdb::math::Vec3<MathT>;
     using RayT  = nanovdb::math::Ray<MathT>;
@@ -152,14 +152,14 @@ rayWalkLogOddsKernel(const fvdb::BatchGridAccessor unionGridAcc,
         const MathT sdfWorld    = rangeWorld - rangeToVox;
 
         // Classify + pick log-odds delta.
-        float logOddsDelta;
+        MathT logOddsDelta;
         if (sdfWorld > MathT(truncationMargin)) {
             // Free space (voxel is farther from the endpoint than the
             // truncation band; sensor side).
-            logOddsDelta = logOddsMiss;
+            logOddsDelta = static_cast<MathT>(logOddsMiss);
         } else if (sdfWorld >= -MathT(truncationMargin)) {
             // Hit band: within +/- truncationMargin of the endpoint.
-            logOddsDelta = logOddsHit;
+            logOddsDelta = static_cast<MathT>(logOddsHit);
         } else {
             // Behind the endpoint — unknown state, skip.
             continue;
@@ -167,7 +167,7 @@ rayWalkLogOddsKernel(const fvdb::BatchGridAccessor unionGridAcc,
 
         const int64_t writeOffset =
             voxelOffsetBase + static_cast<int64_t>(acc.getValue(voxIjk)) - 1;
-        atomAdd(&outLogOddsAcc[writeOffset], static_cast<ScalarT>(logOddsDelta));
+        atomAdd(&logOddsAccumAcc[writeOffset], static_cast<AccumT>(logOddsDelta));
     }
 }
 
@@ -176,16 +176,16 @@ rayWalkLogOddsKernel(const fvdb::BatchGridAccessor unionGridAcc,
 // -------------------------------------------------------------------------
 
 JaggedTensor
-doIntegrateOccupancyFromPoints(const float truncationMargin,
+doIntegrateOccupancyFromPoints(const double truncationMargin,
                                const JaggedTensor &points,
                                const torch::Tensor &sensorOrigins,
                                const GridBatchData &unionGrid,
                                const GridBatchData &baseGrid,
                                const JaggedTensor &logOddsIn,
-                               const float logOddsHit,
-                               const float logOddsMiss,
-                               const float logOddsMin,
-                               const float logOddsMax) {
+                               const double logOddsHit,
+                               const double logOddsMiss,
+                               const double logOddsMin,
+                               const double logOddsMax) {
     const c10::cuda::CUDAGuard device_guard(logOddsIn.device());
 
     const int64_t totalOutVoxels = unionGrid.totalVoxels();
@@ -205,39 +205,39 @@ doIntegrateOccupancyFromPoints(const float truncationMargin,
         outLogOdds = dstJt.jdata();
     }
 
-    // P2: ray-walk kernel.
+    // P2: ray-walk kernel, accumulating in the op-math type so many rays per
+    // voxel don't lose precision in fp16. P3: clamp. The clamp is applied
+    // after all rays have accumulated, so the Bayesian log-odds sum is
+    // respected even if individual contributions overshoot the bounds.
     AT_DISPATCH_V2(
         logOddsIn.scalar_type(),
         "integrateOccupancyFromPointsKernel",
         AT_WRAP([&] {
-            const auto stream = at::cuda::getCurrentCUDAStream();
-            auto outLogOddsAcc =
-                outLogOdds.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>();
+            using accum_t              = at::opmath_type<scalar_t>;
+            torch::Tensor logOddsAccum = outLogOdds.to(c10::CppTypeToScalarType<accum_t>::value);
+            const auto stream          = at::cuda::getCurrentCUDAStream();
             auto pointsAcc = points.packed_accessor64<scalar_t, 2, torch::RestrictPtrTraits>();
             auto sensorAcc =
                 sensorOrigins.packed_accessor64<scalar_t, 2, torch::RestrictPtrTraits>();
             const int64_t totalPoints = points.jdata().size(0);
             if (totalPoints > 0) {
                 const int64_t blocks = GET_BLOCKS(totalPoints, DEFAULT_BLOCK_DIM);
-                rayWalkLogOddsKernel<scalar_t>
-                    <<<blocks, DEFAULT_BLOCK_DIM, 0, stream.stream()>>>(unionGrid.deviceAccessor(),
-                                                                        pointsAcc,
-                                                                        sensorAcc,
-                                                                        truncationMargin,
-                                                                        logOddsHit,
-                                                                        logOddsMiss,
-                                                                        outLogOddsAcc);
+                rayWalkLogOddsKernel<scalar_t, accum_t>
+                    <<<blocks, DEFAULT_BLOCK_DIM, 0, stream.stream()>>>(
+                        unionGrid.deviceAccessor(),
+                        pointsAcc,
+                        sensorAcc,
+                        truncationMargin,
+                        logOddsHit,
+                        logOddsMiss,
+                        logOddsAccum.packed_accessor64<accum_t, 1, torch::RestrictPtrTraits>());
                 C10_CUDA_KERNEL_LAUNCH_CHECK();
             }
+            logOddsAccum.clamp_(logOddsMin, logOddsMax);
+            outLogOdds = logOddsAccum.to(outLogOdds.scalar_type());
         }),
         AT_EXPAND(AT_FLOATING_TYPES),
         c10::kHalf);
-
-    // P3: clamp. Single torch-level call, avoids a separate CUDA
-    // kernel. The clamp is applied AFTER all rays have accumulated
-    // so the Bayesian log-odds sum is respected even if individual
-    // ray contributions would overshoot the bounds momentarily.
-    outLogOdds.clamp_(logOddsMin, logOddsMax);
 
     return unionGrid.jaggedTensor(outLogOdds);
 }
@@ -330,16 +330,16 @@ integrateOccupancyFromPoints(const c10::intrusive_ptr<GridBatchData> grid,
     }
 
     auto unionGrid  = buildUnionGrid(grid, points, truncationMargin);
-    auto newLogOdds = doIntegrateOccupancyFromPoints(static_cast<float>(truncationMargin),
+    auto newLogOdds = doIntegrateOccupancyFromPoints(truncationMargin,
                                                      points,
                                                      sensorOrigins,
                                                      *unionGrid,
                                                      *grid,
                                                      logOdds,
-                                                     static_cast<float>(logOddsHit),
-                                                     static_cast<float>(logOddsMiss),
-                                                     static_cast<float>(logOddsMin),
-                                                     static_cast<float>(logOddsMax));
+                                                     logOddsHit,
+                                                     logOddsMiss,
+                                                     logOddsMin,
+                                                     logOddsMax);
     return {unionGrid, newLogOdds};
 }
 
@@ -415,16 +415,16 @@ integrateOccupancyFromPointsFrames(const c10::intrusive_ptr<GridBatchData> grid,
         torch::Tensor originI  = sensorOrigins.narrow(0, i, 1).contiguous();
 
         auto unionGrid  = buildUnionGrid(accumGrid, ptsJagged, truncationMargin);
-        auto newLogOdds = doIntegrateOccupancyFromPoints(static_cast<float>(truncationMargin),
+        auto newLogOdds = doIntegrateOccupancyFromPoints(truncationMargin,
                                                          ptsJagged,
                                                          originI,
                                                          *unionGrid,
                                                          *accumGrid,
                                                          accumLogOdds,
-                                                         static_cast<float>(logOddsHit),
-                                                         static_cast<float>(logOddsMiss),
-                                                         static_cast<float>(logOddsMin),
-                                                         static_cast<float>(logOddsMax));
+                                                         logOddsHit,
+                                                         logOddsMiss,
+                                                         logOddsMin,
+                                                         logOddsMax);
 
         accumGrid    = unionGrid;
         accumLogOdds = newLogOdds;
