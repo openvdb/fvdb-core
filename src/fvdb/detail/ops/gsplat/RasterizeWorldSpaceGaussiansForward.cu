@@ -393,6 +393,9 @@ launchForwardPrivateUse1(const torch::Tensor &means,
         return {outFeatures, outAlphas, outLastIds};
     }
 
+    // Full-width tile rows match image conversion and loss ownership for 16x16 raster tiles.
+    const int64_t tileAlignment = tileExtentW;
+
     const at::optional<torch::Tensor> contiguousBackgrounds =
         backgrounds.has_value() ? std::make_optional(backgrounds.value().contiguous())
                                 : std::nullopt;
@@ -422,7 +425,8 @@ launchForwardPrivateUse1(const torch::Tensor &means,
         C10_CUDA_CHECK(cudaStreamWaitEvent(prefetchStream, events[deviceId]));
 
         int64_t deviceTileOffset, deviceTileCount;
-        std::tie(deviceTileOffset, deviceTileCount) = deviceChunk(tileCount, deviceId);
+        std::tie(deviceTileOffset, deviceTileCount) =
+            deviceAlignedChunk(tileAlignment, tileCount, deviceId);
         if (deviceTileCount > 0) {
             std::vector<void *> prefetchPointers;
             std::vector<size_t> prefetchSizes;
@@ -445,7 +449,9 @@ launchForwardPrivateUse1(const torch::Tensor &means,
         C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
         C10_CUDA_CHECK(cudaEventDestroy(events[deviceId]));
 
-        const auto [deviceTileOffset, deviceTileCount] = deviceChunk(tileCount, deviceId);
+        uint32_t deviceTileOffset, deviceTileCount;
+        std::tie(deviceTileOffset, deviceTileCount) =
+            deviceAlignedChunk(tileAlignment, tileCount, deviceId);
         if (deviceTileCount > 0) {
             launchForwardKernel<NUM_CHANNELS, Camera>(means,
                                                       quats,
@@ -465,8 +471,8 @@ launchForwardPrivateUse1(const torch::Tensor &means,
                                                       outFeatures,
                                                       outAlphas,
                                                       outLastIds,
-                                                      static_cast<uint32_t>(deviceTileOffset),
-                                                      static_cast<uint32_t>(deviceTileCount),
+                                                      deviceTileOffset,
+                                                      deviceTileCount,
                                                       stream);
         }
     }

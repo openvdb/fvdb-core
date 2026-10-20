@@ -698,6 +698,9 @@ launchRasterizeForwardKernels(
     auto isSparse                = activeTiles.has_value();
     const int64_t tilesPerCamera = tileExtentH * tileExtentW;
     const int64_t tileCount      = isSparse ? activeTiles.value().size(0) : C * tilesPerCamera;
+    // Full-width tile rows match image conversion and loss ownership for 16x16 raster tiles.
+    // Sparse active-tile lists retain their flat partition; empty images need nonzero alignment.
+    const int64_t tileAlignment = isSparse || tileCount == 0 ? 1 : tileExtentW;
 
     std::vector<cudaEvent_t> events(c10::cuda::device_count());
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
@@ -721,7 +724,8 @@ launchRasterizeForwardKernels(
         C10_CUDA_CHECK(cudaStreamWaitEvent(prefetchStream, events[deviceId]));
 
         int64_t deviceTileOffset, deviceTileCount;
-        std::tie(deviceTileOffset, deviceTileCount) = deviceChunk(tileCount, deviceId);
+        std::tie(deviceTileOffset, deviceTileCount) =
+            deviceAlignedChunk(tileAlignment, tileCount, deviceId);
         if (deviceTileCount) {
             std::vector<void *> prefetchPointers;
             std::vector<size_t> prefetchSizes;
@@ -745,7 +749,8 @@ launchRasterizeForwardKernels(
         C10_CUDA_CHECK(cudaEventDestroy(events[deviceId]));
 
         uint32_t deviceTileOffset, deviceTileCount;
-        std::tie(deviceTileOffset, deviceTileCount) = deviceChunk(tileCount, deviceId);
+        std::tie(deviceTileOffset, deviceTileCount) =
+            deviceAlignedChunk(tileAlignment, tileCount, deviceId);
         if (deviceTileCount) {
             auto args =
                 RasterizeForwardArgs<ScalarType, NUM_CHANNELS, NUM_SHARED_CHANNELS, IS_PACKED>(
