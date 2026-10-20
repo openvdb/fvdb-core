@@ -687,10 +687,10 @@ TORCH_LIBRARY(fvdb, m) {
     m.def(
         "_fused_ssim(float C1, float C2, Tensor img1, Tensor img2, bool train) -> (Tensor, Tensor, Tensor, Tensor)");
     m.def(
-        "_fused_ssim_backward(float C1, float C2, Tensor img1, Tensor img2, Tensor dL_dmap, Tensor dm_dmu1, Tensor dm_dsigma1_sq, Tensor dm_dsigma12) -> Tensor");
+        "_fused_ssim_backward(Tensor img1, Tensor img2, Tensor dL_dmap, Tensor dm_dmu1, Tensor dm_dsigma1_sq, Tensor dm_dsigma12) -> Tensor");
 
     m.def(
         "_fused_l1_ssim(Tensor img1, Tensor img2, float ssim_weight, float C1, float C2, bool train, bool normalize_target=False) -> (Tensor, Tensor, Tensor, Tensor)");
     m.def(
-        "_fused_l1_ssim_backward(Tensor img1, Tensor img2, Tensor grad_loss, Tensor dm_dmu1, Tensor dm_dsigma1_sq, Tensor dm_dsigma12, float ssim_weight, float C1, float C2, bool normalize_target=False) -> Tensor");
+        "_fused_l1_ssim_backward(Tensor img1, Tensor img2, Tensor grad_loss, Tensor dm_dmu1, Tensor dm_dsigma1_sq, Tensor dm_dsigma12, float ssim_weight, bool normalize_target=False) -> Tensor");
 }

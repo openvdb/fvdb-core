@@ -34,8 +34,9 @@ namespace cg = cooperative_groups;
 #define BLOCK_Y kImageBlockHeight
 
 // ------------------------------------------
-// Forward Kernel: Fused L1 Map
-//  - Writes abs(img1 - img2) for every channel and pixel.
+// Forward Kernel: Fused L1 Loss
+//  - Reduces each tile over all channels without materializing an L1 map.
+//  - Divides by the full element count, including uneven final tiles.
 //  - Uses the same NCHW storage and spatial tile ownership as SSIM.
 // ------------------------------------------
 __global__ void
@@ -46,42 +47,7 @@ fusedL1Kernel(int localToGlobalOffset,
               int CH,
               const float *__restrict__ img1,
               const float *__restrict__ img2,
-              float *__restrict__ l1_map) {
-    auto block = cg::this_thread_block();
-
-    auto globalLinearGroupIndex = block.group_index().x + localToGlobalOffset;
-    dim3 globalGroupDim((W + BLOCK_X - 1) / BLOCK_X, (H + BLOCK_Y - 1) / BLOCK_Y, B);
-    dim3 globalGroupIndex(globalLinearGroupIndex % globalGroupDim.x,
-                          (globalLinearGroupIndex / globalGroupDim.x) % globalGroupDim.y,
-                          (globalLinearGroupIndex / (globalGroupDim.x * globalGroupDim.y)));
-
-    const int bIdx        = globalGroupIndex.z;
-    const int pix_y       = globalGroupIndex.y * BLOCK_Y + block.thread_index().y;
-    const int pix_x       = globalGroupIndex.x * BLOCK_X + block.thread_index().x;
-    const int64_t pix_id  = static_cast<int64_t>(pix_y) * W + pix_x;
-    const int64_t num_pix = static_cast<int64_t>(H) * W;
-
-    if (pix_y < H && pix_x < W) {
-        for (int c = 0; c < CH; ++c) {
-            const int64_t global_idx = (static_cast<int64_t>(bIdx) * CH + c) * num_pix + pix_id;
-            l1_map[global_idx]       = fabsf(img1[global_idx] - img2[global_idx]);
-        }
-    }
-}
-
-// ------------------------------------------
-// Forward Kernel: Spatial Mean of the L1 Map
-//  - Reduces each tile over all channels on the GPU that owns its image rows.
-//  - Divides by the full element count, including uneven final tiles.
-// ------------------------------------------
-__global__ void
-fusedL1MeanKernel(int localToGlobalOffset,
-                  int B,
-                  int H,
-                  int W,
-                  int CH,
-                  const float *__restrict__ l1_map,
-                  float *__restrict__ partial_sums) {
+              float *__restrict__ partial_sums) {
     auto block = cg::this_thread_block();
 
     auto globalLinearGroupIndex = block.group_index().x + localToGlobalOffset;
@@ -101,7 +67,7 @@ fusedL1MeanKernel(int localToGlobalOffset,
     if (pix_y < H && pix_x < W) {
         for (int c = 0; c < CH; ++c) {
             const int64_t global_idx = (static_cast<int64_t>(bIdx) * CH + c) * num_pix + pix_id;
-            loss += l1_map[global_idx] * normalization;
+            loss += fabsf(img1[global_idx] - img2[global_idx]) * normalization;
         }
     }
 
@@ -196,26 +162,28 @@ checkL1LossGradient(const torch::Tensor &img1, const torch::Tensor &dL_dloss) {
 }
 
 void
-reduceL1MapTiles(const torch::Tensor &l1_map,
-                 int blockOffset,
-                 int blockCount,
-                 float *loss,
-                 cudaStream_t stream) {
+forwardL1Tiles(const torch::Tensor &img1,
+               const torch::Tensor &img2,
+               int blockOffset,
+               int blockCount,
+               float *loss,
+               cudaStream_t stream) {
     if (!blockCount) {
         C10_CUDA_CHECK(cudaMemsetAsync(loss, 0, sizeof(float), stream));
         return;
     }
     auto partial_sums = torch::empty(
-        {blockCount}, l1_map.options().device(torch::kCUDA, c10::cuda::current_device()));
+        {blockCount}, img1.options().device(torch::kCUDA, c10::cuda::current_device()));
     dim3 grid(blockCount);
     dim3 block(BLOCK_X, BLOCK_Y);
-    fusedL1MeanKernel<<<grid, block, 0, stream>>>(blockOffset,
-                                                  l1_map.size(0),
-                                                  l1_map.size(2),
-                                                  l1_map.size(3),
-                                                  l1_map.size(1),
-                                                  l1_map.const_data_ptr<float>(),
-                                                  partial_sums.data_ptr<float>());
+    fusedL1Kernel<<<grid, block, 0, stream>>>(blockOffset,
+                                              img1.size(0),
+                                              img1.size(2),
+                                              img1.size(3),
+                                              img1.size(1),
+                                              img1.const_data_ptr<float>(),
+                                              img2.const_data_ptr<float>(),
+                                              partial_sums.data_ptr<float>());
     C10_CUDA_KERNEL_LAUNCH_CHECK();
     FVDB_CUB_WRAPPER_ASYNC(
         stream, cub::DeviceReduce::Sum, partial_sums.const_data_ptr<float>(), loss, blockCount);
@@ -233,28 +201,15 @@ fusedL1CUDA(const torch::Tensor &img1, const torch::Tensor &img2) {
     const at::cuda::OptionalCUDAGuard device_guard(device_of(img1));
     const auto stream = at::cuda::getCurrentCUDAStream(img1.device().index());
     const int B       = img1.size(0);
-    const int CH      = img1.size(1);
     const int H       = img1.size(2);
     const int W       = img1.size(3);
 
     if (!img1.numel()) {
         return torch::empty({}, img1.options()).fill_(std::numeric_limits<float>::quiet_NaN());
     }
-    auto l1_map          = torch::empty_like(img1);
     const int blockCount = ((W + BLOCK_X - 1) / BLOCK_X) * ((H + BLOCK_Y - 1) / BLOCK_Y) * B;
-    dim3 grid(blockCount);
-    dim3 block(BLOCK_X, BLOCK_Y);
-    fusedL1Kernel<<<grid, block, 0, stream>>>(0,
-                                              B,
-                                              H,
-                                              W,
-                                              CH,
-                                              img1.const_data_ptr<float>(),
-                                              img2.const_data_ptr<float>(),
-                                              l1_map.data_ptr<float>());
-    C10_CUDA_KERNEL_LAUNCH_CHECK();
-    auto loss = torch::empty({}, img1.options());
-    reduceL1MapTiles(l1_map, 0, blockCount, loss.data_ptr<float>(), stream);
+    auto loss            = torch::empty({}, img1.options());
+    forwardL1Tiles(img1, img2, 0, blockCount, loss.data_ptr<float>(), stream);
     return loss;
 }
 
@@ -300,26 +255,22 @@ fusedL1BackwardCUDA(const torch::Tensor &img1,
 
 // ------------------------------------------
 // PyTorch Interface (Multi-GPU Forward)
-//   Writes and reduces the L1 map using the same spatial rows as SSIM.
+//   Reduces the L1 loss using the same spatial rows as SSIM.
 //   Only the scalar partial sums cross devices.
 // ------------------------------------------
 torch::Tensor
 fusedL1PrivateUse1(const torch::Tensor &img1, const torch::Tensor &img2) {
     checkL1Images(img1, img2);
-    const int B  = img1.size(0);
-    const int CH = img1.size(1);
-    const int H  = img1.size(2);
-    const int W  = img1.size(3);
+    const int B = img1.size(0);
+    const int H = img1.size(2);
+    const int W = img1.size(3);
 
     if (!img1.numel()) {
         return torch::empty({}, img1.options()).fill_(std::numeric_limits<float>::quiet_NaN());
     }
-    auto l1_map = torch::empty_like(img1);
-    auto loss   = torch::empty({}, img1.options());
+    auto loss = torch::empty({}, img1.options());
 
-    std::vector<torch::Tensor> inputs  = {img1, img2};
-    std::vector<torch::Tensor> outputs = {l1_map};
-    prefetchImages(inputs, outputs);
+    prefetchImages({img1, img2}, {});
     std::vector<torch::Tensor> partial_losses;
     partial_losses.reserve(c10::cuda::device_count());
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
@@ -327,25 +278,13 @@ fusedL1PrivateUse1(const torch::Tensor &img1, const torch::Tensor &img2) {
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
 
         const auto chunk = imageBlockChunk(B, H, W, deviceId);
-        if (chunk.blockCount) {
-            dim3 grid(chunk.blockCount);
-            dim3 block(BLOCK_X, BLOCK_Y);
-            fusedL1Kernel<<<grid, block, 0, stream>>>(chunk.blockOffset,
-                                                      B,
-                                                      H,
-                                                      W,
-                                                      CH,
-                                                      img1.const_data_ptr<float>(),
-                                                      img2.const_data_ptr<float>(),
-                                                      l1_map.data_ptr<float>());
-            C10_CUDA_KERNEL_LAUNCH_CHECK();
-        }
         partial_losses.push_back(torch::empty({1}, img1.options().device(torch::kCUDA, deviceId)));
-        reduceL1MapTiles(l1_map,
-                         chunk.blockOffset,
-                         chunk.blockCount,
-                         partial_losses.back().data_ptr<float>(),
-                         stream);
+        forwardL1Tiles(img1,
+                       img2,
+                       chunk.blockOffset,
+                       chunk.blockCount,
+                       partial_losses.back().data_ptr<float>(),
+                       stream);
     }
     auto nccl_loss =
         torch::from_blob(loss.data_ptr<float>(), {1}, partial_losses.front().options());

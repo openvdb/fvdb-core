@@ -754,8 +754,6 @@ fusedL1SSIMBackwardCUDA(const torch::Tensor &img1,
                         const torch::Tensor &dm_dsigma1_sq,
                         const torch::Tensor &dm_dsigma12,
                         double ssim_weight,
-                        double C1,
-                        double C2,
                         bool normalize_target) {
     checkImages(img1, img2);
     checkGradients(img1, grad_loss, {dm_dmu1, dm_dsigma1_sq, dm_dsigma12});
@@ -790,8 +788,6 @@ fusedL1SSIMBackwardPrivateUse1(const torch::Tensor &img1,
                                const torch::Tensor &dm_dsigma1_sq,
                                const torch::Tensor &dm_dsigma12,
                                double ssim_weight,
-                               double C1,
-                               double C2,
                                bool normalize_target) {
     checkImages(img1, img2);
     checkGradients(img1, grad_loss, {dm_dmu1, dm_dsigma1_sq, dm_dsigma12});

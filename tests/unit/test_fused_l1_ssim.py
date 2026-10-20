@@ -94,18 +94,22 @@ def test_fused_l1_ssim_nondefault_streams(image_device):
     torch.testing.assert_close(actual.grad.cpu(), reference.grad.cpu(), rtol=2e-4, atol=2e-6)
 
 
-def test_fused_l1_ssim_without_gradients(image_device):
+@pytest.mark.parametrize("grad_context", [torch.no_grad, torch.inference_mode])
+@pytest.mark.parametrize("target_requires_grad", [False, True])
+def test_fused_l1_ssim_without_gradients(image_device, grad_context, target_requires_grad):
     img1, img2 = [value.to(image_device) for value in make_images((1, 3, 17, 19))]
     img1.requires_grad_()
-    with torch.no_grad():
+    img2.requires_grad_(target_requires_grad)
+    with grad_context():
         result = fused_l1_ssim_loss(img1, img2, 0.2)
         expected = torch.lerp(nnf.l1_loss(img1, img2), 1.0 - ssim(img1, img2, train=False), 0.2)
     assert not result.requires_grad
     torch.testing.assert_close(result.cpu(), expected.cpu(), rtol=2e-5, atol=2e-6)
 
 
-def test_fused_l1_ssim_rejects_target_gradients():
-    img1 = torch.zeros(1, 3, 17, 19)
+@pytest.mark.parametrize("prediction_requires_grad", [False, True])
+def test_fused_l1_ssim_rejects_target_gradients(prediction_requires_grad):
+    img1 = torch.zeros(1, 3, 17, 19, requires_grad=prediction_requires_grad)
     img2 = torch.zeros_like(img1, requires_grad=True)
     with pytest.raises(ValueError, match="target gradients"):
         fused_l1_ssim_loss(img1, img2, 0.2)
@@ -142,8 +146,6 @@ def test_fused_l1_ssim_native_parameters(image_device):
         dm_dsigma1_sq,
         dm_dsigma12,
         weight,
-        C1,
-        C2,
     )
     assert result.ndim == 0
     torch.testing.assert_close(result.cpu(), expected.detach().cpu(), rtol=2e-5, atol=2e-6)

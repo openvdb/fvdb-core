@@ -9,7 +9,8 @@ class _FusedL1(torch.autograd.Function):
     @staticmethod
     def forward(ctx, img1: torch.Tensor, img2: torch.Tensor) -> torch.Tensor:
         result = torch.ops.fvdb._fused_l1_loss.default(img1, img2)
-        ctx.save_for_backward(img1, img2)
+        if any(ctx.needs_input_grad):
+            ctx.save_for_backward(img1, img2)
         return result
 
     @staticmethod
@@ -29,8 +30,8 @@ def fused_l1_loss(img1: torch.Tensor, img2: torch.Tensor) -> torch.Tensor:
     not supported. An empty image batch returns NaN, matching a mean reduction.
 
     On DGX, the forward and backward image kernels use the same spatial tile-row
-    ownership as :func:`ssim`. Forward writes a per-pixel absolute-difference map,
-    then reduces tiles over all channels on their owning GPU to compute the mean.
+    ownership as :func:`ssim`. Forward reduces absolute differences directly over
+    each tile and all channels on its owning GPU, then combines the tile sums.
     Backward writes gradients directly without materializing residual or sign
     images. First-order gradients are supported for either or both inputs.
 

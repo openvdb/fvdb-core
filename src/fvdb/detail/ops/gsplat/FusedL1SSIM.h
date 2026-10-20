@@ -37,8 +37,6 @@ torch::Tensor fusedL1SSIMBackwardCUDA(const torch::Tensor &img1,
                                       const torch::Tensor &dm_dsigma1_sq,
                                       const torch::Tensor &dm_dsigma12,
                                       double ssim_weight,
-                                      double C1,
-                                      double C2,
                                       bool normalize_target = false);
 torch::Tensor fusedL1SSIMBackwardPrivateUse1(const torch::Tensor &img1,
                                              const torch::Tensor &img2,
@@ -47,8 +45,6 @@ torch::Tensor fusedL1SSIMBackwardPrivateUse1(const torch::Tensor &img1,
                                              const torch::Tensor &dm_dsigma1_sq,
                                              const torch::Tensor &dm_dsigma12,
                                              double ssim_weight,
-                                             double C1,
-                                             double C2,
                                              bool normalize_target = false);
 
 } // namespace ops
