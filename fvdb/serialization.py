@@ -24,6 +24,7 @@ from __future__ import annotations
 import dataclasses
 from collections.abc import Sequence
 from dataclasses import dataclass
+
 import torch
 
 from . import _fvdb_cpp
