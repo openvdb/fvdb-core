@@ -302,7 +302,7 @@ def project_gaussians_analytic_bwd(
     radii: torch.Tensor,
     conics: torch.Tensor,
     d_loss_d_means2d: torch.Tensor,
-    d_loss_d_depths: torch.Tensor,
+    d_loss_d_depths: Optional[torch.Tensor],
     d_loss_d_conics: torch.Tensor,
     d_loss_d_compensations: Optional[torch.Tensor],
     world_to_cam_matrices_requires_grad: bool,

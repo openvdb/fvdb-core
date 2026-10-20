@@ -91,7 +91,6 @@ projectionBackwardKernel(const int32_t offset,
     conics += idx * 3;
 
     dLossDMeans2d += idx * 2;
-    dLossDDepths += idx;
     dLossDConics += idx * 3;
 
     // vjp: compute the inverse of the 2d covariance
@@ -130,7 +129,7 @@ projectionBackwardKernel(const int32_t offset,
             covar,
             dLossDCovar2d,
             nanovdb::math::Vec2<T>(dLossDMeans2d[0], dLossDMeans2d[1]),
-            dLossDDepths[0]);
+            dLossDDepths ? dLossDDepths[idx] : T{0});
 
     if (outDLossDMeans != nullptr) {
         outDLossDMeans += gId * 3;
@@ -216,7 +215,7 @@ dispatchProjectGaussiansAnalyticBwd(
     const torch::Tensor &radii,                             // [C, N, 2]
     const torch::Tensor &conics,                            // [C, N, 3]
     const torch::Tensor &dLossDMeans2d,                     // [C, N, 2]
-    const torch::Tensor &dLossDDepths,                      // [C, N]
+    const at::optional<torch::Tensor> &dLossDDepths,        // [C, N] optional
     const torch::Tensor &dLossDConics,                      // [C, N, 3]
     const at::optional<torch::Tensor> &dLossDCompensations, // [C, N] optional
     const bool worldToCamMatricesRequiresGrad,
@@ -243,7 +242,7 @@ dispatchProjectGaussiansAnalyticBwd<torch::kCUDA>(
     const torch::Tensor &conics, // [C, N, 3]
     // grad outputs
     const torch::Tensor &dLossDMeans2d,                              // [C, N, 2]
-    const torch::Tensor &dLossDDepths,                               // [C, N]
+    const at::optional<torch::Tensor> &dLossDDepths,                 // [C, N] optional
     const torch::Tensor &dLossDConics,                               // [C, N, 3]
     const at::optional<torch::Tensor> &dLossDCompensations,          // [C, N] optional
     const bool worldToCamMatricesRequiresGrad,
@@ -278,8 +277,6 @@ dispatchProjectGaussiansAnalyticBwd<torch::kCUDA>(
                 "conics must be a contiguous CUDA tensor");
     TORCH_CHECK(dLossDMeans2d.is_cuda() && dLossDMeans2d.is_contiguous(),
                 "dLossDMeans2d must be a contiguous CUDA tensor");
-    TORCH_CHECK(dLossDDepths.is_cuda() && dLossDDepths.is_contiguous(),
-                "dLossDDepths must be a contiguous CUDA tensor");
     TORCH_CHECK(dLossDConics.is_cuda() && dLossDConics.is_contiguous(),
                 "dLossDConics must be a contiguous CUDA tensor");
     if (compensations.has_value()) {
@@ -334,7 +331,7 @@ dispatchProjectGaussiansAnalyticBwd<torch::kCUDA>(
                     conics.data_ptr<float>(),
                     compensations.has_value() ? compensations.value().data_ptr<float>() : nullptr,
                     dLossDMeans2d.data_ptr<float>(),
-                    dLossDDepths.data_ptr<float>(),
+                    dLossDDepths.has_value() ? dLossDDepths.value().data_ptr<float>() : nullptr,
                     dLossDConics.data_ptr<float>(),
                     dLossDCompensations.has_value() ? dLossDCompensations.value().data_ptr<float>()
                                                     : nullptr,
@@ -378,7 +375,7 @@ dispatchProjectGaussiansAnalyticBwd<torch::kCUDA>(
                     conics.data_ptr<float>(),
                     compensations.has_value() ? compensations.value().data_ptr<float>() : nullptr,
                     dLossDMeans2d.data_ptr<float>(),
-                    dLossDDepths.data_ptr<float>(),
+                    dLossDDepths.has_value() ? dLossDDepths.value().data_ptr<float>() : nullptr,
                     dLossDConics.data_ptr<float>(),
                     dLossDCompensations.has_value() ? dLossDCompensations.value().data_ptr<float>()
                                                     : nullptr,
@@ -424,7 +421,7 @@ dispatchProjectGaussiansAnalyticBwd<torch::kPrivateUse1>(
     const torch::Tensor &conics, // [C, N, 3]
     // grad outputs
     const torch::Tensor &dLossDMeans2d,                     // [C, N, 2]
-    const torch::Tensor &dLossDDepths,                      // [C, N]
+    const at::optional<torch::Tensor> &dLossDDepths,        // [C, N] optional
     const torch::Tensor &dLossDConics,                      // [C, N, 3]
     const at::optional<torch::Tensor> &dLossDCompensations, // [C, N] optional
     const bool worldToCamMatricesRequiresGrad,
@@ -566,7 +563,8 @@ dispatchProjectGaussiansAnalyticBwd<torch::kPrivateUse1>(
                             compensations.has_value() ? compensations.value().data_ptr<float>()
                                                       : nullptr,
                             dLossDMeans2d.data_ptr<float>(),
-                            dLossDDepths.data_ptr<float>(),
+                            dLossDDepths.has_value() ? dLossDDepths.value().data_ptr<float>()
+                                                     : nullptr,
                             dLossDConics.data_ptr<float>(),
                             dLossDCompensations.has_value()
                                 ? dLossDCompensations.value().data_ptr<float>()
@@ -613,7 +611,8 @@ dispatchProjectGaussiansAnalyticBwd<torch::kPrivateUse1>(
                             compensations.has_value() ? compensations.value().data_ptr<float>()
                                                       : nullptr,
                             dLossDMeans2d.data_ptr<float>(),
-                            dLossDDepths.data_ptr<float>(),
+                            dLossDDepths.has_value() ? dLossDDepths.value().data_ptr<float>()
+                                                     : nullptr,
                             dLossDConics.data_ptr<float>(),
                             dLossDCompensations.has_value()
                                 ? dLossDCompensations.value().data_ptr<float>()
@@ -705,7 +704,7 @@ dispatchProjectGaussiansAnalyticBwd<torch::kCPU>(
     const torch::Tensor &conics, // [C, N, 3]
     // grad outputs
     const torch::Tensor &dLossDMeans2d,                     // [C, N, 2]
-    const torch::Tensor &dLossDDepths,                      // [C, N]
+    const at::optional<torch::Tensor> &dLossDDepths,        // [C, N] optional
     const torch::Tensor &dLossDConics,                      // [C, N, 3]
     const at::optional<torch::Tensor> &dLossDCompensations, // [C, N] optional
     const bool worldToCamMatricesRequiresGrad,
@@ -730,7 +729,7 @@ projectGaussiansAnalyticBwd(
     const torch::Tensor &radii,                             // [C, N, 2]
     const torch::Tensor &conics,                            // [C, N, 3]
     const torch::Tensor &dLossDMeans2d,                     // [C, N, 2]
-    const torch::Tensor &dLossDDepths,                      // [C, N]
+    const at::optional<torch::Tensor> &dLossDDepths,        // [C, N] optional
     const torch::Tensor &dLossDConics,                      // [C, N, 3]
     const at::optional<torch::Tensor> &dLossDCompensations, // [C, N] optional
     const bool worldToCamMatricesRequiresGrad,
@@ -738,6 +737,19 @@ projectGaussiansAnalyticBwd(
     at::optional<torch::Tensor> outNormalizeddLossdMeans2dNormAccum,
     at::optional<torch::Tensor> outNormalizedMaxRadiiAccum,
     at::optional<torch::Tensor> outGradientStepCounts) {
+    if (dLossDDepths.has_value()) {
+        const auto &depthGradient = dLossDDepths.value();
+        TORCH_CHECK(depthGradient.defined(), "dLossDDepths must be defined when supplied");
+        TORCH_CHECK(depthGradient.device() == means.device(),
+                    "dLossDDepths must be on the same device as means");
+        TORCH_CHECK(depthGradient.scalar_type() == torch::kFloat32,
+                    "dLossDDepths must have dtype float32");
+        TORCH_CHECK(depthGradient.is_contiguous(), "dLossDDepths must be contiguous");
+        TORCH_CHECK(depthGradient.dim() == 2 &&
+                        depthGradient.size(0) == worldToCamMatrices.size(0) &&
+                        depthGradient.size(1) == means.size(0),
+                    "dLossDDepths must have shape [C, N]");
+    }
     return FVDB_DISPATCH_KERNEL(means.device(), [&]() {
         return dispatchProjectGaussiansAnalyticBwd<DeviceTag>(means,
                                                               quats,

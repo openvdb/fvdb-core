@@ -220,7 +220,7 @@ def project_gaussians_analytic_bwd(
     radii: torch.Tensor,
     conics: torch.Tensor,
     d_loss_d_means2d: torch.Tensor,
-    d_loss_d_depths: torch.Tensor,
+    d_loss_d_depths: torch.Tensor | None,
     d_loss_d_conics: torch.Tensor,
     d_loss_d_compensations: torch.Tensor | None,
     world_to_cam_matrices_requires_grad: bool,
@@ -249,7 +249,8 @@ def project_gaussians_analytic_bwd(
         radii (torch.Tensor): Forward radii, shape ``[C, N, 2]``.
         conics (torch.Tensor): Forward conics, shape ``[C, N, 3]``.
         d_loss_d_means2d (torch.Tensor): Loss gradient w.r.t. ``means2d``, shape ``[C, N, 2]``.
-        d_loss_d_depths (torch.Tensor): Loss gradient w.r.t. ``depths``, shape ``[C, N]``.
+        d_loss_d_depths (torch.Tensor | None): Loss gradient w.r.t. ``depths``, shape ``[C, N]``.
+            ``None`` contributes zero without allocating or reading a depth-gradient tensor.
         d_loss_d_conics (torch.Tensor): Loss gradient w.r.t. ``conics``, shape ``[C, N, 3]``.
         d_loss_d_compensations (torch.Tensor | None): Loss gradient w.r.t. ``compensations``, shape
             ``[C, N]``, or ``None``.
