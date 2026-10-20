@@ -2086,8 +2086,8 @@ class Grid:
         """Integrate N LiDAR sweeps into a persistent TSDF volume in one call.
 
         Semantically equivalent to looping :meth:`integrate_tsdf_from_points`
-        N times in sequence (bit-identical output, pinned by
-        ``test_integrate_tsdf_from_points_frames_matches_sequential``),
+        N times in sequence (equal to within float rounding, because the
+        per-voxel atomic sums can add in a different order),
         but keeps the whole loop inside C++ so the per-frame
         JaggedTensor + Python <-> C++ dispatch overhead is amortized.
         Measured 2-3x speedup on Mai City seq00 (700 frames @ 20 cm
@@ -2144,6 +2144,12 @@ class Grid:
         defaults (hit +0.85, miss -0.40, clamp [-4, +4]). The stored
         sidecar IS the log-odds; to recover probability on the host:
         ``p = torch.sigmoid(log_odds)``.
+
+        Updates are applied once per ray, not once per voxel per sweep. A
+        voxel crossed by k rays in one sweep receives k hits or misses before
+        the clamp, so with dense sweeps, voxels near the sensor reach the
+        clamp bounds quickly. nvblox's projective integrator updates each
+        voxel once per frame, so only its default values match here.
 
         Args:
             truncation_distance (float): Width of the hit band around

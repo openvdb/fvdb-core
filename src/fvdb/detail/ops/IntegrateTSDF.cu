@@ -1217,16 +1217,6 @@ integrateTSDFWithFeatures(const c10::intrusive_ptr<GridBatchData> grid,
 
 namespace {
 
-// Implementation note: an alternative one-shot topology build was
-// considered for the batched path -- unproject ALL N frames at once
-// and build a single union grid -- but it allocates an
-// O(N * pixels) point buffer that is dominated by free-space rays
-// at typical fine voxel sizes and high frame counts, and pays a
-// union-grid-sized integrate loop on every frame. The incremental
-// per-frame loop used by `integrateTSDFBatchImpl` below has the
-// same final topology while keeping intermediate working-set size
-// bounded.
-
 std::tuple<c10::intrusive_ptr<GridBatchData>, JaggedTensor, JaggedTensor, JaggedTensor>
 integrateTSDFBatchImpl(const c10::intrusive_ptr<GridBatchData> grid,
                        const double truncationMargin,
@@ -1266,23 +1256,6 @@ integrateTSDFBatchImpl(const c10::intrusive_ptr<GridBatchData> grid,
                       N,
                       ")");
 
-    // --- Incremental per-frame pipeline ------------------------------
-    //
-    // The batched path grows topology one frame at a time, looping the
-    // existing single-frame `integrateTSDFImpl`. This is asymptotically
-    // O(N * frustum_voxels_per_frame) rather than the O(N^2) cost of
-    // building a static union over all frames up-front (each iteration
-    // of the union-then-integrate variant runs the TSDF kernel over
-    // every voxel in the union, the vast majority of which are not
-    // in-view for any given frame).
-    //
-    // It also fixes a mesh under-coverage bug the union-then-integrate
-    // variant exhibited: voxels in the union that were never visible
-    // in any frame stayed at weight=0 and got pruned out by the mesh
-    // extractor. In the incremental path, a voxel only enters the
-    // grid once some frame's truncation shell has touched it, so by
-    // construction every active voxel has at least one real TSDF
-    // update.
     // Feature / weight-image validation (same convention as
     // `integrateTSDFImpl` so per-frame slices pass its checks).
     const bool hasFeatureImages = features.has_value();
@@ -1310,16 +1283,67 @@ integrateTSDFBatchImpl(const c10::intrusive_ptr<GridBatchData> grid,
                           ")");
     }
 
-    // The accumulator lives in a `PersistentTSDFState`. Each frame grows
-    // its topology by the frame's truncation shell (`growFromGrid`, which
-    // carries existing values forward and zero-fills new voxels), then
-    // integrates the frame:
-    //   - carveFreeSpace: `doIntegrate` over the whole live grid, with the
-    //     live grid as both base and union. This is exactly one
-    //     `integrateTSDFImpl` step, so N frames equal N sequential calls
-    //     (pinned by `test_integrate_tsdf_frames_matches_sequential`).
-    //   - otherwise: `doIntegrateShellInPlace`, which updates only the
-    //     shell's voxels.
+    // Each input carries all N frames in one tensor, so checking frame 0's
+    // slices validates every frame's shapes and dtypes.
+    const auto firstFrame = [](const std::optional<torch::Tensor> &t) {
+        return t.has_value() ? std::make_optional(t.value().narrow(0, 0, 1)) : std::nullopt;
+    };
+    checkInputTypes(tsdf,
+                    weights,
+                    features,
+                    depthImages.narrow(0, 0, 1),
+                    firstFrame(featureImages),
+                    firstFrame(weightImages),
+                    projectionMatrices.narrow(0, 0, 1),
+                    camToWorldMatrices.narrow(0, 0, 1));
+    checkInputSizes(*grid,
+                    tsdf,
+                    weights,
+                    features,
+                    depthImages.narrow(0, 0, 1),
+                    firstFrame(featureImages),
+                    firstFrame(weightImages),
+                    projectionMatrices.narrow(0, 0, 1),
+                    camToWorldMatrices.narrow(0, 0, 1));
+
+    const auto frame = [](const std::optional<torch::Tensor> &t, int64_t i) {
+        return t.has_value() ? std::make_optional(t.value().narrow(0, i, 1)) : std::nullopt;
+    };
+
+    if (carveFreeSpace) {
+        // Each frame is one `integrateTSDFImpl` step, so N frames equal N
+        // sequential `integrateTSDF` calls.
+        c10::intrusive_ptr<GridBatchData> accumGrid = grid;
+        JaggedTensor accumTsdf                      = tsdf;
+        JaggedTensor accumWeights                   = weights;
+        std::optional<JaggedTensor> accumFeatures   = features;
+        for (int64_t i = 0; i < N; ++i) {
+            auto [g, t, w, f] = integrateTSDFImpl(accumGrid,
+                                                  truncationMargin,
+                                                  projectionMatrices.narrow(0, i, 1),
+                                                  camToWorldMatrices.narrow(0, i, 1),
+                                                  accumTsdf,
+                                                  accumWeights,
+                                                  accumFeatures,
+                                                  depthImages.narrow(0, i, 1),
+                                                  frame(featureImages, i),
+                                                  frame(weightImages, i));
+            accumGrid         = g;
+            accumTsdf         = t;
+            accumWeights      = w;
+            if (hasFeatureImages) {
+                accumFeatures = f;
+            }
+        }
+        return {accumGrid,
+                accumTsdf,
+                accumWeights,
+                hasFeatureImages ? accumFeatures.value() : JaggedTensor()};
+    }
+
+    // Shell-only: a `PersistentTSDFState` holds the accumulator. Each frame
+    // grows it by the frame's truncation shell (carrying values forward and
+    // zero-filling new voxels), then updates the shell's voxels in place.
     auto featuresStart =
         hasFeatureImages ? std::make_optional(features.value().jdata()) : std::nullopt;
     PersistentTSDFState state(grid, tsdf.jdata(), weights.jdata(), featuresStart);
@@ -1354,30 +1378,7 @@ integrateTSDFBatchImpl(const c10::intrusive_ptr<GridBatchData> grid,
                                               : unprojectedNative;
         const auto pointGrid = buildPointGrid(truncationMargin, unprojected, state.grid());
 
-        // Grow the persistent state: maybe-alloc sidecars, maybe-
-        // inject from old layout to new, update grid pointer.
-        // No-op when `pointGrid` is a subset of `state.grid()`.
         state.growFromGrid(*pointGrid);
-
-        if (carveFreeSpace) {
-            const auto [outTsdf, outWeights, outFeatures] = doIntegrate(truncationMargin,
-                                                                        depth_i_sq,
-                                                                        featImg_i,
-                                                                        wImg_i_sq,
-                                                                        projMats,
-                                                                        invProjMats,
-                                                                        c2wMats,
-                                                                        w2cMats,
-                                                                        state.grid(),
-                                                                        state.grid(),
-                                                                        state.tsdfJagged(),
-                                                                        state.weightsJagged(),
-                                                                        state.featuresJagged());
-            state.tsdf()                                  = outTsdf.jdata();
-            state.weights()                               = outWeights.jdata();
-            state.features()                              = outFeatures.jdata();
-            continue;
-        }
 
         // Placeholder features tensor when features are disabled --
         // the integrate kernel still takes the argument via its

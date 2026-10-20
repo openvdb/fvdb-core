@@ -21,9 +21,18 @@ namespace ops {
 namespace {
 
 // Drops NaN / Inf points, which would otherwise quantise to arbitrary voxels.
-torch::Tensor
-filterFinitePoints(const torch::Tensor &points) {
-    return points.index({at::isfinite(points).all(/*dim=*/1)});
+// One mask over every batch item's points, so the call costs one host sync
+// (the boolean index) however many items there are. An empty `jidx` means
+// every point belongs to list 0.
+JaggedTensor
+filterFinitePoints(const JaggedTensor &points) {
+    const torch::Tensor finite = at::isfinite(points.jdata()).all(/*dim=*/1);
+    const torch::Tensor jidx   = points.jidx();
+    return JaggedTensor::from_data_indices_and_list_ids(points.jdata().index({finite}),
+                                                        jidx.numel() > 0 ? jidx.index({finite})
+                                                                         : jidx,
+                                                        points.jlidx(),
+                                                        points.num_outer_lists());
 }
 
 } // namespace
@@ -102,20 +111,10 @@ buildPointTruncationShell(const JaggedTensor &points,
         numPadVoxels.push_back(numPadVoxelsI);
     }
 
-    // Drop non-finite points per batch item, then build one voxel per
-    // occupied cell and dilate it by the truncation band. An item with no
-    // finite points yields a voxel-less grid.
-    const torch::Tensor offsets = points.joffsets().cpu();
-    const auto offsetsAcc       = offsets.accessor<JOffsetsType, 1>();
-    std::vector<torch::Tensor> validPoints;
-    validPoints.reserve(grid.batchSize());
-    for (int64_t i = 0; i < grid.batchSize(); ++i) {
-        const int64_t start = offsetsAcc[i];
-        const int64_t count = offsetsAcc[i + 1] - start;
-        validPoints.push_back(filterFinitePoints(points.jdata().narrow(0, start, count)));
-    }
-
-    auto pointGrid = buildGridFromPoints(JaggedTensor(validPoints), voxelSizes, origins);
+    // Drop non-finite points, then build one voxel per occupied cell and
+    // dilate it by the truncation band. An item with no finite points yields
+    // a voxel-less grid.
+    auto pointGrid = buildGridFromPoints(filterFinitePoints(points), voxelSizes, origins);
     return dilateGrid(*pointGrid, numPadVoxels);
 }
 

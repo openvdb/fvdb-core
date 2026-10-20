@@ -87,7 +87,11 @@ PersistentTSDFState::PersistentTSDFState(c10::intrusive_ptr<GridBatchData> grid,
                      ") must match tsdf dtype (",
                      mTsdf.scalar_type(),
                      ")");
-    if (features.has_value() && features.value().defined() && features.value().numel() > 0) {
+    // A [0, D] features tensor on an empty grid still carries D channels;
+    // only a [V, 0] placeholder means "no features".
+    const bool featuresPlaceholder = features.has_value() && features.value().defined() &&
+                                     features.value().dim() == 2 && features.value().size(1) == 0;
+    if (features.has_value() && features.value().defined() && !featuresPlaceholder) {
         mHasFeatures = true;
         mFeatures    = features.value();
         TORCH_CHECK_VALUE(mFeatures.dim() == 2, "features must be 2-D [totalVoxels, featureDim]");

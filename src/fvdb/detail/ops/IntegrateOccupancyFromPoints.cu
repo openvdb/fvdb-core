@@ -373,18 +373,6 @@ integrateOccupancyFromPointsFrames(const c10::intrusive_ptr<GridBatchData> grid,
                       logOdds,
                       logOddsMin,
                       logOddsMax);
-    for (const auto &framePoints: pointsPerFrame) {
-        TORCH_CHECK_VALUE(framePoints.dim() == 2 && framePoints.size(1) == 3,
-                          "each frame's points must have shape [M, 3]; got ",
-                          framePoints.sizes());
-        TORCH_CHECK_VALUE(framePoints.device() == grid->device(),
-                          "each frame's points must be on the grid's device (",
-                          grid->device(),
-                          "); got ",
-                          framePoints.device());
-        TORCH_CHECK_TYPE(framePoints.scalar_type() == logOdds.scalar_type(),
-                         "each frame's points dtype must match logOdds dtype");
-    }
 
     const at::cuda::CUDAGuard device_guard(logOdds.device());
 

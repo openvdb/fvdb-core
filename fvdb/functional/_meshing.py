@@ -513,9 +513,10 @@ def integrate_tsdf_from_points_frames_single(
     2-3x speedup on Mai City seq00 (700 frames @ 20 cm voxels,
     ~130 K pts/sweep) vs the Python-for-loop baseline.
 
-    The output is bit-identical to the sequential reference:
-    `test_integrate_tsdf_from_points_frames_matches_sequential`
-    pins this with ``atol=rtol=0``.
+    The output matches the sequential loop to within float rounding, because
+    the per-voxel atomic sums can add in a different order
+    (``test_integrate_tsdf_from_points_frames_matches_sequential`` uses
+    ``atol=2e-6``).
 
     Args:
         grid (Grid): Initial grid (may be empty / seed).
@@ -611,6 +612,12 @@ def integrate_occupancy_from_points_single(
 
     Defaults match nvblox's `ProjectiveIntegratorType.OCCUPANCY`
     defaults (hit +0.85, miss -0.40, clamp [-4, +4]).
+
+    Updates are applied once per ray, not once per voxel per sweep. A
+    voxel crossed by k rays in one sweep receives k hits or misses before
+    the clamp, so with dense sweeps, voxels near the sensor reach the
+    clamp bounds quickly. nvblox's projective integrator updates each
+    voxel once per frame, so only its default values match here.
 
     Args:
         grid: Input grid (topology grows via the point-shell union).

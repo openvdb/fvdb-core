@@ -47,6 +47,7 @@
 #include <cuda_runtime.h>
 
 #include <cmath>
+#include <limits>
 #include <utility>
 
 namespace fvdb::detail::ops {
@@ -200,11 +201,12 @@ rayWalkIntegrateKernel(const fvdb::BatchGridAccessor unionGridAcc,
     // Ray parametrisation (in world space):
     //   t = 0 at origin, t = rangeWorld at endpoint.
     // We walk voxels over t in [0, rangeWorld + truncationMargin] when
-    // carving free space, else [rangeWorld - truncationMargin,
-    // rangeWorld + truncationMargin].
+    // carving free space, else [max(0, rangeWorld - truncationMargin),
+    // rangeWorld + truncationMargin], so the walk never starts behind the
+    // sensor.
     const MathT tTruncStart = rangeWorld - MathT(truncationMargin);
     const MathT tTruncEnd   = rangeWorld + MathT(truncationMargin);
-    const MathT tWalkStart  = carveFreeSpace ? MathT(0) : tTruncStart;
+    const MathT tWalkStart  = carveFreeSpace ? MathT(0) : nanovdb::math::Max(MathT(0), tTruncStart);
     const MathT tWalkEnd    = tTruncEnd;
     if (tWalkEnd <= tWalkStart) {
         return; // nothing to update
@@ -325,7 +327,11 @@ normaliseAccumulatorsKernel(
 
     const AccumT w     = weightsAccumAcc[idx];
     const AccumT tsdfW = tsdfAccumAcc[idx];
-    outWeightsAcc[idx] = static_cast<ScalarDataType>(w);
+    // A voxel crossed by many rays can exceed the sidecar dtype's range (65504
+    // for fp16); saturate rather than store inf, which would turn the next
+    // frame's tsdf * weight into NaN.
+    const AccumT wMax  = static_cast<AccumT>(std::numeric_limits<ScalarDataType>::max());
+    outWeightsAcc[idx] = static_cast<ScalarDataType>(w < wMax ? w : wMax);
     if (w > AccumT(0)) {
         outTsdfAcc[idx] = static_cast<ScalarDataType>(tsdfW / w);
         if (hasFeatures) {
@@ -765,18 +771,6 @@ integrateTSDFFromPointsFrames(const c10::intrusive_ptr<GridBatchData> grid,
                       "integrateTSDFFromPointsFrames requires a CUDA grid");
     checkCommonInputs(
         grid, JaggedTensor(pointsPerFrame[0]), sensorOrigins.narrow(0, 0, 1), tsdf, weights);
-    for (const auto &framePoints: pointsPerFrame) {
-        TORCH_CHECK_VALUE(framePoints.dim() == 2 && framePoints.size(1) == 3,
-                          "each frame's points must have shape [M, 3]; got ",
-                          framePoints.sizes());
-        TORCH_CHECK_VALUE(framePoints.device() == grid->device(),
-                          "each frame's points must be on the grid's device (",
-                          grid->device(),
-                          "); got ",
-                          framePoints.device());
-        TORCH_CHECK_TYPE(framePoints.scalar_type() == tsdf.scalar_type(),
-                         "each frame's points dtype must match tsdf dtype");
-    }
 
     const at::cuda::CUDAGuard device_guard(tsdf.device());
 

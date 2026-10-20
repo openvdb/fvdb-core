@@ -2611,6 +2611,88 @@ class TestBasicOps(unittest.TestCase):
         # fp16 can only round the final sums (|sum| < 4096, ulp <= 2).
         torch.testing.assert_close(log_odds[torch.float16].float(), log_odds[torch.float32], atol=2.0, rtol=0)
 
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA required for integrate_tsdf_frames")
+    def test_integrate_tsdf_frames_validation_and_empty_start(self):
+        """
+        ``integrate_tsdf_frames`` rejects image shapes the single-frame path
+        rejects, and keeps the feature channel when starting from an empty grid,
+        in both carving modes.
+        """
+        import fvdb as fv
+
+        device = "cuda"
+        H, W, N, C = 16, 16, 2, 3
+        K = torch.tensor([[8.0, 0.0, W / 2], [0.0, 8.0, H / 2], [0.0, 0.0, 1.0]], device=device).repeat(N, 1, 1)
+        E = torch.eye(4, device=device).repeat(N, 1, 1)
+        depth = torch.full((N, H, W), 0.5, device=device)
+        feature_images = torch.rand(N, H, W, C, device=device)
+
+        grid = fv.Grid.from_zero_voxels(device=device, voxel_size=0.05)
+        empty = torch.zeros(0, device=device)
+        for carve in (True, False):
+            g, t, w, f = grid.integrate_tsdf_frames(
+                0.1,
+                K,
+                E,
+                empty,
+                empty.clone(),
+                depth,
+                features=torch.zeros(0, C, device=device),
+                feature_images=feature_images,
+                carve_free_space=carve,
+            )
+            self.assertGreater(g.num_voxels, 0)
+            self.assertEqual(tuple(f.shape), (g.num_voxels, C))
+
+        dense = fv.Grid.from_dense([8, 8, 8], [-4, -4, -4], voxel_size=0.05, device=device)
+        zeros = torch.zeros(dense.num_voxels, device=device)
+        with self.assertRaises((ValueError, RuntimeError)):
+            dense.integrate_tsdf_frames(0.1, K, E, zeros, zeros.clone(), depth, weight_images=torch.ones(N, H // 2, W))
+        with self.assertRaises((ValueError, RuntimeError)):
+            dense.integrate_tsdf_frames(
+                0.1,
+                K,
+                E,
+                zeros,
+                zeros.clone(),
+                depth,
+                features=torch.zeros(dense.num_voxels, C, device=device),
+                feature_images=feature_images[..., :1],
+            )
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA required for integrate_tsdf_from_points")
+    def test_integrate_tsdf_from_points_edge_cases(self):
+        """
+        Without carving, a point closer than the truncation distance does not
+        update voxels behind the sensor. fp16 weights saturate at the largest
+        finite value instead of overflowing, so later frames stay finite.
+        """
+        import fvdb as fv
+
+        device = "cuda"
+        voxel_size = 0.05
+        trunc = 3 * voxel_size
+        grid = fv.Grid.from_dense(
+            dense_dims=[32, 8, 8], ijk_min=[-16, -4, -4], voxel_size=voxel_size, origin=0.0, device=device
+        )
+        origin = torch.zeros(3, device=device)
+        zeros = torch.zeros(grid.num_voxels, device=device)
+
+        near = torch.tensor([[0.06, 0.0, 0.0]], device=device)
+        g, _, w = grid.integrate_tsdf_from_points(trunc, near, origin, zeros, zeros.clone(), carve_free_space=False)
+        behind = g.voxel_to_world(g.ijk.float())[:, 0] < -0.5 * voxel_size
+        self.assertEqual(w[behind].count_nonzero().item(), 0)
+        self.assertGreater(w[~behind].count_nonzero().item(), 0)
+
+        many = torch.tensor([[0.5, 0.0, 0.0]], device=device).repeat(70000, 1)
+        zeros16 = zeros.half()
+        g, t, w = grid.integrate_tsdf_from_points(trunc, many.half(), origin.half(), zeros16, zeros16.clone())
+        self.assertTrue(torch.isfinite(w).all())
+        self.assertEqual(w.max().item(), torch.finfo(torch.float16).max)
+        g, t, w = g.integrate_tsdf_from_points(trunc, many[:1].half(), origin.half(), t, w)
+        self.assertTrue(torch.isfinite(t).all())
+        self.assertTrue(torch.isfinite(w).all())
+
     @unittest.skipUnless(torch.cuda.is_available(), "CUDA required for integrate_*_from_points")
     def test_integrate_from_points_rejects_bad_inputs(self):
         """

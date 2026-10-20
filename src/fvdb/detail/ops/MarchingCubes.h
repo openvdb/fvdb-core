@@ -18,13 +18,11 @@ namespace ops {
 /// @brief Public marching-cubes entry point.
 ///
 /// Dispatches to a sparse-compact / packed-key fast variant
-/// (`marchingCubesFast`) for float32 and float16 CUDA inputs.
-/// `marchingCubesFast` produces bit-identical output to the legacy
-/// implementation at fp32 (and numerically-identical output at fp16,
-/// since its kernels cast fp16 -> fp32 on load and do all arithmetic
-/// in fp32 without allocating a transient fp32 buffer). It is
-/// substantially faster and uses substantially less peak memory at
-/// large grid sizes. Other dtypes (fp64) and CPU inputs route to
+/// (`marchingCubesFast`) for float32 and float16 CUDA inputs on batches of
+/// up to 8 grids and 2^30 voxels. Its triangles match the legacy
+/// implementation, and vertex positions agree to within float32 rounding.
+/// fp16 fields are cast to fp32 on load, without a transient fp32 copy.
+/// Everything else (fp64, CPU, larger batches) routes to
 /// `marchingCubesLegacy`.
 std::vector<JaggedTensor>
 marchingCubes(const GridBatchData &batchHdl, const JaggedTensor &field, double level);
