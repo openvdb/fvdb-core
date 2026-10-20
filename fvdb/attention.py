@@ -162,4 +162,4 @@ def scaled_dot_product_attention(
     # out_nested components have shape (H, L_i, D) -- convert back to (L_i, H, D)
     out_data = torch.cat([t.permute(1, 0, 2) for t in out_nested.unbind()], dim=0)
 
-    return JaggedTensor.from_data_and_offsets(out_data, query.joffsets)
+    return query.jagged_like(out_data)

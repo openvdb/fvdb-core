@@ -443,9 +443,11 @@ launchRasterizeTopContributingGaussianIdsForwardKernel(
     auto listIds = torch::empty(
         {0, 1}, torch::TensorOptions().dtype(JLIdxScalarType).device(means2d.device()));
 
-    auto outIds = JaggedTensor::from_data_offsets_and_list_ids(outIdsData, offsets, listIds);
-    auto outWeights =
-        JaggedTensor::from_data_offsets_and_list_ids(outWeightsData, offsets, listIds);
+    const int64_t numTensors = offsets.size(0) - 1;
+    auto outIds              = JaggedTensor::from_data_offsets_and_list_ids_unsafe(
+        outIdsData, offsets, listIds, numTensors);
+    auto outWeights = JaggedTensor::from_data_offsets_and_list_ids_unsafe(
+        outWeightsData, offsets, listIds, numTensors);
 
     // Each pixel in each tile will cache a gaussian consisting of:
     //   - int32_t  gaussian_id; -- 4 bytes

@@ -1164,5 +1164,136 @@ class GaussianSplatFunctionalTests(unittest.TestCase):
         self.assertEqual(metadata["note"], "contract")
 
 
+@unittest.skipUnless(torch.cuda.is_available(), "CUDA is required")
+class ContributingGaussianIdsEmptyTests(unittest.TestCase):
+    """Contributor queries where no requested pixel has a contributing Gaussian (issue 803)."""
+
+    W = H = 64
+    tile_size = 16
+
+    def _scene(self, num_cameras: int, opacity: float = 0.9):
+        # One isotropic Gaussian centred at (40, 40) with sigma 3 px, seen by every camera
+        dev = "cuda"
+        C = num_cameras
+        self.means2d = torch.tensor([[[40.0, 40.0]]], device=dev).expand(C, 1, 2).contiguous()
+        self.conics = torch.tensor([[[1 / 9.0, 0.0, 1 / 9.0]]], device=dev).expand(C, 1, 3).contiguous()
+        self.radii = torch.tensor([[[6, 6]]], dtype=torch.int32, device=dev).expand(C, 1, 2).contiguous()
+        self.depths = torch.ones(C, 1, device=dev)
+        self.opacities = torch.full((C, 1), opacity, device=dev)
+
+    def _sparse_ids(self, pixels: JaggedTensor):
+        C = len(pixels)
+        tiles = self.H // self.tile_size
+        layout = F.build_sparse_gaussian_tile_layout(
+            self.tile_size, tiles, tiles, pixels, image_width=self.W, image_height=self.H
+        )
+        active_tiles, active_tile_mask, tile_pixel_mask, tile_pixel_cumsum, pixel_map = layout
+        tile_offsets, tile_gaussian_ids = F.intersect_gaussian_tiles_sparse(
+            self.means2d,
+            self.radii,
+            self.depths,
+            active_tile_mask,
+            active_tiles,
+            C,
+            self.tile_size,
+            tiles,
+            tiles,
+            conics=self.conics,
+            opacities=self.opacities,
+        )
+        common = (
+            self.means2d,
+            self.conics,
+            self.opacities,
+            tile_offsets,
+            tile_gaussian_ids,
+            pixels,
+            active_tiles,
+            tile_pixel_mask,
+            tile_pixel_cumsum,
+            pixel_map,
+            self.W,
+            self.H,
+            0,
+            0,
+            self.tile_size,
+        )
+        counts, _ = F.rasterize_num_contributing_gaussians_sparse(*common)
+        return F.rasterize_contributing_gaussian_ids_sparse(*common, 0, counts)
+
+    @staticmethod
+    def _pixels(per_camera: list[list[tuple[int, int]]]) -> JaggedTensor:
+        return JaggedTensor([torch.tensor(p, dtype=torch.int64, device="cuda").reshape(-1, 2) for p in per_camera])
+
+    def _check_empty(self, jt: JaggedTensor, pixels_per_camera: list[int]):
+        self.assertEqual(jt.ldim, 2)
+        self.assertEqual(len(jt), len(pixels_per_camera))
+        self.assertEqual(jt.jdata.numel(), 0)
+        self.assertEqual(jt.lshape, [[0] * n for n in pixels_per_camera])
+        for c, n in enumerate(pixels_per_camera):
+            self.assertEqual(len(jt[c]), n)
+
+    def test_control_pixel_on_gaussian(self):
+        self._scene(1)
+        ids, weights = self._sparse_ids(self._pixels([[(40, 40)]]))
+        self.assertEqual(ids.lshape, [[1]])
+        self.assertEqual(ids.jdata.tolist(), [0])
+        self.assertEqual(weights.lshape, [[1]])
+
+    def test_pixel_in_empty_tile(self):
+        self._scene(1)
+        ids, weights = self._sparse_ids(self._pixels([[(0, 0)]]))
+        self._check_empty(ids, [1])
+        self._check_empty(weights, [1])
+
+    def test_pixel_in_busy_tile_with_zero_alpha(self):
+        self._scene(1)
+        ids, weights = self._sparse_ids(self._pixels([[(32, 47)]]))
+        self._check_empty(ids, [1])
+        self._check_empty(weights, [1])
+
+    def test_all_cameras_background_uniform(self):
+        self._scene(3)
+        ids, weights = self._sparse_ids(self._pixels([[(0, 0)], [(1, 1)], [(2, 2)]]))
+        self._check_empty(ids, [1, 1, 1])
+        self._check_empty(weights, [1, 1, 1])
+
+    def test_all_cameras_background_non_uniform(self):
+        self._scene(2)
+        ids, weights = self._sparse_ids(self._pixels([[(0, 0), (0, 1)], [(2, 2)]]))
+        self._check_empty(ids, [2, 1])
+        self._check_empty(weights, [2, 1])
+
+    def test_one_camera_background(self):
+        self._scene(2)
+        ids, _ = self._sparse_ids(self._pixels([[(40, 40)], [(0, 0)]]))
+        self.assertEqual(ids.lshape, [[1], [0]])
+        self.assertEqual(len(ids[1]), 1)
+
+    def test_dense_all_pixels_background(self):
+        C = 2
+        self._scene(C, opacity=0.0)
+        tiles = self.H // self.tile_size
+        tile_offsets, tile_gaussian_ids = F.intersect_gaussian_tiles(
+            self.means2d, self.radii, self.depths, C, self.tile_size, tiles, tiles
+        )
+        common = (
+            self.means2d,
+            self.conics,
+            self.opacities,
+            tile_offsets,
+            tile_gaussian_ids,
+            self.W,
+            self.H,
+            0,
+            0,
+            self.tile_size,
+        )
+        counts, _ = F.rasterize_num_contributing_gaussians(*common)
+        ids, weights = F.rasterize_contributing_gaussian_ids(*common, 0, counts)
+        self._check_empty(ids, [self.W * self.H] * C)
+        self._check_empty(weights, [self.W * self.H] * C)
+
+
 if __name__ == "__main__":
     unittest.main()
