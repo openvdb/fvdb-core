@@ -1942,16 +1942,13 @@ class Grid:
         weight_images: torch.Tensor | None = None,
         features: torch.Tensor | None = None,
         feature_images: torch.Tensor | None = None,
+        carve_free_space: bool = True,
     ):
-        """Integrate N depth frames with one-shot topology build.
+        """Integrate N depth frames in one call.
 
-        Like :meth:`integrate_tsdf` but runs N frames in one call. The
-        union topology over all frames is built once up-front; each
-        frame's TSDF / weight update runs against that fixed topology.
-        Semantically identical to calling :meth:`integrate_tsdf` N
-        times in sequence but typically 3-5x faster for bulk /
-        offline RGB-D reconstruction, since the per-frame
-        ``buildPointTruncationShell + mergeGrids`` cost is amortized.
+        Like :meth:`integrate_tsdf` but runs N frames in order inside one
+        persistent accumulator. Each frame grows the topology by its
+        truncation shell, then updates the TSDF.
 
         All per-frame tensors share the leading N dimension:
         ``projection_matrices[N, 3, 3]``,
@@ -1972,6 +1969,10 @@ class Grid:
                 on this :class:`Grid`. Dtype must match ``tsdf.dtype`` or be ``uint8``.
                 If provided, ``feature_images`` must also be provided.
             feature_images (torch.Tensor | None): ``[N, H, W, D]`` per-pixel feature images.
+            carve_free_space (bool): If ``True`` (default), each frame updates every visible
+                voxel, so the result equals calling :meth:`integrate_tsdf` once per frame. If
+                ``False``, each frame updates only its truncation shell, which is cheaper on
+                large grids but leaves visible free space in front of the surface uncarved.
 
         Returns:
             When no features are provided:
@@ -1995,6 +1996,7 @@ class Grid:
                 depth_images,
                 feature_images,
                 weight_images,
+                carve_free_space,
             )
         return functional.integrate_tsdf_frames_single(
             self,
@@ -2005,6 +2007,7 @@ class Grid:
             weights,
             depth_images,
             weight_images,
+            carve_free_space,
         )
 
     def integrate_tsdf_from_points(

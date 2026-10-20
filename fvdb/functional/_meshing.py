@@ -292,20 +292,14 @@ def integrate_tsdf_frames_single(
     weights: torch.Tensor,
     depth_images: torch.Tensor,
     weight_images: torch.Tensor | None = None,
+    carve_free_space: bool = True,
 ) -> tuple[Grid, torch.Tensor, torch.Tensor]:
-    """Integrate N depth frames into a single :class:`Grid` with one-shot topology.
+    """Integrate N depth frames into a single :class:`Grid` in one call.
 
-    Semantically equivalent to calling :func:`integrate_tsdf_single` N
-    times in sequence (verified bit-identically by
-    ``test_integrate_tsdf_frames_matches_sequential``), but builds the
-    union topology over all N frames ONCE up-front — avoiding the
-    per-frame ``buildPointTruncationShell + mergeGrids`` cost that
-    dominates per-frame wall-clock on small scenes.
-
-    This is the fvdb analog of Open3D's lazy block-hashed allocation:
-    "all frames known up-front, topology built once, fusion runs at
-    fixed topology". For bulk / offline reality-capture reconstruction
-    this is typically 3-5x faster than a per-frame loop.
+    The frames are integrated in order. Each frame grows the topology by its
+    truncation shell and then updates the TSDF, all inside one persistent
+    accumulator, which avoids the per-call Python and allocation overhead of
+    a loop over :func:`integrate_tsdf_single`.
 
     The N dimension is carried on ``depth_images.size(0)``. All per-frame
     tensors (``projection_matrices``, ``cam_to_world_matrices``,
@@ -321,6 +315,11 @@ def integrate_tsdf_frames_single(
         weights (torch.Tensor): Current integration weights on ``grid``.
         depth_images (torch.Tensor): ``[N, H, W]`` or ``[N, H, W, 1]`` depth.
         weight_images (torch.Tensor | None): Optional ``[N, H, W]`` per-pixel weights.
+        carve_free_space (bool): If ``True`` (default), each frame updates every visible voxel,
+            so voxels in front of the observed surface blend toward ``+1`` and the result equals
+            calling :func:`integrate_tsdf_single` once per frame. If ``False``, each frame updates
+            only its truncation shell, which is cheaper on large grids but leaves visible free
+            space in front of the surface uncarved.
 
     Returns:
         updated_grid (Grid): Union of ``grid`` and the truncation shell of all N frames.
@@ -343,6 +342,7 @@ def integrate_tsdf_frames_single(
         weights_jt._impl,
         depth_images,
         weight_images,
+        carve_free_space,
     )
     return G(data=rg), rt.jdata, rw.jdata
 
@@ -358,6 +358,7 @@ def integrate_tsdf_frames_with_features_single(
     depth_images: torch.Tensor,
     feature_images: torch.Tensor,
     weight_images: torch.Tensor | None = None,
+    carve_free_space: bool = True,
 ) -> tuple[Grid, torch.Tensor, torch.Tensor, torch.Tensor]:
     """N-frame batched integration with per-voxel features (e.g. RGB) for a :class:`Grid`.
 
@@ -381,6 +382,7 @@ def integrate_tsdf_frames_with_features_single(
         depth_images,
         feature_images,
         weight_images,
+        carve_free_space,
     )
     return G(data=rg), rt.jdata, rw.jdata, rf.jdata
 

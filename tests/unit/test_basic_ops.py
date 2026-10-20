@@ -2645,14 +2645,9 @@ class TestBasicOps(unittest.TestCase):
     @unittest.skipUnless(torch.cuda.is_available(), "CUDA required for integrate_tsdf_frames")
     def test_integrate_tsdf_frames_matches_sequential(self):
         """
-        `Grid.integrate_tsdf_frames(N frames)` builds the union topology once
-        up-front and then runs N frame updates against that fixed topology.
-        It must produce the same final (grid, tsdf, weights) as N separate
-        `Grid.integrate_tsdf` calls (which rebuild topology each call).
-
-        This is the semantic contract that lets the batched path be a
-        drop-in performance replacement for the per-frame loop in bulk
-        RGB-D reconstruction.
+        With the default ``carve_free_space=True``, ``Grid.integrate_tsdf_frames``
+        produces the same (grid, tsdf, weights) as N sequential
+        ``Grid.integrate_tsdf`` calls, bit for bit.
         """
         import fvdb as fv
 
@@ -2711,6 +2706,47 @@ class TestBasicOps(unittest.TestCase):
         # the same order, over the same voxel set).
         torch.testing.assert_close(t_bat, t_ref, atol=0.0, rtol=0.0)
         torch.testing.assert_close(w_bat, w_ref, atol=0.0, rtol=0.0)
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA required for integrate_tsdf")
+    def test_integrate_tsdf_carves_free_space(self):
+        """
+        A surface that moves away from the camera is carved: voxels at the old
+        surface, now in front of the new one by more than the truncation
+        distance, blend toward +1. ``integrate_tsdf`` and the default
+        ``integrate_tsdf_frames`` carve; ``carve_free_space=False`` does not.
+        """
+        import fvdb as fv
+
+        device = "cuda"
+        voxel_size = 0.05
+        trunc = 0.1
+        H, W = 32, 32
+        grid = fv.Grid.from_dense([32, 32, 32], [-16, -16, -16], voxel_size=voxel_size, device=device)
+        zeros = torch.zeros(grid.num_voxels, device=device)
+
+        K = torch.tensor([[16.0, 0.0, W / 2], [0.0, 16.0, H / 2], [0.0, 0.0, 1.0]], device=device)
+        K = K.unsqueeze(0).repeat(2, 1, 1)
+        E = torch.eye(4, device=device).unsqueeze(0).repeat(2, 1, 1)
+        E[:, 2, 3] = -1.0
+        # Frame 0 sees a plane at world z = -0.5, frame 1 sees it at z = -0.1.
+        depth = torch.stack([torch.full((H, W), 0.5, device=device), torch.full((H, W), 0.9, device=device)])
+
+        def tsdf_at(g, tsdf, ijk):
+            idx = g.ijk_to_index(torch.tensor([ijk], dtype=torch.int32, device=device))
+            return tsdf[idx].item()
+
+        old_surface = [0, 0, -10]  # world z = -0.5
+
+        g, t, w = grid, zeros, zeros.clone()
+        for i in range(2):
+            g, t, w = g.integrate_tsdf(trunc, K[i : i + 1], E[i : i + 1], t, w, depth[i : i + 1])
+        self.assertAlmostEqual(tsdf_at(g, t, old_surface), 0.5, places=5)
+
+        g_c, t_c, _ = grid.integrate_tsdf_frames(trunc, K, E, zeros, zeros.clone(), depth)
+        self.assertAlmostEqual(tsdf_at(g_c, t_c, old_surface), 0.5, places=5)
+
+        g_s, t_s, _ = grid.integrate_tsdf_frames(trunc, K, E, zeros, zeros.clone(), depth, carve_free_space=False)
+        self.assertAlmostEqual(tsdf_at(g_s, t_s, old_surface), 0.0, places=5)
 
     def test_integrate_tsdf_from_points_frames_matches_sequential(self):
         """

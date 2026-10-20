@@ -174,86 +174,235 @@ buildPointGrid(const double truncationMargin,
         __VA_ARGS__();                                            \
     }
 
-// Shell-filtered integrate: two kernels that together update every
-// voxel of the union grid.
-//
-//   1. `injectFromBaseKernel`: walks the BASE grid's leaves, looks each
-//      active voxel up in the union grid, and copies old tsdf /
-//      weight / features to its new position. Cheap per-thread work
-//      (no projection, no depth lookup), and the launch size is
-//      `baseGrid.totalLeaves() * 512` rather than `union.totalLeaves()
-//      * 512` -- so on late frames where union has accumulated
-//      carry-forward voxels that no longer correspond to any current
-//      observation, we only pay for the ones that actually need
-//      copying.
-//
-//   2. `integrateShellKernel`: walks the SHELL grid's leaves (i.e.
-//      the per-frame truncation-band voxels produced by
-//      `buildPointTruncationShell`), looks each active voxel up in
-//      the union grid, projects + frustum-checks + applies the TSDF
-//      blend. Reads the output buffer (already populated by inject
-//      for voxels that were in base) as the "old" value, so
-//      read-modify-write is stream-ordered correctly relative to
-//      inject.
-//
-// For a scene that's saturated the union grid, late-frame shell size
-// is much smaller than union size (typically ~25% at fine voxel sizes
-// on a real RGB-D capture after ~100 frames), so this beats a single
-// kernel that pays projection and visibility-check cost on every union
-// voxel every frame.
+// Integrates one depth frame into every visible voxel of the union grid,
+// carrying forward base-grid values for voxels the frame doesn't touch.
+// Visible voxels in front of the surface (zDiff >= truncation) blend
+// toward +1, which carves free space.
 template <typename ScalarDataType, typename FeatureScalarDataType = ScalarDataType>
 __global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
-injectFromBaseKernel(const bool hasFeatures,
-                     const fvdb::BatchGridAccessor baseGridAcc,
-                     const fvdb::BatchGridAccessor unionGridAcc,
-                     const fvdb::JaggedRAcc64<ScalarDataType, 1> tsdfAcc,
-                     const fvdb::JaggedRAcc64<ScalarDataType, 1> weightsAcc,
-                     const fvdb::JaggedRAcc64<FeatureScalarDataType, 2> featuresAcc,
-                     fvdb::TorchRAcc64<ScalarDataType, 1> outTsdfAcc,
-                     fvdb::TorchRAcc64<ScalarDataType, 1> outWeightsAcc,
-                     fvdb::TorchRAcc64<FeatureScalarDataType, 2> outFeaturesAcc) {
-    using GridT                        = nanovdb::ValueOnIndex;
-    using LeafNodeType                 = nanovdb::NanoGrid<GridT>::LeafNodeType;
+integrateTSDFKernel(const ScalarDataType truncationMargin,
+                    const int64_t imageWidth,
+                    const int64_t imageHeight,
+                    const bool hasFeatures,
+                    const bool hasWeights,
+                    const fvdb::TorchRAcc64<ScalarDataType, 3> projMats,
+                    const fvdb::TorchRAcc64<ScalarDataType, 3> invProjMats,
+                    const fvdb::TorchRAcc64<ScalarDataType, 3> worldToCamMats,
+                    const fvdb::TorchRAcc64<ScalarDataType, 3> camToWorldMats,
+                    const fvdb::TorchRAcc64<ScalarDataType, 3> depthImages,
+                    const fvdb::TorchRAcc64<FeatureScalarDataType, 4> featureImages,
+                    const fvdb::TorchRAcc64<ScalarDataType, 3> weightImages,
+                    const fvdb::BatchGridAccessor baseGridAcc,
+                    const fvdb::BatchGridAccessor unionGridAcc,
+                    const fvdb::JaggedRAcc64<ScalarDataType, 1> tsdfAcc,
+                    const fvdb::JaggedRAcc64<ScalarDataType, 1> weightsAcc,
+                    const fvdb::JaggedRAcc64<FeatureScalarDataType, 2> featuresAcc,
+                    fvdb::TorchRAcc64<ScalarDataType, 1> outTsdfAcc,
+                    fvdb::TorchRAcc64<ScalarDataType, 1> outWeightsAcc,
+                    fvdb::TorchRAcc64<FeatureScalarDataType, 2> outFeaturesAcc) {
+    using ScalarType        = at::opmath_type<ScalarDataType>;
+    using FeatureScalarType = at::opmath_type<FeatureScalarDataType>;
+
+    using GridT        = nanovdb::ValueOnIndex;
+    using LeafNodeType = nanovdb::NanoGrid<GridT>::LeafNodeType;
+    using Vec3T        = nanovdb::math::Vec3<ScalarType>;
+    using Vec4T        = nanovdb::math::Vec4<ScalarType>;
+    using Mat3T        = nanovdb::math::Mat3<ScalarType>;
+    using Mat4T        = nanovdb::math::Mat4<ScalarType>;
+
     constexpr uint64_t VOXELS_PER_LEAF = nanovdb::NanoTree<GridT>::LeafNodeType::NUM_VALUES;
 
-    const auto problemSize = baseGridAcc.totalLeaves() * VOXELS_PER_LEAF;
+    const auto batchSize = projMats.size(0);
+
+    // Grab pointers to the transformation matrices in shared memory
+    extern __shared__ uint8_t sharedData[];
+    Mat3T *sharedProjMats       = reinterpret_cast<Mat3T *>(sharedData);
+    Mat4T *sharedWorldToCamMats = reinterpret_cast<Mat4T *>(sharedData + batchSize * sizeof(Mat3T));
+    Mat3T *sharedInvProjMats =
+        reinterpret_cast<Mat3T *>(sharedData + batchSize * (sizeof(Mat3T) + sizeof(Mat4T)));
+    Mat4T *sharedCamToWorldMats = reinterpret_cast<Mat4T *>(
+        sharedData + batchSize * (sizeof(Mat3T) + sizeof(Mat4T) + sizeof(Mat3T)));
+
+    const auto sharedMat3x3NumElements = batchSize * 3 * 3;
+    const auto sharedMat4x4NumElements = batchSize * 4 * 4;
+
+    // Load view and projection matrices into shared memory
+    if (threadIdx.x < sharedMat3x3NumElements) {
+        const auto batchIdx                      = threadIdx.x / 9;
+        const auto rowIdx                        = (threadIdx.x % 9) / 3;
+        const auto colIdx                        = threadIdx.x % 3;
+        sharedProjMats[batchIdx][rowIdx][colIdx] = ScalarType(projMats[batchIdx][rowIdx][colIdx]);
+    } else if (threadIdx.x < sharedMat3x3NumElements + sharedMat4x4NumElements) {
+        const auto baseIdx  = threadIdx.x - sharedMat3x3NumElements;
+        const auto batchIdx = baseIdx / 16;
+        const auto rowIdx   = (baseIdx % 16) / 4;
+        const auto colIdx   = baseIdx % 4;
+        sharedWorldToCamMats[batchIdx][rowIdx][colIdx] =
+            ScalarType(worldToCamMats[batchIdx][rowIdx][colIdx]);
+    } else if (threadIdx.x < 2 * sharedMat3x3NumElements + sharedMat4x4NumElements) {
+        const auto baseIdx  = threadIdx.x - sharedMat3x3NumElements - sharedMat4x4NumElements;
+        const auto batchIdx = baseIdx / 9;
+        const auto rowIdx   = (baseIdx % 9) / 3;
+        const auto colIdx   = baseIdx % 3;
+        sharedInvProjMats[batchIdx][rowIdx][colIdx] =
+            ScalarType(invProjMats[batchIdx][rowIdx][colIdx]);
+    }
+
+    __syncthreads();
+
+    // Parallelize over all voxels in the leaf nodes (whether enabled or not)
+    const auto problemSize = unionGridAcc.totalLeaves() * VOXELS_PER_LEAF;
     for (auto idx = blockIdx.x * blockDim.x + threadIdx.x; idx < problemSize;
          idx += blockDim.x * gridDim.x) {
-        const int64_t cumBaseLeafIdx  = static_cast<int64_t>(idx / VOXELS_PER_LEAF);
-        const fvdb::JIdxType batchIdx = baseGridAcc.leafBatchIndex(cumBaseLeafIdx);
-        const int64_t baseLeafIdx     = cumBaseLeafIdx - baseGridAcc.leafOffset(batchIdx);
-        const int64_t baseLeafVoxelIdx =
-            static_cast<int64_t>(idx - cumBaseLeafIdx * VOXELS_PER_LEAF);
+        // Which leaf we're in relative to all grids in the batch
+        const int64_t cumUnionLeafIdx = static_cast<int64_t>(idx / VOXELS_PER_LEAF);
 
-        const nanovdb::NanoGrid<GridT> *baseGrid = baseGridAcc.grid(batchIdx);
-        const LeafNodeType &baseLeaf = baseGrid->tree().template getFirstNode<0>()[baseLeafIdx];
-        const int64_t baseVoxelValue =
-            static_cast<int64_t>(baseLeaf.getValue(baseLeafVoxelIdx)) - 1;
-        if (baseVoxelValue < 0)
-            continue;
-        const int64_t baseOffset = baseGridAcc.voxelOffset(batchIdx) + baseVoxelValue;
+        // Which grid we're in
+        const fvdb::JIdxType batchIdx = unionGridAcc.leafBatchIndex(cumUnionLeafIdx);
 
-        // Look up this ijk in the union grid. Base is guaranteed to
-        // be a subset of union (union = merge(shell, base)), so the
-        // lookup always succeeds and yields an active voxel.
-        const nanovdb::Coord ijk                  = baseLeaf.offsetToGlobalCoord(baseLeafVoxelIdx);
+        // Which leaf we're in relative to the grid
+        const int64_t unionLeafIdx = cumUnionLeafIdx - unionGridAcc.leafOffset(batchIdx);
+
+        // Which voxel we're in relative to the leaf
+        const int64_t unionLeafVoxelIdx =
+            static_cast<int64_t>((idx - cumUnionLeafIdx * VOXELS_PER_LEAF));
+
+        // Get pointers to each grid
         const nanovdb::NanoGrid<GridT> *unionGrid = unionGridAcc.grid(batchIdx);
-        const auto unionAcc                       = unionGrid->getAccessor();
-        const int64_t unionOffset =
-            unionGridAcc.voxelOffset(batchIdx) + static_cast<int64_t>(unionAcc.getValue(ijk)) - 1;
-        if (unionOffset < 0)
-            continue; // defensive; shouldn't happen
+        const nanovdb::NanoGrid<GridT> *baseGrid  = baseGridAcc.grid(batchIdx);
 
-        outTsdfAcc[unionOffset]    = tsdfAcc.data()[baseOffset];
-        outWeightsAcc[unionOffset] = weightsAcc.data()[baseOffset];
-        if (hasFeatures) {
-            for (int64_t i = 0; i < outFeaturesAcc.size(1); ++i) {
-                outFeaturesAcc[unionOffset][i] = featuresAcc.data()[baseOffset][i];
+        // Get the leaf node in the union grid
+        const LeafNodeType &unionLeaf = unionGrid->tree().template getFirstNode<0>()[unionLeafIdx];
+
+        // Get the ijk coordinate of the current voxel
+        const nanovdb::Coord ijk = unionLeaf.offsetToGlobalCoord(unionLeafVoxelIdx);
+
+        // Which sidecar index the current voxel in the union grid corresponds to
+        const int64_t unionWriteOffset =
+            unionGridAcc.voxelOffset(batchIdx) +
+            static_cast<int64_t>(unionLeaf.getValue(unionLeafVoxelIdx)) - 1;
+
+        // If this is not an active voxel in the union grid, skip it
+        if (unionWriteOffset < 0) {
+            continue;
+        }
+
+        // World space position of the voxel in the union grid
+        const Vec3T voxelWorldPos = unionGridAcc.primalTransform(batchIdx).applyInv<ScalarType>(
+            ScalarType(ijk[0]), ScalarType(ijk[1]), ScalarType(ijk[2]));
+
+        const Vec4T voxelWorldPosHomogeneous = {
+            voxelWorldPos[0], voxelWorldPos[1], voxelWorldPos[2], ScalarType(1.0)};
+        const Vec4T voxelPosCamSpace    = sharedWorldToCamMats[batchIdx] * voxelWorldPosHomogeneous;
+        const Vec3T voxelPosCamSpace3d  = {voxelPosCamSpace[0] / voxelPosCamSpace[3],
+                                           voxelPosCamSpace[1] / voxelPosCamSpace[3],
+                                           voxelPosCamSpace[2] / voxelPosCamSpace[3]};
+        const Vec3T voxelPosProjSpace   = sharedProjMats[batchIdx] * voxelPosCamSpace3d;
+        const Vec3T voxelPosScreenSpace = {voxelPosProjSpace[0] / voxelPosProjSpace[2],
+                                           voxelPosProjSpace[1] / voxelPosProjSpace[2],
+                                           ScalarType(1.0)};
+
+        const int64_t voxelPosScreenSpaceX = int64_t(voxelPosScreenSpace[0]);
+        const int64_t voxelPosScreenSpaceY = int64_t(voxelPosScreenSpace[1]);
+
+        const auto baseGridTreeAccessor = baseGrid->getAccessor();
+        const int64_t baseGridOffset    = baseGridAcc.voxelOffset(batchIdx) +
+                                       static_cast<int64_t>(baseGridTreeAccessor.getValue(ijk)) - 1;
+
+        const bool voxelInBaseGrid = baseGridOffset >= 0;
+
+        const auto copyOldToNew = [&]() {
+            if (voxelInBaseGrid) {
+                outWeightsAcc[unionWriteOffset] = weightsAcc.data()[baseGridOffset];
+                outTsdfAcc[unionWriteOffset]    = tsdfAcc.data()[baseGridOffset];
+                if (hasFeatures) {
+                    for (auto i = 0; i < outFeaturesAcc.size(1); ++i) {
+                        outFeaturesAcc[unionWriteOffset][i] = featuresAcc.data()[baseGridOffset][i];
+                    }
+                }
+            } else {
+                outWeightsAcc[unionWriteOffset] = ScalarDataType(0);
+                outTsdfAcc[unionWriteOffset]    = ScalarDataType(0);
+                if (hasFeatures) {
+                    for (auto i = 0; i < outFeaturesAcc.size(1); ++i) {
+                        outFeaturesAcc[unionWriteOffset][i] = ScalarDataType(0);
+                    }
+                }
             }
+        };
+
+        // This voxel is not visible in the image, so just copy whatever value was in the base grid
+        const bool voxelIsVisible =
+            (voxelPosScreenSpaceX >= 0 && voxelPosScreenSpaceX < imageWidth &&
+             voxelPosScreenSpaceY >= 0 && voxelPosScreenSpaceY < imageHeight &&
+             voxelPosCamSpace3d[2] > 0.0f);
+        if (!voxelIsVisible) {
+            copyOldToNew();
+            continue;
+        }
+
+        const ScalarType pixelDepth =
+            ScalarType(depthImages[batchIdx][voxelPosScreenSpaceY][voxelPosScreenSpaceX]);
+        const ScalarType voxelDepth                = voxelPosCamSpace3d.length();
+        const Vec3T voxelScreenSpacePosHomogeneous = {
+            ScalarType(voxelPosScreenSpaceX), ScalarType(voxelPosScreenSpaceY), ScalarType(1.0)};
+        const Vec3T unprojectedPixelPosCamSpace =
+            (sharedInvProjMats[batchIdx] * voxelScreenSpacePosHomogeneous) * pixelDepth;
+
+        // const ScalarType zDiff = unprojectedPixelPosCamSpace[2] - voxelPosCamSpace3d[2];
+        const ScalarType zDiff = pixelDepth - voxelPosCamSpace3d[2];
+
+        // If the voxel is too far behind the point, then it's not visible and we don't know
+        // what the value is, so we copy teh value from the base grid
+        if (zDiff > -ScalarType(truncationMargin)) {
+            const ScalarType oldWeight =
+                voxelInBaseGrid ? ScalarType(weightsAcc.data()[baseGridOffset]) : ScalarType(0);
+            const ScalarType oldTsdf =
+                voxelInBaseGrid ? ScalarType(tsdfAcc.data()[baseGridOffset]) : ScalarType(0);
+            const ScalarType tsdf =
+                nanovdb::math::Min(ScalarType(1), zDiff / ScalarType(truncationMargin));
+
+            const ScalarType pixelWeight = [&]() {
+                if (hasWeights) {
+                    return ScalarType(
+                        weightImages[batchIdx][voxelPosScreenSpaceY][voxelPosScreenSpaceX]);
+                } else {
+                    return ScalarType{1};
+                }
+            }();
+
+            if (pixelWeight <= ScalarType(0)) {
+                // If the new weight is zero, we don't update the TSDF or features
+                copyOldToNew();
+                continue;
+            }
+            const ScalarType newWeight =
+                oldWeight + pixelWeight; // ScalarType(1) + oldWeight * pixelWeight;
+            const ScalarType newTsdf     = (oldWeight * oldTsdf + pixelWeight * tsdf) / newWeight;
+            outTsdfAcc[unionWriteOffset] = ScalarDataType(newTsdf);
+            outWeightsAcc[unionWriteOffset] = ScalarDataType(newWeight);
+            if (hasFeatures) {
+                for (auto i = 0; i < outFeaturesAcc.size(1); ++i) {
+                    const ScalarType pixelFeatureI = ScalarType(
+                        featureImages[batchIdx][voxelPosScreenSpaceY][voxelPosScreenSpaceX][i]);
+                    const ScalarType oldFeatureI =
+                        voxelInBaseGrid ? ScalarType(featuresAcc.data()[baseGridOffset][i])
+                                        : ScalarType(0);
+                    outFeaturesAcc[unionWriteOffset][i] = FeatureScalarDataType(
+                        (oldWeight * oldFeatureI + pixelWeight * pixelFeatureI) / newWeight);
+                }
+            }
+        } else {
+            copyOldToNew();
+            continue;
         }
     }
 }
 
+// Integrates one depth frame into the voxels of its truncation shell only,
+// reading and writing the accumulator in place. Used by the multi-frame
+// integrator, whose accumulator already holds every carried-forward voxel.
+// Voxels outside the shell are left untouched, so free space is not carved.
 template <typename ScalarDataType, typename FeatureScalarDataType = ScalarDataType>
 __global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
 integrateShellKernel(const ScalarDataType truncationMargin,
@@ -427,7 +576,6 @@ doIntegrate(const float truncationMargin,
             const torch::Tensor &worldToCamMatrices,
             const GridBatchData &unionGrid,
             const GridBatchData &baseGrid,
-            const GridBatchData &shellGrid,
             const JaggedTensor &tsdf,
             const JaggedTensor &weights,
             const JaggedTensor &features) {
@@ -441,28 +589,26 @@ doIntegrate(const float truncationMargin,
     const bool hasFeatures       = featureDim > 0;
     const bool hasWeights        = weightImages.size(0) > 0;
 
-    // Output tensors are zero-initialised. The shell-filtered integrate
-    // kernel has three "continue" branches (voxel not visible, zDiff
-    // behind surface, pixelWeight == 0) where it silently leaves the
-    // output slot unwritten; for shell voxels NOT in the base grid we
-    // need that slot to read as 0 rather than as uninitialised memory,
-    // otherwise downstream consumers see |tsdf| > 1 garbage.
     torch::Tensor outWeights = torch::zeros({totalOutVoxels}, weights.jdata().options());
     torch::Tensor outTsdf    = torch::zeros({totalOutVoxels}, tsdf.jdata().options());
     torch::Tensor outFeatures =
-        torch::zeros({totalOutVoxels, featureDim}, features.jdata().options());
+        torch::empty({totalOutVoxels, featureDim}, features.jdata().options());
 
-    // Two-pass shell-filtered integrate.
     AT_DISPATCH_V2(
         tsdf.scalar_type(),
-        "integrateTSDFShellFiltered",
+        "integrateTSDFKernel",
         AT_WRAP([&]() {
             using shared_scalar_t              = at::opmath_type<scalar_t>;
             using SharedMat3T                  = nanovdb::math::Mat3<shared_scalar_t>;
             using SharedMat4T                  = nanovdb::math::Mat4<shared_scalar_t>;
             constexpr uint64_t VOXELS_PER_LEAF = nanovdb::OnIndexTree::LeafNodeType::NUM_VALUES;
+            const auto numUnionLeaves          = unionGrid.totalLeaves();
+            const auto numSharedScalars        = 2 * batchSize * 3 * 3 + 2 * batchSize * 4 * 4;
+            const auto problemSize =
+                std::max(numUnionLeaves * VOXELS_PER_LEAF, uint64_t(numSharedScalars));
             const auto sharedMemSize =
                 2 * batchSize * sizeof(SharedMat3T) + 2 * batchSize * sizeof(SharedMat4T);
+            const auto numBlocks = GET_BLOCKS(problemSize, DEFAULT_BLOCK_DIM);
 
             const auto dtype                = tsdf.scalar_type();
             const auto projMatsCasted       = projectionMatrices.to(dtype);
@@ -473,46 +619,14 @@ doIntegrate(const float truncationMargin,
             at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream(tsdf.device().index());
 
             DISPATCH_FEATURE_TYPE([&]() {
-                // Pass 1: inject old tsdf / weight / features from base
-                // grid to their new positions in union. Skipped when
-                // baseGrid is empty (first frame) since there's nothing
-                // to carry forward.
-                const auto numBaseLeaves = baseGrid.totalLeaves();
-                if (numBaseLeaves > 0) {
-                    const auto injectProblemSize = numBaseLeaves * VOXELS_PER_LEAF;
-                    const auto injectBlocks      = GET_BLOCKS(injectProblemSize, DEFAULT_BLOCK_DIM);
-                    injectFromBaseKernel<<<injectBlocks, DEFAULT_BLOCK_DIM, 0, stream>>>(
-                        hasFeatures,
-                        baseGrid.deviceAccessor(),
-                        unionGrid.deviceAccessor(),
-                        tsdf.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>(),
-                        weights.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>(),
-                        features.packed_accessor64<feature_t, 2, torch::RestrictPtrTraits>(),
-                        outTsdf.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>(),
-                        outWeights.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>(),
-                        outFeatures.packed_accessor64<feature_t, 2, torch::RestrictPtrTraits>());
-                    C10_CUDA_KERNEL_LAUNCH_CHECK();
-                }
-
-                // Pass 2: apply this frame's depth observations to the
-                // shell's voxels. Stream ordering guarantees the inject
-                // above has completed before we enter the read-modify-
-                // write below.
-                const auto numShellLeaves   = shellGrid.totalLeaves();
-                const auto numSharedScalars = 2 * batchSize * 3 * 3 + 2 * batchSize * 4 * 4;
-                const auto integrateProblemSize =
-                    std::max(numShellLeaves * VOXELS_PER_LEAF, uint64_t(numSharedScalars));
-                const auto integrateBlocks = GET_BLOCKS(integrateProblemSize, DEFAULT_BLOCK_DIM);
-
-                if (cudaFuncSetAttribute(integrateShellKernel<scalar_t, feature_t>,
+                if (cudaFuncSetAttribute(integrateTSDFKernel<scalar_t, feature_t>,
                                          cudaFuncAttributeMaxDynamicSharedMemorySize,
                                          sharedMemSize) != cudaSuccess) {
                     AT_ERROR("Failed to set maximum shared memory size (requested ",
                              sharedMemSize,
                              " bytes), try lowering tile_size.");
                 }
-
-                integrateShellKernel<<<integrateBlocks, DEFAULT_BLOCK_DIM, sharedMemSize, stream>>>(
+                integrateTSDFKernel<<<numBlocks, DEFAULT_BLOCK_DIM, sharedMemSize, stream>>>(
                     scalar_t(truncationMargin),
                     imageWidth,
                     imageHeight,
@@ -525,8 +639,11 @@ doIntegrate(const float truncationMargin,
                     depthImages.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
                     featureImages.packed_accessor64<feature_t, 4, torch::RestrictPtrTraits>(),
                     weightImages.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
-                    shellGrid.deviceAccessor(),
+                    baseGrid.deviceAccessor(),
                     unionGrid.deviceAccessor(),
+                    tsdf.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>(),
+                    weights.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>(),
+                    features.packed_accessor64<feature_t, 2, torch::RestrictPtrTraits>(),
                     outTsdf.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>(),
                     outWeights.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>(),
                     outFeatures.packed_accessor64<feature_t, 2, torch::RestrictPtrTraits>());
@@ -550,12 +667,9 @@ doIntegrate(const float truncationMargin,
 ///        so the kernel only needs to read-modify-write the shell's
 ///        voxels. No alloc, no inject-pass.
 ///
-/// Semantics: identical to `doIntegrate(..., unionGrid=liveGrid,
-/// baseGrid=<any-empty-grid>, shellGrid=shellGrid, ...)` except we
-/// skip the zero-init + injectFromBaseKernel path since those are
-/// no-ops when (a) the output tensors already hold the current
-/// accumulator values (post-grow), and (b) the kernel only writes
-/// to shell voxels.
+/// Unlike `doIntegrate`, this updates only the shell's voxels, so
+/// visible voxels outside this frame's truncation shell are not
+/// carved toward +1.
 void
 doIntegrateShellInPlace(const float truncationMargin,
                         const torch::Tensor &depthImages,
@@ -1019,15 +1133,9 @@ integrateTSDFImpl(const c10::intrusive_ptr<GridBatchData> grid,
                                        : torch::empty({0, 0, 0}, squeezedDepthImages.options());
     const auto weightImagesSqueezed =
         weightImagesValue.dim() == 4 ? weightImagesValue.squeeze(-1) : weightImagesValue;
-    // Step 3: Integrate weights, tsdf values, and features into the
-    // output tensor. We pass three grids:
-    //   - unionGrid: where output sidecars are indexed (size = total
-    //     active voxels after this frame's shell has been merged in).
-    //   - grid (base): the old accumulated grid, used for
-    //     carrying-forward previously-integrated tsdf/weight.
-    //   - pointGrid (shell): this frame's truncation-band voxels, which
-    //     is the set the integrate kernel actually needs to update
-    //     (everything else just needs a copy-forward).
+    // Step 3: Integrate weights, tsdf values, and features into every
+    // visible voxel of the union grid, carrying forward values from the
+    // base grid.
     const auto [outTsdf, outWeights, outFeatures] = doIntegrate(truncationMargin,
                                                                 squeezedDepthImages,
                                                                 featureImagesValue,
@@ -1038,7 +1146,6 @@ integrateTSDFImpl(const c10::intrusive_ptr<GridBatchData> grid,
                                                                 worldToCamMats,
                                                                 *unionGrid,
                                                                 *grid,
-                                                                *pointGrid,
                                                                 tsdf,
                                                                 weights,
                                                                 featuresValue);
@@ -1130,7 +1237,8 @@ integrateTSDFBatchImpl(const c10::intrusive_ptr<GridBatchData> grid,
                        const std::optional<JaggedTensor> &features,
                        const torch::Tensor &depthImages,
                        const std::optional<torch::Tensor> &featureImages,
-                       const std::optional<torch::Tensor> &weightImages) {
+                       const std::optional<torch::Tensor> &weightImages,
+                       const bool carveFreeSpace) {
     const at::cuda::OptionalCUDAGuard device_guard(device_of(tsdf.jdata()));
 
     TORCH_CHECK_VALUE(grid->batchSize() == 1,
@@ -1202,28 +1310,16 @@ integrateTSDFBatchImpl(const c10::intrusive_ptr<GridBatchData> grid,
                           ")");
     }
 
-    // Own the accumulator as a `PersistentTSDFState` so the per-frame
-    // "grow topology + carry sidecar values forward" step becomes a
-    // single `growFromGrid` call that fast-paths to a no-op when the
-    // frame's truncation shell is a subset of the current live grid.
-    // On bounded-scene trajectories the shell stops introducing new
-    // voxels after some warm-up, so post-converge frames skip both
-    // the sidecar realloc and the inject-from-base pass entirely,
-    // leaving only the shell integrate kernel to run.
-    //
-    // Equivalence with the pre-refactor path:
-    //   - `integrateTSDFImpl` did `zeros(union) + injectFromBase +
-    //     integrateShellKernel` each frame. The first two steps are
-    //     exactly what `PersistentTSDFState::growFromGrid` performs
-    //     (fresh zeros sized to union, then `ops::inject` from live
-    //     grid's sidecars). Replacing them with one `growFromGrid`
-    //     call is semantically identical -- bit-identical mesh /
-    //     tsdf / weight outputs are pinned by
-    //     `test_integrate_tsdf_frames_matches_sequential`
-    //     (atol=rtol=0).
-    //   - The integrate kernel call then becomes
-    //     `doIntegrateShellInPlace` on the state's tensors (skips
-    //     the alloc + inject since growFromGrid already did it).
+    // The accumulator lives in a `PersistentTSDFState`. Each frame grows
+    // its topology by the frame's truncation shell (`growFromGrid`, which
+    // carries existing values forward and zero-fills new voxels), then
+    // integrates the frame:
+    //   - carveFreeSpace: `doIntegrate` over the whole live grid, with the
+    //     live grid as both base and union. This is exactly one
+    //     `integrateTSDFImpl` step, so N frames equal N sequential calls
+    //     (pinned by `test_integrate_tsdf_frames_matches_sequential`).
+    //   - otherwise: `doIntegrateShellInPlace`, which updates only the
+    //     shell's voxels.
     auto featuresStart =
         hasFeatureImages ? std::make_optional(features.value().jdata()) : std::nullopt;
     PersistentTSDFState state(grid, tsdf.jdata(), weights.jdata(), featuresStart);
@@ -1263,6 +1359,26 @@ integrateTSDFBatchImpl(const c10::intrusive_ptr<GridBatchData> grid,
         // No-op when `pointGrid` is a subset of `state.grid()`.
         state.growFromGrid(*pointGrid);
 
+        if (carveFreeSpace) {
+            const auto [outTsdf, outWeights, outFeatures] = doIntegrate(truncationMargin,
+                                                                        depth_i_sq,
+                                                                        featImg_i,
+                                                                        wImg_i_sq,
+                                                                        projMats,
+                                                                        invProjMats,
+                                                                        c2wMats,
+                                                                        w2cMats,
+                                                                        state.grid(),
+                                                                        state.grid(),
+                                                                        state.tsdfJagged(),
+                                                                        state.weightsJagged(),
+                                                                        state.featuresJagged());
+            state.tsdf()                                  = outTsdf.jdata();
+            state.weights()                               = outWeights.jdata();
+            state.features()                              = outFeatures.jdata();
+            continue;
+        }
+
         // Placeholder features tensor when features are disabled --
         // the integrate kernel still takes the argument via its
         // `hasFeatures` flag. Keep the size-matching invariant.
@@ -1301,7 +1417,8 @@ integrateTSDFBatch(const c10::intrusive_ptr<GridBatchData> grid,
                    const JaggedTensor &tsdf,
                    const JaggedTensor &weights,
                    const torch::Tensor &depthImages,
-                   const std::optional<torch::Tensor> &weightImages) {
+                   const std::optional<torch::Tensor> &weightImages,
+                   const bool carveFreeSpace) {
     TORCH_CHECK_NOT_IMPLEMENTED(grid->device().is_cuda(),
                                 "TSDF integration not implemented on the CPU.");
     auto [unionGrid, outTsdf, outWeights, _unusedFeatures] =
@@ -1314,7 +1431,8 @@ integrateTSDFBatch(const c10::intrusive_ptr<GridBatchData> grid,
                                std::nullopt,
                                depthImages,
                                std::nullopt,
-                               weightImages);
+                               weightImages,
+                               carveFreeSpace);
     return {unionGrid, outTsdf, outWeights};
 }
 
@@ -1328,7 +1446,8 @@ integrateTSDFBatchWithFeatures(const c10::intrusive_ptr<GridBatchData> grid,
                                const JaggedTensor &weights,
                                const torch::Tensor &depthImages,
                                const torch::Tensor &featureImages,
-                               const std::optional<torch::Tensor> &weightImages) {
+                               const std::optional<torch::Tensor> &weightImages,
+                               const bool carveFreeSpace) {
     TORCH_CHECK_NOT_IMPLEMENTED(grid->device().is_cuda(),
                                 "TSDF integration not implemented on the CPU.");
     return integrateTSDFBatchImpl(grid,
@@ -1340,7 +1459,8 @@ integrateTSDFBatchWithFeatures(const c10::intrusive_ptr<GridBatchData> grid,
                                   features,
                                   depthImages,
                                   featureImages,
-                                  weightImages);
+                                  weightImages,
+                                  carveFreeSpace);
 }
 
 } // namespace fvdb::detail::ops

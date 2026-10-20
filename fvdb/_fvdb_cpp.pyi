@@ -969,6 +969,7 @@ def integrate_tsdf_batch(
     weights: JaggedTensor,
     depth_images: torch.Tensor,
     weight_images: torch.Tensor | None,
+    carve_free_space: bool,
 ) -> tuple[GridBatchData, JaggedTensor, JaggedTensor]: ...
 def integrate_tsdf_batch_with_features(
     grid: GridBatchData,
@@ -981,6 +982,7 @@ def integrate_tsdf_batch_with_features(
     depth_images: torch.Tensor,
     feature_images: torch.Tensor,
     weight_images: torch.Tensor | None,
+    carve_free_space: bool,
 ) -> tuple[GridBatchData, JaggedTensor, JaggedTensor, JaggedTensor]: ...
 def integrate_tsdf_from_points(
     grid: GridBatchData,

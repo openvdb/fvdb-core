@@ -38,19 +38,14 @@ integrateTSDFWithFeatures(const c10::intrusive_ptr<GridBatchData> grid,
                           const torch::Tensor &featureImages,
                           const std::optional<torch::Tensor> &weightImages);
 
-/// @brief Batched depth-image TSDF integration — builds the full union
-///        topology ONCE over all N frames, then runs N sequential
-///        integrate passes against that fixed topology.
+/// @brief Integrates N depth frames in one call, growing the topology
+///        frame by frame in a persistent accumulator.
 ///
-/// Semantically equivalent to calling `integrateTSDF` N times in a row
-/// (verified bit-identically in the unit test), but avoids the per-
-/// frame `buildPointTruncationShell + mergeGrids` cost that dominates
-/// the per-frame wall-clock on small scenes.
-///
-/// For the paper's RGB-D comparison this is the natural idiom: all
-/// frames are known up-front, topology is built once, then the fusion
-/// kernel runs at fixed topology — the sparse-topology-as-tensor
-/// analog of Open3D's lazy block-hashed allocation.
+/// With `carveFreeSpace`, each frame updates every visible voxel, so the
+/// result equals calling `integrateTSDF` N times (bit-identically). Without
+/// it, each frame updates only its truncation shell, which is cheaper on
+/// large grids but leaves visible free space in front of the surface
+/// uncarved.
 ///
 /// Requires `grid->batchSize() == 1`. The N dimension is carried on
 /// `depthImages.size(0)` and must match `projectionMatrices.size(0)`
@@ -63,7 +58,8 @@ integrateTSDFBatch(const c10::intrusive_ptr<GridBatchData> grid,
                    const JaggedTensor &tsdf,
                    const JaggedTensor &weights,
                    const torch::Tensor &depthImages,
-                   const std::optional<torch::Tensor> &weightImages);
+                   const std::optional<torch::Tensor> &weightImages,
+                   bool carveFreeSpace);
 
 std::tuple<c10::intrusive_ptr<GridBatchData>, JaggedTensor, JaggedTensor, JaggedTensor>
 integrateTSDFBatchWithFeatures(const c10::intrusive_ptr<GridBatchData> grid,
@@ -75,7 +71,8 @@ integrateTSDFBatchWithFeatures(const c10::intrusive_ptr<GridBatchData> grid,
                                const JaggedTensor &weights,
                                const torch::Tensor &depthImages,
                                const torch::Tensor &featureImages,
-                               const std::optional<torch::Tensor> &weightImages);
+                               const std::optional<torch::Tensor> &weightImages,
+                               bool carveFreeSpace);
 
 } // namespace ops
 } // namespace detail

@@ -522,7 +522,8 @@ bind_grid_batch_ops(py::module &m) {
           py::arg("tsdf"),
           py::arg("weights"),
           py::arg("depth_images"),
-          py::arg("weight_images"));
+          py::arg("weight_images"),
+          py::arg("carve_free_space"));
 
     m.def("integrate_tsdf_batch_with_features",
           &ops::integrateTSDFBatchWithFeatures,
@@ -535,7 +536,8 @@ bind_grid_batch_ops(py::module &m) {
           py::arg("weights"),
           py::arg("depth_images"),
           py::arg("feature_images"),
-          py::arg("weight_images"));
+          py::arg("weight_images"),
+          py::arg("carve_free_space"));
 
     m.def("integrate_tsdf_from_points",
           &ops::integrateTSDFFromPoints,
