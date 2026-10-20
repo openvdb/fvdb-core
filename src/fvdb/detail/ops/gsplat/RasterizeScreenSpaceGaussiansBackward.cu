@@ -168,21 +168,25 @@ struct RasterizeBackwardArgs {
         }
 
         if (commonArgs.mIsSparse) {
-            // just check that the number of cameras and number of pixels are correct
-            TORCH_CHECK_VALUE(commonArgs.mNumCameras == mRenderedAlphas.numTensors(),
-                              "Bad size for renderedAlphas");
+            // Packed sparse inputs do not encode the camera count in means2d or tileOffsets. Use
+            // the forward output's jagged structure as the source of truth in that mode.
+            const auto numSparseCameras = mRenderedAlphas.numTensors();
+            if constexpr (!IS_PACKED) {
+                TORCH_CHECK_VALUE(commonArgs.mNumCameras == numSparseCameras,
+                                  "Bad size for renderedAlphas");
+            }
             TORCH_CHECK_VALUE(commonArgs.mPixelMap.size(0) == mRenderedAlphas.elementCount(),
                               "Bad size for renderedAlphas");
-            TORCH_CHECK_VALUE(commonArgs.mNumCameras == mLastGaussianIds.numTensors(),
+            TORCH_CHECK_VALUE(numSparseCameras == mLastGaussianIds.numTensors(),
                               "Bad size for lastGaussianIds");
             TORCH_CHECK_VALUE(commonArgs.mPixelMap.size(0) == mLastGaussianIds.elementCount(),
                               "Bad size for lastGaussianIds");
-            TORCH_CHECK_VALUE(commonArgs.mNumCameras == mDLossDRenderedFeatures.numTensors(),
+            TORCH_CHECK_VALUE(numSparseCameras == mDLossDRenderedFeatures.numTensors(),
                               "Bad size for dLossDRenderedFeatures");
             TORCH_CHECK_VALUE(commonArgs.mPixelMap.size(0) ==
                                   mDLossDRenderedFeatures.elementCount(),
                               "Bad size for dLossDRenderedFeatures");
-            TORCH_CHECK_VALUE(commonArgs.mNumCameras == mDLossDRenderedAlphas.numTensors(),
+            TORCH_CHECK_VALUE(numSparseCameras == mDLossDRenderedAlphas.numTensors(),
                               "Bad size for dLossDRenderedAlphas");
             TORCH_CHECK_VALUE(commonArgs.mPixelMap.size(0) == mDLossDRenderedAlphas.elementCount(),
                               "Bad size for dLossDRenderedAlphas");
