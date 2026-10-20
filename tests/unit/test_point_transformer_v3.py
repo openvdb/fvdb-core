@@ -342,6 +342,18 @@ class TestPointTransformerV3(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "non-negative"):
             model(shifted.jagged_like(self.data.jdata), shifted)
 
+    def test_pooling_from_odd_minimum(self):
+        # Span 126 from an odd minimum outgrows the continued curve after two poolings.
+        ijk = torch.arange(3, 130, dtype=torch.int32, device="cuda")[:, None].expand(-1, 3).contiguous()
+        grid = GridBatch.from_ijk(JaggedTensor([ijk]))
+        data = _features(grid, 4)
+        config = dict(SMALL_CONFIG, enc_patch_size=0, dec_patch_size=0)
+        model = fvnn.PointTransformerV3(**config).cuda()
+        out, out_grid = model(data, grid)
+        self.assertIs(out_grid, grid)
+        self.assertEqual(out.jdata.shape, (grid.total_voxels, 8))
+        self.assertTrue(bool(torch.isfinite(out.jdata).all()))
+
     def test_pointcept_unpool_cpe(self):
         # The option changes only the decoder's first-block convolution input, so it matters with conv
         # in the position encoding and has no effect without it.
