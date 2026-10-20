@@ -123,6 +123,11 @@ def serialization_depth(grid: GridBatch, *, offset_mode: SerializationOffset | s
     return (_max_local_coord(grid, offset_mode) + 1).bit_length()
 
 
+def _fits_depth(grid: GridBatch, offset_mode: SerializationOffset, depth: int, code_shift: int) -> bool:
+    """Whether every coordinate fits in ``depth - code_shift`` bits per axis."""
+    return grid.total_voxels == 0 or _max_local_coord(grid, offset_mode) < 1 << max(0, depth - code_shift)
+
+
 def _resolve_depth(grid: GridBatch, offset_mode: SerializationOffset, depth: int | None, code_shift: int) -> int:
     if code_shift < 0:
         raise ValueError(f"code_shift must be non-negative, got {code_shift}")
@@ -130,7 +135,7 @@ def _resolve_depth(grid: GridBatch, offset_mode: SerializationOffset, depth: int
         depth = serialization_depth(grid, offset_mode=offset_mode) + code_shift
     if not 0 < depth <= _MAX_DEPTH:
         raise ValueError(f"depth must be in [1, {_MAX_DEPTH}], got {depth}")
-    if grid.total_voxels > 0 and _max_local_coord(grid, offset_mode) >= 1 << max(0, depth - code_shift):
+    if not _fits_depth(grid, offset_mode, depth, code_shift):
         raise ValueError(
             f"Coordinates span more than 2**(depth - code_shift) = 2**{depth - code_shift} voxels; "
             "increase depth or use the depth of the finest level."
@@ -265,9 +270,9 @@ class GridSerialization:
     joffsets: torch.Tensor
     """Offsets of the grid batch these permutations belong to."""
     depth: int
-    """Curve depth of the finest level."""
+    """Curve depth at the level where this curve starts, usually the finest level."""
     code_shift: int
-    """Number of halvings from the finest level to this grid."""
+    """Number of halvings from the level ``depth`` refers to down to this grid."""
     offset_mode: SerializationOffset
     """Coordinate offset used for the codes."""
 
@@ -323,6 +328,12 @@ class GridSerialization:
         order is the fine order with each pooled group collapsed to one token. The coarse grid
         should be ``ijk // stride`` of this level's grid.
 
+        With ``offset_mode`` ``"grid"`` or ``"batch"``, a grid whose minimum is not a multiple
+        of the pooled cell size can span one more coarse voxel than the continued curve covers.
+        The coarse grid then starts a fresh curve at its own depth, and coarser levels continue
+        that one. Pooled groups come from ``ijk // stride`` either way, so only the token order
+        at that level changes.
+
         Args:
             coarse_grid (GridBatch): The pooled grid.
             stride (int): Pooling stride, a power of two. Defaults to ``2``.
@@ -334,12 +345,15 @@ class GridSerialization:
         """
         if stride < 1 or stride & (stride - 1):
             raise ValueError(f"stride must be a power of two, got {stride}")
+        depth, code_shift = self.depth, self.code_shift + (stride - 1).bit_length()
+        if not _fits_depth(coarse_grid, self.offset_mode, depth, code_shift):
+            depth, code_shift = None, 0
         return serialize(
             coarse_grid,
             self.orders,
             offset_mode=self.offset_mode,
-            depth=self.depth,
-            code_shift=self.code_shift + (stride - 1).bit_length(),
+            depth=depth,
+            code_shift=code_shift,
             shuffle=shuffle,
             generator=generator,
             keep_codes=self.codes is not None,

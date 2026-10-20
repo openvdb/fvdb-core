@@ -159,6 +159,34 @@ class TestSerializationCodes(unittest.TestCase):
             self.assertTrue(torch.equal(ser_c.codes[i][parent], ser.codes[i] >> 3), ser.orders[i])
             self.assertTrue(torch.equal(ser_cc.codes[i][grandparent], ser.codes[i] >> 6), ser.orders[i])
 
+    @parameterized.expand([[d, m] for d in DEVICES for m in ("grid", "batch")])
+    def test_pooled_starts_fresh_curve_when_span_grows(self, device, offset_mode):
+        # Span 126 needs depth 7. Pooling twice from an odd minimum gives span 32, which the
+        # continued curve's 2**5 voxels cannot hold.
+        ijk = torch.arange(3, 130, dtype=torch.int32, device=device)[:, None].expand(-1, 3).contiguous()
+        fine = GridBatch.from_ijk(JaggedTensor([ijk]))
+        coarse = fine.coarsened_grid(2)
+        coarser = coarse.coarsened_grid(2)
+        coarsest = coarser.coarsened_grid(2)
+        with self.assertRaisesRegex(ValueError, "span"):
+            fvdb.serialize(coarser, CURVE_ORDERS, offset_mode=offset_mode, depth=7, code_shift=2)
+
+        ser = fvdb.serialize(fine, CURVE_ORDERS, offset_mode=offset_mode, keep_codes=True)
+        ser_c = ser.pooled(coarse)
+        ser_cc = ser_c.pooled(coarser)
+        ser_ccc = ser_cc.pooled(coarsest)
+        self.assertEqual((ser.depth, ser_c.depth, ser_c.code_shift), (7, 7, 1))
+        self.assertEqual((ser_cc.depth, ser_cc.code_shift), (6, 0))
+        self.assertEqual((ser_ccc.depth, ser_ccc.code_shift), (6, 1))
+
+        fresh = fvdb.serialize(coarser, CURVE_ORDERS, offset_mode=offset_mode, keep_codes=True)
+        parent = coarsest.ijk_to_index(coarser.ijk.jagged_like(coarser.ijk.jdata // 2), cumulative=True).jdata
+        assert fresh.codes is not None and ser_cc.codes is not None and ser_ccc.codes is not None
+        for i in range(len(CURVE_ORDERS)):
+            self.assertTrue(torch.equal(ser_cc.codes[i], fresh.codes[i]), ser.orders[i])
+            self.assertTrue(torch.equal(ser_cc.perms[i], fresh.perms[i]), ser.orders[i])
+            self.assertTrue(torch.equal(ser_ccc.codes[i][parent], ser_cc.codes[i] >> 3), ser.orders[i])
+
     @parameterized.expand(DEVICES)
     def test_raw_offset_matches_pointcept_on_shifted_grids(self, device):
         # Pointcept encodes its grid coordinates as they are; after cropping they need not start at 0.
