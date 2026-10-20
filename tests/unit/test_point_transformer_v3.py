@@ -7,12 +7,12 @@ import unittest
 
 import torch
 import torch.nn.functional as F
-from fvdb.utils.tests.convolution_utils import conv_ground_truth_stride_1, disable_tf32
 from parameterized import parameterized
 
 import fvdb
 import fvdb.nn as fvnn
 from fvdb import ConvolutionPlan, GridBatch, JaggedTensor
+from fvdb.utils.tests.convolution_utils import conv_ground_truth_stride_1, disable_tf32
 
 from .test_patch_attention import CAN_RUN_VARLEN, _ref_patch_attention
 
