@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/detail/ops/MarchingCubes.h>
+#include <fvdb/detail/ops/MarchingCubesFast.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
 #include <fvdb/detail/utils/MarchingCubesData.h>
@@ -388,7 +389,7 @@ MarchingCubes(const GridBatchData &batchHdl, const torch::Tensor &sdf, double le
 } // anonymous namespace
 
 std::vector<JaggedTensor>
-marchingCubes(const GridBatchData &batchHdl, const JaggedTensor &field, double level) {
+marchingCubesLegacy(const GridBatchData &batchHdl, const JaggedTensor &field, double level) {
     TORCH_CHECK_VALUE(
         field.ldim() == 1,
         "Expected field to have 1 list dimension, i.e. be a single list of coordinate values, but got",
@@ -410,6 +411,15 @@ marchingCubes(const GridBatchData &batchHdl, const JaggedTensor &field, double l
     batchHdl.checkDevice(field);
     return FVDB_DISPATCH_KERNEL_DEVICE(
         field.device(), [&]() { return MarchingCubes<DeviceTag>(batchHdl, fieldJdata, level); });
+}
+
+// Public dispatcher. `marchingCubesFast` runs the sparse-compact,
+// packed-key variant for float32 / float16 CUDA fields on batches of up
+// to 8 grids and 2^30 voxels, and forwards everything else (CPU, fp64,
+// larger batches) to `marchingCubesLegacy`.
+std::vector<JaggedTensor>
+marchingCubes(const GridBatchData &batchHdl, const JaggedTensor &field, double level) {
+    return marchingCubesFast(batchHdl, field, level);
 }
 
 } // namespace ops
