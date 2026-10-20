@@ -16,7 +16,7 @@
 #include <fvdb/detail/ops/Inject.h>
 
 #include <ATen/TensorOperators.h>
-#include <c10/cuda/CUDAGuard.h>
+#include <c10/core/DeviceGuard.h>
 #include <torch/types.h>
 
 #include <cmath>
@@ -66,7 +66,7 @@ dirtyMaskFromSidecars(const GridBatchData &newGrid,
                           "dirtyMaskFromSidecars: feature dims must match");
     }
 
-    const c10::cuda::CUDAGuard deviceGuard(newSidecar.device());
+    const c10::OptionalDeviceGuard deviceGuard(newSidecar.device());
 
     // Fast-path: oldGrid is empty. Every voxel in newGrid is "new" →
     // entirely dirty. Avoids calling inject with a zero-voxel source.

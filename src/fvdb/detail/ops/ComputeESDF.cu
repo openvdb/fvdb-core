@@ -184,9 +184,10 @@ esdfSweepBody(float dSelf, float voxelSize, float maxDistance, ReadNeighbourFn r
 // Seed kernel. Iterates *input* grid voxels (one thread per active voxel
 // via a simple per-leaf-slot launch — the input grid is typically
 // small and the seed runs once, so VBM overhead here is not worth
-// introducing). For each input voxel with weights > threshold and
-// |tsdf| < 1 - eps, writes `tsdf * truncation_distance` into the
-// corresponding slot in the ESDF sidecar.
+// introducing). For each input voxel with weights > threshold, writes
+// `tsdf * truncation_distance` into the corresponding ESDF slot when
+// |tsdf| < 1 - eps. A saturated voxel whose slot has the wrong sign gets
+// the sentinel with the tsdf's sign.
 //
 // We use per-leaf-slot iteration here (not VBM) for two reasons:
 //   1. This kernel runs once; VBM's amortization story doesn't apply.
@@ -232,9 +233,13 @@ esdfSeedKernel(const nanovdb::NanoGrid<nanovdb::ValueOnIndex> *__restrict__ inpu
     if (!(w > weightThreshold))
         return;
 
+    // Near-surface voxels seed their signed distance. Saturated voxels are
+    // observed inside or outside but farther than the truncation band. They
+    // keep a value of the matching sign (a previous call's distance, so warm
+    // reuse converges at once); otherwise they get the sentinel with that
+    // sign, so an interior voxel the sweep never reaches still ends at
+    // -max_distance.
     const float t = tsdf[inputPid];
-    if (!(fabsf(t) < 1.0f - saturationEps))
-        return;
 
     const nanovdb::Coord ijk = leaf.offsetToGlobalCoord(voxOff);
     auto esdfAcc             = esdfGrid->getAccessor();
@@ -245,7 +250,11 @@ esdfSeedKernel(const nanovdb::NanoGrid<nanovdb::ValueOnIndex> *__restrict__ inpu
         return;
     const int64_t esdfPid = static_cast<int64_t>(esdfRaw) - 1;
 
-    esdf[esdfPid] = t * truncationDistance;
+    if (fabsf(t) < 1.0f - saturationEps) {
+        esdf[esdfPid] = t * truncationDistance;
+    } else if ((t < 0.0f) != (esdf[esdfPid] < 0.0f)) {
+        esdf[esdfPid] = t < 0.0f ? -kEsdfSentinel : kEsdfSentinel;
+    }
 }
 
 // -----------------------------------------------------------------------
@@ -701,11 +710,8 @@ computeESDFIncremental(const GridBatchData &gridBatch,
                     "computeESDFIncremental: dirty_mask must be on same "
                     "device as tsdf");
     }
-    // Python wrapper handles the "dirtyMask.any() == False"
-    // short-circuit (returns prev state directly, never entering
-    // C++). By the time we get here, the dirty mask has at least
-    // one true entry, so we do the full incremental work but with
-    // the seed kernel gated on the mask.
+    // An all-false dirty mask seeds nothing, so every voxel inherits its
+    // previous value and the sweep re-applies this call's max_distance.
 
     // Fall through to one-shot when there's no previous state. Keeps
     // the first-frame-of-a-session code path trivial.
@@ -803,8 +809,8 @@ computeESDFIncremental(const GridBatchData &gridBatch,
     //     negative sign arbitrarily far via the 18-sweep chain. The
     //     `candAbs >= maxDistance` guard in the sweep kernel now
     //     prevents this; here we just normalize the "exactly-at-cap"
-    //     boundary values to sentinel so they don't act as phantom
-    //     witnesses.
+    //     boundary values to the sentinel of the same sign, so they don't
+    //     act as phantom witnesses but interior voxels stay negative.
     //
     // Edge case: voxels that genuinely were at exactly `max_distance`
     // get converted too, but they'll be re-derived correctly by the
@@ -818,7 +824,7 @@ computeESDFIncremental(const GridBatchData &gridBatch,
         // itself is >= maxDistF, so already-sentinel voxels are a
         // harmless self-assignment.
         esdfInit.masked_fill_(esdfInit.ge(maxDistF), kEsdfSentinel);
-        esdfInit.masked_fill_(esdfInit.le(-maxDistF), kEsdfSentinel);
+        esdfInit.masked_fill_(esdfInit.le(-maxDistF), -kEsdfSentinel);
     }
 
     // ------------------ Step 3: seed from current TSDF ----------------------

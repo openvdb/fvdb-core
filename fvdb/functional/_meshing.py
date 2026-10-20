@@ -824,11 +824,9 @@ def compute_esdf_incremental_single(
             This is the mechanism that makes ``compute_esdf_incremental``
             scale with the dirty-region size rather than with the full
             grid (matching nvblox's block-dirty-tracking behaviour).
-            When ``dirty_mask.any() == False`` AND ``prev_esdf_grid``
-            is non-empty, the call short-circuits in Python and
-            returns ``(prev_esdf_grid, prev_esdf)`` directly without
-            entering C++ -- this is the "static TSDF cache hit" path
-            that matches nvblox's ~50 us warm-reuse cost.
+            An all-false mask still runs the update, so a changed
+            ``max_distance`` or ``prune_unreached`` takes effect. To skip
+            the call entirely, check ``dirty_mask.any()`` yourself.
             Produce the mask via
             :func:`fvdb.functional.dirty_mask_from_sidecars_single`
             (``(new_grid, new_weights, old_grid, old_weights)``) or
@@ -841,17 +839,6 @@ def compute_esdf_incremental_single(
         esdf: ``[esdf_grid.num_voxels]`` fp32 signed distance.
     """
     from ..grid import Grid as G
-
-    # Python-level short-circuit: if the caller provided a dirty mask
-    # that is entirely false AND we have a previous ESDF state, we
-    # know the monotone-min result is unchanged and return immediately.
-    # Costs one host-side `.any().item()` sync (~30 us) and never
-    # enters C++. This is the "cache hit" equivalent of nvblox's
-    # dirty-block short-circuit -- but expressed at the Python layer
-    # against a user-held tensor, not hidden allocator state.
-    if dirty_mask is not None and prev_esdf_grid.num_voxels > 0:
-        if not dirty_mask.any().item():
-            return prev_esdf_grid, prev_esdf
 
     grid_data = grid.data
     prev_grid_data = prev_esdf_grid.data

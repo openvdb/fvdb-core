@@ -195,6 +195,9 @@ doIntegrateOccupancyFromPoints(const double truncationMargin,
     // p = 0.5 = unknown), which is the standard Bayesian prior for
     // an unobserved cell.
     torch::Tensor outLogOdds = torch::zeros({totalOutVoxels}, logOddsIn.jdata().options());
+    if (totalOutVoxels == 0) {
+        return unionGrid.jaggedTensor(outLogOdds);
+    }
     {
         JaggedTensor dstJt = unionGrid.jaggedTensor(outLogOdds);
         // inject(dstGrid, srcGrid, dst, src): copies ijk-overlapping

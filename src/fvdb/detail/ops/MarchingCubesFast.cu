@@ -294,14 +294,14 @@ mcfEmitCompactKernel(fvdb::GridBatchData::Accessor batchAcc,
     MCF_INTERP_EDGE(0, 0, 1)
     MCF_INTERP_EDGE(1, 1, 2)
     MCF_INTERP_EDGE(2, 2, 3)
-    MCF_INTERP_EDGE(3, 0, 3)
+    MCF_INTERP_EDGE(3, 3, 0)
     MCF_INTERP_EDGE(4, 4, 5)
     MCF_INTERP_EDGE(5, 5, 6)
     MCF_INTERP_EDGE(6, 6, 7)
     MCF_INTERP_EDGE(7, 7, 4)
     MCF_INTERP_EDGE(8, 0, 4)
     MCF_INTERP_EDGE(9, 1, 5)
-    MCF_INTERP_EDGE(10, 6, 2)
+    MCF_INTERP_EDGE(10, 2, 6)
     MCF_INTERP_EDGE(11, 3, 7)
 
 #undef MCF_INTERP_EDGE

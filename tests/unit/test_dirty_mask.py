@@ -16,8 +16,9 @@ Coverage:
   - Does NOT flag voxels present in both grids with identical values.
   - Multi-channel sidecars reduce via "any channel differs".
   - Empty old grid → everything dirty.
-* ``compute_esdf_incremental(dirty_mask=all_false)`` short-circuits:
-  returns the same ``Grid`` and ``Tensor`` objects (Python identity).
+* ``compute_esdf_incremental(dirty_mask=all_false)`` keeps the previous
+  values when the parameters match, and still applies a new
+  ``max_distance``.
 * ``compute_esdf_incremental(dirty_mask=all_true)`` is bit-identical
   to no-mask (full recompute).
 * Partial dirty mask produces output that matches full-recompute on
@@ -51,7 +52,7 @@ def _sphere_tsdf(vs=0.05, dims=20, ijk_min=-10, radius=0.35, trunc=0.15, device=
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("device", ["cuda"])
+@pytest.mark.parametrize("device", ["cuda", "cpu"])
 def test_dirty_mask_flags_new_and_changed(device):
     """Classic three-voxel case: one unchanged, one value-changed,
     one new."""
@@ -74,7 +75,7 @@ def test_dirty_mask_flags_new_and_changed(device):
     assert dirty.cpu().tolist() == [False, True, True]
 
 
-@pytest.mark.parametrize("device", ["cuda"])
+@pytest.mark.parametrize("device", ["cuda", "cpu"])
 def test_dirty_mask_all_unchanged_is_all_false(device):
     """Two identical grids + identical sidecars → no voxels dirty."""
     g, tsdf, _ = _sphere_tsdf(device=device)
@@ -87,7 +88,7 @@ def test_dirty_mask_all_unchanged_is_all_false(device):
     assert not dirty.any().item()
 
 
-@pytest.mark.parametrize("device", ["cuda"])
+@pytest.mark.parametrize("device", ["cuda", "cpu"])
 def test_dirty_mask_empty_old_is_all_true(device):
     """Old grid has zero voxels → every voxel in new grid is "new" →
     every entry dirty. Exercises the fast-path in the C++ helper."""
@@ -108,7 +109,7 @@ def test_dirty_mask_empty_old_is_all_true(device):
     assert dirty.all().item()
 
 
-@pytest.mark.parametrize("device", ["cuda"])
+@pytest.mark.parametrize("device", ["cuda", "cpu"])
 def test_dirty_mask_multichannel_any_differs(device):
     """Multi-channel sidecars: voxel is dirty iff ANY channel differs."""
     ijk = torch.tensor([[0, 0, 0], [1, 0, 0], [2, 0, 0]], dtype=torch.int32)
@@ -133,24 +134,15 @@ def test_dirty_mask_multichannel_any_differs(device):
 
 
 @pytest.mark.parametrize("device", ["cuda"])
-def test_esdf_incremental_all_false_dirty_is_identity(device):
-    """All-false dirty mask + non-empty prev_esdf ⇒ return (prev_grid,
-    prev_esdf) directly via Python identity, never entering C++.
-    This is the ~50 μs "cache hit" path that closes the warm-reuse
-    gap with nvblox."""
+def test_esdf_incremental_all_false_dirty_keeps_values(device):
+    """An all-false dirty mask seeds nothing, so with the same parameters
+    the result equals the previous ESDF. A smaller max_distance still
+    takes effect."""
     vs, trunc, max_dist = 0.05, 0.15, 0.3
     g, tsdf, weights = _sphere_tsdf(vs=vs, dims=20, ijk_min=-10, radius=0.35, trunc=trunc, device=device)
-
-    # Build a prev_esdf state via one-shot call.
-    prev_grid, prev_esdf = g.compute_esdf(
-        tsdf,
-        weights,
-        truncation_distance=trunc,
-        max_distance=max_dist,
-    )
-
-    # All-false dirty mask ⇒ short-circuit.
+    prev_grid, prev_esdf = g.compute_esdf(tsdf, weights, truncation_distance=trunc, max_distance=max_dist)
     dirty_all_false = torch.zeros(g.num_voxels, device=device, dtype=torch.bool)
+
     out_grid, out_esdf = g.compute_esdf_incremental(
         tsdf,
         weights,
@@ -160,9 +152,19 @@ def test_esdf_incremental_all_false_dirty_is_identity(device):
         max_distance=max_dist,
         dirty_mask=dirty_all_false,
     )
-    # Python-identity equality: no new allocation happened.
-    assert out_grid is prev_grid, "should return prev_grid by identity"
-    assert out_esdf is prev_esdf, "should return prev_esdf tensor by identity"
+    assert torch.equal(out_grid.ijk, prev_grid.ijk)
+    assert torch.equal(out_esdf, prev_esdf)
+
+    _, smaller = g.compute_esdf_incremental(
+        tsdf,
+        weights,
+        prev_grid,
+        prev_esdf,
+        truncation_distance=trunc,
+        max_distance=0.1,
+        dirty_mask=dirty_all_false,
+    )
+    assert smaller.abs().max().item() <= 0.1 + 1e-6
 
 
 @pytest.mark.parametrize("device", ["cuda"])

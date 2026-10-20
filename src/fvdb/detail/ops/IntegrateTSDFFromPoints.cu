@@ -397,6 +397,14 @@ doIntegrateFromPoints(const double truncationMargin,
     torch::Tensor outFeatures =
         torch::empty({totalOutVoxels, featureDim}, features.jdata().options());
 
+    // An empty union (no finite points on an empty grid) has nothing to
+    // update, and a zero-block launch is invalid.
+    if (totalOutVoxels == 0) {
+        return {unionGrid.jaggedTensor(outTsdf),
+                unionGrid.jaggedTensor(outWeights),
+                unionGrid.jaggedTensor(outFeatures)};
+    }
+
     AT_DISPATCH_V2(
         tsdf.scalar_type(),
         "integrateTSDFFromPointsKernel",
@@ -712,6 +720,11 @@ integrateTSDFFromPointsWithFeatures(const c10::intrusive_ptr<GridBatchData> grid
                                     bool carveFreeSpace) {
     checkCommonInputs(grid, points, sensorOrigins, tsdf, weights);
 
+    TORCH_CHECK_VALUE(features.device() == grid->device() &&
+                          pointFeatures.device() == grid->device(),
+                      "features and pointFeatures must be on the grid's device (",
+                      grid->device(),
+                      ")");
     TORCH_CHECK_VALUE(features.rdim() == 2, "features must be 2-D [totalVoxels, featureDim]");
     TORCH_CHECK_VALUE(pointFeatures.rdim() == 2,
                       "pointFeatures must be 2-D [totalPoints, featureDim]");

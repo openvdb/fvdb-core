@@ -21,8 +21,6 @@ stochastic side of the pipeline; `compute_esdf` is a geometric wavefront
 whose correctness is better pinned by closed-form reference values.
 """
 
-import time
-
 import pytest
 import torch
 
@@ -221,13 +219,16 @@ def test_spherical_inside_outside_signs(device):
 
 @pytest.mark.parametrize("device", ["cuda"])
 @pytest.mark.parametrize("use_vbm", [True, False])
-def test_interior_beyond_max_distance_is_negative(device, use_vbm):
+@pytest.mark.parametrize("radius", [0.4, 0.85])
+def test_interior_beyond_max_distance_is_negative(device, use_vbm, radius):
     """Voxels inside a solid and farther than max_distance from its surface
     read -max_distance (occupied); voxels outside and beyond it read
-    +max_distance (free), in both the one-shot and incremental paths."""
-    vs, trunc, max_dist, radius = 0.02, 0.1, 0.1, 0.4
+    +max_distance (free), in both the one-shot and incremental paths. The
+    larger sphere's centre is farther from the surface than the sweeps
+    travel, so its sign must come from the observed TSDF."""
+    vs, trunc, max_dist = 0.02, 0.1, 0.1
     g, tsdf, weights = _sphere_tsdf(
-        voxel_size=vs, dense_dims=64, ijk_min=-32, radius=radius, truncation_distance=trunc, device=device
+        voxel_size=vs, dense_dims=96, ijk_min=-48, radius=radius, truncation_distance=trunc, device=device
     )
 
     def at(grid, esdf, xyz):
@@ -236,13 +237,13 @@ def test_interior_beyond_max_distance_is_negative(device, use_vbm):
 
     esdf_grid, esdf = g.compute_esdf(tsdf, weights, truncation_distance=trunc, max_distance=max_dist, use_vbm=use_vbm)
     assert at(esdf_grid, esdf, (0.0, 0.0, 0.0)) == pytest.approx(-max_dist)
-    assert at(esdf_grid, esdf, (0.6, 0.0, 0.0)) == pytest.approx(max_dist)
+    assert at(esdf_grid, esdf, (0.9, 0.9, 0.9)) == pytest.approx(max_dist)
 
     inc_grid, inc = g.compute_esdf_incremental(
         tsdf, weights, esdf_grid, esdf, truncation_distance=trunc, max_distance=max_dist, use_vbm=use_vbm
     )
     assert at(inc_grid, inc, (0.0, 0.0, 0.0)) == pytest.approx(-max_dist)
-    assert at(inc_grid, inc, (0.6, 0.0, 0.0)) == pytest.approx(max_dist)
+    assert at(inc_grid, inc, (0.9, 0.9, 0.9)) == pytest.approx(max_dist)
 
 
 @pytest.mark.parametrize("device", ["cuda"])
@@ -516,98 +517,35 @@ def test_incremental_empty_prev_falls_through_to_one_shot(device):
     assert torch.equal(esdf_one_shot, esdf_incr), f"Max diff: {(esdf_one_shot - esdf_incr).abs().max().item()}"
 
 
+def _sweep_launches(fn) -> int:
+    """Number of ESDF sweep-kernel launches `fn` makes, from the profiler."""
+    from torch.profiler import ProfilerActivity, profile
+
+    with profile(activities=[ProfilerActivity.CUDA]) as prof:
+        fn()
+        torch.cuda.synchronize()
+    return sum(1 for e in prof.events() if "esdfSweep" in e.name and e.device_type.name == "CUDA")
+
+
 @pytest.mark.parametrize("device", ["cuda"])
-def test_warm_reuse_terminates_early(device):
-    """Fixed-point early termination: when `compute_esdf_incremental`
-    is called with identical TSDF + prev_esdf, the wavefront has
-    already converged and the sweep loop detects "no voxel changed"
-    on the first iteration and breaks out of the loop.
-
-    Regression guard via timing: on a sweep-dominated workload (large
-    `max_distance / voxel_size` ratio), warm reuse should be
-    meaningfully faster than cold one-shot. We use
-    `max_distance/voxel_size = 20` so the cold case needs ~20 sweeps
-    while the warm case only needs ~1; the ratio shows clearly even
-    after accounting for the dilate+merge+inject overhead on warm.
-
-    Empirically on Mai City at 10 cm voxels we see warm ~5x faster
-    than cold; here we use a lighter workload (sphere, ~250 K
-    voxels) but the effect still dominates. Assertion: warm should
-    be >= 1.5x faster.
-    """
-    vs = 0.02
-    trunc = 0.1
-    max_dist = 0.4  # = 20 * vs -> ~20 sweeps cold, 1 sweep warm
-    radius = 0.3
+@pytest.mark.parametrize("use_vbm", [True, False])
+def test_warm_reuse_terminates_early(device, use_vbm):
+    """Fixed-point early termination: `compute_esdf_incremental` on an
+    unchanged TSDF converges within a few sweeps (voxels reset at the cap
+    recover from their neighbours), while a cold build with
+    `max_distance / voxel_size = 20` needs many more. Counts sweep-kernel
+    launches, so the check does not depend on timing."""
+    vs, trunc, max_dist = 0.02, 0.1, 0.4
     g, tsdf, weights = _sphere_tsdf(
-        voxel_size=vs,
-        dense_dims=96,
-        ijk_min=-48,
-        radius=radius,
-        truncation_distance=trunc,
-        device=device,
+        voxel_size=vs, dense_dims=96, ijk_min=-48, radius=0.3, truncation_distance=trunc, device=device
     )
-    # Warm up CUDA caches + torch JIT with a throwaway call.
-    _ = g.compute_esdf(
-        tsdf,
-        weights,
-        truncation_distance=trunc,
-        max_distance=max_dist,
-    )
-    torch.cuda.synchronize()
+    kwargs = dict(truncation_distance=trunc, max_distance=max_dist, use_vbm=use_vbm)
+    esdf_grid, esdf = g.compute_esdf(tsdf, weights, **kwargs)
 
-    # Time cold one-shot. Take min of 3 to reduce timer noise.
-    cold_samples = []
-    for _ in range(3):
-        torch.cuda.synchronize()
-        t0 = time.perf_counter()
-        esdf_grid, esdf = g.compute_esdf(
-            tsdf,
-            weights,
-            truncation_distance=trunc,
-            max_distance=max_dist,
-        )
-        torch.cuda.synchronize()
-        cold_samples.append((time.perf_counter() - t0) * 1000.0)
-    cold_ms = min(cold_samples)
-
-    # Warm incremental with same inputs (idempotent).
-    _ = g.compute_esdf_incremental(
-        tsdf,
-        weights,
-        esdf_grid,
-        esdf,
-        truncation_distance=trunc,
-        max_distance=max_dist,
-    )
-    torch.cuda.synchronize()
-    warm_samples = []
-    for _ in range(3):
-        torch.cuda.synchronize()
-        t0 = time.perf_counter()
-        _ = g.compute_esdf_incremental(
-            tsdf,
-            weights,
-            esdf_grid,
-            esdf,
-            truncation_distance=trunc,
-            max_distance=max_dist,
-        )
-        torch.cuda.synchronize()
-        warm_samples.append((time.perf_counter() - t0) * 1000.0)
-    warm_ms = min(warm_samples)
-
-    # Regression guard: warm should be faster than cold by at least
-    # 15%. On this relatively small sphere workload the fixed overhead
-    # (dilate + merge + inject) eats into the sweep-count savings, so
-    # the ratio is modest (~1.25x on RTX 6000 Ada). On realistic
-    # workloads like Mai City the ratio is 3-5x. If early termination
-    # breaks, warm becomes SLOWER than cold (extra inject overhead
-    # with no sweep-count offset) and this test trips immediately.
-    assert warm_ms < cold_ms * 0.85, (
-        f"Warm reuse ({warm_ms:.2f} ms) should be > 1.15x faster than "
-        f"cold ({cold_ms:.2f} ms); early termination likely broken."
-    )
+    cold = _sweep_launches(lambda: g.compute_esdf(tsdf, weights, **kwargs))
+    warm = _sweep_launches(lambda: g.compute_esdf_incremental(tsdf, weights, esdf_grid, esdf, **kwargs))
+    assert warm <= 4, f"warm reuse ran {warm} sweeps; early termination likely broken"
+    assert cold >= 3 * warm, f"cold build ran {cold} sweeps, warm {warm}"
 
 
 @pytest.mark.parametrize("device", ["cuda"])

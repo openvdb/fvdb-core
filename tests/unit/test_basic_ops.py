@@ -2694,6 +2694,48 @@ class TestBasicOps(unittest.TestCase):
         self.assertTrue(torch.isfinite(w).all())
 
     @unittest.skipUnless(torch.cuda.is_available(), "CUDA required for integrate_*_from_points")
+    def test_integrate_from_points_empty_union(self):
+        """
+        Integrating only non-finite points (or none) into an empty grid
+        returns an empty result instead of launching zero-block kernels.
+        """
+        import fvdb as fv
+
+        device = "cuda"
+        grid = fv.Grid.from_zero_voxels(device=device, voxel_size=0.05)
+        empty = torch.zeros(0, device=device)
+        origin = torch.zeros(3, device=device)
+        for points in (torch.full((4, 3), float("nan"), device=device), torch.zeros(0, 3, device=device)):
+            g, t, w = grid.integrate_tsdf_from_points(0.15, points, origin, empty, empty.clone())
+            self.assertEqual((g.num_voxels, t.numel(), w.numel()), (0, 0, 0))
+            g, t, w, f = grid.integrate_tsdf_from_points(
+                0.15,
+                points,
+                origin,
+                empty,
+                empty.clone(),
+                point_features=torch.zeros(points.shape[0], 3, device=device),
+                features=torch.zeros(0, 3, device=device),
+            )
+            self.assertEqual(tuple(f.shape), (0, 3))
+            g, lo = grid.integrate_occupancy_from_points(0.15, points, origin, empty.clone())
+            self.assertEqual((g.num_voxels, lo.numel()), (0, 0))
+
+        dense = fv.Grid.from_dense([8, 8, 8], [-4, -4, -4], voxel_size=0.05, device=device)
+        zeros = torch.zeros(dense.num_voxels, device=device)
+        points = torch.tensor([[0.1, 0.0, 0.0]], device=device)
+        with self.assertRaises(ValueError):
+            dense.integrate_tsdf_from_points(
+                0.15,
+                points,
+                origin,
+                zeros,
+                zeros.clone(),
+                point_features=torch.zeros(1, 3),
+                features=torch.zeros(dense.num_voxels, 3, device=device),
+            )
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA required for integrate_*_from_points")
     def test_integrate_from_points_rejects_bad_inputs(self):
         """
         Inputs on the wrong device or with the wrong size raise ``ValueError``

@@ -1643,17 +1643,12 @@ class Grid:
         removed). When ``prev_esdf_grid`` is empty, falls through to
         :meth:`compute_esdf` semantics.
 
-        When the optional ``dirty_mask`` is provided:
-
-        - If it is entirely ``False`` AND ``prev_esdf_grid`` is
-          non-empty, the call short-circuits in Python and returns
-          ``(prev_esdf_grid, prev_esdf)`` directly without entering
-          C++. This matches nvblox's ~50 μs "no dirty blocks" cache
-          hit but via a user-held tensor instead of hidden library
-          state.
-        - Otherwise, only dirty voxels seed the wavefront. Cost
-          scales with the dirty-region size rather than the full
-          grid — matches nvblox's block-dirty-tracking behaviour.
+        When the optional ``dirty_mask`` is provided, only dirty voxels
+        seed the wavefront, so cost scales with the dirty-region size
+        rather than the full grid. An all-false mask still runs the
+        update, so a changed ``max_distance`` or ``prune_unreached`` takes
+        effect. To skip the call entirely, check ``dirty_mask.any()``
+        yourself.
 
         Build the mask with
         :func:`fvdb.functional.dirty_mask_from_sidecars_single`
