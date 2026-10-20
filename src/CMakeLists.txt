@@ -93,7 +93,10 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/CubesInGrid.cu
     fvdb/detail/ops/AvgPool.cu
     fvdb/detail/ops/MaxPool.cu
+    fvdb/detail/ops/gsplat/CopyImageToDevice.cu
     fvdb/detail/ops/GridEdgeNetwork.cu
+    fvdb/detail/ops/gsplat/FusedL1.cu
+    fvdb/detail/ops/gsplat/FusedL1SSIM.cu
     fvdb/detail/ops/gsplat/FusedSSIM.cu
     fvdb/detail/ops/gsplat/ComputeGaussianNanInfMask.cu
     fvdb/detail/ops/gsplat/AddNoiseToGaussianMeans.cu
@@ -176,6 +179,9 @@ target_include_directories(fvdb PUBLIC
     $<INSTALL_INTERFACE:include>)
 target_include_directories(fvdb PRIVATE
     ${tinyply_SOURCE_DIR}/source)
+
+# Expose nvcc's toolkit include paths, including CCCL, to host C++ sources.
+target_include_directories(fvdb SYSTEM PRIVATE ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
 
 # Needed by Torch for CUDA extensions
 set(TORCH_CUDA_COMMON_FLAGS

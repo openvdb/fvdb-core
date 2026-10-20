@@ -53,8 +53,6 @@ class FusedSSIMMap(torch.autograd.Function):
             ssim_map = ssim_map[:, :, 5:-5, 5:-5]
 
         ctx.save_for_backward(img1.detach(), img2, dm_dmu1, dm_dsigma1_sq, dm_dsigma12)
-        ctx.C1 = C1
-        ctx.C2 = C2
         ctx.padding = padding
 
         return ssim_map
@@ -63,14 +61,11 @@ class FusedSSIMMap(torch.autograd.Function):
     def backward(ctx, opt_grad):
         """Propagate SSIM-map gradients to the first input image."""
         img1, img2, dm_dmu1, dm_dsigma1_sq, dm_dsigma12 = ctx.saved_tensors
-        C1, C2, padding = ctx.C1, ctx.C2, ctx.padding
         dL_dmap = opt_grad
-        if padding == "valid":
+        if ctx.padding == "valid":
             dL_dmap = torch.zeros_like(img1)
             dL_dmap[:, :, 5:-5, 5:-5] = opt_grad
-        grad = torch.ops.fvdb._fused_ssim_backward.default(
-            C1, C2, img1, img2, dL_dmap, dm_dmu1, dm_dsigma1_sq, dm_dsigma12
-        )
+        grad = torch.ops.fvdb._fused_ssim_backward.default(img1, img2, dL_dmap, dm_dmu1, dm_dsigma1_sq, dm_dsigma12)
         return None, None, grad, None, None, None
 
 
