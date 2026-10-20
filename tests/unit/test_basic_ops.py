@@ -2483,6 +2483,91 @@ class TestBasicOps(unittest.TestCase):
         torch.testing.assert_close(actual, expected, atol=1e-4, rtol=0)
 
     @unittest.skipUnless(torch.cuda.is_available(), "CUDA required for integrate_tsdf_from_points")
+    def test_integrate_tsdf_from_points_batch_with_empty_items(self):
+        """
+        Batch items whose points are all filtered out (NaN) or absent keep
+        their slot and their topology; the populated item matches a
+        single-grid integration of the same ray.
+        """
+        import fvdb as fv
+        import fvdb.functional as fvf
+
+        device = "cuda"
+        voxel_size = 0.05
+        trunc = 3 * voxel_size
+        dense_kwargs = dict(dense_dims=[64, 64, 32], ijk_min=[-32, -32, -16], device=device)
+        ray = torch.tensor([[1.0, 0.0, 0.0]], device=device)
+
+        batch = fv.GridBatch.from_dense(3, voxel_sizes=voxel_size, origins=0.0, **dense_kwargs)
+        points = fv.JaggedTensor(
+            [ray, torch.full((4, 3), float("nan"), device=device), torch.empty((0, 3), device=device)]
+        )
+        zeros = batch.jagged_like(torch.zeros(batch.total_voxels, device=device))
+        new_batch, new_tsdf, new_weights = fvf.integrate_tsdf_from_points_batch(
+            batch, trunc, points, torch.zeros(3, 3, device=device), zeros, zeros.clone()
+        )
+
+        self.assertEqual(new_batch.grid_count, 3)
+        for i in (1, 2):
+            self.assertEqual(new_batch.num_voxels_at(i), batch.num_voxels_at(i))
+            self.assertEqual(new_weights[i].jdata.count_nonzero().item(), 0)
+
+        grid = fv.Grid.from_dense(voxel_size=voxel_size, origin=0.0, **dense_kwargs)
+        ref_grid, ref_tsdf, ref_weights = grid.integrate_tsdf_from_points(
+            truncation_distance=trunc,
+            points=ray,
+            sensor_origin=torch.zeros(3, device=device),
+            tsdf=torch.zeros(grid.num_voxels, device=device),
+            weights=torch.zeros(grid.num_voxels, device=device),
+        )
+        self.assertEqual(new_batch.num_voxels_at(0), ref_grid.num_voxels)
+        torch.testing.assert_close(new_tsdf[0].jdata, ref_tsdf)
+        torch.testing.assert_close(new_weights[0].jdata, ref_weights)
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA required for integrate_*_from_points")
+    def test_integrate_from_points_skips_non_finite_points(self):
+        """
+        NaN and Inf points are skipped by the TSDF and occupancy ray walks
+        instead of writing non-finite values or walking unbounded rays.
+        """
+        import fvdb as fv
+
+        device = "cuda"
+        voxel_size = 0.05
+        trunc = 3 * voxel_size
+        grid = fv.Grid.from_dense(
+            dense_dims=[64, 64, 32], ijk_min=[-32, -32, -16], voxel_size=voxel_size, origin=0.0, device=device
+        )
+        origin = torch.zeros(3, device=device)
+        ray = torch.tensor([[1.0, 0.0, 0.0]], device=device)
+        bad = torch.tensor(
+            [[float("nan"), 0.0, 0.0], [float("inf"), 0.0, 0.0], [0.0, float("-inf"), 1.0]], device=device
+        )
+        zeros = torch.zeros(grid.num_voxels, device=device)
+
+        def tsdf(points):
+            return grid.integrate_tsdf_from_points(
+                truncation_distance=trunc, points=points, sensor_origin=origin, tsdf=zeros, weights=zeros.clone()
+            )
+
+        def occupancy(points):
+            return grid.integrate_occupancy_from_points(
+                truncation_distance=trunc, points=points, sensor_origin=origin, log_odds=zeros.clone()
+            )
+
+        _, bad_tsdf, bad_weights = tsdf(bad)
+        self.assertEqual(bad_weights.count_nonzero().item(), 0)
+        self.assertTrue(torch.isfinite(bad_tsdf).all())
+        _, bad_log_odds = occupancy(bad)
+        self.assertEqual(bad_log_odds.count_nonzero().item(), 0)
+
+        _, mixed_tsdf, mixed_weights = tsdf(torch.cat([ray, bad]))
+        _, ref_tsdf, ref_weights = tsdf(ray)
+        torch.testing.assert_close(mixed_tsdf, ref_tsdf)
+        torch.testing.assert_close(mixed_weights, ref_weights)
+        torch.testing.assert_close(occupancy(torch.cat([ray, bad]))[1], occupancy(ray)[1])
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA required for integrate_tsdf_from_points")
     def test_integrate_tsdf_from_points_sphere_reconstruction(self):
         """
         Integrating a dense sphere of points should reconstruct a mesh

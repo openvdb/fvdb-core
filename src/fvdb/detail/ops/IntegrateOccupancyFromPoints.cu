@@ -117,8 +117,8 @@ rayWalkLogOddsKernel(const fvdb::BatchGridAccessor unionGridAcc,
                               static_cast<MathT>(pointsAcc.data()[pointIdx][2]));
     Vec3T dirWorld         = endpointWorld - originWorld;
     const MathT rangeWorld = dirWorld.length();
-    if (rangeWorld < MathT(1e-8))
-        return;
+    if (!isfinite(rangeWorld) || rangeWorld < MathT(1e-8))
+        return; // non-finite point or degenerate zero-length ray
     dirWorld = dirWorld / rangeWorld;
 
     // Walk from the sensor origin through the hit band. We always
