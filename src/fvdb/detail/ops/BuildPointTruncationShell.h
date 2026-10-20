@@ -26,10 +26,10 @@ namespace ops {
 ///      by the truncation-band radius so every voxel within
 ///      `truncationMargin` of any point is active.
 ///
-/// Shared between the depth-image and LiDAR-point TSDF integrators so
-/// both paths hit the same paper-relevant topology primitive. This
-/// matters for the paper's "topology ops compose as a reusable
-/// primitive" claim (both integrators call this function literally).
+/// Shared by the depth-image and LiDAR-point TSDF and occupancy
+/// integrators. Non-finite and far-field points are dropped before the
+/// grid is built; a batch item with no surviving points gets a
+/// voxel-less grid.
 ///
 /// `points` is a JaggedTensor `[B, N_i, 3]` — each batch item may
 /// have a different number of input points. `grid` is used only for
