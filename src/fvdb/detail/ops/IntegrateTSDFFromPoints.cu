@@ -737,19 +737,6 @@ integrateTSDFFromPointsFrames(const c10::intrusive_ptr<GridBatchData> grid,
 
     const at::cuda::CUDAGuard device_guard(tsdf.device());
 
-    // Per-frame profiling toggle, mirrors `integrateTSDFBatchImpl`'s
-    // `FVDB_TSDF_BATCH_PROFILE=1` env var. Useful when decomposing
-    // the per-frame wall clock into shell-build vs
-    // grow/merge/inject vs doIntegrateFromPoints (seed + ray-walk +
-    // normalize). Printing happens once per batch call on stderr.
-    const bool profile_batch = std::getenv("FVDB_TSDF_BATCH_PROFILE") != nullptr;
-    cudaEvent_t evStart{}, evEnd{};
-    if (profile_batch) {
-        cudaEventCreate(&evStart);
-        cudaEventCreate(&evEnd);
-        cudaEventRecord(evStart);
-    }
-
     // Running accumulator: grid topology + TSDF / weights sidecars.
     // Semantically identical to the pre-refactor Python-looped pattern
     // (`for i: g,t,w = g.integrate_tsdf_from_points(trunc, pts[i],
@@ -830,23 +817,6 @@ integrateTSDFFromPointsFrames(const c10::intrusive_ptr<GridBatchData> grid,
         accumGrid    = unionGrid;
         accumTsdf    = newTsdf;
         accumWeights = newWeights;
-    }
-
-    if (profile_batch) {
-        cudaEventRecord(evEnd);
-        cudaEventSynchronize(evEnd);
-        float ms = 0.f;
-        cudaEventElapsedTime(&ms, evStart, evEnd);
-        std::fprintf(stderr,
-                     "[fvdb/tsdf_from_points_batch] N=%lld  incremental=%.2f ms  "
-                     "(%.2f ms/frame)  final_voxels=%lld  final_leaves=%lld\n",
-                     (long long)N,
-                     ms,
-                     ms / static_cast<float>(N),
-                     (long long)accumGrid->totalVoxels(),
-                     (long long)accumGrid->totalLeaves());
-        cudaEventDestroy(evStart);
-        cudaEventDestroy(evEnd);
     }
 
     return {accumGrid, accumTsdf, accumWeights};
