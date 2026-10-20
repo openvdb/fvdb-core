@@ -220,6 +220,32 @@ def test_spherical_inside_outside_signs(device):
 
 
 @pytest.mark.parametrize("device", ["cuda"])
+@pytest.mark.parametrize("use_vbm", [True, False])
+def test_interior_beyond_max_distance_is_negative(device, use_vbm):
+    """Voxels inside a solid and farther than max_distance from its surface
+    read -max_distance (occupied); voxels outside and beyond it read
+    +max_distance (free), in both the one-shot and incremental paths."""
+    vs, trunc, max_dist, radius = 0.02, 0.1, 0.1, 0.4
+    g, tsdf, weights = _sphere_tsdf(
+        voxel_size=vs, dense_dims=64, ijk_min=-32, radius=radius, truncation_distance=trunc, device=device
+    )
+
+    def at(grid, esdf, xyz):
+        ijk = torch.tensor([[round(c / vs - 0.5) for c in xyz]], dtype=torch.int32, device=device)
+        return esdf[grid.ijk_to_index(ijk)].item()
+
+    esdf_grid, esdf = g.compute_esdf(tsdf, weights, truncation_distance=trunc, max_distance=max_dist, use_vbm=use_vbm)
+    assert at(esdf_grid, esdf, (0.0, 0.0, 0.0)) == pytest.approx(-max_dist)
+    assert at(esdf_grid, esdf, (0.6, 0.0, 0.0)) == pytest.approx(max_dist)
+
+    inc_grid, inc = g.compute_esdf_incremental(
+        tsdf, weights, esdf_grid, esdf, truncation_distance=trunc, max_distance=max_dist, use_vbm=use_vbm
+    )
+    assert at(inc_grid, inc, (0.0, 0.0, 0.0)) == pytest.approx(-max_dist)
+    assert at(inc_grid, inc, (0.6, 0.0, 0.0)) == pytest.approx(max_dist)
+
+
+@pytest.mark.parametrize("device", ["cuda"])
 def test_magnitude_bounded_by_max_distance(device):
     """All returned ESDF values satisfy ``|d| <= max_distance`` (plus a
     tiny float-rounding slack)."""

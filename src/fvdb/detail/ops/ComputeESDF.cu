@@ -78,12 +78,10 @@ constexpr int ESDF_PERLEAF_THREADS  = 128;                        // per-leaf ab
 // VBM firstLeafID / jumpMap storage, over torch's active CUDA allocator.
 using VbmBuffer = BuilderBuffer<std::byte>;
 
-// Sentinel used for "never-reached" voxels. Must be LARGE ENOUGH that
-// it is unambiguously identifiable after propagation: the wavefront
-// intentionally doesn't cap at `max_distance`, because capping loses sign
-// information on voxels beyond the cap. With a 1e30 sentinel, any finite propagated distance (even
-// well beyond `max_distance`) is clearly distinguishable, and the
-// final post-loop `clamp(-max, +max)` yields the correct signed result.
+// Sentinel for voxels the wavefront has not reached. It is far larger than
+// any propagated distance, so it stays identifiable, and the final
+// `clamp(-max, +max)` maps an unreached voxel to +max_distance (unknown,
+// treated as free).
 constexpr float kEsdfSentinel = 1.0e30f;
 // Threshold used to detect "still at sentinel" inside the kernel. Any
 // real propagated distance is astronomically smaller than this.
@@ -160,19 +158,20 @@ esdfSweepBody(float dSelf, float voxelSize, float maxDistance, ReadNeighbourFn r
             continue; // neighbour not yet reached
         const float step    = off.weight * voxelSize;
         const float candAbs = dNAbs + step;
-        // Cap propagation at `maxDistance` so wavefronts can't smear
-        // chamfer-overshoot past the user's ESDF support radius. In
-        // particular this is load-bearing for the incremental path:
-        // without the cap, surviving-from-prev-frame negative-sign
-        // voxels (with |d| < max_distance) could propagate their sign
-        // arbitrarily far via the cascading sweep, smearing
-        // -maxDistance into voxels that one-shot would have left at
-        // sentinel. With the cap, voxels more than `maxDistance` from
-        // ANY seed stay at sentinel -> clamped to +maxDistance at the
-        // end (the "unknown, free space" convention). This matches
-        // nvblox / FIESTA defaults.
-        if (candAbs >= maxDistance)
+        // Distances are capped at `maxDistance`; beyond the cap only the
+        // sign travels. An unreached voxel next to an interior (negative)
+        // voxel becomes -maxDistance, so solid interiors deeper than the
+        // cap read as occupied rather than free. Unreached voxels with no
+        // interior neighbour stay at the sentinel and clamp to
+        // +maxDistance. The incremental path resets |d| >= maxDistance to
+        // the sentinel before sweeping, so it recomputes these voxels the
+        // same way the one-shot path does.
+        if (candAbs >= maxDistance) {
+            if (dN < 0.0f && fabsf(d) >= kEsdfSentinelCheck) {
+                d = -maxDistance;
+            }
             continue;
+        }
         if (candAbs < fabsf(d)) {
             // Preserve the sign of the witness neighbour.
             d = (dN < 0.0f) ? -candAbs : candAbs;
