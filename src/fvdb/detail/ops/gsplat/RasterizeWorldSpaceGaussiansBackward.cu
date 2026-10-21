@@ -574,6 +574,9 @@ launchBackwardPrivateUse1(const torch::Tensor &means,
                 torch::zeros_like(opacities)};
     }
 
+    // Use the forward pass's full-width tile rows for both input prefetch and rasterization.
+    const int64_t tileAlignment = tileExtentW;
+
     // Each GPU accumulates into device-local buffers. The managed outputs are populated after the
     // local gradients have been reduced across devices.
     torch::Tensor dMeans     = torch::empty(means.sizes(), means.options());
@@ -617,7 +620,8 @@ launchBackwardPrivateUse1(const torch::Tensor &means,
         C10_CUDA_CHECK(cudaStreamWaitEvent(prefetchStreams[deviceId], prefetchEvent));
 
         int64_t deviceTileOffset, deviceTileCount;
-        std::tie(deviceTileOffset, deviceTileCount) = deviceChunk(tileCount, deviceId);
+        std::tie(deviceTileOffset, deviceTileCount) =
+            deviceAlignedChunk(tileAlignment, tileCount, deviceId);
         if (deviceTileCount > 0) {
             std::vector<void *> prefetchPointers;
             std::vector<size_t> prefetchSizes;
@@ -642,7 +646,9 @@ launchBackwardPrivateUse1(const torch::Tensor &means,
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
 
-        const auto [deviceTileOffset, deviceTileCount] = deviceChunk(tileCount, deviceId);
+        uint32_t deviceTileOffset, deviceTileCount;
+        std::tie(deviceTileOffset, deviceTileCount) =
+            deviceAlignedChunk(tileAlignment, tileCount, deviceId);
 
         dMeansLocals[deviceId]     = makeLocalGradient(means, deviceId, stream);
         dQuatsLocals[deviceId]     = makeLocalGradient(quats, deviceId, stream);
@@ -675,8 +681,8 @@ launchBackwardPrivateUse1(const torch::Tensor &means,
                                                        dLogScalesLocals[deviceId],
                                                        dFeaturesLocals[deviceId],
                                                        dOpacitiesLocals[deviceId],
-                                                       static_cast<uint32_t>(deviceTileOffset),
-                                                       static_cast<uint32_t>(deviceTileCount),
+                                                       deviceTileOffset,
+                                                       deviceTileCount,
                                                        stream);
         }
     }
@@ -698,7 +704,7 @@ launchBackwardPrivateUse1(const torch::Tensor &means,
                 prefetchSizes.emplace_back(elementCount * sizeof(float));
             }
         }
-        memPrefetchBatchAsync(prefetchPointers, prefetchSizes, deviceId, prefetchStream);
+        memDiscardAndPrefetchBatchAsync(prefetchPointers, prefetchSizes, deviceId, prefetchStream);
 
         // Output copies wait on these events after all reductions have been queued.
         C10_CUDA_CHECK(
