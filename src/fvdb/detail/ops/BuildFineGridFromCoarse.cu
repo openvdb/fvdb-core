@@ -394,8 +394,8 @@ fineGridStorageFromCoarseCUDA(const GridBatchData &coarseBatchHdl,
                               const std::optional<JaggedTensor> &mask) {
     // fvdb subdivision maps coarse voxel c to the fine block c*factor + [0, factor-1]^3; a factor-2
     // refine pass maps c to 2c + {0,1}^3. So a uniform power-of-two factor is that many batched
-    // leaf-mask refine passes over the whole batch (BatchedTopologyBuilder) -- no coordinate list,
-    // no per-member builds. A per-coarse-voxel mask is applied by pruning the coarse grid to it
+    // refine passes over the whole batch (BatchedTopologyBuilder) -- no coordinate list, no
+    // per-member builds. A per-coarse-voxel mask is applied by pruning the coarse grid to it
     // first (PruneGrid), then refining. Non-power-of-two / non-uniform factors keep the coord path.
     const int nPasses = subdivUniformPowerOfTwoLog2(factor);
     if (nPasses < 0) {
@@ -425,7 +425,7 @@ fineGridStorageFromCoarseCUDA(const GridBatchData &coarseBatchHdl,
     }
 
     // All batch members are refined together, one batched pass per factor of 2: a single output
-    // storage, one stream synchronization per pass, no per-member builds or merging
+    // storage, two host waits per pass, no per-member builds or merging
     // (issue #755). Empty members become valid empty grids inline.
     const std::vector<batched::TopologyPassSpec> passes(nPasses,
                                                         batched::TopologyPassSpec::refine());
