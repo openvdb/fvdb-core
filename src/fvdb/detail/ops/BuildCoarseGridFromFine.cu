@@ -75,7 +75,7 @@ coarseGridStorageFromFineCUDA(const GridBatchData &fineGridBatch,
     }
 
     // All batch members are coarsened together, one batched pass per factor of 2: a single output
-    // storage, one stream synchronization per pass, no per-member builds or storage merging
+    // storage, two host waits per pass, no per-member builds or storage merging
     // (issue #755). Empty members become valid empty grids inline.
     const std::vector<batched::TopologyPassSpec> passes(nPasses,
                                                         batched::TopologyPassSpec::coarsen());

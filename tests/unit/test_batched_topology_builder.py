@@ -15,10 +15,13 @@ one NanoVDB build + merge per member. These tests pin the batched results agains
 Emphasis is on the cases the batched pipeline must get right and a per-member loop got for free:
 batches with empty members (first/middle/last/all), members of wildly unequal sizes, coordinates
 straddling root-tile boundaries (+-4096) and negative octants (where the sort-key encoding differs
-from the stored ``Tile::key`` encoding), and multi-pass factors (4 = two chained passes).
+from the stored ``Tile::key`` encoding), grids spread over many root tiles, multi-pass factors
+(4 = two chained passes), and batches split into several builder runs by the tile cap.
 """
 
+import os
 import unittest
+from unittest import mock
 
 import torch
 from parameterized import parameterized
@@ -98,6 +101,18 @@ def _tricky_batches():
         ],
         "single_grid": [
             torch.randint(-16, 16, (400, 3), dtype=torch.int32),
+        ],
+        # Small clusters scattered over many root tiles per grid, so each grid's speculative root
+        # holds dozens of tiles and most of them stay empty.
+        "wide_bbox": [
+            torch.cat(
+                [
+                    torch.randint(-12000, 12000, (1, 3), dtype=torch.int32)
+                    + torch.randint(0, 6, (40, 3), dtype=torch.int32)
+                    for _ in range(12)
+                ]
+            )
+            for _ in range(3)
         ],
         "larger_batch": [torch.randint(-32, 32, (50 + 37 * i, 3), dtype=torch.int32) for i in range(16)],
     }
@@ -200,6 +215,34 @@ class TestBatchedTopologyBuilder(unittest.TestCase):
         cpu_mask = JaggedTensor([m.cpu() for m in mask.unbind()])
         cpu_result = cpu_grid.refined_grid(2, mask=cpu_mask)
         self._check_against_cpu(result, cpu_result, "masked refine x2 vs CPU")
+
+    @parameterized.expand([("tile_boundaries",), ("wide_bbox",), ("empty_members",)])
+    def test_chunked_build_matches_unchunked(self, name):
+        # FVDB_TOPOLOGY_MAX_TILES=1 gives every grid its own builder run (a grid needing more tiles
+        # runs alone), so each pass produces several chunks, chained passes read their sources
+        # across chunks, and the last pass assembles the chunks into one storage.
+        coords = _tricky_batches()[name]
+        grid = _build(coords, "cuda")
+        ops = {
+            "refine x4": lambda g: g.refined_grid(4),
+            "coarsen x4": lambda g: g.coarsened_grid(4),
+            "conv_grid k3s1": lambda g: g.conv_grid(kernel_size=3, stride=1),
+            "conv_grid k5s1": lambda g: g.conv_grid(kernel_size=5, stride=1),
+            "conv_transpose_grid k3s2": lambda g: g.conv_transpose_grid(kernel_size=3, stride=2),
+        }
+        for op_name, op in ops.items():
+            msg = f"{name} {op_name}"
+            unchunked = op(grid)
+            with mock.patch.dict(os.environ, {"FVDB_TOPOLOGY_MAX_TILES": "1"}):
+                chunked = op(grid)
+            self.assertEqual(chunked.grid_count, unchunked.grid_count, msg)
+            self.assertTrue(torch.equal(chunked.ijk.jdata, unchunked.ijk.jdata), msg)
+            self.assertTrue(torch.equal(chunked.ijk.joffsets, unchunked.ijk.joffsets), msg)
+            for b in range(chunked.grid_count):
+                self.assertTrue(
+                    torch.equal(chunked.bbox_at(b).cpu(), unchunked.bbox_at(b).cpu()),
+                    f"{msg}: bbox of member {b}",
+                )
 
     def test_refine_coarsen_roundtrip_grid_count(self):
         # Serialization-visible metadata: grid_count/address arithmetic must be consistent for a
