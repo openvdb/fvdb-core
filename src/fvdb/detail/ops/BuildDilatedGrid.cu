@@ -9,6 +9,7 @@
 #include <fvdb/detail/ops/MakeContiguous.h>
 #include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/StreamOrdering.h>
+#include <fvdb/detail/utils/nanovdb/BatchedTopologyBuilder.cuh>
 #include <fvdb/detail/utils/nanovdb/DeviceGridHandleUtils.cuh>
 
 #include <nanovdb/HostBuffer.h>
@@ -29,24 +30,25 @@ template <torch::DeviceType>
 GridStorage dispatchDilateGrid(const GridBatchData &gridBatch,
                                const std::vector<int64_t> &dilationAmount);
 
-template <>
-GridStorage
-dispatchDilateGrid<torch::kCUDA>(const GridBatchData &gridBatch,
-                                 const std::vector<int64_t> &dilationAmount) {
+// Per-member fallback for a NON-uniform dilation vector. Reachable from C++ callers such as
+// IntegrateTSDF (whose per-member pad count derives from each member's voxel size) and
+// VbmCacheTest, and from the raw _fvdb_cpp.dilate_grid binding; the public dilated_grid API
+// broadcasts one scalar. Each member runs nanovdb's DilateGrid dilationAmount[i] times and the
+// single-grid storages are merged -- several stream syncs per member.
+static GridStorage
+dilatePerMemberCUDA(const GridBatchData &gridBatch,
+                    const std::vector<int64_t> &dilationAmount,
+                    cudaStream_t stream) {
     const torch::Device device = gridBatch.device();
-    c10::cuda::CUDAGuard deviceGuard(device);
 
-    // The grids are built and their storage retained on the device's current torch stream; the
-    // prototype carries that stream and the device into every allocation the builder makes.
-    const cudaStream_t stream    = storageStream(device);
+    // The prototype carries the stream and the device into each pass's output-grid allocation;
+    // DilateGrid's scratch goes through BuilderResource on `stream`.
     const DeviceGridBuffer proto = GridStorage::deviceProto(device, stream);
 
-    // Build one grid per batch item, then lay them end to end in one storage. (An all-zero
-    // dilation is handled upstream in dilateGrid() via cloneGrid, so the 0-branch below only
-    // fires for a mixed batch.)
+    // Build one grid per batch item, then lay them end to end in one storage.
     std::vector<GridStorage> parts;
     parts.reserve(gridBatch.batchSize());
-    for (int i = 0; i < gridBatch.batchSize(); i += 1) {
+    for (int64_t i = 0; i < gridBatch.batchSize(); i += 1) {
         if (dilationAmount[i] == 0) {
             // 0-dilation item in a mixed batch: clone logical grid i by byte offset (correct for
             // sliced views)
@@ -59,7 +61,7 @@ dispatchDilateGrid<torch::kCUDA>(const GridBatchData &gridBatch,
 
         // Each pass dilates the previous pass's grid; only the last one is kept.
         GridStorage::DeviceHandle handle;
-        for (auto j = 0; j < dilationAmount[i]; j += 1) {
+        for (int64_t j = 0; j < dilationAmount[i]; j += 1) {
             nanovdb::tools::cuda::DilateGrid<nanovdb::ValueOnIndex, BuilderResource> dilateOp(
                 grid, stream);
             dilateOp.setOperation(nanovdb::tools::morphology::NN_FACE_EDGE_VERTEX);
@@ -75,6 +77,51 @@ dispatchDilateGrid<torch::kCUDA>(const GridBatchData &gridBatch,
     }
 
     return mergeGridStorages(std::move(parts), device, stream);
+}
+
+template <>
+GridStorage
+dispatchDilateGrid<torch::kCUDA>(const GridBatchData &gridBatch,
+                                 const std::vector<int64_t> &dilationAmount) {
+    const torch::Device device = gridBatch.device();
+    c10::cuda::CUDAGuard deviceGuard(device);
+
+    // The grids are built and their storage retained on the device's current torch stream.
+    const cudaStream_t stream = storageStream(device);
+
+    // dilateGrid() validates user input (one non-negative entry per member) and returns early for
+    // an all-zero vector, which covers an empty batch; these are internal invariants of that.
+    TORCH_INTERNAL_ASSERT(
+        static_cast<int64_t>(dilationAmount.size()) == gridBatch.batchSize() &&
+            !dilationAmount.empty(),
+        "dispatchDilateGrid: expected one dilation per member of a non-empty batch");
+    TORCH_INTERNAL_ASSERT(std::all_of(dilationAmount.begin(),
+                                      dilationAmount.end(),
+                                      [](int64_t amount) { return amount >= 0; }),
+                          "dispatchDilateGrid: negative dilation");
+    const int64_t dilation = dilationAmount[0];
+    const bool uniform     = std::all_of(dilationAmount.begin(),
+                                     dilationAmount.end(),
+                                     [dilation](int64_t amount) { return amount == dilation; });
+    if (!uniform) {
+        return dilatePerMemberCUDA(gridBatch, dilationAmount, stream);
+    }
+
+    // Identity (all members dilate by 0). dilateGrid() already short-circuits this via cloneGrid,
+    // so this is defensive: copy the (possibly sliced) selected grids into a fresh contiguous
+    // storage, as BuildPaddedGrid.cu does for its zero-pass case.
+    if (dilation == 0) {
+        return ops::contiguousGridStorage(gridBatch);
+    }
+
+    // Uniform dilation (the only case the public dilated_grid API produces): dilating by radius d
+    // with the full 26-neighbor (face+edge+vertex) stencil equals d chained Minkowski sums with
+    // [-1,1]^3, so run d batched BoxDilate(-1,+1) passes over the WHOLE batch (issue #775). A pass
+    // runs in as few TopologyBuilder runs as FVDB_TOPOLOGY_MAX_TILES allows, and the last pass's
+    // runs end up in one storage. Empty members become valid empty grids inline.
+    const std::vector<batched::TopologyPassSpec> passes(
+        dilation, batched::TopologyPassSpec::boxDilate(nanovdb::Coord(-1), nanovdb::Coord(1)));
+    return batched::batchedTopologyStorage(gridBatch, passes, stream);
 }
 
 template <>

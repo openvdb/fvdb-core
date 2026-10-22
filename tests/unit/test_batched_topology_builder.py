@@ -1,10 +1,10 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 #
-"""Equivalence tests for the batched topology builder (issues #755, #785).
+"""Equivalence tests for the batched topology builder (issues #755, #775, #785).
 
 On CUDA, ``refined_grid`` / ``coarsened_grid`` (and through them ``conv_grid`` /
-``conv_transpose_grid`` for K == S), and the padding ops ``dual_grid`` /
+``conv_transpose_grid`` for K == S), ``dilated_grid``, and the padding ops ``dual_grid`` /
 ``build_padded_grid(bmin, bmax)`` without exclude_border (issue #775), build all batch members
 together, in one or more TopologyBuilder runs per pass, instead of one NanoVDB build + merge per
 member. These tests pin the batched results against:
@@ -64,7 +64,8 @@ def _expected_pad_ijk(ijk: torch.Tensor, bmin: int, bmax: int) -> torch.Tensor:
 
     ``bmax`` chained unit pads by the octant {0,1}^3 and ``-bmin`` by {-1,0}^3 compose to exactly
     this box (Minkowski sums of axis-aligned boxes compose), so this is the expected result of
-    ``build_padded_grid(bmin, bmax)`` and, for ``(0, 1)``, of ``dual_grid()``.
+    ``build_padded_grid(bmin, bmax)``, for ``(0, 1)`` of ``dual_grid()``, and for ``(-d, d)`` of
+    ``dilated_grid(d)`` (d chained 26-neighbor dilations).
     """
     if ijk.numel() == 0:
         return ijk.reshape(0, 3)
@@ -253,6 +254,33 @@ class TestBatchedTopologyBuilder(unittest.TestCase):
             self._check_against_expected(result, expected, f"{name} coarsen x{factor}")
             cpu_result = _build(coords, "cpu").coarsened_grid(factor)
             self._check_against_cpu(result, cpu_result, f"{name} coarsen x{factor} vs CPU")
+
+    @parameterized.expand([(name,) for name in _tricky_batches().keys()])
+    def test_dilated_grid_matches_expected_and_cpu(self, name):
+        # dilated_grid(d) on CUDA runs d chained batched BoxDilate(-1, +1) passes over the whole
+        # batch (issue #775 item 3). d chained 26-neighbor Minkowski sums equal the sum with the
+        # box [-d, d]^3, so pin against a from_ijk build of that box sum (elementwise: canonical
+        # node order) and against the CPU implementation.
+        coords = _tricky_batches()[name]
+        for dilation in (1, 2):
+            grid = _build(coords, "cuda")
+            result = grid.dilated_grid(dilation)
+            expected = [_expected_pad_ijk(c, -dilation, dilation) for c in coords]
+            self._check_against_expected(result, expected, f"{name} dilate {dilation}")
+            cpu_result = _build(coords, "cpu").dilated_grid(dilation)
+            self._check_against_cpu(result, cpu_result, f"{name} dilate {dilation} vs CPU")
+
+    def test_dilated_grid_sliced_view_matches_full(self):
+        # A sliced (non-contiguous) view dilates the same as the equivalent standalone batch.
+        coords = _tricky_batches()["mixed_sizes"]
+        full = _build(coords, "cuda")
+        view = full[1:]
+        standalone = _build(coords[1:], "cuda")
+        dilated_view = view.dilated_grid(1)
+        dilated_standalone = standalone.dilated_grid(1)
+        self.assertEqual(dilated_view.grid_count, dilated_standalone.grid_count)
+        self.assertTrue(torch.equal(dilated_view.ijk.joffsets, dilated_standalone.ijk.joffsets))
+        self.assertTrue(torch.equal(dilated_view.ijk.jdata, dilated_standalone.ijk.jdata))
 
     @parameterized.expand([(name,) for name in _tricky_batches().keys()])
     def test_dual_grid_matches_expected_and_cpu(self, name):
