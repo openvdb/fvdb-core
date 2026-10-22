@@ -1,7 +1,7 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 #
-"""Equivalence tests for the batched leaf-mask topology builder (issue #755).
+"""Equivalence tests for the batched topology builder (issues #755, #785).
 
 On CUDA, ``refined_grid`` / ``coarsened_grid`` (and through them ``conv_grid`` /
 ``conv_transpose_grid`` for K == S) build all batch members in a single batched pass instead of
@@ -14,9 +14,9 @@ one NanoVDB build + merge per member. These tests pin the batched results agains
 
 Emphasis is on the cases the batched pipeline must get right and a per-member loop got for free:
 batches with empty members (first/middle/last/all), members of wildly unequal sizes, coordinates
-straddling root-tile boundaries (+-4096) and negative octants (where the sort-key encoding differs
-from the stored ``Tile::key`` encoding), grids spread over many root tiles, multi-pass factors
-(4 = two chained passes), and batches split into several builder runs by the tile cap.
+straddling root-tile boundaries (+-4096) and negative octants, grids spread over many root tiles,
+multi-pass factors (4 = two chained passes), and batches split into several builder runs by the
+tile cap.
 """
 
 import os
@@ -79,9 +79,8 @@ def _tricky_batches():
             torch.empty((0, 3), dtype=torch.int32),
             torch.empty((0, 3), dtype=torch.int32),
         ],
-        # Straddles the +-4096 root-tile boundaries and negative octants: multiple root tiles per
-        # grid and coordinates where the offset-shifted sort key and stored Tile::key encodings
-        # order tiles differently.
+        # Straddles the +-4096 root-tile boundaries and negative octants, so each grid has
+        # several root tiles and their order depends on the offset-shifted tile key.
         "tile_boundaries": [
             torch.tensor(
                 [
