@@ -1,0 +1,339 @@
+<title>fVDB Conv vs FlexGEMM</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@600&display=swap">
+<style>
+/* Layout: single reading column (~72ch), wide tables scroll in their own frames, status encoded by cell tint. */
+:root {
+  --bg: #f6f7f8;
+  --surface: #ffffff;
+  --fg: #1b2026;
+  --muted: #5b6672;
+  --rule: #d9dee3;
+  --accent: #1f6f8b;
+  --good-bg: #dff1e6; --good-fg: #17603a;
+  --mid-bg: #fbefd6;  --mid-fg: #7a5208;
+  --bad-bg: #f8dedb;  --bad-fg: #8f2a20;
+  --code-bg: #eef1f4;
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-head: "IBM Plex Sans Condensed", "IBM Plex Sans", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12161a; --surface: #1a2026; --fg: #e3e7eb; --muted: #9aa5b0; --rule: #2d353d;
+    --accent: #6cbad6;
+    --good-bg: #173327; --good-fg: #8fd8ad;
+    --mid-bg: #3a2f17;  --mid-fg: #f0c97a;
+    --bad-bg: #3d1f1c;  --bad-fg: #f2a59c;
+    --code-bg: #222a31;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #12161a; --surface: #1a2026; --fg: #e3e7eb; --muted: #9aa5b0; --rule: #2d353d;
+  --accent: #6cbad6;
+  --good-bg: #173327; --good-fg: #8fd8ad;
+  --mid-bg: #3a2f17;  --mid-fg: #f0c97a;
+  --bad-bg: #3d1f1c;  --bad-fg: #f2a59c;
+  --code-bg: #222a31;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--fg);
+  font: 15.5px/1.6 var(--font-body);
+  padding-inline: 16px; padding-block: 40px 72px;
+}
+main { max-width: 860px; margin: 0 auto; display: flex; flex-direction: column; gap: 44px; }
+.prose { max-width: 72ch; }
+header { display: flex; flex-direction: column; gap: 10px; border-bottom: 2px solid var(--fg); padding-bottom: 20px; }
+.eyebrow { font: 500 12px/1 var(--font-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+h1, h2, h3 { font-family: var(--font-head); font-weight: 600; text-wrap: balance; line-height: 1.2; margin: 0; }
+h1 { font-size: clamp(28px, 5vw, 38px); }
+h2 { font-size: 23px; }
+h3 { font-size: 17px; font-family: var(--font-body); }
+.meta { font-size: 13px; color: var(--muted); }
+section { display: flex; flex-direction: column; gap: 14px; }
+p, ul, ol { margin: 0; }
+ul, ol { padding-left: 1.3em; display: flex; flex-direction: column; gap: 6px; }
+code { font-family: var(--font-mono); font-size: .88em; background: var(--code-bg); padding: 1px 5px; border-radius: 3px; }
+strong { font-weight: 600; }
+
+.tldr { background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 18px 22px; }
+.tldr ul { gap: 8px; }
+
+.tbl { overflow-x: auto; border: 1px solid var(--rule); border-radius: 6px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; font-variant-numeric: tabular-nums; }
+th, td { padding: 7px 12px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--rule); }
+th { font: 500 11.5px/1.3 var(--font-mono); letter-spacing: .04em; text-transform: uppercase; color: var(--muted); background: var(--bg); }
+th:first-child, td:first-child { text-align: left; }
+td:first-child { font-family: var(--font-mono); font-size: 12.5px; }
+tr:last-child td { border-bottom: 0; }
+tbody tr:hover td { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.grp { border-left: 1px solid var(--rule); }
+.old { color: var(--muted); }
+.r { font-weight: 500; border-radius: 3px; padding: 1px 6px; }
+.r.bad { background: var(--bad-bg); color: var(--bad-fg); }
+.r.mid { background: var(--mid-bg); color: var(--mid-fg); }
+.r.good { background: var(--good-bg); color: var(--good-fg); }
+.caption { font-size: 13px; color: var(--muted); max-width: 72ch; }
+.legend { display: flex; flex-wrap: wrap; gap: 10px 16px; font-size: 12.5px; color: var(--muted); }
+
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+.box { background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 14px 18px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.box h3 { font-size: 14px; letter-spacing: .02em; }
+.box p, .box li { font-size: 14px; }
+.formula { font-family: var(--font-mono); font-size: 13.5px; }
+
+a { color: var(--accent); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+
+<main>
+  <header>
+    <span class="eyebrow">fVDB · sparse convolution · benchmark review</span>
+    <h1>fVDB sparse conv vs FlexGEMM</h1>
+    <p class="meta">Re-run of FlexGEMM's README training benchmark against fVDB 0.7.0, with a profile of where fVDB spends its time and a proposal for a faster backend. October 2026.</p>
+  </header>
+
+  <section class="tldr">
+    <ul>
+      <li>FlexGEMM still wins in fp16 and tf32, by <strong>2–9×</strong>. The README's fVDB bars are out of date in both directions, and in fp32 at mid resolution fVDB now ties or wins.</li>
+      <li>fVDB's default backend spends <strong>~74% of GPU time</strong> in gather and scatter kernels. Its per-tap GEMMs alone take about as long as FlexGEMM's whole step.</li>
+      <li>Patching gather-scatter can at best reach parity. To win, fVDB needs an output-stationary masked implicit GEMM, added as a new <code>ConvolutionPlan</code> backend with a neighbor map built from NanoVDB leaves.</li>
+      <li>That backend keeps a bit more topology memory on thin shells (≈112N vs 8P bytes) but uses less peak memory, because it drops the per-tap scratch buffers. On dense volumes it keeps about half the topology memory.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Setup</h2>
+    <div class="prose">
+      <p>The benchmark is FlexGEMM's <code>tests/submconv/train_benchmark.py</code> ported to fVDB's <code>ConvolutionPlan</code> API. Each iteration builds the grid and plan (or FlexGEMM's neighbor cache), runs L submanifold 3×3×3 layers forward, then runs backward. Inputs are one-voxel-thick sphere shells averaging 12.7 neighbors per voxel. Results are averaged over 20 iterations after 2 warmup iterations.</p>
+    </div>
+    <div class="tbl"><table>
+      <tbody>
+        <tr><td>GPU</td><td style="text-align:left">RTX PRO 6000 Blackwell Workstation (SM120, 96 GB)</td></tr>
+        <tr><td>Stack</td><td style="text-align:left">CUDA 13.0 · PyTorch 2.13.0 · Triton 3.7.1</td></tr>
+        <tr><td>fVDB</td><td style="text-align:left">0.7.0 (conv sources identical to fvdb-core <code>main</code>, Oct 7)</td></tr>
+        <tr><td>FlexGEMM</td><td style="text-align:left"><code>main</code> @ 6dd94a8, <code>MASKED_IMPLICIT_GEMM_SPLITK</code></td></tr>
+        <tr><td>Correctness</td><td style="text-align:left">Both fVDB backends match FlexGEMM with identical weights after remapping voxel order</td></tr>
+      </tbody>
+    </table></div>
+    <p class="caption">spconv, torchsparse and warpconvnet were not re-run. The README results came from a different GPU, so part of each shift is hardware.</p>
+  </section>
+
+  <section>
+    <h2>Speed relative to FlexGEMM</h2>
+    <p class="prose">Each cell shows FlexGEMM time ÷ fVDB time for one training iteration. A value of 1.0 is a tie, and lower means fVDB is slower. README values are read off its charts.</p>
+    <div class="legend"><span class="r bad">&lt; 0.4</span><span class="r mid">0.4 – 0.9</span><span class="r good">≥ 0.9</span></div>
+    <div class="tbl"><table>
+      <thead>
+        <tr><th>RES, C, L</th><th class="grp">fp16 README</th><th>fp16 now</th><th class="grp">tf32 README</th><th>tf32 now</th><th class="grp">fp32 README</th><th>fp32 now</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>8, 1024, 16</td><td class="grp old">0.07</td><td><span class="r bad">0.16</span></td><td class="grp old">0.07</td><td><span class="r bad">0.19</span></td><td class="grp old">0.22</td><td><span class="r bad">0.32</span></td></tr>
+        <tr><td>16, 1024, 8</td><td class="grp old">0.09</td><td><span class="r bad">0.24</span></td><td class="grp old">0.13</td><td><span class="r bad">0.34</span></td><td class="grp old">0.44</td><td><span class="r mid">0.66</span></td></tr>
+        <tr><td>32, 1024, 4</td><td class="grp old">0.21</td><td><span class="r bad">0.36</span></td><td class="grp old">0.26</td><td><span class="r mid">0.65</span></td><td class="grp old">0.78</td><td><span class="r good">1.11</span></td></tr>
+        <tr><td>64, 1024, 2</td><td class="grp old">0.32</td><td><span class="r mid">0.51</span></td><td class="grp old">0.37</td><td><span class="r mid">0.63</span></td><td class="grp old">0.82</td><td><span class="r good">1.03</span></td></tr>
+        <tr><td>128, 512, 2</td><td class="grp old">0.34</td><td><span class="r bad">0.32</span></td><td class="grp old">0.35</td><td><span class="r mid">0.40</span></td><td class="grp old">0.86</td><td><span class="r mid">0.73</span></td></tr>
+        <tr><td>256, 256, 2</td><td class="grp old">0.32</td><td><span class="r bad">0.17</span></td><td class="grp old">0.33</td><td><span class="r bad">0.19</span></td><td class="grp old">0.84</td><td><span class="r mid">0.44</span></td></tr>
+        <tr><td>512, 128, 2</td><td class="grp old">0.27</td><td><span class="r bad">0.10</span></td><td class="grp old">0.33</td><td><span class="r bad">0.11</span></td><td class="grp old">0.74</td><td><span class="r bad">0.26</span></td></tr>
+        <tr><td>1024, 64, 2</td><td class="grp old">0.34</td><td><span class="r bad">0.11</span></td><td class="grp old">0.38</td><td><span class="r bad">0.11</span></td><td class="grp old">0.66</td><td><span class="r bad">0.15</span></td></tr>
+      </tbody>
+    </table></div>
+    <p class="caption">fVDB's default backend is shown. The <code>pred_gather_igemm</code> backend rejects fp16, and in tf32 and fp32 it runs 1.2–13× slower than the default (e.g. 577 ms vs 42 ms at 8,1024,16 in tf32).</p>
+
+    <h3>Absolute times, fp16</h3>
+    <div class="tbl"><table>
+      <thead><tr><th>RES, C, L</th><th class="grp">fVDB ms</th><th>FlexGEMM ms</th><th class="grp">fVDB peak GB</th><th>FlexGEMM peak GB</th></tr></thead>
+      <tbody>
+        <tr><td>8, 1024, 16</td><td class="grp">34.8</td><td>5.7</td><td class="grp">1.92</td><td>1.81</td></tr>
+        <tr><td>16, 1024, 8</td><td class="grp">17.7</td><td>4.3</td><td class="grp">1.09</td><td>0.98</td></tr>
+        <tr><td>32, 1024, 4</td><td class="grp">17.5</td><td>6.3</td><td class="grp">0.72</td><td>0.62</td></tr>
+        <tr><td>64, 1024, 2</td><td class="grp">17.4</td><td>8.8</td><td class="grp">0.67</td><td>0.59</td></tr>
+        <tr><td>128, 512, 2</td><td class="grp">27.2</td><td>8.6</td><td class="grp">0.65</td><td>0.59</td></tr>
+        <tr><td>256, 256, 2</td><td class="grp">47.8</td><td>8.2</td><td class="grp">1.08</td><td>0.96</td></tr>
+        <tr><td>512, 128, 2</td><td class="grp">104.6</td><td>10.3</td><td class="grp">2.15</td><td>1.73</td></tr>
+        <tr><td>1024, 64, 2</td><td class="grp">225.8</td><td>24.9</td><td class="grp">4.50</td><td>3.48</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <section>
+    <h2>Where fVDB's time goes</h2>
+    <p class="prose">This profile covers one fp16 layer, split into plan build, forward, and backward. The forward and backward timings reuse a prebuilt plan.</p>
+    <div class="tbl"><table>
+      <thead><tr><th>RES, C</th><th class="grp">fVDB topo</th><th>fwd</th><th>bwd</th><th class="grp">FlexGEMM topo</th><th>fwd</th><th>bwd</th></tr></thead>
+      <tbody>
+        <tr><td>16, 1024</td><td class="grp">0.96</td><td>0.71</td><td>1.40</td><td class="grp">0.12</td><td>0.20</td><td>0.38</td></tr>
+        <tr><td>64, 1024</td><td class="grp">1.16</td><td>2.74</td><td>5.04</td><td class="grp">0.21</td><td>2.14</td><td>3.28</td></tr>
+        <tr><td>256, 256</td><td class="grp">3.71</td><td>8.47</td><td>13.67</td><td class="grp">0.21</td><td>1.52</td><td>3.38</td></tr>
+        <tr><td>1024, 64</td><td class="grp">29.81</td><td>38.42</td><td>59.37</td><td class="grp">4.03</td><td>3.21</td><td>9.66</td></tr>
+      </tbody>
+    </table></div>
+    <p class="caption">All times are in milliseconds. FlexGEMM's fp16 forward reaches about 276 TFLOP/s at 256,256 and an effective 2.3 TB/s at 1024,64. That figure exceeds DRAM bandwidth, so L2 is serving most of the reused rows.</p>
+
+    <div class="cols">
+      <div class="box">
+        <h3>1 · Gather and scatter dominate</h3>
+        <p>The default backend loops over the 27 taps. For each tap it gathers rows into a buffer, runs a cuBLAS GEMM, and scatter-adds with per-element atomics. At 256,256 the 81 gather launches and 54 scatter launches take 16.3 of 22.0 ms. At 1024,64 they take 70.6 of 98.0 ms. These kernels move one scalar per thread, use 64-bit div/mod indexing, and use scalar fp16 atomics.</p>
+      </div>
+      <div class="box">
+        <h3>2 · The GEMMs alone match FlexGEMM</h3>
+        <p>At 256,256 fVDB's GEMMs add up to about 5.2 ms, and FlexGEMM's whole forward plus backward takes 4.9 ms. Each per-tap GEMM round-trips its buffer through DRAM. At C=64 the GEMMs are thin and memory-bound.</p>
+      </div>
+      <div class="box">
+        <h3>3 · Small grids are launch-bound</h3>
+        <p>Each layer launches about 216 kernels, and each GEMM runs for about 5 µs. The module stores weights as (K2,K1,K0,Ci,Co), but <code>gs_conv</code> permutes them to (K0,K1,K2,Ci,Co), which forces a <code>.contiguous()</code> copy three times per layer. At RES=16 these copies take 39% of GPU time.</p>
+      </div>
+      <div class="box">
+        <h3>4 · Plan build is 5–18× slower</h3>
+        <p>The plan builds in two passes with atomic counters and probes the tree 27 times per voxel in each pass. This matters in pipelines where the grid changes every step. With a fixed grid the plan is built once.</p>
+      </div>
+      <div class="box">
+        <h3>5 · pred_gather_igemm computes dense leaves</h3>
+        <p>It launches one CTA per 8³ leaf and computes every slot in the leaf. A thin shell fills only a few percent of each leaf, and at RES=8 the whole grid is a single CTA. It is TF32-only, and its backward pass falls back to gather-scatter.</p>
+      </div>
+      <div class="box">
+        <h3>What FlexGEMM does instead</h3>
+        <p>It runs one fused kernel per pass, and each output row accumulates all of its taps in registers, so forward and input-gradient need no atomics. Rows are sorted by a Gray code of their neighbor mask, so each tile skips the taps none of its rows use. It uses split-K when N is small and autotunes its tiles in Triton.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Proposal: a masked implicit GEMM backend</h2>
+    <div class="prose">
+      <p><code>ConvolutionPlan</code> is the right home for this backend. It builds topology once, caches it, shares it across layers, and selects a backend through <code>expert_config</code>. A new <code>"masked_igemm"</code> backend would sit beside <code>_GatherScatterBackend</code>. But what the plan builds today is the wrong shape, and it doesn't keep leaf order.</p>
+    </div>
+    <div class="tbl"><table>
+      <thead><tr><th></th><th style="text-align:left">Current rulebook</th><th style="text-align:left">Masked IGEMM needs</th></tr></thead>
+      <tbody>
+        <tr><td>Layout</td><td style="text-align:left">Offset-major: a (gather, scatter) pair list per tap, CSR offsets</td><td style="text-align:left">Voxel-major: one row of 27 neighbor indices per output voxel</td></tr>
+        <tr><td>Order</td><td style="text-align:left">Atomic arrival order within each tap (<code>GatherScatterDefault.cu:197</code>)</td><td style="text-align:left">Rows in NanoVDB leaf order, plus a tile permutation</td></tr>
+        <tr><td>Build</td><td style="text-align:left">Count pass, prefix sum, fill pass with atomics</td><td style="text-align:left">One pass, no atomics: <code>map[voxel*27 + k] = feat</code></td></tr>
+      </tbody>
+    </table></div>
+
+    <div class="cols">
+      <div class="box">
+        <h3>Leaf-cooperative build</h3>
+        <p>Each CTA calls <code>probeLeaf</code> once on the neighbor leaves of the leaves it covers and stages their bitmasks and offsets in shared memory. Each voxel then resolves its 27 taps with bitmask tests and popcounts instead of 27 tree walks. Rows come out in leaf order because <code>voxel_idx</code> already follows NanoVDB order. The next section covers scheduling CTAs over VBM blocks so sparse leaves don't leave threads idle. This should beat FlexGEMM's hash-based 4 ms build at RES=1024.</p>
+      </div>
+      <div class="box">
+        <h3>Tile ordering</h3>
+        <p>Gray-code sorting groups rows that share a mask, but it breaks spatial locality. The sort only builds a permutation (<code>sorted_idx</code>), and feature data stays in leaf order. Three options to benchmark:</p>
+        <ul>
+          <li>global Gray sort (FlexGEMM)</li>
+          <li>Gray sort within each leaf</li>
+          <li>no sort, plain leaf order</li>
+        </ul>
+      </div>
+    </div>
+
+    <h3>Where fVDB can pull ahead of FlexGEMM</h3>
+    <ul class="prose">
+      <li><strong>Blackwell-native kernels.</strong> A CuTe kernel can use tcgen05, TMA gather, and warp specialization. FlexGEMM's Triton kernel reaches roughly half of dense fp16 peak at its best config, so the headroom is in compute-bound configs (C ≥ 256).</li>
+      <li><strong>Fusion.</strong> At C=64 FlexGEMM is near bandwidth-bound, so gains have to come from moving fewer bytes. Fuse bias, norm, and activation into the epilogue, and read <code>grad_output</code> once for both the weight and input gradients.</li>
+      <li><strong>Hybrid dispatch.</strong> Send dense leaves to the leaf-dense IGEMM, where <code>pred_gather_igemm</code> is a good fit, and sparse leaves to the masked IGEMM.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Scheduling with the VoxelBlockManager</h2>
+    <div class="prose">
+      <p><a href="https://github.com/openvdb/fvdb-core/pull/747">#747</a> caches a NanoVDB VoxelBlockManager (VBM) per grid. The VBM splits active voxels into blocks of 128 and decodes each active index to its leaf and offset in O(1). The conv backend should use it to schedule work, but only if the neighbor probes also change. #747 found that moving <code>GatherScatterDefault</code>'s build onto the VBM made it 10–25% slower, because that build's cost is the 27 tree probes per voxel, not the iteration.</p>
+    </div>
+    <div class="cols">
+      <div class="box">
+        <h3>Neighbor-map build</h3>
+        <p>Launch one CTA per VBM block. On these shells a block spans about two leaves. <code>firstLeafID</code> and the jump map identify those leaves, and the CTA stages their 3×3×3 neighborhoods in shared memory. Taps then resolve with bitmask tests and popcounts, every thread does real work, and no thread walks the tree.</p>
+        <p>The same builder can emit the gather-scatter rulebook. That closes the probe-restructuring item in <a href="https://github.com/openvdb/fvdb-core/issues/817">#817</a>.</p>
+      </div>
+      <div class="box">
+        <h3>GEMM tiles</h3>
+        <p>A VBM block is 128 leaf-ordered output rows, which is already the shape of an implicit-GEMM tile. If leaf order or a within-leaf sort wins the tile-ordering benchmark, VBM blocks become the tiles and <code>sorted_idx</code> goes away. If a global Gray sort wins, the VBM only helps the build.</p>
+      </div>
+      <div class="box">
+        <h3>Map-free mode (optional)</h3>
+        <p>Each GEMM CTA decodes its rows through the VBM and resolves neighbors on the fly. This replaces ≈112N bytes of map with 0.16 B/voxel of VBM, but the probes rerun on every forward and backward pass of every layer. It suits large C, where the GEMM hides probe cost.</p>
+      </div>
+    </div>
+    <h3>Prerequisites from #817</h3>
+    <ul class="prose">
+      <li><strong>One launch per batch.</strong> <code>ConvolutionPlan</code> works on <code>GridBatch</code>, but VBM iteration launches once per grid. Batches of many small grids stay launch-bound until the per-block grid index lands.</li>
+      <li><strong>No first-use host sync.</strong> Until openvdb#2291 merges, the VBM cold build does a blocking device read. Building a plan would then sync the host and couldn't run under CUDA-graph capture.</li>
+      <li><strong>The GEMM keeps its own launch shape.</strong> #747 saw <code>__launch_bounds__(512)</code> silently drop work from a register-heavy callback. GEMM kernels should call <code>decodeInverseMap</code> directly instead of running through <code>forEachActiveVoxelVbmCUDA</code>, with a parity test that checks every output row is written.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Memory</h2>
+    <p class="prose"><strong>N</strong> is the number of active voxels. <strong>P</strong> is the number of active (input, output) voxel pairs summed over all 27 taps, so P/N is the average number of active neighbors per voxel (1 to 27). The formulas below are in bytes.</p>
+    <h3>Topology kept in the plan</h3>
+    <div class="tbl"><table>
+      <thead><tr><th>RES</th><th>voxels N</th><th>pairs P</th><th class="grp">fVDB rulebook</th><th>FlexGEMM cache as-is</th><th>Trimmed port (est.)</th></tr></thead>
+      <tbody>
+        <tr><td>64</td><td>15.2K</td><td>191K</td><td class="grp">1.5 MB</td><td>3.3 MB</td><td>1.6 MB</td></tr>
+        <tr><td>256</td><td>252K</td><td>3.2M</td><td class="grp">24 MB</td><td>55 MB</td><td>27 MB</td></tr>
+        <tr><td>1024</td><td>4.11M</td><td>52.7M</td><td class="grp">402 MB</td><td>898 MB</td><td>439 MB</td></tr>
+      </tbody>
+    </table></div>
+    <div class="cols">
+      <div class="box">
+        <h3>Formulas</h3>
+        <p class="formula">fVDB rulebook = 8P</p>
+        <p class="formula">FlexGEMM cache ≈ 120N + 8P</p>
+        <p class="formula">Trimmed port ≈ 112N</p>
+        <p>FlexGEMM keeps a 27-wide neighbor map (108N), int64 <code>sorted_idx</code> (8N), <code>gray_code</code> (4N), and <code>valid_signal_i/o</code> pair lists (8P). Those pair lists duplicate fVDB's rulebook.</p>
+      </div>
+      <div class="box">
+        <h3>Trimming the port</h3>
+        <ul>
+          <li>Store <code>sorted_idx</code> as int32 (saves 4N).</li>
+          <li>Drop <code>gray_code</code> after sorting (saves 4N).</li>
+          <li>Compute the weight gradient from the map's tap column with masked tiling instead of pair lists (saves 8P). This wastes some work on rows without that tap, so benchmark it before committing.</li>
+        </ul>
+        <p>The layouts break even at P/N = 13.5. Thin shells (12.7) cost about the same either way. Dense volumes approach 27, where the map costs half as much as the rulebook.</p>
+      </div>
+    </div>
+    <h3>Working memory per training step</h3>
+    <p class="prose">This term outweighs the topology. Gather-scatter sizes its scratch buffers to the largest tap segment, which for submanifold conv is the center tap with all N voxels. Forward needs N×(C<sub>in</sub>+C<sub>out</sub>) elements and backward needs N×(2C<sub>in</sub>+C<sub>out</sub>), plus K×C<sub>in</sub>×C<sub>out</sub> per weight copy. At 1024,64 in fp16 that comes to 1.0 GB forward and 1.6 GB backward. Implicit GEMM reads features in place, so this term goes away. That is why FlexGEMM's peak is lower in every config above, despite its larger cache (tf32 at RES=1024: 5.9 GB vs 8.4 GB).</p>
+  </section>
+
+  <section>
+    <h2>Quick fixes to gather-scatter</h2>
+    <p class="prose">These are worth doing even if the new backend lands, because gather-scatter stays the general fallback. Point 2 above sets their ceiling at about parity with FlexGEMM.</p>
+    <ul class="prose">
+      <li>Fix the weight-layout mismatch between <code>nn.SparseConv3d</code> storage and <code>gs_conv</code>'s permute.</li>
+      <li>Vectorize gather and scatter (half2/float4 loads, 32-bit indexing, per-row threads).</li>
+      <li>Run the submanifold center tap as a direct GEMM into the output, with no gather or scatter.</li>
+      <li>Fuse the gather into the GEMM's A-load and the scatter into its epilogue (CUTLASS gather/scatter GEMM).</li>
+      <li>Replace the 27 per-tap GEMMs with one grouped GEMM to cut launch overhead on small grids.</li>
+      <li>Build the rulebook in one pass using the leaf-cooperative probe.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Suggested next steps</h2>
+    <ol class="prose">
+      <li>Write the staged-leaf probe builder on VBM scheduling. Benchmark it against FlexGEMM's 4 ms build at RES=1024 and against the current leaf scan.</li>
+      <li>Have the same builder emit the gather-scatter rulebook, which closes the #817 probe item.</li>
+      <li>Port FlexGEMM's forward, input-gradient, and weight-gradient kernels as a <code>masked_igemm</code> plan backend, plus the reverse map that strided and transposed plans need. FlexGEMM is MIT-licensed. Confirm attribution requirements before copying code.</li>
+      <li>Benchmark the three tile orderings, which decide whether VBM blocks also serve as GEMM tiles. Then benchmark the trimmed weight-gradient path.</li>
+      <li>Rewrite the hot path as a Blackwell-native CuTe kernel and fuse the epilogue.</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>Notes</h2>
+    <ul class="prose">
+      <li>The benchmark rebuilds topology every iteration, as FlexGEMM's original script does. Training on a fixed grid would remove most of fVDB's plan-build penalty from the comparison.</li>
+      <li>FlexGEMM's backward crashes when <code>bias=None</code> (<code>submanifold_conv3d.py:358</code>). The benchmark always passes a bias.</li>
+      <li>Triton 3.7.1 on SM120 needs <code>TRITON_PTXAS_BLACKWELL_PATH</code> set to the CUDA 13 <code>ptxas</code>.</li>
+      <li>Benchmark and profiling scripts are available on request.</li>
+    </ul>
+  </section>
+</main>

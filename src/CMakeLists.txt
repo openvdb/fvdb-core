@@ -64,6 +64,7 @@ set(FVDB_CU_FILES
     fvdb/TorchDeviceBuffer.cu
     fvdb/detail/utils/nanovdb/GridAssembly.cu
     fvdb/detail/GridBatchDataFactory.cu
+    fvdb/detail/VbmCache.cu
     fvdb/detail/io/SaveNanoVDB.cu
     fvdb/detail/ops/ActiveGridCoords.cu
     fvdb/detail/ops/ActiveVoxelsInBoundsMask.cu
@@ -88,6 +89,7 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/SerializeGrid.cu
     fvdb/detail/ops/CoarseIjkForFineGrid.cu
     fvdb/detail/ops/convolution/GatherScatterDefault.cu
+    fvdb/detail/ops/convolution/MaskedIGemm.cu
     fvdb/detail/ops/convolution/PredGatherIGemm.cu
     fvdb/detail/ops/CoordsInGrid.cu
     fvdb/detail/ops/CubesInGrid.cu
