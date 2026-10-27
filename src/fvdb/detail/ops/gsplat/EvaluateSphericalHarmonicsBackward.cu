@@ -954,7 +954,8 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
                     prefetchSizes.emplace_back(elementCount * dLossDMeans.stride(0) *
                                                sizeof(scalar_t));
                 }
-                memPrefetchBatchAsync(prefetchPtrs, prefetchSizes, deviceId, prefetchStream);
+                memDiscardAndPrefetchBatchAsync(
+                    prefetchPtrs, prefetchSizes, deviceId, prefetchStream);
 
                 // Zero outputs once resident while the prefetch stream prepares the inputs.
                 C10_CUDA_CHECK(cudaEventRecord(prefetchEvent, prefetchStream));
@@ -1062,7 +1063,8 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
                 std::vector<void *> prefetchPointers = {
                     dLossDWorldToCamMatrices.data_ptr<scalar_t>() + elementOffset};
                 std::vector<size_t> prefetchSizes = {elementCount * sizeof(scalar_t)};
-                memPrefetchBatchAsync(prefetchPointers, prefetchSizes, deviceId, prefetchStream);
+                memDiscardAndPrefetchBatchAsync(
+                    prefetchPointers, prefetchSizes, deviceId, prefetchStream);
 
                 // The output copy waits on these events after the reduction has been queued.
                 C10_CUDA_CHECK(cudaEventCreateWithFlags(&outputPrefetchEvents[deviceId],
@@ -1120,7 +1122,8 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
                                           elementOffset * dLossDSh0Coeffs.stride(0));
                 prefetchSizes.emplace_back(elementCount * dLossDSh0Coeffs.stride(0) *
                                            sizeof(scalar_t));
-                memPrefetchBatchAsync(prefetchPtrs, prefetchSizes, deviceId, prefetchStream);
+                memDiscardAndPrefetchBatchAsync(
+                    prefetchPtrs, prefetchSizes, deviceId, prefetchStream);
 
                 // Zero outputs once resident while the prefetch stream prepares the inputs.
                 C10_CUDA_CHECK(cudaEventRecord(prefetchEvent, prefetchStream));

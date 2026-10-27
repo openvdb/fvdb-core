@@ -1229,6 +1229,9 @@ callRasterizeBackwardPrivateUse1(
     // Compute tile count: for sparse mode use activeTiles, for dense mode compute from image dims
     const int64_t tileCount =
         activeTiles.has_value() ? activeTiles.value().size(0) : C * tilesPerCamera;
+    // Use the forward pass's full-width tile rows for both input prefetch and rasterization.
+    // Sparse active-tile lists retain their flat partition; empty images need nonzero alignment.
+    const int64_t tileAlignment = activeTiles.has_value() || tileCount == 0 ? 1 : tileExtentW;
     std::vector<torch::Tensor> tileTensors = {dLossDRenderedFeatures.jdata(),
                                               dLossDRenderedAlphas.jdata()};
 
@@ -1259,7 +1262,8 @@ callRasterizeBackwardPrivateUse1(
         C10_CUDA_CHECK(cudaStreamWaitEvent(prefetchStreams[deviceId], prefetchEvent));
 
         int64_t deviceTileOffset, deviceTileCount;
-        std::tie(deviceTileOffset, deviceTileCount) = deviceChunk(tileCount, deviceId);
+        std::tie(deviceTileOffset, deviceTileCount) =
+            deviceAlignedChunk(tileAlignment, tileCount, deviceId);
         if (deviceTileCount) {
             std::vector<void *> prefetchPointers;
             std::vector<size_t> prefetchSizes;
@@ -1286,7 +1290,8 @@ callRasterizeBackwardPrivateUse1(
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
 
         uint32_t deviceTileOffset, deviceTileCount;
-        std::tie(deviceTileOffset, deviceTileCount) = deviceChunk(tileCount, deviceId);
+        std::tie(deviceTileOffset, deviceTileCount) =
+            deviceAlignedChunk(tileAlignment, tileCount, deviceId);
 
         outDLossDMeans2dLocals[deviceId]   = makeLocalGradient(means2d, deviceId, stream);
         outDLossDConicsLocals[deviceId]    = makeLocalGradient(conics, deviceId, stream);
@@ -1365,7 +1370,7 @@ callRasterizeBackwardPrivateUse1(
                 prefetchSizes.emplace_back(elementCount * sizeof(ScalarType));
             }
         }
-        memPrefetchBatchAsync(prefetchPointers, prefetchSizes, deviceId, prefetchStream);
+        memDiscardAndPrefetchBatchAsync(prefetchPointers, prefetchSizes, deviceId, prefetchStream);
 
         // Output copies wait on these events after all reductions have been queued.
         C10_CUDA_CHECK(
