@@ -132,6 +132,18 @@ struct TorchDeviceResource {
         deallocate_async(p, bytes, alignment, cudaStream_t{});
     }
 
+    /// @brief Equal when memory from one can be freed through the other. Torch's CUDA allocator
+    ///        frees a block on whichever device holds it, so any two CUDA resources are equal;
+    ///        PrivateUse1 memory frees only through the PrivateUse1 allocator.
+    friend bool
+    operator==(const TorchDeviceResource &a, const TorchDeviceResource &b) {
+        return a.mDevice.type() == b.mDevice.type();
+    }
+    friend bool
+    operator!=(const TorchDeviceResource &a, const TorchDeviceResource &b) {
+        return !(a == b);
+    }
+
   private:
     torch::Device mDevice;
 };

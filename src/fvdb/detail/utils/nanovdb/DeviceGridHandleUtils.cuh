@@ -68,7 +68,7 @@ makeDeviceHandleFromLayout(DeviceGridBuffer &&buffer,
 #ifndef NDEBUG
     checkAdoptedLayoutDebug(buffer, meta, buffer.stream());
 #endif
-    return nanovdb::cuda::detail::HandleFactory::make(std::move(buffer), std::move(meta));
+    return GridStorage::DeviceHandle::adopt(std::move(buffer), std::move(meta));
 }
 
 /// @brief One grid's bytes, wherever they live, to be laid into new storage.
@@ -207,7 +207,7 @@ class GridStorageParts {
                 return GridStorage();
             }
             return GridStorage(
-                nanovdb::cuda::detail::HandleFactory::make(
+                GridStorage::DeviceHandle::adopt(
                     DeviceGridBuffer(
                         mStream, TorchDeviceResource(mDevice), 0, nanovdb::cuda::noInit),
                     std::vector<nanovdb::GridHandleMetaData>{}),

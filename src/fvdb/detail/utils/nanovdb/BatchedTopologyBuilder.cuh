@@ -1,44 +1,36 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-// Batched leaf-mask topology construction: builds ALL grids of a batch in one pass.
+// Batched topology passes: builds ALL grids of a batch in one pass of NanoVDB's batch-capable
+// tools::cuda::TopologyBuilder.
 //
-// NanoVDB's morphology builders (RefineGrid / CoarsenGrid via TopologyBuilder) are single-grid by
-// construction: each getHandle() call performs several stream synchronizations (source-tree
-// readback, host-side speculative root refinement, node-count readback for allocation sizing) and
-// produces one single-grid handle, which fvdb then lays end to end per batch member
-// (mergeGridStorages) -- another copy of every grid's bytes. For generated-topology workloads that
-// rebuild grids every training iteration (issue #755), that per-member fixed overhead -- not the
-// topology size -- dominates wall clock and serializes the GPU.
+// NanoVDB's morphology builders (RefineGrid, CoarsenGrid, DilateGrid) build one grid per call, with
+// several stream synchronizations each, and fvdb would then lay the single-grid results end to end.
+// For generated-topology workloads that rebuild grids every training iteration (issue #755), that
+// per-member overhead dominates. This header drives the builder over the whole batch instead:
 //
-// This header rebuilds the factor-2 refine (subdivision) and coarsen passes so one invocation
-// covers the whole batch:
+//   roots   one kernel gathers every source grid's upper-node bounding boxes, read back with one
+//           host wait; the host derives each output grid's speculative root tiles from them the way
+//           NanoVDB's single-grid consumers do;
+//   masks   one launch over all source leaves fills the builder's densified child masks, through
+//           NanoVDB's Refine/Coarsen internal-node functors or fvdb's BoxDilate marking;
+//   build   the builder counts nodes (its one host wait), allocates one buffer, and writes every
+//           node; a second launch over all source leaves writes the leaf value masks.
 //
-//   emit    one kernel over all source leaves of all members emits candidate output leaves as
-//           (root-tile sort key, in-tile node key, leaf origin, 512-bit activity mask) slots,
-//           segmented per grid;
-//   sort    two stable segmented radix sorts put each grid's slots in canonical NanoVDB node
-//           order (root tiles by the PointsToGrid offset-shifted key, then upper/lower child
-//           offsets); invalid slots sort to the segment tails;
-//   dedup   head-flag + scan passes derive the unique leaf/lower/upper nodes, their per-grid
-//           counts, and parent linkage (coarsen additionally OR-combines duplicate leaf masks);
-//   size    ONE host synchronization reads back the per-grid node counts; per-grid byte offsets
-//           are computed on the host and a single output buffer is allocated;
-//   build   batched kernels write every grid's GridData/TreeData/RootData (mGridIndex = g,
-//           mGridCount = B), root tiles, upper/lower/leaf nodes, leaf mOffset/mPrefixSum, and
-//           bounding boxes. Empty members become valid empty grids inline (no host proxy grids).
+// The builder densifies 32^3 lower-node masks (about 16.5 MiB of scratch) per speculative root
+// tile, so a pass splits the batch into chunks of consecutive grids holding at most
+// FVDB_TOPOLOGY_MAX_TILES tiles (default 64). The chunks of one pass feed the next pass where they
+// lie; the last pass's chunks are assembled into one storage, or adopted directly when there is
+// one.
 //
-// The mask bit math is NanoVDB's own (RefineLeafMasksFunctor::refineMask /
-// CoarsenLeafMasksFunctor::coarsenMask); the header/bbox/prefix-sum stages are transcriptions of
-// tools::cuda::TopologyBuilder's functors with (gridIndex, localIndex) indexing. Checksums are
-// disabled on the output, matching assembleGridStorage (compaction, concatenation, merge).
-//
-// Scratch is allocated through torch (the caching allocator) on the caller's current stream. The
-// only stream synchronization per pass is the node-count readback that sizes the output buffer.
+// Scratch is allocated through BuilderResource on the caller's stream. The builder is cached per
+// stream, so its pinned staging is allocated once rather than per pass. Checksums are disabled on
+// the output, matching assembleGridStorage (compaction, concatenation, merge).
 
 #ifndef FVDB_DETAIL_UTILS_NANOVDB_BATCHEDTOPOLOGYBUILDER_CUH
 #define FVDB_DETAIL_UTILS_NANOVDB_BATCHEDTOPOLOGYBUILDER_CUH
 
+#include <fvdb/BuilderResource.h>
 #include <fvdb/GridBatchData.h>
 #include <fvdb/GridStorage.h>
 #include <fvdb/TorchDeviceResource.h>
@@ -46,20 +38,21 @@
 
 #include <nanovdb/GridHandle.h>
 #include <nanovdb/NanoVDB.h>
+#include <nanovdb/tools/cuda/TopologyBuilder.cuh>
 #include <nanovdb/util/MorphologyHelpers.h>
 #include <nanovdb/util/cuda/Morphology.cuh>
 
 #include <c10/cuda/CUDAException.h>
-#include <c10/cuda/CUDAGuard.h>
 #include <torch/types.h>
-
-#include <cub/cub.cuh>
 
 #include <cuda_runtime.h>
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <limits>
+#include <memory>
+#include <unordered_map>
 #include <vector>
 
 namespace fvdb {
@@ -68,11 +61,13 @@ namespace batched {
 
 using BuildT = nanovdb::ValueOnIndex;
 using GridT  = nanovdb::NanoGrid<BuildT>;
-using TreeT  = nanovdb::NanoTree<BuildT>;
 using RootT  = nanovdb::NanoRoot<BuildT>;
 using UpperT = nanovdb::NanoUpper<BuildT>;
 using LowerT = nanovdb::NanoLower<BuildT>;
 using LeafT  = nanovdb::NanoLeaf<BuildT>;
+
+using ProcessedTileMap = nanovdb::tools::cuda::topology::detail::ProcessedTileMap<RootT>;
+using TopologyBuilderT = nanovdb::tools::cuda::TopologyBuilder<BuildT, BuilderResource>;
 
 /// One batched topology pass over the whole batch. `Refine` and `Coarsen` are the factor-2
 /// subdivision / coarsening passes; `BoxDilate` is a Minkowski sum with the axis-aligned box
@@ -99,241 +94,56 @@ struct TopologyPassSpec {
 };
 
 /// Device-pointer view of the B source grids of one pass. The grids may live anywhere (a
-/// GridBatchData buffer -- including sliced/non-contiguous views -- or the output buffer of a
-/// previous pass); only per-member device grid pointers and leaf counts are needed.
+/// GridBatchData buffer -- including sliced/non-contiguous views -- or the output chunks of a
+/// previous pass); only per-member device grid pointers, leaf counts, and a bound on each member's
+/// upper-node count are needed.
 struct BatchedTopologySource {
-    std::vector<const GridT *> grids; // per-member device grid pointers (host-side vector)
-    std::vector<int64_t> leafCounts;  // per-member leaf counts (host-side)
+    std::vector<const GridT *> grids;   // per-member device grid pointers (host-side vector)
+    std::vector<int64_t> leafCounts;    // per-member leaf counts (host-side)
+    std::vector<int64_t> upperCapacity; // per-member upper bound on upper nodes (host-side)
     torch::Device device{torch::kCUDA};
 };
 
-/// Result of one batched pass: a single device buffer holding all B output grids back-to-back,
-/// plus the host-side layout needed to wrap it in GridStorage or feed the next pass. The buffer
-/// is grid storage proper (allocated through TorchDeviceResource, retaining the pass's stream),
-/// so the final pass's buffer becomes the batch's storage without another copy.
+/// Result of one batched pass: the output grids in one or more chunk buffers, in batch order, plus
+/// the host-side layout needed to wrap them in GridStorage or feed the next pass. Each buffer is
+/// grid storage proper (allocated through TorchDeviceResource, retaining the pass's stream), so a
+/// single-chunk result becomes the batch's storage without another copy.
 struct BatchedTopologyResult {
-    DeviceGridBuffer buffer;
-    std::vector<uint64_t> gridByteOffsets; // B+1 cumulative byte offsets into `buffer`
-    std::vector<int64_t> leafCounts;       // per-member output leaf counts
+    std::vector<DeviceGridBuffer> chunks; // output buffers; each holds its grids back to back
+    std::vector<const GridT *> grids;     // per-member output grid pointers, into `chunks`
+    std::vector<uint64_t> gridBytes;      // per-member output byte sizes
+    std::vector<int64_t> leafCounts;      // per-member output leaf counts
+    std::vector<int64_t> upperCounts;     // per-member output upper-node counts
 };
 
 // ---------------------------------------------------------------------------------------------
 // Device helpers
 // ---------------------------------------------------------------------------------------------
 
-/// Sentinel tile key marking an invalid emission slot (sorts to the end of its segment).
-static constexpr uint64_t kInvalidTileKey = ~uint64_t(0);
+/// Per-chunk device tables, indexed by member within the chunk.
+struct PassTables {
+    const GridT *const *src;  // source grids
+    GridT *const *dst;        // output grids (set once the output buffer exists)
+    const RootT *const *root; // processed roots
+    const int64_t *tileBase;  // first processed tile of each grid in the builder's mask arrays
+    const int64_t *leafStart; // [numGrids+1] first source leaf of each grid within the chunk
+    int32_t numGrids;
+};
 
-/// Root-tile sort key: the offset-shifted encoding used by PointsToGrid and RefineGrid::refineRoot
-/// (NOT the encoding stored in Tile::key by RootData::CoordToKey). Grids built by every other CUDA
-/// path order their root tiles by this key, and elementwise topology comparisons rely on that
-/// canonical order.
-__device__ inline uint64_t
-tileSortKey(const nanovdb::Coord &ijk) {
-    static constexpr int64_t kOffset = int64_t(1) << 31;
-    return (uint64_t(uint32_t(int64_t(ijk[2]) + kOffset) >> 12)) |
-           (uint64_t(uint32_t(int64_t(ijk[1]) + kOffset) >> 12) << 21) |
-           (uint64_t(uint32_t(int64_t(ijk[0]) + kOffset) >> 12) << 42);
-}
-
-/// In-tile node key ordering leaves by (upper child offset, lower child offset) -- x-major at each
-/// level, matching the breadth-first node order every NanoVDB builder produces.
-__device__ inline uint32_t
-nodeSortKey(const nanovdb::Coord &leafOrigin) {
-    return (UpperT::CoordToOffset(leafOrigin) << 12) | LowerT::CoordToOffset(leafOrigin);
-}
-
-/// Index of the segment containing element i: upper_bound(offsets, i) - 1 over numSegments+1
-/// monotone offsets.
-template <typename OffsetT>
+/// The grid owning chunk-wide source leaf `leaf`: the last grid whose first leaf does not exceed
+/// it. Empty grids share their successor's first leaf and are skipped that way.
 __device__ inline int32_t
-findSegment(const OffsetT *__restrict__ offsets, int32_t numSegments, OffsetT i) {
-    int32_t lo = 0, hi = numSegments - 1; // segment index range
+gridOfLeaf(const PassTables &t, int64_t leaf) {
+    int32_t lo = 0, hi = t.numGrids;
     while (lo < hi) {
-        const int32_t mid = (lo + hi + 1) >> 1;
-        if (offsets[mid] <= i) {
-            lo = mid;
+        const int32_t mid = (lo + hi) >> 1;
+        if (t.leafStart[mid] <= leaf) {
+            lo = mid + 1;
         } else {
-            hi = mid - 1;
+            hi = mid;
         }
     }
-    return lo;
-}
-
-/// Slot-scaled offsets into the origin ([N*3]) and mask ([N*8]) arrays. The slot index is widened
-/// before the multiply; a 32-bit product overflows once the batch emits 2^28 slots, which box
-/// dilation reaches at roughly 10 M source leaves.
-template <typename IndexT>
-__device__ inline int64_t
-originIndex(IndexT slot) {
-    return int64_t(slot) * 3;
-}
-template <typename IndexT>
-__device__ inline int64_t
-maskIndex(IndexT slot) {
-    return int64_t(slot) * 8;
-}
-
-/// Per-grid node layout within the shared output buffer; mirrors TopologyBuilder::getBuffer.
-struct GridNodes {
-    GridT *grid;
-    TreeT *tree;
-    RootT *root;
-    UpperT *upper; // first upper node
-    LowerT *lower; // first lower node
-    LeafT *leaf;   // first leaf node
-    uint32_t numUpper, numLower, numLeaf;
-    uint64_t size; // total grid size in bytes
-};
-
-struct BuildDeviceArrays {
-    uint8_t *dstBase;
-    const uint64_t *gridByteOffsets; // [B+1]
-    const uint32_t *upperStart;      // [B+1] global upper-node index offsets per grid
-    const uint32_t *lowerStart;      // [B+1]
-    const uint32_t *leafStart;       // [B+1]
-};
-
-__device__ inline GridNodes
-gridNodes(const BuildDeviceArrays &a, int32_t g) {
-    GridNodes n;
-    n.numUpper      = a.upperStart[g + 1] - a.upperStart[g];
-    n.numLower      = a.lowerStart[g + 1] - a.lowerStart[g];
-    n.numLeaf       = a.leafStart[g + 1] - a.leafStart[g];
-    n.size          = a.gridByteOffsets[g + 1] - a.gridByteOffsets[g];
-    uint8_t *base   = a.dstBase + a.gridByteOffsets[g];
-    uint64_t offset = 0;
-    n.grid          = reinterpret_cast<GridT *>(base);
-    offset += GridT::memUsage();
-    n.tree = reinterpret_cast<TreeT *>(base + offset);
-    offset += TreeT::memUsage();
-    n.root = reinterpret_cast<RootT *>(base + offset);
-    offset += RootT::memUsage(n.numUpper);
-    n.upper = reinterpret_cast<UpperT *>(base + offset);
-    offset += UpperT::memUsage() * uint64_t(n.numUpper);
-    n.lower = reinterpret_cast<LowerT *>(base + offset);
-    offset += LowerT::memUsage() * uint64_t(n.numLower);
-    n.leaf = reinterpret_cast<LeafT *>(base + offset);
-    return n;
-}
-
-/// Byte size of one grid given its node counts; must match gridNodes()'s layout.
-inline uint64_t
-gridByteSize(uint32_t numUpper, uint32_t numLower, uint32_t numLeaf) {
-    return GridT::memUsage() + TreeT::memUsage() + RootT::memUsage(numUpper) +
-           UpperT::memUsage() * uint64_t(numUpper) + LowerT::memUsage() * uint64_t(numLower) +
-           LeafT::DataType::memUsage() * uint64_t(numLeaf);
-}
-
-// ---------------------------------------------------------------------------------------------
-// Emission kernels: one slot per candidate output leaf, segmented per grid
-// ---------------------------------------------------------------------------------------------
-
-struct EmissionArrays {
-    uint64_t *tileKey;            // [N] root-tile sort key; kInvalidTileKey for dead slots
-    uint32_t *nodeKey;            // [N] (upperChildOffset << 12) | lowerChildOffset
-    int32_t *origin;              // [N*3] output leaf origin
-    uint64_t *mask;               // [N*8] output leaf 512-bit activity-mask contribution
-    const int32_t *segOffsets;    // [B+1] per-grid slot ranges
-    const GridT *const *srcGrids; // [B] device pointers to the source grids
-    int32_t numSegments;
-    int32_t numSlots;
-};
-
-/// Refine (factor 2): slot = (source leaf, octant). A source leaf spanning [o, o+7]^3 produces up
-/// to 8 fine leaves tiling [2o, 2o+15]^3; the fine mask of octant (bi,bj,bk) is the bit-doubled
-/// 4^3 sub-mask of the source mask. Exactly one producer per fine leaf, so no deduplication.
-static __global__ void
-emitRefinedLeaves(EmissionArrays em) {
-    using RefineOp = nanovdb::util::morphology::cuda::RefineLeafMasksFunctor<BuildT>;
-    for (int32_t s = blockIdx.x * blockDim.x + threadIdx.x; s < em.numSlots;
-         s += gridDim.x * blockDim.x) {
-        const int32_t g         = findSegment(em.segOffsets, em.numSegments, s);
-        const int32_t localSlot = s - em.segOffsets[g];
-        const int32_t leafLocal = localSlot >> 3;
-        const int32_t octant    = localSlot & 7;
-        const int32_t bi = (octant >> 2) & 1, bj = (octant >> 1) & 1, bk = octant & 1;
-
-        const LeafT &srcLeaf     = em.srcGrids[g]->tree().template getFirstNode<0>()[leafLocal];
-        const uint64_t *srcWords = srcLeaf.valueMask().words();
-
-        // Extract the (bi,bj,bk) 4^3 sub-block of the source mask. refineMask() only reads the
-        // low-nibble pattern, so the stray high bits from the shift are harmless there, but they
-        // must be masked out for the occupancy test.
-        nanovdb::Mask<3> fineMask;
-        uint64_t *w       = fineMask.words();
-        uint64_t occupied = 0;
-        for (int i = 0; i < 4; ++i) {
-            w[i] = srcWords[i + bi * 4] >> (4 * bk + 32 * bj);
-            occupied |= w[i] & 0x000000000f0f0f0fUL;
-        }
-        if (!occupied) {
-            em.tileKey[s] = kInvalidTileKey;
-            em.nodeKey[s] = 0; // sort pass 1 reads every slot's node key
-            continue;
-        }
-        RefineOp::refineMask(fineMask);
-
-        const nanovdb::Coord srcOrigin = srcLeaf.origin();
-        const nanovdb::Coord fineOrigin(
-            srcOrigin[0] * 2 + 8 * bi, srcOrigin[1] * 2 + 8 * bj, srcOrigin[2] * 2 + 8 * bk);
-        em.tileKey[s]                 = tileSortKey(fineOrigin);
-        em.nodeKey[s]                 = nodeSortKey(fineOrigin);
-        em.origin[originIndex(s)]     = fineOrigin[0];
-        em.origin[originIndex(s) + 1] = fineOrigin[1];
-        em.origin[originIndex(s) + 2] = fineOrigin[2];
-        const uint64_t *fw            = fineMask.words();
-        for (int i = 0; i < 8; ++i) {
-            em.mask[maskIndex(s) + i] = fw[i];
-        }
-    }
-}
-
-/// Coarsen (factor 2): slot = source leaf. A source leaf collapses to a 4^3 block placed by the
-/// parity of the coarsened origin inside one output leaf; up to 8 source leaves contribute to the
-/// same output leaf and are deduplicated (mask-OR) downstream.
-static __global__ void
-emitCoarsenedLeaves(EmissionArrays em) {
-    using CoarsenOp = nanovdb::util::morphology::cuda::CoarsenLeafMasksFunctor<BuildT>;
-    for (int32_t s = blockIdx.x * blockDim.x + threadIdx.x; s < em.numSlots;
-         s += gridDim.x * blockDim.x) {
-        const int32_t g         = findSegment(em.segOffsets, em.numSegments, s);
-        const int32_t leafLocal = s - em.segOffsets[g];
-
-        const LeafT &srcLeaf = em.srcGrids[g]->tree().template getFirstNode<0>()[leafLocal];
-        if (srcLeaf.valueMask().isOff()) { // leaves always have active voxels; defensive
-            em.tileKey[s] = kInvalidTileKey;
-            em.nodeKey[s] = 0;             // sort pass 1 reads every slot's node key
-            continue;
-        }
-
-        const nanovdb::Coord coarseOrigin =
-            nanovdb::util::morphology::coarsenCoord(srcLeaf.origin());
-        // The 4^3 coarse block starts at a multiple of 4, so it lies in a single 8-aligned leaf.
-        const nanovdb::Coord dstLeafOrigin(
-            coarseOrigin[0] & ~7, coarseOrigin[1] & ~7, coarseOrigin[2] & ~7);
-        const int bi = (coarseOrigin[0] & 7) ? 1 : 0;
-        const int bj = (coarseOrigin[1] & 7) ? 1 : 0;
-        const int bk = (coarseOrigin[2] & 7) ? 1 : 0;
-
-        nanovdb::Mask<3> coarseMask = srcLeaf.valueMask();
-        CoarsenOp::coarsenMask(coarseMask);
-
-        uint64_t contribution[8] = {};
-        const uint64_t *cw       = coarseMask.words();
-        for (int wi = 0; wi < 4; ++wi) {
-            contribution[wi + 4 * bi] = cw[wi] << (4 * bk + 32 * bj);
-        }
-
-        em.tileKey[s]                 = tileSortKey(dstLeafOrigin);
-        em.nodeKey[s]                 = nodeSortKey(dstLeafOrigin);
-        em.origin[originIndex(s)]     = dstLeafOrigin[0];
-        em.origin[originIndex(s) + 1] = dstLeafOrigin[1];
-        em.origin[originIndex(s) + 2] = dstLeafOrigin[2];
-        for (int i = 0; i < 8; ++i) {
-            em.mask[maskIndex(s) + i] = contribution[i];
-        }
-    }
+    return lo - 1;
 }
 
 /// Shifts a leaf-mask word along z by s in [-7,7], dropping bits that leave the leaf.
@@ -355,478 +165,283 @@ shiftWordY(uint64_t w, int s) {
     return s > 0 ? w << (8 * s) : (s < 0 ? w >> (-8 * s) : w);
 }
 
-/// BoxDilate: slot = (source leaf, target neighbor-leaf offset db). The contribution of a source
-/// leaf S to the target leaf at S.origin + 8*db is U_{o in [boxLo,boxHi]} shift(S, o - 8*db),
-/// which factorizes per axis (Minkowski sums of axis-aligned boxes compose); shifts with any
-/// component of magnitude >= 8 vanish, so per axis: db==0 keeps all box offsets, db==+-1 keeps
-/// only o==+-1 (shift of -+7). Up to 2^3 source leaves contribute to one target leaf per
-/// one-sided pass (3^3 for the full box), deduplicated (mask-OR) downstream like coarsen.
-static __global__ void
-emitBoxDilatedLeaves(EmissionArrays em, nanovdb::Coord boxLo, nanovdb::Coord boxHi) {
-    // Per-axis target-offset ranges and fanout.
-    int dbLo[3], fan[3];
-    for (int a = 0; a < 3; ++a) {
-        dbLo[a] = boxLo[a] < 0 ? -1 : 0;
-        fan[a]  = (boxHi[a] > 0 ? 1 : 0) - dbLo[a] + 1;
+/// The voxels of source leaf mask `src` that land in the target leaf at offset 8*db under a
+/// Minkowski sum with the box [boxLo, boxHi]: U_{o in box} shift(src, o - 8*db). The sum
+/// factorizes per axis; shifts with any component of magnitude >= 8 vanish, so per axis db==0
+/// keeps every box offset and db==+-1 keeps only o==+-1. Returns whether any voxel lands.
+__device__ inline bool
+boxDilatedContribution(const uint64_t *src,
+                       const nanovdb::Coord &boxLo,
+                       const nanovdb::Coord &boxHi,
+                       const nanovdb::Coord &db,
+                       uint64_t out[8]) {
+    // z-stage, then y-stage (per word), then x-stage (word permutation).
+    uint64_t wz[8], wy[8];
+    for (int i = 0; i < 8; ++i) {
+        uint64_t acc = 0;
+        for (int oz = boxLo[2]; oz <= boxHi[2]; ++oz) {
+            const int sz = oz - 8 * db[2];
+            if (sz > -8 && sz < 8) {
+                acc |= shiftWordZ(src[i], sz);
+            }
+        }
+        wz[i] = acc;
     }
-    const int32_t fanout = fan[0] * fan[1] * fan[2];
-
-    for (int32_t s = blockIdx.x * blockDim.x + threadIdx.x; s < em.numSlots;
-         s += gridDim.x * blockDim.x) {
-        const int32_t g         = findSegment(em.segOffsets, em.numSegments, s);
-        const int32_t localSlot = s - em.segOffsets[g];
-        const int32_t leafLocal = localSlot / fanout;
-        int32_t t               = localSlot % fanout;
-        const int dbz           = dbLo[2] + t % fan[2];
-        t /= fan[2];
-        const int dby = dbLo[1] + t % fan[1];
-        const int dbx = dbLo[0] + t / fan[1];
-
-        const LeafT &srcLeaf     = em.srcGrids[g]->tree().template getFirstNode<0>()[leafLocal];
-        const uint64_t *srcWords = srcLeaf.valueMask().words();
-
-        // z-stage, then y-stage (per word), then x-stage (word permutation).
-        uint64_t wz[8], wy[8], out[8];
-        for (int i = 0; i < 8; ++i) {
-            uint64_t acc = 0;
-            for (int oz = boxLo[2]; oz <= boxHi[2]; ++oz) {
-                const int sz = oz - 8 * dbz;
-                if (sz > -8 && sz < 8) {
-                    acc |= shiftWordZ(srcWords[i], sz);
-                }
+    for (int i = 0; i < 8; ++i) {
+        uint64_t acc = 0;
+        for (int oy = boxLo[1]; oy <= boxHi[1]; ++oy) {
+            const int sy = oy - 8 * db[1];
+            if (sy > -8 && sy < 8) {
+                acc |= shiftWordY(wz[i], sy);
             }
-            wz[i] = acc;
         }
-        for (int i = 0; i < 8; ++i) {
-            uint64_t acc = 0;
-            for (int oy = boxLo[1]; oy <= boxHi[1]; ++oy) {
-                const int sy = oy - 8 * dby;
-                if (sy > -8 && sy < 8) {
-                    acc |= shiftWordY(wz[i], sy);
-                }
-            }
-            wy[i] = acc;
-        }
-        uint64_t occupied = 0;
-        for (int x = 0; x < 8; ++x) {
-            uint64_t acc = 0;
-            for (int ox = boxLo[0]; ox <= boxHi[0]; ++ox) {
-                const int sx  = ox - 8 * dbx; // out[x] gathers wy[x - sx]
-                const int src = x - sx;
-                if (src >= 0 && src < 8) {
-                    acc |= wy[src];
-                }
-            }
-            out[x] = acc;
-            occupied |= acc;
-        }
-        if (!occupied) {
-            em.tileKey[s] = kInvalidTileKey;
-            em.nodeKey[s] = 0; // sort pass 1 reads every slot's node key
-            continue;
-        }
-
-        const nanovdb::Coord srcOrigin = srcLeaf.origin();
-        const nanovdb::Coord dstLeafOrigin(
-            srcOrigin[0] + 8 * dbx, srcOrigin[1] + 8 * dby, srcOrigin[2] + 8 * dbz);
-        em.tileKey[s]                 = tileSortKey(dstLeafOrigin);
-        em.nodeKey[s]                 = nodeSortKey(dstLeafOrigin);
-        em.origin[originIndex(s)]     = dstLeafOrigin[0];
-        em.origin[originIndex(s) + 1] = dstLeafOrigin[1];
-        em.origin[originIndex(s) + 2] = dstLeafOrigin[2];
-        for (int i = 0; i < 8; ++i) {
-            em.mask[maskIndex(s) + i] = out[i];
-        }
+        wy[i] = acc;
     }
+    uint64_t occupied = 0;
+    for (int x = 0; x < 8; ++x) {
+        uint64_t acc = 0;
+        for (int ox = boxLo[0]; ox <= boxHi[0]; ++ox) {
+            const int from = x - (ox - 8 * db[0]); // out[x] gathers wy[x - shift]
+            if (from >= 0 && from < 8) {
+                acc |= wy[from];
+            }
+        }
+        out[x] = acc;
+        occupied |= acc;
+    }
+    return occupied != 0;
 }
 
-// ---------------------------------------------------------------------------------------------
-// Sort / dedup kernels
-// ---------------------------------------------------------------------------------------------
+/// The target-leaf offsets a BoxDilate pass with [boxLo, boxHi] reaches: per axis, -1 when the box
+/// extends below 0, 0, and +1 when it extends above 0. A BoxDilate kernel runs one work item per
+/// (source leaf, offset) pair rather than looping over offsets per thread; a per-thread loop with
+/// these runtime bounds makes each including file take about 20 minutes to compile.
+struct BoxNeighbors {
+    int lo[3], count[3];
 
-static __global__ void
-iotaKernel(uint32_t *out, int32_t n) {
-    for (int32_t i = blockIdx.x * blockDim.x + threadIdx.x; i < n; i += gridDim.x * blockDim.x) {
-        out[i] = uint32_t(i);
+    __hostdev__
+    BoxNeighbors(const nanovdb::Coord &boxLo, const nanovdb::Coord &boxHi) {
+        for (int a = 0; a < 3; ++a) {
+            lo[a]    = boxLo[a] < 0 ? -1 : 0;
+            count[a] = (boxHi[a] > 0 ? 1 : 0) - lo[a] + 1;
+        }
     }
-}
 
-static __global__ void
-gatherKeys64(const uint64_t *__restrict__ keys,
-             const uint32_t *__restrict__ perm,
-             uint64_t *__restrict__ out,
-             int32_t n) {
-    for (int32_t i = blockIdx.x * blockDim.x + threadIdx.x; i < n; i += gridDim.x * blockDim.x) {
-        out[i] = keys[perm[i]];
+    __hostdev__ int
+    size() const {
+        return count[0] * count[1] * count[2];
     }
-}
 
-struct SortedArrays {
-    const uint64_t *tileKey; // [N] canonical order, invalid slots at segment tails
-    uint32_t *nodeKey;       // [N]
-    int32_t *origin;         // [N*3]
-    uint64_t *mask;          // [N*8]
+    /// Offset `i` of size(), z fastest.
+    __hostdev__ nanovdb::Coord
+    operator[](int i) const {
+        const int z = i % count[2];
+        i /= count[2];
+        const int y = i % count[1];
+        return nanovdb::Coord(lo[0] + i / count[1], lo[1] + y, lo[2] + z);
+    }
 };
 
-static __global__ void
-gatherSorted(EmissionArrays em, const uint32_t *__restrict__ perm, SortedArrays out) {
-    for (int32_t j = blockIdx.x * blockDim.x + threadIdx.x; j < em.numSlots;
-         j += gridDim.x * blockDim.x) {
-        const uint32_t s = perm[j];
-        out.nodeKey[j]   = em.nodeKey[s];
-        if (em.tileKey[s] == kInvalidTileKey) { // dead slot: payload is never read downstream
-            continue;
-        }
-        out.origin[originIndex(j)]     = em.origin[originIndex(s)];
-        out.origin[originIndex(j) + 1] = em.origin[originIndex(s) + 1];
-        out.origin[originIndex(j) + 2] = em.origin[originIndex(s) + 2];
-        for (int i = 0; i < 8; ++i) {
-            out.mask[maskIndex(j) + i] = em.mask[maskIndex(s) + i];
-        }
-    }
-}
+// ---------------------------------------------------------------------------------------------
+// Kernels
+// ---------------------------------------------------------------------------------------------
 
-/// Marks the first slot of every distinct leaf / lower / upper node within each grid's segment.
+/// One thread per source grid: its upper-node count, and the bounding box of each upper node at
+/// `boxes + 6 * upperStart[g]` (min xyz, then max xyz).
 static __global__ void
-computeHeadFlags(const uint64_t *__restrict__ tileKey,
-                 const uint32_t *__restrict__ nodeKey,
-                 const int32_t *__restrict__ segOffsets,
-                 int32_t numSegments,
-                 int32_t n,
-                 uint32_t *__restrict__ leafFlag,
-                 uint32_t *__restrict__ lowerFlag,
-                 uint32_t *__restrict__ upperFlag) {
-    for (int32_t j = blockIdx.x * blockDim.x + threadIdx.x; j < n; j += gridDim.x * blockDim.x) {
-        uint32_t lf = 0, wf = 0, uf = 0;
-        if (tileKey[j] != kInvalidTileKey) {
-            const int32_t g     = findSegment(segOffsets, numSegments, j);
-            const bool first    = (j == segOffsets[g]);
-            const bool newTile  = first || tileKey[j] != tileKey[j - 1];
-            const bool newLower = newTile || (nodeKey[j] >> 12) != (nodeKey[j - 1] >> 12);
-            const bool newLeaf  = newLower || nodeKey[j] != nodeKey[j - 1];
-            lf                  = newLeaf ? 1u : 0u;
-            wf                  = newLower ? 1u : 0u;
-            uf                  = newTile ? 1u : 0u;
-        }
-        leafFlag[j]  = lf;
-        lowerFlag[j] = wf;
-        upperFlag[j] = uf;
-    }
-}
-
-/// Per-grid global node-index offsets, read off the inclusive rank scans at segment boundaries.
-static __global__ void
-segmentNodeOffsets(const uint32_t *__restrict__ leafRank,
-                   const uint32_t *__restrict__ lowerRank,
-                   const uint32_t *__restrict__ upperRank,
-                   const int32_t *__restrict__ segOffsets,
-                   int32_t numSegments,
-                   uint32_t *__restrict__ leafStart,
-                   uint32_t *__restrict__ lowerStart,
-                   uint32_t *__restrict__ upperStart) {
+gatherUpperBBoxes(const GridT *const *grids,
+                  const int64_t *upperStart,
+                  int32_t numGrids,
+                  int32_t *counts,
+                  int32_t *boxes) {
     const int32_t g = blockIdx.x * blockDim.x + threadIdx.x;
-    if (g > numSegments) {
+    if (g >= numGrids) {
         return;
     }
-    const int32_t boundary = segOffsets[g]; // slots before this boundary belong to grids < g
-    leafStart[g]           = boundary == 0 ? 0 : leafRank[boundary - 1];
-    lowerStart[g]          = boundary == 0 ? 0 : lowerRank[boundary - 1];
-    upperStart[g]          = boundary == 0 ? 0 : upperRank[boundary - 1];
+    const RootT &root      = grids[g]->tree().root();
+    const int64_t capacity = upperStart[g + 1] - upperStart[g];
+    int32_t n              = 0;
+    for (uint32_t t = 0; t < root.tileCount(); ++t) {
+        const auto *tile = root.tile(t);
+        if (!tile->isChild()) {
+            continue;
+        }
+        if (n < capacity) {
+            const nanovdb::CoordBBox b = root.getChild(tile)->bbox();
+            int32_t *out               = boxes + 6 * (upperStart[g] + n);
+            for (int a = 0; a < 3; ++a) {
+                out[a]     = b.min()[a];
+                out[3 + a] = b.max()[a];
+            }
+        }
+        ++n;
+    }
+    counts[g] = n;
 }
 
-/// Records, for every unique node, its head slot and its parent's global node index.
+/// The source leaf of work item `item`, and for BoxDilate its target-leaf offset `db`: BoxDilate
+/// runs one item per (source leaf, offset) pair, every other op one item per source leaf.
+template <TopologyPassSpec::Op Op>
+__device__ inline int64_t
+leafOfItem(int64_t item, const BoxNeighbors &neighbors, nanovdb::Coord &db) {
+    if constexpr (Op == TopologyPassSpec::Op::BoxDilate) {
+        db = neighbors[int(item % neighbors.size())];
+        return item / neighbors.size();
+    }
+    return item;
+}
+
+/// One work item per source leaf of the chunk (BoxDilate: per source leaf and target offset):
+/// marks the upper- and lower-node children it produces in its grid's densified masks.
+template <TopologyPassSpec::Op Op>
 static __global__ void
-scatterNodeTables(const uint32_t *__restrict__ leafFlag,
-                  const uint32_t *__restrict__ lowerFlag,
-                  const uint32_t *__restrict__ upperFlag,
-                  const uint32_t *__restrict__ leafRank,
-                  const uint32_t *__restrict__ lowerRank,
-                  const uint32_t *__restrict__ upperRank,
-                  int32_t n,
-                  uint32_t *__restrict__ leafHeadSlot,
-                  uint32_t *__restrict__ leafParent,
-                  uint32_t *__restrict__ lowerHeadSlot,
-                  uint32_t *__restrict__ lowerParent,
-                  uint32_t *__restrict__ upperHeadSlot) {
-    for (int32_t j = blockIdx.x * blockDim.x + threadIdx.x; j < n; j += gridDim.x * blockDim.x) {
-        if (leafFlag[j]) {
-            const uint32_t leafIdx = leafRank[j] - 1;
-            leafHeadSlot[leafIdx]  = uint32_t(j);
-            leafParent[leafIdx]    = lowerRank[j] - 1;
-        }
-        if (lowerFlag[j]) {
-            const uint32_t lowerIdx = lowerRank[j] - 1;
-            lowerHeadSlot[lowerIdx] = uint32_t(j);
-            lowerParent[lowerIdx]   = upperRank[j] - 1;
-        }
-        if (upperFlag[j]) {
-            upperHeadSlot[upperRank[j] - 1] = uint32_t(j);
+fillInternalMasks(PassTables t,
+                  int64_t numItems,
+                  nanovdb::Coord boxLo,
+                  nanovdb::Coord boxHi,
+                  nanovdb::Mask<5> *upperMasks,
+                  nanovdb::Mask<4> (*lowerMasks)[nanovdb::Mask<5>::SIZE]) {
+    namespace morph = nanovdb::util::morphology::cuda;
+    const BoxNeighbors neighbors(boxLo, boxHi);
+    for (int64_t item = int64_t(blockIdx.x) * blockDim.x + threadIdx.x; item < numItems;
+         item += int64_t(gridDim.x) * blockDim.x) {
+        nanovdb::Coord db;
+        const int64_t leaf  = leafOfItem<Op>(item, neighbors, db);
+        const int32_t g     = gridOfLeaf(t, leaf);
+        const int64_t local = leaf - t.leafStart[g];
+        auto *upper         = upperMasks + t.tileBase[g];
+        auto *lower         = lowerMasks + t.tileBase[g];
+        if constexpr (Op == TopologyPassSpec::Op::Refine) {
+            morph::RefineInternalNodesFunctor<BuildT>()(local, t.src[g], t.root[g], upper, lower);
+        } else if constexpr (Op == TopologyPassSpec::Op::Coarsen) {
+            morph::CoarsenInternalNodesFunctor<BuildT>()(local, t.src[g], t.root[g], upper, lower);
+        } else {
+            const LeafT &srcLeaf = t.src[g]->tree().template getFirstNode<0>()[local];
+            uint64_t contribution[8];
+            if (!boxDilatedContribution(
+                    srcLeaf.valueMask().words(), boxLo, boxHi, db, contribution)) {
+                continue;
+            }
+            const RootT *root           = t.root[g];
+            const nanovdb::Coord origin = srcLeaf.origin() + (db << 3);
+            const uint32_t upperChild   = UpperT::CoordToOffset(origin);
+            const int64_t tileIndex     = root->probeTile(origin) - root->tile(0);
+            upper[tileIndex].setOnAtomic(upperChild);
+            lower[tileIndex][upperChild].setOnAtomic(LowerT::CoordToOffset(origin));
         }
     }
 }
 
-/// Coarsen and BoxDilate: OR every duplicate slot's mask contribution into its unique leaf's head
-/// slot. Refine is excluded because its source-to-output leaf mapping is injective.
+/// One work item per source leaf of the chunk (BoxDilate: per source leaf and target offset):
+/// writes, or ORs in, its voxels in the output grid's leaf value masks.
+template <TopologyPassSpec::Op Op>
 static __global__ void
-combineDuplicateMasks(const uint64_t *__restrict__ tileKey,
-                      const uint32_t *__restrict__ leafFlag,
-                      const uint32_t *__restrict__ leafRank,
-                      const uint32_t *__restrict__ leafHeadSlot,
-                      int32_t n,
-                      uint64_t *__restrict__ mask) {
-    for (int32_t j = blockIdx.x * blockDim.x + threadIdx.x; j < n; j += gridDim.x * blockDim.x) {
-        if (tileKey[j] == kInvalidTileKey || leafFlag[j]) {
-            continue;
-        }
-        const uint32_t head = leafHeadSlot[leafRank[j] - 1];
-        for (int i = 0; i < 8; ++i) {
-            const uint64_t w = mask[maskIndex(j) + i];
-            if (w) {
-                nanovdb::util::atomicOr(&mask[maskIndex(head) + i], w);
+fillLeafMasks(PassTables t, int64_t numItems, nanovdb::Coord boxLo, nanovdb::Coord boxHi) {
+    namespace morph = nanovdb::util::morphology::cuda;
+    const BoxNeighbors neighbors(boxLo, boxHi);
+    for (int64_t item = int64_t(blockIdx.x) * blockDim.x + threadIdx.x; item < numItems;
+         item += int64_t(gridDim.x) * blockDim.x) {
+        nanovdb::Coord db;
+        const int64_t leaf  = leafOfItem<Op>(item, neighbors, db);
+        const int32_t g     = gridOfLeaf(t, leaf);
+        const int64_t local = leaf - t.leafStart[g];
+        if constexpr (Op == TopologyPassSpec::Op::Refine) {
+            morph::RefineLeafMasksFunctor<BuildT>()(local, t.src[g], t.dst[g]);
+        } else if constexpr (Op == TopologyPassSpec::Op::Coarsen) {
+            morph::CoarsenLeafMasksFunctor<BuildT>()(local, t.src[g], t.dst[g]);
+        } else {
+            const LeafT &srcLeaf = t.src[g]->tree().template getFirstNode<0>()[local];
+            uint64_t contribution[8];
+            if (!boxDilatedContribution(
+                    srcLeaf.valueMask().words(), boxLo, boxHi, db, contribution)) {
+                continue;
+            }
+            const LeafT *dstLeaf = t.dst[g]->tree().root().probeLeaf(srcLeaf.origin() + (db << 3));
+            auto &dstMask        = const_cast<nanovdb::Mask<3> &>(dstLeaf->valueMask());
+            for (int w = 0; w < 8; ++w) {
+                if (contribution[w]) {
+                    nanovdb::util::atomicOr(&dstMask.words()[w], contribution[w]);
+                }
             }
         }
     }
 }
 
-// ---------------------------------------------------------------------------------------------
-// Build kernels (after the single sizing readback and output allocation)
-// ---------------------------------------------------------------------------------------------
-
-/// Copies every source grid's GridData header to its output position (preserving grid name, map,
-/// voxel size); the fields reset by initGridTreeRoot are rewritten afterwards.
+/// One block per grid: copies the source GridData header to the output grid, as NanoVDB's
+/// single-grid consumers do before TopologyBuilder::processGridTreeRoot.
 static __global__ void
-copyGridData(const GridT *const *__restrict__ srcGrids, BuildDeviceArrays a, int32_t numGrids) {
-    constexpr int32_t kWords = int32_t(sizeof(nanovdb::GridData) / sizeof(uint64_t));
-    const int32_t totalWords = numGrids * kWords;
-    for (int32_t t = blockIdx.x * blockDim.x + threadIdx.x; t < totalWords;
-         t += gridDim.x * blockDim.x) {
-        const int32_t g     = t / kWords;
-        const int32_t w     = t % kWords;
-        const uint64_t *src = reinterpret_cast<const uint64_t *>(srcGrids[g]);
-        uint64_t *dst       = reinterpret_cast<uint64_t *>(a.dstBase + a.gridByteOffsets[g]);
-        dst[w]              = src[w];
+copyGridHeaders(PassTables t) {
+    static_assert(sizeof(nanovdb::GridData) % sizeof(uint64_t) == 0);
+    constexpr uint32_t kWords = sizeof(nanovdb::GridData) / sizeof(uint64_t);
+    const int32_t g           = blockIdx.x;
+    const auto *src           = reinterpret_cast<const uint64_t *>(t.src[g]);
+    auto *dst                 = reinterpret_cast<uint64_t *>(t.dst[g]);
+    for (uint32_t w = threadIdx.x; w < kWords; w += blockDim.x) {
+        dst[w] = src[w];
     }
-}
-
-/// Per-grid transcription of tools::cuda::topology::detail::BuildGridTreeRootFunctor with
-/// mGridIndex/mGridCount/mGridSize set for a multi-grid buffer.
-static __global__ void
-initGridTreeRoot(BuildDeviceArrays a, int32_t numGrids) {
-    const int32_t g = blockIdx.x * blockDim.x + threadIdx.x;
-    if (g >= numGrids) {
-        return;
-    }
-    GridNodes n = gridNodes(a, g);
-
-    auto &root       = *n.root;
-    root.mTableSize  = n.numUpper;
-    root.mBackground = RootT::ValueType(0);
-    root.mMinimum = root.mMaximum = RootT::ValueType(0);
-    root.mAverage = root.mStdDevi = RootT::FloatType(0);
-    root.mBBox                    = nanovdb::CoordBBox();
-
-    auto &tree = *n.tree;
-    tree.setRoot(&root);
-    if (n.numUpper) {
-        tree.setFirstNode(n.upper);
-        tree.setFirstNode(n.lower);
-        tree.setFirstNode(n.leaf);
-    } else {
-        tree.setFirstNode<UpperT>(nullptr);
-        tree.setFirstNode<LowerT>(nullptr);
-        tree.setFirstNode<LeafT>(nullptr);
-    }
-    tree.mNodeCount[2] = n.numUpper;
-    tree.mNodeCount[1] = n.numLower;
-    tree.mNodeCount[0] = n.numLeaf;
-    tree.mVoxelCount   = 0; // set by finalizeGrids once leaf masks are in place
-    tree.mTileCount[2] = tree.mTileCount[1] = tree.mTileCount[0] = 0;
-
-    auto &grid = *n.grid;
-    grid.mChecksum.disable();
-    grid.mFlags.initMask({nanovdb::GridFlags::IsBreadthFirst});
-    grid.mGridIndex           = uint32_t(g);
-    grid.mGridCount           = uint32_t(numGrids);
-    grid.mGridSize            = n.size;
-    grid.mWorldBBox           = nanovdb::Vec3dBBox();
-    grid.mVoxelSize           = grid.mMap.getVoxelSize();
-    grid.mBlindMetadataOffset = n.size;
-    grid.mBlindMetadataCount  = 0u;
-    grid.mData1               = 1u;
-}
-
-/// One thread per unique upper node: writes its root tile (in canonical tile order) and preamble.
-static __global__ void
-buildUpperNodes(BuildDeviceArrays a,
-                SortedArrays sorted,
-                const uint32_t *__restrict__ upperHeadSlot,
-                int32_t numGrids,
-                int32_t totalUpper) {
-    for (int32_t u = blockIdx.x * blockDim.x + threadIdx.x; u < totalUpper;
-         u += gridDim.x * blockDim.x) {
-        const int32_t g      = findSegment(a.upperStart, numGrids, uint32_t(u));
-        const GridNodes n    = gridNodes(a, g);
-        const uint32_t local = uint32_t(u) - a.upperStart[g];
-        const uint32_t slot  = upperHeadSlot[u];
-        const nanovdb::Coord tileOrigin(sorted.origin[originIndex(slot)] & ~4095,
-                                        sorted.origin[originIndex(slot) + 1] & ~4095,
-                                        sorted.origin[originIndex(slot) + 2] & ~4095);
-        UpperT &upper = n.upper[local];
-        n.root->tile(local)->setChild(tileOrigin, &upper, n.root->data());
-        upper.mBBox  = nanovdb::CoordBBox();
-        upper.mFlags = (uint64_t)nanovdb::GridFlags::HasBBox;
-    }
-}
-
-/// One thread per unique lower node: links it under its upper node and writes its preamble.
-static __global__ void
-buildLowerNodes(BuildDeviceArrays a,
-                SortedArrays sorted,
-                const uint32_t *__restrict__ lowerHeadSlot,
-                const uint32_t *__restrict__ lowerParent,
-                int32_t numGrids,
-                int32_t totalLower) {
-    for (int32_t l = blockIdx.x * blockDim.x + threadIdx.x; l < totalLower;
-         l += gridDim.x * blockDim.x) {
-        const int32_t g         = findSegment(a.lowerStart, numGrids, uint32_t(l));
-        const GridNodes n       = gridNodes(a, g);
-        const uint32_t local    = uint32_t(l) - a.lowerStart[g];
-        const uint32_t slot     = lowerHeadSlot[l];
-        const uint32_t upperOff = sorted.nodeKey[slot] >> 12;
-        UpperT &upper           = n.upper[lowerParent[l] - a.upperStart[g]];
-        LowerT &lower           = n.lower[local];
-        upper.mChildMask.setOnAtomic(upperOff);
-        upper.setChild(upperOff, &lower);
-        lower.mBBox  = nanovdb::CoordBBox();
-        lower.mFlags = (uint64_t)nanovdb::GridFlags::HasBBox;
-    }
-}
-
-/// One thread per unique leaf: links it under its lower node, writes its activity mask, per-leaf
-/// prefix sums, and voxel count.
-static __global__ void
-buildLeafNodes(BuildDeviceArrays a,
-               SortedArrays sorted,
-               const uint32_t *__restrict__ leafHeadSlot,
-               const uint32_t *__restrict__ leafParent,
-               int32_t numGrids,
-               int32_t totalLeaf,
-               uint64_t *__restrict__ voxelCounts) { // [totalLeaf+1]; element 0 stays 0
-    for (int32_t t = blockIdx.x * blockDim.x + threadIdx.x; t < totalLeaf;
-         t += gridDim.x * blockDim.x) {
-        const int32_t g         = findSegment(a.leafStart, numGrids, uint32_t(t));
-        const GridNodes n       = gridNodes(a, g);
-        const uint32_t local    = uint32_t(t) - a.leafStart[g];
-        const uint32_t slot     = leafHeadSlot[t];
-        const uint32_t lowerOff = sorted.nodeKey[slot] & 0xFFFu;
-        LowerT &lower           = n.lower[leafParent[t] - a.lowerStart[g]];
-        LeafT &leaf             = n.leaf[local];
-        lower.mChildMask.setOnAtomic(lowerOff);
-        lower.setChild(lowerOff, &leaf);
-        leaf.mBBoxMin = nanovdb::Coord(sorted.origin[originIndex(slot)],
-                                       sorted.origin[originIndex(slot) + 1],
-                                       sorted.origin[originIndex(slot) + 2]);
-        leaf.mFlags   = uint8_t(nanovdb::GridFlags::HasBBox);
-
-        uint64_t *dstWords = leaf.mValueMask.words();
-        for (int i = 0; i < 8; ++i) {
-            dstWords[i] = sorted.mask[maskIndex(slot) + i];
-        }
-
-        // Per-leaf voxel count and the 9-bit encoded intra-leaf prefix sums (transcribed from
-        // TopologyBuilder's UpdateLeafVoxelCountsAndPrefixSumFunctor).
-        uint64_t prefixSum = 0, sum = nanovdb::util::countOn(dstWords[0]);
-        prefixSum = sum;
-        for (int wi = 1; wi < 7; ++wi) {
-            sum += nanovdb::util::countOn(dstWords[wi]);
-            prefixSum |= sum << (9 * wi);
-        }
-        sum += nanovdb::util::countOn(dstWords[7]);
-        voxelCounts[t + 1] = sum;
-        leaf.mPrefixSum    = prefixSum;
-    }
-}
-
-/// One thread per leaf: 1-based per-grid value offsets from the global voxel-count scan.
-static __global__ void
-setLeafOffsets(BuildDeviceArrays a,
-               const uint64_t *__restrict__ voxelScan, // [totalLeaf+1] inclusive scan, [0] == 0
-               int32_t numGrids,
-               int32_t totalLeaf) {
-    for (int32_t t = blockIdx.x * blockDim.x + threadIdx.x; t < totalLeaf;
-         t += gridDim.x * blockDim.x) {
-        const int32_t g       = findSegment(a.leafStart, numGrids, uint32_t(t));
-        const GridNodes n     = gridNodes(a, g);
-        const uint32_t local  = uint32_t(t) - a.leafStart[g];
-        n.leaf[local].mOffset = voxelScan[t] - voxelScan[a.leafStart[g]] + 1;
-    }
-}
-
-static __global__ void
-propagateLeafBBox(BuildDeviceArrays a,
-                  const uint32_t *__restrict__ leafParent,
-                  int32_t numGrids,
-                  int32_t totalLeaf) {
-    for (int32_t t = blockIdx.x * blockDim.x + threadIdx.x; t < totalLeaf;
-         t += gridDim.x * blockDim.x) {
-        const int32_t g   = findSegment(a.leafStart, numGrids, uint32_t(t));
-        const GridNodes n = gridNodes(a, g);
-        LeafT &leaf       = n.leaf[uint32_t(t) - a.leafStart[g]];
-        LowerT &lower     = n.lower[leafParent[t] - a.lowerStart[g]];
-        leaf.updateBBox();
-        lower.mBBox.expandAtomic(leaf.bbox());
-    }
-}
-
-static __global__ void
-propagateLowerBBox(BuildDeviceArrays a,
-                   const uint32_t *__restrict__ lowerParent,
-                   int32_t numGrids,
-                   int32_t totalLower) {
-    for (int32_t l = blockIdx.x * blockDim.x + threadIdx.x; l < totalLower;
-         l += gridDim.x * blockDim.x) {
-        const int32_t g   = findSegment(a.lowerStart, numGrids, uint32_t(l));
-        const GridNodes n = gridNodes(a, g);
-        LowerT &lower     = n.lower[uint32_t(l) - a.lowerStart[g]];
-        UpperT &upper     = n.upper[lowerParent[l] - a.upperStart[g]];
-        upper.mBBox.expandAtomic(lower.bbox());
-    }
-}
-
-static __global__ void
-propagateUpperBBox(BuildDeviceArrays a, int32_t numGrids, int32_t totalUpper) {
-    for (int32_t u = blockIdx.x * blockDim.x + threadIdx.x; u < totalUpper;
-         u += gridDim.x * blockDim.x) {
-        const int32_t g   = findSegment(a.upperStart, numGrids, uint32_t(u));
-        const GridNodes n = gridNodes(a, g);
-        n.root->mBBox.expandAtomic(n.upper[uint32_t(u) - a.upperStart[g]].bbox());
-    }
-}
-
-/// Per-grid epilogue: voxel counts, index-space -> world bbox, HasBBox flag.
-static __global__ void
-finalizeGrids(BuildDeviceArrays a, const uint64_t *__restrict__ voxelScan, int32_t numGrids) {
-    const int32_t g = blockIdx.x * blockDim.x + threadIdx.x;
-    if (g >= numGrids) {
-        return;
-    }
-    const GridNodes n = gridNodes(a, g);
-    if (n.numLeaf == 0) { // empty grid: keep the empty bbox and defaults
-        return;
-    }
-    const uint64_t voxelCount = voxelScan[a.leafStart[g + 1]] - voxelScan[a.leafStart[g]];
-    n.tree->mVoxelCount       = voxelCount;
-    n.grid->mData1            = voxelCount + 1;
-
-    nanovdb::CoordBBox bbox = n.root->mBBox;
-    bbox.max() += nanovdb::Coord(1);
-    n.grid->mFlags.setMaskOn(nanovdb::GridFlags::HasBBox);
-    n.grid->mWorldBBox = bbox.transform(n.grid->data()->mMap);
 }
 
 // ---------------------------------------------------------------------------------------------
 // Host driver
 // ---------------------------------------------------------------------------------------------
+
+/// The builder for `stream`, created on first use. It is never destroyed, so no device memory is
+/// released after CUDA shuts down, and its pinned host staging is allocated once, not per pass.
+inline TopologyBuilderT &
+cachedTopologyBuilder(cudaStream_t stream) {
+    thread_local auto *builders =
+        new std::unordered_map<cudaStream_t, std::unique_ptr<TopologyBuilderT>>();
+    auto &builder = (*builders)[stream];
+    if (!builder) {
+        builder = std::make_unique<TopologyBuilderT>(stream);
+    }
+    return *builder;
+}
+
+/// FVDB_TOPOLOGY_MAX_TILES: the most speculative root tiles one builder run takes (default 64,
+/// about 1 GiB of densified masks). A grid needing more runs alone.
+inline int64_t
+maxTilesPerChunk() {
+    const char *env = std::getenv("FVDB_TOPOLOGY_MAX_TILES");
+    const int64_t n = env != nullptr ? std::atoll(env) : 0;
+    return n > 0 ? n : 64;
+}
+
+/// Root tiles a grid with index bounding box `bbox` can occupy: a bound on its upper nodes.
+inline int64_t
+rootTilesOverlapping(const nanovdb::CoordBBox &bbox) {
+    if (bbox.empty()) {
+        return 0;
+    }
+    int64_t n = 1;
+    for (int a = 0; a < 3; ++a) {
+        n *= int64_t(bbox.max()[a] >> 12) - int64_t(bbox.min()[a] >> 12) + 1;
+    }
+    return n;
+}
+
+/// Uploads a small host table to the device on `stream`. Pageable H2D copies are synchronous with
+/// the host but do not synchronize the stream.
+inline torch::Tensor
+uploadTable(const std::vector<int64_t> &host, const torch::Device &device, cudaStream_t stream) {
+    torch::Tensor table = torch::empty({std::max<int64_t>(int64_t(host.size()), 1)},
+                                       torch::dtype(torch::kInt64).device(device));
+    if (!host.empty()) {
+        C10_CUDA_CHECK(cudaMemcpyAsync(table.data_ptr<int64_t>(),
+                                       host.data(),
+                                       sizeof(int64_t) * host.size(),
+                                       cudaMemcpyHostToDevice,
+                                       stream));
+    }
+    return table;
+}
+
+template <typename T>
+inline int64_t
+tableEntry(T *ptr) {
+    static_assert(sizeof(T *) == sizeof(int64_t));
+    return int64_t(reinterpret_cast<uintptr_t>(ptr));
+}
 
 inline BatchedTopologySource
 sourceFromGridBatch(const GridBatchData &batch) {
@@ -835,9 +450,12 @@ sourceFromGridBatch(const GridBatchData &batch) {
     const int64_t batchSize = batch.batchSize();
     src.grids.reserve(batchSize);
     src.leafCounts.reserve(batchSize);
+    src.upperCapacity.reserve(batchSize);
     for (int64_t i = 0; i < batchSize; ++i) {
+        const int64_t leaves = batch.numLeavesAt(i);
         src.grids.push_back(batch.deviceGridPtrAt(i));
-        src.leafCounts.push_back(batch.numLeavesAt(i));
+        src.leafCounts.push_back(leaves);
+        src.upperCapacity.push_back(leaves > 0 ? rootTilesOverlapping(batch.bboxAt(i)) : 0);
     }
     return src;
 }
@@ -845,19 +463,235 @@ sourceFromGridBatch(const GridBatchData &batch) {
 inline BatchedTopologySource
 sourceFromResult(const BatchedTopologyResult &result, const torch::Device &device) {
     BatchedTopologySource src;
-    src.device             = device;
-    const size_t batchSize = result.leafCounts.size();
-    src.grids.reserve(batchSize);
-    src.leafCounts   = result.leafCounts;
-    const auto *base = reinterpret_cast<const uint8_t *>(result.buffer.data());
-    for (size_t i = 0; i < batchSize; ++i) {
-        src.grids.push_back(reinterpret_cast<const GridT *>(base + result.gridByteOffsets[i]));
-    }
+    src.device        = device;
+    src.grids         = result.grids;
+    src.leafCounts    = result.leafCounts;
+    src.upperCapacity = result.upperCounts;
     return src;
 }
 
-/// Runs one batched topology pass over all grids of `src`.
-/// One cudaStreamSynchronize total (the node-count readback that sizes the output allocation).
+/// Each source grid's upper-node bounding boxes, read back with one host wait.
+inline std::vector<std::vector<nanovdb::CoordBBox>>
+readUpperBBoxes(const BatchedTopologySource &src, cudaStream_t stream) {
+    const int32_t numGrids = int32_t(src.grids.size());
+    std::vector<int64_t> upperStart(numGrids + 1, 0), gridTable(numGrids);
+    for (int32_t g = 0; g < numGrids; ++g) {
+        upperStart[g + 1] = upperStart[g] + src.upperCapacity[g];
+        gridTable[g]      = tableEntry(src.grids[g]);
+    }
+    torch::Tensor gridsDev      = uploadTable(gridTable, src.device, stream);
+    torch::Tensor upperStartDev = uploadTable(upperStart, src.device, stream);
+
+    // One int32 block: the per-grid counts, then 6 ints per upper-node bbox.
+    const int64_t words = numGrids + 6 * upperStart[numGrids];
+    torch::Tensor dev   = torch::empty({words}, torch::dtype(torch::kInt32).device(src.device));
+    torch::Tensor host  = torch::empty({words}, torch::dtype(torch::kInt32).pinned_memory(true));
+    gatherUpperBBoxes<<<(numGrids + 127) / 128, 128, 0, stream>>>(
+        reinterpret_cast<const GridT *const *>(gridsDev.data_ptr<int64_t>()),
+        upperStartDev.data_ptr<int64_t>(),
+        numGrids,
+        dev.data_ptr<int32_t>(),
+        dev.data_ptr<int32_t>() + numGrids);
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
+    C10_CUDA_CHECK(cudaMemcpyAsync(host.data_ptr<int32_t>(),
+                                   dev.data_ptr<int32_t>(),
+                                   sizeof(int32_t) * words,
+                                   cudaMemcpyDeviceToHost,
+                                   stream));
+    C10_CUDA_CHECK(cudaStreamSynchronize(stream));
+
+    const int32_t *counts = host.data_ptr<int32_t>();
+    const int32_t *boxes  = counts + numGrids;
+    std::vector<std::vector<nanovdb::CoordBBox>> uppers(numGrids);
+    for (int32_t g = 0; g < numGrids; ++g) {
+        TORCH_CHECK(counts[g] <= src.upperCapacity[g],
+                    "batched topology pass: grid ",
+                    g,
+                    " has ",
+                    counts[g],
+                    " upper nodes, more than its bound of ",
+                    src.upperCapacity[g]);
+        for (int32_t u = 0; u < counts[g]; ++u) {
+            const int32_t *b = boxes + 6 * (upperStart[g] + u);
+            uppers[g].emplace_back(nanovdb::Coord(b[0], b[1], b[2]),
+                                   nanovdb::Coord(b[3], b[4], b[5]));
+        }
+    }
+    return uppers;
+}
+
+/// The speculative root tiles of one output grid, from its source grid's upper-node bounding
+/// boxes, as NanoVDB's RefineGrid, CoarsenGrid and DilateGrid derive them.
+inline ProcessedTileMap
+processedTiles(const std::vector<nanovdb::CoordBBox> &uppers, const TopologyPassSpec &pass) {
+    namespace topo = nanovdb::tools::cuda::topology::detail;
+    using nanovdb::util::morphology::coarsenCoord;
+    using nanovdb::util::morphology::refineCoord;
+    ProcessedTileMap tiles;
+    for (const nanovdb::CoordBBox &b: uppers) {
+        if (b.empty()) {
+            continue;
+        }
+        switch (pass.op) {
+        case TopologyPassSpec::Op::Refine:
+            topo::insertProcessedTiles<RootT>(
+                tiles, nanovdb::CoordBBox(refineCoord(b.min()), refineCoord(b.max()).offsetBy(1)));
+            break;
+        case TopologyPassSpec::Op::Coarsen:
+            topo::insertProcessedTile<RootT>(tiles, coarsenCoord((b.min() >> 12) << 12));
+            break;
+        case TopologyPassSpec::Op::BoxDilate:
+            topo::insertProcessedTiles<RootT>(
+                tiles, nanovdb::CoordBBox(b.min() + pass.boxLo, b.max() + pass.boxHi));
+            break;
+        }
+    }
+    return tiles;
+}
+
+constexpr int32_t kThreads = 256;
+
+/// Work items of a mask-fill launch over `numLeaves` source leaves (see leafOfItem).
+inline int64_t
+workItems(int64_t numLeaves, const TopologyPassSpec &pass) {
+    return pass.op == TopologyPassSpec::Op::BoxDilate
+               ? numLeaves * BoxNeighbors(pass.boxLo, pass.boxHi).size()
+               : numLeaves;
+}
+
+inline unsigned
+itemBlocks(int64_t numItems) {
+    return unsigned(std::min<int64_t>((numItems + kThreads - 1) / kThreads, int64_t(1) << 20));
+}
+
+template <TopologyPassSpec::Op Op>
+inline void
+launchFillInternalMasks(const PassTables &t,
+                        int64_t numLeaves,
+                        const TopologyPassSpec &pass,
+                        TopologyBuilderT &builder,
+                        cudaStream_t stream) {
+    const int64_t numItems = workItems(numLeaves, pass);
+    fillInternalMasks<Op>
+        <<<itemBlocks(numItems), kThreads, 0, stream>>>(t,
+                                                        numItems,
+                                                        pass.boxLo,
+                                                        pass.boxHi,
+                                                        builder.deviceUpperMasks(),
+                                                        builder.deviceLowerMasks());
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
+}
+
+template <TopologyPassSpec::Op Op>
+inline void
+launchFillLeafMasks(const PassTables &t,
+                    int64_t numLeaves,
+                    const TopologyPassSpec &pass,
+                    cudaStream_t stream) {
+    const int64_t numItems = workItems(numLeaves, pass);
+    fillLeafMasks<Op>
+        <<<itemBlocks(numItems), kThreads, 0, stream>>>(t, numItems, pass.boxLo, pass.boxHi);
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
+}
+
+/// Builds grids [first, last) of `src` in one TopologyBuilder run and appends them to `result`.
+inline void
+buildChunk(const BatchedTopologySource &src,
+           const TopologyPassSpec &pass,
+           int32_t first,
+           int32_t last,
+           const std::vector<ProcessedTileMap> &tiles,
+           BatchedTopologyResult &result,
+           cudaStream_t stream) {
+    namespace topo            = nanovdb::tools::cuda::topology::detail;
+    using Op                  = TopologyPassSpec::Op;
+    const int32_t n           = last - first;
+    TopologyBuilderT &builder = cachedTopologyBuilder(stream);
+
+    // 1. Speculative roots.
+    std::vector<uint32_t> tileCounts(n);
+    for (int32_t i = 0; i < n; ++i) {
+        tileCounts[i] = uint32_t(tiles[first + i].size());
+    }
+    builder.allocateProcessedRoots(tileCounts);
+    for (int32_t i = 0; i < n; ++i) {
+        topo::packProcessedRoot(tiles[first + i], builder.hostProcessedRoot(i));
+    }
+    builder.uploadProcessedRoot(stream);
+    builder.allocateInternalMaskBuffers(stream);
+
+    // 2. Densified child masks, one launch over the chunk's source leaves.
+    std::vector<int64_t> srcTable(n), rootTable(n), tileBase(n), leafStart(n + 1, 0);
+    for (int32_t i = 0; i < n; ++i) {
+        srcTable[i]      = tableEntry(src.grids[first + i]);
+        rootTable[i]     = tableEntry(builder.deviceProcessedRoot(i));
+        tileBase[i]      = builder.data(i)->tileBase;
+        leafStart[i + 1] = leafStart[i] + src.leafCounts[first + i];
+    }
+    const int64_t numLeaves = leafStart[n];
+    torch::Tensor srcDev    = uploadTable(srcTable, src.device, stream);
+    torch::Tensor rootDev   = uploadTable(rootTable, src.device, stream);
+    torch::Tensor tileDev   = uploadTable(tileBase, src.device, stream);
+    torch::Tensor leafDev   = uploadTable(leafStart, src.device, stream);
+    PassTables t;
+    t.src       = reinterpret_cast<const GridT *const *>(srcDev.data_ptr<int64_t>());
+    t.dst       = nullptr;
+    t.root      = reinterpret_cast<const RootT *const *>(rootDev.data_ptr<int64_t>());
+    t.tileBase  = tileDev.data_ptr<int64_t>();
+    t.leafStart = leafDev.data_ptr<int64_t>();
+    t.numGrids  = n;
+    if (numLeaves > 0) {
+        switch (pass.op) {
+        case Op::Refine:
+            launchFillInternalMasks<Op::Refine>(t, numLeaves, pass, builder, stream);
+            break;
+        case Op::Coarsen:
+            launchFillInternalMasks<Op::Coarsen>(t, numLeaves, pass, builder, stream);
+            break;
+        case Op::BoxDilate:
+            launchFillInternalMasks<Op::BoxDilate>(t, numLeaves, pass, builder, stream);
+            break;
+        }
+    }
+
+    // 3. Node counts (the builder's host wait), the output buffer, and every node but the leaf
+    //    value masks.
+    builder.countNodes(stream);
+    const DeviceGridBuffer proto(stream, TorchDeviceResource(src.device), 0, nanovdb::cuda::noInit);
+    DeviceGridBuffer buffer = builder.getBuffer(proto, stream);
+    std::vector<int64_t> dstTable(n);
+    for (int32_t i = 0; i < n; ++i) {
+        GridT *dst  = &builder.data(i)->getGrid();
+        dstTable[i] = tableEntry(dst);
+        result.grids.push_back(dst);
+        result.gridBytes.push_back(builder.data(i)->size);
+        result.leafCounts.push_back(builder.data(i)->nodeCount[0]);
+        result.upperCounts.push_back(builder.data(i)->nodeCount[2]);
+    }
+    torch::Tensor dstDev = uploadTable(dstTable, src.device, stream);
+    t.dst                = reinterpret_cast<GridT *const *>(dstDev.data_ptr<int64_t>());
+    copyGridHeaders<<<n, 128, 0, stream>>>(t);
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
+    builder.processGridTreeRoot(stream);
+    builder.processUpperNodes(stream);
+    builder.processLowerNodes(stream);
+
+    // 4. Leaf value masks, one launch over the chunk's source leaves.
+    if (numLeaves > 0) {
+        switch (pass.op) {
+        case Op::Refine: launchFillLeafMasks<Op::Refine>(t, numLeaves, pass, stream); break;
+        case Op::Coarsen: launchFillLeafMasks<Op::Coarsen>(t, numLeaves, pass, stream); break;
+        case Op::BoxDilate: launchFillLeafMasks<Op::BoxDilate>(t, numLeaves, pass, stream); break;
+        }
+    }
+    builder.processLeafOffsets(stream);
+    builder.processBBox(stream);
+    builder.postProcessGridTree(stream);
+    result.chunks.push_back(std::move(buffer));
+}
+
+/// Runs one batched topology pass over all grids of `src`: one host wait for the source roots,
+/// then one per chunk for its node counts.
 inline BatchedTopologyResult
 runBatchedTopologyPass(const BatchedTopologySource &src,
                        const TopologyPassSpec &pass,
@@ -865,361 +699,42 @@ runBatchedTopologyPass(const BatchedTopologySource &src,
     TORCH_CHECK(src.device.is_cuda(), "batched topology passes require a CUDA device");
     const int32_t numGrids = int32_t(src.grids.size());
     TORCH_CHECK(numGrids > 0, "batched topology pass requires at least one grid");
-    int32_t fanout = 1;
-    switch (pass.op) {
-    case TopologyPassSpec::Op::Refine: fanout = 8; break;
-    case TopologyPassSpec::Op::Coarsen: fanout = 1; break;
-    case TopologyPassSpec::Op::BoxDilate:
+    if (pass.op == TopologyPassSpec::Op::BoxDilate) {
         for (int a = 0; a < 3; ++a) {
             TORCH_CHECK(pass.boxLo[a] >= -1 && pass.boxLo[a] <= 0 && pass.boxHi[a] >= 0 &&
                             pass.boxHi[a] <= 1,
                         "BoxDilate pass components must be in {-1,0} / {0,1}");
-            fanout *= (pass.boxHi[a] > 0 ? 1 : 0) - (pass.boxLo[a] < 0 ? -1 : 0) + 1;
         }
-        break;
     }
 
-    // Per-grid emission slot ranges (host-known: leaf counts x fanout; no sync needed).
-    std::vector<int32_t> segOffsetsHost(numGrids + 1, 0);
-    int64_t total = 0;
+    const auto uppers = readUpperBBoxes(src, stream);
+    std::vector<ProcessedTileMap> tiles(numGrids);
     for (int32_t g = 0; g < numGrids; ++g) {
-        segOffsetsHost[g] = int32_t(total);
-        total += src.leafCounts[g] * fanout;
-    }
-    TORCH_CHECK(total <= std::numeric_limits<int32_t>::max(),
-                "batched topology pass: emission slot count ",
-                total,
-                " exceeds int32 range");
-    segOffsetsHost[numGrids] = int32_t(total);
-    const int32_t numSlots   = int32_t(total);
-    const int64_t allocSlots = std::max(numSlots, 1); // torch::empty({0}) yields a null data_ptr
-
-    const auto byteOpts = torch::TensorOptions().dtype(torch::kUInt8).device(src.device);
-    const auto i32Opts  = byteOpts.dtype(torch::kInt32);
-    const auto i64Opts  = byteOpts.dtype(torch::kInt64);
-
-    constexpr int32_t kThreads = 256;
-    const auto numBlocks = [](int32_t n) { return std::max((n + kThreads - 1) / kThreads, 1); };
-    const auto u32       = [](torch::Tensor &t) {
-        return reinterpret_cast<uint32_t *>(t.data_ptr<int32_t>());
-    };
-    const auto u64 = [](torch::Tensor &t) {
-        return reinterpret_cast<uint64_t *>(t.data_ptr<int64_t>());
-    };
-
-    // Runs a cub function twice: once to query scratch size, once for real.
-    const auto callCub = [&](auto fn) {
-        size_t tempBytes = 0;
-        fn(nullptr, tempBytes);
-        torch::Tensor tempStorage =
-            torch::empty({std::max<int64_t>(int64_t(tempBytes), 1)}, byteOpts);
-        fn(tempStorage.data_ptr<uint8_t>(), tempBytes);
-    };
-
-    // Small host-side staging uploaded once per pass: segment offsets + source grid pointers.
-    // (Pageable H2D copies are synchronous with the host but do not synchronize the stream.)
-    torch::Tensor segOffsetsDev = torch::empty({numGrids + 1}, i32Opts);
-    torch::Tensor srcGridsDev   = torch::empty({numGrids}, i64Opts);
-    C10_CUDA_CHECK(cudaMemcpyAsync(segOffsetsDev.data_ptr<int32_t>(),
-                                   segOffsetsHost.data(),
-                                   sizeof(int32_t) * (numGrids + 1),
-                                   cudaMemcpyHostToDevice,
-                                   stream));
-    static_assert(sizeof(const GridT *) == sizeof(int64_t));
-    C10_CUDA_CHECK(cudaMemcpyAsync(srcGridsDev.data_ptr<int64_t>(),
-                                   src.grids.data(),
-                                   sizeof(const GridT *) * numGrids,
-                                   cudaMemcpyHostToDevice,
-                                   stream));
-
-    // --- Emit candidate output leaves. ---
-    torch::Tensor emTileKey = torch::empty({allocSlots}, i64Opts);
-    torch::Tensor emNodeKey = torch::empty({allocSlots}, i32Opts);
-    torch::Tensor emOrigin  = torch::empty({allocSlots * 3}, i32Opts);
-    torch::Tensor emMask    = torch::empty({allocSlots * 8}, i64Opts);
-
-    EmissionArrays em;
-    em.tileKey     = u64(emTileKey);
-    em.nodeKey     = u32(emNodeKey);
-    em.origin      = emOrigin.data_ptr<int32_t>();
-    em.mask        = u64(emMask);
-    em.segOffsets  = segOffsetsDev.data_ptr<int32_t>();
-    em.srcGrids    = reinterpret_cast<const GridT *const *>(srcGridsDev.data_ptr<int64_t>());
-    em.numSegments = numGrids;
-    em.numSlots    = numSlots;
-
-    if (numSlots > 0) {
-        switch (pass.op) {
-        case TopologyPassSpec::Op::Refine:
-            emitRefinedLeaves<<<numBlocks(numSlots), kThreads, 0, stream>>>(em);
-            break;
-        case TopologyPassSpec::Op::Coarsen:
-            emitCoarsenedLeaves<<<numBlocks(numSlots), kThreads, 0, stream>>>(em);
-            break;
-        case TopologyPassSpec::Op::BoxDilate:
-            emitBoxDilatedLeaves<<<numBlocks(numSlots), kThreads, 0, stream>>>(
-                em, pass.boxLo, pass.boxHi);
-            break;
-        }
-        C10_CUDA_KERNEL_LAUNCH_CHECK();
+        tiles[g] = processedTiles(uppers[g], pass);
     }
 
-    // --- Canonical-order segmented sort: stable by node key, then stable by tile key. ---
-    torch::Tensor permA   = torch::empty({allocSlots}, i32Opts);
-    torch::Tensor permB   = torch::empty({allocSlots}, i32Opts);
-    torch::Tensor keysTmp = torch::empty({allocSlots}, i32Opts);
-    torch::Tensor keys64A = torch::empty({allocSlots}, i64Opts);
-    torch::Tensor keys64B = torch::empty({allocSlots}, i64Opts);
-
-    if (numSlots > 0) {
-        iotaKernel<<<numBlocks(numSlots), kThreads, 0, stream>>>(u32(permA), numSlots);
-        C10_CUDA_KERNEL_LAUNCH_CHECK();
-
-        // Pass 1: sort by the 27-bit in-tile node key.
-        callCub([&](void *temp, size_t &bytes) {
-            C10_CUDA_CHECK(cub::DeviceSegmentedRadixSort::SortPairs(temp,
-                                                                    bytes,
-                                                                    em.nodeKey,
-                                                                    u32(keysTmp),
-                                                                    u32(permA),
-                                                                    u32(permB),
-                                                                    numSlots,
-                                                                    numGrids,
-                                                                    em.segOffsets,
-                                                                    em.segOffsets + 1,
-                                                                    0,
-                                                                    27,
-                                                                    stream));
-        });
-
-        // Pass 2: stable sort by the 64-bit tile key (invalid slots carry ~0 and sort last).
-        gatherKeys64<<<numBlocks(numSlots), kThreads, 0, stream>>>(
-            em.tileKey, u32(permB), u64(keys64A), numSlots);
-        C10_CUDA_KERNEL_LAUNCH_CHECK();
-
-        callCub([&](void *temp, size_t &bytes) {
-            C10_CUDA_CHECK(cub::DeviceSegmentedRadixSort::SortPairs(temp,
-                                                                    bytes,
-                                                                    u64(keys64A),
-                                                                    u64(keys64B),
-                                                                    u32(permB),
-                                                                    u32(permA),
-                                                                    numSlots,
-                                                                    numGrids,
-                                                                    em.segOffsets,
-                                                                    em.segOffsets + 1,
-                                                                    0,
-                                                                    64,
-                                                                    stream));
-        });
-    }
-    // From here on: permA = canonical-order permutation, keys64B = sorted tile keys.
-
-    torch::Tensor sortedNodeKey = torch::empty({allocSlots}, i32Opts);
-    torch::Tensor sortedOrigin  = torch::empty({allocSlots * 3}, i32Opts);
-    torch::Tensor sortedMask    = torch::empty({allocSlots * 8}, i64Opts);
-
-    SortedArrays sorted;
-    sorted.tileKey = u64(keys64B);
-    sorted.nodeKey = u32(sortedNodeKey);
-    sorted.origin  = sortedOrigin.data_ptr<int32_t>();
-    sorted.mask    = u64(sortedMask);
-
-    // --- Dedup: head flags, global node ranks, per-grid offsets, parent linkage. ---
-    torch::Tensor leafFlag  = torch::empty({allocSlots}, i32Opts);
-    torch::Tensor lowerFlag = torch::empty({allocSlots}, i32Opts);
-    torch::Tensor upperFlag = torch::empty({allocSlots}, i32Opts);
-    torch::Tensor leafRank  = torch::empty({allocSlots}, i32Opts);
-    torch::Tensor lowerRank = torch::empty({allocSlots}, i32Opts);
-    torch::Tensor upperRank = torch::empty({allocSlots}, i32Opts);
-
-    torch::Tensor leafHeadSlot  = torch::empty({allocSlots}, i32Opts);
-    torch::Tensor leafParent    = torch::empty({allocSlots}, i32Opts);
-    torch::Tensor lowerHeadSlot = torch::empty({allocSlots}, i32Opts);
-    torch::Tensor lowerParent   = torch::empty({allocSlots}, i32Opts);
-    torch::Tensor upperHeadSlot = torch::empty({allocSlots}, i32Opts);
-
-    if (numSlots > 0) {
-        gatherSorted<<<numBlocks(numSlots), kThreads, 0, stream>>>(em, u32(permA), sorted);
-        C10_CUDA_KERNEL_LAUNCH_CHECK();
-
-        computeHeadFlags<<<numBlocks(numSlots), kThreads, 0, stream>>>(sorted.tileKey,
-                                                                       sorted.nodeKey,
-                                                                       em.segOffsets,
-                                                                       numGrids,
-                                                                       numSlots,
-                                                                       u32(leafFlag),
-                                                                       u32(lowerFlag),
-                                                                       u32(upperFlag));
-        C10_CUDA_KERNEL_LAUNCH_CHECK();
-
-        const std::pair<torch::Tensor *, torch::Tensor *> scans[3] = {
-            {&leafFlag, &leafRank}, {&lowerFlag, &lowerRank}, {&upperFlag, &upperRank}};
-        for (const auto &[flags, ranks]: scans) {
-            callCub([&](void *temp, size_t &bytes) {
-                C10_CUDA_CHECK(cub::DeviceScan::InclusiveSum(
-                    temp, bytes, u32(*flags), u32(*ranks), numSlots, stream));
-            });
-        }
-
-        scatterNodeTables<<<numBlocks(numSlots), kThreads, 0, stream>>>(u32(leafFlag),
-                                                                        u32(lowerFlag),
-                                                                        u32(upperFlag),
-                                                                        u32(leafRank),
-                                                                        u32(lowerRank),
-                                                                        u32(upperRank),
-                                                                        numSlots,
-                                                                        u32(leafHeadSlot),
-                                                                        u32(leafParent),
-                                                                        u32(lowerHeadSlot),
-                                                                        u32(lowerParent),
-                                                                        u32(upperHeadSlot));
-        C10_CUDA_KERNEL_LAUNCH_CHECK();
-
-        if (pass.op != TopologyPassSpec::Op::Refine) { // coarsen/dilate have duplicate producers
-            combineDuplicateMasks<<<numBlocks(numSlots), kThreads, 0, stream>>>(sorted.tileKey,
-                                                                                u32(leafFlag),
-                                                                                u32(leafRank),
-                                                                                u32(leafHeadSlot),
-                                                                                numSlots,
-                                                                                sorted.mask);
-            C10_CUDA_KERNEL_LAUNCH_CHECK();
-        }
-    }
-
-    torch::Tensor upperStart = torch::empty({numGrids + 1}, i32Opts);
-    torch::Tensor lowerStart = torch::empty({numGrids + 1}, i32Opts);
-    torch::Tensor leafStart  = torch::empty({numGrids + 1}, i32Opts);
-
-    segmentNodeOffsets<<<numBlocks(numGrids + 1), kThreads, 0, stream>>>(u32(leafRank),
-                                                                         u32(lowerRank),
-                                                                         u32(upperRank),
-                                                                         em.segOffsets,
-                                                                         numGrids,
-                                                                         u32(leafStart),
-                                                                         u32(lowerStart),
-                                                                         u32(upperStart));
-    C10_CUDA_KERNEL_LAUNCH_CHECK();
-
-    // --- THE synchronization: read back per-grid node offsets, size and allocate the output. ---
-    std::vector<uint32_t> leafStartHost(numGrids + 1), lowerStartHost(numGrids + 1),
-        upperStartHost(numGrids + 1);
-    C10_CUDA_CHECK(cudaMemcpyAsync(leafStartHost.data(),
-                                   leafStart.data_ptr<int32_t>(),
-                                   sizeof(uint32_t) * (numGrids + 1),
-                                   cudaMemcpyDeviceToHost,
-                                   stream));
-    C10_CUDA_CHECK(cudaMemcpyAsync(lowerStartHost.data(),
-                                   lowerStart.data_ptr<int32_t>(),
-                                   sizeof(uint32_t) * (numGrids + 1),
-                                   cudaMemcpyDeviceToHost,
-                                   stream));
-    C10_CUDA_CHECK(cudaMemcpyAsync(upperStartHost.data(),
-                                   upperStart.data_ptr<int32_t>(),
-                                   sizeof(uint32_t) * (numGrids + 1),
-                                   cudaMemcpyDeviceToHost,
-                                   stream));
-    C10_CUDA_CHECK(cudaStreamSynchronize(stream));
-
+    // Chunks of consecutive grids, each holding at most maxTilesPerChunk() tiles.
     BatchedTopologyResult result;
-    result.gridByteOffsets.resize(numGrids + 1);
-    result.leafCounts.resize(numGrids);
-    uint64_t totalBytes = 0;
+    const int64_t maxTiles = maxTilesPerChunk();
+    int32_t first          = 0;
+    int64_t chunkTiles     = 0;
     for (int32_t g = 0; g < numGrids; ++g) {
-        result.gridByteOffsets[g] = totalBytes;
-        const uint32_t numUpper   = upperStartHost[g + 1] - upperStartHost[g];
-        const uint32_t numLower   = lowerStartHost[g + 1] - lowerStartHost[g];
-        const uint32_t numLeaf    = leafStartHost[g + 1] - leafStartHost[g];
-        result.leafCounts[g]      = numLeaf;
-        totalBytes += gridByteSize(numUpper, numLower, numLeaf);
+        const int64_t gridTiles = int64_t(tiles[g].size());
+        if (g > first && chunkTiles + gridTiles > maxTiles) {
+            buildChunk(src, pass, first, g, tiles, result, stream);
+            first      = g;
+            chunkTiles = 0;
+        }
+        chunkTiles += gridTiles;
     }
-    result.gridByteOffsets[numGrids] = totalBytes;
-
-    const int32_t totalLeaf  = int32_t(leafStartHost[numGrids]);
-    const int32_t totalLower = int32_t(lowerStartHost[numGrids]);
-    const int32_t totalUpper = int32_t(upperStartHost[numGrids]);
-
-    result.buffer = DeviceGridBuffer(
-        stream, TorchDeviceResource(src.device), totalBytes, nanovdb::cuda::noInit);
-    C10_CUDA_CHECK(cudaMemsetAsync(result.buffer.data(), 0, totalBytes, stream));
-
-    torch::Tensor gridOffDev = torch::empty({numGrids + 1}, i64Opts);
-    C10_CUDA_CHECK(cudaMemcpyAsync(gridOffDev.data_ptr<int64_t>(),
-                                   result.gridByteOffsets.data(),
-                                   sizeof(uint64_t) * (numGrids + 1),
-                                   cudaMemcpyHostToDevice,
-                                   stream));
-
-    BuildDeviceArrays build;
-    build.dstBase         = reinterpret_cast<uint8_t *>(result.buffer.data());
-    build.gridByteOffsets = u64(gridOffDev);
-    build.upperStart      = u32(upperStart);
-    build.lowerStart      = u32(lowerStart);
-    build.leafStart       = u32(leafStart);
-
-    // --- Build all grids. ---
-    constexpr int32_t kGridDataWords = int32_t(sizeof(nanovdb::GridData) / sizeof(uint64_t));
-    copyGridData<<<numBlocks(numGrids * kGridDataWords), kThreads, 0, stream>>>(
-        em.srcGrids, build, numGrids);
-    C10_CUDA_KERNEL_LAUNCH_CHECK();
-
-    initGridTreeRoot<<<numBlocks(numGrids), kThreads, 0, stream>>>(build, numGrids);
-    C10_CUDA_KERNEL_LAUNCH_CHECK();
-
-    torch::Tensor voxelCounts = torch::zeros({int64_t(totalLeaf) + 1}, i64Opts);
-
-    if (totalLeaf > 0) {
-        buildUpperNodes<<<numBlocks(totalUpper), kThreads, 0, stream>>>(
-            build, sorted, u32(upperHeadSlot), numGrids, totalUpper);
-        C10_CUDA_KERNEL_LAUNCH_CHECK();
-
-        buildLowerNodes<<<numBlocks(totalLower), kThreads, 0, stream>>>(
-            build, sorted, u32(lowerHeadSlot), u32(lowerParent), numGrids, totalLower);
-        C10_CUDA_KERNEL_LAUNCH_CHECK();
-
-        buildLeafNodes<<<numBlocks(totalLeaf), kThreads, 0, stream>>>(build,
-                                                                      sorted,
-                                                                      u32(leafHeadSlot),
-                                                                      u32(leafParent),
-                                                                      numGrids,
-                                                                      totalLeaf,
-                                                                      u64(voxelCounts));
-        C10_CUDA_KERNEL_LAUNCH_CHECK();
-
-        // In-place inclusive scan over elements [1, totalLeaf]; element 0 stays 0.
-        callCub([&](void *temp, size_t &bytes) {
-            C10_CUDA_CHECK(cub::DeviceScan::InclusiveSum(
-                temp, bytes, u64(voxelCounts) + 1, u64(voxelCounts) + 1, totalLeaf, stream));
-        });
-
-        setLeafOffsets<<<numBlocks(totalLeaf), kThreads, 0, stream>>>(
-            build, u64(voxelCounts), numGrids, totalLeaf);
-        C10_CUDA_KERNEL_LAUNCH_CHECK();
-
-        propagateLeafBBox<<<numBlocks(totalLeaf), kThreads, 0, stream>>>(
-            build, u32(leafParent), numGrids, totalLeaf);
-        C10_CUDA_KERNEL_LAUNCH_CHECK();
-
-        propagateLowerBBox<<<numBlocks(totalLower), kThreads, 0, stream>>>(
-            build, u32(lowerParent), numGrids, totalLower);
-        C10_CUDA_KERNEL_LAUNCH_CHECK();
-
-        propagateUpperBBox<<<numBlocks(totalUpper), kThreads, 0, stream>>>(
-            build, numGrids, totalUpper);
-        C10_CUDA_KERNEL_LAUNCH_CHECK();
-    }
-
-    finalizeGrids<<<numBlocks(numGrids), kThreads, 0, stream>>>(build, u64(voxelCounts), numGrids);
-    C10_CUDA_KERNEL_LAUNCH_CHECK();
-
+    buildChunk(src, pass, first, numGrids, tiles, result, stream);
     return result;
 }
 
-/// Runs a chained sequence of batched passes over the batch and wraps the final buffer as the
-/// batch's storage. `passes` must be non-empty. The layout is the one the host computed and the
-/// build kernels wrote (each header carries its gridIndex/gridCount), so the storage adopts it
-/// rather than parsing the buffer back; the kernels are still in flight on `stream`, which the
-/// storage retains.
+/// Runs a chained sequence of batched passes over the batch and wraps the result as the batch's
+/// storage. `passes` must be non-empty. A single-chunk result is adopted with the layout the
+/// builder computed (each header carries its gridIndex/gridCount), so its kernels may still be in
+/// flight on `stream`, which the storage retains; several chunks are assembled into one storage.
 inline GridStorage
 batchedTopologyStorage(const GridBatchData &batch,
                        const std::vector<TopologyPassSpec> &passes,
@@ -1231,17 +746,29 @@ batchedTopologyStorage(const GridBatchData &batch,
         result =
             runBatchedTopologyPass(sourceFromResult(result, batch.device()), passes[p], stream);
     }
-    const size_t numGrids = result.leafCounts.size();
-    std::vector<nanovdb::GridHandleMetaData> meta;
-    meta.reserve(numGrids);
-    for (size_t g = 0; g < numGrids; ++g) {
-        meta.push_back(
-            nanovdb::GridHandleMetaData{result.gridByteOffsets[g],
-                                        result.gridByteOffsets[g + 1] - result.gridByteOffsets[g],
-                                        nanovdb::GridType::OnIndex});
+
+    const size_t numGrids = result.grids.size();
+    if (result.chunks.size() == 1) {
+        std::vector<nanovdb::GridHandleMetaData> meta;
+        meta.reserve(numGrids);
+        uint64_t offset = 0;
+        for (size_t g = 0; g < numGrids; ++g) {
+            meta.push_back(nanovdb::GridHandleMetaData{
+                offset, result.gridBytes[g], nanovdb::GridType::OnIndex});
+            offset += result.gridBytes[g];
+        }
+        return GridStorage(
+            makeDeviceHandleFromLayout(std::move(result.chunks.front()), std::move(meta)),
+            batch.device());
     }
-    return GridStorage(makeDeviceHandleFromLayout(std::move(result.buffer), std::move(meta)),
-                       batch.device());
+
+    GridSpanSource source{batch.device(), stream, {}};
+    source.spans.reserve(numGrids);
+    for (size_t g = 0; g < numGrids; ++g) {
+        source.spans.push_back(
+            GridSpan{result.grids[g], result.gridBytes[g], nanovdb::GridType::OnIndex});
+    }
+    return assembleGridStorage({source}, batch.device(), stream);
 }
 
 } // namespace batched
