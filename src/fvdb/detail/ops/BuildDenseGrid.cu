@@ -11,6 +11,7 @@
 #include <fvdb/detail/utils/cuda/GridDim.h>
 #include <fvdb/detail/utils/cuda/StreamOrdering.h>
 #include <fvdb/detail/utils/cuda/Utils.cuh>
+#include <fvdb/detail/utils/nanovdb/CreateEmptyGridStorage.h>
 #include <fvdb/detail/utils/nanovdb/DeviceGridHandleUtils.cuh>
 
 #if CCCL_DEVICE_MERGE_SUPPORTED
@@ -24,6 +25,9 @@
 #include <c10/cuda/CUDAGuard.h>
 #include <c10/cuda/CUDAMathCompat.h>
 #include <torch/types.h>
+
+#include <algorithm>
+#include <limits>
 
 namespace fvdb {
 namespace detail {
@@ -84,6 +88,71 @@ checkInputs(const torch::Device device,
     }
 }
 
+// Header fix-up for a buffer holding `gridCount` back-to-back copies of the same single grid:
+// copy i becomes grid i of the batch. Every copy has the same mGridSize, so no offset table is
+// needed. The checksum is disabled as assembleGridStorage does (the source grid from PointsToGrid
+// carries a disabled checksum anyway, so this is consistent rather than a downgrade).
+__global__ void
+fixupReplicatedGridHeaders(uint8_t *base, uint64_t gridSize, uint32_t gridCount) {
+    const uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= gridCount) {
+        return;
+    }
+    auto *data = reinterpret_cast<nanovdb::GridData *>(base + static_cast<uint64_t>(i) * gridSize);
+    data->mGridIndex = i;
+    data->mGridCount = gridCount;
+    data->mChecksum.disable();
+}
+
+// Replicate a single-grid device storage `count` times into one buffer laid out the way
+// assembleGridStorage lays out a multi-grid storage (grids back-to-back, each header's
+// mGridIndex / mGridCount naming its slot), with log2(count) copies and one header fix-up launch
+// instead of one copy and one fix-up launch per member.
+GridStorage
+replicateGridStorage(const GridStorage &single,
+                     int64_t count,
+                     torch::Device device,
+                     cudaStream_t stream) {
+    TORCH_CHECK(single.gridCount() == 1, "replicateGridStorage expects a single-grid storage");
+    TORCH_CHECK(count > 1, "replicateGridStorage expects count > 1");
+    TORCH_CHECK(count <= std::numeric_limits<uint32_t>::max(), "too many grids to replicate");
+    const auto *src = static_cast<const uint8_t *>(single.deviceBytes());
+    TORCH_CHECK(src != nullptr, "replicateGridStorage expects a device-resident storage");
+    const uint64_t gridSize = single.gridSize(0);
+
+    DeviceGridBuffer buffer(stream,
+                            TorchDeviceResource(device),
+                            gridSize * static_cast<uint64_t>(count),
+                            nanovdb::cuda::noInit);
+    auto *dst = reinterpret_cast<uint8_t *>(buffer.data());
+
+    // Seed copy 0 from the source, then double the filled prefix: log2(count) device-to-device
+    // memcpys instead of one per member.
+    C10_CUDA_CHECK(cudaMemcpyAsync(dst, src, gridSize, cudaMemcpyDeviceToDevice, stream));
+    for (int64_t filled = 1; filled < count; filled *= 2) {
+        const int64_t n = std::min(filled, count - filled);
+        C10_CUDA_CHECK(cudaMemcpyAsync(dst + static_cast<uint64_t>(filled) * gridSize,
+                                       dst,
+                                       static_cast<uint64_t>(n) * gridSize,
+                                       cudaMemcpyDeviceToDevice,
+                                       stream));
+    }
+
+    const int64_t numBlocks = GET_BLOCKS(count, DEFAULT_BLOCK_DIM);
+    fixupReplicatedGridHeaders<<<numBlocks, DEFAULT_BLOCK_DIM, 0, stream>>>(
+        dst, gridSize, static_cast<uint32_t>(count));
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
+
+    // The layout is known (offset = i * gridSize), so adopt it rather than parsing the buffer.
+    std::vector<nanovdb::GridHandleMetaData> meta;
+    meta.reserve(count);
+    for (int64_t i = 0; i < count; ++i) {
+        meta.push_back(nanovdb::GridHandleMetaData{
+            static_cast<uint64_t>(i) * gridSize, gridSize, nanovdb::GridType::OnIndex});
+    }
+    return GridStorage(makeDeviceHandleFromLayout(std::move(buffer), std::move(meta)), device);
+}
+
 } // namespace
 
 template <torch::DeviceType>
@@ -132,28 +201,30 @@ dispatchCreateNanoGridFromDense<torch::kCUDA>(int64_t batchSize,
 
     TORCH_CHECK(ijkData.is_contiguous(), "ijkData must be contiguous");
 
-    // Every batch item is the same dense box (a mask, if given, is shared across the batch), so
-    // build the grid once and repeat it for the remaining items instead of re-running the radix
-    // sort over the identical coordinate list batchSize times: the merge copies the one grid into
-    // each item's slot.
-    const int64_t nVoxels = ijkData.size(0);
-    GridStorageParts parts(device, stream, 1);
-    for (int64_t i = 0; i < batchSize; i += 1) {
-        if (nVoxels == 0) {
-            parts.addEmpty();
-        } else if (i == 0) {
-            parts.add(GridStorage(
-                nanovdb::tools::cuda::
-                    voxelsToGrid<GridT, nanovdb::Coord *, DeviceGridBuffer, BuilderResource>(
-                        (nanovdb::Coord *)ijkData.data_ptr(), nVoxels, 1.0, proto, stream),
-                device));
-            C10_CUDA_KERNEL_LAUNCH_CHECK();
-        } else {
-            parts.addRepeat(0);
-        }
+    if (batchSize == 0) {
+        // Same result as merging zero parts: an empty storage, which makeGridBatchData rejects.
+        return GridStorageParts(device, stream, 0).merge();
     }
 
-    return parts.merge();
+    // Every batch item is the same dense box (a mask, if given, is shared across the batch), so
+    // build ONE grid and replicate its buffer batchSize times with a header fix-up per copy,
+    // instead of re-running the radix sort over the identical coordinate list batchSize times.
+    const int64_t nVoxels = ijkData.size(0);
+    if (nVoxels == 0) {
+        // Mask selected nothing: batchSize valid empty grids (built on host, moved to device).
+        return createEmptyGridStorage(device, batchSize);
+    }
+
+    GridStorage single(nanovdb::tools::cuda::
+                           voxelsToGrid<GridT, nanovdb::Coord *, DeviceGridBuffer, BuilderResource>(
+                               (nanovdb::Coord *)ijkData.data_ptr(), nVoxels, 1.0, proto, stream),
+                       device);
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
+
+    if (batchSize == 1) {
+        return single;
+    }
+    return replicateGridStorage(single, batchSize, device, stream);
 }
 
 template <>
