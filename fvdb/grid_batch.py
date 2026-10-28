@@ -1986,7 +1986,7 @@ class GridBatch:
             offset (NumericMaxRank1 | None): Optional coordinate offset before encoding.
 
         Returns:
-            codes (JaggedTensor): Morton codes. Shape: ``(batch_size, num_voxels_for_grid_b, 1)``.
+            codes (JaggedTensor): Morton codes. Shape: ``(batch_size, num_voxels_for_grid_b)``.
 
         .. seealso:: :meth:`Grid.morton`
         """
@@ -2001,7 +2001,7 @@ class GridBatch:
             offset (NumericMaxRank1 | None): Optional coordinate offset before encoding.
 
         Returns:
-            codes (JaggedTensor): Transposed Morton codes. Shape: ``(batch_size, num_voxels_for_grid_b, 1)``.
+            codes (JaggedTensor): Transposed Morton codes. Shape: ``(batch_size, num_voxels_for_grid_b)``.
 
         .. seealso:: :meth:`Grid.morton_zyx`
         """
@@ -2016,7 +2016,7 @@ class GridBatch:
             offset (NumericMaxRank1 | None): Optional coordinate offset before encoding.
 
         Returns:
-            codes (JaggedTensor): Hilbert codes. Shape: ``(batch_size, num_voxels_for_grid_b, 1)``.
+            codes (JaggedTensor): Hilbert codes. Shape: ``(batch_size, num_voxels_for_grid_b)``.
 
         .. seealso:: :meth:`Grid.hilbert`
         """
@@ -2031,7 +2031,7 @@ class GridBatch:
             offset (NumericMaxRank1 | None): Optional coordinate offset before encoding.
 
         Returns:
-            codes (JaggedTensor): Transposed Hilbert codes. Shape: ``(batch_size, num_voxels_for_grid_b, 1)``.
+            codes (JaggedTensor): Transposed Hilbert codes. Shape: ``(batch_size, num_voxels_for_grid_b)``.
 
         .. seealso:: :meth:`Grid.hilbert_zyx`
         """
