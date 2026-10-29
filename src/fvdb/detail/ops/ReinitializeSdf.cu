@@ -235,7 +235,7 @@ heunKernel(ScalarT *out,
 template <typename ScalarT>
 void
 runReinit(OnIndexGridT *grid,
-          const VbmCache::GridVbm &vbm,
+          const GridVbm &vbm,
           ScalarT *phi,
           ScalarT *sign,
           ScalarT *phiBase,
@@ -423,8 +423,8 @@ reinitializeSdfCuda(const GridBatchData &batchHdl,
         const ScalarT voxelSize = (ScalarT)vs[0];
         const ScalarT bandWidth = (ScalarT)band * voxelSize; // narrow-band half-width, world units
 
-        const VbmCache::GridVbm vbm = batchHdl.vbmCache().get(batchHdl, batchIdx);
-        const int64_t valueCount    = int64_t(vbm.lastOffset) + 1; // numVoxels + 1 (slot 0 = bg)
+        const GridVbm vbm        = batchHdl.vbmAt(batchIdx);
+        const int64_t valueCount = int64_t(vbm.lastOffset) + 1; // numVoxels + 1 (slot 0 = bg)
 
         torch::Tensor phiBuf     = torch::empty({valueCount}, opts);
         torch::Tensor signBuf    = torch::empty({valueCount}, opts);

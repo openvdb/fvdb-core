@@ -25,6 +25,8 @@ namespace fvdb {
 
 namespace detail {
 class VbmCache;
+struct BatchVbm;
+struct GridVbm;
 } // namespace detail
 
 struct GridBatchData : public torch::CustomClassHolder {
@@ -103,13 +105,22 @@ struct GridBatchData : public torch::CustomClassHolder {
     // storageStream(), and copyStorage().
     std::shared_ptr<GridStorage> mStorage;
 
-    // Lazily-built per-grid VoxelBlockManager handles (pure derived state; never serialized).
-    // Shared with views exactly as mStorage is: entries are keyed by physical byte offset into the
-    // storage, and topology is immutable after construction, so they never need invalidation.
+    // Lazily-built VoxelBlockManagers for this batch's grids (pure derived state; never
+    // serialized). Every GridBatchData, views included, owns its own: the VBMs are built per
+    // batch, and topology is immutable after construction, so they never need invalidation.
     std::shared_ptr<detail::VbmCache> mVbmCache;
 
+    // Defined in GridBatchData.cu, where detail::VbmCache is complete.
+    static std::shared_ptr<detail::VbmCache> makeVbmCache();
+
+  public:
+    // -----------------------------------------------------------------------
+    // Constructors: bundle pre-computed fields (take ownership of the metadata
+    // pointers). All computation happens outside, in factory functions, before
+    // a constructor is called. The second builds a view sharing another
+    // batch's storage.
+    // -----------------------------------------------------------------------
     GridBatchData(std::shared_ptr<GridStorage> storage,
-                  std::shared_ptr<detail::VbmCache> vbmCache,
                   GridMetadata *hostGridMetadata,
                   GridMetadata *deviceGridMetadata,
                   int64_t batchSize,
@@ -121,24 +132,7 @@ struct GridBatchData : public torch::CustomClassHolder {
           mBatchSize(batchSize), mBatchMetadata(std::move(batchMetadata)),
           mLeafBatchIndices(std::move(leafBatchIndices)), mBatchOffsets(std::move(batchOffsets)),
           mListIndices(std::move(listIndices)), mStorage(std::move(storage)),
-          mVbmCache(std::move(vbmCache)) {}
-
-  public:
-    // -----------------------------------------------------------------------
-    // Constructors: bundle pre-computed fields (take ownership of the metadata
-    // pointers). All computation happens outside, in factory functions, before
-    // a constructor is called. The second builds a view sharing another
-    // batch's storage and VBM cache. The first is defined in GridBatchData.cu
-    // because it creates the cache, which needs the complete detail::VbmCache.
-    // -----------------------------------------------------------------------
-    GridBatchData(std::shared_ptr<GridStorage> storage,
-                  GridMetadata *hostGridMetadata,
-                  GridMetadata *deviceGridMetadata,
-                  int64_t batchSize,
-                  GridBatchMetadata batchMetadata,
-                  torch::Tensor leafBatchIndices,
-                  torch::Tensor batchOffsets,
-                  torch::Tensor listIndices);
+          mVbmCache(makeVbmCache()) {}
 
     GridBatchData(const GridBatchData &sharingStorageOf,
                   GridMetadata *hostGridMetadata,
@@ -149,7 +143,6 @@ struct GridBatchData : public torch::CustomClassHolder {
                   torch::Tensor batchOffsets,
                   torch::Tensor listIndices)
         : GridBatchData(sharingStorageOf.mStorage,
-                        sharingStorageOf.mVbmCache,
                         hostGridMetadata,
                         deviceGridMetadata,
                         batchSize,
@@ -397,9 +390,11 @@ struct GridBatchData : public torch::CustomClassHolder {
     nanovdb::OnIndexGrid *deviceGridPtrAt(int64_t bi) const;
     nanovdb::OnIndexGrid *hostGridPtrAt(int64_t bi) const;
 
-    // The batch's lazily-built per-grid VoxelBlockManager cache (see detail/VbmCache.h).
-    // Defined in GridBatchData.cu (requires the complete detail::VbmCache type).
-    detail::VbmCache &vbmCache() const;
+    // The batch's VoxelBlockManagers (see detail/VbmCache.h), built on the current CUDA stream
+    // at first use and ordered before work later queued on the current stream. vbmAt is grid
+    // bi's slice. Defined in GridBatchData.cu (requires the complete detail types).
+    const detail::BatchVbm &vbm() const;
+    detail::GridVbm vbmAt(int64_t bi) const;
 
     const VoxelCoordTransform &
     primalTransformAt(int64_t bi) const {

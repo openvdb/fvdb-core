@@ -11,8 +11,8 @@
 // sparse spherical shell (~a few % of leaf slots active) — occupancy is the leaf scan's cost
 // driver and the VBM decode is occupancy-independent.
 //
-// A separate benchmark measures the one-time VbmCache build cost (paid once per grid
-// lifetime; the iteration benchmarks run against a warm cache).
+// A separate benchmark measures the one-time VbmCache build cost (paid once per batch
+// lifetime). The batch benchmarks time many small grids per batch, warm and cold.
 //
 
 #ifdef __NVCC__
@@ -212,11 +212,103 @@ BM_VbmCacheBuild(benchmark::State &state) {
     auto grid = makeSweepGrid(int(state.range(0)));
     for (auto _: state) {
         fvdb::detail::VbmCache cache;
-        benchmark::DoNotOptimize(cache.get(*grid, 0));
+        benchmark::DoNotOptimize(cache.acquire(*grid));
         c10::cuda::getCurrentCUDAStream().synchronize();
     }
     state.counters["voxels"] = double(grid->totalVoxels());
 }
+
+// ============================================================================
+// Batches of many small grids
+// ============================================================================
+
+// A batch of numGrids distinct grids, each a 25%-occupancy random subsample of a dim^3 box.
+c10::intrusive_ptr<GridBatchData>
+makeBatch(int64_t numGrids, int dim, uint64_t seed) {
+    std::vector<torch::Tensor> ijks;
+    for (int64_t b = 0; b < numGrids; ++b) {
+        ijks.push_back(
+            randomIjk(dim, 0.25, seed * 4096 + uint64_t(b)).to(torch::Device(torch::kCUDA, 0)));
+    }
+    std::vector<nanovdb::Vec3d> sizes(numGrids, nanovdb::Vec3d(1.0));
+    std::vector<nanovdb::Vec3d> origins(numGrids, nanovdb::Vec3d(0.0));
+    return fvdb::detail::ops::createNanoGridFromIJK(JaggedTensor(ijks), sizes, origins);
+}
+
+enum class BatchPath { LeafScan, Vbm };
+
+template <BatchPath Path>
+void
+runBatchPath(const GridBatchData &batch, WriteCoordsFunctor func) {
+    if constexpr (Path == BatchPath::LeafScan) {
+        leafScanIteration(batch, func);
+    } else {
+        forEachActiveVoxelVbmCUDA(batch, func);
+    }
+}
+
+// Warm cache: state.range(0) grids per batch, each a 25% subsample of a state.range(1)^3 box.
+template <BatchPath Path>
+void
+BM_BatchWarm(benchmark::State &state) {
+    if (!torch::cuda::is_available()) {
+        state.SkipWithError("CUDA not available");
+        return;
+    }
+    auto batch = makeBatch(state.range(0), int(state.range(1)), /*seed=*/1);
+    auto out   = torch::empty({batch->totalVoxels(), 3},
+                            torch::TensorOptions().dtype(torch::kInt32).device(batch->device()));
+    WriteCoordsFunctor func{out.data_ptr<int32_t>()};
+    runBatchPath<Path>(*batch, func);
+    c10::cuda::getCurrentCUDAStream().synchronize();
+    for (auto _: state) {
+        runBatchPath<Path>(*batch, func);
+        c10::cuda::getCurrentCUDAStream().synchronize();
+    }
+    state.counters["voxels"] = double(batch->totalVoxels());
+}
+
+// Cold cache: every iteration runs on a freshly built batch, so the VBM path also builds the
+// batch's VBMs. Grid construction happens before timing starts.
+constexpr int kColdIterations = 10;
+
+template <BatchPath Path>
+void
+BM_BatchCold(benchmark::State &state) {
+    if (!torch::cuda::is_available()) {
+        state.SkipWithError("CUDA not available");
+        return;
+    }
+    std::vector<c10::intrusive_ptr<GridBatchData>> batches;
+    for (int k = 0; k < kColdIterations; ++k) {
+        batches.push_back(makeBatch(state.range(0), int(state.range(1)), /*seed=*/k + 1));
+    }
+    // Every batch has the same voxel count (a fixed fraction of the same box per grid).
+    auto out = torch::empty({batches[0]->totalVoxels(), 3},
+                            torch::TensorOptions().dtype(torch::kInt32).device(torch::kCUDA));
+    WriteCoordsFunctor func{out.data_ptr<int32_t>()};
+    c10::cuda::getCurrentCUDAStream().synchronize();
+    int k = 0;
+    for (auto _: state) {
+        runBatchPath<Path>(*batches[k++], func);
+        c10::cuda::getCurrentCUDAStream().synchronize();
+    }
+    state.counters["voxels"] = double(batches[0]->totalVoxels());
+}
+
+#define BATCH_ARGS                                 \
+    ->ArgsProduct({{1, 4, 16, 64, 256}, {32, 64}}) \
+        ->ArgNames({"grids", "dim"})               \
+        ->Unit(benchmark::kMicrosecond)
+
+BENCHMARK_TEMPLATE(BM_BatchWarm, BatchPath::LeafScan)->Name("BatchWarm/LeafScan") BATCH_ARGS;
+BENCHMARK_TEMPLATE(BM_BatchWarm, BatchPath::Vbm)->Name("BatchWarm/Vbm") BATCH_ARGS;
+BENCHMARK_TEMPLATE(BM_BatchCold, BatchPath::LeafScan)
+    ->Name("BatchCold/LeafScan")
+    ->Iterations(kColdIterations) BATCH_ARGS;
+BENCHMARK_TEMPLATE(BM_BatchCold, BatchPath::Vbm)
+    ->Name("BatchCold/Vbm")
+    ->Iterations(kColdIterations) BATCH_ARGS;
 
 #define OCCUPANCY_SWEEP_ARGS \
     ->Arg(100)               \
