@@ -517,6 +517,41 @@ countTiles(TileIteratorT iterator,
     return numTiles;
 }
 
+template <typename TileIteratorT, typename T, typename CountT>
+__device__ CountT
+countTilesForGaussian(const uint32_t gidx,
+                      const uint32_t numGaussiansPerCamera,
+                      const uint32_t tileSize,
+                      const uint32_t numTilesW,
+                      const uint32_t numTilesH,
+                      const uint32_t totalTiles,
+                      const int64_t keyStart,
+                      const int64_t keyEnd,
+                      const T *means2d,
+                      const int32_t *radii,
+                      const T *conics,
+                      const T *opacities,
+                      const bool *tileMask,
+                      const int32_t *cameraJIdx) {
+    const int32_t radiusU = radii[gidx * 2 + 0];
+    const int32_t radiusV = radii[gidx * 2 + 1];
+    if (radiusU <= 0 || radiusV <= 0) {
+        return CountT{0};
+    }
+    const float2 mean2d = *reinterpret_cast<const float2 *>(means2d + gidx * 2);
+    const int32_t cidx  = cameraJIdx == nullptr ? gidx / numGaussiansPerCamera : cameraJIdx[gidx];
+    return countTiles<TileIteratorT, CountT>(
+        makeTileIterator<TileIteratorT>(
+            mean2d, radiusU, radiusV, conics, opacities, gidx, tileSize, numTilesW, numTilesH),
+        cidx,
+        numTilesW,
+        numTilesH,
+        totalTiles,
+        keyStart,
+        keyEnd,
+        tileMask);
+}
+
 // Compute the number of 2d image tiles intersected by a set of 2D projected Gaussians.
 //
 // When conics and opacities are null, intersection uses each Gaussian's axis-aligned bounding box,
@@ -525,57 +560,51 @@ countTiles(TileIteratorT iterator,
 // opacity. In both cases, the 2D shape and depth approximate the projection of a 3D Gaussian onto
 // the image plane, and depth is the (world-space) depth of the Gaussian.
 //
-// The output is a set of counts of the number of tiles each Gaussian intersects.
+// The output contains the total number of intersections for each block of Gaussians.
 //
 template <typename TileIteratorT, typename T, typename CountT>
 __global__ __launch_bounds__(NUM_THREADS) void
-countTilesPerGaussian(const uint32_t gaussianOffset,
-                      const uint32_t gaussianCount,
-                      const uint32_t numGaussiansPerCamera,
-                      const uint32_t tileSize,
-                      const uint32_t numTilesW,
-                      const uint32_t numTilesH,
-                      const uint32_t totalTiles,
-                      const int64_t keyStart,                        // tile-key range start
-                      const int64_t keyEnd,                          // tile-key range end
-                      const T *__restrict__ means2d,                 // [C, N, 2] or [M, 2]
-                      const int32_t *__restrict__ radii,             // [C, N, 2] or [M, 2]
-                      const T *__restrict__ conics,                  // NULL, [C, N, 3], or [M, 3]
-                      const T *__restrict__ opacities,               // NULL, [C, N], or [M]
-                      const bool *__restrict__ tileMask,             // [C, H, W] or nullptr
-                      const int32_t *__restrict__ cameraJIdx,        // NULL or [M]
-                      CountT *__restrict__ outNumTilesPerGaussian) { // [ C * N ] or [ M ]
-    // parallelize over gaussianCount
-    for (auto idx = blockIdx.x * blockDim.x + threadIdx.x; idx < gaussianCount;
-         idx += blockDim.x * gridDim.x) {
-        auto gidx             = idx + gaussianOffset;
-        const int32_t radiusU = radii[gidx * 2 + 0];
-        const int32_t radiusV = radii[gidx * 2 + 1];
-        if (radiusU <= 0 || radiusV <= 0) {
-            outNumTilesPerGaussian[gidx] = static_cast<CountT>(0);
-        } else {
-            const float2 mean2d = *reinterpret_cast<const float2 *>(means2d + gidx * 2);
-            const int32_t cidx  = (cameraJIdx == nullptr)
-                                      ? static_cast<int32_t>(gidx / numGaussiansPerCamera)
-                                      : cameraJIdx[gidx];
-            outNumTilesPerGaussian[gidx] =
-                countTiles<TileIteratorT, CountT>(makeTileIterator<TileIteratorT>(mean2d,
-                                                                                  radiusU,
-                                                                                  radiusV,
-                                                                                  conics,
-                                                                                  opacities,
-                                                                                  gidx,
-                                                                                  tileSize,
-                                                                                  numTilesW,
-                                                                                  numTilesH),
-                                                  cidx,
-                                                  numTilesW,
-                                                  numTilesH,
-                                                  totalTiles,
-                                                  keyStart,
-                                                  keyEnd,
-                                                  tileMask);
-        }
+countTilesPerGaussianBlock(
+    const uint32_t gaussianOffset,
+    const uint32_t gaussianCount,
+    const uint32_t numGaussiansPerCamera,
+    const uint32_t tileSize,
+    const uint32_t numTilesW,
+    const uint32_t numTilesH,
+    const uint32_t totalTiles,
+    const int64_t keyStart,                     // tile-key range start
+    const int64_t keyEnd,                       // tile-key range end
+    const T *__restrict__ means2d,              // [C, N, 2] or [M, 2]
+    const int32_t *__restrict__ radii,          // [C, N, 2] or [M, 2]
+    const T *__restrict__ conics,               // NULL, [C, N, 3], or [M, 3]
+    const T *__restrict__ opacities,            // NULL, [C, N], or [M]
+    const bool *__restrict__ tileMask,          // [C, H, W] or nullptr
+    const int32_t *__restrict__ cameraJIdx,     // NULL or [M]
+    CountT *__restrict__ outNumTilesPerBlock) { // [ceil(gaussianCount / NUM_THREADS)]
+    // Launch one block per NUM_THREADS Gaussians. Inactive lanes in the last block must
+    // participate in the reduction with zero, rather than returning before the collective.
+    const uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    const CountT count =
+        idx < gaussianCount ? countTilesForGaussian<TileIteratorT, T, CountT>(idx + gaussianOffset,
+                                                                              numGaussiansPerCamera,
+                                                                              tileSize,
+                                                                              numTilesW,
+                                                                              numTilesH,
+                                                                              totalTiles,
+                                                                              keyStart,
+                                                                              keyEnd,
+                                                                              means2d,
+                                                                              radii,
+                                                                              conics,
+                                                                              opacities,
+                                                                              tileMask,
+                                                                              cameraJIdx)
+                            : CountT{0};
+    using BlockReduce = cub::BlockReduce<CountT, NUM_THREADS>;
+    __shared__ typename BlockReduce::TempStorage tempStorage;
+    const CountT blockCount = BlockReduce(tempStorage).Sum(count);
+    if (threadIdx.x == 0) {
+        outNumTilesPerBlock[blockIdx.x] = blockCount;
     }
 }
 
@@ -706,73 +735,93 @@ computeGaussianTileIntersections(
     const uint32_t numTilesH,
     const uint32_t tileIdBits,
     const uint32_t totalTiles,
-    const int64_t keyStart,                          // tile-key range start
-    const int64_t keyEnd,                            // tile-key range end
-    const T *__restrict__ means2d,                   // [C, N, 2] or [M, 2]
-    const int32_t *__restrict__ radii,               // [C, N, 2] or [M, 2]
-    const T *__restrict__ conics,                    // NULL, [C, N, 3], or [M, 3]
-    const T *__restrict__ opacities,                 // NULL, [C, N], or [M]
-    const T *__restrict__ depths,                    // [C, N]    or [M]
-    const int64_t *__restrict__ cumTilesPerGaussian, // [ C * N ] or [ M ]
-    const bool *__restrict__ tileMask,               // [C, H, W] or nullptr
-    const int32_t *__restrict__ cameraJIdx,          // NULL or [M]
-    int64_t *__restrict__ intersectionKeys,          // [ C * N * numTiles ] or [ M * numTiles ]
-    int32_t *__restrict__ intersectionValues) {      // [ C * N * numTiles ] or [ M * numTiles ]
+    const int64_t keyStart,                       // tile-key range start
+    const int64_t keyEnd,                         // tile-key range end
+    const T *__restrict__ means2d,                // [C, N, 2] or [M, 2]
+    const int32_t *__restrict__ radii,            // [C, N, 2] or [M, 2]
+    const T *__restrict__ conics,                 // NULL, [C, N, 3], or [M, 3]
+    const T *__restrict__ opacities,              // NULL, [C, N], or [M]
+    const T *__restrict__ depths,                 // [C, N]    or [M]
+    const int64_t *__restrict__ cumTilesPerBlock, // [ceil(gaussianCount / NUM_THREADS)]
+    const bool *__restrict__ tileMask,            // [C, H, W] or nullptr
+    const int32_t *__restrict__ cameraJIdx,       // NULL or [M]
+    int64_t *__restrict__ intersectionKeys,       // [ C * N * numTiles ] or [ M * numTiles ]
+    int32_t *__restrict__ intersectionValues) {   // [ C * N * numTiles ] or [ M * numTiles ]
 
-    // parallelize over total_gaussians
-    for (auto idx = blockIdx.x * blockDim.x + threadIdx.x; idx < gaussianCount;
-         idx += blockDim.x * gridDim.x) {
-        auto gidx = idx + gaussianOffset;
-        // Get the camera id from the batch indices or use the camera index directly
-        const int32_t cidx =
-            cameraJIdx == nullptr ? gidx / numGaussiansPerCamera : cameraJIdx[gidx];
-
-        const int32_t radiusU = radii[gidx * 2 + 0];
-        const int32_t radiusV = radii[gidx * 2 + 1];
-        if (radiusU > 0 && radiusV > 0) {
-            const float2 mean2d = *reinterpret_cast<const float2 *>(means2d + 2 * gidx);
-
-            // If you use float64, we're casting you to float32 so we can
-            // pack the depth into the key. In principle this loses precision,
-            // in practice it's fine.
-            const float depth = depths[gidx];
-
-            // Suppose you're using tile_id_bits = 22, then the output for this intersection is
-            // camera id (10 bits) | tile id (22 bits) | depth (32 bits)
-            // which we pack into an int64_t
-            const int64_t depthEnc = encodeDepth(depth);
-
-            // For each tile this Gaussian intersects whose tile-key L = cidx * totalTiles +
-            // tileIdx falls in this device's range [keyStart, keyEnd), write out an intersection
-            // tuple {(camera_id | tile_id | depth), gaussian_id} (int64_t, int32_t). The write
-            // index is local to this device's intersection slice (intersectionKeys /
-            // intersectionValues are already offset to the start of that slice), and matches the
-            // per-device count computed by countTilesPerGaussian.
-            int64_t curIsect = (gidx == 0) ? 0 : cumTilesPerGaussian[gidx - 1];
-            emitTiles(makeTileIterator<TileIteratorT>(mean2d,
-                                                      radiusU,
-                                                      radiusV,
-                                                      conics,
-                                                      opacities,
-                                                      gidx,
-                                                      tileSize,
-                                                      numTilesW,
-                                                      numTilesH),
-                      cidx,
-                      gidx,
-                      numTilesW,
-                      numTilesH,
-                      tileIdBits,
-                      totalTiles,
-                      keyStart,
-                      keyEnd,
-                      depthEnc,
-                      tileMask,
-                      curIsect,
-                      intersectionKeys,
-                      intersectionValues);
-        }
+    int64_t blockGaussianOffset = 0;
+    // Count and emit use the same one-block-per-NUM_THREADS-Gaussians layout. Reconstruct
+    // offsets in Gaussian order so the stable depth sort retains its equal-depth ordering.
+    const int64_t blockStart = blockIdx.x == 0 ? 0 : cumTilesPerBlock[blockIdx.x - 1];
+    if (blockStart == cumTilesPerBlock[blockIdx.x]) {
+        return; // Uniform across the block; there are no intersections to emit.
     }
+    const uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    const int64_t count =
+        idx < gaussianCount
+            ? countTilesForGaussian<TileIteratorT, T, int64_t>(idx + gaussianOffset,
+                                                               numGaussiansPerCamera,
+                                                               tileSize,
+                                                               numTilesW,
+                                                               numTilesH,
+                                                               totalTiles,
+                                                               keyStart,
+                                                               keyEnd,
+                                                               means2d,
+                                                               radii,
+                                                               conics,
+                                                               opacities,
+                                                               tileMask,
+                                                               cameraJIdx)
+            : int64_t{0};
+    using BlockScan = cub::BlockScan<int64_t, NUM_THREADS>;
+    __shared__ typename BlockScan::TempStorage tempStorage;
+    BlockScan(tempStorage).ExclusiveSum(count, blockGaussianOffset);
+    if (count == 0) {
+        return;
+    }
+    blockGaussianOffset += blockStart;
+
+    auto gidx = idx + gaussianOffset;
+    // Get the camera id from the batch indices or use the camera index directly
+    const int32_t cidx = cameraJIdx == nullptr ? gidx / numGaussiansPerCamera : cameraJIdx[gidx];
+
+    const int32_t radiusU = radii[gidx * 2 + 0];
+    const int32_t radiusV = radii[gidx * 2 + 1];
+    const float2 mean2d   = *reinterpret_cast<const float2 *>(means2d + 2 * gidx);
+
+    // If you use float64, we're casting you to float32 so we can
+    // pack the depth into the key. In principle this loses precision,
+    // in practice it's fine.
+    const float depth = depths[gidx];
+
+    // Suppose you're using tile_id_bits = 22, then the output for this intersection is
+    // camera id (10 bits) | tile id (22 bits) | depth (32 bits)
+    // which we pack into an int64_t
+    const int64_t depthEnc = encodeDepth(depth);
+
+    // For each tile this Gaussian intersects whose tile-key L = cidx * totalTiles +
+    // tileIdx falls in this device's range [keyStart, keyEnd), write out an intersection
+    // tuple {(camera_id | tile_id | depth), gaussian_id} (int64_t, int32_t). The write
+    // index is local to this device's intersection slice (intersectionKeys /
+    // intersectionValues are already offset to the start of that slice), and matches the
+    // per-device count computed by countTilesPerGaussianBlock.
+    int64_t curIsect = blockGaussianOffset;
+    emitTiles(
+        makeTileIterator<TileIteratorT>(
+            mean2d, radiusU, radiusV, conics, opacities, gidx, tileSize, numTilesW, numTilesH),
+        cidx,
+        gidx,
+        numTilesW,
+        numTilesH,
+        tileIdBits,
+        totalTiles,
+        keyStart,
+        keyEnd,
+        depthEnc,
+        tileMask,
+        curIsect,
+        intersectionKeys,
+        intersectionValues);
 }
 
 __global__ __launch_bounds__(NUM_THREADS) void
@@ -1030,9 +1079,10 @@ intersectGaussianTilesCudaImpl(
     }
     using scalar_t = float;
 
-    // Allocate tensor to store the number of tiles each gaussian intersects
-    torch::Tensor tilesPerGaussianCumsum =
-        torch::empty({totalGaussians}, means2d.options().dtype(torch::kInt64));
+    // Store one tile count per Gaussian block; emission reconstructs offsets within each block.
+    const int numGaussianBlocks = GET_BLOCKS(totalGaussians, NUM_THREADS);
+    torch::Tensor tilesPerBlockCumsum =
+        torch::empty({numGaussianBlocks}, means2d.options().dtype(torch::kInt64));
 
     const auto tileMaskPtr =
         tileMask.has_value() ? tileMask.value().const_data_ptr<bool>() : nullptr;
@@ -1040,39 +1090,39 @@ intersectGaussianTilesCudaImpl(
     const auto opacitiesPtr =
         opacities.has_value() ? opacities.value().const_data_ptr<scalar_t>() : nullptr;
 
-    // Count the number of tiles each Gaussian intersects, store in tiles_per_gaussian_cumsum
-    const int NUM_BLOCKS                   = (totalGaussians + NUM_THREADS - 1) / NUM_THREADS;
-    const auto launchCountTilesPerGaussian = [&]<typename TileIteratorT>() {
-        countTilesPerGaussian<TileIteratorT, scalar_t, int64_t>
-            <<<NUM_BLOCKS, NUM_THREADS, 0, stream>>>(0,
-                                                     totalGaussians,
-                                                     numGaussians,
-                                                     tileSize,
-                                                     numTilesW,
-                                                     numTilesH,
-                                                     totalTiles,
-                                                     0,
-                                                     static_cast<int64_t>(numCameras) * totalTiles,
-                                                     means2d.const_data_ptr<scalar_t>(),
-                                                     radii.const_data_ptr<int32_t>(),
-                                                     conicsPtr,
-                                                     opacitiesPtr,
-                                                     tileMaskPtr,
-                                                     cameraJIdxPtr,
-                                                     tilesPerGaussianCumsum.data_ptr<int64_t>());
+    // Count intersections per Gaussian block.
+    const auto launchCountTilesPerGaussianBlock = [&]<typename TileIteratorT>() {
+        countTilesPerGaussianBlock<TileIteratorT, scalar_t, int64_t>
+            <<<numGaussianBlocks, NUM_THREADS, 0, stream>>>(
+                0,
+                totalGaussians,
+                numGaussians,
+                tileSize,
+                numTilesW,
+                numTilesH,
+                totalTiles,
+                0,
+                static_cast<int64_t>(numCameras) * totalTiles,
+                means2d.const_data_ptr<scalar_t>(),
+                radii.const_data_ptr<int32_t>(),
+                conicsPtr,
+                opacitiesPtr,
+                tileMaskPtr,
+                cameraJIdxPtr,
+                tilesPerBlockCumsum.data_ptr<int64_t>());
     };
     if (conics.has_value()) {
-        launchCountTilesPerGaussian.operator()<EllipseTileIterator>();
+        launchCountTilesPerGaussianBlock.operator()<EllipseTileIterator>();
     } else {
-        launchCountTilesPerGaussian.operator()<AABBTileIterator>();
+        launchCountTilesPerGaussianBlock.operator()<AABBTileIterator>();
     }
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 
     // cumulative sum to get the total number of intersections
-    tilesPerGaussianCumsum = torch::cumsum(tilesPerGaussianCumsum, 0, torch::kInt64);
+    tilesPerBlockCumsum = torch::cumsum(tilesPerBlockCumsum, 0, torch::kInt64);
 
     // Allocate tensors to store the intersections
-    const int64_t totalIntersections = tilesPerGaussianCumsum[-1].item<int64_t>();
+    const int64_t totalIntersections = tilesPerBlockCumsum[-1].item<int64_t>();
     if (totalIntersections == 0) {
         return std::make_tuple(torch::zeros(outputDims, means2d.options().dtype(torch::kInt64)),
                                torch::empty({0}, means2d.options().dtype(torch::kInt32)));
@@ -1088,7 +1138,7 @@ intersectGaussianTilesCudaImpl(
         // encodes the index of the Gaussian in the input arrays.
         const auto launchComputeGaussianTileIntersections = [&]<typename TileIteratorT>() {
             computeGaussianTileIntersections<TileIteratorT, scalar_t>
-                <<<NUM_BLOCKS, NUM_THREADS, 0, stream>>>(
+                <<<numGaussianBlocks, NUM_THREADS, 0, stream>>>(
                     numCameras,
                     numGaussians,
                     0,
@@ -1105,7 +1155,7 @@ intersectGaussianTilesCudaImpl(
                     conicsPtr,
                     opacitiesPtr,
                     depths.const_data_ptr<scalar_t>(),
-                    tilesPerGaussianCumsum.const_data_ptr<int64_t>(),
+                    tilesPerBlockCumsum.const_data_ptr<int64_t>(),
                     tileMaskPtr,
                     cameraJIdxPtr,
                     intersectionKeys.data_ptr<int64_t>(),
@@ -1346,19 +1396,19 @@ intersectGaussianTilesPrivateUse1Impl(
     // device can then sort its own intersections independently and their concatenation is globally
     // sorted, with no cross-device merge.
 
-    // For each device, count the in-range tiles per Gaussian, then scan in place to get the
-    // per-Gaussian write offsets. Each device gets its own buffer (not a single
-    // [deviceCount, totalGaussians] tensor, which the multi-GPU allocator would stripe) so its row
-    // stays device-local; count and scan share the per-device stream, so no merge is needed, and a
-    // single-device CUB scan avoids torch::cumsum dispatching to the multi-GPU cumsum.
-    std::vector<int64_t *> deviceTilesPerGaussianCumsum(deviceCount, nullptr);
+    // Store one count per NUM_THREADS Gaussians on each device, then scan these block totals.
+    // Emit reconstructs the per-Gaussian offsets with a block-local scan, reducing the persistent
+    // prefix storage from 8 * totalGaussians bytes to 8 * numGaussianBlocks bytes per device.
+    // Count, scan, emit, and release share the device's stream; no merge is needed between them.
+    const int numGaussianBlocks = GET_BLOCKS(totalGaussians, NUM_THREADS);
+    std::vector<int64_t *> deviceTilesPerBlockCumsum(deviceCount, nullptr);
 
     for (const auto deviceId: c10::irange(deviceCount)) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
 
         C10_CUDA_CHECK(cudaMallocAsync(
-            &deviceTilesPerGaussianCumsum[deviceId], totalGaussians * sizeof(int64_t), stream));
+            &deviceTilesPerBlockCumsum[deviceId], numGaussianBlocks * sizeof(int64_t), stream));
 
         size_t deviceKeyOffset, deviceKeyCount;
         std::tie(deviceKeyOffset, deviceKeyCount) = deviceChunk(totalTileKeys, deviceId);
@@ -1367,39 +1417,39 @@ intersectGaussianTilesPrivateUse1Impl(
 
         // Every device scans all Gaussians but counts only the tiles that fall in its tile-key
         // range.
-        const int NUM_BLOCKS                   = (totalGaussians + NUM_THREADS - 1) / NUM_THREADS;
-        const auto launchCountTilesPerGaussian = [&]<typename TileIteratorT>() {
-            countTilesPerGaussian<TileIteratorT, scalar_t, int64_t>
-                <<<NUM_BLOCKS, NUM_THREADS, 0, stream>>>(0,
-                                                         totalGaussians,
-                                                         numGaussians,
-                                                         tileSize,
-                                                         numTilesW,
-                                                         numTilesH,
-                                                         totalTiles,
-                                                         keyStart,
-                                                         keyEnd,
-                                                         means2d.const_data_ptr<scalar_t>(),
-                                                         radii.const_data_ptr<int32_t>(),
-                                                         conicsPtr,
-                                                         opacitiesPtr,
-                                                         tileMaskPtr,
-                                                         cameraJIdxPtr,
-                                                         deviceTilesPerGaussianCumsum[deviceId]);
+        const auto launchCountTilesPerGaussianBlock = [&]<typename TileIteratorT>() {
+            countTilesPerGaussianBlock<TileIteratorT, scalar_t, int64_t>
+                <<<numGaussianBlocks, NUM_THREADS, 0, stream>>>(
+                    0,
+                    totalGaussians,
+                    numGaussians,
+                    tileSize,
+                    numTilesW,
+                    numTilesH,
+                    totalTiles,
+                    keyStart,
+                    keyEnd,
+                    means2d.const_data_ptr<scalar_t>(),
+                    radii.const_data_ptr<int32_t>(),
+                    conicsPtr,
+                    opacitiesPtr,
+                    tileMaskPtr,
+                    cameraJIdxPtr,
+                    deviceTilesPerBlockCumsum[deviceId]);
         };
         if (conics.has_value()) {
-            launchCountTilesPerGaussian.operator()<EllipseTileIterator>();
+            launchCountTilesPerGaussianBlock.operator()<EllipseTileIterator>();
         } else {
-            launchCountTilesPerGaussian.operator()<AABBTileIterator>();
+            launchCountTilesPerGaussianBlock.operator()<AABBTileIterator>();
         }
         C10_CUDA_KERNEL_LAUNCH_CHECK();
 
-        // Inclusive scan of the counts in place to get the per-Gaussian write offsets.
+        // Inclusive scan of the block counts in place; the final entry is the device total.
         FVDB_CUB_WRAPPER_ASYNC(stream,
                                cub::DeviceScan::InclusiveSum,
-                               deviceTilesPerGaussianCumsum[deviceId],
-                               deviceTilesPerGaussianCumsum[deviceId],
-                               totalGaussians);
+                               deviceTilesPerBlockCumsum[deviceId],
+                               deviceTilesPerBlockCumsum[deviceId],
+                               numGaussianBlocks);
     }
 
     // Read each device's scan total back to the host. mergeStreams() only orders the device
@@ -1415,11 +1465,11 @@ intersectGaussianTilesPrivateUse1Impl(
     for (const auto deviceId: c10::irange(deviceCount)) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
-        // The total is the last element of the device's inclusive-scan row. Issuing the copy on the
-        // device's stream orders it after the scan; the synchronize below then guarantees it has
-        // completed before we read deviceTotals on the host.
+        // The total is the last element of the device's scanned block counts. Issuing the copy on
+        // the device's stream orders it after the scan; the synchronize below then guarantees it
+        // has completed before we read deviceTotals on the host.
         C10_CUDA_CHECK(cudaMemcpyAsync(&deviceTotals[deviceId],
-                                       deviceTilesPerGaussianCumsum[deviceId] + totalGaussians - 1,
+                                       deviceTilesPerBlockCumsum[deviceId] + numGaussianBlocks - 1,
                                        sizeof(int64_t),
                                        cudaMemcpyDeviceToHost,
                                        stream));
@@ -1438,7 +1488,7 @@ intersectGaussianTilesPrivateUse1Impl(
         for (const auto deviceId: c10::irange(deviceCount)) {
             C10_CUDA_CHECK(cudaSetDevice(deviceId));
             auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
-            C10_CUDA_CHECK(cudaFreeAsync(deviceTilesPerGaussianCumsum[deviceId], stream));
+            C10_CUDA_CHECK(cudaFreeAsync(deviceTilesPerBlockCumsum[deviceId], stream));
         }
         return std::make_tuple(torch::zeros(outputDims, means2d.options().dtype(torch::kInt64)),
                                torch::empty({0}, means2d.options().dtype(torch::kInt32)));
@@ -1506,10 +1556,9 @@ intersectGaussianTilesPrivateUse1Impl(
             const int64_t keyEnd   = static_cast<int64_t>(deviceKeyOffset + deviceKeyCount);
             const int64_t intersectionOffset = deviceIntersectionOffset[deviceId];
 
-            const int NUM_BLOCKS = (totalGaussians + NUM_THREADS - 1) / NUM_THREADS;
             const auto launchComputeGaussianTileIntersections = [&]<typename TileIteratorT>() {
                 computeGaussianTileIntersections<TileIteratorT, scalar_t>
-                    <<<NUM_BLOCKS, NUM_THREADS, 0, stream>>>(
+                    <<<numGaussianBlocks, NUM_THREADS, 0, stream>>>(
                         numCameras,
                         numGaussians,
                         0,
@@ -1526,7 +1575,7 @@ intersectGaussianTilesPrivateUse1Impl(
                         conicsPtr,
                         opacitiesPtr,
                         depths.const_data_ptr<scalar_t>(),
-                        deviceTilesPerGaussianCumsum[deviceId],
+                        deviceTilesPerBlockCumsum[deviceId],
                         tileMaskPtr,
                         cameraJIdxPtr,
                         deviceIntersectionKeys[deviceId],
@@ -1541,7 +1590,7 @@ intersectGaussianTilesPrivateUse1Impl(
 
             // The emit kernel is the last reader of this device's cumulative-count buffer; free it
             // on the same stream so the free is ordered after the kernel.
-            C10_CUDA_CHECK(cudaFreeAsync(deviceTilesPerGaussianCumsum[deviceId], stream));
+            C10_CUDA_CHECK(cudaFreeAsync(deviceTilesPerBlockCumsum[deviceId], stream));
         }
 
         // Sort the intersections by their key so intersections within the same tile are grouped
