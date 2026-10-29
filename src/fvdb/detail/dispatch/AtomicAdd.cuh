@@ -14,6 +14,9 @@
 //
 //     atomic_add(tg, &out_v(row, col), value);
 //
+// Counters hit by many threads (e.g. per-tap counts in a two-pass build) should use
+// atomic_fetch_increment_i32, which warp-aggregates the atomic on GPU.
+//
 #ifndef FVDB_DETAIL_DISPATCH_ATOMICADD_CUH
 #define FVDB_DETAIL_DISPATCH_ATOMICADD_CUH
 
@@ -161,6 +164,41 @@ atomic_fetch_add_i32(Tag /*tg*/, int32_t *dst, int32_t val) {
 #else
     if constexpr (::dispatch::cpu_tag<Tag>) {
         return std::atomic_ref<int32_t>(*dst).fetch_add(val, std::memory_order_relaxed);
+    }
+    return 0;
+#endif
+}
+
+/// @brief Device-dispatched atomic fetch-and-increment for int32_t, warp-aggregated on GPU.
+///
+/// Prefer this over atomic_fetch_add_i32(tg, dst, 1) when many threads increment a small set of
+/// counters. On GPU, the lanes of a warp that target the same address issue one atomic for the
+/// whole group, and each lane receives a distinct value in [old, old + groupSize). As with
+/// independent atomics, which lane receives which value is unspecified.
+///
+/// @tparam Tag  A dispatch tag carrying at least a torch::DeviceType.
+/// @param tg    Tag instance (selects CPU vs GPU path).
+/// @param dst   Pointer to the counter.
+/// @return      A unique pre-increment value of @p dst for this thread.
+template <typename Tag>
+    requires ::dispatch::with_type<Tag, torch::DeviceType>
+__hostdev__ int32_t
+atomic_fetch_increment_i32(Tag /*tg*/, int32_t *dst) {
+#if defined(__CUDA_ARCH__)
+    unsigned const peers = __match_any_sync(__activemask(), reinterpret_cast<uintptr_t>(dst));
+    unsigned lane;
+    asm("mov.u32 %0, %%laneid;" : "=r"(lane));
+    int const leader = __ffs(peers) - 1;
+
+    int32_t base = 0;
+    if (static_cast<int>(lane) == leader) {
+        base = atomicAdd(dst, __popc(peers));
+    }
+    base = __shfl_sync(peers, base, leader);
+    return base + __popc(peers & ((1u << lane) - 1u));
+#else
+    if constexpr (::dispatch::cpu_tag<Tag>) {
+        return std::atomic_ref<int32_t>(*dst).fetch_add(1, std::memory_order_relaxed);
     }
     return 0;
 #endif
