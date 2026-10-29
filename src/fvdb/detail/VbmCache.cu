@@ -8,15 +8,53 @@
 #include <c10/cuda/CUDAException.h>
 #include <c10/cuda/CUDAGuard.h>
 
+#include <cub/block/block_scan.cuh>
+
 #include <algorithm>
-#include <cstring>
 #include <limits>
 
 namespace fvdb {
 namespace detail {
 
+namespace {
+
+constexpr int kFillEntriesThreads = 256;
+
+// Fills the batch's VBM entries on the device from its grid metadata, so the build needs no
+// host-to-device upload. One block scans the grids' VBM block counts, kFillEntriesThreads grids
+// per pass. Matches the host entries computed in VbmCache::build.
+__global__ void __launch_bounds__(kFillEntriesThreads)
+fillEntriesKernel(const GridBatchData::Accessor acc, BatchVbm::Entry *entries) {
+    using BlockScan = cub::BlockScan<uint64_t, kFillEntriesThreads>;
+    __shared__ typename BlockScan::TempStorage scanStorage;
+
+    const int64_t numGrids = acc.batchSize();
+    uint64_t carry         = 0;
+    for (int64_t first = 0; first < numGrids; first += kFillEntriesThreads) {
+        const int64_t bi = first + threadIdx.x;
+        uint64_t voxels  = 0;
+        if (bi < numGrids) {
+            const int64_t end = bi + 1 < numGrids ? acc.voxelOffset(bi + 1) : acc.totalVoxels();
+            voxels            = uint64_t(end - acc.voxelOffset(bi));
+        }
+        const uint64_t blocks = (voxels + VbmCache::kBlockWidth - 1) >> VbmCache::kLog2BlockWidth;
+        uint64_t blockBase;
+        uint64_t passBlocks;
+        BlockScan(scanStorage).ExclusiveSum(blocks, blockBase, passBlocks);
+        if (bi < numGrids) {
+            entries[bi] = BatchVbm::Entry{
+                acc.grid(bi), voxels, carry + blockBase, uint32_t(acc.leafOffset(bi))};
+        }
+        carry += passBlocks;
+        __syncthreads(); // scanStorage is reused by the next pass
+    }
+}
+
+} // namespace
+
 // No device guard: setting a device fails in a child forked after CUDA initialized, where
 // Python's cycle collector can free inherited grids. Destroying the event is best-effort.
+// The event exists only if a second stream acquired the cache.
 VbmCache::~VbmCache() {
     if (mBuiltOn) {
         C10_CUDA_IGNORE_ERROR(cudaEventDestroy(mBuiltOn));
@@ -38,14 +76,18 @@ VbmCache::acquire(const GridBatchData &owner) {
     const bool synced =
         stream == mBuiltStream ||
         std::find(mSyncedStreams.begin(), mSyncedStreams.end(), stream) != mSyncedStreams.end();
-    if (mBuiltOn && !synced) {
+    if (mBuffer.defined() && !synced) {
+        // Recorded on first need rather than at build time, since most batches only ever see one
+        // stream. The build stream is in order, so a later record still follows the build.
+        if (!mBuiltOn) {
+            C10_CUDA_CHECK(cudaEventCreateWithFlags(&mBuiltOn, cudaEventDisableTiming));
+            C10_CUDA_CHECK(cudaEventRecord(mBuiltOn, mBuiltStream));
+        }
         // Execution ordering: this consumer stream must see the finished build.
         C10_CUDA_CHECK(cudaStreamWaitEvent(stream, mBuiltOn, 0));
         // Lifetime ordering: destroying the owner while this stream's kernels are in flight
-        // must not recycle the buffers under them.
-        mFirstLeafID.record_stream(stream.unwrap());
-        mJumpMap.record_stream(stream.unwrap());
-        mEntries.record_stream(stream.unwrap());
+        // must not recycle the buffer under them.
+        mBuffer.record_stream(stream.unwrap());
         mSyncedStreams.push_back(stream);
     }
     return mVbm;
@@ -75,38 +117,29 @@ VbmCache::build(const GridBatchData &owner, const c10::cuda::CUDAStream &stream)
         return;
     }
 
-    // Tensor-backed buffers: the caching allocator ties frees to the allocation stream and to
-    // any record_stream()ed consumer streams.
-    const auto opts = torch::TensorOptions().device(owner.device());
-    mFirstLeafID    = torch::empty({int64_t(blockCount)}, opts.dtype(torch::kUInt32));
-    mJumpMap = torch::empty({int64_t(blockCount) * kJumpMapWordCount}, opts.dtype(torch::kUInt64));
+    // One tensor-backed buffer: the caching allocator ties its free to the allocation stream and
+    // to any record_stream()ed consumer streams. Layout, each part 8-byte aligned:
+    // jumpMap (uint64), entries, firstLeafID (uint32).
+    static_assert(sizeof(BatchVbm::Entry) % alignof(uint64_t) == 0);
+    const size_t jumpMapBytes     = blockCount * kJumpMapWordCount * sizeof(uint64_t);
+    const size_t entryBytes       = size_t(numGrids) * sizeof(BatchVbm::Entry);
+    const size_t firstLeafIDBytes = blockCount * sizeof(uint32_t);
+    mBuffer           = torch::empty({int64_t(jumpMapBytes + entryBytes + firstLeafIDBytes)},
+                           torch::TensorOptions().dtype(torch::kUInt8).device(owner.device()));
+    auto *base        = mBuffer.mutable_data_ptr<uint8_t>();
+    auto *jumpMap     = reinterpret_cast<uint64_t *>(base);
+    auto *entries     = reinterpret_cast<BatchVbm::Entry *>(base + jumpMapBytes);
+    auto *firstLeafID = reinterpret_cast<uint32_t *>(base + jumpMapBytes + entryBytes);
 
-    const size_t entryBytes = mHostEntries.size() * sizeof(BatchVbm::Entry);
-    auto hostEntries        = torch::empty(
-        {int64_t(entryBytes)}, torch::TensorOptions().dtype(torch::kUInt8).pinned_memory(true));
-    std::memcpy(hostEntries.data_ptr(), mHostEntries.data(), entryBytes);
-    mEntries            = hostEntries.to(owner.device(), /*non_blocking=*/true);
-    const auto *entries = reinterpret_cast<const BatchVbm::Entry *>(mEntries.const_data_ptr());
-
-    nanovdb::tools::cuda::buildVoxelBlockManagerBatch<kLog2BlockWidth>(
-        entries,
-        uint32_t(numGrids),
-        uint32_t(leafCount),
-        blockCount,
-        mFirstLeafID.mutable_data_ptr<uint32_t>(),
-        mJumpMap.mutable_data_ptr<uint64_t>(),
-        stream);
+    fillEntriesKernel<<<1, kFillEntriesThreads, 0, stream>>>(owner.deviceAccessor(), entries);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 
-    C10_CUDA_CHECK(cudaEventCreateWithFlags(&mBuiltOn, cudaEventDisableTiming));
-    C10_CUDA_CHECK(cudaEventRecord(mBuiltOn, stream));
+    nanovdb::tools::cuda::buildVoxelBlockManagerBatch<kLog2BlockWidth>(
+        entries, uint32_t(numGrids), uint32_t(leafCount), blockCount, firstLeafID, jumpMap, stream);
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
     mBuiltStream = stream;
 
-    mVbm = BatchVbm{mFirstLeafID.const_data_ptr<uint32_t>(),
-                    mJumpMap.const_data_ptr<uint64_t>(),
-                    entries,
-                    numGrids,
-                    blockCount};
+    mVbm = BatchVbm{firstLeafID, jumpMap, entries, numGrids, blockCount};
 }
 
 GridVbm

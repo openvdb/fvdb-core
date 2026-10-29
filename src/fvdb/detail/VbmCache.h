@@ -53,15 +53,16 @@ struct GridVbm {
 /// nanovdb::tools::cuda::VoxelBlockManager::decodeInverseMap, which gives occupancy-independent
 /// per-active-voxel iteration.
 ///
-/// The first acquire() builds all of the batch's VBMs on the current stream with one upload,
-/// one memset and one kernel launch, sized from host metadata, so it never synchronizes the
-/// host. Topology is immutable after construction, so the VBMs never need invalidation. The
-/// cache belongs to exactly one GridBatchData, views included, and is never serialized.
+/// The first acquire() builds all of the batch's VBMs on the current stream into one buffer:
+/// one kernel fills the per-grid entries from device metadata, then one memset and one kernel
+/// build the VBMs. Sizes come from host metadata, so the build never synchronizes the host.
+/// Topology is immutable after construction, so the VBMs never need invalidation. The cache belongs
+/// to exactly one GridBatchData, views included, and is never serialized.
 ///
-/// Stream safety: the buffers are torch::Tensor storage from the CUDA caching allocator. The
+/// Stream safety: the buffer is torch::Tensor storage from the CUDA caching allocator. The
 /// first acquire() from a stream other than the build stream makes that stream wait on the
-/// build and record_stream()s the buffers for it, so destroying the owner while that stream's
-/// kernels are in flight cannot recycle the buffers under them. Callers must acquire() on the
+/// build and record_stream()s the buffer for it, so destroying the owner while that stream's
+/// kernels are in flight cannot recycle the buffer under them. Callers must acquire() on the
 /// stream they launch consuming kernels on.
 class VbmCache {
   public:
@@ -91,10 +92,8 @@ class VbmCache {
     const GridBatchData *mOwner = nullptr;    // set by the build; acquire() checks it
     BatchVbm mVbm;
     std::vector<BatchVbm::Entry> mHostEntries;
-    torch::Tensor mFirstLeafID;               // uint32 [blockCount]
-    torch::Tensor mJumpMap;                   // uint64 [blockCount * kJumpMapWordCount]
-    torch::Tensor mEntries;                   // bytes of numGrids BatchVbm::Entry
-    cudaEvent_t mBuiltOn      = nullptr;      // recorded on mBuiltStream after the build
+    torch::Tensor mBuffer;                    // bytes: jumpMap, entries, firstLeafID
+    cudaEvent_t mBuiltOn      = nullptr;      // created when a second stream first acquires
     cudaStream_t mBuiltStream = nullptr;
     std::vector<cudaStream_t> mSyncedStreams; // other streams already ordered after the build
 };
