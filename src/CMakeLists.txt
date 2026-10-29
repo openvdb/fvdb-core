@@ -22,10 +22,6 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_torch.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_tinyply.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_cutlass.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_nanovdb.cmake)
-include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_blosc.cmake)
-
-# zlib is required for NANOVDB_USE_ZIP (reading ZIP-compressed .nvdb files).
-find_package(ZLIB REQUIRED)
 
 # Enable testing at this level so CTest discovers tests from all subdirectories
 enable_testing()
@@ -174,7 +170,6 @@ set_target_properties(
 
 target_include_directories(fvdb PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
-    $<BUILD_INTERFACE:${nanovdb_SOURCE_DIR}/nanovdb>
     $<BUILD_INTERFACE:${nvtx3_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>)
 target_include_directories(fvdb PRIVATE
@@ -201,8 +196,6 @@ target_compile_options(fvdb PRIVATE
     "-Wno-stringop-overflow"
     "-Wno-maybe-uninitialized"
     "-fdiagnostics-color=always"
-    "-DNANOVDB_USE_BLOSC"
-    "-DNANOVDB_USE_ZIP"
     "-fvisibility=default"
     "-Wall"
     "-Werror"
@@ -215,8 +208,6 @@ target_compile_options(fvdb PRIVATE
     "-Werror=all-warnings"
     "--threads=$ENV{NVCC_THREADS}"
     "-Xcompiler=-Wall,-Werror,-Wno-maybe-uninitialized"
-    "-DNANOVDB_USE_BLOSC"
-    "-DNANOVDB_USE_ZIP"
     ${TORCH_CUDA_COMMON_FLAGS}
     >
     $<$<AND:$<BOOL:${FVDB_LINEINFO}>,$<COMPILE_LANGUAGE:CUDA>>:-lineinfo>)
@@ -224,8 +215,8 @@ target_compile_options(fvdb PRIVATE
 # Header-only NVTX v3 loads its injection library with dlopen. Consumers of fvdb
 # headers emit those calls, and glibc < 2.34 keeps dlopen in libdl.
 target_link_libraries(fvdb
-    PUBLIC torch nanovdb_editor::public_headers ${CMAKE_DL_LIBS}
-    PRIVATE tinyply cutlass blosc::blosc ZLIB::ZLIB dispatch)
+    PUBLIC torch $<BUILD_INTERFACE:NanoVDB::nanovdb> nanovdb_editor::public_headers ${CMAKE_DL_LIBS}
+    PRIVATE tinyply cutlass dispatch)
 
 # ----------------------------------------------------------------------------
 # Precompiled headers (host C++ only)
@@ -274,7 +265,7 @@ if(FVDB_INSTALL_DEV)
     install(FILES ${_FVDB_PUBLIC_HEADERS}
         DESTINATION include/fvdb)
 
-    install(DIRECTORY ${nanovdb_SOURCE_DIR}/nanovdb/nanovdb/
+    install(DIRECTORY ${FVDB_NANOVDB_INCLUDE_DIR}/nanovdb/
         DESTINATION include/nanovdb
         FILES_MATCHING PATTERN "*.h")
 
