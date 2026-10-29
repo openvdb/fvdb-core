@@ -12,7 +12,8 @@
 // driver and the VBM decode is occupancy-independent.
 //
 // A separate benchmark measures the one-time VbmCache build cost (paid once per batch
-// lifetime). The batch benchmarks time many small grids per batch, warm and cold.
+// lifetime). The batch benchmarks time batches of 1-256 random or shell grids in 32^3 to 256^3
+// boxes, warm and cold.
 //
 
 #ifdef __NVCC__
@@ -26,6 +27,7 @@
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 #include <fvdb/detail/utils/cuda/ForEachVbmCUDA.cuh>
 
+#include <ATen/cuda/CUDAGeneratorImpl.h>
 #include <c10/cuda/CUDAStream.h>
 #include <torch/torch.h>
 
@@ -43,26 +45,34 @@ using namespace fvdb;
 
 // Dense cube: every voxel of a dim^3 box is active (occupancy ~100%).
 torch::Tensor
-denseCubeIjk(int dim) {
-    auto r    = torch::arange(dim, torch::kInt32);
+denseCubeIjk(int dim, torch::Device device = torch::kCPU) {
+    auto r    = torch::arange(dim, torch::TensorOptions().dtype(torch::kInt32).device(device));
     auto grid = torch::meshgrid({r, r, r}, "ij");
     return torch::stack({grid[0].reshape(-1), grid[1].reshape(-1), grid[2].reshape(-1)}, 1);
 }
 
 // Random subsample of a dense cube: occupancy ~= fraction.
 torch::Tensor
-randomIjk(int dim, double fraction, uint64_t seed) {
-    auto cube     = denseCubeIjk(dim);
-    auto gen      = at::detail::createCPUGenerator(seed);
+randomIjk(int dim, double fraction, uint64_t seed, torch::Device device = torch::kCPU) {
+    auto cube = denseCubeIjk(dim, device);
+    at::Generator gen;
+    if (device.is_cuda()) {
+        gen = at::cuda::detail::createCUDAGenerator(device.index());
+        gen.set_current_seed(seed);
+    } else {
+        gen = at::detail::createCPUGenerator(seed);
+    }
     int64_t count = int64_t(double(cube.size(0)) * fraction);
-    auto perm     = torch::randperm(cube.size(0), gen, torch::kInt64).slice(0, 0, count);
+    auto perm     = torch::randperm(
+                    cube.size(0), gen, torch::TensorOptions().dtype(torch::kInt64).device(device))
+                    .slice(0, 0, count);
     return cube.index_select(0, perm);
 }
 
 // Spherical shell of ~thickness voxels: the narrow-band case, sparsest leaf occupancy.
 torch::Tensor
-shellIjk(int dim, double thickness) {
-    auto cube   = denseCubeIjk(dim);
+shellIjk(int dim, double thickness, torch::Device device = torch::kCPU) {
+    auto cube   = denseCubeIjk(dim, device);
     auto center = double(dim - 1) / 2.0;
     auto radius = double(dim) * 0.4;
     auto d      = (cube.to(torch::kFloat64) - center).norm(2, 1) - radius;
@@ -219,16 +229,22 @@ BM_VbmCacheBuild(benchmark::State &state) {
 }
 
 // ============================================================================
-// Batches of many small grids
+// Batches of grids
 // ============================================================================
 
-// A batch of numGrids distinct grids, each a 25%-occupancy random subsample of a dim^3 box.
+// Random: each grid is a distinct 25% random subsample of a dim^3 box, so every leaf is present
+// and about a quarter full. Shell: each grid is a 3-voxel-thick spherical shell inscribed in the
+// box, the narrow-band case. Inputs are generated on the GPU.
+enum class BatchShape : int64_t { Random = 0, Shell = 1 };
+
 c10::intrusive_ptr<GridBatchData>
-makeBatch(int64_t numGrids, int dim, uint64_t seed) {
+makeBatch(int64_t numGrids, int dim, BatchShape shape, uint64_t seed) {
+    const torch::Device device(torch::kCUDA, 0);
     std::vector<torch::Tensor> ijks;
     for (int64_t b = 0; b < numGrids; ++b) {
-        ijks.push_back(
-            randomIjk(dim, 0.25, seed * 4096 + uint64_t(b)).to(torch::Device(torch::kCUDA, 0)));
+        ijks.push_back(shape == BatchShape::Shell
+                           ? shellIjk(dim, 3.0, device)
+                           : randomIjk(dim, 0.25, seed * 4096 + uint64_t(b), device));
     }
     std::vector<nanovdb::Vec3d> sizes(numGrids, nanovdb::Vec3d(1.0));
     std::vector<nanovdb::Vec3d> origins(numGrids, nanovdb::Vec3d(0.0));
@@ -247,7 +263,7 @@ runBatchPath(const GridBatchData &batch, WriteCoordsFunctor func) {
     }
 }
 
-// Warm cache: state.range(0) grids per batch, each a 25% subsample of a state.range(1)^3 box.
+// Warm cache: state.range(0) grids per batch of shape state.range(2) in a state.range(1)^3 box.
 template <BatchPath Path>
 void
 BM_BatchWarm(benchmark::State &state) {
@@ -255,8 +271,9 @@ BM_BatchWarm(benchmark::State &state) {
         state.SkipWithError("CUDA not available");
         return;
     }
-    auto batch = makeBatch(state.range(0), int(state.range(1)), /*seed=*/1);
-    auto out   = torch::empty({batch->totalVoxels(), 3},
+    auto batch =
+        makeBatch(state.range(0), int(state.range(1)), BatchShape(state.range(2)), /*seed=*/1);
+    auto out = torch::empty({batch->totalVoxels(), 3},
                             torch::TensorOptions().dtype(torch::kInt32).device(batch->device()));
     WriteCoordsFunctor func{out.data_ptr<int32_t>()};
     runBatchPath<Path>(*batch, func);
@@ -281,9 +298,10 @@ BM_BatchCold(benchmark::State &state) {
     }
     std::vector<c10::intrusive_ptr<GridBatchData>> batches;
     for (int k = 0; k < kColdIterations; ++k) {
-        batches.push_back(makeBatch(state.range(0), int(state.range(1)), /*seed=*/k + 1));
+        batches.push_back(
+            makeBatch(state.range(0), int(state.range(1)), BatchShape(state.range(2)), k + 1));
     }
-    // Every batch has the same voxel count (a fixed fraction of the same box per grid).
+    // Every batch has the same voxel count (a fixed fraction or the same shell per grid).
     auto out = torch::empty({batches[0]->totalVoxels(), 3},
                             torch::TensorOptions().dtype(torch::kInt32).device(torch::kCUDA));
     WriteCoordsFunctor func{out.data_ptr<int32_t>()};
@@ -296,9 +314,10 @@ BM_BatchCold(benchmark::State &state) {
     state.counters["voxels"] = double(batches[0]->totalVoxels());
 }
 
-#define BATCH_ARGS                                 \
-    ->ArgsProduct({{1, 4, 16, 64, 256}, {32, 64}}) \
-        ->ArgNames({"grids", "dim"})               \
+#define BATCH_ARGS                                              \
+    ->ArgsProduct({{1, 4, 16, 64, 256}, {32, 64, 128}, {0, 1}}) \
+        ->ArgsProduct({{1, 4, 16, 64}, {256}, {0, 1}})          \
+        ->ArgNames({"grids", "dim", "shell"})                   \
         ->Unit(benchmark::kMicrosecond)
 
 BENCHMARK_TEMPLATE(BM_BatchWarm, BatchPath::LeafScan)->Name("BatchWarm/LeafScan") BATCH_ARGS;
