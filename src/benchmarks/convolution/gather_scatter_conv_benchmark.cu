@@ -552,8 +552,8 @@ BM_Conv_ChannelScale_CPU(benchmark::State &state) {
 #define CONV_CHANNELS \
     ->Args({4})->Args({16})->Args({32})->Args({64})->Args({128})->Args({256})->UseRealTime()
 
-// Topology build
-BENCHMARK(BM_Conv_TopologyBuild_CUDA)       CONV_GRID_SIZES;
+// Topology build (larger CUDA sizes expose contention on the per-tap counters)
+BENCHMARK(BM_Conv_TopologyBuild_CUDA)       CONV_GRID_SIZES->Args({64})->Args({128});
 BENCHMARK(BM_Conv_TopologyBuild_CPU)        CONV_GRID_SIZES;
 
 // Forward
