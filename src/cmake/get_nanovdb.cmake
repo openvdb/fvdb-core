@@ -1,17 +1,40 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 
+# NanoVDB is header only. Its CMake project provides the NanoVDB::nanovdb
+# interface target. With CPM_USE_LOCAL_PACKAGES=ON, CPM first looks for an
+# installed NanoVDBConfig.cmake with a matching major version.
+#
+# NanoVDB::nanovdb carries Blosc and ZIP support for .nvdb I/O. Blosc comes
+# from NanoVDB's vendored nanovdb_blosc library. CUDA stays off because fVDB
+# compiles against the CUDA toolkit's CCCL.
 CPMAddPackage(
-    NAME nanovdb
+    NAME NanoVDB
+    VERSION 32.11
     GITHUB_REPOSITORY AcademySoftwareFoundation/openvdb
-    GIT_TAG 71ae97d42fabde311559b697d61b219dfeed3eeb
+    GIT_TAG a3e97a4ede5c1720df72de1f54dfc251ab7cf7d1
     SOURCE_SUBDIR nanovdb/nanovdb
-    DOWNLOAD_ONLY YES
+    EXCLUDE_FROM_ALL YES
+    OPTIONS
+        "NANOVDB_BUILD_TOOLS OFF"
+        "NANOVDB_USE_CUDA OFF"
+        "NANOVDB_USE_BLOSC ON"
+        "NANOVDB_USE_ZLIB ON"
+        "NANOVDB_USE_TBB OFF"
 )
 
-# NanoVDB is header only, so we don't build it. Instead, we just add the headers
-# to the include path and create an interface target.
-if(nanovdb_ADDED)
-    add_library(nanovdb INTERFACE)
-    target_include_directories(nanovdb INTERFACE ${nanovdb_SOURCE_DIR}/nanovdb)
+if(NOT TARGET NanoVDB::nanovdb)
+    message(FATAL_ERROR "Expected the NanoVDB::nanovdb target from NanoVDB")
 endif()
+
+# FVDB_NANOVDB_INCLUDE_DIR holds the nanovdb/ header tree that fVDB bundles
+# into its installs
+get_target_property(_fvdb_nanovdb_imported NanoVDB::nanovdb IMPORTED)
+if(_fvdb_nanovdb_imported)
+    get_target_property(FVDB_NANOVDB_INCLUDE_DIR NanoVDB::nanovdb INTERFACE_INCLUDE_DIRECTORIES)
+else()
+    get_target_property(_fvdb_nanovdb_source_dir NanoVDB::nanovdb SOURCE_DIR)
+    cmake_path(GET _fvdb_nanovdb_source_dir PARENT_PATH FVDB_NANOVDB_INCLUDE_DIR)
+endif()
+unset(_fvdb_nanovdb_imported)
+unset(_fvdb_nanovdb_source_dir)
