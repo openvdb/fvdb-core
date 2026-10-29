@@ -4,86 +4,123 @@
 #include <fvdb/GridBatchData.h>
 #include <fvdb/detail/VbmCache.h>
 
-#include <nanovdb/tools/cuda/VoxelBlockManager.cuh>
-
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAException.h>
 #include <c10/cuda/CUDAGuard.h>
 
+#include <algorithm>
+#include <cstring>
+#include <limits>
+
 namespace fvdb {
 namespace detail {
 
+// No device guard: setting a device fails in a child forked after CUDA initialized, where
+// Python's cycle collector can free inherited grids. Destroying the event is best-effort.
 VbmCache::~VbmCache() {
-    for (auto &[key, entry]: mEntries) {
-        if (entry.builtOn) {
-            c10::cuda::CUDAGuard guard(entry.deviceIdx);
-            C10_CUDA_CHECK_WARN(cudaEventDestroy(entry.builtOn));
-        }
+    if (mBuiltOn) {
+        C10_CUDA_IGNORE_ERROR(cudaEventDestroy(mBuiltOn));
     }
 }
 
-VbmCache::GridVbm
-VbmCache::get(const GridBatchData &batch, int64_t bi) {
-    TORCH_CHECK(batch.device().is_cuda(), "VbmCache is only supported for CUDA grids");
-    const uint64_t key = batch.cumBytesAt(bi); // view-stable identity into the shared buffer
-
+const BatchVbm &
+VbmCache::acquire(const GridBatchData &owner) {
+    TORCH_CHECK(owner.device().is_cuda(), "VbmCache is only supported for CUDA grids");
     std::lock_guard<std::mutex> lock(mMutex);
-    const auto stream = at::cuda::getCurrentCUDAStream(batch.device().index());
+    const auto stream = at::cuda::getCurrentCUDAStream(owner.device().index());
 
-    auto it = mEntries.find(key);
-    if (it != mEntries.end()) {
-        Entry &entry = it->second;
-        if (entry.builtOn && stream.stream() != entry.builtStream) {
-            // Execution ordering: this consumer stream must see the finished build.
-            C10_CUDA_CHECK(cudaStreamWaitEvent(stream.stream(), entry.builtOn, 0));
-            // Lifetime ordering: register the consumer stream with the caching allocator so
-            // that destroying the owning GridBatchData while this stream's kernels are still
-            // in flight cannot recycle the buffers under them.
-            entry.firstLeafID.record_stream(stream.unwrap());
-            entry.jumpMap.record_stream(stream.unwrap());
-        }
-        return entry.view;
+    if (!mOwner) {
+        build(owner, stream);
+        return mVbm;
+    }
+    TORCH_CHECK(mOwner == &owner, "VbmCache::acquire called with a batch that does not own it");
+
+    const bool synced =
+        stream == mBuiltStream ||
+        std::find(mSyncedStreams.begin(), mSyncedStreams.end(), stream) != mSyncedStreams.end();
+    if (mBuiltOn && !synced) {
+        // Execution ordering: this consumer stream must see the finished build.
+        C10_CUDA_CHECK(cudaStreamWaitEvent(stream, mBuiltOn, 0));
+        // Lifetime ordering: destroying the owner while this stream's kernels are in flight
+        // must not recycle the buffers under them.
+        mFirstLeafID.record_stream(stream.unwrap());
+        mJumpMap.record_stream(stream.unwrap());
+        mEntries.record_stream(stream.unwrap());
+        mSyncedStreams.push_back(stream);
+    }
+    return mVbm;
+}
+
+void
+VbmCache::build(const GridBatchData &owner, const c10::cuda::CUDAStream &stream) {
+    c10::cuda::CUDAGuard guard(owner.device());
+    mOwner = &owner;
+
+    // Bases come from host metadata, so the build reads nothing back from the device.
+    const int64_t numGrids = owner.batchSize();
+    mHostEntries.resize(numGrids);
+    uint64_t blockCount = 0;
+    uint64_t leafCount  = 0;
+    for (int64_t bi = 0; bi < numGrids; ++bi) {
+        const uint64_t numVoxels = uint64_t(owner.numVoxelsAt(bi));
+        mHostEntries[bi] =
+            BatchVbm::Entry{owner.deviceGridPtrAt(bi), numVoxels, blockCount, uint32_t(leafCount)};
+        blockCount += (numVoxels + kBlockWidth - 1) >> kLog2BlockWidth;
+        leafCount += uint64_t(owner.numLeavesAt(bi));
+    }
+    TORCH_CHECK(leafCount <= std::numeric_limits<uint32_t>::max(),
+                "VbmCache supports at most 2^32 - 1 leaves per batch");
+    if (blockCount == 0) {
+        mVbm = BatchVbm{nullptr, nullptr, nullptr, numGrids, 0};
+        return;
     }
 
-    Entry entry;
-    entry.deviceIdx         = batch.device().index();
-    const int64_t numVoxels = batch.numVoxelsAt(bi);
-    if (numVoxels > 0) {
-        c10::cuda::CUDAGuard guard(batch.device().index());
-        const int64_t nBlocks = (numVoxels + kBlockWidth - 1) >> kLog2BlockWidth;
+    // Tensor-backed buffers: the caching allocator ties frees to the allocation stream and to
+    // any record_stream()ed consumer streams.
+    const auto opts = torch::TensorOptions().device(owner.device());
+    mFirstLeafID    = torch::empty({int64_t(blockCount)}, opts.dtype(torch::kUInt32));
+    mJumpMap = torch::empty({int64_t(blockCount) * kJumpMapWordCount}, opts.dtype(torch::kUInt64));
 
-        // Tensor-backed buffers: the caching allocator ties frees to the allocation stream and
-        // to any record_stream()ed consumer streams, which no raw allocation would. The
-        // NanoVDB handle only sees non-owning views, and only for the duration of the build.
-        // Sizing the VBM from host metadata (firstOffset = 1, lastOffset = numVoxels) selects
-        // the in-place build overload, which skips the allocating overload's device read of
-        // activeVoxelCount. The build still reads the tree's node counts from the device with a
-        // blocking copy, so a cache miss synchronizes the host once per grid.
-        auto opts         = torch::TensorOptions().device(batch.device());
-        entry.firstLeafID = torch::empty({nBlocks}, opts.dtype(torch::kInt32));
-        entry.jumpMap     = torch::empty({nBlocks * kJumpMapWordCount}, opts.dtype(torch::kInt64));
+    const size_t entryBytes = mHostEntries.size() * sizeof(BatchVbm::Entry);
+    auto hostEntries        = torch::empty(
+        {int64_t(entryBytes)}, torch::TensorOptions().dtype(torch::kUInt8).pinned_memory(true));
+    std::memcpy(hostEntries.data_ptr(), mHostEntries.data(), entryBytes);
+    mEntries            = hostEntries.to(owner.device(), /*non_blocking=*/true);
+    const auto *entries = reinterpret_cast<const BatchVbm::Entry *>(mEntries.const_data_ptr());
 
-        nanovdb::tools::VoxelBlockManagerHandle<VbmBufferView> handle(
-            VbmBufferView(entry.firstLeafID.data_ptr()),
-            VbmBufferView(entry.jumpMap.data_ptr()),
-            uint64_t(nBlocks),
-            /*firstOffset=*/1,
-            /*lastOffset=*/uint64_t(numVoxels));
-        nanovdb::tools::cuda::buildVoxelBlockManager<kLog2BlockWidth>(
-            batch.deviceGridPtrAt(bi), handle, stream.stream());
-        C10_CUDA_KERNEL_LAUNCH_CHECK();
+    nanovdb::tools::cuda::buildVoxelBlockManagerBatch<kLog2BlockWidth>(
+        entries,
+        uint32_t(numGrids),
+        uint32_t(leafCount),
+        blockCount,
+        mFirstLeafID.mutable_data_ptr<uint32_t>(),
+        mJumpMap.mutable_data_ptr<uint64_t>(),
+        stream);
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
 
-        C10_CUDA_CHECK(cudaEventCreateWithFlags(&entry.builtOn, cudaEventDisableTiming));
-        C10_CUDA_CHECK(cudaEventRecord(entry.builtOn, stream.stream()));
-        entry.builtStream = stream.stream();
+    C10_CUDA_CHECK(cudaEventCreateWithFlags(&mBuiltOn, cudaEventDisableTiming));
+    C10_CUDA_CHECK(cudaEventRecord(mBuiltOn, stream));
+    mBuiltStream = stream;
 
-        entry.view = GridVbm{reinterpret_cast<const uint32_t *>(entry.firstLeafID.data_ptr()),
-                             reinterpret_cast<const uint64_t *>(entry.jumpMap.data_ptr()),
-                             uint32_t(nBlocks),
-                             /*firstOffset=*/1,
-                             /*lastOffset=*/uint64_t(numVoxels)};
+    mVbm = BatchVbm{mFirstLeafID.const_data_ptr<uint32_t>(),
+                    mJumpMap.const_data_ptr<uint64_t>(),
+                    entries,
+                    numGrids,
+                    blockCount};
+}
+
+GridVbm
+VbmCache::gridVbm(int64_t bi) const {
+    TORCH_CHECK(mOwner, "VbmCache::gridVbm called before the VBMs were built");
+    const BatchVbm::Entry &entry = mHostEntries.at(bi);
+    if (entry.voxelCount == 0) {
+        return GridVbm{};
     }
-    return mEntries.emplace(key, std::move(entry)).first->second.view;
+    return GridVbm{mVbm.firstLeafID + entry.blockBase,
+                   mVbm.jumpMap + entry.blockBase * kJumpMapWordCount,
+                   uint32_t((entry.voxelCount + kBlockWidth - 1) >> kLog2BlockWidth),
+                   /*firstOffset=*/1,
+                   /*lastOffset=*/entry.voxelCount};
 }
 
 } // namespace detail

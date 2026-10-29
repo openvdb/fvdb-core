@@ -29,7 +29,11 @@ _FORK_FREE_SCRIPT = textwrap.dedent(
     if __name__ == "__main__":
         gc.disable()
         ijk = torch.randint(0, 32, (1000, 3), device="cuda", dtype=torch.int32)
-        holder = {"grid": fvdb.GridBatch.from_ijk(fvdb.JaggedTensor([ijk]))}
+        grid = fvdb.GridBatch.from_ijk(fvdb.JaggedTensor([ijk]))
+        _ = grid.ijk  # builds the VBM cache, so the child also frees its CUDA event and buffers
+        torch.cuda.synchronize()
+        holder = {"grid": grid}
+        del grid
         holder["self"] = holder
         del holder
         p = mp.get_context("fork").Process(target=child)

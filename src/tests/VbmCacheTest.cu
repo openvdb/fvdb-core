@@ -1,14 +1,14 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-// VbmCacheTest.cu -- Tests for the lazily-built per-grid VoxelBlockManager cache.
+// VbmCacheTest.cu -- Tests for the lazily-built, batch-wide VoxelBlockManager cache.
 //
 // The VBM decode contract these tests pin down:
 //   - decoding slot s of grid bi yields the leaf/voxel whose sequential value index is s,
 //     i.e. leaf.getValue(voxelOffset) == s and leaf.offsetToGlobalCoord(voxelOffset) is the
 //     s-th active coordinate in the grid's sequential order (== activeGridCoords row s-1);
-//   - cache entries are built once per grid and shared between a GridBatchData and its
-//     sliced/indexed views (same underlying buffer);
+//   - a batch's VBMs are built once, together; every GridBatchData, views included, owns its
+//     own, and a view's VBM for a grid matches its parent's for the same grid bitwise;
 //   - empty grids yield a zero GridVbm and never touch the device;
 //   - every fVDB grid production path emits sequential (breadth-first, fixed-size) grids,
 //     which the decode requires (grid->isSequential()).
@@ -129,7 +129,7 @@ decodeAllSlotsKernel(const nanovdb::OnIndexGrid *grid,
 // parity against the legacy leaf-scan ground truth (activeGridCoords on a CPU twin).
 void
 expectDecodeParity(GridBatchData &batch, int64_t bi, const torch::Tensor &expectedIjkCpu) {
-    auto vbm = batch.vbmCache().get(batch, bi);
+    auto vbm = batch.vbmAt(bi);
     ASSERT_EQ(int64_t(vbm.lastOffset), batch.numVoxelsAt(bi));
     ASSERT_EQ(vbm.firstOffset, 1u);
     ASSERT_EQ(
@@ -207,7 +207,7 @@ TEST(VbmCacheTest, MultiBatchDecodeParity) {
     }
 }
 
-TEST(VbmCacheTest, ViewSharing) {
+TEST(VbmCacheTest, ViewsBuildTheirOwn) {
     if (!cudaIsAvailable()) {
         GTEST_SKIP() << "CUDA not available";
     }
@@ -216,14 +216,23 @@ TEST(VbmCacheTest, ViewSharing) {
     auto parent = makeBatch(ijks, torch::Device(torch::kCUDA, 0));
     auto slice  = ops::indexGrid(*parent, 1, 3, 1);
 
-    // The slice shares the parent's cache object, and the same logical grid resolves to the
-    // same cached entry (same device pointers) through either.
-    ASSERT_EQ(&slice->vbmCache(), &parent->vbmCache());
-    auto fromSlice  = slice->vbmCache().get(*slice, 0);
-    auto fromParent = parent->vbmCache().get(*parent, 1);
-    EXPECT_EQ(fromSlice.firstLeafID, fromParent.firstLeafID);
-    EXPECT_EQ(fromSlice.jumpMap, fromParent.jumpMap);
-    EXPECT_EQ(fromSlice.blockCount, fromParent.blockCount);
+    // The slice builds its own VBMs, and its grid 0 is the parent's grid 1, byte for byte.
+    ASSERT_NE(slice->vbm().firstLeafID, parent->vbm().firstLeafID);
+    const auto fromSlice  = slice->vbmAt(0);
+    const auto fromParent = parent->vbmAt(1);
+    ASSERT_EQ(fromSlice.blockCount, fromParent.blockCount);
+    auto opts       = torch::TensorOptions().device(parent->device());
+    const int64_t n = fromSlice.blockCount;
+    auto asInt32    = [&](const uint32_t *p) {
+        return torch::from_blob(const_cast<uint32_t *>(p), {n}, opts.dtype(torch::kInt32));
+    };
+    auto asInt64 = [&](const uint64_t *p) {
+        return torch::from_blob(const_cast<uint64_t *>(p),
+                                {n * VbmCache::kJumpMapWordCount},
+                                opts.dtype(torch::kInt64));
+    };
+    EXPECT_TRUE(torch::equal(asInt32(fromSlice.firstLeafID), asInt32(fromParent.firstLeafID)));
+    EXPECT_TRUE(torch::equal(asInt64(fromSlice.jumpMap), asInt64(fromParent.jumpMap)));
 
     // Decode parity through the view.
     auto cpuBatch = makeBatch(ijks, torch::Device(torch::kCPU));
@@ -240,7 +249,7 @@ TEST(VbmCacheTest, EmptyGrid) {
     auto batch                      = makeBatch(ijks, torch::Device(torch::kCUDA, 0));
     ASSERT_EQ(batch->numVoxelsAt(0), 0);
 
-    auto vbm = batch->vbmCache().get(*batch, 0);
+    auto vbm = batch->vbmAt(0);
     EXPECT_EQ(vbm.blockCount, 0u);
     EXPECT_EQ(vbm.firstLeafID, nullptr);
     EXPECT_EQ(vbm.jumpMap, nullptr);
@@ -250,15 +259,16 @@ TEST(VbmCacheTest, EmptyGrid) {
     expectDecodeParity(*batch, 1, expected.index(1).jdata());
 }
 
-TEST(VbmCacheTest, RepeatedGetIsCached) {
+TEST(VbmCacheTest, RepeatedAcquireIsCached) {
     if (!cudaIsAvailable()) {
         GTEST_SKIP() << "CUDA not available";
     }
-    auto batch = makeBatch({randomIjk(2000, 32, 9)}, torch::Device(torch::kCUDA, 0));
-    auto first = batch->vbmCache().get(*batch, 0);
-    auto again = batch->vbmCache().get(*batch, 0);
-    EXPECT_EQ(first.firstLeafID, again.firstLeafID);
-    EXPECT_EQ(first.jumpMap, again.jumpMap);
+    auto batch        = makeBatch({randomIjk(2000, 32, 9)}, torch::Device(torch::kCUDA, 0));
+    const auto *first = &batch->vbm();
+    const auto *again = &batch->vbm();
+    EXPECT_EQ(first, again);
+    EXPECT_EQ(batch->vbmAt(0).firstLeafID, first->firstLeafID);
+    EXPECT_EQ(batch->vbmAt(0).jumpMap, first->jumpMap);
 }
 
 // A consumer on a different stream than the build must (a) observe the finished build (the
@@ -284,15 +294,15 @@ TEST(VbmCacheTest, CrossStreamConsumerLifetime) {
     {
         auto batch = makeBatch({ijk}, device);
         ASSERT_EQ(batch->numVoxelsAt(0), numVoxels);
-        // Build the cache entry on the default stream.
-        (void)batch->vbmCache().get(*batch, 0);
+        // Build the VBMs on the default stream.
+        (void)batch->vbm();
 
         // Consume it from a side stream, then destroy the batch (and with it the cache) while
         // the side stream's kernel may still be running.
         c10::cuda::CUDAStream sideStream = c10::cuda::getStreamFromPool(false, device.index());
         {
             c10::cuda::CUDAStreamGuard streamGuard(sideStream);
-            auto vbm = batch->vbmCache().get(*batch, 0);
+            auto vbm = batch->vbmAt(0);
             decodeAllSlotsKernel<<<vbm.blockCount, VbmCache::kBlockWidth, 0, sideStream>>>(
                 batch->deviceGridPtrAt(0),
                 vbm.firstLeafID,

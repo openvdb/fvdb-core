@@ -8,27 +8,20 @@
 
 namespace fvdb {
 
-GridBatchData::GridBatchData(std::shared_ptr<GridStorage> storage,
-                             GridMetadata *hostGridMetadata,
-                             GridMetadata *deviceGridMetadata,
-                             int64_t batchSize,
-                             GridBatchMetadata batchMetadata,
-                             torch::Tensor leafBatchIndices,
-                             torch::Tensor batchOffsets,
-                             torch::Tensor listIndices)
-    : GridBatchData(std::move(storage),
-                    std::make_shared<detail::VbmCache>(),
-                    hostGridMetadata,
-                    deviceGridMetadata,
-                    batchSize,
-                    std::move(batchMetadata),
-                    std::move(leafBatchIndices),
-                    std::move(batchOffsets),
-                    std::move(listIndices)) {}
+std::shared_ptr<detail::VbmCache>
+GridBatchData::makeVbmCache() {
+    return std::make_shared<detail::VbmCache>();
+}
 
-detail::VbmCache &
-GridBatchData::vbmCache() const {
-    return *mVbmCache;
+const detail::BatchVbm &
+GridBatchData::vbm() const {
+    return mVbmCache->acquire(*this);
+}
+
+detail::GridVbm
+GridBatchData::vbmAt(int64_t bi) const {
+    mVbmCache->acquire(*this);
+    return mVbmCache->gridVbm(bi);
 }
 
 // -----------------------------------------------------------------------
