@@ -61,6 +61,11 @@ struct GridVbm {
 /// build and record_stream()s the buffer for it, so destroying the owner while that stream's
 /// kernels are in flight cannot recycle the buffer under them. Callers must acquire() on the
 /// stream they launch consuming kernels on.
+///
+/// As with any record_stream()ed tensor, a batch used from more than one stream cannot be freed
+/// in a child process forked after CUDA initialized: PyTorch's allocator records an event on
+/// each recorded stream at free time, which fails and aborts in the child. Single-stream use,
+/// the common case, never calls record_stream() and frees normally there.
 class VbmCache {
   public:
     static constexpr int kLog2BlockWidth   = 7; // 128 active voxels per VBM block
