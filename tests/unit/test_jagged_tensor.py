@@ -3384,6 +3384,56 @@ class TestEmptyStructures(unittest.TestCase):
         )
         self.assertEqual(jt.lshape, [1, 2])
 
+    @parameterized.expand(devices)
+    def test_rejects_structure_values_that_overflow_int32(self, device):
+        # int64 values past the int32 range must not wrap into valid ones
+        data = torch.zeros(2, device=device)
+        with self.assertRaisesRegex(ValueError, "must fit"):
+            fvdb.JaggedTensor.from_data_and_indices(data, torch.tensor([0, 2**32 + 1], device=device), 2)
+        with self.assertRaisesRegex(ValueError, "must fit"):
+            fvdb.JaggedTensor.from_data_offsets_and_list_ids(
+                data,
+                torch.tensor([0, 1, 2], device=device),
+                torch.tensor([[0, 0], [2**32, 0]], device=device),
+                num_outer_lists=2,
+            )
+        jt = fvdb.JaggedTensor.from_data_and_indices(data, torch.tensor([0, 1], device=device), 2)
+        self.assertEqual(jt.lshape, [1, 1])
+
+    @parameterized.expand(devices)
+    def test_strided_structure_tensors_are_stored_contiguous(self, device):
+        data = torch.arange(3.0, device=device)
+        offsets = torch.tensor([0, 9, 1, 9, 3, 9], device=device)[::2]
+        jt = fvdb.JaggedTensor.from_data_and_offsets(data, offsets)
+        self.assertTrue(jt.joffsets.is_contiguous())
+        self.assertEqual(fvdb.jcat([jt, jt], dim=0).lshape, [2, 4])
+
+    def test_from_offsets_inside_cuda_graph_capture(self):
+        # Graph capture cannot sync, so validation is skipped there
+        if not torch.cuda.is_available():
+            self.skipTest("CUDA is required")
+        data = torch.arange(5.0, device="cuda")
+        offsets = torch.tensor([0, 3, 5], device="cuda")
+        list_ids = torch.tensor([[0, 0], [1, 0]], dtype=torch.int32, device="cuda")
+        stream = torch.cuda.Stream()
+        stream.wait_stream(torch.cuda.current_stream())
+        with torch.cuda.stream(stream):
+            fvdb.JaggedTensor.from_data_and_offsets(data, offsets)
+        torch.cuda.current_stream().wait_stream(stream)
+
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph):
+            jt = fvdb.JaggedTensor.from_data_and_offsets(data, offsets)
+            out = jt.jdata * 2
+        graph.replay()
+        torch.cuda.synchronize()
+        self.assertEqual(out.tolist(), [0.0, 2.0, 4.0, 6.0, 8.0])
+        self.assertEqual(jt.lshape, [3, 2])
+
+        with self.assertRaisesRegex(ValueError, "num_outer_lists is required"):
+            with torch.cuda.graph(torch.cuda.CUDAGraph()):
+                fvdb.JaggedTensor.from_data_offsets_and_list_ids(data, offsets, list_ids)
+
     def test_jcat_dim0_jidx(self):
         # Issue 811: CUDA wrote jidx at the wrong position
         if not torch.cuda.is_available():

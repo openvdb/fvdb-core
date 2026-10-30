@@ -99,6 +99,7 @@ checkStructureKernel(int64_t count,
                      int64_t numTensors,
                      TorchRAcc64<JLIdxType, 2> listIds,
                      int64_t numOuterLists,
+                     const bool *castOverflow,
                      int64_t *out) {
     __shared__ unsigned long long blockFailures;
     if (threadIdx.x == 0) {
@@ -107,8 +108,11 @@ checkStructureKernel(int64_t count,
     __syncthreads();
 
     uint64_t failures = 0;
-    for (int64_t idx = blockIdx.x * blockDim.x + threadIdx.x; idx < count;
-         idx += blockDim.x * gridDim.x) {
+    if (castOverflow != nullptr && blockIdx.x == 0 && threadIdx.x == 0 && *castOverflow) {
+        failures |= kCastOverflow;
+    }
+    for (int64_t idx = int64_t(blockIdx.x) * blockDim.x + threadIdx.x; idx < count;
+         idx += int64_t(blockDim.x) * gridDim.x) {
         failures |= checkStructureAt(
             idx, offsets, numElements, indices, numTensors, listIds, numOuterLists);
         if (idx == listIds.size(0) - 1) {
@@ -145,13 +149,17 @@ checkJaggedStructureCPU(const torch::Tensor &offsets,
                         const torch::Tensor &indices,
                         int64_t numTensors,
                         const torch::Tensor &listIds,
-                        int64_t numOuterLists) {
+                        int64_t numOuterLists,
+                        const torch::Tensor &castOverflow) {
     const auto offsetsAcc = offsets.accessor<JOffsetsType, 1>();
     const auto indicesAcc = indices.accessor<JIdxType, 1>();
     const auto listIdsAcc = listIds.accessor<JLIdxType, 2>();
     const int64_t count   = std::max({offsets.size(0), indices.size(0), listIds.size(0)});
 
     JaggedStructureCheck ret;
+    if (castOverflow.defined() && castOverflow.item<bool>()) {
+        ret.failures |= kCastOverflow;
+    }
     for (int64_t idx = 0; idx < count; ++idx) {
         ret.failures |= checkStructureAt(
             idx, offsetsAcc, numElements, indicesAcc, numTensors, listIdsAcc, numOuterLists);
@@ -179,17 +187,31 @@ checkJaggedStructureCUDA(const torch::Tensor &offsets,
                          const torch::Tensor &indices,
                          int64_t numTensors,
                          const torch::Tensor &listIds,
-                         int64_t numOuterLists) {
+                         int64_t numOuterLists,
+                         const torch::Tensor &castOverflow) {
     const c10::cuda::CUDAGuard deviceGuard(offsets.device());
     const int64_t count = std::max({offsets.size(0), indices.size(0), listIds.size(0)});
     if (count == 0) {
         return {};
     }
 
+    // Reading the result back needs a stream sync, which graph capture does not allow
+    cudaStream_t stream = c10::cuda::getCurrentCUDAStream(offsets.device().index()).stream();
+    cudaStreamCaptureStatus captureStatus;
+    C10_CUDA_CHECK(cudaStreamIsCapturing(stream, &captureStatus));
+    if (captureStatus != cudaStreamCaptureStatusNone) {
+        JaggedStructureCheck ret;
+        ret.skipped = true;
+        return ret;
+    }
+
+    const torch::Tensor overflowDevice =
+        castOverflow.defined() ? castOverflow.to(offsets.device(), torch::kBool) : torch::Tensor();
+    const bool *overflowPtr = overflowDevice.defined() ? overflowDevice.data_ptr<bool>() : nullptr;
+
     const torch::Tensor result =
         torch::empty({2}, torch::TensorOptions().dtype(torch::kInt64).pinned_memory(true));
     int64_t *resultHost = result.data_ptr<int64_t>();
-    cudaStream_t stream = c10::cuda::getCurrentCUDAStream(offsets.device().index()).stream();
 
     const auto launch = [&](int numBlocks, int64_t *out) {
         checkStructureKernel<<<numBlocks, DEFAULT_BLOCK_DIM, 0, stream>>>(
@@ -200,6 +222,7 @@ checkJaggedStructureCUDA(const torch::Tensor &offsets,
             numTensors,
             listIds.packed_accessor64<JLIdxType, 2, torch::RestrictPtrTraits>(),
             numOuterLists,
+            overflowPtr,
             out);
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     };
@@ -236,7 +259,8 @@ checkJaggedStructure(const torch::Tensor &offsets,
                      const torch::Tensor &indices,
                      int64_t numTensors,
                      const torch::Tensor &listIds,
-                     int64_t numOuterLists) {
+                     int64_t numOuterLists,
+                     const torch::Tensor &castOverflow) {
     const torch::Device device = offsets.defined()   ? offsets.device()
                                  : indices.defined() ? indices.device()
                                  : listIds.defined() ? listIds.device()
@@ -246,10 +270,11 @@ checkJaggedStructure(const torch::Tensor &offsets,
     const torch::Tensor l      = orEmpty(listIds, JLIdxScalarType, 2, device);
 
     if (device.is_cuda()) {
-        return checkJaggedStructureCUDA(o, numElements, i, numTensors, l, numOuterLists);
+        return checkJaggedStructureCUDA(
+            o, numElements, i, numTensors, l, numOuterLists, castOverflow);
     }
     return checkJaggedStructureCPU(
-        o.cpu(), numElements, i.cpu(), numTensors, l.cpu(), numOuterLists);
+        o.cpu(), numElements, i.cpu(), numTensors, l.cpu(), numOuterLists, castOverflow);
 }
 
 } // namespace ops

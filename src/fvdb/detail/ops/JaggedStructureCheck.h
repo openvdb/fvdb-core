@@ -14,28 +14,32 @@ namespace ops {
 
 /// @brief Bits set in JaggedStructureCheck::failures, one per violated invariant
 enum JaggedStructureFailure : uint64_t {
-    kOffsetsStart        = 1u << 0, ///< offsets[0] != 0
-    kOffsetsEnd          = 1u << 1, ///< offsets[-1] != number of elements
-    kOffsetsDecreasing   = 1u << 2, ///< offsets decrease somewhere
-    kIndicesNegative     = 1u << 3, ///< an index is negative
-    kIndicesTooLarge     = 1u << 4, ///< an index is >= the tensor count
-    kIndicesDecreasing   = 1u << 5, ///< indices decrease somewhere
-    kOuterIdsNegative    = 1u << 6, ///< an outer list id is negative
-    kOuterIdsDecreasing  = 1u << 7, ///< outer list ids decrease somewhere
-    kInnerIdsNotCounting = 1u << 8, ///< inner ids do not count 0, 1, ... within an outer list
-    kOuterIdsTooLarge    = 1u << 9, ///< an outer list id is >= the outer list count
+    kOffsetsStart        = 1u << 0,  ///< offsets[0] != 0
+    kOffsetsEnd          = 1u << 1,  ///< offsets[-1] != number of elements
+    kOffsetsDecreasing   = 1u << 2,  ///< offsets decrease somewhere
+    kIndicesNegative     = 1u << 3,  ///< an index is negative
+    kIndicesTooLarge     = 1u << 4,  ///< an index is >= the tensor count
+    kIndicesDecreasing   = 1u << 5,  ///< indices decrease somewhere
+    kOuterIdsNegative    = 1u << 6,  ///< an outer list id is negative
+    kOuterIdsDecreasing  = 1u << 7,  ///< outer list ids decrease somewhere
+    kInnerIdsNotCounting = 1u << 8,  ///< inner ids do not count 0, 1, ... within an outer list
+    kOuterIdsTooLarge    = 1u << 9,  ///< an outer list id is >= the outer list count
+    kCastOverflow        = 1u << 10, ///< a value changed when cast to its structure dtype
 };
 
 /// @brief Outcome of checkJaggedStructure
 struct JaggedStructureCheck {
-    uint64_t failures   = 0;  ///< OR of JaggedStructureFailure bits
-    int64_t lastOuterId = -1; ///< Outer id of the last list id row, or -1 if there are no rows
+    uint64_t failures   = 0;     ///< OR of JaggedStructureFailure bits
+    int64_t lastOuterId = -1;    ///< Outer id of the last list id row, or -1 if there are no rows
+    bool skipped        = false; ///< True when the stream is capturing a CUDA graph, which cannot
+                                 ///< sync, so nothing was checked
 };
 
 /// @brief Check the values of a JaggedTensor's structure tensors in one pass.
 ///
 /// Each argument tensor is optional; an undefined tensor is not checked. On CUDA the result is read
-/// back with a single device-to-host copy.
+/// back with a single device-to-host copy. During CUDA graph capture the check is skipped and the
+/// result is marked skipped.
 ///
 /// @param offsets Offsets with numTensors + 1 entries (JOffsetsType)
 /// @param numElements Number of elements in the data tensor
@@ -43,13 +47,16 @@ struct JaggedStructureCheck {
 /// @param numTensors Number of tensors
 /// @param listIds List ids of shape [numTensors, 2] (JLIdxType)
 /// @param numOuterLists Outer list count to check outer ids against, or -1 to skip that check
+/// @param castOverflow Optional 0-dim bool tensor, true when casting a structure tensor to its
+///        canonical dtype changed a value. It sets kCastOverflow.
 /// @return The violated invariants and the last outer id
 JaggedStructureCheck checkJaggedStructure(const torch::Tensor &offsets,
                                           int64_t numElements,
                                           const torch::Tensor &indices,
                                           int64_t numTensors,
                                           const torch::Tensor &listIds,
-                                          int64_t numOuterLists);
+                                          int64_t numOuterLists,
+                                          const torch::Tensor &castOverflow);
 
 } // namespace ops
 } // namespace detail

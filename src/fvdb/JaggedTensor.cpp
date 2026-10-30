@@ -23,16 +23,25 @@ namespace fvdb {
 
 namespace {
 
-// Checks that a structure tensor is integral, then casts it to the canonical dtype on its own
-// device
+// Checks that a structure tensor is integral, then casts it to a contiguous tensor of the canonical
+// dtype on its own device. A narrowing cast wraps out-of-range values into range, so overflow is
+// set to a 0-dim bool tensor that records whether any value changed. Reading it is left to the
+// structure check, which avoids a second sync.
 torch::Tensor
-canonicalStructureTensor(const torch::Tensor &t, c10::ScalarType dtype, const char *name) {
+canonicalStructureTensor(const torch::Tensor &t,
+                         c10::ScalarType dtype,
+                         const char *name,
+                         torch::Tensor &overflow) {
     TORCH_CHECK_VALUE(t.defined(), name, " must be a defined tensor");
     TORCH_CHECK_VALUE(c10::isIntegralType(t.scalar_type(), /*includeBool=*/false),
                       name,
                       " must have an integer dtype, but got ",
                       t.scalar_type());
-    return t.to(dtype);
+    const torch::Tensor cast = t.to(dtype).contiguous();
+    if (t.scalar_type() != dtype && t.numel() > 0) {
+        overflow = (cast != t).any();
+    }
+    return cast;
 }
 
 // Structure tensors that all start on the host are validated there, which needs no kernel and no
@@ -85,26 +94,51 @@ checkListIdsShape(const torch::Tensor &listIds,
 }
 
 // Validates the structure tensors' values in one pass, which costs one device-to-host copy on CUDA,
-// and returns the outer list count. Offsets or indices may be undefined.
+// and returns the outer list count. Offsets or indices may be undefined. The overflow tensors come
+// from canonicalStructureTensor and may be undefined. Inside CUDA graph capture nothing is checked,
+// because the result cannot be read back.
 int64_t
 validateStructure(const torch::Tensor &offsets,
                   int64_t numElements,
                   const torch::Tensor &indices,
                   int64_t numTensors,
                   const torch::Tensor &listIds,
-                  std::optional<int64_t> numOuterLists) {
+                  std::optional<int64_t> numOuterLists,
+                  const torch::Tensor &valuesOverflow,
+                  const torch::Tensor &listIdsOverflow) {
     using namespace detail::ops;
 
-    const int64_t knownOuterLists    = checkListIdsShape(listIds, numTensors, numOuterLists);
-    const bool nested                = listIds.size(1) == 2;
+    const int64_t knownOuterLists = checkListIdsShape(listIds, numTensors, numOuterLists);
+    const bool nested             = listIds.size(1) == 2;
+
+    // ldim 1 list id values are discarded, so only nested list ids can overflow
+    torch::Tensor castOverflow = valuesOverflow;
+    if (nested && listIdsOverflow.defined()) {
+        const torch::Tensor listOverflow = listIdsOverflow.to(listIds.device());
+        castOverflow                     = castOverflow.defined()
+                                               ? castOverflow.to(listIds.device()).logical_or(listOverflow)
+                                               : listOverflow;
+    }
+
     const JaggedStructureCheck check = checkJaggedStructure(offsets,
                                                             numElements,
                                                             indices,
                                                             numTensors,
                                                             nested ? listIds : torch::Tensor(),
-                                                            nested ? knownOuterLists : -1);
+                                                            nested ? knownOuterLists : -1,
+                                                            castOverflow);
+
+    if (check.skipped) {
+        TORCH_CHECK_VALUE(!nested || knownOuterLists >= 0,
+                          "num_outer_lists is required for nested list ids during CUDA graph "
+                          "capture, because the outer list count cannot be read back");
+        return nested ? knownOuterLists : numTensors;
+    }
 
     const auto failed = [&](JaggedStructureFailure bit) { return (check.failures & bit) != 0; };
+    TORCH_CHECK_VALUE(!failed(kCastOverflow),
+                      "structure values must fit in their canonical integer dtype (int32 for "
+                      "indices and list ids, int64 for offsets)");
     TORCH_CHECK_VALUE(!failed(kOffsetsStart), "offsets must start at 0");
     TORCH_CHECK_VALUE(!failed(kOffsetsEnd),
                       "offsets must end at the number of elements in data (",
@@ -596,8 +630,9 @@ JaggedTensor::from_data_indices_and_list_ids(torch::Tensor data,
                       "data must have shape [N, ...], but got data.dim() = ",
                       data.defined() ? data.dim() : 0);
     TORCH_CHECK_VALUE(num_tensors >= 0, "num_tensors must be non-negative, but got ", num_tensors);
-    indices  = canonicalStructureTensor(indices, JIdxScalarType, "indices");
-    list_ids = canonicalStructureTensor(list_ids, JLIdxScalarType, "list_ids");
+    torch::Tensor indicesOverflow, listIdsOverflow;
+    indices  = canonicalStructureTensor(indices, JIdxScalarType, "indices", indicesOverflow);
+    list_ids = canonicalStructureTensor(list_ids, JLIdxScalarType, "list_ids", listIdsOverflow);
     const torch::Device checkDevice = structureCheckDevice(data, {indices, list_ids});
     indices                         = indices.to(checkDevice);
     list_ids                        = list_ids.to(checkDevice);
@@ -615,10 +650,16 @@ JaggedTensor::from_data_indices_and_list_ids(torch::Tensor data,
                       numElements,
                       " elements but num_tensors is 0");
 
-    const int64_t outerLists = validateStructure(
-        torch::Tensor(), numElements, indices, num_tensors, list_ids, num_outer_lists);
-    indices  = indices.to(data.device());
-    list_ids = list_ids.to(data.device());
+    const int64_t outerLists = validateStructure(torch::Tensor(),
+                                                 numElements,
+                                                 indices,
+                                                 num_tensors,
+                                                 list_ids,
+                                                 num_outer_lists,
+                                                 indicesOverflow,
+                                                 listIdsOverflow);
+    indices                  = indices.to(data.device());
+    list_ids                 = list_ids.to(data.device());
 
     // The indices are now known to be sorted and in range, so each tensor starts at a binary search
     // position. This avoids the second sync that unique_dim in joffsets_from_jidx_and_jdata costs.
@@ -643,8 +684,9 @@ JaggedTensor::from_data_offsets_and_list_ids(torch::Tensor data,
     TORCH_CHECK_VALUE(data.defined() && data.dim() > 0,
                       "data must have shape [N, ...], but got data.dim() = ",
                       data.defined() ? data.dim() : 0);
-    offsets  = canonicalStructureTensor(offsets, JOffsetsScalarType, "offsets");
-    list_ids = canonicalStructureTensor(list_ids, JLIdxScalarType, "list_ids");
+    torch::Tensor offsetsOverflow, listIdsOverflow;
+    offsets  = canonicalStructureTensor(offsets, JOffsetsScalarType, "offsets", offsetsOverflow);
+    list_ids = canonicalStructureTensor(list_ids, JLIdxScalarType, "list_ids", listIdsOverflow);
     const torch::Device checkDevice = structureCheckDevice(data, {offsets, list_ids});
     offsets                         = offsets.to(checkDevice);
     list_ids                        = list_ids.to(checkDevice);
@@ -654,10 +696,16 @@ JaggedTensor::from_data_offsets_and_list_ids(torch::Tensor data,
         offsets.sizes());
     const int64_t numTensors = offsets.size(0) - 1;
 
-    const int64_t outerLists = validateStructure(
-        offsets, data.size(0), torch::Tensor(), numTensors, list_ids, num_outer_lists);
-    offsets  = offsets.to(data.device());
-    list_ids = list_ids.to(data.device());
+    const int64_t outerLists = validateStructure(offsets,
+                                                 data.size(0),
+                                                 torch::Tensor(),
+                                                 numTensors,
+                                                 list_ids,
+                                                 num_outer_lists,
+                                                 offsetsOverflow,
+                                                 listIdsOverflow);
+    offsets                  = offsets.to(data.device());
+    list_ids                 = list_ids.to(data.device());
 
     return from_data_offsets_and_list_ids_unsafe(data, offsets, list_ids, outerLists);
 }
@@ -698,9 +746,9 @@ JaggedTensor::from_jdata_joffsets_jidx_and_lidx_unsafe(torch::Tensor jdata,
         joffsets.dim() == 1,
         "Invalid offsets when constructing JaggedTensor from data, offsets, indices, list indices");
 
-    // Every constructor ends here, so this is where storage takes its canonical form. A single
-    // tensor stores an empty jidx and ldim 1 stores empty list ids. Equivalent JaggedTensors then
-    // have the same structure shapes, which element-wise ops and indexing compare.
+    // A single tensor stores an empty jidx and ldim 1 stores empty list ids. Constructors that set
+    // members directly build this form themselves. Equivalent JaggedTensors then have the same
+    // structure shapes, which element-wise ops and indexing compare.
     if (joffsets.size(0) <= 2 && jidx.size(0) > 0) {
         jidx = torch::empty({0}, jidx.options());
     }
