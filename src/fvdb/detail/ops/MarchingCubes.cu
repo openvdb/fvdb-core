@@ -368,12 +368,12 @@ MarchingCubes(const GridBatchData &batchHdl, const torch::Tensor &sdf, double le
     torch::Tensor tBatchIdx = vBatchIdx.index({unqTriangles.index({torch::indexing::Slice(), 0})})
                                   .to(fvdb::JIdxScalarType);
 
-    JaggedTensor retVertices = JaggedTensor::from_data_indices_and_list_ids(
-        vertices, vBatchIdx, batchHdl.jlidx(), batchHdl.batchSize());
-    JaggedTensor retTriangles = JaggedTensor::from_data_indices_and_list_ids(
-        unqTriangles, tBatchIdx, batchHdl.jlidx(), batchHdl.batchSize());
-    JaggedTensor retUniqueVertices = JaggedTensor::from_data_indices_and_list_ids(
-        unqVertIdx, vBatchIdx, batchHdl.jlidx(), batchHdl.batchSize());
+    JaggedTensor retVertices = JaggedTensor::from_data_indices_and_list_ids_unsafe(
+        vertices, vBatchIdx, batchHdl.jlidx(), batchHdl.batchSize(), batchHdl.batchSize());
+    JaggedTensor retTriangles = JaggedTensor::from_data_indices_and_list_ids_unsafe(
+        unqTriangles, tBatchIdx, batchHdl.jlidx(), batchHdl.batchSize(), batchHdl.batchSize());
+    JaggedTensor retUniqueVertices = JaggedTensor::from_data_indices_and_list_ids_unsafe(
+        unqVertIdx, vBatchIdx, batchHdl.jlidx(), batchHdl.batchSize(), batchHdl.batchSize());
 
     // Fix triangle indices per mesh
     int64_t cumNumVerts = 0;

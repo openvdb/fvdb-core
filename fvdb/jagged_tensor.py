@@ -652,12 +652,21 @@ class JaggedTensor:
 
     @classmethod
     def from_data_indices_and_list_ids(
-        cls, data: torch.Tensor, indices: torch.Tensor, list_ids: torch.Tensor, num_tensors: int
+        cls,
+        data: torch.Tensor,
+        indices: torch.Tensor,
+        list_ids: torch.Tensor,
+        num_tensors: int,
+        *,
+        num_outer_lists: int | None = None,
     ) -> "JaggedTensor":
         """
         Create a :class:`JaggedTensor` from data, per-element indices, and list IDs.
 
-        This function validates that data, indices, list_ids, and num_tensors are compatible.
+        This function validates that data, indices, list_ids, and num_tensors are compatible and
+        describe a well-formed :class:`JaggedTensor`. ``indices`` must be sorted and in range, and
+        ``list_ids`` must number the tensors of each outer list ``0, 1, ...`` in order. Validation
+        reads the structure tensors on the host, so a CUDA input costs one device-to-host sync.
         The offsets are computed internally from the indices.
 
         Example (ldim == 1, list of tensors):
@@ -691,21 +700,48 @@ class JaggedTensor:
                 Empty tensor assumes a single, naturally ordered list of tensors.
                 For ldim == 2: shape ``(num_tensors, 2)`` where each row is ``(outer_idx, inner_idx)``.
             num_tensors (int): Total number of tensors.
+            num_outer_lists (int | None): Number of outer lists for ldim == 2. Pass it when
+                trailing outer lists may be empty, since ``list_ids`` cannot express them. Defaults
+                to the largest outer index + 1 (0 when there are no tensors). For ldim == 1 it must
+                equal ``num_tensors`` if given.
 
         Returns:
             jagged_tensor (JaggedTensor): A :class:`JaggedTensor` defined by the data, indices, and list ids.
         """
-        return cls(impl=JaggedTensorCpp.from_data_indices_and_list_ids(data, indices, list_ids, num_tensors))
+        return cls(
+            impl=JaggedTensorCpp.from_data_indices_and_list_ids(
+                data, indices, list_ids, num_tensors, num_outer_lists=num_outer_lists
+            )
+        )
 
     @classmethod
     def from_data_offsets_and_list_ids(
-        cls, data: torch.Tensor, offsets: torch.Tensor, list_ids: torch.Tensor
+        cls,
+        data: torch.Tensor,
+        offsets: torch.Tensor,
+        list_ids: torch.Tensor,
+        *,
+        num_outer_lists: int | None = None,
     ) -> "JaggedTensor":
         """
         Create a :class:`JaggedTensor` from data, offsets, and list IDs.
 
-        This function validates that data, offsets, and list_ids are compatible.
+        This function validates that data, offsets, and list_ids are compatible and describe a
+        well-formed :class:`JaggedTensor`. ``offsets`` must start at 0, be non-decreasing, and end
+        at ``data.shape[0]``, and ``list_ids`` must number the tensors of each outer list
+        ``0, 1, ...`` in order. Validation reads the structure tensors on the host, so a CUDA input
+        costs one device-to-host sync.
         The per-element indices are computed internally from the offsets.
+
+        Example (ldim == 2 with an empty trailing outer list):
+
+        .. code-block:: python
+
+            data = torch.tensor([1, 2, 3])
+            offsets = torch.tensor([0, 2, 3])
+            list_ids = torch.tensor([[0, 0], [1, 0]])
+            jt = JaggedTensor.from_data_offsets_and_list_ids(data, offsets, list_ids, num_outer_lists=3)
+            # Result: [[[1, 2]], [[3]], []]
 
         Example (ldim == 1, list of tensors):
 
@@ -738,11 +774,19 @@ class JaggedTensor:
                 For ldim == 1: shape ``(num_tensors, 1)`` or empty tensor with shape ``(0, 1)``.
                 Empty tensor assumes a single, naturally ordered list of tensors.
                 For ldim == 2: shape ``(num_tensors, 2)`` where each row is ``(outer_idx, inner_idx)``.
+            num_outer_lists (int | None): Number of outer lists for ldim == 2. Pass it when
+                trailing outer lists may be empty, since ``list_ids`` cannot express them. Defaults
+                to the largest outer index + 1 (0 when there are no tensors). For ldim == 1 it must
+                equal the number of tensors if given.
 
         Returns:
             jagged_tensor (JaggedTensor): A :class:`JaggedTensor` defined by the data, offsets, and list ids.
         """
-        return cls(impl=JaggedTensorCpp.from_data_offsets_and_list_ids(data, offsets, list_ids))
+        return cls(
+            impl=JaggedTensorCpp.from_data_offsets_and_list_ids(
+                data, offsets, list_ids, num_outer_lists=num_outer_lists
+            )
+        )
 
     # ============================================================
     #                Regular Instance Methods Begin
