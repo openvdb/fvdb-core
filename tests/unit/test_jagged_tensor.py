@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 import itertools
+import os
 import pickle
 import tempfile
 import unittest
@@ -3412,6 +3413,8 @@ class TestEmptyStructures(unittest.TestCase):
         # Graph capture cannot sync, so validation is skipped there
         if not torch.cuda.is_available():
             self.skipTest("CUDA is required")
+        if os.environ.get("PYTORCH_NO_CUDA_MEMORY_CACHING", "0") != "0":
+            self.skipTest("CUDA graph capture needs the caching allocator")
         data = torch.arange(5.0, device="cuda")
         offsets = torch.tensor([0, 3, 5], device="cuda")
         list_ids = torch.tensor([[0, 0], [1, 0]], dtype=torch.int32, device="cuda")
