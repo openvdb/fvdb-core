@@ -168,9 +168,6 @@ forwardL1Tiles(const torch::Tensor &img1,
                int blockCount,
                float *partial_sums,
                cudaStream_t stream) {
-    if (!blockCount) {
-        return;
-    }
     dim3 grid(blockCount);
     dim3 block(BLOCK_X, BLOCK_Y);
     fusedL1Kernel<<<grid, block, 0, stream>>>(blockOffset,

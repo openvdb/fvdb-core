@@ -568,9 +568,6 @@ forwardTiles(const torch::Tensor &img1,
              float *loss_tiles,
              cudaStream_t stream,
              bool normalize_target) {
-    if (!blockCount) {
-        return;
-    }
     const int B  = img1.size(0);
     const int CH = img1.size(1);
     const int H  = img1.size(2);
@@ -616,9 +613,6 @@ backwardTiles(const torch::Tensor &img1,
               int blockCount,
               cudaStream_t stream,
               bool normalize_target) {
-    if (!blockCount) {
-        return;
-    }
     dim3 grid(blockCount);
     dim3 block(BLOCK_X, BLOCK_Y);
     AT_DISPATCH_V2(img2.scalar_type(),
@@ -822,6 +816,9 @@ fusedL1SSIMBackwardPrivateUse1(const torch::Tensor &img1,
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto stream      = c10::cuda::getCurrentCUDAStream(deviceId);
         const auto chunk = imageBlockChunk(B, H, W, deviceId);
+        if (!chunk.blockCount) {
+            continue;
+        }
         backwardTiles(img1,
                       img2,
                       grad_loss,
