@@ -47,13 +47,6 @@ structureCheckDevice(const torch::Tensor &data, std::initializer_list<torch::Ten
     return torch::kCPU;
 }
 
-// A JaggedTensor with at most one tensor stores an empty jidx. Element-wise ops compare jidx
-// shapes, so every constructor must follow this convention.
-torch::Tensor
-singleTensorJIdx(const torch::Tensor &indices, int64_t numTensors) {
-    return numTensors <= 1 ? torch::empty({0}, indices.options()) : indices;
-}
-
 // Checks list id shapes against the tensor count. Returns the outer list count that outer ids must
 // stay below, or -1 when the count is inferred from the ids.
 int64_t
@@ -145,8 +138,6 @@ JaggedTensor::binary_op_check(const JaggedTensor &other) const {
                 "device should match between this tensor and other tensor");
     TORCH_CHECK(mData.sizes().equals(other.jdata().sizes()),
                 "data shape should match between this tensor and other tensor");
-    TORCH_CHECK(mBatchIdx.sizes().equals(other.jidx().sizes()),
-                "batch indices' shape should match between this tensor and other tensor");
     TORCH_CHECK(mOffsets.sizes().equals(other.joffsets().sizes()),
                 "offsets shape should match between this tensor and other tensor");
     if (Config::global().pedanticErrorCheckingEnabled()) {
@@ -641,8 +632,7 @@ JaggedTensor::from_data_indices_and_list_ids(torch::Tensor data,
         offsets = torch::zeros({num_tensors + 1}, offsetOpts);
     }
 
-    return from_jdata_joffsets_jidx_and_lidx_unsafe(
-        data, offsets, singleTensorJIdx(indices, num_tensors), list_ids, outerLists);
+    return from_jdata_joffsets_jidx_and_lidx_unsafe(data, offsets, indices, list_ids, outerLists);
 }
 
 JaggedTensor
@@ -680,7 +670,7 @@ JaggedTensor::from_data_indices_and_list_ids_unsafe(torch::Tensor data,
                                                     int64_t num_outer_lists) {
     const torch::Tensor offsets = joffsets_from_jidx_and_jdata(indices, data, num_tensors);
     return from_jdata_joffsets_jidx_and_lidx_unsafe(
-        data, offsets, singleTensorJIdx(indices, num_tensors), list_ids, num_outer_lists);
+        data, offsets, indices, list_ids, num_outer_lists);
 }
 
 JaggedTensor
@@ -707,6 +697,17 @@ JaggedTensor::from_jdata_joffsets_jidx_and_lidx_unsafe(torch::Tensor jdata,
     TORCH_CHECK_VALUE(
         joffsets.dim() == 1,
         "Invalid offsets when constructing JaggedTensor from data, offsets, indices, list indices");
+
+    // Every constructor ends here, so this is where storage takes its canonical form. A single
+    // tensor stores an empty jidx and ldim 1 stores empty list ids. Equivalent JaggedTensors then
+    // have the same structure shapes, which element-wise ops and indexing compare.
+    if (joffsets.size(0) <= 2 && jidx.size(0) > 0) {
+        jidx = torch::empty({0}, jidx.options());
+    }
+    if (lidx.size(1) == 1 && lidx.size(0) > 0) {
+        lidx = torch::empty({0, 1}, lidx.options());
+    }
+
     JaggedTensor ret;
     ret.mData          = jdata;
     ret.mOffsets       = joffsets;
@@ -883,9 +884,7 @@ JaggedTensor::jcat(const std::vector<JaggedTensor> &vec, std::optional<int64_t> 
             } else {
                 offsets.push_back(jvec.mOffsets + curOffset);
             }
-            if (jvec.mListIdx.size(1) == 2) {
-                lidx.push_back(jvec.mListIdx + curListOffset);
-            }
+            lidx.push_back(jvec.mListIdx + curListOffset);
             curOffset += jvec.mData.size(0);
             curListOffset[0][0] += jvec.mNumOuterLists;
             totalLists += jvec.mNumOuterLists;
@@ -893,13 +892,7 @@ JaggedTensor::jcat(const std::vector<JaggedTensor> &vec, std::optional<int64_t> 
         const torch::Tensor retJData    = torch::cat(data, 0);
         const torch::Tensor retJOffsets = torch::cat(offsets, 0);
         const torch::Tensor retJidx     = jidx_from_joffsets(retJOffsets, retJData.size(0));
-        // ldim 1 inputs may mix empty and explicit list indices, so use the empty form
-        const torch::Tensor retLidx =
-            vec[0].mListIdx.size(1) == 1
-                ? torch::empty(
-                      {0, 1},
-                      torch::TensorOptions().dtype(JLIdxScalarType).device(retJData.device()))
-                : torch::cat(lidx, 0);
+        const torch::Tensor retLidx     = torch::cat(lidx, 0);
         return JaggedTensor::from_jdata_joffsets_jidx_and_lidx_unsafe(
             retJData, retJOffsets, retJidx, retLidx, totalLists);
     } else {

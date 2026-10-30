@@ -171,8 +171,7 @@ using PackedJaggedAccessor64 = PackedJaggedAccessor<ScalarT, NDims, PtrTraits, i
 ///   - jidx is either empty or has jdata.size(0) entries. It is empty whenever num_tensors <= 1 or
 ///     jdata is empty, so an empty jidx says nothing about the tensor count; use num_tensors().
 ///   - num_outer_lists() is the only source of the outer list count.
-///   - ldim 1: num_outer_lists() == num_tensors(), and jlidx has shape [0, 1] or
-///     [num_tensors, 1].
+///   - ldim 1: num_outer_lists() == num_tensors(), and jlidx has shape [0, 1].
 ///   - ldim 2: jlidx has shape [num_tensors, 2]. Each row is (outer, inner). Outer ids are
 ///     non-decreasing and lie in [0, num_outer_lists()). Inner ids count 0, 1, ... within each
 ///     outer list. An empty outer list has no rows.

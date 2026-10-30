@@ -3270,7 +3270,7 @@ class TestEmptyStructures(unittest.TestCase):
 
     @parameterized.expand(devices)
     def test_single_tensor_structures_are_interchangeable(self, device):
-        # Element-wise ops compare jidx shapes, so every way of building one tensor must agree
+        # Every way of building one tensor must store the same structure
         t = self._t(device, 1, 2, 3)
         nested = fvdb.JaggedTensor([[], [t]])
         from_offsets = fvdb.JaggedTensor.from_data_offsets_and_list_ids(
@@ -3286,6 +3286,33 @@ class TestEmptyStructures(unittest.TestCase):
         flat = fvdb.JaggedTensor([t])
         from_indices = fvdb.JaggedTensor.from_data_and_indices(t, torch.zeros(3, dtype=torch.int32, device=device), 1)
         self.assertEqual((flat + from_indices).jdata.tolist(), [2.0, 4.0, 6.0])
+
+    @parameterized.expand(devices)
+    def test_jcat_single_mask_preserves_indexing(self, device):
+        # Explicit ldim-1 list ids and the empty form must index the same tensor
+        x = fvdb.JaggedTensor.from_data_offsets_and_list_ids(
+            torch.tensor([10.0, 20.0], device=device),
+            torch.tensor([0, 1, 2], device=device),
+            torch.tensor([[0], [1]], dtype=torch.int32, device=device),
+        )
+        mask = x.jagged_like(torch.tensor([True, True], device=device))
+        expected = x[mask]
+        actual = x[fvdb.jcat([mask], dim=None)]
+        self.assertEqual(actual.lshape, expected.lshape)
+        self.assertTrue(torch.equal(actual.jdata, expected.jdata))
+        self.assertEqual(x.jlidx.shape, (0, 1))
+
+    @parameterized.expand(devices)
+    def test_jcat_dim0_result_and_indices_roundtrip(self, device):
+        # jcat along dim 0 writes a full jidx, which must not leak into a single-tensor result
+        a = fvdb.JaggedTensor.from_tensor(torch.tensor([1.0, 2.0], device=device))
+        concatenated = fvdb.jcat([a, a], dim=0)
+        rebuilt = fvdb.JaggedTensor.from_data_and_indices(
+            concatenated.jdata, concatenated.jidx, num_tensors=concatenated.num_tensors
+        )
+        actual = concatenated + rebuilt
+        self.assertEqual(actual.lshape, concatenated.lshape)
+        self.assertTrue(torch.equal(actual.jdata, 2 * concatenated.jdata))
 
     def test_structure_tensors_move_to_data_device(self):
         if not torch.cuda.is_available():
