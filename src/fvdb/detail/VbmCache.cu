@@ -81,13 +81,15 @@ VbmCache::build(const GridBatchData &owner, const c10::cuda::CUDAStream &stream)
     }
 
     // One tensor-backed buffer: the caching allocator ties its free to the allocation stream and
-    // to any record_stream()ed consumer streams. Layout: jumpMap (uint64), then firstLeafID.
-    const size_t jumpMapBytes = blockCount * kJumpMapWordCount * sizeof(uint64_t);
-    mBuffer       = torch::empty({int64_t(jumpMapBytes + blockCount * sizeof(uint32_t))},
-                           torch::TensorOptions().dtype(torch::kUInt8).device(owner.device()));
-    auto *jumpMap = reinterpret_cast<uint64_t *>(mBuffer.mutable_data_ptr<uint8_t>());
-    auto *firstLeafID =
-        reinterpret_cast<uint32_t *>(mBuffer.mutable_data_ptr<uint8_t>() + jumpMapBytes);
+    // to any record_stream()ed consumer streams. Layout, in uint64 words: jumpMap, then
+    // firstLeafID packed two uint32 per word. firstLeafID is addressed through a uint32 pointer
+    // into the same allocation, which avoids two tensor view calls on every cold build.
+    const int64_t jumpMapWords     = int64_t(blockCount) * kJumpMapWordCount;
+    const int64_t firstLeafIDWords = int64_t(blockCount + 1) / 2;
+    mBuffer                        = torch::empty({jumpMapWords + firstLeafIDWords},
+                           torch::TensorOptions().dtype(torch::kUInt64).device(owner.device()));
+    auto *jumpMap                  = mBuffer.mutable_data_ptr<uint64_t>();
+    auto *firstLeafID              = reinterpret_cast<uint32_t *>(jumpMap + jumpMapWords);
 
     nanovdb::tools::cuda::buildVoxelBlockManagerBatch<kLog2BlockWidth>(BatchVbmLayout::of(owner),
                                                                        uint32_t(numGrids),

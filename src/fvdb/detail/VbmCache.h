@@ -97,7 +97,7 @@ class VbmCache {
     const GridBatchData *mOwner = nullptr;    // set by the build; acquire() checks it
     BatchVbm mVbm;
     std::vector<nanovdb::tools::cuda::VoxelBlockManagerBatchEntry> mHostEntries;
-    torch::Tensor mBuffer;                    // bytes: jumpMap, entries, firstLeafID
+    torch::Tensor mBuffer;                    // uint64: jumpMap, then packed firstLeafID
     cudaEvent_t mBuiltOn      = nullptr;      // created when a second stream first acquires
     cudaStream_t mBuiltStream = nullptr;
     std::vector<cudaStream_t> mSyncedStreams; // other streams already ordered after the build
