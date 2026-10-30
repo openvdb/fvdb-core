@@ -58,6 +58,21 @@ class ActiveGridCoordsVbmTests(unittest.TestCase):
         self.assertTrue(torch.equal(cuda.ijk.jdata.cpu(), cpu.ijk.jdata))
         self.assertTrue(torch.equal(cuda[3:11].ijk.jdata.cpu(), cpu[3:11].ijk.jdata))
 
+    def test_ijk_inside_cuda_graph_capture(self):
+        # The VBM build cannot be captured, so the first use must come before capture
+        _, cuda = self._make_batches([_random_ijk(600, 16, 40), _random_ijk(700, 16, 41)])
+        with self.assertRaisesRegex(RuntimeError, "Run the op once before capturing"):
+            with torch.cuda.graph(torch.cuda.CUDAGraph()):
+                cuda.ijk
+
+        expected = cuda.ijk.jdata.clone()
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph):
+            out = cuda.ijk.jdata
+        graph.replay()
+        torch.cuda.synchronize()
+        self.assertTrue(torch.equal(out, expected))
+
     def test_morton_matches_cpu(self):
         ijks = [_random_ijk(1000, 24, 9), _random_ijk(1500, 24, 10)]
         cpu, cuda = self._make_batches(ijks)

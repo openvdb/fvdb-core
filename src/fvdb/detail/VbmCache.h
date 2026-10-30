@@ -62,6 +62,10 @@ struct GridVbm {
 /// kernels are in flight cannot recycle the buffer under them. Callers must acquire() on the
 /// stream they launch consuming kernels on.
 ///
+/// CUDA graph capture: the build cannot be captured, so the first acquire() must happen before
+/// capture, as in the usual warmup. A capturing stream other than the build stream waits on the
+/// build through an external event node.
+///
 /// As with any record_stream()ed tensor, a batch used from more than one stream cannot be freed
 /// in a child process forked after CUDA initialized: PyTorch's allocator records an event on
 /// each recorded stream at free time, which fails and aborts in the child. Single-stream use,
@@ -103,7 +107,7 @@ class VbmCache {
     BatchVbm mVbm;
     std::vector<nanovdb::tools::cuda::VoxelBlockManagerBatchEntry> mHostEntries;
     torch::Tensor mBuffer;                    // uint64: jumpMap, then packed firstLeafID
-    cudaEvent_t mBuiltOn      = nullptr;      // created when a second stream first acquires
+    cudaEvent_t mBuiltOn      = nullptr;      // recorded right after the build
     cudaStream_t mBuiltStream = nullptr;
     std::vector<cudaStream_t> mSyncedStreams; // other streams already ordered after the build
 };
