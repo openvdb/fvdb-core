@@ -1,10 +1,12 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 
+# Temporary: the head of AcademySoftwareFoundation/openvdb#2291 (batched VBM build), on top of
+# develop/nanovdb. Move back to AcademySoftwareFoundation/openvdb once #2291 merges.
 CPMAddPackage(
     NAME nanovdb
-    GITHUB_REPOSITORY AcademySoftwareFoundation/openvdb
-    GIT_TAG 71ae97d42fabde311559b697d61b219dfeed3eeb
+    GITHUB_REPOSITORY swahtz/openvdb
+    GIT_TAG 29165acbda12d2c6a3db809b9806a371038d7096
     SOURCE_SUBDIR nanovdb/nanovdb
     DOWNLOAD_ONLY YES
 )

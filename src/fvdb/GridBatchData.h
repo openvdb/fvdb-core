@@ -13,6 +13,7 @@
 #include <ATen/core/TensorBody.h>
 #include <torch/types.h>
 
+#include <memory>
 #include <optional>
 #include <vector>
 
@@ -21,6 +22,12 @@
 #endif
 
 namespace fvdb {
+
+namespace detail {
+class VbmCache;
+struct BatchVbm;
+struct GridVbm;
+} // namespace detail
 
 struct GridBatchData : public torch::CustomClassHolder {
     static constexpr int64_t MAX_GRIDS_PER_BATCH = 1024; // Maximum number of grids in a batch
@@ -98,6 +105,14 @@ struct GridBatchData : public torch::CustomClassHolder {
     // storageStream(), and copyStorage().
     std::shared_ptr<GridStorage> mStorage;
 
+    // Lazily-built VoxelBlockManagers for this batch's grids (pure derived state; never
+    // serialized). Every GridBatchData, views included, owns its own: the VBMs are built per
+    // batch, and topology is immutable after construction, so they never need invalidation.
+    std::shared_ptr<detail::VbmCache> mVbmCache;
+
+    // Defined in GridBatchData.cu, where detail::VbmCache is complete.
+    static std::shared_ptr<detail::VbmCache> makeVbmCache();
+
   public:
     // -----------------------------------------------------------------------
     // Constructors: bundle pre-computed fields (take ownership of the metadata
@@ -116,7 +131,8 @@ struct GridBatchData : public torch::CustomClassHolder {
         : mHostGridMetadata(hostGridMetadata), mDeviceGridMetadata(deviceGridMetadata),
           mBatchSize(batchSize), mBatchMetadata(std::move(batchMetadata)),
           mLeafBatchIndices(std::move(leafBatchIndices)), mBatchOffsets(std::move(batchOffsets)),
-          mListIndices(std::move(listIndices)), mStorage(std::move(storage)) {}
+          mListIndices(std::move(listIndices)), mStorage(std::move(storage)),
+          mVbmCache(makeVbmCache()) {}
 
     GridBatchData(const GridBatchData &sharingStorageOf,
                   GridMetadata *hostGridMetadata,
@@ -373,6 +389,12 @@ struct GridBatchData : public torch::CustomClassHolder {
     // TopologyBuilder), `hostGridPtrAt` a host pointer (CPU proxy-grid paths).
     nanovdb::OnIndexGrid *deviceGridPtrAt(int64_t bi) const;
     nanovdb::OnIndexGrid *hostGridPtrAt(int64_t bi) const;
+
+    // The batch's VoxelBlockManagers (see detail/VbmCache.h), built on the current CUDA stream
+    // at first use and ordered before work later queued on the current stream. vbmAt is grid
+    // bi's slice. Defined in GridBatchData.cu (requires the complete detail types).
+    const detail::BatchVbm &vbm() const;
+    detail::GridVbm vbmAt(int64_t bi) const;
 
     const VoxelCoordTransform &
     primalTransformAt(int64_t bi) const {
