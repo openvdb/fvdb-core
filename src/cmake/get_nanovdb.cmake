@@ -6,7 +6,7 @@
 CPMAddPackage(
     NAME nanovdb
     GITHUB_REPOSITORY swahtz/openvdb
-    GIT_TAG 23a0881474ed831c7c940453c9151bade84686a7
+    GIT_TAG 29165acbda12d2c6a3db809b9806a371038d7096
     SOURCE_SUBDIR nanovdb/nanovdb
     DOWNLOAD_ONLY YES
 )

@@ -26,7 +26,7 @@ static_assert(kVbmForEachBlockDim % detail::VbmCache::kBlockWidth == 0,
               "each CUDA block must cover whole VBM blocks");
 
 /// One launch over every active voxel of a batch. Each group of kBlockWidth threads takes one
-/// VBM block of the batch (grid-stride), finds its grid from the entries' block bases with a
+/// VBM block of the batch (grid-stride), finds its grid from the grids' block bases with a
 /// warp-uniform binary search, and each thread decodes one voxel's (leafIndex, voxelOffset) in
 /// registers via the VoxelBlockManager's rank+select inverse-map decode.
 ///
@@ -35,7 +35,7 @@ static_assert(kVbmForEachBlockDim % detail::VbmCache::kBlockWidth == 0,
 template <typename Func, typename... Args>
 __global__ void __launch_bounds__(kVbmForEachBlockDim)
 forEachActiveVoxelVbmKernel(const detail::BatchVbm vbm,
-                            const GridBatchData::Accessor acc,
+                            const detail::BatchVbmLayout layout,
                             Func func,
                             Args... args) {
     using VbmCache = detail::VbmCache;
@@ -47,27 +47,28 @@ forEachActiveVoxelVbmKernel(const detail::BatchVbm vbm,
              uint64_t(blockIdx.x) * kVbmBlocksPerCudaBlock + threadIdx.x / VbmCache::kBlockWidth;
          vb < vbm.blockCount;
          vb += stride) {
-        // The last grid whose first block is <= vb. Empty grids share their successor's base.
+        // The last grid whose first block is <= vb. Blocks between grids, and those of empty
+        // grids, fall past their grid's voxels and are skipped.
         int64_t lo = 0;
         int64_t hi = vbm.numGrids;
         while (lo < hi) {
             const int64_t mid = (lo + hi) >> 1;
-            if (vbm.entries[mid].blockBase <= vb) {
+            if (layout.blockBase(mid) <= vb) {
                 lo = mid + 1;
             } else {
                 hi = mid;
             }
         }
-        const int64_t bi  = lo - 1;
-        const auto &entry = vbm.entries[bi];
-        const uint64_t b  = vb - entry.blockBase;             // VBM block within the grid
-        const uint64_t i  = b * VbmCache::kBlockWidth + slot; // 0-based voxel in the grid
-        if (i >= entry.voxelCount) {
+        const int64_t bi = lo - 1;
+        const uint64_t b = vb - layout.blockBase(bi);        // VBM block within the grid
+        const uint64_t i = b * VbmCache::kBlockWidth + slot; // 0-based voxel in the grid
+        if (i >= layout.voxelCount(bi)) {
             continue;
         }
+        const nanovdb::OnIndexGrid *grid = layout.acc.grid(bi);
         uint32_t leafIndex;
         uint16_t voxelOffset;
-        VbmT::decodeInverseMap(entry.grid,
+        VbmT::decodeInverseMap(grid,
                                vbm.firstLeafID[vb],
                                vbm.jumpMap + vb * VbmCache::kJumpMapWordCount,
                                1 + b * VbmCache::kBlockWidth,
@@ -77,11 +78,11 @@ forEachActiveVoxelVbmKernel(const detail::BatchVbm vbm,
         if (leafIndex == VbmT::UnusedLeafIndex) {
             continue; // defensive; i < voxelCount makes this unreachable
         }
-        const auto &leaf         = entry.grid->tree().template getFirstNode<0>()[leafIndex];
+        const auto &leaf         = grid->tree().template getFirstNode<0>()[leafIndex];
         const nanovdb::Coord ijk = leaf.offsetToGlobalCoord(voxelOffset);
         // Sequential OnIndex invariant: the decoded voxel's value index equals its slot (i + 1),
         // so the batch-wide feature index matches the leaf scan's baseOffset + getValue - 1.
-        func.perActiveVoxel(ijk, acc.voxelOffset(bi) + int64_t(i), args...);
+        func.perActiveVoxel(ijk, layout.voxelOffsets[bi] + int64_t(i), args...);
     }
 }
 
@@ -114,7 +115,7 @@ forEachActiveVoxelVbmCUDA(const fvdb::GridBatchData &batchHdl, Func func, Args..
     const auto numBlocks =
         uint32_t(std::min<uint64_t>(cudaBlocks, std::numeric_limits<int32_t>::max()));
     _private::forEachActiveVoxelVbmKernel<<<numBlocks, _private::kVbmForEachBlockDim, 0, stream>>>(
-        vbm, batchHdl.deviceAccessor(), func, args...);
+        vbm, detail::BatchVbmLayout::of(batchHdl), func, args...);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 
