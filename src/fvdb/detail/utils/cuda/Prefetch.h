@@ -8,19 +8,20 @@
 
 #include <cuda_runtime_api.h>
 
+#include <cstdint>
 #include <vector>
 
 namespace fvdb {
 namespace detail {
 
 struct TilePrefetchRange {
-    uint32_t offset;
-    uint32_t count;
-    uint32_t numTilesH;
-    uint32_t numTilesW;
-    uint32_t imageHeight;
-    uint32_t imageWidth;
-    uint32_t tileSize;
+    int64_t offset;
+    int64_t count;
+    int64_t numTilesH;
+    int64_t numTilesW;
+    int64_t imageHeight;
+    int64_t imageWidth;
+    int64_t tileSize;
 };
 
 /// Given a contiguous tensor with dimensions [C, ...] where C is the number of cameras, we prefetch
@@ -48,8 +49,9 @@ void appendPerCameraPrefetchRanges(std::vector<void *> &prefetchPointers,
                                    uint32_t cameraCount);
 
 /// Given a list of contiguous tensors laid out as either [C, numTilesH, numTilesW, ...] or
-/// [C, imageHeight, imageWidth, ...], append the memory touched by the tile range
-/// [tileOffset, tileOffset + tileCount) to the prefetch batch.
+/// [C, imageHeight, imageWidth, ...], append prefetch ranges for the tile range
+/// [tileOffset, tileOffset + tileCount). Image tensors include only full-width tile rows entirely
+/// owned by the range; partial tile rows are left to demand paging.
 void appendPerTilePrefetchRanges(std::vector<void *> &prefetchPointers,
                                  std::vector<size_t> &prefetchSizes,
                                  const torch::TensorList &tensors,
@@ -59,6 +61,15 @@ void memPrefetchBatchAsync(std::vector<void *> &prefetchPointers,
                            std::vector<size_t> &prefetchSizes,
                            int deviceId,
                            cudaStream_t stream);
+
+/// Prefetch the memory ranges given by paired pointers and byte sizes to the specified device,
+/// ordered on the non-default input stream. On CUDA 13+, discard existing contents to avoid
+/// migrating data that will be overwritten; callers must overwrite discarded data before reading
+/// it. On older CUDA versions, fall back to individual prefetch calls without discarding contents.
+void memDiscardAndPrefetchBatchAsync(std::vector<void *> &prefetchPointers,
+                                     std::vector<size_t> &prefetchSizes,
+                                     int deviceId,
+                                     cudaStream_t stream);
 
 /// Given a list of contiguous tensors each with dimensions [C, ...] where C is the number of
 /// cameras, we memset the slices [cameraOffset : cameraCount, ...] to the specified value

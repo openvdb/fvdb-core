@@ -19,16 +19,16 @@ runs small random minibatches over the pre-voxelized dataset.
 
 import logging
 
-import fvdb.nn as fvnn
 import polyscope as ps
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import tqdm
-from fvdb.utils.examples import load_gso_shoes
 
 import fvdb
+import fvdb.nn as fvnn
 from fvdb import ConvolutionPlan, GridBatch, JaggedTensor
+from fvdb.utils.examples import load_gso_shoes
 
 RESOLUTION = 64  # voxels along the longest axis of each shape
 NUM_LEVELS = 4  # stride-2 pyramid depth; the decoder neck lattice is (RESOLUTION / 2**NUM_LEVELS)^3 = 4^3

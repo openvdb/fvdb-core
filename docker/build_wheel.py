@@ -43,12 +43,17 @@ def parse_args(versions):
         "and copies it to the output directory. Defaults come from .github/versions.json.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
+    # '%(default).0s' renders as nothing; it stops the formatter appending "(default: None)"
     parser.add_argument(
         "--python",
-        dest="python_version",
-        default=versions["python"]["default"],
-        metavar="VER",
-        help="Python version (installed via uv, so any version uv can provide)",
+        dest="python_versions",
+        action="append",
+        default=None,
+        metavar="VER[,VER...]",
+        help="Python version(s) (installed via uv, so any version uv can provide). "
+        "Takes a comma-separated list and may be repeated. Several versions share "
+        "one build of the CUDA library and produce one wheel each "
+        f"(default: {versions['python']['default']})%(default).0s",
     )
     parser.add_argument(
         "--torch",
@@ -116,7 +121,22 @@ def parse_args(versions):
         args.version_mode = "suffix"
     if args.jobs is not None and args.jobs < 1:
         die("--jobs must be a positive integer")
+
+    requested = [v.strip() for value in (args.python_versions or []) for v in value.split(",") if v.strip()]
+    args.python_versions = list(dict.fromkeys(requested)) or [versions["python"]["default"]]
+    for version in args.python_versions:
+        if not re.fullmatch(r"3\.[0-9]+", version):
+            die(f"--python expects major.minor versions such as 3.12 (got '{version}')")
     return args
+
+
+def pick_core_python(python_versions, default_python):
+    """Return the Python version that gets the full build. The others build only
+    their bindings against its libfvdb.so, so prefer the stable default over a
+    pre-release Python whose failure would take every wheel down with it."""
+    if default_python in python_versions:
+        return default_python
+    return python_versions[0]
 
 
 def detect_native_arch_list():
@@ -153,8 +173,8 @@ def version_sort_key(version):
     return [int(part) for part in re.findall(r"\d+", version)]
 
 
-def check_torch_wheel_available(torch_version, cuda_tag, python_version):
-    """Fail fast if PyTorch does not publish a wheel for the requested
+def check_torch_wheel_available(torch_version, cuda_tag, python_versions):
+    """Fail fast if PyTorch does not publish a wheel for each requested
     torch/CUDA/Python combination, by consulting the same package index the
     build will resolve against. On network failure, warn and continue (the
     docker build will still fail naturally if the combination is invalid)."""
@@ -187,13 +207,13 @@ def check_torch_wheel_available(torch_version, cuda_tag, python_version):
             f"PyTorch does not publish a torch=={torch_version} wheel for {cuda_tag}; "
             f"available versions for {cuda_tag}: {', '.join(available_versions)}"
         )
-    cp_tag = python_version.replace(".", "")
     available_pythons = sorted({cp for version, cp in wheels if version == torch_version}, key=int)
-    if cp_tag not in available_pythons:
+    missing = [v for v in python_versions if v.replace(".", "") not in available_pythons]
+    if missing:
         pythons = ", ".join(f"{cp[0]}.{cp[1:]}" for cp in available_pythons)
         die(
             f"PyTorch does not publish a torch=={torch_version}+{cuda_tag} wheel "
-            f"for Python {python_version}; available Python versions: {pythons}"
+            f"for Python {', '.join(missing)}; available Python versions: {pythons}"
         )
 
 
@@ -232,7 +252,7 @@ def main():
         die("docker is required but not found")
     buildx = subprocess.run(["docker", "buildx", "version"], capture_output=True)
     if buildx.returncode != 0:
-        die("docker with BuildKit (buildx) is required; " "upgrade Docker or install the buildx plugin")
+        die("docker with BuildKit (buildx) is required; upgrade Docker or install the buildx plugin")
 
     known_cuda = versions["cuda"]["versions"].get(args.cuda_version)
     if known_cuda is not None:
@@ -251,7 +271,10 @@ def main():
     torch_tag = "".join(args.torch_version.split(".")[:2])
     local_suffix = f"+pt{torch_tag}.{cuda_tag}"
 
-    check_torch_wheel_available(args.torch_version, cuda_tag, args.python_version)
+    check_torch_wheel_available(args.torch_version, cuda_tag, args.python_versions)
+
+    core_python = pick_core_python(args.python_versions, versions["python"]["default"])
+    extra_pythons = [v for v in args.python_versions if v != core_python]
 
     cuda_arch_list = args.cuda_arch_list
     if cuda_arch_list == "native":
@@ -269,9 +292,11 @@ def main():
         )
 
     print("Building fvdb-core wheel with:")
-    print(f"  Python:          {args.python_version}")
-    print(f"  PyTorch:         {args.torch_version} " f"(index: https://download.pytorch.org/whl/{cuda_tag})")
-    print(f"  CUDA:            {args.cuda_version} " f"(image: nvidia/cuda:{cuda_image_tag}-cudnn-devel-rockylinux8)")
+    print(f"  Python:          {core_python} (full build)")
+    if extra_pythons:
+        print(f"                   {', '.join(extra_pythons)} (bindings only, sharing the {core_python} libfvdb.so)")
+    print(f"  PyTorch:         {args.torch_version} (index: https://download.pytorch.org/whl/{cuda_tag})")
+    print(f"  CUDA:            {args.cuda_version} (image: nvidia/cuda:{cuda_image_tag}-cudnn-devel-rockylinux8)")
     print(f"  CUDA archs:      {cuda_arch_list}")
     print(f"  Wheel version:   {wheel_version or f'{current_version} (unchanged)'}")
     print(f"  auditwheel:      {'skipped' if args.skip_auditwheel else 'enabled'}")
@@ -282,7 +307,8 @@ def main():
     build_args = {
         "CUDA_IMAGE_TAG": cuda_image_tag,
         "UV_VERSION": versions["uv"]["version"],
-        "PYTHON_VERSION": args.python_version,
+        "PYTHON_VERSION": core_python,
+        "EXTRA_PYTHON_VERSIONS": " ".join(extra_pythons),
         "TORCH_VERSION": args.torch_version,
         "CUDA_TAG": cuda_tag,
         "CUDA_ARCH_LIST": cuda_arch_list,
@@ -307,6 +333,10 @@ def main():
         command += ["--build-arg", f"{name}={value}"]
     command.append(str(REPO_ROOT))
 
+    # Written by the bindings-only builds in Dockerfile.wheel, one failed Python per line
+    failures_file = args.output_dir / ".build_failures"
+    failures_file.unlink(missing_ok=True)
+
     # Flush our own output before docker starts writing to the same stream,
     # so the configuration summary precedes the build log when piped (e.g. CI).
     sys.stdout.flush()
@@ -314,16 +344,26 @@ def main():
     if result.returncode != 0:
         sys.exit(result.returncode)
 
+    failed = []
+    if failures_file.is_file():
+        failed = failures_file.read_text().split()
+        failures_file.unlink()
     wheels = sorted(args.output_dir.glob("fvdb_core-*.whl"))
+    for version in args.python_versions:
+        cp_tag = "cp" + version.replace(".", "")
+        if version not in failed and not any(f"-{cp_tag}-" in wheel.name for wheel in wheels):
+            failed.append(version)
+
     print()
     print(f"Wheel(s) written to {args.output_dir}:")
     for wheel in wheels:
         print(f"  {wheel}")
     print()
+    if failed:
+        print(f"Error: no wheel was built for Python {', '.join(failed)}; see the build log above", file=sys.stderr)
+        sys.exit(1)
     print("Install with the matching PyTorch build, e.g.:")
-    print(
-        f"  pip install torch=={args.torch_version} " f"--extra-index-url https://download.pytorch.org/whl/{cuda_tag}"
-    )
+    print(f"  pip install torch=={args.torch_version} --extra-index-url https://download.pytorch.org/whl/{cuda_tag}")
     print(f"  pip install {args.output_dir}/fvdb_core-*.whl")
 
 

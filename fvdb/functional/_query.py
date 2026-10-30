@@ -2,14 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 """Functional API for spatial queries on sparse grids."""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
 import torch
 
-from ..jagged_tensor import JaggedTensor
 from .. import _fvdb_cpp
+from ..jagged_tensor import JaggedTensor
 from ..types import NumericMaxRank1, to_Vec3fBroadcastable
 
 

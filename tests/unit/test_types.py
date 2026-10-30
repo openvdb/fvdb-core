@@ -6,6 +6,8 @@ from typing import Any
 
 import numpy as np
 import torch
+from parameterized import parameterized
+
 from fvdb.types import (  # Type guard functions; Type definitions; Conversion functions; Helper function
     DeviceIdentifier,
     ListOfListsOfTensors,
@@ -33,7 +35,6 @@ from fvdb.types import (  # Type guard functions; Type definitions; Conversion f
     to_Vec3i,
     to_Vec3iBatch,
 )
-from parameterized import parameterized
 
 all_devices = ["cpu", "cuda"]
 all_dtypes = [torch.float32, torch.float64, torch.int32, torch.int64]

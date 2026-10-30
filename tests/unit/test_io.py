@@ -6,13 +6,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import fvdb.functional
 import numpy as np
 import torch
-from fvdb.utils.tests import get_fvdb_test_data_path
 from parameterized import parameterized
 
 import fvdb
+import fvdb.functional
+from fvdb.utils.tests import get_fvdb_test_data_path
 
 standard_dtypes_and_dims = [
     (torch.float16, 1),

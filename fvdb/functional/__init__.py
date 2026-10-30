@@ -55,6 +55,37 @@ from ._dense import (
     inject_to_dense_cminor_single,
 )
 
+# Gaussian splatting kernels (flat, non-differentiable wrappers)
+from ._gaussian_splatting import (
+    as_pixel_jagged,
+    build_sparse_gaussian_tile_layout,
+    evaluate_spherical_harmonics_bwd,
+    evaluate_spherical_harmonics_fwd,
+    intersect_gaussian_tiles,
+    intersect_gaussian_tiles_sparse,
+    load_gaussian_ply,
+    mcmc_add_noise_to_means,
+    mcmc_relocate_gaussians,
+    project_gaussians_analytic_bwd,
+    project_gaussians_analytic_fwd,
+    project_gaussians_analytic_jagged_bwd,
+    project_gaussians_analytic_jagged_fwd,
+    project_gaussians_ut_fwd,
+    rasterize_contributing_gaussian_ids,
+    rasterize_contributing_gaussian_ids_sparse,
+    rasterize_num_contributing_gaussians,
+    rasterize_num_contributing_gaussians_sparse,
+    rasterize_screen_space_gaussians_bwd,
+    rasterize_screen_space_gaussians_fwd,
+    rasterize_screen_space_gaussians_sparse_bwd,
+    rasterize_screen_space_gaussians_sparse_fwd,
+    rasterize_top_contributing_gaussian_ids,
+    rasterize_top_contributing_gaussian_ids_sparse,
+    rasterize_world_space_gaussians_bwd,
+    rasterize_world_space_gaussians_fwd,
+    save_gaussian_ply,
+)
+
 # Grid indexing
 from ._indexing import index_grid_batch
 
@@ -94,14 +125,6 @@ from ._meshing import (
     integrate_tsdf_with_features_single,
     marching_cubes_batch,
     marching_cubes_single,
-)
-
-# Signed distance fields
-from ._sdf import (
-    reinitialize_sdf_batch,
-    reinitialize_sdf_single,
-    rebuild_narrow_band_batch,
-    rebuild_narrow_band_single,
 )
 
 # Pooling / refinement
@@ -148,6 +171,14 @@ from ._ray import (
     voxels_along_rays_single,
 )
 
+# Signed distance fields
+from ._sdf import (
+    rebuild_narrow_band_batch,
+    rebuild_narrow_band_single,
+    reinitialize_sdf_batch,
+    reinitialize_sdf_single,
+)
+
 # Grid topology
 from ._topology import (
     clip_batch,
@@ -192,37 +223,6 @@ from ._transforms import (
     voxel_to_world_single,
     world_to_voxel_batch,
     world_to_voxel_single,
-)
-
-# Gaussian splatting kernels (flat, non-differentiable wrappers)
-from ._gaussian_splatting import (
-    as_pixel_jagged,
-    build_sparse_gaussian_tile_layout,
-    evaluate_spherical_harmonics_bwd,
-    evaluate_spherical_harmonics_fwd,
-    intersect_gaussian_tiles,
-    intersect_gaussian_tiles_sparse,
-    load_gaussian_ply,
-    mcmc_add_noise_to_means,
-    mcmc_relocate_gaussians,
-    project_gaussians_analytic_bwd,
-    project_gaussians_analytic_fwd,
-    project_gaussians_analytic_jagged_bwd,
-    project_gaussians_analytic_jagged_fwd,
-    project_gaussians_ut_fwd,
-    rasterize_contributing_gaussian_ids,
-    rasterize_contributing_gaussian_ids_sparse,
-    rasterize_num_contributing_gaussians,
-    rasterize_num_contributing_gaussians_sparse,
-    rasterize_screen_space_gaussians_bwd,
-    rasterize_screen_space_gaussians_fwd,
-    rasterize_screen_space_gaussians_sparse_bwd,
-    rasterize_screen_space_gaussians_sparse_fwd,
-    rasterize_top_contributing_gaussian_ids,
-    rasterize_top_contributing_gaussian_ids_sparse,
-    rasterize_world_space_gaussians_bwd,
-    rasterize_world_space_gaussians_fwd,
-    save_gaussian_ply,
 )
 
 __all__ = [

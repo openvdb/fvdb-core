@@ -9,6 +9,7 @@ may hold many grids, so a batch is expanded into one named editor view per grid:
 the base ``name`` when the batch holds a single grid, or ``name[i]`` for grid ``i``
 of a multi-grid batch.
 """
+
 from typing import TYPE_CHECKING
 
 import torch

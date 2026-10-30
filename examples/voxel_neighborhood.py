@@ -1,13 +1,13 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 #
-import fvdb.viz as fviz
 import numpy as np
 import polyscope as ps
 import torch
-from fvdb.utils.examples import load_dragon_mesh
 
+import fvdb.viz as fviz
 from fvdb import Grid
+from fvdb.utils.examples import load_dragon_mesh
 
 
 def main():

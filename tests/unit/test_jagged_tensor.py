@@ -9,6 +9,9 @@ from typing import List
 
 import numpy as np
 import torch
+from parameterized import parameterized
+
+import fvdb
 from fvdb.types import (
     ListOfListsOfTensors,
     ListOfTensors,
@@ -24,9 +27,6 @@ from fvdb.types import (
     is_RShapeSpec,
 )
 from fvdb.utils.tests import get_fvdb_test_data_path, probabilistic_test
-from parameterized import parameterized
-
-import fvdb
 
 from . import expand_tests
 

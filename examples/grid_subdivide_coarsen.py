@@ -3,14 +3,14 @@
 #
 import uuid
 
-import fvdb.viz as fviz
 import numpy as np
 import point_cloud_utils as pcu
 import polyscope as ps
 import torch
-from fvdb.utils.examples import load_dragon_mesh
 
 import fvdb
+import fvdb.viz as fviz
+from fvdb.utils.examples import load_dragon_mesh
 
 
 def visualize_grid(a: fvdb.GridBatch, offset: float):

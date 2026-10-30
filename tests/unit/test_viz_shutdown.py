@@ -6,14 +6,14 @@ import gc
 import io
 import json
 import os
-from pathlib import Path
 import socket
 import struct
 import subprocess
 import sys
 import time
-from unittest.mock import Mock
 import weakref
+from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 import torch

@@ -1,17 +1,16 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 #
-import fvdb.nn as fvdbnn
 import torch.nn as nn
 from fvdb_benchmark.utils import encode_range_name
 from fvdb_benchmark.wrapper import Wrapper
 from torch.profiler import record_function
 
 import fvdb
+import fvdb.nn as fvdbnn
 
 
 class UpDown(nn.Module):
-
     def __init__(self, backend: str, factor: int = 2):
         super().__init__()
 

@@ -102,7 +102,7 @@ GridBatchData::~GridBatchData() {
         fvdb::detail::freeHostGridMetadata(mHostGridMetadata);
         mHostGridMetadata = nullptr;
         if (dev.is_cuda()) {
-            fvdb::detail::freeDeviceGridMetadata(dev, mDeviceGridMetadata);
+            fvdb::detail::freeDeviceGridMetadata(mDeviceGridMetadata);
             mDeviceGridMetadata = nullptr;
         }
     } else if (dev.is_privateuseone()) {

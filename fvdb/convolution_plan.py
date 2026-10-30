@@ -14,10 +14,10 @@ from threading import Lock
 from typing import Any, overload
 
 import torch
-from fvdb.types import NumericMaxRank1, ValueConstraint, to_Vec3i
 
 from fvdb import GridBatch, JaggedTensor
 from fvdb.functional._dispatch import _get_grid_data
+from fvdb.types import NumericMaxRank1, ValueConstraint, to_Vec3i
 
 from . import _fvdb_cpp
 from .enums import ConvolutionPhasePolicy, ConvolutionTopologyPolicy, ConvolutionTopologyProvenance
@@ -354,9 +354,9 @@ def _validate_coverage_policy(
     if output_zero_count is None:
         return
     if topology_policy is ConvolutionTopologyPolicy.COMPLETE and output_zero_count:
-        raise RuntimeError("Generated complete topology contains " f"{output_zero_count} zero-degree output rows.")
+        raise RuntimeError(f"Generated complete topology contains {output_zero_count} zero-degree output rows.")
     if topology_policy is ConvolutionTopologyPolicy.RESTRICTED and strict_output_coverage and output_zero_count:
-        raise ValueError("Restricted topology contains " f"{output_zero_count} zero-degree output rows.")
+        raise ValueError(f"Restricted topology contains {output_zero_count} zero-degree output rows.")
 
 
 def _vec_is_all(v: torch.Tensor, i: int | float) -> bool:
@@ -436,7 +436,13 @@ class _GatherScatterConvFn(torch.autograd.Function):
     """Autograd wrapper for the default gather-scatter convolution (forward + transposed)."""
 
     @staticmethod
-    def forward(ctx, features: torch.Tensor, weights: torch.Tensor, topo: _fvdb_cpp.GatherScatterDefaultTopology, transposed: bool) -> torch.Tensor:  # type: ignore[override]
+    def forward(  # type: ignore[override]
+        ctx,
+        features: torch.Tensor,
+        weights: torch.Tensor,
+        topo: _fvdb_cpp.GatherScatterDefaultTopology,
+        transposed: bool,
+    ) -> torch.Tensor:
         if transposed:
             output = _fvdb_cpp.gs_conv_transpose(features, weights, topo)
         else:
