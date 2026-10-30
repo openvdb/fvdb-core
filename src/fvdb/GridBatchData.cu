@@ -20,6 +20,7 @@ GridBatchData::vbm() const {
 
 detail::GridVbm
 GridBatchData::vbmAt(int64_t bi) const {
+    bi = negativeToPositiveIndexWithRangecheck(bi);
     mVbmCache->acquire(*this);
     return mVbmCache->gridVbm(bi);
 }

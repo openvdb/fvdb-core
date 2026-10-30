@@ -399,3 +399,17 @@ TEST(VbmCacheTest, CudaProductionPathsDecode) {
         }
     }
 }
+
+TEST(VbmCacheTest, NegativeGridIndex) {
+    if (!cudaIsAvailable()) {
+        GTEST_SKIP() << "CUDA not available";
+    }
+    auto batch =
+        makeBatch({randomIjk(100, 16, 30), randomIjk(300, 16, 31)}, torch::Device(torch::kCUDA, 0));
+    const auto last     = batch->vbmAt(1);
+    const auto negative = batch->vbmAt(-1);
+    EXPECT_EQ(negative.firstLeafID, last.firstLeafID);
+    EXPECT_EQ(negative.jumpMap, last.jumpMap);
+    EXPECT_EQ(negative.blockCount, last.blockCount);
+    EXPECT_ANY_THROW(batch->vbmAt(2));
+}
