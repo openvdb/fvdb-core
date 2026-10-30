@@ -6,6 +6,7 @@
 # the CUDA results must match the CPU leaf-scan path bitwise, including through
 # sliced GridBatch views (which build their own VBMs) and for batches containing
 # empty grids.
+import os
 import unittest
 
 import torch
@@ -60,6 +61,8 @@ class ActiveGridCoordsVbmTests(unittest.TestCase):
 
     def test_ijk_inside_cuda_graph_capture(self):
         # The VBM build cannot be captured, so the first use must come before capture
+        if os.environ.get("PYTORCH_NO_CUDA_MEMORY_CACHING", "0") != "0":
+            self.skipTest("CUDA graph capture needs the caching allocator")
         _, cuda = self._make_batches([_random_ijk(600, 16, 40), _random_ijk(700, 16, 41)])
         with self.assertRaisesRegex(RuntimeError, "Run the op once before capturing"):
             with torch.cuda.graph(torch.cuda.CUDAGraph()):
