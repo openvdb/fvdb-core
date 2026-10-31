@@ -1,11 +1,12 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 #
-"""Equivalence tests for the batched leaf-mask topology builder (issue #755).
+"""Equivalence tests for the batched topology builder (issues #755, #785).
 
 On CUDA, ``refined_grid`` / ``coarsened_grid`` (and through them ``conv_grid`` /
-``conv_transpose_grid`` for K == S) build all batch members in a single batched pass instead of
-one NanoVDB build + merge per member. These tests pin the batched results against:
+``conv_transpose_grid`` for K == S) and ``dilated_grid`` build all batch members in a single
+batched pass instead of one NanoVDB build + merge per member. These tests pin the batched results
+against:
 
 - ``from_ijk`` (PointsToGrid) grids built from independently computed expected coordinates,
   compared **elementwise** (``torch.equal`` on ``ijk.jdata``), which pins the canonical NanoVDB
@@ -14,11 +15,14 @@ one NanoVDB build + merge per member. These tests pin the batched results agains
 
 Emphasis is on the cases the batched pipeline must get right and a per-member loop got for free:
 batches with empty members (first/middle/last/all), members of wildly unequal sizes, coordinates
-straddling root-tile boundaries (+-4096) and negative octants (where the sort-key encoding differs
-from the stored ``Tile::key`` encoding), and multi-pass factors (4 = two chained passes).
+straddling root-tile boundaries (+-4096) and negative octants, grids spread over many root tiles,
+multi-pass factors (4 = two chained passes), and batches split into several builder runs by the
+tile cap.
 """
 
+import os
 import unittest
+from unittest import mock
 
 import torch
 from parameterized import parameterized
@@ -52,6 +56,25 @@ def _expected_coarsen_ijk(ijk: torch.Tensor, factor: int) -> torch.Tensor:
     return torch.unique(coarse, dim=0).to(torch.int32)
 
 
+def _expected_dilate_ijk(ijk: torch.Tensor, dilation: int) -> torch.Tensor:
+    """Unique coordinates of ``ijk`` dilated ``dilation`` times by the 26-neighbor stencil.
+
+    Each application is the Minkowski sum with {-1,0,1}^3; ``dilation`` chained applications
+    equal the sum with [-d, d]^3, which is what the CPU implementation computes in one shot.
+    """
+    if ijk.numel() == 0:
+        return ijk.reshape(0, 3)
+    offsets = torch.stack(
+        torch.meshgrid(torch.arange(-1, 2), torch.arange(-1, 2), torch.arange(-1, 2), indexing="ij"),
+        dim=-1,
+    ).reshape(-1, 3)
+    out = ijk.to(torch.int64)
+    for _ in range(dilation):
+        out = (out[:, None, :] + offsets[None, :, :].to(out.device)).reshape(-1, 3)
+        out = torch.unique(out, dim=0)
+    return out.to(torch.int32)
+
+
 def _ijk_sets(grid: GridBatch):
     return [set(map(tuple, t.cpu().to(torch.int64).tolist())) for t in grid.ijk.unbind()]
 
@@ -76,9 +99,8 @@ def _tricky_batches():
             torch.empty((0, 3), dtype=torch.int32),
             torch.empty((0, 3), dtype=torch.int32),
         ],
-        # Straddles the +-4096 root-tile boundaries and negative octants: multiple root tiles per
-        # grid and coordinates where the offset-shifted sort key and stored Tile::key encodings
-        # order tiles differently.
+        # Straddles the +-4096 root-tile boundaries and negative octants, so each grid has
+        # several root tiles and their order depends on the offset-shifted tile key.
         "tile_boundaries": [
             torch.tensor(
                 [
@@ -98,6 +120,18 @@ def _tricky_batches():
         ],
         "single_grid": [
             torch.randint(-16, 16, (400, 3), dtype=torch.int32),
+        ],
+        # Small clusters scattered over many root tiles per grid, so each grid's speculative root
+        # holds dozens of tiles and most of them stay empty.
+        "wide_bbox": [
+            torch.cat(
+                [
+                    torch.randint(-12000, 12000, (1, 3), dtype=torch.int32)
+                    + torch.randint(0, 6, (40, 3), dtype=torch.int32)
+                    for _ in range(12)
+                ]
+            )
+            for _ in range(3)
         ],
         "larger_batch": [torch.randint(-32, 32, (50 + 37 * i, 3), dtype=torch.int32) for i in range(16)],
     }
@@ -146,6 +180,28 @@ class TestBatchedTopologyBuilder(unittest.TestCase):
             self._check_against_expected(result, expected, f"{name} coarsen x{factor}")
             cpu_result = _build(coords, "cpu").coarsened_grid(factor)
             self._check_against_cpu(result, cpu_result, f"{name} coarsen x{factor} vs CPU")
+
+    @parameterized.expand([(name,) for name in _tricky_batches().keys()])
+    def test_dilated_grid_matches_expected_and_cpu(self, name):
+        # dilated_grid(d) on CUDA runs d chained batched BoxDilate(-1, +1) passes over the whole
+        # batch (issue #775 item 3). Pin against a from_ijk build of the 26-neighbor Minkowski sum
+        # applied d times (elementwise: canonical node order) and against the CPU implementation.
+        coords = _tricky_batches()[name]
+        for dilation in (1, 2):
+            grid = _build(coords, "cuda")
+            result = grid.dilated_grid(dilation)
+            expected = [_expected_dilate_ijk(c, dilation) for c in coords]
+            self._check_against_expected(result, expected, f"{name} dilate {dilation}")
+            cpu_result = _build(coords, "cpu").dilated_grid(dilation)
+            self._check_against_cpu(result, cpu_result, f"{name} dilate {dilation} vs CPU")
+
+    def test_dilated_grid_sliced_view_matches_full(self):
+        # A sliced (non-contiguous) view dilates the same as the equivalent standalone batch.
+        coords = _tricky_batches()["mixed_sizes"]
+        full = _build(coords, "cuda")
+        view = full[1:]
+        standalone = _build(coords[1:], "cuda")
+        self.assertTrue(torch.equal(view.dilated_grid(1).ijk.jdata, standalone.dilated_grid(1).ijk.jdata))
 
     def test_conv_grid_k2s2_multi_grid_matches_per_member(self):
         coords = _tricky_batches()["mixed_sizes"]
@@ -200,6 +256,34 @@ class TestBatchedTopologyBuilder(unittest.TestCase):
         cpu_mask = JaggedTensor([m.cpu() for m in mask.unbind()])
         cpu_result = cpu_grid.refined_grid(2, mask=cpu_mask)
         self._check_against_cpu(result, cpu_result, "masked refine x2 vs CPU")
+
+    @parameterized.expand([("tile_boundaries",), ("wide_bbox",), ("empty_members",)])
+    def test_chunked_build_matches_unchunked(self, name):
+        # FVDB_TOPOLOGY_MAX_TILES=1 gives every grid its own builder run (a grid needing more tiles
+        # runs alone), so each pass produces several chunks, chained passes read their sources
+        # across chunks, and the last pass assembles the chunks into one storage.
+        coords = _tricky_batches()[name]
+        grid = _build(coords, "cuda")
+        ops = {
+            "refine x4": lambda g: g.refined_grid(4),
+            "coarsen x4": lambda g: g.coarsened_grid(4),
+            "conv_grid k3s1": lambda g: g.conv_grid(kernel_size=3, stride=1),
+            "conv_grid k5s1": lambda g: g.conv_grid(kernel_size=5, stride=1),
+            "conv_transpose_grid k3s2": lambda g: g.conv_transpose_grid(kernel_size=3, stride=2),
+        }
+        for op_name, op in ops.items():
+            msg = f"{name} {op_name}"
+            unchunked = op(grid)
+            with mock.patch.dict(os.environ, {"FVDB_TOPOLOGY_MAX_TILES": "1"}):
+                chunked = op(grid)
+            self.assertEqual(chunked.grid_count, unchunked.grid_count, msg)
+            self.assertTrue(torch.equal(chunked.ijk.jdata, unchunked.ijk.jdata), msg)
+            self.assertTrue(torch.equal(chunked.ijk.joffsets, unchunked.ijk.joffsets), msg)
+            for b in range(chunked.grid_count):
+                self.assertTrue(
+                    torch.equal(chunked.bbox_at(b).cpu(), unchunked.bbox_at(b).cpu()),
+                    f"{msg}: bbox of member {b}",
+                )
 
     def test_refine_coarsen_roundtrip_grid_count(self):
         # Serialization-visible metadata: grid_count/address arithmetic must be consistent for a
