@@ -374,7 +374,7 @@ def project_gaussians_analytic_jagged_bwd(
     radii: torch.Tensor,
     conics: torch.Tensor,
     d_loss_d_means2d: torch.Tensor,
-    d_loss_d_depths: torch.Tensor,
+    d_loss_d_depths: torch.Tensor | None,
     d_loss_d_conics: torch.Tensor,
     world_to_cam_matrices_requires_grad: bool,
     ortho: bool,
@@ -395,7 +395,8 @@ def project_gaussians_analytic_jagged_bwd(
         radii (torch.Tensor): Forward radii, shape ``[M, 2]``.
         conics (torch.Tensor): Forward conics, shape ``[M, 3]``.
         d_loss_d_means2d (torch.Tensor): Loss gradient w.r.t. ``means2d``, shape ``[M, 2]``.
-        d_loss_d_depths (torch.Tensor): Loss gradient w.r.t. ``depths``, shape ``[M]``.
+        d_loss_d_depths (torch.Tensor | None): Loss gradient w.r.t. ``depths``, shape ``[M]``.
+            ``None`` contributes zero without allocating or reading a depth-gradient tensor.
         d_loss_d_conics (torch.Tensor): Loss gradient w.r.t. ``conics``, shape ``[M, 3]``.
         world_to_cam_matrices_requires_grad (bool): Whether to compute the camera-matrix gradient.
         ortho (bool): Whether the forward pass used an orthographic projection.
