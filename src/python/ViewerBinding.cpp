@@ -388,6 +388,18 @@ bind_viewer(py::module &m) {
              "Add a single grid with per-voxel float32 density values as a fog volume "
              "(rendered by the nanovdb-editor render pipeline). The grid must contain exactly "
              "one grid.")
+        .def("add_mesh_view",
+             &fvdb::detail::viewer::Viewer::addMeshView,
+             py::arg("scene_name"),
+             py::arg("name"),
+             py::arg("vertices"),
+             py::arg("faces"),
+             py::arg("colors")           = std::nullopt,
+             py::arg("resolution")       = 512,
+             py::arg("inflation_radius") = 0.0,
+             "Add a triangle mesh with (V, 3) vertices, (F, 3) integer faces and optional (V, 3) "
+             "float32 RGB colors in [0, 1]. The nanovdb-editor builds a VoxelBVH over the "
+             "triangles and ray-traces them.")
         .def("has_nanovdb_view",
              &fvdb::detail::viewer::Viewer::hasNanoVDBView,
              py::arg("name"),

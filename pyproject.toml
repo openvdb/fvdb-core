@@ -31,7 +31,7 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-viewer = ["nanovdb-editor>=0.1.6,<0.2.0"]
+viewer = ["nanovdb-editor>=0.1.8,<0.2.0"]
 # Mesh/point-cloud loading and plotting used by fvdb.utils.examples. These are imported
 # lazily, so the core package works without them; install with `pip install fvdb-core[examples]`.
 examples = ["point_cloud_utils", "polyscope"]
