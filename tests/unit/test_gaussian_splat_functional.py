@@ -300,6 +300,36 @@ class GaussianSplatFunctionalTests(unittest.TestCase):
         )
         self.assertIsNone(no_cam_grad[4])
 
+    def test_project_analytic_bwd_missing_depth_matches_zero(self):
+        def backward(depth_gradient):
+            return F.project_gaussians_analytic_bwd(
+                self.means,
+                self.quats,
+                self.log_scales,
+                self.w2c,
+                self.K,
+                None,
+                self.W,
+                self.H,
+                0.3,
+                self.radii,
+                self.conics,
+                torch.ones_like(self.means2d),
+                depth_gradient,
+                torch.ones_like(self.conics),
+                None,
+                True,
+                False,
+            )
+
+        missing = backward(None)
+        explicit_zero = backward(torch.zeros_like(self.depths))
+        for actual, expected in zip(missing, explicit_zero):
+            if expected is None:
+                self.assertIsNone(actual)
+            else:
+                torch.testing.assert_close(actual, expected)
+
     def test_project_analytic_jagged_fwd_bwd(self):
         N = self.N
         g_sizes = torch.tensor([N // 2, N - N // 2], dtype=torch.int64, device=self.device)
@@ -350,6 +380,57 @@ class GaussianSplatFunctionalTests(unittest.TestCase):
         self._assert_shape(d_quats, (N, 4), torch.float32)
         self._assert_shape(d_scales, (N, 3), torch.float32)
         self._assert_shape(d_w2c, (self.C, 4, 4), torch.float32)
+
+    def test_project_analytic_jagged_bwd_missing_depth_matches_zero(self):
+        N = self.N
+        g_sizes = torch.tensor([N // 2, N - N // 2], dtype=torch.int64, device=self.device)
+        c_sizes = torch.tensor([1, 1], dtype=torch.int64, device=self.device)
+        scales = torch.exp(self.log_scales)
+        radii, means2d, depths, conics, _ = F.project_gaussians_analytic_jagged_fwd(
+            g_sizes,
+            self.means,
+            self.quats,
+            scales,
+            c_sizes,
+            self.w2c,
+            self.K,
+            self.W,
+            self.H,
+            0.3,
+            0.01,
+            1e10,
+            0.0,
+            False,
+        )
+
+        def backward(depth_gradient):
+            return F.project_gaussians_analytic_jagged_bwd(
+                g_sizes,
+                self.means,
+                self.quats,
+                scales,
+                c_sizes,
+                self.w2c,
+                self.K,
+                self.W,
+                self.H,
+                0.3,
+                radii,
+                conics,
+                torch.ones_like(means2d),
+                depth_gradient,
+                torch.ones_like(conics),
+                True,
+                False,
+            )
+
+        missing = backward(None)
+        explicit_zero = backward(torch.zeros_like(depths))
+        for actual, expected in zip(missing, explicit_zero):
+            if expected is None:
+                self.assertIsNone(actual)
+            else:
+                torch.testing.assert_close(actual, expected)
 
     def test_project_ut_fwd_accepts_enum_and_int(self):
         C, N = self.C, self.N
