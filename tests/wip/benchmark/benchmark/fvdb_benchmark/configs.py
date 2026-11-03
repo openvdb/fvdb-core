@@ -6,10 +6,10 @@ from pathlib import Path
 
 import torch
 import torch.nn as nn
-from fvdb.nn import SparseConv3d, VDBTensor
 from torchsparse import SparseTensor
 
 import fvdb
+from fvdb.nn import SparseConv3d, VDBTensor
 
 
 class BaseConfig(ABC):

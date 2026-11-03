@@ -20,6 +20,9 @@ Tests compare forward-pass results against:
 import unittest
 
 import torch
+from parameterized import parameterized
+
+from fvdb import ConvolutionPlan, JaggedTensor
 from fvdb.convolution_plan import _PredGatherIGemmBackend
 from fvdb.utils.tests import (
     fourier_anti_symmetric_kernel,
@@ -34,9 +37,6 @@ from fvdb.utils.tests.convolution_utils import (
     get_cluster_edge_aligned,
     sort_coords_by_ijk,
 )
-from parameterized import parameterized
-
-from fvdb import ConvolutionPlan, JaggedTensor
 
 # =============================================================================
 # Configuration

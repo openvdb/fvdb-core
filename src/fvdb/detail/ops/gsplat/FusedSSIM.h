@@ -39,9 +39,7 @@ namespace ops {
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> fusedSSIMCUDA(
     double C1, double C2, const torch::Tensor &img1, const torch::Tensor &img2, bool train);
 
-torch::Tensor fusedSSIMBackwardCUDA(double C1,
-                                    double C2,
-                                    const torch::Tensor &img1,
+torch::Tensor fusedSSIMBackwardCUDA(const torch::Tensor &img1,
                                     const torch::Tensor &img2,
                                     const torch::Tensor &dL_dmap,
                                     const torch::Tensor &dm_dmu1,
@@ -51,9 +49,7 @@ torch::Tensor fusedSSIMBackwardCUDA(double C1,
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> fusedSSIMPrivateUse1(
     double C1, double C2, const torch::Tensor &img1, const torch::Tensor &img2, bool train);
 
-torch::Tensor fusedSSIMBackwardPrivateUse1(double C1,
-                                           double C2,
-                                           const torch::Tensor &img1,
+torch::Tensor fusedSSIMBackwardPrivateUse1(const torch::Tensor &img1,
                                            const torch::Tensor &img2,
                                            const torch::Tensor &dL_dmap,
                                            const torch::Tensor &dm_dmu1,

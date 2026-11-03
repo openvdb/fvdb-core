@@ -96,8 +96,11 @@ struct TorchDeviceResource {
         return TorchResource{}.allocate_async(bytes, alignment, stream);
     }
 
-    /// @brief Frees @p p on the bound device. The block returns to the stream it was allocated
+    /// @brief Frees @p p. The block returns to the stream it was allocated
     ///        on; @p stream is ignored, so it must be that same stream (see the class comment).
+    /// @note No device guard: torch's allocator finds the block's device itself, and setting a
+    ///       device fails in a child forked after CUDA initialized, where Python's cycle collector
+    ///       can free inherited grids.
     void
     deallocate_async(void *p, size_t bytes, size_t alignment, cudaStream_t stream) {
         if (p == nullptr) {
@@ -107,7 +110,6 @@ struct TorchDeviceResource {
             c10::GetAllocator(c10::DeviceType::PrivateUse1)->raw_deallocate(p);
             return;
         }
-        c10::cuda::CUDAGuard deviceGuard(mDevice);
         TorchResource{}.deallocate_async(p, bytes, alignment, stream);
     }
 
@@ -128,6 +130,18 @@ struct TorchDeviceResource {
     void
     deallocate(void *p, size_t bytes, size_t alignment) {
         deallocate_async(p, bytes, alignment, cudaStream_t{});
+    }
+
+    /// @brief Equal when memory from one can be freed through the other. Torch's CUDA allocator
+    ///        frees a block on whichever device holds it, so any two CUDA resources are equal;
+    ///        PrivateUse1 memory frees only through the PrivateUse1 allocator.
+    friend bool
+    operator==(const TorchDeviceResource &a, const TorchDeviceResource &b) {
+        return a.mDevice.type() == b.mDevice.type();
+    }
+    friend bool
+    operator!=(const TorchDeviceResource &a, const TorchDeviceResource &b) {
+        return !(a == b);
     }
 
   private:

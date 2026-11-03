@@ -286,6 +286,8 @@ jobs:
       image: nvidia/cuda:${{ needs.versions.outputs.compat-cuda-patch }}-cudnn-devel-${{ needs.versions.outputs.docker-os-ubuntu }}
       env:
         PYTHONPATH: ""
+        # The viewer tests need the NVIDIA Vulkan driver, which the toolkit only mounts with graphics
+        NVIDIA_DRIVER_CAPABILITIES: all
       options: --rm
     defaults:
       run:
@@ -318,7 +320,8 @@ jobs:
           AGENT_TOOLSDIRECTORY: "/opt/hostedtoolcache"
 
       - name: Install apt dependencies
-        run: apt install -y zlib1g-dev libpng-dev
+        # The NVIDIA Vulkan driver needs the loader, libXext, and libEGL from the image
+        run: apt install -y zlib1g-dev libpng-dev libvulkan1 libxext6 libegl1
 
       - name: Install pip dependencies
         run: |

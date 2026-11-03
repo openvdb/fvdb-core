@@ -756,11 +756,7 @@ if __name__ == "__main__":
                     summary["Speedup"] = 1
 
                 for _, row in summary.iterrows():
-                    print(
-                        f"  {row['Implementation']:25s} "
-                        f"{row['Throughput (M/s)']:8.1f} M/s  "
-                        f"({row['Speedup']:5.1f}x)"
-                    )
+                    print(f"  {row['Implementation']:25s} {row['Throughput (M/s)']:8.1f} M/s  ({row['Speedup']:5.1f}x)")
 
         elif bench_type == "cpu_pool":
             print("\n--- CPU Pool Comparison Summary ---")

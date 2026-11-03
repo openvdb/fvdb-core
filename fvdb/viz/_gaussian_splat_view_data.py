@@ -128,7 +128,7 @@ class GaussianSplatViewData:
         if self.sh_ordering == ShOrderingMode.RGB_RGB_RGB:
             if self.sh0.shape[1] != 1:
                 raise ValueError(
-                    'sh0 must have shape (N, 1, C) for sh_ordering="rgb_rgb_rgb", ' f"got {tuple(self.sh0.shape)}"
+                    f'sh0 must have shape (N, 1, C) for sh_ordering="rgb_rgb_rgb", got {tuple(self.sh0.shape)}'
                 )
             if self.sh0.shape[2] != 3:
                 raise ValueError(f"sh0 must contain exactly 3 RGB channels, got {self.sh0.shape[2]}")
@@ -139,7 +139,7 @@ class GaussianSplatViewData:
         else:
             if self.sh0.shape[2] != 1:
                 raise ValueError(
-                    'sh0 must have shape (N, C, 1) for sh_ordering="rrr_ggg_bbb", ' f"got {tuple(self.sh0.shape)}"
+                    f'sh0 must have shape (N, C, 1) for sh_ordering="rrr_ggg_bbb", got {tuple(self.sh0.shape)}'
                 )
             if self.sh0.shape[1] != 3:
                 raise ValueError(f"sh0 must contain exactly 3 RGB channels, got {self.sh0.shape[1]}")

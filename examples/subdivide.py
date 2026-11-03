@@ -4,12 +4,12 @@
 import logging
 import time
 
-import fvdb.viz as fviz
 import polyscope as ps
 import torch
-from fvdb.utils.examples import load_dragon_mesh
 
+import fvdb.viz as fviz
 from fvdb import Grid
+from fvdb.utils.examples import load_dragon_mesh
 
 
 def main():

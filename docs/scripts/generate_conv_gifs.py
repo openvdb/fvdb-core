@@ -13,13 +13,14 @@ Outputs:
 """
 
 import os
-import numpy as np
+
 import matplotlib
+import numpy as np
 
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-import matplotlib.patches as patches
 import matplotlib.animation as animation
+import matplotlib.patches as patches
+import matplotlib.pyplot as plt
 
 # ---------------------------------------------------------------------------
 # Colour palette (neutral, consistent with existing docs)

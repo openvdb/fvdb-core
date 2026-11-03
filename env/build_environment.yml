@@ -10,7 +10,7 @@ dependencies:
   - cuda-compiler
   - cuda-nvrtc-dev
   - cuda-nvtx-dev
-  - cuda-version=13.0
+  - cuda-version=13.4
   - cxx-compiler
   - gcc_linux-64=14.3
   - git
@@ -28,7 +28,9 @@ dependencies:
   - pkg-config
   - pybind11
   - python=3.12
-  - pytorch-gpu=2.13.0
+  # The build string labels this metapackage only. cuda-version selects the
+  # CUDA build of pytorch itself.
+  - pytorch-gpu=2.14.1=cuda134*
   - scikit-build-core
   - setuptools>=68.2.2
   - sphinx_rtd_theme

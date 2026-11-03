@@ -7,15 +7,15 @@ import unittest
 
 import numpy as np
 import torch
+from parameterized import parameterized
+
+import fvdb
+from fvdb import GridBatch, JaggedTensor
 from fvdb.utils.tests import (
     dtype_to_atol,
     make_dense_grid_batch_and_jagged_point_data,
     make_grid_batch_and_jagged_point_data,
 )
-from parameterized import parameterized
-
-import fvdb
-from fvdb import GridBatch, JaggedTensor
 
 from . import expand_tests
 
@@ -527,7 +527,7 @@ class TestBasicOps(unittest.TestCase):
 
         self.assertTrue(
             torch.allclose(target_primal_coordinates, pred_primal_coordinates, atol=dtype_to_atol(dtype)),
-            f"Max diff = {torch.max(torch.abs(target_primal_coordinates- pred_primal_coordinates)).item()}",
+            f"Max diff = {torch.max(torch.abs(target_primal_coordinates - pred_primal_coordinates)).item()}",
         )
 
         target_dual_coordinates = ((pts - vox_origin) / vox_size) + 0.5
@@ -1824,8 +1824,7 @@ class TestBasicOps(unittest.TestCase):
             self.assertTrue((isect_neg >= 0).all().item(), f"-0 dir miss: {d_neg}")
             self.assertTrue(
                 torch.equal(isect_pos, isect_neg),
-                f"sign-of-zero divergence: dir {d_pos} vs {d_neg}, "
-                f"isect {isect_pos.tolist()} vs {isect_neg.tolist()}",
+                f"sign-of-zero divergence: dir {d_pos} vs {d_neg}, isect {isect_pos.tolist()} vs {isect_neg.tolist()}",
             )
 
     @expand_tests(all_device_dtype_combos)
@@ -2230,9 +2229,7 @@ class TestBasicOps(unittest.TestCase):
                 ii,
                 jj,
                 kk,
-            ) = torch.meshgrid(
-                [torch.arange(N, device=device)] * 3, indexing="ij"
-            )  # index space [0, N-1]
+            ) = torch.meshgrid([torch.arange(N, device=device)] * 3, indexing="ij")  # index space [0, N-1]
             xx, yy, zz = (
                 ii.float() / (float(N) - 1) - 0.5,
                 jj.float() / (float(N) - 1) - 0.5,
@@ -2240,9 +2237,7 @@ class TestBasicOps(unittest.TestCase):
             )  # normalize to [-1, 1]
             sphere_sdf = torch.stack(
                 [-torch.sqrt(xx**2 + yy**2 + zz**2) + sphere_rad for sphere_rad in sphere_rads[:batch_size]]
-            ).unsqueeze(
-                -1
-            )  # [B, N, N, N, 1] sdf
+            ).unsqueeze(-1)  # [B, N, N, N, 1] sdf
 
             # Build a grid with the SDF
             grid = GridBatch.from_dense(

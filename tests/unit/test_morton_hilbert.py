@@ -5,10 +5,10 @@ import unittest
 
 import numpy as np
 import torch
-from fvdb.types import resolve_device
 from parameterized import parameterized
 
 from fvdb import GridBatch, JaggedTensor, hilbert, morton
+from fvdb.types import resolve_device
 
 all_device_combos = [
     ["cpu"],

@@ -18,8 +18,6 @@ namespace fvdb {
 
 namespace {
 
-using HandleFactory = nanovdb::cuda::detail::HandleFactory;
-
 bool
 isDeviceKind(const torch::Device &device) {
     return device.is_cuda() || device.is_privateuseone();
@@ -39,7 +37,7 @@ checkStorageDevice(const torch::Device &device) {
 // device off the buffer (a later GridStorage(DeviceHandle&&), a prototype) agrees with the storage.
 GridStorage::DeviceHandle
 emptyDeviceHandle(const torch::Device &device, cudaStream_t stream) {
-    return HandleFactory::make(
+    return GridStorage::DeviceHandle::adopt(
         DeviceGridBuffer(stream, TorchDeviceResource(device), 0, nanovdb::cuda::noInit),
         std::vector<nanovdb::GridHandleMetaData>{});
 }
@@ -122,7 +120,7 @@ const std::vector<nanovdb::GridHandleMetaData> &
 GridStorage::metadata() const {
     return std::visit(
         [](const auto &h) -> const std::vector<nanovdb::GridHandleMetaData> & {
-            return HandleFactory::meta(h);
+            return h.metaData();
         },
         mHandle);
 }
@@ -279,7 +277,7 @@ GridStorage::to(const torch::Device &requested, cudaStream_t stream) const {
                                                mDevice.index(),
                                                src.bufferSize(),
                                                stream));
-            dst = HandleFactory::make(std::move(buf), HandleFactory::meta(src));
+            dst = DeviceHandle::adopt(std::move(buf), src.metaData());
         } else {
             const DeviceGridBuffer proto = deviceProto(device, stream);
             dst = nanovdb::cuda::copyTo<DeviceGridBuffer>(src, stream, &proto);

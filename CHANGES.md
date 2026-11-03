@@ -1,7 +1,7 @@
 fVDB Version History
 ====================
 
-## Unreleased
+## Version 0.7.0 - In Development
 
 ### SDF & Ray Traversal
 
@@ -16,6 +16,12 @@ fVDB Version History
 - Reduced `reinitialize_sdf` peak scratch memory from 6x the field to 2x at order 1 or 2 and 3x at order 3, plus 1x
   when smoothing. The input tensor doubles as the frozen phi0 and the non-finite check is fused into the first
   sweep (#796).
+  
+### Build & Packaging
+
+- **PyTorch 2.14** fVDB updated to build, test and publish with PyTorch 2.14, CUDA 13.0/13.2 and Python 3.10-3.15
+  support. The conda development and test environments move to CUDA 13.4, the CUDA build conda-forge publishes
+  PyTorch 2.14 for.
 
 ## Version 0.6.0 - September 18, 2026
 

@@ -304,7 +304,6 @@ primalVoxelTransformForSizeAndOrigin(const nanovdb::Vec3d &voxSize,
     const nanovdb::Vec3d &w   = voxSize;
     const nanovdb::Vec3d &tx  = voxOrigin;
     const nanovdb::Vec3d invW = nanovdb::Vec3d(1.0, 1.0, 1.0) / w;
-    const nanovdb::Vec3d half(0.5, 0.5, 0.5);
 
     return VoxelCoordTransform(invW, -tx / w);
 }

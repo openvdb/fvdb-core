@@ -8,10 +8,13 @@ the equivalent methods on :class:`~fvdb.Grid` and :class:`~fvdb.GridBatch`.
 Every operation is available as a standalone function that takes the grid as
 its first argument, mirroring the design of :mod:`torch.nn.functional`.
 
-Each operation has two variants:
+Each grid operation has two variants:
 
 - ``*_batch`` -- operates on a :class:`~fvdb.GridBatch` with :class:`~fvdb.JaggedTensor` data.
 - ``*_single`` -- operates on a :class:`~fvdb.Grid` with plain :class:`torch.Tensor` data.
+
+The :ref:`Gaussian splatting kernels <functional-gaussian-splatting>` at the end of this page are
+the exception: each is a single flat wrapper over a CUDA kernel.
 
 .. tip::
 
@@ -228,3 +231,75 @@ I/O
 .. autofunction:: save_nanovdb_single
 .. autofunction:: read_nanovdb_metadata
 .. autofunction:: grid_names_in_nanovdb
+
+
+.. _functional-gaussian-splatting:
+
+Gaussian Splatting
+------------------
+
+Flat wrappers over the Gaussian splatting CUDA kernels, one function per kernel entry point. These
+functions do not build an autograd graph. Forward and backward kernels are exposed separately so
+that a downstream package can attach its own :class:`torch.autograd.Function` classes and compose
+the stages into a differentiable pipeline.
+
+Conventions: ``C`` is the number of cameras, ``N`` the number of Gaussians and ``D`` the feature
+channel count. Pixel coordinates have their origin at the top-left corner of the image. Sparse
+variants take ``pixels_to_render`` as a :class:`~fvdb.JaggedTensor` with one ``[P_c, 2]`` list of
+integer ``(row, col)`` coordinates per camera. Camera enums are :class:`~fvdb.CameraModel` and
+:class:`~fvdb.RollingShutterType`.
+
+Projection
+~~~~~~~~~~
+
+.. autofunction:: project_gaussians_analytic_fwd
+.. autofunction:: project_gaussians_analytic_bwd
+.. autofunction:: project_gaussians_analytic_jagged_fwd
+.. autofunction:: project_gaussians_analytic_jagged_bwd
+.. autofunction:: project_gaussians_ut_fwd
+
+Spherical Harmonics
+~~~~~~~~~~~~~~~~~~~
+
+.. autofunction:: evaluate_spherical_harmonics_fwd
+.. autofunction:: evaluate_spherical_harmonics_bwd
+
+Tile Intersection
+~~~~~~~~~~~~~~~~~
+
+.. autofunction:: intersect_gaussian_tiles
+.. autofunction:: intersect_gaussian_tiles_sparse
+.. autofunction:: build_sparse_gaussian_tile_layout
+.. autofunction:: as_pixel_jagged
+
+Rasterization
+~~~~~~~~~~~~~
+
+.. autofunction:: rasterize_screen_space_gaussians_fwd
+.. autofunction:: rasterize_screen_space_gaussians_bwd
+.. autofunction:: rasterize_screen_space_gaussians_sparse_fwd
+.. autofunction:: rasterize_screen_space_gaussians_sparse_bwd
+.. autofunction:: rasterize_world_space_gaussians_fwd
+.. autofunction:: rasterize_world_space_gaussians_bwd
+
+Analysis
+~~~~~~~~
+
+.. autofunction:: rasterize_num_contributing_gaussians
+.. autofunction:: rasterize_num_contributing_gaussians_sparse
+.. autofunction:: rasterize_contributing_gaussian_ids
+.. autofunction:: rasterize_contributing_gaussian_ids_sparse
+.. autofunction:: rasterize_top_contributing_gaussian_ids
+.. autofunction:: rasterize_top_contributing_gaussian_ids_sparse
+
+MCMC Densification
+~~~~~~~~~~~~~~~~~~
+
+.. autofunction:: mcmc_relocate_gaussians
+.. autofunction:: mcmc_add_noise_to_means
+
+PLY I/O
+~~~~~~~
+
+.. autofunction:: save_gaussian_ply
+.. autofunction:: load_gaussian_ply
