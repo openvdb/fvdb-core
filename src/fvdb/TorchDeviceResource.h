@@ -45,17 +45,15 @@ namespace fvdb {
 ///        block to the stream it was keyed to whatever stream the free names, so
 ///        Buffer::set_stream and Buffer::resize with a different stream would free to a stream the
 ///        new work was never ordered against. GridStorage never does either; a buffer whose work
-///        must move to another stream is copied (GridStorage::to). PrivateUse1 is the exception
-///        on both counts: its allocator ignores the stream, which is what lets the
-///        DistributedPointsToGrid builders retarget a result allocated on a DeviceMesh stream
-///        (set_stream) onto the storage stream before the mesh is destroyed. (Keying to torch's
-///        current stream instead, as the deprecated dual-space buffer's resource does, would be
-///        wrong here: it would let a buffer retained on another stream be freed to a stream its
-///        work was never ordered against.)
+///        must move to another stream is copied (GridStorage::to). Keying to torch's current
+///        stream instead would let a buffer retained on another stream be freed to a stream its
+///        work was never ordered against.
 ///
 ///        PrivateUse1, fvdb's unified-memory device for multi-GPU builds, allocates through the
 ///        allocator registered for it; that memory is not stream-ordered and is host- and
-///        device-accessible.
+///        device-accessible. The resource type cannot say so, because it also serves CUDA, so
+///        builders that need host- and device-accessible storage by type use
+///        TorchUnifiedResource and copy into a DeviceGridBuffer.
 ///
 ///        The resource is a cheap value type (a torch::Device), copyable as nanovdb's resource
 ///        concept requires, and default-constructible to the current CUDA device so that
@@ -157,6 +155,52 @@ using DeviceGridBuffer = nanovdb::cuda::Buffer<std::byte, TorchDeviceResource>;
 
 static_assert(nanovdb::BufferHasDeviceSingle<DeviceGridBuffer>::value,
               "DeviceGridBuffer must be a single-space device buffer");
+
+/// @brief Memory resource over the PrivateUse1 allocator, fvdb's unified memory. It declares
+///        host and device accessibility so NanoVDB treats its buffers as both-space storage, as
+///        DistributedPointsToGrid requires: every device in the mesh writes the grid.
+///
+///        Like NanoVDB's ManagedResource it is synchronous, because the allocator is not
+///        stream-ordered. The caller ensures device work on an allocation has finished before
+///        freeing it.
+struct TorchUnifiedResource {
+    static constexpr size_t DEFAULT_ALIGNMENT = TorchResource::DEFAULT_ALIGNMENT;
+    static constexpr bool HOST_ACCESSIBLE     = true;
+    static constexpr bool DEVICE_ACCESSIBLE   = true;
+
+    void *
+    allocate(size_t bytes, size_t /*alignment*/) {
+        void *p = c10::GetAllocator(c10::DeviceType::PrivateUse1)->raw_allocate(bytes);
+        if (!p && bytes) {
+            throw std::runtime_error("fvdb: TorchUnifiedResource::allocate failed");
+        }
+        return p;
+    }
+
+    void
+    deallocate(void *p, size_t /*bytes*/, size_t /*alignment*/) {
+        if (p != nullptr) {
+            c10::GetAllocator(c10::DeviceType::PrivateUse1)->raw_deallocate(p);
+        }
+    }
+
+    /// @brief Stateless, so any two instances are equal.
+    friend bool
+    operator==(const TorchUnifiedResource &, const TorchUnifiedResource &) {
+        return true;
+    }
+    friend bool
+    operator!=(const TorchUnifiedResource &, const TorchUnifiedResource &) {
+        return false;
+    }
+};
+
+/// @brief Byte-addressed both-space buffer over PrivateUse1 unified memory.
+using UnifiedGridBuffer = nanovdb::cuda::Buffer<std::byte, TorchUnifiedResource>;
+
+static_assert(nanovdb::BufferHasHostSingle<UnifiedGridBuffer>::value &&
+                  nanovdb::BufferHasDeviceSingle<UnifiedGridBuffer>::value,
+              "UnifiedGridBuffer must be host- and device-accessible single-space storage");
 
 } // namespace fvdb
 

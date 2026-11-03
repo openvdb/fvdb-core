@@ -10,11 +10,10 @@
 #include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/StreamOrdering.h>
 #include <fvdb/detail/utils/cuda/Utils.cuh>
+#include <fvdb/detail/utils/nanovdb/BuildDistributedGrid.cuh>
 #include <fvdb/detail/utils/nanovdb/DeviceGridHandleUtils.cuh>
 
-#if CCCL_DEVICE_MERGE_SUPPORTED
-#include <nanovdb/tools/cuda/DistributedPointsToGrid.cuh>
-#else
+#if !CCCL_DEVICE_MERGE_SUPPORTED
 #include <nanovdb/tools/cuda/PointsToGrid.cuh>
 #endif
 #include <nanovdb/HostBuffer.h>
@@ -152,15 +151,8 @@ dispatchCreateNanoGridFromIJK<torch::kPrivateUse1>(const JaggedTensor &ijk) {
             int32_t *dataPtr = ijkData.data_ptr<int32_t>() + ijkData.stride(0) * startIdx;
             auto coordPtr    = reinterpret_cast<nanovdb::Coord *>(dataPtr);
 
-            nanovdb::cuda::DeviceMesh mesh;
-            nanovdb::tools::cuda::DistributedPointsToGrid<GridT> converter(mesh);
-            auto handle =
-                converter.getHandle<nanovdb::Coord *, DeviceGridBuffer>(coordPtr, nVoxels, proto);
-            // getHandle allocated the storage on, and synchronized, a stream of `mesh`, which is
-            // destroyed at the end of this iteration. Retain the storage stream instead so the
-            // buffer never names a dead stream.
-            handle.buffer().set_stream(stream);
-            parts.add(GridStorage(std::move(handle), device));
+            parts.add(
+                GridStorage(buildDistributedGrid<GridT>(coordPtr, nVoxels, proto, stream), device));
         }
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     }

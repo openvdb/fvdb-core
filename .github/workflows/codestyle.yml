@@ -127,9 +127,8 @@ jobs:
           test $? -eq 1
 
   # fvdb's grid storage is GridStorage over NanoVDB's single-space cuda::Buffer (#770). The
-  # dual-space buffers NanoVDB is removing (DeviceBuffer, UnifiedBuffer) and fvdb's own
-  # deprecated TorchDeviceBuffer shim must not creep back into the library; the shim's own
-  # files and their build entries are the only places allowed to name them.
+  # dual-space buffers NanoVDB removed (DeviceBuffer, UnifiedBuffer) and fvdb's removed
+  # TorchDeviceBuffer shim must not creep back into the library.
   no-dual-space-buffers:
     name: No dual-space NanoVDB buffers
     runs-on: ubuntu-latest
@@ -140,7 +139,7 @@ jobs:
     - name: test
       run: |
           set +e
-          git grep -n -E 'TorchDeviceBuffer|TorchStorageResource|cuda::DeviceBuffer|cuda::UnifiedBuffer|cuda/DeviceBuffer\.h|cuda/UnifiedBuffer\.h|DualDeviceBuffer|DualUnifiedBuffer' -- 'src/' ':!src/fvdb/TorchDeviceBuffer.h' ':!src/fvdb/TorchDeviceBuffer.cu' ':!src/tests/TorchDeviceBufferTest.cu' ':!src/CMakeLists.txt' ':!src/tests/CMakeLists.txt'
+          git grep -n -E 'TorchDeviceBuffer|TorchStorageResource|cuda::DeviceBuffer|cuda::UnifiedBuffer|cuda/DeviceBuffer\.h|cuda/UnifiedBuffer\.h|DualDeviceBuffer|DualUnifiedBuffer' -- 'src/'
           test $? -eq 1
 
   # env/ holds several conda environments that each pin python, cuda-version and

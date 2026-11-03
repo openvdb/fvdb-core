@@ -6,6 +6,9 @@ fVDB Version History
 - **PyTorch 2.14** fVDB updated to build, test and publish with PyTorch 2.14, CUDA 13.0/13.2 and Python 3.10-3.15
   support. The conda development and test environments move to CUDA 13.4, the CUDA build conda-forge publishes
   PyTorch 2.14 for.
+- **Breaking (C++):** Removed the deprecated `TorchDeviceBuffer` and `TorchStorageResource`. Multi-GPU
+  (PrivateUse1) grid builds now run `DistributedPointsToGrid` into a new `UnifiedGridBuffer` over
+  `TorchUnifiedResource` and copy the result into grid storage, which NanoVDB 14.0's buffer API requires.
 
 ## Version 0.6.0 - September 18, 2026
 
