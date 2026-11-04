@@ -667,6 +667,7 @@ def intersect_gaussian_tiles(
 
     Inputs may be dense (``[C, N, ...]``) or packed (``[M, ...]`` with ``camera_ids``). Passing
     ``conics`` and ``opacities`` enables a tighter per-tile culling test.
+    The multi-GPU backend requires packed ``camera_ids`` to be sorted in nondecreasing order.
 
     Args:
         means2d (torch.Tensor): Projected 2D centers, shape ``[C, N, 2]`` or ``[M, 2]``.
