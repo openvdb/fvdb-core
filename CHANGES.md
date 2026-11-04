@@ -8,7 +8,9 @@ fVDB Version History
   PyTorch 2.14 for.
 - **Breaking (C++):** Removed the deprecated `TorchDeviceBuffer` and `TorchStorageResource`. Multi-GPU
   (PrivateUse1) grid builds now run `DistributedPointsToGrid` into a new `UnifiedGridBuffer` over
-  `TorchUnifiedResource` and copy the result into grid storage, which NanoVDB 14.0's buffer API requires.
+  `TorchUnifiedResource`, as NanoVDB 14.0's buffer API requires. `GridStorage` holds that buffer as a third
+  kind of storage, `UnifiedHandle`, so the build needs no copy. `isDevice()` is true for it, but only
+  `unifiedHandle()` returns it, and `deviceHandle()` throws.
 
 ## Version 0.6.0 - September 18, 2026
 

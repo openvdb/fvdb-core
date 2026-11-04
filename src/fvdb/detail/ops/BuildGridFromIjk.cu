@@ -120,8 +120,7 @@ dispatchCreateNanoGridFromIJK<torch::kPrivateUse1>(const JaggedTensor &ijk) {
     const torch::Device device = ijk.device();
     // Unified-memory storage is not stream-ordered; storageStream(PrivateUse1) is the legacy
     // default stream, which is what the storage retains and what the assembler orders against.
-    const cudaStream_t stream    = storageStream(device);
-    const DeviceGridBuffer proto = GridStorage::deviceProto(device, stream);
+    const cudaStream_t stream = storageStream(device);
 
     // FIXME: This is slow because we have to copy this data to the host and then build the
     // grids. Ideally we want to do this in a single invocation.
@@ -151,8 +150,7 @@ dispatchCreateNanoGridFromIJK<torch::kPrivateUse1>(const JaggedTensor &ijk) {
             int32_t *dataPtr = ijkData.data_ptr<int32_t>() + ijkData.stride(0) * startIdx;
             auto coordPtr    = reinterpret_cast<nanovdb::Coord *>(dataPtr);
 
-            parts.add(
-                GridStorage(buildDistributedGrid<GridT>(coordPtr, nVoxels, proto, stream), device));
+            parts.add(GridStorage(buildDistributedGrid<GridT>(coordPtr, nVoxels), device));
         }
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     }

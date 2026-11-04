@@ -53,7 +53,7 @@ namespace fvdb {
 ///        allocator registered for it; that memory is not stream-ordered and is host- and
 ///        device-accessible. The resource type cannot say so, because it also serves CUDA, so
 ///        builders that need host- and device-accessible storage by type use
-///        TorchUnifiedResource and copy into a DeviceGridBuffer.
+///        TorchUnifiedResource, which GridStorage holds as a UnifiedHandle.
 ///
 ///        The resource is a cheap value type (a torch::Device), copyable as nanovdb's resource
 ///        concept requires, and default-constructible to the current CUDA device so that

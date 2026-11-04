@@ -208,8 +208,7 @@ dispatchCreateNanoGridFromDense<torch::kPrivateUse1>(int64_t batchSize,
 
     // Unified-memory storage is not stream-ordered; storageStream(PrivateUse1) is the legacy
     // default stream, which is what the storage retains and what the assembler orders against.
-    const cudaStream_t stream    = storageStream(device);
-    const DeviceGridBuffer proto = GridStorage::deviceProto(device, stream);
+    const cudaStream_t stream = storageStream(device);
 
     // Every batch item is the same dense box, so build the grid once and copy it for the remaining
     // items instead of re-running DistributedPointsToGrid over the identical coordinate list: the
@@ -223,8 +222,7 @@ dispatchCreateNanoGridFromDense<torch::kPrivateUse1>(int64_t batchSize,
             int32_t *dataPtr = ijkData.data_ptr<int32_t>();
             auto coordPtr    = reinterpret_cast<nanovdb::Coord *>(dataPtr);
 
-            parts.add(
-                GridStorage(buildDistributedGrid<GridT>(coordPtr, nVoxels, proto, stream), device));
+            parts.add(GridStorage(buildDistributedGrid<GridT>(coordPtr, nVoxels), device));
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         } else {
             parts.addRepeat(0);
