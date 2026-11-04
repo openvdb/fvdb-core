@@ -18,11 +18,47 @@
 #include <cuda/std/tuple>
 
 #include <cstdint>
+#include <type_traits>
 
 namespace fvdb::detail::ops {
 
 /// Opacity threshold used by 3DGS alpha compositing.
 constexpr __device__ float kAlphaThreshold = 0.99f;
+
+/// Number of feature channels each rasterization pass holds in registers.
+constexpr uint32_t kRasterChannelChunk = 64;
+
+/// Largest channel remainder that joins the last full chunk instead of taking its own pass.
+constexpr uint32_t kRasterMaxFoldedRemainder = 8;
+
+/// Number of channels a per-channel loop unrolls when it keeps no per-channel state.
+template <uint32_t NUM_CHANNELS>
+constexpr uint32_t kRasterChannelUnroll =
+    NUM_CHANNELS < kRasterChannelChunk ? NUM_CHANNELS : kRasterChannelChunk;
+
+/// Split NUM_CHANNELS into register-resident chunks and call
+/// `fn(std::integral_constant<uint32_t, WIDTH>{}, channelStart)` once per chunk, in order.
+///
+/// Every chunk has a compile-time width, so per-channel arrays stay in registers and need no
+/// tail predicates. Full chunks are kRasterChannelChunk wide. A remainder of at most
+/// kRasterMaxFoldedRemainder channels widens the last full chunk; a larger one gets its own pass.
+template <uint32_t NUM_CHANNELS, typename Fn>
+inline __device__ void
+forEachRasterChannelChunk(Fn &&fn) {
+    constexpr uint32_t CHUNK = kRasterChannelChunk;
+    constexpr uint32_t REM   = NUM_CHANNELS % CHUNK;
+    constexpr bool FOLD_REM  = NUM_CHANNELS > CHUNK && REM != 0 && REM <= kRasterMaxFoldedRemainder;
+    constexpr uint32_t NUM_FULL = NUM_CHANNELS / CHUNK - (FOLD_REM ? 1 : 0);
+    constexpr uint32_t TAIL     = FOLD_REM ? CHUNK + REM : REM;
+
+#pragma unroll 1
+    for (uint32_t chunk = 0; chunk < NUM_FULL; ++chunk) {
+        fn(std::integral_constant<uint32_t, CHUNK>{}, chunk * CHUNK);
+    }
+    if constexpr (TAIL != 0) {
+        fn(std::integral_constant<uint32_t, TAIL>{}, NUM_FULL * CHUNK);
+    }
+}
 
 /// Common dense-tile rasterization arguments shared by from-world forward/backward kernels.
 struct RasterizeFromWorldCommonArgs {
