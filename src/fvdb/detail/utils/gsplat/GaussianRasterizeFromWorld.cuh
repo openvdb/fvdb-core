@@ -51,9 +51,12 @@ forEachRasterChannelChunk(Fn &&fn) {
     constexpr uint32_t NUM_FULL = NUM_CHANNELS / CHUNK - (FOLD_REM ? 1 : 0);
     constexpr uint32_t TAIL     = FOLD_REM ? CHUNK + REM : REM;
 
+    // Guarded so a zero trip count never emits `chunk < 0`, which older nvcc rejects (#186-D).
+    if constexpr (NUM_FULL != 0) {
 #pragma unroll 1
-    for (uint32_t chunk = 0; chunk < NUM_FULL; ++chunk) {
-        fn(std::integral_constant<uint32_t, CHUNK>{}, chunk * CHUNK);
+        for (uint32_t chunk = 0; chunk < NUM_FULL; ++chunk) {
+            fn(std::integral_constant<uint32_t, CHUNK>{}, chunk * CHUNK);
+        }
     }
     if constexpr (TAIL != 0) {
         fn(std::integral_constant<uint32_t, TAIL>{}, NUM_FULL * CHUNK);
