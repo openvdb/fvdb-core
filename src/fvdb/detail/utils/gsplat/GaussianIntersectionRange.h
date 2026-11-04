@@ -6,7 +6,8 @@
 
 #include <c10/macros/Macros.h>
 
-#include <cuda/std/algorithm>
+#include <thrust/binary_search.h>
+#include <thrust/execution_policy.h>
 
 #include <cstdint>
 
@@ -35,8 +36,9 @@ gaussianRangeForTileKeys(const int64_t keyStart,
     if (cameraJIdx == nullptr) {
         return {cameraStart * numGaussians, (cameraEnd - cameraStart) * numGaussians};
     }
-    const auto begin = cuda::std::lower_bound(cameraJIdx, cameraJIdx + numGaussians, cameraStart);
-    const auto end   = cuda::std::lower_bound(begin, cameraJIdx + numGaussians, cameraEnd);
+    const auto begin =
+        thrust::lower_bound(thrust::seq, cameraJIdx, cameraJIdx + numGaussians, cameraStart);
+    const auto end = thrust::lower_bound(thrust::seq, begin, cameraJIdx + numGaussians, cameraEnd);
     return {static_cast<uint32_t>(begin - cameraJIdx), static_cast<uint32_t>(end - begin)};
 }
 
