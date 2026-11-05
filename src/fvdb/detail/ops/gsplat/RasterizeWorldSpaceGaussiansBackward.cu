@@ -29,7 +29,7 @@ namespace cg = cooperative_groups;
 
 namespace {
 
-template <uint32_t NUM_CHANNELS> struct SharedGaussian {
+struct SharedGaussian {
     int32_t id;                       // flattened id in [0, C*N)
     nanovdb::math::Vec3<float> mean;  // world mean
     nanovdb::math::Vec4<float> quat;  // wxyz
@@ -104,42 +104,20 @@ rasterizeFromWorld3DGSBackwardKernel(
     // Forward state for this pixel.
     int32_t lastIntersectionOffset = -1;
     float T_final                  = 1.0f;
-    float T                        = 1.0f;
-
-    float v_render_c[NUM_CHANNELS];
-#pragma unroll
-    for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
-        v_render_c[k] = 0.f;
-    }
-    float v_render_a = 0.f;
-
+    float v_render_a               = 0.f;
     if (done) {
         lastIntersectionOffset = args.lastIds[camId][row][col];
-
-        const float alphaFinal = args.renderedAlphas[camId][row][col][0];
-        T_final                = 1.0f - alphaFinal;
-        T                      = T_final;
-
-#pragma unroll
-        for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
-            v_render_c[k] = args.dLossDRenderedFeatures[camId][row][col][k];
-        }
-        v_render_a = args.dLossDRenderedAlphas[camId][row][col][0];
-    }
-
-    float buffer[NUM_CHANNELS];
-#pragma unroll
-    for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
-        buffer[k] = 0.f;
+        T_final                = 1.0f - args.renderedAlphas[camId][row][col][0];
+        v_render_a             = args.dLossDRenderedAlphas[camId][row][col][0];
     }
 
     // Shared memory for gaussian batches (after camera-op shared state).
     uintptr_t gaussAddr = smemAddr + cameraLocal.numSharedMemBytes();
     gaussAddr           = alignUpAddress(gaussAddr, alignof(int32_t));
-    int32_t *idBatch    = reinterpret_cast<int32_t *>(gaussAddr);               // [blockSize]
+    int32_t *idBatch    = reinterpret_cast<int32_t *>(gaussAddr); // [blockSize]
     gaussAddr += static_cast<size_t>(blockSize) * sizeof(int32_t);
-    gaussAddr    = alignUpAddress(gaussAddr, alignof(SharedGaussian<NUM_CHANNELS>));
-    auto *gBatch = reinterpret_cast<SharedGaussian<NUM_CHANNELS> *>(gaussAddr); // [blockSize]
+    gaussAddr    = alignUpAddress(gaussAddr, alignof(SharedGaussian));
+    auto *gBatch = reinterpret_cast<SharedGaussian *>(gaussAddr); // [blockSize]
 
     const uint32_t threadRank      = block.thread_rank();
     cg::thread_block_tile<32> warp = cg::tiled_partition<32>(block);
@@ -151,235 +129,248 @@ rasterizeFromWorld3DGSBackwardKernel(
     const int32_t lastIntersectionOffsetInWarp =
         cg::reduce(warp, lastIntersectionOffset, cg::greater<int32_t>());
 
-    for (int64_t b = 0; b < nBatches; ++b) {
-        block.sync();
-        const int64_t batchEndOffset = nIsects - 1 - blockSize * b;
-        const int64_t remaining      = batchEndOffset + 1;
-        const uint32_t batchSize =
-            static_cast<uint32_t>(remaining < blockSize ? remaining : blockSize);
-        const int64_t idx = rangeStart + batchEndOffset - threadRank;
+    // Each channel chunk re-traverses the tile's Gaussians back to front with only its own
+    // channels in registers. dL/dalpha is a sum over channels, and the geometry VJP is linear in
+    // it, so each chunk adds the geometry gradient of its own share of dL/dalpha.
+    forEachRasterChannelChunk<NUM_CHANNELS>([&](auto width, const uint32_t channelStart) {
+        constexpr uint32_t W = decltype(width)::value;
 
-        if (idx >= rangeStart) {
-            const int32_t flatId = common.tileGaussianIds[idx];
-            idBatch[threadRank]  = flatId;
-            const int32_t gid    = flatId % (int32_t)common.means.size(0);
-            const int32_t cid    = flatId / (int32_t)common.means.size(0);
-
-            const nanovdb::math::Vec3<float> mean_w(
-                common.means[gid][0], common.means[gid][1], common.means[gid][2]);
-            const nanovdb::math::Vec4<float> quat_wxyz(common.quats[gid][0],
-                                                       common.quats[gid][1],
-                                                       common.quats[gid][2],
-                                                       common.quats[gid][3]);
-            const nanovdb::math::Vec3<float> scale(__expf(common.logScales[gid][0]),
-                                                   __expf(common.logScales[gid][1]),
-                                                   __expf(common.logScales[gid][2]));
-            const nanovdb::math::Mat3<float> isclR = computeIsclRot<float>(quat_wxyz, scale);
-            const float op                         = common.opacities[cid][gid];
-
-            gBatch[threadRank].id      = flatId;
-            gBatch[threadRank].mean    = mean_w;
-            gBatch[threadRank].quat    = quat_wxyz;
-            gBatch[threadRank].scale   = scale;
-            gBatch[threadRank].isclR   = isclR;
-            gBatch[threadRank].opacity = op;
+        float v_render_c[W];
+#pragma unroll
+        for (uint32_t k = 0; k < W; ++k) {
+            v_render_c[k] =
+                done ? args.dLossDRenderedFeatures[camId][row][col][channelStart + k] : 0.f;
         }
 
-        block.sync();
+        // Per-pixel part of dL/dalpha from the background and the rendered alpha. The alpha
+        // term is not per channel, so only the first chunk adds it.
+        float bgDot = 0.f;
+        if (common.backgrounds != nullptr) {
+#pragma unroll
+            for (uint32_t k = 0; k < W; ++k) {
+                bgDot += common.backgroundValue(camId, channelStart + k) * v_render_c[k];
+            }
+        }
+        const float v_alpha_tail = (channelStart == 0 ? v_render_a : 0.f) - bgDot;
 
-        // Process gaussians in this batch, from back-to-front.
-        const int64_t startT64 = batchEndOffset > lastIntersectionOffsetInWarp
-                                     ? batchEndOffset - lastIntersectionOffsetInWarp
-                                     : 0;
-        const uint32_t startT  = startT64 < batchSize ? static_cast<uint32_t>(startT64) : batchSize;
-        for (uint32_t t = startT; t < batchSize; ++t) {
-            bool valid = done;
-            if (batchEndOffset - t > lastIntersectionOffset) {
-                valid = false;
+        // Sum over the Gaussians behind the current one of fac * (features . v_render_c).
+        float bufferDot = 0.f;
+        float T         = T_final;
+
+        for (int64_t b = 0; b < nBatches; ++b) {
+            block.sync();
+            const int64_t batchEndOffset = nIsects - 1 - blockSize * b;
+            const int64_t remaining      = batchEndOffset + 1;
+            const uint32_t batchSize =
+                static_cast<uint32_t>(remaining < blockSize ? remaining : blockSize);
+            const int64_t idx = rangeStart + batchEndOffset - threadRank;
+
+            if (idx >= rangeStart) {
+                const int32_t flatId = common.tileGaussianIds[idx];
+                idBatch[threadRank]  = flatId;
+                const int32_t gid    = flatId % (int32_t)common.means.size(0);
+                const int32_t cid    = flatId / (int32_t)common.means.size(0);
+
+                const nanovdb::math::Vec3<float> mean_w(
+                    common.means[gid][0], common.means[gid][1], common.means[gid][2]);
+                const nanovdb::math::Vec4<float> quat_wxyz(common.quats[gid][0],
+                                                           common.quats[gid][1],
+                                                           common.quats[gid][2],
+                                                           common.quats[gid][3]);
+                const nanovdb::math::Vec3<float> scale(__expf(common.logScales[gid][0]),
+                                                       __expf(common.logScales[gid][1]),
+                                                       __expf(common.logScales[gid][2]));
+                const nanovdb::math::Mat3<float> isclR = computeIsclRot<float>(quat_wxyz, scale);
+                const float op                         = common.opacities[cid][gid];
+
+                gBatch[threadRank].id      = flatId;
+                gBatch[threadRank].mean    = mean_w;
+                gBatch[threadRank].quat    = quat_wxyz;
+                gBatch[threadRank].scale   = scale;
+                gBatch[threadRank].isclR   = isclR;
+                gBatch[threadRank].opacity = op;
             }
 
-            float alpha = 0.f;
-            float opac  = 0.f;
-            float vis   = 0.f;
+            block.sync();
 
-            nanovdb::math::Vec3<float> mean_w(0.f);
-            nanovdb::math::Vec4<float> quat_wxyz(1.f, 0.f, 0.f, 0.f);
-            nanovdb::math::Vec3<float> scale(1.f);
-            nanovdb::math::Mat3<float> Mt;
-            nanovdb::math::Vec3<float> o_minus_mu(0.f);
-            nanovdb::math::Vec3<float> gro(0.f), grd(0.f), grd_n(0.f), gcrod(0.f);
-            float grayDist = 0.f;
-
-            if (valid) {
-                const SharedGaussian<NUM_CHANNELS> g = gBatch[t];
-                mean_w                               = g.mean;
-                quat_wxyz                            = g.quat;
-                scale                                = g.scale;
-                Mt                                   = g.isclR;
-                opac                                 = g.opacity;
-
-                o_minus_mu        = ray.eye() - mean_w;
-                gro               = Mt * o_minus_mu;
-                grd               = Mt * ray.dir();
-                grd_n             = fvdb::detail::ops::normalizeSafe<float>(grd);
-                gcrod             = grd_n.cross(gro);
-                grayDist          = gcrod.dot(gcrod);
-                const float power = -0.5f * grayDist;
-                vis               = __expf(power);
-                alpha             = min(kAlphaThreshold, opac * vis);
-                if (power > 0.f || alpha < 1.f / 255.f) {
+            // Process gaussians in this batch, from back-to-front.
+            const int64_t startT64 = batchEndOffset > lastIntersectionOffsetInWarp
+                                         ? batchEndOffset - lastIntersectionOffsetInWarp
+                                         : 0;
+            const uint32_t startT =
+                startT64 < batchSize ? static_cast<uint32_t>(startT64) : batchSize;
+            for (uint32_t t = startT; t < batchSize; ++t) {
+                bool valid = done;
+                if (batchEndOffset - t > lastIntersectionOffset) {
                     valid = false;
                 }
-            }
 
-            if (!warp.any(valid)) {
-                continue;
-            }
+                float alpha = 0.f;
+                float opac  = 0.f;
+                float vis   = 0.f;
 
-            float v_feat_local[NUM_CHANNELS];
-#pragma unroll
-            for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
-                v_feat_local[k] = 0.f;
-            }
+                nanovdb::math::Vec3<float> mean_w(0.f);
+                nanovdb::math::Vec4<float> quat_wxyz(1.f, 0.f, 0.f, 0.f);
+                nanovdb::math::Vec3<float> scale(1.f);
+                nanovdb::math::Mat3<float> Mt;
+                nanovdb::math::Vec3<float> o_minus_mu(0.f);
+                nanovdb::math::Vec3<float> gro(0.f), grd(0.f), grd_n(0.f), gcrod(0.f);
+                float grayDist = 0.f;
 
-            nanovdb::math::Vec3<float> v_mean_local(0.f);
-            float v_quat_local[4] = {0.f, 0.f, 0.f, 0.f};
-            nanovdb::math::Vec3<float> v_logscale_local(0.f);
-            float v_opacity_local = 0.f;
+                if (valid) {
+                    const SharedGaussian g = gBatch[t];
+                    mean_w                 = g.mean;
+                    quat_wxyz              = g.quat;
+                    scale                  = g.scale;
+                    Mt                     = g.isclR;
+                    opac                   = g.opacity;
 
-            if (valid) {
-                const float ra = 1.0f / (1.0f - alpha);
-                T *= ra;
-
-                const float fac = alpha * T;
-#pragma unroll
-                for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
-                    v_feat_local[k] = fac * v_render_c[k];
-                }
-
-                // v_alpha accumulation
-                float v_alpha        = 0.f;
-                const int32_t flatId = idBatch[t];
-                const int32_t cid    = flatId / (int32_t)common.means.size(0);
-                const int32_t gid    = flatId % (int32_t)common.means.size(0);
-
-#pragma unroll
-                for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
-                    const float c = common.features[cid][gid][k];
-                    v_alpha += (c * T - buffer[k] * ra) * v_render_c[k];
-                }
-
-                v_alpha += T_final * ra * v_render_a;
-
-                if (common.backgrounds != nullptr) {
-                    float accum = 0.f;
-#pragma unroll
-                    for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
-                        accum += common.backgroundValue(camId, k) * v_render_c[k];
+                    o_minus_mu        = ray.eye() - mean_w;
+                    gro               = Mt * o_minus_mu;
+                    grd               = Mt * ray.dir();
+                    grd_n             = fvdb::detail::ops::normalizeSafe<float>(grd);
+                    gcrod             = grd_n.cross(gro);
+                    grayDist          = gcrod.dot(gcrod);
+                    const float power = -0.5f * grayDist;
+                    vis               = __expf(power);
+                    alpha             = min(kAlphaThreshold, opac * vis);
+                    if (power > 0.f || alpha < 1.f / 255.f) {
+                        valid = false;
                     }
-                    v_alpha += -T_final * ra * accum;
                 }
 
-                if (opac * vis <= kAlphaThreshold) {
-                    const float v_vis                        = opac * v_alpha;
-                    const float v_gradDist                   = -0.5f * vis * v_vis;
-                    const nanovdb::math::Vec3<float> v_gcrod = 2.0f * v_gradDist * gcrod;
-                    const nanovdb::math::Vec3<float> v_grd_n = -(v_gcrod.cross(gro));
-                    const nanovdb::math::Vec3<float> v_gro   = v_gcrod.cross(grd_n);
-
-                    const nanovdb::math::Vec3<float> v_grd = normalizeSafeVJP<float>(grd, v_grd_n);
-
-                    // v_Mt = outer(v_grd, ray.dir) + outer(v_gro, (ray.eye() - mean))
-                    const nanovdb::math::Vec3<float> rayDir = ray.dir();
-                    nanovdb::math::Mat3<float> v_Mt =
-                        nanovdb::math::Mat3<float>(v_grd[0] * rayDir[0],
-                                                   v_grd[0] * rayDir[1],
-                                                   v_grd[0] * rayDir[2],
-                                                   v_grd[1] * rayDir[0],
-                                                   v_grd[1] * rayDir[1],
-                                                   v_grd[1] * rayDir[2],
-                                                   v_grd[2] * rayDir[0],
-                                                   v_grd[2] * rayDir[1],
-                                                   v_grd[2] * rayDir[2]);
-                    v_Mt += nanovdb::math::Mat3<float>(v_gro[0] * o_minus_mu[0],
-                                                       v_gro[0] * o_minus_mu[1],
-                                                       v_gro[0] * o_minus_mu[2],
-                                                       v_gro[1] * o_minus_mu[0],
-                                                       v_gro[1] * o_minus_mu[1],
-                                                       v_gro[1] * o_minus_mu[2],
-                                                       v_gro[2] * o_minus_mu[0],
-                                                       v_gro[2] * o_minus_mu[1],
-                                                       v_gro[2] * o_minus_mu[2]);
-
-                    const nanovdb::math::Vec3<float> v_o_minus_mu = Mt.transpose() * v_gro;
-                    v_mean_local += -v_o_minus_mu;
-
-                    nanovdb::math::Vec4<float> dQuat(0.f);
-                    nanovdb::math::Vec3<float> dLogScale(0.f);
-                    isclRotVectorJacobianProduct<float>(quat_wxyz, scale, v_Mt, dQuat, dLogScale);
-                    v_quat_local[0] += dQuat[0];
-                    v_quat_local[1] += dQuat[1];
-                    v_quat_local[2] += dQuat[2];
-                    v_quat_local[3] += dQuat[3];
-                    v_logscale_local += dLogScale;
-
-                    v_opacity_local = vis * v_alpha;
+                if (!warp.any(valid)) {
+                    continue;
                 }
 
-                // buffer update
+                float v_feat_local[W];
 #pragma unroll
-                for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
+                for (uint32_t k = 0; k < W; ++k) {
+                    v_feat_local[k] = 0.f;
+                }
+
+                nanovdb::math::Vec3<float> v_mean_local(0.f);
+                float v_quat_local[4] = {0.f, 0.f, 0.f, 0.f};
+                nanovdb::math::Vec3<float> v_logscale_local(0.f);
+                float v_opacity_local = 0.f;
+
+                if (valid) {
+                    const float ra = 1.0f / (1.0f - alpha);
+                    T *= ra;
+
+                    const float fac      = alpha * T;
                     const int32_t flatId = idBatch[t];
                     const int32_t cid    = flatId / (int32_t)common.means.size(0);
                     const int32_t gid    = flatId % (int32_t)common.means.size(0);
-                    buffer[k] += common.features[cid][gid][k] * fac;
-                }
-            }
 
-            // Warp-reduce and atomic add once per gaussian per warp.
-            warpSumMut(v_opacity_local, warp);
-            warpSumMut(v_mean_local, warp);
-            warpSumMut<4>(v_quat_local, warp);
-            warpSumMut(v_logscale_local, warp);
-            warpSumMut<NUM_CHANNELS>(v_feat_local, warp);
-
-            if (warp.thread_rank() == 0) {
-                const int32_t flatId = idBatch[t];
-                const int32_t cid    = flatId / (int32_t)common.means.size(0);
-                const int32_t gid    = flatId % (int32_t)common.means.size(0);
-
-                // Per-camera grads
-                float *dFeaturesGaussianPtr = args.dFeatures.data() +
-                                              cid * args.dFeatures.stride(0) +
-                                              gid * args.dFeatures.stride(1);
+                    float featDot = 0.f;
 #pragma unroll
-                for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
-                    atomicAdd(dFeaturesGaussianPtr + k * args.dFeatures.stride(2), v_feat_local[k]);
+                    for (uint32_t k = 0; k < W; ++k) {
+                        v_feat_local[k] = fac * v_render_c[k];
+                        featDot += common.features[cid][gid][channelStart + k] * v_render_c[k];
+                    }
+
+                    const float v_alpha =
+                        featDot * T - bufferDot * ra + T_final * ra * v_alpha_tail;
+
+                    if (opac * vis <= kAlphaThreshold) {
+                        const float v_vis                        = opac * v_alpha;
+                        const float v_gradDist                   = -0.5f * vis * v_vis;
+                        const nanovdb::math::Vec3<float> v_gcrod = 2.0f * v_gradDist * gcrod;
+                        const nanovdb::math::Vec3<float> v_grd_n = -(v_gcrod.cross(gro));
+                        const nanovdb::math::Vec3<float> v_gro   = v_gcrod.cross(grd_n);
+
+                        const nanovdb::math::Vec3<float> v_grd =
+                            normalizeSafeVJP<float>(grd, v_grd_n);
+
+                        // v_Mt = outer(v_grd, ray.dir) + outer(v_gro, (ray.eye() - mean))
+                        const nanovdb::math::Vec3<float> rayDir = ray.dir();
+                        nanovdb::math::Mat3<float> v_Mt =
+                            nanovdb::math::Mat3<float>(v_grd[0] * rayDir[0],
+                                                       v_grd[0] * rayDir[1],
+                                                       v_grd[0] * rayDir[2],
+                                                       v_grd[1] * rayDir[0],
+                                                       v_grd[1] * rayDir[1],
+                                                       v_grd[1] * rayDir[2],
+                                                       v_grd[2] * rayDir[0],
+                                                       v_grd[2] * rayDir[1],
+                                                       v_grd[2] * rayDir[2]);
+                        v_Mt += nanovdb::math::Mat3<float>(v_gro[0] * o_minus_mu[0],
+                                                           v_gro[0] * o_minus_mu[1],
+                                                           v_gro[0] * o_minus_mu[2],
+                                                           v_gro[1] * o_minus_mu[0],
+                                                           v_gro[1] * o_minus_mu[1],
+                                                           v_gro[1] * o_minus_mu[2],
+                                                           v_gro[2] * o_minus_mu[0],
+                                                           v_gro[2] * o_minus_mu[1],
+                                                           v_gro[2] * o_minus_mu[2]);
+
+                        const nanovdb::math::Vec3<float> v_o_minus_mu = Mt.transpose() * v_gro;
+                        v_mean_local += -v_o_minus_mu;
+
+                        nanovdb::math::Vec4<float> dQuat(0.f);
+                        nanovdb::math::Vec3<float> dLogScale(0.f);
+                        isclRotVectorJacobianProduct<float>(
+                            quat_wxyz, scale, v_Mt, dQuat, dLogScale);
+                        v_quat_local[0] += dQuat[0];
+                        v_quat_local[1] += dQuat[1];
+                        v_quat_local[2] += dQuat[2];
+                        v_quat_local[3] += dQuat[3];
+                        v_logscale_local += dLogScale;
+
+                        v_opacity_local = vis * v_alpha;
+                    }
+
+                    bufferDot += featDot * fac;
                 }
-                float *dOpacityGaussianPtr = args.dOpacities.data() +
-                                             cid * args.dOpacities.stride(0) +
-                                             gid * args.dOpacities.stride(1);
-                atomicAdd(dOpacityGaussianPtr, v_opacity_local);
 
-                // Geometry grads (shared across cameras)
-                float *dMeansPtr = args.dMeans.data() + gid * args.dMeans.stride(0);
-                atomicAdd(dMeansPtr + 0 * args.dMeans.stride(1), v_mean_local[0]);
-                atomicAdd(dMeansPtr + 1 * args.dMeans.stride(1), v_mean_local[1]);
-                atomicAdd(dMeansPtr + 2 * args.dMeans.stride(1), v_mean_local[2]);
+                // Warp-reduce and atomic add once per gaussian per warp.
+                warpSumMut(v_opacity_local, warp);
+                warpSumMut(v_mean_local, warp);
+                warpSumMut<4>(v_quat_local, warp);
+                warpSumMut(v_logscale_local, warp);
+                warpSumMut<W>(v_feat_local, warp);
 
-                float *dQuatsPtr = args.dQuats.data() + gid * args.dQuats.stride(0);
-                atomicAdd(dQuatsPtr + 0 * args.dQuats.stride(1), v_quat_local[0]);
-                atomicAdd(dQuatsPtr + 1 * args.dQuats.stride(1), v_quat_local[1]);
-                atomicAdd(dQuatsPtr + 2 * args.dQuats.stride(1), v_quat_local[2]);
-                atomicAdd(dQuatsPtr + 3 * args.dQuats.stride(1), v_quat_local[3]);
+                if (warp.thread_rank() == 0) {
+                    const int32_t flatId = idBatch[t];
+                    const int32_t cid    = flatId / (int32_t)common.means.size(0);
+                    const int32_t gid    = flatId % (int32_t)common.means.size(0);
 
-                float *dLogScalesPtr = args.dLogScales.data() + gid * args.dLogScales.stride(0);
-                atomicAdd(dLogScalesPtr + 0 * args.dLogScales.stride(1), v_logscale_local[0]);
-                atomicAdd(dLogScalesPtr + 1 * args.dLogScales.stride(1), v_logscale_local[1]);
-                atomicAdd(dLogScalesPtr + 2 * args.dLogScales.stride(1), v_logscale_local[2]);
+                    // Per-camera grads
+                    float *dFeaturesGaussianPtr = args.dFeatures.data() +
+                                                  cid * args.dFeatures.stride(0) +
+                                                  gid * args.dFeatures.stride(1);
+#pragma unroll
+                    for (uint32_t k = 0; k < W; ++k) {
+                        atomicAdd(dFeaturesGaussianPtr +
+                                      (channelStart + k) * args.dFeatures.stride(2),
+                                  v_feat_local[k]);
+                    }
+                    float *dOpacityGaussianPtr = args.dOpacities.data() +
+                                                 cid * args.dOpacities.stride(0) +
+                                                 gid * args.dOpacities.stride(1);
+                    atomicAdd(dOpacityGaussianPtr, v_opacity_local);
+
+                    // Geometry grads (shared across cameras)
+                    float *dMeansPtr = args.dMeans.data() + gid * args.dMeans.stride(0);
+                    atomicAdd(dMeansPtr + 0 * args.dMeans.stride(1), v_mean_local[0]);
+                    atomicAdd(dMeansPtr + 1 * args.dMeans.stride(1), v_mean_local[1]);
+                    atomicAdd(dMeansPtr + 2 * args.dMeans.stride(1), v_mean_local[2]);
+
+                    float *dQuatsPtr = args.dQuats.data() + gid * args.dQuats.stride(0);
+                    atomicAdd(dQuatsPtr + 0 * args.dQuats.stride(1), v_quat_local[0]);
+                    atomicAdd(dQuatsPtr + 1 * args.dQuats.stride(1), v_quat_local[1]);
+                    atomicAdd(dQuatsPtr + 2 * args.dQuats.stride(1), v_quat_local[2]);
+                    atomicAdd(dQuatsPtr + 3 * args.dQuats.stride(1), v_quat_local[3]);
+
+                    float *dLogScalesPtr = args.dLogScales.data() + gid * args.dLogScales.stride(0);
+                    atomicAdd(dLogScalesPtr + 0 * args.dLogScales.stride(1), v_logscale_local[0]);
+                    atomicAdd(dLogScalesPtr + 1 * args.dLogScales.stride(1), v_logscale_local[1]);
+                    atomicAdd(dLogScalesPtr + 2 * args.dLogScales.stride(1), v_logscale_local[2]);
+                }
             }
         }
-    }
+    });
 }
 
 template <uint32_t NUM_CHANNELS, typename Camera>
@@ -447,8 +438,7 @@ launchBackwardKernel(const torch::Tensor &means,
     const size_t blockSize = (size_t)tileSize * (size_t)tileSize;
     size_t sharedMem       = (alignof(nanovdb::math::Mat3<float>) - 1) + camera.numSharedMemBytes();
     sharedMem += (alignof(int32_t) - 1) + blockSize * sizeof(int32_t);
-    sharedMem += (alignof(SharedGaussian<NUM_CHANNELS>) - 1) +
-                 blockSize * sizeof(SharedGaussian<NUM_CHANNELS>);
+    sharedMem += (alignof(SharedGaussian) - 1) + blockSize * sizeof(SharedGaussian);
 
     RasterizeFromWorldBackwardArgs<NUM_CHANNELS, Camera> kernelArgs{
         args,
