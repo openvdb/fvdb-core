@@ -138,8 +138,8 @@ paddedIJKForGrid(const GridBatchData &batchHdl, const nanovdb::CoordBBox &bbox) 
         forEachVoxelPrivateUse1(1, batchHdl, cb);
     }
 
-    return JaggedTensor::from_data_offsets_and_list_ids(
-        outIJK, batchHdl.voxelOffsets() * totalPadAmount, batchHdl.jlidx());
+    return JaggedTensor::from_data_offsets_and_list_ids_unsafe(
+        outIJK, batchHdl.voxelOffsets() * totalPadAmount, batchHdl.jlidx(), batchHdl.batchSize());
 }
 
 GridStorage

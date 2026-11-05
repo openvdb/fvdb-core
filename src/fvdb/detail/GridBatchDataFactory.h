@@ -19,7 +19,7 @@ namespace detail {
 GridBatchData::GridMetadata *allocateHostGridMetadata(int64_t batchSize);
 void freeHostGridMetadata(GridBatchData::GridMetadata *ptr);
 GridBatchData::GridMetadata *allocateDeviceGridMetadata(torch::Device device, int64_t batchSize);
-void freeDeviceGridMetadata(torch::Device device, GridBatchData::GridMetadata *ptr);
+void freeDeviceGridMetadata(GridBatchData::GridMetadata *ptr);
 GridBatchData::GridMetadata *allocateUnifiedMemoryGridMetadata(int64_t batchSize);
 void freeUnifiedMemoryGridMetadata(GridBatchData::GridMetadata *ptr);
 

@@ -28,11 +28,17 @@ The following is a matrix of the versions of software that we :ref:`test and dis
      - Python Version
      - CUDA Version
      - Vulkan Version (only for visualization)
-   * - 0.6
+   * - 0.7 (pre-release, nightly wheels only)
      - Linux Only
      - |torch_full_version|
      - |python_range|
      - |cuda_versions|
+     - 1.3.275.0
+   * - 0.6
+     - Linux Only
+     - 2.13.0
+     - 3.10 - 3.15
+     - 13.0, 13.2
      - 1.3.275.0
    * - 0.5
      - Linux Only
@@ -142,13 +148,17 @@ only the GPU architecture present on this machine:
 
    ./docker/build_wheel.py --python 3.11 --torch 2.11.0 --cuda 13.0 --cuda-arch-list native
 
+``--python`` also takes a comma-separated list, such as ``--python 3.11,3.12,3.13``. The script
+then compiles the CUDA library once and builds one wheel per Python version, which is much faster
+than running it once per version.
+
 The set of valid PyTorch/CUDA/Python combinations is determined by which wheels
 PyTorch publishes on `download.pytorch.org <https://download.pytorch.org/whl/>`_
 (the human-readable summary is on the `PyTorch get-started page
 <https://pytorch.org/get-started/locally/>`_). Before starting the Docker build,
 the script consults that package index and exits early with the list of
 available alternatives if no PyTorch wheel exists for the requested
-combination — for example, requesting ``--torch 2.13.0 --cuda 12.8`` will
+combination — for example, requesting ``--torch 2.14.1 --cuda 12.8`` will
 report the PyTorch versions actually published for CUDA 12.8. If the index
 cannot be reached (for example, when building offline), the check is skipped
 with a warning and an invalid combination will instead fail during the build's
@@ -230,7 +240,7 @@ Notes on Testing, Compatibility, and Distribution
 --------------------------------------------------
 An fvdb-core minor release is tested against the current stable minor version of PyTorch at the time of release and the latest two minor versions of CUDA compatible with that release from `PyTorch's release compatibility matrix <https://github.com/pytorch/pytorch/blob/main/RELEASE.md#release-compatibility-matrix>`_. fvdb-core minor releases will be distributed as a set of wheels built across a matrix of that same current, stable version of PyTorch; the latest two CUDA versions supported by the stable PyTorch version; and all Python minor versions supported by the stable PyTorch version\ [*]_. Any fvdb-core patch releases made for that minor version will maintain the same compatibility as the minor release.
 
-Additionally, we test fvdb-core (on a weekly schedule) with the oldest PyTorch version that supports the lowest CUDA version which our 'stable PyTorch's latest two CUDA versions' policy above would imply.  For example, by PyTorch's matrix, for 2.13, the latest two supported CUDA versions are 13.2 and 13.0 and the lowest PyTorch version to have support for CUDA 13.0 is PyTorch 2.9.
+Additionally, we test fvdb-core (on a weekly schedule) with the oldest PyTorch version that supports the lowest CUDA version which our 'stable PyTorch's latest two CUDA versions' policy above would imply.  For example, by PyTorch's matrix, for 2.14, the latest two supported CUDA versions are 13.2 and 13.0 and the lowest PyTorch version to have support for CUDA 13.0 is PyTorch 2.9.
 
 Inside of the version ranges of our testing regime, the maintainers will review submitted fixes and work to fix reported issues. However, for compatibility issues outside that range, the maintainers will endeavor to assist but may not be able to resolve issues outside this scope. Generally, fixes and new features are targeted for the current in-development minor release and compatibility range.
 

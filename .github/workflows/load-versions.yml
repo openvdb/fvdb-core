@@ -70,6 +70,10 @@ on:
         value: ${{ jobs.load.outputs.aws-cloudfront-distribution-domain }}
       publish-matrix:
         value: ${{ jobs.load.outputs.publish-matrix }}
+      publish-build-matrix:
+        value: ${{ jobs.load.outputs.publish-build-matrix }}
+      publish-python-versions:
+        value: ${{ jobs.load.outputs.publish-python-versions }}
       auditwheel-excludes:
         value: ${{ jobs.load.outputs.auditwheel-excludes }}
       auditwheel-excludes-cuda-major:
@@ -109,6 +113,8 @@ jobs:
       aws-security-group: ${{ steps.parse.outputs.aws-security-group }}
       aws-cloudfront-distribution-domain: ${{ steps.parse.outputs.aws-cloudfront-distribution-domain }}
       publish-matrix: ${{ steps.parse.outputs.publish-matrix }}
+      publish-build-matrix: ${{ steps.parse.outputs.publish-build-matrix }}
+      publish-python-versions: ${{ steps.parse.outputs.publish-python-versions }}
       auditwheel-excludes: ${{ steps.parse.outputs.auditwheel-excludes }}
       auditwheel-excludes-cuda-major: ${{ steps.parse.outputs.auditwheel-excludes-cuda-major }}
     steps:
@@ -163,6 +169,9 @@ jobs:
             echo "aws-security-group=$(jq -r '.aws.security_group' $CFG)"
             echo "aws-cloudfront-distribution-domain=$(jq -r '.aws.cloudfront_distribution_domain // ""' $CFG)"
             echo "publish-matrix=$(jq -c '.publish_matrix' $CFG)"
+            # One build job per torch/CUDA combination builds every Python version
+            echo "publish-build-matrix=$(jq -c '.publish_matrix | del(."python-version")' $CFG)"
+            echo "publish-python-versions=$(jq -r '.publish_matrix."python-version" | join(",")' $CFG)"
             echo "auditwheel-excludes=$(jq -c '.auditwheel_excludes' $CFG)"
             echo "auditwheel-excludes-cuda-major=$(jq -c '.auditwheel_excludes_cuda_major' $CFG)"
           } >> "$GITHUB_OUTPUT"

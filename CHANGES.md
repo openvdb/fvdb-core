@@ -1,6 +1,12 @@
 fVDB Version History
 ====================
 
+## Version 0.7.0 - In Development
+
+- **PyTorch 2.14** fVDB updated to build, test and publish with PyTorch 2.14, CUDA 13.0/13.2 and Python 3.10-3.15
+  support. The conda development and test environments move to CUDA 13.4, the CUDA build conda-forge publishes
+  PyTorch 2.14 for.
+
 ## Version 0.6.0 - September 18, 2026
 
 *91 commits, 260 files changed, 5 contributors.*

@@ -668,8 +668,8 @@ launchRasterizeForwardKernels(
     const uint32_t N        = packed ? 0 : means2d.size(1); // number of gaussians
     const uint32_t channels = features.size(-1);
 
-    const uint32_t tileExtentH = renderWindow.tileExtentH(tileSize);
-    const uint32_t tileExtentW = renderWindow.tileExtentW(tileSize);
+    const int64_t tileExtentH = renderWindow.tileExtentH(tileSize);
+    const int64_t tileExtentW = renderWindow.tileExtentW(tileSize);
 
     TORCH_CHECK_VALUE(pixelMap.has_value() == pixelsToRender.has_value(),
                       "pixelMap and pixelsToRender must be provided together");
@@ -695,9 +695,12 @@ launchRasterizeForwardKernels(
     auto outAlphas   = fvdb::JaggedTensor(alphasToRenderVec);
     auto outLastIds  = fvdb::JaggedTensor(lastIdsToRenderVec);
 
-    auto isSparse                 = activeTiles.has_value();
-    const uint32_t tilesPerCamera = tileExtentH * tileExtentW;
-    uint32_t tileCount            = isSparse ? activeTiles.value().size(0) : C * tilesPerCamera;
+    auto isSparse                = activeTiles.has_value();
+    const int64_t tilesPerCamera = tileExtentH * tileExtentW;
+    const int64_t tileCount      = isSparse ? activeTiles.value().size(0) : C * tilesPerCamera;
+    // Full-width tile rows match image conversion and loss ownership for 16x16 raster tiles.
+    // Sparse active-tile lists retain their flat partition; empty images need nonzero alignment.
+    const int64_t tileAlignment = isSparse || tileCount == 0 ? 1 : tileExtentW;
 
     std::vector<cudaEvent_t> events(c10::cuda::device_count());
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
@@ -717,11 +720,12 @@ launchRasterizeForwardKernels(
 
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
-        auto stream = c10::cuda::getStreamFromPool(false, deviceId);
-        C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
+        auto prefetchStream = c10::cuda::getStreamFromPool(false, deviceId);
+        C10_CUDA_CHECK(cudaStreamWaitEvent(prefetchStream, events[deviceId]));
 
-        uint32_t deviceTileOffset, deviceTileCount;
-        std::tie(deviceTileOffset, deviceTileCount) = deviceChunk(tileCount, deviceId);
+        int64_t deviceTileOffset, deviceTileCount;
+        std::tie(deviceTileOffset, deviceTileCount) =
+            deviceAlignedChunk(tileAlignment, tileCount, deviceId);
         if (deviceTileCount) {
             std::vector<void *> prefetchPointers;
             std::vector<size_t> prefetchSizes;
@@ -733,18 +737,9 @@ launchRasterizeForwardKernels(
                                               renderWindow.width,
                                               tileSize};
             appendPerTilePrefetchRanges(prefetchPointers, prefetchSizes, tileTensors, tileRange);
-            if constexpr (!IS_PACKED) {
-                const uint32_t cameraOffset = deviceTileOffset / tilesPerCamera;
-                const uint32_t cameraCount =
-                    cuda::ceil_div(deviceTileOffset + deviceTileCount, tilesPerCamera) -
-                    cameraOffset;
-                std::vector<torch::Tensor> cameraTensors = {means2d, conics, features, opacities};
-                appendPerCameraPrefetchRanges(
-                    prefetchPointers, prefetchSizes, cameraTensors, cameraOffset, cameraCount);
-            }
-            memPrefetchBatchAsync(prefetchPointers, prefetchSizes, deviceId, stream);
+            memPrefetchBatchAsync(prefetchPointers, prefetchSizes, deviceId, prefetchStream);
         }
-        C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
+        C10_CUDA_CHECK(cudaEventRecord(events[deviceId], prefetchStream));
     }
 
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
@@ -754,7 +749,8 @@ launchRasterizeForwardKernels(
         C10_CUDA_CHECK(cudaEventDestroy(events[deviceId]));
 
         uint32_t deviceTileOffset, deviceTileCount;
-        std::tie(deviceTileOffset, deviceTileCount) = deviceChunk(tileCount, deviceId);
+        std::tie(deviceTileOffset, deviceTileCount) =
+            deviceAlignedChunk(tileAlignment, tileCount, deviceId);
         if (deviceTileCount) {
             auto args =
                 RasterizeForwardArgs<ScalarType, NUM_CHANNELS, NUM_SHARED_CHANNELS, IS_PACKED>(

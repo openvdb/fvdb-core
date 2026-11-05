@@ -11,9 +11,22 @@ import warnings
 from pathlib import Path
 from unittest.mock import patch
 
-import fvdb.convolution_plan as convolution_plan_module
 import pytest
 import torch
+from parameterized import parameterized
+
+import fvdb.convolution_plan as convolution_plan_module
+from fvdb import (
+    ConvolutionCoverageWarning,
+    ConvolutionPhasePolicy,
+    ConvolutionPlan,
+    ConvolutionTopologyPolicy,
+    ConvolutionTopologyProvenance,
+    Grid,
+    GridBatch,
+    JaggedTensor,
+    _fvdb_cpp,
+)
 from fvdb.convolution_plan import (
     _GatherScatterBackend,
     _MatmulBackend,
@@ -27,19 +40,6 @@ from fvdb.utils.tests.convolution_semantics_oracle import (
     forward_support,
     relation_edges,
     transpose_support,
-)
-from parameterized import parameterized
-
-from fvdb import (
-    ConvolutionCoverageWarning,
-    ConvolutionPhasePolicy,
-    ConvolutionPlan,
-    ConvolutionTopologyPolicy,
-    ConvolutionTopologyProvenance,
-    Grid,
-    GridBatch,
-    JaggedTensor,
-    _fvdb_cpp,
 )
 
 
@@ -640,9 +640,9 @@ class TestConvSemanticsIntegration(unittest.TestCase):
         )
         if completed.returncode == 77:
             pytest.skip(completed.stdout.strip())
-        assert (
-            completed.returncode == 0
-        ), f"split-cache subprocess failed\nstdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
+        assert completed.returncode == 0, (
+            f"split-cache subprocess failed\nstdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
+        )
         assert "split cache reused" in completed.stdout
 
     def test_generated_forward_grid_uses_convolution_lattice_transform(self) -> None:

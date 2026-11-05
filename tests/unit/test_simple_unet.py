@@ -12,15 +12,15 @@ propagate gradients without NaN.
 import unittest
 
 import torch
+from parameterized import parameterized
+
+from fvdb import GridBatch, JaggedTensor
 from fvdb.nn import SimpleUNet
 from fvdb.types import DeviceIdentifier, resolve_device
 from fvdb.utils.tests.convolution_utils import (
     REDUCED_DEVICE_DTYPE_COMBOS,
     create_grid_from_coords,
 )
-from parameterized import parameterized
-
-from fvdb import GridBatch, JaggedTensor
 
 
 def _make_dense_block_coords(extent: int, offset: int, device: torch.device) -> torch.Tensor:

@@ -12,3 +12,9 @@ Enums
 
 .. autoclass:: fvdb.ConvolutionTopologyProvenance
    :members:
+
+.. autoclass:: fvdb.CameraModel
+   :members:
+
+.. autoclass:: fvdb.RollingShutterType
+   :members:

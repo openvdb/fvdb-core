@@ -223,6 +223,11 @@ template <typename ScalarType, size_t NUM_CHANNELS, bool IS_PACKED> struct Raste
     // Check that the input tensor shapes are valid
     void
     checkInputShapes() {
+        // activePixelIndex() uses a cub::BlockScan fixed at 16x16 threads on the sparse path.
+        TORCH_CHECK_VALUE(!mIsSparse || mTileSize == 16,
+                          "Sparse rasterization requires tileSize == 16, got ",
+                          mTileSize);
+
         const int64_t totalGaussians = IS_PACKED ? mMeans2d.size(0) : 0;
 
         TORCH_CHECK_VALUE(2 == mMeans2d.size(NUM_OUTER_DIMS), "Bad size for means2d");

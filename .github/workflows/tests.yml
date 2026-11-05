@@ -266,13 +266,18 @@ jobs:
         PYTHONPATH: ""
         CPM_SOURCE_CACHE: "/__w/cpm_cache"
         CONDA_PKGS_DIRS: "/opt/conda-pkgs-cache"
+        # The viewer tests need the NVIDIA Vulkan driver, which the toolkit only mounts with graphics
+        NVIDIA_DRIVER_CAPABILITIES: all
+        # Point the conda Vulkan loader at the driver manifest the toolkit mounts, in case it skips /etc
+        VK_DRIVER_FILES: /etc/vulkan/icd.d/nvidia_icd.json
       options: --rm -v /tmp/conda-pkgs-cache:/opt/conda-pkgs-cache
     defaults:
       run:
         shell: bash -el {0}
     steps:
       - name: Install system dependencies
-        run: dnf install -y git procps-ng findutils
+        # libXext and libglvnd-egl let the NVIDIA Vulkan driver load for the viewer tests
+        run: dnf install -y git procps-ng findutils libXext libglvnd-egl
 
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:

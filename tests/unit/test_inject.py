@@ -701,9 +701,9 @@ class InjectionTests(unittest.TestCase):
         self.assertTrue(sidecar123_bf.requires_grad, "sidecar123_bf should require gradients")
         assert sidecar1_bf.jdata.grad is not None, "sidecar1_bf should have gradients"
         assert sidecar3_bf.jdata.grad is not None, "sidecar3_bf should have gradients"
-        assert (
-            not sidecar123_bf.jdata.is_leaf or sidecar123_bf.jdata.grad is None
-        ), "sidecar123_bf should not have gradients"
+        assert not sidecar123_bf.jdata.is_leaf or sidecar123_bf.jdata.grad is None, (
+            "sidecar123_bf should not have gradients"
+        )
         assert sidecar123_base_bf.jdata.grad is not None, "sidecar123_base_bf should have gradients"
         sidecar1_bf_grad = sidecar1_bf.jdata.grad.clone().detach()
         sidecar3_bf_grad = sidecar3_bf.jdata.grad.clone().detach()

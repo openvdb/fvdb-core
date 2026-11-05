@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 """Functional API for loading and saving grid batches in NanoVDB format."""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, overload

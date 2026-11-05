@@ -152,7 +152,7 @@ def rasterize_num_contributing_gaussians(
     image_origin_h: int,
     tile_size: int,
 ) -> tuple[torch.Tensor, torch.Tensor]: ...
-def sparse_rasterize_num_contributing_gaussians(
+def rasterize_num_contributing_gaussians_sparse(
     means2d: torch.Tensor,
     conics: torch.Tensor,
     opacities: torch.Tensor,
@@ -183,7 +183,7 @@ def rasterize_contributing_gaussian_ids(
     num_depth_samples: int,
     num_contributing_gaussians: Optional[torch.Tensor] = ...,
 ) -> tuple[JaggedTensor, JaggedTensor]: ...
-def sparse_rasterize_contributing_gaussian_ids(
+def rasterize_contributing_gaussian_ids_sparse(
     means2d: torch.Tensor,
     conics: torch.Tensor,
     opacities: torch.Tensor,
@@ -201,6 +201,37 @@ def sparse_rasterize_contributing_gaussian_ids(
     tile_size: int,
     num_depth_samples: int,
     num_contributing_gaussians: Optional[JaggedTensor] = ...,
+) -> tuple[JaggedTensor, JaggedTensor]: ...
+def rasterize_top_contributing_gaussian_ids(
+    means2d: torch.Tensor,
+    conics: torch.Tensor,
+    opacities: torch.Tensor,
+    tile_offsets: torch.Tensor,
+    tile_gaussian_ids: torch.Tensor,
+    image_width: int,
+    image_height: int,
+    image_origin_w: int,
+    image_origin_h: int,
+    tile_size: int,
+    num_depth_samples: int,
+) -> tuple[torch.Tensor, torch.Tensor]: ...
+def rasterize_top_contributing_gaussian_ids_sparse(
+    means2d: torch.Tensor,
+    conics: torch.Tensor,
+    opacities: torch.Tensor,
+    tile_offsets: torch.Tensor,
+    tile_gaussian_ids: torch.Tensor,
+    pixels_to_render: JaggedTensor,
+    active_tiles: torch.Tensor,
+    tile_pixel_mask: torch.Tensor,
+    tile_pixel_cumsum: torch.Tensor,
+    pixel_map: torch.Tensor,
+    image_width: int,
+    image_height: int,
+    image_origin_w: int,
+    image_origin_h: int,
+    tile_size: int,
+    num_depth_samples: int,
 ) -> tuple[JaggedTensor, JaggedTensor]: ...
 def mcmc_relocate_gaussians(
     log_scales: torch.Tensor,
@@ -257,29 +288,29 @@ def project_gaussians_analytic_fwd(
     min_radius_2d: float,
     calc_compensations: bool,
     ortho: bool,
-) -> tuple[torch.Tensor, ...]: ...
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor | None]: ...
 def project_gaussians_analytic_bwd(
     means: torch.Tensor,
     quats: torch.Tensor,
     scales: torch.Tensor,
     world_to_cam_matrices: torch.Tensor,
     projection_matrices: torch.Tensor,
-    compensations: torch.Tensor,
+    compensations: Optional[torch.Tensor],
     image_width: int,
     image_height: int,
     eps2d: float,
     radii: torch.Tensor,
     conics: torch.Tensor,
     d_loss_d_means2d: torch.Tensor,
-    d_loss_d_depths: torch.Tensor,
+    d_loss_d_depths: Optional[torch.Tensor],
     d_loss_d_conics: torch.Tensor,
-    d_loss_d_compensations: torch.Tensor,
+    d_loss_d_compensations: Optional[torch.Tensor],
     world_to_cam_matrices_requires_grad: bool,
     ortho: bool,
     out_normalized_d_loss_d_means2d_norm_accum: Optional[torch.Tensor] = ...,
     out_normalized_max_radii_accum: Optional[torch.Tensor] = ...,
     out_gradient_step_counts: Optional[torch.Tensor] = ...,
-) -> tuple[torch.Tensor, ...]: ...
+) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor, torch.Tensor, torch.Tensor | None]: ...
 def evaluate_spherical_harmonics_fwd(
     sh_degree_to_use: int,
     num_cameras: int,
@@ -304,7 +335,7 @@ def evaluate_spherical_harmonics_bwd(
     radii: torch.Tensor,
     compute_d_loss_d_means: bool,
     compute_d_loss_d_world_to_cam_matrices: bool,
-) -> tuple[torch.Tensor, ...]: ...
+) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None, torch.Tensor | None]: ...
 def rasterize_screen_space_gaussians_fwd(
     means2d: torch.Tensor,
     conics: torch.Tensor,
@@ -317,9 +348,10 @@ def rasterize_screen_space_gaussians_fwd(
     tile_size: int,
     tile_offsets: torch.Tensor,
     tile_gaussian_ids: torch.Tensor,
-    backgrounds: Optional[torch.Tensor],
-    masks: Optional[torch.Tensor],
-) -> tuple[torch.Tensor, ...]: ...
+    num_shared_channels_override: int = ...,
+    backgrounds: Optional[torch.Tensor] = ...,
+    masks: Optional[torch.Tensor] = ...,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]: ...
 def rasterize_screen_space_gaussians_bwd(
     means2d: torch.Tensor,
     conics: torch.Tensor,
@@ -340,7 +372,7 @@ def rasterize_screen_space_gaussians_bwd(
     num_shared_channels_override: int = ...,
     backgrounds: Optional[torch.Tensor] = ...,
     masks: Optional[torch.Tensor] = ...,
-) -> tuple[torch.Tensor, ...]: ...
+) -> tuple[torch.Tensor | None, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]: ...
 def rasterize_screen_space_gaussians_sparse_fwd(
     pixels_to_render: JaggedTensor,
     means2d: torch.Tensor,
@@ -358,9 +390,10 @@ def rasterize_screen_space_gaussians_sparse_fwd(
     tile_pixel_mask: torch.Tensor,
     tile_pixel_cumsum: torch.Tensor,
     pixel_map: torch.Tensor,
-    backgrounds: Optional[torch.Tensor],
-    masks: Optional[torch.Tensor],
-) -> tuple[torch.Tensor, ...]: ...
+    num_shared_channels_override: int = ...,
+    backgrounds: Optional[torch.Tensor] = ...,
+    masks: Optional[torch.Tensor] = ...,
+) -> tuple[JaggedTensor, JaggedTensor, JaggedTensor]: ...
 def rasterize_screen_space_gaussians_sparse_bwd(
     pixels_to_render: JaggedTensor,
     means2d: torch.Tensor,
@@ -374,10 +407,10 @@ def rasterize_screen_space_gaussians_sparse_bwd(
     tile_size: int,
     tile_offsets: torch.Tensor,
     tile_gaussian_ids: torch.Tensor,
-    rendered_alphas: torch.Tensor,
-    last_ids: torch.Tensor,
-    d_loss_d_rendered_features: torch.Tensor,
-    d_loss_d_rendered_alphas: torch.Tensor,
+    rendered_alphas: JaggedTensor,
+    last_ids: JaggedTensor,
+    d_loss_d_rendered_features: JaggedTensor,
+    d_loss_d_rendered_alphas: JaggedTensor,
     active_tiles: torch.Tensor,
     tile_pixel_mask: torch.Tensor,
     tile_pixel_cumsum: torch.Tensor,
@@ -386,7 +419,7 @@ def rasterize_screen_space_gaussians_sparse_bwd(
     num_shared_channels_override: int = ...,
     backgrounds: Optional[torch.Tensor] = ...,
     masks: Optional[torch.Tensor] = ...,
-) -> tuple[torch.Tensor, ...]: ...
+) -> tuple[torch.Tensor | None, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]: ...
 def rasterize_world_space_gaussians_fwd(
     means: torch.Tensor,
     quats: torch.Tensor,
@@ -408,7 +441,7 @@ def rasterize_world_space_gaussians_fwd(
     tile_gaussian_ids: torch.Tensor,
     backgrounds: Optional[torch.Tensor],
     masks: Optional[torch.Tensor],
-) -> tuple[torch.Tensor, ...]: ...
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]: ...
 def rasterize_world_space_gaussians_bwd(
     means: torch.Tensor,
     quats: torch.Tensor,
@@ -434,7 +467,7 @@ def rasterize_world_space_gaussians_bwd(
     d_loss_d_rendered_alphas: torch.Tensor,
     backgrounds: Optional[torch.Tensor],
     masks: Optional[torch.Tensor],
-) -> tuple[torch.Tensor, ...]: ...
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]: ...
 def project_gaussians_analytic_jagged_fwd(
     g_sizes: torch.Tensor,
     means: torch.Tensor,
@@ -450,7 +483,7 @@ def project_gaussians_analytic_jagged_fwd(
     far: float,
     min_radius_2d: float,
     ortho: bool,
-) -> tuple[torch.Tensor, ...]: ...
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor | None]: ...
 def project_gaussians_analytic_jagged_bwd(
     g_sizes: torch.Tensor,
     means: torch.Tensor,
@@ -465,11 +498,11 @@ def project_gaussians_analytic_jagged_bwd(
     radii: torch.Tensor,
     conics: torch.Tensor,
     d_loss_d_means2d: torch.Tensor,
-    d_loss_d_depths: torch.Tensor,
+    d_loss_d_depths: Optional[torch.Tensor],
     d_loss_d_conics: torch.Tensor,
     world_to_cam_matrices_requires_grad: bool,
     ortho: bool,
-) -> tuple[torch.Tensor, ...]: ...
+) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor, torch.Tensor, torch.Tensor | None]: ...
 def intersect_gaussian_tiles(
     means2d: torch.Tensor,
     radii: torch.Tensor,
@@ -501,8 +534,10 @@ def build_sparse_gaussian_tile_layout(
     num_tiles_w: int,
     num_tiles_h: int,
     pixels_to_render: JaggedTensor,
-) -> tuple[torch.Tensor, ...]: ...
-def project_gaussians_unscented_fwd(
+    image_width: Optional[int] = ...,
+    image_height: Optional[int] = ...,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]: ...
+def project_gaussians_ut_fwd(
     means: torch.Tensor,
     quats: torch.Tensor,
     log_scales: torch.Tensor,
@@ -524,7 +559,7 @@ def project_gaussians_unscented_fwd(
     ut_kappa: float = ...,
     ut_in_image_margin: float = ...,
     ut_require_all_sigma_points_in_image: bool = ...,
-) -> tuple[torch.Tensor, ...]: ...
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor | None]: ...
 
 class GridBatchData:
     MAX_GRIDS_PER_BATCH: ClassVar[int] = ...
@@ -1033,11 +1068,20 @@ class JaggedTensor:
     def from_data_and_offsets(arg0: torch.Tensor, arg1: torch.Tensor) -> JaggedTensor: ...
     @staticmethod
     def from_data_indices_and_list_ids(
-        data: torch.Tensor, indices: torch.Tensor, list_ids: torch.Tensor, num_tensors: int
+        data: torch.Tensor,
+        indices: torch.Tensor,
+        list_ids: torch.Tensor,
+        num_tensors: int,
+        *,
+        num_outer_lists: int | None = None,
     ) -> JaggedTensor: ...
     @staticmethod
     def from_data_offsets_and_list_ids(
-        data: torch.Tensor, offsets: torch.Tensor, list_ids: torch.Tensor
+        data: torch.Tensor,
+        offsets: torch.Tensor,
+        list_ids: torch.Tensor,
+        *,
+        num_outer_lists: int | None = None,
     ) -> JaggedTensor: ...
     def int(self) -> JaggedTensor: ...
     def jagged_like(self, data: torch.Tensor) -> JaggedTensor: ...

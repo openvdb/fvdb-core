@@ -6,13 +6,13 @@ import unittest
 from collections.abc import MutableMapping
 from typing import NamedTuple
 
-import fvdb.nn as fvnn
 import torch
 import torch.distributed
 import torch.multiprocessing
 import torch.nn as nn
 
 import fvdb
+import fvdb.nn as fvnn
 from fvdb import ConvolutionPlan, GridBatch, JaggedTensor
 
 from . import expand_tests
@@ -26,7 +26,6 @@ all_device_dtype_combos = [
 
 
 class TestNNModules(unittest.TestCase):
-
     def _make_dense_grid(self, device, batch_size=1, shape=(10, 10, 10)):
         return GridBatch.from_dense(batch_size, list(shape), voxel_sizes=0.1, origins=(0.0, 0.0, 0.0), device=device)
 

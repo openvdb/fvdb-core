@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 import torch
 
 from .. import _fvdb_cpp
-from ..enums import SmoothingMode
+from ..enums import SmoothingMode, _to_cpp_enum
 from ..jagged_tensor import JaggedTensor
 from ._dense import inject_batch, inject_single
 
@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 
 def _to_cpp_smoothing(smoothing: SmoothingMode) -> "_fvdb_cpp.SmoothingMode":
     """Convert a public :class:`fvdb.SmoothingMode` to the bound C++ enum (matched by member name)."""
-    return getattr(_fvdb_cpp.SmoothingMode, smoothing.name)
+    return _to_cpp_enum(SmoothingMode, _fvdb_cpp.SmoothingMode, smoothing)
 
 
 def _validated_scalar_field(field: torch.Tensor, num_voxels: int) -> torch.Tensor:

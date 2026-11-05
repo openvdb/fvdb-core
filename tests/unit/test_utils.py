@@ -9,6 +9,8 @@ import unittest
 
 import pytest
 import torch
+from parameterized import parameterized
+
 from fvdb.utils.tests import (
     ScopedTimer,
     fourier_anti_symmetric_kernel,
@@ -19,7 +21,6 @@ from fvdb.utils.tests import (
     has_any_symmetry,
     has_any_symmetry_witnessed,
 )
-from parameterized import parameterized
 
 
 class TestScopedTimer(unittest.TestCase):

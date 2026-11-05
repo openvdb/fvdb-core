@@ -503,8 +503,7 @@ def suite_sparsity(
                     r = benchmark_one(acls, ijk, C, C, K, device, bbox_dim, "sparsity", params, warmup, num_iters)
                 if r:
                     print(
-                        f"  {r.library:20s}  mean={r.mean_ms:8.3f} ms  std={r.std_ms:6.3f}"
-                        f"  setup={r.setup_ms:8.3f} ms"
+                        f"  {r.library:20s}  mean={r.mean_ms:8.3f} ms  std={r.std_ms:6.3f}  setup={r.setup_ms:8.3f} ms"
                     )
                     results.append(r)
     return results
@@ -643,9 +642,9 @@ def main() -> None:
     all_results: list[BenchmarkResult] = []
 
     for suite_name in suites_to_run:
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print(f"  Suite: {suite_name}")
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
         suite_fn = SUITES[suite_name]
         results = suite_fn(available, device, args.warmup, args.iters)
         all_results.extend(results)

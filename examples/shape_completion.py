@@ -11,16 +11,16 @@ occupancy classifiers.
 
 import logging
 
-import fvdb.nn as fvnn
 import polyscope as ps
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import tqdm
-from fvdb.utils.examples import load_dragon_mesh, load_happy_mesh
 
 import fvdb
+import fvdb.nn as fvnn
 from fvdb import ConvolutionPlan, GridBatch, JaggedTensor
+from fvdb.utils.examples import load_dragon_mesh, load_happy_mesh
 
 RESOLUTION = 64  # voxels along the longest axis of each shape
 NUM_LEVELS = 5  # stride-2 pyramid depth; coarsest lattice is RESOLUTION / 2**NUM_LEVELS = 2^3

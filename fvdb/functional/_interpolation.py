@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 """Functional API for sparse grid interpolation: sampling and splatting."""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, cast
