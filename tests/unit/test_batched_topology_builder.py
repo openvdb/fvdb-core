@@ -259,6 +259,11 @@ class TestBatchedTopologyBuilder(unittest.TestCase):
             for b in range(num_grids):
                 self.assertTrue(torch.equal(batched.bbox_at(b).cpu(), torch.stack([lo, hi])))
 
+    def test_from_dense_replication_spans_header_blocks(self):
+        # 257 members: the header-stamp kernel runs two 256-thread blocks, and the last doubling
+        # copy is partial (one grid after the 256 already filled).
+        self._check_from_dense_matches_per_member(257, [5, 12, 7], [-3, 125, 4], None, "from_dense B=257")
+
     @parameterized.expand([(b,) for b in (1, 3, 16)])
     def test_from_dense_masked_matches_per_member(self, num_grids):
         torch.manual_seed(775)

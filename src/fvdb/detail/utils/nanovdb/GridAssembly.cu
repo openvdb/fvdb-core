@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/BuilderResource.h>
+#include <fvdb/detail/utils/cuda/GridDim.h>
 #include <fvdb/detail/utils/cuda/StreamOrdering.h>
 #include <fvdb/detail/utils/nanovdb/DeviceGridHandleUtils.cuh>
 
@@ -197,6 +198,61 @@ assembleGridStorage(const std::vector<GridSpanSource> &sources,
         // and a host source may be released or rewritten as soon as this returns while a copy
         // from it (pinned, or pageable and merely staged) could still be pending.
         synchronizeStream(stream, device);
+    }
+    return GridStorage(makeDeviceHandleFromLayout(std::move(buffer), std::move(meta)), device);
+}
+
+GridStorage
+replicateGridStorage(const GridStorage &source,
+                     uint32_t count,
+                     const torch::Device &requested,
+                     cudaStream_t stream) {
+    const torch::Device device = GridStorage::resolveDevice(requested);
+    TORCH_CHECK(!device.is_cpu(), "replicateGridStorage: destination must be a device");
+    TORCH_CHECK(source.device() == device,
+                "replicateGridStorage: source on ",
+                source.device(),
+                " cannot be replicated onto ",
+                device);
+    TORCH_CHECK(!source.isEmpty() && !source.isHost() && source.gridCount() == 1,
+                "replicateGridStorage: source must hold one device-resident grid");
+    TORCH_CHECK(count > 1, "replicateGridStorage: count must be at least 2");
+    const uint64_t gridSize = source.gridSize(0);
+
+    c10::OptionalDeviceGuard deviceGuard(device.is_cuda() ? std::optional<torch::Device>(device)
+                                                          : std::nullopt);
+    orderStreamAfter(stream, device, source.stream(), source.device());
+
+    DeviceGridBuffer buffer(
+        stream, TorchDeviceResource(device), gridSize * count, nanovdb::cuda::noInit);
+    std::byte *dst = buffer.data();
+
+    // Copy the grid once, then double the filled prefix. Each copy reads only bytes already
+    // written, so the copies never overlap.
+    C10_CUDA_CHECK(cudaMemcpyAsync(dst, source.deviceBytes(), gridSize, cudaMemcpyDefault, stream));
+    for (uint64_t filled = 1; filled < count; filled *= 2) {
+        const uint64_t n = std::min<uint64_t>(filled, count - filled);
+        C10_CUDA_CHECK(
+            cudaMemcpyAsync(dst + filled * gridSize, dst, n * gridSize, cudaMemcpyDefault, stream));
+    }
+    stampRepeatedGridHeaders<<<GET_BLOCKS(count, DEFAULT_BLOCK_DIM),
+                               DEFAULT_BLOCK_DIM,
+                               0,
+                               stream>>>(dst, gridSize, count);
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
+
+    // The source may be released as soon as this returns.
+    if (source.device().is_cuda() && device.is_cuda()) {
+        orderStreamAfter(source.stream(), source.device(), stream, device);
+    }
+    if (device.is_privateuseone()) {
+        // Unified memory is read by host code straight away.
+        synchronizeStream(stream, device);
+    }
+
+    std::vector<nanovdb::GridHandleMetaData> meta(count);
+    for (uint32_t i = 0; i < count; ++i) {
+        meta[i] = nanovdb::GridHandleMetaData{i * gridSize, gridSize, source.gridType(0)};
     }
     return GridStorage(makeDeviceHandleFromLayout(std::move(buffer), std::move(meta)), device);
 }
