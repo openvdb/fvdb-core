@@ -757,10 +757,8 @@ PadGrid<BuildT, ResourceT>::padRoot() {
     // Package the padded root topology into a RootNode plus Tile list in the builder's pinned
     // host staging area, then upload it (asynchronously, on mStream) into the builder's device
     // scratch. Mirrors nanovdb::tools::cuda::DilateGrid::dilateRoot.
-    uint64_t rootSize          = RootT::memUsage(dilatedTiles.size());
-    auto dilatedRootPtr        = mBuilder.allocateProcessedRoot(rootSize);
-    dilatedRootPtr->mTableSize = dilatedTiles.size();
-    uint32_t t                 = 0;
+    auto dilatedRootPtr = mBuilder.allocateProcessedRootTiles(uint32_t(dilatedTiles.size()));
+    uint32_t t          = 0;
     for (const auto &[key, tile]: dilatedTiles)
         *dilatedRootPtr->tile(t++) = tile;
     mBuilder.uploadProcessedRoot(mStream);
