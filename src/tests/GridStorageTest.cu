@@ -167,8 +167,8 @@ TEST(GridStorageTest, DeviceProtoCarriesDeviceAndStream) {
     EXPECT_EQ(proto.resource().device(), kCuda0);
 
     // What the builders do with it: allocate the output through the proto's resource.
-    auto out = nanovdb::cuda::detail::createDeviceStorage<DeviceGridBuffer>(
-        4096, &proto, 0, side.stream());
+    auto out =
+        nanovdb::cuda::detail::createDeviceStorage<DeviceGridBuffer>(4096, &proto, side.stream());
     EXPECT_EQ(out.size_bytes(), 4096u);
     EXPECT_NE(out.data(), nullptr);
     EXPECT_EQ(out.stream(), side.stream());
