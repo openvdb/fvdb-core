@@ -432,6 +432,55 @@ TEST(GridStorageTest, GridStoragePartsSharesEmptyAndRepeats) {
     EXPECT_EQ(lone.device(), kCuda0);
 }
 
+TEST(GridStorageTest, GridStoragePartsReplicatesUniformRepeats) {
+    initTorchCudaAllocator();
+    const auto stream = c10::cuda::getCurrentCUDAStream(0).stream();
+    // 257 copies: the header kernel spans two blocks and the last doubling copy is partial.
+    constexpr uint32_t kCount = 257;
+    for (const bool empty: {false, true}) {
+        SCOPED_TRACE(empty ? "empty grid" : "float grid");
+        std::vector<HostHandle> hostParts;
+        for (uint32_t i = 0; i < kCount; ++i) {
+            hostParts.push_back(
+                empty ? fvdb::detail::createEmptyGridStorage(torch::kCPU).hostHandle().copy()
+                      : makeFloatGrid(4, 1.0f));
+        }
+        HostHandle expected = nanovdb::mergeGrids(hostParts);
+        for (uint32_t i = 0; i < expected.gridCount(); ++i) {
+            const_cast<nanovdb::GridData *>(expected.gridData(i))->mChecksum.disable();
+        }
+
+        fvdb::detail::GridStorageParts parts(kCuda0, stream, 1);
+        if (empty) {
+            parts.addEmpty();
+        } else {
+            parts.add(GridStorage(makeFloatGrid(4, 1.0f)).to(kCuda0, stream));
+        }
+        for (uint32_t i = 1; i < kCount; ++i) {
+            parts.addRepeat(0);
+        }
+        GridStorage merged = parts.merge();
+
+        ASSERT_EQ(merged.gridCount(), kCount);
+        EXPECT_EQ(merged.device(), kCuda0);
+        EXPECT_EQ(merged.stream(), stream);
+        EXPECT_EQ(merged.bufferSize(), expected.bufferSize());
+        for (uint32_t i = 0; i < kCount; ++i) {
+            EXPECT_EQ(merged.gridOffset(i), i * expected.gridSize(0));
+            EXPECT_EQ(merged.gridType(i), expected.gridType(i));
+        }
+        std::vector<uint8_t> expectedBytes(expected.bufferSize());
+        std::memcpy(expectedBytes.data(), expected.data(), expected.bufferSize());
+        EXPECT_EQ(deviceBytesOf(merged), expectedBytes);
+
+        auto bytes = merged.deviceHandle().buffer().copy(stream);
+        ASSERT_NO_THROW({
+            DeviceHandle reparsed(std::move(bytes));
+            EXPECT_EQ(reparsed.gridCount(), kCount);
+        });
+    }
+}
+
 TEST(GridStorageTest, MakeDeviceHandleFromLayoutChecksExtent) {
     initTorchCudaAllocator();
     const auto stream = c10::cuda::getCurrentCUDAStream(0).stream();

@@ -237,6 +237,32 @@ TEST_F(BuildDistributedGridTest, MergesUnifiedParts) {
     }
 }
 
+// A batch that repeats one grid takes merge()'s replication path, which must also yield unified
+// storage. 257 copies run the header kernel over two blocks and end on a partial doubling copy.
+TEST_F(BuildDistributedGridTest, ReplicatesIntoUnifiedStorage) {
+    constexpr uint32_t kCount = 257;
+    fvdb::detail::GridStorageParts parts(kPrivateUse1, cudaStream_t{}, kCount);
+    parts.add(build());
+    for (uint32_t i = 1; i < kCount; ++i) {
+        parts.addRepeat(0);
+    }
+    GridStorage merged = parts.merge();
+
+    EXPECT_NO_THROW(merged.unifiedHandle());
+    EXPECT_THROW(merged.deviceHandle(), c10::Error);
+    EXPECT_EQ(merged.stream(), cudaStream_t{});
+    ASSERT_EQ(merged.gridCount(), kCount);
+    const uint64_t gridSize = merged.gridSize(0);
+    EXPECT_EQ(merged.bufferSize(), gridSize * kCount);
+    for (uint32_t i = 0; i < kCount; ++i) {
+        const auto *grid = merged.hostGridAt<nanovdb::ValueOnIndex>(i);
+        expectGrid(grid);
+        EXPECT_EQ(grid->gridIndex(), i);
+        EXPECT_EQ(grid->gridCount(), kCount);
+        EXPECT_EQ(merged.gridSize(i), gridSize);
+    }
+}
+
 #else
 
 TEST(BuildDistributedGridTest, Skipped) {

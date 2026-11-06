@@ -24,6 +24,8 @@
 #include <c10/cuda/CUDAMathCompat.h>
 #include <torch/types.h>
 
+#include <limits>
+
 namespace fvdb {
 namespace detail {
 namespace ops {
@@ -110,6 +112,11 @@ dispatchCreateNanoGridFromDense<torch::kCUDA>(int64_t batchSize,
     const cudaStream_t stream    = storageStream(device);
     const DeviceGridBuffer proto = GridStorage::deviceProto(device, stream);
 
+    if (batchSize == 0) {
+        // Same result as merging zero parts: an empty storage, which makeGridBatchData rejects.
+        return GridStorageParts(device, stream, 0).merge();
+    }
+
     const int64_t gridVolume = static_cast<int64_t>(size[0]) * size[1] * size[2];
 
     const int64_t NUM_BLOCKS = GET_BLOCKS(gridVolume, DEFAULT_BLOCK_DIM);
@@ -132,26 +139,22 @@ dispatchCreateNanoGridFromDense<torch::kCUDA>(int64_t batchSize,
     TORCH_CHECK(ijkData.is_contiguous(), "ijkData must be contiguous");
 
     // Every batch item is the same dense box (a mask, if given, is shared across the batch), so
-    // build the grid once and repeat it for the remaining items instead of re-running the radix
-    // sort over the identical coordinate list batchSize times: the merge copies the one grid into
-    // each item's slot.
+    // build the grid once and repeat it. The merge replicates the one grid into every slot.
     const int64_t nVoxels = ijkData.size(0);
     GridStorageParts parts(device, stream, 1);
-    for (int64_t i = 0; i < batchSize; i += 1) {
-        if (nVoxels == 0) {
-            parts.addEmpty();
-        } else if (i == 0) {
-            parts.add(GridStorage(
-                nanovdb::tools::cuda::
-                    voxelsToGrid<GridT, nanovdb::Coord *, DeviceGridBuffer, BuilderResource>(
-                        (nanovdb::Coord *)ijkData.data_ptr(), nVoxels, 1.0, proto, stream),
-                device));
-            C10_CUDA_KERNEL_LAUNCH_CHECK();
-        } else {
-            parts.addRepeat(0);
-        }
+    if (nVoxels == 0) {
+        parts.addEmpty();
+    } else {
+        parts.add(GridStorage(
+            nanovdb::tools::cuda::
+                voxelsToGrid<GridT, nanovdb::Coord *, DeviceGridBuffer, BuilderResource>(
+                    static_cast<nanovdb::Coord *>(ijkData.data_ptr()), nVoxels, 1.0, proto, stream),
+            device));
+        C10_CUDA_KERNEL_LAUNCH_CHECK();
     }
-
+    for (int64_t i = 1; i < batchSize; ++i) {
+        parts.addRepeat(0);
+    }
     return parts.merge();
 }
 

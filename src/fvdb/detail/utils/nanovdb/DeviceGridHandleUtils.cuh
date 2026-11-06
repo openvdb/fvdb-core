@@ -18,7 +18,10 @@
 #include <c10/cuda/CUDAException.h>
 #include <c10/util/Exception.h>
 
+#include <algorithm>
+#include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <type_traits>
 #include <utility>
@@ -27,13 +30,32 @@
 namespace fvdb::detail {
 
 /// @brief Stamps a grid's position in its batch into its header and disables the checksum, which
-///        the write invalidates. One thread. Shared by every site that lays grids into a buffer
-///        by hand (merge, concatenate, compaction).
+///        the write invalidates. The one header policy for every site that lays grids into a
+///        buffer by hand (merge, replication, concatenation, compaction).
+__device__ inline void
+stampGridHeader(nanovdb::GridData *data, uint32_t gridIndex, uint32_t gridCount) {
+    data->mGridIndex = gridIndex;
+    data->mGridCount = gridCount;
+    data->mChecksum.disable();
+}
+
+/// @brief stampGridHeader on one grid. One thread.
 __global__ inline void
 updateGridCountAndZeroChecksum(nanovdb::GridData *d_data, uint32_t gridIndex, uint32_t gridCount) {
-    d_data->mGridIndex = gridIndex;
-    d_data->mGridCount = gridCount;
-    d_data->mChecksum.disable();
+    stampGridHeader(d_data, gridIndex, gridCount);
+}
+
+/// @brief stampGridHeader on @p gridCount grids laid back to back at a stride of @p gridSize
+///        bytes from @p base. One thread per grid.
+__global__ inline void
+stampRepeatedGridHeaders(std::byte *base, uint64_t gridSize, uint32_t gridCount) {
+    const uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < gridCount) {
+        stampGridHeader(
+            nanovdb::util::PtrAdd<nanovdb::GridData>(base, static_cast<int64_t>(i * gridSize)),
+            i,
+            gridCount);
+    }
 }
 
 /// @brief Debug builds only: reads back every grid header in @p bytes, device-accessible storage
@@ -136,17 +158,30 @@ GridStorage assembleGridStorage(const std::vector<GridSpanSource> &sources,
                                 const torch::Device &device,
                                 cudaStream_t stream);
 
+/// @brief @p count back-to-back copies of the single grid in @p source, in fresh storage on
+///        @p device (a CUDA or PrivateUse1 device, which @p source must live on), made on
+///        @p stream. Copy i is stamped as grid i of @p count. Writes log2(count) copies and one
+///        header launch, where assembleGridStorage writes one copy and one launch per grid.
+///        Same ordering contract and handle kinds as assembleGridStorage for a device destination.
+GridStorage replicateGridStorage(const GridStorage &source,
+                                 uint32_t count,
+                                 const torch::Device &device,
+                                 cudaStream_t stream);
+
 /// @brief Collects a builder's per-item results and lays them end to end in one storage on
 ///        @p device, made on @p stream. Items are added in batch order: a storage the builder
 ///        produced (add), the shared voxel-less grid for an item with nothing in it (addEmpty:
 ///        built once per batch, on first use, however many items are empty), or a repeat of an
-///        earlier item (addRepeat: no copy until the merge, so a batch of identical grids is one
-///        build and one copy per item). Every added storage must live on @p device.
+///        earlier item (addRepeat: no copy until the merge). Every added storage must live on
+///        @p device.
 ///
-///        merge() returns the single item's storage as is when there is exactly one; otherwise
-///        it assembles the items' grids (assembleGridStorage), after which the collected parts
-///        may be dropped. Like all assembled storage the result's checksums are disabled; the
-///        builders do not compute one either (NanoVDB's default), and nothing in fvdb reads them.
+///        merge() returns the single item's storage as is when there is exactly one. When every
+///        item is the same single-grid device storage, it replicates that grid
+///        (replicateGridStorage), so a batch of identical grids is one build and log2(B) copies.
+///        Any other mix is assembled one copy per item (assembleGridStorage). Either way the
+///        collected parts may be dropped afterwards. Like all assembled storage the result's
+///        checksums are disabled; the builders do not compute one either (NanoVDB's default), and
+///        nothing in fvdb reads them.
 class GridStorageParts {
   public:
     GridStorageParts(const torch::Device &device, cudaStream_t stream, size_t expectedCount)
@@ -198,6 +233,10 @@ class GridStorageParts {
         if (mItems.size() == 1) {
             return std::move(*mItems[0]);
         }
+        if (isUniformRepeat()) {
+            return replicateGridStorage(
+                *mItems[0], static_cast<uint32_t>(mItems.size()), mDevice, mStream);
+        }
         std::vector<GridSpanSource> sources;
         sources.reserve(mItems.size());
         for (const GridStorage *part: mItems) {
@@ -222,6 +261,21 @@ class GridStorageParts {
     }
 
   private:
+    // Two or more items, all the same single-grid storage, on a device destination.
+    bool
+    isUniformRepeat() const {
+        if (mItems.size() < 2 || mItems.size() > std::numeric_limits<uint32_t>::max() ||
+            mDevice.is_cpu()) {
+            return false;
+        }
+        const GridStorage *first = mItems[0];
+        if (first->isEmpty() || first->isHost() || first->gridCount() != 1) {
+            return false;
+        }
+        return std::all_of(
+            mItems.begin(), mItems.end(), [first](const GridStorage *p) { return p == first; });
+    }
+
     torch::Device mDevice;
     cudaStream_t mStream;
     std::vector<GridStorage> mOwned;   // reserved up front: mItems points into it
