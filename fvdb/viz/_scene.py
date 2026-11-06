@@ -24,6 +24,7 @@ from ._gaussian_splat_3d_view import GaussianSplat3dView
 from ._gaussian_splat_view_data import GaussianSplatViewData, ShOrderingMode
 from ._image_view import ImageView
 from ._level_set_view import LevelSetView
+from ._mesh_view import MeshView, add_mesh_views
 from ._nanovdb_grid_view import add_nanovdb_grid_views
 from ._point_cloud_view import PointCloudView
 from ._viewer_server import _get_viewer_server_cpp
@@ -403,6 +404,58 @@ class Scene:
             name=name,
             view_names=view_names,
             _private=FogVolumeView.__PRIVATE__,
+        )
+
+    @torch.no_grad()
+    def add_surface_mesh(
+        self,
+        name: str,
+        vertices: "torch.Tensor | JaggedTensor",
+        faces: "torch.Tensor | JaggedTensor",
+        colors: "torch.Tensor | JaggedTensor | None" = None,
+        *,
+        resolution: int = 512,
+        inflation_radius: float = 0.0,
+    ) -> MeshView:
+        """
+        Add a triangle mesh to the viewer.
+
+        The nanovdb-editor builds a VoxelBVH over the triangles in its render loop and
+        ray-traces them, so the mesh appears shortly after this call returns. If a view
+        with ``name`` already exists it is replaced. The output of
+        :meth:`fvdb.Grid.marching_cubes` and :meth:`fvdb.GridBatch.marching_cubes` can be
+        passed in directly.
+
+        .. note::
+
+            If the inputs are :class:`~fvdb.JaggedTensor` batches with more than one
+            mesh, one view is created per mesh, named ``name[i]`` for mesh ``i``.
+
+        Args:
+            name (str): Unique name for this view within the scene.
+            vertices: A ``(V, 3)`` floating point tensor of vertex positions, or a
+                :class:`~fvdb.JaggedTensor` holding one such tensor per mesh.
+            faces: A ``(F, 3)`` integer tensor of vertex indices per triangle, or a
+                :class:`~fvdb.JaggedTensor` holding one such tensor per mesh. Indices are
+                local to each mesh.
+            colors: Optional ``(V, 3)`` per-vertex RGB colors, floating point in ``[0, 1]``
+                or ``uint8`` in ``[0, 255]``, matching the type of ``vertices``. Meshes
+                without colors render white.
+            resolution (int): Resolution of the VoxelBVH acceleration structure, in
+                ``[1, 4096]``. It affects build and render speed, not the rendered geometry.
+            inflation_radius (float): Inflation radius of the VoxelBVH build, in world units.
+
+        Returns:
+            mesh_view (MeshView): The newly created view.
+        """
+        view_names = add_mesh_views(self._name, name, vertices, faces, colors, resolution, inflation_radius)
+        return MeshView(
+            scene_name=self._name,
+            name=name,
+            view_names=view_names,
+            resolution=resolution,
+            inflation_radius=inflation_radius,
+            _private=MeshView.__PRIVATE__,
         )
 
     @torch.no_grad()

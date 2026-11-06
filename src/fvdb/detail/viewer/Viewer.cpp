@@ -667,6 +667,79 @@ Viewer::addFogVolumeView(const std::string &scene_name,
 }
 
 void
+Viewer::addMeshView(const std::string &scene_name,
+                    const std::string &name,
+                    const torch::Tensor &vertices,
+                    const torch::Tensor &faces,
+                    const std::optional<torch::Tensor> &colors,
+                    int64_t resolution,
+                    double inflation_radius) {
+    TORCH_CHECK(
+        mEditor.editor.add_mesh != nullptr,
+        "Viewing meshes requires nanovdb-editor >= 0.1.8; upgrade the nanovdb-editor package");
+    TORCH_CHECK(vertices.dim() == 2 && vertices.size(1) == 3 && vertices.size(0) > 0,
+                "vertices must be a non-empty (V, 3) tensor");
+    TORCH_CHECK(vertices.is_floating_point(), "vertices must have a floating point dtype");
+    TORCH_CHECK(faces.dim() == 2 && faces.size(1) == 3 && faces.size(0) > 0,
+                "faces must be a non-empty (F, 3) tensor");
+    TORCH_CHECK(!faces.is_floating_point() && !faces.is_complex() &&
+                    faces.scalar_type() != torch::kBool,
+                "faces must have an integer dtype");
+    TORCH_CHECK(resolution >= 1 && resolution <= 4096, "resolution must be in [1, 4096]");
+    TORCH_CHECK(inflation_radius >= 0.0, "inflation_radius must be non-negative");
+
+    const int64_t numVertices = vertices.size(0);
+    torch::Tensor facesCpu    = faces.cpu();
+    TORCH_CHECK(facesCpu.min().item<int64_t>() >= 0 && facesCpu.max().item<int64_t>() < numVertices,
+                "faces must index vertices in [0, ",
+                numVertices,
+                ")");
+
+    torch::Tensor verticesCpu = vertices.to(torch::kCPU, torch::kFloat32).contiguous();
+    // The editor reads indices as uint32. Values are range-checked above, so int32 has the same
+    // bit pattern.
+    facesCpu = facesCpu.to(torch::kInt32).contiguous();
+
+    torch::Tensor colorsCpu;
+    if (colors.has_value()) {
+        TORCH_CHECK(colors->dim() == 2 && colors->size(0) == numVertices && colors->size(1) == 3,
+                    "colors must have shape (",
+                    numVertices,
+                    ", 3)");
+        colorsCpu = colors->to(torch::kCPU, torch::kFloat32).contiguous();
+    }
+
+    pnanovdb_compute_array_t *positionsArray = mEditor.compute.create_array(
+        sizeof(float), static_cast<uint64_t>(verticesCpu.numel()), verticesCpu.data_ptr());
+    pnanovdb_compute_array_t *indicesArray = mEditor.compute.create_array(
+        sizeof(uint32_t), static_cast<uint64_t>(facesCpu.numel()), facesCpu.data_ptr());
+    pnanovdb_compute_array_t *colorsArray =
+        colorsCpu.defined() ? mEditor.compute.create_array(sizeof(float),
+                                                           static_cast<uint64_t>(colorsCpu.numel()),
+                                                           colorsCpu.data_ptr())
+                            : nullptr;
+
+    pnanovdb_editor_mesh_desc_t desc = {};
+    desc.positions                   = positionsArray;
+    desc.indices                     = indicesArray;
+    desc.colors                      = colorsArray;
+    desc.resolution                  = static_cast<pnanovdb_uint32_t>(resolution);
+    desc.inflation_radius            = static_cast<float>(inflation_radius);
+
+    pnanovdb_editor_token_t *sceneToken = mEditor.editor.get_token(scene_name.c_str());
+    pnanovdb_editor_token_t *nameToken  = mEditor.editor.get_token(name.c_str());
+
+    // The editor copies the arrays, so they are released right after the call.
+    mEditor.editor.add_mesh(&mEditor.editor, sceneToken, nameToken, &desc);
+
+    for (pnanovdb_compute_array_t *arr: {positionsArray, indicesArray, colorsArray}) {
+        if (arr) {
+            mEditor.compute.destroy_array(arr);
+        }
+    }
+}
+
+void
 Viewer::addNanoVDBGridView(const std::string &scene_name,
                            const std::string &name,
                            const GridBatchData &grid,
