@@ -68,6 +68,42 @@ copySpan(void *dst,
     C10_CUDA_CHECK(cudaMemcpyAsync(dst, span.bytes, span.size, cudaMemcpyDefault, stream));
 }
 
+// Destination bytes for device storage, in the buffer type the device's handle kind requires.
+// PrivateUse1 gets a UnifiedGridBuffer, allocated synchronously. CUDA gets a DeviceGridBuffer
+// that retains `stream`. Write through data(), then adopt() the finished layout.
+class DestinationBuffer {
+  public:
+    DestinationBuffer(const torch::Device &device, cudaStream_t stream, uint64_t bytes)
+        : mDevice(device) {
+        if (device.is_privateuseone()) {
+            mData = mUnified.emplace(bytes, nanovdb::cuda::noInit).data();
+        } else {
+            mData = mCuda.emplace(stream, TorchDeviceResource(device), bytes, nanovdb::cuda::noInit)
+                        .data();
+        }
+    }
+
+    std::byte *
+    data() const {
+        return mData;
+    }
+
+    GridStorage
+    adopt(std::vector<nanovdb::GridHandleMetaData> meta) && {
+        if (mUnified) {
+            return GridStorage(makeDeviceHandleFromLayout(std::move(*mUnified), std::move(meta)),
+                               mDevice);
+        }
+        return GridStorage(makeDeviceHandleFromLayout(std::move(*mCuda), std::move(meta)), mDevice);
+    }
+
+  private:
+    torch::Device mDevice;
+    std::optional<DeviceGridBuffer> mCuda;
+    std::optional<UnifiedGridBuffer> mUnified;
+    std::byte *mData = nullptr;
+};
+
 } // namespace
 
 GridStorage
@@ -164,17 +200,8 @@ assembleGridStorage(const std::vector<GridSpanSource> &sources,
         orderStreamAfter(stream, device, k.stream, k.device);
     }
 
-    // PrivateUse1 storage is unified; the buffer is allocated synchronously and adopted below.
-    std::optional<DeviceGridBuffer> cudaBuffer;
-    std::optional<UnifiedGridBuffer> unifiedBuffer;
-    std::byte *base;
-    if (device.is_privateuseone()) {
-        base = unifiedBuffer.emplace(totalBytes, nanovdb::cuda::noInit).data();
-    } else {
-        base = cudaBuffer
-                   .emplace(stream, TorchDeviceResource(device), totalBytes, nanovdb::cuda::noInit)
-                   .data();
-    }
+    DestinationBuffer buffer(device, stream, totalBytes);
+    std::byte *base = buffer.data();
     std::vector<nanovdb::GridHandleMetaData> meta;
     meta.reserve(gridCount);
     uint64_t offset = 0;
@@ -211,11 +238,7 @@ assembleGridStorage(const std::vector<GridSpanSource> &sources,
         // from it (pinned, or pageable and merely staged) could still be pending.
         synchronizeStream(stream, device);
     }
-    if (unifiedBuffer) {
-        return GridStorage(makeDeviceHandleFromLayout(std::move(*unifiedBuffer), std::move(meta)),
-                           device);
-    }
-    return GridStorage(makeDeviceHandleFromLayout(std::move(*cudaBuffer), std::move(meta)), device);
+    return std::move(buffer).adopt(std::move(meta));
 }
 
 GridStorage
@@ -239,8 +262,7 @@ replicateGridStorage(const GridStorage &source,
                                                           : std::nullopt);
     orderStreamAfter(stream, device, source.stream(), source.device());
 
-    DeviceGridBuffer buffer(
-        stream, TorchDeviceResource(device), gridSize * count, nanovdb::cuda::noInit);
+    DestinationBuffer buffer(device, stream, gridSize * count);
     std::byte *dst = buffer.data();
 
     // Copy the grid once, then double the filled prefix. Each copy reads only bytes already
@@ -270,7 +292,7 @@ replicateGridStorage(const GridStorage &source,
     for (uint32_t i = 0; i < count; ++i) {
         meta[i] = nanovdb::GridHandleMetaData{i * gridSize, gridSize, source.gridType(0)};
     }
-    return GridStorage(makeDeviceHandleFromLayout(std::move(buffer), std::move(meta)), device);
+    return std::move(buffer).adopt(std::move(meta));
 }
 
 namespace {

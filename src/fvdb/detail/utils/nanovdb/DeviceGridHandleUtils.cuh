@@ -162,7 +162,7 @@ GridStorage assembleGridStorage(const std::vector<GridSpanSource> &sources,
 ///        @p device (a CUDA or PrivateUse1 device, which @p source must live on), made on
 ///        @p stream. Copy i is stamped as grid i of @p count. Writes log2(count) copies and one
 ///        header launch, where assembleGridStorage writes one copy and one launch per grid.
-///        Same ordering contract as assembleGridStorage for a device destination.
+///        Same ordering contract and handle kinds as assembleGridStorage for a device destination.
 GridStorage replicateGridStorage(const GridStorage &source,
                                  uint32_t count,
                                  const torch::Device &device,
