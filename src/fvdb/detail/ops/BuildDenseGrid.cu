@@ -11,11 +11,10 @@
 #include <fvdb/detail/utils/cuda/GridDim.h>
 #include <fvdb/detail/utils/cuda/StreamOrdering.h>
 #include <fvdb/detail/utils/cuda/Utils.cuh>
+#include <fvdb/detail/utils/nanovdb/BuildDistributedGrid.cuh>
 #include <fvdb/detail/utils/nanovdb/DeviceGridHandleUtils.cuh>
 
-#if CCCL_DEVICE_MERGE_SUPPORTED
-#include <nanovdb/tools/cuda/DistributedPointsToGrid.cuh>
-#else
+#if !CCCL_DEVICE_MERGE_SUPPORTED
 #include <nanovdb/tools/cuda/PointsToGrid.cuh>
 #endif
 #include <nanovdb/HostBuffer.h>
@@ -210,10 +209,9 @@ dispatchCreateNanoGridFromDense<torch::kPrivateUse1>(int64_t batchSize,
 
     TORCH_CHECK(ijkData.is_contiguous(), "ijkData must be contiguous");
 
-    // Unified-memory storage is not stream-ordered; storageStream(PrivateUse1) is the legacy
-    // default stream, which is what the storage retains and what the assembler orders against.
-    const cudaStream_t stream    = storageStream(device);
-    const DeviceGridBuffer proto = GridStorage::deviceProto(device, stream);
+    // The built parts are unified storage, which retains no stream. Merging several items runs
+    // on storageStream(PrivateUse1), the legacy default stream, and synchronizes it.
+    const cudaStream_t stream = storageStream(device);
 
     // Every batch item is the same dense box, so build the grid once and copy it for the remaining
     // items instead of re-running DistributedPointsToGrid over the identical coordinate list: the
@@ -224,25 +222,16 @@ dispatchCreateNanoGridFromDense<torch::kPrivateUse1>(int64_t batchSize,
         if (!nVoxels) {
             parts.addEmpty();
         } else if (i == 0) {
-            int32_t *dataPtr = ijkData.data_ptr<int32_t>();
-            auto coordPtr    = reinterpret_cast<nanovdb::Coord *>(dataPtr);
+            auto *coordPtr = static_cast<nanovdb::Coord *>(ijkData.data_ptr());
 
-            nanovdb::cuda::DeviceMesh mesh;
-            nanovdb::tools::cuda::DistributedPointsToGrid<GridT> converter(mesh);
-            auto handle =
-                converter.getHandle<nanovdb::Coord *, DeviceGridBuffer>(coordPtr, nVoxels, proto);
-            // getHandle allocated the storage on, and synchronized, a stream of `mesh`, which is
-            // destroyed at the end of this iteration. Retain the storage stream instead so the
-            // buffer never names a dead stream.
-            handle.buffer().set_stream(stream);
-            parts.add(GridStorage(std::move(handle), device));
+            parts.add(GridStorage(buildDistributedGrid<GridT>(coordPtr, nVoxels), device));
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         } else {
             parts.addRepeat(0);
         }
     }
 
-    // A single item is handed out as built (getHandle synchronized its mesh); the assembler
+    // A single item is handed out as built (buildDistributedGrid synchronized it); the assembler
     // synchronizes for a PrivateUse1 destination itself.
     return parts.merge();
 #else
