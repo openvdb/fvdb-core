@@ -280,6 +280,15 @@ install(DIRECTORY ${FVDB_NANOVDB_INCLUDE_DIR}/nanovdb/
     COMPONENT PythonModule
     FILES_MATCHING PATTERN "*.h")
 
+if(FVDB_NANOVDB_BLOSC_DIR)
+    install(FILES ${FVDB_NANOVDB_BLOSC_DIR}/LICENSE.txt
+        DESTINATION fvdb/licenses/blosc COMPONENT PythonModule)
+    install(FILES ${FVDB_NANOVDB_BLOSC_DIR}/lz4/LICENSE
+        DESTINATION fvdb/licenses/lz4 COMPONENT PythonModule)
+    install(FILES ${FVDB_NANOVDB_BLOSC_DIR}/LICENSES/FASTLZ.txt
+        DESTINATION fvdb/licenses/fastlz COMPONENT PythonModule)
+endif()
+
 install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/dispatch/dispatch/macros.h
     DESTINATION fvdb/include/dispatch/dispatch
     COMPONENT PythonModule)
