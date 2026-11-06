@@ -183,7 +183,7 @@ assembleGridStorage(const std::vector<GridSpanSource> &sources,
             auto *dst = base + offset;
             copySpan(dst, device, span, s.device, stream);
             updateGridCountAndZeroChecksum<<<1, 1, 0, stream>>>(
-                reinterpret_cast<nanovdb::GridData *>(dst), index, gridCount);
+                nanovdb::util::PtrAdd<nanovdb::GridData>(base, static_cast<int64_t>(offset)), index, gridCount);
             C10_CUDA_KERNEL_LAUNCH_CHECK();
             meta.push_back(nanovdb::GridHandleMetaData{offset, span.size, span.type});
             offset += span.size;
