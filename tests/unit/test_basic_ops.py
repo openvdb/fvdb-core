@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 import itertools
+import math
 import pickle
 import unittest
 
@@ -2218,7 +2219,7 @@ class TestBasicOps(unittest.TestCase):
                 fvdb.JaggedTensor(ray_o), fvdb.JaggedTensor(ray_d), fvdb.JaggedTensor(bad_scalars)
             )
 
-    @expand_tests(list(itertools.product(["cpu", "cuda"], [torch.float32, torch.float64])))
+    @expand_tests(list(itertools.product(["cpu", "cuda"], [torch.float16, torch.float32, torch.float64])))
     def test_marching_cubes(self, device, dtype):
         # Generate the SDF for a sphere on a grid
         N = 32 if device == "cpu" else 64
@@ -2238,6 +2239,10 @@ class TestBasicOps(unittest.TestCase):
             sphere_sdf = torch.stack(
                 [-torch.sqrt(xx**2 + yy**2 + zz**2) + sphere_rad for sphere_rad in sphere_rads[:batch_size]]
             ).unsqueeze(-1)  # [B, N, N, N, 1] sdf
+            # Cast to the parameterized dtype so the test exercises each
+            # marching-cubes path (CUDA fp32/fp16 -> fast, CUDA fp64 and
+            # CPU -> legacy).
+            sphere_sdf = sphere_sdf.to(dtype)
 
             # Build a grid with the SDF
             grid = GridBatch.from_dense(
@@ -2253,9 +2258,13 @@ class TestBasicOps(unittest.TestCase):
             for level in [0.0, 0.2, -0.2]:
                 v, f, _ = grid.marching_cubes(sdf_p, level)
 
+                # Output vertex dtype should match input SDF dtype. The fast
+                # path keeps this by downcasting retVertices at the end.
+                self.assertEqual(v[0].jdata.dtype, dtype)
+
                 for bi in range(batch_size):
                     mesh_radius = torch.linalg.norm(
-                        v[bi].jdata - torch.tensor([[0.5] * 3], device=device, dtype=dtype), axis=1
+                        v[bi].jdata.float() - torch.tensor([[0.5] * 3], device=device), axis=1
                     )
                     vox_size = torch.norm(grid.voxel_sizes[bi])
                     self.assertTrue(torch.all(mesh_radius - sphere_rads[bi] < vox_size / 2.0 - level))
@@ -2264,6 +2273,83 @@ class TestBasicOps(unittest.TestCase):
                 # ps.init()
                 # ps.register_surface_mesh("marching_cubes", v.cpu()[0].jdata.numpy(), f.cpu()[0].jdata.numpy())
                 # ps.show()
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA required for fp16 MC fast path")
+    def test_marching_cubes_fp16_matches_fp32(self):
+        """
+        The CUDA fp16 path in `marchingCubes` uses the fast path with kernel-
+        side `fp16 -> fp32` per-load casts (no transient fp32 buffer). This
+        test pins that the fp16 output is numerically close to fp32 (within
+        fp16's resolution) and that the topology matches exactly.
+        """
+        device = "cuda"
+        N = 64
+        ii, jj, kk = torch.meshgrid([torch.arange(N, device=device)] * 3, indexing="ij")
+        xx = ii.float() / (N - 1) - 0.5
+        yy = jj.float() / (N - 1) - 0.5
+        zz = kk.float() / (N - 1) - 0.5
+        sphere_sdf_fp32 = (-torch.sqrt(xx**2 + yy**2 + zz**2) + 0.5).unsqueeze(-1).unsqueeze(0)
+
+        grid = GridBatch.from_dense(
+            1,
+            list(sphere_sdf_fp32[0].shape[:3]),
+            [0] * 3,
+            voxel_sizes=1.0 / N,
+            origins=[0] * 3,
+            device=device,
+        )
+        sdf_fp32 = grid.inject_from_dense_cminor(sphere_sdf_fp32)
+        sdf_fp16 = grid.inject_from_dense_cminor(sphere_sdf_fp32.half())
+
+        v32, f32, _ = grid.marching_cubes(sdf_fp32, 0.0)
+        v16, f16, _ = grid.marching_cubes(sdf_fp16, 0.0)
+
+        # Topology must be identical: fp32 and fp16 input run the same
+        # kernel logic; only the per-load cast differs.
+        self.assertEqual(v32[0].jdata.shape, v16[0].jdata.shape)
+        self.assertEqual(f32[0].jdata.shape, f16[0].jdata.shape)
+
+        # Output dtypes preserved per legacy contract.
+        self.assertEqual(v32[0].jdata.dtype, torch.float32)
+        self.assertEqual(v16[0].jdata.dtype, torch.float16)
+
+        # Vertices agree to fp16 precision (~2^-10 at unit range).
+        max_dev = (v32[0].jdata - v16[0].jdata.float()).abs().max().item()
+        self.assertLess(max_dev, 1.0e-3, f"fp16 vs fp32 MC vertex deviation {max_dev:.2e} exceeds fp16 resolution")
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA required")
+    def test_marching_cubes_large_batches_match_per_grid(self):
+        """
+        Each grid of a batch meshes the same as on its own, including batches
+        past the fast path's 8-grid packed-key limit, which fall back to the
+        legacy implementation.
+        """
+        device = "cuda"
+        N = 16
+        ii, jj, kk = torch.meshgrid([torch.arange(N, device=device)] * 3, indexing="ij")
+        xx, yy, zz = (t.float() / (N - 1) - 0.5 for t in (ii, jj, kk))
+        dist = torch.sqrt(xx**2 + yy**2 + zz**2)
+
+        def sphere_sdfs(count):
+            radii = torch.linspace(0.2, 0.45, count, device=device)
+            return [(r - dist).unsqueeze(-1).unsqueeze(0) for r in radii]
+
+        def mesh(sdfs):
+            grid = GridBatch.from_dense(
+                len(sdfs), [N, N, N], [0] * 3, voxel_sizes=1.0 / N, origins=[0] * 3, device=device
+            )
+            field = grid.inject_from_dense_cminor(torch.cat(sdfs))
+            return grid.marching_cubes(field, 0.0)
+
+        for batch_size in (8, 12, 17):
+            sdfs = sphere_sdfs(batch_size)
+            verts, faces, _ = mesh(sdfs)
+            for i in range(batch_size):
+                ref_verts, ref_faces, _ = mesh(sdfs[i : i + 1])
+                # Shared edge vertices may be interpolated from either side, so
+                # positions can differ by an ulp between calls.
+                torch.testing.assert_close(verts[i].jdata, ref_verts[0].jdata, atol=1e-6, rtol=0)
+                self.assertTrue(torch.equal(faces[i].jdata, ref_faces[0].jdata), f"B={batch_size} grid {i} faces")
 
     @expand_tests(list(itertools.product(["cuda"], [torch.float32, torch.float64])))
     def test_integrate_tsdf_pixel_weight_blending(self, device, dtype):
@@ -2371,6 +2457,866 @@ class TestBasicOps(unittest.TestCase):
         tsdf2_u_2d = fvdb.JaggedTensor(tsdf2_u.jdata.unsqueeze(-1))
         sampled_u = grid2_u.sample_trilinear(pts, tsdf2_u_2d).jdata.flatten()
         torch.testing.assert_close(sampled_u, expected_tsdf_u, atol=atol, rtol=0)
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA required for integrate_tsdf_from_points")
+    def test_integrate_tsdf_from_points_single_ray_is_exact(self):
+        """
+        For a single LiDAR ray from origin to (R, 0, 0), the per-voxel
+        TSDF along the ray direction should be exactly
+        (R - voxel_x) / truncation, clamped to [-1, 1]. This pins the
+        running-sum kernel's core signed-distance arithmetic.
+        """
+        import fvdb as fv
+
+        device = "cuda"
+        voxel_size = 0.05
+        trunc = 3 * voxel_size
+        R = 1.0
+        points = torch.tensor([[R, 0.0, 0.0]], device=device, dtype=torch.float32)
+        sensor_origin = torch.zeros(3, device=device, dtype=torch.float32)
+
+        grid = fv.Grid.from_dense(
+            dense_dims=[64, 64, 32],
+            ijk_min=[-32, -32, -16],
+            voxel_size=voxel_size,
+            origin=[0, 0, 0],
+            device=device,
+        )
+        tsdf = torch.zeros(grid.num_voxels, device=device, dtype=torch.float32)
+        weights = torch.zeros(grid.num_voxels, device=device, dtype=torch.float32)
+
+        new_grid, new_tsdf, new_weights = grid.integrate_tsdf_from_points(
+            truncation_distance=trunc,
+            points=points,
+            sensor_origin=sensor_origin,
+            tsdf=tsdf,
+            weights=weights,
+            carve_free_space=True,
+        )
+
+        # Find voxels at y=z=0 along +x, in the truncation band around R.
+        # Index into the RETURNED grid (not the input grid) because
+        # `integrate_tsdf_from_points` can grow the topology (e.g. when
+        # the leaf-granularity shell builder in the incremental path
+        # over-covers at sub-leaf scale -- the output grid is a
+        # superset of the input).
+        ijk = new_grid.ijk
+        world = new_grid.voxel_to_world(ijk.float())
+        on_axis = (ijk[:, 1] == 0) & (ijk[:, 2] == 0)
+        x = world[:, 0]
+        in_band = on_axis & (x - R).abs().le(trunc + 0.5 * voxel_size)
+
+        sdf_norm = (R - x[in_band]) / trunc
+        expected = sdf_norm.clamp(-1.0, 1.0)
+        actual = new_tsdf[in_band]
+        self.assertTrue(
+            (new_weights[in_band] > 0).all(),
+            "all in-band on-axis voxels should have been updated",
+        )
+        torch.testing.assert_close(actual, expected, atol=1e-4, rtol=0)
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA required for integrate_tsdf_from_points")
+    def test_integrate_tsdf_from_points_batch_with_empty_items(self):
+        """
+        Batch items whose points are all filtered out (NaN) or absent keep
+        their slot and their topology; the populated item matches a
+        single-grid integration of the same ray.
+        """
+        import fvdb as fv
+        import fvdb.functional as fvf
+
+        device = "cuda"
+        voxel_size = 0.05
+        trunc = 3 * voxel_size
+        dense_kwargs = dict(dense_dims=[64, 64, 32], ijk_min=[-32, -32, -16], device=device)
+        ray = torch.tensor([[1.0, 0.0, 0.0]], device=device)
+
+        batch = fv.GridBatch.from_dense(3, voxel_sizes=voxel_size, origins=0.0, **dense_kwargs)
+        points = fv.JaggedTensor(
+            [ray, torch.full((4, 3), float("nan"), device=device), torch.empty((0, 3), device=device)]
+        )
+        zeros = batch.jagged_like(torch.zeros(batch.total_voxels, device=device))
+        new_batch, new_tsdf, new_weights = fvf.integrate_tsdf_from_points_batch(
+            batch, trunc, points, torch.zeros(3, 3, device=device), zeros, zeros.clone()
+        )
+
+        self.assertEqual(new_batch.grid_count, 3)
+        for i in (1, 2):
+            self.assertEqual(new_batch.num_voxels_at(i), batch.num_voxels_at(i))
+            self.assertEqual(new_weights[i].jdata.count_nonzero().item(), 0)
+
+        grid = fv.Grid.from_dense(voxel_size=voxel_size, origin=0.0, **dense_kwargs)
+        ref_grid, ref_tsdf, ref_weights = grid.integrate_tsdf_from_points(
+            truncation_distance=trunc,
+            points=ray,
+            sensor_origin=torch.zeros(3, device=device),
+            tsdf=torch.zeros(grid.num_voxels, device=device),
+            weights=torch.zeros(grid.num_voxels, device=device),
+        )
+        self.assertEqual(new_batch.num_voxels_at(0), ref_grid.num_voxels)
+        torch.testing.assert_close(new_tsdf[0].jdata, ref_tsdf)
+        torch.testing.assert_close(new_weights[0].jdata, ref_weights)
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA required for integrate_*_from_points")
+    def test_integrate_from_points_accumulates_in_op_math(self):
+        """
+        Many rays through one voxel in a single frame accumulate in the op-math
+        type, so fp16 matches fp32 to fp16 resolution and fp64 is exact.
+        """
+        import fvdb as fv
+
+        device = "cuda"
+        voxel_size = 0.05
+        trunc = 3 * voxel_size
+        rays = 5000
+
+        def make(dtype):
+            grid = fv.Grid.from_dense(
+                dense_dims=[64, 16, 16], ijk_min=[-8, -8, -8], voxel_size=voxel_size, origin=0.0, device=device
+            )
+            return grid, torch.zeros(grid.num_voxels, device=device, dtype=dtype)
+
+        # Every ray ends at the same point, so each on-axis voxel sees `rays` updates.
+        points = torch.tensor([[1.0, 0.0, 0.0]], device=device).repeat(rays, 1)
+        origin = torch.zeros(3, device=device)
+
+        results = {}
+        for dtype in (torch.float16, torch.float32, torch.float64):
+            grid, zeros = make(dtype)
+            results[dtype] = grid.integrate_tsdf_from_points(
+                trunc, points.to(dtype), origin.to(dtype), zeros, zeros.clone()
+            )
+        _, t16, w16 = results[torch.float16]
+        _, t32, w32 = results[torch.float32]
+        g64, t64, w64 = results[torch.float64]
+
+        self.assertEqual(w32.max().item(), rays)
+        torch.testing.assert_close(w16.float(), w32, atol=0, rtol=0)
+        torch.testing.assert_close(t16.float(), t32, atol=1e-3, rtol=0)
+
+        world = g64.voxel_to_world(g64.ijk.double())
+        on_axis = (g64.ijk[:, 1] == 0) & (g64.ijk[:, 2] == 0) & ((world[:, 0] - 1.0).abs() <= trunc)
+        expected = ((1.0 - world[on_axis, 0]) / trunc).clamp(-1.0, 1.0)
+        torch.testing.assert_close(t64[on_axis], expected, atol=1e-12, rtol=0)
+
+        # Occupancy: each on-axis voxel in front of the far endpoint gets `rays` misses,
+        # and voxels near the near endpoint get `rays` hits. Wide bounds expose the sums.
+        both = torch.cat([points, 0.5 * points])
+        log_odds = {}
+        for dtype in (torch.float16, torch.float32):
+            grid, zeros = make(dtype)
+            _, log_odds[dtype] = grid.integrate_occupancy_from_points(
+                trunc, both.to(dtype), origin.to(dtype), zeros, log_odds_min=-1e4, log_odds_max=1e4
+            )
+        # fp16 can only round the final sums (|sum| < 4096, ulp <= 2).
+        torch.testing.assert_close(log_odds[torch.float16].float(), log_odds[torch.float32], atol=2.0, rtol=0)
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA required for integrate_tsdf_frames")
+    def test_integrate_tsdf_frames_validation_and_empty_start(self):
+        """
+        ``integrate_tsdf_frames`` rejects image shapes the single-frame path
+        rejects, and keeps the feature channel when starting from an empty grid,
+        in both carving modes.
+        """
+        import fvdb as fv
+
+        device = "cuda"
+        H, W, N, C = 16, 16, 2, 3
+        K = torch.tensor([[8.0, 0.0, W / 2], [0.0, 8.0, H / 2], [0.0, 0.0, 1.0]], device=device).repeat(N, 1, 1)
+        E = torch.eye(4, device=device).repeat(N, 1, 1)
+        depth = torch.full((N, H, W), 0.5, device=device)
+        feature_images = torch.rand(N, H, W, C, device=device)
+
+        grid = fv.Grid.from_zero_voxels(device=device, voxel_size=0.05)
+        empty = torch.zeros(0, device=device)
+        for carve in (True, False):
+            g, t, w, f = grid.integrate_tsdf_frames(
+                0.1,
+                K,
+                E,
+                empty,
+                empty.clone(),
+                depth,
+                features=torch.zeros(0, C, device=device),
+                feature_images=feature_images,
+                carve_free_space=carve,
+            )
+            self.assertGreater(g.num_voxels, 0)
+            self.assertEqual(tuple(f.shape), (g.num_voxels, C))
+
+        dense = fv.Grid.from_dense([8, 8, 8], [-4, -4, -4], voxel_size=0.05, device=device)
+        zeros = torch.zeros(dense.num_voxels, device=device)
+        with self.assertRaises((ValueError, RuntimeError)):
+            dense.integrate_tsdf_frames(0.1, K, E, zeros, zeros.clone(), depth, weight_images=torch.ones(N, H // 2, W))
+        with self.assertRaises((ValueError, RuntimeError)):
+            dense.integrate_tsdf_frames(
+                0.1,
+                K,
+                E,
+                zeros,
+                zeros.clone(),
+                depth,
+                features=torch.zeros(dense.num_voxels, C, device=device),
+                feature_images=feature_images[..., :1],
+            )
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA required for integrate_tsdf_from_points")
+    def test_integrate_tsdf_from_points_edge_cases(self):
+        """
+        Without carving, a point closer than the truncation distance does not
+        update voxels behind the sensor. fp16 weights saturate at the largest
+        finite value instead of overflowing, so later frames stay finite.
+        """
+        import fvdb as fv
+
+        device = "cuda"
+        voxel_size = 0.05
+        trunc = 3 * voxel_size
+        grid = fv.Grid.from_dense(
+            dense_dims=[32, 8, 8], ijk_min=[-16, -4, -4], voxel_size=voxel_size, origin=0.0, device=device
+        )
+        origin = torch.zeros(3, device=device)
+        zeros = torch.zeros(grid.num_voxels, device=device)
+
+        near = torch.tensor([[0.06, 0.0, 0.0]], device=device)
+        g, _, w = grid.integrate_tsdf_from_points(trunc, near, origin, zeros, zeros.clone(), carve_free_space=False)
+        behind = g.voxel_to_world(g.ijk.float())[:, 0] < -0.5 * voxel_size
+        self.assertEqual(w[behind].count_nonzero().item(), 0)
+        self.assertGreater(w[~behind].count_nonzero().item(), 0)
+
+        many = torch.tensor([[0.5, 0.0, 0.0]], device=device).repeat(70000, 1)
+        zeros16 = zeros.half()
+        g, t, w = grid.integrate_tsdf_from_points(trunc, many.half(), origin.half(), zeros16, zeros16.clone())
+        self.assertTrue(torch.isfinite(w).all())
+        self.assertEqual(w.max().item(), torch.finfo(torch.float16).max)
+        g, t, w = g.integrate_tsdf_from_points(trunc, many[:1].half(), origin.half(), t, w)
+        self.assertTrue(torch.isfinite(t).all())
+        self.assertTrue(torch.isfinite(w).all())
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA required for integrate_*_from_points")
+    def test_integrate_from_points_empty_union(self):
+        """
+        Integrating only non-finite points (or none) into an empty grid
+        returns an empty result instead of launching zero-block kernels.
+        """
+        import fvdb as fv
+
+        device = "cuda"
+        grid = fv.Grid.from_zero_voxels(device=device, voxel_size=0.05)
+        empty = torch.zeros(0, device=device)
+        origin = torch.zeros(3, device=device)
+        for points in (torch.full((4, 3), float("nan"), device=device), torch.zeros(0, 3, device=device)):
+            g, t, w = grid.integrate_tsdf_from_points(0.15, points, origin, empty, empty.clone())
+            self.assertEqual((g.num_voxels, t.numel(), w.numel()), (0, 0, 0))
+            g, t, w, f = grid.integrate_tsdf_from_points(
+                0.15,
+                points,
+                origin,
+                empty,
+                empty.clone(),
+                point_features=torch.zeros(points.shape[0], 3, device=device),
+                features=torch.zeros(0, 3, device=device),
+            )
+            self.assertEqual(tuple(f.shape), (0, 3))
+            g, lo = grid.integrate_occupancy_from_points(0.15, points, origin, empty.clone())
+            self.assertEqual((g.num_voxels, lo.numel()), (0, 0))
+
+        dense = fv.Grid.from_dense([8, 8, 8], [-4, -4, -4], voxel_size=0.05, device=device)
+        zeros = torch.zeros(dense.num_voxels, device=device)
+        points = torch.tensor([[0.1, 0.0, 0.0]], device=device)
+        with self.assertRaises(ValueError):
+            dense.integrate_tsdf_from_points(
+                0.15,
+                points,
+                origin,
+                zeros,
+                zeros.clone(),
+                point_features=torch.zeros(1, 3),
+                features=torch.zeros(dense.num_voxels, 3, device=device),
+            )
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA required for integrate_*_from_points")
+    def test_integrate_from_points_rejects_bad_inputs(self):
+        """
+        Inputs on the wrong device or with the wrong size raise ``ValueError``
+        instead of reaching the kernels.
+        """
+        import fvdb as fv
+
+        device = "cuda"
+        voxel_size = 0.05
+        trunc = 3 * voxel_size
+        grid = fv.Grid.from_dense(
+            dense_dims=[16, 16, 16], ijk_min=[-8, -8, -8], voxel_size=voxel_size, origin=0.0, device=device
+        )
+        points = torch.tensor([[0.2, 0.0, 0.0]], device=device)
+        zeros = torch.zeros(grid.num_voxels, device=device)
+        short = torch.zeros(grid.num_voxels - 1, device=device)
+
+        with self.assertRaises(ValueError):
+            grid.integrate_tsdf_from_points(trunc, points, torch.zeros(3), zeros, zeros.clone())
+        with self.assertRaises(ValueError):
+            grid.integrate_occupancy_from_points(trunc, points, torch.zeros(3), zeros.clone())
+        with self.assertRaises(ValueError):
+            grid.integrate_tsdf_from_points_frames(
+                trunc, [points, points], torch.zeros(2, 3, device=device), short, short.clone()
+            )
+        with self.assertRaises(ValueError):
+            grid.integrate_tsdf_from_points_frames(
+                trunc, [points, points.cpu()], torch.zeros(2, 3, device=device), zeros, zeros.clone()
+            )
+        with self.assertRaises(ValueError):
+            grid.integrate_occupancy_from_points_frames(trunc, [points], torch.zeros(1, 3, device=device), short)
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA required for integrate_*_from_points")
+    def test_integrate_from_points_skips_non_finite_points(self):
+        """
+        NaN and Inf points are skipped by the TSDF and occupancy ray walks
+        instead of writing non-finite values or walking unbounded rays.
+        """
+        import fvdb as fv
+
+        device = "cuda"
+        voxel_size = 0.05
+        trunc = 3 * voxel_size
+        grid = fv.Grid.from_dense(
+            dense_dims=[64, 64, 32], ijk_min=[-32, -32, -16], voxel_size=voxel_size, origin=0.0, device=device
+        )
+        origin = torch.zeros(3, device=device)
+        ray = torch.tensor([[1.0, 0.0, 0.0]], device=device)
+        bad = torch.tensor(
+            [[float("nan"), 0.0, 0.0], [float("inf"), 0.0, 0.0], [0.0, float("-inf"), 1.0]], device=device
+        )
+        zeros = torch.zeros(grid.num_voxels, device=device)
+
+        def tsdf(points):
+            return grid.integrate_tsdf_from_points(
+                truncation_distance=trunc, points=points, sensor_origin=origin, tsdf=zeros, weights=zeros.clone()
+            )
+
+        def occupancy(points):
+            return grid.integrate_occupancy_from_points(
+                truncation_distance=trunc, points=points, sensor_origin=origin, log_odds=zeros.clone()
+            )
+
+        _, bad_tsdf, bad_weights = tsdf(bad)
+        self.assertEqual(bad_weights.count_nonzero().item(), 0)
+        self.assertTrue(torch.isfinite(bad_tsdf).all())
+        _, bad_log_odds = occupancy(bad)
+        self.assertEqual(bad_log_odds.count_nonzero().item(), 0)
+
+        _, mixed_tsdf, mixed_weights = tsdf(torch.cat([ray, bad]))
+        _, ref_tsdf, ref_weights = tsdf(ray)
+        torch.testing.assert_close(mixed_tsdf, ref_tsdf)
+        torch.testing.assert_close(mixed_weights, ref_weights)
+        torch.testing.assert_close(occupancy(torch.cat([ray, bad]))[1], occupancy(ray)[1])
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA required for integrate_tsdf_from_points")
+    def test_integrate_tsdf_from_points_sphere_reconstruction(self):
+        """
+        Integrating a dense sphere of points should reconstruct a mesh
+        whose vertex radii match the source radius to within a fraction
+        of a voxel. This exercises the full ray-walk + HDDA path and the
+        Euclidean-range SDF formula (an along-ray-projection formula
+        would bias the reconstruction outward by ~1.5 voxels).
+        """
+        import fvdb as fv
+
+        device = "cuda"
+        voxel_size = 0.05
+        trunc = 3 * voxel_size
+        R = 1.0
+
+        n_theta, n_phi = 32, 64
+        theta = torch.linspace(0, math.pi, n_theta, device=device)
+        phi = torch.linspace(0, 2 * math.pi, n_phi + 1, device=device)[:-1]
+        tt, pp = torch.meshgrid(theta, phi, indexing="ij")
+        pts = (
+            torch.stack(
+                [
+                    R * torch.sin(tt) * torch.cos(pp),
+                    R * torch.sin(tt) * torch.sin(pp),
+                    R * torch.cos(tt),
+                ],
+                -1,
+            )
+            .reshape(-1, 3)
+            .float()
+        )
+        sensor_origin = torch.zeros(3, device=device, dtype=torch.float32)
+
+        grid = fv.Grid.from_dense(
+            dense_dims=[64, 64, 64],
+            ijk_min=[-32, -32, -32],
+            voxel_size=voxel_size,
+            origin=[0, 0, 0],
+            device=device,
+        )
+        tsdf = torch.zeros(grid.num_voxels, device=device, dtype=torch.float32)
+        weights = torch.zeros(grid.num_voxels, device=device, dtype=torch.float32)
+
+        new_grid, new_tsdf, new_weights = grid.integrate_tsdf_from_points(
+            truncation_distance=trunc,
+            points=pts,
+            sensor_origin=sensor_origin,
+            tsdf=tsdf,
+            weights=weights,
+            carve_free_space=True,
+        )
+
+        # MC only makes sense where we have observations; prune to the
+        # observed-voxel subgrid before extraction.
+        observed = new_weights > 0
+        pruned = new_grid.pruned_grid(observed)
+        pruned_tsdf = new_tsdf[observed]
+
+        v, _, _ = pruned.marching_cubes(pruned_tsdf, 0.0)
+        self.assertGreater(v.shape[0], 0, "expected a non-empty mesh")
+
+        radii = v.norm(dim=1)
+        # Tolerate up to 1 voxel of mean error + per-vertex resolution.
+        self.assertLess(
+            (radii.mean() - R).abs().item(),
+            0.5 * voxel_size,
+            f"sphere mesh mean radius off by >0.5 voxels: {radii.mean().item()}",
+        )
+        self.assertLess(
+            radii.std().item(),
+            voxel_size,
+            f"sphere mesh radial std too wide: {radii.std().item()}",
+        )
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA required for integrate_tsdf_frames")
+    def test_integrate_tsdf_frames_matches_sequential(self):
+        """
+        With the default ``carve_free_space=True``, ``Grid.integrate_tsdf_frames``
+        produces the same (grid, tsdf, weights) as N sequential
+        ``Grid.integrate_tsdf`` calls, bit for bit.
+        """
+        import fvdb as fv
+
+        device = "cuda"
+        N = 5
+        H, W = 64, 64
+        voxel_size = 0.05
+        trunc = 0.1
+
+        grid = fv.Grid.from_dense([32, 32, 32], [-16, -16, -16], voxel_size=voxel_size, device=device)
+        tsdf0 = torch.zeros(grid.num_voxels, device=device)
+        weights0 = torch.zeros(grid.num_voxels, device=device)
+
+        K = torch.eye(3, device=device).unsqueeze(0).repeat(N, 1, 1)
+        K[:, 0, 0] = K[:, 1, 1] = 32.0
+        K[:, 0, 2] = W / 2
+        K[:, 1, 2] = H / 2
+        # N viewpoints along +z with small translations so the truncation
+        # shell actually grows across frames (exercises the copy-forward
+        # path for iterations > 0, where base = unionGrid).
+        E = torch.eye(4, device=device).unsqueeze(0).repeat(N, 1, 1)
+        for i in range(N):
+            E[i, 0, 3] = 0.05 * (i - N / 2)
+            E[i, 2, 3] = -1.0 - 0.02 * i
+        depth = 0.5 + 0.01 * torch.randn(N, H, W, device=device)
+
+        # --- Batched path ---
+        g_bat, t_bat, w_bat = grid.integrate_tsdf_frames(
+            truncation_distance=trunc,
+            projection_matrices=K,
+            cam_to_world_matrices=E,
+            tsdf=tsdf0,
+            weights=weights0,
+            depth_images=depth,
+        )
+
+        # --- Sequential reference ---
+        g_ref, t_ref, w_ref = grid, tsdf0, weights0
+        for i in range(N):
+            g_ref, t_ref, w_ref = g_ref.integrate_tsdf(
+                truncation_distance=trunc,
+                projection_matrices=K[i : i + 1],
+                cam_to_world_matrices=E[i : i + 1],
+                tsdf=t_ref,
+                weights=w_ref,
+                depth_images=depth[i : i + 1],
+            )
+
+        # Topology must match exactly (same union over all frames'
+        # truncation shells).
+        self.assertEqual(g_bat.num_voxels, g_ref.num_voxels)
+        self.assertTrue(torch.equal(g_bat.ijk, g_ref.ijk))
+
+        # TSDF and weights must match bit-identically (both paths feed
+        # the same floating-point operations through the same kernel, in
+        # the same order, over the same voxel set).
+        torch.testing.assert_close(t_bat, t_ref, atol=0.0, rtol=0.0)
+        torch.testing.assert_close(w_bat, w_ref, atol=0.0, rtol=0.0)
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA required for integrate_tsdf")
+    def test_integrate_tsdf_carves_free_space(self):
+        """
+        A surface that moves away from the camera is carved: voxels at the old
+        surface, now in front of the new one by more than the truncation
+        distance, blend toward +1. ``integrate_tsdf`` and the default
+        ``integrate_tsdf_frames`` carve; ``carve_free_space=False`` does not.
+        """
+        import fvdb as fv
+
+        device = "cuda"
+        voxel_size = 0.05
+        trunc = 0.1
+        H, W = 32, 32
+        grid = fv.Grid.from_dense([32, 32, 32], [-16, -16, -16], voxel_size=voxel_size, device=device)
+        zeros = torch.zeros(grid.num_voxels, device=device)
+
+        K = torch.tensor([[16.0, 0.0, W / 2], [0.0, 16.0, H / 2], [0.0, 0.0, 1.0]], device=device)
+        K = K.unsqueeze(0).repeat(2, 1, 1)
+        E = torch.eye(4, device=device).unsqueeze(0).repeat(2, 1, 1)
+        E[:, 2, 3] = -1.0
+        # Frame 0 sees a plane at world z = -0.5, frame 1 sees it at z = -0.1.
+        depth = torch.stack([torch.full((H, W), 0.5, device=device), torch.full((H, W), 0.9, device=device)])
+
+        def tsdf_at(g, tsdf, ijk):
+            idx = g.ijk_to_index(torch.tensor([ijk], dtype=torch.int32, device=device))
+            return tsdf[idx].item()
+
+        old_surface = [0, 0, -10]  # world z = -0.5
+
+        g, t, w = grid, zeros, zeros.clone()
+        for i in range(2):
+            g, t, w = g.integrate_tsdf(trunc, K[i : i + 1], E[i : i + 1], t, w, depth[i : i + 1])
+        self.assertAlmostEqual(tsdf_at(g, t, old_surface), 0.5, places=5)
+
+        g_c, t_c, _ = grid.integrate_tsdf_frames(trunc, K, E, zeros, zeros.clone(), depth)
+        self.assertAlmostEqual(tsdf_at(g_c, t_c, old_surface), 0.5, places=5)
+
+        g_s, t_s, _ = grid.integrate_tsdf_frames(trunc, K, E, zeros, zeros.clone(), depth, carve_free_space=False)
+        self.assertAlmostEqual(tsdf_at(g_s, t_s, old_surface), 0.0, places=5)
+
+    def test_integrate_tsdf_from_points_frames_matches_sequential(self):
+        """
+        ``Grid.integrate_tsdf_from_points_frames`` runs N LiDAR sweeps
+        in one C++ call; the result must agree with N sequential
+        ``integrate_tsdf_from_points`` calls.
+
+        Unlike the depth-image integrator (which writes to each voxel
+        exactly once per frame and is therefore bit-deterministic),
+        the LiDAR ray-walk kernel accumulates per-voxel TSDF/weight
+        contributions via ``atomicAdd`` across threads walking
+        overlapping rays. Atomic ordering is non-deterministic in
+        CUDA, so two back-to-back calls to the *same* single-frame
+        API don't produce bit-identical TSDF tensors either: we
+        measured ~0.4% of voxels diverge by exactly 1 ULP of fp32
+        between two runs of the sequential reference. Consequently
+        we assert agreement within a small tolerance (``atol=2e-6``,
+        ~10x the observed 1-ULP atomic-noise floor) rather than
+        bit-identity.
+
+        Weights *are* bit-deterministic (``+= 1.0`` per contribution
+        is exact) so we pin those at ``atol=rtol=0``.
+        """
+        import fvdb as fv
+
+        device = "cuda"
+        N = 5
+        voxel_size = 0.2
+        trunc = 0.6
+
+        grid = fv.Grid.from_dense(
+            [10, 10, 10],
+            [-5, -5, -5],
+            voxel_size=voxel_size,
+            origin=[0, 0, 0],
+            device=device,
+        )
+        tsdf0 = torch.zeros(grid.num_voxels, device=device)
+        weights0 = torch.zeros(grid.num_voxels, device=device)
+
+        torch.manual_seed(0)
+        pts_per_frame = [
+            torch.randn(1000, 3, device=device) + torch.tensor([float(i) * 0.5, 0.0, 0.0], device=device)
+            for i in range(N)
+        ]
+        sensor_origins = torch.stack([torch.tensor([float(i) * 0.5, 0.0, 0.0], device=device) for i in range(N)])
+
+        # --- Batched path ---
+        g_bat, t_bat, w_bat = grid.integrate_tsdf_from_points_frames(
+            truncation_distance=trunc,
+            points_per_frame=pts_per_frame,
+            sensor_origins=sensor_origins,
+            tsdf=tsdf0,
+            weights=weights0,
+            carve_free_space=True,
+        )
+
+        # --- Sequential reference ---
+        g_ref, t_ref, w_ref = grid, tsdf0, weights0
+        for i in range(N):
+            g_ref, t_ref, w_ref = g_ref.integrate_tsdf_from_points(
+                truncation_distance=trunc,
+                points=pts_per_frame[i],
+                sensor_origin=sensor_origins[i],
+                tsdf=t_ref,
+                weights=w_ref,
+                carve_free_space=True,
+            )
+
+        # Topology must match bit-identically (same N shells unioned
+        # in the same order via the same mergeGrids calls).
+        self.assertEqual(g_bat.num_voxels, g_ref.num_voxels)
+        self.assertTrue(torch.equal(g_bat.ijk, g_ref.ijk))
+
+        # Weights are deterministic (sum of +1 contributions).
+        torch.testing.assert_close(w_bat, w_ref, atol=0.0, rtol=0.0)
+
+        # TSDF is not bit-deterministic due to atomic-add reorder in
+        # `rayWalkIntegrateKernel`; assert within a 10-ULP tolerance.
+        torch.testing.assert_close(t_bat, t_ref, atol=2e-6, rtol=1e-5)
+
+    def test_integrate_tsdf_frames_fp16(self):
+        """
+        Verify the fp16 integrate_tsdf_frames path produces a valid
+        output -- same ijk topology contract, tsdf/weights tensors in
+        fp16, and results within fp16 precision of the fp32 baseline.
+        This is the headline "halves accumulated-grid memory" path
+        that reality-capture pipelines rely on; we want to catch
+        regressions of its dispatch.
+        """
+        import fvdb as fv
+
+        device = "cuda"
+        N = 4
+        H, W = 48, 48
+        voxel_size = 0.05
+        trunc = 0.15
+
+        K = torch.eye(3, device=device).unsqueeze(0).repeat(N, 1, 1)
+        K[:, 0, 0] = K[:, 1, 1] = 24.0
+        K[:, 0, 2] = W / 2
+        K[:, 1, 2] = H / 2
+        E = torch.eye(4, device=device).unsqueeze(0).repeat(N, 1, 1)
+        for i in range(N):
+            E[i, 0, 3] = 0.04 * (i - N / 2)
+            E[i, 2, 3] = -1.2 - 0.02 * i
+        depth = 0.6 + 0.01 * torch.randn(N, H, W, device=device)
+
+        outputs = {}
+        for dtype in (torch.float32, torch.float16):
+            grid = fv.Grid.from_dense(
+                [24, 24, 24],
+                [-12, -12, -12],
+                voxel_size=voxel_size,
+                device=device,
+            )
+            t0 = torch.zeros(grid.num_voxels, device=device, dtype=dtype)
+            w0 = torch.zeros(grid.num_voxels, device=device, dtype=dtype)
+            g, t, w = grid.integrate_tsdf_frames(
+                truncation_distance=trunc,
+                projection_matrices=K.to(dtype),
+                cam_to_world_matrices=E.to(dtype),
+                tsdf=t0,
+                weights=w0,
+                depth_images=depth.to(dtype),
+            )
+            outputs[dtype] = (g, t, w)
+
+        g32, t32, w32 = outputs[torch.float32]
+        g16, t16, w16 = outputs[torch.float16]
+
+        self.assertEqual(t16.dtype, torch.float16)
+        self.assertEqual(w16.dtype, torch.float16)
+
+        # Topology sizes should be within 10% of each other (fp16
+        # unprojection produces slightly different quantised boundary
+        # voxels but the bulk of the surface is identical at this
+        # voxel size / scene scale).
+        vox_ratio = g16.num_voxels / max(g32.num_voxels, 1)
+        self.assertGreater(vox_ratio, 0.9)
+        self.assertLess(vox_ratio, 1.2)
+
+        # Both tsdf fields should lie in [-1, 1] after normalisation by
+        # the truncation margin (the kernel clamps with
+        # `Min(1, zDiff/trunc)`).
+        self.assertTrue((t16.abs() <= 1.0 + 1e-2).all())
+        self.assertTrue((t32.abs() <= 1.0 + 1e-6).all())
+
+        # Weights should be non-negative.
+        self.assertTrue((w16 >= 0).all())
+        self.assertTrue((w32 >= 0).all())
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA required for integrate_tsdf_from_points")
+    def test_integrate_tsdf_from_points_return_contract_matches_depth(self):
+        """
+        The LiDAR and depth TSDF integrators must return structurally
+        identical tuples: the no-features path returns (Grid, Tensor[N],
+        Tensor[N]) and the with-features path returns (Grid, Tensor[N],
+        Tensor[N], Tensor[N, D]), with consistent dtypes. This pins the
+        API contract so future refactors cannot silently diverge.
+        """
+        import fvdb as fv
+
+        device = "cuda"
+        grid = fv.Grid.from_dense([32, 32, 32], [0, 0, 0], voxel_size=1.0 / 32, device=device)
+        tsdf = torch.zeros(grid.num_voxels, device=device, dtype=torch.float32)
+        weights = torch.zeros(grid.num_voxels, device=device, dtype=torch.float32)
+
+        K = torch.eye(3, device=device, dtype=torch.float32).unsqueeze(0)
+        E = torch.eye(4, device=device, dtype=torch.float32).unsqueeze(0)
+        depth = 0.5 * torch.ones(1, 16, 16, device=device, dtype=torch.float32)
+
+        pts = torch.tensor([[0.5, 0.0, 0.0]], device=device, dtype=torch.float32)
+        origin = torch.zeros(3, device=device, dtype=torch.float32)
+
+        # No-features: both paths should return a 3-tuple with identical
+        # output types/shapes up to num_voxels (which differs because the
+        # two integrators produce different union grids).
+        d_grid, d_tsdf, d_weights = grid.integrate_tsdf(
+            truncation_distance=0.1,
+            projection_matrices=K,
+            cam_to_world_matrices=E,
+            tsdf=tsdf,
+            weights=weights,
+            depth_images=depth,
+        )
+        l_grid, l_tsdf, l_weights = grid.integrate_tsdf_from_points(
+            truncation_distance=0.1,
+            points=pts,
+            sensor_origin=origin,
+            tsdf=tsdf,
+            weights=weights,
+            carve_free_space=True,
+        )
+
+        self.assertIs(type(d_grid), type(l_grid))
+        self.assertIs(type(d_tsdf), type(l_tsdf))
+        self.assertIs(type(d_weights), type(l_weights))
+        self.assertEqual(d_tsdf.dtype, l_tsdf.dtype)
+        self.assertEqual(d_weights.dtype, l_weights.dtype)
+        self.assertEqual(d_tsdf.shape, (d_grid.num_voxels,))
+        self.assertEqual(l_tsdf.shape, (l_grid.num_voxels,))
+        self.assertEqual(d_weights.shape, (d_grid.num_voxels,))
+        self.assertEqual(l_weights.shape, (l_grid.num_voxels,))
+
+        # With-features: both paths should return a 4-tuple with
+        # identical output types/shapes (up to num_voxels).
+        features = torch.zeros(grid.num_voxels, 3, device=device, dtype=torch.uint8)
+        feat_images = torch.zeros(1, 16, 16, 3, device=device, dtype=torch.uint8)
+        d_grid_f, d_tsdf_f, d_weights_f, d_feat_f = grid.integrate_tsdf_with_features(
+            truncation_distance=0.1,
+            projection_matrices=K,
+            cam_to_world_matrices=E,
+            tsdf=tsdf,
+            features=features,
+            weights=weights,
+            depth_images=depth,
+            feature_images=feat_images,
+        )
+        point_colours = torch.tensor([[255, 0, 0]], device=device, dtype=torch.uint8)
+        l_grid_f, l_tsdf_f, l_weights_f, l_feat_f = grid.integrate_tsdf_from_points(
+            truncation_distance=0.1,
+            points=pts,
+            sensor_origin=origin,
+            tsdf=tsdf,
+            weights=weights,
+            point_features=point_colours,
+            features=features,
+            carve_free_space=True,
+        )
+
+        self.assertEqual(d_feat_f.shape, (d_grid_f.num_voxels, 3))
+        self.assertEqual(l_feat_f.shape, (l_grid_f.num_voxels, 3))
+        self.assertEqual(d_feat_f.dtype, l_feat_f.dtype)
+        self.assertEqual(d_feat_f.dtype, torch.uint8)
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA required for integrate_tsdf_from_points")
+    def test_integrate_tsdf_from_points_colour_propagation(self):
+        """
+        Colouring half the sphere red and half blue, then integrating
+        with `point_features`, should produce a voxel feature field that
+        samples (within fp precision) to the nearest-input-colour at
+        voxels within the truncation band. Uint8 colours must round-trip
+        through the fp32 running-sum accumulator without precision loss
+        for the uniform-colour regions.
+        """
+        import fvdb as fv
+
+        device = "cuda"
+        voxel_size = 0.05
+        trunc = 3 * voxel_size
+        R = 1.0
+
+        n_theta, n_phi = 32, 64
+        theta = torch.linspace(0, math.pi, n_theta, device=device)
+        phi = torch.linspace(0, 2 * math.pi, n_phi + 1, device=device)[:-1]
+        tt, pp = torch.meshgrid(theta, phi, indexing="ij")
+        pts = (
+            torch.stack(
+                [
+                    R * torch.sin(tt) * torch.cos(pp),
+                    R * torch.sin(tt) * torch.sin(pp),
+                    R * torch.cos(tt),
+                ],
+                -1,
+            )
+            .reshape(-1, 3)
+            .float()
+        )
+        # Hemisphere split by sign of x:
+        red = torch.tensor([255, 0, 0], device=device, dtype=torch.uint8)
+        blue = torch.tensor([0, 0, 255], device=device, dtype=torch.uint8)
+        point_colors = torch.where(
+            pts[:, 0:1] > 0,
+            red.unsqueeze(0).expand(pts.shape[0], -1),
+            blue.unsqueeze(0).expand(pts.shape[0], -1),
+        ).contiguous()
+
+        sensor_origin = torch.zeros(3, device=device, dtype=torch.float32)
+        grid = fv.Grid.from_dense(
+            dense_dims=[64, 64, 64],
+            ijk_min=[-32, -32, -32],
+            voxel_size=voxel_size,
+            origin=[0, 0, 0],
+            device=device,
+        )
+        tsdf = torch.zeros(grid.num_voxels, device=device, dtype=torch.float32)
+        weights = torch.zeros(grid.num_voxels, device=device, dtype=torch.float32)
+        features = torch.zeros(grid.num_voxels, 3, device=device, dtype=torch.uint8)
+
+        new_grid, _, new_weights, new_features = grid.integrate_tsdf_from_points(
+            truncation_distance=trunc,
+            points=pts,
+            sensor_origin=sensor_origin,
+            tsdf=tsdf,
+            weights=weights,
+            point_features=point_colors,
+            features=features,
+            carve_free_space=False,  # keep only truncation-band voxels for colour check
+        )
+
+        # Colour must match the input hemisphere at observed voxels well
+        # away from the x=0 seam. We sample a few known-hemisphere
+        # voxels via world -> ijk lookup.
+        ijk = new_grid.ijk
+        world = new_grid.voxel_to_world(ijk.float())
+        observed = new_weights > 0
+
+        # Voxels on the +x hemisphere within truncation of the sphere.
+        dist_to_sphere = (world.norm(dim=1) - R).abs()
+        on_red_hemi = (world[:, 0] > 0.5) & (dist_to_sphere < trunc) & observed
+        on_blue_hemi = (world[:, 0] < -0.5) & (dist_to_sphere < trunc) & observed
+
+        self.assertGreater(on_red_hemi.sum().item(), 10, "expected red-hemi observations")
+        self.assertGreater(on_blue_hemi.sum().item(), 10, "expected blue-hemi observations")
+
+        red_r = new_features[on_red_hemi, 0].float().mean().item()
+        red_b = new_features[on_red_hemi, 2].float().mean().item()
+        blue_r = new_features[on_blue_hemi, 0].float().mean().item()
+        blue_b = new_features[on_blue_hemi, 2].float().mean().item()
+
+        # Away from the seam, each hemisphere should pick up ~pure colour.
+        self.assertGreater(red_r, 200, f"red hemi red channel too low: {red_r}")
+        self.assertLess(red_b, 50, f"red hemi blue leak too high: {red_b}")
+        self.assertGreater(blue_b, 200, f"blue hemi blue channel too low: {blue_b}")
+        self.assertLess(blue_r, 50, f"blue hemi red leak too high: {blue_r}")
 
     @parameterized.expand(all_device_dtype_combos + bfloat16_combos)
     def test_refine_empty_grid(self, device, dtype):
