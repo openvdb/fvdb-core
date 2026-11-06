@@ -8,13 +8,21 @@
 # NanoVDBConfig.cmake with a matching major version.
 #
 # fVDB needs Blosc and ZIP support for .nvdb I/O, and builds NanoVDB with CUDA.
-# NanoVDB's CUDA option uses an existing CCCL::CCCL target, so find the CUDA
-# toolkit's CCCL first. Without it, NanoVDB would clone its own CCCL, and fVDB
-# would compile against different CUB and Thrust headers than torch.
+# NanoVDB's CUDA option looks for the CUDA toolkit's CCCL and clones its own
+# CCCL when it finds none, which would give fVDB different CUB and Thrust
+# headers than torch. Requiring the toolkit's CCCL here makes that a configure
+# error instead, and NanoVDB uses the CCCL::CCCL target found here.
 if(NOT TARGET CCCL::CCCL)
     find_package(CUDAToolkit REQUIRED)
     find_package(CCCL CONFIG REQUIRED
         HINTS "${CUDAToolkit_TARGET_DIR}/lib/cmake" "${CUDAToolkit_LIBRARY_DIR}/cmake")
+endif()
+
+# The CPM package was named nanovdb before, so keep honoring a source override
+# such as -DCPM_nanovdb_SOURCE=<openvdb checkout> under the old name.
+if(CPM_nanovdb_SOURCE AND NOT CPM_NanoVDB_SOURCE)
+    message(WARNING "CPM_nanovdb_SOURCE is deprecated, use CPM_NanoVDB_SOURCE")
+    set(CPM_NanoVDB_SOURCE "${CPM_nanovdb_SOURCE}")
 endif()
 
 CPMAddPackage(
@@ -68,4 +76,12 @@ unset(_fvdb_nanovdb_definitions)
 get_target_property(FVDB_NANOVDB_INCLUDE_DIR NanoVDB::nanovdb NANOVDB_INCLUDE_DIR)
 if(NOT FVDB_NANOVDB_INCLUDE_DIR)
     message(FATAL_ERROR "NanoVDB::nanovdb does not set NANOVDB_INCLUDE_DIR")
+endif()
+
+# libfvdb.so statically links nanovdb_blosc, so the wheel ships the notices for
+# its BSD-licensed Blosc, LZ4 and FastLZ code. An installed NanoVDB has no
+# source tree here and installs these notices itself.
+set(FVDB_NANOVDB_BLOSC_DIR "${FVDB_NANOVDB_INCLUDE_DIR}/../ext/blosc/openvdb/ext/blosc")
+if(NOT EXISTS "${FVDB_NANOVDB_BLOSC_DIR}/LICENSE.txt")
+    unset(FVDB_NANOVDB_BLOSC_DIR)
 endif()
