@@ -3,9 +3,33 @@
 //
 #include <fvdb/GridBatchData.h>
 #include <fvdb/detail/GridBatchDataFactory.h>
+#include <fvdb/detail/VbmCache.h>
 #include <fvdb/detail/ops/JIdxForGrid.h>
 
 namespace fvdb {
+
+GridBatchData::GridBatchData(std::shared_ptr<GridStorage> storage,
+                             GridMetadata *hostGridMetadata,
+                             GridMetadata *deviceGridMetadata,
+                             int64_t batchSize,
+                             GridBatchMetadata batchMetadata,
+                             torch::Tensor leafBatchIndices,
+                             torch::Tensor batchOffsets,
+                             torch::Tensor listIndices)
+    : GridBatchData(std::move(storage),
+                    std::make_shared<detail::VbmCache>(),
+                    hostGridMetadata,
+                    deviceGridMetadata,
+                    batchSize,
+                    std::move(batchMetadata),
+                    std::move(leafBatchIndices),
+                    std::move(batchOffsets),
+                    std::move(listIndices)) {}
+
+detail::VbmCache &
+GridBatchData::vbmCache() const {
+    return *mVbmCache;
+}
 
 // -----------------------------------------------------------------------
 // Methods that dereference mStorage

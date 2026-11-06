@@ -140,6 +140,59 @@ def pred_gather_igemm_conv(
     kernel_size: int,
     stride: int,
 ) -> torch.Tensor: ...
+
+class MaskedIGemmTopology:
+    """Neighbor map, row ordering and pair lists for masked implicit GEMM convolution."""
+
+    @property
+    def neighbor_map(self) -> torch.Tensor: ...
+    @property
+    def sorted_rows(self) -> torch.Tensor: ...
+    @property
+    def row_masks(self) -> torch.Tensor: ...
+    @property
+    def pair_in(self) -> torch.Tensor: ...
+    @property
+    def pair_out(self) -> torch.Tensor: ...
+    @property
+    def pair_offsets(self) -> torch.Tensor: ...
+    @property
+    def total_voxels(self) -> int: ...
+    @property
+    def input_voxels(self) -> int: ...
+    @property
+    def reverse_map(self) -> torch.Tensor | None: ...
+    @property
+    def kernel_volume(self) -> int: ...
+    @property
+    def kernel_size(self) -> list[int]: ...
+
+def migemm_build_topology(
+    feature_grid: GridBatchData,
+    output_grid: GridBatchData,
+    kernel_size: Vec3iOrScalar,
+    stride: Vec3iOrScalar,
+) -> MaskedIGemmTopology: ...
+def migemm_conv(
+    features: torch.Tensor,
+    weights: torch.Tensor,
+    bias: torch.Tensor | None,
+    topology: MaskedIGemmTopology,
+    transposed: bool = False,
+    precise: bool = False,
+) -> torch.Tensor: ...
+def migemm_conv_backward(
+    grad_output: torch.Tensor,
+    features: torch.Tensor,
+    weights: torch.Tensor,
+    topology: MaskedIGemmTopology,
+    need_features: bool = True,
+    need_weights: bool = True,
+    transposed: bool = False,
+    precise: bool = False,
+) -> tuple[torch.Tensor | None, torch.Tensor | None]: ...
+def migemm_column_sum(x: torch.Tensor) -> torch.Tensor: ...
+def migemm_supports(in_channels: int, out_channels: int, dtype: torch.dtype, device: torch.device) -> bool: ...
 def rasterize_num_contributing_gaussians(
     means2d: torch.Tensor,
     conics: torch.Tensor,
