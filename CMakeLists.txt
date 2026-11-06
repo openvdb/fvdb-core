@@ -1,7 +1,7 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 
-cmake_minimum_required(VERSION 3.25 FATAL_ERROR)
+cmake_minimum_required(VERSION 3.27 FATAL_ERROR)
 
 # Set global download timeout to 600 seconds (10 minutes)
 set(CMAKE_DOWNLOAD_TIMEOUT 600 CACHE STRING "Time allowed for downloads in seconds")
@@ -152,7 +152,10 @@ if(FVDB_PREBUILT_CORE)
     target_include_directories(fvdb INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
         ${nvtx3_SOURCE_DIR}/include)
-    target_link_libraries(fvdb INTERFACE torch NanoVDB::nanovdb nanovdb_editor::public_headers ${CMAKE_DL_LIBS})
+    # libfvdb.so already contains NanoVDB's libraries; the bindings need only its headers and
+    # definitions.
+    target_link_libraries(fvdb INTERFACE
+        torch $<COMPILE_ONLY:NanoVDB::nanovdb> nanovdb_editor::public_headers ${CMAKE_DL_LIBS})
 else()
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/src/)
 endif()

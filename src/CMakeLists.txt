@@ -1,7 +1,7 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 
-cmake_minimum_required(VERSION 3.25 FATAL_ERROR)
+cmake_minimum_required(VERSION 3.27 FATAL_ERROR)
 
 project(fvdb LANGUAGES CXX CUDA)
 
@@ -214,9 +214,14 @@ target_compile_options(fvdb PRIVATE
 
 # Header-only NVTX v3 loads its injection library with dlopen. Consumers of fvdb
 # headers emit those calls, and glibc < 2.34 keeps dlopen in libdl.
+#
+# NanoVDB's include paths and NANOVDB_USE_* definitions are PUBLIC, so every TU
+# that includes nanovdb/io/IO.h compiles it the same way. Its libraries
+# (nanovdb_blosc, zlib) are PRIVATE, so libfvdb.so holds the only copy.
 target_link_libraries(fvdb
-    PUBLIC torch $<BUILD_INTERFACE:NanoVDB::nanovdb> nanovdb_editor::public_headers ${CMAKE_DL_LIBS}
-    PRIVATE tinyply cutlass dispatch)
+    PUBLIC torch $<BUILD_INTERFACE:$<COMPILE_ONLY:NanoVDB::nanovdb>> nanovdb_editor::public_headers
+           ${CMAKE_DL_LIBS}
+    PRIVATE $<BUILD_INTERFACE:NanoVDB::nanovdb> tinyply cutlass dispatch)
 
 # ----------------------------------------------------------------------------
 # Precompiled headers (host C++ only)
