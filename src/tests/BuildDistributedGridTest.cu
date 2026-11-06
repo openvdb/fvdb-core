@@ -175,13 +175,48 @@ TEST_F(BuildDistributedGridTest, CopiesOutOfUnifiedStorage) {
 
     GridStorage cuda = storage.to(kCuda0);
     EXPECT_NO_THROW(cuda.deviceHandle());
+    EXPECT_THROW(cuda.unifiedHandle(), c10::Error);
     EXPECT_EQ(hostCopyOf(cuda), original);
 
-    // A PrivateUse1 destination is an ordinary device handle over the PrivateUse1 allocator.
     GridStorage pu1 = storage.to(kPrivateUse1);
-    EXPECT_NO_THROW(pu1.deviceHandle());
+    EXPECT_NO_THROW(pu1.unifiedHandle());
     EXPECT_EQ(alloc().live.load(), 2);
     expectGrid(pu1.hostGridAt<nanovdb::ValueOnIndex>(0));
+}
+
+// PrivateUse1 storage is unified however it was made, so its handle kind never depends on the
+// batch size or the source.
+TEST_F(BuildDistributedGridTest, EveryPrivateUse1PathYieldsUnifiedStorage) {
+    const auto expectUnified = [](const GridStorage &s) {
+        EXPECT_EQ(s.device(), kPrivateUse1);
+        EXPECT_TRUE(s.isDevice());
+        EXPECT_NO_THROW(s.unifiedHandle());
+        EXPECT_THROW(s.deviceHandle(), c10::Error);
+        EXPECT_EQ(s.stream(), cudaStream_t{});
+    };
+
+    expectUnified(GridStorage::empty(kPrivateUse1));
+    expectUnified(GridStorage::empty(kCuda0).to(kPrivateUse1));
+
+    const GridStorage cuda = build().to(kCuda0);
+    const GridStorage host = cuda.to(torch::kCPU);
+    for (const GridStorage *src: {&cuda, &host}) {
+        GridStorage pu1 = src->to(kPrivateUse1);
+        expectUnified(pu1);
+        expectGrid(pu1.hostGridAt<nanovdb::ValueOnIndex>(0));
+    }
+
+    // The shared voxel-less grid is made on the host and copied over.
+    fvdb::detail::GridStorageParts empties(kPrivateUse1, cudaStream_t{}, 0);
+    empties.addEmpty();
+    empties.addEmpty();
+    GridStorage voxelless = empties.merge();
+    expectUnified(voxelless);
+    EXPECT_EQ(voxelless.gridCount(), 2u);
+
+    // Only CUDA storage goes through TorchDeviceResource.
+    EXPECT_THROW(fvdb::TorchDeviceResource{kPrivateUse1}, c10::Error);
+    EXPECT_THROW(GridStorage::deviceProto(kPrivateUse1, cudaStream_t{}), c10::Error);
 }
 
 TEST_F(BuildDistributedGridTest, MergesUnifiedParts) {
@@ -190,7 +225,9 @@ TEST_F(BuildDistributedGridTest, MergesUnifiedParts) {
     parts.add(build());
     GridStorage merged = parts.merge();
 
-    EXPECT_NO_THROW(merged.deviceHandle());
+    EXPECT_NO_THROW(merged.unifiedHandle());
+    EXPECT_THROW(merged.deviceHandle(), c10::Error);
+    EXPECT_EQ(merged.hostBytes(), merged.deviceBytes());
     ASSERT_EQ(merged.gridCount(), 2u);
     for (uint32_t i = 0; i < 2; ++i) {
         const auto *grid = merged.hostGridAt<nanovdb::ValueOnIndex>(i);

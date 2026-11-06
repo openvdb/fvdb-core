@@ -118,8 +118,8 @@ dispatchCreateNanoGridFromIJK<torch::kPrivateUse1>(const JaggedTensor &ijk) {
     static_assert(sizeof(nanovdb::Coord) == 3 * sizeof(int32_t), "nanovdb::Coord must be 3 ints");
 
     const torch::Device device = ijk.device();
-    // Unified-memory storage is not stream-ordered; storageStream(PrivateUse1) is the legacy
-    // default stream, which is what the storage retains and what the assembler orders against.
+    // The built parts are unified storage, which retains no stream. Merging several items runs
+    // on storageStream(PrivateUse1), the legacy default stream, and synchronizes it.
     const cudaStream_t stream = storageStream(device);
 
     // FIXME: This is slow because we have to copy this data to the host and then build the
@@ -147,8 +147,8 @@ dispatchCreateNanoGridFromIJK<torch::kPrivateUse1>(const JaggedTensor &ijk) {
         if (!nVoxels) {
             parts.addEmpty();
         } else {
-            int32_t *dataPtr = ijkData.data_ptr<int32_t>() + ijkData.stride(0) * startIdx;
-            auto coordPtr    = reinterpret_cast<nanovdb::Coord *>(dataPtr);
+            auto *coordPtr =
+                static_cast<nanovdb::Coord *>(ijkData.narrow(0, startIdx, nVoxels).data_ptr());
 
             parts.add(GridStorage(buildDistributedGrid<GridT>(coordPtr, nVoxels), device));
         }

@@ -18,14 +18,9 @@ namespace fvdb {
 
 namespace {
 
-bool
-isDeviceKind(const torch::Device &device) {
-    return device.is_cuda() || device.is_privateuseone();
-}
-
 void
 checkStorageDevice(const torch::Device &device) {
-    TORCH_CHECK(device.is_cpu() || isDeviceKind(device),
+    TORCH_CHECK(device.is_cpu() || device.is_cuda() || device.is_privateuseone(),
                 "GridStorage: device must be CPU, CUDA or PrivateUse1, got ",
                 device);
     TORCH_CHECK(!device.is_cuda() || device.has_index(),
@@ -36,7 +31,7 @@ checkStorageDevice(const torch::Device &device) {
 // An empty handle whose buffer already carries the right resource, so anything that reads the
 // device off the buffer (a later GridStorage(DeviceHandle&&), a prototype) agrees with the storage.
 GridStorage::DeviceHandle
-emptyDeviceHandle(const torch::Device &device, cudaStream_t stream) {
+emptyCudaHandle(const torch::Device &device, cudaStream_t stream) {
     return GridStorage::DeviceHandle::adopt(
         DeviceGridBuffer(stream, TorchDeviceResource(device), 0, nanovdb::cuda::noInit),
         std::vector<nanovdb::GridHandleMetaData>{});
@@ -61,18 +56,20 @@ copyFromDevice(const HandleT &src,
         return GridStorage(nanovdb::cuda::copyTo<nanovdb::HostBuffer>(src, stream));
     }
 
+    // A unified destination is host-readable, so copyTo synchronizes `stream` before returning.
+    if (device.is_privateuseone()) {
+        return GridStorage(nanovdb::cuda::copyTo<UnifiedGridBuffer>(src, stream), device);
+    }
+
     GridStorage::DeviceHandle dst;
     {
-        c10::OptionalDeviceGuard dstGuard(device.is_cuda() ? std::optional<torch::Device>(device)
-                                                           : std::nullopt);
+        c10::cuda::CUDAGuard dstGuard(device);
         // Only a copy between two different CUDA devices needs the peer path: torch's allocator
         // backends (expandable segments, cudaMallocAsync) do not support a plain memcpy between
         // devices without peer access, and c10 itself selects cudaMemcpyPeerAsync there. Every
-        // other pairing (same CUDA device; PrivateUse1 on either side, whose unified memory any
+        // other pairing (same CUDA device, or a PrivateUse1 source, whose unified memory any
         // device addresses) is an ordinary copyTo with cudaMemcpyDefault.
-        const bool acrossCudaDevices =
-            srcDevice.is_cuda() && device.is_cuda() && srcDevice != device;
-        if (acrossCudaDevices) {
+        if (srcDevice.is_cuda() && srcDevice != device) {
             DeviceGridBuffer buf(
                 stream, TorchDeviceResource(device), src.bufferSize(), nanovdb::cuda::noInit);
             C10_CUDA_CHECK(cudaMemcpyPeerAsync(buf.data(),
@@ -90,7 +87,7 @@ copyFromDevice(const HandleT &src,
     // The copy is still in flight on `stream`. Destroying the source frees its block on
     // `srcStream`, where torch may hand it straight to the next allocation on that stream; make
     // that stream wait for the copy so the block cannot be rewritten underneath it. A PrivateUse1
-    // source or destination synchronizes `stream` instead.
+    // source synchronizes `stream` instead.
     detail::orderStreamAfter(srcStream, srcDevice, stream, device);
     return GridStorage(std::move(dst), device);
 }
@@ -102,20 +99,20 @@ GridStorage::GridStorage() : mHandle(HostHandle()), mDevice(torch::kCPU) {}
 GridStorage::GridStorage(HostHandle &&handle) : mHandle(std::move(handle)), mDevice(torch::kCPU) {}
 
 GridStorage::GridStorage(DeviceHandle &&handle)
-    : mHandle(std::in_place_index<1>, std::move(handle)),
-      mDevice(std::get<1>(mHandle).buffer().resource().device()) {}
+    : mHandle(std::in_place_type<DeviceHandle>, std::move(handle)),
+      mDevice(std::get<DeviceHandle>(mHandle).buffer().resource().device()) {}
 
 GridStorage::GridStorage(DeviceHandle &&handle, const torch::Device &device)
-    : mHandle(std::in_place_index<1>, std::move(handle)), mDevice(resolveDevice(device)) {
+    : mHandle(std::in_place_type<DeviceHandle>, std::move(handle)), mDevice(resolveDevice(device)) {
     checkStorageDevice(mDevice);
-    TORCH_CHECK(isDeviceKind(mDevice), "GridStorage: a device handle cannot live on ", mDevice);
-    auto &h = std::get<1>(mHandle);
+    TORCH_CHECK(mDevice.is_cuda(), "GridStorage: a device handle cannot live on ", mDevice);
+    auto &h = std::get<DeviceHandle>(mHandle);
     if (h.isEmpty()) {
         // An empty handle carries whatever resource it was default-constructed with (the current
         // CUDA device, e.g. cuda::copyTo's result for a zero-byte source); re-home it so the
         // buffer agrees with device() for anyone who re-wraps it or uses it as a prototype.
         if (h.buffer().resource().device() != mDevice) {
-            h = emptyDeviceHandle(mDevice, h.buffer().stream());
+            h = emptyCudaHandle(mDevice, h.buffer().stream());
         }
         return;
     }
@@ -127,7 +124,7 @@ GridStorage::GridStorage(DeviceHandle &&handle, const torch::Device &device)
 }
 
 GridStorage::GridStorage(UnifiedHandle &&handle, const torch::Device &device)
-    : mHandle(std::in_place_index<2>, std::move(handle)), mDevice(device) {
+    : mHandle(std::in_place_type<UnifiedHandle>, std::move(handle)), mDevice(device) {
     TORCH_CHECK(mDevice.is_privateuseone(),
                 "GridStorage: a unified handle must live on PrivateUse1, got ",
                 mDevice);
@@ -142,24 +139,27 @@ GridStorage::resolveDevice(const torch::Device &device) {
 }
 
 GridStorage
-GridStorage::empty(const torch::Device &requested) {
+GridStorage::empty(const torch::Device &requested, cudaStream_t stream) {
     const torch::Device device = resolveDevice(requested);
     checkStorageDevice(device);
     if (device.is_cpu()) {
         return GridStorage();
     }
-    return GridStorage(emptyDeviceHandle(device, cudaStream_t{}), device);
+    if (device.is_privateuseone()) {
+        return GridStorage(UnifiedHandle(), device);
+    }
+    return GridStorage(emptyCudaHandle(device, stream), device);
 }
 
 DeviceGridBuffer
 GridStorage::deviceProto(const torch::Device &requested, cudaStream_t stream) {
     const torch::Device device = resolveDevice(requested);
     checkStorageDevice(device);
-    TORCH_CHECK(isDeviceKind(device), "GridStorage::deviceProto: not a device: ", device);
+    TORCH_CHECK(device.is_cuda(), "GridStorage::deviceProto: not a CUDA device: ", device);
     // Allocations through the proto are device-correct on their own (the resource guards), but
     // the kernels the NanoVDB builders launch next to them run on whatever device is current.
     TORCH_INTERNAL_ASSERT_DEBUG_ONLY(
-        !device.is_cuda() || c10::cuda::current_device() == device.index(),
+        c10::cuda::current_device() == device.index(),
         "GridStorage::deviceProto: ",
         device,
         " is not the current CUDA device; the builder's kernels would run on the wrong device");
@@ -214,11 +214,14 @@ GridStorage::gridType(uint32_t i) const {
 
 const void *
 GridStorage::hostBytes() const {
-    if (isHost()) {
-        return std::get<0>(mHandle).data();
+    if (const auto *h = std::get_if<HostHandle>(&mHandle)) {
+        return h->data();
     }
-    // PrivateUse1 is unified memory: the device pointer is a host pointer too.
-    return mDevice.is_privateuseone() ? deviceBytes() : nullptr;
+    // Unified memory: the device pointer is a host pointer too.
+    if (const auto *h = std::get_if<UnifiedHandle>(&mHandle)) {
+        return h->deviceData();
+    }
+    return nullptr;
 }
 
 void *
@@ -228,11 +231,13 @@ GridStorage::hostBytes() {
 
 const void *
 GridStorage::deviceBytes() const {
-    switch (mHandle.index()) {
-    case 1: return std::get<1>(mHandle).deviceData();
-    case 2: return std::get<2>(mHandle).deviceData();
-    default: return nullptr;
+    if (const auto *h = std::get_if<DeviceHandle>(&mHandle)) {
+        return h->deviceData();
     }
+    if (const auto *h = std::get_if<UnifiedHandle>(&mHandle)) {
+        return h->deviceData();
+    }
+    return nullptr;
 }
 
 void *
@@ -242,45 +247,56 @@ GridStorage::deviceBytes() {
 
 cudaStream_t
 GridStorage::stream() const {
-    return mHandle.index() == 1 ? std::get<1>(mHandle).buffer().stream() : cudaStream_t{};
+    const auto *h = std::get_if<DeviceHandle>(&mHandle);
+    return h ? h->buffer().stream() : cudaStream_t{};
 }
 
 const GridStorage::HostHandle &
 GridStorage::hostHandle() const {
     TORCH_CHECK(isHost(), "GridStorage: storage on ", mDevice, " has no host handle");
-    return std::get<0>(mHandle);
+    return std::get<HostHandle>(mHandle);
 }
 
 GridStorage::HostHandle &
 GridStorage::hostHandle() {
     TORCH_CHECK(isHost(), "GridStorage: storage on ", mDevice, " has no host handle");
-    return std::get<0>(mHandle);
+    return std::get<HostHandle>(mHandle);
 }
 
 const GridStorage::DeviceHandle &
 GridStorage::deviceHandle() const {
-    TORCH_CHECK(mHandle.index() == 1, "GridStorage: storage on ", mDevice, " has no device handle");
-    return std::get<1>(mHandle);
+    TORCH_CHECK(std::holds_alternative<DeviceHandle>(mHandle),
+                "GridStorage: storage on ",
+                mDevice,
+                " has no device handle");
+    return std::get<DeviceHandle>(mHandle);
 }
 
 GridStorage::DeviceHandle &
 GridStorage::deviceHandle() {
-    TORCH_CHECK(mHandle.index() == 1, "GridStorage: storage on ", mDevice, " has no device handle");
-    return std::get<1>(mHandle);
+    TORCH_CHECK(std::holds_alternative<DeviceHandle>(mHandle),
+                "GridStorage: storage on ",
+                mDevice,
+                " has no device handle");
+    return std::get<DeviceHandle>(mHandle);
 }
 
 const GridStorage::UnifiedHandle &
 GridStorage::unifiedHandle() const {
-    TORCH_CHECK(
-        mHandle.index() == 2, "GridStorage: storage on ", mDevice, " has no unified handle");
-    return std::get<2>(mHandle);
+    TORCH_CHECK(std::holds_alternative<UnifiedHandle>(mHandle),
+                "GridStorage: storage on ",
+                mDevice,
+                " has no unified handle");
+    return std::get<UnifiedHandle>(mHandle);
 }
 
 GridStorage::UnifiedHandle &
 GridStorage::unifiedHandle() {
-    TORCH_CHECK(
-        mHandle.index() == 2, "GridStorage: storage on ", mDevice, " has no unified handle");
-    return std::get<2>(mHandle);
+    TORCH_CHECK(std::holds_alternative<UnifiedHandle>(mHandle),
+                "GridStorage: storage on ",
+                mDevice,
+                " has no unified handle");
+    return std::get<UnifiedHandle>(mHandle);
 }
 
 GridStorage
@@ -296,40 +312,33 @@ GridStorage::to(const torch::Device &requested, cudaStream_t stream) const {
     if (isEmpty()) {
         // cuda::copyTo would return a default-constructed handle here, whose resource is the
         // *current* CUDA device and whose stream is the default, not the requested ones.
-        if (device.is_cpu()) {
-            return GridStorage();
-        }
-        return GridStorage(emptyDeviceHandle(device, stream), device);
+        return empty(device, stream);
     }
 
-    if (isHost()) {
-        const auto &src = std::get<0>(mHandle);
+    if (const auto *src = std::get_if<HostHandle>(&mHandle)) {
         if (device.is_cpu()) {
-            return GridStorage(src.copy<nanovdb::HostBuffer>());
+            return GridStorage(src->copy<nanovdb::HostBuffer>());
         }
         // Host to device: the pageable source makes the copy synchronous on the source side (the
-        // bytes are staged before the call returns) and the destination retains `stream`, so a
-        // CUDA destination needs no ordering. copyTo does not synchronize for a device
-        // destination, though, and PrivateUse1 storage hands out its unified pointer to the host
-        // immediately, so there the copy must have landed before this returns.
-        c10::OptionalDeviceGuard deviceGuard(device.is_cuda() ? std::optional<torch::Device>(device)
-                                                              : std::nullopt);
-        const DeviceGridBuffer proto = deviceProto(device, stream);
-        auto dst                     = nanovdb::cuda::copyTo<DeviceGridBuffer>(src, stream, &proto);
+        // bytes are staged before the call returns), so neither destination needs ordering. A
+        // CUDA destination retains `stream`; a unified destination is host-readable, so copyTo
+        // synchronizes `stream` before returning.
         if (device.is_privateuseone()) {
-            detail::synchronizeStream(stream, device);
+            return GridStorage(nanovdb::cuda::copyTo<UnifiedGridBuffer>(*src, stream), device);
         }
-        return GridStorage(std::move(dst), device);
+        c10::cuda::CUDAGuard deviceGuard(device);
+        const DeviceGridBuffer proto = deviceProto(device, stream);
+        return GridStorage(nanovdb::cuda::copyTo<DeviceGridBuffer>(*src, stream, &proto), device);
     }
 
     // Device source. Its writers are queued on its retained stream, which is also the stream its
     // block is keyed to; the copy runs on `stream`, a stream of the destination device. A unified
     // source has no retained stream and orders against the legacy default stream.
-    if (mHandle.index() == 1) {
-        const auto &src = std::get<1>(mHandle);
-        return copyFromDevice(src, src.buffer().stream(), mDevice, device, stream);
+    if (const auto *src = std::get_if<DeviceHandle>(&mHandle)) {
+        return copyFromDevice(*src, src->buffer().stream(), mDevice, device, stream);
     }
-    return copyFromDevice(std::get<2>(mHandle), cudaStream_t{}, mDevice, device, stream);
+    return copyFromDevice(
+        std::get<UnifiedHandle>(mHandle), cudaStream_t{}, mDevice, device, stream);
 }
 
 } // namespace fvdb

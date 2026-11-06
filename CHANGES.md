@@ -6,11 +6,14 @@ fVDB Version History
 - **PyTorch 2.14** fVDB updated to build, test and publish with PyTorch 2.14, CUDA 13.0/13.2 and Python 3.10-3.15
   support. The conda development and test environments move to CUDA 13.4, the CUDA build conda-forge publishes
   PyTorch 2.14 for.
-- **Breaking (C++):** Removed the deprecated `TorchDeviceBuffer` and `TorchStorageResource`. Multi-GPU
-  (PrivateUse1) grid builds now run `DistributedPointsToGrid` into a new `UnifiedGridBuffer` over
-  `TorchUnifiedResource`, as NanoVDB 14.0's buffer API requires. `GridStorage` holds that buffer as a third
-  kind of storage, `UnifiedHandle`, so the build needs no copy. `isDevice()` is true for it, but only
-  `unifiedHandle()` returns it, and `deviceHandle()` throws.
+- **Breaking (C++):** Removed the deprecated `TorchDeviceBuffer` and `TorchStorageResource`. PrivateUse1
+  (multi-GPU) grid storage now lives in a new `UnifiedGridBuffer` over `TorchUnifiedResource`, which
+  NanoVDB 14.0's `DistributedPointsToGrid` requires as its output buffer. `GridStorage` holds it as a third
+  handle kind, `UnifiedHandle`, and the storage's device decides the kind: `HostHandle` for CPU,
+  `DeviceHandle` for CUDA and `UnifiedHandle` for PrivateUse1, however the storage was made. For every
+  PrivateUse1 grid, `isDevice()` is true, `unifiedHandle()` returns the handle and `deviceHandle()` throws.
+  Code that serves CUDA and PrivateUse1 alike should use `deviceBytes()` and `deviceGridAt()`.
+  `TorchDeviceResource` and `GridStorage::deviceProto` now accept CUDA devices only.
 
 ## Version 0.6.0 - September 18, 2026
 

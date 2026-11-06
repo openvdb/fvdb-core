@@ -163,14 +163,24 @@ assembleGridStorage(const std::vector<GridSpanSource> &sources,
         orderStreamAfter(stream, device, k.stream, k.device);
     }
 
-    DeviceGridBuffer buffer(stream, TorchDeviceResource(device), totalBytes, nanovdb::cuda::noInit);
+    // PrivateUse1 storage is unified; the buffer is allocated synchronously and adopted below.
+    std::optional<DeviceGridBuffer> cudaBuffer;
+    std::optional<UnifiedGridBuffer> unifiedBuffer;
+    std::byte *base;
+    if (device.is_privateuseone()) {
+        base = unifiedBuffer.emplace(totalBytes, nanovdb::cuda::noInit).data();
+    } else {
+        base = cudaBuffer
+                   .emplace(stream, TorchDeviceResource(device), totalBytes, nanovdb::cuda::noInit)
+                   .data();
+    }
     std::vector<nanovdb::GridHandleMetaData> meta;
     meta.reserve(gridCount);
     uint64_t offset = 0;
     uint32_t index  = 0;
     for (const auto &s: sources) {
         for (const auto &span: s.spans) {
-            auto *dst = buffer.data() + offset;
+            auto *dst = base + offset;
             copySpan(dst, device, span, s.device, stream);
             updateGridCountAndZeroChecksum<<<1, 1, 0, stream>>>(
                 reinterpret_cast<nanovdb::GridData *>(dst), index, gridCount);
@@ -198,7 +208,11 @@ assembleGridStorage(const std::vector<GridSpanSource> &sources,
         // from it (pinned, or pageable and merely staged) could still be pending.
         synchronizeStream(stream, device);
     }
-    return GridStorage(makeDeviceHandleFromLayout(std::move(buffer), std::move(meta)), device);
+    if (unifiedBuffer) {
+        return GridStorage(makeDeviceHandleFromLayout(std::move(*unifiedBuffer), std::move(meta)),
+                           device);
+    }
+    return GridStorage(makeDeviceHandleFromLayout(std::move(*cudaBuffer), std::move(meta)), device);
 }
 
 namespace {
@@ -223,13 +237,13 @@ compareAdoptedHeaders(const std::byte *base,
 } // namespace
 
 void
-checkAdoptedLayoutDebug(const DeviceGridBuffer &buffer,
+checkAdoptedLayoutDebug(const void *bytes,
+                        const torch::Device &device,
                         const std::vector<nanovdb::GridHandleMetaData> &meta,
                         cudaStream_t stream) {
     if (meta.empty()) {
         return;
     }
-    const torch::Device device = buffer.resource().device();
     c10::OptionalDeviceGuard guard(device.is_cuda() ? std::optional<torch::Device>(device)
                                                     : std::nullopt);
     const uint32_t count = static_cast<uint32_t>(meta.size());
@@ -242,7 +256,7 @@ checkAdoptedLayoutDebug(const DeviceGridBuffer &buffer,
                                    stream));
     constexpr uint32_t kThreads = 128;
     compareAdoptedHeaders<<<(count + kThreads - 1) / kThreads, kThreads, 0, stream>>>(
-        static_cast<const std::byte *>(buffer.data()), dMeta.data(), count, dMismatch.data());
+        static_cast<const std::byte *>(bytes), dMeta.data(), count, dMismatch.data());
     C10_CUDA_KERNEL_LAUNCH_CHECK();
     std::vector<uint32_t> mismatches(count);
     C10_CUDA_CHECK(cudaMemcpyAsync(mismatches.data(),

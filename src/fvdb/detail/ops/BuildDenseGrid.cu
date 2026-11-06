@@ -206,8 +206,8 @@ dispatchCreateNanoGridFromDense<torch::kPrivateUse1>(int64_t batchSize,
 
     TORCH_CHECK(ijkData.is_contiguous(), "ijkData must be contiguous");
 
-    // Unified-memory storage is not stream-ordered; storageStream(PrivateUse1) is the legacy
-    // default stream, which is what the storage retains and what the assembler orders against.
+    // The built parts are unified storage, which retains no stream. Merging several items runs
+    // on storageStream(PrivateUse1), the legacy default stream, and synchronizes it.
     const cudaStream_t stream = storageStream(device);
 
     // Every batch item is the same dense box, so build the grid once and copy it for the remaining
@@ -219,8 +219,7 @@ dispatchCreateNanoGridFromDense<torch::kPrivateUse1>(int64_t batchSize,
         if (!nVoxels) {
             parts.addEmpty();
         } else if (i == 0) {
-            int32_t *dataPtr = ijkData.data_ptr<int32_t>();
-            auto coordPtr    = reinterpret_cast<nanovdb::Coord *>(dataPtr);
+            auto *coordPtr = static_cast<nanovdb::Coord *>(ijkData.data_ptr());
 
             parts.add(GridStorage(buildDistributedGrid<GridT>(coordPtr, nVoxels), device));
             C10_CUDA_KERNEL_LAUNCH_CHECK();
