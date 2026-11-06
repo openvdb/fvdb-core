@@ -7,9 +7,16 @@
 # compiler. With CPM_USE_LOCAL_PACKAGES=ON, CPM first looks for an installed
 # NanoVDBConfig.cmake with a matching major version.
 #
-# fVDB needs Blosc and ZIP support for .nvdb I/O. NanoVDB's CUDA option stays
-# off here because fVDB sets up CUDA itself. An installed NanoVDB built with
-# CUDA is also fine, because NanoVDB compiles against the CUDA toolkit's CCCL.
+# fVDB needs Blosc and ZIP support for .nvdb I/O, and builds NanoVDB with CUDA.
+# NanoVDB's CUDA option uses an existing CCCL::CCCL target, so find the CUDA
+# toolkit's CCCL first. Without it, NanoVDB would clone its own CCCL, and fVDB
+# would compile against different CUB and Thrust headers than torch.
+if(NOT TARGET CCCL::CCCL)
+    find_package(CUDAToolkit REQUIRED)
+    find_package(CCCL CONFIG REQUIRED
+        HINTS "${CUDAToolkit_TARGET_DIR}/lib/cmake" "${CUDAToolkit_LIBRARY_DIR}/cmake")
+endif()
+
 CPMAddPackage(
     NAME NanoVDB
     VERSION 32.11
@@ -19,7 +26,7 @@ CPMAddPackage(
     EXCLUDE_FROM_ALL YES
     OPTIONS
         "NANOVDB_BUILD_TOOLS OFF"
-        "NANOVDB_USE_CUDA OFF"
+        "NANOVDB_USE_CUDA ON"
         "NANOVDB_USE_BLOSC ON"
         "NANOVDB_USE_ZLIB ON"
         "NANOVDB_USE_TBB OFF"
