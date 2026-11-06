@@ -40,6 +40,11 @@ template <uint32_t NUM_CHANNELS, typename Camera> struct RasterizeFromWorldForwa
 
     inline __device__ void
     volumeRenderTileForward() const {
+        // Fully expanding every channel operation makes the 512/513-channel kernels prohibitively
+        // expensive for ptxas to optimize, especially for SM 120. Preserve full unrolling for the
+        // smaller kernels while keeping the generated code bounded for larger channel counts.
+        constexpr uint32_t CHANNEL_UNROLL = NUM_CHANNELS <= 32 ? 32 : 4;
+
         const uint32_t blockSize = blockDim.x * blockDim.y;
         auto block               = cg::this_thread_block();
         const auto &common       = commonArgs;
@@ -65,7 +70,7 @@ template <uint32_t NUM_CHANNELS, typename Camera> struct RasterizeFromWorldForwa
             if (inside) {
                 outAlphaPtr[0]  = 0.0f;
                 outLastIdPtr[0] = -1;
-#pragma unroll
+#pragma unroll CHANNEL_UNROLL
                 for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
                     outFeaturesPtr[k * outFeatures.stride(3)] = common.backgroundValue(camId, k);
                 }
@@ -96,7 +101,7 @@ template <uint32_t NUM_CHANNELS, typename Camera> struct RasterizeFromWorldForwa
                 // alpha=0, output background if provided else 0.
                 outAlphaPtr[0]  = 0.0f;
                 outLastIdPtr[0] = -1;
-#pragma unroll
+#pragma unroll CHANNEL_UNROLL
                 for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
                     outFeaturesPtr[k * outFeatures.stride(3)] = common.backgroundValue(camId, k);
                 }
@@ -116,7 +121,7 @@ template <uint32_t NUM_CHANNELS, typename Camera> struct RasterizeFromWorldForwa
         float transmittance            = 1.0f;
         int32_t lastIntersectionOffset = -1;
         float pixOut[NUM_CHANNELS];
-#pragma unroll
+#pragma unroll CHANNEL_UNROLL
         for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
             pixOut[k] = 0.f;
         }
@@ -186,7 +191,7 @@ template <uint32_t NUM_CHANNELS, typename Camera> struct RasterizeFromWorldForwa
                 const float contrib = alpha * transmittance;
                 const int32_t cid   = g.id / (int32_t)common.means.size(0);
                 const int32_t gid   = g.id % (int32_t)common.means.size(0);
-#pragma unroll
+#pragma unroll CHANNEL_UNROLL
                 for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
                     pixOut[k] += common.features[cid][gid][k] * contrib;
                 }
@@ -201,7 +206,7 @@ template <uint32_t NUM_CHANNELS, typename Camera> struct RasterizeFromWorldForwa
 
         outAlphaPtr[0]  = 1.0f - transmittance;
         outLastIdPtr[0] = lastIntersectionOffset;
-#pragma unroll
+#pragma unroll CHANNEL_UNROLL
         for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
             outFeaturesPtr[k * outFeatures.stride(3)] =
                 pixOut[k] + transmittance * common.backgroundValue(camId, k);
