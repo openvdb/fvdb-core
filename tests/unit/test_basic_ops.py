@@ -2317,6 +2317,31 @@ class TestBasicOps(unittest.TestCase):
         max_dev = (v32[0].jdata - v16[0].jdata.float()).abs().max().item()
         self.assertLess(max_dev, 1.0e-3, f"fp16 vs fp32 MC vertex deviation {max_dev:.2e} exceeds fp16 resolution")
 
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA required for the marching cubes fast path")
+    def test_marching_cubes_sparse_leaves_avoid_per_leaf_buffers(self):
+        """
+        A grid with one active voxel per leaf stays on the path that allocates
+        per active voxel; the fast path's per-leaf-slot classify buffer would
+        need 512 bytes for every active voxel here.
+        """
+        import fvdb as fv
+
+        device = "cuda"
+        n = 64  # 262144 leaves; the per-leaf-slot buffer alone would be 128 MiB
+        r = torch.arange(n, device=device) * 8
+        ijk = torch.stack(torch.meshgrid(r, r, r, indexing="ij"), dim=-1).reshape(-1, 3).to(torch.int32)
+        grid = fv.Grid.from_ijk(ijk, voxel_size=1.0)
+        self.assertEqual(grid.num_voxels, n**3)
+        field = torch.randn(grid.num_voxels, device=device)
+
+        torch.cuda.synchronize()
+        torch.cuda.reset_peak_memory_stats()
+        base = torch.cuda.memory_allocated()
+        grid.marching_cubes(field, 0.0)
+        torch.cuda.synchronize()
+        peak = torch.cuda.max_memory_allocated() - base
+        self.assertLess(peak, 32 * 1024 * 1024)
+
     @unittest.skipUnless(torch.cuda.is_available(), "CUDA required")
     def test_marching_cubes_large_batches_match_per_grid(self):
         """

@@ -48,7 +48,10 @@ namespace ops {
 ///
 /// Dtype / device coverage:
 ///   - float32 CUDA: native fast path for batches of up to 8 grids and
-///     2^30 voxels. Larger batches go to `marchingCubesLegacy`.
+///     2^30 voxels. Larger batches go to `marchingCubesLegacy`, as do
+///     grids averaging fewer than 64 active voxels per leaf, where the
+///     per-leaf-slot classify buffer would use more memory than the
+///     legacy per-voxel one.
 ///   - float16 CUDA: as described above; only the final `retVertices`
 ///     tensor (`[nV, 3]` floats, orders of magnitude smaller than the
 ///     SDF) is downcast to fp16 to preserve the public output-dtype

@@ -415,8 +415,9 @@ marchingCubesLegacy(const GridBatchData &batchHdl, const JaggedTensor &field, do
 
 // Public dispatcher. `marchingCubesFast` runs the sparse-compact,
 // packed-key variant for float32 / float16 CUDA fields on batches of up
-// to 8 grids and 2^30 voxels, and forwards everything else (CPU, fp64,
-// larger batches) to `marchingCubesLegacy`.
+// to 8 grids and 2^30 voxels whose leaves average at least 64 active
+// voxels, and forwards everything else (CPU, fp64, larger batches, very
+// sparse leaves) to `marchingCubesLegacy`.
 std::vector<JaggedTensor>
 marchingCubes(const GridBatchData &batchHdl, const JaggedTensor &field, double level) {
     return marchingCubesFast(batchHdl, field, level);

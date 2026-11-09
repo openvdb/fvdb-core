@@ -57,6 +57,11 @@ constexpr int MCF_BATCH_SHIFT  = 2 * MCF_VID_BITS;
 constexpr int64_t MCF_BATCH_MAX = int64_t{1} << (63 - MCF_BATCH_SHIFT);
 constexpr int64_t MCF_VOXEL_MAX = int64_t{1} << MCF_VID_BITS;
 
+// Minimum average active voxels per leaf for the fast path. At 64 the
+// classify buffer (512 B per leaf) matches the legacy per-voxel count
+// buffer (8 B per active voxel); sparser grids use the legacy path.
+constexpr int64_t MCF_MIN_VOXELS_PER_LEAF = 64;
+
 __host__ __device__ __forceinline__ int64_t
 mcf_pack_key(int32_t batchIdx, int64_t vid0, int64_t vid1) {
     return (static_cast<int64_t>(batchIdx) << MCF_BATCH_SHIFT) |
@@ -574,7 +579,16 @@ marchingCubesFast(const GridBatchData &batchHdl, const JaggedTensor &field, doub
     const bool fitsPackedKey =
         batchHdl.batchSize() <= MCF_BATCH_MAX && batchHdl.totalVoxels() <= MCF_VOXEL_MAX;
 
-    if (!isCuda || !supportedDtype || !fitsPackedKey) {
+    // The classify step allocates one byte per leaf slot (512 per leaf) and
+    // scans all of them, while the legacy path allocates 8 bytes per active
+    // voxel. Below MCF_MIN_VOXELS_PER_LEAF active voxels per leaf the fast
+    // path would use more memory than the path it replaces, so very sparse
+    // grids stay on the legacy path. A +-3-voxel narrow band averages about
+    // 190 active voxels per leaf, so narrow-band SDFs are unaffected.
+    const bool denseEnoughLeaves =
+        batchHdl.totalVoxels() >= MCF_MIN_VOXELS_PER_LEAF * batchHdl.totalLeaves();
+
+    if (!isCuda || !supportedDtype || !fitsPackedKey || !denseEnoughLeaves) {
         return marchingCubesLegacy(batchHdl, field, level);
     }
     fieldJdata = fieldJdata.contiguous();
