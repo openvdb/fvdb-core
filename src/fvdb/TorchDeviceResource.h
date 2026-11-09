@@ -45,17 +45,13 @@ namespace fvdb {
 ///        block to the stream it was keyed to whatever stream the free names, so
 ///        Buffer::set_stream and Buffer::resize with a different stream would free to a stream the
 ///        new work was never ordered against. GridStorage never does either; a buffer whose work
-///        must move to another stream is copied (GridStorage::to). PrivateUse1 is the exception
-///        on both counts: its allocator ignores the stream, which is what lets the
-///        DistributedPointsToGrid builders retarget a result allocated on a DeviceMesh stream
-///        (set_stream) onto the storage stream before the mesh is destroyed. (Keying to torch's
-///        current stream instead, as the deprecated dual-space buffer's resource does, would be
-///        wrong here: it would let a buffer retained on another stream be freed to a stream its
-///        work was never ordered against.)
+///        must move to another stream is copied (GridStorage::to). Keying to torch's current
+///        stream instead would let a buffer retained on another stream be freed to a stream its
+///        work was never ordered against.
 ///
-///        PrivateUse1, fvdb's unified-memory device for multi-GPU builds, allocates through the
-///        allocator registered for it; that memory is not stream-ordered and is host- and
-///        device-accessible.
+///        The resource serves CUDA devices only. PrivateUse1, fvdb's unified-memory device for
+///        multi-GPU builds, is not stream-ordered and is host- and device-accessible, so its grids
+///        live in a UnifiedGridBuffer over TorchUnifiedResource instead.
 ///
 ///        The resource is a cheap value type (a torch::Device), copyable as nanovdb's resource
 ///        concept requires, and default-constructible to the current CUDA device so that
@@ -67,13 +63,11 @@ struct TorchDeviceResource {
     /// @brief Binds to the current CUDA device.
     TorchDeviceResource() : mDevice(torch::kCUDA, c10::cuda::current_device()) {}
 
-    /// @brief Binds to @p device, which must be an indexed CUDA device or PrivateUse1.
+    /// @brief Binds to @p device, which must be an indexed CUDA device.
     explicit TorchDeviceResource(const torch::Device &device) : mDevice(device) {
-        TORCH_CHECK(device.is_cuda() || device.is_privateuseone(),
-                    "TorchDeviceResource: device must be CUDA or PrivateUse1, got ",
+        TORCH_CHECK(device.is_cuda() && device.has_index(),
+                    "TorchDeviceResource: device must be an indexed CUDA device, got ",
                     device);
-        TORCH_CHECK(!device.is_cuda() || device.has_index(),
-                    "TorchDeviceResource: CUDA device must carry an index");
     }
 
     const torch::Device &
@@ -82,16 +76,9 @@ struct TorchDeviceResource {
     }
 
     /// @brief Allocates @p bytes on the bound device, keyed to @p stream, the buffer's retained
-    ///        stream (see the class comment). Ignored for PrivateUse1.
+    ///        stream (see the class comment).
     void *
     allocate_async(size_t bytes, size_t alignment, cudaStream_t stream) {
-        if (mDevice.is_privateuseone()) {
-            void *p = c10::GetAllocator(c10::DeviceType::PrivateUse1)->raw_allocate(bytes);
-            if (!p && bytes) {
-                throw std::runtime_error("fvdb: TorchDeviceResource::allocate_async failed");
-            }
-            return p;
-        }
         c10::cuda::CUDAGuard deviceGuard(mDevice);
         return TorchResource{}.allocate_async(bytes, alignment, stream);
     }
@@ -106,10 +93,6 @@ struct TorchDeviceResource {
         if (p == nullptr) {
             return;
         }
-        if (mDevice.is_privateuseone()) {
-            c10::GetAllocator(c10::DeviceType::PrivateUse1)->raw_deallocate(p);
-            return;
-        }
         TorchResource{}.deallocate_async(p, bytes, alignment, stream);
     }
 
@@ -119,10 +102,8 @@ struct TorchDeviceResource {
     void *
     allocate(size_t bytes, size_t alignment) {
         void *p = allocate_async(bytes, alignment, cudaStream_t{});
-        if (mDevice.is_cuda()) {
-            c10::cuda::CUDAGuard deviceGuard(mDevice);
-            C10_CUDA_CHECK(cudaStreamSynchronize(cudaStream_t{}));
-        }
+        c10::cuda::CUDAGuard deviceGuard(mDevice);
+        C10_CUDA_CHECK(cudaStreamSynchronize(cudaStream_t{}));
         return p;
     }
 
@@ -130,6 +111,17 @@ struct TorchDeviceResource {
     void
     deallocate(void *p, size_t bytes, size_t alignment) {
         deallocate_async(p, bytes, alignment, cudaStream_t{});
+    }
+
+    /// @brief Equal when memory from one can be freed through the other. Torch's CUDA allocator
+    ///        frees a block on whichever device holds it, so any two resources are equal.
+    friend bool
+    operator==(const TorchDeviceResource &, const TorchDeviceResource &) {
+        return true;
+    }
+    friend bool
+    operator!=(const TorchDeviceResource &, const TorchDeviceResource &) {
+        return false;
     }
 
   private:
@@ -145,6 +137,53 @@ using DeviceGridBuffer = nanovdb::cuda::Buffer<std::byte, TorchDeviceResource>;
 
 static_assert(nanovdb::BufferHasDeviceSingle<DeviceGridBuffer>::value,
               "DeviceGridBuffer must be a single-space device buffer");
+
+/// @brief Memory resource over the PrivateUse1 allocator, fvdb's unified memory, and the resource
+///        behind every PrivateUse1 grid. It declares host and device accessibility so NanoVDB
+///        treats its buffers as both-space storage, which DistributedPointsToGrid requires because
+///        every device in the mesh writes the grid.
+///
+///        Like NanoVDB's ManagedResource it is synchronous, because the allocator is not
+///        stream-ordered. The caller ensures device work on an allocation has finished before
+///        freeing it.
+struct TorchUnifiedResource {
+    static constexpr size_t DEFAULT_ALIGNMENT = TorchResource::DEFAULT_ALIGNMENT;
+    static constexpr bool HOST_ACCESSIBLE     = true;
+    static constexpr bool DEVICE_ACCESSIBLE   = true;
+
+    void *
+    allocate(size_t bytes, size_t /*alignment*/) {
+        void *p = c10::GetAllocator(c10::DeviceType::PrivateUse1)->raw_allocate(bytes);
+        if (!p && bytes) {
+            throw std::runtime_error("fvdb: TorchUnifiedResource::allocate failed");
+        }
+        return p;
+    }
+
+    void
+    deallocate(void *p, size_t /*bytes*/, size_t /*alignment*/) {
+        if (p != nullptr) {
+            c10::GetAllocator(c10::DeviceType::PrivateUse1)->raw_deallocate(p);
+        }
+    }
+
+    /// @brief Stateless, so any two instances are equal.
+    friend bool
+    operator==(const TorchUnifiedResource &, const TorchUnifiedResource &) {
+        return true;
+    }
+    friend bool
+    operator!=(const TorchUnifiedResource &, const TorchUnifiedResource &) {
+        return false;
+    }
+};
+
+/// @brief Byte-addressed both-space buffer over PrivateUse1 unified memory.
+using UnifiedGridBuffer = nanovdb::cuda::Buffer<std::byte, TorchUnifiedResource>;
+
+static_assert(nanovdb::BufferHasHostSingle<UnifiedGridBuffer>::value &&
+                  nanovdb::BufferHasDeviceSingle<UnifiedGridBuffer>::value,
+              "UnifiedGridBuffer must be host- and device-accessible single-space storage");
 
 } // namespace fvdb
 

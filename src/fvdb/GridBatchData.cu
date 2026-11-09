@@ -347,7 +347,8 @@ GridBatchData::jaggedTensor(const torch::Tensor &data) const {
     checkDevice(data);
     TORCH_CHECK(data.dim() >= 1, "Data have more than one dimensions");
     TORCH_CHECK(data.size(0) == totalVoxels(), "Data size mismatch");
-    return JaggedTensor::from_data_offsets_and_list_ids(data, voxelOffsets(), jlidx());
+    return JaggedTensor::from_data_offsets_and_list_ids_unsafe(
+        data, voxelOffsets(), jlidx(), batchSize());
 }
 
 torch::Tensor

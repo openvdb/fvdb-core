@@ -9,6 +9,8 @@
 #include <c10/core/ScalarType.h>
 #include <c10/cuda/CUDAException.h>
 
+#include <cuda/cmath>
+
 #include <algorithm>
 #include <cstdint>
 #include <vector>
@@ -41,7 +43,6 @@ appendPerTileImageRanges(std::vector<void *> &prefetchPointers,
                          const TilePrefetchRange &range,
                          int64_t tilesPerCamera) {
     const size_t scalarSize        = c10::elementSize(tensor.scalar_type());
-    const size_t pixelStrideBytes  = tensor.stride(2) * scalarSize;
     const size_t rowStrideBytes    = tensor.stride(1) * scalarSize;
     const size_t cameraStrideBytes = tensor.stride(0) * scalarSize;
     const int64_t tileRangeEnd     = range.offset + range.count;
@@ -52,30 +53,20 @@ appendPerTileImageRanges(std::vector<void *> &prefetchPointers,
         const int64_t cameraTileBegin   = cameraId * tilesPerCamera;
         const int64_t nextCameraTile    = std::min(tileRangeEnd, cameraTileBegin + tilesPerCamera);
         const int64_t firstTileInCamera = currentTile - cameraTileBegin;
-        const int64_t lastTileInCamera  = nextCameraTile - cameraTileBegin - 1;
 
-        const int64_t firstTileRow = firstTileInCamera / range.numTilesW;
-        const int64_t firstTileCol = firstTileInCamera % range.numTilesW;
-        const int64_t lastTileRow  = lastTileInCamera / range.numTilesW;
-        const int64_t lastTileCol  = lastTileInCamera % range.numTilesW;
+        // Round inward to full-width tile rows owned entirely by this device. Partial tile rows
+        // remain demand-paged, keeping one contiguous range per camera without logical overlap.
+        const int64_t firstTileRow = cuda::ceil_div(firstTileInCamera, range.numTilesW);
+        const int64_t tileRowEnd   = (nextCameraTile - cameraTileBegin) / range.numTilesW;
 
         const int64_t rowStart = firstTileRow * range.tileSize;
-        const int64_t rowEnd   = std::min(range.imageHeight, (lastTileRow + 1) * range.tileSize);
-        const int64_t colStart = firstTileCol * range.tileSize;
-        const int64_t colEnd   = std::min(range.imageWidth, (lastTileCol + 1) * range.tileSize);
+        const int64_t rowEnd   = std::min(range.imageHeight, tileRowEnd * range.tileSize);
 
         if (rowStart < rowEnd) {
             auto *cameraPtr =
                 static_cast<uint8_t *>(tensor.data_ptr()) + cameraId * cameraStrideBytes;
-            auto *prefetchPointer =
-                cameraPtr + rowStart * rowStrideBytes + colStart * pixelStrideBytes;
-            auto *prefetchEnd =
-                cameraPtr + (rowEnd - 1) * rowStrideBytes + colEnd * pixelStrideBytes;
-            if (prefetchPointer < prefetchEnd) {
-                const size_t prefetchSize = static_cast<size_t>(prefetchEnd - prefetchPointer);
-                prefetchPointers.emplace_back(prefetchPointer);
-                prefetchSizes.emplace_back(prefetchSize);
-            }
+            prefetchPointers.emplace_back(cameraPtr + rowStart * rowStrideBytes);
+            prefetchSizes.emplace_back((rowEnd - rowStart) * rowStrideBytes);
         }
 
         currentTile = nextCameraTile;
@@ -112,6 +103,37 @@ memPrefetchBatchAsync(std::vector<void *> &prefetchPointers,
                                              prefetchLocations.size(),
                                              0,
                                              stream));
+#endif
+}
+
+void
+memDiscardAndPrefetchBatchAsync(std::vector<void *> &prefetchPointers,
+                                std::vector<size_t> &prefetchSizes,
+                                int deviceId,
+                                cudaStream_t stream) {
+    TORCH_CHECK(stream, "cudaMemPrefetchBatchAsync does not support the default stream");
+    if (prefetchPointers.empty()) {
+        return;
+    }
+
+#if (CUDART_VERSION < 13000)
+    for (size_t i = 0; i < prefetchPointers.size(); ++i) {
+        C10_CUDA_CHECK(nanovdb::util::cuda::memPrefetchAsync(
+            prefetchPointers[i], prefetchSizes[i], deviceId, stream));
+    }
+#else
+    const cudaMemLocation location                 = {cudaMemLocationTypeDevice, deviceId};
+    std::vector<cudaMemLocation> prefetchLocations = {location};
+    std::vector<size_t> prefetchLocationIndices    = {0};
+
+    C10_CUDA_CHECK(cudaMemDiscardAndPrefetchBatchAsync(prefetchPointers.data(),
+                                                       prefetchSizes.data(),
+                                                       prefetchPointers.size(),
+                                                       prefetchLocations.data(),
+                                                       prefetchLocationIndices.data(),
+                                                       prefetchLocations.size(),
+                                                       0,
+                                                       stream));
 #endif
 }
 

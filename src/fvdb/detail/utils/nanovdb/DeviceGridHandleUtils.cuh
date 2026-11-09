@@ -18,41 +18,71 @@
 #include <c10/cuda/CUDAException.h>
 #include <c10/util/Exception.h>
 
+#include <algorithm>
+#include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <optional>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
 namespace fvdb::detail {
 
 /// @brief Stamps a grid's position in its batch into its header and disables the checksum, which
-///        the write invalidates. One thread. Shared by every site that lays grids into a buffer
-///        by hand (merge, concatenate, compaction).
-__global__ inline void
-updateGridCountAndZeroChecksum(nanovdb::GridData *d_data, uint32_t gridIndex, uint32_t gridCount) {
-    d_data->mGridIndex = gridIndex;
-    d_data->mGridCount = gridCount;
-    d_data->mChecksum.disable();
+///        the write invalidates. The one header policy for every site that lays grids into a
+///        buffer by hand (merge, replication, concatenation, compaction).
+__device__ inline void
+stampGridHeader(nanovdb::GridData *data, uint32_t gridIndex, uint32_t gridCount) {
+    data->mGridIndex = gridIndex;
+    data->mGridCount = gridCount;
+    data->mChecksum.disable();
 }
 
-/// @brief Debug builds only: reads back every grid header in @p buffer on @p stream and throws
-///        if its (gridIndex, gridCount, gridSize) disagree with @p meta. Adopting a layout skips
-///        the parse that used to catch a header the writer got wrong; this keeps that net where
-///        it costs nothing in release. Defined in GridAssembly.cu. Synchronizes @p stream.
-void checkAdoptedLayoutDebug(const DeviceGridBuffer &buffer,
+/// @brief stampGridHeader on one grid. One thread.
+__global__ inline void
+updateGridCountAndZeroChecksum(nanovdb::GridData *d_data, uint32_t gridIndex, uint32_t gridCount) {
+    stampGridHeader(d_data, gridIndex, gridCount);
+}
+
+/// @brief stampGridHeader on @p gridCount grids laid back to back at a stride of @p gridSize
+///        bytes from @p base. One thread per grid.
+__global__ inline void
+stampRepeatedGridHeaders(std::byte *base, uint64_t gridSize, uint32_t gridCount) {
+    const uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < gridCount) {
+        stampGridHeader(
+            nanovdb::util::PtrAdd<nanovdb::GridData>(base, static_cast<int64_t>(i * gridSize)),
+            i,
+            gridCount);
+    }
+}
+
+/// @brief Debug builds only: reads back every grid header in @p bytes, device-accessible storage
+///        on @p device, on @p stream and throws if its (gridIndex, gridCount, gridSize) disagree
+///        with @p meta. Adopting a layout skips the parse that used to catch a header the writer
+///        got wrong; this keeps that net where it costs nothing in release. Defined in
+///        GridAssembly.cu. Synchronizes @p stream.
+void checkAdoptedLayoutDebug(const void *bytes,
+                             const torch::Device &device,
                              const std::vector<nanovdb::GridHandleMetaData> &meta,
                              cudaStream_t stream);
 
-/// @brief Wraps device bytes whose layout is already known in a GridHandle without parsing them:
-///        @p meta must list every grid in order, packed end to end from offset 0 at NanoVDB's data
-///        alignment, which is the only layout the rest of the stack (the chain parse, the typed
-///        accessors) can consume. That and the buffer's extent are checked; the grid types are
-///        taken on trust, as they are when copyTo adopts metadata. The headers themselves are
-///        checked against @p meta in debug builds (checkAdoptedLayoutDebug), which waits for the
-///        writers on the buffer's retained stream; release builds adopt without a readback.
-inline GridStorage::DeviceHandle
-makeDeviceHandleFromLayout(DeviceGridBuffer &&buffer,
-                           std::vector<nanovdb::GridHandleMetaData> meta) {
+/// @brief Wraps CUDA (DeviceGridBuffer) or PrivateUse1 (UnifiedGridBuffer) bytes whose layout is
+///        already known in a GridHandle without parsing them: @p meta must list every grid in
+///        order, packed end to end from offset 0 at NanoVDB's data alignment, which is the only
+///        layout the rest of the stack (the chain parse, the typed accessors) can consume. That and
+///        the buffer's extent are checked; the grid types are taken on trust, as they are when
+///        copyTo adopts metadata. The headers themselves are checked against @p meta in debug
+///        builds (checkAdoptedLayoutDebug), which waits for the writers on a DeviceGridBuffer's
+///        retained stream. A UnifiedGridBuffer retains no stream, so its writers must be finished
+///        before the call. Release builds adopt without a readback.
+template <typename BufferT>
+nanovdb::GridHandle<BufferT>
+makeDeviceHandleFromLayout(BufferT &&buffer, std::vector<nanovdb::GridHandleMetaData> meta) {
+    static_assert(
+        std::is_same_v<BufferT, DeviceGridBuffer> || std::is_same_v<BufferT, UnifiedGridBuffer>,
+        "makeDeviceHandleFromLayout takes a DeviceGridBuffer or UnifiedGridBuffer rvalue");
     const uint64_t extent = buffer.size_bytes();
     TORCH_CHECK(meta.empty() == (extent == 0),
                 "makeDeviceHandleFromLayout: metadata and buffer disagree about emptiness");
@@ -66,9 +96,13 @@ makeDeviceHandleFromLayout(DeviceGridBuffer &&buffer,
         end = m.offset + m.size;
     }
 #ifndef NDEBUG
-    checkAdoptedLayoutDebug(buffer, meta, buffer.stream());
+    if constexpr (std::is_same_v<BufferT, DeviceGridBuffer>) {
+        checkAdoptedLayoutDebug(buffer.data(), buffer.resource().device(), meta, buffer.stream());
+    } else {
+        checkAdoptedLayoutDebug(buffer.data(), torch::Device(torch::kPrivateUse1), meta, {});
+    }
 #endif
-    return nanovdb::cuda::detail::HandleFactory::make(std::move(buffer), std::move(meta));
+    return nanovdb::GridHandle<BufferT>::adopt(std::move(buffer), std::move(meta));
 }
 
 /// @brief One grid's bytes, wherever they live, to be laid into new storage.
@@ -112,9 +146,10 @@ logicalGridSpans(const GridBatchData &input, int64_t first, int64_t count) {
 ///        Ordering, device destination: @p stream first waits on each distinct source stream
 ///        (the spans' writers), and each CUDA source stream waits on @p stream at the end, so a
 ///        source may be released as soon as this returns. The result adopts the layout it just
-///        wrote (no parse kernel) and retains @p stream. When a host or PrivateUse1 source, or a
-///        PrivateUse1 destination, is involved, @p stream is synchronized before returning: those
-///        bytes are not stream-ordered, or are read by host code straight away.
+///        wrote (no parse kernel); a CUDA result retains @p stream, and a PrivateUse1 result is
+///        unified storage. When a host or PrivateUse1 source, or a PrivateUse1 destination, is
+///        involved, @p stream is synchronized before returning: those bytes are not stream-ordered,
+///        or are read by host code straight away.
 ///        Host destination: each device source is copied on its own retained stream under its own
 ///        device and waited for; @p stream is not used. The handle is constructed from the bytes,
 ///        which validates the chain, and is complete on return. Copies between two CUDA devices
@@ -123,17 +158,30 @@ GridStorage assembleGridStorage(const std::vector<GridSpanSource> &sources,
                                 const torch::Device &device,
                                 cudaStream_t stream);
 
+/// @brief @p count back-to-back copies of the single grid in @p source, in fresh storage on
+///        @p device (a CUDA or PrivateUse1 device, which @p source must live on), made on
+///        @p stream. Copy i is stamped as grid i of @p count. Writes log2(count) copies and one
+///        header launch, where assembleGridStorage writes one copy and one launch per grid.
+///        Same ordering contract and handle kinds as assembleGridStorage for a device destination.
+GridStorage replicateGridStorage(const GridStorage &source,
+                                 uint32_t count,
+                                 const torch::Device &device,
+                                 cudaStream_t stream);
+
 /// @brief Collects a builder's per-item results and lays them end to end in one storage on
 ///        @p device, made on @p stream. Items are added in batch order: a storage the builder
 ///        produced (add), the shared voxel-less grid for an item with nothing in it (addEmpty:
 ///        built once per batch, on first use, however many items are empty), or a repeat of an
-///        earlier item (addRepeat: no copy until the merge, so a batch of identical grids is one
-///        build and one copy per item). Every added storage must live on @p device.
+///        earlier item (addRepeat: no copy until the merge). Every added storage must live on
+///        @p device.
 ///
-///        merge() returns the single item's storage as is when there is exactly one; otherwise
-///        it assembles the items' grids (assembleGridStorage), after which the collected parts
-///        may be dropped. Like all assembled storage the result's checksums are disabled; the
-///        builders do not compute one either (NanoVDB's default), and nothing in fvdb reads them.
+///        merge() returns the single item's storage as is when there is exactly one. When every
+///        item is the same single-grid device storage, it replicates that grid
+///        (replicateGridStorage), so a batch of identical grids is one build and log2(B) copies.
+///        Any other mix is assembled one copy per item (assembleGridStorage). Either way the
+///        collected parts may be dropped afterwards. Like all assembled storage the result's
+///        checksums are disabled; the builders do not compute one either (NanoVDB's default), and
+///        nothing in fvdb reads them.
 class GridStorageParts {
   public:
     GridStorageParts(const torch::Device &device, cudaStream_t stream, size_t expectedCount)
@@ -185,6 +233,10 @@ class GridStorageParts {
         if (mItems.size() == 1) {
             return std::move(*mItems[0]);
         }
+        if (isUniformRepeat()) {
+            return replicateGridStorage(
+                *mItems[0], static_cast<uint32_t>(mItems.size()), mDevice, mStream);
+        }
         std::vector<GridSpanSource> sources;
         sources.reserve(mItems.size());
         for (const GridStorage *part: mItems) {
@@ -203,20 +255,27 @@ class GridStorageParts {
         }
         if (sources.empty()) {
             // Keep the device and stream a non-empty result would have retained.
-            if (mDevice.is_cpu()) {
-                return GridStorage();
-            }
-            return GridStorage(
-                nanovdb::cuda::detail::HandleFactory::make(
-                    DeviceGridBuffer(
-                        mStream, TorchDeviceResource(mDevice), 0, nanovdb::cuda::noInit),
-                    std::vector<nanovdb::GridHandleMetaData>{}),
-                mDevice);
+            return GridStorage::empty(mDevice, mStream);
         }
         return assembleGridStorage(sources, mDevice, mStream);
     }
 
   private:
+    // Two or more items, all the same single-grid storage, on a device destination.
+    bool
+    isUniformRepeat() const {
+        if (mItems.size() < 2 || mItems.size() > std::numeric_limits<uint32_t>::max() ||
+            mDevice.is_cpu()) {
+            return false;
+        }
+        const GridStorage *first = mItems[0];
+        if (first->isEmpty() || first->isHost() || first->gridCount() != 1) {
+            return false;
+        }
+        return std::all_of(
+            mItems.begin(), mItems.end(), [first](const GridStorage *p) { return p == first; });
+    }
+
     torch::Device mDevice;
     cudaStream_t mStream;
     std::vector<GridStorage> mOwned;   // reserved up front: mItems points into it

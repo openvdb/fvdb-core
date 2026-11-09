@@ -220,7 +220,7 @@ def project_gaussians_analytic_bwd(
     radii: torch.Tensor,
     conics: torch.Tensor,
     d_loss_d_means2d: torch.Tensor,
-    d_loss_d_depths: torch.Tensor,
+    d_loss_d_depths: torch.Tensor | None,
     d_loss_d_conics: torch.Tensor,
     d_loss_d_compensations: torch.Tensor | None,
     world_to_cam_matrices_requires_grad: bool,
@@ -249,7 +249,8 @@ def project_gaussians_analytic_bwd(
         radii (torch.Tensor): Forward radii, shape ``[C, N, 2]``.
         conics (torch.Tensor): Forward conics, shape ``[C, N, 3]``.
         d_loss_d_means2d (torch.Tensor): Loss gradient w.r.t. ``means2d``, shape ``[C, N, 2]``.
-        d_loss_d_depths (torch.Tensor): Loss gradient w.r.t. ``depths``, shape ``[C, N]``.
+        d_loss_d_depths (torch.Tensor | None): Loss gradient w.r.t. ``depths``, shape ``[C, N]``.
+            ``None`` contributes zero without allocating or reading a depth-gradient tensor.
         d_loss_d_conics (torch.Tensor): Loss gradient w.r.t. ``conics``, shape ``[C, N, 3]``.
         d_loss_d_compensations (torch.Tensor | None): Loss gradient w.r.t. ``compensations``, shape
             ``[C, N]``, or ``None``.
@@ -373,7 +374,7 @@ def project_gaussians_analytic_jagged_bwd(
     radii: torch.Tensor,
     conics: torch.Tensor,
     d_loss_d_means2d: torch.Tensor,
-    d_loss_d_depths: torch.Tensor,
+    d_loss_d_depths: torch.Tensor | None,
     d_loss_d_conics: torch.Tensor,
     world_to_cam_matrices_requires_grad: bool,
     ortho: bool,
@@ -394,7 +395,8 @@ def project_gaussians_analytic_jagged_bwd(
         radii (torch.Tensor): Forward radii, shape ``[M, 2]``.
         conics (torch.Tensor): Forward conics, shape ``[M, 3]``.
         d_loss_d_means2d (torch.Tensor): Loss gradient w.r.t. ``means2d``, shape ``[M, 2]``.
-        d_loss_d_depths (torch.Tensor): Loss gradient w.r.t. ``depths``, shape ``[M]``.
+        d_loss_d_depths (torch.Tensor | None): Loss gradient w.r.t. ``depths``, shape ``[M]``.
+            ``None`` contributes zero without allocating or reading a depth-gradient tensor.
         d_loss_d_conics (torch.Tensor): Loss gradient w.r.t. ``conics``, shape ``[M, 3]``.
         world_to_cam_matrices_requires_grad (bool): Whether to compute the camera-matrix gradient.
         ortho (bool): Whether the forward pass used an orthographic projection.
@@ -665,6 +667,7 @@ def intersect_gaussian_tiles(
 
     Inputs may be dense (``[C, N, ...]``) or packed (``[M, ...]`` with ``camera_ids``). Passing
     ``conics`` and ``opacities`` enables a tighter per-tile culling test.
+    The multi-GPU backend requires packed ``camera_ids`` to be sorted in nondecreasing order.
 
     Args:
         means2d (torch.Tensor): Projected 2D centers, shape ``[C, N, 2]`` or ``[M, 2]``.

@@ -21,12 +21,17 @@ namespace fvdb {
 /// @brief The bytes of a batch of NanoVDB grids, on one torch device, with the per-grid
 ///        metadata that locates each grid inside them.
 ///
-///        This is the storage behind GridBatchData. It replaces nanovdb::GridHandle over a
-///        dual-space buffer with the two single-space handles NanoVDB's memory-resource API is
-///        built around: a HostBuffer handle for CPU storage and a DeviceGridBuffer handle
-///        (nanovdb::cuda::Buffer<std::byte, TorchDeviceResource>) for CUDA and PrivateUse1
-///        storage, whose device travels in the buffer's resource. Which one is held is a runtime
-///        fact, device(), exactly as the batch's device is today.
+///        This is the storage behind GridBatchData. It holds one of three single-space NanoVDB
+///        handles, and the storage's device decides which:
+///        - CPU: HostHandle (HostBuffer).
+///        - CUDA: DeviceHandle (DeviceGridBuffer, over TorchDeviceResource). The device travels
+///          in the buffer's resource, and the buffer retains the stream it was made on.
+///        - PrivateUse1: UnifiedHandle (UnifiedGridBuffer, over TorchUnifiedResource). Unified
+///          memory is host- and device-accessible and has no retained stream.
+///
+///        isDevice() is true for CUDA and PrivateUse1 alike, so it does not mean deviceHandle()
+///        is valid. Code that serves both should use deviceBytes() and deviceGridAt(), which
+///        cover either handle.
 ///
 ///        Everything a handle exposes about its grids (count, sizes, types, typed grid pointers)
 ///        is answered from adopted metadata without touching device memory. Grid indices here are
@@ -38,8 +43,9 @@ namespace fvdb {
 ///        lives with the tools that produce such bytes, not here.
 class GridStorage {
   public:
-    using HostHandle   = nanovdb::GridHandle<nanovdb::HostBuffer>;
-    using DeviceHandle = nanovdb::GridHandle<DeviceGridBuffer>;
+    using HostHandle    = nanovdb::GridHandle<nanovdb::HostBuffer>;
+    using DeviceHandle  = nanovdb::GridHandle<DeviceGridBuffer>;
+    using UnifiedHandle = nanovdb::GridHandle<UnifiedGridBuffer>;
 
     /// @brief Empty storage on the CPU.
     GridStorage();
@@ -52,9 +58,12 @@ class GridStorage {
     ///        that names the device).
     explicit GridStorage(DeviceHandle &&handle);
 
-    /// @brief Adopts a device handle for storage that lives on @p device, which must agree with
-    ///        the handle's resource unless the handle is empty.
+    /// @brief Adopts a device handle for storage that lives on @p device, which must be a CUDA
+    ///        device that agrees with the handle's resource unless the handle is empty.
     GridStorage(DeviceHandle &&handle, const torch::Device &device);
+
+    /// @brief Adopts a unified handle for storage on @p device, which must be PrivateUse1.
+    GridStorage(UnifiedHandle &&handle, const torch::Device &device);
 
     GridStorage(GridStorage &&) noexcept            = default;
     GridStorage &operator=(GridStorage &&) noexcept = default;
@@ -66,12 +75,13 @@ class GridStorage {
     ///        else is returned as given. Every entry point taking a device applies this first.
     static torch::Device resolveDevice(const torch::Device &device);
 
-    /// @brief Empty storage on @p device (kCPU, a CUDA device, or PrivateUse1).
-    static GridStorage empty(const torch::Device &device);
+    /// @brief Empty storage on @p device (kCPU, a CUDA device, or PrivateUse1). Empty CUDA
+    ///        storage retains @p stream.
+    static GridStorage empty(const torch::Device &device, cudaStream_t stream = cudaStream_t{});
 
     /// @brief A zero-byte DeviceGridBuffer carrying @p device in its resource and @p stream as its
     ///        retained stream: the prototype the NanoVDB builders and cuda::copyTo take the output
-    ///        resource and stream from. @p device must be an indexed CUDA device or PrivateUse1.
+    ///        resource and stream from. @p device must be a CUDA device.
     static DeviceGridBuffer deviceProto(const torch::Device &device, cudaStream_t stream);
 
     const torch::Device &
@@ -80,11 +90,12 @@ class GridStorage {
     }
     bool
     isHost() const {
-        return mHandle.index() == 0;
+        return std::holds_alternative<HostHandle>(mHandle);
     }
+    /// @brief True for CUDA and PrivateUse1 storage. Only CUDA storage has a deviceHandle().
     bool
     isDevice() const {
-        return mHandle.index() == 1;
+        return !isHost();
     }
 
     /// @brief True if no bytes are held. Empty storage still has a device.
@@ -120,11 +131,13 @@ class GridStorage {
     template <typename ValueT>
     const nanovdb::NanoGrid<ValueT> *
     hostGridAt(uint32_t i) const {
-        if (isHost()) {
-            return std::get<0>(mHandle).template grid<ValueT>(i);
+        if (const auto *h = std::get_if<HostHandle>(&mHandle)) {
+            return h->template grid<ValueT>(i);
         }
-        return mDevice.is_privateuseone() ? std::get<1>(mHandle).template deviceGrid<ValueT>(i)
-                                          : nullptr;
+        if (const auto *h = std::get_if<UnifiedHandle>(&mHandle)) {
+            return h->template deviceGrid<ValueT>(i);
+        }
+        return nullptr;
     }
     template <typename ValueT>
     nanovdb::NanoGrid<ValueT> *
@@ -139,7 +152,13 @@ class GridStorage {
     template <typename ValueT>
     const nanovdb::NanoGrid<ValueT> *
     deviceGridAt(uint32_t i) const {
-        return isDevice() ? std::get<1>(mHandle).template deviceGrid<ValueT>(i) : nullptr;
+        if (const auto *h = std::get_if<DeviceHandle>(&mHandle)) {
+            return h->template deviceGrid<ValueT>(i);
+        }
+        if (const auto *h = std::get_if<UnifiedHandle>(&mHandle)) {
+            return h->template deviceGrid<ValueT>(i);
+        }
+        return nullptr;
     }
     template <typename ValueT>
     nanovdb::NanoGrid<ValueT> *
@@ -149,8 +168,8 @@ class GridStorage {
     }
     //@}
 
-    /// @brief The stream device storage frees on and orders its work against (the buffer's
-    ///        retained stream); the legacy default stream for host storage.
+    /// @brief The stream CUDA storage frees on and orders its work against (the buffer's
+    ///        retained stream); the legacy default stream for CPU and PrivateUse1 storage.
     cudaStream_t stream() const;
 
     /// @brief A deep copy of the storage on @p device, made on @p stream. Empty storage yields
@@ -167,11 +186,14 @@ class GridStorage {
     GridStorage to(const torch::Device &device) const;
 
     //@{
-    /// @brief The underlying handle. Throws if the storage is not of that kind.
+    /// @brief The underlying handle: hostHandle() for CPU, deviceHandle() for CUDA and
+    ///        unifiedHandle() for PrivateUse1 storage. Throws for any other device.
     const HostHandle &hostHandle() const;
     HostHandle &hostHandle();
     const DeviceHandle &deviceHandle() const;
     DeviceHandle &deviceHandle();
+    const UnifiedHandle &unifiedHandle() const;
+    UnifiedHandle &unifiedHandle();
     //@}
 
     /// @brief The adopted per-grid metadata, in physical order.
@@ -180,7 +202,7 @@ class GridStorage {
   private:
     const nanovdb::GridHandleMetaData &metaAt(uint32_t i) const;
 
-    std::variant<HostHandle, DeviceHandle> mHandle;
+    std::variant<HostHandle, DeviceHandle, UnifiedHandle> mHandle;
     torch::Device mDevice;
 };
 

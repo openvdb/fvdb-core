@@ -302,7 +302,7 @@ def project_gaussians_analytic_bwd(
     radii: torch.Tensor,
     conics: torch.Tensor,
     d_loss_d_means2d: torch.Tensor,
-    d_loss_d_depths: torch.Tensor,
+    d_loss_d_depths: Optional[torch.Tensor],
     d_loss_d_conics: torch.Tensor,
     d_loss_d_compensations: Optional[torch.Tensor],
     world_to_cam_matrices_requires_grad: bool,
@@ -498,7 +498,7 @@ def project_gaussians_analytic_jagged_bwd(
     radii: torch.Tensor,
     conics: torch.Tensor,
     d_loss_d_means2d: torch.Tensor,
-    d_loss_d_depths: torch.Tensor,
+    d_loss_d_depths: Optional[torch.Tensor],
     d_loss_d_conics: torch.Tensor,
     world_to_cam_matrices_requires_grad: bool,
     ortho: bool,
@@ -1196,11 +1196,20 @@ class JaggedTensor:
     def from_data_and_offsets(arg0: torch.Tensor, arg1: torch.Tensor) -> JaggedTensor: ...
     @staticmethod
     def from_data_indices_and_list_ids(
-        data: torch.Tensor, indices: torch.Tensor, list_ids: torch.Tensor, num_tensors: int
+        data: torch.Tensor,
+        indices: torch.Tensor,
+        list_ids: torch.Tensor,
+        num_tensors: int,
+        *,
+        num_outer_lists: int | None = None,
     ) -> JaggedTensor: ...
     @staticmethod
     def from_data_offsets_and_list_ids(
-        data: torch.Tensor, offsets: torch.Tensor, list_ids: torch.Tensor
+        data: torch.Tensor,
+        offsets: torch.Tensor,
+        list_ids: torch.Tensor,
+        *,
+        num_outer_lists: int | None = None,
     ) -> JaggedTensor: ...
     def int(self) -> JaggedTensor: ...
     def jagged_like(self, data: torch.Tensor) -> JaggedTensor: ...
