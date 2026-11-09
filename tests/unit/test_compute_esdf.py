@@ -246,6 +246,105 @@ def test_interior_beyond_max_distance_is_negative(device, use_vbm, radius):
     assert at(inc_grid, inc, (0.9, 0.9, 0.9)) == pytest.approx(max_dist)
 
 
+def _x_slab_tsdf(voxel_size, tsdf_of_i, device="cuda"):
+    """A slab of voxels ``i in [-4, 8)``, ``j, k in [-2, 3)`` whose TSDF
+    depends only on ``i`` via ``tsdf_of_i``. All voxels have weight 1."""
+    r = torch.arange(-4, 8, device=device)
+    s = torch.arange(-2, 3, device=device)
+    ijk = torch.stack(torch.meshgrid(r, s, s, indexing="ij"), dim=-1).reshape(-1, 3).to(torch.int32)
+    g = fvdb.Grid.from_ijk(ijk, voxel_size=voxel_size, origin=0.0)
+    i = g.ijk[:, 0].long()
+    tsdf = tsdf_of_i(i).to(torch.float32).contiguous()
+    weights = torch.ones(g.num_voxels, device=device, dtype=torch.float32)
+    return g, tsdf, weights
+
+
+def _esdf_at_input_voxels(g, esdf_grid, esdf):
+    idx = esdf_grid.ijk_to_index(g.ijk)
+    assert bool((idx >= 0).all())
+    return esdf[idx]
+
+
+@pytest.mark.parametrize("device", ["cuda"])
+@pytest.mark.parametrize("use_vbm", [True, False])
+def test_observed_saturated_voxels_keep_their_sign(device, use_vbm):
+    """A saturated voxel whose only reached neighbour is a seed of the
+    opposite sign keeps its own observed sign. Plane ``d = x - 0.05`` with
+    a truncation band narrower than a voxel: only the voxel at x=0 seeds,
+    and the saturated outside voxel at x=0.2 used to take its sign
+    (-0.25), which then spread through free space."""
+    vs, trunc, max_dist = 0.2, 0.1, 0.6
+    g, tsdf, weights = _x_slab_tsdf(vs, lambda i: ((i * vs - 0.05) / trunc).clamp(-1.0, 1.0), device)
+    expected_sign = torch.where(tsdf < 0, -1.0, 1.0)
+    kwargs = dict(truncation_distance=trunc, max_distance=max_dist, use_vbm=use_vbm)
+
+    esdf_grid, esdf = g.compute_esdf(tsdf, weights, **kwargs)
+    observed = _esdf_at_input_voxels(g, esdf_grid, esdf)
+    assert torch.equal(torch.sign(observed), expected_sign), observed
+
+    for dirty_mask in (None, torch.zeros(g.num_voxels, dtype=torch.bool, device=device)):
+        inc_grid, inc = g.compute_esdf_incremental(tsdf, weights, esdf_grid, esdf, dirty_mask=dirty_mask, **kwargs)
+        observed = _esdf_at_input_voxels(g, inc_grid, inc)
+        assert torch.equal(torch.sign(observed), expected_sign), observed
+
+
+@pytest.mark.parametrize("device", ["cuda"])
+@pytest.mark.parametrize("use_vbm", [True, False])
+def test_seed_keeps_its_sign_next_to_closer_opposite_seed(device, use_vbm):
+    """Projective TSDFs are not 1-Lipschitz, so a seed can sit next to an
+    opposite-sign seed whose distance plus one step is smaller than its
+    own. The seed takes the smaller magnitude but keeps its sign."""
+    vs, trunc, max_dist = 0.2, 0.3, 0.6
+    table = {0: -0.01, 1: 0.25}
+
+    def tsdf_of_i(i):
+        d = torch.where(i < 0, -trunc, trunc).to(torch.float32)
+        for k, v in table.items():
+            d = torch.where(i == k, torch.full_like(d, v), d)
+        return d / trunc
+
+    g, tsdf, weights = _x_slab_tsdf(vs, tsdf_of_i, device)
+    esdf_grid, esdf = g.compute_esdf(tsdf, weights, truncation_distance=trunc, max_distance=max_dist, use_vbm=use_vbm)
+    observed = _esdf_at_input_voxels(g, esdf_grid, esdf)
+    at_one = observed[g.ijk[:, 0] == 1]
+    assert torch.allclose(at_one, torch.full_like(at_one, 0.01 + vs), atol=1e-5), at_one
+
+
+@pytest.mark.parametrize("device", ["cuda"])
+@pytest.mark.parametrize("use_vbm", [True, False])
+@pytest.mark.parametrize("all_false_dirty_mask", [False, True])
+def test_incremental_larger_max_distance_matches_one_shot(device, use_vbm, all_false_dirty_mask):
+    """Raising ``max_distance`` between incremental calls must not leave
+    values clamped to the old cap behind: the min-only sweep cannot raise
+    them, so they would read as real distances."""
+    vs, trunc = 0.025, 0.1
+    g, tsdf, weights = _sphere_tsdf(vs, 40, -20, 0.25, trunc, device)
+    small = dict(truncation_distance=trunc, max_distance=0.1, use_vbm=use_vbm)
+    large = dict(truncation_distance=trunc, max_distance=0.2, use_vbm=use_vbm)
+
+    prev_grid, prev = g.compute_esdf(tsdf, weights, **small)
+    dirty_mask = torch.zeros(g.num_voxels, dtype=torch.bool, device=device) if all_false_dirty_mask else None
+    inc_grid, inc = g.compute_esdf_incremental(tsdf, weights, prev_grid, prev, dirty_mask=dirty_mask, **large)
+    ref_grid, ref = g.compute_esdf(tsdf, weights, **large)
+
+    assert torch.equal(inc_grid.ijk, ref_grid.ijk)
+    torch.testing.assert_close(inc, ref, atol=1e-5, rtol=0)
+
+
+@pytest.mark.parametrize("device", ["cuda"])
+def test_incremental_rejects_multidimensional_dirty_mask(device):
+    """The seed kernel reads one flag per voxel, so a ``[N, 2]`` mask
+    must be rejected rather than read as its first N flattened entries."""
+    vs, trunc, max_dist = 0.05, 0.1, 0.2
+    g, tsdf, weights = _sphere_tsdf(vs, 16, -8, 0.2, trunc, device)
+    esdf_grid, esdf = g.compute_esdf(tsdf, weights, truncation_distance=trunc, max_distance=max_dist)
+    mask = torch.ones(g.num_voxels, 2, dtype=torch.bool, device=device)
+    with pytest.raises(ValueError, match="1-D"):
+        g.compute_esdf_incremental(
+            tsdf, weights, esdf_grid, esdf, truncation_distance=trunc, max_distance=max_dist, dirty_mask=mask
+        )
+
+
 @pytest.mark.parametrize("device", ["cuda"])
 def test_magnitude_bounded_by_max_distance(device):
     """All returned ESDF values satisfy ``|d| <= max_distance`` (plus a

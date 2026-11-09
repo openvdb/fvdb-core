@@ -732,6 +732,12 @@ def compute_esdf_single(
     units (i.e., the same units as ``truncation_distance`` and
     ``max_distance``).
 
+    Sign: observed voxels (``weights > weight_threshold``) keep the sign
+    of their own TSDF value and only take distance magnitudes from their
+    neighbours. Unobserved voxels take the sign of the neighbour that
+    gives them their distance, and unobserved voxels beyond the cap next
+    to an interior get ``-max_distance``.
+
     Args:
         grid: Input TSDF grid topology.
         tsdf: ``[num_voxels]`` fp32 normalized TSDF in ``[-1, +1]``.

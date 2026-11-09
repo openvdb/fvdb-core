@@ -1582,7 +1582,10 @@ class Grid:
         signed distances with ``|d| <= max_distance``. Composes three
         nanoVDB topology ops (``dilateGrid``, a VBM-stencil sweep kernel,
         and optionally ``pruneGrid``) on the same sparse-grid substrate
-        used by ``integrate_tsdf``.
+        used by ``integrate_tsdf``. Observed voxels
+        (``weights > weight_threshold``) keep the sign of their own TSDF
+        value; unobserved voxels take the sign of the neighbour that
+        gives them their distance.
 
         Args:
             tsdf (torch.Tensor): ``[num_voxels]`` fp32 normalized TSDF

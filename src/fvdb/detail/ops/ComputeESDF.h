@@ -27,8 +27,11 @@ namespace ops {
 ///     allocate the ESDF support band around the TSDF zero-crossing shell.
 ///   - A custom VBM-stencil kernel, launched N times, that reads each
 ///     voxel's 26-neighbourhood and computes
-///     `d' = sign(d_n) * (|d_n| + ||offset|| * voxel_size)`
-///     against the current value. N = `ceil(max_distance / voxel_size) + 2`
+///     `|d'| = |d_n| + ||offset|| * voxel_size`
+///     against the current magnitude. Observed voxels
+///     (`weights > weight_threshold`) keep the sign of their own TSDF
+///     value; only unobserved voxels take the sign of the neighbour that
+///     wins the min. N = `ceil(max_distance / voxel_size) + 2`
 ///     is sufficient for 26-connectivity convergence; more-than-needed
 ///     sweeps are cheap (each voxel's min is monotone, so extra sweeps
 ///     are no-ops).

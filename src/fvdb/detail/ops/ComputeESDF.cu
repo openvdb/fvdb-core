@@ -135,16 +135,32 @@ __device__ __constant__ EsdfOffset kEsdfOffsets[26] = {
 // -----------------------------------------------------------------------
 // Core stencil body: given self-distance `dSelf` and a neighbour query
 // callable `readNeighbour(ijk+o)`, return the monotone-min of dSelf and
-// all 26 valid neighbour propagations. Sign-preserving: the candidate
-// is `sign(d_n) * (|d_n| + ||offset|| * vs)`, which expands the
-// neighbour's signed distance outward by the geometric step. A zero
-// d_n stays zero (zero-crossing propagation).
+// all 26 valid neighbour propagations. The candidate magnitude is
+// `|d_n| + ||offset|| * vs`, an upper bound on the distance to the
+// surface by the triangle inequality whatever the neighbour's sign.
+//
+// Sign. `observedSign` is the voxel's own inside/outside state from the
+// TSDF (-1 inside, +1 outside, 0 unobserved), and an observed voxel
+// always keeps it: only its magnitude is propagated. This matches
+// voxblox (which never overwrites the sign of an observed voxel) and
+// nvblox (whose `is_inside` comes from the voxel's own TSDF value and
+// is not propagated). Without it, a saturated or noisy voxel next to a
+// closer seed of the opposite sign took that seed's sign, and the flip
+// then spread through free space. Unobserved voxels have no sign of
+// their own and take the sign of the neighbour that wins the min.
 // -----------------------------------------------------------------------
 
 template <typename ReadNeighbourFn>
 __device__ __forceinline__ float
-esdfSweepBody(float dSelf, float voxelSize, float maxDistance, ReadNeighbourFn readNeighbour) {
-    float d = dSelf;
+esdfSweepBody(float dSelf,
+              int8_t observedSign,
+              float voxelSize,
+              float maxDistance,
+              ReadNeighbourFn readNeighbour) {
+    // An observed voxel's value always carries its own sign. A value of
+    // the wrong sign (e.g. carried over from a previous incremental call)
+    // keeps its magnitude, which is still a valid upper bound.
+    float d = observedSign == 0 ? dSelf : copysignf(fabsf(dSelf), static_cast<float>(observedSign));
 #pragma unroll
     for (int i = 0; i < 26; ++i) {
         const EsdfOffset off = kEsdfOffsets[i];
@@ -159,22 +175,27 @@ esdfSweepBody(float dSelf, float voxelSize, float maxDistance, ReadNeighbourFn r
         const float step    = off.weight * voxelSize;
         const float candAbs = dNAbs + step;
         // Distances are capped at `maxDistance`; beyond the cap only the
-        // sign travels. An unreached voxel next to an interior (negative)
-        // voxel becomes -maxDistance, so solid interiors deeper than the
-        // cap read as occupied rather than free. Unreached voxels with no
-        // interior neighbour stay at the sentinel and clamp to
-        // +maxDistance. The incremental path resets |d| >= maxDistance to
-        // the sentinel before sweeping, so it recomputes these voxels the
-        // same way the one-shot path does.
+        // sign travels. An unreached voxel that is observed inside, or is
+        // unobserved and next to an interior (negative) voxel, becomes
+        // -maxDistance, so solid interiors deeper than the cap read as
+        // occupied rather than free. Other unreached voxels stay at the
+        // sentinel and clamp to +maxDistance; promoting observed-outside
+        // voxels to +maxDistance here would give the same output but
+        // spend a sweep per layer. The incremental path resets values at
+        // the cap to the sentinel before sweeping, so it recomputes these
+        // voxels the same way the one-shot path does.
         if (candAbs >= maxDistance) {
-            if (dN < 0.0f && fabsf(d) >= kEsdfSentinelCheck) {
+            const bool inside = observedSign != 0 ? observedSign < 0 : dN < 0.0f;
+            if (inside && fabsf(d) >= kEsdfSentinelCheck) {
                 d = -maxDistance;
             }
             continue;
         }
         if (candAbs < fabsf(d)) {
-            // Preserve the sign of the witness neighbour.
-            d = (dN < 0.0f) ? -candAbs : candAbs;
+            // Observed voxels keep their own sign; unobserved voxels take
+            // the sign of the witness neighbour.
+            const bool inside = observedSign != 0 ? observedSign < 0 : dN < 0.0f;
+            d                 = inside ? -candAbs : candAbs;
         }
     }
     return d;
@@ -187,7 +208,10 @@ esdfSweepBody(float dSelf, float voxelSize, float maxDistance, ReadNeighbourFn r
 // introducing). For each input voxel with weights > threshold, writes
 // `tsdf * truncation_distance` into the corresponding ESDF slot when
 // |tsdf| < 1 - eps. A saturated voxel whose slot has the wrong sign gets
-// the sentinel with the tsdf's sign.
+// the sentinel with the tsdf's sign. Every observed voxel also records
+// its sign in `observedSign`, which the sweep never overrides; this
+// happens before the dirty-mask gate, so incremental calls lock the
+// signs of unchanged voxels too.
 //
 // We use per-leaf-slot iteration here (not VBM) for two reasons:
 //   1. This kernel runs once; VBM's amortization story doesn't apply.
@@ -203,6 +227,7 @@ esdfSeedKernel(const nanovdb::NanoGrid<nanovdb::ValueOnIndex> *__restrict__ inpu
                const bool *__restrict__ dirtyMask, // nullable; when non-null,
                                                    // only dirty voxels seed
                float *__restrict__ esdf,           // [esdfGrid->totalActiveVoxels]
+               int8_t *__restrict__ observedSign,  // [esdfGrid->totalActiveVoxels]
                float truncationDistance,
                float weightThreshold,
                float saturationEps) {
@@ -219,15 +244,6 @@ esdfSeedKernel(const nanovdb::NanoGrid<nanovdb::ValueOnIndex> *__restrict__ inpu
 
     // 1-indexed pid; subtract one for torch tensor offset.
     const int64_t inputPid = static_cast<int64_t>(leaf.getValue(voxOff)) - 1;
-
-    // Dirty-mask gate: when provided, skip non-dirty voxels so the
-    // wavefront only re-propagates from what actually changed this
-    // frame. This is the mechanism that gives fvdb's
-    // `compute_esdf_incremental` nvblox-style dirty-region update
-    // scaling. When `dirtyMask == nullptr` (the default), behaves
-    // as before -- seed from every near-surface voxel.
-    if (dirtyMask != nullptr && !dirtyMask[inputPid])
-        return;
 
     const float w = weights[inputPid];
     if (!(w > weightThreshold))
@@ -250,6 +266,18 @@ esdfSeedKernel(const nanovdb::NanoGrid<nanovdb::ValueOnIndex> *__restrict__ inpu
         return;
     const int64_t esdfPid = static_cast<int64_t>(esdfRaw) - 1;
 
+    // The voxel is observed, so its inside/outside state is known.
+    observedSign[esdfPid] = t < 0.0f ? int8_t(-1) : int8_t(1);
+
+    // Dirty-mask gate: when provided, skip non-dirty voxels so the
+    // wavefront only re-propagates from what actually changed this
+    // frame. This is the mechanism that gives fvdb's
+    // `compute_esdf_incremental` nvblox-style dirty-region update
+    // scaling. When `dirtyMask == nullptr` (the default), behaves
+    // as before -- seed from every near-surface voxel.
+    if (dirtyMask != nullptr && !dirtyMask[inputPid])
+        return;
+
     if (fabsf(t) < 1.0f - saturationEps) {
         esdf[esdfPid] = t * truncationDistance;
     } else if ((t < 0.0f) != (esdf[esdfPid] < 0.0f)) {
@@ -270,6 +298,7 @@ esdfSweepVBMKernel(nanovdb::NanoGrid<nanovdb::ValueOnIndex> *__restrict__ esdfGr
                    const uint64_t *__restrict__ jumpMap,
                    const float *__restrict__ esdfIn,
                    float *__restrict__ esdfOut,
+                   const int8_t *__restrict__ observedSign,
                    float voxelSize,
                    float maxDistance,
                    int *__restrict__ dChanged) {
@@ -304,17 +333,21 @@ esdfSweepVBMKernel(nanovdb::NanoGrid<nanovdb::ValueOnIndex> *__restrict__ esdfGr
 
     const float dSelf = esdfIn[selfPid];
 
-    const float dNew = esdfSweepBody(
-        dSelf, voxelSize, maxDistance, [&](int dx, int dy, int dz, float &dOut, bool &activeOut) {
-            const nanovdb::Coord c = ijk + nanovdb::Coord(dx, dy, dz);
-            if (!acc.isActive(c)) {
-                activeOut = false;
-                return;
-            }
-            const int64_t pid = static_cast<int64_t>(acc.getValue(c)) - 1;
-            dOut              = esdfIn[pid];
-            activeOut         = true;
-        });
+    const float dNew = esdfSweepBody(dSelf,
+                                     observedSign[selfPid],
+                                     voxelSize,
+                                     maxDistance,
+                                     [&](int dx, int dy, int dz, float &dOut, bool &activeOut) {
+                                         const nanovdb::Coord c = ijk + nanovdb::Coord(dx, dy, dz);
+                                         if (!acc.isActive(c)) {
+                                             activeOut = false;
+                                             return;
+                                         }
+                                         const int64_t pid =
+                                             static_cast<int64_t>(acc.getValue(c)) - 1;
+                                         dOut      = esdfIn[pid];
+                                         activeOut = true;
+                                     });
 
     esdfOut[selfPid] = dNew;
     // Signal fixed-point detection: if this voxel's value changed,
@@ -341,6 +374,7 @@ __global__ void
 esdfSweepPerLeafKernel(nanovdb::NanoGrid<nanovdb::ValueOnIndex> *__restrict__ esdfGrid,
                        const float *__restrict__ esdfIn,
                        float *__restrict__ esdfOut,
+                       const int8_t *__restrict__ observedSign,
                        float voxelSize,
                        float maxDistance,
                        int *__restrict__ dChanged) {
@@ -361,6 +395,7 @@ esdfSweepPerLeafKernel(nanovdb::NanoGrid<nanovdb::ValueOnIndex> *__restrict__ es
         const float dSelf = esdfIn[selfPid];
         const float dNew =
             esdfSweepBody(dSelf,
+                          observedSign[selfPid],
                           voxelSize,
                           maxDistance,
                           [&](int dx, int dy, int dz, float &dOut, bool &activeOut) {
@@ -398,6 +433,7 @@ esdfSweepPerLeafKernel(nanovdb::NanoGrid<nanovdb::ValueOnIndex> *__restrict__ es
 std::tuple<c10::intrusive_ptr<GridBatchData>, torch::Tensor>
 runEsdfSweepsAndFinalize(const c10::intrusive_ptr<GridBatchData> &esdfGrid,
                          torch::Tensor esdfInit,
+                         torch::Tensor observedSign,
                          float voxelSizeF,
                          int64_t dilateAmount,
                          float maxDistF,
@@ -458,6 +494,7 @@ runEsdfSweepsAndFinalize(const c10::intrusive_ptr<GridBatchData> &esdfGrid,
                                                     vbmJumpMap,
                                                     esdfIn->data_ptr<float>(),
                                                     esdfOut->data_ptr<float>(),
+                                                    observedSign.data_ptr<int8_t>(),
                                                     voxelSizeF,
                                                     maxDistF,
                                                     changedFlag.data_ptr<int32_t>());
@@ -480,6 +517,7 @@ runEsdfSweepsAndFinalize(const c10::intrusive_ptr<GridBatchData> &esdfGrid,
                                      stream.stream()>>>(esdfDeviceGrid,
                                                         esdfIn->data_ptr<float>(),
                                                         esdfOut->data_ptr<float>(),
+                                                        observedSign.data_ptr<int8_t>(),
                                                         voxelSizeF,
                                                         maxDistF,
                                                         changedFlag.data_ptr<int32_t>());
@@ -490,6 +528,9 @@ runEsdfSweepsAndFinalize(const c10::intrusive_ptr<GridBatchData> &esdfGrid,
             }
         }
     }
+
+    // The sign sidecar is only read by the sweeps.
+    observedSign.reset();
 
     // In-place clamp: allocating a third sidecar here (while both
     // ping-pong buffers are still alive) was the ESDF-phase memory
@@ -608,6 +649,9 @@ computeESDF(const GridBatchData &gridBatch,
     // ------------------ Step 2: allocate + fill-sentinel ESDF ----------------
 
     torch::Tensor esdfA = torch::full({esdfVoxels}, kEsdfSentinel, floatOpts);
+    // Per-voxel observed sign (-1 inside, +1 outside, 0 unobserved), set by
+    // the seed kernel and read by the sweeps.
+    torch::Tensor observedSign = torch::zeros({esdfVoxels}, floatOpts.dtype(torch::kInt8));
 
     // ------------------ Step 3: seed from input TSDF ------------------------
 
@@ -635,6 +679,7 @@ computeESDF(const GridBatchData &gridBatch,
                                                 weightsC.data_ptr<float>(),
                                                 /*dirtyMask=*/nullptr,
                                                 esdfA.data_ptr<float>(),
+                                                observedSign.data_ptr<int8_t>(),
                                                 truncF,
                                                 threshF,
                                                 saturEps);
@@ -644,8 +689,15 @@ computeESDF(const GridBatchData &gridBatch,
 
     // ------------------ Step 4-5: sweeps + clamp + prune ---------------------
 
-    return runEsdfSweepsAndFinalize(
-        esdfGrid, esdfA, voxelSizeF, dilateAmount, maxDistF, prune_unreached, use_vbm, stream);
+    return runEsdfSweepsAndFinalize(esdfGrid,
+                                    std::move(esdfA),
+                                    std::move(observedSign),
+                                    voxelSizeF,
+                                    dilateAmount,
+                                    maxDistF,
+                                    prune_unreached,
+                                    use_vbm,
+                                    stream);
 }
 
 // -----------------------------------------------------------------------
@@ -700,6 +752,12 @@ computeESDFIncremental(const GridBatchData &gridBatch,
     if (hasDirtyMask) {
         TORCH_CHECK_VALUE(dirtyMask.scalar_type() == torch::kBool,
                           "computeESDFIncremental: dirty_mask must be bool");
+        // The seed kernel reads one flag per voxel from the raw pointer, so
+        // a [N, k] mask would silently use the first N flattened entries.
+        TORCH_CHECK_VALUE(dirtyMask.dim() == 1,
+                          "computeESDFIncremental: dirty_mask must be 1-D, got ",
+                          dirtyMask.dim(),
+                          " dims");
         TORCH_CHECK_VALUE(dirtyMask.size(0) == gridBatch.totalVoxels(),
                           "computeESDFIncremental: dirty_mask size (",
                           dirtyMask.size(0),
@@ -791,8 +849,8 @@ computeESDFIncremental(const GridBatchData &gridBatch,
         esdfInit = dstJt.jdata();
     }
 
-    // Reset voxels saturated at the previous frame's max_distance cap
-    // back to sentinel. Two reasons:
+    // Reset voxels saturated at the previous call's max_distance cap
+    // back to sentinel. Three reasons:
     //
     // (1) The clamped output from a previous `compute_esdf` call loses
     //     the distinction between "reached at exactly max_distance" and
@@ -812,20 +870,37 @@ computeESDFIncremental(const GridBatchData &gridBatch,
     //     boundary values to the sentinel of the same sign, so they don't
     //     act as phantom witnesses but interior voxels stay negative.
     //
-    // Edge case: voxels that genuinely were at exactly `max_distance`
+    // (3) The cap may have grown since the previous call. Values clamped
+    //     to the old, smaller cap are not distances, and the min-only
+    //     sweep can never raise them, so they must be reset too. The
+    //     previous cap is not passed in, but the clamp guarantees no
+    //     previous value exceeds it, so `max|prevEsdf|` is the old cap
+    //     whenever any voxel was saturated. When none was, it is the
+    //     largest reached distance, and resetting those voxels is the
+    //     edge case below. The reset threshold is therefore
+    //     `min(max_distance, max|prevEsdf|)`.
+    //
+    // Edge case: voxels that genuinely were at exactly the threshold
     // get converted too, but they'll be re-derived correctly by the
     // wavefront from neighbouring seeded voxels with the same accuracy
     // as a one-shot call.
     {
-        // Two sign-aware comparisons instead of `abs().ge(...)`: the
-        // abs() would materialize a full fp32 temp over the merged
-        // support band; each comparison only allocates a 1-byte bool
-        // mask (sequentially, so they don't stack). The sentinel
-        // itself is >= maxDistF, so already-sentinel voxels are a
-        // harmless self-assignment.
-        esdfInit.masked_fill_(esdfInit.ge(maxDistF), kEsdfSentinel);
-        esdfInit.masked_fill_(esdfInit.le(-maxDistF), -kEsdfSentinel);
+        // `amax`/`amin` instead of `abs().max()` avoid a full fp32 temp,
+        // and the threshold stays a 0-dim device tensor, so there is no
+        // host sync. Two sign-aware comparisons instead of
+        // `abs().ge(...)` for the same reason: each comparison only
+        // allocates a 1-byte bool mask (sequentially, so they don't
+        // stack). The sentinel itself is >= the threshold, so
+        // already-sentinel voxels are a harmless self-assignment.
+        const torch::Tensor prevCap   = torch::maximum(prevEsdf.amax(), prevEsdf.amin().neg());
+        const torch::Tensor threshold = prevCap.clamp_max(maxDistF);
+        esdfInit.masked_fill_(esdfInit.ge(threshold), kEsdfSentinel);
+        esdfInit.masked_fill_(esdfInit.le(threshold.neg()), -kEsdfSentinel);
     }
+
+    // Per-voxel observed sign (-1 inside, +1 outside, 0 unobserved), set by
+    // the seed kernel from the current TSDF and read by the sweeps.
+    torch::Tensor observedSign = torch::zeros({esdfVoxels}, floatOpts.dtype(torch::kInt8));
 
     // ------------------ Step 3: seed from current TSDF ----------------------
 
@@ -858,6 +933,7 @@ computeESDFIncremental(const GridBatchData &gridBatch,
                                             weightsC.data_ptr<float>(),
                                             dirtyMaskPtr,
                                             esdfInit.data_ptr<float>(),
+                                            observedSign.data_ptr<int8_t>(),
                                             truncF,
                                             threshF,
                                             saturEps);
@@ -866,8 +942,15 @@ computeESDFIncremental(const GridBatchData &gridBatch,
 
     // ------------------ Step 4-5: sweeps + clamp + prune --------------------
 
-    return runEsdfSweepsAndFinalize(
-        esdfGrid, esdfInit, voxelSizeF, dilateAmount, maxDistF, prune_unreached, use_vbm, stream);
+    return runEsdfSweepsAndFinalize(esdfGrid,
+                                    std::move(esdfInit),
+                                    std::move(observedSign),
+                                    voxelSizeF,
+                                    dilateAmount,
+                                    maxDistF,
+                                    prune_unreached,
+                                    use_vbm,
+                                    stream);
 }
 
 } // namespace ops
