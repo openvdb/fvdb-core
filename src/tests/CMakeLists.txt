@@ -61,11 +61,10 @@ function(ConfigureTest CMAKE_TEST_NAME)
   )
 
   # Include directories needed to COMPILE the test object library
-  # Test sources need to find <tests/utils/ImageUtils.h> etc.
+  # Test sources need to find <tests/utils/ImageUtils.h> etc. The CUDA toolkit
+  # and CCCL paths come from fvdb, so the tests compile against NanoVDB's CCCL.
   target_include_directories(${CMAKE_TEST_NAME}_obj PRIVATE
     ${CMAKE_SOURCE_DIR}/src # Include src for finding <tests/utils/...>
-    ${CUDAToolkit_INCLUDE_DIRS}
-    ${CUDAToolkit_INCLUDE_DIRS}/cccl
   )
 
   # Propagate usage requirements (include dirs, defines, SYSTEM marker) from
