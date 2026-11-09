@@ -2660,6 +2660,45 @@ class TestBasicOps(unittest.TestCase):
                 feature_images=feature_images[..., :1],
             )
 
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA required for integrate_tsdf")
+    def test_integrate_tsdf_rejects_inputs_on_other_devices(self):
+        """
+        Depth integration rejects any input that is not on the grid's device
+        instead of handing a host pointer to a CUDA kernel, in the single-frame
+        path and in both carving modes of the multi-frame path.
+        """
+        import fvdb as fv
+
+        device = "cuda"
+        H, W, N, C = 16, 16, 2, 3
+        K = torch.tensor([[8.0, 0.0, W / 2], [0.0, 8.0, H / 2], [0.0, 0.0, 1.0]], device=device).repeat(N, 1, 1)
+        E = torch.eye(4, device=device).repeat(N, 1, 1)
+        depth = torch.full((N, H, W), 0.5, device=device)
+        dense = fv.Grid.from_dense([8, 8, 8], [-4, -4, -4], voxel_size=0.05, device=device)
+        zeros = torch.zeros(dense.num_voxels, device=device)
+
+        with self.assertRaisesRegex(ValueError, "weight_images must be on the grid's device"):
+            dense.integrate_tsdf(0.1, K[:1], E[:1], zeros, zeros.clone(), depth[:1], weight_images=torch.ones(1, H, W))
+        with self.assertRaisesRegex(ValueError, "projection_matrices must be on the grid's device"):
+            dense.integrate_tsdf(0.1, K[:1].cpu(), E[:1], zeros, zeros.clone(), depth[:1])
+        for carve in (True, False):
+            with self.assertRaisesRegex(ValueError, "weight_images must be on the grid's device"):
+                dense.integrate_tsdf_frames(
+                    0.1, K, E, zeros, zeros.clone(), depth, weight_images=torch.ones(N, H, W), carve_free_space=carve
+                )
+            with self.assertRaisesRegex(ValueError, "feature_images must be on the grid's device"):
+                dense.integrate_tsdf_frames(
+                    0.1,
+                    K,
+                    E,
+                    zeros,
+                    zeros.clone(),
+                    depth,
+                    features=torch.zeros(dense.num_voxels, C, device=device),
+                    feature_images=torch.rand(N, H, W, C),
+                    carve_free_space=carve,
+                )
+
     @unittest.skipUnless(torch.cuda.is_available(), "CUDA required for integrate_tsdf_from_points")
     def test_integrate_tsdf_from_points_edge_cases(self):
         """

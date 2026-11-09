@@ -865,6 +865,42 @@ checkInputTypes(const JaggedTensor &tsdf,
 }
 
 void
+checkInputDevices(const GridBatchData &grid,
+                  const JaggedTensor &tsdf,
+                  const JaggedTensor &weights,
+                  const std::optional<JaggedTensor> &features,
+                  const torch::Tensor &depthImages,
+                  const std::optional<torch::Tensor> &featureImages,
+                  const std::optional<torch::Tensor> &weightImages,
+                  const torch::Tensor &projectionMatrices,
+                  const torch::Tensor &camToWorldMatrices) {
+    // The kernels dereference every input directly, so a tensor on another
+    // device would be read through a foreign pointer instead of failing.
+    const auto check = [&](const torch::Tensor &t, const char *name) {
+        TORCH_CHECK_VALUE(t.device() == grid.device(),
+                          name,
+                          " must be on the grid's device (",
+                          grid.device(),
+                          "), but got ",
+                          t.device());
+    };
+    check(tsdf.jdata(), "tsdf");
+    check(weights.jdata(), "weights");
+    if (features.has_value()) {
+        check(features.value().jdata(), "features");
+    }
+    check(depthImages, "depth_images");
+    if (featureImages.has_value()) {
+        check(featureImages.value(), "feature_images");
+    }
+    if (weightImages.has_value()) {
+        check(weightImages.value(), "weight_images");
+    }
+    check(projectionMatrices, "projection_matrices");
+    check(camToWorldMatrices, "cam_to_world_matrices");
+}
+
+void
 checkInputSizes(const GridBatchData &grid,
                 const JaggedTensor &tsdf,
                 const JaggedTensor &weights,
@@ -1057,6 +1093,15 @@ integrateTSDFImpl(const c10::intrusive_ptr<GridBatchData> grid,
                   const torch::Tensor &depthImages,
                   const std::optional<torch::Tensor> &featureImages,
                   const std::optional<torch::Tensor> &weightImages) {
+    checkInputDevices(*grid,
+                      tsdf,
+                      weights,
+                      features,
+                      depthImages,
+                      featureImages,
+                      weightImages,
+                      projectionMatrices,
+                      camToWorldMatrices);
     const at::cuda::OptionalCUDAGuard device_guard(device_of(tsdf.jdata()));
     // Check that the input tensors have the correct dimensions and types
     checkInputTypes(tsdf,
@@ -1229,6 +1274,17 @@ integrateTSDFBatchImpl(const c10::intrusive_ptr<GridBatchData> grid,
                        const std::optional<torch::Tensor> &featureImages,
                        const std::optional<torch::Tensor> &weightImages,
                        const bool carveFreeSpace) {
+    // Validate devices before anything else touches the inputs; this covers
+    // both carving modes, including the unprojection in the shell-only path.
+    checkInputDevices(*grid,
+                      tsdf,
+                      weights,
+                      features,
+                      depthImages,
+                      featureImages,
+                      weightImages,
+                      projectionMatrices,
+                      camToWorldMatrices);
     const at::cuda::OptionalCUDAGuard device_guard(device_of(tsdf.jdata()));
 
     TORCH_CHECK_VALUE(grid->batchSize() == 1,
