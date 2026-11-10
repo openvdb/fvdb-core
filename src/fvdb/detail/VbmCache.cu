@@ -135,15 +135,23 @@ VbmCache::build(const GridBatchData &owner, const c10::cuda::CUDAStream &stream)
 GridVbm
 VbmCache::gridVbm(int64_t bi) const {
     TORCH_CHECK(mOwner, "VbmCache::gridVbm called before the VBMs were built");
-    const auto &entry = mHostEntries.at(bi);
-    if (entry.voxelCount == 0) {
+    TORCH_CHECK(bi >= 0 && bi < int64_t(mHostEntries.size()),
+                "VbmCache::gridVbm: grid index out of range");
+    const nanovdb::tools::cuda::VoxelBlockManagerBatchView<kLog2BlockWidth> view(
+        nanovdb::tools::cuda::VoxelBlockManagerBatchEntryArray{mHostEntries.data()},
+        uint32_t(mHostEntries.size()),
+        mVbm.blockCount,
+        mVbm.firstLeafID,
+        mVbm.jumpMap);
+    const uint32_t g = uint32_t(bi);
+    if (view.voxelCount(g) == 0) {
         return GridVbm{};
     }
-    return GridVbm{mVbm.firstLeafID + entry.blockBase,
-                   mVbm.jumpMap + entry.blockBase * kJumpMapWordCount,
-                   uint32_t((entry.voxelCount + kBlockWidth - 1) >> kLog2BlockWidth),
+    return GridVbm{view.firstLeafID(g),
+                   view.jumpMap(g),
+                   uint32_t(view.blockCount(g)),
                    /*firstOffset=*/1,
-                   /*lastOffset=*/entry.voxelCount};
+                   /*lastOffset=*/view.voxelCount(g)};
 }
 
 } // namespace detail

@@ -113,9 +113,10 @@ class VbmCache {
 };
 
 /// @brief Each grid's VBM placement in its batch's shared arrays, derived from the batch's
-/// device-side voxel offsets and grid metadata. Serves as buildVoxelBlockManagerBatch's entry
-/// source and as the iteration kernel's grid lookup. The lookup binary-searches voxelOffsets,
-/// which is compact (8 bytes per grid), rather than the much larger per-grid metadata.
+/// device-side voxel offsets and grid metadata. Serves as the entry source of
+/// buildVoxelBlockManagerBatch and of BatchVbmView. Its leafBase, blockBase and voxelCount hooks
+/// let the build's and the view's binary searches read compact per-grid arrays (leaf offsets,
+/// voxel offsets) instead of deriving whole entries from the much larger per-grid metadata.
 struct BatchVbmLayout {
     GridBatchData::Accessor acc;
     const int64_t *voxelOffsets; // [numGrids + 1], device
@@ -138,11 +139,21 @@ struct BatchVbmLayout {
         return VbmCache::blockBase(voxelOffsets[g], g);
     }
 
+    __hostdev__ uint32_t
+    leafBase(int64_t g) const {
+        return uint32_t(acc.leafOffset(g));
+    }
+
     __hostdev__ nanovdb::tools::cuda::VoxelBlockManagerBatchEntry
     operator()(uint32_t g) const {
-        return {acc.grid(g), voxelCount(g), blockBase(g), uint32_t(acc.leafOffset(g))};
+        return {acc.grid(g), voxelCount(g), blockBase(g), leafBase(g)};
     }
 };
+
+/// @brief The batch's VBMs as a NanoVDB batch view over BatchVbmLayout: each grid's slice of
+/// the shared arrays, and the grid that owns a batch-wide block.
+using BatchVbmView =
+    nanovdb::tools::cuda::VoxelBlockManagerBatchView<VbmCache::kLog2BlockWidth, BatchVbmLayout>;
 
 } // namespace detail
 } // namespace fvdb

@@ -26,9 +26,10 @@ static_assert(kVbmForEachBlockDim % detail::VbmCache::kBlockWidth == 0,
               "each CUDA block must cover whole VBM blocks");
 
 /// One launch over every active voxel of a batch. Each group of kBlockWidth threads takes one
-/// VBM block of the batch (grid-stride), finds its grid from the grids' block bases with a
-/// warp-uniform binary search, and each thread decodes one voxel's (leafIndex, voxelOffset) in
-/// registers via the VoxelBlockManager's rank+select inverse-map decode.
+/// VBM block of the batch (grid-stride) and finds its grid through the batch view's
+/// lastGridAtOrBefore, a warp-uniform binary search over the grids' block bases. Each thread
+/// decodes one voxel's (leafIndex, voxelOffset) in registers via the VoxelBlockManager's
+/// rank+select inverse-map decode.
 ///
 /// Keep this kernel at 256 threads. A one-thread-per-slot <<<blockCount, 512>>> shape with
 /// __launch_bounds__(512) was observed to silently drop work from a register-heavy callback.
@@ -40,37 +41,31 @@ forEachActiveVoxelVbmKernel(const detail::BatchVbm vbm,
                             Args... args) {
     using VbmCache = detail::VbmCache;
     using VbmT     = nanovdb::tools::cuda::VoxelBlockManager<VbmCache::kLog2BlockWidth>;
+    using ViewT    = detail::BatchVbmView;
 
+    const ViewT view(layout, uint32_t(vbm.numGrids), vbm.blockCount, vbm.firstLeafID, vbm.jumpMap);
     const int slot        = int(threadIdx.x) & (VbmCache::kBlockWidth - 1);
     const uint64_t stride = uint64_t(gridDim.x) * kVbmBlocksPerCudaBlock;
     for (uint64_t vb =
              uint64_t(blockIdx.x) * kVbmBlocksPerCudaBlock + threadIdx.x / VbmCache::kBlockWidth;
          vb < vbm.blockCount;
          vb += stride) {
-        // The last grid whose first block is <= vb. Blocks between grids, and those of empty
-        // grids, fall past their grid's voxels and are skipped.
-        int64_t lo = 0;
-        int64_t hi = vbm.numGrids;
-        while (lo < hi) {
-            const int64_t mid = (lo + hi) >> 1;
-            if (layout.blockBase(mid) <= vb) {
-                lo = mid + 1;
-            } else {
-                hi = mid;
-            }
+        // Blocks between grids map to the grid before them and fall past its voxels below
+        const uint32_t bi = view.lastGridAtOrBefore(vb);
+        if (bi == ViewT::UnusedGridIndex) {
+            continue;
         }
-        const int64_t bi = lo - 1;
-        const uint64_t b = vb - layout.blockBase(bi);        // VBM block within the grid
+        const uint64_t b = vb - view.blockBase(bi);          // VBM block within the grid
         const uint64_t i = b * VbmCache::kBlockWidth + slot; // 0-based voxel in the grid
-        if (i >= layout.voxelCount(bi)) {
+        if (i >= view.voxelCount(bi)) {
             continue;
         }
         const nanovdb::OnIndexGrid *grid = layout.acc.grid(bi);
         uint32_t leafIndex;
         uint16_t voxelOffset;
         VbmT::decodeInverseMap(grid,
-                               vbm.firstLeafID[vb],
-                               vbm.jumpMap + vb * VbmCache::kJumpMapWordCount,
+                               view.firstLeafID()[vb],
+                               view.jumpMap() + vb * VbmCache::kJumpMapWordCount,
                                1 + b * VbmCache::kBlockWidth,
                                slot,
                                leafIndex,
