@@ -129,6 +129,8 @@ rasterizeFromWorld3DGSBackwardKernel(
     const int32_t lastIntersectionOffsetInWarp =
         cg::reduce(warp, lastIntersectionOffset, cg::greater<int32_t>());
 
+    const int32_t numGaussians = static_cast<int32_t>(common.means.size(0));
+
     // Each channel chunk re-traverses the tile's Gaussians back to front with only its own
     // channels in registers. dL/dalpha is a sum over channels, and the geometry VJP is linear in
     // it, so each chunk adds the geometry gradient of its own share of dL/dalpha.
@@ -168,8 +170,8 @@ rasterizeFromWorld3DGSBackwardKernel(
             if (idx >= rangeStart) {
                 const int32_t flatId = common.tileGaussianIds[idx];
                 idBatch[threadRank]  = flatId;
-                const int32_t gid    = flatId % (int32_t)common.means.size(0);
-                const int32_t cid    = flatId / (int32_t)common.means.size(0);
+                const int32_t gid    = flatId % numGaussians;
+                const int32_t cid    = flatId / numGaussians;
 
                 const nanovdb::math::Vec3<float> mean_w(
                     common.means[gid][0], common.means[gid][1], common.means[gid][2]);
@@ -260,8 +262,8 @@ rasterizeFromWorld3DGSBackwardKernel(
 
                     const float fac      = alpha * T;
                     const int32_t flatId = idBatch[t];
-                    const int32_t cid    = flatId / (int32_t)common.means.size(0);
-                    const int32_t gid    = flatId % (int32_t)common.means.size(0);
+                    const int32_t cid    = flatId / numGaussians;
+                    const int32_t gid    = flatId % numGaussians;
 
                     float featDot = 0.f;
 #pragma unroll
@@ -333,8 +335,8 @@ rasterizeFromWorld3DGSBackwardKernel(
 
                 if (warp.thread_rank() == 0) {
                     const int32_t flatId = idBatch[t];
-                    const int32_t cid    = flatId / (int32_t)common.means.size(0);
-                    const int32_t gid    = flatId % (int32_t)common.means.size(0);
+                    const int32_t cid    = flatId / numGaussians;
+                    const int32_t gid    = flatId % numGaussians;
 
                     // Per-camera grads
                     float *dFeaturesGaussianPtr = args.dFeatures.data() +
@@ -435,7 +437,7 @@ launchBackwardKernel(const torch::Tensor &means,
     args.backgrounds = opt.backgrounds;
     args.masks       = opt.masks;
 
-    const size_t blockSize = (size_t)tileSize * (size_t)tileSize;
+    const size_t blockSize = static_cast<size_t>(tileSize) * static_cast<size_t>(tileSize);
     size_t sharedMem       = (alignof(nanovdb::math::Mat3<float>) - 1) + camera.numSharedMemBytes();
     sharedMem += (alignof(int32_t) - 1) + blockSize * sizeof(int32_t);
     sharedMem += (alignof(SharedGaussian) - 1) + blockSize * sizeof(SharedGaussian);

@@ -112,9 +112,10 @@ template <uint32_t NUM_CHANNELS, typename Camera> struct RasterizeFromWorldForwa
         gaussAddr        = alignUpAddress(gaussAddr, alignof(SharedGaussian));
         auto *gaussBatch = reinterpret_cast<SharedGaussian *>(gaussAddr); // [blockSize]
 
-        const int64_t nIsects     = rangeEnd - rangeStart;
-        const int64_t nBatches    = (nIsects + blockSize - 1) / blockSize;
-        const uint32_t threadRank = block.thread_rank();
+        const int64_t nIsects      = rangeEnd - rangeStart;
+        const int64_t nBatches     = (nIsects + blockSize - 1) / blockSize;
+        const uint32_t threadRank  = block.thread_rank();
+        const int32_t numGaussians = static_cast<int32_t>(common.means.size(0));
 
         // Each channel chunk re-traverses the tile's Gaussians with only its own channels in
         // registers. Alpha does not depend on the features, so every chunk sees the same
@@ -132,7 +133,7 @@ template <uint32_t NUM_CHANNELS, typename Camera> struct RasterizeFromWorldForwa
             }
 
             for (int64_t b = 0; b < nBatches; ++b) {
-                if (__syncthreads_count(done) >= (int)blockSize) {
+                if (__syncthreads_count(done) >= static_cast<int>(blockSize)) {
                     break;
                 }
 
@@ -142,7 +143,7 @@ template <uint32_t NUM_CHANNELS, typename Camera> struct RasterizeFromWorldForwa
                 if (idx < rangeEnd) {
                     const int32_t flatId = common.tileGaussianIds[idx];
                     idBatch[threadRank]  = flatId;
-                    const int32_t gid    = flatId % (int32_t)common.means.size(0);
+                    const int32_t gid    = flatId % numGaussians;
 
                     const nanovdb::math::Vec3<float> mean_w(
                         common.means[gid][0], common.means[gid][1], common.means[gid][2]);
@@ -155,7 +156,7 @@ template <uint32_t NUM_CHANNELS, typename Camera> struct RasterizeFromWorldForwa
                                                            __expf(common.logScales[gid][2]));
                     const nanovdb::math::Mat3<float> isclR =
                         computeIsclRot<float>(quat_wxyz, scale);
-                    const int32_t cid = flatId / (int32_t)common.means.size(0);
+                    const int32_t cid = flatId / numGaussians;
                     const float op    = common.opacities[cid][gid];
 
                     gaussBatch[threadRank].id      = flatId;
@@ -191,8 +192,8 @@ template <uint32_t NUM_CHANNELS, typename Camera> struct RasterizeFromWorldForwa
                         break;
                     }
                     const float contrib = alpha * transmittance;
-                    const int32_t cid   = g.id / (int32_t)common.means.size(0);
-                    const int32_t gid   = g.id % (int32_t)common.means.size(0);
+                    const int32_t cid   = g.id / numGaussians;
+                    const int32_t gid   = g.id % numGaussians;
 #pragma unroll
                     for (uint32_t k = 0; k < W; ++k) {
                         pixOut[k] += common.features[cid][gid][channelStart + k] * contrib;
@@ -202,6 +203,9 @@ template <uint32_t NUM_CHANNELS, typename Camera> struct RasterizeFromWorldForwa
                 }
             }
 
+            // This returns from the chunk lambda only, skipping this chunk's writes. Out-of-image
+            // threads still run every later chunk, which they must so that they reach each
+            // chunk's __syncthreads_count and __syncthreads.
             if (!inside) {
                 return;
             }
@@ -290,7 +294,7 @@ launchForwardKernel(const torch::Tensor &means,
         outAlphas.packed_accessor64<float, 4, torch::RestrictPtrTraits>(),
         outLastIds.packed_accessor64<int32_t, 3, torch::RestrictPtrTraits>()};
 
-    const size_t blockSize = (size_t)tileSize * (size_t)tileSize;
+    const size_t blockSize = static_cast<size_t>(tileSize) * static_cast<size_t>(tileSize);
     size_t sharedMem       = (alignof(nanovdb::math::Mat3<float>) - 1) + camera.numSharedMemBytes();
     sharedMem += (alignof(int32_t) - 1) + blockSize * sizeof(int32_t);
     sharedMem += (alignof(SharedGaussian) - 1) + blockSize * sizeof(SharedGaussian);
