@@ -16,20 +16,20 @@ on:
         default: "main"
 
 # Allow subsequent pushes to the same PR or REF to cancel any previous jobs.
-# When called from pr-tests.yml, github.workflow is the CALLER's name, so a
-# group built from it would collide with the caller's own group and with the
-# sibling called workflows. Use a name unique to this file instead. PR runs
-# are already de-duplicated by the caller's group; this one serializes manual
-# dispatches.
+# Only manual dispatches are de-duplicated here. When called from
+# pr-tests.yml, the caller's concurrency group already cancels the previous
+# run for the PR; a second group at this level would let a new run cancel the
+# previous run's stop-runner job mid-teardown and leave an EC2 instance
+# running. Called runs therefore get a group unique to the run. (The group
+# must not be built from github.workflow: in a called workflow that is the
+# caller's name and would collide with the caller's own group.)
 concurrency:
-  group: fvdb-conda-tests-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.event_name == 'workflow_dispatch' && format('fvdb-conda-dispatch-{0}', github.ref) || format('fvdb-conda-run-{0}', github.run_id) }}
   cancel-in-progress: true
 
 permissions:
   contents: read
-  deployments: read
   pull-requests: read
-  issues: read
 
 jobs:
   ##############################################################################
