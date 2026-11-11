@@ -1,15 +1,17 @@
 name: fVDB pip CUDA 13.0 Build and Test
 
 on:
-  # zizmor: ignore[dangerous-triggers] pull_request_target is required to provision AWS runners; privileged credentials are scoped to runner lifecycle jobs.
-  pull_request_target:
-    branches:
-      - '**'
+  # Called by pr-tests.yml, which owns the pull_request_target trigger and the
+  # approval gate. Do NOT add a pull_request_target trigger here: it would run
+  # this workflow for external PRs without approval.
+  workflow_call:
+    secrets:
+      EC2_RUNNER_TOKEN:
+        required: true
 
-# Allow subsequent pushes to the same PR or REF to cancel any previous jobs.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+# No concurrency group here: PR runs are de-duplicated by the caller
+# (pr-tests.yml). A group built from github.workflow would collide with the
+# caller's, because in a called workflow github.workflow is the caller's name.
 
 permissions:
   contents: read

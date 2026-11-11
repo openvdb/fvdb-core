@@ -1,0 +1,85 @@
+# Copyright Contributors to the OpenVDB Project
+# SPDX-License-Identifier: Apache-2.0
+#
+# Entry point for all pull-request build-and-test workflows.
+#
+# This is the ONLY test workflow with a pull_request_target trigger. It runs
+# one approval gate (approval-gate.yml) and then calls the three build-and-test
+# workflows, so a PR from an external account needs a single approval per
+# commit rather than one per workflow.
+#
+#   approve -> conda  (tests.yml)
+#           -> cu130  (cu130.yml)
+#           -> cu132  (cu132.yml)
+#
+# Check names reported on the PR are "<job name here> / <job name there>",
+# e.g. "Conda / fVDB Unit Tests (Conda)". Branch rulesets that require these
+# checks must use those names.
+#
+# To add another build-and-test workflow: give it a workflow_call trigger (no
+# pull_request_target), and add a job here that `needs: approve`.
+
+name: fVDB PR Tests
+
+on:
+  # zizmor: ignore[dangerous-triggers] pull_request_target is required to provision AWS runners; every job is behind the approval gate and privileged credentials are scoped to runner lifecycle jobs.
+  pull_request_target:
+    branches:
+      - '**'
+
+# Allow subsequent pushes to the same PR to cancel any previous run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+# Deny by default. Each calling job grants the ceiling its called workflow
+# needs; the called workflows narrow it further per job (only the runner
+# lifecycle jobs take id-token: write).
+permissions: {}
+
+jobs:
+  # PRs from accounts without write access wait here until a maintainer
+  # approves the run; see approval-gate.yml. Every other job must need this
+  # one so nothing privileged starts first.
+  approve:
+    name: Approval
+    uses: ./.github/workflows/approval-gate.yml
+
+  conda:
+    name: Conda
+    needs: approve
+    permissions:
+      contents: read
+      deployments: read
+      pull-requests: read
+      issues: read
+      id-token: write # Required for AWS OIDC in the runner lifecycle jobs
+    uses: ./.github/workflows/tests.yml
+    secrets:
+      EC2_RUNNER_TOKEN: ${{ secrets.EC2_RUNNER_TOKEN }}
+
+  cu130:
+    name: pip CUDA 13.0
+    needs: approve
+    permissions:
+      contents: read
+      deployments: read
+      pull-requests: read
+      issues: read
+      id-token: write # Required for AWS OIDC in the runner lifecycle jobs
+    uses: ./.github/workflows/cu130.yml
+    secrets:
+      EC2_RUNNER_TOKEN: ${{ secrets.EC2_RUNNER_TOKEN }}
+
+  cu132:
+    name: pip CUDA 13.2
+    needs: approve
+    permissions:
+      contents: read
+      deployments: read
+      pull-requests: read
+      issues: read
+      id-token: write # Required for AWS OIDC in the runner lifecycle jobs
+    uses: ./.github/workflows/cu132.yml
+    secrets:
+      EC2_RUNNER_TOKEN: ${{ secrets.EC2_RUNNER_TOKEN }}

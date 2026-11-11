@@ -1,0 +1,122 @@
+# Copyright Contributors to the OpenVDB Project
+# SPDX-License-Identifier: Apache-2.0
+#
+# Reusable workflow: approval gate for pull_request_target workflows.
+#
+# pull_request_target runs with the base repository's privileges (secrets,
+# OIDC, self-hosted runners), so nothing privileged may start for a PR from an
+# external account until a maintainer has approved that run.
+#
+# Callers add one job that uses this workflow and make their first jobs depend
+# on it:
+#
+#   approve:
+#     uses: ./.github/workflows/approval-gate.yml
+#   versions:
+#     needs: approve
+#     ...
+#
+# How it works:
+#   classify  decides whether the run is trusted (see the step for the rule).
+#   gate      is an empty job whose environment is `ci-trusted` (no protection
+#             rules) for trusted runs, or `ci-external-approval` (required
+#             reviewers) for everything else. An untrusted run waits there
+#             until a reviewer approves it in the Actions UI.
+#
+# REPOSITORY SETUP REQUIRED before this workflow is merged:
+#   Both environments must already exist (Settings -> Environments), with
+#   "Allow administrators to bypass" off and deployment branches limited to
+#   the default branch. `ci-external-approval` must have required reviewers.
+#   GitHub silently creates an UNPROTECTED environment for any name it has not
+#   seen, so merging this without the environments in place disables the gate.
+#
+# The approval covers the commit in the event payload. Jobs that fetch PR code
+# must verify the fetched head equals github.event.pull_request.head.sha.
+
+name: Approval gate
+
+on:
+  workflow_call:
+
+# Deny by default; nothing here needs more than the token's implicit metadata
+# read access.
+permissions: {}
+
+jobs:
+  classify:
+    name: Classify PR author
+    runs-on: ubuntu-latest
+    permissions: {}
+    outputs:
+      trusted: ${{ steps.classify.outputs.trusted }}
+    steps:
+      # Trusted means: not a PR event at all (push to main or manual dispatch,
+      # both of which already need write access), or BOTH the PR author and
+      # the account that triggered this event have write access or higher.
+      #
+      # The sender is checked as well as the author because a PR's head branch
+      # can live in a fork the author does not own; pushes to it then come
+      # from someone else.
+      #
+      # author_association is deliberately not used: it reports private org
+      # members inconsistently and counts read-only collaborators as
+      # COLLABORATOR.
+      #
+      # Anything unexpected (API error, empty value) leaves trusted=false.
+      - name: Check write access of PR author and event sender
+        id: classify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          SENDER: ${{ github.event.sender.login }}
+        run: |
+          set -uo pipefail
+          trusted=false
+
+          has_write() {
+            local user="$1" perm
+            if [ -z "$user" ]; then
+              echo "empty login" >&2
+              return 1
+            fi
+            if ! perm=$(gh api "repos/${REPO}/collaborators/${user}/permission" --jq '.permission'); then
+              echo "permission lookup failed for ${user}" >&2
+              return 1
+            fi
+            echo "${user}: ${perm}" >&2
+            case "$perm" in
+              admin|write) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+
+          if [ "$EVENT_NAME" != "pull_request_target" ]; then
+            echo "Event ${EVENT_NAME}: no PR code involved."
+            trusted=true
+          elif has_write "$PR_AUTHOR" && has_write "$SENDER"; then
+            trusted=true
+          fi
+
+          echo "trusted=${trusted}"
+          echo "trusted=${trusted}" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Approval gate"
+            echo "- Event: \`${EVENT_NAME}\`"
+            echo "- PR author: \`${PR_AUTHOR:-n/a}\`, triggered by: \`${SENDER:-n/a}\`"
+            echo "- Trusted: **${trusted}**"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  gate:
+    name: Approval gate
+    needs: classify
+    runs-on: ubuntu-latest
+    permissions: {}
+    # Exactly two possible names, both hard-coded. Never interpolate a job
+    # output into the environment name (see REPOSITORY SETUP above). Anything
+    # other than the literal string 'true' selects the protected environment.
+    environment: ${{ needs.classify.outputs.trusted == 'true' && 'ci-trusted' || 'ci-external-approval' }}
+    steps:
+      - name: Approved
+        run: echo "Gate passed."

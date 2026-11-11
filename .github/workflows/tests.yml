@@ -1,10 +1,13 @@
 name: fVDB Conda Build and Test
 
 on:
-  # zizmor: ignore[dangerous-triggers] pull_request_target is required to provision AWS runners; privileged credentials are scoped to runner lifecycle jobs.
-  pull_request_target:
-    branches:
-      - '**'
+  # Called by pr-tests.yml, which owns the pull_request_target trigger and the
+  # approval gate. Do NOT add a pull_request_target trigger here: it would run
+  # this workflow for external PRs without approval.
+  workflow_call:
+    secrets:
+      EC2_RUNNER_TOKEN:
+        required: true
   workflow_dispatch:
     inputs:
       branch:
@@ -13,8 +16,13 @@ on:
         default: "main"
 
 # Allow subsequent pushes to the same PR or REF to cancel any previous jobs.
+# When called from pr-tests.yml, github.workflow is the CALLER's name, so a
+# group built from it would collide with the caller's own group and with the
+# sibling called workflows. Use a name unique to this file instead. PR runs
+# are already de-duplicated by the caller's group; this one serializes manual
+# dispatches.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: fvdb-conda-tests-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
