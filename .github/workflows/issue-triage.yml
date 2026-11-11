@@ -42,7 +42,16 @@ jobs:
           AUTHOR: ${{ github.event.issue.user.login }}
         run: |
           set -uo pipefail
-          if ! perm=$(gh api "repos/${REPO}/collaborators/${AUTHOR}/permission" --jq '.permission'); then
+          if ! perm=$(gh api "repos/${REPO}/collaborators/${AUTHOR}/permission" --jq '.permission' 2>"${RUNNER_TEMP}/lookup.err"); then
+            # A deleted or renamed account (for example on a reopened old
+            # issue) no longer resolves. That author is certainly not a
+            # maintainer, so label the issue external rather than failing.
+            if grep -q "HTTP 404" "${RUNNER_TEMP}/lookup.err"; then
+              echo "${AUTHOR}: account not found; treating as external"
+              echo "external=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            cat "${RUNNER_TEMP}/lookup.err" >&2
             echo "::error::Permission lookup failed for ${AUTHOR}"
             exit 1
           fi
