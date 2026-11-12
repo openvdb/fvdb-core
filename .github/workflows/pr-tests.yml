@@ -12,6 +12,10 @@
 #           -> cu130  (cu130.yml)
 #           -> cu132  (cu132.yml)
 #
+# The called workflows start and stop their EC2 runners in the ci-aws
+# environment, with the runner role (aws.runner_role in versions.json). That
+# role accepts only OIDC tokens issued for ci-aws.
+#
 # Check names reported on the PR are "<job name here> / <job name there>",
 # e.g. "Conda / fVDB Unit Tests (Conda)". Branch rulesets that require these
 # checks must use those names.
