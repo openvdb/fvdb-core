@@ -32,7 +32,7 @@ jobs:
       # Exact tool versions so the gate is deterministic. Bump deliberately;
       # new releases may surface new findings that fail unrelated PRs.
       ZIZMOR_VERSION: "1.26.1"
-      ACTIONLINT_VERSION: "v1.7.7"
+      ACTIONLINT_VERSION: "v1.7.12"
       PYYAML_VERSION: "6.0.3"
       PYTEST_VERSION: "9.0.3"
     steps:
