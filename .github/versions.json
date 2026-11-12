@@ -40,6 +40,7 @@
   },
   "aws": {
     "role": "arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role",
+    "ci_role": "arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-ec2-runners",
     "region": "us-east-2",
     "cpu_ami": "ami-0e14a711dad782a70",
     "gpu_ami": "ami-0f5c0b65fde08ae43",
