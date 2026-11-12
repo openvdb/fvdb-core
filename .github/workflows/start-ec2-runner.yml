@@ -108,7 +108,14 @@ jobs:
     # required reviewers; its deployment-branch policy limits which refs can
     # start a runner. Approval of external PRs happens earlier, in
     # approval-gate.yml.
-    environment: ci-aws
+    #
+    # deployment: false keeps the environment (its deployment-branch policy
+    # still applies and the OIDC subject still names ci-aws) but records no
+    # deployment, so PRs are not filled with "deployed to ci-aws" events.
+    # Both were verified in openvdb/fvdb-test.
+    environment:
+      name: ci-aws
+      deployment: false
     # Taken from the attempt that actually SUCCEEDED -- see the select step
     # below for why "first non-empty" is not the same thing.
     outputs:

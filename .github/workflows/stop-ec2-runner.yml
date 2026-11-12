@@ -63,7 +63,14 @@ jobs:
     # required reviewers; its deployment-branch policy limits which refs can
     # start a runner. Approval of external PRs happens earlier, in
     # approval-gate.yml.
-    environment: ci-aws
+    #
+    # deployment: false keeps the environment (its deployment-branch policy
+    # still applies and the OIDC subject still names ci-aws) but records no
+    # deployment, so PRs are not filled with "deployed to ci-aws" events.
+    # Both were verified in openvdb/fvdb-test.
+    environment:
+      name: ci-aws
+      deployment: false
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
