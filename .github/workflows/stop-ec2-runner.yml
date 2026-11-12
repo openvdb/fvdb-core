@@ -70,6 +70,9 @@ jobs:
         with:
           role-to-assume: ${{ inputs.aws-role }}
           aws-region: ${{ inputs.aws-region }}
+          # 900s is the STS minimum. This job finishes in seconds, so a leaked
+          # session is useful for 15 minutes instead of the default hour.
+          role-duration-seconds: 900
 
       - name: Find EC2 instance ID by label
         id: find-instance
