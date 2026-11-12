@@ -1,10 +1,13 @@
 name: fVDB Conda Build and Test
 
 on:
-  # zizmor: ignore[dangerous-triggers] pull_request_target is required to provision AWS runners; privileged credentials are scoped to runner lifecycle jobs.
-  pull_request_target:
-    branches:
-      - '**'
+  # Called by pr-tests.yml, which owns the pull_request_target trigger and the
+  # approval gate. Do NOT add a pull_request_target trigger here: it would run
+  # this workflow for external PRs without approval.
+  workflow_call:
+    secrets:
+      EC2_RUNNER_TOKEN:
+        required: true
   workflow_dispatch:
     inputs:
       branch:
@@ -13,15 +16,20 @@ on:
         default: "main"
 
 # Allow subsequent pushes to the same PR or REF to cancel any previous jobs.
+# Only manual dispatches are de-duplicated here. When called from
+# pr-tests.yml, the caller's concurrency group already cancels the previous
+# run for the PR; a second group at this level would let a new run cancel the
+# previous run's stop-runner job mid-teardown and leave an EC2 instance
+# running. Called runs therefore get a group unique to the run. (The group
+# must not be built from github.workflow: in a called workflow that is the
+# caller's name and would collide with the caller's own group.)
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.event_name == 'workflow_dispatch' && format('fvdb-conda-dispatch-{0}', github.ref) || format('fvdb-conda-run-{0}', github.run_id) }}
   cancel-in-progress: true
 
 permissions:
   contents: read
-  deployments: read
   pull-requests: read
-  issues: read
 
 jobs:
   ##############################################################################
@@ -49,7 +57,7 @@ jobs:
       instance-type: m6a.8xlarge
       runner-label: tests-build-${{ github.run_id }}-${{ github.run_attempt }}
       az-config: ${{ needs.versions.outputs.aws-cpu-az-config }}
-      aws-role: ${{ needs.versions.outputs.aws-role }}
+      aws-role: ${{ needs.versions.outputs.aws-runner-role }}
       aws-region: ${{ needs.versions.outputs.aws-region }}
     secrets:
       EC2_RUNNER_TOKEN: ${{ secrets.EC2_RUNNER_TOKEN }}
@@ -130,7 +138,7 @@ jobs:
       - name: Upload wheel
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-            name: fvdb-test-package
+            name: fvdb-test-package-conda
             path: dist/*.whl
             retention-days: 2
 
@@ -142,7 +150,7 @@ jobs:
       - name: Upload gtests
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-            name: fvdb-gtest
+            name: fvdb-gtest-conda
             path: fvdb-gtest.tar
             retention-days: 2
 
@@ -161,7 +169,7 @@ jobs:
     with:
       label: tests-build-${{ github.run_id }}-${{ github.run_attempt }}
       ec2-instance-id: ${{ needs.start-build-runner.outputs.ec2-instance-id }}
-      aws-role: ${{ needs.versions.outputs.aws-role }}
+      aws-role: ${{ needs.versions.outputs.aws-runner-role }}
       aws-region: ${{ needs.versions.outputs.aws-region }}
     secrets:
       EC2_RUNNER_TOKEN: ${{ secrets.EC2_RUNNER_TOKEN }}
@@ -181,7 +189,7 @@ jobs:
       fallback-instance-type: g5.xlarge # A10G, SM 8.6 -- different capacity pool
       runner-label: tests-gpu-${{ github.run_id }}-${{ github.run_attempt }}
       az-config: ${{ needs.versions.outputs.aws-gpu-az-config }}
-      aws-role: ${{ needs.versions.outputs.aws-role }}
+      aws-role: ${{ needs.versions.outputs.aws-runner-role }}
       aws-region: ${{ needs.versions.outputs.aws-region }}
     secrets:
       EC2_RUNNER_TOKEN: ${{ secrets.EC2_RUNNER_TOKEN }}
@@ -240,7 +248,7 @@ jobs:
       - name: Download gtests
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-            name: fvdb-gtest
+            name: fvdb-gtest-conda
             path: .
 
       - name: Extract tar
@@ -313,7 +321,7 @@ jobs:
       - name: Download package
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-            name: fvdb-test-package
+            name: fvdb-test-package-conda
             path: ./dist
 
       - name: Install package
@@ -391,7 +399,7 @@ jobs:
       - name: Download package
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-            name: fvdb-test-package
+            name: fvdb-test-package-conda
             path: ./dist
 
       - name: Install package
@@ -439,7 +447,7 @@ jobs:
     with:
       label: tests-gpu-${{ github.run_id }}-${{ github.run_attempt }}
       ec2-instance-id: ${{ needs.start-tests-gpu-runner.outputs.ec2-instance-id }}
-      aws-role: ${{ needs.versions.outputs.aws-role }}
+      aws-role: ${{ needs.versions.outputs.aws-runner-role }}
       aws-region: ${{ needs.versions.outputs.aws-region }}
     secrets:
       EC2_RUNNER_TOKEN: ${{ secrets.EC2_RUNNER_TOKEN }}

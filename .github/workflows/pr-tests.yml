@@ -1,0 +1,98 @@
+# Copyright Contributors to the OpenVDB Project
+# SPDX-License-Identifier: Apache-2.0
+#
+# Entry point for all pull-request build-and-test workflows.
+#
+# This is the ONLY test workflow with a pull_request_target trigger. It runs
+# one approval gate (approval-gate.yml) and then calls the three build-and-test
+# workflows, so a PR from an external account needs a single approval per
+# commit rather than one per workflow.
+#
+#   approve -> conda  (tests.yml)
+#           -> cu130  (cu130.yml)
+#           -> cu132  (cu132.yml)
+#
+# Check names reported on the PR are "<job name here> / <job name there>",
+# e.g. "Conda / fVDB Unit Tests (Conda)". Branch rulesets that require these
+# checks must use those names.
+#
+# To add another build-and-test workflow: give it a workflow_call trigger (no
+# pull_request_target), and add a job here that `needs: approve`.
+
+name: fVDB PR Tests
+
+on:
+  # zizmor: ignore[dangerous-triggers] pull_request_target is required to provision AWS runners; every job is behind the approval gate and privileged credentials are scoped to runner lifecycle jobs.
+  pull_request_target:
+    # ready_for_review is not a default type; without it, marking a draft
+    # ready runs nothing until the next push.
+    types: [opened, synchronize, reopened, ready_for_review]
+    # Keep this list in step with the deployment-branch policies of the
+    # ci-trusted and ci-external-approval environments and with the
+    # repository's Actions policy for pull_request_target.
+    branches:
+      - main
+      - 'release/**'
+
+# Allow subsequent pushes to the same PR to cancel any previous run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+# Deny by default. Each calling job grants the ceiling its called workflow
+# needs. The called workflows narrow it further themselves: their default is
+# contents + pull-requests read, and only the runner lifecycle jobs take
+# id-token: write, so jobs that run PR code cannot request an OIDC token.
+#
+# The ceiling is repeated on each calling job rather than stated once here
+# because id-token: write at workflow level is rejected by zizmor
+# (excessive-permissions), which is a required check in this repository.
+permissions: {}
+
+jobs:
+  # PRs from accounts without write access wait here until a maintainer
+  # approves the run; see approval-gate.yml. Every other job must need this
+  # one so nothing privileged starts first.
+  #
+  # Draft PRs skip the gate, and through `needs` everything else, so nobody
+  # is asked to approve a run that would do nothing. Marking the PR ready
+  # triggers a new run.
+  approve:
+    name: Approval
+    if: github.event.pull_request.draft == false
+    permissions:
+      actions: read # approval-gate.yml reads the environment's protection rules
+    uses: ./.github/workflows/approval-gate.yml
+
+  conda:
+    name: Conda
+    needs: approve
+    permissions:
+      contents: read # checkout
+      pull-requests: read # dorny/paths-filter in check-changes.yml
+      id-token: write # AWS OIDC in the runner lifecycle jobs
+    uses: ./.github/workflows/tests.yml
+    secrets:
+      EC2_RUNNER_TOKEN: ${{ secrets.EC2_RUNNER_TOKEN }}
+
+  cu130:
+    name: pip CUDA 13.0
+    needs: approve
+    permissions:
+      contents: read # checkout
+      pull-requests: read # dorny/paths-filter in check-changes.yml
+      id-token: write # AWS OIDC in the runner lifecycle jobs
+    uses: ./.github/workflows/cu130.yml
+    secrets:
+      EC2_RUNNER_TOKEN: ${{ secrets.EC2_RUNNER_TOKEN }}
+
+  cu132:
+    name: pip CUDA 13.2
+    needs: approve
+    permissions:
+      contents: read # checkout
+      pull-requests: read # dorny/paths-filter in check-changes.yml
+      id-token: write # AWS OIDC in the runner lifecycle jobs
+    uses: ./.github/workflows/cu132.yml
+    secrets:
+      EC2_RUNNER_TOKEN: ${{ secrets.EC2_RUNNER_TOKEN }}

@@ -33,7 +33,7 @@ on:
         type: string
         required: true
       aws-role:
-        description: IAM role to assume via OIDC.
+        description: IAM role to assume via OIDC (needs.versions.outputs.aws-runner-role).
         type: string
         required: true
       aws-region:
@@ -102,6 +102,13 @@ jobs:
   start:
     name: Start EC2 runner
     runs-on: ubuntu-latest
+    # The runner role (aws.runner_role in versions.json) trusts only OIDC
+    # tokens whose subject names the ci-aws environment, and a job's token
+    # names an environment only if the job declares one. ci-aws has no
+    # required reviewers; its deployment-branch policy limits which refs can
+    # start a runner. Approval of external PRs happens earlier, in
+    # approval-gate.yml.
+    environment: ci-aws
     # Taken from the attempt that actually SUCCEEDED -- see the select step
     # below for why "first non-empty" is not the same thing.
     outputs:
