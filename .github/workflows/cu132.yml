@@ -43,8 +43,7 @@ jobs:
       instance-type: m6a.8xlarge
       runner-label: cu132-build-${{ github.run_id }}-${{ github.run_attempt }}
       az-config: ${{ needs.versions.outputs.aws-cpu-az-config }}
-      aws-role: ${{ needs.versions.outputs.aws-ci-role }}
-      ci-aws-environment: true
+      aws-role: ${{ needs.versions.outputs.aws-runner-role }}
       aws-region: ${{ needs.versions.outputs.aws-region }}
     secrets:
       EC2_RUNNER_TOKEN: ${{ secrets.EC2_RUNNER_TOKEN }}
@@ -206,8 +205,7 @@ jobs:
     with:
       label: cu132-build-${{ github.run_id }}-${{ github.run_attempt }}
       ec2-instance-id: ${{ needs.start-build-runner.outputs.ec2-instance-id }}
-      aws-role: ${{ needs.versions.outputs.aws-ci-role }}
-      ci-aws-environment: true
+      aws-role: ${{ needs.versions.outputs.aws-runner-role }}
       aws-region: ${{ needs.versions.outputs.aws-region }}
     secrets:
       EC2_RUNNER_TOKEN: ${{ secrets.EC2_RUNNER_TOKEN }}
@@ -226,8 +224,7 @@ jobs:
       fallback-instance-type: g5.xlarge # A10G, SM 8.6 -- different capacity pool
       runner-label: cu132-gpu-${{ github.run_id }}-${{ github.run_attempt }}
       az-config: ${{ needs.versions.outputs.aws-gpu-az-config }}
-      aws-role: ${{ needs.versions.outputs.aws-ci-role }}
-      ci-aws-environment: true
+      aws-role: ${{ needs.versions.outputs.aws-runner-role }}
       aws-region: ${{ needs.versions.outputs.aws-region }}
     secrets:
       EC2_RUNNER_TOKEN: ${{ secrets.EC2_RUNNER_TOKEN }}
@@ -565,8 +562,7 @@ jobs:
     with:
       label: cu132-gpu-${{ github.run_id }}-${{ github.run_attempt }}
       ec2-instance-id: ${{ needs.start-tests-gpu-runner.outputs.ec2-instance-id }}
-      aws-role: ${{ needs.versions.outputs.aws-ci-role }}
-      ci-aws-environment: true
+      aws-role: ${{ needs.versions.outputs.aws-runner-role }}
       aws-region: ${{ needs.versions.outputs.aws-region }}
     secrets:
       EC2_RUNNER_TOKEN: ${{ secrets.EC2_RUNNER_TOKEN }}

@@ -54,8 +54,8 @@ on:
         value: ${{ jobs.load.outputs.docker-os-ubuntu }}
       aws-role:
         value: ${{ jobs.load.outputs.aws-role }}
-      aws-ci-role:
-        value: ${{ jobs.load.outputs.aws-ci-role }}
+      aws-runner-role:
+        value: ${{ jobs.load.outputs.aws-runner-role }}
       aws-region:
         value: ${{ jobs.load.outputs.aws-region }}
       aws-cpu-ami:
@@ -107,7 +107,7 @@ jobs:
       docker-os-rocky: ${{ steps.parse.outputs.docker-os-rocky }}
       docker-os-ubuntu: ${{ steps.parse.outputs.docker-os-ubuntu }}
       aws-role: ${{ steps.parse.outputs.aws-role }}
-      aws-ci-role: ${{ steps.parse.outputs.aws-ci-role }}
+      aws-runner-role: ${{ steps.parse.outputs.aws-runner-role }}
       aws-region: ${{ steps.parse.outputs.aws-region }}
       aws-cpu-ami: ${{ steps.parse.outputs.aws-cpu-ami }}
       aws-gpu-ami: ${{ steps.parse.outputs.aws-gpu-ami }}
@@ -164,7 +164,7 @@ jobs:
             echo "docker-os-rocky=$(jq -r '.docker_os.rocky' $CFG)"
             echo "docker-os-ubuntu=$(jq -r '.docker_os.ubuntu' $CFG)"
             echo "aws-role=$(jq -r '.aws.role' $CFG)"
-            echo "aws-ci-role=$(jq -r '.aws.ci_role' $CFG)"
+            echo "aws-runner-role=$(jq -r '.aws.runner_role' $CFG)"
             echo "aws-region=$(jq -r '.aws.region' $CFG)"
             echo "aws-cpu-ami=$(jq -r '.aws.cpu_ami' $CFG)"
             echo "aws-gpu-ami=$(jq -r '.aws.gpu_ami' $CFG)"
