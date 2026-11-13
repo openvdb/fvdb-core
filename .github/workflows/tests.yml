@@ -1,9 +1,9 @@
 name: fVDB Unit Tests
 
 on:
-  pull_request_target:
-    branches:
-      - '**'
+  # pull_request_target was removed from this release branch: its workflows
+  # predate the approval gate on main, and pull_request_target runs PR code
+  # with this repository's privileges. Run manually with workflow_dispatch.
   workflow_dispatch:
     inputs:
       branch:
