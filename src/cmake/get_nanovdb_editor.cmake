@@ -17,7 +17,7 @@ set(NANOVDB_EDITOR_BUILD_TYPE "Release" CACHE STRING "Build type for nanovdb_edi
 # Note: only change this when the interfaces have changed
 # dd40e38: adds NANOVDB_EDITOR_PUBLIC_HEADERS_ONLY and NANOVDB_EDITOR_USE_EXTERNAL_ZLIB
 set(NANOVDB_EDITOR_TAG dd40e38b9d09fe4c6f724f92e7090693eb04d5eb)
-set(NANOVDB_EDITOR_VERSION 0.1.6)
+set(NANOVDB_EDITOR_VERSION 0.1.8)
 # Note: NANOVDB_EDITOR_VERSION should be >= version at NANOVDB_EDITOR_TAG commit
 
 CPMAddPackage(
