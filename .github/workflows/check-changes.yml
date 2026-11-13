@@ -15,11 +15,13 @@ on:
         description: "'true' unless every changed file is a skippable (docs/non-code) path"
         value: ${{ jobs.check-changes.outputs.should_test }}
 
-# Permissions are inherited from the calling workflow.
-
+# The scopes this workflow needs. Callers must grant at least these on the job
+# that calls it; this block caps what the job receives. dorny/paths-filter runs
+# only on pull_request_target, where it lists the PR's changed files through
+# the REST API (pull-requests: read) and needs no checkout, so contents is not
+# needed. If a scope is added here, add it to every caller's grant too.
 permissions:
-  contents: read
-  pull-requests: read # dorny/paths-filter lists the PR's changed files
+  pull-requests: read
 
 jobs:
   check-changes:
