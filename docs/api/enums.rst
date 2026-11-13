@@ -13,6 +13,12 @@ Enums
 .. autoclass:: fvdb.ConvolutionTopologyProvenance
    :members:
 
+.. autoclass:: fvdb.SerializationOrder
+   :members:
+
+.. autoclass:: fvdb.SerializationOffset
+   :members:
+
 .. autoclass:: fvdb.CameraModel
    :members:
 
