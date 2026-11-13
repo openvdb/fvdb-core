@@ -19,17 +19,19 @@
 # How it works:
 #   classify  decides whether the run is trusted (see the step for the rule).
 #   gate      is an empty job whose environment is `ci-trusted` (no protection
-#             rules) for trusted runs, or `ci-external-approval` (required
-#             reviewers) for everything else. An untrusted run waits there
-#             until a reviewer approves it in the Actions UI.
+#             rules) for trusted runs, or `ci-external-approval` for everything
+#             else. An untrusted run waits there until a maintainer comments
+#             `/ok-to-test <full commit SHA>` on the PR (see ok-to-test.yml).
 #
 # REPOSITORY SETUP REQUIRED before this workflow is merged:
 #   Both environments must already exist (Settings -> Environments), with
-#   "Allow administrators to bypass" off. `ci-external-approval` must have
-#   required reviewers. GitHub silently creates an UNPROTECTED environment for
-#   any name it has not seen, so merging this without the environments in
-#   place disables the gate. The classify job refuses to continue if
-#   `ci-external-approval` is missing or has no required reviewers.
+#   "Allow administrators to bypass" off. `ci-external-approval` must be
+#   protected by the fvdb-ok-to-test GitHub App's deployment protection rule
+#   (repository variable OK_TO_TEST_APP_SLUG names the App), or by required
+#   reviewers. GitHub silently creates an UNPROTECTED environment for any name
+#   it has not seen, so merging this without the environments in place
+#   disables the gate. The classify job refuses to continue if
+#   `ci-external-approval` is missing or has neither protection.
 #
 #   Keep these three settings in step, one short allowlist of branches (the
 #   default branch plus release branches, e.g. `main` and `release/*`):
@@ -37,7 +39,7 @@
 #     - the deployment-branch policy of both environments;
 #     - the repository's Actions policy that allows pull_request_target.
 #
-# CALLER REQUIREMENT:
+# CALLER REQUIREMENTS:
 #   The calling job must grant `actions: read` (needed to read the
 #   environment's protection rules), e.g.
 #
@@ -45,6 +47,14 @@
 #       permissions:
 #         actions: read
 #       uses: ./.github/workflows/approval-gate.yml
+#
+#   The calling workflow must set this run-name, and be listed in
+#   GATED_WORKFLOWS in ok-to-test.yml, which finds held runs by it:
+#
+#     run-name: "${{ format('PR #{0} @ {1}', github.event.pull_request.number, github.event.pull_request.head.sha) }}"
+#
+#   (ok-to-test.yml also checks each run's head commit, repository and
+#   branch; the title ties the run to the PR number.)
 #
 # The approval covers the commit in the event payload. Jobs that fetch PR code
 # must verify the fetched head equals github.event.pull_request.head.sha.
@@ -68,31 +78,45 @@ jobs:
       trusted: ${{ steps.classify.outputs.trusted }}
     steps:
       # The gate is only as good as the settings of `ci-external-approval`.
-      # If that environment is deleted, renamed or loses its required
-      # reviewers, external PRs would pass with nothing to warn anyone. Fail
-      # every run, trusted or not, so the problem is noticed immediately.
-      - name: Verify ci-external-approval still requires reviewers
+      # If that environment is deleted, renamed or loses its protection,
+      # external PRs would pass with nothing to warn anyone. Fail every run,
+      # trusted or not, so the problem is noticed immediately.
+      #
+      # Either protection is enough: the fvdb-ok-to-test App's rule (released
+      # by /ok-to-test) or required reviewers (released in the Actions UI).
+      # Required reviewers are the fallback if the App is ever unavailable.
+      - name: Verify ci-external-approval is still protected
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
+          APP_SLUG: ${{ vars.OK_TO_TEST_APP_SLUG }}
         run: |
           set -uo pipefail
-          n=$(gh api "repos/${REPO}/environments/ci-external-approval" \
-                --jq '[.protection_rules[] | select(.type == "required_reviewers") | .reviewers[]] | length') || n=0
-          case "$n" in
-            ''|*[!0-9]*) n=0 ;;
-          esac
-          if [ "$n" -lt 1 ]; then
-            echo "::error::Environment ci-external-approval is missing or has no required reviewers; refusing to run."
+          count() {
+            case "$1" in
+              ''|*[!0-9]*) echo 0 ;;
+              *) echo "$1" ;;
+            esac
+          }
+          apps=0
+          if [ -n "$APP_SLUG" ]; then
+            apps=$(count "$(gh api "repos/${REPO}/environments/ci-external-approval/deployment_protection_rules" \
+                     --jq "[.custom_deployment_protection_rules[] | select(.enabled and .app.slug == \"${APP_SLUG}\")] | length")")
+          fi
+          reviewers=$(count "$(gh api "repos/${REPO}/environments/ci-external-approval" \
+                        --jq '[.protection_rules[] | select(.type == "required_reviewers") | .reviewers[]] | length')")
+          if [ "$apps" -lt 1 ] && [ "$reviewers" -lt 1 ]; then
+            echo "::error::Environment ci-external-approval is missing, or has neither the ${APP_SLUG:-<OK_TO_TEST_APP_SLUG unset>} rule nor required reviewers; refusing to run."
             exit 1
           fi
-          echo "ci-external-approval has ${n} required reviewer(s)."
+          echo "ci-external-approval: ${APP_SLUG:-<no app>} rule enabled: ${apps}; required reviewers: ${reviewers}."
 
       # Trusted means: a push, manual dispatch or schedule event (none of which
       # an outside account can cause), or a pull_request_target event with
       # ALL of:
-      #   - the PR author has write access or higher;
-      #   - the account that triggered this event has write access or higher;
+      #   - the PR author is a collaborator on this repository, at any
+      #     permission level (see is_collaborator below);
+      #   - the account that triggered this event is a collaborator too;
       #   - the PR head lives in this repository, or in a fork owned by the
       #     PR author.
       #
@@ -102,15 +126,14 @@ jobs:
       # reopening the PR) says nothing about who supplied the current head.
       #
       # author_association is deliberately not used: it reports private org
-      # members inconsistently and counts read-only collaborators as
-      # COLLABORATOR.
+      # members inconsistently.
       #
       # Any other event is untrusted. This workflow is reusable; a caller
       # that later adds issue_comment, workflow_run, pull_request or similar
       # must not get the unprotected environment by default.
       #
       # Anything unexpected (API error, empty value) leaves trusted=false.
-      - name: Check write access of PR author and event sender
+      - name: Check that the PR author and event sender are collaborators
         id: classify
         env:
           GH_TOKEN: ${{ github.token }}
@@ -124,21 +147,39 @@ jobs:
           set -uo pipefail
           trusted=false
 
-          has_write() {
-            local user="$1" perm
+          # True when the user is a collaborator on this repository at any
+          # permission level. With the workflow's GITHUB_TOKEN no single API
+          # call answers that, so two are combined:
+          # - the permission endpoint, for write or higher. This covers org
+          #   owners and members with access through a team: every openvdb
+          #   org member today. It cannot be used for read access, because on
+          #   a public repository it reports "read" for any GitHub user.
+          # - the check-collaborator endpoint (204 or 404), for direct and
+          #   outside collaborators at any level, read included. With this
+          #   token it answers 404 for org owners and team members.
+          # An org member whose only access is read through a team counts as
+          # neither; none exists today.
+          is_collaborator() {
+            local user="$1" perm err
             if [ -z "$user" ]; then
               echo "empty login" >&2
               return 1
             fi
-            if ! perm=$(gh api "repos/${REPO}/collaborators/${user}/permission" --jq '.permission'); then
-              echo "permission lookup failed for ${user}" >&2
-              return 1
+            if perm=$(gh api "repos/${REPO}/collaborators/${user}/permission" --jq '.permission'); then
+              case "$perm" in
+                admin|write)
+                  echo "${user}: ${perm} access" >&2
+                  return 0 ;;
+              esac
+            else
+              perm="lookup failed"
             fi
-            echo "${user}: ${perm}" >&2
-            case "$perm" in
-              admin|write) return 0 ;;
-              *) return 1 ;;
-            esac
+            if err=$(gh api "repos/${REPO}/collaborators/${user}" --silent 2>&1); then
+              echo "${user}: direct or outside collaborator (${perm})" >&2
+              return 0
+            fi
+            echo "${user}: not a collaborator (${perm}; ${err})" >&2
+            return 1
           }
 
           # True when the PR head is in this repository or in a fork owned by
@@ -160,7 +201,7 @@ jobs:
               echo "Event ${EVENT_NAME}: no PR code involved."
               trusted=true ;;
             pull_request_target)
-              if has_write "$PR_AUTHOR" && has_write "$SENDER" && head_is_authors; then
+              if is_collaborator "$PR_AUTHOR" && is_collaborator "$SENDER" && head_is_authors; then
                 trusted=true
               fi ;;
             *)
