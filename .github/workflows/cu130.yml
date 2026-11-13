@@ -10,15 +10,20 @@ on:
 # (pr-tests.yml). A group built from github.workflow would collide with the
 # caller's, because in a called workflow github.workflow is the caller's name.
 
+# Read-only by default. Jobs that need more are granted it individually:
+# pull-requests: read for check-changes, id-token: write for the runner
+# start and stop calls. The jobs that run PR code get contents: read only.
 permissions:
   contents: read
-  pull-requests: read
 
 jobs:
   ##############################################################################
   # CHECK FOR RELEVANT CHANGES
   ##############################################################################
   check-changes:
+    permissions:
+      contents: read
+      pull-requests: read # dorny/paths-filter lists the PR's changed files
     uses: ./.github/workflows/check-changes.yml
 
   versions:
