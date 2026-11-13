@@ -80,8 +80,6 @@ jobs:
       stagger-seconds: 15
       aws-role: ${{ needs.versions.outputs.aws-runner-role }}
       aws-region: ${{ needs.versions.outputs.aws-region }}
-    secrets:
-      EC2_RUNNER_TOKEN: ${{ secrets.EC2_RUNNER_TOKEN }}
 
   ##############################################################################
   # BUILD NIGHTLY WHEELS
@@ -366,5 +364,3 @@ jobs:
       label: nightly-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
       aws-role: ${{ needs.versions.outputs.aws-runner-role }}
       aws-region: ${{ needs.versions.outputs.aws-region }}
-    secrets:
-      EC2_RUNNER_TOKEN: ${{ secrets.EC2_RUNNER_TOKEN }}

@@ -5,9 +5,6 @@ on:
   # approval gate. Do NOT add a pull_request_target trigger here: it would run
   # this workflow for external PRs without approval.
   workflow_call:
-    secrets:
-      EC2_RUNNER_TOKEN:
-        required: true
 
 # No concurrency group here: PR runs are de-duplicated by the caller
 # (pr-tests.yml). A group built from github.workflow would collide with the
@@ -45,8 +42,6 @@ jobs:
       az-config: ${{ needs.versions.outputs.aws-cpu-az-config }}
       aws-role: ${{ needs.versions.outputs.aws-runner-role }}
       aws-region: ${{ needs.versions.outputs.aws-region }}
-    secrets:
-      EC2_RUNNER_TOKEN: ${{ secrets.EC2_RUNNER_TOKEN }}
 
   ##############################################################################
   # BUILD FVDB
@@ -207,8 +202,6 @@ jobs:
       ec2-instance-id: ${{ needs.start-build-runner.outputs.ec2-instance-id }}
       aws-role: ${{ needs.versions.outputs.aws-runner-role }}
       aws-region: ${{ needs.versions.outputs.aws-region }}
-    secrets:
-      EC2_RUNNER_TOKEN: ${{ secrets.EC2_RUNNER_TOKEN }}
 
   ##############################################################################
   # START FVDB TESTS GPU RUNNER
@@ -226,8 +219,6 @@ jobs:
       az-config: ${{ needs.versions.outputs.aws-gpu-az-config }}
       aws-role: ${{ needs.versions.outputs.aws-runner-role }}
       aws-region: ${{ needs.versions.outputs.aws-region }}
-    secrets:
-      EC2_RUNNER_TOKEN: ${{ secrets.EC2_RUNNER_TOKEN }}
 
   ##############################################################################
   # RUN FVDB GTESTS
@@ -564,5 +555,3 @@ jobs:
       ec2-instance-id: ${{ needs.start-tests-gpu-runner.outputs.ec2-instance-id }}
       aws-role: ${{ needs.versions.outputs.aws-runner-role }}
       aws-region: ${{ needs.versions.outputs.aws-region }}
-    secrets:
-      EC2_RUNNER_TOKEN: ${{ secrets.EC2_RUNNER_TOKEN }}

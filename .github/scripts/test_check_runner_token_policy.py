@@ -1,11 +1,12 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
-"""Unit tests for the EC2 runner-token CI policy.
+"""Unit tests for the EC2 runner GitHub App key CI policy.
 
 Exercises check_runner_token_policy.py -- the security gate that enforces that
-``secrets.EC2_RUNNER_TOKEN`` only ever reaches ``machulav/ec2-github-runner``,
-either as that action's ``github-token`` input or forwarded by name to a *local*
-reusable workflow that this same scan covers. Run by
+``secrets.RUNNER_APP_KEY`` (the fvdb-ec2-runners App's private key) is only used
+by ``actions/create-github-app-token`` in a job that declares the ``ci-aws``
+environment, and that the token it mints only reaches
+``machulav/ec2-github-runner`` as its ``github-token`` input. Run by
 .github/workflows/workflow-security.yml on every PR (it needs only pyyaml +
 pytest, no fvdb build).
 """
@@ -14,7 +15,6 @@ from __future__ import annotations
 
 import importlib.util
 import subprocess
-import textwrap
 from pathlib import Path
 
 import pytest
@@ -35,421 +35,201 @@ def _load_policy_module():
 
 policy = _load_policy_module()
 
+MINT = """\
+      - name: Mint a runner-registration token
+        id: runner-app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
+        with:
+          client-id: ${{ vars.RUNNER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RUNNER_APP_KEY }}
+          permission-administration: write
+"""
 
-def _check(tmp_path: Path, yaml_text: str, callees: tuple[str, ...] = ()) -> list[str]:
-    """Write a workflow file and return the policy violations it produces.
+RUNNER = """\
+      - uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef
+        with:
+          mode: start
+          github-token: ${{ steps.runner-app-token.outputs.token }}
+"""
 
-    ``callees`` names sibling workflow files to create first, for the rule-3b
-    check that a forwarding target actually exists in this directory (and is
-    therefore covered by the same scan).
-    """
-    for name in callees:
-        (tmp_path / name).write_text("name: callee\n")
+
+def _workflow(steps: str, job_extra: str = "    environment: ci-aws\n", top_extra: str = "") -> str:
+    return (
+        f"name: wf\non: [push]\n{top_extra}jobs:\n  start:\n    runs-on: ubuntu-latest\n{job_extra}    steps:\n{steps}"
+    )
+
+
+def _check(tmp_path: Path, yaml_text: str) -> list[str]:
+    """Write a workflow file and return the policy violations it produces."""
     wf = tmp_path / "wf.yml"
-    wf.write_text(textwrap.dedent(yaml_text))
+    wf.write_text(yaml_text)
     violations: list[str] = []
     policy.check_workflow_file(wf, violations)
     return violations
 
 
-# --- compliant baseline ------------------------------------------------------
+def _has(violations: list[str], fragment: str) -> bool:
+    return any(fragment in v for v in violations)
+
+
+# --- compliant baselines ------------------------------------------------------
 
 
 def test_compliant_workflow_has_no_violations(tmp_path):
-    violations = _check(
-        tmp_path,
-        """
-        name: ok
-        on: [push]
-        jobs:
-          start:
-            runs-on: ubuntu-latest
-            steps:
-              - uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef
-                with:
-                  mode: start
-                  github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
-        """,
-    )
-    assert violations == []
+    assert _check(tmp_path, _workflow(MINT + RUNNER)) == []
 
 
-def test_workflow_without_token_is_ignored(tmp_path):
-    violations = _check(
-        tmp_path,
-        """
-        name: notoken
-        on: [push]
-        jobs:
-          build:
-            runs-on: ubuntu-latest
-            steps:
-              - uses: actions/checkout@v4
-              - run: echo hello
-        """,
-    )
-    assert violations == []
+def test_environment_mapping_form_is_accepted(tmp_path):
+    extra = "    environment:\n      name: ci-aws\n      deployment: false\n"
+    assert _check(tmp_path, _workflow(MINT + RUNNER, job_extra=extra)) == []
 
 
-# --- rule 2: token may only appear as the github-token input -----------------
-
-
-def test_token_in_env_is_rejected(tmp_path):
-    violations = _check(
-        tmp_path,
-        """
-        name: bad
-        on: [push]
-        jobs:
-          leak:
-            runs-on: ubuntu-latest
-            env:
-              GH_TOKEN: ${{ secrets.EC2_RUNNER_TOKEN }}
-            steps:
-              - run: gh api /repos
-        """,
-    )
-    assert any("may only appear" in v for v in violations)
-
-
-def test_token_in_run_step_is_rejected(tmp_path):
-    violations = _check(
-        tmp_path,
-        """
-        name: bad
-        on: [push]
-        jobs:
-          leak:
-            runs-on: ubuntu-latest
-            steps:
-              - run: echo "${{ secrets.EC2_RUNNER_TOKEN }}"
-        """,
-    )
-    assert any("may only appear" in v for v in violations)
-
-
-def test_token_via_non_github_token_input_is_rejected(tmp_path):
-    violations = _check(
-        tmp_path,
-        """
-        name: bad
-        on: [push]
-        jobs:
-          start:
-            runs-on: ubuntu-latest
-            steps:
-              - uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef
-                with:
-                  mode: start
-                  token: ${{ secrets.EC2_RUNNER_TOKEN }}
-        """,
-    )
-    assert violations  # line rule and/or disallowed-input rule fire
-
-
-# --- rule 5: no dynamic secret access (evades the textual name check) --------
-
-
-def test_dynamic_secret_access_via_format_is_rejected(tmp_path):
-    """secrets[format(...)] resolves the token without spelling its name."""
-    violations = _check(
-        tmp_path,
-        """
-        name: bad
-        on: [push]
-        jobs:
-          leak:
-            runs-on: ubuntu-latest
-            steps:
-              - run: echo "${{ secrets[format('EC2_RUNNER_%s', 'TOKEN')] }}"
-        """,
-    )
-    assert any("dynamic secret access" in v for v in violations)
-
-
-def test_dynamic_secret_access_via_matrix_is_rejected(tmp_path):
-    violations = _check(
-        tmp_path,
-        """
-        name: bad
-        on: [push]
-        jobs:
-          leak:
-            runs-on: ubuntu-latest
-            steps:
-              - run: echo "${{ secrets[matrix.name] }}"
-        """,
-    )
-    assert any("dynamic secret access" in v for v in violations)
-
-
-def test_dynamic_secret_access_is_rejected_even_without_token_name(tmp_path):
-    """The check runs on every workflow, even ones that never name the token."""
-    violations = _check(
-        tmp_path,
-        """
-        name: bad
-        on: [push]
-        jobs:
-          leak:
-            runs-on: ubuntu-latest
-            steps:
-              - run: echo "${{ secrets['SOME_OTHER_SECRET'] }}"
-        """,
-    )
-    assert any("dynamic secret access" in v for v in violations)
+def test_workflow_without_key_is_ignored(tmp_path):
+    steps = "      - run: echo hello\n"
+    assert _check(tmp_path, _workflow(steps, job_extra="")) == []
 
 
 def test_identifier_ending_in_secrets_is_not_flagged(tmp_path):
-    """`\\b` must not match e.g. mysecrets[0] (not a secrets-context access)."""
-    violations = _check(
-        tmp_path,
-        """
-        name: ok
-        on: [push]
-        jobs:
-          build:
-            runs-on: ubuntu-latest
-            steps:
-              - run: echo "${{ fromJSON(needs.x.outputs.mysecrets)[0] }}"
-        """,
+    steps = "      - run: echo ${{ fromJSON('{}').mysecrets }}\n"
+    assert _check(tmp_path, _workflow(steps, job_extra="")) == []
+
+
+# --- rule 2: the one textual form ----------------------------------------------
+
+
+def test_key_in_run_step_is_rejected(tmp_path):
+    steps = MINT + "      - run: echo ${{ secrets.RUNNER_APP_KEY }}\n"
+    assert _has(_check(tmp_path, _workflow(steps)), "may only appear as")
+
+
+def test_key_in_job_env_is_rejected(tmp_path):
+    extra = "    environment: ci-aws\n    env:\n      KEY: ${{ secrets.RUNNER_APP_KEY }}\n"
+    violations = _check(tmp_path, _workflow(MINT + RUNNER, job_extra=extra))
+    assert _has(violations, "may only appear as")
+    assert _has(violations, "referenced at job level")
+
+
+def test_key_in_workflow_env_is_rejected(tmp_path):
+    top = "env:\n  KEY: ${{ secrets.RUNNER_APP_KEY }}\n"
+    violations = _check(tmp_path, _workflow(MINT + RUNNER, top_extra=top))
+    assert _has(violations, "referenced outside any job")
+
+
+# --- rule 3: where the key may be used ----------------------------------------
+
+
+def test_key_to_another_action_is_rejected(tmp_path):
+    steps = (
+        "      - id: other\n"
+        "        uses: some/other-action@0123456789012345678901234567890123456789\n"
+        "        with:\n"
+        "          private-key: ${{ secrets.RUNNER_APP_KEY }}\n"
     )
-    assert violations == []
+    assert _has(_check(tmp_path, _workflow(steps)), "is not 'actions/create-github-app-token'")
 
 
-# --- rule 3: only machulav/ec2-github-runner may consume the token -----------
+def test_key_without_ci_aws_environment_is_rejected(tmp_path):
+    assert _has(_check(tmp_path, _workflow(MINT + RUNNER, job_extra="")), "must declare the 'ci-aws' environment")
 
 
-def test_token_to_wrong_action_is_rejected(tmp_path):
-    violations = _check(
-        tmp_path,
-        """
-        name: bad
-        on: [push]
-        jobs:
-          evil:
-            runs-on: ubuntu-latest
-            steps:
-              - uses: some/other-action@v1
-                with:
-                  github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
-        """,
+def test_key_in_other_environment_is_rejected(tmp_path):
+    extra = "    environment: pypi\n"
+    assert _has(_check(tmp_path, _workflow(MINT + RUNNER, job_extra=extra)), "must declare the 'ci-aws' environment")
+
+
+def test_mint_step_without_id_is_rejected(tmp_path):
+    steps = MINT.replace("        id: runner-app-token\n", "")
+    assert _has(_check(tmp_path, _workflow(steps)), "must have an 'id'")
+
+
+@pytest.mark.parametrize("extra_input", ["owner: openvdb", "repositories: fvdb-core", "skip-token-revoke: true"])
+def test_widening_token_inputs_are_rejected(tmp_path, extra_input):
+    steps = MINT + f"          {extra_input}\n" + RUNNER
+    assert _has(_check(tmp_path, _workflow(steps)), "must stay limited to this repository")
+
+
+# --- rule 4: no untrusted code alongside the key ------------------------------
+
+
+def test_checkout_in_key_job_is_rejected(tmp_path):
+    steps = "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1\n" + MINT + RUNNER
+    assert _has(_check(tmp_path, _workflow(steps)), "actions/checkout")
+
+
+def test_local_action_in_key_job_is_rejected(tmp_path):
+    steps = MINT + "      - uses: ./.github/actions/thing\n" + RUNNER
+    assert _has(_check(tmp_path, _workflow(steps)), "LOCAL action")
+
+
+# --- rule 5: where the minted token may go ------------------------------------
+
+
+def test_token_in_run_step_is_rejected(tmp_path):
+    steps = MINT + "      - run: echo ${{ steps.runner-app-token.outputs.token }}\n"
+    assert _has(_check(tmp_path, _workflow(steps)), "uses the token of step 'runner-app-token'")
+
+
+def test_token_in_step_env_is_rejected(tmp_path):
+    steps = (
+        MINT
+        + "      - run: gh api user\n        env:\n          GH_TOKEN: ${{ steps.runner-app-token.outputs.token }}\n"
     )
-    assert any("machulav/ec2-github-runner" in v for v in violations)
+    assert _has(_check(tmp_path, _workflow(steps)), "uses the token of step 'runner-app-token'")
 
 
-# --- rule 4: token job must not pull in untrusted code -----------------------
-
-
-def test_checkout_in_token_job_is_rejected(tmp_path):
-    violations = _check(
-        tmp_path,
-        """
-        name: bad
-        on: [push]
-        jobs:
-          start:
-            runs-on: ubuntu-latest
-            steps:
-              - uses: actions/checkout@v4
-              - uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef
-                with:
-                  mode: start
-                  github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
-        """,
+def test_token_to_another_action_is_rejected(tmp_path):
+    steps = (
+        MINT + "      - uses: some/other-action@0123456789012345678901234567890123456789\n"
+        "        with:\n"
+        "          github-token: ${{ steps.runner-app-token.outputs.token }}\n"
     )
-    assert any("actions/checkout" in v for v in violations)
+    assert _has(_check(tmp_path, _workflow(steps)), "uses the token of step 'runner-app-token'")
 
 
-def test_local_action_in_token_job_is_rejected(tmp_path):
-    violations = _check(
-        tmp_path,
-        """
-        name: bad
-        on: [push]
-        jobs:
-          start:
-            runs-on: ubuntu-latest
-            steps:
-              - uses: ./.github/actions/evil
-              - uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef
-                with:
-                  mode: start
-                  github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
-        """,
+def test_token_via_other_runner_input_is_rejected(tmp_path):
+    steps = MINT + RUNNER + "          label: ${{ steps.runner-app-token.outputs.token }}\n"
+    assert _has(_check(tmp_path, _workflow(steps)), "uses the token of step 'runner-app-token'")
+
+
+def test_token_in_concatenated_value_is_rejected(tmp_path):
+    steps = MINT + RUNNER.replace(
+        "${{ steps.runner-app-token.outputs.token }}", "x${{ steps.runner-app-token.outputs.token }}"
     )
-    assert any("LOCAL action" in v for v in violations)
+    assert _has(_check(tmp_path, _workflow(steps)), "uses the token of step 'runner-app-token'")
 
 
-# --- rule 3b: forwarding to a local reusable workflow ------------------------
+def test_token_in_job_outputs_is_rejected(tmp_path):
+    extra = "    environment: ci-aws\n    outputs:\n      t: ${{ steps.runner-app-token.outputs.token }}\n"
+    assert _has(_check(tmp_path, _workflow(MINT + RUNNER, job_extra=extra)), "referenced at job level")
 
 
-def test_forward_to_local_reusable_workflow_is_allowed(tmp_path):
-    """The DRY shape: the callee is a workflow file this same scan covers."""
-    violations = _check(
-        tmp_path,
-        """
-        name: ok
-        on: [push]
-        jobs:
-          call:
-            uses: ./.github/workflows/start-ec2-runner.yml
-            secrets:
-              EC2_RUNNER_TOKEN: ${{ secrets.EC2_RUNNER_TOKEN }}
-        """,
-        callees=("start-ec2-runner.yml",),
-    )
-    assert violations == []
+# --- rules 6, 7 and 8 ---------------------------------------------------------
 
 
-def test_callee_declaring_the_token_secret_is_allowed(tmp_path):
-    """The other half of 3b: `on.workflow_call.secrets` naming the token."""
-    violations = _check(
-        tmp_path,
-        """
-        name: ok
-        on:
-          workflow_call:
-            secrets:
-              EC2_RUNNER_TOKEN:
-                required: true
-        jobs:
-          start:
-            runs-on: ubuntu-latest
-            steps:
-              - uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef
-                with:
-                  mode: start
-                  github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
-        """,
-    )
-    assert violations == []
-
-
-def test_forward_to_remote_reusable_workflow_is_rejected(tmp_path):
-    """The hole `secrets: inherit` used to walk through: the token leaves the
-    repo, where no scan of ours can see what the callee does with it."""
-    violations = _check(
-        tmp_path,
-        """
-        name: bad
-        on: [push]
-        jobs:
-          call:
-            uses: other-org/other-repo/.github/workflows/x.yml@main
-            secrets:
-              EC2_RUNNER_TOKEN: ${{ secrets.EC2_RUNNER_TOKEN }}
-        """,
-    )
-    assert any("only be forwarded to a local reusable workflow" in v for v in violations)
-
-
-def test_forward_to_missing_local_workflow_is_rejected(tmp_path):
-    """A callee that is not in this directory would not be scanned."""
-    violations = _check(
-        tmp_path,
-        """
-        name: bad
-        on: [push]
-        jobs:
-          call:
-            uses: ./.github/workflows/nope.yml
-            secrets:
-              EC2_RUNNER_TOKEN: ${{ secrets.EC2_RUNNER_TOKEN }}
-        """,
-    )
-    assert any("does not exist" in v for v in violations)
-
-
-def test_forward_under_a_different_name_is_rejected(tmp_path):
-    """One name everywhere, so a single grep still enumerates every file."""
-    violations = _check(
-        tmp_path,
-        """
-        name: bad
-        on: [push]
-        jobs:
-          call:
-            uses: ./.github/workflows/start-ec2-runner.yml
-            secrets:
-              gh-token: ${{ secrets.EC2_RUNNER_TOKEN }}
-        """,
-        callees=("start-ec2-runner.yml",),
-    )
-    assert violations
-
-
-def test_forward_from_a_job_with_no_uses_is_rejected(tmp_path):
-    violations = _check(
-        tmp_path,
-        """
-        name: bad
-        on: [push]
-        jobs:
-          call:
-            runs-on: ubuntu-latest
-            secrets:
-              EC2_RUNNER_TOKEN: ${{ secrets.EC2_RUNNER_TOKEN }}
-            steps:
-              - run: echo hi
-        """,
-    )
-    assert any("no job-level uses" in v for v in violations)
-
-
-def test_workflow_level_env_is_rejected(tmp_path):
-    """Same textual shape as a legitimate forward -- caught structurally."""
-    violations = _check(
-        tmp_path,
-        """
-        name: bad
-        on: [push]
-        env:
-          EC2_RUNNER_TOKEN: ${{ secrets.EC2_RUNNER_TOKEN }}
-        jobs:
-          leak:
-            runs-on: ubuntu-latest
-            steps:
-              - run: env
-        """,
-    )
-    assert any("outside any job" in v for v in violations)
-
-
-# --- rule 6: no blanket secret forwarding ------------------------------------
+def test_dynamic_secret_access_is_rejected(tmp_path):
+    steps = "      - run: echo ${{ secrets[format('RUNNER_APP_{0}', 'KEY')] }}\n"
+    assert _has(_check(tmp_path, _workflow(steps, job_extra="")), "dynamic secret access")
 
 
 def test_secrets_inherit_is_rejected(tmp_path):
-    """`inherit` forwards the admin token while naming nothing, so no textual
-    check can see where it goes -- including a forward out of the repo."""
-    violations = _check(
-        tmp_path,
-        """
-        name: bad
-        on: [push]
-        jobs:
-          call:
-            uses: ./.github/workflows/start-ec2-runner.yml
-            secrets: inherit
-        """,
-        callees=("start-ec2-runner.yml",),
+    text = (
+        "name: wf\n"
+        "on: [push]\n"
+        "jobs:\n"
+        "  call:\n"
+        "    uses: ./.github/workflows/start-ec2-runner.yml\n"
+        "    secrets: inherit\n"
     )
-    assert any("secrets: inherit" in v for v in violations)
+    assert _has(_check(tmp_path, text), "'secrets: inherit' is not allowed")
 
 
-def test_secrets_inherit_is_rejected_even_to_a_remote_workflow(tmp_path):
-    violations = _check(
-        tmp_path,
-        """
-        name: bad
-        on: [push]
-        jobs:
-          call:
-            uses: other-org/other-repo/.github/workflows/x.yml@main
-            secrets: inherit
-        """,
+def test_retired_pat_name_is_rejected(tmp_path):
+    steps = (
+        "      - uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef\n"
+        "        with:\n"
+        "          github-token: ${{ secrets.EC2_RUNNER_TOKEN }}\n"
     )
-    assert any("secrets: inherit" in v for v in violations)
+    assert _has(_check(tmp_path, _workflow(steps, job_extra="")), "'EC2_RUNNER_TOKEN' is retired")
 
 
 # --- the real fvdb workflows must all pass -----------------------------------
@@ -461,6 +241,16 @@ def test_repo_workflows_are_compliant():
     for path in sorted(workflow_dir.glob("*.yml")):
         policy.check_workflow_file(path, violations)
     assert violations == [], "real workflows violate the runner-token policy:\n" + "\n".join(violations)
+
+
+def test_repo_runner_workflows_use_the_app_key():
+    """Guard against the policy passing vacuously: both runner workflows mint
+    the token from the App key."""
+    workflow_dir = REPO_ROOT / ".github" / "workflows"
+    for name in ("start-ec2-runner.yml", "stop-ec2-runner.yml"):
+        text = (workflow_dir / name).read_text()
+        assert "private-key: ${{ secrets.RUNNER_APP_KEY }}" in text, name
+        assert "github-token: ${{ steps.runner-app-token.outputs.token }}" in text, name
 
 
 # --- rule 1: leak check fails closed when git cannot run ---------------------
@@ -477,7 +267,7 @@ def test_leak_check_fails_closed_outside_git_worktree(tmp_path):
 
 def test_leak_check_against_ref_passes_on_clean_repo():
     """Scanning a committed ref (the gate's PR-tree mode) flags nothing here:
-    the token name only appears in allowed CI paths at HEAD."""
+    the key name only appears in allowed CI paths at HEAD."""
     if not _git_available():
         pytest.skip("git not available")
     violations: list[str] = []

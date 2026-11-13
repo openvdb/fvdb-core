@@ -1,68 +1,60 @@
 #!/usr/bin/env python3
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
-"""Repo-specific CI policy for the EC2 runner admin token.
+"""Repo-specific CI policy for the EC2 runner GitHub App key.
 
-This script enforces, by inspecting the workflow files themselves:
+Self-hosted EC2 runners are registered and removed with a short-lived token
+minted from the fvdb-ec2-runners GitHub App (repository permission
+Administration: write). The App's private key is the secret ``RUNNER_APP_KEY``
+of the ``ci-aws`` environment. This script enforces, by inspecting the workflow
+files themselves, that the key and the token minted from it go nowhere else:
 
-  1. The token name may appear ONLY inside ``.github/workflows/`` and the CI
-     tooling under ``.github/scripts/`` (this enforcement script and its tests).
-     It must not leak into product source, docs, etc.
+  1. The key's name may appear ONLY inside ``.github/workflows/`` and the CI
+     tooling under ``.github/scripts/`` (this script and its tests). It must not
+     leak into product source, docs, etc.
 
-  2. Every textual occurrence in a workflow must be one of exactly three forms
-     (whitespace inside ``${{ }}`` is tolerated):
+  2. Every textual occurrence in a workflow must be exactly
 
-         github-token: ${{ secrets.EC2_RUNNER_TOKEN }}   # the action input
-         EC2_RUNNER_TOKEN: ${{ secrets.EC2_RUNNER_TOKEN }}   # caller forwarding
-         EC2_RUNNER_TOKEN:                               # callee declaration
+         private-key: ${{ secrets.RUNNER_APP_KEY }}
 
-     Each is a bare interpolation that is the *whole* value of a scalar key, so
-     this rule alone forbids the token in a ``run:`` script or in any
-     concatenated string. Which of the three a line is allowed to be is then
-     settled structurally by rules 3 and 4 -- e.g. an ``env:`` entry happens to
-     have the same shape as the forwarding form, and is rejected below.
+     (whitespace inside ``${{ }}`` is tolerated): a bare interpolation that is
+     the whole value of the input, so it can never sit in a ``run:`` script, an
+     ``env:`` entry or a concatenated string.
 
-     The forwarded name is required to be ``EC2_RUNNER_TOKEN`` itself, so the
-     token keeps one name across caller and callee and a single
-     ``git grep EC2_RUNNER_TOKEN`` still enumerates every file that touches it.
+  3. That line must be the ``private-key`` input of a step whose ``uses:`` is
+     ``actions/create-github-app-token``, and the step must:
 
-  3. The token may be consumed in exactly two ways:
+     a. have an ``id`` (the token is read through it, see rule 5);
+     b. not set ``owner``, ``repositories`` or ``enterprise`` (the token stays
+        limited to this repository) or ``skip-token-revoke`` (the token is
+        revoked when the job ends);
+     c. sit in a job that declares the ``ci-aws`` environment, whose
+        deployment-branch policy decides which refs may start a runner, and
+        whose secrets only such jobs can read.
 
-     a. by a *step* whose ``uses:`` is ``machulav/ec2-github-runner``, via its
-        ``github-token`` input; or
-     b. by a *job* whose ``uses:`` is a local reusable workflow
-        (``./.github/workflows/<name>.yml``), via a ``secrets:`` mapping.
+     The key may not be named anywhere else in the job (``env:``, ``with:``,
+     ``outputs:``, ``if:``) or outside any job.
 
-     (b) is safe precisely because the callee is itself a file in
-     ``.github/workflows/``: this same scan covers it, so rules 2-4 apply to it
-     directly, and under ``pull_request_target`` it is base-controlled like
-     every other workflow. Forwarding to anything else -- a remote reusable
-     workflow, or a callee that is not present in this directory -- would send
-     the token somewhere the scan cannot see, and is rejected.
+  4. A job that holds the key must not pull untrusted code into its workspace
+     alongside it: no local actions (``uses: ./...``) and no
+     ``actions/checkout``.
 
-  4. A job that references the token *in a step* must not pull untrusted code
-     into its workspace alongside the privileged context: no local actions
-     (``uses: ./...``) and no ``actions/checkout``. (Sibling ``run:`` steps are
-     fine -- rule 2 guarantees they can never reference the token.) A
-     reusable-workflow caller job under 3(b) has no ``steps:`` and no workspace
-     at all, so there is nothing for this rule to bite on.
+  5. The minted token, ``steps.<id>.outputs.token``, may only be passed as the
+     ``github-token`` input of a ``machulav/ec2-github-runner`` step in the
+     same job, as the whole value. Any other mention -- a ``run:`` script, an
+     ``env:`` entry, another action's input, a job output -- is rejected.
 
-  5. No dynamic secret access (``secrets[...]``) anywhere in a workflow. Rules
-     1-4 are textual: they key on the literal name ``EC2_RUNNER_TOKEN``. Dynamic
-     indexing such as ``secrets[format('EC2_RUNNER_%s', 'TOKEN')]`` or
-     ``secrets[matrix.name]`` could resolve the admin token *without* spelling
-     its name, evading every other rule. It is never used legitimately here, so
-     reject it outright (this check runs on every workflow, even ones that never
-     mention the token by name).
+  6. No dynamic secret access (``secrets[...]``) anywhere in a workflow. It
+     could resolve the key without spelling its name, evading rules 1-3.
 
-  6. No ``secrets: inherit`` anywhere in a workflow. It forwards *every* secret,
-     including the admin token, without ever spelling a name -- so it is
-     invisible to rules 1-3 and would let a caller hand the token to a remote
-     reusable workflow with this scan reporting OK. Forward the one secret
-     explicitly instead (rule 3b), which is both narrower and checkable.
+  7. No ``secrets: inherit`` anywhere in a workflow. It forwards every secret
+     without naming one, so no textual check can see where it goes.
+
+  8. The retired personal access token secret, ``EC2_RUNNER_TOKEN``, must not
+     appear in any workflow.
 
 Usage:
-    check_runner_token_policy.py [WORKFLOW_DIR] [--repo-root DIR]
+    check_runner_token_policy.py [WORKFLOW_DIR] [--repo-root DIR] [--leak-check-ref REF]
 
 Exit code 0 = compliant, 1 = one or more violations.
 """
@@ -77,45 +69,29 @@ from pathlib import Path
 
 import yaml
 
-TOKEN_NAME = "EC2_RUNNER_TOKEN"
-TOKEN_REF = f"secrets.{TOKEN_NAME}"
-ALLOWED_ACTION = "machulav/ec2-github-runner"
+KEY_NAME = "RUNNER_APP_KEY"
+TOKEN_ACTION = "actions/create-github-app-token"
+RUNNER_ACTION = "machulav/ec2-github-runner"
+ENVIRONMENT = "ci-aws"
+RETIRED_NAMES = ("EC2_RUNNER_TOKEN",)
+# create-github-app-token inputs that would widen the token or keep it alive.
+FORBIDDEN_TOKEN_INPUTS = ("owner", "repositories", "enterprise", "skip-token-revoke")
 
-# Rule 2's three allowed textual forms. Each is a bare interpolation that is the
-# whole value of a scalar key, so none of them can hide inside a `run:` script or
-# a concatenated string.
-_INTERP = r"\$\{\{\s*secrets\." + re.escape(TOKEN_NAME) + r"\s*\}\}"
-#   github-token: ${{ secrets.EC2_RUNNER_TOKEN }}      -- the action input
-ACTION_INPUT_LINE = re.compile(r"^\s*github-token:\s*" + _INTERP + r"\s*$")
-#   EC2_RUNNER_TOKEN: ${{ secrets.EC2_RUNNER_TOKEN }}  -- caller forwarding
-FORWARD_LINE = re.compile(r"^\s*" + re.escape(TOKEN_NAME) + r":\s*" + _INTERP + r"\s*$")
-#   EC2_RUNNER_TOKEN:                                  -- callee declaration
-DECLARE_LINE = re.compile(r"^\s*" + re.escape(TOKEN_NAME) + r":\s*$")
-ALLOWED_LINES = (ACTION_INPUT_LINE, FORWARD_LINE, DECLARE_LINE)
+# Rule 2's one allowed form.
+KEY_LINE = re.compile(r"^\s*private-key:\s*\$\{\{\s*secrets\." + re.escape(KEY_NAME) + r"\s*\}\}\s*$")
 
-# The only `uses:` a job may have if it is forwarded the token (rule 3b): a
-# reusable workflow in this repo's own .github/workflows, which this same scan
-# therefore covers. The capture group is the callee's file name, checked to exist.
-LOCAL_REUSABLE = re.compile(r"^\./\.github/workflows/([^/]+\.ya?ml)$")
-
-# Rule 6: blanket secret forwarding, which names nothing and so evades rules 1-3.
+# Rule 7: blanket secret forwarding, which names nothing.
 INHERIT_LINE = re.compile(r"^\s*secrets:\s*inherit\s*$")
 
-# Dynamic secret access, e.g. secrets['X'], secrets[matrix.y], secrets[format(...)].
-# The \b avoids matching identifiers that merely end in "secrets" (e.g. mysecrets[0]).
+# Rule 6: dynamic secret access, e.g. secrets['X'], secrets[matrix.y]. The \b
+# avoids matching identifiers that merely end in "secrets" (e.g. mysecrets[0]).
 DYNAMIC_SECRET = re.compile(r"\bsecrets\s*\[")
 
-# Paths (relative to repo root) that are allowed to mention the token name at
-# all. The workflows are where it is legitimately used; CI tooling under
-# .github/scripts/ (this script and its tests) references it by name out of
-# necessity. None of these can expose the token *value*: rules 2-3 guarantee the
-# secret is only ever interpolated into the machulav action, so a file merely
-# containing the name string is harmless.
+# Paths (relative to repo root) that are allowed to mention the key name at all.
 ALLOWED_PATH_PREFIXES = (
     ".github/workflows/",
     ".github/scripts/",
 )
-# Human-readable form of the allowed locations, for violation/error messages.
 ALLOWED_PATHS_DESC = " or ".join(ALLOWED_PATH_PREFIXES)
 
 
@@ -130,45 +106,33 @@ def iter_steps(job: dict):
             yield step
 
 
-def _on_block(data: dict) -> dict:
-    """The workflow's trigger mapping.
-
-    YAML 1.1 parses a bare ``on:`` key as the boolean ``True``, so accept both
-    spellings rather than depending on how the file happens to quote it.
-    """
-    for key in ("on", True):
-        value = data.get(key)
-        if isinstance(value, dict):
-            return value
-    return {}
+def _mentions(value, needle: str) -> bool:
+    return needle in yaml.safe_dump(value)
 
 
-def _token_secret_declaration(data: dict) -> dict | None:
-    """The ``on.workflow_call.secrets`` mapping, if it declares the token.
+def _token_ref(step_id: str) -> re.Pattern:
+    """Matches any reference to the token output of step ``step_id``."""
+    return re.compile(r"\bsteps\s*\.\s*" + re.escape(step_id) + r"\s*\.\s*outputs\s*\.\s*token\b")
 
-    This is the callee side of rule 3b -- the one legitimate mention of the
-    token name outside a job. Returns the enclosing mapping so the caller can
-    remove the declaration before scanning what is left.
-    """
-    call = _on_block(data).get("workflow_call")
-    if not isinstance(call, dict):
-        return None
-    secrets = call.get("secrets")
-    if isinstance(secrets, dict) and TOKEN_NAME in secrets:
-        return secrets
+
+def _bare_token_value(step_id: str) -> re.Pattern:
+    """The one allowed use: the whole value is the token interpolation."""
+    return re.compile(r"^\$\{\{\s*steps\." + re.escape(step_id) + r"\.outputs\.token\s*\}\}$")
+
+
+def _environment_name(job: dict) -> str | None:
+    env = job.get("environment")
+    if isinstance(env, str):
+        return env
+    if isinstance(env, dict) and isinstance(env.get("name"), str):
+        return env["name"]
     return None
-
-
-def _mentions_token(value) -> bool:
-    return TOKEN_NAME in yaml.safe_dump(value)
 
 
 def check_workflow_file(path: Path, violations: list[str]) -> None:
     text = path.read_text()
 
-    # --- Rules 5 & 6: blanket / unnamed secret access (every workflow). -------
-    # These must run before the token-name early return below: the whole point
-    # of both is that they can reach the token without ever naming it.
+    # --- Rules 6, 7 and 8 apply to every workflow, named or not. -------------
     for lineno, line in enumerate(text.splitlines(), start=1):
         if DYNAMIC_SECRET.search(line):
             fail(
@@ -177,7 +141,7 @@ def check_workflow_file(path: Path, violations: list[str]) -> None:
                 None,
                 f"line {lineno}: dynamic secret access is not allowed -- use "
                 f"'secrets.<NAME>', not 'secrets[...]' (it can resolve "
-                f"'{TOKEN_NAME}' without naming it): {line.strip()!r}",
+                f"'{KEY_NAME}' without naming it): {line.strip()!r}",
             )
         if INHERIT_LINE.match(line):
             fail(
@@ -185,172 +149,164 @@ def check_workflow_file(path: Path, violations: list[str]) -> None:
                 path,
                 None,
                 f"line {lineno}: 'secrets: inherit' is not allowed -- it forwards "
-                f"every secret, including '{TOKEN_NAME}', without naming one, so no "
-                f"textual check can see where the token goes. Forward the single "
-                f"secret explicitly: '{TOKEN_NAME}: ${{{{ secrets.{TOKEN_NAME} }}}}'.",
+                f"every secret without naming one, so no textual check can see "
+                f"where it goes. Forward the secrets a callee needs explicitly.",
             )
+        for retired in RETIRED_NAMES:
+            if retired in line:
+                fail(
+                    violations,
+                    path,
+                    None,
+                    f"line {lineno}: '{retired}' is retired; runners are registered "
+                    f"with a token from the fvdb-ec2-runners GitHub App "
+                    f"(see start-ec2-runner.yml): {line.strip()!r}",
+                )
 
-    if TOKEN_REF not in text and TOKEN_NAME not in text:
-        return
-
-    # --- Rule 2: every line naming the token must be one of the three forms. --
+    # --- Rule 2: every line naming the key must be the one allowed form. -----
     for lineno, line in enumerate(text.splitlines(), start=1):
-        if TOKEN_NAME not in line:
-            continue
-        if not any(rx.match(line) for rx in ALLOWED_LINES):
+        if KEY_NAME in line and not KEY_LINE.match(line):
             fail(
                 violations,
                 path,
                 None,
-                f"line {lineno}: '{TOKEN_NAME}' may only appear as "
-                f"'github-token: ${{{{ secrets.{TOKEN_NAME} }}}}' (action input), "
-                f"'{TOKEN_NAME}: ${{{{ secrets.{TOKEN_NAME} }}}}' (forward to a local "
-                f"reusable workflow), or '{TOKEN_NAME}:' (workflow_call declaration), "
-                f"got: {line.strip()!r}",
+                f"line {lineno}: '{KEY_NAME}' may only appear as "
+                f"'private-key: ${{{{ secrets.{KEY_NAME} }}}}', got: {line.strip()!r}",
             )
 
-    # --- Structural rules 3 & 4 via parsed YAML. ------------------------------
     try:
         data = yaml.safe_load(text) or {}
     except yaml.YAMLError as exc:
         fail(violations, path, None, f"could not parse YAML: {exc}")
         return
 
-    # Outside of `jobs:`, the only legitimate mention is the workflow_call
-    # declaration; drop it and anything left over is a leak (workflow-level
-    # `env:`, a default, a trigger expression, ...).
-    declaration = _token_secret_declaration(data)
-    if declaration is not None:
-        declaration.pop(TOKEN_NAME)
     outside_jobs = {k: v for k, v in data.items() if k != "jobs"}
-    if _mentions_token(outside_jobs):
-        fail(
-            violations,
-            path,
-            None,
-            "token referenced outside any job; the only legitimate mention there "
-            "is an 'on.workflow_call.secrets' declaration",
-        )
+    if _mentions(outside_jobs, KEY_NAME):
+        fail(violations, path, None, f"'{KEY_NAME}' referenced outside any job")
 
     jobs = data.get("jobs") or {}
     for job_name, job in jobs.items():
         if not isinstance(job, dict):
             continue
-        if not _mentions_token(job):
+        check_job(path, job_name, job, violations)
+
+
+def check_job(path: Path, job_name: str, job: dict, violations: list[str]) -> None:
+    key_steps = [s for s in iter_steps(job) if _mentions(s, KEY_NAME)]
+
+    # --- Rule 3: where the key may be used. ----------------------------------
+    leftover = {k: v for k, v in job.items() if k != "steps"}
+    if _mentions(leftover, KEY_NAME):
+        fail(
+            violations,
+            path,
+            job_name,
+            f"'{KEY_NAME}' referenced at job level (env/with/outputs/...); it may only "
+            f"be the 'private-key' input of a '{TOKEN_ACTION}' step",
+        )
+
+    token_ids: list[str] = []
+    for step in key_steps:
+        uses = (step.get("uses") or "").split("@")[0]
+        label = step.get("name") or step.get("id") or uses or "<unnamed>"
+        if uses != TOKEN_ACTION:
+            fail(
+                violations,
+                path,
+                job_name,
+                f"step '{label}' uses '{KEY_NAME}' but is not '{TOKEN_ACTION}' (uses: {uses or '<none>'})",
+            )
             continue
+        with_block = step.get("with") or {}
+        if not isinstance(with_block, dict):
+            fail(violations, path, job_name, f"step '{label}': 'with:' is not a mapping")
+            continue
+        others = sorted(k for k, v in with_block.items() if k != "private-key" and _mentions({k: v}, KEY_NAME))
+        if others:
+            fail(violations, path, job_name, f"step '{label}' passes '{KEY_NAME}' via input(s) {others}")
+        widened = sorted(k for k in with_block if k in FORBIDDEN_TOKEN_INPUTS)
+        if widened:
+            fail(
+                violations,
+                path,
+                job_name,
+                f"step '{label}' sets {widened}; the runner token must stay limited to "
+                f"this repository and be revoked when the job ends",
+            )
+        if _mentions({k: v for k, v in step.items() if k != "with"}, KEY_NAME):
+            fail(violations, path, job_name, f"step '{label}' names '{KEY_NAME}' outside 'with: private-key'")
+        step_id = step.get("id")
+        if not isinstance(step_id, str) or not step_id:
+            fail(violations, path, job_name, f"step '{label}' must have an 'id' so its token can be checked")
+        else:
+            token_ids.append(step_id)
 
-        # --- Rule 3b: forwarding to a local reusable workflow. ---------------
-        secrets_block = job.get("secrets")
-        forwarded = {}
-        if isinstance(secrets_block, dict):
-            forwarded = {k: v for k, v in secrets_block.items() if _mentions_token({k: v})}
+    if not key_steps:
+        return
 
-        if forwarded:
-            renamed = sorted(k for k in forwarded if k != TOKEN_NAME)
-            if renamed:
-                fail(
-                    violations,
-                    path,
-                    job_name,
-                    f"token forwarded under a different name {renamed}; it must be "
-                    f"forwarded as '{TOKEN_NAME}' so that a single "
-                    f"'git grep {TOKEN_NAME}' still finds every file that touches it",
-                )
-            uses = job.get("uses") or ""
-            callee = LOCAL_REUSABLE.match(uses)
-            if callee is None:
-                fail(
-                    violations,
-                    path,
-                    job_name,
-                    f"token forwarded via 'secrets:' to {uses or '<no job-level uses:>'!r}; "
-                    f"it may only be forwarded to a local reusable workflow "
-                    f"('./.github/workflows/<name>.yml'), which this same scan covers",
-                )
-            elif not (path.parent / callee.group(1)).is_file():
-                fail(
-                    violations,
-                    path,
-                    job_name,
-                    f"token forwarded to {uses!r}, which does not exist in "
-                    f"{path.parent}; the callee must be a workflow this scan covers",
-                )
+    environment = _environment_name(job)
+    if environment != ENVIRONMENT:
+        fail(
+            violations,
+            path,
+            job_name,
+            f"job uses '{KEY_NAME}' but its environment is {environment!r}; it must "
+            f"declare the '{ENVIRONMENT}' environment",
+        )
 
-        # --- Rule 3a: only the EC2 runner action may consume it in a step. ----
-        token_steps = []
+    # --- Rule 4: no untrusted code in a job that holds the key. ---------------
+    for step in iter_steps(job):
+        uses = step.get("uses") or ""
+        if uses.startswith("./") or uses.startswith("../"):
+            fail(
+                violations,
+                path,
+                job_name,
+                f"job holds '{KEY_NAME}' and also runs a LOCAL action (uses: {uses}); not allowed",
+            )
+        if uses.split("@")[0] == "actions/checkout":
+            fail(
+                violations,
+                path,
+                job_name,
+                f"job holds '{KEY_NAME}' and also runs actions/checkout; the key must not "
+                f"share a job with checked-out code",
+            )
+
+    # --- Rule 5: where the minted token may go. ------------------------------
+    for step_id in token_ids:
+        ref = _token_ref(step_id)
+        bare = _bare_token_value(step_id)
+        if ref.search(yaml.safe_dump(leftover)):
+            fail(
+                violations,
+                path,
+                job_name,
+                f"token of step '{step_id}' referenced at job level (env/outputs/...); it may "
+                f"only be the 'github-token' input of a '{RUNNER_ACTION}' step",
+            )
         for step in iter_steps(job):
-            if not _mentions_token(step):
+            if not ref.search(yaml.safe_dump(step)):
                 continue
-            token_steps.append(step)
-
             uses = (step.get("uses") or "").split("@")[0]
-            if uses != ALLOWED_ACTION:
+            label = step.get("name") or step.get("id") or uses or "<unnamed>"
+            with_block = step.get("with") if isinstance(step.get("with"), dict) else {}
+            ok_input = uses == RUNNER_ACTION and bare.match(str(with_block.get("github-token", "")).strip())
+            other_inputs = {k: v for k, v in with_block.items() if k != "github-token"}
+            elsewhere = {k: v for k, v in step.items() if k != "with"}
+            if not ok_input or ref.search(yaml.safe_dump(other_inputs)) or ref.search(yaml.safe_dump(elsewhere)):
                 fail(
                     violations,
                     path,
                     job_name,
-                    f"step '{step.get('name', uses or '<unnamed>')}' uses the token "
-                    f"but is not '{ALLOWED_ACTION}' (uses: {uses or '<none>'})",
-                )
-
-            # Rule 2 (structural backstop): only via the github-token input.
-            with_block = step.get("with") or {}
-            offending = {k: v for k, v in with_block.items() if k != "github-token" and _mentions_token({k: v})}
-            if offending:
-                fail(
-                    violations,
-                    path,
-                    job_name,
-                    f"token passed via disallowed input(s): {sorted(offending)}",
-                )
-
-        # Anything left -- job-level `env:`, a `with:` input, a `if:` expression
-        # -- is a mention in a position neither rule 3a nor 3b sanctions.
-        leftover = {k: v for k, v in job.items() if k not in ("steps", "secrets")}
-        if _mentions_token(leftover):
-            fail(
-                violations,
-                path,
-                job_name,
-                f"token referenced at job level (env/with/...), not as an "
-                f"'{ALLOWED_ACTION}' step input or a 'secrets:' forward to a local "
-                f"reusable workflow",
-            )
-        elif not token_steps and not forwarded:
-            # The job names the token but in none of the shapes above (e.g. a
-            # `secrets:` block that is not a mapping). Fail closed.
-            fail(
-                violations,
-                path,
-                job_name,
-                "token referenced in this job in an unrecognised position",
-            )
-
-        # --- Rule 4: no untrusted code in a job that touches the token. -------
-        # A rule 3b caller job has no steps, so this only ever applies to 3a.
-        for step in iter_steps(job):
-            uses = step.get("uses") or ""
-            bare = uses.split("@")[0]
-            if uses.startswith("./") or uses.startswith("../"):
-                fail(
-                    violations,
-                    path,
-                    job_name,
-                    f"job exposes the token and also runs a LOCAL action (uses: {uses}); not allowed",
-                )
-            if bare == "actions/checkout":
-                fail(
-                    violations,
-                    path,
-                    job_name,
-                    "job exposes the token and also runs actions/checkout; "
-                    "the privileged token must not share a job with checked-out "
-                    "code",
+                    f"step '{label}' uses the token of step '{step_id}'; it may only be "
+                    f"'github-token: ${{{{ steps.{step_id}.outputs.token }}}}' on a "
+                    f"'{RUNNER_ACTION}' step",
                 )
 
 
 def check_no_leaks_outside_workflows(repo_root: Path, violations: list[str], ref: str | None = None) -> None:
-    """Rule 1: the token name must not appear anywhere except the workflows.
+    """Rule 1: the key name must not appear anywhere except the CI files.
 
     When ``ref`` is given (e.g. a PR head SHA or ``FETCH_HEAD``), the search runs
     against that commit's *tree* instead of the working tree. This lets the
@@ -359,28 +315,26 @@ def check_no_leaks_outside_workflows(repo_root: Path, violations: list[str], ref
     itself still runs from the trusted base checkout. ``git grep`` only reads
     blobs, so scanning an untrusted ref executes nothing.
     """
-    cmd = ["git", "-C", str(repo_root), "grep", "-l", "-I", "-F", TOKEN_NAME]
+    cmd = ["git", "-C", str(repo_root), "grep", "-l", "-I", "-F", KEY_NAME]
     if ref:
         cmd.append(ref)
     try:
         out = subprocess.run(cmd, capture_output=True, text=True, check=False)
     except FileNotFoundError:
-        # git is required to verify confinement; if it is unavailable we cannot
-        # run the check, so fail closed rather than silently passing.
+        # git is required to verify confinement; fail closed if it is missing.
         violations.append(
-            f"<repo-wide leak check>: 'git' not found; cannot verify '{TOKEN_NAME}' is confined to {ALLOWED_PATHS_DESC}"
+            f"<repo-wide leak check>: 'git' not found; cannot verify '{KEY_NAME}' is confined to {ALLOWED_PATHS_DESC}"
         )
         return
 
     # `git grep` exits 0 when matches are found and 1 when there are none. Any
     # other code (e.g. 128 when repo_root is not a git worktree, or the ref is
-    # missing) means the leak check could not run -- fail closed rather than
-    # silently passing.
+    # missing) means the leak check could not run -- fail closed.
     if out.returncode not in (0, 1):
         violations.append(
             f"<repo-wide leak check>: 'git grep' failed (exit {out.returncode}) "
             f"in {repo_root}{f' for ref {ref}' if ref else ''}; cannot verify "
-            f"'{TOKEN_NAME}' is confined to {ALLOWED_PATHS_DESC}. "
+            f"'{KEY_NAME}' is confined to {ALLOWED_PATHS_DESC}. "
             f"stderr: {out.stderr.strip()!r}"
         )
         return
@@ -389,12 +343,11 @@ def check_no_leaks_outside_workflows(repo_root: Path, violations: list[str], ref
         line = line.strip()
         if not line:
             continue
-        # With a ref, `git grep` prefixes each match with "<ref>:"; strip it to
-        # get the repo-relative path.
+        # With a ref, `git grep` prefixes each match with "<ref>:".
         rel = line.split(":", 1)[1] if ref else line
         if any(rel.startswith(p) for p in ALLOWED_PATH_PREFIXES):
             continue
-        violations.append(f"{rel}: '{TOKEN_NAME}' must not be referenced outside {ALLOWED_PATHS_DESC}")
+        violations.append(f"{rel}: '{KEY_NAME}' must not be referenced outside {ALLOWED_PATHS_DESC}")
 
 
 def main() -> int:
@@ -441,13 +394,13 @@ def main() -> int:
         for v in violations:
             print(f"  - {v}", file=sys.stderr)
         print(
-            "\nThe admin-scoped runner token may ONLY be used in one of two ways:\n"
-            f"    github-token: ${{{{ secrets.{TOKEN_NAME} }}}}\n"
-            f"  in a step that uses '{ALLOWED_ACTION}', inside a job that does\n"
-            "  not check out code or run local actions; or\n"
-            f"    secrets:\n      {TOKEN_NAME}: ${{{{ secrets.{TOKEN_NAME} }}}}\n"
-            "  on a job whose 'uses:' is a local './.github/workflows/<name>.yml'\n"
-            "  (which this same scan covers). 'secrets: inherit' is never allowed.\n"
+            "\nThe runner App key may ONLY be used as\n"
+            f"    private-key: ${{{{ secrets.{KEY_NAME} }}}}\n"
+            f"  on an '{TOKEN_ACTION}' step with an 'id', in a job that declares the\n"
+            f"  '{ENVIRONMENT}' environment and does not check out code or run local\n"
+            "  actions. The minted token may only be\n"
+            "    github-token: ${{ steps.<id>.outputs.token }}\n"
+            f"  on a '{RUNNER_ACTION}' step in that job.\n"
             "  See .github/scripts/check_runner_token_policy.py.",
             file=sys.stderr,
         )
@@ -455,8 +408,8 @@ def main() -> int:
 
     print(
         f"✅ EC2 runner token policy: OK ({len(files)} workflow file(s) scanned; "
-        f"token reaches only '{ALLOWED_ACTION}', directly or via a local "
-        f"reusable workflow)."
+        f"the runner App key is used only by '{TOKEN_ACTION}' in '{ENVIRONMENT}' jobs, "
+        f"and its token only by '{RUNNER_ACTION}')."
     )
     return 0
 
