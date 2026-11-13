@@ -45,10 +45,6 @@ on:
 
 permissions: {}
 
-concurrency:
-  group: ok-to-test-${{ github.event.issue.number }}
-  cancel-in-progress: false
-
 env:
   # Workflow files whose held runs this command may release, and the
   # environment they wait on.
@@ -61,8 +57,15 @@ jobs:
     if: github.event.issue.pull_request && startsWith(github.event.comment.body, '/ok-to-test')
     runs-on: ubuntu-latest
     environment: ok-to-test-bot
+    # Job level, not workflow level: every comment on the PR starts this
+    # workflow, and a workflow-level group would let any later comment cancel
+    # a pending /ok-to-test. Only comments that pass the `if` above get here.
+    concurrency:
+      group: ok-to-test-${{ github.event.issue.number }}
+      cancel-in-progress: false
     permissions:
       actions: read # List the gated workflows' runs
+      contents: read # Read each held run's workflow file at its revision
       pull-requests: write # Reply on the pull request
     steps:
       - name: Check the commenter and the commit
@@ -120,21 +123,82 @@ jobs:
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.issue.number }}
           SHA: ${{ steps.check.outputs.sha }}
+          # The run-name expression the gated workflows (pr-tests.yml) use, without
+          # the expression delimiters. A run's title is only trusted when the
+          # workflow file at that run's revision sets a run-name with it.
+          RUN_NAME_EXPR: "format('PR #{0} @ {1}', github.event.pull_request.number, github.event.pull_request.head.sha)"
         run: |
           set -euo pipefail
-          # Must match the run-name of the gated workflows (pr-tests.yml).
           title="PR #${PR_NUMBER} @ ${SHA}"
-          : > runs.txt
-          for wf in $GATED_WORKFLOWS; do
-            gh api --paginate \
-              "repos/${REPO}/actions/workflows/${wf}/runs?event=pull_request_target&status=waiting&per_page=100" \
-              --jq ".workflow_runs[] | select(.display_title == \"${title}\") | .id" >> runs.txt
+          since=$(date -u -d '-30 days' +%F) # held runs expire after 30 days
+
+          # A pull_request_target run uses the workflow file from its BASE
+          # branch, which can be an older revision (a release branch, say)
+          # without our run-name. Such a run's title is the PR title, which the
+          # PR author chooses, so it could imitate another PR's title. Only
+          # trust titles from revisions that set the expected run-name.
+          declare -A revision_ok=()
+          trusted_revision() { # <workflow path> <revision>
+            local key="$1@$2"
+            if [ -z "${revision_ok[$key]:-}" ]; then
+              revision_ok[$key]=no
+              if gh api "repos/${REPO}/contents/$1?ref=$2" -H 'Accept: application/vnd.github.raw' > wf.yml 2>/dev/null \
+                  && grep -E '^run-name:' wf.yml | grep -qF "$RUN_NAME_EXPR"; then
+                revision_ok[$key]=yes
+              fi
+            fi
+            [ "${revision_ok[$key]}" = yes ]
+          }
+
+          # The comment can arrive before a run reaches the gate (still queued,
+          # or still classifying). Wait up to about 5 minutes for every
+          # matching run to be waiting at the gate or past it.
+          for attempt in $(seq 1 11); do
+            : > runs.txt
+            pending=0
+            for wf in $GATED_WORKFLOWS; do
+              gh api --paginate \
+                "repos/${REPO}/actions/workflows/${wf}/runs?event=pull_request_target&created=%3E%3D${since}&per_page=100" \
+                --jq '.workflow_runs[] | [.id, .status, .path, .head_sha, .display_title] | @tsv' > list.tsv
+              while IFS=$'\t' read -r id status path rev run_title; do
+                [ "$run_title" = "$title" ] || continue
+                if ! trusted_revision "$path" "$rev"; then
+                  echo "Ignoring run ${id}: ${path} at ${rev} does not set the expected run-name."
+                  continue
+                fi
+                case "$status" in
+                  waiting) echo "$id" >> runs.txt ;;
+                  completed) ;;
+                  in_progress)
+                    gate=$(gh api "repos/${REPO}/actions/runs/${id}/jobs?per_page=100" \
+                             --jq '[.jobs[] | select(.name | endswith("Approval gate")) | .status] | first // "none"')
+                    [ "$gate" = completed ] || pending=1 ;;
+                  *) pending=1 ;;
+                esac
+              done < list.tsv
+            done
+            [ "$pending" = 0 ] && break
+            [ "$attempt" -lt 11 ] || { echo "Gave up waiting for runs to reach the gate."; break; }
+            echo "A run for ${SHA} has not reached the gate yet; checking again in 30s."
+            sleep 30
           done
-          # A pull_request run's head_sha is the PR head commit, so these are
-          # matched by SHA, which check confirmed is this PR's current head.
+
+          # Fork pull_request runs held for "Approve and run". Their head_sha is
+          # the PR head commit; also require this PR's head repository and
+          # branch, so another PR with the same commit is not approved too.
+          pr=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}")
+          head_repo=$(jq -r '.head.repo.full_name // ""' <<<"$pr")
+          head_ref=$(jq -r '.head.ref' <<<"$pr")
+          : > fork_runs.txt
           gh api --paginate \
             "repos/${REPO}/actions/runs?event=pull_request&status=action_required&head_sha=${SHA}&per_page=100" \
-            --jq '.workflow_runs[].id' > fork_runs.txt
+            --jq '.workflow_runs[] | [.id, .head_repository.full_name, .head_branch] | @tsv' > forks.tsv
+          while IFS=$'\t' read -r id repo branch; do
+            if [ -n "$head_repo" ] && [ "$repo" = "$head_repo" ] && [ "$branch" = "$head_ref" ]; then
+              echo "$id" >> fork_runs.txt
+            fi
+          done < forks.tsv
+
           echo "Held gated runs:"; cat runs.txt
           echo "Fork runs awaiting approval:"; cat fork_runs.txt
           echo "count=$(( $(wc -l < runs.txt) + $(wc -l < fork_runs.txt) ))" >> "$GITHUB_OUTPUT"
@@ -191,6 +255,15 @@ jobs:
           } > reply.md
           cat reply.md
           [ ${#failed[@]} -eq 0 ]
+
+      # A step that fails before writing reply.md (an API error, a missing
+      # App key or variable) would otherwise leave the PR with no answer.
+      - name: Report an unexpected failure
+        if: failure() && hashFiles('reply.md') == ''
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          printf '%s\n' "\`/ok-to-test\` failed before it finished, so some runs may not have been approved. See ${RUN_URL}" > reply.md
 
       - name: Reply on the pull request
         if: always() && hashFiles('reply.md') != ''
