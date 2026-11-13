@@ -81,6 +81,9 @@ on:
       auditwheel-excludes-cuda-major:
         value: ${{ jobs.load.outputs.auditwheel-excludes-cuda-major }}
 
+permissions:
+  contents: read # sparse checkout of .github/versions.json
+
 jobs:
   load:
     runs-on: ubuntu-latest

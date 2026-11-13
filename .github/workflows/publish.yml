@@ -29,9 +29,6 @@ concurrency:
 
 permissions:
   contents: read
-  deployments: read
-  pull-requests: read
-  issues: read
 
 jobs:
   pr-flags:

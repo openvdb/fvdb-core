@@ -24,15 +24,19 @@ concurrency:
   group: ${{ github.event_name == 'workflow_dispatch' && format('fvdb-conda-dispatch-{0}', github.ref) || format('fvdb-conda-run-{0}', github.run_id) }}
   cancel-in-progress: true
 
+# Read-only by default. Jobs that need more are granted it individually
+# (check-changes; the runner start and stop calls). The jobs that run PR code
+# get contents: read only.
 permissions:
   contents: read
-  pull-requests: read
 
 jobs:
   ##############################################################################
   # CHECK FOR RELEVANT CHANGES
   ##############################################################################
   check-changes:
+    permissions:
+      pull-requests: read # scopes required by check-changes.yml; see that file
     uses: ./.github/workflows/check-changes.yml
 
   versions:
