@@ -53,8 +53,8 @@
 #
 #     run-name: "${{ format('PR #{0} @ {1}', github.event.pull_request.number, github.event.pull_request.head.sha) }}"
 #
-#   (A pull_request_target run's own head_sha is the base commit, so the
-#   title is the only place the run records which PR commit it is for.)
+#   (ok-to-test.yml also checks each run's head commit, repository and
+#   branch; the title ties the run to the PR number.)
 #
 # The approval covers the commit in the event payload. Jobs that fetch PR code
 # must verify the fetched head equals github.event.pull_request.head.sha.

@@ -65,7 +65,6 @@ jobs:
       cancel-in-progress: false
     permissions:
       actions: read # List the gated workflows' runs
-      contents: read # Read each held run's workflow file at its revision
       pull-requests: write # Reply on the pull request
     steps:
       - name: Check the commenter and the commit
@@ -123,31 +122,23 @@ jobs:
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.issue.number }}
           SHA: ${{ steps.check.outputs.sha }}
-          # The run-name expression the gated workflows (pr-tests.yml) use, without
-          # the expression delimiters. A run's title is only trusted when the
-          # workflow file at that run's revision sets a run-name with it.
-          RUN_NAME_EXPR: "format('PR #{0} @ {1}', github.event.pull_request.number, github.event.pull_request.head.sha)"
         run: |
           set -euo pipefail
+          # Must match the run-name of the gated workflows (pr-tests.yml).
           title="PR #${PR_NUMBER} @ ${SHA}"
           since=$(date -u -d '-30 days' +%F) # held runs expire after 30 days
 
-          # A pull_request_target run uses the workflow file from its BASE
-          # branch, which can be an older revision (a release branch, say)
-          # without our run-name. Such a run's title is the PR title, which the
-          # PR author chooses, so it could imitate another PR's title. Only
-          # trust titles from revisions that set the expected run-name.
-          declare -A revision_ok=()
-          trusted_revision() { # <workflow path> <revision>
-            local key="$1@$2"
-            if [ -z "${revision_ok[$key]:-}" ]; then
-              revision_ok[$key]=no
-              if gh api "repos/${REPO}/contents/$1?ref=$2" -H 'Accept: application/vnd.github.raw' > wf.yml 2>/dev/null \
-                  && grep -E '^run-name:' wf.yml | grep -qF "$RUN_NAME_EXPR"; then
-                revision_ok[$key]=yes
-              fi
-            fi
-            [ "${revision_ok[$key]}" = yes ]
+          # Every run records the head commit, repository and branch of the PR
+          # that triggered it, for pull_request_target and pull_request alike.
+          # Requiring them as well as the title means that a run of an older
+          # workflow revision without our run-name (titled with the PR title,
+          # which its author chooses) cannot pass for this PR, and neither can
+          # another PR opened from a different branch with the same commit.
+          pr=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}")
+          head_repo=$(jq -r '.head.repo.full_name // ""' <<<"$pr")
+          head_ref=$(jq -r '.head.ref' <<<"$pr")
+          is_this_pr() { # <run head sha> <run head repository> <run head branch>
+            [ -n "$head_repo" ] && [ "$1" = "$SHA" ] && [ "$2" = "$head_repo" ] && [ "$3" = "$head_ref" ]
           }
 
           # The comment can arrive before a run reaches the gate (still queued,
@@ -158,12 +149,11 @@ jobs:
             pending=0
             for wf in $GATED_WORKFLOWS; do
               gh api --paginate \
-                "repos/${REPO}/actions/workflows/${wf}/runs?event=pull_request_target&created=%3E%3D${since}&per_page=100" \
-                --jq '.workflow_runs[] | [.id, .status, .path, .head_sha, .display_title] | @tsv' > list.tsv
-              while IFS=$'\t' read -r id status path rev run_title; do
-                [ "$run_title" = "$title" ] || continue
-                if ! trusted_revision "$path" "$rev"; then
-                  echo "Ignoring run ${id}: ${path} at ${rev} does not set the expected run-name."
+                "repos/${REPO}/actions/workflows/${wf}/runs?event=pull_request_target&head_sha=${SHA}&created=%3E%3D${since}&per_page=100" \
+                --jq '.workflow_runs[] | [.id, .status, .head_sha, .head_repository.full_name, .head_branch, .display_title] | @tsv' > list.tsv
+              while IFS=$'\t' read -r id status rev repo branch run_title; do
+                if [ "$run_title" != "$title" ] || ! is_this_pr "$rev" "$repo" "$branch"; then
+                  echo "Ignoring run ${id} (${run_title}; head ${repo}:${branch})."
                   continue
                 fi
                 case "$status" in
@@ -183,18 +173,14 @@ jobs:
             sleep 30
           done
 
-          # Fork pull_request runs held for "Approve and run". Their head_sha is
-          # the PR head commit; also require this PR's head repository and
-          # branch, so another PR with the same commit is not approved too.
-          pr=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}")
-          head_repo=$(jq -r '.head.repo.full_name // ""' <<<"$pr")
-          head_ref=$(jq -r '.head.ref' <<<"$pr")
+          # Fork pull_request runs held for "Approve and run", matched the same
+          # way (they have no run-name to match).
           : > fork_runs.txt
           gh api --paginate \
             "repos/${REPO}/actions/runs?event=pull_request&status=action_required&head_sha=${SHA}&per_page=100" \
-            --jq '.workflow_runs[] | [.id, .head_repository.full_name, .head_branch] | @tsv' > forks.tsv
-          while IFS=$'\t' read -r id repo branch; do
-            if [ -n "$head_repo" ] && [ "$repo" = "$head_repo" ] && [ "$branch" = "$head_ref" ]; then
+            --jq '.workflow_runs[] | [.id, .head_sha, .head_repository.full_name, .head_branch] | @tsv' > forks.tsv
+          while IFS=$'\t' read -r id rev repo branch; do
+            if is_this_pr "$rev" "$repo" "$branch"; then
               echo "$id" >> fork_runs.txt
             fi
           done < forks.tsv

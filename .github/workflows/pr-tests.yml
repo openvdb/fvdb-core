@@ -21,10 +21,9 @@
 
 name: fVDB PR Tests
 
-# ok-to-test.yml finds this workflow's held runs by this exact title, so keep
-# it in step with that file. A pull_request_target run's own head_sha is the
-# base commit, so the title is the only place the run records which PR commit
-# it is for. It is built only from fields the PR author cannot choose.
+# ok-to-test.yml finds this workflow's held runs by this exact title, together
+# with the run's head commit, repository and branch, so keep it in step with
+# that file. It is built only from fields the PR author cannot choose.
 run-name: "${{ format('PR #{0} @ {1}', github.event.pull_request.number, github.event.pull_request.head.sha) }}"
 
 on:
