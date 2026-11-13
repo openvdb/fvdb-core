@@ -67,6 +67,7 @@ jobs:
     if: github.event.pull_request.draft == false
     permissions:
       actions: read # approval-gate.yml reads the environment's protection rules
+      pull-requests: write # approval-gate.yml posts /ok-to-test instructions on external PRs
     uses: ./.github/workflows/approval-gate.yml
 
   conda:

@@ -22,6 +22,8 @@
 #             rules) for trusted runs, or `ci-external-approval` for everything
 #             else. An untrusted run waits there until a maintainer comments
 #             `/ok-to-test <full commit SHA>` on the PR (see ok-to-test.yml).
+#   notify    for an untrusted run, posts (or updates) one comment on the PR
+#             telling maintainers the exact /ok-to-test command for its head.
 #
 # REPOSITORY SETUP REQUIRED before this workflow is merged:
 #   Both environments must already exist (Settings -> Environments), with
@@ -41,11 +43,13 @@
 #
 # CALLER REQUIREMENTS:
 #   The calling job must grant `actions: read` (needed to read the
-#   environment's protection rules), e.g.
+#   environment's protection rules) and `pull-requests: write` (for the
+#   notify job's comment), e.g.
 #
 #     approve:
 #       permissions:
 #         actions: read
+#         pull-requests: write
 #       uses: ./.github/workflows/approval-gate.yml
 #
 #   The calling workflow must set this run-name, and be listed in
@@ -64,8 +68,8 @@ name: Approval gate
 on:
   workflow_call:
 
-# Deny by default. The classify job opts into actions: read; the gate job
-# needs nothing.
+# Deny by default. The classify job opts into actions: read and the notify
+# job into pull-requests: write; the gate job needs nothing.
 permissions: {}
 
 jobs:
@@ -216,6 +220,53 @@ jobs:
             echo "- PR author: \`${PR_AUTHOR:-n/a}\`, triggered by: \`${SENDER:-n/a}\`, head repository: \`${HEAD_REPO:-n/a}\`"
             echo "- Trusted: **${trusted}**"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # Tells maintainers how to release a held run. One comment per PR, edited
+  # on later pushes to show the new head commit. Runs no PR code: the comment
+  # is built only from the PR number and head SHA in the event payload.
+  # A failure here never affects the gate.
+  notify:
+    name: Post approval instructions
+    needs: classify
+    if: github.event_name == 'pull_request_target' && needs.classify.outputs.trusted != 'true'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      pull-requests: write # Post or update the instructions comment
+    steps:
+      - name: Post or update the /ok-to-test instructions
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          marker='<!-- ok-to-test-notice -->'
+          fence='```'
+          printf '%s\n' \
+            "$marker" \
+            "**CI is waiting for maintainer approval.**" \
+            "" \
+            "Maintainers: after reviewing the changes up to \`${HEAD_SHA}\`, comment" \
+            "" \
+            "$fence" \
+            "/ok-to-test ${HEAD_SHA}" \
+            "$fence" \
+            "" \
+            "Each new push needs a new \`/ok-to-test\`. This comment is updated to the latest commit." \
+            > notice.md
+
+          existing=$(gh api --paginate "repos/${REPO}/issues/${PR_NUMBER}/comments?per_page=100" \
+                       --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"${marker}\"))) | .id" \
+                     | head -n1)
+          if [ -n "$existing" ]; then
+            gh api -X PATCH "repos/${REPO}/issues/comments/${existing}" -F body=@notice.md --silent
+            echo "Updated comment ${existing} for ${HEAD_SHA}."
+          else
+            gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" -F body=@notice.md --silent
+            echo "Posted instructions for ${HEAD_SHA}."
+          fi
 
   gate:
     name: Approval gate
