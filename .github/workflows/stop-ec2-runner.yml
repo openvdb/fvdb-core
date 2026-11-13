@@ -13,9 +13,10 @@
 #     (publish.yml, whose start job fans out over a matrix, so there is no
 #     single job output to read).
 #
-# Security note: like its start counterpart, this workflow holds the
-# admin-scoped runner token and therefore never checks out code or runs a
-# local action -- see .github/scripts/check_runner_token_policy.py.
+# Security note: like its start counterpart, this workflow mints a
+# runner-registration token from the fvdb-ec2-runners GitHub App and therefore
+# never checks out code or runs a local action -- see
+# .github/scripts/check_runner_token_policy.py.
 name: Stop EC2 Runner
 
 on:
@@ -44,10 +45,6 @@ on:
       aws-region:
         description: AWS region the instance is running in.
         type: string
-        required: true
-    secrets:
-      EC2_RUNNER_TOKEN:
-        description: Admin-scoped token used to de-register the runner.
         required: true
 
 permissions:
@@ -81,6 +78,20 @@ jobs:
           # session is useful for 15 minutes instead of the default hour.
           role-duration-seconds: 900
 
+      # The runner action needs a token that can register and remove this
+      # repository's self-hosted runners (Administration: write). It comes from
+      # the fvdb-ec2-runners GitHub App: minted for this job, limited to this
+      # repository, and revoked when the job ends. The App's private key is a
+      # secret of the ci-aws environment, so only jobs that declare ci-aws, on
+      # refs its deployment-branch policy allows, can read it.
+      - name: Mint a runner-registration token
+        id: runner-app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.RUNNER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RUNNER_APP_KEY }}
+          permission-administration: write
+
       - name: Find EC2 instance ID by label
         id: find-instance
         if: inputs.ec2-instance-id == ''
@@ -112,6 +123,6 @@ jobs:
         uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
         with:
           mode: stop
-          github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
+          github-token: ${{ steps.runner-app-token.outputs.token }}
           label: ${{ inputs.label }}
           ec2-instance-id: ${{ inputs.ec2-instance-id || steps.find-instance.outputs.instance-id }}

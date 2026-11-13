@@ -9,14 +9,13 @@
 # the pinned action SHA) lives in exactly one place and cannot drift between
 # tests.yml, cu130.yml, cu132.yml, publish.yml and nightly-publish.yml.
 #
-# Security note: this workflow holds the admin-scoped runner token, so it
+# Security note: this workflow mints a runner-registration token from the
+# fvdb-ec2-runners GitHub App (Administration: write on this repository), so it
 # deliberately has no `actions/checkout` and no local actions -- see
-# .github/scripts/check_runner_token_policy.py, which enforces that and which
-# also covers this file, because it is a *local* reusable workflow. Callers must
-# forward that one secret explicitly by name; `secrets: inherit` is rejected by
-# the same check. (The token's name is deliberately not spelled in this comment:
-# the policy allows it to appear only in the three positions it documents, so a
-# single grep for the name enumerates every place it can actually reach.)
+# .github/scripts/check_runner_token_policy.py, which enforces that. The App's
+# private key is a secret of the ci-aws environment that this job declares;
+# callers pass no secret at all, and `secrets: inherit` is rejected by the same
+# check.
 name: Start EC2 Runner
 
 on:
@@ -83,10 +82,6 @@ on:
         type: number
         required: false
         default: 90
-    secrets:
-      EC2_RUNNER_TOKEN:
-        description: Admin-scoped token used to register the runner with this repo.
-        required: true
     outputs:
       label:
         description: Runner label to pass as `runs-on` in the job being provisioned.
@@ -141,6 +136,20 @@ jobs:
           # instead of the default hour.
           role-duration-seconds: 900
 
+      # The runner action needs a token that can register and remove this
+      # repository's self-hosted runners (Administration: write). It comes from
+      # the fvdb-ec2-runners GitHub App: minted for this job, limited to this
+      # repository, and revoked when the job ends. The App's private key is a
+      # secret of the ci-aws environment, so only jobs that declare ci-aws, on
+      # refs its deployment-branch policy allows, can read it.
+      - name: Mint a runner-registration token
+        id: runner-app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.RUNNER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RUNNER_APP_KEY }}
+          permission-administration: write
+
       # Every instance gets a RunnerLabel tag (when the caller supplied a label)
       # and a GitHubRunId tag, on top of whatever the caller passed. The tag is
       # the ONLY handle stop-ec2-runner.yml has when this job's outputs are
@@ -177,7 +186,7 @@ jobs:
         uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
         with:
           mode: start
-          github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
+          github-token: ${{ steps.runner-app-token.outputs.token }}
           ec2-instance-type: ${{ inputs.instance-type }}
           availability-zones-config: ${{ inputs.az-config }}
           # Empty label => the action generates a unique one (its documented
@@ -195,7 +204,7 @@ jobs:
         uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
         with:
           mode: stop
-          github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
+          github-token: ${{ steps.runner-app-token.outputs.token }}
           label: ${{ steps.a1.outputs.label }}
           ec2-instance-id: ${{ steps.a1.outputs.ec2-instance-id }}
 
@@ -227,7 +236,7 @@ jobs:
         uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
         with:
           mode: start
-          github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
+          github-token: ${{ steps.runner-app-token.outputs.token }}
           # The fallback type when one is configured, so this attempt draws on a
           # different capacity pool rather than re-asking the pool that just said no.
           ec2-instance-type: ${{ inputs.fallback-instance-type || inputs.instance-type }}
@@ -247,7 +256,7 @@ jobs:
         uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
         with:
           mode: stop
-          github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
+          github-token: ${{ steps.runner-app-token.outputs.token }}
           label: ${{ steps.a2.outputs.label }}
           ec2-instance-id: ${{ steps.a2.outputs.ec2-instance-id }}
 
@@ -274,7 +283,7 @@ jobs:
         uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
         with:
           mode: start
-          github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
+          github-token: ${{ steps.runner-app-token.outputs.token }}
           ec2-instance-type: ${{ inputs.instance-type }}
           availability-zones-config: ${{ inputs.az-config }}
           # Empty label => the action generates a unique one (its documented
@@ -292,7 +301,7 @@ jobs:
         uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
         with:
           mode: stop
-          github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
+          github-token: ${{ steps.runner-app-token.outputs.token }}
           label: ${{ steps.a3.outputs.label }}
           ec2-instance-id: ${{ steps.a3.outputs.ec2-instance-id }}
 
@@ -321,7 +330,7 @@ jobs:
         uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
         with:
           mode: stop
-          github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
+          github-token: ${{ steps.runner-app-token.outputs.token }}
           label: ${{ steps.a1.outputs.label }}
           ec2-instance-id: ${{ steps.a1.outputs.ec2-instance-id }}
 
@@ -331,7 +340,7 @@ jobs:
         uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
         with:
           mode: stop
-          github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
+          github-token: ${{ steps.runner-app-token.outputs.token }}
           label: ${{ steps.a2.outputs.label }}
           ec2-instance-id: ${{ steps.a2.outputs.ec2-instance-id }}
 
@@ -341,7 +350,7 @@ jobs:
         uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
         with:
           mode: stop
-          github-token: ${{ secrets.EC2_RUNNER_TOKEN }}
+          github-token: ${{ steps.runner-app-token.outputs.token }}
           label: ${{ steps.a3.outputs.label }}
           ec2-instance-id: ${{ steps.a3.outputs.ec2-instance-id }}
 

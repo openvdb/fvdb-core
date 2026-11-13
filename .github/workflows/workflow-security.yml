@@ -64,14 +64,15 @@ jobs:
           echo "Scanning PR workflow files:"
           ls -1 .github/workflows
 
-      # 3a. Repo-specific policy: the admin runner token may only reach
-      #     machulav/ec2-github-runner -- either as that action's github-token
-      #     input, or forwarded by name to a local reusable workflow that this
-      #     same scan covers (never via secrets: inherit). The policy script
+      # 3a. Repo-specific policy: the runner GitHub App key may only be used
+      #     by actions/create-github-app-token in a job that declares the
+      #     ci-aws environment, and the token it mints may only reach
+      #     machulav/ec2-github-runner's github-token input (never via
+      #     secrets: inherit or dynamic secret access). The policy script
       #     and its tests run from the trusted base checkout (not the PR).
       #     Rules 2-4 scan the overlaid PR workflow files; the Rule 1 leak check
       #     runs against the PR head commit tree (read-only) so it also catches
-      #     runner-token references the PR adds outside .github/workflows.
+      #     references to the key that the PR adds outside .github/workflows.
       - name: Enforce EC2 runner token policy
         run: |
           set -euo pipefail

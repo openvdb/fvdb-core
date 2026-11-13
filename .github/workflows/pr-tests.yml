@@ -77,8 +77,6 @@ jobs:
       pull-requests: read # dorny/paths-filter in check-changes.yml
       id-token: write # AWS OIDC in the runner lifecycle jobs
     uses: ./.github/workflows/tests.yml
-    secrets:
-      EC2_RUNNER_TOKEN: ${{ secrets.EC2_RUNNER_TOKEN }}
 
   cu130:
     name: pip CUDA 13.0
@@ -88,8 +86,6 @@ jobs:
       pull-requests: read # dorny/paths-filter in check-changes.yml
       id-token: write # AWS OIDC in the runner lifecycle jobs
     uses: ./.github/workflows/cu130.yml
-    secrets:
-      EC2_RUNNER_TOKEN: ${{ secrets.EC2_RUNNER_TOKEN }}
 
   cu132:
     name: pip CUDA 13.2
@@ -99,5 +95,3 @@ jobs:
       pull-requests: read # dorny/paths-filter in check-changes.yml
       id-token: write # AWS OIDC in the runner lifecycle jobs
     uses: ./.github/workflows/cu132.yml
-    secrets:
-      EC2_RUNNER_TOKEN: ${{ secrets.EC2_RUNNER_TOKEN }}
