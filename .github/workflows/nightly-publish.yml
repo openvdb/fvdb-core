@@ -65,6 +65,7 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.versions.outputs.publish-build-matrix) }}
     uses: ./.github/workflows/start-ec2-runner.yml
+    secrets: inherit # zizmor: ignore[secrets-inherit] the runner App key reaches the runner jobs this way; see start-ec2-runner.yml
     with:
       # One job builds the CUDA library once, then the bindings for every Python version
       instance-type: m6a.4xlarge
@@ -360,6 +361,7 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.versions.outputs.publish-build-matrix) }}
     uses: ./.github/workflows/stop-ec2-runner.yml
+    secrets: inherit # zizmor: ignore[secrets-inherit] the runner App key reaches the runner jobs this way; see start-ec2-runner.yml
     with:
       label: nightly-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
       aws-role: ${{ needs.versions.outputs.aws-runner-role }}

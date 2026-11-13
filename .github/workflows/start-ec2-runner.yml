@@ -14,8 +14,13 @@
 # deliberately has no `actions/checkout` and no local actions -- see
 # .github/scripts/check_runner_token_policy.py, which enforces that. The App's
 # private key is a secret of the ci-aws environment that this job declares;
-# callers pass no secret at all, and `secrets: inherit` is rejected by the same
-# check.
+# callers forward it with `secrets: inherit`, which the same check allows only
+# into this repository's own workflows.
+#
+# Every caller on the way here passes `secrets: inherit`. GitHub only gives a
+# reusable workflow's jobs the secrets of an environment they declare (here
+# the runner App key in ci-aws) when each caller above them uses `secrets: inherit`;
+# without it the key arrives empty. Verified in openvdb/fvdb-ok-to-test-sandbox.
 name: Start EC2 Runner
 
 on:

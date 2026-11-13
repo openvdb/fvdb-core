@@ -38,6 +38,7 @@ jobs:
     permissions:
       id-token: write  # Required for AWS OIDC
     uses: ./.github/workflows/start-ec2-runner.yml
+    secrets: inherit # zizmor: ignore[secrets-inherit] the runner App key reaches the runner jobs this way; see start-ec2-runner.yml
     with:
       instance-type: m6a.8xlarge
       az-config: ${{ needs.versions.outputs.aws-cpu-az-config }}
@@ -162,6 +163,7 @@ jobs:
     # but only if the start-build-runner job was not skipped
     if: ${{ always() && needs.start-build-runner.result != 'skipped' }}
     uses: ./.github/workflows/stop-ec2-runner.yml
+    secrets: inherit # zizmor: ignore[secrets-inherit] the runner App key reaches the runner jobs this way; see start-ec2-runner.yml
     with:
       label: ${{ needs.start-build-runner.outputs.label }}
       ec2-instance-id: ${{ needs.start-build-runner.outputs.ec2-instance-id }}
@@ -177,6 +179,7 @@ jobs:
     permissions:
       id-token: write  # Required for AWS OIDC
     uses: ./.github/workflows/start-ec2-runner.yml
+    secrets: inherit # zizmor: ignore[secrets-inherit] the runner App key reaches the runner jobs this way; see start-ec2-runner.yml
     with:
       instance-type: g6.xlarge # 4 CPU-core, L4 GPU
       fallback-instance-type: g5.xlarge # A10G, SM 8.6 -- different capacity pool
@@ -377,6 +380,7 @@ jobs:
     # but only if the start-tests-gpu-runner job was not skipped
     if: ${{ always() && needs.start-tests-gpu-runner.result != 'skipped' }}
     uses: ./.github/workflows/stop-ec2-runner.yml
+    secrets: inherit # zizmor: ignore[secrets-inherit] the runner App key reaches the runner jobs this way; see start-ec2-runner.yml
     with:
       label: ${{ needs.start-tests-gpu-runner.outputs.label }}
       ec2-instance-id: ${{ needs.start-tests-gpu-runner.outputs.ec2-instance-id }}

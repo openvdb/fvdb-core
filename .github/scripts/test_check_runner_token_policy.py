@@ -211,16 +211,40 @@ def test_dynamic_secret_access_is_rejected(tmp_path):
     assert _has(_check(tmp_path, _workflow(steps, job_extra="")), "dynamic secret access")
 
 
-def test_secrets_inherit_is_rejected(tmp_path):
-    text = (
-        "name: wf\n"
-        "on: [push]\n"
-        "jobs:\n"
-        "  call:\n"
-        "    uses: ./.github/workflows/start-ec2-runner.yml\n"
-        "    secrets: inherit\n"
+def _caller(uses: str, secrets_line: str = "    secrets: inherit\n") -> str:
+    return f"name: wf\non: [push]\njobs:\n  call:\n    uses: {uses}\n{secrets_line}"
+
+
+def test_secrets_inherit_to_local_workflow_is_allowed(tmp_path):
+    (tmp_path / "start-ec2-runner.yml").write_text("name: callee\n")
+    assert _check(tmp_path, _caller("./.github/workflows/start-ec2-runner.yml")) == []
+
+
+def test_secrets_inherit_with_trailing_comment_is_still_checked(tmp_path):
+    line = "    secrets: inherit # zizmor: ignore[secrets-inherit]\n"
+    violations = _check(
+        tmp_path, _caller("some/org/.github/workflows/x.yml@0123456789012345678901234567890123456789", line)
     )
-    assert _has(_check(tmp_path, text), "'secrets: inherit' is not allowed")
+    assert _has(violations, "only allowed into a local reusable workflow")
+
+
+def test_secrets_inherit_to_remote_workflow_is_rejected(tmp_path):
+    violations = _check(tmp_path, _caller("some/org/.github/workflows/x.yml@0123456789012345678901234567890123456789"))
+    assert _has(violations, "only allowed into a local reusable workflow")
+
+
+def test_secrets_inherit_to_missing_local_workflow_is_rejected(tmp_path):
+    assert _has(_check(tmp_path, _caller("./.github/workflows/missing.yml")), "does not exist")
+
+
+def test_secret_outside_allowlist_is_rejected(tmp_path):
+    steps = "      - run: echo hi\n        env:\n          X: ${{ secrets.CODEBUILD_SECRET }}\n"
+    assert _has(_check(tmp_path, _workflow(steps, job_extra="")), "'CODEBUILD_SECRET' is not on the allowlist")
+
+
+def test_allowlisted_secrets_are_accepted(tmp_path):
+    steps = "      - run: gh api user\n        env:\n          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n"
+    assert _check(tmp_path, _workflow(steps, job_extra="")) == []
 
 
 def test_retired_pat_name_is_rejected(tmp_path):
