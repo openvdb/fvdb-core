@@ -67,8 +67,9 @@ jobs:
       # 3a. Repo-specific policy: the runner GitHub App key may only be used
       #     by actions/create-github-app-token in a job that declares the
       #     ci-aws environment, and the token it mints may only reach
-      #     machulav/ec2-github-runner's github-token input (never via
-      #     secrets: inherit or dynamic secret access). The policy script
+      #     machulav/ec2-github-runner's github-token input. secrets: inherit
+      #     is allowed only into local reusable workflows, and no workflow may
+      #     reference any other secret. The policy script
       #     and its tests run from the trusted base checkout (not the PR).
       #     Rules 2-4 scan the overlaid PR workflow files; the Rule 1 leak check
       #     runs against the PR head commit tree (read-only) so it also catches

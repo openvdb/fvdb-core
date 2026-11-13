@@ -77,6 +77,7 @@ jobs:
       pull-requests: read # dorny/paths-filter in check-changes.yml
       id-token: write # AWS OIDC in the runner lifecycle jobs
     uses: ./.github/workflows/tests.yml
+    secrets: inherit # zizmor: ignore[secrets-inherit] the runner App key reaches the runner jobs this way; see start-ec2-runner.yml
 
   cu130:
     name: pip CUDA 13.0
@@ -86,6 +87,7 @@ jobs:
       pull-requests: read # dorny/paths-filter in check-changes.yml
       id-token: write # AWS OIDC in the runner lifecycle jobs
     uses: ./.github/workflows/cu130.yml
+    secrets: inherit # zizmor: ignore[secrets-inherit] the runner App key reaches the runner jobs this way; see start-ec2-runner.yml
 
   cu132:
     name: pip CUDA 13.2
@@ -95,3 +97,4 @@ jobs:
       pull-requests: read # dorny/paths-filter in check-changes.yml
       id-token: write # AWS OIDC in the runner lifecycle jobs
     uses: ./.github/workflows/cu132.yml
+    secrets: inherit # zizmor: ignore[secrets-inherit] the runner App key reaches the runner jobs this way; see start-ec2-runner.yml

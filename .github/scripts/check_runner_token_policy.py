@@ -47,11 +47,20 @@ files themselves, that the key and the token minted from it go nowhere else:
   6. No dynamic secret access (``secrets[...]``) anywhere in a workflow. It
      could resolve the key without spelling its name, evading rules 1-3.
 
-  7. No ``secrets: inherit`` anywhere in a workflow. It forwards every secret
-     without naming one, so no textual check can see where it goes.
+  7. ``secrets: inherit`` only on a job that calls a local reusable workflow
+     (``./.github/workflows/<name>.yml``) present in this directory, so this
+     same scan covers where the secrets go. It is needed: GitHub only gives a
+     reusable workflow's jobs the secrets of an environment they declare (the
+     key, in ``ci-aws``) when every caller above them uses ``secrets: inherit``.
 
   8. The retired personal access token secret, ``EC2_RUNNER_TOKEN``, must not
      appear in any workflow.
+
+  9. Workflows may reference no secret other than ``GITHUB_TOKEN``,
+     ``RUNNER_APP_KEY`` and ``OK_TO_TEST_APP_KEY``. Because rule 7 forwards
+     every secret into the called workflows, this allowlist is what keeps any
+     other repository or organization secret from reaching a job. Adding a
+     secret means adding it here deliberately.
 
 Usage:
     check_runner_token_policy.py [WORKFLOW_DIR] [--repo-root DIR] [--leak-check-ref REF]
@@ -80,8 +89,12 @@ FORBIDDEN_TOKEN_INPUTS = ("owner", "repositories", "enterprise", "skip-token-rev
 # Rule 2's one allowed form.
 KEY_LINE = re.compile(r"^\s*private-key:\s*\$\{\{\s*secrets\." + re.escape(KEY_NAME) + r"\s*\}\}\s*$")
 
-# Rule 7: blanket secret forwarding, which names nothing.
-INHERIT_LINE = re.compile(r"^\s*secrets:\s*inherit\s*$")
+# Rule 9: the only secrets a workflow may reference.
+ALLOWED_SECRETS = ("GITHUB_TOKEN", KEY_NAME, "OK_TO_TEST_APP_KEY")
+SECRET_REF = re.compile(r"\bsecrets\s*\.\s*([A-Za-z_][A-Za-z0-9_]*)")
+
+# Rule 7: blanket secret forwarding is only allowed into a local reusable workflow.
+LOCAL_REUSABLE = re.compile(r"^\./\.github/workflows/([^/]+\.ya?ml)$")
 
 # Rule 6: dynamic secret access, e.g. secrets['X'], secrets[matrix.y]. The \b
 # avoids matching identifiers that merely end in "secrets" (e.g. mysecrets[0]).
@@ -143,15 +156,15 @@ def check_workflow_file(path: Path, violations: list[str]) -> None:
                 f"'secrets.<NAME>', not 'secrets[...]' (it can resolve "
                 f"'{KEY_NAME}' without naming it): {line.strip()!r}",
             )
-        if INHERIT_LINE.match(line):
-            fail(
-                violations,
-                path,
-                None,
-                f"line {lineno}: 'secrets: inherit' is not allowed -- it forwards "
-                f"every secret without naming one, so no textual check can see "
-                f"where it goes. Forward the secrets a callee needs explicitly.",
-            )
+        for name in SECRET_REF.findall(line):
+            if name not in ALLOWED_SECRETS and name not in RETIRED_NAMES:
+                fail(
+                    violations,
+                    path,
+                    None,
+                    f"line {lineno}: secret '{name}' is not on the allowlist "
+                    f"{list(ALLOWED_SECRETS)} in check_runner_token_policy.py: {line.strip()!r}",
+                )
         for retired in RETIRED_NAMES:
             if retired in line:
                 fail(
@@ -188,7 +201,39 @@ def check_workflow_file(path: Path, violations: list[str]) -> None:
     for job_name, job in jobs.items():
         if not isinstance(job, dict):
             continue
+        check_inherit(path, job_name, job, violations)
         check_job(path, job_name, job, violations)
+
+    # Rule 7, backstop: 'inherit' anywhere other than a job's 'secrets:' value.
+    without_job_secrets = {k: v for k, v in data.items() if k != "jobs"} | {
+        "jobs": {n: {k: v for k, v in j.items() if k != "secrets"} for n, j in jobs.items() if isinstance(j, dict)}
+    }
+    if re.search(r"\bsecrets\s*:\s*inherit\b", yaml.safe_dump(without_job_secrets)):
+        fail(violations, path, None, "'secrets: inherit' outside a job's 'secrets:' key")
+
+
+def check_inherit(path: Path, job_name: str, job: dict, violations: list[str]) -> None:
+    """Rule 7: 'secrets: inherit' only into a local reusable workflow this scan covers."""
+    if job.get("secrets") != "inherit":
+        return
+    uses = str(job.get("uses") or "")
+    callee = LOCAL_REUSABLE.match(uses)
+    if callee is None:
+        fail(
+            violations,
+            path,
+            job_name,
+            f"'secrets: inherit' to {uses or '<no job-level uses:>'!r}; it is only allowed "
+            f"into a local reusable workflow ('./.github/workflows/<name>.yml')",
+        )
+    elif not (path.parent / callee.group(1)).is_file():
+        fail(
+            violations,
+            path,
+            job_name,
+            f"'secrets: inherit' to {uses!r}, which does not exist in {path.parent}; "
+            f"the callee must be a workflow this scan covers",
+        )
 
 
 def check_job(path: Path, job_name: str, job: dict, violations: list[str]) -> None:
@@ -400,7 +445,9 @@ def main() -> int:
             f"  '{ENVIRONMENT}' environment and does not check out code or run local\n"
             "  actions. The minted token may only be\n"
             "    github-token: ${{ steps.<id>.outputs.token }}\n"
-            f"  on a '{RUNNER_ACTION}' step in that job.\n"
+            f"  on a '{RUNNER_ACTION}' step in that job. 'secrets: inherit' is only\n"
+            "  allowed into local reusable workflows, and workflows may reference only\n"
+            f"  the secrets {list(ALLOWED_SECRETS)}.\n"
             "  See .github/scripts/check_runner_token_policy.py.",
             file=sys.stderr,
         )
