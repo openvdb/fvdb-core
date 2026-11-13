@@ -16,3 +16,4 @@ expand_tests = functools.partial(
     parameterized.expand,
     name_func=lambda f, n, p: f"{f.__name__}_{parameterized.to_safe_name('_'.join(str(x) for x in p.args))}",
 )
+# CI smoke test after the workflow permissions changes (not for merging).
