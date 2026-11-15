@@ -255,7 +255,7 @@ When code is pushed to a release branch (e.g. `release/v0.4`):
 Release candidate wheels are published to the staging index at:
 
 ```
-https://fvdb-packages.s3.us-east-2.amazonaws.com/simple-staging/
+https://d36m13axqqhiit.cloudfront.net/simple-staging/
 ```
 
 This allows manual testing before the final release. Staging wheels older
