@@ -9,7 +9,7 @@ Applications of fVDB include 3D deep learning, computer graphics/vision, robotic
 .. raw:: html
 
   <video autoplay loop controls muted width="90%" style="display: block; margin: 0 auto;">
-     <source src="https://fvdb-data.s3.us-east-2.amazonaws.com/fvdb-reality-capture/fvdb_intro_480p.mp4" type="video/mp4" />
+     <source src="https://d184pg3x235vug.cloudfront.net/fvdb-reality-capture/fvdb_intro_480p.mp4" type="video/mp4" />
   </video>
 
 |
@@ -48,14 +48,14 @@ The videos below show ƒVDB being used for large-scale 3D reconstruction, simula
    <p style="text-align: center; font-weight: bold; font-style: italic; text-decoration: underline; font-size: medium; text-decoration-skip-ink: none; margin-bottom: 0.5em;">
    ƒVDB being used to reconstruct radiance (25 million splats) fields and TSDF volumes (100 million voxels) from images and points</p>
   <video autoplay loop controls muted width="90%" style="display: block; margin: 0 auto;">
-     <source src="https://fvdb-data.s3.us-east-2.amazonaws.com/fvdb-reality-capture/spot_airport_480p.mp4" type="video/mp4" />
+     <source src="https://d184pg3x235vug.cloudfront.net/fvdb-reality-capture/spot_airport_480p.mp4" type="video/mp4" />
   </video>
 
    <br>
    <p style="text-align: center; font-weight: bold; font-style: italic; text-decoration: underline; font-size: medium; text-decoration-skip-ink: none; margin-bottom: 0.5em;">
    ƒVDB being used to process a sparse SDF on a grid with 181 million voxels. Visualized in a browser.</p>
   <video autoplay loop controls muted width="90%" style="display: block; margin: 0 auto;">
-     <source src="https://fvdb-data.s3.us-east-2.amazonaws.com/fvdb-reality-capture/crawler_480p.mp4" type="video/mp4" />
+     <source src="https://d184pg3x235vug.cloudfront.net/fvdb-reality-capture/crawler_480p.mp4" type="video/mp4" />
   </video>
 
 |
