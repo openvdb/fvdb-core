@@ -288,7 +288,8 @@ jobs:
           TMPDIR=$(mktemp -d)
           ROOT_INDEX="$TMPDIR/index.html"
           echo "Building root simple index from s3://${S3_BUCKET}/${SIMPLE_PREFIX}/"
-          projects=$(aws s3 ls "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/" | awk '{print $2}' | sed 's:/$::')
+          # Only folders ("PRE" lines); a file line's second field is its timestamp.
+          projects=$(aws s3 ls "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/" | awk '$1 == "PRE" {print $2}' | sed 's:/$::')
           TITLE="Simple index"
           {
             echo "<!DOCTYPE html>";
