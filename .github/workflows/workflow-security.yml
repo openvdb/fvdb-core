@@ -78,7 +78,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m pip install --quiet "pyyaml==${PYYAML_VERSION}" "pytest==${PYTEST_VERSION}"
-          python3 -m pytest .github/scripts/test_check_runner_token_policy.py .github/scripts/test_publish_simple_index.py -q
+          python3 -m pytest .github/scripts/test_check_runner_token_policy.py .github/scripts/test_publish_simple_index.py .github/scripts/test_verify_package_index.py -q
           leak_ref_args=()
           if [ "${GITHUB_EVENT_NAME}" = "pull_request_target" ]; then
             leak_ref_args=(--leak-check-ref FETCH_HEAD)
