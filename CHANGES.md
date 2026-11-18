@@ -3,17 +3,75 @@ fVDB Version History
 
 ## Version 0.7.0 - In Development
 
-- **PyTorch 2.14** fVDB updated to build, test and publish with PyTorch 2.14, CUDA 13.0/13.2 and Python 3.10-3.15
-  support. The conda development and test environments move to CUDA 13.4, the CUDA build conda-forge publishes
-  PyTorch 2.14 for.
+*49 commits, 223 files changed, 4 contributors.*
+
+This release publishes the low-level Gaussian splatting kernels in `fvdb.functional`, improves multi-GPU rendering
+and losses, and accelerates CUDA dense-grid construction. It also supports empty jagged structures, updates to
+PyTorch 2.14, and adopts NanoVDB's unified buffers for multi-GPU grid storage.
+
+**Highlights:**
+
+- Published Gaussian projection, rasterization, and related kernels as a public API for downstream composition.
+- Added fused L1 and L1 + SSIM losses and reduced multi-GPU rendering memory and communication overhead.
+- Accelerated repeated CUDA dense-grid construction by up to 1.9x at batch size 256 in PR benchmarks.
+- Added support for empty and trailing-empty `JaggedTensor` structures and validation for raw constructors.
+
+**Contributors:** @swahtz, @matthewdcong, @harrism, @phapalova
+
+### Compatibility & Distribution
+
+- **PyTorch 2.14:** fVDB builds, tests, and publishes wheels for PyTorch 2.14 with CUDA 13.0/13.2 and Python
+  3.10-3.15. Conda development and test environments use CUDA 13.4 to match conda-forge's PyTorch build (#818).
+- Build all Python wheels from a single libfvdb build per CUDA version, test published wheels against pip PyTorch,
+  and fix Python 3.15 nightly builds and NVIDIA Vulkan setup in GPU CI. Nightly wheels publish at 10:00 UTC
+  (#813, #824, #825, #827, #829).
+- Attest published wheels and verify the release index daily. Generate the root index from package directories
+  and preserve stored wheel hashes when rewriting the index. Serve the staging index and introductory videos
+  through CloudFront (#869, #870, #871, #872, #873).
+
+### Gaussian Splatting & Losses
+
+- Published non-differentiable Gaussian kernels in `fvdb.functional`, with separate forward and backward
+  functions for downstream autograd. The API covers projection, spherical harmonics, tile intersection,
+  rasterization, contributor queries, MCMC utilities, and PLY I/O. `CameraModel` and `RollingShutterType`
+  are also exported from `fvdb` (#799).
+- **Breaking (private bindings):** Replace `project_gaussians_unscented_fwd` with `project_gaussians_ut_fwd`,
+  and use `rasterize_num_contributing_gaussians_sparse` and `rasterize_contributing_gaussian_ids_sparse`
+  in place of the former `sparse_rasterize_*` contributor functions (#799).
+- Added fused L1 and L1 + SSIM to `fvdb.utils.metrics`. Fixed allocator mismatches in multi-GPU fused
+  losses and cleaned up image prefetching and transfer code (#816, #820, #840).
+- Improved multi-GPU locality, switched intersection sorting to radix sort, limited intersections to each
+  device's cameras, and used padded NCCL reduce-scatter for uneven gradient sizes. Reduced tile-intersection
+  memory use and removed redundant jagged wrapping in rasterization backward (#801, #822, #833, #836, #839, #842).
+- Fixed sparse layout and packed rasterization validation, including out-of-image and duplicate pixel
+  selections. Gaussian projection backward now accepts omitted depth gradients (#799, #830, #843).
+- Chunked world-space rasterization channels to bound register use and compilation time and standardized
+  screen-space backward naming (#821, #847).
+
+### Grid Construction, Storage & Jagged Tensors
+
+- CUDA `GridBatch.from_dense` builds one grid and replicates it with doubling copies and a single header
+  kernel. PR benchmarks on RTX PRO 6000 Blackwell reported roughly 1.9x faster construction for 256 identical
+  grids (#778).
 - **Breaking (C++):** Removed the deprecated `TorchDeviceBuffer` and `TorchStorageResource`. PrivateUse1
-  (multi-GPU) grid storage now lives in a new `UnifiedGridBuffer` over `TorchUnifiedResource`, which
-  NanoVDB 14.0's `DistributedPointsToGrid` requires as its output buffer. `GridStorage` holds it as a third
-  handle kind, `UnifiedHandle`, and the storage's device decides the kind: `HostHandle` for CPU,
-  `DeviceHandle` for CUDA and `UnifiedHandle` for PrivateUse1, however the storage was made. For every
-  PrivateUse1 grid, `isDevice()` is true, `unifiedHandle()` returns the handle and `deviceHandle()` throws.
-  Code that serves CUDA and PrivateUse1 alike should use `deviceBytes()` and `deviceGridAt()`.
-  `TorchDeviceResource` and `GridStorage::deviceProto` now accept CUDA devices only.
+  grids now use `UnifiedGridBuffer` over `TorchUnifiedResource` for NanoVDB 14.0. Their `GridStorage` reports
+  `isDevice()` and exposes `unifiedHandle()`. Calling `deviceHandle()` throws. Use `deviceBytes()` and `deviceGridAt()`
+  for code shared with CUDA. `TorchDeviceResource` and `GridStorage::deviceProto` accept CUDA devices only
+  (#845).
+- Updated the NanoVDB pin and switched to its exported CMake target. Grid metadata can now be freed in a
+  forked child without entering a CUDA device guard (#815, #834, #837).
+- Supported empty jagged tensors and trailing empty outer lists, and added validation for raw
+  `JaggedTensor` constructors (#812).
+- Fixed Viewer shutdown and the port getter (#810).
+
+### Development & CI
+
+- Switched Python formatting from Black to Ruff, checked binding stubs against the compiled extension,
+  and added type checking for `fvdb.functional` (#804, #807, #823).
+- Gated external PR tests on maintainer approval via `/ok-to-test`, switched EC2 runner registration to a
+  GitHub App token, and tightened AWS session duration and workflow permissions. Updated workflow actions,
+  actionlint, and issue triage authentication (#850, #851, #854, #855, #856, #857, #858, #862, #863, #865, #868).
+- Updated the stable documentation version and adopted the 0.6.0 release metadata (#794, #795).
 
 ## Version 0.6.0 - September 18, 2026
 
