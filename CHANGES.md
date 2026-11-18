@@ -67,10 +67,9 @@ PyTorch 2.14, and adopts NanoVDB's unified buffers for multi-GPU grid storage.
 
 - Switched Python formatting from Black to Ruff, checked binding stubs against the compiled extension,
   and added type checking for `fvdb.functional` (#804, #807, #823).
-- Gated external PR tests on maintainer approval via `/ok-to-test`, switched EC2 runner registration to a
-  GitHub App token, and tightened AWS session duration and workflow permissions. Updated workflow actions,
-  actionlint, and issue triage authentication (#850, #851, #854, #855, #856, #857, #858, #862, #863, #865, #868).
-- Updated the stable documentation version and adopted the 0.6.0 release metadata (#794, #795).
+- Switched EC2 runner registration to a GitHub App token and tightened AWS session duration and workflow
+  permissions. Updated workflow actions, actionlint, and issue triage authentication
+  (#851, #854, #855, #856, #857, #862, #863, #865).
 
 ## Version 0.6.0 - September 18, 2026
 
