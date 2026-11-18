@@ -26,8 +26,7 @@ PyTorch 2.14, and adopts NanoVDB's unified buffers for multi-GPU grid storage.
   and fix Python 3.15 nightly builds and NVIDIA Vulkan setup in GPU CI. Nightly wheels publish at 10:00 UTC
   (#813, #824, #825, #827, #829).
 - Attest published wheels and verify the release index daily. Generate the root index from package directories
-  and preserve stored wheel hashes when rewriting the index. Serve the staging index and introductory videos
-  through CloudFront (#869, #870, #871, #872, #873).
+  and preserve stored wheel hashes when rewriting the index (#871, #872, #873).
 
 ### Gaussian Splatting & Losses
 
