@@ -1,0 +1,64 @@
+# Copyright Contributors to the OpenVDB Project
+# SPDX-License-Identifier: Apache-2.0
+#
+# Daily check of the public release package index
+# (https://d36m13axqqhiit.cloudfront.net/simple/). Every wheel must either be
+# in .github/package-index-baseline.json with the same hash (wheels released
+# before build attestations) or have a build provenance attestation from its
+# repository's publish workflow. See .github/scripts/verify_package_index.py.
+#
+# On failure it opens (or comments on) an issue labelled package-index-alert.
+
+name: Verify package index
+
+on:
+  schedule:
+    - cron: "30 12 * * *" # daily, after the nightly publishes
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: verify-package-index
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify release index hashes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # checkout
+      attestations: read # read the wheels' build provenance
+      issues: write # report a failure
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            .github/scripts/verify_package_index.py
+            .github/package-index-baseline.json
+          sparse-checkout-cone-mode: false
+
+      - name: Verify
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/verify_package_index.py
+
+      - name: Open or update an alert issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          gh label create package-index-alert -R "$REPO" --color B60205 \
+            --description "Release package index failed verification" 2>/dev/null || true
+          body="The release package index failed verification: ${RUN_URL}. A wheel hash in the index may have been changed. Investigate before anyone installs new wheels."
+          existing=$(gh issue list -R "$REPO" --label package-index-alert --state open --json number -q '.[0].number')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" -R "$REPO" --body "$body"
+          else
+            gh issue create -R "$REPO" --label package-index-alert \
+              --title "Release package index failed verification" --body "$body"
+          fi

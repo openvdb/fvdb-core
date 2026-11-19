@@ -33,7 +33,7 @@ jobs:
         shell: bash -el {0}
     steps:
       ### Get the PR branch and apply changes to the target branch
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # Fetch all history for all branches
           persist-credentials: false
@@ -97,7 +97,7 @@ jobs:
       #### End of git merge
 
       - name: Set up fvdb_build Conda env
-        uses: mamba-org/setup-micromamba@d7c9bd84e824b79d2af72a2d4196c7f4300d3476 # v3.0.0
+        uses: mamba-org/setup-micromamba@f457c30a868e4760d3a6fcea5f25dc655b8edf39 # v3.2.1
         with:
           post-cleanup: 'all'
           environment-name: fvdb_build
@@ -111,7 +111,7 @@ jobs:
           NEEDS_VERSIONS_OUTPUTS_CUDA_ARCH_PUBLISH: ${{ needs.versions.outputs.cuda-arch-publish }}
 
       - name: Upload wheel
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
             name: fvdb-test-package
             path: dist/*.whl
@@ -123,7 +123,7 @@ jobs:
         run: tar -cvf fvdb-gtest.tar build/
 
       - name: Upload gtests
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
             name: fvdb-gtest
             path: fvdb-gtest.tar
@@ -152,7 +152,7 @@ jobs:
         shell: bash -el {0}
     steps:
       ### Get the PR branch and apply changes to the target branch
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # Fetch all history for all branches
           persist-credentials: false
@@ -216,7 +216,7 @@ jobs:
       #### End of git merge
 
       - name: Set up fvdb_test Conda env
-        uses: mamba-org/setup-micromamba@d7c9bd84e824b79d2af72a2d4196c7f4300d3476 # v3.0.0
+        uses: mamba-org/setup-micromamba@f457c30a868e4760d3a6fcea5f25dc655b8edf39 # v3.2.1
         with:
           cache-environment: false
           post-cleanup: 'all'
@@ -224,7 +224,7 @@ jobs:
           environment-file: env/test_environment.yml
 
       - name: Download package
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
             name: fvdb-test-package
             path: ./dist
@@ -244,7 +244,7 @@ jobs:
           pytest benchmark --benchmark-json benchmark/output.json
 
       - name: Store benchmark result
-        uses: benchmark-action/github-action-benchmark@52576c92bccf6ac60c8223ec7eb2565637cae9ba # v1.22.1
+        uses: benchmark-action/github-action-benchmark@4322e5726e6334590d251fc4f92bec0efafc45dc # v1.22.2
         with:
             name: Python Benchmark with pytest-benchmark
             tool: 'pytest'

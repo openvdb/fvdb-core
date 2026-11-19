@@ -29,9 +29,6 @@ concurrency:
 
 permissions:
   contents: read
-  deployments: read
-  pull-requests: read
-  issues: read
 
 jobs:
   pr-flags:
@@ -46,7 +43,7 @@ jobs:
     steps:
       - name: Compute publish routing flags
         id: flags
-        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           PUBLISH_TARGET: ${{ inputs.publish_target }}
         with:
@@ -82,7 +79,7 @@ jobs:
             core.setOutput('pypi', pypi ? 'true' : 'false');
             core.setOutput('release', release ? 'true' : 'false');
             core.setOutput('release_push', releasePush ? 'true' : 'false');
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: env/test_environment.yml
           sparse-checkout-cone-mode: false
@@ -109,6 +106,7 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.versions.outputs.publish-build-matrix) }}
     uses: ./.github/workflows/start-ec2-runner.yml
+    secrets: inherit # zizmor: ignore[secrets-inherit] the runner App key reaches the runner jobs this way; see start-ec2-runner.yml
     with:
       # One job builds the CUDA library once, then the bindings for every Python version
       instance-type: m6a.8xlarge
@@ -122,10 +120,8 @@ jobs:
           {"Key": "GitHubRunId", "Value": "${{ github.run_id }}"}
         ]
       stagger-seconds: 15
-      aws-role: ${{ needs.versions.outputs.aws-role }}
+      aws-role: ${{ needs.versions.outputs.aws-runner-role }}
       aws-region: ${{ needs.versions.outputs.aws-region }}
-    secrets:
-      EC2_RUNNER_TOKEN: ${{ secrets.EC2_RUNNER_TOKEN }}
 
   fvdb-build:
     name: fVDB Build
@@ -135,7 +131,7 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.versions.outputs.publish-build-matrix) }}
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # Fetch all history for all branches
           ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.ref || inputs.branch || github.ref }}
@@ -209,7 +205,7 @@ jobs:
       # Runs after a partial failure too, so the wheels that did build stay inspectable
       - name: Upload wheels
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: fvdb-publish-package-torch${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}
           path: dist/fvdb_core-*.whl
@@ -233,13 +229,13 @@ jobs:
       id-token: write  # IMPORTANT: mandatory for trusted publishing
 
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           ref: ${{ inputs.branch || github.ref }}
           persist-credentials: false
       - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '${{ needs.versions.outputs.python-default }}'
       - name: Add post-release to version (TestPyPI only)
@@ -281,18 +277,19 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       id-token: write  # Required for AWS OIDC
+      attestations: write # Store the wheels' build provenance
     env:
       S3_BUCKET: fvdb-packages
       SIMPLE_PREFIX: ${{ needs.pr-flags.outputs.release == 'true' && 'simple' || 'simple-staging' }}
     steps:
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ needs.versions.outputs.aws-role }}
           aws-region: ${{ needs.versions.outputs.aws-region }}
 
       - name: Download all built wheels
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: fvdb-publish-package-*
           path: dist
@@ -339,102 +336,36 @@ jobs:
         env:
           STEPS_PROJ_OUTPUTS_NORMALIZED: ${{ steps.proj.outputs.normalized }}
 
-      - name: Upload wheels to S3 project directory
-        run: |
-          set -euo pipefail
-          DEST="s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${STEPS_PROJ_OUTPUTS_NORMALIZED}"
-          # Ensure trailing slash exactly once
-          DEST="${DEST%/}/"
-          echo "Uploading wheels to $DEST"
-          shopt -s nullglob
-          upload_failed=0
-          for whl in dist/*.whl; do
-            echo "Uploading $whl"
-            if aws s3 cp "$whl" "$DEST"; then
-              echo "✓ Successfully uploaded $whl"
-            else
-              echo "✗ FAILED to upload $whl"
-              upload_failed=1
-            fi
-          done
-          if [ $upload_failed -eq 1 ]; then
-            echo "ERROR: One or more wheel uploads failed"
-            exit 1
-          fi
-          echo "All wheels uploaded successfully"
+      # Signed SLSA build provenance for each wheel, recorded in GitHub's
+      # attestation store and the public Sigstore log. Anyone can check a
+      # wheel with: gh attestation verify <wheel> --repo openvdb/fvdb-core
+      # verify-package-index.yml (fvdb-core) checks that every wheel in the
+      # release index has one.
+      - name: Attest build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/*.whl
 
-          # Brief delay to ensure S3 consistency for subsequent listing
-          echo "Waiting 2 seconds for S3 consistency..."
-          sleep 2
+      - name: Check out the publish script
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          path: src
+          sparse-checkout: .github/scripts/publish_simple_index.py
+          sparse-checkout-cone-mode: false
+
+      # Uploads the wheels and rewrites the project index. Hashes of wheels not
+      # built in this run are copied from the current index, never recomputed
+      # from S3, so a wheel replaced in S3 fails pip's hash check instead of
+      # being vouched for. Release wheels (prefix simple) are write-once.
+      - name: Upload wheels and update the project index
         env:
-          STEPS_PROJ_OUTPUTS_NORMALIZED: ${{ steps.proj.outputs.normalized }}
-
-      - name: Generate project index.html
+          PROJECT: ${{ steps.proj.outputs.normalized }}
+          TITLE: Links for ${{ steps.proj.outputs.project_name }}
         run: |
-          set -euo pipefail
-          OUTDIR="dist/index-gen/${STEPS_PROJ_OUTPUTS_NORMALIZED}"
-          mkdir -p "$OUTDIR"
-          INDEX_FILE="$OUTDIR/index.html"
-          TITLE="Links for ${STEPS_PROJ_OUTPUTS_PROJECT_NAME}"
-          # List wheels from S3 to ensure index matches what's actually uploaded and previous versions
-          # Use grep -E and || true to handle case where no wheels exist yet, then extract filename (field 4)
-          wheels=$(aws s3 ls "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${STEPS_PROJ_OUTPUTS_NORMALIZED}/" | { grep -E '\.whl$' || true; } | awk '{print $4}')
-
-          echo "Found wheels in S3:"
-          echo "$wheels"
-
-          if [ -z "$wheels" ]; then
-            echo "WARNING: No wheels found in S3 at s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${STEPS_PROJ_OUTPUTS_NORMALIZED}/"
-            echo "This may indicate an upload failure or timing issue"
-          fi
-
-          {
-            echo "<!DOCTYPE html>";
-            echo "<html><head><meta charset=\"utf-8\"><title>${TITLE}</title></head><body>";
-            echo "<h1>${TITLE}</h1>";
-            wheel_count=0
-            for whl in $wheels; do
-              wheel_count=$((wheel_count + 1))
-              echo "Processing wheel ${wheel_count}: $whl" >&2
-              # Get SHA256 from S3 ETag or compute from local file if available
-              if [ -f "dist/$whl" ]; then
-                sha=$(sha256sum "dist/$whl" | awk '{print $1}')
-                echo "  ✓ Computed SHA256 from local file: ${sha:0:16}..." >&2
-              else
-                # Download temporarily to compute hash
-                echo "  → Downloading $whl to compute hash..." >&2
-                if aws s3 cp "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${STEPS_PROJ_OUTPUTS_NORMALIZED}/$whl" "/tmp/$whl" --only-show-errors; then
-                  sha=$(sha256sum "/tmp/$whl" | awk '{print $1}')
-                  rm "/tmp/$whl"
-                  echo "  ✓ Computed SHA256 from S3 file: ${sha:0:16}..." >&2
-                else
-                  echo "  ✗ ERROR: Failed to download $whl from S3" >&2
-                  exit 1
-                fi
-              fi
-              href_whl="${whl//+/%2B}"
-              html_line="<a href=\"${href_whl}#sha256=${sha}\">${whl}</a><br/>"
-              echo "  Adding HTML: $html_line" >&2
-              echo "$html_line";
-            done;
-            echo "</body></html>";
-          } > "$INDEX_FILE"
-
-          echo ""
-          echo "Total wheels processed: $wheel_count"
-
-          echo "Generated index.html:"
-          cat "$INDEX_FILE"
-
-          echo "Uploading index.html to S3..."
-          aws s3 cp "$INDEX_FILE" "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${STEPS_PROJ_OUTPUTS_NORMALIZED}/index.html" \
-            --content-type text/html \
-            --cache-control "public, max-age=60, must-revalidate" \
-            --only-show-errors
-          echo "Index uploaded successfully"
-        env:
-          STEPS_PROJ_OUTPUTS_NORMALIZED: ${{ steps.proj.outputs.normalized }}
-          STEPS_PROJ_OUTPUTS_PROJECT_NAME: ${{ steps.proj.outputs.project_name }}
+          python3 src/.github/scripts/publish_simple_index.py \
+            --bucket "$S3_BUCKET" --prefix "$SIMPLE_PREFIX" --project "$PROJECT" \
+            --title "$TITLE" --dist dist
 
       - name: Generate root simple index.html
         run: |
@@ -443,7 +374,8 @@ jobs:
           ROOT_INDEX="$TMPDIR/index.html"
           echo "Building root simple index from s3://${S3_BUCKET}/${SIMPLE_PREFIX}/"
           # List existing project prefixes
-          projects=$(aws s3 ls "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/" | awk '{print $2}' | sed 's:/$::')
+          # Only folders ("PRE" lines); a file line's second field is its timestamp.
+          projects=$(aws s3 ls "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/" | awk '$1 == "PRE" {print $2}' | sed 's:/$::')
           TITLE="Simple index"
           {
             echo "<!DOCTYPE html>";
@@ -513,6 +445,7 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.versions.outputs.publish-build-matrix) }}
     uses: ./.github/workflows/start-ec2-runner.yml
+    secrets: inherit # zizmor: ignore[secrets-inherit] the runner App key reaches the runner jobs this way; see start-ec2-runner.yml
     with:
       instance-type: g6.xlarge
       fallback-instance-type: g5.xlarge # A10G, SM 8.6 -- different capacity pool
@@ -526,10 +459,8 @@ jobs:
           {"Key": "GitHubRunId", "Value": "${{ github.run_id }}"}
         ]
       stagger-seconds: 15
-      aws-role: ${{ needs.versions.outputs.aws-role }}
+      aws-role: ${{ needs.versions.outputs.aws-runner-role }}
       aws-region: ${{ needs.versions.outputs.aws-region }}
-    secrets:
-      EC2_RUNNER_TOKEN: ${{ secrets.EC2_RUNNER_TOKEN }}
 
   validate-smoke-test:
     name: Smoke test built wheel
@@ -552,13 +483,13 @@ jobs:
         run: dnf install -y git wget procps-ng findutils
 
       - name: Install uv
-        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: "${{ needs.versions.outputs.uv-version }}"
           enable-cache: false
 
       - name: Download wheel artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: fvdb-publish-package-torch${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}
           path: dist
@@ -637,14 +568,14 @@ jobs:
         # The NVIDIA Vulkan driver needs the loader, libXext, and libEGL from the image
         run: apt update && apt install -y git wget zlib1g-dev libpng-dev libvulkan1 libxext6 libegl1
 
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           ref: ${{ inputs.branch || github.ref }}
           persist-credentials: false
 
       - name: Install uv
-        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: "${{ needs.versions.outputs.uv-version }}"
           enable-cache: false
@@ -664,7 +595,7 @@ jobs:
           NEEDS_VERSIONS_OUTPUTS_TORCH_FULL_VERSION: ${{ needs.versions.outputs.torch-full-version }}
 
       - name: Download wheel artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: fvdb-publish-package-torch${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}
           path: dist
@@ -706,12 +637,11 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.versions.outputs.publish-build-matrix) }}
     uses: ./.github/workflows/stop-ec2-runner.yml
+    secrets: inherit # zizmor: ignore[secrets-inherit] the runner App key reaches the runner jobs this way; see start-ec2-runner.yml
     with:
       label: val-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
-      aws-role: ${{ needs.versions.outputs.aws-role }}
+      aws-role: ${{ needs.versions.outputs.aws-runner-role }}
       aws-region: ${{ needs.versions.outputs.aws-region }}
-    secrets:
-      EC2_RUNNER_TOKEN: ${{ secrets.EC2_RUNNER_TOKEN }}
 
   fvdb-build-stop-runner:
     name: Stop CPU-only EC2 runner for build
@@ -726,9 +656,8 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.versions.outputs.publish-build-matrix) }}
     uses: ./.github/workflows/stop-ec2-runner.yml
+    secrets: inherit # zizmor: ignore[secrets-inherit] the runner App key reaches the runner jobs this way; see start-ec2-runner.yml
     with:
       label: ec2-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
-      aws-role: ${{ needs.versions.outputs.aws-role }}
+      aws-role: ${{ needs.versions.outputs.aws-runner-role }}
       aws-region: ${{ needs.versions.outputs.aws-region }}
-    secrets:
-      EC2_RUNNER_TOKEN: ${{ secrets.EC2_RUNNER_TOKEN }}
