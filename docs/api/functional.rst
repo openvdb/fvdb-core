@@ -130,6 +130,17 @@ Meshing and TSDF Integration
 .. autofunction:: integrate_tsdf_single
 .. autofunction:: integrate_tsdf_with_features_batch
 .. autofunction:: integrate_tsdf_with_features_single
+.. autofunction:: integrate_tsdf_frames_single
+.. autofunction:: integrate_tsdf_frames_with_features_single
+.. autofunction:: integrate_tsdf_from_points_batch
+.. autofunction:: integrate_tsdf_from_points_single
+.. autofunction:: integrate_tsdf_from_points_with_features_batch
+.. autofunction:: integrate_tsdf_from_points_with_features_single
+.. autofunction:: integrate_tsdf_from_points_frames_single
+.. autofunction:: integrate_occupancy_from_points_single
+.. autofunction:: integrate_occupancy_from_points_frames_single
+.. autofunction:: compute_esdf_single
+.. autofunction:: compute_esdf_incremental_single
 
 
 Signed Distance Fields
@@ -152,6 +163,7 @@ Grid Topology
 .. autofunction:: dual_grid_single
 .. autofunction:: dilated_grid_batch
 .. autofunction:: dilated_grid_single
+.. autofunction:: dirty_mask_from_sidecars_single
 .. autofunction:: merged_grid_batch
 .. autofunction:: merged_grid_single
 .. autofunction:: pruned_grid_batch
