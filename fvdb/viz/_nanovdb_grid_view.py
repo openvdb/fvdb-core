@@ -107,8 +107,12 @@ def update_nanovdb_grid_views(
         view_names (list[str]): The names of the editor views after the update.
     """
     view_names = add_nanovdb_grid_views(scene_name, name, grid, values, server_method, arg_name)
+    remove_stale_views(scene_name, prev_view_names, view_names)
+    return view_names
 
+
+def remove_stale_views(scene_name: str, prev_view_names: list[str], view_names: list[str]) -> None:
+    """Remove each view in ``prev_view_names`` that is not in ``view_names``."""
     server = _get_viewer_server_cpp()
     for stale in set(prev_view_names) - set(view_names):
         server.remove_view(scene_name, stale)
-    return view_names

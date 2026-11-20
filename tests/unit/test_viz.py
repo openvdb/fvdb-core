@@ -380,6 +380,94 @@ class TestViewerScene(unittest.TestCase):
                 fvdb.JaggedTensor([torch.randn(grid.num_voxels, dtype=torch.float32)]),
             )
 
+    @staticmethod
+    def _tetrahedron() -> tuple[torch.Tensor, torch.Tensor]:
+        vertices = torch.tensor([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=torch.float32)
+        faces = torch.tensor([[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]], dtype=torch.int64)
+        return vertices, faces
+
+    @staticmethod
+    def _sphere_mesh(radius: float, device: str) -> tuple[torch.Tensor, torch.Tensor]:
+        grid = fvdb.Grid.from_dense(dense_dims=[24, 24, 24], ijk_min=[-12, -12, -12], device=device)
+        sdf = grid.voxel_to_world(grid.ijk.to(torch.float32)).norm(dim=-1, keepdim=True) - radius
+        vertices, faces, _ = grid.marching_cubes(sdf)
+        return vertices, faces
+
+    def test_add_surface_mesh(self):
+        scene = fvdb.viz.Scene("test_surface_mesh")
+        vertices, faces = self._tetrahedron()
+
+        view = scene.add_surface_mesh("tet", vertices, faces)
+        assert isinstance(view, fvdb.viz.MeshView)
+        assert view.name == "tet"
+        assert view.scene_name == "test_surface_mesh"
+        assert view._view_names == ["tet"]
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="marching_cubes requires CUDA")
+    def test_add_surface_mesh_from_marching_cubes(self):
+        scene = fvdb.viz.Scene("test_surface_mesh_mc")
+        vertices, faces = self._sphere_mesh(8.0, "cuda")
+        assert faces.shape[0] > 0
+
+        view = scene.add_surface_mesh("sphere", vertices, faces, resolution=128)
+        assert view._view_names == ["sphere"]
+
+    def test_add_surface_mesh_colors(self):
+        scene = fvdb.viz.Scene("test_surface_mesh_colors")
+        vertices, faces = self._tetrahedron()
+
+        scene.add_surface_mesh("float_colors", vertices, faces, torch.rand(4, 3))
+        scene.add_surface_mesh("uint8_colors", vertices, faces, torch.randint(0, 256, (4, 3), dtype=torch.uint8))
+
+    def test_add_surface_mesh_batch(self):
+        scene = fvdb.viz.Scene("test_surface_mesh_batch")
+        vertices, faces = self._tetrahedron()
+        vertex_batch = fvdb.JaggedTensor([vertices, vertices + 2.0, vertices - 2.0])
+        face_batch = fvdb.JaggedTensor([faces, faces, faces[:2]])
+
+        view = scene.add_surface_mesh("tets", vertex_batch, face_batch)
+        assert view._view_names == ["tets[0]", "tets[1]", "tets[2]"]
+
+        # A smaller batch removes the views it no longer produces.
+        view.update(fvdb.JaggedTensor([vertices, vertices]), fvdb.JaggedTensor([faces, faces]))
+        assert view._view_names == ["tets[0]", "tets[1]"]
+
+        view.update(vertices, faces)
+        assert view._view_names == ["tets"]
+
+    def test_add_surface_mesh_update(self):
+        scene = fvdb.viz.Scene("test_surface_mesh_update")
+        vertices, faces = self._tetrahedron()
+
+        view = scene.add_surface_mesh("tet", vertices, faces)
+        view.update(vertices * 2.0, faces[:2], torch.ones(4, 3))
+        assert view._view_names == ["tet"]
+
+    def test_add_surface_mesh_invalid(self):
+        scene = fvdb.viz.Scene("test_surface_mesh_invalid")
+        vertices, faces = self._tetrahedron()
+
+        with pytest.raises(ValueError):
+            scene.add_surface_mesh("bad_vertex_shape", vertices[:, :2], faces)
+        with pytest.raises(TypeError):
+            scene.add_surface_mesh("int_vertices", vertices.to(torch.int32), faces)
+        with pytest.raises(ValueError):
+            scene.add_surface_mesh("bad_face_shape", vertices, faces[:, :2])
+        with pytest.raises(TypeError):
+            scene.add_surface_mesh("float_faces", vertices, faces.to(torch.float32))
+        with pytest.raises(ValueError):
+            scene.add_surface_mesh("out_of_range", vertices, torch.tensor([[0, 1, 4]]))
+        with pytest.raises(ValueError):
+            scene.add_surface_mesh("negative_index", vertices, torch.tensor([[0, 1, -1]]))
+        with pytest.raises(ValueError):
+            scene.add_surface_mesh("bad_colors", vertices, faces, torch.rand(3, 3))
+        with pytest.raises(ValueError):
+            scene.add_surface_mesh("bad_resolution", vertices, faces, resolution=0)
+        with pytest.raises(ValueError):
+            scene.add_surface_mesh("bad_inflation", vertices, faces, inflation_radius=-1.0)
+        with pytest.raises(TypeError):
+            scene.add_surface_mesh("mixed_types", fvdb.JaggedTensor([vertices]), faces)
+
     def test_camera_fov(self):
         scene = fvdb.viz.Scene("test_camera_fov")
 

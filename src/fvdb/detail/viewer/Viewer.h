@@ -18,6 +18,7 @@
 
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -194,6 +195,17 @@ class Viewer {
                           const std::string &name,
                           const GridBatchData &grid,
                           const JaggedTensor &density);
+
+    // Add a triangle mesh. vertices is (V, 3) floating point, faces is (F, 3) integer and
+    // colors is an optional (V, 3) float32 RGB in [0, 1]. The editor builds a VoxelBVH over the
+    // triangles in its render loop and ray-traces them. Requires nanovdb-editor >= 0.1.8.
+    void addMeshView(const std::string &scene_name,
+                     const std::string &name,
+                     const torch::Tensor &vertices,
+                     const torch::Tensor &faces,
+                     const std::optional<torch::Tensor> &colors,
+                     int64_t resolution,
+                     double inflation_radius);
 
     bool
     hasNanoVDBView(const std::string &name) const {

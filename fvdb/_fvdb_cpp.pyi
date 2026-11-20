@@ -1503,6 +1503,16 @@ class Viewer:
         grid: GridBatchData,
         density: JaggedTensor,
     ) -> None: ...
+    def add_mesh_view(
+        self,
+        scene_name: str,
+        name: str,
+        vertices: torch.Tensor,
+        faces: torch.Tensor,
+        colors: torch.Tensor | None = None,
+        resolution: int = 512,
+        inflation_radius: float = 0.0,
+    ) -> None: ...
     def has_nanovdb_view(self, name: str) -> bool: ...
     def wait_for_interrupt(self) -> None: ...
     def add_slider(
