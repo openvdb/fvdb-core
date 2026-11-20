@@ -13,6 +13,7 @@
 #include <nanovdb/io/IO.h>
 #include <nanovdb/tools/CreateNanoGrid.h>
 #include <nanovdb/tools/GridBuilder.h>
+#include <nanovdb/tools/VoxelBlockManager.h>
 
 #include <torch/types.h>
 
@@ -170,6 +171,41 @@ copyIndexGridToHandle(const nanovdb::NanoGrid<SourceGridT> *sourceGrid) {
     return nanovdb::GridHandle<nanovdb::HostBuffer>(std::move(buf));
 }
 
+/// @brief Whether a copied index grid meets the layout fVDB's CUDA ops need to iterate its active
+///        voxels through the VoxelBlockManager (see nanovdb/tools/VoxelBlockManager.h): no leaf
+///        without active voxels, no active tiles, and leaf value indices running 1..N in leaf
+///        order. fVDB's own grids always meet it.
+inline bool
+isVoxelBlockManagerCompatible(const nanovdb::GridHandle<nanovdb::HostBuffer> &handle) {
+    return nanovdb::tools::isVoxelBlockManagerCompatible(handle.grid<nanovdb::ValueOnIndex>());
+}
+
+/// @brief Rebuild a copied index grid that does not meet the VoxelBlockManager layout. Index gaps,
+///        from indexed stats or tiles or from a ValueIndex grid relabelled ValueOnIndex, go away
+///        when the grid is rebuilt from its source; the grid carries no data, so nothing is lost.
+///        Leaves without active voxels and active tiles survive the rebuild
+///        (AcademySoftwareFoundation/openvdb#2436), so such grids are rejected.
+template <typename SourceGridT>
+nanovdb::GridHandle<nanovdb::HostBuffer>
+makeVoxelBlockManagerCompatible(nanovdb::GridHandle<nanovdb::HostBuffer> handle,
+                                const nanovdb::NanoGrid<SourceGridT> *sourceGrid) {
+    if (isVoxelBlockManagerCompatible(handle)) {
+        return handle;
+    }
+    auto rebuilt =
+        nanovdb::tools::createNanoGrid<nanovdb::NanoGrid<SourceGridT>,
+                                       nanovdb::ValueOnIndex,
+                                       nanovdb::HostBuffer>(*sourceGrid, 0u, false, false);
+    TORCH_CHECK_VALUE(isVoxelBlockManagerCompatible(rebuilt),
+                      "Index grid '",
+                      sourceGrid->gridName(),
+                      "' has leaves with no active voxels or has active tiles, which fVDB cannot "
+                      "load. Prune its inactive leaves and tiles before saving it.");
+    reinterpret_cast<nanovdb::GridData *>(rebuilt.data())->mGridClass =
+        nanovdb::GridClass::IndexGrid;
+    return rebuilt;
+}
+
 /// @brief Load a nanovdb ValueOnIndex grid with tensor blind metatada (GridClass = TensorGrid) into
 ///        an index grid of the same type stored in a HostBuffer) and a torch tensor of data
 ///        (i.e. the standard grid format for FVDB).
@@ -200,6 +236,12 @@ nanovdbTensorGridToFVDBGrid(const nanovdb::NanoGrid<SourceGridT> *sourceGrid) {
     // Copy the index grid from the loaded buffer and update metadata to be consisten with FVDB
     nanovdb::GridHandle<nanovdb::HostBuffer> retHandle =
         copyIndexGridToHandle<SourceGridT, TargetGridT>(sourceGrid);
+    // The data rows follow the grid's value indices, so the grid cannot be rebuilt here
+    TORCH_CHECK_VALUE(isVoxelBlockManagerCompatible(retHandle),
+                      "Tensor grid '",
+                      sourceGrid->gridName(),
+                      "' has leaves with no active voxels, active tiles, or gaps in its value "
+                      "indices, which fVDB cannot load.");
 
     // Check if this grid has FVDB blind data attached to it
     bool foundFVDB          = false;
@@ -276,8 +318,8 @@ std::tuple<nanovdb::GridHandle<nanovdb::HostBuffer>,
            nanovdb::Vec3d,
            nanovdb::Vec3d>
 nanovdbIndexGridToFVDBGrid(const nanovdb::NanoGrid<SourceGridT> *sourceGrid) {
-    nanovdb::GridHandle<nanovdb::HostBuffer> retHandle =
-        copyIndexGridToHandle<SourceGridT, TargetGridT>(sourceGrid);
+    nanovdb::GridHandle<nanovdb::HostBuffer> retHandle = makeVoxelBlockManagerCompatible(
+        copyIndexGridToHandle<SourceGridT, TargetGridT>(sourceGrid), sourceGrid);
     const std::string name         = sourceGrid->gridName();
     const nanovdb::Vec3d voxSize   = sourceGrid->data()->mVoxelSize;
     const nanovdb::Vec3d voxOrigin = sourceGrid->data()->mMap.applyMap(nanovdb::Vec3d(0.0));
