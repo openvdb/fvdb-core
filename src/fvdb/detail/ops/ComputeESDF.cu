@@ -38,9 +38,9 @@
 // Scope. float32 CUDA + batchSize == 1 only. Multi-batch and fp64 are
 // future-work lifts.
 
-#include <fvdb/BuilderResource.h>
 #include <fvdb/GridBatchData.h>
 #include <fvdb/detail/GridBatchDataFactory.h>
+#include <fvdb/detail/VbmCache.h>
 #include <fvdb/detail/ops/BuildDilatedGrid.h>
 #include <fvdb/detail/ops/BuildMergedGrids.h>
 #include <fvdb/detail/ops/BuildPrunedGrid.h>
@@ -58,7 +58,10 @@
 
 #include <cuda_runtime.h>
 
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <limits>
 
 namespace fvdb {
 namespace detail {
@@ -67,16 +70,16 @@ namespace ops {
 namespace {
 
 // -----------------------------------------------------------------------
-// Kernel tuning: 128-voxel VBM blocks with a 2-u64 jump map.
+// Kernel tuning. The VBM sweep uses the grid's cached VoxelBlockManager
+// (VbmCache: 128-voxel blocks) with 256-thread grid-stride launches, each
+// CUDA block covering two VBM blocks, like forEachActiveVoxelVbmCUDA.
 // -----------------------------------------------------------------------
 
-constexpr int ESDF_BLOCK_WIDTH_LOG2 = 7;
-constexpr int ESDF_BLOCK_WIDTH      = 1 << ESDF_BLOCK_WIDTH_LOG2; // 128
-constexpr int ESDF_JUMP_MAP_LENGTH  = ESDF_BLOCK_WIDTH / 64;      // 2
-constexpr int ESDF_PERLEAF_THREADS  = 128;                        // per-leaf ablation
-
-// VBM firstLeafID / jumpMap storage, over torch's active CUDA allocator.
-using VbmBuffer = BuilderBuffer<std::byte>;
+constexpr int ESDF_VBM_THREADS        = 256;
+constexpr int ESDF_VBM_BLOCKS_PER_CTA = ESDF_VBM_THREADS / VbmCache::kBlockWidth;
+static_assert(ESDF_VBM_THREADS % VbmCache::kBlockWidth == 0,
+              "each CUDA block must cover whole VBM blocks");
+constexpr int ESDF_PERLEAF_THREADS = 128; // per-leaf ablation
 
 // Sentinel for voxels the wavefront has not reached. It is far larger than
 // any propagated distance, so it stays identifiable, and the final
@@ -286,81 +289,87 @@ esdfSeedKernel(const nanovdb::NanoGrid<nanovdb::ValueOnIndex> *__restrict__ inpu
 }
 
 // -----------------------------------------------------------------------
-// Sweep kernel (VBM path). One CUDA block iterates ESDF_BLOCK_WIDTH
-// contiguous active voxels via `decodeInverseMaps`. Each thread reads
-// its own self-distance and 26 neighbours, writes the monotone min to
-// `esdfOut`. Reads from `esdfIn` only — safe double-buffered Jacobi.
+// Sweep kernel (VBM path). Each group of VbmCache::kBlockWidth threads
+// takes one VBM block of the grid's cached VoxelBlockManager (grid-stride),
+// and each thread decodes its voxel's (leaf, offset) in registers with
+// `decodeInverseMap`: one thread per active voxel, no shared memory, no
+// barrier. Each thread reads its own self-distance and 26 neighbours and
+// writes the monotone min to `esdfOut`. Reads from `esdfIn` only, so the
+// double-buffered Jacobi update is safe.
 // -----------------------------------------------------------------------
 
-__global__ void
-esdfSweepVBMKernel(nanovdb::NanoGrid<nanovdb::ValueOnIndex> *__restrict__ esdfGrid,
-                   const uint32_t *__restrict__ firstLeafID,
-                   const uint64_t *__restrict__ jumpMap,
+__global__ void __launch_bounds__(ESDF_VBM_THREADS)
+esdfSweepVBMKernel(const nanovdb::NanoGrid<nanovdb::ValueOnIndex> *__restrict__ esdfGrid,
+                   const GridVbm vbm,
                    const float *__restrict__ esdfIn,
                    float *__restrict__ esdfOut,
                    const int8_t *__restrict__ observedSign,
                    float voxelSize,
                    float maxDistance,
                    int *__restrict__ dChanged) {
-    constexpr int BW       = ESDF_BLOCK_WIDTH;
-    constexpr int JML      = ESDF_JUMP_MAP_LENGTH;
-    constexpr uint64_t VPL = nanovdb::OnIndexTree::LeafNodeType::NUM_VALUES;
+    using VbmT          = nanovdb::tools::cuda::VoxelBlockManager<VbmCache::kLog2BlockWidth>;
+    constexpr int BW    = VbmCache::kBlockWidth;
+    const int slot      = static_cast<int>(threadIdx.x) & (BW - 1);
+    const uint64_t step = static_cast<uint64_t>(gridDim.x) * ESDF_VBM_BLOCKS_PER_CTA;
 
-    __shared__ uint32_t smem_leafIndex[BW];
-    __shared__ uint16_t smem_voxelOffset[BW];
+    for (uint64_t b =
+             static_cast<uint64_t>(blockIdx.x) * ESDF_VBM_BLOCKS_PER_CTA + threadIdx.x / BW;
+         b < vbm.blockCount;
+         b += step) {
+        // 0-based voxel index; the grid's last VBM block can be partial.
+        const uint64_t i = b * BW + slot;
+        if (i >= vbm.lastOffset) {
+            continue;
+        }
+        uint32_t leafID;
+        uint16_t voxOff;
+        VbmT::decodeInverseMap(esdfGrid,
+                               vbm.firstLeafID[b],
+                               vbm.jumpMap + b * VbmCache::kJumpMapWordCount,
+                               vbm.firstOffset + b * BW,
+                               slot,
+                               leafID,
+                               voxOff);
+        if (leafID == VbmT::UnusedLeafIndex) {
+            continue; // defensive; i < lastOffset makes this unreachable
+        }
 
-    const uint64_t blockFirstOffset = static_cast<uint64_t>(blockIdx.x) * BW + 1;
+        const auto &leaf         = esdfGrid->tree().template getFirstNode<0>()[leafID];
+        const nanovdb::Coord ijk = leaf.offsetToGlobalCoord(voxOff);
+        auto acc                 = esdfGrid->getAccessor();
+        // Sequential OnIndex: the decoded voxel's value index is i + 1.
+        const int64_t selfPid = static_cast<int64_t>(i);
 
-    nanovdb::tools::cuda::VoxelBlockManager<ESDF_BLOCK_WIDTH_LOG2>::template decodeInverseMaps<
-        nanovdb::ValueOnIndex>(esdfGrid,
-                               firstLeafID[blockIdx.x],
-                               jumpMap + static_cast<uint64_t>(blockIdx.x) * JML,
-                               blockFirstOffset,
-                               smem_leafIndex,
-                               smem_voxelOffset);
-    // __syncthreads() is issued inside decodeInverseMaps.
+        const float dSelf = esdfIn[selfPid];
 
-    const uint32_t leafID = smem_leafIndex[threadIdx.x];
-    if (leafID == nanovdb::tools::cuda::VoxelBlockManager<ESDF_BLOCK_WIDTH_LOG2>::UnusedLeafIndex) {
-        return;
+        const float dNew =
+            esdfSweepBody(dSelf,
+                          observedSign[selfPid],
+                          voxelSize,
+                          maxDistance,
+                          [&](int dx, int dy, int dz, float &dOut, bool &activeOut) {
+                              const nanovdb::Coord c = ijk + nanovdb::Coord(dx, dy, dz);
+                              if (!acc.isActive(c)) {
+                                  activeOut = false;
+                                  return;
+                              }
+                              const int64_t pid = static_cast<int64_t>(acc.getValue(c)) - 1;
+                              dOut              = esdfIn[pid];
+                              activeOut         = true;
+                          });
+
+        esdfOut[selfPid] = dNew;
+        // Signal fixed-point detection: if this voxel's value changed,
+        // the host-side loop will run another sweep. Race-free: all
+        // threads write the same value (1) and we only read *dChanged
+        // after the kernel completes. The comparison is exact because
+        // `esdfSweepBody` only writes a new `d` via assignment and
+        // starts at `d = dSelf`; if no neighbour won the min, `dNew`
+        // equals `dSelf` bit-for-bit.
+        if (dNew != dSelf) {
+            dChanged[0] = 1;
+        }
     }
-    const uint16_t voxOff = smem_voxelOffset[threadIdx.x];
-
-    const auto &leaf         = esdfGrid->tree().template getFirstNode<0>()[leafID];
-    const nanovdb::Coord ijk = leaf.offsetToGlobalCoord(voxOff);
-    auto acc                 = esdfGrid->getAccessor();
-    const int64_t selfPid    = static_cast<int64_t>(leaf.getValue(voxOff)) - 1;
-
-    const float dSelf = esdfIn[selfPid];
-
-    const float dNew = esdfSweepBody(dSelf,
-                                     observedSign[selfPid],
-                                     voxelSize,
-                                     maxDistance,
-                                     [&](int dx, int dy, int dz, float &dOut, bool &activeOut) {
-                                         const nanovdb::Coord c = ijk + nanovdb::Coord(dx, dy, dz);
-                                         if (!acc.isActive(c)) {
-                                             activeOut = false;
-                                             return;
-                                         }
-                                         const int64_t pid =
-                                             static_cast<int64_t>(acc.getValue(c)) - 1;
-                                         dOut      = esdfIn[pid];
-                                         activeOut = true;
-                                     });
-
-    esdfOut[selfPid] = dNew;
-    // Signal fixed-point detection: if this voxel's value changed,
-    // the host-side loop will run another sweep. Race-free: all
-    // threads write the same value (1) and we only read *dChanged
-    // after the kernel completes. The comparison is exact because
-    // `esdfSweepBody` only writes a new `d` via assignment and
-    // starts at `d = dSelf`; if no neighbour won the min, `dNew`
-    // equals `dSelf` bit-for-bit.
-    if (dNew != dSelf) {
-        dChanged[0] = 1;
-    }
-    (void)VPL;
 }
 
 // -----------------------------------------------------------------------
@@ -472,32 +481,27 @@ runEsdfSweepsAndFinalize(const c10::intrusive_ptr<GridBatchData> &esdfGrid,
     const int numSweepsMax = static_cast<int>(dilateAmount) * 2 + 4;
 
     if (use_vbm) {
-        const auto vbm =
-            nanovdb::tools::cuda::buildVoxelBlockManager<ESDF_BLOCK_WIDTH_LOG2, VbmBuffer>(
-                esdfDeviceGrid,
-                /*firstOffset=*/1,
-                /*lastOffset=*/static_cast<uint64_t>(esdfVoxels),
-                /*nBlocks=*/0,
-                stream.stream());
-        C10_CUDA_KERNEL_LAUNCH_CHECK();
-        const int nBlocks              = static_cast<int>(vbm.blockCount());
-        const uint32_t *vbmFirstLeafID = vbm.deviceFirstLeafID();
-        const uint64_t *vbmJumpMap     = vbm.deviceJumpMap();
+        // The grid's cached VBM, built on the current stream at first use
+        // (this one), and kept with the returned grid when not pruned.
+        const GridVbm vbm = esdfGrid->vbmAt(0);
+        TORCH_CHECK(vbm.lastOffset == static_cast<uint64_t>(esdfVoxels),
+                    "computeESDF: VBM does not cover the ESDF grid");
+        const uint64_t ctas =
+            (uint64_t(vbm.blockCount) + ESDF_VBM_BLOCKS_PER_CTA - 1) / ESDF_VBM_BLOCKS_PER_CTA;
+        const auto nCtas = static_cast<unsigned int>(
+            std::min<uint64_t>(ctas, std::numeric_limits<int32_t>::max()));
 
         for (int sweep = 0; sweep < numSweepsMax; ++sweep) {
             changedFlag.zero_();
-            esdfSweepVBMKernel<<<static_cast<unsigned int>(nBlocks),
-                                 static_cast<unsigned int>(ESDF_BLOCK_WIDTH),
-                                 0,
-                                 stream.stream()>>>(esdfDeviceGrid,
-                                                    vbmFirstLeafID,
-                                                    vbmJumpMap,
-                                                    esdfIn->data_ptr<float>(),
-                                                    esdfOut->data_ptr<float>(),
-                                                    observedSign.data_ptr<int8_t>(),
-                                                    voxelSizeF,
-                                                    maxDistF,
-                                                    changedFlag.data_ptr<int32_t>());
+            esdfSweepVBMKernel<<<nCtas, ESDF_VBM_THREADS, 0, stream.stream()>>>(
+                esdfDeviceGrid,
+                vbm,
+                esdfIn->data_ptr<float>(),
+                esdfOut->data_ptr<float>(),
+                observedSign.data_ptr<int8_t>(),
+                voxelSizeF,
+                maxDistF,
+                changedFlag.data_ptr<int32_t>());
             C10_CUDA_KERNEL_LAUNCH_CHECK();
             std::swap(esdfIn, esdfOut);
             // .item() is a sync + host-device copy (~30 us). Each
