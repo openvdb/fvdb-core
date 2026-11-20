@@ -31,7 +31,7 @@ VbmCache::acquire(const GridBatchData &owner) {
     const auto stream = at::cuda::getCurrentCUDAStream(owner.device().index());
 
     cudaStreamCaptureStatus captureStatus;
-    C10_CUDA_CHECK(cudaStreamIsCapturing(stream.stream(), &captureStatus));
+    C10_CUDA_CHECK(cudaStreamIsCapturing(stream, &captureStatus));
     const bool capturing = captureStatus != cudaStreamCaptureStatusNone;
 
     if (!mOwner) {
