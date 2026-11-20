@@ -332,6 +332,56 @@ def test_incremental_larger_max_distance_matches_one_shot(device, use_vbm, all_f
 
 
 @pytest.mark.parametrize("device", ["cuda"])
+@pytest.mark.parametrize("use_vbm", [True, False])
+def test_interior_fill_does_not_leak_around_an_open_wall(device, use_vbm):
+    """A wall in the plane x = 0, observed only within its TSDF band, with
+    open edges. Unobserved voxels beyond the cap on the wall's free side
+    are unknown and must read +max_distance. The -max_distance interior
+    fill used to chain through unobserved voxels, around the wall's edge
+    and onto the free side, marking nearly all of them occupied."""
+    vs, trunc, max_dist = 0.1, 0.2, 0.3
+    band, half_w, half_d = 2, 6, 3
+    i = torch.arange(-band, band + 1, device=device)
+    j = torch.arange(-half_w, half_w + 1, device=device)
+    k = torch.arange(-half_d, half_d + 1, device=device)
+    ijk = torch.stack(torch.meshgrid(i, j, k, indexing="ij"), -1).reshape(-1, 3).to(torch.int32)
+    g = fvdb.Grid.from_ijk(ijk, voxel_size=vs, origin=0.0)
+    x = g.ijk[:, 0].float() * vs
+    tsdf = ((x - 0.5 * vs) / trunc).clamp(-1.0, 1.0).to(torch.float32)  # surface at x = vs / 2
+    weights = torch.ones(g.num_voxels, device=device, dtype=torch.float32)
+
+    esdf_grid, esdf = g.compute_esdf(tsdf, weights, truncation_distance=trunc, max_distance=max_dist, use_vbm=use_vbm)
+    eijk = esdf_grid.ijk
+    unobserved = g.ijk_to_index(eijk) < 0
+    free_side = unobserved & (eijk[:, 0] > band)
+    assert free_side.sum().item() > 0, "sanity: should have unobserved free-side voxels"
+    assert (esdf[free_side] >= 0.0).all(), (
+        f"{(esdf[free_side] < 0).sum().item()} of {free_side.sum().item()} free-side voxels read occupied"
+    )
+    # The observed interior behind the wall still fills: observed voxels keep their sign.
+    behind = ~unobserved & (eijk[:, 0] < 0)
+    assert (esdf[behind] < 0.0).all()
+
+
+@pytest.mark.parametrize("device", ["cuda"])
+def test_incremental_rejects_a_previous_grid_in_another_frame(device):
+    """The previous ESDF is carried over by ijk, so a previous grid with a
+    different origin or voxel size would put every value in the wrong voxel."""
+    vs, trunc, max_dist = 0.05, 0.1, 0.2
+    g, tsdf, weights = _sphere_tsdf(vs, 16, -8, 0.2, trunc, device)
+    esdf_grid, esdf = g.compute_esdf(tsdf, weights, truncation_distance=trunc, max_distance=max_dist)
+    kwargs = dict(truncation_distance=trunc, max_distance=max_dist)
+
+    shifted = fvdb.Grid.from_ijk(esdf_grid.ijk, voxel_size=vs, origin=[0.4 * vs, 0.0, 0.0])
+    with pytest.raises(ValueError, match="origin"):
+        g.compute_esdf_incremental(tsdf, weights, shifted, esdf, **kwargs)
+
+    stretched = fvdb.Grid.from_ijk(esdf_grid.ijk, voxel_size=[vs, vs, 2 * vs], origin=0.0)
+    with pytest.raises(ValueError, match="voxel_size"):
+        g.compute_esdf_incremental(tsdf, weights, stretched, esdf, **kwargs)
+
+
+@pytest.mark.parametrize("device", ["cuda"])
 def test_incremental_rejects_multidimensional_dirty_mask(device):
     """The seed kernel reads one flag per voxel, so a ``[N, 2]`` mask
     must be rejected rather than read as its first N flattened entries."""

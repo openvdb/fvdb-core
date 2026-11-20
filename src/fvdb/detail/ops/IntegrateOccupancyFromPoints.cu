@@ -128,8 +128,14 @@ rayWalkLogOddsKernel(const fvdb::BatchGridAccessor unionGridAcc,
 
     const RayT rayWorld(originWorld, dirWorld, tWalkStart, tWalkEnd);
 
+    // The HDDA walk floors index-space positions into cells, so it walks
+    // the dual (cell-corner) frame: fvdb voxels are centred on integer
+    // ijk, and the dual transform shifts by half a voxel so voxel ijk
+    // spans [ijk, ijk + 1). Same as the other fvdb ray ops. Both
+    // transforms share the world-to-index scale, so ray t is unchanged.
+    // The primal transform gives voxel-centre world positions below.
     const VoxelCoordTransform transform = unionGridAcc.primalTransform(batchIdx);
-    const RayT rayVox                   = transform.applyToRay(rayWorld);
+    const RayT rayVox                   = unionGridAcc.dualTransform(batchIdx).applyToRay(rayWorld);
 
     const nanovdb::NanoGrid<GridT> *grid = unionGridAcc.grid(batchIdx);
     auto acc                             = grid->getAccessor();

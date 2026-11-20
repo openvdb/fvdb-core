@@ -109,6 +109,37 @@ def test_sphere_shell_hits_are_positive(device):
 
 
 @pytest.mark.parametrize("device", ["cuda"])
+def test_off_axis_ray_updates_the_voxels_it_crosses(device):
+    """fvdb voxels are centred on integer ijk, so a ray at y = -0.3 * vs
+    crosses row j = 0 only. The walk used to floor positions in the primal
+    frame and updated row j = -1 instead."""
+    vs = 0.05
+    trunc = 0.1
+    R = 1.0
+    y = -0.3 * vs
+    points = torch.tensor([[R, y, 0.0]], device=device, dtype=torch.float32)
+    sensor_origin = torch.tensor([0.0, y, 0.0], device=device, dtype=torch.float32)
+
+    g = fvdb.Grid.from_dense(
+        dense_dims=[64, 8, 8], ijk_min=[-32, -4, -4], voxel_size=vs, origin=[0, 0, 0], device=device
+    )
+    log_odds = torch.zeros(g.num_voxels, device=device, dtype=torch.float32)
+    g2, log_odds2 = g.integrate_occupancy_from_points(
+        truncation_distance=trunc, points=points, sensor_origin=sensor_origin, log_odds=log_odds
+    )
+
+    ijk = g2.ijk
+    touched = log_odds2 != 0
+    assert touched.any(), "the ray should update some voxels"
+    on_row = (ijk[:, 1] == 0) & (ijk[:, 2] == 0)
+    assert bool(on_row[touched].all()), f"updated voxels off the ray's row: {ijk[touched & ~on_row][:5].tolist()}"
+    x = g2.voxel_to_world(ijk.float())[:, 0]
+    crossed = on_row & (x > vs) & (x < R + trunc - vs)
+    assert crossed.any()
+    assert bool(touched[crossed].all()), "voxels the ray crosses were skipped"
+
+
+@pytest.mark.parametrize("device", ["cuda"])
 def test_log_odds_clamped_to_bounds(device):
     """All returned log-odds must be in [log_odds_min, log_odds_max]."""
     vs = 0.05

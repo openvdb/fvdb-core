@@ -2541,6 +2541,58 @@ class TestBasicOps(unittest.TestCase):
         torch.testing.assert_close(actual, expected, atol=1e-4, rtol=0)
 
     @unittest.skipUnless(torch.cuda.is_available(), "CUDA required for integrate_tsdf_from_points")
+    def test_integrate_tsdf_from_points_off_axis_ray_hits_its_voxels(self):
+        """
+        fvdb voxels are centred on integer ijk, so voxel j spans
+        y in [(j - 0.5) * vs, (j + 0.5) * vs). A ray at y = -0.3 * vs
+        crosses only j = 0. The walk used to floor positions in the primal
+        frame, which put this ray in row j = -1 and left j = 0 untouched;
+        a ray exactly on y = 0 (as in the single-ray test) hides that.
+        """
+        import fvdb as fv
+
+        device = "cuda"
+        voxel_size = 0.05
+        trunc = 3 * voxel_size
+        R = 1.0
+        y = -0.3 * voxel_size
+        points = torch.tensor([[R, y, 0.0]], device=device, dtype=torch.float32)
+        sensor_origin = torch.tensor([0.0, y, 0.0], device=device, dtype=torch.float32)
+
+        grid = fv.Grid.from_dense(
+            dense_dims=[64, 8, 8],
+            ijk_min=[-32, -4, -4],
+            voxel_size=voxel_size,
+            origin=[0, 0, 0],
+            device=device,
+        )
+        tsdf = torch.zeros(grid.num_voxels, device=device, dtype=torch.float32)
+        weights = torch.zeros(grid.num_voxels, device=device, dtype=torch.float32)
+
+        new_grid, new_tsdf, new_weights = grid.integrate_tsdf_from_points(
+            truncation_distance=trunc,
+            points=points,
+            sensor_origin=sensor_origin,
+            tsdf=tsdf,
+            weights=weights,
+            carve_free_space=True,
+        )
+
+        ijk = new_grid.ijk
+        updated = new_weights > 0
+        self.assertTrue(bool(updated.any()), "the ray should update some voxels")
+        self.assertTrue(
+            bool(((ijk[updated, 1] == 0) & (ijk[updated, 2] == 0)).all()),
+            f"updated voxels off the ray's row: {ijk[updated & (ijk[:, 1] != 0)][:5].tolist()}",
+        )
+        # Every voxel of row j = k = 0 between the sensor and the far edge of
+        # the truncation band is crossed, so all of them must be updated.
+        x = new_grid.voxel_to_world(ijk.float())[:, 0]
+        crossed = (ijk[:, 1] == 0) & (ijk[:, 2] == 0) & (x > voxel_size) & (x < R + trunc - voxel_size)
+        self.assertTrue(bool(crossed.any()))
+        self.assertTrue(bool(updated[crossed].all()), "voxels the ray crosses were skipped")
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA required for integrate_tsdf_from_points")
     def test_integrate_tsdf_from_points_batch_with_empty_items(self):
         """
         Batch items whose points are all filtered out (NaN) or absent keep
@@ -2891,7 +2943,12 @@ class TestBasicOps(unittest.TestCase):
         trunc = 3 * voxel_size
         R = 1.0
 
-        n_theta, n_phi = 32, 64
+        # Rays must land at most about a voxel apart at radius R, or the
+        # observed voxels near the surface (one line per ray) never form
+        # the complete 2x2x2 cubes marching cubes needs. 32 x 64 rays are
+        # about two voxels apart at R = 1 and only produced a mesh while the
+        # ray walk was off by half a voxel.
+        n_theta, n_phi = 64, 128
         theta = torch.linspace(0, math.pi, n_theta, device=device)
         phi = torch.linspace(0, 2 * math.pi, n_phi + 1, device=device)[:-1]
         tt, pp = torch.meshgrid(theta, phi, indexing="ij")

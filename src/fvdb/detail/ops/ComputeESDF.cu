@@ -137,7 +137,8 @@ __device__ __constant__ EsdfOffset kEsdfOffsets[26] = {
 
 // -----------------------------------------------------------------------
 // Core stencil body: given self-distance `dSelf` and a neighbour query
-// callable `readNeighbour(ijk+o)`, return the monotone-min of dSelf and
+// callable `readNeighbour(ijk+o)` (the neighbour's distance, observed
+// sign and whether it is active), return the monotone-min of dSelf and
 // all 26 valid neighbour propagations. The candidate magnitude is
 // `|d_n| + ||offset|| * vs`, an upper bound on the distance to the
 // surface by the triangle inequality whatever the neighbour's sign.
@@ -168,8 +169,9 @@ esdfSweepBody(float dSelf,
     for (int i = 0; i < 26; ++i) {
         const EsdfOffset off = kEsdfOffsets[i];
         float dN;
+        int8_t signN;
         bool active;
-        readNeighbour(off.dx, off.dy, off.dz, dN, active);
+        readNeighbour(off.dx, off.dy, off.dz, dN, signN, active);
         if (!active)
             continue;
         const float dNAbs = fabsf(dN);
@@ -178,17 +180,24 @@ esdfSweepBody(float dSelf,
         const float step    = off.weight * voxelSize;
         const float candAbs = dNAbs + step;
         // Distances are capped at `maxDistance`; beyond the cap only the
-        // sign travels. An unreached voxel that is observed inside, or is
-        // unobserved and next to an interior (negative) voxel, becomes
-        // -maxDistance, so solid interiors deeper than the cap read as
-        // occupied rather than free. Other unreached voxels stay at the
-        // sentinel and clamp to +maxDistance; promoting observed-outside
-        // voxels to +maxDistance here would give the same output but
-        // spend a sweep per layer. The incremental path resets values at
-        // the cap to the sentinel before sweeping, so it recomputes these
-        // voxels the same way the one-shot path does.
+        // sign travels. An unreached voxel that is observed inside becomes
+        // -maxDistance, so observed solid interiors deeper than the cap
+        // read as occupied rather than free; the fill spreads through
+        // them because each keeps its own sign. An unobserved voxel
+        // becomes -maxDistance only next to a neighbour that is observed
+        // inside or holds a real negative distance within the cap. It
+        // does not take the fill from an unobserved neighbour that was
+        // itself filled, or the fill would chain through every connected
+        // unobserved voxel, around the open edge of a surface and onto
+        // its free side. Other unreached voxels stay at the sentinel and
+        // clamp to +maxDistance (unknown, treated as free); promoting
+        // observed-outside voxels to +maxDistance here would give the
+        // same output but spend a sweep per layer. The incremental path
+        // resets values at the cap to the sentinel before sweeping, so it
+        // recomputes these voxels the same way the one-shot path does.
         if (candAbs >= maxDistance) {
-            const bool inside = observedSign != 0 ? observedSign < 0 : dN < 0.0f;
+            const bool inside = observedSign != 0 ? observedSign < 0
+                                                  : dN < 0.0f && (signN < 0 || dNAbs < maxDistance);
             if (inside && fabsf(d) >= kEsdfSentinelCheck) {
                 d = -maxDistance;
             }
@@ -342,21 +351,22 @@ esdfSweepVBMKernel(const nanovdb::NanoGrid<nanovdb::ValueOnIndex> *__restrict__ 
 
         const float dSelf = esdfIn[selfPid];
 
-        const float dNew =
-            esdfSweepBody(dSelf,
-                          observedSign[selfPid],
-                          voxelSize,
-                          maxDistance,
-                          [&](int dx, int dy, int dz, float &dOut, bool &activeOut) {
-                              const nanovdb::Coord c = ijk + nanovdb::Coord(dx, dy, dz);
-                              if (!acc.isActive(c)) {
-                                  activeOut = false;
-                                  return;
-                              }
-                              const int64_t pid = static_cast<int64_t>(acc.getValue(c)) - 1;
-                              dOut              = esdfIn[pid];
-                              activeOut         = true;
-                          });
+        const float dNew = esdfSweepBody(
+            dSelf,
+            observedSign[selfPid],
+            voxelSize,
+            maxDistance,
+            [&](int dx, int dy, int dz, float &dOut, int8_t &signOut, bool &activeOut) {
+                const nanovdb::Coord c = ijk + nanovdb::Coord(dx, dy, dz);
+                if (!acc.isActive(c)) {
+                    activeOut = false;
+                    return;
+                }
+                const int64_t pid = static_cast<int64_t>(acc.getValue(c)) - 1;
+                dOut              = esdfIn[pid];
+                signOut           = observedSign[pid];
+                activeOut         = true;
+            });
 
         esdfOut[selfPid] = dNew;
         // Signal fixed-point detection: if this voxel's value changed,
@@ -402,21 +412,22 @@ esdfSweepPerLeafKernel(nanovdb::NanoGrid<nanovdb::ValueOnIndex> *__restrict__ es
         auto acc                 = esdfGrid->getAccessor();
 
         const float dSelf = esdfIn[selfPid];
-        const float dNew =
-            esdfSweepBody(dSelf,
-                          observedSign[selfPid],
-                          voxelSize,
-                          maxDistance,
-                          [&](int dx, int dy, int dz, float &dOut, bool &activeOut) {
-                              const nanovdb::Coord c = ijk + nanovdb::Coord(dx, dy, dz);
-                              if (!acc.isActive(c)) {
-                                  activeOut = false;
-                                  return;
-                              }
-                              const int64_t pid = static_cast<int64_t>(acc.getValue(c)) - 1;
-                              dOut              = esdfIn[pid];
-                              activeOut         = true;
-                          });
+        const float dNew  = esdfSweepBody(
+            dSelf,
+            observedSign[selfPid],
+            voxelSize,
+            maxDistance,
+            [&](int dx, int dy, int dz, float &dOut, int8_t &signOut, bool &activeOut) {
+                const nanovdb::Coord c = ijk + nanovdb::Coord(dx, dy, dz);
+                if (!acc.isActive(c)) {
+                    activeOut = false;
+                    return;
+                }
+                const int64_t pid = static_cast<int64_t>(acc.getValue(c)) - 1;
+                dOut              = esdfIn[pid];
+                signOut           = observedSign[pid];
+                activeOut         = true;
+            });
         esdfOut[selfPid] = dNew;
         if (dNew != dSelf) {
             dChanged[0] = 1;
@@ -804,17 +815,51 @@ computeESDFIncremental(const GridBatchData &gridBatch,
     TORCH_CHECK_VALUE(std::fabs(vsX - voxSizes[0][1]) < 1e-9 &&
                           std::fabs(vsX - voxSizes[0][2]) < 1e-9,
                       "computeESDFIncremental: anisotropic voxels not supported");
-    // Require matching voxel size between previous and current grids.
-    // Changing voxel sizes across frames would break the sign-propagation
-    // witness semantics; users in that case should reset to one-shot.
+    // The previous ESDF is carried over by ijk (merge + inject), so its
+    // grid must share the current grid's index space: same device, same
+    // voxel size on every axis, and same origin. Otherwise every carried
+    // value lands in the wrong voxel, and since the sweep only lowers
+    // distances, a too-small wrong value is never corrected. Callers who
+    // change the grid's frame should reset to one-shot.
+    TORCH_CHECK_VALUE(prevEsdfGrid.device() == gridBatch.device(),
+                      "computeESDFIncremental: prevEsdfGrid must be on the grid's device (",
+                      gridBatch.device(),
+                      ")");
     std::vector<nanovdb::Vec3d> prevVoxSizes, prevOrigins;
     prevEsdfGrid.gridVoxelSizesAndOrigins(prevVoxSizes, prevOrigins);
-    TORCH_CHECK_VALUE(!prevVoxSizes.empty() && std::fabs(prevVoxSizes[0][0] - vsX) < 1e-9,
-                      "computeESDFIncremental: prevEsdfGrid voxel_size (",
-                      prevVoxSizes.empty() ? 0.0 : prevVoxSizes[0][0],
-                      ") must match current grid voxel_size (",
-                      vsX,
-                      ")");
+    TORCH_CHECK_VALUE(prevVoxSizes.size() == 1 && prevOrigins.size() == 1,
+                      "computeESDFIncremental: expected a single-grid prevEsdfGrid");
+    const double frameTol = 1e-6 * vsX;
+    for (int a = 0; a < 3; ++a) {
+        TORCH_CHECK_VALUE(std::fabs(prevVoxSizes[0][a] - voxSizes[0][a]) < frameTol,
+                          "computeESDFIncremental: prevEsdfGrid voxel_size (",
+                          prevVoxSizes[0][0],
+                          ", ",
+                          prevVoxSizes[0][1],
+                          ", ",
+                          prevVoxSizes[0][2],
+                          ") must match current grid voxel_size (",
+                          voxSizes[0][0],
+                          ", ",
+                          voxSizes[0][1],
+                          ", ",
+                          voxSizes[0][2],
+                          ")");
+        TORCH_CHECK_VALUE(std::fabs(prevOrigins[0][a] - origins[0][a]) < frameTol,
+                          "computeESDFIncremental: prevEsdfGrid origin (",
+                          prevOrigins[0][0],
+                          ", ",
+                          prevOrigins[0][1],
+                          ", ",
+                          prevOrigins[0][2],
+                          ") must match current grid origin (",
+                          origins[0][0],
+                          ", ",
+                          origins[0][1],
+                          ", ",
+                          origins[0][2],
+                          ")");
+    }
     const float voxelSizeF = static_cast<float>(vsX);
 
     auto floatOpts = torch::TensorOptions().dtype(torch::kFloat32).device(tsdf.device());
