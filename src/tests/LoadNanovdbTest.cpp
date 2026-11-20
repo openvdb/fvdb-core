@@ -3,9 +3,11 @@
 
 #include <fvdb/FVDB.h>
 #include <fvdb/JaggedTensor.h>
+#include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/io/LoadNanovdb.h>
 #include <fvdb/detail/io/SaveNanoVDB.h>
 #include <fvdb/detail/ops/ActiveGridCoords.h>
+#include <fvdb/detail/ops/SerializeGrid.h>
 
 #include <nanovdb/NanoVDB.h>
 #include <nanovdb/tools/CreateNanoGrid.h>
@@ -327,4 +329,33 @@ TEST(LoadNanovdb, IndexGridWithEmptyLeafIsRejected) {
     } catch (const c10::ValueError &e) {
         EXPECT_NE(std::string(e.what()).find("no active voxels"), std::string::npos) << e.what();
     }
+}
+
+TEST(SerializeGrid, GridWithEmptyLeafIsRejectedOnDeserialize) {
+    // Load-time checks now keep such grids out, so build the batch directly, as a grid pickled
+    // before those checks would have been
+    auto source = makeSourceGrid(/*withEmptyLeaf=*/true);
+    auto handle =
+        nanovdb::tools::createNanoGrid<nanovdb::tools::build::Grid<float>, nanovdb::ValueOnIndex>(
+            *source, 0u, false, false);
+    auto batch = fvdb::detail::makeGridBatchData(
+        fvdb::GridStorage(std::move(handle)), {nanovdb::Vec3d(1.0)}, {nanovdb::Vec3d(0.0)});
+    const torch::Tensor serialized = fvdb::detail::ops::serializeGrid(*batch);
+    try {
+        fvdb::detail::ops::deserializeGrid(serialized);
+        FAIL() << "Expected the grid with an empty leaf to be rejected";
+    } catch (const c10::ValueError &e) {
+        EXPECT_NE(std::string(e.what()).find("no active voxels"), std::string::npos) << e.what();
+    }
+}
+
+TEST(SerializeGrid, CompatibleGridRoundTrips) {
+    auto source = makeSourceGrid(/*withEmptyLeaf=*/false);
+    auto handle =
+        nanovdb::tools::createNanoGrid<nanovdb::tools::build::Grid<float>, nanovdb::ValueOnIndex>(
+            *source, 0u, false, false);
+    auto batch = fvdb::detail::makeGridBatchData(
+        fvdb::GridStorage(std::move(handle)), {nanovdb::Vec3d(1.0)}, {nanovdb::Vec3d(0.0)});
+    auto restored = fvdb::detail::ops::deserializeGrid(fvdb::detail::ops::serializeGrid(*batch));
+    EXPECT_EQ(restored->totalVoxels(), 4);
 }

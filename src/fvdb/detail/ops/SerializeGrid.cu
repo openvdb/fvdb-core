@@ -6,6 +6,7 @@
 #include <fvdb/detail/ops/SerializeGrid.h>
 
 #include <nanovdb/HostBuffer.h>
+#include <nanovdb/tools/VoxelBlockManager.h>
 
 #include <optional>
 
@@ -132,7 +133,19 @@ deserializeGrid(const torch::Tensor &serialized) {
         voxelOrigins.emplace_back(gridMetadata[i].voxelOrigin());
     }
 
-    return makeGridBatchData(std::move(storage), voxelSizes, voxelOrigins);
+    auto batch = makeGridBatchData(std::move(storage), voxelSizes, voxelOrigins);
+
+    // Grids pickled before load-time checking may not meet the layout fVDB's CUDA ops iterate
+    // through (see nanovdb/tools/VoxelBlockManager.h). Rebuilding one would renumber its voxels
+    // and misalign any pickled features, so such grids are rejected instead.
+    for (int64_t bi = 0; bi < batch->batchSize(); ++bi) {
+        TORCH_CHECK_VALUE(nanovdb::tools::isVoxelBlockManagerCompatible(batch->hostGridPtrAt(bi)),
+                          "Serialized grid ",
+                          bi,
+                          " has leaves with no active voxels, active tiles, or gaps in its value "
+                          "indices, which fVDB cannot load.");
+    }
+    return batch;
 }
 
 } // namespace ops
