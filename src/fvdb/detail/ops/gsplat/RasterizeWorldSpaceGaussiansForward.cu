@@ -23,7 +23,7 @@ namespace cg = cooperative_groups;
 
 namespace {
 
-template <uint32_t NUM_CHANNELS> struct SharedGaussian {
+struct SharedGaussian {
     int32_t id;                       // flattened id in [0, C*N)
     nanovdb::math::Vec3<float> mean;  // world mean
     nanovdb::math::Mat3<float> isclR; // S^{-1} R^T
@@ -65,7 +65,7 @@ template <uint32_t NUM_CHANNELS, typename Camera> struct RasterizeFromWorldForwa
             if (inside) {
                 outAlphaPtr[0]  = 0.0f;
                 outLastIdPtr[0] = -1;
-#pragma unroll
+#pragma unroll(kRasterChannelUnroll<NUM_CHANNELS>)
                 for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
                     outFeaturesPtr[k * outFeatures.stride(3)] = common.backgroundValue(camId, k);
                 }
@@ -82,8 +82,8 @@ template <uint32_t NUM_CHANNELS, typename Camera> struct RasterizeFromWorldForwa
 
         const nanovdb::math::Ray<float> ray = cameraLocal.unprojectPixelToRay(camId, row, col);
 
-        const bool rayValid = ray.dir().dot(ray.dir()) > 0.0f;
-        bool done           = (!inside) || (!rayValid);
+        const bool rayValid  = ray.dir().dot(ray.dir()) > 0.0f;
+        const bool pixelDone = (!inside) || (!rayValid);
 
         // Determine gaussian range for this tile.
         const auto [rangeStart, rangeEnd] = common.tileGaussianRange(camId, tileRow, tileCol);
@@ -96,7 +96,7 @@ template <uint32_t NUM_CHANNELS, typename Camera> struct RasterizeFromWorldForwa
                 // alpha=0, output background if provided else 0.
                 outAlphaPtr[0]  = 0.0f;
                 outLastIdPtr[0] = -1;
-#pragma unroll
+#pragma unroll(kRasterChannelUnroll<NUM_CHANNELS>)
                 for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
                     outFeaturesPtr[k * outFeatures.stride(3)] = common.backgroundValue(camId, k);
                 }
@@ -107,105 +107,119 @@ template <uint32_t NUM_CHANNELS, typename Camera> struct RasterizeFromWorldForwa
         // Shared memory for batched gaussians (after camera-op shared state).
         uintptr_t gaussAddr = smemAddr + cameraLocal.numSharedMemBytes();
         gaussAddr           = alignUpAddress(gaussAddr, alignof(int32_t));
-        int32_t *idBatch    = reinterpret_cast<int32_t *>(gaussAddr); // [blockSize]
+        int32_t *idBatch    = reinterpret_cast<int32_t *>(gaussAddr);     // [blockSize]
         gaussAddr += static_cast<size_t>(blockSize) * sizeof(int32_t);
-        gaussAddr = alignUpAddress(gaussAddr, alignof(SharedGaussian<NUM_CHANNELS>));
-        auto *gaussBatch =
-            reinterpret_cast<SharedGaussian<NUM_CHANNELS> *>(gaussAddr); // [blockSize]
+        gaussAddr        = alignUpAddress(gaussAddr, alignof(SharedGaussian));
+        auto *gaussBatch = reinterpret_cast<SharedGaussian *>(gaussAddr); // [blockSize]
 
-        float transmittance            = 1.0f;
-        int32_t lastIntersectionOffset = -1;
-        float pixOut[NUM_CHANNELS];
+        const int64_t nIsects      = rangeEnd - rangeStart;
+        const int64_t nBatches     = (nIsects + blockSize - 1) / blockSize;
+        const uint32_t threadRank  = block.thread_rank();
+        const int32_t numGaussians = static_cast<int32_t>(common.means.size(0));
+
+        // Each channel chunk re-traverses the tile's Gaussians with only its own channels in
+        // registers. Alpha does not depend on the features, so every chunk sees the same
+        // transmittance sequence and the first chunk writes alpha and the last id.
+        forEachRasterChannelChunk<NUM_CHANNELS>([&](auto width, const uint32_t channelStart) {
+            constexpr uint32_t W = decltype(width)::value;
+
+            float transmittance            = 1.0f;
+            int32_t lastIntersectionOffset = -1;
+            bool done                      = pixelDone;
+            float pixOut[W];
 #pragma unroll
-        for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
-            pixOut[k] = 0.f;
-        }
-
-        const int64_t nIsects     = rangeEnd - rangeStart;
-        const int64_t nBatches    = (nIsects + blockSize - 1) / blockSize;
-        const uint32_t threadRank = block.thread_rank();
-
-        for (int64_t b = 0; b < nBatches; ++b) {
-            if (__syncthreads_count(done) >= (int)blockSize) {
-                break;
+            for (uint32_t k = 0; k < W; ++k) {
+                pixOut[k] = 0.f;
             }
 
-            const int64_t batchOffset = blockSize * b;
-            const int64_t batchStart  = rangeStart + batchOffset;
-            const int64_t idx         = batchStart + threadRank;
-            if (idx < rangeEnd) {
-                const int32_t flatId = common.tileGaussianIds[idx];
-                idBatch[threadRank]  = flatId;
-                const int32_t gid    = flatId % (int32_t)common.means.size(0);
-
-                const nanovdb::math::Vec3<float> mean_w(
-                    common.means[gid][0], common.means[gid][1], common.means[gid][2]);
-                const nanovdb::math::Vec4<float> quat_wxyz(common.quats[gid][0],
-                                                           common.quats[gid][1],
-                                                           common.quats[gid][2],
-                                                           common.quats[gid][3]);
-                const nanovdb::math::Vec3<float> scale(__expf(common.logScales[gid][0]),
-                                                       __expf(common.logScales[gid][1]),
-                                                       __expf(common.logScales[gid][2]));
-                const nanovdb::math::Mat3<float> isclR = computeIsclRot<float>(quat_wxyz, scale);
-                const int32_t cid                      = flatId / (int32_t)common.means.size(0);
-                const float op                         = common.opacities[cid][gid];
-
-                gaussBatch[threadRank].id      = flatId;
-                gaussBatch[threadRank].mean    = mean_w;
-                gaussBatch[threadRank].isclR   = isclR;
-                gaussBatch[threadRank].opacity = op;
-            }
-
-            __syncthreads();
-
-            const int64_t remaining = rangeEnd - batchStart;
-            const uint32_t batchSize =
-                static_cast<uint32_t>(remaining < blockSize ? remaining : blockSize);
-            for (uint32_t t = 0; (t < batchSize) && !done; ++t) {
-                const SharedGaussian<NUM_CHANNELS> g = gaussBatch[t];
-                // 3DGS ray-ellipsoid visibility in "whitened" coordinates (see 3D-GUT paper
-                // Fig. 11). gro   = S^{-1} R^T (o - μ) grd   = normalize( S^{-1} R^T d ) gcrod =
-                // grd × gro  (distance proxy to principal axis in whitened space)
-                const nanovdb::math::Vec3<float> gro = g.isclR * (ray.eye() - g.mean);
-                const nanovdb::math::Vec3<float> grd =
-                    fvdb::detail::ops::normalizeSafe<float>(g.isclR * ray.dir());
-                const nanovdb::math::Vec3<float> gcrod = grd.cross(gro);
-                const float grayDist                   = gcrod.dot(gcrod);
-                const float power                      = -0.5f * grayDist;
-                const float vis                        = __expf(power);
-                float alpha                            = min(kAlphaThreshold, g.opacity * vis);
-                if (power > 0.f || alpha < 1.f / 255.f) {
-                    continue;
-                }
-                const float nextTransmittance = transmittance * (1.0f - alpha);
-                if (nextTransmittance <= kTransmittanceThreshold) {
-                    done = true;
+            for (int64_t b = 0; b < nBatches; ++b) {
+                if (__syncthreads_count(done) >= static_cast<int>(blockSize)) {
                     break;
                 }
-                const float contrib = alpha * transmittance;
-                const int32_t cid   = g.id / (int32_t)common.means.size(0);
-                const int32_t gid   = g.id % (int32_t)common.means.size(0);
-#pragma unroll
-                for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
-                    pixOut[k] += common.features[cid][gid][k] * contrib;
+
+                const int64_t batchOffset = blockSize * b;
+                const int64_t batchStart  = rangeStart + batchOffset;
+                const int64_t idx         = batchStart + threadRank;
+                if (idx < rangeEnd) {
+                    const int32_t flatId = common.tileGaussianIds[idx];
+                    idBatch[threadRank]  = flatId;
+                    const int32_t gid    = flatId % numGaussians;
+
+                    const nanovdb::math::Vec3<float> mean_w(
+                        common.means[gid][0], common.means[gid][1], common.means[gid][2]);
+                    const nanovdb::math::Vec4<float> quat_wxyz(common.quats[gid][0],
+                                                               common.quats[gid][1],
+                                                               common.quats[gid][2],
+                                                               common.quats[gid][3]);
+                    const nanovdb::math::Vec3<float> scale(__expf(common.logScales[gid][0]),
+                                                           __expf(common.logScales[gid][1]),
+                                                           __expf(common.logScales[gid][2]));
+                    const nanovdb::math::Mat3<float> isclR =
+                        computeIsclRot<float>(quat_wxyz, scale);
+                    const int32_t cid = flatId / numGaussians;
+                    const float op    = common.opacities[cid][gid];
+
+                    gaussBatch[threadRank].id      = flatId;
+                    gaussBatch[threadRank].mean    = mean_w;
+                    gaussBatch[threadRank].isclR   = isclR;
+                    gaussBatch[threadRank].opacity = op;
                 }
-                lastIntersectionOffset = static_cast<int32_t>(batchOffset + t);
-                transmittance          = nextTransmittance;
-            }
-        }
 
-        if (!inside) {
-            return;
-        }
+                __syncthreads();
 
-        outAlphaPtr[0]  = 1.0f - transmittance;
-        outLastIdPtr[0] = lastIntersectionOffset;
+                const int64_t remaining = rangeEnd - batchStart;
+                const uint32_t batchSize =
+                    static_cast<uint32_t>(remaining < blockSize ? remaining : blockSize);
+                for (uint32_t t = 0; (t < batchSize) && !done; ++t) {
+                    const SharedGaussian g = gaussBatch[t];
+                    // 3DGS ray-ellipsoid visibility in "whitened" coordinates (see 3D-GUT paper
+                    // Fig. 11). gro   = S^{-1} R^T (o - μ) grd   = normalize( S^{-1} R^T d )
+                    // gcrod = grd × gro  (distance proxy to principal axis in whitened space)
+                    const nanovdb::math::Vec3<float> gro = g.isclR * (ray.eye() - g.mean);
+                    const nanovdb::math::Vec3<float> grd =
+                        fvdb::detail::ops::normalizeSafe<float>(g.isclR * ray.dir());
+                    const nanovdb::math::Vec3<float> gcrod = grd.cross(gro);
+                    const float grayDist                   = gcrod.dot(gcrod);
+                    const float power                      = -0.5f * grayDist;
+                    const float vis                        = __expf(power);
+                    float alpha                            = min(kAlphaThreshold, g.opacity * vis);
+                    if (power > 0.f || alpha < 1.f / 255.f) {
+                        continue;
+                    }
+                    const float nextTransmittance = transmittance * (1.0f - alpha);
+                    if (nextTransmittance <= kTransmittanceThreshold) {
+                        done = true;
+                        break;
+                    }
+                    const float contrib = alpha * transmittance;
+                    const int32_t cid   = g.id / numGaussians;
+                    const int32_t gid   = g.id % numGaussians;
 #pragma unroll
-        for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
-            outFeaturesPtr[k * outFeatures.stride(3)] =
-                pixOut[k] + transmittance * common.backgroundValue(camId, k);
-        }
+                    for (uint32_t k = 0; k < W; ++k) {
+                        pixOut[k] += common.features[cid][gid][channelStart + k] * contrib;
+                    }
+                    lastIntersectionOffset = static_cast<int32_t>(batchOffset + t);
+                    transmittance          = nextTransmittance;
+                }
+            }
+
+            // This returns from the chunk lambda only, skipping this chunk's writes. Out-of-image
+            // threads still run every later chunk, which they must so that they reach each
+            // chunk's __syncthreads_count and __syncthreads.
+            if (!inside) {
+                return;
+            }
+
+            if (channelStart == 0) {
+                outAlphaPtr[0]  = 1.0f - transmittance;
+                outLastIdPtr[0] = lastIntersectionOffset;
+            }
+#pragma unroll
+            for (uint32_t k = 0; k < W; ++k) {
+                outFeaturesPtr[(channelStart + k) * outFeatures.stride(3)] =
+                    pixOut[k] + transmittance * common.backgroundValue(camId, channelStart + k);
+            }
+        });
     }
 };
 
@@ -280,11 +294,10 @@ launchForwardKernel(const torch::Tensor &means,
         outAlphas.packed_accessor64<float, 4, torch::RestrictPtrTraits>(),
         outLastIds.packed_accessor64<int32_t, 3, torch::RestrictPtrTraits>()};
 
-    const size_t blockSize = (size_t)tileSize * (size_t)tileSize;
+    const size_t blockSize = static_cast<size_t>(tileSize) * static_cast<size_t>(tileSize);
     size_t sharedMem       = (alignof(nanovdb::math::Mat3<float>) - 1) + camera.numSharedMemBytes();
     sharedMem += (alignof(int32_t) - 1) + blockSize * sizeof(int32_t);
-    sharedMem += (alignof(SharedGaussian<NUM_CHANNELS>) - 1) +
-                 blockSize * sizeof(SharedGaussian<NUM_CHANNELS>);
+    sharedMem += (alignof(SharedGaussian) - 1) + blockSize * sizeof(SharedGaussian);
 
     if (cudaFuncSetAttribute(rasterizeGaussiansFromWorld<NUM_CHANNELS, Camera>,
                              cudaFuncAttributeMaxDynamicSharedMemorySize,
