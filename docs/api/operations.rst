@@ -17,6 +17,24 @@ Attention and volume rendering
 .. autofunction:: fvdb.scaled_dot_product_attention
 .. autofunction:: fvdb.volume_render
 
+Space-filling-curve serialization
+---------------------------------
+
+Sort each grid's voxels along a Morton (z-order) or Hilbert curve, so that a sparse grid
+becomes a 1D sequence for attention or state-space models. Order names and axis
+conventions match Pointcept, so weights trained there see the same orderings.
+
+Orders are :class:`~fvdb.SerializationOrder` values and the origin is a
+:class:`~fvdb.SerializationOffset`; both also accept their string values.
+
+.. autofunction:: fvdb.serialize
+.. autoclass:: fvdb.GridSerialization
+   :members:
+.. autofunction:: fvdb.serialization_perm
+.. autofunction:: fvdb.serialization_codes
+.. autofunction:: fvdb.serialization_depth
+.. autofunction:: fvdb.permute_jagged
+
 Unary tensor operations
 -----------------------
 

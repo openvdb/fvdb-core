@@ -42,6 +42,10 @@ below describe their arguments and outputs.
    :members:
    :exclude-members: extra_repr
 
+.. autoclass:: fvdb.nn.DropPath
+   :members:
+   :exclude-members: extra_repr
+
 
 U-Net Architecture Blocks
 ---------------------------
@@ -79,5 +83,40 @@ U-Net Architecture Blocks
    :exclude-members: extra_repr
 
 .. autoclass:: fvdb.nn.SimpleUNetUp
+   :members:
+   :exclude-members: extra_repr
+
+
+Point Transformer V3
+--------------------
+
+Serialized-attention layers and network following Pointcept's Point Transformer V3.
+Patch and window attention need PyTorch 2.11 or newer and an SM80+ GPU.
+
+.. autoclass:: fvdb.nn.PointTransformerV3
+   :members:
+   :exclude-members: extra_repr
+
+.. autoclass:: fvdb.nn.PointTransformerV3Block
+   :members:
+   :exclude-members: extra_repr
+
+.. autoclass:: fvdb.nn.SerializedAttention
+   :members:
+   :exclude-members: extra_repr
+
+.. autoclass:: fvdb.nn.ConditionalPositionEncoding
+   :members:
+   :exclude-members: extra_repr
+
+.. autoclass:: fvdb.nn.SerializedPooling
+   :members:
+   :exclude-members: extra_repr
+
+.. autoclass:: fvdb.nn.SerializedUnpooling
+   :members:
+   :exclude-members: extra_repr
+
+.. autoclass:: fvdb.nn.PointTransformerV3Embedding
    :members:
    :exclude-members: extra_repr
