@@ -136,7 +136,7 @@ struct twopass_topology_op {
                     }
 
                     if (feat_tree_acc.isActive(probe)) {
-                        dispatch::atomic_fetch_add_i32(tg_inner, &counts_ptr[k], 1);
+                        dispatch::atomic_fetch_increment_i32(tg_inner, &counts_ptr[k]);
                     }
                 }
             });
@@ -200,7 +200,7 @@ struct twopass_topology_op {
                         int32_t const feat_flat =
                             static_cast<int32_t>(feat_base + feat_tree_acc.getValue(probe) - 1);
                         int32_t const pos =
-                            dispatch::atomic_fetch_add_i32(tg_inner, &counters_ptr[k], 1);
+                            dispatch::atomic_fetch_increment_i32(tg_inner, &counters_ptr[k]);
                         int64_t const write_pos = offsets_ptr[k] + pos;
                         gather_ptr[write_pos]   = feat_flat;
                         scatter_ptr[write_pos]  = static_cast<int32_t>(voxel_idx);
