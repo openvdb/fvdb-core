@@ -446,12 +446,7 @@ class SparseConv3d(_SparseConv3dBase):
 
         assert isinstance(data, JaggedTensor), "Input data must be a JaggedTensor"
 
-        out_data = plan.execute(data, self.weight)
-
-        if self.bias is not None:
-            out_data.jdata = out_data.jdata + self.bias
-
-        return out_data
+        return plan.execute(data, self.weight, self.bias)
 
 
 @_trace_fvdb_nn_forward
@@ -508,12 +503,7 @@ class SparseConvTranspose3d(_SparseConv3dBase):
                 "mismatched input/output channels, kernel size, or stride, or transposition"
             )
 
-        out_data = plan.execute(data, self.weight)
-
-        if self.bias is not None:
-            out_data.jdata = out_data.jdata + self.bias
-
-        return out_data
+        return plan.execute(data, self.weight, self.bias)
 
 
 @_trace_fvdb_nn_forward

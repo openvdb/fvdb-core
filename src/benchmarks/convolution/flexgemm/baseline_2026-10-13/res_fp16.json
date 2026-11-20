@@ -1,0 +1,122 @@
+{
+ "8,1024,16": {
+  "N": 192,
+  "fvdb (default)": {
+   "ms": 34.8262451171875,
+   "mem_gb": 1.9166312217712402
+  },
+  "fvdb (pred_gather_igemm)": {
+   "ms": null,
+   "mem_gb": "ERR: RuntimeError: features must be float32"
+  },
+  "flex_gemm": {
+   "ms": 5.69407844543457,
+   "mem_gb": 1.8098015785217285
+  }
+ },
+ "16,1024,8": {
+  "N": 848,
+  "fvdb (default)": {
+   "ms": 17.748377990722656,
+   "mem_gb": 1.0876379013061523
+  },
+  "fvdb (pred_gather_igemm)": {
+   "ms": null,
+   "mem_gb": "ERR: RuntimeError: features must be float32"
+  },
+  "flex_gemm": {
+   "ms": 4.286894226074219,
+   "mem_gb": 0.9806904792785645
+  }
+ },
+ "32,1024,4": {
+  "N": 3840,
+  "fvdb (default)": {
+   "ms": 17.49158935546875,
+   "mem_gb": 0.7166013717651367
+  },
+  "fvdb (pred_gather_igemm)": {
+   "ms": null,
+   "mem_gb": "ERR: RuntimeError: features must be float32"
+  },
+  "flex_gemm": {
+   "ms": 6.254964828491211,
+   "mem_gb": 0.618560791015625
+  }
+ },
+ "64,1024,2": {
+  "N": 15192,
+  "fvdb (default)": {
+   "ms": 17.3610595703125,
+   "mem_gb": 0.6668739318847656
+  },
+  "fvdb (pred_gather_igemm)": {
+   "ms": null,
+   "mem_gb": "ERR: RuntimeError: features must be float32"
+  },
+  "flex_gemm": {
+   "ms": 8.76974868774414,
+   "mem_gb": 0.5909638404846191
+  }
+ },
+ "128,512,2": {
+  "N": 64160,
+  "fvdb (default)": {
+   "ms": 27.220498657226564,
+   "mem_gb": 0.652554988861084
+  },
+  "fvdb (pred_gather_igemm)": {
+   "ms": null,
+   "mem_gb": "ERR: RuntimeError: features must be float32"
+  },
+  "flex_gemm": {
+   "ms": 8.584230041503906,
+   "mem_gb": 0.5872898101806641
+  }
+ },
+ "256,256,2": {
+  "N": 252392,
+  "fvdb (default)": {
+   "ms": 47.80530700683594,
+   "mem_gb": 1.082749366760254
+  },
+  "fvdb (pred_gather_igemm)": {
+   "ms": null,
+   "mem_gb": "ERR: RuntimeError: features must be float32"
+  },
+  "flex_gemm": {
+   "ms": 8.208100891113281,
+   "mem_gb": 0.9567813873291016
+  }
+ },
+ "512,128,2": {
+  "N": 1026536,
+  "fvdb (default)": {
+   "ms": 104.6043212890625,
+   "mem_gb": 2.154782772064209
+  },
+  "fvdb (pred_gather_igemm)": {
+   "ms": null,
+   "mem_gb": "ERR: RuntimeError: features must be float32"
+  },
+  "flex_gemm": {
+   "ms": 10.32531509399414,
+   "mem_gb": 1.7316656112670898
+  }
+ },
+ "1024,64,2": {
+  "N": 4113056,
+  "fvdb (default)": {
+   "ms": 225.8148681640625,
+   "mem_gb": 4.5019211769104
+  },
+  "fvdb (pred_gather_igemm)": {
+   "ms": null,
+   "mem_gb": "ERR: RuntimeError: features must be float32"
+  },
+  "flex_gemm": {
+   "ms": 24.8748291015625,
+   "mem_gb": 3.484844207763672
+  }
+ }
+}
