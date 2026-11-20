@@ -29,7 +29,7 @@ namespace fvdb::detail::ops {
 
 // If `factor` is a uniform power of two (2,4,8,... in every axis), returns log2(factor) -- the
 // number of unit CoarsenGrid passes needed. Returns -1 otherwise (non-uniform or non-power-of-two
-// factors have no leaf-mask coarsening tool and keep the coordinate-list path). Factor 1 -> 0.
+// factors have no batched coarsen pass and keep the coordinate-list path). Factor 1 -> 0.
 static int
 uniformPowerOfTwoLog2(const nanovdb::Coord &factor) {
     if (factor[0] != factor[1] || factor[1] != factor[2] || factor[0] < 1) {
@@ -56,7 +56,7 @@ coarseGridStorageFromFineCUDA(const GridBatchData &fineGridBatch,
                               const nanovdb::Coord &branchingFactor) {
     // fvdb coarsening maps fine voxel f to floor(f / factor); a factor-2 coarsen pass maps f to
     // floor(f / 2) (coarsenCoord is exactly floor(n/2) for all n, and each 2^3 fine block is
-    // unioned). So a uniform power-of-two factor is that many batched leaf-mask coarsen passes
+    // unioned). So a uniform power-of-two factor is that many batched coarsen passes
     // over the whole batch (BatchedTopologyBuilder) -- no coordinate list, no per-member builds.
     // Non-power-of-two / non-uniform factors keep the coordinate path.
     const int nPasses = uniformPowerOfTwoLog2(branchingFactor);
@@ -75,7 +75,7 @@ coarseGridStorageFromFineCUDA(const GridBatchData &fineGridBatch,
     }
 
     // All batch members are coarsened together, one batched pass per factor of 2: a single output
-    // storage, one stream synchronization per pass, no per-member builds or storage merging
+    // storage, two host waits per pass, no per-member builds or storage merging
     // (issue #755). Empty members become valid empty grids inline.
     const std::vector<batched::TopologyPassSpec> passes(nPasses,
                                                         batched::TopologyPassSpec::coarsen());
