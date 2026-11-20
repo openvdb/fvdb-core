@@ -420,8 +420,9 @@ reinitializeSdfCuda(const GridBatchData &batchHdl,
                           ", ",
                           vs[2],
                           ")");
-        const ScalarT voxelSize = (ScalarT)vs[0];
-        const ScalarT bandWidth = (ScalarT)band * voxelSize; // narrow-band half-width, world units
+        const ScalarT voxelSize = static_cast<ScalarT>(vs[0]);
+        const ScalarT bandWidth =
+            static_cast<ScalarT>(band) * voxelSize; // narrow-band half-width, world units
 
         const GridVbm vbm        = batchHdl.vbmAt(batchIdx);
         const int64_t valueCount = int64_t(vbm.lastOffset) + 1; // numVoxels + 1 (slot 0 = bg)

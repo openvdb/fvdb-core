@@ -36,8 +36,8 @@ VbmCache::acquire(const GridBatchData &owner) {
 
     if (!mOwner) {
         // A build captured into a graph would run only on replay, while the cache would already
-        // count as built for eager use
-        TORCH_CHECK(!capturing,
+        // count as built for eager use. An empty batch builds nothing, so it may be captured.
+        TORCH_CHECK(!capturing || owner.totalVoxels() == 0,
                     "The grid's VoxelBlockManagers are built on first use, which cannot happen "
                     "during CUDA graph capture. Run the op once before capturing.");
         build(owner, stream);

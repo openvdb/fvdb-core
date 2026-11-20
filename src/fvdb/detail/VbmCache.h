@@ -60,7 +60,8 @@ struct GridVbm {
 /// first acquire() from a stream other than the build stream makes that stream wait on the
 /// build and record_stream()s the buffer for it, so destroying the owner while that stream's
 /// kernels are in flight cannot recycle the buffer under them. Callers must acquire() on the
-/// stream they launch consuming kernels on.
+/// stream they launch consuming kernels on. Consumer streams must outlive the owner: streams are
+/// remembered by handle, so a new stream that reuses a destroyed one's handle would skip the wait.
 ///
 /// CUDA graph capture: the build cannot be captured, so the first acquire() must happen before
 /// capture, as in the usual warmup. A capturing stream other than the build stream waits on the

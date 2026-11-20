@@ -29,10 +29,7 @@ static_assert(kVbmForEachBlockDim % detail::VbmCache::kBlockWidth == 0,
 /// VBM block of the batch (grid-stride) and finds its grid through the batch view's
 /// lastGridAtOrBefore, a warp-uniform binary search over the grids' block bases. Each thread
 /// decodes one voxel's (leafIndex, voxelOffset) in registers via the VoxelBlockManager's
-/// rank+select inverse-map decode.
-///
-/// Keep this kernel at 256 threads. A one-thread-per-slot <<<blockCount, 512>>> shape with
-/// __launch_bounds__(512) was observed to silently drop work from a register-heavy callback.
+/// rank+select inverse-map decode. Launched at 256 threads, like dispatch::for_each.
 template <typename Func, typename... Args>
 __global__ void __launch_bounds__(kVbmForEachBlockDim)
 forEachActiveVoxelVbmKernel(const detail::BatchVbm vbm,

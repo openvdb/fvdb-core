@@ -145,6 +145,8 @@ ConfigureTest(PrefetchTest "PrefetchTest.cpp")
 ConfigureTest(LocalGradientTest "LocalGradientTest.cpp")
 ConfigureTest(GradientReductionTest "GradientReductionTest.cpp")
 ConfigureTest(LoadNanovdbTest "LoadNanovdbTest.cpp")
+# Includes NanoVDB's host-side VoxelBlockManager; see VbmCacheTest below
+target_compile_options(LoadNanovdbTest_obj PRIVATE -Wno-unknown-pragmas)
 ConfigureTest(JaggedTensorTest "JaggedTensorTest.cpp")
 ConfigureTest(PackedJaggedAccessorTest "PackedJaggedAccessorTest.cu")
 ConfigureTest(GridStorageTest "GridStorageTest.cu")
