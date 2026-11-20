@@ -152,13 +152,10 @@ PersistentTSDFState::growFromGrid(const GridBatchData &shellGrid) {
         mGrid->device().is_cuda() ? std::optional<torch::Device>(mGrid->device()) : std::nullopt);
 
     // `mergeGrids` builds the set-union of the two input grids' active
-    // voxels. When the shell is a strict subset of the live grid the
-    // merged grid is structurally identical to the live grid (same
-    // ordered active voxel set) and `totalVoxels()` matches, which we
-    // use as the no-op fast path below. This is the hot steady-state
-    // case on long trajectories: after the first ~50-100 frames the
-    // truncation shell stops introducing novel voxels and we skip both
-    // the realloc and the inject pass entirely.
+    // voxels. When the shell is a subset of the live grid, the merged
+    // grid has the same active voxels as the live grid (the steady state
+    // on long trajectories), but the sidecars are still reallocated and
+    // injected; see the note after the merge.
     //
     // Argument order matters: `mergeGrids(shellGrid, mGrid)` iterates
     // the shell's voxels first in the output (per-leaf) ordering, which

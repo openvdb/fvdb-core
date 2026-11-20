@@ -105,7 +105,7 @@ buildPointTruncationShell(const JaggedTensor &points,
                           minVoxLengthI,
                           ", resulting in too many padding voxels (",
                           numPadVoxelsI,
-                          ") which cannot exceed ",
+                          ") which must be less than ",
                           MAX_PAD_VOXELS,
                           ". Use a larger voxel size or a smaller truncation margin.");
         numPadVoxels.push_back(numPadVoxelsI);

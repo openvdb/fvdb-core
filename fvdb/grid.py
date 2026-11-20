@@ -826,10 +826,11 @@ class Grid:
 
         Args:
             sidecar (torch.Tensor): ``[num_voxels]`` or
-                ``[num_voxels, C]`` per-voxel sidecar tensor to
+                ``[num_voxels, ...]`` per-voxel sidecar tensor to
                 decay. The decayed magnitude drives the prune mask.
                 For multi-channel sidecars, the per-voxel magnitude
-                is the L2 norm across channels.
+                is the L2 norm over all of the voxel's channels; a
+                sidecar with zero channels is rejected.
             decay_factor (float): Multiplicative scaling applied to
                 ``sidecar``. Typical: ``0.95`` (gentle decay) to
                 ``0.5`` (aggressive). ``1.0`` is no-op.
@@ -849,16 +850,28 @@ class Grid:
             new_extras (list[torch.Tensor]): Each ``extra_sidecars[i]``
                 pruned with the same mask.
         """
+        if sidecar.dim() == 0 or sidecar.shape[0] != self.num_voxels:
+            raise ValueError(
+                f"sidecar must have shape [num_voxels, ...] with num_voxels={self.num_voxels}, "
+                f"got {tuple(sidecar.shape)}"
+            )
+        if sidecar.dim() > 1 and sidecar[0].numel() == 0:
+            raise ValueError(f"sidecar has no channels (shape {tuple(sidecar.shape)}), so it has no magnitude")
+        for i, extra in enumerate(extra_sidecars):
+            if extra.dim() == 0 or extra.shape[0] != self.num_voxels:
+                raise ValueError(
+                    f"extra_sidecars[{i}] must have shape [num_voxels, ...] with "
+                    f"num_voxels={self.num_voxels}, got {tuple(extra.shape)}"
+                )
+
         decayed = sidecar * decay_factor
 
-        # Magnitude for pruning: L2 norm across channels for multi-
-        # channel sidecars, elementwise abs for 1-D.
+        # Magnitude for pruning: elementwise abs for 1-D sidecars, otherwise
+        # the L2 norm over all of a voxel's trailing elements.
         if decayed.dim() == 1:
             magnitude = decayed.abs()
         else:
-            magnitude = (
-                decayed.norm(dim=1) if decayed.shape[1] > 0 else decayed.abs().sum(dim=tuple(range(1, decayed.dim())))
-            )
+            magnitude = decayed.reshape(decayed.shape[0], -1).norm(dim=1)
 
         if prune_threshold <= 0.0:
             return self, decayed, list(extra_sidecars)
@@ -2033,10 +2046,12 @@ class Grid:
             features (torch.Tensor | None): Optional ``[num_voxels, D]``
                 per-voxel feature vector. Dtype must match ``tsdf.dtype`` or
                 be ``uint8``.
-            carve_free_space (bool): If ``True``, voxels observed to be in
-                front of the endpoint (outside the truncation band) are
-                written ``tsdf = +1, weight = 1``. Matches VDBFusion /
-                nvblox default behaviour.
+            carve_free_space (bool): If ``True``, each ray also updates the
+                voxels it crosses in front of the endpoint (outside the
+                truncation band) with a free-space sample: ``tsdf = +1`` is
+                blended into the voxel's weighted average and the voxel's
+                weight grows by 1 per ray, like any other sample. Matches
+                VDBFusion / nvblox default behaviour.
 
         Returns:
             When no features are provided:

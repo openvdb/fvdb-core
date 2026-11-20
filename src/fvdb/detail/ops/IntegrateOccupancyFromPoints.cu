@@ -73,7 +73,7 @@ using GridT = nanovdb::ValueOnIndex;
 // Per-ray update rule:
 //   - For each active voxel `v` along the ray within the walk window:
 //       sdfWorld = ||P - O|| - ||v - O||
-//       if sdfWorld > +truncationMargin (voxel behind endpoint, free):
+//       if sdfWorld > +truncationMargin (voxel on the sensor side of the endpoint, free):
 //           log_odds[v] += logOddsMiss   (negative -> more likely free)
 //       if sdfWorld in [-truncationMargin, +truncationMargin] (hit band):
 //           log_odds[v] += logOddsHit    (positive -> more likely occupied)
@@ -329,11 +329,10 @@ integrateOccupancyFromPoints(const c10::intrusive_ptr<GridBatchData> grid,
                              const double logOddsMax) {
     checkCommonInputs(grid, points, sensorOrigins, logOdds, logOddsMin, logOddsMax);
 
-    // Empty point cloud: nothing to allocate, nothing to integrate.
-    // Return the grid + log-odds unchanged. `buildPointTruncationShell`
-    // doesn't handle a zero-point input cleanly (it tries to build an
-    // empty grid handle which triggers a batched-handle assert); this
-    // pre-check keeps the no-op case clean.
+    // Empty point cloud: nothing to integrate, so return the grid and
+    // log-odds unchanged without building a union grid. This is a
+    // shortcut, not a guard: `buildPointTruncationShell` handles empty
+    // input, and the multi-frame path relies on that.
     if (points.numel() == 0) {
         return {grid, logOdds};
     }

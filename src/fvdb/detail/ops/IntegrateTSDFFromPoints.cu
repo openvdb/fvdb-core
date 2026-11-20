@@ -741,6 +741,10 @@ integrateTSDFFromPointsWithFeatures(const c10::intrusive_ptr<GridBatchData> grid
                       "pointFeatures batch size must match grid batch size");
     TORCH_CHECK_VALUE(pointFeatures.numel() == points.numel() / 3 * pointFeatures.rsize(-1),
                       "pointFeatures must have exactly one row per input point");
+    // The kernel reads pointFeatures by the points' flat index, so each
+    // batch item's rows must line up with its points, not just the total.
+    TORCH_CHECK_VALUE(torch::equal(pointFeatures.joffsets(), points.joffsets()),
+                      "pointFeatures must have the same per-grid point counts as points");
     // Matching dtype rules from the depth integrator: features must be
     // either the same fp dtype as tsdf, or uint8.
     TORCH_CHECK_TYPE(features.scalar_type() == tsdf.scalar_type() ||

@@ -255,3 +255,27 @@ def test_compound_prune_predicate_via_user_mask(device):
     keep = (weights > 5.0) & (features.norm(dim=1) > 0.5)
     g2 = g.pruned_grid(keep)
     assert g2.num_voxels == int(keep.sum().item())
+
+
+@pytest.mark.parametrize("device", ["cuda"])
+def test_multi_dim_sidecar_prunes_per_voxel(device):
+    """A ``[N, C, D]`` sidecar's magnitude is the norm over all of a voxel's
+    elements, so the keep mask stays per voxel."""
+    g, _, weights, _ = _make_grid_with_sidecars(device=device)
+    sidecar = weights[:, None, None].expand(-1, 2, 3).contiguous()
+    g2, s2, _ = g.decay_and_prune(sidecar, decay_factor=1.0, prune_threshold=float(weights[13]) * 6**0.5)
+    assert g2.num_voxels == 13
+    assert tuple(s2.shape) == (13, 2, 3)
+
+
+@pytest.mark.parametrize("device", ["cuda"])
+def test_rejects_sidecars_without_a_magnitude(device):
+    """A zero-channel sidecar has no magnitude to prune on, and a sidecar
+    that is not voxel-aligned cannot be pruned with the grid."""
+    g, _, weights, _ = _make_grid_with_sidecars(device=device)
+    with pytest.raises(ValueError, match="no channels"):
+        g.decay_and_prune(torch.zeros(g.num_voxels, 0, device=device), 0.9, 0.1)
+    with pytest.raises(ValueError, match="num_voxels"):
+        g.decay_and_prune(weights[:-1], 0.9, 0.1)
+    with pytest.raises(ValueError, match="extra_sidecars"):
+        g.decay_and_prune(weights, 0.9, 0.1, extra_sidecars=[weights[:-1]])

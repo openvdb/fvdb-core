@@ -382,6 +382,19 @@ def test_incremental_rejects_a_previous_grid_in_another_frame(device):
 
 
 @pytest.mark.parametrize("device", ["cuda"])
+def test_incremental_rejects_an_empty_dirty_mask(device):
+    """A zero-length mask used to mean a silent full recompute."""
+    vs, trunc, max_dist = 0.05, 0.1, 0.2
+    g, tsdf, weights = _sphere_tsdf(vs, 16, -8, 0.2, trunc, device)
+    esdf_grid, esdf = g.compute_esdf(tsdf, weights, truncation_distance=trunc, max_distance=max_dist)
+    mask = torch.zeros(0, dtype=torch.bool, device=device)
+    with pytest.raises(ValueError, match="no elements"):
+        g.compute_esdf_incremental(
+            tsdf, weights, esdf_grid, esdf, truncation_distance=trunc, max_distance=max_dist, dirty_mask=mask
+        )
+
+
+@pytest.mark.parametrize("device", ["cuda"])
 def test_incremental_rejects_multidimensional_dirty_mask(device):
     """The seed kernel reads one flag per voxel, so a ``[N, 2]`` mask
     must be rejected rather than read as its first N flattened entries."""

@@ -1249,15 +1249,15 @@ integrateTSDFWithFeatures(const c10::intrusive_ptr<GridBatchData> grid,
 // -------------------------------------------------------------------------
 // Batched depth-image TSDF integration.
 //
-// Builds the full union-grid topology ONCE over all N frames, then runs
-// N sequential calls to the existing `doIntegrate` kernel against that
-// fixed topology. Semantically equivalent to calling `integrateTSDF` N
-// times (verified bit-identically in the unit test).
-//
-// The per-frame path pays O(pixels + unionVoxels) of topology rebuild
-// every call; the batched path does one topology build over
-// N * pixels points, then N kernel launches — so the perf win is
-// (N - 1) * (topology_build_ms + merge_ms) per N-frame batch.
+// Integrates N frames in order, still growing the topology once per
+// frame. With free-space carving, each frame is one `integrateTSDFImpl`
+// step, so the result equals N sequential `integrateTSDF` calls. Without
+// it, a `PersistentTSDFState` holds the accumulator: each frame merges
+// its truncation shell into the live grid (reallocating and carrying the
+// sidecars forward) and then updates the shell's voxels in place. The
+// unit tests check both against sequential integration. The saving over
+// N separate calls is per-call overhead and the Python round trips, not
+// topology builds.
 // -------------------------------------------------------------------------
 
 namespace {

@@ -2593,6 +2593,29 @@ class TestBasicOps(unittest.TestCase):
         self.assertTrue(bool(updated[crossed].all()), "voxels the ray crosses were skipped")
 
     @unittest.skipUnless(torch.cuda.is_available(), "CUDA required for integrate_tsdf_from_points")
+    def test_integrate_tsdf_from_points_rejects_misaligned_point_features(self):
+        """
+        The kernel reads point features by the points' flat index, so each
+        batch item's feature rows must match its own points, not just the
+        total; [3, 5] points with [5, 3] feature rows used to pass.
+        """
+        import fvdb as fv
+        import fvdb.functional as fvf
+
+        device = "cuda"
+        batch = fv.GridBatch.from_dense(
+            2, dense_dims=[8, 8, 8], ijk_min=[-4, -4, -4], voxel_sizes=0.05, origins=0.0, device=device
+        )
+        points = fv.JaggedTensor([torch.rand(3, 3, device=device) * 0.1, torch.rand(5, 3, device=device) * 0.1])
+        point_features = fv.JaggedTensor([torch.rand(5, 3, device=device), torch.rand(3, 3, device=device)])
+        zeros = batch.jagged_like(torch.zeros(batch.total_voxels, device=device))
+        features = batch.jagged_like(torch.zeros(batch.total_voxels, 3, device=device))
+        with self.assertRaisesRegex(ValueError, "per-grid point counts"):
+            fvf.integrate_tsdf_from_points_with_features_batch(
+                batch, 0.15, points, torch.zeros(2, 3, device=device), zeros, features, zeros.clone(), point_features
+            )
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA required for integrate_tsdf_from_points")
     def test_integrate_tsdf_from_points_batch_with_empty_items(self):
         """
         Batch items whose points are all filtered out (NaN) or absent keep

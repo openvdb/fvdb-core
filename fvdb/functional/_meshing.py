@@ -410,9 +410,11 @@ def integrate_tsdf_from_points_batch(
         sensor_origins (torch.Tensor): ``[B, 3]`` per-batch sensor origin.
         tsdf (JaggedTensor): Current TSDF values.
         weights (JaggedTensor): Current integration weights.
-        carve_free_space (bool): If ``True``, voxels observed as free space
-            (in front of the endpoint, outside the truncation band) are
-            written ``tsdf = +1``. Matches VDBFusion / nvblox default.
+        carve_free_space (bool): If ``True``, each ray also adds a
+            free-space sample (``tsdf = +1``, weight 1) to the voxels it
+            crosses in front of the endpoint, outside the truncation band,
+            blended into their weighted averages. Matches VDBFusion /
+            nvblox default.
 
     Returns:
         updated_grid (GridBatch): The updated grid batch (union of input
@@ -457,8 +459,10 @@ def integrate_tsdf_from_points_single(
         sensor_origin (torch.Tensor): ``[3]`` world-space sensor origin.
         tsdf (torch.Tensor): Current TSDF values.
         weights (torch.Tensor): Current integration weights.
-        carve_free_space (bool): If ``True``, voxels observed as free
-            space are written ``tsdf = +1``.
+        carve_free_space (bool): If ``True``, each ray also adds a
+            free-space sample (``tsdf = +1``, weight 1) to the voxels it
+            crosses in front of the endpoint, blended into their weighted
+            averages.
 
     Returns:
         updated_grid (Grid): The updated grid.
@@ -848,12 +852,18 @@ def compute_esdf_incremental_single(
 
     grid_data = grid.data
     prev_grid_data = prev_esdf_grid.data
-    # C++ accepts `dirty_mask` as a possibly-undefined tensor; pass an
-    # empty tensor to signal "no dirty mask" (pybind then sees an
-    # undefined Tensor which the C++ side interprets via `.defined()`).
+    # The C++ op treats a zero-element mask as "no dirty mask" (it checks
+    # `numel() > 0`), so `None` is passed as an empty tensor. A caller's
+    # own mask must therefore cover every voxel; a zero-length one would
+    # otherwise silently mean a full recompute.
     if dirty_mask is None:
         dm_arg = torch.empty(0, device=tsdf.device, dtype=torch.bool)
     else:
+        if dirty_mask.numel() == 0 and grid.num_voxels > 0:
+            raise ValueError(
+                f"dirty_mask has no elements but the grid has {grid.num_voxels} voxels; "
+                "pass dirty_mask=None for a full recompute"
+            )
         dm_arg = dirty_mask
     out_grid, out_esdf = _fvdb_cpp.compute_esdf_incremental(
         grid_data,
