@@ -25,9 +25,10 @@ enum class SmoothingMode : int32_t {
 /// @brief Re-initialize a signed per-voxel field into a signed distance field on the *same* grid.
 ///
 /// Redistances the input field to satisfy |grad phi| = 1 (TVD-RK Godunov upwind eikonal solve with
-/// a frozen Peng sign), then optionally de-staircases it with mean-curvature or volume-preserving
-/// Taubin Laplacian smoothing. The grid topology is unchanged: the returned JaggedTensor has the
-/// same per-voxel ordering as the input.
+/// a frozen Peng sign and a Russo-Smereka subcell fix that anchors the zero crossing), then
+/// optionally de-staircases it with mean-curvature or volume-preserving Taubin Laplacian smoothing.
+/// The grid topology is unchanged: the returned JaggedTensor has the same per-voxel ordering as the
+/// input.
 ///
 /// @param batchHdl    Grid batch defining the sparse topology.
 /// @param field       Per-voxel signed field with finite values and shape (N,) or (N, 1),
@@ -49,9 +50,14 @@ enum class SmoothingMode : int32_t {
 ///                    inactive interior (e.g. the output of rebuild_narrow_band) is kept solid
 ///                    rather than hollow.
 /// @param redistanceIters  Number of TVD-RK redistancing sweeps. Pass <= 0 to use the default
-///                         max(6, round(2.5*band) + 2).
-/// @param order       TVD-RK order: 1 (forward Euler), 2 (Heun), or 3 (Shu-Osher).
-/// @param smooth      Number of smoothing passes (0 disables smoothing).
+///                         max(20, 6*band). The same count is used for the redistance that follows
+///                         smoothing, so a small explicit value renormalizes the smoothed field
+///                         only within about 0.4*redistanceIters voxels of the surface.
+/// @param order       TVD-RK order: 1 (forward Euler), 2 (Heun), or 3 (Shu-Osher). The redistance
+///                    marches to a steady state, so the order does not change the converged result;
+///                    1 is the cheapest in time and scratch memory.
+/// @param smooth      Number of smoothing passes (0 disables smoothing). After smoothing the field
+///                    is redistanced again, anchored to the smoothed zero crossing.
 /// @param smoothing   Which Laplacian flow each smoothing pass applies (mean-curvature or Taubin).
 /// @return A new per-voxel SDF JaggedTensor on the same grid/ordering as @p field.
 JaggedTensor reinitializeSdf(const GridBatchData &batchHdl,
