@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Sweep masked_igemm forward tile configs (FVDB_MIGEMM_CFG) per workload.
 
-    python tune_tiles.py --mode fp16
+python tune_tiles.py --mode fp16
 """
+
 import argparse
 import math
 import os

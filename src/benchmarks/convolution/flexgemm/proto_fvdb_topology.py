@@ -12,6 +12,7 @@ leaf order, then times FlexGEMM's kernels under different tile orderings:
 
     python proto_fvdb_topology.py --mode fp16
 """
+
 import argparse
 import json
 import math

@@ -16,12 +16,12 @@ import os
 import unittest
 
 import torch
-from fvdb.convolution_plan import _MaskedIGemmBackend, _MatmulBackend
-from fvdb.functional._dispatch import _get_grid_data
 from parameterized import parameterized
 
 import fvdb
 from fvdb import ConvolutionPlan, GridBatch, JaggedTensor, _fvdb_cpp
+from fvdb.convolution_plan import _MaskedIGemmBackend, _MatmulBackend
+from fvdb.functional._dispatch import _get_grid_data
 
 CONFIG = {"backend": "masked_igemm"}
 
@@ -71,7 +71,6 @@ def _rel_err(a: torch.Tensor, b: torch.Tensor) -> float:
 
 @unittest.skipUnless(_has_sm80(), "masked_igemm requires a CUDA SM80+ device")
 class TestMaskedIGemm(unittest.TestCase):
-
     def _check(self, grid, cin, cout, kernel_size, dtype, tol=None):
         torch.manual_seed(0)
         tol = tol or (2e-2 if dtype == torch.bfloat16 else 4e-3)

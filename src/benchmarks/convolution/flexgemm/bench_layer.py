@@ -7,6 +7,7 @@ multiples of 8, which masked_igemm runs zero-padded. Stem layers take no input g
 
     python bench_layer.py out.json
 """
+
 import json
 import math
 import sys
@@ -53,7 +54,7 @@ for RES in (256, 512, 1024):
         rows[f"{RES},{ci},{co}"] = res
         print(
             f"RES {RES:4d} {ci:2d}->{co:2d}  masked {res['masked_igemm']:6.2f}  default {res['default']:6.2f}  flex {res['flex_gemm']:6.2f} ms"
-            f"  -> {res['flex_gemm']/res['masked_igemm']:.2f}x vs flex, {res['default']/res['masked_igemm']:.1f}x vs default",
+            f"  -> {res['flex_gemm'] / res['masked_igemm']:.2f}x vs flex, {res['default'] / res['masked_igemm']:.1f}x vs default",
             flush=True,
         )
 json.dump(

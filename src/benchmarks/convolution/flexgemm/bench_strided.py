@@ -12,6 +12,7 @@ fvdb.nn.SparseConv3d, whose weight storage is the kernels' tap-major layout.
     python bench_strided.py --mode fp16 --topology fixed --json out.json
     python bench_strided.py --mode tf32 --topology per-iter --backends masked_igemm,flex_gemm
 """
+
 import argparse
 import json
 import math

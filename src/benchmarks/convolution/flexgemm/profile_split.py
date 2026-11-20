@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Split one conv layer's cost into grid build, plan build, forward and backward.
 
-    python profile_split.py --mode fp16 --backends default,flex_gemm --kernels
+python profile_split.py --mode fp16 --backends default,flex_gemm --kernels
 """
+
 import argparse
 import json
 import math

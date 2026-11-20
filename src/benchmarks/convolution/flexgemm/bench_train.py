@@ -8,6 +8,7 @@ runs L submanifold 3x3x3 layers forward, then backward.
     python bench_train.py --mode fp16 --topology per-iter --json out.json
     python bench_train.py --mode tf32 --topology fixed --workload solid --backends default,flex_gemm
 """
+
 import argparse
 import json
 
