@@ -115,7 +115,7 @@ class ReinitializeSdfTests(unittest.TestCase):
     def test_reinitialize_preserves_good_sdf(self):
         """Redistancing an already-correct SDF (|grad phi| = 1) should preserve it in the band."""
         field = self.analytic.clamp(-self.bw, self.bw)
-        phi = self.grid.reinitialize_sdf(field, band=self.band, smooth=0, order=3)
+        phi = self.grid.reinitialize_sdf(field, band=self.band, order=3)
         self.assertEqual(phi.shape[0], self.grid.num_voxels)
         m = self._band_mask(self.band - 1)
         err = (phi[m] - self.analytic[m]).abs()
@@ -129,7 +129,7 @@ class ReinitializeSdfTests(unittest.TestCase):
             torch.full_like(self.analytic, -self.bw),
             torch.full_like(self.analytic, self.bw),
         )
-        phi = self.grid.reinitialize_sdf(field, band=self.band, smooth=0, order=3)
+        phi = self.grid.reinitialize_sdf(field, band=self.band, order=3)
         m = self._band_mask(self.band - 1)
         err = (phi[m] - self.analytic[m]).abs()
         self.assertLess(err.mean().item(), 0.6 * self.vx)
@@ -139,14 +139,10 @@ class ReinitializeSdfTests(unittest.TestCase):
         phi = self.grid.reinitialize_sdf(field, band=self.band)
         self.assertLessEqual(phi.abs().max().item(), self.bw + 1e-4)
 
-    def test_order_and_smoothing_run(self):
+    def test_orders_run(self):
         field = self.analytic.clamp(-self.bw, self.bw)
         for order in (1, 2, 3):
             phi = self.grid.reinitialize_sdf(field, band=self.band, order=order)
-            self.assertEqual(phi.shape[0], self.grid.num_voxels)
-        # smoothing mode is selected with the SmoothingMode enum
-        for mode in (fvdb.SmoothingMode.MEAN_CURVATURE, fvdb.SmoothingMode.TAUBIN):
-            phi = self.grid.reinitialize_sdf(field, band=self.band, smooth=4, smoothing=mode)
             self.assertEqual(phi.shape[0], self.grid.num_voxels)
 
     def test_float64(self):

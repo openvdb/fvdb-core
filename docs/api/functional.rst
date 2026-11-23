@@ -141,6 +141,13 @@ Signed Distance Fields
 .. autofunction:: rebuild_narrow_band_single
 
 
+Smoothing
+---------
+
+.. autofunction:: laplacian_smooth_batch
+.. autofunction:: laplacian_smooth_single
+
+
 Grid Topology
 -------------
 

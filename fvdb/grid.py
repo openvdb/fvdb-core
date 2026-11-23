@@ -1503,30 +1503,24 @@ class Grid:
         self,
         field: torch.Tensor,
         band: int = 3,
-        smooth: int = 0,
         order: int = 1,
-        smoothing: SmoothingMode = SmoothingMode.MEAN_CURVATURE,
         redistance_iters: int = -1,
     ) -> torch.Tensor:
         """Re-initialize a signed per-voxel field into an SDF on this grid (topology unchanged).
 
         Redistances ``field`` to ``|grad phi| = 1`` (TVD-RK Godunov eikonal solve with a frozen Peng
-        sign and a Russo-Smereka subcell fix that anchors the zero crossing), then optionally
-        de-staircases it with curvature-based smoothing.
+        sign and a Russo-Smereka subcell fix that anchors the zero crossing). To de-staircase the
+        result, smooth it with :meth:`laplacian_smooth` and redistance again.
 
         Args:
             field (torch.Tensor): Per-voxel signed field, shape ``(num_voxels,)`` or ``(num_voxels, 1)``.
             band (int): Narrow-band half-width in voxels (clamps the field to ``[-band*vx, band*vx]``).
-            smooth (int): Number of smoothing passes (``0`` disables smoothing).
             order (int): TVD-RK order, one of ``1`` (default), ``2``, or ``3``. The order does not
                 change the converged result; ``1`` is the cheapest in time and memory.
-            smoothing (SmoothingMode): Which Laplacian flow each smoothing pass applies --
-                :attr:`~fvdb.SmoothingMode.MEAN_CURVATURE` (default) or
-                :attr:`~fvdb.SmoothingMode.TAUBIN` (volume-preserving). Only used when ``smooth > 0``.
             redistance_iters (int): Number of redistancing sweeps; ``<= 0`` uses the default
-                ``max(20, 6*band)``. The same count is used for the redistance that follows smoothing,
-                so a small explicit value renormalizes the smoothed field only within about
-                ``0.4*redistance_iters`` voxels of the surface.
+                ``max(20, 6*band)``. Values propagate about ``0.4`` voxels per sweep, so a small
+                explicit value renormalizes the field only within about ``0.4*redistance_iters``
+                voxels of the surface.
 
         Returns:
             sdf (torch.Tensor): The re-initialized SDF, shape ``(num_voxels,)``.
@@ -1534,8 +1528,8 @@ class Grid:
         Note:
             * ``field`` must represent the intended inside/outside regions and zero crossings. Its
               magnitudes need not be accurate distances, but affect convergence, accuracy, and
-              sub-voxel surface location. With ``smooth=0`` redistancing aims to preserve the input
-              surface, subject to discretization error; smoothing moves it and then re-redistances.
+              sub-voxel surface location. Redistancing aims to preserve the input surface, subject
+              to discretization error.
             * Values must be finite, with shape ``(N,)`` or ``(N, 1)``. Invalid shapes and NaN/Inf
               values raise ``ValueError``.
             * The surface is where the field changes sign between *active* voxels; one active voxel
@@ -1543,29 +1537,26 @@ class Grid:
               sub-voxel accuracy). A grid whose active values are all one sign has no surface: the
               result is the constant ``-/+band*vx`` and :meth:`rebuild_narrow_band` returns an empty
               band, which is correct for e.g. a tile that lies entirely inside an object.
-            * Inactive neighbours read as ``+/-band*vx`` using the adjacent voxel's frozen sign during
-              redistancing and its current sign during smoothing. Both filled solids (interior active)
-              and narrow bands whose interior is inactive are valid inputs. Leave no-data voxels
+            * Inactive neighbours read as ``+/-band*vx`` using the adjacent voxel's frozen sign. Both
+              filled solids (interior active) and narrow bands whose interior is inactive are valid
+              inputs. Leave no-data voxels
               *inactive* rather than assigning them NaN/Inf values.
             * Voxels whose value is exactly ``0`` have a zero frozen sign and are left at ``0`` by the
               redistance (a no-data pass-through; :meth:`ray_implicit_intersection` treats exact
               ``0`` as a gap). Their signed neighbours, however, see them as an interface and are
-              redistanced toward them, and smoothing blends them -- prune such voxels first when you
-              can.
+              redistanced toward them -- prune such voxels first when you can.
             * Voxels must be isotropic (``ValueError`` otherwise). CUDA only; ``float32`` or
               ``float64``.
         """
         from . import functional
 
-        return functional.reinitialize_sdf_single(self, field, band, smooth, order, smoothing, redistance_iters)
+        return functional.reinitialize_sdf_single(self, field, band, order, redistance_iters)
 
     def rebuild_narrow_band(
         self,
         field: torch.Tensor,
         band: int = 3,
-        smooth: int = 0,
         order: int = 1,
-        smoothing: SmoothingMode = SmoothingMode.MEAN_CURVATURE,
         redistance_iters: int = -1,
         pad: bool = True,
         prune: bool = True,
@@ -1580,12 +1571,8 @@ class Grid:
         Args:
             field (torch.Tensor): Per-voxel signed field, shape ``(num_voxels,)`` or ``(num_voxels, 1)``.
             band (int): Narrow-band half-width in voxels.
-            smooth (int): Number of smoothing passes (``0`` disables smoothing).
             order (int): TVD-RK order, one of ``1`` (default), ``2``, or ``3``. The order does not
                 change the converged result; ``1`` is the cheapest in time and memory.
-            smoothing (SmoothingMode): Which Laplacian flow each smoothing pass applies --
-                :attr:`~fvdb.SmoothingMode.MEAN_CURVATURE` (default) or
-                :attr:`~fvdb.SmoothingMode.TAUBIN` (volume-preserving). Only used when ``smooth > 0``.
             redistance_iters (int): Number of redistancing sweeps; ``<= 0`` uses the default.
             pad (bool): If ``True`` (default) dilate by ``band`` first so the output band is a full
                 ``band`` voxels wide even if the input grid was thinner. The dilation grows one layer
@@ -1605,9 +1592,50 @@ class Grid:
         """
         from . import functional
 
-        return functional.rebuild_narrow_band_single(
-            self, field, band, smooth, order, smoothing, redistance_iters, pad, prune
-        )
+        return functional.rebuild_narrow_band_single(self, field, band, order, redistance_iters, pad, prune)
+
+    def laplacian_smooth(
+        self,
+        field: torch.Tensor,
+        iterations: int = 1,
+        mode: SmoothingMode = SmoothingMode.MEAN_CURVATURE,
+        boundary_value: float | None = None,
+    ) -> torch.Tensor:
+        """Smooth a per-voxel field on this grid with the 6-neighbour umbrella Laplacian.
+
+        Each pass moves every voxel toward the mean of its six face neighbours,
+        ``out = in + w * (mean(neighbours) - in)``, for every channel independently; ``mode``
+        selects the passes per iteration (see :class:`~fvdb.SmoothingMode`). The grid topology is
+        unchanged.
+
+        Args:
+            field (torch.Tensor): Per-voxel values, shape ``(num_voxels,)`` or ``(num_voxels, C)``,
+                ``float32`` or ``float64``.
+            iterations (int): Number of smoothing iterations (``0`` returns a copy).
+            mode (SmoothingMode): The smoothing schedule each iteration applies.
+            boundary_value (float | None): How an inactive face neighbour is read. ``None``
+                (default) for zero flux (the face contributes nothing), or a non-negative ``b`` read
+                as ``-b`` beside a negative centre value and ``+b`` otherwise (sign continuation, for
+                signed fields; for a narrow-band SDF pass ``band * voxel_size[0]``).
+
+        Returns:
+            smoothed (torch.Tensor): The smoothed field, same shape and ordering as ``field``.
+
+        Note:
+            Smoothing moves the zero crossing of a signed field; redistance afterwards with
+            :meth:`reinitialize_sdf`::
+
+                sdf = grid.reinitialize_sdf(field, band=band)
+                sdf = grid.laplacian_smooth(sdf, iterations=n, boundary_value=band * grid.voxel_size[0].item())
+                sdf = grid.reinitialize_sdf(sdf, band=band)
+
+            See :func:`fvdb.functional.laplacian_smooth_batch` for details.
+
+        .. seealso:: :meth:`GridBatch.laplacian_smooth`
+        """
+        from . import functional
+
+        return functional.laplacian_smooth_single(self, field, iterations, mode, boundary_value)
 
     def integrate_tsdf(
         self,

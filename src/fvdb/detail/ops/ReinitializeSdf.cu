@@ -42,8 +42,8 @@ static_assert(kStencilBlockDim % VbmCache::kBlockWidth == 0,
 // means inactive. An inactive neighbour continues the supplied sign: beside a negative voxel it is
 // deep interior (-bandWidth), beside a positive voxel deep exterior (+bandWidth). Without this the
 // inner edge of a narrow band sees +bandWidth across the face and a phantom interface forms one
-// voxel inside the true surface. Godunov updates supply the frozen sign; the frozen-data and
-// smoothing reads supply the centre value of the field being read.
+// voxel inside the true surface. Godunov updates supply the frozen sign; the frozen-data reads
+// supply the centre value of the field being read.
 template <typename ScalarT>
 __device__ inline ScalarT
 faceValue(const ScalarT *field, uint64_t index, ScalarT signSource, ScalarT bandWidth) {
@@ -333,40 +333,15 @@ rkStageFusedKernel(const OnIndexGridT *grid,
         });
 }
 
-// one umbrella-Laplacian smoothing pass: outField = inField + weight*(faceMean - inField).
-// Double-buffered (inField != outField) so neighbour reads see the pre-pass field.
-template <typename ScalarT>
-__global__ void __launch_bounds__(kStencilBlockDim)
-smoothFusedKernel(const OnIndexGridT *grid,
-                  const GridVbm vbm,
-                  const ScalarT *inField,
-                  ScalarT weight,
-                  ScalarT bandWidth,
-                  ScalarT *outField) {
-    forEachVoxelWithFaces(
-        grid,
-        vbm,
-        [&](const nanovdb::Coord &, uint64_t centerIndex, const uint64_t *faceIndex, auto &) {
-            const int64_t bufferIndex = int64_t(centerIndex) - 1;
-            const ScalarT center      = inField[bufferIndex];
-            VBM_FACE_VALUES(faceValues, inField, center, bandWidth);
-            const ScalarT faceMean = (faceValues[0] + faceValues[1] + faceValues[2] +
-                                      faceValues[3] + faceValues[4] + faceValues[5]) *
-                                     (ScalarT(1) / ScalarT(6));
-            outField[bufferIndex] = center + weight * (faceMean - center);
-        });
-}
-
-// Redistance (|grad phi| = 1) + optional de-staircase one grid's field, in place in `phi`.
+// Redistance (|grad phi| = 1) one grid's field, in place in `phi`.
 //
 // Memory: `phi` is the caller's output slice and `field` (the untouched input slice) doubles as
 // the frozen phi0, so the solve needs only the scratch below, each `numVoxels` long:
 //   * scratchA          always (RK stage / ping-pong)
 //   * scratchB          order 3 only (Shu-Osher needs phi^n and two stages live at once)
-//   * smoothedPhi0      smooth > 0 only (snapshot of the smoothed field for the re-redistance)
 // Inactive neighbours are resolved by `faceValue` to +/-bandWidth using the frozen sign for Godunov
-// updates and the current centre sign otherwise, so a narrow band with an inactive interior is
-// treated as continuing inward, not as exterior.
+// updates and the phi0 centre sign for the frozen interface data, so a narrow band with an inactive
+// interior is treated as continuing inward, not as exterior.
 template <typename ScalarT>
 void
 runReinit(OnIndexGridT *grid,
@@ -375,14 +350,11 @@ runReinit(OnIndexGridT *grid,
           ScalarT *phi,
           ScalarT *scratchA,
           ScalarT *scratchB,
-          ScalarT *smoothedPhi0,
           int64_t numVoxels,
           ScalarT voxelSize,
           ScalarT bandWidth,
           int band,
-          int smooth,
           int order,
-          bool taubin,
           int redistanceIters,
           cudaStream_t stream) {
     const uint32_t launchBlocks = stencilLaunchBlocks(vbm);
@@ -451,49 +423,6 @@ runReinit(OnIndexGridT *grid,
     const int defaultIters = std::max(20, 6 * band);
     const int iters        = redistanceIters > 0 ? redistanceIters : defaultIters;
     redistance(field, scratchA, iters);
-
-    if (smooth) {
-        ScalarT *current = phi, *other = scratchA; // ping-pong
-        auto pass = [&](ScalarT weight) {
-            if (launchBlocks) {
-                smoothFusedKernel<ScalarT><<<launchBlocks, kStencilBlockDim, 0, stream>>>(
-                    grid, vbm, current, weight, bandWidth, other);
-                C10_CUDA_KERNEL_LAUNCH_CHECK();
-            }
-            std::swap(current, other);
-        };
-        if (taubin) {
-            for (int i = 0; i < smooth; ++i) {
-                pass(ScalarT(0.5));
-                pass(ScalarT(-0.53));
-            } // volume-preserving
-        } else {
-            for (int i = 0; i < smooth; ++i)
-                pass(ScalarT(1.0)); // mean-curvature
-        }
-        // The smoothed surface is the new anchor. The result must end up in phi (evolving field)
-        // and be kept as phi0; one copy suffices if the buffer it landed in takes one of those
-        // roles and the other spare buffer becomes the scratch.
-        const ScalarT *anchor;
-        ScalarT *scratch;
-        if (current == phi) {
-            C10_CUDA_CHECK(
-                cudaMemcpyAsync(smoothedPhi0, phi, fieldBytes, cudaMemcpyDeviceToDevice, stream));
-            anchor  = smoothedPhi0;
-            scratch = scratchA;
-        } else {
-            C10_CUDA_CHECK(
-                cudaMemcpyAsync(phi, current, fieldBytes, cudaMemcpyDeviceToDevice, stream));
-            anchor  = current;
-            scratch = smoothedPhi0;
-        }
-        // The full sweep count is needed here, not a short fixed floor: smoothing is not a small
-        // perturbation on a clamped band. On a 52k-voxel chair, mean-curvature passes moved values
-        // by 1.2 (1 pass) to 2.5 (8 passes) voxels, and with 4 post-smoothing sweeps the field was
-        // off the converged result by up to 2.8 voxels (mean 0.04-0.26); 20 sweeps brought the mean
-        // under 0.005.
-        redistance(anchor, scratch, iters);
-    }
 }
 
 template <typename ScalarT>
@@ -503,9 +432,7 @@ reinitializeSdfCuda(const GridBatchData &batchHdl,
                     torch::Tensor &out,
                     int band,
                     int redistanceIters,
-                    int order,
-                    int smooth,
-                    bool taubin) {
+                    int order) {
     c10::cuda::CUDAGuard deviceGuard(batchHdl.device());
     cudaStream_t stream = at::cuda::getCurrentCUDAStream(batchHdl.device().index()).stream();
     auto opts           = torch::TensorOptions().dtype(field.dtype()).device(field.device());
@@ -549,7 +476,6 @@ reinitializeSdfCuda(const GridBatchData &batchHdl,
 
         torch::Tensor scratchA = torch::empty({numVoxels}, opts);
         torch::Tensor scratchB = (order >= 3) ? torch::empty({numVoxels}, opts) : torch::Tensor();
-        torch::Tensor smoothed = (smooth > 0) ? torch::empty({numVoxels}, opts) : torch::Tensor();
 
         runReinit<ScalarT>(grid,
                            vbm,
@@ -557,14 +483,11 @@ reinitializeSdfCuda(const GridBatchData &batchHdl,
                            phi,
                            scratchA.data_ptr<ScalarT>(),
                            (order >= 3) ? scratchB.data_ptr<ScalarT>() : nullptr,
-                           (smooth > 0) ? smoothed.data_ptr<ScalarT>() : nullptr,
                            numVoxels,
                            voxelSize,
                            bandWidth,
                            band,
-                           smooth,
                            order,
-                           taubin,
                            redistanceIters,
                            stream);
         C10_CUDA_CHECK(cudaStreamSynchronize(stream));
@@ -578,10 +501,7 @@ reinitializeSdf(const GridBatchData &batchHdl,
                 const JaggedTensor &field,
                 int band,
                 int redistanceIters,
-                int order,
-                int smooth,
-                SmoothingMode smoothing) {
-    const bool taubin = (smoothing == SmoothingMode::TAUBIN);
+                int order) {
     TORCH_CHECK_VALUE(
         field.ldim() == 1,
         "Expected field to have 1 list dimension (a single list of per-voxel values)");
@@ -596,7 +516,6 @@ reinitializeSdf(const GridBatchData &batchHdl,
                       "field batch size does not match the grid batch size");
     TORCH_CHECK_VALUE(band >= 1, "band must be >= 1");
     TORCH_CHECK_VALUE(order >= 1 && order <= 3, "order must be 1, 2, or 3");
-    TORCH_CHECK_VALUE(smooth >= 0, "smooth must be >= 0");
     batchHdl.checkDevice(field);
     TORCH_CHECK(field.device().is_cuda(),
                 "reinitialize_sdf currently requires a CUDA device (VoxelBlockManager solver)");
@@ -617,8 +536,7 @@ reinitializeSdf(const GridBatchData &batchHdl,
 
     torch::Tensor out = torch::empty_like(fieldJdata);
     AT_DISPATCH_FLOATING_TYPES(fieldJdata.scalar_type(), "reinitializeSdf", [&] {
-        reinitializeSdfCuda<scalar_t>(
-            batchHdl, fieldJdata, out, band, redistanceIters, order, smooth, taubin);
+        reinitializeSdfCuda<scalar_t>(batchHdl, fieldJdata, out, band, redistanceIters, order);
     });
     return field.jagged_like(out);
 }

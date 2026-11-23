@@ -171,13 +171,14 @@ from ._ray import (
     voxels_along_rays_single,
 )
 
-# Signed distance fields
+# Signed distance fields and smoothing
 from ._sdf import (
     rebuild_narrow_band_batch,
     rebuild_narrow_band_single,
     reinitialize_sdf_batch,
     reinitialize_sdf_single,
 )
+from ._smoothing import laplacian_smooth_batch, laplacian_smooth_single
 
 # Grid topology
 from ._topology import (
@@ -302,7 +303,9 @@ __all__ = [
     "integrate_tsdf_single",
     "integrate_tsdf_with_features_batch",
     "integrate_tsdf_with_features_single",
-    # Signed distance fields
+    # Signed distance fields and smoothing
+    "laplacian_smooth_batch",
+    "laplacian_smooth_single",
     "rebuild_narrow_band_batch",
     "rebuild_narrow_band_single",
     "reinitialize_sdf_batch",

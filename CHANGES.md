@@ -24,10 +24,16 @@ fVDB Version History
   oblique slabs and rods are fixed points under repeated calls (#796).
 - **Default changes:** `reinitialize_sdf` and `rebuild_narrow_band` default to `order=1` (the converged result does
   not depend on the RK order) and `redistance_iters <= 0` now means `max(20, 6*band)` instead of
-  `max(6, round(2.5*band) + 2)`. The redistance after smoothing uses the same sweep count (#796).
-- Reduced `reinitialize_sdf` peak scratch memory from 6x the field to 2x at order 1 or 2 and 3x at order 3, plus 1x
-  when smoothing. The input tensor doubles as the frozen phi0 and the non-finite check is fused into the first
-  sweep (#796).
+  `max(6, round(2.5*band) + 2)` (#796).
+- Reduced `reinitialize_sdf` peak scratch memory from 6x the field to 2x at order 1 or 2 and 3x at order 3. The
+  input tensor doubles as the frozen phi0 and the non-finite check is fused into the first sweep (#796).
+- Added `laplacian_smooth` on `Grid`, `GridBatch` and `fvdb.functional`: umbrella-Laplacian smoothing of any
+  per-voxel field (`(N,)` or `(N, C)`) with the `SmoothingMode.MEAN_CURVATURE` or `SmoothingMode.TAUBIN`
+  schedule. Inactive face neighbours either contribute nothing (zero flux, the default) or, given a
+  `boundary_value`, continue the centre voxel's sign at that magnitude, which is how narrow-band SDFs are smoothed.
+- **Breaking:** Removed the `smooth` and `smoothing` arguments from `reinitialize_sdf` and `rebuild_narrow_band`.
+  The same result comes from `reinitialize_sdf`, then `laplacian_smooth(sdf, iterations=smooth, mode=smoothing,
+  boundary_value=band * voxel_size)`, then `reinitialize_sdf` again.
 
 ## Version 0.6.0 - September 18, 2026
 

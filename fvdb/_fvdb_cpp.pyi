@@ -972,8 +972,13 @@ def reinitialize_sdf(
     band: int,
     redistance_iters: int,
     order: int,
-    smooth: int,
-    smoothing: SmoothingMode,
+) -> JaggedTensor: ...
+def laplacian_smooth(
+    grid: GridBatchData,
+    field: JaggedTensor,
+    iterations: int,
+    mode: SmoothingMode,
+    boundary_values: torch.Tensor | None,
 ) -> JaggedTensor: ...
 
 # Topology / misc

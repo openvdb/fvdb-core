@@ -10,18 +10,12 @@ from typing import TYPE_CHECKING
 import torch
 
 from .. import _fvdb_cpp
-from ..enums import SmoothingMode, _to_cpp_enum
 from ..jagged_tensor import JaggedTensor
 from ._dense import inject_batch, inject_single
 
 if TYPE_CHECKING:
     from ..grid import Grid
     from ..grid_batch import GridBatch
-
-
-def _to_cpp_smoothing(smoothing: SmoothingMode) -> "_fvdb_cpp.SmoothingMode":
-    """Convert a public :class:`fvdb.SmoothingMode` to the bound C++ enum (matched by member name)."""
-    return _to_cpp_enum(SmoothingMode, _fvdb_cpp.SmoothingMode, smoothing)
 
 
 def _validated_scalar_field(field: torch.Tensor, num_voxels: int) -> torch.Tensor:
@@ -102,33 +96,26 @@ def reinitialize_sdf_batch(
     grid: GridBatch,
     field: JaggedTensor,
     band: int = 3,
-    smooth: int = 0,
     order: int = 1,
-    smoothing: SmoothingMode = SmoothingMode.MEAN_CURVATURE,
     redistance_iters: int = -1,
 ) -> JaggedTensor:
     """Re-initialize a signed per-voxel field into an SDF on the same grid batch.
 
     Redistances ``field`` to satisfy ``|grad phi| = 1`` (TVD-RK Godunov upwind eikonal solve with a
-    frozen Peng sign and a Russo-Smereka subcell fix that anchors the zero crossing), then
-    optionally de-staircases it with curvature-based smoothing. The grid topology is unchanged: the
-    returned field has the same per-voxel ordering as ``field``.
+    frozen Peng sign and a Russo-Smereka subcell fix that anchors the zero crossing). The grid
+    topology is unchanged: the returned field has the same per-voxel ordering as ``field``.
 
     Args:
         grid (GridBatch): The grid batch defining the sparse topology.
         field (JaggedTensor): Per-voxel signed field values.
         band (int): Narrow-band half-width in voxels. The field is clamped to ``[-band*vx, band*vx]``.
-        smooth (int): Number of smoothing passes (``0`` disables smoothing).
         order (int): TVD-RK order, one of ``1`` (Euler, default), ``2`` (Heun), or ``3`` (Shu-Osher).
             The redistance marches to a steady state, so the order does not change the converged
             result; ``1`` costs one stencil pass per sweep and one scratch buffer.
-        smoothing (SmoothingMode): Which Laplacian flow each smoothing pass applies --
-            :attr:`~fvdb.SmoothingMode.MEAN_CURVATURE` (default) or
-            :attr:`~fvdb.SmoothingMode.TAUBIN` (volume-preserving). Only used when ``smooth > 0``.
         redistance_iters (int): Number of redistancing sweeps; ``<= 0`` uses the default
-            ``max(20, 6*band)``. The same count is used for the redistance that follows smoothing,
-            so a small explicit value renormalizes the smoothed field only within about
-            ``0.4*redistance_iters`` voxels of the surface.
+            ``max(20, 6*band)``. Values propagate about ``0.4`` voxels per sweep, so a small explicit
+            value renormalizes the field only within about ``0.4*redistance_iters`` voxels of the
+            surface.
 
     Returns:
         sdf (JaggedTensor): The re-initialized SDF, same per-voxel ordering as ``field``.
@@ -136,8 +123,8 @@ def reinitialize_sdf_batch(
     Note:
         * ``field`` must represent the intended inside/outside regions and zero crossings. Its
           magnitudes need not be accurate distances, but affect convergence, accuracy, and sub-voxel
-          surface location. With ``smooth=0`` redistancing aims to preserve the input surface, subject
-          to discretization error; smoothing moves the surface and then re-redistances.
+          surface location. Redistancing aims to preserve the input surface, subject to
+          discretization error.
         * Values must be finite, with shape ``(N,)`` or ``(N, 1)`` (for a batch, the shape of
           ``field.jdata``). Invalid shapes and NaN/Inf values raise ``ValueError``.
         * The surface is where the field changes sign between *active* voxels; one active voxel of
@@ -145,23 +132,26 @@ def reinitialize_sdf_batch(
           accuracy). A grid whose active values are all one sign has no surface: the result is the
           constant ``-/+band*vx`` and :func:`rebuild_narrow_band_batch` returns an empty band, which
           is correct for e.g. a tile that lies entirely inside an object.
-        * Inactive neighbours read as ``+/-band*vx`` using the adjacent voxel's frozen sign during
-          redistancing and its current sign during smoothing. Both filled solids (interior active)
-          and narrow bands whose interior is inactive are valid inputs. Leave no-data voxels
-          *inactive* rather than assigning them NaN/Inf values.
+        * Inactive neighbours read as ``+/-band*vx`` using the adjacent voxel's frozen sign. Both
+          filled solids (interior active) and narrow bands whose interior is inactive are valid
+          inputs. Leave no-data voxels *inactive* rather than assigning them NaN/Inf values.
         * Voxels whose value is exactly ``0`` have a zero frozen sign and are left at ``0`` by the
           redistance (a no-data pass-through relied on by the ray-implicit-intersection op, which
           treats exact ``0`` as a gap). Their signed neighbours, however, see them as an interface and
-          are redistanced toward them, and smoothing blends them -- prune such voxels first when you
-          can.
+          are redistanced toward them -- prune such voxels first when you can.
         * Each grid must have isotropic voxels (``ValueError`` otherwise); grids in the batch may
           differ from one another. CUDA only; ``float32`` or ``float64``.
+        * To de-staircase an SDF, smooth it with :func:`laplacian_smooth_batch` using sign
+          continuation at ``band*vx`` and redistance again::
 
-    .. seealso:: :func:`reinitialize_sdf_single`, :func:`rebuild_narrow_band_batch`
+              sdf = reinitialize_sdf_batch(grid, field, band)
+              sdf = laplacian_smooth_batch(grid, sdf, n, boundary_value=band * grid.voxel_sizes[:, 0])
+              sdf = reinitialize_sdf_batch(grid, sdf, band)
+
+    .. seealso:: :func:`reinitialize_sdf_single`, :func:`rebuild_narrow_band_batch`,
+        :func:`laplacian_smooth_batch`
     """
-    result = _fvdb_cpp.reinitialize_sdf(
-        grid.data, field._impl, band, redistance_iters, order, smooth, _to_cpp_smoothing(smoothing)
-    )
+    result = _fvdb_cpp.reinitialize_sdf(grid.data, field._impl, band, redistance_iters, order)
     return JaggedTensor(impl=result)
 
 
@@ -169,9 +159,7 @@ def reinitialize_sdf_single(
     grid: Grid,
     field: torch.Tensor,
     band: int = 3,
-    smooth: int = 0,
     order: int = 1,
-    smoothing: SmoothingMode = SmoothingMode.MEAN_CURVATURE,
     redistance_iters: int = -1,
 ) -> torch.Tensor:
     """Re-initialize a signed per-voxel field into an SDF on a single grid.
@@ -180,26 +168,20 @@ def reinitialize_sdf_single(
         grid (Grid): The single grid defining the sparse topology.
         field (torch.Tensor): Per-voxel signed field values, shape ``(num_voxels,)`` or ``(num_voxels, 1)``.
         band (int): Narrow-band half-width in voxels.
-        smooth (int): Number of smoothing passes (``0`` disables smoothing).
         order (int): TVD-RK order, one of ``1`` (default), ``2``, or ``3``. The order does not
             change the converged result; ``1`` is the cheapest in time and memory.
-        smoothing (SmoothingMode): Which Laplacian flow each smoothing pass applies --
-            :attr:`~fvdb.SmoothingMode.MEAN_CURVATURE` (default) or
-            :attr:`~fvdb.SmoothingMode.TAUBIN` (volume-preserving). Only used when ``smooth > 0``.
         redistance_iters (int): Number of redistancing sweeps. ``<= 0`` uses the default.
 
     Returns:
         sdf (torch.Tensor): The re-initialized SDF, shape ``(num_voxels,)``.
 
     Note:
-        See :func:`reinitialize_sdf_batch` for the input contract.
+        See :func:`reinitialize_sdf_batch` for the input contract and how to smooth.
 
-    .. seealso:: :func:`reinitialize_sdf_batch`, :func:`rebuild_narrow_band_single`
+    .. seealso:: :func:`reinitialize_sdf_batch`, :func:`rebuild_narrow_band_single`,
+        :func:`laplacian_smooth_single`
     """
-    field_jt = JaggedTensor(field)
-    result = _fvdb_cpp.reinitialize_sdf(
-        grid.data, field_jt._impl, band, redistance_iters, order, smooth, _to_cpp_smoothing(smoothing)
-    )
+    result = _fvdb_cpp.reinitialize_sdf(grid.data, JaggedTensor(field)._impl, band, redistance_iters, order)
     return JaggedTensor(impl=result).jdata
 
 
@@ -212,9 +194,7 @@ def rebuild_narrow_band_batch(
     grid: GridBatch,
     field: JaggedTensor,
     band: int = 3,
-    smooth: int = 0,
     order: int = 1,
-    smoothing: SmoothingMode = SmoothingMode.MEAN_CURVATURE,
     redistance_iters: int = -1,
     pad: bool = True,
     prune: bool = True,
@@ -231,12 +211,8 @@ def rebuild_narrow_band_batch(
         grid (GridBatch): The grid batch defining the sparse topology.
         field (JaggedTensor): Per-voxel signed field values.
         band (int): Narrow-band half-width in voxels.
-        smooth (int): Number of smoothing passes (``0`` disables smoothing).
         order (int): TVD-RK order, one of ``1`` (default), ``2``, or ``3``. The order does not
             change the converged result; ``1`` is the cheapest in time and memory.
-        smoothing (SmoothingMode): Which Laplacian flow each smoothing pass applies --
-            :attr:`~fvdb.SmoothingMode.MEAN_CURVATURE` (default) or
-            :attr:`~fvdb.SmoothingMode.TAUBIN` (volume-preserving). Only used when ``smooth > 0``.
         redistance_iters (int): Number of redistancing sweeps. ``<= 0`` uses the default.
         pad (bool): If ``True`` (default) dilate the grid by ``band`` voxels before redistancing so
             the output narrow band is a full ``band`` voxels wide even if the input grid had a
@@ -262,7 +238,7 @@ def rebuild_narrow_band_batch(
     field = field.jagged_like(_validated_scalar_field(field.jdata, grid.total_voxels))
     if pad:
         grid, field = _pad_with_sign_batch(grid, field, band, band_width)
-    phi = reinitialize_sdf_batch(grid, field, band, smooth, order, smoothing, redistance_iters)
+    phi = reinitialize_sdf_batch(grid, field, band, order, redistance_iters)
     if not prune:
         return grid, phi
     mask = phi.jdata.abs() < band_width.to(phi.jdata.device)[phi.jidx.long()] * 0.999
@@ -273,9 +249,7 @@ def rebuild_narrow_band_single(
     grid: Grid,
     field: torch.Tensor,
     band: int = 3,
-    smooth: int = 0,
     order: int = 1,
-    smoothing: SmoothingMode = SmoothingMode.MEAN_CURVATURE,
     redistance_iters: int = -1,
     pad: bool = True,
     prune: bool = True,
@@ -291,12 +265,8 @@ def rebuild_narrow_band_single(
         grid (Grid): The single grid defining the sparse topology.
         field (torch.Tensor): Per-voxel signed field values, shape ``(num_voxels,)`` or ``(num_voxels, 1)``.
         band (int): Narrow-band half-width in voxels.
-        smooth (int): Number of smoothing passes (``0`` disables smoothing).
         order (int): TVD-RK order, one of ``1`` (default), ``2``, or ``3``. The order does not
             change the converged result; ``1`` is the cheapest in time and memory.
-        smoothing (SmoothingMode): Which Laplacian flow each smoothing pass applies --
-            :attr:`~fvdb.SmoothingMode.MEAN_CURVATURE` (default) or
-            :attr:`~fvdb.SmoothingMode.TAUBIN` (volume-preserving). Only used when ``smooth > 0``.
         redistance_iters (int): Number of redistancing sweeps. ``<= 0`` uses the default.
         pad (bool): If ``True`` (default) dilate the grid by ``band`` voxels before redistancing so
             the output narrow band is a full ``band`` voxels wide even if the input grid had a
@@ -322,7 +292,7 @@ def rebuild_narrow_band_single(
     field = _validated_scalar_field(field, grid.num_voxels)
     if pad:
         grid, field = _pad_with_sign_single(grid, field, band, band_width)
-    phi = reinitialize_sdf_single(grid, field, band, smooth, order, smoothing, redistance_iters)
+    phi = reinitialize_sdf_single(grid, field, band, order, redistance_iters)
     if not prune:
         return grid, phi
     mask = phi.abs() < band_width * 0.999
