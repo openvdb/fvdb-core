@@ -3,7 +3,9 @@
 //
 // Dual-contouring (DC + QEF) mesher: meshes an OnIndex grid carrying a narrow-band SDF into a
 // triangle mesh, with QEF vertex placement and optional cluster-collapse decimation. The 3x3x3 box
-// stencil is gathered once per voxel via the NanoVDB VoxelBlockManager.
+// stencil is gathered once per voxel via the NanoVDB VoxelBlockManager. The whole batch is meshed
+// together (in chunks of consecutive grids bounded by kMaxChunkVoxels), so the number of host
+// synchronizations and kernel launches does not grow with the number of grids.
 //
 // This follows the dual-contouring approach of OpenVDB's tools/VolumeToMesh.h, but places vertices
 // by minimising a quadratic error function (classic DC) rather than averaging the edge crossings
@@ -40,6 +42,7 @@
 #include <ATen/cuda/Atomic.cuh>
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAException.h>
+#include <c10/cuda/CUDAGuard.h>
 
 #include <algorithm>
 #include <cmath>
@@ -54,8 +57,33 @@ namespace {
 
 using OnIndexGridT = nanovdb::NanoGrid<nanovdb::ValueOnIndex>;
 
-// log2 of the VoxelBlockManager block width, shared with the batch's cached VBM handles.
+// The batch's cached VoxelBlockManagers (GridBatchData::vbm) are decoded one VBM block per CUDA
+// block of kBlockWidth threads, one thread per block slot. (A grid-stride form with 256-thread
+// blocks doubled the gather kernel's register count and ran ~25% slower.)
 static constexpr int kLog2BlockWidth = VbmCache::kLog2BlockWidth;
+static constexpr int kBlockWidth     = VbmCache::kBlockWidth;
+
+// Grids are meshed together in chunks of consecutive grids holding at most this many active voxels
+// (a single larger grid forms its own chunk). Each chunk costs a constant number of host syncs (the
+// surface-cell compaction, the triangle count, the vertex prune, and the cluster relabels when
+// decimating) and ~89 bytes of scratch per voxel, so this bounds the scratch at ~370 MB while a
+// chunk's work (milliseconds) still dwarfs its sync overhead (tens of microseconds). Chunk-local
+// value indices are int32, so a chunk must also stay below 2^31 voxels.
+static constexpr int64_t kMaxChunkVoxels = int64_t(1) << 22;
+
+// Per-grid decimation-key parameters, one row of int64 per grid in the batch (see
+// buildGridKeyParams): the grid's surface-cell coord minimum (the key origin), its key-space spans,
+// and the base of its key range, so that cluster keys of different grids never collide.
+enum GridKeyParam : int {
+    kKeyOriginX = 0,
+    kKeyOriginY,
+    kKeyOriginZ,
+    kKeySpanY,
+    kKeySpanZ,
+    kKeyFineCount, // number of fine (per-voxel) keys of the grid: spanX * spanY * spanZ
+    kKeyBase,      // first key of the grid's [kKeyBase, kKeyBase + 2 * kKeyFineCount) key range
+    kNumGridKeyParams
+};
 
 // ------------------------- box-stencil geometry (compile-time) -------------------------
 
@@ -198,20 +226,26 @@ solveSymmetric3x3(const double A[6], const double b[3], double x[3]) {
 
 // =====================  fused VBM decode  ====================================================
 /// @brief Decoding the VBM stencil is the expensive part, so each voxel does it ONCE here and
-/// writes four value-indexed outputs that every later kernel then reads in O(1) (no re-walking the
+/// writes four slot-indexed outputs that every later kernel then reads in O(1) (no re-walking the
 /// tree):
-///   - neighborTable [valueCount x numColumns] : the gathered box-stencil neighbour value-indices
+///   - neighborTable [valueCount x numColumns] : the gathered box-stencil neighbour slots
 ///   - gradient                                : central-difference SDF gradient (the surface
-///   normal)
+///                                               normal)
 ///   - surfaceFlag                             : 1 iff the iso surface passes through this voxel's
-///   cube
+///                                               cube
 ///   - voxelCoord                              : the voxel's index-space (i,j,k)
-__global__ void
-gatherFusedKernel(const OnIndexGridT *grid,
-                  const uint32_t *firstLeafID,
-                  const uint64_t *jumpMap,
-                  uint64_t firstOffset,
-                  uint64_t lastOffset,
+///
+/// One launch covers every grid of a chunk: CUDA block b decodes batch-wide VBM block vbBegin + b
+/// (gap blocks between grids exit at once). Outputs are
+/// indexed by chunk-wide slot: the voxel with batch-wide feature index f sits at slot
+/// 1 + f - chunkVoxelBase, and slot 0 is the shared background (inactive neighbours of every grid
+/// map to it). The box stencil only reaches voxels of the same grid, so the neighbour table, and
+/// with it all connectivity, never crosses grids.
+__global__ void __launch_bounds__(kBlockWidth)
+gatherFusedKernel(const BatchVbm vbm,
+                  const BatchVbmLayout layout,
+                  uint64_t vbBegin,
+                  int64_t chunkVoxelBase,
                   const float *sdf,
                   BoxStencilGeometry geometry,
                   float iso,
@@ -219,34 +253,46 @@ gatherFusedKernel(const OnIndexGridT *grid,
                   float *gradient,
                   uint8_t *surfaceFlag,
                   int32_t *voxelCoord) {
-    // Register-only VBM decode of this thread's voxel (no shared memory, no barrier); launched as
-    // <<<blockCount, blockWidth>>> over the grid's VBM blocks, one thread per block slot.
-    constexpr int blockWidth = 1 << kLog2BlockWidth, jumpMapWordCount = blockWidth / 64;
-    using VoxelBlockManagerT        = nanovdb::tools::cuda::VoxelBlockManager<kLog2BlockWidth>;
-    const uint64_t blockFirstOffset = firstOffset + uint64_t(blockIdx.x) * blockWidth;
-    if (blockFirstOffset + threadIdx.x > lastOffset)
+    using VoxelBlockManagerT = nanovdb::tools::cuda::VoxelBlockManager<kLog2BlockWidth>;
+    const BatchVbmView view(
+        layout, uint32_t(vbm.numGrids), vbm.blockCount, vbm.firstLeafID, vbm.jumpMap);
+    const uint64_t vb = vbBegin + blockIdx.x; // this CUDA block's batch-wide VBM block
+    // blocks between grids map to the grid before them and fall past its voxels below
+    const uint32_t bi = view.lastGridAtOrBefore(vb);
+    if (bi == BatchVbmView::UnusedGridIndex)
+        return;
+    const uint64_t localBlock = vb - view.blockBase(bi);
+    if (localBlock * kBlockWidth + threadIdx.x >= view.voxelCount(bi))
         return; // slot past the grid's last active voxel
+    const nanovdb::OnIndexGrid *grid = layout.acc.grid(bi);
     uint32_t leafIndex;
     uint16_t voxelOffset;
     VoxelBlockManagerT::template decodeInverseMap<nanovdb::ValueOnIndex>(
         grid,
-        firstLeafID[blockIdx.x],
-        &jumpMap[uint64_t(blockIdx.x) * jumpMapWordCount],
-        blockFirstOffset,
+        view.firstLeafID()[vb],
+        view.jumpMap() + vb * VbmCache::kJumpMapWordCount,
+        1 + localBlock * kBlockWidth,
         int(threadIdx.x),
         leafIndex,
         voxelOffset);
     if (leafIndex == VoxelBlockManagerT::UnusedLeafIndex)
-        return; // defensive; the lastOffset guard above makes this unreachable
+        return; // defensive; the voxelCount guard above makes this unreachable
+    // grid-local value indices (1-based, 0 = inactive); slotOf maps one to its chunk-wide slot
+    // (0 = background) as it is read
     uint64_t stencil[27];
     VoxelBlockManagerT::template computeBoxStencil<nanovdb::ValueOnIndex>(
         grid, leafIndex, voxelOffset, stencil);
-    const uint64_t centerIndex = stencil[13]; // centre value index (>= 1 for active)
-    const int numColumns       = geometry.numColumns;
+    const int64_t slotBase = layout.voxelOffsets[bi] - chunkVoxelBase;
+    auto slotOf            = [&](int spoke) -> int64_t {
+        const uint64_t valueIndex = stencil[spoke];
+        return valueIndex ? int64_t(valueIndex) + slotBase : 0;
+    };
+    const int64_t centerIndex = slotOf(13); // this voxel's slot (>= 1)
+    const int numColumns      = geometry.numColumns;
 
     for (int column = 0; column < numColumns; ++column) {
         neighborTable[centerIndex * numColumns + column] =
-            (int32_t)stencil[geometry.usedSpokes[column]];
+            (int32_t)slotOf(geometry.usedSpokes[column]);
     }
 
     // central-difference gradient (inactive face stencil==0 -> use the centre value). Computed in
@@ -254,7 +300,7 @@ gatherFusedKernel(const OnIndexGridT *grid,
     // scale cancels) -- the assumption of the SDF ops this consumes. See the note in DualContour.h.
     const float centerSdf = sdf[centerIndex];
     auto faceValue        = [&](int spoke) {
-        uint64_t neighbor = stencil[spoke];
+        const int64_t neighbor = slotOf(spoke);
         return neighbor > 0 ? sdf[neighbor] : centerSdf;
     };
     gradient[centerIndex * 3 + 0] =
@@ -271,7 +317,7 @@ gatherFusedKernel(const OnIndexGridT *grid,
     bool allCornersActive = true;
 #pragma unroll
     for (int corner = 0; corner < 8; ++corner) {
-        uint64_t cornerIndex = stencil[geometry.cornerSpoke[corner]];
+        const int64_t cornerIndex = slotOf(geometry.cornerSpoke[corner]);
         numInsideCorners += (sdf[cornerIndex] < iso) ? 1 : 0;
         // corner 0 is offset (0,0,0) -- the anchor voxel itself (== centerIndex), which is always
         // active here (this thread only runs for an active voxel), so skip its redundant check.
@@ -351,6 +397,7 @@ computeEdgeCrossing(int edge,
 /// tangent-plane feature point is [Kobbelt et al. 2001]. (See the reference list at the top.)
 __global__ void
 placeQefVerticesKernel(const int32_t *surfaceCells,
+                       const int32_t *surfaceGrid,
                        int64_t numSurfaceCells,
                        const int32_t *neighborTable,
                        const float *sdf,
@@ -358,7 +405,7 @@ placeQefVerticesKernel(const int32_t *surfaceCells,
                        const int32_t *voxelCoord,
                        BoxStencilGeometry geometry,
                        float iso,
-                       VoxelCoordTransform transform,
+                       GridBatchData::Accessor batchAcc,
                        float *outVertices,
                        float *outRefNormal) {
     const int64_t cellOrdinal = int64_t(blockIdx.x) * blockDim.x + threadIdx.x;
@@ -446,10 +493,11 @@ placeQefVerticesKernel(const int32_t *surfaceCells,
             localVertex[axis] = fmin(fmax(crossingCentroid[axis] + solution[axis], 0.0), 1.0);
     }
     // cell-local vertex -> world: localVertex is in [0,1]^3 within the cell, so add the cell's
-    // index-space origin and map index space -> world with the grid transform.
-    const float originX              = (float)voxelCoord[int64_t(cellValueIndex) * 3 + 0];
-    const float originY              = (float)voxelCoord[int64_t(cellValueIndex) * 3 + 1];
-    const float originZ              = (float)voxelCoord[int64_t(cellValueIndex) * 3 + 2];
+    // index-space origin and map index space -> world with the cell's grid transform.
+    const VoxelCoordTransform &transform = batchAcc.primalTransform(surfaceGrid[cellOrdinal]);
+    const float originX                  = (float)voxelCoord[int64_t(cellValueIndex) * 3 + 0];
+    const float originY                  = (float)voxelCoord[int64_t(cellValueIndex) * 3 + 1];
+    const float originZ                  = (float)voxelCoord[int64_t(cellValueIndex) * 3 + 2];
     auto worldPos                    = transform.applyInv<float>(originX + (float)localVertex[0],
                                               originY + (float)localVertex[1],
                                               originZ + (float)localVertex[2]);
@@ -688,64 +736,78 @@ cellNormalKernel(const int32_t *surfaceCells,
 }
 
 __device__ inline long long
-packKey(int x, int y, int z, int spanY, int spanZ) {
-    return ((long long)x * spanY + y) * spanZ + z;
+packKey(long long x, long long y, long long z, long long spanY, long long spanZ) {
+    return (x * spanY + y) * spanZ + z;
 }
 
-/// @brief Uniform-block cluster key (also the coarse-block key reused in the adaptive pass).
+/// @brief A surface cell's index-space coord relative to its grid's key origin (the minimum
+/// surface-cell coord of the grid), and the grid's key parameter row.
+struct CellKeyFrame {
+    const int64_t *params; // the grid's kNumGridKeyParams row
+    long long localX, localY, localZ;
+};
+
+__device__ inline CellKeyFrame
+cellKeyFrame(int64_t i,
+             const int32_t *surfaceCells,
+             const int32_t *surfaceGrid,
+             const int32_t *voxelCoord,
+             const int64_t *gridKeyParams) {
+    const int64_t *params        = gridKeyParams + int64_t(surfaceGrid[i]) * kNumGridKeyParams;
+    const int32_t cellValueIndex = surfaceCells[i];
+    return {params,
+            voxelCoord[int64_t(cellValueIndex) * 3 + 0] - params[kKeyOriginX],
+            voxelCoord[int64_t(cellValueIndex) * 3 + 1] - params[kKeyOriginY],
+            voxelCoord[int64_t(cellValueIndex) * 3 + 2] - params[kKeyOriginZ]};
+}
+
+/// @brief Uniform-block cluster key (also the coarse-block key reused in the adaptive pass). Each
+/// grid's keys lie in its own [kKeyBase, kKeyBase + kKeyFineCount) range, so no cluster spans
+/// grids.
 __global__ void
 clusterKeyKernel(const int32_t *surfaceCells,
+                 const int32_t *surfaceGrid,
                  int64_t numSurfaceCells,
                  const int32_t *voxelCoord,
-                 int originX,
-                 int originY,
-                 int originZ,
-                 int spanY,
-                 int spanZ,
+                 const int64_t *gridKeyParams,
                  int blockSize,
                  long long *clusterKeys) {
     int64_t i = int64_t(blockIdx.x) * blockDim.x + threadIdx.x;
     if (i >= numSurfaceCells)
         return;
-    int32_t cellValueIndex = surfaceCells[i];
-    int localX             = voxelCoord[int64_t(cellValueIndex) * 3 + 0] - originX,
-        localY             = voxelCoord[int64_t(cellValueIndex) * 3 + 1] - originY,
-        localZ             = voxelCoord[int64_t(cellValueIndex) * 3 + 2] - originZ;
-    clusterKeys[i] =
-        packKey(localX / blockSize, localY / blockSize, localZ / blockSize, spanY, spanZ);
+    const CellKeyFrame f = cellKeyFrame(i, surfaceCells, surfaceGrid, voxelCoord, gridKeyParams);
+    clusterKeys[i]       = f.params[kKeyBase] + packKey(f.localX / blockSize,
+                                                  f.localY / blockSize,
+                                                  f.localZ / blockSize,
+                                                  f.params[kKeySpanY],
+                                                  f.params[kKeySpanZ]);
 }
 
 /// @brief Adaptive cluster key: a cell in a flat block takes its coarse-block id (so the whole
 /// block collapses to one vertex); a cell in a feature block takes its own per-voxel key (so it
-/// stays full detail). The flat-block keys are offset by fineKeyCount so the fine and coarse key
-/// spaces can never collide.
+/// stays full detail). Within the grid's key range the flat-block keys are offset by kKeyFineCount
+/// so the fine and coarse key spaces can never collide.
 __global__ void
 clusterKeyAdaptiveKernel(const int32_t *surfaceCells,
+                         const int32_t *surfaceGrid,
                          int64_t numSurfaceCells,
                          const int32_t *voxelCoord,
-                         int originX,
-                         int originY,
-                         int originZ,
-                         int spanY,
-                         int spanZ,
+                         const int64_t *gridKeyParams,
                          int blockSize,
                          const int32_t *blockOfCell,
                          const uint8_t *blockIsFlat,
-                         long long fineKeyCount,
                          long long *clusterKeys) {
     int64_t i = int64_t(blockIdx.x) * blockDim.x + threadIdx.x;
     if (i >= numSurfaceCells)
         return;
-    int32_t cellValueIndex = surfaceCells[i];
-    int localX             = voxelCoord[int64_t(cellValueIndex) * 3 + 0] - originX,
-        localY             = voxelCoord[int64_t(cellValueIndex) * 3 + 1] - originY,
-        localZ             = voxelCoord[int64_t(cellValueIndex) * 3 + 2] - originZ;
+    const CellKeyFrame f  = cellKeyFrame(i, surfaceCells, surfaceGrid, voxelCoord, gridKeyParams);
+    const long long spanY = f.params[kKeySpanY], spanZ = f.params[kKeySpanZ];
     if (blockIsFlat[blockOfCell[i]])
         clusterKeys[i] =
-            fineKeyCount +
-            packKey(localX / blockSize, localY / blockSize, localZ / blockSize, spanY, spanZ);
+            f.params[kKeyBase] + f.params[kKeyFineCount] +
+            packKey(f.localX / blockSize, f.localY / blockSize, f.localZ / blockSize, spanY, spanZ);
     else
-        clusterKeys[i] = packKey(localX, localY, localZ, spanY, spanZ);
+        clusterKeys[i] = f.params[kKeyBase] + packKey(f.localX, f.localY, f.localZ, spanY, spanZ);
 }
 
 /// @brief Accumulate the per-cluster QEF: each surface cell builds the same 12-edge normal-equation
@@ -755,6 +817,7 @@ clusterKeyAdaptiveKernel(const int32_t *surfaceCells,
 /// atomicAdd -> order-dependent; see the decimation note above.)
 __global__ void
 clusterQefAccumKernel(const int32_t *surfaceCells,
+                      const int32_t *surfaceGrid,
                       const int32_t *clusterIds,
                       int64_t numSurfaceCells,
                       const int32_t *neighborTable,
@@ -763,9 +826,7 @@ clusterQefAccumKernel(const int32_t *surfaceCells,
                       const int32_t *voxelCoord,
                       BoxStencilGeometry geometry,
                       float iso,
-                      int originX,
-                      int originY,
-                      int originZ,
+                      const int64_t *gridKeyParams,
                       double *normalMatrix,
                       double *normalRhs,
                       double *crossingSum,
@@ -779,9 +840,11 @@ clusterQefAccumKernel(const int32_t *surfaceCells,
     float cornerSdf[8], cornerGradient[8][3];
     loadCellCorners(
         cellValueIndex, neighborTable, sdf, gradient, geometry, cornerSdf, cornerGradient);
-    double cellOriginX    = voxelCoord[int64_t(cellValueIndex) * 3 + 0] - originX,
-           cellOriginY    = voxelCoord[int64_t(cellValueIndex) * 3 + 1] - originY,
-           cellOriginZ    = voxelCoord[int64_t(cellValueIndex) * 3 + 2] - originZ;
+    // the cell's origin in its grid's key frame (shared by every cell of a cluster)
+    const CellKeyFrame frame =
+        cellKeyFrame(i, surfaceCells, surfaceGrid, voxelCoord, gridKeyParams);
+    double cellOriginX = (double)frame.localX, cellOriginY = (double)frame.localY,
+           cellOriginZ    = (double)frame.localZ;
     double localMatrix[6] = {0, 0, 0, 0, 0, 0}, localRhs[3] = {0, 0, 0},
            localCrossingSum[3] = {0, 0, 0}, localNormalSum[3] = {0, 0, 0};
     int numCrossings = 0;
@@ -828,16 +891,15 @@ clusterQefAccumKernel(const int32_t *surfaceCells,
 /// normal).
 __global__ void
 clusterSolveKernel(int64_t numClusters,
+                   const int32_t *clusterGrid,
                    const double *normalMatrix,
                    const double *normalRhs,
                    const double *crossingSum,
                    const double *crossingCount,
                    const double *normalSum,
-                   int originX,
-                   int originY,
-                   int originZ,
+                   const int64_t *gridKeyParams,
                    int blockSize,
-                   VoxelCoordTransform transform,
+                   GridBatchData::Accessor batchAcc,
                    float *vertices,
                    float *refNormal) {
     int64_t clusterId = int64_t(blockIdx.x) * blockDim.x + threadIdx.x;
@@ -861,15 +923,66 @@ clusterSolveKernel(int64_t numClusters,
     for (int axis = 0; axis < 3; ++axis)
         solution[axis] = fmin(fmax(solution[axis], crossingCentroid[axis] - blockSize),
                               crossingCentroid[axis] + blockSize);
-    auto worldPos                = transform.applyInv<float>((float)(solution[0] + originX),
-                                              (float)(solution[1] + originY),
-                                              (float)(solution[2] + originZ));
+    // back from the grid's key frame to index space, then to world with the grid's transform
+    const int32_t grid    = clusterGrid[clusterId];
+    const int64_t *params = gridKeyParams + int64_t(grid) * kNumGridKeyParams;
+    auto worldPos =
+        batchAcc.primalTransform(grid).applyInv<float>((float)(solution[0] + params[kKeyOriginX]),
+                                                       (float)(solution[1] + params[kKeyOriginY]),
+                                                       (float)(solution[2] + params[kKeyOriginZ]));
     vertices[clusterId * 3 + 0]  = worldPos[0];
     vertices[clusterId * 3 + 1]  = worldPos[1];
     vertices[clusterId * 3 + 2]  = worldPos[2];
     refNormal[clusterId * 3 + 0] = (float)normalSum[clusterId * 3 + 0];
     refNormal[clusterId * 3 + 1] = (float)normalSum[clusterId * 3 + 1];
     refNormal[clusterId * 3 + 2] = (float)normalSum[clusterId * 3 + 2];
+}
+
+/// @brief Per-grid bounds of the surface-cell coords: bounds[g] = [min x,y,z, max x,y,z] over grid
+/// g's surface cells (initialised to +/-INT32_MAX by the caller). Surface cells come ordered by
+/// slot and hence grouped by grid, so almost every warp holds a single grid: such a warp reduces
+/// in registers and issues one atomic per bound, instead of 32 atomics contending on the same six
+/// words (a warp straddling two grids, or the partial last warp, falls back to per-thread
+/// atomics).
+static_assert(DEFAULT_BLOCK_DIM % 32 == 0, "surfaceBoundsKernel reduces whole warps");
+
+__global__ void
+surfaceBoundsKernel(const int32_t *surfaceCells,
+                    const int32_t *surfaceGrid,
+                    int64_t numSurfaceCells,
+                    const int32_t *voxelCoord,
+                    int32_t *bounds) {
+    const int64_t i = int64_t(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (i >= numSurfaceCells)
+        return;
+    const int32_t grid = surfaceGrid[i];
+    const int64_t cell = surfaceCells[i];
+    int32_t lo[3], hi[3];
+#pragma unroll
+    for (int axis = 0; axis < 3; ++axis)
+        lo[axis] = hi[axis] = voxelCoord[cell * 3 + axis];
+    int32_t *gridBounds = bounds + int64_t(grid) * 6;
+    // every lane of a warp whose last index is in range got past the early return above (the
+    // launch's block size is a multiple of 32), so the warp can synchronize as a whole
+    constexpr unsigned kFullMask = 0xffffffffu;
+    const bool fullWarp          = (i - (threadIdx.x & 31)) + 32 <= numSurfaceCells;
+    if (fullWarp && __all_sync(kFullMask, grid == __shfl_sync(kFullMask, grid, 0))) {
+#pragma unroll
+        for (int offset = 16; offset > 0; offset >>= 1) {
+#pragma unroll
+            for (int axis = 0; axis < 3; ++axis) {
+                lo[axis] = min(lo[axis], __shfl_xor_sync(kFullMask, lo[axis], offset));
+                hi[axis] = max(hi[axis], __shfl_xor_sync(kFullMask, hi[axis], offset));
+            }
+        }
+        if ((threadIdx.x & 31) != 0)
+            return;
+    }
+#pragma unroll
+    for (int axis = 0; axis < 3; ++axis) {
+        atomicMin(&gridBounds[axis], lo[axis]);
+        atomicMax(&gridBounds[3 + axis], hi[axis]);
+    }
 }
 
 // ------------------------- host helpers -------------------------
@@ -884,7 +997,7 @@ denseRelabel(const torch::Tensor &keys, int64_t &numUnique) {
 }
 
 /// @brief Per-dtype TensorOptions for this op's scratch/output tensors (all on the same device).
-/// Bundled so the per-grid mesher takes a single argument instead of one option per dtype.
+/// Bundled so the chunk mesher takes a single argument instead of one option per dtype.
 struct ScratchOptions {
     torch::TensorOptions f32, i32, i64, u8, f64;
     explicit ScratchOptions(torch::Device device)
@@ -895,37 +1008,111 @@ struct ScratchOptions {
           f64(torch::TensorOptions().dtype(torch::kFloat64).device(device)) {}
 };
 
-/// @brief Mesh ONE grid into a triangle mesh. `sdf` is value-indexed (length valueCount, slot 0 =
+/// @brief The per-grid decimation-key parameters ([numGrids, kNumGridKeyParams] int64, on the
+/// device) from the surface cells' coords and grids, without a host sync. Each grid's key origin is
+/// its minimum surface-cell coord and its spans cover its surface cells, exactly as when each grid
+/// was meshed on its own; the key bases then give each grid a disjoint range of
+/// 2 * kKeyFineCount keys (fine keys, then the adaptive pass's coarse keys). Grids without surface
+/// cells get empty spans and an empty key range.
+static torch::Tensor
+buildGridKeyParams(const int32_t *surfaceCells,
+                   const int32_t *surfaceGrid,
+                   int64_t numSurfaceCells,
+                   const int32_t *voxelCoord,
+                   int64_t numGrids,
+                   cudaStream_t stream,
+                   const ScratchOptions &opts) {
+    // per-grid [min x, min y, min z, max x, max y, max z] of the surface-cell coords
+    torch::Tensor bounds = torch::empty({numGrids, 6}, opts.i32);
+    bounds.narrow(1, 0, 3).fill_(std::numeric_limits<int32_t>::max());
+    bounds.narrow(1, 3, 3).fill_(std::numeric_limits<int32_t>::min());
+    surfaceBoundsKernel<<<GET_BLOCKS(numSurfaceCells, DEFAULT_BLOCK_DIM),
+                          DEFAULT_BLOCK_DIM,
+                          0,
+                          stream>>>(
+        surfaceCells, surfaceGrid, numSurfaceCells, voxelCoord, bounds.data_ptr<int32_t>());
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
+    const torch::Tensor wide      = bounds.to(torch::kInt64);
+    const torch::Tensor lo        = wide.narrow(1, 0, 3);
+    const torch::Tensor hi        = wide.narrow(1, 3, 3);
+    const torch::Tensor span      = (hi - lo + 1).clamp_min(0); // 0 for grids without surface cells
+    const torch::Tensor fineCount = span.prod(1);
+    const torch::Tensor keyRange  = 2 * fineCount;
+    const torch::Tensor keyBase   = torch::cumsum(keyRange, 0) - keyRange; // exclusive prefix sum
+    return torch::stack({lo.select(1, 0),
+                         lo.select(1, 1),
+                         lo.select(1, 2),
+                         span.select(1, 1),
+                         span.select(1, 2),
+                         fineCount,
+                         keyBase},
+                        1)
+        .contiguous();
+}
+
+/// @brief One chunk's mesh: vertices/normals grouped by grid (ascending), triangles holding
+/// grid-local vertex indices, and the grid of every vertex and triangle.
+struct ChunkMesh {
+    torch::Tensor vertices;     // [V, 3] float32
+    torch::Tensor normals;      // [V, 3] float32
+    torch::Tensor triangles;    // [T, 3] int64, indices local to the triangle's grid
+    torch::Tensor vertexGrid;   // [V] int64
+    torch::Tensor triangleGrid; // [T] int64
+};
+
+/// @brief Mesh the consecutive grids [gridBegin, gridEnd) of the batch together. Slots are
+/// chunk-wide (slot 1 + f - chunkVoxelBase for the voxel with batch-wide feature index f, slot 0 =
 /// the "outside" sentinel used for inactive neighbours). Pipeline:
-///   1. gatherFusedKernel  -- one VBM decode per voxel -> neighbour table + gradient + surface flag
-///                            + index coord
-///   2. compact the surface cells (torch::nonzero) -- the cells the iso surface passes through
+///   1. gatherFusedKernel  -- one VBM decode per voxel of every grid of the chunk -> neighbour
+///                            table + gradient + surface flag + index coord
+///   2. compact the surface cells (torch::nonzero) -- the cells the iso surface passes through --
+///      and find each one's grid (searchsorted over the batch's voxel offsets)
 ///   3. place one vertex per surface cell: QEF (placeQefVerticesKernel), or when decimating group
-///   the
-///      cells into clusters and solve one vertex per cluster
+///      the cells into per-grid clusters and solve one vertex per cluster
 ///   4. connectivity: one quad per sign-changing minimal grid edge -> triangles (count -> cumsum ->
 ///      write), each oriented outward by the SDF gradient
-///   5. prune unreferenced vertices and normalise the per-vertex reference normals
-/// Returns {vertices (V,3) f32, normals (V,3) f32, triangles (T,3) int32} with triangle indices
-/// local to this grid.
-static std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
-meshOneGrid(OnIndexGridT *grid,
-            const GridVbm &vbm,
-            const float *sdf,
-            int64_t valueCount,
-            VoxelCoordTransform transform,
-            float iso,
-            int reduce,
-            double adaptivity,
-            cudaStream_t stream,
-            const ScratchOptions &opts) {
-    const bool decimate  = (reduce != 1) || (adaptivity > 0.0);
-    const int numColumns = kGeometry.numColumns;
-    auto emptyVertices   = [&] { return torch::empty({0, 3}, opts.f32); };
-    auto emptyTriangles  = [&] { return torch::empty({0, 3}, opts.i32); };
+///   5. prune unreferenced vertices, rebase the triangles onto grid-local vertex indices, and
+///      normalise the per-vertex reference normals
+/// Surface cells, and hence vertices and triangles, come out ordered by slot and so grouped by
+/// grid; a grid's slice is identical to meshing that grid alone (bitwise, without decimation).
+/// Host syncs: steps 2, 4 and 5 once each, plus one or two cluster relabels when decimating.
+static ChunkMesh
+meshChunk(const GridBatchData &batchHdl,
+          const BatchVbm &vbm,
+          const BatchVbmLayout &layout,
+          int64_t gridBegin,
+          int64_t gridEnd,
+          const torch::Tensor &fieldData,
+          float iso,
+          int reduce,
+          double adaptivity,
+          cudaStream_t stream,
+          const ScratchOptions &opts) {
+    const bool decimate          = (reduce != 1) || (adaptivity > 0.0);
+    const int numColumns         = kGeometry.numColumns;
+    const int64_t numGrids       = batchHdl.batchSize();
+    const int64_t chunkVoxelBase = batchHdl.cumVoxelsAt(gridBegin);
+    const int64_t chunkVoxelEnd =
+        gridEnd < numGrids ? batchHdl.cumVoxelsAt(gridEnd) : batchHdl.totalVoxels();
+    const int64_t numChunkVoxels = chunkVoxelEnd - chunkVoxelBase;
+    const int64_t valueCount     = numChunkVoxels + 1; // slot 0 = background
 
-    if (valueCount <= 1 || vbm.blockCount == 0)
-        return {emptyVertices(), emptyVertices(), emptyTriangles()};
+    auto emptyChunk = [&] {
+        return ChunkMesh{torch::empty({0, 3}, opts.f32),
+                         torch::empty({0, 3}, opts.f32),
+                         torch::empty({0, 3}, opts.i64),
+                         torch::empty({0}, opts.i64),
+                         torch::empty({0}, opts.i64)};
+    };
+    if (numChunkVoxels == 0)
+        return emptyChunk();
+
+    // value-indexed SDF: slot 0 = "outside" sentinel (>= iso) so inactive corners classify as
+    // outside, slots [1..numChunkVoxels] = the chunk's slice of the field.
+    torch::Tensor sdfBuf = torch::empty({valueCount}, opts.f32);
+    sdfBuf.narrow(0, 0, 1).fill_(iso + 1.0f);
+    sdfBuf.narrow(0, 1, numChunkVoxels).copy_(fieldData.narrow(0, chunkVoxelBase, numChunkVoxels));
+    const float *sdf = sdfBuf.data_ptr<float>();
 
     torch::Tensor neighborTableBuf = torch::empty({valueCount * numColumns}, opts.i32);
     torch::Tensor gradientBuf      = torch::empty({valueCount * 3}, opts.f32);
@@ -938,38 +1125,56 @@ meshOneGrid(OnIndexGridT *grid,
     C10_CUDA_CHECK(cudaMemsetAsync(gradient, 0, 3 * sizeof(float), stream)); // background slot 0
     C10_CUDA_CHECK(cudaMemsetAsync(surfaceFlag, 0, sizeof(uint8_t), stream));
 
-    gatherFusedKernel<<<vbm.blockCount, 1 << kLog2BlockWidth, 0, stream>>>(grid,
-                                                                           vbm.firstLeafID,
-                                                                           vbm.jumpMap,
-                                                                           vbm.firstOffset,
-                                                                           vbm.lastOffset,
-                                                                           sdf,
-                                                                           kGeometry,
-                                                                           iso,
-                                                                           neighborTable,
-                                                                           gradient,
-                                                                           surfaceFlag,
-                                                                           voxelCoord);
+    // the chunk's VBM blocks: from gridBegin's first block to the next chunk's first block (or the
+    // end of the batch); gap blocks between grids are skipped by the kernel.
+    const uint64_t vbBegin = VbmCache::blockBase(chunkVoxelBase, gridBegin);
+    const uint64_t vbEnd =
+        gridEnd < numGrids ? VbmCache::blockBase(chunkVoxelEnd, gridEnd) : vbm.blockCount;
+    TORCH_CHECK(vbEnd - vbBegin <= uint64_t(std::numeric_limits<int32_t>::max()),
+                "dual_contour: too many VBM blocks in one chunk");
+    gatherFusedKernel<<<uint32_t(vbEnd - vbBegin), kBlockWidth, 0, stream>>>(vbm,
+                                                                             layout,
+                                                                             vbBegin,
+                                                                             chunkVoxelBase,
+                                                                             sdf,
+                                                                             kGeometry,
+                                                                             iso,
+                                                                             neighborTable,
+                                                                             gradient,
+                                                                             surfaceFlag,
+                                                                             voxelCoord);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 
-    // compact surface cells: torch::nonzero returns the set value indices in ascending order,
-    // giving a stable vertex order (== the source's copy_if over a counting iterator).
-    torch::Tensor surfaceCellBuf  = torch::nonzero(surfaceFlagBuf).flatten().to(torch::kInt32);
-    const int32_t *surfaceCells   = surfaceCellBuf.data_ptr<int32_t>();
-    const int64_t numSurfaceCells = surfaceCellBuf.size(0);
+    // compact surface cells: torch::nonzero returns the set slots in ascending order, giving a
+    // stable vertex order grouped by grid (== the source's copy_if over a counting iterator).
+    torch::Tensor surfaceCellsLong = torch::nonzero(surfaceFlagBuf).flatten(); // host sync
+    const int64_t numSurfaceCells  = surfaceCellsLong.size(0);
     if (numSurfaceCells == 0)
-        return {emptyVertices(), emptyVertices(), emptyTriangles()};
-    // int64 view of the surface-cell indices, reused by the index_select / index_put_ scatters
-    // below
-    torch::Tensor surfaceCellsLong = surfaceCellBuf.to(torch::kInt64);
+        return emptyChunk();
+    torch::Tensor surfaceCellBuf = surfaceCellsLong.to(torch::kInt32);
+    const int32_t *surfaceCells  = surfaceCellBuf.data_ptr<int32_t>();
+    // each surface cell's grid: the last grid whose first feature index is <= the cell's (known on
+    // the host when the chunk holds a single grid)
+    const bool singleGrid = gridEnd - gridBegin == 1;
+    torch::Tensor surfaceGridLong =
+        singleGrid ? torch::full({numSurfaceCells}, gridBegin, opts.i64)
+                   : torch::searchsorted(batchHdl.voxelOffsets(),
+                                         surfaceCellsLong + (chunkVoxelBase - 1),
+                                         /*out_int32=*/false,
+                                         /*right=*/true) -
+                         1;
+    torch::Tensor surfaceGridBuf           = surfaceGridLong.to(torch::kInt32);
+    const int32_t *surfaceGrid             = surfaceGridBuf.data_ptr<int32_t>();
+    const GridBatchData::Accessor batchAcc = batchHdl.deviceAccessor();
 
     torch::Tensor cellVertexBuf = torch::full({valueCount}, -1, opts.i32);
     int32_t *cellVertex         = cellVertexBuf.data_ptr<int32_t>();
 
     int64_t numVertices = 0;
-    torch::Tensor vertexBuf, refNormalBuf;
+    torch::Tensor vertexBuf, refNormalBuf, vertexGrid;
     if (!decimate) {
         numVertices = numSurfaceCells;
+        vertexGrid  = surfaceGridLong;
         // cellVertex[surfaceCells[i]] = i (the compaction ordinal); background slots stay -1.
         cellVertexBuf.index_put_({surfaceCellsLong}, torch::arange(numSurfaceCells, opts.i32));
         vertexBuf    = torch::empty({numSurfaceCells * 3}, opts.f32);
@@ -978,6 +1183,7 @@ meshOneGrid(OnIndexGridT *grid,
                                  DEFAULT_BLOCK_DIM,
                                  0,
                                  stream>>>(surfaceCells,
+                                           surfaceGrid,
                                            numSurfaceCells,
                                            neighborTable,
                                            sdf,
@@ -985,7 +1191,7 @@ meshOneGrid(OnIndexGridT *grid,
                                            voxelCoord,
                                            kGeometry,
                                            iso,
-                                           transform,
+                                           batchAcc,
                                            vertexBuf.data_ptr<float>(),
                                            refNormalBuf.data_ptr<float>());
         C10_CUDA_KERNEL_LAUNCH_CHECK();
@@ -995,38 +1201,29 @@ meshOneGrid(OnIndexGridT *grid,
         // blocks: a flat block collapses to one vertex while feature blocks stay full resolution,
         // so 8 sets only how coarse the *flat* regions become.
         const int blockSize = (adaptivity > 0.0 && reduce <= 1) ? 8 : std::max(1, reduce);
-        // surface-cell coord bounds (for the mixed-radix cluster keys): a gather + amin/amax
-        // reduction in place of a hand-rolled atomic-min/max kernel.
-        torch::Tensor surfaceCoord =
-            voxelCoordBuf.view({valueCount, 3}).index_select(0, surfaceCellsLong);
-        torch::Tensor coordBounds = torch::stack({surfaceCoord.amin(0), surfaceCoord.amax(0)}, 0)
-                                        .cpu(); // (2,3): row 0 min, row 1 max
-        auto bounds       = coordBounds.accessor<int32_t, 2>();
-        const int originX = bounds[0][0], originY = bounds[0][1], originZ = bounds[0][2];
-        const int spanY = bounds[1][1] - originY + 1, spanZ = bounds[1][2] - originZ + 1;
-        const long long fineKeyCount = (long long)(bounds[1][0] - originX + 1) * spanY * spanZ;
+        // per-grid key origins/spans/bases from the surface-cell coords, on the device
+        torch::Tensor gridKeyParamsBuf = buildGridKeyParams(
+            surfaceCells, surfaceGrid, numSurfaceCells, voxelCoord, numGrids, stream, opts);
+        const int64_t *gridKeyParams = gridKeyParamsBuf.data_ptr<int64_t>();
 
         torch::Tensor clusterKeyBuf = torch::empty({numSurfaceCells}, opts.i64);
         auto *clusterKeys = reinterpret_cast<long long *>(clusterKeyBuf.data_ptr<int64_t>());
         torch::Tensor clusterIdBuf;
         int64_t numClusters = 0;
+        clusterKeyKernel<<<GET_BLOCKS(numSurfaceCells, DEFAULT_BLOCK_DIM),
+                           DEFAULT_BLOCK_DIM,
+                           0,
+                           stream>>>(surfaceCells,
+                                     surfaceGrid,
+                                     numSurfaceCells,
+                                     voxelCoord,
+                                     gridKeyParams,
+                                     blockSize,
+                                     clusterKeys);
+        C10_CUDA_KERNEL_LAUNCH_CHECK();
         if (adaptivity <= 0.0) { // uniform blocks
-            clusterKeyKernel<<<GET_BLOCKS(numSurfaceCells, DEFAULT_BLOCK_DIM),
-                               DEFAULT_BLOCK_DIM,
-                               0,
-                               stream>>>(surfaceCells,
-                                         numSurfaceCells,
-                                         voxelCoord,
-                                         originX,
-                                         originY,
-                                         originZ,
-                                         spanY,
-                                         spanZ,
-                                         blockSize,
-                                         clusterKeys);
-            C10_CUDA_KERNEL_LAUNCH_CHECK();
             clusterIdBuf = denseRelabel(clusterKeyBuf, numClusters);
-        } else { // flat blocks collapse, feature cells stay fine
+        } else {                 // flat blocks collapse, feature cells stay fine
             torch::Tensor cellNormalBuf = torch::empty({numSurfaceCells * 3}, opts.f32);
             cellNormalKernel<<<GET_BLOCKS(numSurfaceCells, DEFAULT_BLOCK_DIM),
                                DEFAULT_BLOCK_DIM,
@@ -1039,20 +1236,6 @@ meshOneGrid(OnIndexGridT *grid,
                                          kGeometry,
                                          iso,
                                          cellNormalBuf.data_ptr<float>());
-            C10_CUDA_KERNEL_LAUNCH_CHECK();
-            clusterKeyKernel<<<GET_BLOCKS(numSurfaceCells, DEFAULT_BLOCK_DIM),
-                               DEFAULT_BLOCK_DIM,
-                               0,
-                               stream>>>(surfaceCells,
-                                         numSurfaceCells,
-                                         voxelCoord,
-                                         originX,
-                                         originY,
-                                         originZ,
-                                         spanY,
-                                         spanZ,
-                                         blockSize,
-                                         clusterKeys);
             C10_CUDA_KERNEL_LAUNCH_CHECK();
             int64_t numBlocks            = 0;
             torch::Tensor blockOfCellBuf = denseRelabel(clusterKeyBuf, numBlocks);
@@ -1076,17 +1259,13 @@ meshOneGrid(OnIndexGridT *grid,
                                        DEFAULT_BLOCK_DIM,
                                        0,
                                        stream>>>(surfaceCells,
+                                                 surfaceGrid,
                                                  numSurfaceCells,
                                                  voxelCoord,
-                                                 originX,
-                                                 originY,
-                                                 originZ,
-                                                 spanY,
-                                                 spanZ,
+                                                 gridKeyParams,
                                                  blockSize,
                                                  blockOfCellBuf.data_ptr<int32_t>(),
                                                  blockFlatBuf.data_ptr<uint8_t>(),
-                                                 fineKeyCount,
                                                  clusterKeys);
             C10_CUDA_KERNEL_LAUNCH_CHECK();
             clusterIdBuf = denseRelabel(clusterKeyBuf, numClusters);
@@ -1096,7 +1275,12 @@ meshOneGrid(OnIndexGridT *grid,
         // cellVertex[surfaceCells[i]] = clusterIds[i] (background slots stay -1).
         cellVertexBuf.index_put_({surfaceCellsLong}, clusterIdBuf);
         if (numClusters == 0)
-            return {emptyVertices(), emptyVertices(), emptyTriangles()};
+            return emptyChunk();
+        // every cell of a cluster is in the same grid (the key ranges are disjoint per grid), so
+        // this scatter is race-free in value; clusters are sorted by key and so grouped by grid.
+        vertexGrid = torch::empty({numClusters}, opts.i64)
+                         .index_put_({clusterIdBuf.to(torch::kInt64)}, surfaceGridLong);
+        torch::Tensor clusterGridBuf   = vertexGrid.to(torch::kInt32);
         torch::Tensor normalMatrixBuf  = torch::zeros({numClusters * 6}, opts.f64),
                       normalRhsBuf     = torch::zeros({numClusters * 3}, opts.f64),
                       crossingSumBuf   = torch::zeros({numClusters * 3}, opts.f64),
@@ -1106,6 +1290,7 @@ meshOneGrid(OnIndexGridT *grid,
                                 DEFAULT_BLOCK_DIM,
                                 0,
                                 stream>>>(surfaceCells,
+                                          surfaceGrid,
                                           clusterIds,
                                           numSurfaceCells,
                                           neighborTable,
@@ -1114,9 +1299,7 @@ meshOneGrid(OnIndexGridT *grid,
                                           voxelCoord,
                                           kGeometry,
                                           iso,
-                                          originX,
-                                          originY,
-                                          originZ,
+                                          gridKeyParams,
                                           normalMatrixBuf.data_ptr<double>(),
                                           normalRhsBuf.data_ptr<double>(),
                                           crossingSumBuf.data_ptr<double>(),
@@ -1129,16 +1312,15 @@ meshOneGrid(OnIndexGridT *grid,
                              DEFAULT_BLOCK_DIM,
                              0,
                              stream>>>(numClusters,
+                                       clusterGridBuf.data_ptr<int32_t>(),
                                        normalMatrixBuf.data_ptr<double>(),
                                        normalRhsBuf.data_ptr<double>(),
                                        crossingSumBuf.data_ptr<double>(),
                                        crossingCountBuf.data_ptr<double>(),
                                        normalSumBuf.data_ptr<double>(),
-                                       originX,
-                                       originY,
-                                       originZ,
+                                       gridKeyParams,
                                        blockSize,
-                                       transform,
+                                       batchAcc,
                                        vertexBuf.data_ptr<float>(),
                                        refNormalBuf.data_ptr<float>());
         C10_CUDA_KERNEL_LAUNCH_CHECK();
@@ -1160,61 +1342,64 @@ meshOneGrid(OnIndexGridT *grid,
                                      iso,
                                      triangleCountBuf.data_ptr<int64_t>());
     C10_CUDA_KERNEL_LAUNCH_CHECK();
-    torch::Tensor triangleOffsetBuf = torch::cumsum(triangleCountBuf, 0); // inclusive prefix sum
-    int64_t numTriangles            = triangleOffsetBuf[-1].item<int64_t>();
+    torch::Tensor triangleOffsetBuf = torch::cumsum(triangleCountBuf, 0);    // inclusive prefix sum
+    const int64_t numTriangles      = triangleOffsetBuf[-1].item<int64_t>(); // host sync
+    if (numTriangles == 0 || numVertices == 0)
+        return emptyChunk();
     triangleOffsetBuf    = torch::roll(triangleOffsetBuf, {1}); // shift -> exclusive prefix sum
     triangleOffsetBuf[0] = 0;
     torch::Tensor triangleBuf = torch::empty({numTriangles * 3}, opts.i32);
     int32_t *triangles        = triangleBuf.data_ptr<int32_t>();
-    if (numTriangles > 0) {
-        writeTrianglesKernel<<<GET_BLOCKS(numSurfaceCells, DEFAULT_BLOCK_DIM),
-                               DEFAULT_BLOCK_DIM,
-                               0,
-                               stream>>>(surfaceCells,
-                                         numSurfaceCells,
-                                         neighborTable,
-                                         sdf,
-                                         cellVertex,
-                                         kGeometry,
-                                         iso,
-                                         triangleOffsetBuf.data_ptr<int64_t>(),
-                                         triangles);
-        C10_CUDA_KERNEL_LAUNCH_CHECK();
-        orientTrianglesKernel<<<GET_BLOCKS(numTriangles, DEFAULT_BLOCK_DIM),
-                                DEFAULT_BLOCK_DIM,
-                                0,
-                                stream>>>(
-            numTriangles, vertexBuf.data_ptr<float>(), refNormalBuf.data_ptr<float>(), triangles);
-        C10_CUDA_KERNEL_LAUNCH_CHECK();
-    }
+    writeTrianglesKernel<<<GET_BLOCKS(numSurfaceCells, DEFAULT_BLOCK_DIM),
+                           DEFAULT_BLOCK_DIM,
+                           0,
+                           stream>>>(surfaceCells,
+                                     numSurfaceCells,
+                                     neighborTable,
+                                     sdf,
+                                     cellVertex,
+                                     kGeometry,
+                                     iso,
+                                     triangleOffsetBuf.data_ptr<int64_t>(),
+                                     triangles);
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
+    orientTrianglesKernel<<<GET_BLOCKS(numTriangles, DEFAULT_BLOCK_DIM),
+                            DEFAULT_BLOCK_DIM,
+                            0,
+                            stream>>>(
+        numTriangles, vertexBuf.data_ptr<float>(), refNormalBuf.data_ptr<float>(), triangles);
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
 
     // prune unreferenced (free-point) vertices and reindex the triangles. torch::unique_dim over
     // the flattened triangle indices returns, in ascending order, the referenced vertex ids and
     // (via return_inverse) the triangles already reindexed into [0, numKeptVertices) -- the same
     // merge idiom MarchingCubes uses. Compacting the vertices/normals is then a single index_select
-    // gather.
-    torch::Tensor outVertices, outNormals;
-    int64_t numOutVertices = 0;
-    if (numTriangles > 0 && numVertices > 0) {
-        auto unique = torch::unique_dim(triangleBuf, 0, /*sorted=*/true, /*return_inverse=*/true);
-        torch::Tensor keptVertexIds =
-            std::get<0>(unique).to(torch::kInt64); // referenced ids, ascending
-        numOutVertices = keptVertexIds.size(0);
-        outVertices    = vertexBuf.view({numVertices, 3}).index_select(0, keptVertexIds);
-        outNormals     = refNormalBuf.view({numVertices, 3}).index_select(0, keptVertexIds);
-        triangleBuf    = std::get<1>(unique).to(torch::kInt32);
-    } else {
-        outVertices  = emptyVertices();
-        outNormals   = emptyVertices();
-        numTriangles = 0;
-    }
+    // gather. The kept vertices stay grouped by grid, so subtracting each grid's first kept vertex
+    // turns the chunk-wide indices into grid-local ones.
+    auto unique = torch::unique_dim(triangleBuf, 0, /*sorted=*/true, /*return_inverse=*/true);
+    torch::Tensor keptVertexIds  = std::get<0>(unique).to(torch::kInt64); // ascending; host sync
+    const int64_t numOutVertices = keptVertexIds.size(0);
+    torch::Tensor chunkTriangles = std::get<1>(unique).to(torch::kInt64).view({numTriangles, 3});
 
-    // normalize the per-vertex reference normal -> unit SDF-gradient normal
-    if (numOutVertices > 0)
-        outNormals = outNormals / outNormals.norm(2, /*dim=*/1, /*keepdim=*/true).clamp_min(1e-12);
-    return {outVertices.view({numOutVertices, 3}),
-            outNormals.view({numOutVertices, 3}),
-            triangleBuf.view({numTriangles, 3})};
+    ChunkMesh mesh;
+    mesh.vertices = vertexBuf.view({numVertices, 3}).index_select(0, keptVertexIds);
+    mesh.normals  = refNormalBuf.view({numVertices, 3}).index_select(0, keptVertexIds);
+    mesh.normals =
+        mesh.normals / mesh.normals.norm(2, /*dim=*/1, /*keepdim=*/true).clamp_min(1e-12);
+    if (singleGrid) { // chunk-wide vertex indices are already grid-local
+        mesh.vertexGrid   = torch::full({numOutVertices}, gridBegin, opts.i64);
+        mesh.triangleGrid = torch::full({numTriangles}, gridBegin, opts.i64);
+        mesh.triangles    = chunkTriangles;
+    } else {
+        mesh.vertexGrid   = vertexGrid.index_select(0, keptVertexIds);
+        mesh.triangleGrid = mesh.vertexGrid.index_select(0, chunkTriangles.select(1, 0));
+        torch::Tensor gridVertexCount = torch::bincount(mesh.vertexGrid, /*weights=*/{}, numGrids);
+        torch::Tensor gridVertexBase  = torch::cumsum(gridVertexCount, 0) - gridVertexCount;
+        mesh.triangles =
+            chunkTriangles - gridVertexBase.index_select(0, mesh.triangleGrid).unsqueeze(1);
+    }
+    TORCH_INTERNAL_ASSERT(mesh.vertices.size(0) == numOutVertices);
+    return mesh;
 }
 
 } // namespace
@@ -1238,10 +1423,10 @@ dualContour(const GridBatchData &batchHdl,
     adaptivity = std::clamp(adaptivity, 0.0, 1.5); // beyond 1.5 the flatness bar saturates
     reduce     = std::max(1, reduce);
 
-    cudaStream_t stream = at::cuda::getCurrentCUDAStream(batchHdl.device().index()).stream();
-    const auto device   = field.device();
+    const auto device = field.device();
+    c10::cuda::CUDAGuard deviceGuard(device);
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream(device.index()).stream();
     ScratchOptions opts(device);
-    auto jidxOpts = torch::TensorOptions().dtype(fvdb::JIdxScalarType).device(device);
 
     torch::Tensor fieldData = field.jdata().contiguous();
     if (fieldData.dim() != 1)
@@ -1249,62 +1434,64 @@ dualContour(const GridBatchData &batchHdl,
     if (fieldData.scalar_type() != torch::kFloat32)
         fieldData =
             fieldData.to(torch::kFloat32); // QEF accumulators are double; the SDF stays float32
-    const float *fieldPtr = fieldData.data_ptr<float>();
-    const float isoFloat  = (float)iso;
 
-    std::vector<torch::Tensor> vertexList, normalList, faceList, vertexBatchList, faceBatchList;
-    for (int64_t b = 0; b < batchHdl.batchSize(); ++b) {
-        const int64_t numVoxels = batchHdl.numVoxelsAt(b);
-        torch::Tensor vertices, normals, triangles;
-        if (numVoxels == 0) {
-            vertices  = torch::empty({0, 3}, opts.f32);
-            normals   = torch::empty({0, 3}, opts.f32);
-            triangles = torch::empty({0, 3}, opts.i32);
-        } else {
-            OnIndexGridT *grid            = batchHdl.deviceGridPtrAt(b);
-            const int64_t voxelOffset     = batchHdl.cumVoxelsAt(b);
-            VoxelCoordTransform transform = batchHdl.primalTransformAt(b);
-            const GridVbm vbm             = batchHdl.vbmAt(b);           // cached on the batch
-            const int64_t valueCount      = int64_t(vbm.lastOffset) + 1; // numVoxels + 1
-            // Value indices are stored as int32 in the neighbour table / surface-cell / coord
-            // buffers; fail loudly rather than silently overflow on an enormous single grid.
-            TORCH_CHECK(valueCount <= std::numeric_limits<int32_t>::max(),
-                        "dual_contour: grid ",
-                        b,
-                        " has too many voxels (",
-                        valueCount,
-                        ") for int32 value indexing");
+    // The batch's VBMs (built on first use) and their placement, shared by every chunk.
+    const int64_t numGrids      = batchHdl.batchSize();
+    const BatchVbm &vbm         = batchHdl.vbm();
+    const BatchVbmLayout layout = BatchVbmLayout::of(batchHdl);
 
-            // gather the field into a value-indexed SDF buffer: slot 0 = "outside" sentinel (>=
-            // iso) so inactive corners classify as outside, and slots [1..numVoxels] = this grid's
-            // field. The memcpy fills everything except slot 0, so only slot 0 needs the sentinel
-            // write.
-            torch::Tensor sdfBuf = torch::empty({valueCount}, opts.f32);
-            float *sdf           = sdfBuf.data_ptr<float>();
-            sdfBuf.narrow(0, 0, 1).fill_(isoFloat + 1.0f);
-            C10_CUDA_CHECK(cudaMemcpyAsync(sdf + 1,
-                                           fieldPtr + voxelOffset,
-                                           numVoxels * sizeof(float),
-                                           cudaMemcpyDeviceToDevice,
-                                           stream));
-            std::tie(vertices, normals, triangles) = meshOneGrid(
-                grid, vbm, sdf, valueCount, transform, isoFloat, reduce, adaptivity, stream, opts);
-            C10_CUDA_CHECK(cudaStreamSynchronize(stream)); // per-grid scratch freed at scope exit
+    // Greedily group consecutive grids into chunks of at most kMaxChunkVoxels voxels; a single grid
+    // larger than that forms its own chunk. Chunk-local slots are int32 (the neighbour table and
+    // the surface-cell / triangle buffers), so a chunk must fit in int32 value indexing.
+    std::vector<ChunkMesh> chunks;
+    for (int64_t gridBegin = 0; gridBegin < numGrids;) {
+        int64_t gridEnd   = gridBegin + 1;
+        int64_t numVoxels = batchHdl.numVoxelsAt(gridBegin);
+        while (gridEnd < numGrids && numVoxels + batchHdl.numVoxelsAt(gridEnd) <= kMaxChunkVoxels)
+            numVoxels += batchHdl.numVoxelsAt(gridEnd++);
+        TORCH_CHECK(numVoxels + 1 <= std::numeric_limits<int32_t>::max(),
+                    "dual_contour: grid ",
+                    gridBegin,
+                    " has too many voxels (",
+                    numVoxels,
+                    ") for int32 value indexing");
+        if (numVoxels > 0) {
+            chunks.push_back(meshChunk(batchHdl,
+                                       vbm,
+                                       layout,
+                                       gridBegin,
+                                       gridEnd,
+                                       fieldData,
+                                       (float)iso,
+                                       reduce,
+                                       adaptivity,
+                                       stream,
+                                       opts));
         }
-        const int64_t numGridVertices = vertices.size(0), numGridTriangles = triangles.size(0);
-        vertexList.push_back(vertices);
-        normalList.push_back(normals);
-        faceList.push_back(triangles.to(torch::kInt64));
-        vertexBatchList.push_back(torch::full({numGridVertices}, b, jidxOpts));
-        faceBatchList.push_back(torch::full({numGridTriangles}, b, jidxOpts));
+        gridBegin = gridEnd;
     }
 
-    // concatenate per-grid meshes (already grouped by batch) and build the jagged outputs
-    torch::Tensor allVertices    = torch::cat(vertexList, 0);
-    torch::Tensor allNormals     = torch::cat(normalList, 0);
-    torch::Tensor allFaces       = torch::cat(faceList, 0);
-    torch::Tensor vertexBatchIdx = torch::cat(vertexBatchList, 0);
-    torch::Tensor faceBatchIdx   = torch::cat(faceBatchList, 0);
+    // concatenate the chunks (each already grouped by grid, chunks in grid order) and build the
+    // jagged outputs
+    std::vector<torch::Tensor> vertexList, normalList, faceList, vertexGridList, faceGridList;
+    for (const ChunkMesh &chunk: chunks) {
+        vertexList.push_back(chunk.vertices);
+        normalList.push_back(chunk.normals);
+        faceList.push_back(chunk.triangles);
+        vertexGridList.push_back(chunk.vertexGrid);
+        faceGridList.push_back(chunk.triangleGrid);
+    }
+    auto catOrEmpty = [&](const std::vector<torch::Tensor> &list,
+                          std::initializer_list<int64_t> emptyShape,
+                          const torch::TensorOptions &options) {
+        return list.empty() ? torch::empty(emptyShape, options) : torch::cat(list, 0);
+    };
+    torch::Tensor allVertices = catOrEmpty(vertexList, {0, 3}, opts.f32);
+    torch::Tensor allNormals  = catOrEmpty(normalList, {0, 3}, opts.f32);
+    torch::Tensor allFaces    = catOrEmpty(faceList, {0, 3}, opts.i64);
+    torch::Tensor vertexBatchIdx =
+        catOrEmpty(vertexGridList, {0}, opts.i64).to(fvdb::JIdxScalarType);
+    torch::Tensor faceBatchIdx = catOrEmpty(faceGridList, {0}, opts.i64).to(fvdb::JIdxScalarType);
 
     JaggedTensor retVertices = JaggedTensor::from_data_indices_and_list_ids(
         allVertices, vertexBatchIdx, batchHdl.jlidx(), batchHdl.batchSize());

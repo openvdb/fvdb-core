@@ -26,6 +26,12 @@ namespace ops {
 /// (@p reduce / @p adaptivity) contracts the connectivity onto fewer vertices.
 /// Requires a >= ~3-voxel band for a watertight result.
 ///
+/// The grids of the batch are meshed together (in chunks of consecutive grids of up to 2^22 active
+/// voxels), so the host synchronizations and kernel launches are a small constant per chunk rather
+/// than per grid. Each grid's output is the same as meshing that grid alone: bitwise without
+/// decimation; with decimation, clusters never span grids, and only the order of the double-atomic
+/// cluster sums differs.
+///
 /// @note Vertex placement and the emitted normals are computed in index space (the QEF and the
 ///       central-difference gradient). This is exact for isotropic voxel sizes -- the assumption of
 ///       the narrow-band SDF ops (reinitialize_sdf / rebuild_narrow_band) this op consumes, which

@@ -186,6 +186,86 @@ class DualContourTests(unittest.TestCase):
         self.assertEqual(nonmanifold, 0)
         self.assertEqual(v.shape[0] - num_edges + f.shape[0], 2)
 
+    def _sphere_batch(self, halves, radii, no_surface=(), empty=()):
+        """A batch of dense cubes (``half`` voxels each side) carrying a clamped sphere SDF each.
+        Grids listed in ``no_surface`` get an all-positive field (no surface cells); grids listed in
+        ``empty`` have no voxels at all."""
+        points = [
+            torch.empty(0, 3, device=self.device) if i in empty else self._cube_points(self.vx, h)
+            for i, h in enumerate(halves)
+        ]
+        gb = fvdb.GridBatch.from_points(fvdb.JaggedTensor(points), voxel_sizes=self.vx)
+        fields = []
+        for i, r in enumerate(radii):
+            f = ((gb.ijk[i].jdata.float() * self.vx).norm(dim=1) - r).clamp(-self.bw, self.bw)
+            fields.append(torch.full_like(f, self.bw) if i in no_surface else f)
+        return gb, fvdb.JaggedTensor(fields)
+
+    def _assert_batch_matches_single(self, gb, field, exact=True, **kwargs):
+        """Mesh the batch at once and each grid on its own, and compare grid by grid. ``exact``
+        requires bitwise equality (the non-decimated path is deterministic); otherwise the vertex and
+        face counts must match and the positions agree to float tolerance (decimation accumulates
+        cluster QEFs with double atomics, whose summation order varies)."""
+        vb, fb, nb = fvdb.functional.dual_contour_batch(gb, field, **kwargs)
+        for i in range(gb.grid_count):
+            single = gb[i]
+            vs, fs, ns = fvdb.functional.dual_contour_batch(single, field[i], **kwargs)
+            v, f, n = vb[i].jdata, fb[i].jdata, nb[i].jdata
+            self.assertEqual(v.shape, vs.jdata.shape, f"grid {i} vertex count")
+            self.assertEqual(f.shape, fs.jdata.shape, f"grid {i} face count")
+            if f.shape[0] > 0:
+                self.assertGreaterEqual(int(f.min()), 0)
+                self.assertLess(int(f.max()), v.shape[0])  # faces are grid-local
+            if exact:
+                self.assertTrue(torch.equal(v, vs.jdata), f"grid {i} vertices")
+                self.assertTrue(torch.equal(f, fs.jdata), f"grid {i} faces")
+                self.assertTrue(torch.equal(n, ns.jdata), f"grid {i} normals")
+            else:
+                self.assertTrue(torch.allclose(v, vs.jdata, atol=1e-5), f"grid {i} vertices")
+                self.assertTrue(torch.equal(f, fs.jdata), f"grid {i} faces")
+
+    def test_dc_batch_is_bitwise_per_grid(self):
+        """The whole batch is meshed in one pass, but each grid's slice must be bitwise identical to
+        meshing that grid alone -- across grids of different sizes, a grid with no surface, and an
+        empty (zero-voxel) grid, which must come back as empty meshes without shifting the others."""
+        gb, field = self._sphere_batch([12, 6, 10, 8, 9], [0.3, 0.15, 0.3, 0.2, 0.25], no_surface=(1,), empty=(3,))
+        self._assert_batch_matches_single(gb, field)
+        v, f, n = fvdb.functional.dual_contour_batch(gb, field)
+        for i in (1, 3):
+            self.assertEqual(v[i].jdata.shape[0], 0)
+            self.assertEqual(f[i].jdata.shape[0], 0)
+            self.assertEqual(n[i].jdata.shape[0], 0)
+
+    def test_dc_batch_decimation_does_not_merge_grids(self):
+        """Decimation clusters are keyed per grid, so overlapping grids in one batch never share a
+        cluster: a batch of identical grids must decimate each grid exactly as it would alone (same
+        vertex and face counts, same faces, positions to atomic-summation tolerance)."""
+        gb, field = self._sphere_batch([10, 10, 10], [0.3, 0.3, 0.3])
+        for kwargs in ({"reduce": 4}, {"adaptivity": 0.5}, {"reduce": 2, "adaptivity": 0.3}):
+            self._assert_batch_matches_single(gb, field, exact=False, **kwargs)
+
+    def test_dc_batch_of_many_small_grids(self):
+        """A batch of many small grids (the generative-model decode case the batched pipeline is
+        for) matches meshing each grid alone."""
+        halves = [5 + (i % 4) for i in range(24)]
+        radii = [0.08 + 0.01 * (i % 7) for i in range(24)]
+        gb, field = self._sphere_batch(halves, radii)
+        self._assert_batch_matches_single(gb, field)
+
+    def test_dc_batch_spans_multiple_chunks(self):
+        """Grids are meshed in chunks of at most 2^22 voxels; a batch of three 129^3 grids
+        (~2.1M voxels each) needs one chunk per grid and must still match per-grid meshing."""
+        gb, field = self._sphere_batch([64, 64, 64], [2.0, 2.5, 3.0])
+        self.assertGreater(gb.total_voxels, 1 << 22)
+        self._assert_batch_matches_single(gb, field)
+
+    def test_dc_sliced_batch_view(self):
+        """A sliced GridBatch view starts at a nonzero voxel offset in the shared storage; meshing it
+        must match meshing the grids alone."""
+        gb, field = self._sphere_batch([8, 12, 6, 10], [0.2, 0.3, 0.15, 0.3])
+        view = gb[1:]
+        self._assert_batch_matches_single(view, field[1:])
+
     def _cube_points(self, vx: float, half: int) -> torch.Tensor:
         rng = torch.arange(-half, half + 1, device=self.device, dtype=torch.float32)
         ii, jj, kk = torch.meshgrid(rng, rng, rng, indexing="ij")
