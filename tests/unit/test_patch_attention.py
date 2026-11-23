@@ -453,6 +453,22 @@ class TestGlobalVarlenAttention(unittest.TestCase):
         with mock.patch.object(torch, "equal", side_effect=AssertionError("offsets compared on device")):
             fvdb.scaled_dot_product_attention(k, k, v, 1.0)
 
+    @parameterized.expand(
+        [["global", {}], ["patch", {"patch_size": 16}], ["window", {"window_size": 8}], ["nested", None]]
+    )
+    def test_output_reuses_query_structure(self, _, kwargs):
+        # Rebuilding the output with from_data_and_offsets validates the offsets on the device and
+        # blocks the host until the GPU queue drains, on every call.
+        q, k, v = _random_qkv(self.LSHAPE, self.HEADS, self.DIM, torch.bfloat16)
+        with mock.patch.object(
+            JaggedTensor, "from_data_and_offsets", side_effect=AssertionError("output offsets re-validated")
+        ):
+            if kwargs is None:
+                out = self._nested(q, k, v, 1.0)
+            else:
+                out = fvdb.scaled_dot_product_attention(q, k, v, 1.0, **kwargs)
+        self.assertEqual(out.lshape, q.lshape)
+
     def test_backward_matches_nested_path(self):
         q, k, v = _random_qkv(self.LSHAPE, self.HEADS, self.DIM, torch.bfloat16)
         scale = self.DIM**-0.5

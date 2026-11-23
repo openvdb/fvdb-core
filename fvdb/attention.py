@@ -220,7 +220,7 @@ def _varlen_attention(
     out = cast(torch.Tensor, out)  # a tensor unless return_aux is requested
     if layout is not None:
         out = out.index_select(0, layout.unpad_idx)
-    return JaggedTensor.from_data_and_offsets(out.to(out_dtype), query.joffsets)
+    return query.jagged_like(out.to(out_dtype))
 
 
 def _same_offsets(a: JaggedTensor, b: JaggedTensor) -> bool:
@@ -270,7 +270,7 @@ def _global_varlen_attention(query: JaggedTensor, key: JaggedTensor, value: Jagg
         max(k_lens),
         scale=scale,
     )
-    return JaggedTensor.from_data_and_offsets(cast(torch.Tensor, out), query.joffsets)
+    return query.jagged_like(cast(torch.Tensor, out))
 
 
 def scaled_dot_product_attention(
@@ -393,4 +393,4 @@ def scaled_dot_product_attention(
     # out_nested components have shape (H, L_i, D) -- convert back to (L_i, H, D)
     out_data = torch.cat([t.permute(1, 0, 2) for t in out_nested.unbind()], dim=0)
 
-    return JaggedTensor.from_data_and_offsets(out_data, query.joffsets)
+    return query.jagged_like(out_data)
